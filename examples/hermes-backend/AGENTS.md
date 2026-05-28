@@ -2,14 +2,23 @@
 
 You are configuring Hermes to use `@CognitiveOS/core` as its durable memory backend.
 
+For a portable one-file skill, read `SKILL.md` or install it into the workspace with:
+
+```bash
+./node_modules/.bin/cogmem-connect hermes --workspace .
+```
+
+This writes `~/.hermes/skills/cogmem-memory/SKILL.md`, which Hermes discovers as a local skill.
+
 ## Install
 
 Run from the Hermes workspace root:
 
 ```bash
-bun add @CognitiveOS/core
-bunx cogmem-init --agent hermes
-bunx cogmem-doctor
+export COGMEM_CORE_REPO="github:<owner>/CognitiveOS-core#main"
+bun add "$COGMEM_CORE_REPO"
+./node_modules/.bin/cogmem-init --agent hermes
+./node_modules/.bin/cogmem-doctor
 ```
 
 The default install creates:
@@ -22,9 +31,9 @@ The default install creates:
 
 Use `~/.cogmem/config.toml` or a project `.cogmem/config.toml` as the only configuration source. Do not create `.agent-brain.env` files, do not pass `--env-path`, and do not configure kernel behavior through `AB_*`, `COGMEM_*`, or `AGENT_BRAIN_MODEL_*` environment variables.
 
-Use `bunx cogmem-init --agent hermes --scope project` only when this workspace needs its own `.cogmem/` directory.
+Use `./node_modules/.bin/cogmem-init --agent hermes --scope project` only when this workspace needs its own `.cogmem/` directory.
 
-If you configure a high-dimensional embedding model, set `core.vector_dimension` in `~/.cogmem/config.toml` to the model output dimension. Example: `qwen3-embedding:8b` needs `vector_dimension = 4096`. Run `bunx cogmem-doctor` after editing; it warns about 2048+ dimensions because 4096-dimensional vectors cost about 1.53 GiB per 100,000 memories before SQLite/index overhead.
+If you configure a high-dimensional embedding model, set `core.vector_dimension` in `~/.cogmem/config.toml` to the model output dimension. Example: `qwen3-embedding:8b` needs `vector_dimension = 4096`. Run `./node_modules/.bin/cogmem-doctor` after editing; it warns about 2048+ dimensions because 4096-dimensional vectors cost about 1.53 GiB per 100,000 memories before SQLite/index overhead.
 
 ## Migrate Existing Hermes Memory
 
@@ -36,25 +45,25 @@ Default Hermes memory contract:
 Preview first:
 
 ```bash
-bunx cogmem-import-hermes --workspace . --project hermes --dry-run
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes --dry-run
 ```
 
 Then migrate:
 
 ```bash
-bunx cogmem-import-hermes --workspace . --project hermes
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes
 ```
 
 Use `--json` when another agent needs structured output:
 
 ```bash
-bunx cogmem-import-hermes --workspace . --project hermes --json
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes --json
 ```
 
 If Hermes stores memory somewhere else, pass explicit paths:
 
 ```bash
-bunx cogmem-import-hermes --workspace . --project hermes --profile ./memory/profile.md --sessions ./memory/sessions
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes --profile ./memory/profile.md --sessions ./memory/sessions
 ```
 
 ## Runtime Wiring

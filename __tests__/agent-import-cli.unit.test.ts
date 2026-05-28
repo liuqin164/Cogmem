@@ -1,19 +1,22 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMemoryKernel } from '../src/factory.js';
 import { parseArgs } from '../src/bin/import-support.js';
+import { KernelAgentMemoryBackend } from '../src/agent/index.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const openClawImportBin = join(coreRoot, 'src/bin/import-openclaw.ts');
 const hermesImportBin = join(coreRoot, 'src/bin/import-hermes.ts');
+const connectBin = join(coreRoot, 'src/bin/connect.ts');
 
 async function runCli(
   cmd: string[],
   cwd = coreRoot,
+  env: Record<string, string | undefined> = {},
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const proc = Bun.spawn({
     cmd,
@@ -22,6 +25,7 @@ async function runCli(
     stderr: 'pipe',
     env: {
       ...process.env,
+      ...env,
       NO_COLOR: '1',
     },
   });
@@ -120,6 +124,45 @@ test('OpenClaw import writes memory once and skips already imported records on r
   });
   kernel.close();
   expect(recalled.rawEvidence.some((item) => item.content.includes('BLE device provisioning'))).toBe(true);
+});
+
+test('OpenClaw migrated records are visible through KernelAgentMemoryBackend recall', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-backend-recall-'));
+  const dbPath = join(dir, 'memory.db');
+  mkdirSync(join(dir, 'memory'));
+  writeFileSync(join(dir, 'USER.md'), 'User identity: remembers protocol design details.');
+  writeFileSync(join(dir, 'memory', '2026-05-07.md'), [
+    '# 2026-05-07',
+    '- 09:00 User: Bluetooth protocol project used BLE device provisioning.',
+    '- 09:01 Agent: Logged the Bluetooth project memory.',
+  ].join('\n'));
+
+  const imported = await runCli([
+    'bun',
+    openClawImportBin,
+    '--workspace',
+    dir,
+    '--db',
+    dbPath,
+    '--project',
+    'openclaw-test',
+    '--json',
+  ]);
+
+  expect(imported.stderr).toBe('');
+  expect(imported.exitCode).toBe(0);
+
+  const kernel = createMemoryKernel({ dbPath });
+  const memory = new KernelAgentMemoryBackend(kernel);
+  const recalled = memory.recall({
+    agentId: 'openclaw',
+    projectId: 'openclaw-test',
+    query: 'Bluetooth provisioning project',
+    limit: 5,
+  });
+  kernel.close();
+
+  expect(recalled.items.some((item) => item.text.includes('BLE device provisioning'))).toBe(true);
 });
 
 test('Hermes import migrates profile and session markdown into core memory', async () => {
@@ -260,24 +303,119 @@ test('agent-facing runbooks tell OpenClaw and Hermes agents how to self-install 
   const openclaw = await Bun.file(join(coreRoot, 'examples/openclaw-backend/AGENTS.md')).text();
   const hermes = await Bun.file(join(coreRoot, 'examples/hermes-backend/AGENTS.md')).text();
 
-  expect(openclaw).toContain('bunx cogmem-init --agent openclaw');
+  expect(openclaw).toContain('cogmem-init --agent openclaw');
   expect(openclaw).toContain('~/.cogmem/config.toml');
   expect(openclaw).toContain('cogmem-import-openclaw');
   expect(openclaw).toContain('KernelAgentMemoryBackend');
   expect(openclaw).toContain('Do not import AGENTS.md');
 
-  expect(hermes).toContain('bunx cogmem-init --agent hermes');
+  expect(hermes).toContain('cogmem-init --agent hermes');
   expect(hermes).toContain('~/.cogmem/config.toml');
   expect(hermes).toContain('cogmem-import-hermes');
   expect(hermes).toContain('KernelAgentMemoryBackend');
   expect(hermes).toContain('profile.md');
 });
 
+test('agent-facing skill files tell OpenClaw and Hermes agents how to self-install, migrate, and recall', async () => {
+  const openclaw = await Bun.file(join(coreRoot, 'examples/openclaw-backend/SKILL.md')).text();
+  const hermes = await Bun.file(join(coreRoot, 'examples/hermes-backend/SKILL.md')).text();
+
+  for (const body of [openclaw, hermes]) {
+    expect(body).toStartWith('---\nname: cogmem-memory-backend');
+    expect(body).toContain('cogmem-init');
+    expect(body).toContain('cogmem-doctor');
+    expect(body).toContain('cogmem-mcp');
+    expect(body).toContain('--dry-run');
+    expect(body).toContain('KernelAgentMemoryBackend');
+    expect(body).toContain('createMemoryKernelFromConfig');
+    expect(body).toContain('recall.narrative');
+    expect(body).toContain('Do not run a separate vector search');
+    expect(body).toContain('Do not create .agent-brain.env');
+  }
+
+  expect(openclaw).toContain('cogmem-import-openclaw');
+  expect(openclaw).toContain('memory_search');
+  expect(openclaw).toContain('plugins.slots.memory');
+  expect(hermes).toContain('cogmem-import-hermes');
+  expect(hermes).toContain('~/.hermes/config.yaml');
+  expect(hermes).toContain('memory.provider');
+});
+
+test('cogmem-connect installs an agent skill into a workspace without migrating data', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-openclaw-'));
+  const skillPath = join(dir, 'skills', 'cogmem-memory', 'SKILL.md');
+
+  const dryRun = await runCli([
+    'bun',
+    connectBin,
+    'openclaw',
+    '--workspace',
+    dir,
+    '--dry-run',
+    '--json',
+  ]);
+
+  expect(dryRun.stderr).toBe('');
+  expect(dryRun.exitCode).toBe(0);
+  const dryRunParsed = JSON.parse(dryRun.stdout);
+  expect(dryRunParsed.agent).toBe('openclaw');
+  expect(dryRunParsed.dryRun).toBe(true);
+  expect(dryRunParsed.skillPath).toBe(skillPath);
+  expect(existsSync(skillPath)).toBe(false);
+
+  const installed = await runCli([
+    'bun',
+    connectBin,
+    'openclaw',
+    '--workspace',
+    dir,
+    '--json',
+  ]);
+
+  expect(installed.stderr).toBe('');
+  expect(installed.exitCode).toBe(0);
+  const installedParsed = JSON.parse(installed.stdout);
+  expect(installedParsed.installed).toBe(true);
+  expect(installedParsed.hostConfigSnippet).toContain('plugins.slots.memory');
+  expect(existsSync(skillPath)).toBe(true);
+  const body = readFileSync(skillPath, 'utf8');
+  expect(body).toStartWith('---\nname: cogmem-memory-backend');
+  expect(body).toContain('OpenClaw');
+});
+
+test('cogmem-connect installs Hermes skill into the real Hermes skills directory by default', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-hermes-home-'));
+  const workspace = join(dir, 'workspace');
+  mkdirSync(workspace);
+  const skillPath = join(dir, '.hermes', 'skills', 'cogmem-memory', 'SKILL.md');
+
+  const installed = await runCli([
+    'bun',
+    connectBin,
+    'hermes',
+    '--workspace',
+    workspace,
+    '--json',
+  ], coreRoot, { HOME: dir });
+
+  expect(installed.stderr).toBe('');
+  expect(installed.exitCode).toBe(0);
+  const parsed = JSON.parse(installed.stdout);
+  expect(parsed.skillPath).toBe(skillPath);
+  expect(parsed.hostConfigSnippet).toContain('mcp_servers:');
+  expect(parsed.hostConfigSnippet).toContain('cogmem-mcp');
+  expect(existsSync(skillPath)).toBe(true);
+  expect(readFileSync(skillPath, 'utf8')).toStartWith('---\nname: cogmem-memory-backend');
+});
+
 test('package exposes agent migration bins', () => {
   const packageJson = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8'));
 
+  expect(packageJson.bin['cogmem-explain-recall']).toBe('dist/bin/explain-recall.js');
+  expect(packageJson.bin['cogmem-mcp']).toBe('dist/bin/mcp.js');
   expect(packageJson.bin['cogmem-import-openclaw']).toBe('dist/bin/import-openclaw.js');
   expect(packageJson.bin['cogmem-import-hermes']).toBe('dist/bin/import-hermes.js');
+  expect(packageJson.bin['cogmem-connect']).toBe('dist/bin/connect.js');
 });
 
 test('import CLI parser keeps repeated path arguments in order without duplication', () => {

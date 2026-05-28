@@ -7,7 +7,8 @@ Durable, local-first memory for agent frameworks.
 ## Install
 
 ```bash
-bun add @CognitiveOS/core
+export COGMEM_CORE_REPO="github:<owner>/CognitiveOS-core#main"
+bun add "$COGMEM_CORE_REPO"
 ```
 
 Core uses Bun because the default storage path uses `bun:sqlite`.
@@ -17,14 +18,14 @@ Core uses Bun because the default storage path uses `bun:sqlite`.
 For new users, start with the interactive wizard:
 
 ```bash
-bunx cogmem-init
-bunx cogmem-doctor
+./node_modules/.bin/cogmem-init
+./node_modules/.bin/cogmem-doctor
 ```
 
 For automation or CI smoke tests:
 
 ```bash
-bunx cogmem-init --yes --agent none --dry-run
+./node_modules/.bin/cogmem-init --yes --agent none --dry-run
 ```
 
 The wizard creates a stable Cogmem home directory. By default this is `~/.cogmem`; project-local installs can use `cogmem-init --scope project`.
@@ -114,13 +115,21 @@ console.log(result.items);
 
 Core includes a first-party OpenClaw workspace profile. It recognizes `USER.md`, `SOUL.md`, `PERSONA.md`, `MEMORY.md`, `memory/YYYY-MM-DD.md`, and session export folders.
 
+To install the agent-facing skill file into an OpenClaw workspace:
+
+```bash
+./node_modules/.bin/cogmem-connect openclaw --workspace .
+```
+
+This writes `<workspace>/skills/cogmem-memory/SKILL.md`, OpenClaw's workspace skill location. The skill tells an agent how to install, validate, dry-run migration, migrate, and wire `KernelAgentMemoryBackend` without changing OpenClaw host config automatically.
+
 Run the command after configuration to migrate existing OpenClaw memory into the kernel:
 
 ```bash
-bunx cogmem-init --agent openclaw
-bunx cogmem-doctor
-bunx cogmem-import-openclaw --workspace . --project openclaw --dry-run
-bunx cogmem-import-openclaw --workspace . --project openclaw
+./node_modules/.bin/cogmem-init --agent openclaw
+./node_modules/.bin/cogmem-doctor
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --dry-run
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw
 ```
 
 ```ts
@@ -135,7 +144,7 @@ for (const source of profile.buildInstalledBatchSources({ projectId: 'openclaw' 
 }
 ```
 
-See `examples/openclaw-backend`.
+See `examples/openclaw-backend/README.md` and `examples/openclaw-backend/SKILL.md`.
 
 ## Hermes
 
@@ -144,13 +153,21 @@ Core includes a conservative Hermes profile for filesystem-based memory exports:
 - `profile.md` as durable profile/persona memory
 - `sessions/**/*.md` as conversation/session memory
 
+To install the agent-facing skill file into a Hermes workspace:
+
+```bash
+./node_modules/.bin/cogmem-connect hermes --workspace .
+```
+
+This writes `~/.hermes/skills/cogmem-memory/SKILL.md`, Hermes's primary skill location. The skill tells an agent how to install, validate, dry-run migration, migrate, wire `KernelAgentMemoryBackend`, and add the optional `cogmem-mcp` server without changing `~/.hermes/config.yaml` automatically.
+
 Run the command after configuration to migrate existing Hermes memory into the kernel:
 
 ```bash
-bunx cogmem-init --agent hermes
-bunx cogmem-doctor
-bunx cogmem-import-hermes --workspace . --project hermes --dry-run
-bunx cogmem-import-hermes --workspace . --project hermes
+./node_modules/.bin/cogmem-init --agent hermes
+./node_modules/.bin/cogmem-doctor
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes --dry-run
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes
 ```
 
 If a Hermes install uses different paths, pass `profilePath` and `sessionDir` explicitly.
@@ -168,13 +185,16 @@ const sources = profile.buildSourceDefinitions({
 console.log(sources);
 ```
 
-See `examples/hermes-backend`.
+See `examples/hermes-backend/README.md` and `examples/hermes-backend/SKILL.md`.
 
 ## CLI
 
 ```bash
 cogmem-init              # interactive setup
 cogmem-doctor            # validates config.toml and opens the kernel
+cogmem-connect           # install OpenClaw/Hermes agent-facing SKILL.md files
+cogmem-explain-recall    # explain pulse/temporal/narrative recall decisions
+cogmem-mcp               # stdio MCP server exposing cogmem memory tools
 cogmem-import-openclaw   # migrate OpenClaw workspace memory into core
 cogmem-import-hermes     # migrate Hermes profile/session memory into core
 cogmem-snapshot          # export/import snapshot helper
@@ -186,7 +206,7 @@ cogmem-migrate-vectors   # vector backend migration helper; uses config vector_d
 
 The package entrypoint exports explicit stable and beta symbols only. Internal implementation stores and compilers are not exported from `@CognitiveOS/core`.
 
-Stable integration APIs include `MemoryKernel`, `createMemoryKernelFromConfig()`, `KernelAgentMemoryBackend`, `OpenClawWorkspaceProfile`, and `HermesWorkspaceProfile`. Advanced recall orchestration symbols such as `UniverseNavigator`, `PulseRetrievalEngine`, `TemporalBranchSearch`, and `NarrativeRecallAssembler` are exported as beta APIs for agents that need direct inspection or custom routing.
+Stable integration APIs include `MemoryKernel`, `createMemoryKernelFromConfig()`, `KernelAgentMemoryBackend`, `OpenClawWorkspaceProfile`, and `HermesWorkspaceProfile`. Advanced recall orchestration symbols such as `UniverseNavigator`, `PulseRetrievalEngine`, `TemporalBranchSearch`, `NarrativeRecallAssembler`, `explainRecallWithKernel`, and the `listCogmemMcpTools` / `callCogmemMcpTool` helpers are exported as beta APIs for agents that need direct inspection, custom routing, or MCP hosting.
 
 ## Development
 

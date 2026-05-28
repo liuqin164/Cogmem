@@ -5,9 +5,11 @@ Use core as OpenClaw's durable memory backend without installing CognitiveOS.
 ## Install
 
 ```bash
-bun add @CognitiveOS/core
-bunx cogmem-init --agent openclaw
-bunx cogmem-doctor
+export COGMEM_CORE_REPO="github:<owner>/CognitiveOS-core#main"
+bun add "$COGMEM_CORE_REPO"
+./node_modules/.bin/cogmem-connect openclaw --workspace .
+./node_modules/.bin/cogmem-init --agent openclaw
+./node_modules/.bin/cogmem-doctor
 ```
 
 ## Migrate
@@ -15,13 +17,13 @@ bunx cogmem-doctor
 Preview:
 
 ```bash
-bunx cogmem-import-openclaw --workspace . --project openclaw --dry-run
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --dry-run
 ```
 
 Import:
 
 ```bash
-bunx cogmem-import-openclaw --workspace . --project openclaw
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw
 ```
 
 The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store.
@@ -61,4 +63,4 @@ console.log(recalled.items);
 
 The profile imports memory sources only. It ignores operational files such as `AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md` by default.
 
-For an agent-facing installation and migration runbook, see `AGENTS.md`.
+For agent-facing instructions, install or read `SKILL.md`. `./node_modules/.bin/cogmem-connect openclaw --workspace .` copies it to `<workspace>/skills/cogmem-memory/SKILL.md`.

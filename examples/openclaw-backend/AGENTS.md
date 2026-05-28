@@ -2,14 +2,23 @@
 
 You are configuring OpenClaw to use `@CognitiveOS/core` as its durable memory backend.
 
+For a portable one-file skill, read `SKILL.md` or install it into the workspace with:
+
+```bash
+./node_modules/.bin/cogmem-connect openclaw --workspace .
+```
+
+This writes `<workspace>/skills/cogmem-memory/SKILL.md`, which OpenClaw discovers as a workspace skill.
+
 ## Install
 
 Run from the OpenClaw workspace root:
 
 ```bash
-bun add @CognitiveOS/core
-bunx cogmem-init --agent openclaw
-bunx cogmem-doctor
+export COGMEM_CORE_REPO="github:<owner>/CognitiveOS-core#main"
+bun add "$COGMEM_CORE_REPO"
+./node_modules/.bin/cogmem-init --agent openclaw
+./node_modules/.bin/cogmem-doctor
 ```
 
 The default install creates:
@@ -22,28 +31,28 @@ The default install creates:
 
 Use `~/.cogmem/config.toml` or a project `.cogmem/config.toml` as the only configuration source. Do not create `.agent-brain.env` files, do not pass `--env-path`, and do not configure kernel behavior through `AB_*`, `COGMEM_*`, or `AGENT_BRAIN_MODEL_*` environment variables.
 
-Use `bunx cogmem-init --agent openclaw --scope project` only when this workspace needs its own `.cogmem/` directory.
+Use `./node_modules/.bin/cogmem-init --agent openclaw --scope project` only when this workspace needs its own `.cogmem/` directory.
 
-If you configure a high-dimensional embedding model, set `core.vector_dimension` in `~/.cogmem/config.toml` to the model output dimension. Example: `qwen3-embedding:8b` needs `vector_dimension = 4096`. Run `bunx cogmem-doctor` after editing; it warns about 2048+ dimensions because 4096-dimensional vectors cost about 1.53 GiB per 100,000 memories before SQLite/index overhead.
+If you configure a high-dimensional embedding model, set `core.vector_dimension` in `~/.cogmem/config.toml` to the model output dimension. Example: `qwen3-embedding:8b` needs `vector_dimension = 4096`. Run `./node_modules/.bin/cogmem-doctor` after editing; it warns about 2048+ dimensions because 4096-dimensional vectors cost about 1.53 GiB per 100,000 memories before SQLite/index overhead.
 
 ## Migrate Existing OpenClaw Memory
 
 Preview first:
 
 ```bash
-bunx cogmem-import-openclaw --workspace . --project openclaw --dry-run
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --dry-run
 ```
 
 Then migrate:
 
 ```bash
-bunx cogmem-import-openclaw --workspace . --project openclaw
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw
 ```
 
 Use `--json` when another agent needs structured output:
 
 ```bash
-bunx cogmem-import-openclaw --workspace . --project openclaw --json
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --json
 ```
 
 Import scope:
@@ -58,9 +67,9 @@ Import scope:
 Useful options:
 
 ```bash
-bunx cogmem-import-openclaw --workspace . --project openclaw --date 2026-05-07
-bunx cogmem-import-openclaw --workspace . --project openclaw --session ./custom-session.md
-bunx cogmem-import-openclaw --workspace . --project openclaw --memory ./custom-memory.md
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --date 2026-05-07
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --session ./custom-session.md
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --memory ./custom-memory.md
 ```
 
 ## Runtime Wiring

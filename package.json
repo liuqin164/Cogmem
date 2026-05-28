@@ -18,6 +18,9 @@
   "bin": {
     "cogmem-init": "dist/bin/init.js",
     "cogmem-doctor": "dist/bin/doctor.js",
+    "cogmem-connect": "dist/bin/connect.js",
+    "cogmem-explain-recall": "dist/bin/explain-recall.js",
+    "cogmem-mcp": "dist/bin/mcp.js",
     "cogmem-import-openclaw": "dist/bin/import-openclaw.js",
     "cogmem-import-hermes": "dist/bin/import-hermes.js",
     "cogmem-snapshot": "dist/bin/snapshot.js",
@@ -34,6 +37,7 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@xenova/transformers": "^2.17.2",
     "hnswlib-node": "^2.0.1"
   },

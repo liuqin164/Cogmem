@@ -80,6 +80,12 @@ export { PulseRetrievalEngine } from './retrieval/PulseRetrievalEngine.js';
 export { NarrativeRecallAssembler } from './retrieval/NarrativeRecallAssembler.js';
 export { UniverseNavigator } from './retrieval/UniverseNavigator.js';
 export { UniverseTraversalExecutor } from './retrieval/UniverseTraversalExecutor.js';
+/**
+ * Recall explainability and MCP bridge helpers.
+ * @beta @since 2.0.0
+ */
+export { explainRecallWithKernel } from './recall/RecallExplanation.js';
+export { callCogmemMcpTool, listCogmemMcpTools } from './mcp/CoreMcpTools.js';
 // ─── @experimental ───────────────────────────────────────────────────────────
 /**
  * Chinese-language lexicons for entity hints, stopwords, and topic classification.

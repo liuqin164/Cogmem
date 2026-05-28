@@ -10,9 +10,11 @@ Use core as a Hermes-compatible durable memory backend through a narrow filesyst
 ## Install
 
 ```bash
-bun add @CognitiveOS/core
-bunx cogmem-init --agent hermes
-bunx cogmem-doctor
+export COGMEM_CORE_REPO="github:<owner>/CognitiveOS-core#main"
+bun add "$COGMEM_CORE_REPO"
+./node_modules/.bin/cogmem-connect hermes --workspace .
+./node_modules/.bin/cogmem-init --agent hermes
+./node_modules/.bin/cogmem-doctor
 ```
 
 ## Migrate
@@ -20,19 +22,19 @@ bunx cogmem-doctor
 Preview:
 
 ```bash
-bunx cogmem-import-hermes --workspace . --project hermes --dry-run
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes --dry-run
 ```
 
 Import:
 
 ```bash
-bunx cogmem-import-hermes --workspace . --project hermes
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes
 ```
 
 If Hermes stores memory somewhere else:
 
 ```bash
-bunx cogmem-import-hermes --workspace . --project hermes --profile ./memory/profile.md --sessions ./memory/sessions
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes --profile ./memory/profile.md --sessions ./memory/sessions
 ```
 
 The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store.
@@ -76,4 +78,4 @@ console.log(recalled.items);
 
 If a Hermes workspace uses different paths, pass explicit `profilePath` and `sessionDir` values instead of changing core.
 
-For an agent-facing installation and migration runbook, see `AGENTS.md`.
+For agent-facing instructions, install or read `SKILL.md`. `./node_modules/.bin/cogmem-connect hermes --workspace .` copies it to `~/.hermes/skills/cogmem-memory/SKILL.md`.

@@ -9,6 +9,9 @@ test('core public entrypoint exposes backend primitives', async () => {
   expect(typeof api.KernelAgentMemoryBackend).toBe('function');
   expect(typeof api.OpenClawWorkspaceProfile).toBe('function');
   expect(typeof api.HermesWorkspaceProfile).toBe('function');
+  expect(typeof api.explainRecallWithKernel).toBe('function');
+  expect(typeof api.listCogmemMcpTools).toBe('function');
+  expect(typeof api.callCogmemMcpTool).toBe('function');
   expect(typeof api.UniverseNavigator).toBe('function');
   expect(typeof api.PulseRetrievalEngine).toBe('function');
   expect(typeof api.TemporalBranchSearch).toBe('function');

@@ -1,0 +1,134 @@
+#!/usr/bin/env bun
+import { resolve } from 'node:path';
+
+import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
+import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
+
+interface ExplainArgs {
+  query?: string;
+  projectId?: string;
+  agentId?: string;
+  limit?: number;
+  startTime?: number;
+  endTime?: number;
+  dbPath?: string;
+  configPath?: string;
+  json: boolean;
+  help: boolean;
+}
+
+function readArgs(argv: string[]): ExplainArgs {
+  const values: Record<string, string | boolean> = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const item = argv[index];
+    if (!item.startsWith('--')) continue;
+    const key = item.slice(2);
+    const next = argv[index + 1];
+    if (!next || next.startsWith('--')) {
+      values[key] = true;
+      continue;
+    }
+    values[key] = next;
+    index += 1;
+  }
+
+  return {
+    query: stringArg(values, 'query'),
+    projectId: stringArg(values, 'project') || stringArg(values, 'project-id'),
+    agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
+    limit: numberArg(values, 'limit'),
+    startTime: timeArg(values, 'since'),
+    endTime: timeArg(values, 'until'),
+    dbPath: stringArg(values, 'db'),
+    configPath: stringArg(values, 'config'),
+    json: values.json === true,
+    help: values.help === true || values.h === true,
+  };
+}
+
+function stringArg(values: Record<string, string | boolean>, key: string): string | undefined {
+  const value = values[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function numberArg(values: Record<string, string | boolean>, key: string): number | undefined {
+  const raw = stringArg(values, key);
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`--${key} must be a positive number`);
+  return parsed;
+}
+
+function timeArg(values: Record<string, string | boolean>, key: string): number | undefined {
+  const raw = stringArg(values, key);
+  if (!raw) return undefined;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  const parsed = Date.parse(raw);
+  if (Number.isNaN(parsed)) throw new Error(`--${key} must be a timestamp or parseable date`);
+  return parsed;
+}
+
+function usage(): string {
+  return [
+    'Usage: cogmem-explain-recall --query <text> [--project <id>] [--agent <id>] [--limit <n>] [--db <memory.db>|--config <config.toml>] [--json]',
+    '',
+    'Explains the memory kernel recall path: narrative, pulse trace, temporal traversal, runtime path, and evidence.',
+  ].join('\n');
+}
+
+function openKernel(args: ExplainArgs): MemoryKernel {
+  if (args.dbPath) return createMemoryKernel({ dbPath: resolve(args.dbPath) });
+  return createMemoryKernelFromConfig({
+    configPath: args.configPath ? resolve(args.configPath) : undefined,
+    cwd: process.cwd(),
+  });
+}
+
+function printHuman(explanation: ReturnType<typeof explainRecallWithKernel>): void {
+  console.log(`query: ${explanation.query}`);
+  if (explanation.projectId) console.log(`project: ${explanation.projectId}`);
+  if (explanation.agentId) console.log(`agent: ${explanation.agentId}`);
+  console.log(`mode: ${explanation.recallMode}`);
+  console.log(`fallback: ${explanation.fallbackUsed}`);
+  if (explanation.narrative?.headline) console.log(`headline: ${explanation.narrative.headline}`);
+  if (explanation.temporalTraversal?.labels.length) {
+    console.log(`temporal: ${explanation.temporalTraversal.labels.join(', ')}`);
+  }
+  console.log('evidence:');
+  for (const item of explanation.evidence) {
+    console.log(`- ${item.id}: ${item.text}`);
+  }
+}
+
+async function main(): Promise<void> {
+  const args = readArgs(process.argv.slice(2));
+  if (args.help) {
+    console.log(usage());
+    return;
+  }
+  if (!args.query) throw new Error(`Missing --query.\n${usage()}`);
+
+  const kernel = openKernel(args);
+  try {
+    const explanation = explainRecallWithKernel(kernel, {
+      query: args.query,
+      projectId: args.projectId,
+      agentId: args.agentId,
+      limit: args.limit,
+      startTime: args.startTime,
+      endTime: args.endTime,
+    });
+    if (args.json) {
+      console.log(JSON.stringify(explanation, null, 2));
+      return;
+    }
+    printHuman(explanation);
+  } finally {
+    kernel.close();
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});

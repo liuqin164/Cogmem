@@ -193,6 +193,7 @@ export class OpenClawWorkspaceProfile {
         adapterKind: item.adapterKind!,
         sourcePath: item.path,
         projectId,
+        tags: ['openclaw'],
         metadata: {
           openclawWorkspaceRoot: this.workspaceRoot,
           openclawRelativePath: item.relativePath,
