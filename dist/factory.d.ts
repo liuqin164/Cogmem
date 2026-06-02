@@ -2,6 +2,7 @@ import { BeliefStore } from './belief/BeliefStore.js';
 import { IngestionCursorStore } from './batch/IngestionCursorStore.js';
 import { MemoryGraph } from './core/MemoryGraph.js';
 import { type BrainRecallOptions } from './recall/BrainRecall.js';
+import { type RecallGovernanceSuppressionReason } from './recall/RecallGovernance.js';
 import { TopicRegistry } from './recall/TopicRegistry.js';
 import { type OfflineConsolidationOutput } from './engine/OfflineConsolidationPipeline.js';
 import { PipelineMetrics } from './engine/PipelineMetrics.js';
@@ -57,6 +58,11 @@ export interface MemoryKernelNavigationResult {
     fallbackUsed: boolean;
     navigation?: UniverseNavigationResult;
     rawEvidence: Neuron[];
+    filteredEvidence?: Array<{
+        neuron: Neuron;
+        reason: 'status_suppressed' | 'over_context_limit';
+        governanceReason?: RecallGovernanceSuppressionReason;
+    }>;
 }
 export interface ForgetUserResult {
     projectId: string;

@@ -285,4 +285,41 @@ describe('IterativeLLMClarifier — prompt construction', () => {
     expect(seenPrompts.length).toBe(2);
     expect(seenPrompts[1]).toContain('已执行工具查询');
   });
+
+  it('uses cue-driven bounded session context instead of raw history', async () => {
+    const seenPrompts: string[] = [];
+    const clarifier = new IterativeLLMClarifier(
+      async (prompt: string) => {
+        seenPrompts.push(prompt);
+        return '最终回答';
+      },
+      makeMockDispatcher(),
+      {
+        session: {
+          getRecentTurns() {
+            return [
+              {
+                role: 'user' as const,
+                content: 'Atlas deployment status was waiting on canary checks.',
+                timestamp: 1,
+              },
+              {
+                role: 'assistant' as const,
+                content: 'UNRELATED_RAW_HISTORY_SECRET '.repeat(400),
+                timestamp: 2,
+              },
+            ];
+          },
+          getContextForLLM() {
+            return 'UNRELATED_RAW_HISTORY_SECRET '.repeat(800);
+          },
+        },
+      }
+    );
+
+    await clarifier.clarify('Atlas deployment status', makeEmptyRecall());
+
+    expect(seenPrompts[0]).toContain('Atlas deployment status was waiting on canary checks.');
+    expect(seenPrompts[0]).not.toContain('UNRELATED_RAW_HISTORY_SECRET');
+  });
 });

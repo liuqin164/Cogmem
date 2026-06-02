@@ -8,6 +8,11 @@ import { Reflection } from './core/Reflection.js';
 import { TwoStagePulseRanker } from './core/TwoStagePulseRanker.js';
 import { BrainRecall, type BrainRecallOptions } from './recall/BrainRecall.js';
 import { HierarchicalRecallRouter } from './recall/HierarchicalRecallRouter.js';
+import {
+  isRecallableMemoryEvidence,
+  recallSuppressionReasonFor,
+  type RecallGovernanceSuppressionReason,
+} from './recall/RecallGovernance.js';
 import { TopicClassifier } from './recall/TopicClassifier.js';
 import { TopicDecayPolicy } from './recall/TopicDecayPolicy.js';
 import { TopicRegistry } from './recall/TopicRegistry.js';
@@ -121,6 +126,16 @@ export interface MemoryKernelNavigationResult {
   fallbackUsed: boolean;
   navigation?: UniverseNavigationResult;
   rawEvidence: Neuron[];
+  filteredEvidence?: Array<{
+    neuron: Neuron;
+    reason: 'status_suppressed' | 'over_context_limit';
+    governanceReason?: RecallGovernanceSuppressionReason;
+  }>;
+}
+
+interface RecallableEvidenceSelection {
+  rawEvidence: Neuron[];
+  filteredEvidence: NonNullable<MemoryKernelNavigationResult['filteredEvidence']>;
 }
 
 export interface ForgetUserResult {
@@ -485,19 +500,27 @@ export class MemoryKernel {
     const rawEvidence = candidateIds
       .map((id) => this.memoryGraph.getNeuron(id))
       .filter((item): item is Neuron => Boolean(item))
-      .filter((neuron) => !options.projectId || neuron.metadata.projectId === options.projectId)
-      .slice(0, limit);
+      .filter((neuron) => !options.projectId || neuron.metadata.projectId === options.projectId);
+    const governedEvidence = selectRecallableEvidence(rawEvidence, limit);
 
-    if (rawEvidence.length > 0) {
+    if (governedEvidence.rawEvidence.length > 0) {
       return {
         query,
         projectId: options.projectId,
         recallMode: 'universe_navigation',
         fallbackUsed: false,
         navigation,
-        rawEvidence,
+        rawEvidence: governedEvidence.rawEvidence,
+        filteredEvidence: governedEvidence.filteredEvidence,
       };
     }
+
+    const fallbackEvidence = this.recall(query, {
+      projectId: options.projectId,
+      limit,
+      includeRawEvidence: true,
+    }).rawEvidence.filter((neuron) => !options.projectId || neuron.metadata.projectId === options.projectId);
+    const governedFallbackEvidence = selectRecallableEvidence(fallbackEvidence, limit);
 
     return {
       query,
@@ -505,11 +528,11 @@ export class MemoryKernel {
       recallMode: 'brain_recall_fallback',
       fallbackUsed: true,
       navigation,
-      rawEvidence: this.recall(query, {
-        projectId: options.projectId,
-        limit,
-        includeRawEvidence: true,
-      }).rawEvidence,
+      rawEvidence: governedFallbackEvidence.rawEvidence,
+      filteredEvidence: uniqueFilteredEvidence([
+        ...governedEvidence.filteredEvidence,
+        ...governedFallbackEvidence.filteredEvidence,
+      ]),
     };
   }
 
@@ -890,4 +913,42 @@ function extractNavigationTerms(query: string): string[] {
       .map((token) => token.trim())
       .filter((token) => token.length >= 2)
   );
+}
+
+function selectRecallableEvidence(
+  neurons: Neuron[],
+  limit: number,
+): RecallableEvidenceSelection {
+  const recallable = neurons.filter((neuron) => isRecallableMemoryEvidence(neuron));
+  const filteredEvidence = uniqueFilteredEvidence([
+    ...neurons
+      .filter((neuron) => !isRecallableMemoryEvidence(neuron))
+      .map((neuron) => ({
+        neuron,
+        reason: 'status_suppressed' as const,
+        governanceReason: recallSuppressionReasonFor(neuron),
+      })),
+    ...recallable
+      .slice(limit)
+      .map((neuron) => ({ neuron, reason: 'over_context_limit' as const })),
+  ]);
+
+  return {
+    rawEvidence: recallable.slice(0, limit),
+    filteredEvidence,
+  };
+}
+
+function uniqueFilteredEvidence(
+  items: NonNullable<MemoryKernelNavigationResult['filteredEvidence']>,
+): NonNullable<MemoryKernelNavigationResult['filteredEvidence']> {
+  const seen = new Set<string>();
+  const uniqueItems: NonNullable<MemoryKernelNavigationResult['filteredEvidence']> = [];
+  for (const item of items) {
+    const key = `${item.neuron.id}:${item.reason}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueItems.push(item);
+  }
+  return uniqueItems;
 }

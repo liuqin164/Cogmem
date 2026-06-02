@@ -16,6 +16,7 @@ import type { AnswerEvidenceTrace, EvidenceRef } from './AnswerEvidenceTrace.js'
 import type { BoardEventBus } from '../boards/BoardEventBus.js';
 import type { BoardEvent } from '../boards/Board.js';
 import type { UserModelManager } from '../models/UserModelManager.js';
+import { buildCueDrivenSessionContext } from './SessionContextSelector.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -260,7 +261,11 @@ export class IterativeLLMClarifier {
     }
 
     // Layer 2: conversation history
-    const history = this.options.session?.getContextForLLM?.();
+    const history = buildCueDrivenSessionContext({
+      session: this.options.session,
+      query,
+      projectId: this.options.projectId,
+    });
     if (history) {
       parts.push('【对话历史】');
       parts.push(history);

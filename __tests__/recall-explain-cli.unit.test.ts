@@ -65,3 +65,16 @@ test('cogmem-explain-recall prints universe navigation details as json', async (
 
   if (existsSync(dbPath)) unlinkSync(dbPath);
 });
+
+test('cogmem-explain-recall help documents filtered evidence governance fields', async () => {
+  const result = await runCli([
+    'bun',
+    explainBin,
+    '--help',
+  ]);
+
+  expect(result.stderr).toBe('');
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout).toContain('filteredEvidence');
+  expect(result.stdout).toContain('governanceReason');
+});

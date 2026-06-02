@@ -208,6 +208,98 @@ test('Hermes import migrates profile and session markdown into core memory', asy
   expect(recalled.rawEvidence.some((item) => item.content.includes('GATT configuration service'))).toBe(true);
 });
 
+test('Hermes import accepts repeated explicit session files for single or batch migration', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-hermes-explicit-sessions-'));
+  const dbPath = join(dir, 'memory.db');
+  writeFileSync(join(dir, 'one.md'), 'Human: Hermes explicit session one remembered OAuth refresh.\nAI: Stored.');
+  writeFileSync(join(dir, 'two.md'), 'Human: Hermes explicit session two remembered vector migration.\nAI: Stored.');
+
+  const result = await runCli([
+    'bun',
+    hermesImportBin,
+    '--workspace',
+    dir,
+    '--db',
+    dbPath,
+    '--project',
+    'hermes-explicit-test',
+    '--session',
+    'one.md',
+    '--session',
+    'two.md',
+    '--json',
+  ]);
+
+  expect(result.stderr).toBe('');
+  expect(result.exitCode).toBe(0);
+  const parsed = JSON.parse(result.stdout);
+  expect(parsed.sourcesScanned).toBe(2);
+  expect(parsed.recordsIngested).toBeGreaterThanOrEqual(2);
+  expect(parsed.sourceResults.map((item: { sourcePath: string }) => item.sourcePath).sort()).toEqual([
+    join(dir, 'one.md'),
+    join(dir, 'two.md'),
+  ]);
+});
+
+test('agent import uses configured local OpenAI-compatible embedding endpoint during migration', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-quantized-embed-'));
+  const workspace = join(dir, 'workspace');
+  const configDir = join(workspace, '.cogmem');
+  mkdirSync(join(workspace, 'memory'), { recursive: true });
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(workspace, 'memory', '2026-05-07.md'), 'User: local quantized embedding import remembered release notes.');
+
+  let embedCalls = 0;
+  const server = Bun.serve({
+    port: 0,
+    fetch: async (request) => {
+      if (new URL(request.url).pathname !== '/v1/embeddings') {
+        return new Response('not found', { status: 404 });
+      }
+      embedCalls += 1;
+      const body = await request.json() as { input?: string | string[] };
+      const count = Array.isArray(body.input) ? body.input.length : 1;
+      return Response.json({
+        data: Array.from({ length: count }, () => ({
+          embedding: Array.from({ length: 16 }, (_, index) => index / 16),
+        })),
+      });
+    },
+  });
+
+  try {
+    writeFileSync(join(configDir, 'config.toml'), [
+      '[core]',
+      'db_path = "memory.db"',
+      'vector_backend = "sqlite-vec"',
+      'vector_dimension = 16',
+      '',
+      '[embedding]',
+      'provider = "openai_compatible"',
+      `base_url = "http://127.0.0.1:${server.port}/v1"`,
+      'model = "qwen3-embedding:0.6b"',
+    ].join('\n'));
+
+    const result = await runCli([
+      'bun',
+      openClawImportBin,
+      '--workspace',
+      workspace,
+      '--project',
+      'openclaw-quantized-test',
+      '--json',
+    ]);
+
+    expect(result.stderr).toBe('');
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.recordsIngested).toBeGreaterThanOrEqual(1);
+    expect(embedCalls).toBeGreaterThanOrEqual(1);
+  } finally {
+    server.stop(true);
+  }
+});
+
 test('OpenClaw import auto-discovers structured cogmem config instead of env files', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-config-import-'));
   const dbPath = join(dir, '.cogmem', 'memory.db');
@@ -316,6 +408,23 @@ test('agent-facing runbooks tell OpenClaw and Hermes agents how to self-install 
   expect(hermes).toContain('profile.md');
 });
 
+test('README documents complete import usage including single files, batches, and local quantized embeddings', async () => {
+  const readme = await Bun.file(join(coreRoot, 'README.md')).text();
+
+  expect(readme).toContain('## Import Existing Agent Memory');
+  expect(readme).toContain('ollama pull qwen3-embedding:0.6b');
+  expect(readme).toContain('provider = "openai_compatible"');
+  expect(readme).toContain('model = "qwen3-embedding:0.6b"');
+  expect(readme).toContain('cogmem-import-openclaw');
+  expect(readme).toContain('--session ./one.md --session ./two.md');
+  expect(readme).toContain('--memory ./one.md --memory ./two.md');
+  expect(readme).toContain('cogmem-import-hermes');
+  expect(readme).toContain('--profile ./memory/profile.md --sessions ./memory/sessions');
+  expect(readme).toContain('--session ./one.md --session ./two.md');
+  expect(readme).toContain('dry-run');
+  expect(readme).toContain('Imported records are embedded through the configured kernel embedder');
+});
+
 test('agent-facing skill files tell OpenClaw and Hermes agents how to self-install, migrate, and recall', async () => {
   const openclaw = await Bun.file(join(coreRoot, 'examples/openclaw-backend/SKILL.md')).text();
   const hermes = await Bun.file(join(coreRoot, 'examples/hermes-backend/SKILL.md')).text();
@@ -331,14 +440,22 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
     expect(body).toContain('recall.narrative');
     expect(body).toContain('Do not run a separate vector search');
     expect(body).toContain('Do not create .agent-brain.env');
+    expect(body).toContain('ollama pull qwen3-embedding:0.6b');
+    expect(body).toContain('[embedding]');
+    expect(body).toContain('provider = "openai_compatible"');
+    expect(body).toContain('model = "qwen3-embedding:0.6b"');
+    expect(body).toContain('Imported records are embedded through the configured kernel embedder');
   }
 
   expect(openclaw).toContain('cogmem-import-openclaw');
   expect(openclaw).toContain('memory_search');
   expect(openclaw).toContain('plugins.slots.memory');
+  expect(openclaw).toContain('--session ./one.md --session ./two.md');
+  expect(openclaw).toContain('--memory ./one.md --memory ./two.md');
   expect(hermes).toContain('cogmem-import-hermes');
   expect(hermes).toContain('~/.hermes/config.yaml');
   expect(hermes).toContain('memory.provider');
+  expect(hermes).toContain('--session ./one.md --session ./two.md');
 });
 
 test('cogmem-connect installs an agent skill into a workspace without migrating data', async () => {

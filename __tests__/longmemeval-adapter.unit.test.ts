@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { BENCHMARK_GROUPS } from '../src/benchmark/BenchmarkRegistry.js';
 import { ExternalBenchmarkRunner } from '../src/benchmark/ExternalBenchmarkRunner.js';
 import { LongMemEvalAdapter, type LongMemEvalBrain } from '../src/benchmark/LongMemEvalAdapter.js';
-import { parseLongMemEvalArgs } from '../../scripts/run-longmemeval.js';
+import { parseLongMemEvalArgs } from '../../../scripts/run-longmemeval.ts';
 
 function mockBrain(answer = 'blue headphones had static noise'): LongMemEvalBrain & { ingested: Array<{ projectId?: string; content: string }> } {
   const ingested: Array<{ projectId?: string; content: string }> = [];

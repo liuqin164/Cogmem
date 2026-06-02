@@ -109,3 +109,70 @@ test('agent backend recall overfetches before agent tag filtering', async () => 
 
   kernel.close();
 });
+
+test('agent backend recalls project-scoped imported evidence without requiring an agent tag', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-project-evidence-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await kernel.ingest({
+    projectId: 'demo',
+    content: 'Imported project profile says the release memory vector backend is sqlite-vec.',
+    tags: ['source:profile'],
+    sourceType: 'verified_fact',
+  });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    query: 'which vector backend should the release memory use?',
+    limit: 3,
+  });
+
+  const item = recalled.items.find((candidate) => candidate.text.includes('sqlite-vec'));
+  expect(item).toBeDefined();
+  expect(item?.tags).not.toContain('agent:openclaw');
+  expect(item?.source).toMatch(/^evt-/);
+
+  kernel.close();
+});
+
+test('agent backend suppresses archived and suspect memory from recall context', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-status-filter-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  const active = await kernel.ingest({
+    projectId: 'demo',
+    content: 'Release governance policy says active scoped evidence may enter agent context.',
+    tags: ['agent:openclaw', 'release'],
+  });
+  const archived = await kernel.ingest({
+    projectId: 'demo',
+    content: 'Release governance policy says archived stale evidence must stay out of agent context.',
+    tags: ['agent:openclaw', 'release'],
+  });
+  const suspect = await kernel.ingest({
+    projectId: 'demo',
+    content: 'Release governance policy says suspect disputed evidence must stay out of agent context.',
+    tags: ['agent:openclaw', 'release'],
+  });
+
+  kernel.memoryGraph.updateNeuronStatus(archived.id, 'archived');
+  kernel.memoryGraph.updateNeuronMetadata(suspect.id, { status: 'suspect' });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    query: 'release governance policy evidence',
+    limit: 10,
+  });
+
+  expect(recalled.items.some((item) => item.id === active.id)).toBe(true);
+  expect(recalled.items.some((item) => item.id === archived.id)).toBe(false);
+  expect(recalled.items.some((item) => item.id === suspect.id)).toBe(false);
+  expect(JSON.stringify(recalled.items)).not.toContain('archived stale evidence');
+  expect(JSON.stringify(recalled.items)).not.toContain('suspect disputed evidence');
+
+  kernel.close();
+});

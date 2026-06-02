@@ -61,6 +61,15 @@ export interface ChatSessionLike {
         content: string;
         timestamp: number;
     }>;
+    getRelevantTurns?(input: {
+        query: string;
+        projectId?: string;
+        maxChars?: number;
+    }): Array<{
+        role: 'user' | 'assistant';
+        content: string;
+        timestamp: number;
+    }>;
     getContextForLLM?(): string;
 }
 export interface QueryManagerLike {

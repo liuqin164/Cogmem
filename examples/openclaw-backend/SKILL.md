@@ -45,7 +45,23 @@ The default install creates:
 ~/.cogmem/snapshots/
 ```
 
-If the embedding model is high-dimensional, set `core.vector_dimension` in `config.toml` to the model output width before ingesting memory. Example: `qwen3-embedding:8b` uses `vector_dimension = 4096`.
+To embed imported memories with a local quantized model, run Ollama locally and configure the kernel before importing:
+
+```bash
+ollama pull qwen3-embedding:0.6b
+```
+
+```toml
+[core]
+vector_dimension = 1024
+
+[embedding]
+provider = "openai_compatible"
+base_url = "http://localhost:11434/v1"
+model = "qwen3-embedding:0.6b"
+```
+
+Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2560`; `qwen3-embedding:8b` uses `4096`. Run `./node_modules/.bin/cogmem-doctor` after editing. Imported records are embedded through the configured kernel embedder during `cogmem-import-openclaw`.
 
 ## Migrate Existing OpenClaw Memory
 
@@ -83,6 +99,8 @@ Useful scoped imports:
 ./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --date 2026-05-07
 ./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --session ./custom-session.md
 ./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --memory ./custom-memory.md
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --session ./one.md --session ./two.md
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --memory ./one.md --memory ./two.md
 ```
 
 ## Runtime Wiring

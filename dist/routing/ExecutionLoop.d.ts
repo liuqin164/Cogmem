@@ -74,5 +74,6 @@ export declare class ExecutionLoop {
     } | undefined);
     execute(plan: TaskPlan): Promise<ExecutionResult>;
     private assertNever;
+    private collectRecallGateTurns;
 }
 //# sourceMappingURL=ExecutionLoop.d.ts.map

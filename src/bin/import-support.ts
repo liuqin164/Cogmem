@@ -115,6 +115,7 @@ export async function runHermesImport(argv: string[]): Promise<void> {
     projectId,
     profilePath: stringArg(args, 'profile'),
     sessionDir: stringArg(args, 'sessions'),
+    sessionPaths: listArgs(args, 'session').map((item) => resolve(workspaceRoot, item)),
   });
 
   await runAgentImport({
@@ -123,7 +124,7 @@ export async function runHermesImport(argv: string[]): Promise<void> {
     workspaceRoot,
     projectId,
     sources,
-    usage: 'Usage: cogmem-import-hermes [--workspace <dir>] [--project <id>] [--db <memory.db>|--config <config.toml>] [--profile <file>] [--sessions <dir>] [--dry-run] [--json]',
+    usage: 'Usage: cogmem-import-hermes [--workspace <dir>] [--project <id>] [--db <memory.db>|--config <config.toml>] [--profile <file>] [--sessions <dir>] [--session <file>...] [--dry-run] [--json]',
   });
 }
 

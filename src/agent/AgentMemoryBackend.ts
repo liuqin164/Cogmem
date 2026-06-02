@@ -1,4 +1,5 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
+import { isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 
 export interface AgentTurnMemory {
   agentId: string;
@@ -104,8 +105,11 @@ export class KernelAgentMemoryBackend {
     agentId: string
   ): MemoryKernelNavigationResult['rawEvidence'] {
     return neurons.filter((neuron) => {
+      if (!isRecallableMemoryEvidence(neuron)) return false;
       const tags = neuron.metadata.tags || [];
-      return tags.includes(`agent:${agentId}`) || tags.includes(agentId);
+      const explicitAgentTags = tags.filter((tag) => tag.startsWith('agent:'));
+      if (explicitAgentTags.length === 0) return true;
+      return explicitAgentTags.includes(`agent:${agentId}`) || tags.includes(agentId);
     });
   }
 
@@ -116,7 +120,7 @@ export class KernelAgentMemoryBackend {
       projectId: neuron.metadata.projectId,
       topicPath: neuron.metadata.topicPath,
       tags: neuron.metadata.tags || [],
-      source: neuron.metadata.filePath,
+      source: neuron.metadata.filePath || neuron.metadata.sourceEventId,
     };
   }
 }

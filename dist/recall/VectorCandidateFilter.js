@@ -1,3 +1,4 @@
+import { isRecallableMemoryEvidence } from './RecallGovernance.js';
 export class VectorCandidateFilter {
     rules;
     constructor(rules = []) {
@@ -51,10 +52,7 @@ export class StatusFilter extends MemoryGraphVectorFilterRule {
     filter(neuronIds, _context) {
         return neuronIds.filter((id) => {
             const neuron = this.neuron(id);
-            if (!neuron)
-                return false;
-            const status = neuron.metadata.status ?? 'active';
-            return status === 'active' || status === 'cold';
+            return isRecallableMemoryEvidence(neuron);
         });
     }
 }

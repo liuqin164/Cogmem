@@ -87,5 +87,10 @@ export declare class BrainRecall {
     private appendVectorResults;
     private appendVectorResultsAsync;
     private appendVectorResultIds;
+    private toRecallableNeurons;
+    private retainRecallableNeuronIds;
+    private filterRecallableNeuronIds;
+    private isRecallableNeuronId;
+    private isRecallableNeuron;
 }
 //# sourceMappingURL=BrainRecall.d.ts.map

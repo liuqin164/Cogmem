@@ -8,6 +8,7 @@ import { parse as parseToolCall } from './ToolCallParser.js';
 import { EvidenceBudgetManager } from './EvidenceBudgetManager.js';
 import { ToolResultSanitizer } from './ToolResultSanitizer.js';
 import { callSignature } from './ToolUsePolicy.js';
+import { buildCueDrivenSessionContext } from './SessionContextSelector.js';
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -153,7 +154,11 @@ export class IterativeLLMClarifier {
             parts.push('');
         }
         // Layer 2: conversation history
-        const history = this.options.session?.getContextForLLM?.();
+        const history = buildCueDrivenSessionContext({
+            session: this.options.session,
+            query,
+            projectId: this.options.projectId,
+        });
         if (history) {
             parts.push('【对话历史】');
             parts.push(history);

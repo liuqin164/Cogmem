@@ -30,6 +30,11 @@ test('core MCP tool list exposes recall, write, and explain tools', () => {
     'cogmem_recall',
     'cogmem_explain_recall',
   ]);
+  const recall = tools.find((tool) => tool.name === 'cogmem_recall');
+  const explain = tools.find((tool) => tool.name === 'cogmem_explain_recall');
+  expect(recall?.description).toContain('governed');
+  expect(explain?.description).toContain('filteredEvidence');
+  expect(explain?.description).toContain('governanceReason');
 });
 
 test('core MCP tools can remember a turn and recall prepared narrative context', async () => {

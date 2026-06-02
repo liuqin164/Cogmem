@@ -33,6 +33,7 @@ export declare class RecallSufficiencyGate {
     evaluate(input: RecallSufficiencyInput): RecallSufficiencyDecision;
     private calculateTopConfidence;
     private detectTopicalDrift;
+    private buildDriftContext;
     private buildFollowups;
     private collectEvidenceText;
 }

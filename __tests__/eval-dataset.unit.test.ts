@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
-import { injectContradictions } from '../../eval/datasets/contradiction_injection.ts';
-import { generateNoisyCorpus } from '../../eval/datasets/noisy_tool_output_corpus.ts';
-import { generateSyntheticConversation } from '../../eval/datasets/synthetic_long_conversation.ts';
+import { injectContradictions } from '../../../eval/datasets/contradiction_injection.ts';
+import { generateNoisyCorpus } from '../../../eval/datasets/noisy_tool_output_corpus.ts';
+import { generateSyntheticConversation } from '../../../eval/datasets/synthetic_long_conversation.ts';
 
 describe('Eval dataset generators', () => {
   it('generateSyntheticConversation(10) returns 10 turns', () => {

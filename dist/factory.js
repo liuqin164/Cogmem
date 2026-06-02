@@ -7,6 +7,7 @@ import { Reflection } from './core/Reflection.js';
 import { TwoStagePulseRanker } from './core/TwoStagePulseRanker.js';
 import { BrainRecall } from './recall/BrainRecall.js';
 import { HierarchicalRecallRouter } from './recall/HierarchicalRecallRouter.js';
+import { isRecallableMemoryEvidence, recallSuppressionReasonFor, } from './recall/RecallGovernance.js';
 import { TopicClassifier } from './recall/TopicClassifier.js';
 import { TopicDecayPolicy } from './recall/TopicDecayPolicy.js';
 import { TopicRegistry } from './recall/TopicRegistry.js';
@@ -347,29 +348,36 @@ export class MemoryKernel {
         const rawEvidence = candidateIds
             .map((id) => this.memoryGraph.getNeuron(id))
             .filter((item) => Boolean(item))
-            .filter((neuron) => !options.projectId || neuron.metadata.projectId === options.projectId)
-            .slice(0, limit);
-        if (rawEvidence.length > 0) {
+            .filter((neuron) => !options.projectId || neuron.metadata.projectId === options.projectId);
+        const governedEvidence = selectRecallableEvidence(rawEvidence, limit);
+        if (governedEvidence.rawEvidence.length > 0) {
             return {
                 query,
                 projectId: options.projectId,
                 recallMode: 'universe_navigation',
                 fallbackUsed: false,
                 navigation,
-                rawEvidence,
+                rawEvidence: governedEvidence.rawEvidence,
+                filteredEvidence: governedEvidence.filteredEvidence,
             };
         }
+        const fallbackEvidence = this.recall(query, {
+            projectId: options.projectId,
+            limit,
+            includeRawEvidence: true,
+        }).rawEvidence.filter((neuron) => !options.projectId || neuron.metadata.projectId === options.projectId);
+        const governedFallbackEvidence = selectRecallableEvidence(fallbackEvidence, limit);
         return {
             query,
             projectId: options.projectId,
             recallMode: 'brain_recall_fallback',
             fallbackUsed: true,
             navigation,
-            rawEvidence: this.recall(query, {
-                projectId: options.projectId,
-                limit,
-                includeRawEvidence: true,
-            }).rawEvidence,
+            rawEvidence: governedFallbackEvidence.rawEvidence,
+            filteredEvidence: uniqueFilteredEvidence([
+                ...governedEvidence.filteredEvidence,
+                ...governedFallbackEvidence.filteredEvidence,
+            ]),
         };
     }
     async consolidate(options = {}) {
@@ -696,4 +704,35 @@ function extractNavigationTerms(query) {
         .split(/[\s,，。！？、:：/]+/)
         .map((token) => token.trim())
         .filter((token) => token.length >= 2));
+}
+function selectRecallableEvidence(neurons, limit) {
+    const recallable = neurons.filter((neuron) => isRecallableMemoryEvidence(neuron));
+    const filteredEvidence = uniqueFilteredEvidence([
+        ...neurons
+            .filter((neuron) => !isRecallableMemoryEvidence(neuron))
+            .map((neuron) => ({
+            neuron,
+            reason: 'status_suppressed',
+            governanceReason: recallSuppressionReasonFor(neuron),
+        })),
+        ...recallable
+            .slice(limit)
+            .map((neuron) => ({ neuron, reason: 'over_context_limit' })),
+    ]);
+    return {
+        rawEvidence: recallable.slice(0, limit),
+        filteredEvidence,
+    };
+}
+function uniqueFilteredEvidence(items) {
+    const seen = new Set();
+    const uniqueItems = [];
+    for (const item of items) {
+        const key = `${item.neuron.id}:${item.reason}`;
+        if (seen.has(key))
+            continue;
+        seen.add(key);
+        uniqueItems.push(item);
+    }
+    return uniqueItems;
 }

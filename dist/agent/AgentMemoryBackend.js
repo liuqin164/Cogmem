@@ -1,3 +1,4 @@
+import { isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 export class KernelAgentMemoryBackend {
     kernel;
     constructor(kernel) {
@@ -58,8 +59,13 @@ export class KernelAgentMemoryBackend {
     }
     filterAgentEvidence(neurons, agentId) {
         return neurons.filter((neuron) => {
+            if (!isRecallableMemoryEvidence(neuron))
+                return false;
             const tags = neuron.metadata.tags || [];
-            return tags.includes(`agent:${agentId}`) || tags.includes(agentId);
+            const explicitAgentTags = tags.filter((tag) => tag.startsWith('agent:'));
+            if (explicitAgentTags.length === 0)
+                return true;
+            return explicitAgentTags.includes(`agent:${agentId}`) || tags.includes(agentId);
         });
     }
     toAgentRecallItem(neuron) {
@@ -69,7 +75,7 @@ export class KernelAgentMemoryBackend {
             projectId: neuron.metadata.projectId,
             topicPath: neuron.metadata.topicPath,
             tags: neuron.metadata.tags || [],
-            source: neuron.metadata.filePath,
+            source: neuron.metadata.filePath || neuron.metadata.sourceEventId,
         };
     }
 }

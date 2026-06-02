@@ -1,5 +1,6 @@
 import type { MemoryGraph } from '../core/MemoryGraph.js';
 import type { Neuron } from '../types/index.js';
+import { isRecallableMemoryEvidence } from './RecallGovernance.js';
 
 export interface VectorFilterContext {
   projectId?: string;
@@ -71,9 +72,7 @@ export class StatusFilter extends MemoryGraphVectorFilterRule {
   filter(neuronIds: string[], _context: VectorFilterContext): string[] {
     return neuronIds.filter((id) => {
       const neuron = this.neuron(id);
-      if (!neuron) return false;
-      const status = neuron.metadata.status ?? 'active';
-      return status === 'active' || status === 'cold';
+      return isRecallableMemoryEvidence(neuron);
     });
   }
 }

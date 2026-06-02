@@ -4,7 +4,7 @@
 
 ```bash
 bun install
-bun run --filter '@CognitiveOS/core' typecheck
+bun run --filter '@CognitiveOS/core' type
 bun run --filter '@CognitiveOS/core' test
 ```
 
@@ -14,10 +14,12 @@ Before opening a pull request that changes core, run:
 
 ```bash
 bun run --filter '@CognitiveOS/core' build
-bun run --filter '@CognitiveOS/core' typecheck
+bun run --filter '@CognitiveOS/core' type
 bun run --filter '@CognitiveOS/core' test
 cd packages/core && npm pack --dry-run --json
 ```
+
+`@CognitiveOS/core` is distributed from GitHub for this release candidate. Use `npm pack --dry-run --json` only to verify the package contents; do not publish the package to npm.
 
 ## API Discipline
 

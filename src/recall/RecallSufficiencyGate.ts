@@ -38,6 +38,8 @@ const DEFAULT_CONFIG: RecallSufficiencyGateConfig = {
   maxSuggestedFollowups: 3
 };
 
+const DRIFT_CONTEXT_CHAR_BUDGET = 4000;
+
 const COREFERENCE_CUES = [
   '之前',
   '上次',
@@ -125,9 +127,39 @@ export class RecallSufficiencyGate {
 
   private detectTopicalDrift(query: string, recentTurns: RecallSufficiencyInput['recentTurns']): boolean {
     if (!hasTemporalRelative(query)) return false;
-    const recentText = recentTurns.slice(-6).map((turn) => turn.content).join('\n');
-    if (!recentText.trim()) return true;
-    return trigramJaccard(query, recentText) < 0.1;
+    const driftContext = this.buildDriftContext(query, recentTurns);
+    if (!driftContext.trim()) return true;
+    return trigramJaccard(query, driftContext) < 0.1;
+  }
+
+  private buildDriftContext(query: string, turns: RecallSufficiencyInput['recentTurns']): string {
+    const scored = turns
+      .map((turn, index) => ({
+        turn,
+        index,
+        score: turnRelevanceScore(query, turn.content),
+      }))
+      .filter((item) => item.turn.content.trim().length > 0);
+
+    const relevant = scored
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score || b.turn.timestamp - a.turn.timestamp || b.index - a.index);
+    const fallback = scored
+      .sort((a, b) => b.turn.timestamp - a.turn.timestamp || b.index - a.index);
+    const candidates = relevant.length > 0 ? relevant : fallback;
+    const selected: string[] = [];
+    let usedChars = 0;
+
+    for (const item of candidates) {
+      const content = item.turn.content.trim();
+      const nextCost = content.length + 1;
+      if (selected.length > 0 && usedChars + nextCost > DRIFT_CONTEXT_CHAR_BUDGET) continue;
+      selected.push(content);
+      usedChars += nextCost;
+      if (usedChars >= DRIFT_CONTEXT_CHAR_BUDGET) break;
+    }
+
+    return selected.join('\n');
   }
 
   private buildFollowups(
@@ -201,4 +233,23 @@ function extractCorePhrase(text: string): string {
     .map((token) => token.trim())
     .filter((token) => token.length >= 2 && !COREFERENCE_CUES.includes(token.toLowerCase()));
   return tokens.slice(0, 4).join(' ');
+}
+
+function turnRelevanceScore(query: string, content: string): number {
+  const queryTokens = tokenizeForRecallGate(query);
+  if (queryTokens.length === 0) return 0;
+  const normalizedContent = content.toLowerCase();
+  const lexicalHits = queryTokens.filter((token) => normalizedContent.includes(token)).length;
+  return lexicalHits / queryTokens.length + trigramJaccard(query, content);
+}
+
+function tokenizeForRecallGate(text: string): string[] {
+  return Array.from(new Set(
+    text
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}_\-\u4e00-\u9fa5\s]/gu, ' ')
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2 && !TEMPORAL_RELATIVE_CUES.includes(token))
+  ));
 }

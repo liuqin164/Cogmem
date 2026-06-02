@@ -71,6 +71,25 @@ describe('RecallSufficiencyGate', () => {
     expect(decision.suggestedFollowupQueries.length).toBeGreaterThan(0);
   });
 
+  it('uses older relevant turns instead of a fixed recent-six drift window', () => {
+    const gate = new RecallSufficiencyGate({ topConfidenceThreshold: 0 });
+    const decision = gate.evaluate({
+      query: 'last week deployment status',
+      layer1Result: recall(),
+      recentTurns: [
+        { role: 'user', content: 'last week deployment status was waiting on canary checks', timestamp: 1 },
+        { role: 'user', content: 'today we discussed bluetooth pairing noise', timestamp: 2 },
+        { role: 'assistant', content: 'bluetooth note stored', timestamp: 3 },
+        { role: 'user', content: 'headset battery replacement details', timestamp: 4 },
+        { role: 'assistant', content: 'battery note stored', timestamp: 5 },
+        { role: 'user', content: 'keyboard layout preference', timestamp: 6 },
+        { role: 'assistant', content: 'keyboard note stored', timestamp: 7 },
+      ]
+    });
+
+    expect(decision.signals.topicalDriftHit).toBe(false);
+  });
+
   it('deduplicates and caps suggested followup queries', () => {
     const gate = new RecallSufficiencyGate({ maxSuggestedFollowups: 3, topConfidenceThreshold: 1 });
     const decision = gate.evaluate({

@@ -222,6 +222,70 @@ describe('ExecutionLoop', () => {
     expect(graphCall).toBeDefined();
   });
 
+  test('recall gate requests session turns without a fixed six-turn cap', async () => {
+    const requestedLimits: Array<number | undefined> = [];
+    const loop = new ExecutionLoop(() => makeRecall(2, 0.9), {
+      onLLMClarify: async () => 'unused',
+      confidenceThreshold: 0.6,
+      session: {
+        getRecentTurns(limit?: number) {
+          requestedLimits.push(limit);
+          return Array.from({ length: 8 }, (_, index) => ({
+            role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+            content: `turn ${index}`,
+            timestamp: index,
+          }));
+        },
+      },
+    });
+
+    await loop.execute(makePlan());
+
+    expect(requestedLimits).toHaveLength(1);
+    expect(requestedLimits[0]).toBeUndefined();
+  });
+
+  test('legacy LLM prompt uses cue-driven bounded session context instead of raw history', async () => {
+    let seenPrompt = '';
+    const loop = new ExecutionLoop(() => makeRecall(0, 0), {
+      onLLMClarify: async (prompt) => {
+        seenPrompt = prompt;
+        return 'clarified';
+      },
+      confidenceThreshold: 0.6,
+      session: {
+        getRecentTurns() {
+          return [
+            {
+              role: 'user' as const,
+              content: 'Atlas deployment status was waiting on canary checks.',
+              timestamp: 1,
+            },
+            {
+              role: 'user' as const,
+              content: 'UNRELATED_RAW_HISTORY_SECRET '.repeat(400),
+              timestamp: 2,
+            },
+          ];
+        },
+        getContextForLLM() {
+          return 'UNRELATED_RAW_HISTORY_SECRET '.repeat(800);
+        },
+      },
+      recallGateDisabled: true,
+    });
+
+    const plan = makePlan();
+    plan.query = 'Atlas deployment status';
+    plan.steps[0]!.inputs.query = 'Atlas deployment status';
+    plan.steps[2]!.inputs.query = 'Atlas deployment status';
+
+    await loop.execute(plan);
+
+    expect(seenPrompt).toContain('Atlas deployment status was waiting on canary checks.');
+    expect(seenPrompt).not.toContain('UNRELATED_RAW_HISTORY_SECRET');
+  });
+
   test('record count matches plan length and total duration is non-negative', async () => {
     const loop = new ExecutionLoop(() => makeRecall(0, 0), {
       confidenceThreshold: 0.6

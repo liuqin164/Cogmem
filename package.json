@@ -31,6 +31,8 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "prepare": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "type": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test __tests__",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
@@ -53,6 +55,7 @@
     "CHANGELOG.md",
     "CONCURRENT_ACCESS.md",
     "CONTRIBUTING.md",
+    "RELEASE_CHECKLIST.md",
     "SECURITY.md",
     "LICENSE"
   ],

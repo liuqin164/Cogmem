@@ -6,6 +6,7 @@ import { computeStableHash, type SourceDefinition } from '../types.js';
 export interface HermesWorkspaceSourceOptions {
   projectId?: string;
   sessionDir?: string;
+  sessionPaths?: string[];
   profilePath?: string;
 }
 
@@ -37,7 +38,12 @@ export class HermesWorkspaceProfile {
     }
 
     const sessionDir = resolve(this.workspaceRoot, options.sessionDir ?? 'sessions');
-    for (const sourcePath of listMarkdownFiles(sessionDir)) {
+    const sessionPaths = uniquePaths([
+      ...listMarkdownFiles(sessionDir),
+      ...(options.sessionPaths || []),
+    ]);
+    for (const sourcePath of sessionPaths) {
+      if (!existsSync(sourcePath) || !statSync(sourcePath).isFile()) continue;
       sources.push({
         sourceId: `hermes-session-${computeStableHash([projectId, this.relativePath(sourcePath)]).slice(0, 12)}`,
         adapterKind: 'conversation_markdown',
@@ -58,6 +64,10 @@ export class HermesWorkspaceProfile {
   private relativePath(filePath: string): string {
     return relative(this.workspaceRoot, filePath).replace(/\\/g, '/');
   }
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return Array.from(new Set(paths.map((item) => resolve(item))));
 }
 
 function listMarkdownFiles(dir: string): string[] {

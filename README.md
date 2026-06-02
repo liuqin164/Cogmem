@@ -6,8 +6,10 @@ Durable, local-first memory for agent frameworks.
 
 ## Install
 
+`@CognitiveOS/core` 2.0.0-rc.1 is a GitHub-only open-source release. It is not published to npm; install it from the GitHub repository or tag used for the core package.
+
 ```bash
-export COGMEM_CORE_REPO="github:<owner>/CognitiveOS-core#main"
+export COGMEM_CORE_REPO="github:<owner>/CognitiveOS-core#v2.0.0-rc.1"
 bun add "$COGMEM_CORE_REPO"
 ```
 
@@ -111,6 +113,78 @@ console.log(result.items);
 
 `KernelAgentMemoryBackend.recall()` routes through universe navigation first. That means core activates related entities, temporal branches, and graph neighbors, assembles a narrative summary, and returns context that is already prepared for the agent. `MemoryKernel.recall()` remains available as the lower-level BrainRecall path; the backend uses it only as a fallback when universe navigation yields no scoped evidence.
 
+## Governed Recall And Explainability
+
+Agent-facing recall is governed by default. `KernelAgentMemoryBackend.recall()`, `MemoryKernel.navigateMemory()`, and `BrainRecall` exclude non-recallable evidence from active context before returning `rawEvidence` or backend `items`.
+
+- `rawEvidence` contains evidence allowed to enter active agent context.
+- `filteredEvidence` is available from `MemoryKernel.navigateMemory()` and `explainRecallWithKernel()` for forensic recall/explain flows. It records same-project candidates that were not included.
+- `reason` stays backward compatible. For governance filtering it remains `status_suppressed`; for budget filtering it is `over_context_limit`.
+- `governanceReason` is an optional refinement for `status_suppressed`, such as `archived`, `suspect_llm_inference`, `suspect_external_tool_observation`, or `suspect_unverified_claim`.
+
+Raw user utterances may be recalled as provenance evidence when they are explicitly tagged as raw user evidence (`sourceType: 'user_input'`, `reliability:raw_utterance`, `role:user`, and `record:raw_utterance` or `record:conversation_message`). This does not promote the utterance into a durable fact; it only allows the original user statement to be inspected as evidence. Suspect LLM inference, suspect tool observation, and unverified suspect claims stay out of active context.
+
+Use `cogmem-explain-recall --json` or the `cogmem_explain_recall` MCP tool to inspect `filteredEvidence`, `governanceReason`, activation paths, and narrative recall reasons. Explain output is project-scoped; filtered evidence from other projects is not exposed in a scoped explain result.
+
+Core is an agent memory kernel, not a knowledge-base application, wiki front end, Obsidian replacement, UI dashboard, or agent framework. Markdown imports and exports are projections/adapters; the source of truth is the kernel store and public API.
+
+## Import Existing Agent Memory
+
+Use the import tools when an external agent already has memory files and needs to migrate them into the kernel store. Always run `--dry-run` first. Import is project-scoped and idempotent; re-running against the same database skips records already processed by the cursor store.
+
+Imported records are embedded through the configured kernel embedder. To import through a local quantized embedding model, configure the kernel before running the importer. For example, with Ollama:
+
+```bash
+ollama pull qwen3-embedding:0.6b
+```
+
+```toml
+[core]
+db_path = "memory.db"
+vector_backend = "sqlite-vec"
+vector_dimension = 1024
+
+[embedding]
+provider = "openai_compatible"
+base_url = "http://localhost:11434/v1"
+model = "qwen3-embedding:0.6b"
+```
+
+Set `core.vector_dimension` to the embedding model output dimension. `qwen3-embedding:0.6b` uses 1024 dimensions, `qwen3-embedding:4b` uses 2560 dimensions, and `qwen3-embedding:8b` uses 4096 dimensions.
+
+OpenClaw default workspace import:
+
+```bash
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --dry-run
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw
+```
+
+OpenClaw explicit single-file or batch import:
+
+```bash
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --session ./one.md
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --session ./one.md --session ./two.md
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --memory ./one.md
+./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --memory ./one.md --memory ./two.md
+```
+
+Hermes default workspace import:
+
+```bash
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes --dry-run
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes
+```
+
+Hermes explicit path import:
+
+```bash
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes --profile ./memory/profile.md --sessions ./memory/sessions
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes --session ./one.md
+./node_modules/.bin/cogmem-import-hermes --workspace . --project hermes --session ./one.md --session ./two.md
+```
+
+Pass `--json` when automation needs machine-readable counts for scanned sources, parsed records, ingested records, skipped records, and source-level results. The importers migrate memory evidence only; they do not install host runtime features, task schedulers, channels, dashboards, or application code.
+
 ## OpenClaw
 
 Core includes a first-party OpenClaw workspace profile. It recognizes `USER.md`, `SOUL.md`, `PERSONA.md`, `MEMORY.md`, `memory/YYYY-MM-DD.md`, and session export folders.
@@ -211,15 +285,22 @@ Stable integration APIs include `MemoryKernel`, `createMemoryKernelFromConfig()`
 ## Development
 
 ```bash
-bun run --filter '@CognitiveOS/core' typecheck
+bun run --filter '@CognitiveOS/core' type
 bun run --filter '@CognitiveOS/core' build
 bun run --filter '@CognitiveOS/core' test
 ```
 
-Release dry-run:
+Release dry-run for the GitHub-only package:
 
 ```bash
 cd packages/core
 npm pack --dry-run --json
-npm publish --dry-run --tag rc
 ```
+
+If the local npm cache is not writable, use a temporary cache instead:
+
+```bash
+npm_config_cache="$(mktemp -d)" npm pack --dry-run --json
+```
+
+Do not run `npm publish`; this package is released through GitHub source distribution only.

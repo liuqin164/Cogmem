@@ -31,6 +31,7 @@ import type { TopicSummaryBoard } from './TopicSummaryBoard.js';
 import type { GraphCommunityEngine } from '../engine/GraphCommunityEngine.js';
 import type { EmbeddingProvider } from '../embedding/EmbeddingProvider.js';
 import type { NeuronEmbeddingStore } from '../embedding/NeuronEmbeddingStore.js';
+import { isRecallableMemoryEvidence } from './RecallGovernance.js';
 
 export type { BrainRecallResult } from '../types/BrainRecallResult.js';
 
@@ -136,6 +137,7 @@ export class BrainRecall {
       ...this.deps.factStore.listNeuronIdsByEntityIds(candidateEntityIds, limit * 6)
     ]));
     const topicRouteResult = this.routeByTopic(query, options.projectId, options.topicPath, candidateNeuronIds);
+    this.retainRecallableNeuronIds(candidateNeuronIds);
     const vectorTopicPath = topicRouteResult && !topicRouteResult.fallbackToGlobal
       ? topicRouteResult.matchedTopicPath ?? options.topicPath
       : undefined;
@@ -181,17 +183,14 @@ export class BrainRecall {
     const compiledHitCount = beliefs.length + facts.length + events.length + entityTimeline.length;
     const rawEvidence = options.includeRawEvidence === false
       ? []
-      : candidateNeuronIds
-          .map((neuronId) => this.deps.memoryGraph.getNeuron(neuronId))
-          .filter((item): item is Neuron => Boolean(item))
-          .slice(0, limit);
+      : this.toRecallableNeurons(candidateNeuronIds, limit);
     this._expandByCommunity(rawEvidence, limit);
     if (topicRouteResult && !topicRouteResult.fallbackToGlobal && options.includeRawEvidence !== false) {
       const summaryTopicPath = topicRouteResult.matchedTopicPath ?? options.topicPath ?? rawEvidence[0]?.metadata.topicPath ?? '';
       const summary = this.deps.topicSummaryBoard?.getSummaryNeuron(summaryTopicPath, options.projectId);
       const index = summary ? rawEvidence.findIndex((item) => item.id === summary.id) : -1;
-      if (summary && index >= 0) rawEvidence.unshift(...rawEvidence.splice(index, 1));
-      else if (summary) rawEvidence.unshift(summary);
+      if (summary && this.isRecallableNeuron(summary) && index >= 0) rawEvidence.unshift(...rawEvidence.splice(index, 1));
+      else if (summary && this.isRecallableNeuron(summary)) rawEvidence.unshift(summary);
     }
     this._prependSemanticConsolidations(rawEvidence, options.projectId, topicRouteResult?.matchedTopicPath ?? options.topicPath);
     this._prependCrossDomainPrinciples(rawEvidence, options.projectId);
@@ -241,7 +240,7 @@ export class BrainRecall {
       projectId,
       topicPath,
       limit: 3
-    });
+    }).filter((neuron) => this.isRecallableNeuron(neuron));
     for (const neuron of semantic) {
       const index = rawEvidence.findIndex((item) => item.id === neuron.id);
       if (index >= 0) rawEvidence.splice(index, 1);
@@ -253,7 +252,7 @@ export class BrainRecall {
     const principles = this.findDurableNeuronsByType('cross_domain_principle', {
       projectId,
       limit: 2
-    });
+    }).filter((neuron) => this.isRecallableNeuron(neuron));
     for (const neuron of principles) {
       const index = rawEvidence.findIndex((item) => item.id === neuron.id);
       if (index >= 0) rawEvidence.splice(index, 1);
@@ -278,7 +277,7 @@ export class BrainRecall {
     for (const communityId of communityIds) for (const id of this.deps.graphCommunityEngine?.getCommunityMembers(communityId!) || []) {
       if (ids.has(id) || rawEvidence.length >= limit + 3) continue;
       const neuron = this.deps.memoryGraph.getNeuron(id);
-      if (neuron) { rawEvidence.push(neuron); ids.add(id); }
+      if (this.isRecallableNeuron(neuron)) { rawEvidence.push(neuron); ids.add(id); }
     }
   }
 
@@ -440,6 +439,7 @@ export class BrainRecall {
     return this.deps.memoryGraph.fullTextSearch(query, projectId, limit * 6)
       .map((neuronId) => this.deps.memoryGraph.getNeuron(neuronId))
       .filter((item): item is Neuron => Boolean(item))
+      .filter((neuron) => this.isRecallableNeuron(neuron))
       .filter((neuron) => {
         const tags = neuron.metadata.tags || [];
         return tags.includes('namespace:user_profile') || tags.includes('namespace:agent_persona');
@@ -708,15 +708,42 @@ export class BrainRecall {
     const vectorIds = this.deps.vectorCandidateFilter
       ? this.deps.vectorCandidateFilter.filter(rawVectorIds, { projectId, topicPath, queryTime: Date.now() })
       : rawVectorIds;
-    if (vectorIds.length === 0) return false;
+    const recallableVectorIds = this.filterRecallableNeuronIds(vectorIds);
+    if (recallableVectorIds.length === 0) return false;
 
     const existingSet = new Set(candidateNeuronIds);
-    for (const id of vectorIds) {
+    for (const id of recallableVectorIds) {
       if (!existingSet.has(id)) {
         candidateNeuronIds.push(id);
         existingSet.add(id);
       }
     }
     return true;
+  }
+
+  private toRecallableNeurons(neuronIds: string[], limit: number): Neuron[] {
+    return neuronIds
+      .map((neuronId) => this.deps.memoryGraph.getNeuron(neuronId))
+      .filter((item): item is Neuron => this.isRecallableNeuron(item))
+      .slice(0, limit);
+  }
+
+  private retainRecallableNeuronIds(neuronIds: string[]): void {
+    for (let index = neuronIds.length - 1; index >= 0; index--) {
+      if (!this.isRecallableNeuronId(neuronIds[index])) neuronIds.splice(index, 1);
+    }
+  }
+
+  private filterRecallableNeuronIds(neuronIds: string[]): string[] {
+    return neuronIds.filter((id) => this.isRecallableNeuronId(id));
+  }
+
+  private isRecallableNeuronId(neuronId: string): boolean {
+    const neuron = this.deps.memoryGraph.getNeuron(neuronId);
+    return !neuron || this.isRecallableNeuron(neuron);
+  }
+
+  private isRecallableNeuron(neuron: Neuron | null | undefined): neuron is Neuron {
+    return isRecallableMemoryEvidence(neuron);
   }
 }

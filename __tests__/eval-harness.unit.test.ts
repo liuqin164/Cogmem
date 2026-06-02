@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { existsSync, lstatSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { EvalRunner, type EvalSuiteResult } from '../../eval/runners/EvalRunner.ts';
-import { ReportFormatter } from '../../eval/runners/ReportFormatter.ts';
+import { EvalRunner, type EvalSuiteResult } from '../src/eval/runners/EvalRunner.ts';
+import { ReportFormatter } from '../../../eval/runners/ReportFormatter.ts';
 
 let results: EvalSuiteResult[] = [];
 const formatter = new ReportFormatter();

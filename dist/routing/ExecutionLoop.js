@@ -1,6 +1,7 @@
 import { RecallSufficiencyGate } from '../recall/RecallSufficiencyGate.js';
 import { ConfidenceGate } from './ConfidenceGate.js';
 import { IterativeLLMClarifier, } from './IterativeLLMClarifier.js';
+import { buildCueDrivenSessionContext, selectCueDrivenSessionTurns } from './SessionContextSelector.js';
 export class ExecutionLoop {
     recallFn;
     options;
@@ -89,11 +90,7 @@ export class ExecutionLoop {
                         recallSufficiencyDecision = gate.evaluate({
                             query: plan.query,
                             layer1Result: lastRecallResult,
-                            recentTurns: this.options?.session?.getRecentTurns(6).map((turn) => ({
-                                role: turn.role,
-                                content: turn.content,
-                                timestamp: turn.timestamp
-                            })) || [],
+                            recentTurns: this.collectRecallGateTurns(plan.query, plan.steps[0]?.inputs.projectId),
                             projectId: plan.steps[0]?.inputs.projectId
                         });
                         this.options?.boardEventBus?.emit({
@@ -143,7 +140,11 @@ export class ExecutionLoop {
                         promptParts.push(this.options.personaBlock);
                         promptParts.push('');
                     }
-                    const history = this.options?.session?.getContextForLLM?.();
+                    const history = buildCueDrivenSessionContext({
+                        session: this.options?.session,
+                        query: plan.query,
+                        projectId: step.inputs.projectId,
+                    });
                     if (history) {
                         promptParts.push('【对话历史】');
                         promptParts.push(history);
@@ -219,5 +220,15 @@ export class ExecutionLoop {
     }
     assertNever(step) {
         throw new Error(`Unsupported task step type: ${step.type}`);
+    }
+    collectRecallGateTurns(query, projectId) {
+        const session = this.options?.session;
+        if (!session)
+            return [];
+        return selectCueDrivenSessionTurns({ session, query, projectId, maxChars: 4000 }).map((turn) => ({
+            role: turn.role,
+            content: turn.content,
+            timestamp: turn.timestamp
+        }));
     }
 }
