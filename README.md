@@ -269,6 +269,8 @@ To install the agent-facing skill file into an OpenClaw workspace:
 
 This writes `<workspace>/skills/cogmem-memory/SKILL.md`, OpenClaw's workspace skill location. The skill tells an agent how to install, validate, dry-run migration, migrate, and wire `KernelAgentMemoryBackend` without changing OpenClaw host config automatically.
 
+`cogmem-connect` does not edit `~/.openclaw/openclaw.json`. Current OpenClaw memory config is OpenClaw-owned (`memory.backend` supports backends such as `"builtin"` and `"qmd"`). Do not add unknown host config fields for CognitiveOS-core; install a real OpenClaw plugin wrapper with a valid manifest/schema before changing host runtime wiring.
+
 Run the command after configuration to migrate existing OpenClaw memory into the kernel:
 
 ```bash

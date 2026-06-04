@@ -141,13 +141,13 @@ const preparedContext = {
 
 Use `recall.narrative` as the compact prompt context and `recall.items` as cited memory evidence. If `recall.recallMode === 'universe_navigation'`, the memory kernel has already prepared related context through the pulse/temporal/narrative path.
 
-## OpenClaw Native Plugin Notes
+## OpenClaw Host Integration Notes
 
-OpenClaw memory plugins are selected through `plugins.slots.memory`, and the active plugin is expected to provide tools such as `memory_search` and `memory_get`. Do not set `plugins.slots.memory = "cogmem"` unless a real OpenClaw plugin manifest and runtime wrapper have been installed.
+`cogmem-connect openclaw` installs this file into `<workspace>/skills/cogmem-memory/SKILL.md`, which is OpenClaw's workspace skill location. That makes the procedure discoverable without changing OpenClaw host config or pretending that a native memory plugin has already been installed.
 
-`cogmem-connect openclaw` installs this file into `<workspace>/skills/cogmem-memory/SKILL.md`, which is OpenClaw's workspace skill location. That makes the procedure discoverable without pretending that a native memory plugin has already been installed.
+Current OpenClaw memory config is OpenClaw-owned. Its documented backend selector is `memory.backend` with values such as `"builtin"` and `"qmd"`, and the built-in memory surface exposes tools such as `memory_search` and `memory_get`. Do not write `plugins.slots.memory` or other unknown OpenClaw config fields for CognitiveOS-core; OpenClaw uses strict config validation and unknown fields can prevent the Gateway from starting.
 
-When authoring that wrapper, map OpenClaw tool behavior to core like this:
+When authoring a real OpenClaw plugin wrapper, package it with a valid OpenClaw plugin manifest/schema first, then map OpenClaw tool behavior to core like this:
 
 - `memory_search` should call `memory.recall()` and return `recall.narrative` plus cited `recall.items`.
 - `memory_get` should read from the cited evidence returned by core or from the original workspace file when a citation includes a file path.
@@ -157,6 +157,8 @@ When authoring that wrapper, map OpenClaw tool behavior to core like this:
 After runtime wiring changes, run:
 
 ```bash
+openclaw config schema
+openclaw doctor
 openclaw plugins inspect <plugin-id> --runtime --json
 openclaw gateway restart
 ```

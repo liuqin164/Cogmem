@@ -111,16 +111,11 @@ function usage(): string {
 function hostConfigSnippet(agent: AgentKind, workspaceRoot: string): string {
   if (agent === 'openclaw') {
     return [
-      '// OpenClaw native memory slot is not changed by cogmem-connect.',
-      '// Equivalent setting path: plugins.slots.memory',
-      '// Only enable this after installing a real OpenClaw native plugin wrapper:',
-      '{',
-      '  plugins: {',
-      '    slots: {',
-      '      memory: "cogmem-memory",',
-      '    },',
-      '  },',
-      '}',
+      '// cogmem-connect does not modify OpenClaw host config.',
+      '// It installs a workspace skill at <workspace>/skills/cogmem-memory/SKILL.md.',
+      '// Current OpenClaw memory config is owned by OpenClaw, for example memory.backend = "builtin" | "qmd".',
+      '// Do not write unknown OpenClaw config fields for CognitiveOS-core.',
+      '// Add host config only after installing a real OpenClaw plugin wrapper with a valid manifest/schema.',
     ].join('\n');
   }
 

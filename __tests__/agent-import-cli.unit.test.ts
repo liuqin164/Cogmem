@@ -449,7 +449,9 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
 
   expect(openclaw).toContain('cogmem-import-openclaw');
   expect(openclaw).toContain('memory_search');
-  expect(openclaw).toContain('plugins.slots.memory');
+  expect(openclaw).toContain('memory.backend');
+  expect(openclaw).toContain('Do not write `plugins.slots.memory`');
+  expect(openclaw).not.toContain('plugins.slots.memory = "cogmem"');
   expect(openclaw).toContain('--session ./one.md --session ./two.md');
   expect(openclaw).toContain('--memory ./one.md --memory ./two.md');
   expect(hermes).toContain('cogmem-import-hermes');
@@ -493,7 +495,9 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   expect(installed.exitCode).toBe(0);
   const installedParsed = JSON.parse(installed.stdout);
   expect(installedParsed.installed).toBe(true);
-  expect(installedParsed.hostConfigSnippet).toContain('plugins.slots.memory');
+  expect(installedParsed.hostConfigSnippet).toContain('does not modify OpenClaw host config');
+  expect(installedParsed.hostConfigSnippet).toContain('Do not write unknown OpenClaw config fields');
+  expect(installedParsed.hostConfigSnippet).not.toContain('plugins.slots.memory');
   expect(existsSync(skillPath)).toBe(true);
   const body = readFileSync(skillPath, 'utf8');
   expect(body).toStartWith('---\nname: cogmem-memory-backend');

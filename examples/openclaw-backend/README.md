@@ -96,3 +96,5 @@ console.log(recalled.items);
 The profile imports memory sources only. It ignores operational files such as `AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md` by default.
 
 For agent-facing instructions, install or read `SKILL.md`. `./node_modules/.bin/cogmem-connect openclaw --workspace .` copies it to `<workspace>/skills/cogmem-memory/SKILL.md`.
+
+`cogmem-connect` does not edit `~/.openclaw/openclaw.json`. Current OpenClaw memory config is OpenClaw-owned (`memory.backend` supports backends such as `"builtin"` and `"qmd"`). Do not add unknown host config fields for CognitiveOS-core; install a real OpenClaw plugin wrapper with a valid manifest/schema before changing host runtime wiring.
