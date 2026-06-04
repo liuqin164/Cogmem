@@ -109,9 +109,9 @@ function pickFirst(models, ...matchers) {
     }
     return undefined;
 }
-function suggestEmbeddingModel(det) {
+export function suggestEmbeddingModel(det) {
     if (det.ollamaAvailable) {
-        const model = pickFirst(det.ollamaModels, (n) => n.includes('bge-m3'), (n) => n.includes('nomic-embed-text'), (n) => n.startsWith('dmeta'), (n) => n.startsWith('mxbai'));
+        const model = pickFirst(det.ollamaModels, (n) => n.includes('qwen3-embedding'), (n) => n.includes('bge-m3'), (n) => n.includes('nomic-embed-text'), (n) => n.startsWith('dmeta'), (n) => n.startsWith('mxbai'));
         if (model) {
             return {
                 provider: 'openai_compatible',
@@ -128,15 +128,15 @@ function suggestEmbeddingModel(det) {
         vectorDimension: DEFAULT_VECTOR_DIMENSION,
     };
 }
-function inferEmbeddingVectorDimension(provider, model) {
+export function inferEmbeddingVectorDimension(provider, model) {
     if (provider === 'deterministic_local')
         return DEFAULT_VECTOR_DIMENSION;
     const normalized = model.toLowerCase();
-    if (normalized.includes('qwen3-embedding:8b'))
+    if (/qwen3-embedding[-:]8b/.test(normalized))
         return 4096;
-    if (normalized.includes('qwen3-embedding:4b'))
+    if (/qwen3-embedding[-:]4b/.test(normalized))
         return 2560;
-    if (normalized.includes('qwen3-embedding:0.6b'))
+    if (/qwen3-embedding[-:]0\.6b/.test(normalized))
         return 1024;
     if (normalized.includes('bge-m3'))
         return 1024;
@@ -575,7 +575,7 @@ async function main() {
     console.log('╚═══════════════════════════════════════════════════════════════╝');
     console.log('');
     const target = resolveInstallTarget(args);
-    console.log('  This wizard writes ~/.cogmem/config.toml by default.');
+    console.log(`  This wizard writes ${args.scope === 'project' ? '.cogmem/config.toml in the current project' : '~/.cogmem/config.toml by default'}.`);
     console.log('  Run cogmem-init again at any time to reconfigure.');
     console.log(`  Cogmem home: ${target.homeDir}`);
     // Detect backends
@@ -705,7 +705,9 @@ async function main() {
     console.log('  Done. ✓');
     console.log('');
 }
-main().catch((err) => {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
-});
+if (import.meta.main) {
+    main().catch((err) => {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+    });
+}

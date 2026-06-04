@@ -4,6 +4,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  inferEmbeddingVectorDimension,
+  suggestEmbeddingModel,
+} from '../src/bin/init.js';
+
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
 const initBin = join(coreRoot, 'src/bin/init.ts');
@@ -74,6 +79,21 @@ test('init supports non-interactive dry-run config generation', async () => {
   expect(output).toContain('[integrations.openclaw]');
   expect(output).toContain('[integrations.hermes]');
   expect(existsSync(join(homePath, 'config.toml'))).toBe(false);
+});
+
+test('init recognizes Qwen3 embedding GGUF model names exposed by Ollama', () => {
+  const suggested = suggestEmbeddingModel({
+    ollamaAvailable: true,
+    ollamaModels: ['qwen3-embedding-4b:latest'],
+    openaiAvailable: false,
+    anthropicAvailable: false,
+    qwenAvailable: false,
+  });
+
+  expect(suggested.provider).toBe('openai_compatible');
+  expect(suggested.model).toBe('qwen3-embedding-4b:latest');
+  expect(suggested.vectorDimension).toBe(2560);
+  expect(inferEmbeddingVectorDimension('openai_compatible', 'qwen3-embedding-8b:latest')).toBe(4096);
 });
 
 test('init exposes vector dimension and warns for high-dimensional embeddings', async () => {

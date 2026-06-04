@@ -27,22 +27,22 @@ Run from the OpenClaw workspace root:
 ```bash
 export COGMEM_CORE_REPO="github:<owner>/CognitiveOS-core#main"
 bun add "$COGMEM_CORE_REPO"
-./node_modules/.bin/cogmem-init --agent openclaw
+./node_modules/.bin/cogmem-init --agent openclaw --scope project
 ./node_modules/.bin/cogmem-doctor
 ```
 
-Use project-local config only when this workspace needs isolation:
+This creates project-local kernel config and storage under `.cogmem/`, which is the recommended OpenClaw workspace setup.
 
 ```bash
 ./node_modules/.bin/cogmem-init --agent openclaw --scope project
 ```
 
-The default install creates:
+The install creates:
 
 ```text
-~/.cogmem/config.toml
-~/.cogmem/memory.db
-~/.cogmem/snapshots/
+.cogmem/config.toml
+.cogmem/memory.db
+.cogmem/snapshots/
 ```
 
 To embed imported memories with a local quantized model, run Ollama locally and configure the kernel before importing:
@@ -84,13 +84,14 @@ Use JSON output when another agent is orchestrating the run:
 ```
 
 The importer is idempotent. Re-running it skips records already imported into the same memory database.
+Real non-JSON imports print source-level and embedding+ingest progress to stderr. Use `--json --progress` to keep JSON on stdout while streaming progress to stderr, or `--no-progress` when a wrapper needs quiet stderr.
 
 Imported sources:
 
 - `USER.md` as user profile memory.
 - `SOUL.md`, `PERSONA.md`, and `IDENTITY.md` as persona/profile memory.
 - `MEMORY.md` as imported summary/index memory.
-- `memory/YYYY-MM-DD.md` as daily episodic memory.
+- `memory/YYYY-MM-DD.md` and `memory/YYYY-MM-DD-<slug>.md` as daily episodic memory.
 - `sessions/*.md`, `session-logs/*.md`, `session_logs/*.md`, `conversations/*.md`, `exports/sessions/*.md`, and `exports/conversations/*.md` as session memory.
 
 Useful scoped imports:
@@ -146,6 +147,8 @@ Use `recall.narrative` as the compact prompt context and `recall.items` as cited
 `cogmem-connect openclaw` installs this file into `<workspace>/skills/cogmem-memory/SKILL.md`, which is OpenClaw's workspace skill location. That makes the procedure discoverable without changing OpenClaw host config or pretending that a native memory plugin has already been installed.
 
 Current OpenClaw memory config is OpenClaw-owned. Its documented backend selector is `memory.backend` with values such as `"builtin"` and `"qmd"`, and the built-in memory surface exposes tools such as `memory_search` and `memory_get`. Do not write `plugins.slots.memory` or other unknown OpenClaw config fields for CognitiveOS-core; OpenClaw uses strict config validation and unknown fields can prevent the Gateway from starting.
+
+Installing this workspace skill makes the memory kernel visible to OpenClaw agents as an operating procedure. It does not automatically replace OpenClaw's native memory runtime or guarantee every future turn reads/writes `KernelAgentMemoryBackend`; automatic per-turn recall and recording require explicit host wiring through an OpenClaw plugin, MCP server, or adapter that calls the public kernel API.
 
 When authoring a real OpenClaw plugin wrapper, package it with a valid OpenClaw plugin manifest/schema first, then map OpenClaw tool behavior to core like this:
 

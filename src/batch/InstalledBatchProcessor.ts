@@ -51,10 +51,55 @@ export interface BatchSourceResult {
   diagnostics: SourceAdapterDiagnostic[];
 }
 
+export type BatchProgressEvent =
+  | {
+      stage: 'source:start';
+      sourceIndex: number;
+      totalSources: number;
+      sourcePath: string;
+      adapterKind: SourceDefinition['adapterKind'];
+    }
+  | {
+      stage: 'source:parsed';
+      sourceIndex: number;
+      totalSources: number;
+      sourcePath: string;
+      adapterKind: SourceDefinition['adapterKind'];
+      recordsParsed: number;
+      pendingRecords: number;
+      skippedRecords: number;
+    }
+  | {
+      stage: 'source:ingest:start';
+      sourceIndex: number;
+      totalSources: number;
+      sourcePath: string;
+      adapterKind: SourceDefinition['adapterKind'];
+      pendingRecords: number;
+    }
+  | {
+      stage: 'source:ingest:complete';
+      sourceIndex: number;
+      totalSources: number;
+      sourcePath: string;
+      adapterKind: SourceDefinition['adapterKind'];
+      ingestedRecords: number;
+      totalRecordsIngested: number;
+    }
+  | {
+      stage: 'offline:start';
+      recordsIngested: number;
+    }
+  | {
+      stage: 'offline:complete';
+      recordsIngested: number;
+    };
+
 interface InstalledBatchProcessorDependencies {
   cursorStore: IngestionCursorStore;
   ingestBatch: (inputs: IngestInput[]) => Promise<Neuron[]>;
   runOfflineWindow: (window: BatchConsolidationWindow) => Promise<OfflineConsolidationOutput>;
+  onProgress?: (event: BatchProgressEvent) => void;
 }
 
 export class InstalledBatchProcessor {
@@ -94,9 +139,18 @@ export class InstalledBatchProcessor {
     const adapterDiagnostics: SourceAdapterDiagnostic[] = [];
     const sourceResults: BatchSourceResult[] = [];
 
-    for (const source of sources) {
+    for (const [sourceOffset, source] of sources.entries()) {
       const adapter = this.adapters.get(source.adapterKind);
       if (!adapter) continue;
+      const sourceIndex = sourceOffset + 1;
+
+      this.deps.onProgress?.({
+        stage: 'source:start',
+        sourceIndex,
+        totalSources: sources.length,
+        sourcePath: source.sourcePath,
+        adapterKind: source.adapterKind
+      });
 
       const snapshot = this.loader.read(source);
       const cursor = this.deps.cursorStore.getCursor(source.sourceId);
@@ -116,11 +170,29 @@ export class InstalledBatchProcessor {
 
       recordsParsed += adapted.records.length;
       skippedRecords += adapted.records.length - pending.length;
+      this.deps.onProgress?.({
+        stage: 'source:parsed',
+        sourceIndex,
+        totalSources: sources.length,
+        sourcePath: source.sourcePath,
+        adapterKind: source.adapterKind,
+        recordsParsed: adapted.records.length,
+        pendingRecords: pending.length,
+        skippedRecords: adapted.records.length - pending.length
+      });
       if (!cursor || cursor.lastSeenHash !== snapshot.fileHash || pending.length > 0) {
         sourcesChanged += 1;
       }
 
       if (pending.length > 0) {
+        this.deps.onProgress?.({
+          stage: 'source:ingest:start',
+          sourceIndex,
+          totalSources: sources.length,
+          sourcePath: source.sourcePath,
+          adapterKind: source.adapterKind,
+          pendingRecords: pending.length
+        });
         const envelopes = pending.map((record) => buildEpisodeEnvelope(source, record));
         const neurons = await this.deps.ingestBatch(envelopes.map((item) => item.ingestInput));
         recordsIngested += envelopes.length;
@@ -137,6 +209,15 @@ export class InstalledBatchProcessor {
             processedAt: Date.now(),
             neuronId: neuron?.id
           });
+        });
+        this.deps.onProgress?.({
+          stage: 'source:ingest:complete',
+          sourceIndex,
+          totalSources: sources.length,
+          sourcePath: source.sourcePath,
+          adapterKind: source.adapterKind,
+          ingestedRecords: envelopes.length,
+          totalRecordsIngested: recordsIngested
         });
       }
 
@@ -163,7 +244,9 @@ export class InstalledBatchProcessor {
       });
     }
 
+    this.deps.onProgress?.({ stage: 'offline:start', recordsIngested });
     const offline = await this.deps.runOfflineWindow(options.window);
+    this.deps.onProgress?.({ stage: 'offline:complete', recordsIngested });
     return {
       window: options.window,
       sourcesScanned: sources.length,

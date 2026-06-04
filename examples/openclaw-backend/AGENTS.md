@@ -17,21 +17,19 @@ Run from the OpenClaw workspace root:
 ```bash
 export COGMEM_CORE_REPO="github:<owner>/CognitiveOS-core#main"
 bun add "$COGMEM_CORE_REPO"
-./node_modules/.bin/cogmem-init --agent openclaw
+./node_modules/.bin/cogmem-init --agent openclaw --scope project
 ./node_modules/.bin/cogmem-doctor
 ```
 
-The default install creates:
+The OpenClaw workspace install creates:
 
 ```text
-~/.cogmem/config.toml
-~/.cogmem/memory.db
-~/.cogmem/snapshots/
+.cogmem/config.toml
+.cogmem/memory.db
+.cogmem/snapshots/
 ```
 
 Use `~/.cogmem/config.toml` or a project `.cogmem/config.toml` as the only configuration source. Do not create `.agent-brain.env` files, do not pass `--env-path`, and do not configure kernel behavior through `AB_*`, `COGMEM_*`, or `AGENT_BRAIN_MODEL_*` environment variables.
-
-Use `./node_modules/.bin/cogmem-init --agent openclaw --scope project` only when this workspace needs its own `.cogmem/` directory.
 
 To embed imported memories with a local quantized model, run Ollama locally and configure the kernel before importing:
 
@@ -71,12 +69,14 @@ Use `--json` when another agent needs structured output:
 ./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --json
 ```
 
+Real non-JSON imports print source-level and embedding+ingest progress to stderr. Use `--json --progress` to keep JSON on stdout while streaming progress to stderr, or `--no-progress` when a wrapper needs quiet stderr.
+
 Import scope:
 
 - Import `USER.md` as user profile memory.
 - Import `SOUL.md`, `PERSONA.md`, and `IDENTITY.md` as persona/profile memory.
 - Import `MEMORY.md` as imported summary/index memory.
-- Import `memory/YYYY-MM-DD.md` as daily episodic memory.
+- Import `memory/YYYY-MM-DD.md` and `memory/YYYY-MM-DD-<slug>.md` as daily episodic memory.
 - Import `sessions/*.md`, `session-logs/*.md`, `session_logs/*.md`, `conversations/*.md`, `exports/sessions/*.md`, and `exports/conversations/*.md` as session memory.
 - Do not import AGENTS.md, TOOLS.md, HEARTBEAT.md, or BOOTSTRAP.md. They are operational instructions, not durable user memory.
 
@@ -133,5 +133,7 @@ Recall behavior:
 - Use `recall.items` as cited memory evidence.
 - Use `recall.temporalTraversal?.labels` when the user refers to a day, session, or adjacent work period.
 - Do not run a separate vector search before calling `memory.recall()`. The backend is the first-class memory retrieval path.
+
+Installing the workspace skill makes the kernel procedure discoverable to OpenClaw agents. It does not automatically replace OpenClaw's native memory runtime or guarantee every future turn reads/writes `KernelAgentMemoryBackend`; automatic per-turn recall and recording require explicit host wiring through an OpenClaw plugin, MCP server, or adapter that calls the public kernel API.
 
 The migration command is idempotent. Re-running it skips records already imported into the same memory database.

@@ -34,10 +34,18 @@ export class InstalledBatchProcessor {
         const processedSourceIds = [];
         const adapterDiagnostics = [];
         const sourceResults = [];
-        for (const source of sources) {
+        for (const [sourceOffset, source] of sources.entries()) {
             const adapter = this.adapters.get(source.adapterKind);
             if (!adapter)
                 continue;
+            const sourceIndex = sourceOffset + 1;
+            this.deps.onProgress?.({
+                stage: 'source:start',
+                sourceIndex,
+                totalSources: sources.length,
+                sourcePath: source.sourcePath,
+                adapterKind: source.adapterKind
+            });
             const snapshot = this.loader.read(source);
             const cursor = this.deps.cursorStore.getCursor(source.sourceId);
             const adapted = adapter.adapt(source, snapshot, source.tags?.includes('ingest:profile_only')
@@ -51,10 +59,28 @@ export class InstalledBatchProcessor {
             const pending = adapted.records.filter((record) => !seenHashes.has(record.provenance.recordHash));
             recordsParsed += adapted.records.length;
             skippedRecords += adapted.records.length - pending.length;
+            this.deps.onProgress?.({
+                stage: 'source:parsed',
+                sourceIndex,
+                totalSources: sources.length,
+                sourcePath: source.sourcePath,
+                adapterKind: source.adapterKind,
+                recordsParsed: adapted.records.length,
+                pendingRecords: pending.length,
+                skippedRecords: adapted.records.length - pending.length
+            });
             if (!cursor || cursor.lastSeenHash !== snapshot.fileHash || pending.length > 0) {
                 sourcesChanged += 1;
             }
             if (pending.length > 0) {
+                this.deps.onProgress?.({
+                    stage: 'source:ingest:start',
+                    sourceIndex,
+                    totalSources: sources.length,
+                    sourcePath: source.sourcePath,
+                    adapterKind: source.adapterKind,
+                    pendingRecords: pending.length
+                });
                 const envelopes = pending.map((record) => buildEpisodeEnvelope(source, record));
                 const neurons = await this.deps.ingestBatch(envelopes.map((item) => item.ingestInput));
                 recordsIngested += envelopes.length;
@@ -71,6 +97,15 @@ export class InstalledBatchProcessor {
                         processedAt: Date.now(),
                         neuronId: neuron?.id
                     });
+                });
+                this.deps.onProgress?.({
+                    stage: 'source:ingest:complete',
+                    sourceIndex,
+                    totalSources: sources.length,
+                    sourcePath: source.sourcePath,
+                    adapterKind: source.adapterKind,
+                    ingestedRecords: envelopes.length,
+                    totalRecordsIngested: recordsIngested
                 });
             }
             this.deps.cursorStore.updateCursor({
@@ -95,7 +130,9 @@ export class InstalledBatchProcessor {
                 diagnostics: adapted.diagnostics || []
             });
         }
+        this.deps.onProgress?.({ stage: 'offline:start', recordsIngested });
         const offline = await this.deps.runOfflineWindow(options.window);
+        this.deps.onProgress?.({ stage: 'offline:complete', recordsIngested });
         return {
             window: options.window,
             sourcesScanned: sources.length,

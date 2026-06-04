@@ -51,6 +51,8 @@ const SESSION_DIR_CANDIDATES = [
   join('exports', 'conversations'),
 ];
 
+const OPENCLAW_DAILY_MEMORY_FILE = /^\d{4}-\d{2}-\d{2}(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.md$/i;
+
 export class OpenClawWorkspaceProfile {
   readonly workspaceRoot: string;
 
@@ -93,7 +95,7 @@ export class OpenClawWorkspaceProfile {
     if (name === 'MEMORY.md') {
       return this.result(absolutePath, normalized, 'memory_source', 'openclaw_memory_index', 'Imported summary/index memory source.');
     }
-    if (/^memory\/\d{4}-\d{2}-\d{2}\.md$/i.test(normalized)) {
+    if (normalized.startsWith('memory/') && OPENCLAW_DAILY_MEMORY_FILE.test(name)) {
       return this.result(absolutePath, normalized, 'memory_source', 'openclaw_daily_memory', 'Daily episodic memory source.');
     }
     if (this.isSessionPath(normalized)) {
@@ -119,6 +121,7 @@ export class OpenClawWorkspaceProfile {
       'IDENTITY.md',
       'MEMORY.md',
       join('memory', 'YYYY-MM-DD.md'),
+      join('memory', 'YYYY-MM-DD-<slug>.md'),
       join('sessions', '<exported-conversation>.md'),
       'AGENTS.md',
       'TOOLS.md',
@@ -164,9 +167,14 @@ export class OpenClawWorkspaceProfile {
     const memoryDir = join(this.workspaceRoot, 'memory');
     if (date) {
       maybeAdd(join(memoryDir, `${date}.md`));
+      if (existsSync(memoryDir)) {
+        for (const child of readdirSync(memoryDir)) {
+          if (child.startsWith(`${date}-`) && OPENCLAW_DAILY_MEMORY_FILE.test(child)) maybeAdd(join(memoryDir, child));
+        }
+      }
     } else if (existsSync(memoryDir)) {
       for (const child of readdirSync(memoryDir)) {
-        if (/^\d{4}-\d{2}-\d{2}\.md$/i.test(child)) maybeAdd(join(memoryDir, child));
+        if (OPENCLAW_DAILY_MEMORY_FILE.test(child)) maybeAdd(join(memoryDir, child));
       }
     }
 

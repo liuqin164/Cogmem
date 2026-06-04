@@ -13,5 +13,18 @@
  *
  * Writes a `.cogmem/config.toml` file loadable by `createMemoryKernelFromConfig()`.
  */
-export {};
+export interface DetectionResult {
+    ollamaAvailable: boolean;
+    ollamaModels: string[];
+    openaiAvailable: boolean;
+    anthropicAvailable: boolean;
+    qwenAvailable: boolean;
+}
+export declare function suggestEmbeddingModel(det: DetectionResult): {
+    provider: 'deterministic_local' | 'openai_compatible';
+    model: string;
+    baseUrl: string;
+    vectorDimension: number;
+};
+export declare function inferEmbeddingVectorDimension(provider: 'deterministic_local' | 'openai_compatible', model: string): number;
 //# sourceMappingURL=init.d.ts.map

@@ -17,6 +17,7 @@ import {
   type SourceDefinition,
 } from '../adapters/index.js';
 import { InstalledBatchProcessor } from '../batch/InstalledBatchProcessor.js';
+import type { BatchProgressEvent } from '../batch/InstalledBatchProcessor.js';
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import {
   createMemoryKernel,
@@ -102,7 +103,7 @@ export async function runOpenClawImport(argv: string[]): Promise<void> {
     workspaceRoot,
     projectId,
     sources,
-    usage: 'Usage: cogmem-import-openclaw [--workspace <dir>] [--project <id>] [--db <memory.db>|--config <config.toml>] [--date YYYY-MM-DD] [--session <file>...] [--memory <file>...] [--dry-run] [--json]',
+    usage: 'Usage: cogmem-import-openclaw [--workspace <dir>] [--project <id>] [--db <memory.db>|--config <config.toml>] [--date YYYY-MM-DD] [--session <file>...] [--memory <file>...] [--dry-run] [--json] [--progress] [--no-progress]',
   });
 }
 
@@ -124,7 +125,7 @@ export async function runHermesImport(argv: string[]): Promise<void> {
     workspaceRoot,
     projectId,
     sources,
-    usage: 'Usage: cogmem-import-hermes [--workspace <dir>] [--project <id>] [--db <memory.db>|--config <config.toml>] [--profile <file>] [--sessions <dir>] [--session <file>...] [--dry-run] [--json]',
+    usage: 'Usage: cogmem-import-hermes [--workspace <dir>] [--project <id>] [--db <memory.db>|--config <config.toml>] [--profile <file>] [--sessions <dir>] [--session <file>...] [--dry-run] [--json] [--progress] [--no-progress]',
   });
 }
 
@@ -245,6 +246,7 @@ async function importSources(input: {
       startTime: window.start,
       endTime: window.end,
     }),
+    onProgress: buildProgressReporter(input.args),
   });
 
   try {
@@ -371,4 +373,39 @@ function printHumanSummary(result: AgentImportResult): void {
       console.log(`- ${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}`);
     }
   }
+}
+
+function buildProgressReporter(args: ParsedArgs): ((event: BatchProgressEvent) => void) | undefined {
+  if (args.values['no-progress'] === true || args.values.quiet === true) return undefined;
+  if (args.values.json === true && args.values.progress !== true) return undefined;
+
+  return (event: BatchProgressEvent) => {
+    const prefix = '[cogmem-import]';
+    if (event.stage === 'source:start') {
+      console.error(`${prefix} source ${event.sourceIndex}/${event.totalSources} scanning ${basename(event.sourcePath)} (${event.adapterKind})`);
+      return;
+    }
+    if (event.stage === 'source:parsed') {
+      console.error([
+        `${prefix} source ${event.sourceIndex}/${event.totalSources} parsed ${basename(event.sourcePath)}`,
+        `records=${event.recordsParsed}`,
+        `pending=${event.pendingRecords}`,
+        `skipped=${event.skippedRecords}`,
+      ].join(' '));
+      return;
+    }
+    if (event.stage === 'source:ingest:start') {
+      console.error(`${prefix} source ${event.sourceIndex}/${event.totalSources} embedding+ingesting ${event.pendingRecords} record(s) from ${basename(event.sourcePath)}`);
+      return;
+    }
+    if (event.stage === 'source:ingest:complete') {
+      console.error(`${prefix} source ${event.sourceIndex}/${event.totalSources} ingested ${event.ingestedRecords} record(s); total=${event.totalRecordsIngested}`);
+      return;
+    }
+    if (event.stage === 'offline:start') {
+      console.error(`${prefix} consolidating imported window after ${event.recordsIngested} ingested record(s)`);
+      return;
+    }
+    console.error(`${prefix} consolidation complete`);
+  };
 }

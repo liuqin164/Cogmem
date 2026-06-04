@@ -28,7 +28,7 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface DetectionResult {
+export interface DetectionResult {
   ollamaAvailable: boolean;
   ollamaModels: string[];
   openaiAvailable: boolean;
@@ -181,7 +181,7 @@ function pickFirst(models: string[], ...matchers: Array<(n: string) => boolean>)
   return undefined;
 }
 
-function suggestEmbeddingModel(det: DetectionResult): {
+export function suggestEmbeddingModel(det: DetectionResult): {
   provider: 'deterministic_local' | 'openai_compatible';
   model: string;
   baseUrl: string;
@@ -190,6 +190,7 @@ function suggestEmbeddingModel(det: DetectionResult): {
   if (det.ollamaAvailable) {
     const model = pickFirst(
       det.ollamaModels,
+      (n) => n.includes('qwen3-embedding'),
       (n) => n.includes('bge-m3'),
       (n) => n.includes('nomic-embed-text'),
       (n) => n.startsWith('dmeta'),
@@ -212,15 +213,15 @@ function suggestEmbeddingModel(det: DetectionResult): {
   };
 }
 
-function inferEmbeddingVectorDimension(
+export function inferEmbeddingVectorDimension(
   provider: 'deterministic_local' | 'openai_compatible',
   model: string,
 ): number {
   if (provider === 'deterministic_local') return DEFAULT_VECTOR_DIMENSION;
   const normalized = model.toLowerCase();
-  if (normalized.includes('qwen3-embedding:8b')) return 4096;
-  if (normalized.includes('qwen3-embedding:4b')) return 2560;
-  if (normalized.includes('qwen3-embedding:0.6b')) return 1024;
+  if (/qwen3-embedding[-:]8b/.test(normalized)) return 4096;
+  if (/qwen3-embedding[-:]4b/.test(normalized)) return 2560;
+  if (/qwen3-embedding[-:]0\.6b/.test(normalized)) return 1024;
   if (normalized.includes('bge-m3')) return 1024;
   if (normalized.includes('mxbai')) return 1024;
   if (normalized.includes('nomic-embed-text')) return 768;
@@ -722,7 +723,7 @@ async function main(): Promise<void> {
   console.log('╚═══════════════════════════════════════════════════════════════╝');
   console.log('');
   const target = resolveInstallTarget(args);
-  console.log('  This wizard writes ~/.cogmem/config.toml by default.');
+  console.log(`  This wizard writes ${args.scope === 'project' ? '.cogmem/config.toml in the current project' : '~/.cogmem/config.toml by default'}.`);
   console.log('  Run cogmem-init again at any time to reconfigure.');
   console.log(`  Cogmem home: ${target.homeDir}`);
 
@@ -863,7 +864,9 @@ async function main(): Promise<void> {
   console.log('');
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}

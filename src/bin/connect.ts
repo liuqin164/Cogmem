@@ -82,7 +82,7 @@ function defaultSkillPath(agent: AgentKind, workspaceRoot: string): string {
 function nextCommands(agent: AgentKind): string[] {
   if (agent === 'openclaw') {
     return [
-      './node_modules/.bin/cogmem-init --agent openclaw',
+      './node_modules/.bin/cogmem-init --agent openclaw --scope project',
       './node_modules/.bin/cogmem-doctor',
       './node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --dry-run',
       './node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw',

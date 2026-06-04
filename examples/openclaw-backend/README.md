@@ -8,7 +8,7 @@ Use core as OpenClaw's durable memory backend without installing CognitiveOS.
 export COGMEM_CORE_REPO="github:<owner>/CognitiveOS-core#main"
 bun add "$COGMEM_CORE_REPO"
 ./node_modules/.bin/cogmem-connect openclaw --workspace .
-./node_modules/.bin/cogmem-init --agent openclaw
+./node_modules/.bin/cogmem-init --agent openclaw --scope project
 ./node_modules/.bin/cogmem-doctor
 ```
 
@@ -59,6 +59,7 @@ Single source files and batches can be imported explicitly:
 
 The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store.
 Imported records are embedded through the configured kernel embedder during import.
+Real non-JSON imports print source-level and embedding+ingest progress to stderr. Use `--json --progress` to keep JSON on stdout while streaming progress to stderr, or `--no-progress` for quiet automation.
 
 ## Runtime
 
@@ -98,3 +99,5 @@ The profile imports memory sources only. It ignores operational files such as `A
 For agent-facing instructions, install or read `SKILL.md`. `./node_modules/.bin/cogmem-connect openclaw --workspace .` copies it to `<workspace>/skills/cogmem-memory/SKILL.md`.
 
 `cogmem-connect` does not edit `~/.openclaw/openclaw.json`. Current OpenClaw memory config is OpenClaw-owned (`memory.backend` supports backends such as `"builtin"` and `"qmd"`). Do not add unknown host config fields for CognitiveOS-core; install a real OpenClaw plugin wrapper with a valid manifest/schema before changing host runtime wiring.
+
+Installing the workspace skill makes the kernel discoverable to OpenClaw agents. It does not automatically replace OpenClaw's native memory runtime or guarantee every future turn reads/writes `KernelAgentMemoryBackend`; automatic per-turn recall and recording require explicit host wiring through an OpenClaw plugin, MCP server, or adapter that calls the public kernel API.

@@ -231,6 +231,8 @@ OpenClaw default workspace import:
 ./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw
 ```
 
+The importer prints source-level and record-level progress to stderr during real non-JSON imports, including the embedding+ingest stage. JSON output stays on stdout; pass `--json --progress` to keep machine-readable stdout while streaming progress to stderr. Use `--no-progress` for quiet automation.
+
 OpenClaw explicit single-file or batch import:
 
 ```bash
@@ -259,7 +261,7 @@ Pass `--json` when automation needs machine-readable counts for scanned sources,
 
 ## OpenClaw
 
-Core includes a first-party OpenClaw workspace profile. It recognizes `USER.md`, `SOUL.md`, `PERSONA.md`, `MEMORY.md`, `memory/YYYY-MM-DD.md`, and session export folders.
+Core includes a first-party OpenClaw workspace profile. It recognizes `USER.md`, `SOUL.md`, `PERSONA.md`, `MEMORY.md`, `memory/YYYY-MM-DD.md`, `memory/YYYY-MM-DD-<slug>.md`, and session export folders.
 
 To install the agent-facing skill file into an OpenClaw workspace:
 
@@ -274,11 +276,13 @@ This writes `<workspace>/skills/cogmem-memory/SKILL.md`, OpenClaw's workspace sk
 Run the command after configuration to migrate existing OpenClaw memory into the kernel:
 
 ```bash
-./node_modules/.bin/cogmem-init --agent openclaw
+./node_modules/.bin/cogmem-init --agent openclaw --scope project
 ./node_modules/.bin/cogmem-doctor
 ./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --dry-run
 ./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw
 ```
+
+This installs and validates the kernel store and the agent-facing workspace skill. It does not by itself replace OpenClaw's native `memory.backend` or make every future OpenClaw turn automatically call `KernelAgentMemoryBackend`; automatic per-turn read/write requires an OpenClaw runtime/plugin/MCP wiring layer that explicitly invokes the public kernel API.
 
 ```ts
 import { OpenClawWorkspaceProfile, createMemoryKernelFromConfig } from '@CognitiveOS/core';

@@ -32,10 +32,48 @@ export interface BatchSourceResult {
     skippedRecords: number;
     diagnostics: SourceAdapterDiagnostic[];
 }
+export type BatchProgressEvent = {
+    stage: 'source:start';
+    sourceIndex: number;
+    totalSources: number;
+    sourcePath: string;
+    adapterKind: SourceDefinition['adapterKind'];
+} | {
+    stage: 'source:parsed';
+    sourceIndex: number;
+    totalSources: number;
+    sourcePath: string;
+    adapterKind: SourceDefinition['adapterKind'];
+    recordsParsed: number;
+    pendingRecords: number;
+    skippedRecords: number;
+} | {
+    stage: 'source:ingest:start';
+    sourceIndex: number;
+    totalSources: number;
+    sourcePath: string;
+    adapterKind: SourceDefinition['adapterKind'];
+    pendingRecords: number;
+} | {
+    stage: 'source:ingest:complete';
+    sourceIndex: number;
+    totalSources: number;
+    sourcePath: string;
+    adapterKind: SourceDefinition['adapterKind'];
+    ingestedRecords: number;
+    totalRecordsIngested: number;
+} | {
+    stage: 'offline:start';
+    recordsIngested: number;
+} | {
+    stage: 'offline:complete';
+    recordsIngested: number;
+};
 interface InstalledBatchProcessorDependencies {
     cursorStore: IngestionCursorStore;
     ingestBatch: (inputs: IngestInput[]) => Promise<Neuron[]>;
     runOfflineWindow: (window: BatchConsolidationWindow) => Promise<OfflineConsolidationOutput>;
+    onProgress?: (event: BatchProgressEvent) => void;
 }
 export declare class InstalledBatchProcessor {
     private readonly deps;
