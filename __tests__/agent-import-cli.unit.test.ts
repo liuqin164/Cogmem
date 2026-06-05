@@ -539,6 +539,10 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(existsSync(join(pluginDir, 'index.js'))).toBe(true);
   expect(existsSync(join(pluginDir, 'bridge.mjs'))).toBe(true);
   expect(readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8')).toContain('KernelAgentMemoryBackend');
+  const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
+  expect(manifest.configSchema.type).toBe('object');
+  expect(manifest.configSchema.properties.configPath.type).toBe('string');
+  expect(manifest.configSchema.properties.autoRecall.type).toBe('boolean');
 
   const openclawConfig = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
   expect(openclawConfig.plugins.load.paths).toContain(pluginDir);
