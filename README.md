@@ -271,7 +271,21 @@ To install the agent-facing skill file into an OpenClaw workspace:
 
 This writes `<workspace>/skills/cogmem-memory/SKILL.md`, OpenClaw's workspace skill location. The skill tells an agent how to install, validate, dry-run migration, migrate, and wire `KernelAgentMemoryBackend` without changing OpenClaw host config automatically.
 
-`cogmem-connect` does not edit `~/.openclaw/openclaw.json`. Current OpenClaw memory config is OpenClaw-owned (`memory.backend` supports backends such as `"builtin"` and `"qmd"`). Do not add unknown host config fields for CognitiveOS-core; install a real OpenClaw plugin wrapper with a valid manifest/schema before changing host runtime wiring.
+To make OpenClaw automatically recall and record memory on every future turn, install the first-party local plugin wrapper:
+
+```bash
+./node_modules/.bin/cogmem-connect openclaw --workspace . --auto --force
+```
+
+`--auto` writes `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables the plugin entry with `hooks.allowPromptInjection=true` and `hooks.allowConversationAccess=true`. The wrapper registers `before_prompt_build` for governed recall and `agent_end` for turn recording. It calls `KernelAgentMemoryBackend` through `@CognitiveOS/core` public API via a Bun bridge; core still does not import OpenClaw or become an OpenClaw runtime.
+
+If an existing installation needs repair after an update:
+
+```bash
+./node_modules/.bin/cogmem-doctor --fix --agent openclaw --workspace .
+```
+
+OpenClaw config is still OpenClaw-owned (`memory.backend` supports backends such as `"builtin"` and `"qmd"`). Do not add unknown host config fields for CognitiveOS-core and do not write `plugins.slots.memory`. Runtime integration must go through the installed local plugin wrapper or another explicit adapter that calls the public kernel API.
 
 Run the command after configuration to migrate existing OpenClaw memory into the kernel:
 
@@ -280,9 +294,10 @@ Run the command after configuration to migrate existing OpenClaw memory into the
 ./node_modules/.bin/cogmem-doctor
 ./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --dry-run
 ./node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw
+./node_modules/.bin/cogmem-connect openclaw --workspace . --auto --force
 ```
 
-This installs and validates the kernel store and the agent-facing workspace skill. It does not by itself replace OpenClaw's native `memory.backend` or make every future OpenClaw turn automatically call `KernelAgentMemoryBackend`; automatic per-turn read/write requires an OpenClaw runtime/plugin/MCP wiring layer that explicitly invokes the public kernel API.
+This installs and validates the kernel store, migrates existing OpenClaw memory evidence, installs the agent-facing workspace skill, and installs the local automatic memory plugin. Restart the OpenClaw Gateway after changing plugin code, hook policy, or `plugins.load.paths`.
 
 ```ts
 import { OpenClawWorkspaceProfile, createMemoryKernelFromConfig } from '@CognitiveOS/core';
@@ -342,9 +357,11 @@ See `examples/hermes-backend/README.md` and `examples/hermes-backend/SKILL.md`.
 ## CLI
 
 ```bash
+cogmem                   # unified command dispatcher: cogmem doctor, cogmem connect, cogmem update
 cogmem-init              # interactive setup
-cogmem-doctor            # validates config.toml and opens the kernel
-cogmem-connect           # install OpenClaw/Hermes agent-facing SKILL.md files
+cogmem-doctor            # validates config.toml and opens the kernel; --fix repairs OpenClaw auto wiring
+cogmem-connect           # install OpenClaw/Hermes agent-facing SKILL.md files; openclaw --auto installs runtime hooks
+cogmem-update            # package update helper; equivalent to cogmem update
 cogmem-explain-recall    # explain pulse/temporal/narrative recall decisions
 cogmem-mcp               # stdio MCP server exposing cogmem memory tools
 cogmem-import-openclaw   # migrate OpenClaw workspace memory into core

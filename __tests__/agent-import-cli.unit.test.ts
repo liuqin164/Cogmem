@@ -12,6 +12,8 @@ const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const openClawImportBin = join(coreRoot, 'src/bin/import-openclaw.ts');
 const hermesImportBin = join(coreRoot, 'src/bin/import-hermes.ts');
 const connectBin = join(coreRoot, 'src/bin/connect.ts');
+const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
+const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');
 
 async function runCli(
   cmd: string[],
@@ -504,6 +506,98 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   expect(body).toContain('OpenClaw');
 });
 
+test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-openclaw-auto-'));
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  const openclawConfigPath = join(dir, 'openclaw.json');
+  const pluginDir = join(dir, 'extensions', 'cogmem-auto-memory');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+  writeFileSync(openclawConfigPath, JSON.stringify({ plugins: { enabled: true } }, null, 2));
+
+  const installed = await runCli([
+    'bun',
+    connectBin,
+    'openclaw',
+    '--workspace',
+    dir,
+    '--config',
+    configPath,
+    '--openclaw-config',
+    openclawConfigPath,
+    '--auto',
+    '--force',
+    '--json',
+  ]);
+
+  expect(installed.stderr).toBe('');
+  expect(installed.exitCode).toBe(0);
+  const parsed = JSON.parse(installed.stdout);
+  expect(parsed.autoMemory.enabled).toBe(true);
+  expect(parsed.autoMemory.installed).toBe(true);
+  expect(parsed.autoMemory.pluginDir).toBe(pluginDir);
+  expect(existsSync(join(pluginDir, 'index.js'))).toBe(true);
+  expect(existsSync(join(pluginDir, 'bridge.mjs'))).toBe(true);
+  expect(readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8')).toContain('KernelAgentMemoryBackend');
+
+  const openclawConfig = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
+  expect(openclawConfig.plugins.load.paths).toContain(pluginDir);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].enabled).toBe(true);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].hooks.allowConversationAccess).toBe(true);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].hooks.allowPromptInjection).toBe(true);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.configPath).toBe(configPath);
+});
+
+test('doctor --fix can repair OpenClaw automatic memory wiring', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-doctor-openclaw-fix-'));
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  const openclawConfigPath = join(dir, 'openclaw.json');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+  writeFileSync(openclawConfigPath, JSON.stringify({}, null, 2));
+
+  const fixed = await runCli([
+    'bun',
+    doctorBin,
+    '--config',
+    configPath,
+    '--fix',
+    '--agent',
+    'openclaw',
+    '--workspace',
+    dir,
+    '--openclaw-config',
+    openclawConfigPath,
+  ]);
+
+  expect(fixed.stderr).toBe('');
+  expect(fixed.exitCode).toBe(0);
+  expect(fixed.stdout).toContain('OK configuration parsed');
+  expect(fixed.stdout).toContain('OK openclaw auto memory integration fixed');
+  const openclawConfig = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].enabled).toBe(true);
+});
+
+test('unified cogmem CLI dispatches doctor and update commands', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-unified-cli-'));
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+
+  const doctor = await runCli(['bun', cogmemBin, 'doctor', '--config', configPath]);
+  expect(doctor.stderr).toBe('');
+  expect(doctor.exitCode).toBe(0);
+  expect(doctor.stdout).toContain('OK kernel ready');
+
+  const update = await runCli(['bun', cogmemBin, 'update', '--dry-run', '--json']);
+  expect(update.stderr).toBe('');
+  expect(update.exitCode).toBe(0);
+  const parsed = JSON.parse(update.stdout);
+  expect(parsed.command).toBe('update');
+  expect(parsed.dryRun).toBe(true);
+  expect(parsed.nextCommand).toContain('@CognitiveOS/core');
+});
+
 test('cogmem-connect installs Hermes skill into the real Hermes skills directory by default', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-hermes-home-'));
   const workspace = join(dir, 'workspace');
@@ -537,6 +631,8 @@ test('package exposes agent migration bins', () => {
   expect(packageJson.bin['cogmem-import-openclaw']).toBe('dist/bin/import-openclaw.js');
   expect(packageJson.bin['cogmem-import-hermes']).toBe('dist/bin/import-hermes.js');
   expect(packageJson.bin['cogmem-connect']).toBe('dist/bin/connect.js');
+  expect(packageJson.bin.cogmem).toBe('dist/bin/cogmem.js');
+  expect(packageJson.bin['cogmem-update']).toBe('dist/bin/update.js');
 });
 
 test('import CLI parser keeps repeated path arguments in order without duplication', () => {

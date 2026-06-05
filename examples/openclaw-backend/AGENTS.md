@@ -19,6 +19,7 @@ export COGMEM_CORE_REPO="github:<owner>/CognitiveOS-core#main"
 bun add "$COGMEM_CORE_REPO"
 ./node_modules/.bin/cogmem-init --agent openclaw --scope project
 ./node_modules/.bin/cogmem-doctor
+./node_modules/.bin/cogmem-connect openclaw --workspace . --auto --force
 ```
 
 The OpenClaw workspace install creates:
@@ -134,6 +135,18 @@ Recall behavior:
 - Use `recall.temporalTraversal?.labels` when the user refers to a day, session, or adjacent work period.
 - Do not run a separate vector search before calling `memory.recall()`. The backend is the first-class memory retrieval path.
 
-Installing the workspace skill makes the kernel procedure discoverable to OpenClaw agents. It does not automatically replace OpenClaw's native memory runtime or guarantee every future turn reads/writes `KernelAgentMemoryBackend`; automatic per-turn recall and recording require explicit host wiring through an OpenClaw plugin, MCP server, or adapter that calls the public kernel API.
+Installing the workspace skill makes the kernel procedure discoverable to OpenClaw agents. Installing the local auto wrapper makes future turns call the memory kernel automatically:
+
+```bash
+./node_modules/.bin/cogmem-connect openclaw --workspace . --auto --force
+```
+
+This writes `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through `@CognitiveOS/core` public API via a Bun bridge; core does not import OpenClaw.
+
+After updating the package or editing OpenClaw config, repair wiring with:
+
+```bash
+./node_modules/.bin/cogmem-doctor --fix --agent openclaw --workspace .
+```
 
 The migration command is idempotent. Re-running it skips records already imported into the same memory database.

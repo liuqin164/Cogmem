@@ -16,9 +16,11 @@
     }
   },
   "bin": {
+    "cogmem": "dist/bin/cogmem.js",
     "cogmem-init": "dist/bin/init.js",
     "cogmem-doctor": "dist/bin/doctor.js",
     "cogmem-connect": "dist/bin/connect.js",
+    "cogmem-update": "dist/bin/update.js",
     "cogmem-explain-recall": "dist/bin/explain-recall.js",
     "cogmem-mcp": "dist/bin/mcp.js",
     "cogmem-import-openclaw": "dist/bin/import-openclaw.js",

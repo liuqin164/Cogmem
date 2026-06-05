@@ -19,3 +19,4 @@
 - Added JSON/JSONL/CSV/TSV normalization source anchors and agent lifecycle facade methods for tool calls, tool observations, and task events.
 - Added `cogmem-normalize-transcript` for dry-run friendly transcript normalization into source-ref Markdown before import.
 - Added `memory_natural_emergence` benchmark baselines for critical recall, old-important recall, stale/superseded/suspect leakage, cross-project leakage, provenance completeness, context budget efficiency, pulse expansion, and inhibition correctness.
+- Added the unified `cogmem` CLI, `cogmem update`, `cogmem-connect openclaw --auto`, and `cogmem-doctor --fix --agent openclaw` so OpenClaw can install/repair an automatic recall and turn-recording wrapper without hand-editing runtime files.

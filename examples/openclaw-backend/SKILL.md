@@ -144,13 +144,25 @@ Use `recall.narrative` as the compact prompt context and `recall.items` as cited
 
 ## OpenClaw Host Integration Notes
 
-`cogmem-connect openclaw` installs this file into `<workspace>/skills/cogmem-memory/SKILL.md`, which is OpenClaw's workspace skill location. That makes the procedure discoverable without changing OpenClaw host config or pretending that a native memory plugin has already been installed.
+`cogmem-connect openclaw` installs this file into `<workspace>/skills/cogmem-memory/SKILL.md`, which is OpenClaw's workspace skill location. That makes the procedure discoverable without changing OpenClaw host config.
 
 Current OpenClaw memory config is OpenClaw-owned. Its documented backend selector is `memory.backend` with values such as `"builtin"` and `"qmd"`, and the built-in memory surface exposes tools such as `memory_search` and `memory_get`. Do not write `plugins.slots.memory` or other unknown OpenClaw config fields for CognitiveOS-core; OpenClaw uses strict config validation and unknown fields can prevent the Gateway from starting.
 
-Installing this workspace skill makes the memory kernel visible to OpenClaw agents as an operating procedure. It does not automatically replace OpenClaw's native memory runtime or guarantee every future turn reads/writes `KernelAgentMemoryBackend`; automatic per-turn recall and recording require explicit host wiring through an OpenClaw plugin, MCP server, or adapter that calls the public kernel API.
+To make every future OpenClaw turn automatically use the memory kernel, install the local plugin wrapper:
 
-When authoring a real OpenClaw plugin wrapper, package it with a valid OpenClaw plugin manifest/schema first, then map OpenClaw tool behavior to core like this:
+```bash
+./node_modules/.bin/cogmem-connect openclaw --workspace . --auto --force
+```
+
+`--auto` writes `<workspace>/extensions/cogmem-auto-memory/`, patches `plugins.load.paths`, and enables `hooks.allowPromptInjection=true` and `hooks.allowConversationAccess=true` for the wrapper. The wrapper registers `before_prompt_build` for governed recall and `agent_end` for turn recording, then calls `KernelAgentMemoryBackend` through `@CognitiveOS/core` public API via a Bun bridge. Core does not import OpenClaw.
+
+After package updates or config drift, repair the host wiring:
+
+```bash
+./node_modules/.bin/cogmem-doctor --fix --agent openclaw --workspace .
+```
+
+The wrapper maps OpenClaw behavior to core like this:
 
 - `memory_search` should call `memory.recall()` and return `recall.narrative` plus cited `recall.items`.
 - `memory_get` should read from the cited evidence returned by core or from the original workspace file when a citation includes a file path.

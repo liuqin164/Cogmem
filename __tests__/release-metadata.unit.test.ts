@@ -65,6 +65,7 @@ describe('core release metadata', () => {
   test('every package CLI bin has a source entrypoint', () => {
     const manifest = packageJson();
     const expectedBins = [
+      'cogmem',
       'cogmem-connect',
       'cogmem-doctor',
       'cogmem-explain-recall',
@@ -76,6 +77,7 @@ describe('core release metadata', () => {
       'cogmem-normalize-transcript',
       'cogmem-re-embed',
       'cogmem-snapshot',
+      'cogmem-update',
     ];
 
     expect(Object.keys(manifest.bin).sort()).toEqual(expectedBins);

@@ -10,6 +10,7 @@ bun add "$COGMEM_CORE_REPO"
 ./node_modules/.bin/cogmem-connect openclaw --workspace .
 ./node_modules/.bin/cogmem-init --agent openclaw --scope project
 ./node_modules/.bin/cogmem-doctor
+./node_modules/.bin/cogmem-connect openclaw --workspace . --auto --force
 ```
 
 ## Local Quantized Embeddings
@@ -98,6 +99,18 @@ The profile imports memory sources only. It ignores operational files such as `A
 
 For agent-facing instructions, install or read `SKILL.md`. `./node_modules/.bin/cogmem-connect openclaw --workspace .` copies it to `<workspace>/skills/cogmem-memory/SKILL.md`.
 
-`cogmem-connect` does not edit `~/.openclaw/openclaw.json`. Current OpenClaw memory config is OpenClaw-owned (`memory.backend` supports backends such as `"builtin"` and `"qmd"`). Do not add unknown host config fields for CognitiveOS-core; install a real OpenClaw plugin wrapper with a valid manifest/schema before changing host runtime wiring.
+To make future OpenClaw turns automatically recall and record memory, run:
 
-Installing the workspace skill makes the kernel discoverable to OpenClaw agents. It does not automatically replace OpenClaw's native memory runtime or guarantee every future turn reads/writes `KernelAgentMemoryBackend`; automatic per-turn recall and recording require explicit host wiring through an OpenClaw plugin, MCP server, or adapter that calls the public kernel API.
+```bash
+./node_modules/.bin/cogmem-connect openclaw --workspace . --auto --force
+```
+
+`--auto` installs `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables a local plugin wrapper with `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through the public `@CognitiveOS/core` API via a Bun bridge; core still does not import OpenClaw.
+
+If the package is updated later, repair the OpenClaw wiring with:
+
+```bash
+./node_modules/.bin/cogmem-doctor --fix --agent openclaw --workspace .
+```
+
+Current OpenClaw memory config is OpenClaw-owned (`memory.backend` supports backends such as `"builtin"` and `"qmd"`). Do not add unknown host config fields for CognitiveOS-core and do not write `plugins.slots.memory`.

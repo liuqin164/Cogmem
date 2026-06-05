@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { installOpenClawAutoMemoryPlugin, } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 function readArgs(argv) {
     const values = {};
     const positionals = [];
@@ -26,7 +27,14 @@ function readArgs(argv) {
     return {
         agent,
         workspaceRoot: resolve(stringValue(values.workspace) || '.'),
+        configPath: stringValue(values.config),
+        openclawConfigPath: stringValue(values['openclaw-config']),
+        pluginDir: stringValue(values['plugin-dir']),
+        bunPath: stringValue(values.bun),
+        projectId: stringValue(values.project),
+        agentId: stringValue(values['agent-id']),
         outputPath: stringValue(values.output),
+        auto: values.auto === true,
         dryRun: values['dry-run'] === true,
         force: values.force === true,
         json: values.json === true,
@@ -55,6 +63,7 @@ function nextCommands(agent) {
             './node_modules/.bin/cogmem-doctor',
             './node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --dry-run',
             './node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw',
+            './node_modules/.bin/cogmem-connect openclaw --workspace . --auto --force',
         ];
     }
     return [
@@ -66,17 +75,26 @@ function nextCommands(agent) {
 }
 function usage() {
     return [
-        'Usage: cogmem-connect <openclaw|hermes> [--workspace <dir>] [--output <SKILL.md>] [--dry-run] [--force] [--json]',
+        'Usage: cogmem-connect <openclaw|hermes> [--workspace <dir>] [--output <SKILL.md>] [--auto] [--config <config.toml>] [--openclaw-config <openclaw.json>] [--dry-run] [--force] [--json]',
         '',
         'Installs the agent-facing CognitiveOS-core memory skill file into:',
         '  OpenClaw: <workspace>/skills/cogmem-memory/SKILL.md',
         '  Hermes:   ~/.hermes/skills/cogmem-memory/SKILL.md',
         '',
-        'This command does not migrate data and does not modify OpenClaw or Hermes host config.',
+        'By default this command installs only the agent-facing skill file.',
+        'For OpenClaw, pass --auto to install the local automatic recall/remember plugin wrapper and patch OpenClaw plugin config.',
     ].join('\n');
 }
-function hostConfigSnippet(agent, workspaceRoot) {
+function hostConfigSnippet(agent, workspaceRoot, auto) {
     if (agent === 'openclaw') {
+        if (auto) {
+            return [
+                '// cogmem-connect openclaw --auto installs a local OpenClaw plugin wrapper.',
+                '// The wrapper registers before_prompt_build for governed recall and agent_end for turn recording.',
+                '// It calls KernelAgentMemoryBackend through @CognitiveOS/core public API via a Bun bridge.',
+                '// Restart the OpenClaw Gateway after changing plugin code, hook policy, or plugins.load.paths.',
+            ].join('\n');
+        }
         return [
             '// cogmem-connect does not modify OpenClaw host config.',
             '// It installs a workspace skill at <workspace>/skills/cogmem-memory/SKILL.md.',
@@ -109,12 +127,29 @@ function installSkill(args) {
     const template = readFileSync(templatePath, 'utf8');
     const skillPath = resolve(args.outputPath || defaultSkillPath(args.agent, args.workspaceRoot));
     const alreadyCurrent = existsSync(skillPath) && readFileSync(skillPath, 'utf8') === template;
+    let autoMemory;
     if (!args.dryRun && !alreadyCurrent) {
         if (existsSync(skillPath) && !args.force) {
             throw new Error(`Skill already exists at ${skillPath}. Re-run with --force to overwrite.`);
         }
         mkdirSync(dirname(skillPath), { recursive: true });
         writeFileSync(skillPath, template, 'utf8');
+    }
+    if (args.agent === 'openclaw' && args.auto) {
+        autoMemory = installOpenClawAutoMemoryPlugin({
+            workspaceRoot: args.workspaceRoot,
+            configPath: args.configPath,
+            openclawConfigPath: args.openclawConfigPath,
+            pluginDir: args.pluginDir,
+            bunPath: args.bunPath,
+            projectId: args.projectId,
+            agentId: args.agentId,
+            dryRun: args.dryRun,
+            force: args.force,
+        });
+    }
+    else if (args.auto && args.agent !== 'openclaw') {
+        throw new Error('--auto is currently supported only for OpenClaw.');
     }
     return {
         agent: args.agent,
@@ -125,7 +160,8 @@ function installSkill(args) {
         installed: !args.dryRun && !alreadyCurrent,
         alreadyCurrent,
         nextCommands: nextCommands(args.agent),
-        hostConfigSnippet: hostConfigSnippet(args.agent, args.workspaceRoot),
+        hostConfigSnippet: hostConfigSnippet(args.agent, args.workspaceRoot, args.auto),
+        autoMemory,
     };
 }
 function printHuman(result) {
@@ -135,6 +171,15 @@ function printHuman(result) {
     console.log('');
     console.log('Host config snippet:');
     console.log(result.hostConfigSnippet);
+    if (result.autoMemory) {
+        console.log('');
+        console.log('OpenClaw automatic memory plugin:');
+        console.log(`  plugin: ${result.autoMemory.pluginDir}`);
+        console.log(`  config: ${result.autoMemory.openclawConfigPath}`);
+        console.log(`  hooks: ${result.autoMemory.hookNames.join(', ')}`);
+        if (result.autoMemory.backupPath)
+            console.log(`  backup: ${result.autoMemory.backupPath}`);
+    }
     console.log('');
     console.log('Next commands:');
     for (const command of result.nextCommands) {

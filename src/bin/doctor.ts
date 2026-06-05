@@ -1,11 +1,16 @@
 #!/usr/bin/env bun
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
+import { installOpenClawAutoMemoryPlugin } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 
 function readArg(name: string): string | undefined {
   const index = process.argv.indexOf(name);
   if (index === -1) return undefined;
   return process.argv[index + 1];
+}
+
+function hasFlag(name: string): boolean {
+  return process.argv.includes(name);
 }
 
 function ok(message: string): void {
@@ -29,6 +34,12 @@ function fail(message: string): never {
 
 const configPath = readArg('--config');
 const envPath = readArg('--env-path');
+const fix = hasFlag('--fix');
+const agent = readArg('--agent');
+const workspace = readArg('--workspace');
+const openclawConfigPath = readArg('--openclaw-config');
+const pluginDir = readArg('--plugin-dir');
+const bunPath = readArg('--bun');
 
 if (envPath) {
   fail('--env-path is no longer supported. Use cogmem-init to create .cogmem/config.toml, then run cogmem-doctor --config <config.toml>.');
@@ -46,4 +57,19 @@ if (envPath) {
   if (health.package !== '@CognitiveOS/core') fail('unexpected package identity');
   ok(`kernel ready at ${health.dbPath}`);
   kernel.close();
+  if (fix) {
+    if (agent !== 'openclaw') {
+      fail('doctor --fix currently requires --agent openclaw.');
+    }
+    const result = installOpenClawAutoMemoryPlugin({
+      workspaceRoot: workspace || loaded.integrations.openclaw.workspaceDir || process.cwd(),
+      configPath: resolution.path,
+      openclawConfigPath,
+      pluginDir,
+      bunPath,
+      force: true,
+    });
+    ok(`openclaw auto memory integration fixed at ${result.pluginDir}`);
+    ok(`openclaw config patched at ${result.openclawConfigPath}`);
+  }
 }
