@@ -124,6 +124,7 @@ function buildPatchedOpenClawConfig(input) {
             maxAssistantChars: 12000,
             recallTimeoutMs: 30000,
             rememberTimeoutMs: 60000,
+            auditLog: true,
         },
     };
     const after = JSON.stringify(root);
@@ -163,6 +164,8 @@ function buildPluginFiles() {
                     maxAssistantChars: { type: 'number' },
                     recallTimeoutMs: { type: 'number' },
                     rememberTimeoutMs: { type: 'number' },
+                    auditLog: { type: 'boolean' },
+                    auditLogPath: { type: 'string' },
                 },
             },
         }, null, 2)}\n`,
@@ -174,6 +177,7 @@ function pluginIndexJs() {
     return String.raw `'use strict';
 
 const { spawnSync } = require('node:child_process');
+const { appendFileSync, mkdirSync } = require('node:fs');
 const path = require('node:path');
 
 const PLUGIN_ID = 'cogmem-auto-memory';
@@ -190,11 +194,19 @@ const DEFAULTS = {
   maxAssistantChars: 12000,
   recallTimeoutMs: 30000,
   rememberTimeoutMs: 60000,
+  auditLog: true,
+  auditLogPath: '',
 };
 const seenTurns = new Map();
 
-function pluginConfig(api) {
-  return Object.assign({}, DEFAULTS, api && (api.pluginConfig || api.config || {}));
+function pluginConfig(api, event, ctx) {
+  return Object.assign(
+    {},
+    DEFAULTS,
+    api && (api.pluginConfig || api.config || {}),
+    ctx && (ctx.config || ctx.pluginConfig || {}),
+    event && event.context && event.context.pluginConfig || {}
+  );
 }
 
 function asMessages(event) {
@@ -271,55 +283,107 @@ function logWarn(api, message) {
   console.warn(message);
 }
 
+function audit(config, record) {
+  if (config.auditLog === false) return;
+  try {
+    const logPath = config.auditLogPath || path.join(config.cwd || process.cwd(), '.cogmem', 'logs', 'openclaw-auto-memory.jsonl');
+    mkdirSync(path.dirname(logPath), { recursive: true });
+    appendFileSync(logPath, JSON.stringify({
+      ts: new Date().toISOString(),
+      pluginId: PLUGIN_ID,
+      ...record,
+    }) + '\n');
+  } catch {
+    // Audit logging must never block the host agent.
+  }
+}
+
 const plugin = {
   id: PLUGIN_ID,
   name: 'CogMem Auto Memory',
   version: '0.1.0',
   register(api) {
-    const config = pluginConfig(api);
     if (!api || typeof api.on !== 'function') {
       throw new Error('OpenClaw plugin API missing api.on');
     }
 
-    if (config.autoRecall !== false) {
-      api.on('before_prompt_build', async (event) => {
-        const messages = asMessages(event);
-        const query = latestByRole(messages, 'user').slice(0, config.maxQueryChars || 2000);
-        if (!query.trim()) return {};
-        try {
-          const sessionId = eventId(event, 'openclaw-session');
-          const recalled = runBridge('recall', { query, sessionId, config }, config, config.recallTimeoutMs || 30000);
-          if (!recalled.context) return {};
-          return { prependContext: recalled.context };
-        } catch (error) {
-          logWarn(api, '[cogmem-auto-memory] recall skipped: ' + (error && error.message || String(error)));
-          return {};
-        }
-      }, { priority: 10 });
-    }
+    api.on('before_prompt_build', async (event, ctx) => {
+      const config = pluginConfig(api, event, ctx);
+      if (config.autoRecall === false) return {};
+      const sessionId = eventId(event, 'openclaw-session');
+      const messages = asMessages(event);
+      const query = latestByRole(messages, 'user').slice(0, config.maxQueryChars || 2000);
+      if (!query.trim()) {
+        audit(config, { hook: 'before_prompt_build', sessionId, action: 'skip', reason: 'empty_user_query' });
+        return {};
+      }
+      try {
+        const recalled = runBridge('recall', { query, sessionId, config }, config, config.recallTimeoutMs || 30000);
+        audit(config, {
+          hook: 'before_prompt_build',
+          sessionId,
+          action: recalled.context ? 'inject' : 'skip',
+          reason: recalled.context ? undefined : 'empty_recall_context',
+          itemCount: recalled.itemCount || 0,
+          contextChars: recalled.context ? recalled.context.length : 0,
+          recallMode: recalled.recallMode,
+          fallbackUsed: recalled.fallbackUsed === true,
+        });
+        if (!recalled.context) return {};
+        return { prependContext: recalled.context };
+      } catch (error) {
+        audit(config, {
+          hook: 'before_prompt_build',
+          sessionId,
+          action: 'error',
+          reason: error && error.message || String(error),
+        });
+        logWarn(api, '[cogmem-auto-memory] recall skipped: ' + (error && error.message || String(error)));
+        return {};
+      }
+    }, { priority: 10 });
 
-    if (config.autoRemember !== false) {
-      api.on('agent_end', async (event) => {
-        const messages = asMessages(event);
-        const userText = latestByRole(messages, 'user');
-        const assistantText = latestByRole(messages, 'assistant');
-        if (!userText.trim() || !assistantText.trim()) return;
-        const sessionId = eventId(event, 'openclaw-session');
-        const key = sessionId + ':' + userText.length + ':' + assistantText.length + ':' + assistantText.slice(0, 80);
-        if (seenTurns.get(sessionId) === key) return;
-        seenTurns.set(sessionId, key);
-        try {
-          runBridge('remember', {
-            sessionId,
-            userText,
-            assistantText: assistantText.slice(0, config.maxAssistantChars || 12000),
-            config,
-          }, config, config.rememberTimeoutMs || 60000);
-        } catch (error) {
-          logWarn(api, '[cogmem-auto-memory] remember skipped: ' + (error && error.message || String(error)));
-        }
-      }, { priority: 90 });
-    }
+    api.on('agent_end', async (event, ctx) => {
+      const config = pluginConfig(api, event, ctx);
+      if (config.autoRemember === false) return;
+      const messages = asMessages(event);
+      const userText = latestByRole(messages, 'user');
+      const assistantText = latestByRole(messages, 'assistant');
+      const sessionId = eventId(event, 'openclaw-session');
+      if (!userText.trim() || !assistantText.trim()) {
+        audit(config, { hook: 'agent_end', sessionId, action: 'skip', reason: 'missing_turn_text' });
+        return;
+      }
+      const key = sessionId + ':' + userText.length + ':' + assistantText.length + ':' + assistantText.slice(0, 80);
+      if (seenTurns.get(sessionId) === key) {
+        audit(config, { hook: 'agent_end', sessionId, action: 'skip', reason: 'duplicate_turn' });
+        return;
+      }
+      seenTurns.set(sessionId, key);
+      try {
+        runBridge('remember', {
+          sessionId,
+          userText,
+          assistantText: assistantText.slice(0, config.maxAssistantChars || 12000),
+          config,
+        }, config, config.rememberTimeoutMs || 60000);
+        audit(config, {
+          hook: 'agent_end',
+          sessionId,
+          action: 'remember',
+          userChars: userText.length,
+          assistantChars: assistantText.length,
+        });
+      } catch (error) {
+        audit(config, {
+          hook: 'agent_end',
+          sessionId,
+          action: 'error',
+          reason: error && error.message || String(error),
+        });
+        logWarn(api, '[cogmem-auto-memory] remember skipped: ' + (error && error.message || String(error)));
+      }
+    }, { priority: 90 });
   },
 };
 

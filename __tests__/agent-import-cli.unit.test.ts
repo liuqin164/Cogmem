@@ -538,11 +538,18 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(parsed.autoMemory.pluginDir).toBe(pluginDir);
   expect(existsSync(join(pluginDir, 'index.js'))).toBe(true);
   expect(existsSync(join(pluginDir, 'bridge.mjs'))).toBe(true);
+  const indexBody = readFileSync(join(pluginDir, 'index.js'), 'utf8');
+  expect(indexBody).toContain('function pluginConfig(api, event, ctx)');
+  expect(indexBody).toContain('ctx && (ctx.config || ctx.pluginConfig || {})');
+  expect(indexBody).toContain('event && event.context && event.context.pluginConfig || {}');
+  expect(indexBody).toContain("api.on('before_prompt_build', async (event, ctx)");
+  expect(indexBody).toContain("api.on('agent_end', async (event, ctx)");
   expect(readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8')).toContain('KernelAgentMemoryBackend');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
   expect(manifest.configSchema.type).toBe('object');
   expect(manifest.configSchema.properties.configPath.type).toBe('string');
   expect(manifest.configSchema.properties.autoRecall.type).toBe('boolean');
+  expect(manifest.configSchema.properties.auditLog.type).toBe('boolean');
 
   const openclawConfig = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
   expect(openclawConfig.plugins.load.paths).toContain(pluginDir);
@@ -550,6 +557,10 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].hooks.allowConversationAccess).toBe(true);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].hooks.allowPromptInjection).toBe(true);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.configPath).toBe(configPath);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.auditLog).toBe(true);
+  expect(indexBody).toContain("openclaw-auto-memory.jsonl");
+  expect(indexBody).toContain("action: recalled.context ? 'inject' : 'skip'");
+  expect(indexBody).toContain("action: 'remember'");
 });
 
 test('doctor --fix can repair OpenClaw automatic memory wiring', async () => {
