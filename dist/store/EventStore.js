@@ -306,9 +306,17 @@ export class EventStore {
             conditions.push(`project_id IN (${filters.projectId.map(() => '?').join(', ')})`);
             params.push(...filters.projectId);
         }
+        if (filters?.workspaceId?.length) {
+            conditions.push(`workspace_id IN (${filters.workspaceId.map(() => '?').join(', ')})`);
+            params.push(...filters.workspaceId);
+        }
         if (filters?.threadId?.length) {
             conditions.push(`thread_id IN (${filters.threadId.map(() => '?').join(', ')})`);
             params.push(...filters.threadId);
+        }
+        if (filters?.sessionId?.length) {
+            conditions.push(`session_id IN (${filters.sessionId.map(() => '?').join(', ')})`);
+            params.push(...filters.sessionId);
         }
         if (filters?.startTime !== undefined) {
             conditions.push('occurred_at >= ?');
@@ -342,7 +350,9 @@ export class EventStore {
                 causationId: filters?.causationId,
                 correlationId: filters?.correlationId,
                 projectId: filters?.projectId,
+                workspaceId: filters?.workspaceId,
                 threadId: filters?.threadId,
+                sessionId: filters?.sessionId,
                 startTime: filters?.startTime,
                 endTime: filters?.endTime
             }

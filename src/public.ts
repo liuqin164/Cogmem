@@ -62,6 +62,7 @@ export {
   type AgentRecallItem,
   type AgentRecallQuery,
   type AgentRecallResult,
+  type AgentRecallSourceAnchor,
   type AgentTaskEventMemory,
   type AgentToolCallMemory,
   type AgentToolObservationMemory,

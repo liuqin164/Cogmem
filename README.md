@@ -114,6 +114,8 @@ console.log(result.items);
 
 `KernelAgentMemoryBackend.recall()` routes through universe navigation first. That means core activates related entities, temporal branches, and graph neighbors, assembles a narrative summary, and returns context that is already prepared for the agent. `MemoryKernel.recall()` remains available as the lower-level BrainRecall path; the backend uses it only as a fallback when universe navigation yields no scoped evidence. If both compiled recall paths miss, the backend can use bounded raw ledger FTS as `raw_ledger_fallback`; this returns only matching raw snippets within the evidence limit and does not dump whole threads into the prompt.
 
+Adapters may pass `sessionId`, `threadId`, `excludeSessionId`, and `intent` when the user asks for session-aware or forensic recall. `intent: "previous_session_summary"` reads the previous completed session from the chronological ledger instead of guessing through semantic recall. `intent: "forensic_quote"` returns raw user/source events with `sourceAnchor` and `canAnswerExactQuote=true`; compiled memories and imported summaries set `canAnswerExactQuote=false` and must not be presented as exact wording. This keeps chronological replay separate from ranked context recall.
+
 Turn recording supports four modes:
 
 - `immediate_compile`: legacy behavior; records raw events and immediately creates compiled vector-backed memory.
@@ -292,6 +294,8 @@ To make OpenClaw automatically recall and record memory on every future turn, in
 ```
 
 `--auto` writes `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables the plugin entry with `hooks.allowPromptInjection=true` and `hooks.allowConversationAccess=true`. The wrapper registers `before_prompt_build` for governed recall and `agent_end` for turn recording. `agent_end` uses queued remember by default: it appends a durable JSONL job under `.cogmem/queue/` and spawns a background drain process, so slow embeddings or SQLite writes do not block Telegram/gateway response delivery. It calls `KernelAgentMemoryBackend` through `@CognitiveOS/core` public API via a Bun bridge; core still does not import OpenClaw or become an OpenClaw runtime.
+
+The OpenClaw wrapper injects retrieved history under `# CogMem Retrieved Memory`. Current conversation context remains OpenClaw-owned and separate from long-term memory. The wrapper uses a small CPU intent router: "previous session" style questions pass `intent: "previous_session_summary"` and exclude the current session; exact wording questions pass `intent: "forensic_quote"` and require raw ledger anchors. Imported `memory/YYYY-MM-DD.md` summaries remain provenance support and are marked `canAnswerExactQuote=false`, so an agent should say it only has a summary when raw source text is unavailable.
 
 When debugging recall, use:
 

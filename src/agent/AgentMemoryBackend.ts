@@ -42,9 +42,30 @@ export interface AgentRecallQuery {
   agentId: string;
   projectId: string;
   query: string;
+  workspaceId?: string;
+  sessionId?: string;
+  threadId?: string;
+  excludeSessionId?: string;
+  intent?: 'memory_recall' | 'previous_session_summary' | 'forensic_quote';
   limit?: number;
   startTime?: number;
   endTime?: number;
+}
+
+export interface AgentRecallSourceAnchor {
+  eventId?: string;
+  threadId?: string;
+  sessionId?: string;
+  turnId?: string;
+  role?: MemoryEvent['role'];
+  threadSeq?: number;
+  turnSeq?: number;
+  eventOrdinal?: number;
+  parentEventId?: string;
+  prevEventId?: string;
+  nextEventId?: string;
+  causalityType?: MemoryEvent['causalityType'];
+  orderingConfidence?: MemoryEvent['orderingConfidence'];
 }
 
 export interface AgentToolCallMemory {
@@ -105,6 +126,11 @@ export interface AgentRecallItem {
   topicPath?: string;
   tags: string[];
   source?: string;
+  sourceType?: 'compiled_memory' | 'imported_summary' | 'raw_ledger' | 'raw_ledger_session';
+  sourceAnchor?: AgentRecallSourceAnchor;
+  confidence?: number;
+  whyMatched?: string;
+  canAnswerExactQuote?: boolean;
 }
 
 export interface AgentRecallResult {
@@ -322,6 +348,13 @@ export class KernelAgentMemoryBackend {
   }
 
   recall(query: AgentRecallQuery): AgentRecallResult {
+    if (query.intent === 'previous_session_summary') {
+      return this.recallPreviousSession(query);
+    }
+    if (query.intent === 'forensic_quote') {
+      return this.recallForensicQuote(query);
+    }
+
     const limit = query.limit ?? 5;
     const retrievalLimit = Math.max(limit * 4, 24);
     const result = this.kernel.navigateMemory(query.query, {
@@ -364,15 +397,22 @@ export class KernelAgentMemoryBackend {
 
     const rawEvents = this.kernel.searchRawEvents(query.query, {
       projectId: query.projectId,
+      workspaceId: query.workspaceId,
+      threadId: query.threadId,
       startTime: query.startTime,
       endTime: query.endTime,
       limit: Math.max(limit * 2, 10),
     });
     const rawItems = rawEvents
       .filter((event) => this.isAgentRawEvent(event, query.agentId))
+      .filter((event) => this.isAllowedSession(event, query))
       .filter((event) => !this.isOperationalNoiseRawEvent(event))
       .slice(0, limit)
-      .map((event) => this.toAgentRawRecallItem(event));
+      .map((event) => this.toAgentRawRecallItem(event, {
+        sourceType: 'raw_ledger',
+        whyMatched: 'raw_ledger_text_fallback',
+        canAnswerExactQuote: true,
+      }));
 
     return {
       recallMode: 'raw_ledger_fallback',
@@ -383,6 +423,97 @@ export class KernelAgentMemoryBackend {
       runtime: result.navigation?.runtime,
       fallbackUsed: true,
     };
+  }
+
+  private recallPreviousSession(query: AgentRecallQuery): AgentRecallResult {
+    const limit = query.limit ?? 5;
+    const previousSessionId = this.findPreviousSessionId(query);
+    const events = previousSessionId
+      ? this.getSessionEvents(previousSessionId, query, Math.max(limit * 3, 24))
+      : [];
+    const items = events
+      .filter((event) => this.isAgentRawEvent(event, query.agentId))
+      .filter((event) => !this.isOperationalNoiseRawEvent(event))
+      .filter((event) => this.hasReadableEventText(event))
+      .slice(0, limit)
+      .map((event) => this.toAgentRawRecallItem(event, {
+        sourceType: 'raw_ledger_session',
+        whyMatched: 'previous_session_summary',
+        canAnswerExactQuote: true,
+      }));
+
+    return {
+      recallMode: 'raw_ledger_fallback',
+      items,
+      fallbackUsed: true,
+    };
+  }
+
+  private recallForensicQuote(query: AgentRecallQuery): AgentRecallResult {
+    const limit = query.limit ?? 5;
+    const rawEvents = this.kernel.searchRawEvents(this.toForensicSearchQuery(query.query), {
+      projectId: query.projectId,
+      workspaceId: query.workspaceId,
+      threadId: query.threadId,
+      startTime: query.startTime,
+      endTime: query.endTime,
+      limit: Math.max(limit * 4, 20),
+    });
+    const items = rawEvents
+      .filter((event) => this.isAgentRawEvent(event, query.agentId))
+      .filter((event) => this.isAllowedSession(event, query))
+      .filter((event) => !this.isOperationalNoiseRawEvent(event))
+      .filter((event) => event.role === 'user' || event.rawEventType === 'message')
+      .filter((event) => this.hasReadableEventText(event))
+      .sort((a, b) => this.quoteEventPriority(a) - this.quoteEventPriority(b))
+      .slice(0, limit)
+      .map((event) => this.toAgentRawRecallItem(event, {
+        sourceType: 'raw_ledger',
+        whyMatched: 'forensic_quote_raw_event',
+        canAnswerExactQuote: true,
+      }));
+
+    return {
+      recallMode: 'raw_ledger_fallback',
+      items,
+      fallbackUsed: true,
+    };
+  }
+
+  private findPreviousSessionId(query: AgentRecallQuery): string | undefined {
+    const page = this.kernel.eventStore.queryEvents(1, 1000, {
+      projectId: query.projectId ? [query.projectId] : undefined,
+      workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
+      startTime: query.startTime,
+      endTime: query.endTime,
+    });
+    const currentSessionIds = new Set([query.sessionId, query.excludeSessionId].filter((value): value is string => !!value));
+    const sessionIds = new Set<string>();
+    for (const event of page.records) {
+      if (!event.sessionId || currentSessionIds.has(event.sessionId)) continue;
+      if (!this.isAgentRawEvent(event, query.agentId)) continue;
+      if (this.isOperationalNoiseRawEvent(event)) continue;
+      sessionIds.add(event.sessionId);
+    }
+    return sessionIds.values().next().value;
+  }
+
+  private getSessionEvents(sessionId: string, query: AgentRecallQuery, limit: number): MemoryEvent[] {
+    const page = this.kernel.eventStore.queryEvents(1, Math.max(limit, 1), {
+      projectId: query.projectId ? [query.projectId] : undefined,
+      workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
+      sessionId: [sessionId],
+      startTime: query.startTime,
+      endTime: query.endTime,
+    });
+    return page.records
+      .slice()
+      .sort((a, b) => (
+        (a.globalSeq || 0) - (b.globalSeq || 0)
+        || (a.threadSeq || 0) - (b.threadSeq || 0)
+        || (a.eventOrdinal || 0) - (b.eventOrdinal || 0)
+        || a.eventId.localeCompare(b.eventId)
+      ));
   }
 
   private filterAgentEvidence(
@@ -399,13 +530,22 @@ export class KernelAgentMemoryBackend {
   }
 
   private toAgentRecallItem(neuron: MemoryKernelNavigationResult['rawEvidence'][number]): AgentRecallItem {
+    const tags = neuron.metadata.tags || [];
+    const importedSummary = tags.includes('reliability:imported_summary')
+      || tags.includes('provenance:imported_summary')
+      || tags.includes('memory_layer:summary_seed');
     return {
       id: neuron.id,
       text: neuron.content,
       projectId: neuron.metadata.projectId,
       topicPath: neuron.metadata.topicPath,
-      tags: neuron.metadata.tags || [],
+      tags,
       source: neuron.metadata.filePath || neuron.metadata.sourceEventId,
+      sourceType: importedSummary ? 'imported_summary' : 'compiled_memory',
+      sourceAnchor: neuron.metadata.sourceEventId ? { eventId: neuron.metadata.sourceEventId } : undefined,
+      confidence: importedSummary ? 0.35 : 0.75,
+      whyMatched: importedSummary ? 'imported_summary_support_only' : 'governed_compiled_memory',
+      canAnswerExactQuote: false,
     };
   }
 
@@ -428,7 +568,57 @@ export class KernelAgentMemoryBackend {
     return isOperationalNoiseText(typeof payload.text === 'string' ? payload.text : JSON.stringify(event.payload));
   }
 
-  private toAgentRawRecallItem(event: MemoryEvent): AgentRecallItem {
+  private isAllowedSession(event: MemoryEvent, query: AgentRecallQuery): boolean {
+    if (query.excludeSessionId && event.sessionId === query.excludeSessionId) return false;
+    if (query.sessionId && query.intent && query.intent !== 'memory_recall' && event.sessionId === query.sessionId) return false;
+    return true;
+  }
+
+  private hasReadableEventText(event: MemoryEvent): boolean {
+    const payload = event.payload as { text?: unknown; output?: unknown; title?: unknown };
+    return typeof payload.text === 'string'
+      || typeof payload.output === 'string'
+      || typeof payload.title === 'string';
+  }
+
+  private toForensicSearchQuery(query: string): string {
+    const stopwords = [
+      '原话',
+      '是什么',
+      '什么',
+      '我问过',
+      '问过',
+      '问题',
+      '记得吗',
+      '记得',
+      '完整对话',
+      '怎么说的',
+      '怎么说',
+      '上一句',
+      '下一句',
+      'exact',
+      'quote',
+      'verbatim',
+    ];
+    let normalized = query;
+    for (const word of stopwords) normalized = normalized.replace(new RegExp(word, 'gi'), ' ');
+    return normalized.trim() || query;
+  }
+
+  private quoteEventPriority(event: MemoryEvent): number {
+    if (event.role === 'user') return 0;
+    if (event.role === 'assistant') return 1;
+    return 2;
+  }
+
+  private toAgentRawRecallItem(
+    event: MemoryEvent,
+    options: {
+      sourceType: NonNullable<AgentRecallItem['sourceType']>;
+      whyMatched: string;
+      canAnswerExactQuote: boolean;
+    }
+  ): AgentRecallItem {
     const payload = event.payload as { text?: unknown };
     const tags = [
       'raw_ledger',
@@ -442,6 +632,29 @@ export class KernelAgentMemoryBackend {
       projectId: event.projectId,
       tags,
       source: event.eventId,
+      sourceType: options.sourceType,
+      sourceAnchor: this.toAgentSourceAnchor(event),
+      confidence: 1,
+      whyMatched: options.whyMatched,
+      canAnswerExactQuote: options.canAnswerExactQuote,
+    };
+  }
+
+  private toAgentSourceAnchor(event: MemoryEvent): AgentRecallSourceAnchor {
+    return {
+      eventId: event.eventId,
+      threadId: event.threadId,
+      sessionId: event.sessionId,
+      turnId: event.turnId,
+      role: event.role,
+      threadSeq: event.threadSeq,
+      turnSeq: event.turnSeq,
+      eventOrdinal: event.eventOrdinal,
+      parentEventId: event.parentEventId,
+      prevEventId: event.prevEventId,
+      nextEventId: event.nextEventId,
+      causalityType: event.causalityType,
+      orderingConfidence: event.orderingConfidence,
     };
   }
 

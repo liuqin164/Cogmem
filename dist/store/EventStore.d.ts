@@ -67,7 +67,9 @@ export declare class EventStore {
         causationId?: string[];
         correlationId?: string[];
         projectId?: string[];
+        workspaceId?: string[];
         threadId?: string[];
+        sessionId?: string[];
         startTime?: number;
         endTime?: number;
     }): EventAuditPage;

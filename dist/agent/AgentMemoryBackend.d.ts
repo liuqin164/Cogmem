@@ -27,9 +27,29 @@ export interface AgentRecallQuery {
     agentId: string;
     projectId: string;
     query: string;
+    workspaceId?: string;
+    sessionId?: string;
+    threadId?: string;
+    excludeSessionId?: string;
+    intent?: 'memory_recall' | 'previous_session_summary' | 'forensic_quote';
     limit?: number;
     startTime?: number;
     endTime?: number;
+}
+export interface AgentRecallSourceAnchor {
+    eventId?: string;
+    threadId?: string;
+    sessionId?: string;
+    turnId?: string;
+    role?: MemoryEvent['role'];
+    threadSeq?: number;
+    turnSeq?: number;
+    eventOrdinal?: number;
+    parentEventId?: string;
+    prevEventId?: string;
+    nextEventId?: string;
+    causalityType?: MemoryEvent['causalityType'];
+    orderingConfidence?: MemoryEvent['orderingConfidence'];
 }
 export interface AgentToolCallMemory {
     agentId: string;
@@ -86,6 +106,11 @@ export interface AgentRecallItem {
     topicPath?: string;
     tags: string[];
     source?: string;
+    sourceType?: 'compiled_memory' | 'imported_summary' | 'raw_ledger' | 'raw_ledger_session';
+    sourceAnchor?: AgentRecallSourceAnchor;
+    confidence?: number;
+    whyMatched?: string;
+    canAnswerExactQuote?: boolean;
 }
 export interface AgentRecallResult {
     recallMode: MemoryKernelNavigationResult['recallMode'] | 'raw_ledger_fallback';
@@ -105,11 +130,20 @@ export declare class KernelAgentMemoryBackend {
     ingestToolObservation(observation: AgentToolObservationMemory): Promise<MemoryEvent>;
     ingestTaskEvent(task: AgentTaskEventMemory): Promise<MemoryEvent>;
     recall(query: AgentRecallQuery): AgentRecallResult;
+    private recallPreviousSession;
+    private recallForensicQuote;
+    private findPreviousSessionId;
+    private getSessionEvents;
     private filterAgentEvidence;
     private toAgentRecallItem;
     private isAgentRawEvent;
     private isOperationalNoiseRawEvent;
+    private isAllowedSession;
+    private hasReadableEventText;
+    private toForensicSearchQuery;
+    private quoteEventPriority;
     private toAgentRawRecallItem;
+    private toAgentSourceAnchor;
     private toSourceRef;
     private shouldCompileTurn;
     private hasDurableTurnSignal;

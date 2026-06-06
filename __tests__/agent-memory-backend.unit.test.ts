@@ -107,6 +107,105 @@ test('agent backend selective mode compiles durable instructions but skips low-s
   kernel.close();
 });
 
+test('agent backend can recall the previous session from the raw ledger without semantic guessing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-previous-session-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-old-import',
+    userText: '6月3日检查 OpenClaw 配置，并建议重启 Hermes。',
+    assistantText: '这是旧摘要导入，不是刚结束的会话。',
+    timestamp: 1_700_000_000_000,
+    ingestMode: 'raw_archive_only',
+  });
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-previous',
+    userText: '我们讨论 CogMem Memory Context 是否混入当前会话，以及记忆黑盒问题。',
+    assistantText: '结论是要区分当前上下文、检索到的历史记忆和 raw ledger source。',
+    timestamp: 1_700_000_060_000,
+    ingestMode: 'raw_archive_only',
+  });
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    userText: '上一个会话我们聊了什么',
+    assistantText: '我应该查询刚结束的上一会话，而不是旧摘要。',
+    timestamp: 1_700_000_120_000,
+    ingestMode: 'raw_archive_only',
+  });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    excludeSessionId: 'session-current',
+    intent: 'previous_session_summary',
+    query: '上一个会话我们聊了什么',
+    limit: 6,
+  });
+
+  expect(recalled.recallMode).toBe('raw_ledger_fallback');
+  expect(recalled.fallbackUsed).toBe(true);
+  expect(recalled.items.length).toBeGreaterThan(0);
+  expect(recalled.items.every((item) => item.sourceAnchor?.sessionId === 'session-previous')).toBe(true);
+  expect(JSON.stringify(recalled.items)).toContain('CogMem Memory Context');
+  expect(JSON.stringify(recalled.items)).toContain('记忆黑盒问题');
+  expect(JSON.stringify(recalled.items)).not.toContain('重启 Hermes');
+
+  kernel.close();
+});
+
+test('agent backend forensic quote recall returns raw user events with source anchors', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-forensic-quote-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-source',
+    userText: '你能看到记忆内核中存储的记忆吗？还是说它是黑盒的',
+    assistantText: '我能看到注入摘要和日志，但不能直接读完整数据库。',
+    timestamp: 1_700_000_000_000,
+    ingestMode: 'raw_archive_only',
+  });
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    userText: '我问过你记忆黑盒的问题，原话是什么',
+    assistantText: '需要从 raw ledger source 回答，不能猜。',
+    timestamp: 1_700_000_060_000,
+    ingestMode: 'raw_archive_only',
+  });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    excludeSessionId: 'session-current',
+    intent: 'forensic_quote',
+    query: '记忆 黑盒 原话',
+    limit: 3,
+  });
+
+  expect(recalled.recallMode).toBe('raw_ledger_fallback');
+  expect(recalled.items).toHaveLength(1);
+  expect(recalled.items[0].text).toBe('你能看到记忆内核中存储的记忆吗？还是说它是黑盒的');
+  expect(recalled.items[0].sourceType).toBe('raw_ledger');
+  expect(recalled.items[0].canAnswerExactQuote).toBe(true);
+  expect(recalled.items[0].sourceAnchor?.sessionId).toBe('session-source');
+  expect(recalled.items[0].sourceAnchor?.role).toBe('user');
+
+  kernel.close();
+});
+
 test('agent backend remembers and recalls a project-scoped turn', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'agent-backend-'));
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });

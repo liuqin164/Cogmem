@@ -616,6 +616,9 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(indexBody).toContain('event && event.context && event.context.pluginConfig || {}');
   expect(indexBody).toContain("api.on('before_prompt_build', async (event, ctx)");
   expect(indexBody).toContain("api.on('agent_end', async (event, ctx)");
+  expect(indexBody).toContain('function classifyRecallIntent(query)');
+  expect(indexBody).toContain("intent: classifyRecallIntent(query)");
+  expect(indexBody).toContain('excludeSessionId: sessionId');
   expect(readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8')).toContain('KernelAgentMemoryBackend');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
   expect(manifest.configSchema.type).toBe('object');
@@ -650,6 +653,11 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(bridgeBody).toContain('ingestToolCall');
   expect(bridgeBody).toContain('ingestToolObservation');
   expect(bridgeBody).toContain('ingestTaskEvent');
+  expect(bridgeBody).toContain('# CogMem Retrieved Memory');
+  expect(bridgeBody).toContain('sourceType');
+  expect(bridgeBody).toContain('canAnswerExactQuote=false');
+  expect(bridgeBody).toContain('Current conversation context is separate');
+  expect(bridgeBody).toContain("intent: input.intent || 'memory_recall'");
 });
 
 test('doctor --fix can repair OpenClaw automatic memory wiring', async () => {

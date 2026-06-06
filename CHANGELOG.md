@@ -28,3 +28,4 @@
 - Changed the OpenClaw automatic memory wrapper to queue `agent_end` remember jobs and drain them in the background, avoiding synchronous response blocking from slow embeddings or SQLite writes.
 - Added best-effort OpenClaw lifecycle capture for tool calls, tool results, and task events when the host hook payload exposes them.
 - Added operational noise suppression so heartbeat polls, `HEARTBEAT_OK`, and setup reminders remain auditable evidence but do not enter active agent context by default.
+- Added session-aware and forensic recall intents for `KernelAgentMemoryBackend` and the OpenClaw auto-memory wrapper, separating current conversation context from retrieved history and requiring raw ledger anchors for exact wording.
