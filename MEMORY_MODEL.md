@@ -11,6 +11,7 @@ It is not a vector RAG store, a knowledge-base application, a wiki, an Obsidian 
 - Raw Search Index: FTS/metadata search over raw ledger text for exact source discovery without requiring every event to keep a high-dimensional vector.
 - Compiled Memory: write-time facts, beliefs, events, summaries, graph links, and governance state derived from raw evidence.
 - Dream Backlog: observable consolidation coverage over raw events so `raw_then_dream` does not silently become unprocessed log accumulation.
+- Dream Candidates: optional background curator output such as user preference candidates, project constraints, diagnostic memories, topic summaries, and temporal invalidation suggestions. These remain candidates with source refs, confidence, and governance status; an LLM helper must not directly rewrite verified memory.
 - Active Core: a very small current operating context maintained by the host agent or adapter, not all history.
 - Associative Graph: pulse-activated local graph, topic, entity, temporal, and cognitive adjacency candidates.
 - Recall Pack / ContextPack: the limited governed context returned for the current agent task.
@@ -56,7 +57,7 @@ Chronological order is for replay and audit. Recall ranking is for selecting use
 
 Do not use vector topK to reconstruct conversation order. Do not use ledger replay to bypass governed recall. Do not inject an entire thread, day, or transcript into prompt context unless a forensic/audit tool explicitly requests replay.
 
-Cold recall should reactivate evidence in layers: first governed compiled memory and summaries, then bounded raw FTS/metadata search, then optional on-demand reranking of a small raw window. `KernelAgentMemoryBackend.recall()` uses this raw ledger path only after governed universe navigation and BrainRecall fail to produce scoped evidence. Do not restore the old pattern of embedding every raw sentence just to make fuzzy search easier.
+Cold recall should reactivate evidence in layers: first governed compiled memory and summaries, then bounded raw FTS/metadata search, then optional on-demand reranking of a small raw window. `KernelAgentMemoryBackend.recall()` compiles long user questions into a bounded query plan before raw search, so filler text does not drown out cues such as `CogMem Memory Context`, `记忆`, and `黑盒`. Forensic follow-ups can pass `anchorEventId` or `anchorText` from the previous recall item to answer "what were my exact words" from the raw ledger instead of guessing from an imported summary. The backend uses raw ledger fallback only after governed universe navigation and BrainRecall fail to produce scoped evidence. Do not restore the old pattern of embedding every raw sentence just to make fuzzy search easier.
 
 ## SourceRefs
 
@@ -79,12 +80,14 @@ Compatible mechanisms translated into the kernel model:
 - Memory tier names: used as documentation and API explanation only.
 - Provider lifecycle: routed through `KernelAgentMemoryBackend` and narrow adapters, never through host runtime imports.
 - Behavior memory: stored as candidate/provisional governed memory with source refs and confidence, not as automatically verified fact.
+- Dreaming-style consolidation: acceptable only as a local-first curator that proposes categorized candidates and summaries from raw ledger windows. It may classify user preferences, project constraints, procedures, failures, diagnostic memories, topic summaries, and temporal supersession candidates, but CPU governance must decide promotion and every candidate must retain source refs.
 - Benchmark ideas: expressed as natural-emergence metrics that test recall and inhibition together.
 
 Rejected designs:
 
 - default vector topK as the primary recall path
 - LLM-controlled free memory mutation
+- LLM dream output promoted straight to verified fact
 - provider context directly injected into prompts
 - Markdown projection as source of truth
 - unbounded graph traversal

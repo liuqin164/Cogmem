@@ -617,7 +617,8 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(indexBody).toContain("api.on('before_prompt_build', async (event, ctx)");
   expect(indexBody).toContain("api.on('agent_end', async (event, ctx)");
   expect(indexBody).toContain('function classifyRecallIntent(query)');
-  expect(indexBody).toContain("intent: classifyRecallIntent(query)");
+  expect(indexBody).toContain('const intent = classifyRecallIntent(query)');
+  expect(indexBody).toContain('anchorEventId: anchor && anchor.eventId');
   expect(indexBody).toContain('excludeSessionId: sessionId');
   expect(readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8')).toContain('KernelAgentMemoryBackend');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
@@ -745,6 +746,7 @@ test('package exposes agent migration bins', () => {
   expect(packageJson.bin['cogmem-connect']).toBe('dist/bin/connect.js');
   expect(packageJson.bin.cogmem).toBe('dist/bin/cogmem.js');
   expect(packageJson.bin['cogmem-update']).toBe('dist/bin/update.js');
+  expect(packageJson.bin['cogmem-memory']).toBe('dist/bin/memory.js');
 });
 
 test('import CLI parser keeps repeated path arguments in order without duplication', () => {

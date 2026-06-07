@@ -74,6 +74,7 @@ describe('core release metadata', () => {
       'cogmem-import-openclaw',
       'cogmem-init',
       'cogmem-mcp',
+      'cogmem-memory',
       'cogmem-migrate-vectors',
       'cogmem-normalize-transcript',
       'cogmem-re-embed',

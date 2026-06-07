@@ -29,3 +29,6 @@
 - Added best-effort OpenClaw lifecycle capture for tool calls, tool results, and task events when the host hook payload exposes them.
 - Added operational noise suppression so heartbeat polls, `HEARTBEAT_OK`, and setup reminders remain auditable evidence but do not enter active agent context by default.
 - Added session-aware and forensic recall intents for `KernelAgentMemoryBackend` and the OpenClaw auto-memory wrapper, separating current conversation context from retrieved history and requiring raw ledger anchors for exact wording.
+- Added `compileAgentRecallQuery()` and `queryPlan` output for `KernelAgentMemoryBackend.recall()`, so long natural-language memory questions are distilled into bounded recall cues before semantic and raw-ledger lookup.
+- Added forensic follow-up anchors (`anchorEventId` / `anchorText`) so adapters can answer "what were my exact words" from the previous raw source event instead of guessing from a vague query or imported summary.
+- Added `cogmem memory` / `cogmem-memory` as a local audit console for status, raw ledger listing, raw text search, and event context drill-down.

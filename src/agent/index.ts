@@ -12,3 +12,10 @@ export {
   type AgentTurnMemory,
   type AgentTurnMemoryResult,
 } from './AgentMemoryBackend.js';
+
+export {
+  compileAgentRecallQuery,
+  inferAgentRecallIntent,
+  type AgentRecallIntent,
+  type AgentRecallQueryPlan,
+} from './AgentRecallQueryCompiler.js';

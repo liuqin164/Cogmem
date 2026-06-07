@@ -206,6 +206,74 @@ test('agent backend forensic quote recall returns raw user events with source an
   kernel.close();
 });
 
+test('agent backend forensic quote recall distills long follow-up queries before raw ledger search', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-forensic-long-query-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-source',
+    userText: '你能看到记忆内核中存储的记忆吗？还是说它是黑盒的',
+    assistantText: '我能看到注入摘要和日志，但不能直接读完整数据库。',
+    timestamp: 1_700_000_000_000,
+    ingestMode: 'raw_archive_only',
+  });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    excludeSessionId: 'session-current',
+    intent: 'forensic_quote',
+    query: '我不是要你泛泛解释现在的上下文，而是问我们之前讨论过记忆黑盒这个问题时，我问你的原话是什么',
+    limit: 3,
+  });
+
+  expect(recalled.items).toHaveLength(1);
+  expect(recalled.items[0].text).toBe('你能看到记忆内核中存储的记忆吗？还是说它是黑盒的');
+  expect(recalled.items[0].whyMatched).toBe('forensic_quote_raw_event');
+  expect(recalled.queryPlan?.searchTexts).toContain('记忆 黑盒');
+
+  kernel.close();
+});
+
+test('agent backend forensic quote recall can use a prior raw source anchor for vague follow-up questions', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-followup-anchor-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  const remembered = await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-source',
+    userText: '你能看到记忆内核中存储的记忆吗？还是说它是黑盒的',
+    assistantText: '我能看到注入摘要和日志，但不能直接读完整数据库。',
+    timestamp: 1_700_000_000_000,
+    ingestMode: 'raw_archive_only',
+  });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    excludeSessionId: 'session-current',
+    intent: 'forensic_quote',
+    query: '那我当时的原话是什么',
+    anchorEventId: remembered.rawEventIds[0],
+    limit: 3,
+  });
+
+  expect(recalled.items).toHaveLength(1);
+  expect(recalled.items[0].text).toBe('你能看到记忆内核中存储的记忆吗？还是说它是黑盒的');
+  expect(recalled.items[0].sourceAnchor?.eventId).toBe(remembered.rawEventIds[0]);
+  expect(recalled.items[0].whyMatched).toBe('forensic_quote_anchor_event');
+  expect(recalled.items[0].canAnswerExactQuote).toBe(true);
+
+  kernel.close();
+});
+
 test('agent backend remembers and recalls a project-scoped turn', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'agent-backend-'));
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });

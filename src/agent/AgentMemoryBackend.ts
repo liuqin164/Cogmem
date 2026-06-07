@@ -1,6 +1,11 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 import type { MemoryEvent, MemorySourceRef } from '../types/index.js';
+import {
+  compileAgentRecallQuery,
+  type AgentRecallIntent,
+  type AgentRecallQueryPlan,
+} from './AgentRecallQueryCompiler.js';
 
 export type AgentTurnIngestMode =
   | 'immediate_compile'
@@ -46,7 +51,9 @@ export interface AgentRecallQuery {
   sessionId?: string;
   threadId?: string;
   excludeSessionId?: string;
-  intent?: 'memory_recall' | 'previous_session_summary' | 'forensic_quote';
+  intent?: AgentRecallIntent;
+  anchorEventId?: string;
+  anchorText?: string;
   limit?: number;
   startTime?: number;
   endTime?: number;
@@ -141,6 +148,7 @@ export interface AgentRecallResult {
   temporalTraversal?: NonNullable<MemoryKernelNavigationResult['navigation']>['branchSearch']['temporalTraversal'];
   runtime?: NonNullable<MemoryKernelNavigationResult['navigation']>['runtime'];
   fallbackUsed: boolean;
+  queryPlan?: AgentRecallQueryPlan;
 }
 
 export class KernelAgentMemoryBackend {
@@ -348,16 +356,21 @@ export class KernelAgentMemoryBackend {
   }
 
   recall(query: AgentRecallQuery): AgentRecallResult {
+    const queryPlan = compileAgentRecallQuery({
+      query: query.query,
+      intent: query.intent,
+      anchorText: query.anchorText,
+    });
     if (query.intent === 'previous_session_summary') {
-      return this.recallPreviousSession(query);
+      return this.recallPreviousSession(query, queryPlan);
     }
     if (query.intent === 'forensic_quote') {
-      return this.recallForensicQuote(query);
+      return this.recallForensicQuote(query, queryPlan);
     }
 
     const limit = query.limit ?? 5;
     const retrievalLimit = Math.max(limit * 4, 24);
-    const result = this.kernel.navigateMemory(query.query, {
+    const result = this.kernel.navigateMemory(queryPlan.primarySearchText, {
       projectId: query.projectId,
       limit: retrievalLimit,
       startTime: query.startTime,
@@ -373,10 +386,11 @@ export class KernelAgentMemoryBackend {
         temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
         runtime: result.navigation?.runtime,
         fallbackUsed: result.fallbackUsed,
+        queryPlan,
       };
     }
 
-    const fallback = this.kernel.recall(query.query, {
+    const fallback = this.kernel.recall(queryPlan.primarySearchText, {
       projectId: query.projectId,
       limit: retrievalLimit,
     });
@@ -392,17 +406,11 @@ export class KernelAgentMemoryBackend {
         temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
         runtime: result.navigation?.runtime,
         fallbackUsed: true,
+        queryPlan,
       };
     }
 
-    const rawEvents = this.kernel.searchRawEvents(query.query, {
-      projectId: query.projectId,
-      workspaceId: query.workspaceId,
-      threadId: query.threadId,
-      startTime: query.startTime,
-      endTime: query.endTime,
-      limit: Math.max(limit * 2, 10),
-    });
+    const rawEvents = this.searchRawEventsByQueryPlan(queryPlan, query, Math.max(limit * 2, 10));
     const rawItems = rawEvents
       .filter((event) => this.isAgentRawEvent(event, query.agentId))
       .filter((event) => this.isAllowedSession(event, query))
@@ -422,10 +430,11 @@ export class KernelAgentMemoryBackend {
       temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
       runtime: result.navigation?.runtime,
       fallbackUsed: true,
+      queryPlan,
     };
   }
 
-  private recallPreviousSession(query: AgentRecallQuery): AgentRecallResult {
+  private recallPreviousSession(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan): AgentRecallResult {
     const limit = query.limit ?? 5;
     const previousSessionId = this.findPreviousSessionId(query);
     const events = previousSessionId
@@ -446,24 +455,23 @@ export class KernelAgentMemoryBackend {
       recallMode: 'raw_ledger_fallback',
       items,
       fallbackUsed: true,
+      queryPlan,
     };
   }
 
-  private recallForensicQuote(query: AgentRecallQuery): AgentRecallResult {
+  private recallForensicQuote(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan): AgentRecallResult {
     const limit = query.limit ?? 5;
-    const rawEvents = this.kernel.searchRawEvents(this.toForensicSearchQuery(query.query), {
-      projectId: query.projectId,
-      workspaceId: query.workspaceId,
-      threadId: query.threadId,
-      startTime: query.startTime,
-      endTime: query.endTime,
-      limit: Math.max(limit * 4, 20),
-    });
-    const items = rawEvents
+    const anchorItems = this.recallForensicAnchor(query, limit);
+    const rawEvents = anchorItems.length > 0 && (queryPlan.anchorUsed || !!query.anchorEventId)
+      ? []
+      : this.searchRawEventsByQueryPlan(queryPlan, query, Math.max(limit * 4, 20));
+    const items = [
+      ...anchorItems,
+      ...rawEvents
       .filter((event) => this.isAgentRawEvent(event, query.agentId))
       .filter((event) => this.isAllowedSession(event, query))
       .filter((event) => !this.isOperationalNoiseRawEvent(event))
-      .filter((event) => event.role === 'user' || event.rawEventType === 'message')
+      .filter((event) => this.isQuoteSourceEvent(event))
       .filter((event) => this.hasReadableEventText(event))
       .sort((a, b) => this.quoteEventPriority(a) - this.quoteEventPriority(b))
       .slice(0, limit)
@@ -471,13 +479,66 @@ export class KernelAgentMemoryBackend {
         sourceType: 'raw_ledger',
         whyMatched: 'forensic_quote_raw_event',
         canAnswerExactQuote: true,
-      }));
+      })),
+    ].filter((item, index, array) => array.findIndex((candidate) => candidate.id === item.id) === index)
+      .slice(0, limit);
 
     return {
       recallMode: 'raw_ledger_fallback',
       items,
       fallbackUsed: true,
+      queryPlan,
     };
+  }
+
+  private recallForensicAnchor(query: AgentRecallQuery, limit: number): AgentRecallItem[] {
+    if (!query.anchorEventId) return [];
+    const context = this.kernel.getEventContext(query.anchorEventId, { before: 4, after: 4 });
+    if (!context) return [];
+    const candidates = [context.event, ...context.before.slice().reverse(), ...context.after];
+    return candidates
+      .filter((event) => this.isAgentRawEvent(event, query.agentId))
+      .filter((event) => this.isAllowedSession(event, query))
+      .filter((event) => !this.isOperationalNoiseRawEvent(event))
+      .filter((event) => this.isQuoteSourceEvent(event))
+      .filter((event) => this.hasReadableEventText(event))
+      .sort((a, b) => {
+        const anchorDelta = (a.eventId === query.anchorEventId ? 0 : 1) - (b.eventId === query.anchorEventId ? 0 : 1);
+        if (anchorDelta !== 0) return anchorDelta;
+        return this.quoteEventPriority(a) - this.quoteEventPriority(b);
+      })
+      .slice(0, limit)
+      .map((event) => this.toAgentRawRecallItem(event, {
+        sourceType: 'raw_ledger',
+        whyMatched: 'forensic_quote_anchor_event',
+        canAnswerExactQuote: true,
+      }));
+  }
+
+  private searchRawEventsByQueryPlan(
+    queryPlan: AgentRecallQueryPlan,
+    query: AgentRecallQuery,
+    limit: number,
+  ): MemoryEvent[] {
+    const seen = new Set<string>();
+    const out: MemoryEvent[] = [];
+    for (const searchText of queryPlan.searchTexts) {
+      const events = this.kernel.searchRawEvents(searchText, {
+        projectId: query.projectId,
+        workspaceId: query.workspaceId,
+        threadId: query.threadId,
+        startTime: query.startTime,
+        endTime: query.endTime,
+        limit,
+      });
+      for (const event of events) {
+        if (seen.has(event.eventId)) continue;
+        seen.add(event.eventId);
+        out.push(event);
+        if (out.length >= limit) return out;
+      }
+    }
+    return out;
   }
 
   private findPreviousSessionId(query: AgentRecallQuery): string | undefined {
@@ -581,34 +642,14 @@ export class KernelAgentMemoryBackend {
       || typeof payload.title === 'string';
   }
 
-  private toForensicSearchQuery(query: string): string {
-    const stopwords = [
-      '原话',
-      '是什么',
-      '什么',
-      '我问过',
-      '问过',
-      '问题',
-      '记得吗',
-      '记得',
-      '完整对话',
-      '怎么说的',
-      '怎么说',
-      '上一句',
-      '下一句',
-      'exact',
-      'quote',
-      'verbatim',
-    ];
-    let normalized = query;
-    for (const word of stopwords) normalized = normalized.replace(new RegExp(word, 'gi'), ' ');
-    return normalized.trim() || query;
-  }
-
   private quoteEventPriority(event: MemoryEvent): number {
     if (event.role === 'user') return 0;
     if (event.role === 'assistant') return 1;
     return 2;
+  }
+
+  private isQuoteSourceEvent(event: MemoryEvent): boolean {
+    return event.role === 'user' || (!event.role && event.rawEventType === 'message');
   }
 
   private toAgentRawRecallItem(

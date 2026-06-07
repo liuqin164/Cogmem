@@ -1,5 +1,6 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
 import type { MemoryEvent } from '../types/index.js';
+import { type AgentRecallIntent, type AgentRecallQueryPlan } from './AgentRecallQueryCompiler.js';
 export type AgentTurnIngestMode = 'immediate_compile' | 'selective_compile' | 'raw_archive_only' | 'raw_then_dream';
 export type AgentTurnCompileReason = 'immediate_compile' | 'durable_signal_detected' | 'low_signal_turn' | 'raw_archive_only' | 'raw_then_dream';
 export interface AgentTurnMemory {
@@ -31,7 +32,9 @@ export interface AgentRecallQuery {
     sessionId?: string;
     threadId?: string;
     excludeSessionId?: string;
-    intent?: 'memory_recall' | 'previous_session_summary' | 'forensic_quote';
+    intent?: AgentRecallIntent;
+    anchorEventId?: string;
+    anchorText?: string;
     limit?: number;
     startTime?: number;
     endTime?: number;
@@ -120,6 +123,7 @@ export interface AgentRecallResult {
     temporalTraversal?: NonNullable<MemoryKernelNavigationResult['navigation']>['branchSearch']['temporalTraversal'];
     runtime?: NonNullable<MemoryKernelNavigationResult['navigation']>['runtime'];
     fallbackUsed: boolean;
+    queryPlan?: AgentRecallQueryPlan;
 }
 export declare class KernelAgentMemoryBackend {
     private readonly kernel;
@@ -132,6 +136,8 @@ export declare class KernelAgentMemoryBackend {
     recall(query: AgentRecallQuery): AgentRecallResult;
     private recallPreviousSession;
     private recallForensicQuote;
+    private recallForensicAnchor;
+    private searchRawEventsByQueryPlan;
     private findPreviousSessionId;
     private getSessionEvents;
     private filterAgentEvidence;
@@ -140,8 +146,8 @@ export declare class KernelAgentMemoryBackend {
     private isOperationalNoiseRawEvent;
     private isAllowedSession;
     private hasReadableEventText;
-    private toForensicSearchQuery;
     private quoteEventPriority;
+    private isQuoteSourceEvent;
     private toAgentRawRecallItem;
     private toAgentSourceAnchor;
     private toSourceRef;

@@ -58,9 +58,13 @@ export type {
  * @stable @since 2.0.0
  */
 export {
+  compileAgentRecallQuery,
+  inferAgentRecallIntent,
   KernelAgentMemoryBackend,
+  type AgentRecallIntent,
   type AgentRecallItem,
   type AgentRecallQuery,
+  type AgentRecallQueryPlan,
   type AgentRecallResult,
   type AgentRecallSourceAnchor,
   type AgentTaskEventMemory,

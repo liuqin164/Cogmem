@@ -220,6 +220,7 @@ const DEFAULTS = {
   auditLogPath: '',
 };
 const seenTurns = new Map();
+const lastRecallAnchors = new Map();
 
 function pluginConfig(api, event, ctx) {
   return Object.assign(
@@ -494,14 +495,24 @@ const plugin = {
         return {};
       }
       try {
+        const intent = classifyRecallIntent(query);
+        const anchor = intent === 'forensic_quote' ? lastRecallAnchors.get(sessionId) : undefined;
         const recalled = runBridge('recall', {
           query,
           sessionId,
           threadId,
-          intent: classifyRecallIntent(query),
+          intent,
           excludeSessionId: sessionId,
+          anchorEventId: anchor && anchor.eventId,
+          anchorText: anchor && anchor.text,
           config,
         }, config, config.recallTimeoutMs || 30000);
+        if (recalled.anchorEventId) {
+          lastRecallAnchors.set(sessionId, {
+            eventId: recalled.anchorEventId,
+            text: recalled.anchorText || '',
+          });
+        }
         audit(config, {
           hook: 'before_prompt_build',
           sessionId,
@@ -512,6 +523,7 @@ const plugin = {
           contextChars: recalled.context ? recalled.context.length : 0,
           recallMode: recalled.recallMode,
           fallbackUsed: recalled.fallbackUsed === true,
+          anchorEventId: recalled.anchorEventId,
         });
         if (!recalled.context) return {};
         return { prependContext: recalled.context };
@@ -610,14 +622,20 @@ try {
       threadId: input.threadId,
       excludeSessionId: input.excludeSessionId,
       intent: input.intent || 'memory_recall',
+      anchorEventId: input.anchorEventId,
+      anchorText: input.anchorText,
       limit: Number(config.limit || 5),
     });
+    const anchorItem = result.items.find((item) => item && item.sourceAnchor && item.sourceAnchor.eventId);
     console.log(JSON.stringify({
       context: formatRecallContext(result),
       itemCount: result.items.length,
       recallMode: result.recallMode,
       fallbackUsed: result.fallbackUsed,
       intent: input.intent || 'memory_recall',
+      anchorEventId: anchorItem && anchorItem.sourceAnchor && anchorItem.sourceAnchor.eventId,
+      anchorText: anchorItem && anchorItem.text,
+      queryPlan: result.queryPlan,
     }));
   } else if (command === 'remember') {
     const result = await rememberPayload(input, config);

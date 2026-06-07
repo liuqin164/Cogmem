@@ -1,2 +1,3 @@
 export { KernelAgentMemoryBackend, type AgentRecallItem, type AgentRecallQuery, type AgentRecallResult, type AgentRecallSourceAnchor, type AgentTaskEventMemory, type AgentToolCallMemory, type AgentToolObservationMemory, type AgentTurnCompileReason, type AgentTurnIngestMode, type AgentTurnMemory, type AgentTurnMemoryResult, } from './AgentMemoryBackend.js';
+export { compileAgentRecallQuery, inferAgentRecallIntent, type AgentRecallIntent, type AgentRecallQueryPlan, } from './AgentRecallQueryCompiler.js';
 //# sourceMappingURL=index.d.ts.map

@@ -18,6 +18,7 @@ const snapshotBin = join(coreRoot, 'src/bin/snapshot.ts');
 const reEmbedBin = join(coreRoot, 'src/bin/re-embed.ts');
 const migrateVectorsBin = join(coreRoot, 'src/bin/migrate-vectors.ts');
 const compactBin = join(coreRoot, 'src/bin/compact.ts');
+const memoryBin = join(coreRoot, 'src/bin/memory.ts');
 
 test('doctor validates a structured cogmem config file', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-doctor-'));
@@ -522,6 +523,71 @@ test('doctor storage mode reports vector bytes per raw event', async () => {
   expect(exitCode).toBe(0);
   expect(output).toContain('OK storage raw_events=');
   expect(output).toContain('vector_bytes_per_raw_event=');
+});
+
+test('memory CLI lists and shows raw ledger events with source anchors', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-cli-'));
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(join(dir, '.cogmem'), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
+
+  const kernel = createMemoryKernel({ dbPath: join(dir, '.cogmem', 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const remembered = await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-memory-cli',
+    userText: '你能看到记忆内核中存储的记忆吗？还是说它是黑盒的',
+    assistantText: '我能看到注入摘要和日志，但不能直接读完整数据库。',
+    ingestMode: 'raw_archive_only',
+  });
+  kernel.close();
+
+  const listProc = Bun.spawn({
+    cmd: ['bun', memoryBin, 'list', '--config', configPath, '--project', 'demo', '--json'],
+    cwd: coreRoot,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const listOutput = await new Response(listProc.stdout).text();
+  const listError = await new Response(listProc.stderr).text();
+  expect(await listProc.exited).toBe(0);
+  expect(listError).toBe('');
+  const listed = JSON.parse(listOutput);
+  expect(listed.total).toBe(2);
+  expect(listed.events[0].sourceAnchor.sessionId).toBe('session-memory-cli');
+  expect(JSON.stringify(listed)).toContain('黑盒');
+
+  const showProc = Bun.spawn({
+    cmd: ['bun', memoryBin, 'show', '--config', configPath, '--event', remembered.rawEventIds[0], '--before', '0', '--after', '1', '--json'],
+    cwd: coreRoot,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const showOutput = await new Response(showProc.stdout).text();
+  const showError = await new Response(showProc.stderr).text();
+  expect(await showProc.exited).toBe(0);
+  expect(showError).toBe('');
+  const shown = JSON.parse(showOutput);
+  expect(shown.event.text).toBe('你能看到记忆内核中存储的记忆吗？还是说它是黑盒的');
+  expect(shown.after[0].role).toBe('assistant');
+});
+
+test('unified cogmem CLI exposes memory audit commands', async () => {
+  const proc = Bun.spawn({
+    cmd: ['bun', join(coreRoot, 'src/bin/cogmem.ts'), '--help'],
+    cwd: coreRoot,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const output = await new Response(proc.stdout).text();
+  const errorOutput = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+
+  expect(errorOutput).toBe('');
+  expect(exitCode).toBe(0);
+  expect(output).toContain('memory');
+  expect(output).toContain('audit/search/show raw and compiled memory');
 });
 
 test('vector migration dry-run uses configured vector_dimension by default', async () => {

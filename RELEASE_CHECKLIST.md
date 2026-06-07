@@ -18,6 +18,9 @@ This release candidate is GitHub-only. The package is not published to npm.
   - `cogmem-init`
   - `cogmem-doctor`
   - `cogmem-connect`
+  - `cogmem-update`
+  - `cogmem-compact`
+  - `cogmem-memory`
   - `cogmem-explain-recall`
   - `cogmem-mcp`
   - `cogmem-import-openclaw`

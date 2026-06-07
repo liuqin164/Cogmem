@@ -26,7 +26,7 @@ export type { CogmemConfigResolution, CogmemConfigResolutionOptions, LoadedCogme
  * Agent framework integration facade.
  * @stable @since 2.0.0
  */
-export { KernelAgentMemoryBackend, type AgentRecallItem, type AgentRecallQuery, type AgentRecallResult, type AgentRecallSourceAnchor, type AgentTaskEventMemory, type AgentToolCallMemory, type AgentToolObservationMemory, type AgentTurnCompileReason, type AgentTurnIngestMode, type AgentTurnMemory, type AgentTurnMemoryResult, } from './agent/index.js';
+export { compileAgentRecallQuery, inferAgentRecallIntent, KernelAgentMemoryBackend, type AgentRecallIntent, type AgentRecallItem, type AgentRecallQuery, type AgentRecallQueryPlan, type AgentRecallResult, type AgentRecallSourceAnchor, type AgentTaskEventMemory, type AgentToolCallMemory, type AgentToolObservationMemory, type AgentTurnCompileReason, type AgentTurnIngestMode, type AgentTurnMemory, type AgentTurnMemoryResult, } from './agent/index.js';
 /**
  * Core recall pipeline.
  * @stable @since 1.0.0

@@ -114,7 +114,7 @@ console.log(result.items);
 
 `KernelAgentMemoryBackend.recall()` routes through universe navigation first. That means core activates related entities, temporal branches, and graph neighbors, assembles a narrative summary, and returns context that is already prepared for the agent. `MemoryKernel.recall()` remains available as the lower-level BrainRecall path; the backend uses it only as a fallback when universe navigation yields no scoped evidence. If both compiled recall paths miss, the backend can use bounded raw ledger FTS as `raw_ledger_fallback`; this returns only matching raw snippets within the evidence limit and does not dump whole threads into the prompt.
 
-Adapters may pass `sessionId`, `threadId`, `excludeSessionId`, and `intent` when the user asks for session-aware or forensic recall. `intent: "previous_session_summary"` reads the previous completed session from the chronological ledger instead of guessing through semantic recall. `intent: "forensic_quote"` returns raw user/source events with `sourceAnchor` and `canAnswerExactQuote=true`; compiled memories and imported summaries set `canAnswerExactQuote=false` and must not be presented as exact wording. This keeps chronological replay separate from ranked context recall.
+Adapters may pass `sessionId`, `threadId`, `excludeSessionId`, `intent`, `anchorEventId`, and `anchorText` when the user asks for session-aware or forensic recall. `KernelAgentMemoryBackend.recall()` compiles the user's raw question into a bounded `queryPlan` before search, so long questions such as "do you remember when we discussed CogMem Memory Context and the memory black box" are distilled into stable recall cues instead of using the full sentence as a brittle vector/FTS query. `intent: "previous_session_summary"` reads the previous completed session from the chronological ledger instead of guessing through semantic recall. `intent: "forensic_quote"` returns raw user/source events with `sourceAnchor` and `canAnswerExactQuote=true`; follow-up questions such as "what were my exact words" can pass the previous recall anchor to drill down to the raw event. Compiled memories and imported summaries set `canAnswerExactQuote=false` and must not be presented as exact wording. This keeps chronological replay separate from ranked context recall.
 
 Turn recording supports four modes:
 
@@ -389,6 +389,7 @@ cogmem-doctor            # validates config.toml and opens the kernel; --storage
 cogmem-connect           # install OpenClaw/Hermes agent-facing SKILL.md files; openclaw --auto installs runtime hooks
 cogmem-update            # package update helper; equivalent to cogmem update
 cogmem-compact           # dry-run or apply vector-only compaction; defaults to dry-run unless --apply is passed
+cogmem-memory            # local audit console for memory status/list/search/show
 cogmem-explain-recall    # explain pulse/temporal/narrative recall decisions
 cogmem-mcp               # stdio MCP server exposing cogmem memory tools
 cogmem-import-openclaw   # migrate OpenClaw workspace memory into core
@@ -409,13 +410,24 @@ Storage inspection and safe vector compaction:
 
 Run `--dry-run` first. Use `--apply` only after snapshotting the database and ensuring no live writer is active.
 
+Memory audit console:
+
+```bash
+./node_modules/.bin/cogmem memory status --config .cogmem/config.toml
+./node_modules/.bin/cogmem memory list --project openclaw --json
+./node_modules/.bin/cogmem memory search --query "记忆 黑盒" --project openclaw --json
+./node_modules/.bin/cogmem memory show --event evt-... --before 2 --after 2 --json
+```
+
+`cogmem memory` is intentionally a local provenance console, not a wiki, Obsidian replacement, or hosted dashboard. Use it to inspect raw ledger anchors, source context, vector pressure, and dream backlog coverage when the injected prompt context feels like a black box.
+
 Benchmark groups are documented in `BENCHMARKS.md`; `memory_natural_emergence` tracks recall, inhibition, leakage, provenance, budget, and pulse expansion metrics.
 
 ## Public API Policy
 
 The package entrypoint exports explicit stable and beta symbols only. Internal implementation stores and compilers are not exported from `@CognitiveOS/core`.
 
-Stable integration APIs include `MemoryKernel`, `createMemoryKernelFromConfig()`, `KernelAgentMemoryBackend`, `OpenClawWorkspaceProfile`, and `HermesWorkspaceProfile`. Advanced recall orchestration symbols such as `UniverseNavigator`, `PulseRetrievalEngine`, `TemporalBranchSearch`, `NarrativeRecallAssembler`, `explainRecallWithKernel`, and the `listCogmemMcpTools` / `callCogmemMcpTool` helpers are exported as beta APIs for agents that need direct inspection, custom routing, or MCP hosting.
+Stable integration APIs include `MemoryKernel`, `createMemoryKernelFromConfig()`, `KernelAgentMemoryBackend`, `compileAgentRecallQuery()`, `OpenClawWorkspaceProfile`, and `HermesWorkspaceProfile`. Advanced recall orchestration symbols such as `UniverseNavigator`, `PulseRetrievalEngine`, `TemporalBranchSearch`, `NarrativeRecallAssembler`, `explainRecallWithKernel`, and the `listCogmemMcpTools` / `callCogmemMcpTool` helpers are exported as beta APIs for agents that need direct inspection, custom routing, or MCP hosting.
 
 ## Development
 
