@@ -443,7 +443,9 @@ export class KernelAgentMemoryBackend {
     isAgentRawEvent(event, agentId) {
         if (!event.sourceId)
             return true;
-        return event.sourceId === agentId || event.sourceId.startsWith(`${agentId}:`);
+        return event.sourceId === agentId
+            || event.sourceId.startsWith(`${agentId}:`)
+            || event.sourceId.startsWith(`${agentId}-`);
     }
     isOperationalNoiseRawEvent(event) {
         const payload = event.payload;
@@ -481,24 +483,35 @@ export class KernelAgentMemoryBackend {
     }
     toAgentRawRecallItem(event, options) {
         const payload = event.payload;
+        const metadata = payload.metadata || {};
+        const metadataTags = Array.isArray(metadata.tags) ? metadata.tags.filter((tag) => typeof tag === 'string') : [];
+        const importedSummary = metadataTags.includes('governance:imported_summary_support')
+            || metadataTags.includes('provenance:imported_summary')
+            || metadataTags.includes('memory_layer:summary_seed')
+            || metadata.reliabilityClass === 'imported_summary'
+            || metadata.importedSummarySupport === true;
         const tags = [
             'raw_ledger',
             event.rawEventType ? `raw:${event.rawEventType}` : '',
             event.role ? `role:${event.role}` : '',
             event.sessionId ? `session:${event.sessionId}` : '',
+            ...metadataTags,
         ].filter(Boolean);
+        const sourceRef = metadata.sourceRef && typeof metadata.sourceRef === 'object'
+            ? metadata.sourceRef
+            : undefined;
         return {
             id: event.eventId,
             text: typeof payload.text === 'string' ? payload.text : JSON.stringify(event.payload),
             projectId: event.projectId,
             tags,
-            source: event.eventId,
-            sourceType: options.sourceType,
+            source: importedSummary ? (sourceRef?.sourcePath || event.sourceId || event.eventId) : event.eventId,
+            sourceType: importedSummary ? 'imported_summary' : options.sourceType,
             sourceAnchor: this.toAgentSourceAnchor(event),
             sourceContext: this.toAgentSourceContext(event.eventId),
-            confidence: 1,
-            whyMatched: options.whyMatched,
-            canAnswerExactQuote: options.canAnswerExactQuote,
+            confidence: importedSummary ? 0.45 : 1,
+            whyMatched: importedSummary ? 'imported_summary_raw_source_fallback' : options.whyMatched,
+            canAnswerExactQuote: importedSummary ? false : options.canAnswerExactQuote,
         };
     }
     preferredRawSourceEventId(neuron) {

@@ -241,6 +241,48 @@ async function importSources(input: {
       for (const item of items) neurons.push(await opened.kernel.ingest(item));
       return neurons;
     },
+    recordRawEvidence: (envelope) => {
+      const sourceRef = envelope.ingestInput.sourceRefs?.[0];
+      const record = envelope.record;
+      const metadata = record.metadata || {};
+      const role = sourceRef?.role === 'assistant'
+        ? 'assistant'
+        : sourceRef?.role === 'tool'
+          ? 'tool'
+          : sourceRef?.role === 'system'
+            ? 'system'
+            : record.role === 'agent'
+              ? 'assistant'
+              : record.role === 'user'
+                ? 'user'
+                : 'system';
+      const threadId = sourceRef?.threadId || stringRecordField(metadata.threadId) || record.provenance.sourceId;
+      const sessionId = sourceRef?.sessionId || stringRecordField(metadata.sessionId) || record.provenance.sourceId;
+      return opened.kernel.recordRawEvent({
+        projectId: input.projectId,
+        workspaceId: input.projectId,
+        threadId,
+        sessionId,
+        turnId: sourceRef?.turnId || record.turnId || record.recordId,
+        turnSeq: sourceRef?.turnSeq,
+        role,
+        rawEventType: 'message',
+        content: record.text,
+        eventOrdinal: sourceRef?.eventOrdinal ?? sourceRef?.sourceOffset,
+        occurredAt: record.timestamp,
+        sourceId: record.provenance.sourceId,
+        metadata: {
+          ...metadata,
+          imported: true,
+          sourcePath: record.provenance.sourcePath,
+          sourceType: record.provenance.sourceType,
+          adapterVersion: record.provenance.adapterVersion,
+          reliabilityClass: record.provenance.reliabilityClass,
+          sourceRef,
+          tags: envelope.ingestInput.tags || [],
+        },
+      });
+    },
     runOfflineWindow: (window) => opened.kernel.consolidate({
       projectId: input.projectId,
       startTime: window.start,
@@ -284,6 +326,10 @@ async function importSources(input: {
     opened.kernel.cursorStore.close();
     opened.kernel.close();
   }
+}
+
+function stringRecordField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function openKernel(args: ParsedArgs, workspaceRoot: string): { kernel: MemoryKernel; dbPath: string } {

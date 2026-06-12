@@ -152,6 +152,7 @@ export class DreamCuratorWorker {
                 });
             }
         }
+        candidates.push(...this.buildSemanticOrganizationCandidates(events, now, status));
         const providerCandidates = await this.buildProviderCandidates(events, options, now, status);
         candidates.push(...providerCandidates);
         return candidates;
@@ -180,6 +181,10 @@ export class DreamCuratorWorker {
                 'topicSummaryCandidates',
                 'temporalFactUpdateCandidates',
                 'conflictCandidates',
+                'semanticTagCandidates',
+                'indexingDecisionCandidates',
+                'semanticRelationCandidates',
+                'edgeAdjustmentCandidates',
             ],
             rawLedgerEvents: events.map((event) => ({
                 eventId: event.eventId,
@@ -223,6 +228,10 @@ export class DreamCuratorWorker {
             ['topicSummaryCandidates', 'topic_summary', 'topic_summary'],
             ['temporalFactUpdateCandidates', 'temporal_fact_update', 'temporal_fact_update'],
             ['conflictCandidates', 'conflict_candidate', 'conflict_candidate'],
+            ['semanticTagCandidates', 'semantic_tags', 'semantic_tags'],
+            ['indexingDecisionCandidates', 'indexing_decision', 'indexing_decision'],
+            ['semanticRelationCandidates', 'semantic_relation', 'semantic_relation'],
+            ['edgeAdjustmentCandidates', 'edge_adjustment', 'edge_adjustment'],
         ];
         const candidates = [];
         for (const [bucket, candidateType, promotionTargetType] of buckets) {
@@ -250,6 +259,108 @@ export class DreamCuratorWorker {
                     createdAt: now,
                 });
             }
+        }
+        return candidates;
+    }
+    buildSemanticOrganizationCandidates(events, now, status) {
+        const candidates = [];
+        const readable = events.filter((event) => eventText(event).trim());
+        if (readable.length === 0)
+            return candidates;
+        const combined = readable.map(eventText).join('\n');
+        const topics = extractTopics(combined);
+        const topicPath = inferTopicPath(combined, topics);
+        const semanticTags = inferSemanticTags(combined, topics);
+        if (semanticTags.length > 0) {
+            candidates.push({
+                candidateType: 'semantic_tags',
+                status,
+                confidence: 0.7,
+                content: {
+                    projectId: readable[0]?.projectId,
+                    topicPath,
+                    tags: semanticTags,
+                    topics,
+                    source: 'deterministic_dream_curator_semantic_tagging',
+                    governance: 'candidate_only_cpu_governance_required',
+                    purpose: 'help future recall route by stable semantic cues instead of full-sentence matching',
+                },
+                evidence: readable.slice(0, 8).map((event) => this.toEvidence(event)),
+                promotionTargetType: 'semantic_tags',
+                createdAt: now,
+            });
+        }
+        for (const event of readable) {
+            const text = eventText(event);
+            const eventTopics = extractTopics(text);
+            const importance = memoryIndexImportance(text, event);
+            candidates.push({
+                candidateType: 'indexing_decision',
+                status,
+                confidence: importance.shouldEmbed ? 0.72 : 0.62,
+                content: {
+                    projectId: event.projectId,
+                    sourceEventId: event.eventId,
+                    shouldEmbed: importance.shouldEmbed,
+                    storeAs: importance.storeAs,
+                    topicPath: inferTopicPath(text, eventTopics),
+                    tags: inferSemanticTags(text, eventTopics),
+                    reason: importance.reason,
+                    rawPreservation: 'raw_ledger_must_remain',
+                    source: 'deterministic_dream_curator_indexing_decision',
+                    governance: 'candidate_only_cpu_governance_required',
+                },
+                evidence: [this.toEvidence(event)],
+                promotionTargetType: 'indexing_decision',
+                createdAt: now,
+            });
+        }
+        for (let index = 0; index < readable.length - 1; index += 1) {
+            const current = readable[index];
+            const next = readable[index + 1];
+            if (current.sessionId && next.sessionId && current.sessionId !== next.sessionId)
+                continue;
+            const relation = current.role === 'user' && next.role === 'assistant'
+                ? 'answered_by'
+                : next.parentEventId === current.eventId
+                    ? next.causalityType || 'caused'
+                    : 'chronologically_followed_by';
+            candidates.push({
+                candidateType: 'semantic_relation',
+                status,
+                confidence: relation === 'answered_by' ? 0.74 : 0.62,
+                content: {
+                    projectId: current.projectId || next.projectId,
+                    relation,
+                    sourceEventId: current.eventId,
+                    targetEventId: next.eventId,
+                    topicPath: inferTopicPath(`${eventText(current)}\n${eventText(next)}`, extractTopics(`${eventText(current)}\n${eventText(next)}`)),
+                    source: 'deterministic_dream_curator_event_relation',
+                    governance: 'candidate_only_cpu_governance_required',
+                },
+                evidence: [this.toEvidence(current), this.toEvidence(next)],
+                promotionTargetType: 'semantic_relation',
+                createdAt: now,
+            });
+        }
+        if (readable.length >= 2 && semanticTags.length > 0) {
+            candidates.push({
+                candidateType: 'edge_adjustment',
+                status,
+                confidence: 0.64,
+                content: {
+                    projectId: readable[0]?.projectId,
+                    topicPath,
+                    strengthenWhenTagsOverlap: semanticTags,
+                    weakenReasons: ['operational_noise', 'imported_summary_without_raw_transcript', 'superseded_or_conflicted_fact'],
+                    evidenceEventIds: readable.slice(0, 8).map((event) => event.eventId),
+                    source: 'deterministic_dream_curator_edge_adjustment',
+                    governance: 'candidate_only_cpu_governance_required',
+                },
+                evidence: readable.slice(0, 8).map((event) => this.toEvidence(event)),
+                promotionTargetType: 'edge_adjustment',
+                createdAt: now,
+            });
         }
         return candidates;
     }
@@ -389,11 +500,76 @@ function preferenceTags(text) {
 }
 function extractTopics(text) {
     const topics = [];
-    for (const topic of ['CogMem', 'CognitiveOS', 'OpenClaw', 'Hermes', 'Obsidian', 'wiki', '记忆内核', '记忆黑盒', 'local-first']) {
+    for (const topic of ['CogMem', 'CognitiveOS', 'OpenClaw', 'Hermes', 'Obsidian', 'wiki', '记忆内核', '记忆黑盒', '上下文噪声', 'source locator', 'raw ledger', 'local-first']) {
         if (text.toLowerCase().includes(topic.toLowerCase()))
             topics.push(topic);
     }
     return [...new Set(topics)];
+}
+function inferTopicPath(text, topics) {
+    if (/记忆黑盒|黑盒|上下文噪声|source locator|raw ledger|原话|sourceContext/iu.test(text)) {
+        return 'memory/auditability';
+    }
+    if (/OpenClaw|插件|plugin|hook|before_prompt_build|agent_end/iu.test(text)) {
+        return 'integration/openclaw';
+    }
+    if (/Dream|Curator|整理|策展|候选|治理/iu.test(text)) {
+        return 'memory/curation';
+    }
+    if (/Obsidian|wiki|知识库/iu.test(text)) {
+        return 'architecture/boundary';
+    }
+    if (topics.includes('CogMem') || topics.includes('记忆内核'))
+        return 'memory/kernel';
+    return 'memory/session';
+}
+function inferSemanticTags(text, topics) {
+    const tags = new Set();
+    for (const topic of topics)
+        tags.add(`topic:${topic}`);
+    if (/记忆黑盒|黑盒/iu.test(text))
+        tags.add('concept:memory_black_box');
+    if (/上下文噪声|噪声/iu.test(text))
+        tags.add('concept:context_noise');
+    if (/原话|怎么说|exact quote|verbatim/iu.test(text))
+        tags.add('need:exact_quote');
+    if (/sourceContext|source locator|sourceLocator|raw ledger|下钻/iu.test(text))
+        tags.add('need:source_drilldown');
+    if (/上一个会话|上个会话|previous session|last session/iu.test(text))
+        tags.add('need:previous_session');
+    if (/不要|禁止|边界|不能|do not|never|must not/iu.test(text))
+        tags.add('kind:boundary');
+    if (/失败|问题|原因|root cause|diagnostic|诊断/iu.test(text))
+        tags.add('kind:diagnostic');
+    return [...tags];
+}
+function memoryIndexImportance(text, event) {
+    if (/请以后|长期目标|必须|不要|禁止|边界|偏好|重要|always|never|must|preference|goal/iu.test(text)) {
+        return {
+            shouldEmbed: true,
+            storeAs: 'compiled_memory_candidate',
+            reason: 'durable_user_preference_goal_or_boundary',
+        };
+    }
+    if (/记忆黑盒|上下文噪声|source locator|raw ledger|原话|诊断|root cause|失败教训/iu.test(text)) {
+        return {
+            shouldEmbed: true,
+            storeAs: 'topic_summary_or_diagnostic_candidate',
+            reason: 'reusable_project_memory_or_diagnostic_context',
+        };
+    }
+    if (event.rawEventType === 'tool_result' || event.rawEventType === 'task_event') {
+        return {
+            shouldEmbed: false,
+            storeAs: 'raw_ledger_only_until_governed',
+            reason: 'tool_or_task_observation_requires_governance_before_embedding',
+        };
+    }
+    return {
+        shouldEmbed: false,
+        storeAs: 'raw_ledger_only',
+        reason: 'low_signal_event_preserve_raw_without_hot_vector',
+    };
 }
 function truncate(value, maxLength) {
     return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;

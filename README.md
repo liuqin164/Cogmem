@@ -139,7 +139,7 @@ console.log(result.temporalTraversal?.labels);
 console.log(result.items);
 ```
 
-`KernelAgentMemoryBackend.recall()` routes through universe navigation first. That means core activates related entities, temporal branches, and graph neighbors, assembles a narrative summary, and returns context that is already prepared for the agent. `MemoryKernel.recall()` remains available as the lower-level BrainRecall path; the backend uses it only as a fallback when universe navigation yields no scoped evidence. If both compiled recall paths miss, the backend can use bounded raw ledger FTS as `raw_ledger_fallback`; this returns only matching raw snippets within the evidence limit and does not dump whole threads into the prompt.
+`KernelAgentMemoryBackend.recall()` routes through universe navigation first. That means core activates related entities, temporal branches, and graph neighbors, assembles a narrative summary, and returns context that is already prepared for the agent. `MemoryKernel.recall()` remains available as the lower-level BrainRecall path; the backend uses it only as a fallback when universe navigation yields no scoped evidence. If both compiled recall paths miss, the backend can use bounded raw ledger FTS as `raw_ledger_fallback`; this returns only matching raw snippets within the evidence limit and does not dump whole threads into the prompt. Hosts can expose the same path as an active memory search command through `cogmem memory recall --query "<question>" --project <project> --agent <agent> --json`; this is the recommended fallback when automatic prompt injection is empty or too thin.
 
 Adapters may pass `sessionId`, `threadId`, `excludeSessionId`, `intent`, `anchorEventId`, and `anchorText` when the user asks for session-aware or forensic recall. `KernelAgentMemoryBackend.recall()` compiles the user's raw question into a bounded `queryPlan` before search, so long questions such as "do you remember when we discussed CogMem Memory Context and the memory black box" are distilled into stable recall cues instead of using the full sentence as a brittle vector/FTS query. The query plan includes `semanticCuePhrases` and `temporalHints`, so wording drift such as "对话存档位置属于黑盒" versus "记忆黑盒问题" can still reach raw ledger evidence through cues like `记忆 黑盒`, `存档 黑盒`, and `黑盒`. `intent: "previous_session_summary"` reads the previous completed session from the chronological ledger instead of guessing through semantic recall. `intent: "forensic_quote"` returns raw user/source events with `sourceAnchor`, `sourceContext`, and `canAnswerExactQuote=true`; follow-up questions such as "what were my exact words" can pass the previous recall anchor to drill down to the raw event. Compiled memories and imported summaries set `canAnswerExactQuote=false` and must not be presented as exact wording, but they may still include `sourceContext` and a `sourceLocator` command such as `cogmem memory show --event <eventId> --before 2 --after 2` so the agent can inspect the original raw event and surrounding context. This keeps chronological replay separate from ranked context recall.
 
@@ -160,7 +160,7 @@ console.log(result.candidateCount);
 console.log(kernel.listDreamCandidates({ projectId: 'workspace-a', statuses: ['candidate'] }));
 ```
 
-The curator is candidate-only. In `rule_only` mode it is deterministic and local-first. When `[memory_model]` is configured with an OpenAI-compatible chat endpoint, it can also ask the memory model to propose richer candidates: user preferences, project memories, long-term goals, prohibitions/boundaries, failure lessons, diagnostic conclusions, session summaries, topic summaries, temporal fact updates, and conflict candidates. All candidates are stored in the deep-write governance queue with raw event source anchors. It does not create hot vectors, does not delete raw ledger events, and does not promote candidates to verified facts.
+The curator is candidate-only. In `rule_only` mode it is deterministic and local-first. It creates window summaries, explicit preference/constraint candidates, correction candidates, semantic tag candidates, indexing decision candidates, event relation candidates, and edge-adjustment candidates. When `[memory_model]` is configured with an OpenAI-compatible chat endpoint, it can also ask the memory model to propose richer candidates: user preferences, project memories, long-term goals, prohibitions/boundaries, failure lessons, diagnostic conclusions, session summaries, topic summaries, temporal fact updates, conflicts, semantic tags, indexing decisions, semantic relations, and edge adjustments. All candidates are stored in the deep-write governance queue with raw event source anchors. It does not create hot vectors, does not delete raw ledger events, and does not promote candidates to verified facts.
 
 Core exposes schedule helpers for hosts that want background curation without turning core into a daemon:
 
@@ -178,6 +178,8 @@ Core separates raw chronological evidence from ranked recall. The Chronological 
 Use `MemoryKernel.getThreadEvents(threadId)` to replay raw events in ledger order and `MemoryKernel.getEventContext(eventId, { before, after })` to inspect surrounding source context. Use `KernelAgentMemoryBackend.recall()` for current agent context. Do not use replay as a prompt dump.
 
 Use `MemoryKernel.searchRawEvents(query, { projectId })` when you need to find original raw evidence that may not have compiled memory or a hot vector. This raw FTS/metadata path is for source discovery and cold recall; it is not the default agent context ranking path.
+
+Existing OpenClaw/Hermes importers now write raw ledger anchors for imported records before ingesting compiled/index memory. Imported daily summaries remain `imported_summary` evidence with `canAnswerExactQuote=false`, but they are searchable through raw ledger and can carry `sourceContext` so an agent can say where the summary came from instead of treating it as a black box.
 
 Vector pruning is not memory pruning. `cogmem compact` deletes only eligible vector blobs from `vector_index`; it does not delete raw ledger events, sourceRefs, chronological ordering, or tool-call parent/child links.
 
@@ -462,6 +464,7 @@ Memory audit console:
 ./node_modules/.bin/cogmem memory status --config .cogmem/config.toml
 ./node_modules/.bin/cogmem memory list --project openclaw --json
 ./node_modules/.bin/cogmem memory search --query "记忆 黑盒" --project openclaw --json
+./node_modules/.bin/cogmem memory recall --query "我们之前是不是讨论过记忆黑盒的问题" --project openclaw --agent openclaw --json
 ./node_modules/.bin/cogmem memory show --event evt-... --before 2 --after 2 --json
 ./node_modules/.bin/cogmem memory dream --project openclaw --json
 ./node_modules/.bin/cogmem memory candidates --project openclaw --status candidate --json

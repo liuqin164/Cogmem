@@ -82,7 +82,36 @@ export class InstalledBatchProcessor {
                     pendingRecords: pending.length
                 });
                 const envelopes = pending.map((record) => buildEpisodeEnvelope(source, record));
-                const neurons = await this.deps.ingestBatch(envelopes.map((item) => item.ingestInput));
+                const inputs = envelopes.map((item) => {
+                    const rawEvent = this.deps.recordRawEvidence?.(item);
+                    if (!rawEvent)
+                        return item.ingestInput;
+                    const sourceRefs = item.ingestInput.sourceRefs || [];
+                    const rawRef = {
+                        ...(sourceRefs[0] || {}),
+                        eventId: rawEvent.eventId,
+                        eventType: rawEvent.eventType,
+                        contentHash: rawEvent.contentHash,
+                        threadId: rawEvent.threadId,
+                        sessionId: rawEvent.sessionId,
+                        turnId: rawEvent.turnId,
+                        role: rawEvent.role,
+                        threadSeq: rawEvent.threadSeq,
+                        turnSeq: rawEvent.turnSeq,
+                        eventOrdinal: rawEvent.eventOrdinal,
+                        parentEventId: rawEvent.parentEventId,
+                        prevEventId: rawEvent.prevEventId,
+                        nextEventId: rawEvent.nextEventId,
+                        causalityType: rawEvent.causalityType,
+                        orderingConfidence: rawEvent.orderingConfidence,
+                    };
+                    return {
+                        ...item.ingestInput,
+                        sourceEventId: rawEvent.eventId,
+                        sourceRefs: [...sourceRefs, rawRef],
+                    };
+                });
+                const neurons = await this.deps.ingestBatch(inputs);
                 recordsIngested += envelopes.length;
                 envelopes.forEach((item, index) => {
                     const neuron = neurons[index];

@@ -168,7 +168,7 @@ test('OpenClaw migrated records are visible through KernelAgentMemoryBackend rec
   expect(recalled.items.some((item) => item.text.includes('BLE device provisioning'))).toBe(true);
 });
 
-test('OpenClaw legacy daily summary imports remain provenance support instead of active agent context', async () => {
+test('OpenClaw legacy daily summary imports are searchable as bounded provenance support after dreaming', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-legacy-summary-'));
   const dbPath = join(dir, 'memory.db');
   mkdirSync(join(dir, 'memory'));
@@ -213,6 +213,7 @@ test('OpenClaw legacy daily summary imports remain provenance support instead of
   }
 
   const memory = new KernelAgentMemoryBackend(kernel);
+  await kernel.runDreamCurator({ projectId: 'openclaw-test', limit: 20 });
   const recalled = memory.recall({
     agentId: 'openclaw',
     projectId: 'openclaw-test',
@@ -227,7 +228,12 @@ test('OpenClaw legacy daily summary imports remain provenance support instead of
   });
   kernel.close();
 
-  expect(recalled.items.some((item) => item.text.includes('重启本地的hermes'))).toBe(false);
+  const importedItem = recalled.items.find((item) => item.text.includes('重启本地的hermes'));
+  expect(importedItem).toBeDefined();
+  expect(importedItem?.sourceType).toBe('imported_summary');
+  expect(importedItem?.canAnswerExactQuote).toBe(false);
+  expect(importedItem?.sourceContext?.event.text).toContain('重启本地的hermes');
+  expect(importedItem?.sourceContext?.locator.command).toContain('cogmem memory show --event');
   expect(explanation.filteredEvidence?.some((item) => (
     item.text?.includes('重启本地的hermes')
     && item.reason === 'status_suppressed'
@@ -524,6 +530,8 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
   expect(openclaw).not.toContain('plugins.slots.memory = "cogmem"');
   expect(openclaw).toContain('Queued remember');
   expect(openclaw).toContain('cogmem-explain-recall --query');
+  expect(openclaw).toContain('cogmem memory recall --query');
+  expect(openclaw).toContain('If CogMem Retrieved Memory is absent');
   expect(openclaw).toContain('sourceAnchor');
   expect(openclaw).toContain('filteredEvidence');
   expect(openclaw).toContain('--session ./one.md --session ./two.md');

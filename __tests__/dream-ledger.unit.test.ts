@@ -222,6 +222,38 @@ test('dream curator can use explicit memory-model generation to create governanc
   kernel.close();
 });
 
+test('dream curator proposes semantic tags, index decisions, and event relations for raw dialogue windows', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-relations-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-dream-relations',
+    userText: '我担心记忆黑盒：如果只注入摘要，agent 不知道原话和上下文在哪里。',
+    assistantText: '需要让 recall item 带 sourceContext，并把黑盒问题归到 memory/auditability 主题。',
+    ingestMode: 'raw_then_dream',
+  });
+
+  const result = await kernel.runDreamCurator({ projectId: 'demo', limit: 20 });
+  const candidates = kernel.listDreamCandidates({ statuses: ['candidate'], limit: 50 });
+  const candidateTypes = candidates.map((candidate) => candidate.candidateType);
+  const serialized = JSON.stringify(candidates);
+
+  expect(result.skipped).toBe(false);
+  expect(candidateTypes).toContain('semantic_tags');
+  expect(candidateTypes).toContain('indexing_decision');
+  expect(candidateTypes).toContain('semantic_relation');
+  expect(serialized).toContain('memory/auditability');
+  expect(serialized).toContain('记忆黑盒');
+  expect(serialized).toContain('shouldEmbed');
+  expect(serialized).toContain('sourceAnchor');
+  expect(kernel.vectorStore.getCurrentCount()).toBe(0);
+
+  kernel.close();
+});
+
 test('dream curator records a diagnostic candidate when explicit generation returns invalid output', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-llm-invalid-'));
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });

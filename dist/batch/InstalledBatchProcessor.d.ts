@@ -1,7 +1,8 @@
 import type { IngestInput, Neuron } from '../types/index.js';
-import { type SourceAdapterDiagnostic, type SourceDefinition } from '../adapters/index.js';
+import { type BatchEpisodeEnvelope, type SourceAdapterDiagnostic, type SourceDefinition } from '../adapters/index.js';
 import type { IngestionCursorStore } from './IngestionCursorStore.js';
 import type { OfflineConsolidationOutput } from '../engine/OfflineConsolidationPipeline.js';
+import type { MemoryEvent } from '../types/index.js';
 export interface BatchConsolidationWindow {
     start: number;
     end: number;
@@ -72,6 +73,7 @@ export type BatchProgressEvent = {
 interface InstalledBatchProcessorDependencies {
     cursorStore: IngestionCursorStore;
     ingestBatch: (inputs: IngestInput[]) => Promise<Neuron[]>;
+    recordRawEvidence?: (envelope: BatchEpisodeEnvelope) => MemoryEvent | undefined;
     runOfflineWindow: (window: BatchConsolidationWindow) => Promise<OfflineConsolidationOutput>;
     onProgress?: (event: BatchProgressEvent) => void;
 }

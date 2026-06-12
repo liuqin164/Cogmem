@@ -36,6 +36,7 @@ export declare class DreamCuratorWorker {
     private buildCandidates;
     private buildProviderCandidates;
     private flattenProviderCandidates;
+    private buildSemanticOrganizationCandidates;
     private providerEvidenceFor;
     private providerDiagnosticCandidate;
     private resolveGenerateText;

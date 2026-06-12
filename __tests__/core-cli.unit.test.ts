@@ -573,6 +573,54 @@ test('memory CLI lists and shows raw ledger events with source anchors', async (
   expect(shown.after[0].role).toBe('assistant');
 });
 
+test('memory CLI recall lets agents actively query governed memory with source context', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-recall-cli-'));
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(join(dir, '.cogmem'), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
+
+  const kernel = createMemoryKernel({ dbPath: join(dir, '.cogmem', 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-memory-recall-source',
+    userText: '我们的对话存档位置属于黑盒吧，我作为用户无法看到的是吗？',
+    assistantText: '这属于记忆黑盒和可审计性问题，需要 source locator 下钻。',
+    ingestMode: 'raw_archive_only',
+  });
+  kernel.close();
+
+  const recallProc = Bun.spawn({
+    cmd: [
+      'bun',
+      memoryBin,
+      'recall',
+      '--config',
+      configPath,
+      '--project',
+      'demo',
+      '--agent',
+      'openclaw',
+      '--query',
+      '我们之前是不是讨论过记忆黑盒的问题',
+      '--json',
+    ],
+    cwd: coreRoot,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const recallOutput = await new Response(recallProc.stdout).text();
+  const recallError = await new Response(recallProc.stderr).text();
+  expect(await recallProc.exited).toBe(0);
+  expect(recallError).toBe('');
+  const recalled = JSON.parse(recallOutput);
+  expect(recalled.items.some((item: { text: string }) => item.text.includes('存档位置'))).toBe(true);
+  expect(JSON.stringify(recalled)).toContain('sourceContext');
+  expect(JSON.stringify(recalled)).toContain('cogmem memory show --event');
+  expect(recalled.queryPlan.semanticCuePhrases).toContain('存档 黑盒');
+});
+
 test('memory CLI runs dream curator and lists governance candidates', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-dream-cli-'));
   const configPath = join(dir, '.cogmem', 'config.toml');

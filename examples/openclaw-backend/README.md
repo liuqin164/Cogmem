@@ -125,6 +125,14 @@ When `recalled.items[]` contains `sourceContext`, the agent can answer where the
 
 Do not quote `compiled_memory` or `imported_summary` items as user wording when `canAnswerExactQuote=false`.
 
+If automatic `# CogMem Retrieved Memory` injection is absent or too thin, the agent should actively query the kernel before saying it does not remember:
+
+```bash
+./node_modules/.bin/cogmem memory recall --query "<user question>" --project openclaw --agent openclaw --json
+```
+
+Use `--intent previous_session_summary` for "上个会话我们聊了什么" and `--intent forensic_quote` for "我当时的原话是什么". Only fall back to legacy `memory/` Markdown files after `cogmem memory recall` or `cogmem memory search` fails to find useful evidence.
+
 For agent-facing instructions, install or read `SKILL.md`. `./node_modules/.bin/cogmem-connect openclaw --workspace .` copies it to `<workspace>/skills/cogmem-memory/SKILL.md`.
 
 To make future OpenClaw turns automatically recall and record memory, run:

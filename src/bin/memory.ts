@@ -1,19 +1,23 @@
 #!/usr/bin/env bun
 import { resolve } from 'node:path';
 
+import { KernelAgentMemoryBackend, type AgentRecallIntent } from '../agent/index.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 import type { DeepWriteCandidateRecord, DeepWriteCandidateStatus } from '../store/DeepWriteCandidateStore.js';
 import type { MemoryEvent } from '../types/index.js';
 
 interface MemoryArgs {
-  command?: 'status' | 'list' | 'search' | 'show' | 'dream' | 'candidates';
+  command?: 'status' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'candidates';
   query?: string;
   eventId?: string;
   status?: DeepWriteCandidateStatus;
+  agentId?: string;
+  intent?: AgentRecallIntent;
   projectId?: string;
   workspaceId?: string;
   threadId?: string;
   sessionId?: string;
+  excludeSessionId?: string;
   limit?: number;
   before?: number;
   after?: number;
@@ -46,10 +50,13 @@ function readArgs(argv: string[]): MemoryArgs {
     query: stringArg(values, 'query') || stringArg(values, 'q'),
     eventId: stringArg(values, 'event') || stringArg(values, 'event-id'),
     status: candidateStatusArg(values, 'status'),
+    agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
+    intent: recallIntentArg(values, 'intent'),
     projectId: stringArg(values, 'project') || stringArg(values, 'project-id'),
     workspaceId: stringArg(values, 'workspace') || stringArg(values, 'workspace-id'),
     threadId: stringArg(values, 'thread') || stringArg(values, 'thread-id'),
     sessionId: stringArg(values, 'session') || stringArg(values, 'session-id'),
+    excludeSessionId: stringArg(values, 'exclude-session') || stringArg(values, 'exclude-session-id'),
     limit: numberArg(values, 'limit'),
     before: numberArg(values, 'before'),
     after: numberArg(values, 'after'),
@@ -68,6 +75,7 @@ function usage(): string {
     '  status               summarize raw ledger, vector, and dream backlog state',
     '  list                 list raw ledger events with source anchors',
     '  search --query <q>   search raw ledger text without requiring hot vectors',
+    '  recall --query <q>   run agent-facing governed recall with source context',
     '  show --event <id>    show one raw event with surrounding context',
     '  dream                run the Memory Curator / Dream Worker over undreamed raw events',
     '  candidates           list dream/deep-write governance candidates',
@@ -79,6 +87,8 @@ function usage(): string {
     '  --session <id>       scope to one session',
     '  --limit <n>          result limit, default 20',
     '  --status <status>    candidate queue status, default candidate',
+    '  --agent <id>         agent id for governed recall, default openclaw',
+    '  --intent <intent>    memory_recall, previous_session_summary, or forensic_quote',
     '  --db <memory.db>     open an explicit database path',
     '  --config <toml>      open a cogmem TOML config',
     '  --json               print machine-readable JSON',
@@ -92,9 +102,20 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
   return value === 'status'
     || value === 'list'
     || value === 'search'
+    || value === 'recall'
     || value === 'show'
     || value === 'dream'
     || value === 'candidates';
+}
+
+function recallIntentArg(
+  values: Record<string, string | boolean>,
+  key: string,
+): AgentRecallIntent | undefined {
+  const raw = stringArg(values, key);
+  if (!raw) return undefined;
+  if (raw === 'memory_recall' || raw === 'previous_session_summary' || raw === 'forensic_quote') return raw;
+  throw new Error(`--${key} must be one of memory_recall, previous_session_summary, forensic_quote`);
 }
 
 function stringArg(values: Record<string, string | boolean>, key: string): string | undefined {
@@ -240,6 +261,32 @@ function runSearch(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   };
 }
 
+function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  if (!args.query) throw new Error(`Missing --query.\n${usage()}`);
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const result = backend.recall({
+    agentId: args.agentId || 'openclaw',
+    projectId: args.projectId || 'openclaw',
+    workspaceId: args.workspaceId,
+    sessionId: args.sessionId,
+    threadId: args.threadId,
+    excludeSessionId: args.excludeSessionId,
+    intent: args.intent,
+    query: args.query,
+    limit: args.limit || 5,
+  });
+  return {
+    query: args.query,
+    agentId: args.agentId || 'openclaw',
+    projectId: args.projectId || 'openclaw',
+    recallMode: result.recallMode,
+    fallbackUsed: result.fallbackUsed,
+    queryPlan: result.queryPlan,
+    narrative: result.narrative,
+    items: result.items,
+  };
+}
+
 function runShow(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
   if (!args.eventId) throw new Error(`Missing --event.\n${usage()}`);
   const context = kernel.getEventContext(args.eventId, {
@@ -302,6 +349,17 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     }
     return;
   }
+  if (command === 'recall') {
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    console.log(`recallMode: ${payload.recallMode}`);
+    console.log(`fallbackUsed: ${payload.fallbackUsed}`);
+    for (const item of items as Array<Record<string, unknown>>) {
+      console.log(`- ${item.id} ${item.sourceType || 'memory'} ${item.text}`);
+      const sourceContext = item.sourceContext as { locator?: { command?: string } } | undefined;
+      if (sourceContext?.locator?.command) console.log(`  sourceLocator=${sourceContext.locator.command}`);
+    }
+    return;
+  }
   const events = Array.isArray(payload.events) ? payload.events : [payload.event].filter(Boolean);
   for (const event of events as Array<Record<string, unknown>>) {
     const anchor = event.sourceAnchor as Record<string, unknown>;
@@ -331,11 +389,13 @@ async function main(): Promise<void> {
         ? runList(kernel, args)
         : args.command === 'search'
           ? runSearch(kernel, args)
-          : args.command === 'show'
-            ? runShow(kernel, args)
-            : args.command === 'dream'
-              ? await runDream(kernel, args)
-              : runCandidates(kernel, args);
+          : args.command === 'recall'
+            ? runRecall(kernel, args)
+            : args.command === 'show'
+              ? runShow(kernel, args)
+              : args.command === 'dream'
+                ? await runDream(kernel, args)
+                : runCandidates(kernel, args);
     if (args.json) {
       console.log(JSON.stringify(payload, null, 2));
       return;

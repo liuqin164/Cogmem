@@ -152,6 +152,29 @@ Each `recall.items[]` entry can include:
 
 If the user asks for "原话", "具体内容", "完整脉络", "为什么当时这么判断", or "前后发生了什么", use `sourceContext` first. If more context is needed, run the locator command. Do not answer exact quotes from `compiled_memory` or `imported_summary` alone.
 
+## Active Memory Search
+
+If CogMem Retrieved Memory is absent, thin, or does not answer the user's question, do not answer "I do not remember" until you actively query CogMem. Use the kernel first, not the old `memory/` Markdown files:
+
+```bash
+./node_modules/.bin/cogmem memory recall --query "<user question>" --project openclaw --agent openclaw --json
+```
+
+Useful intents:
+
+```bash
+./node_modules/.bin/cogmem memory recall --query "上个会话我们聊了什么" --intent previous_session_summary --project openclaw --agent openclaw --session "$OPENCLAW_SESSION_ID" --exclude-session "$OPENCLAW_SESSION_ID" --json
+./node_modules/.bin/cogmem memory recall --query "我关于记忆黑盒问题的原话是什么" --intent forensic_quote --project openclaw --agent openclaw --json
+```
+
+Use `items[].sourceContext` to understand what the user asked, how the agent answered, and nearby context. If the item has `sourceContext.locator.command`, run that command for a fuller local replay:
+
+```bash
+./node_modules/.bin/cogmem memory show --event <eventId> --before 2 --after 2 --json
+```
+
+Only fall back to searching OpenClaw's legacy `memory/` files when `cogmem memory recall` and `cogmem memory search` return no useful evidence or when the user explicitly asks to inspect the legacy files.
+
 ## OpenClaw Host Integration Notes
 
 `cogmem-connect openclaw` installs this file into `<workspace>/skills/cogmem-memory/SKILL.md`, which is OpenClaw's workspace skill location. That makes the procedure discoverable without changing OpenClaw host config.
@@ -189,6 +212,7 @@ Run curation manually or from a host-owned schedule:
 ```
 
 The Dream Worker only proposes candidates such as user preferences, project memories, long-term goals, boundaries, failure lessons, diagnostic conclusions, session/topic summaries, temporal fact updates, and conflicts. CPU governance decides whether they remain provisional, need confirmation, become promoted, or are superseded/archived.
+It also proposes semantic tags, indexing decisions, event relations, and edge-adjustment candidates so future recall can route by stable cues such as `memory/auditability`, `concept:memory_black_box`, and `need:source_drilldown` instead of matching only the user's full sentence. These are still governance candidates; do not treat them as verified facts until promoted by core governance.
 
 After package updates or config drift, repair the host wiring:
 
