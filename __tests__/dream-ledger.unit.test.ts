@@ -254,6 +254,47 @@ test('dream curator proposes semantic tags, index decisions, and event relations
   kernel.close();
 });
 
+test('dream governance promotes semantic organization candidates instead of letting the queue pile up', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-governance-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-dream-governance',
+    userText: '我担心记忆黑盒：如果只注入摘要，agent 不知道原话和上下文在哪里。',
+    assistantText: '需要让 recall item 带 sourceContext，并把黑盒问题归到 memory/auditability 主题。',
+    ingestMode: 'raw_then_dream',
+  });
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-dream-governance',
+    userText: '请以后记住：回答记忆黑盒问题时必须先查 sourceContext。',
+    assistantText: '我会把它作为用户偏好候选，等待 CPU governance 处理。',
+    ingestMode: 'raw_then_dream',
+  });
+
+  await kernel.runDreamCurator({ projectId: 'demo', limit: 20 });
+  expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['candidate'] })).toBeGreaterThan(0);
+
+  const governed = kernel.promoteDreamCandidates({ projectId: 'demo', limit: 50 });
+  const promoted = kernel.listDreamCandidates({ projectId: 'demo', statuses: ['promoted'], limit: 50 });
+  const promotedTypes = promoted.map((candidate) => candidate.candidateType);
+
+  expect(governed.decisions.length).toBeGreaterThan(0);
+  expect(promotedTypes).toContain('summary');
+  expect(promotedTypes).toContain('preferences');
+  expect(promotedTypes).toContain('semantic_tags');
+  expect(promotedTypes).toContain('indexing_decision');
+  expect(promotedTypes).toContain('semantic_relation');
+  expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['candidate'] })).toBe(0);
+  expect(kernel.vectorStore.getCurrentCount()).toBe(0);
+
+  kernel.close();
+});
+
 test('dream curator records a diagnostic candidate when explicit generation returns invalid output', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-llm-invalid-'));
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
@@ -278,6 +319,64 @@ test('dream curator records a diagnostic candidate when explicit generation retu
   expect(candidates.some((candidate) => candidate.candidateType === 'diagnostic_conclusion')).toBe(true);
   expect(JSON.stringify(candidates)).toContain('dream_curator_provider_invalid_output');
   expect(JSON.stringify(candidates)).toContain('sourceAnchor');
+
+  kernel.close();
+});
+
+test('dream curator deduplicates provider warnings and supersedes them after provider recovery', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-provider-recovery-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-provider-recovery',
+    userText: '第一次运行时 provider 输出坏了。',
+    assistantText: '应该只生成一个可诊断警告。',
+    ingestMode: 'raw_then_dream',
+  });
+  await kernel.runDreamCurator({ projectId: 'demo', generateText: async () => 'not json' });
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-provider-recovery',
+    userText: '第二次运行时 provider 仍然输出坏了。',
+    assistantText: '同类警告不应该无限堆积。',
+    ingestMode: 'raw_then_dream',
+  });
+  await kernel.runDreamCurator({ projectId: 'demo', generateText: async () => 'not json' });
+
+  const warnings = kernel.listDreamCandidates({
+    projectId: 'demo',
+    statuses: ['needs_confirmation'],
+    candidateTypes: ['diagnostic_conclusion'],
+    limit: 10,
+  });
+  expect(warnings.filter((candidate) => JSON.stringify(candidate.content).includes('dream_curator_provider_invalid_output'))).toHaveLength(1);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-provider-recovery',
+    userText: '第三次运行时 provider 恢复，能输出合法 JSON。',
+    assistantText: '旧 provider warning 应该被标记为 superseded。',
+    ingestMode: 'raw_then_dream',
+  });
+  await kernel.runDreamCurator({
+    projectId: 'demo',
+    generateText: async () => JSON.stringify({
+      sessionSummaryCandidates: [{
+        summary: 'provider 已恢复并成功返回结构化候选。',
+        confidence: 0.76,
+        evidenceEventIds: ['all'],
+      }],
+    }),
+  });
+
+  expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['needs_confirmation'], candidateTypes: ['diagnostic_conclusion'] })).toBe(0);
+  expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['superseded'], candidateTypes: ['diagnostic_conclusion'] })).toBe(1);
 
   kernel.close();
 });

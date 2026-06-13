@@ -158,18 +158,34 @@ Run the dream curator when `raw_then_dream` backlog exists:
 const result = await kernel.runDreamCurator({ projectId: 'workspace-a', limit: 100 });
 console.log(result.candidateCount);
 console.log(kernel.listDreamCandidates({ projectId: 'workspace-a', statuses: ['candidate'] }));
+console.log(kernel.promoteDreamCandidates({ projectId: 'workspace-a', limit: 100 }).queue);
 ```
 
 The curator is candidate-only. In `rule_only` mode it is deterministic and local-first. It creates window summaries, explicit preference/constraint candidates, correction candidates, semantic tag candidates, indexing decision candidates, event relation candidates, and edge-adjustment candidates. When `[memory_model]` is configured with an OpenAI-compatible chat endpoint, it can also ask the memory model to propose richer candidates: user preferences, project memories, long-term goals, prohibitions/boundaries, failure lessons, diagnostic conclusions, session summaries, topic summaries, temporal fact updates, conflicts, semantic tags, indexing decisions, semantic relations, and edge adjustments. All candidates are stored in the deep-write governance queue with raw event source anchors. It does not create hot vectors, does not delete raw ledger events, and does not promote candidates to verified facts.
+
+Candidate generation and governance are separate. `runDreamCurator()` proposes candidates; `promoteDreamCandidates()` applies CPU governance. Governance can promote source-anchored summaries and explicit user preferences as provisional memory, accept semantic tags/indexing decisions/event relations/edge adjustments as promoted organization metadata, keep uncertain claims in `needs_confirmation`, or reject/supersede stale diagnostics. It does not turn tool output or LLM inference into verified facts.
 
 Core exposes schedule helpers for hosts that want background curation without turning core into a daemon:
 
 - `manual`: an operator or agent runs `cogmem memory dream`.
 - `interval`: cron/systemd runs it every N milliseconds.
 - `daily`: cron/systemd runs it at configured local times, such as `03:30` and `15:30`.
-- `continuous`: the host adapter runs it when raw backlog has been idle for a configured period.
+- `continuous`: the host adapter or process manager runs `cogmem memory dream --watch --promote` when raw backlog should be processed continuously.
 
-Use `describeDreamCuratorWorkflow()` and `nextDreamCuratorRunAt()` to make these schedules explicit in adapters. The host owns timers; core only processes a bounded ledger window when called.
+Use `describeDreamCuratorWorkflow()` and `nextDreamCuratorRunAt()` to make schedules explicit in adapters. The host owns timers and process lifetime; core only processes bounded ledger windows. For a foreground long-running worker:
+
+```bash
+./node_modules/.bin/cogmem memory dream --project openclaw --watch --interval-ms 300000 --promote --json
+```
+
+For one-shot maintenance:
+
+```bash
+./node_modules/.bin/cogmem memory dream --project openclaw --promote --json
+./node_modules/.bin/cogmem memory govern --project openclaw --json
+```
+
+Provider warning candidates are diagnostic signals, not memory. Repeated identical provider failures are deduplicated; once a later curation run returns valid structured output, older provider warnings are marked `superseded`.
 
 ## Memory Model
 
@@ -473,7 +489,9 @@ Memory audit console:
 ./node_modules/.bin/cogmem memory search --query "记忆 黑盒" --project openclaw --json
 ./node_modules/.bin/cogmem memory recall --query "我们之前是不是讨论过记忆黑盒的问题" --project openclaw --agent openclaw --json
 ./node_modules/.bin/cogmem memory show --event evt-... --before 2 --after 2 --json
-./node_modules/.bin/cogmem memory dream --project openclaw --json
+./node_modules/.bin/cogmem memory dream --project openclaw --promote --json
+./node_modules/.bin/cogmem memory dream --project openclaw --watch --interval-ms 300000 --promote --json
+./node_modules/.bin/cogmem memory govern --project openclaw --json
 ./node_modules/.bin/cogmem memory candidates --project openclaw --status candidate --json
 ```
 

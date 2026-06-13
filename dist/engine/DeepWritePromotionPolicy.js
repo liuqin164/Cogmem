@@ -39,9 +39,13 @@ function firstEvidenceNeuronId(candidate) {
         if (typeof item === 'string' && item.trim())
             return item.trim();
         const record = asRecord(item);
-        const id = stringField(record, ['neuronId', 'neuron_id', 'id', 'sourceNeuronId']);
+        const id = stringField(record, ['neuronId', 'neuron_id', 'id', 'sourceNeuronId', 'eventId']);
         if (id)
             return id;
+        const sourceAnchor = asRecord(record.sourceAnchor);
+        const anchorId = stringField(sourceAnchor, ['eventId', 'id']);
+        if (anchorId)
+            return anchorId;
     }
     return undefined;
 }
@@ -72,13 +76,55 @@ function hasUserTurnEvidence(candidate) {
         return String(record.role || record.turnRole || '').toLowerCase() === 'user';
     });
 }
+function isOrganizationCandidate(type) {
+    return type === 'semantic_tags'
+        || type === 'indexing_decision'
+        || type === 'semantic_relation'
+        || type === 'edge_adjustment';
+}
+function isSummaryLikeCandidate(type) {
+    return type === 'summary'
+        || type === 'session_summary'
+        || type === 'topic_summary'
+        || type === 'project_memory'
+        || type === 'failure_lesson'
+        || type === 'diagnostic_conclusion';
+}
+function isPreferenceLikeCandidate(type) {
+    return type === 'preferences'
+        || type === 'user_preference'
+        || type === 'boundary'
+        || type === 'long_term_goal';
+}
+function promotedSummaryContent(type, content) {
+    const text = stringField(content, ['summary', 'statement', 'text', 'content', 'recommendation', 'rootCause', 'newStatement']);
+    const topic = stringField(content, ['topic', 'category', 'candidateBucket']);
+    return {
+        ...content,
+        summary: text || JSON.stringify(content),
+        scope: type === 'session_summary' ? 'session' : type === 'project_memory' ? 'project' : 'turn_window',
+        source: stringField(content, ['source']) || 'deep_write_summary_candidate',
+        topic,
+    };
+}
+function promotedPreferenceContent(type, content) {
+    const value = stringField(content, ['object', 'objectValue', 'value', 'preferenceValue', 'statement', 'summary', 'text']);
+    return {
+        ...content,
+        predicate: stringField(content, ['predicate', 'preference', 'kind']) || type,
+        object: value,
+        statement: value,
+        source: stringField(content, ['source']) || 'deep_write_preference_candidate',
+    };
+}
 function sourceNeuronIds(candidate) {
     return evidenceArray(candidate)
         .map((item) => {
         if (typeof item === 'string')
             return item;
         const record = asRecord(item);
-        return stringField(record, ['neuronId', 'neuron_id', 'id', 'sourceNeuronId', 'sourceId']);
+        return stringField(record, ['neuronId', 'neuron_id', 'id', 'sourceNeuronId', 'sourceId', 'eventId'])
+            || stringField(asRecord(record.sourceAnchor), ['eventId', 'id']);
     })
         .filter((item) => Boolean(item));
 }
@@ -91,10 +137,11 @@ export class DeepWritePromotionPolicy {
         const candidates = this.deps.candidateStore.listCandidatesByRun(runId);
         return candidates.map((candidate) => this.evaluateAndApply(candidate));
     }
-    promotePending(limit = 100) {
-        return this.deps.candidateStore
-            .listCandidatesByStatus(['candidate'], { limit })
-            .map((candidate) => this.evaluateAndApply(candidate));
+    promotePending(limit = 100, options = {}) {
+        const candidates = options.projectId
+            ? this.deps.candidateStore.listCandidates({ statuses: ['candidate'], projectId: options.projectId, limit })
+            : this.deps.candidateStore.listCandidatesByStatus(['candidate'], { limit });
+        return candidates.map((candidate) => this.evaluateAndApply(candidate));
     }
     evaluateAndApply(candidate) {
         if (candidate.status !== 'candidate') {
@@ -103,6 +150,33 @@ export class DeepWritePromotionPolicy {
         const content = asRecord(candidate.content);
         if (evidenceArray(candidate).length === 0) {
             return this.mark(candidate, 'rejected', { outcome: 'reject', reason: 'missing_evidence' });
+        }
+        if (isOrganizationCandidate(candidate.candidateType)) {
+            return this.promoteOrganizationCandidate(candidate, content);
+        }
+        if (isSummaryLikeCandidate(candidate.candidateType)) {
+            if (candidate.confidence < 0.72) {
+                return this.mark(candidate, 'needs_confirmation', {
+                    outcome: 'needs_confirmation',
+                    reason: 'summary_like_below_min_promote_confidence'
+                });
+            }
+            return this.promoteSummary(candidate, promotedSummaryContent(candidate.candidateType, content));
+        }
+        if (isPreferenceLikeCandidate(candidate.candidateType)) {
+            if (candidate.confidence < 0.74) {
+                return this.mark(candidate, 'needs_confirmation', {
+                    outcome: 'needs_confirmation',
+                    reason: 'preference_like_below_min_promote_confidence'
+                });
+            }
+            if (!hasExplicitUserSource(content) && !hasUserTurnEvidence(candidate)) {
+                return this.mark(candidate, 'needs_confirmation', {
+                    outcome: 'needs_confirmation',
+                    reason: 'preference_like_requires_user_evidence'
+                });
+            }
+            return this.promotePreference(candidate, promotedPreferenceContent(candidate.candidateType, content));
         }
         if (candidate.confidence < this.deps.minPromoteConfidence) {
             return this.mark(candidate, 'needs_confirmation', {
@@ -137,6 +211,23 @@ export class DeepWritePromotionPolicy {
         return this.mark(candidate, 'needs_confirmation', {
             outcome: 'needs_confirmation',
             reason: `${candidate.candidateType}_requires_review`
+        });
+    }
+    promoteOrganizationCandidate(candidate, content) {
+        if (candidate.confidence < 0.6) {
+            return this.mark(candidate, 'needs_confirmation', {
+                outcome: 'needs_confirmation',
+                reason: 'organization_candidate_below_min_confidence'
+            });
+        }
+        if (evidenceArray(candidate).length === 0) {
+            return this.mark(candidate, 'rejected', { outcome: 'reject', reason: 'missing_evidence' });
+        }
+        return this.mark(candidate, 'promoted', {
+            outcome: 'promote_provisional',
+            reason: 'semantic_organization_candidate_accepted',
+            targetType: candidate.promotionTargetType || candidate.candidateType,
+            targetId: stringField(content, ['sourceEventId', 'targetEventId', 'topicPath']) || candidate.candidateId
         });
     }
     promoteFact(candidate, content) {
@@ -308,7 +399,7 @@ export class DeepWritePromotionPolicy {
         const neuronId = firstEvidenceNeuronId(candidate);
         const subject = stringField(content, ['subject', 'owner', 'user']) || 'user';
         const predicate = stringField(content, ['predicate', 'preference', 'kind']) || 'preference';
-        const value = stringField(content, ['object', 'objectValue', 'value', 'preferenceValue', 'statement']);
+        const value = stringField(content, ['object', 'objectValue', 'value', 'preferenceValue', 'statement', 'summary', 'text']);
         if (!neuronId || !value) {
             return this.mark(candidate, 'needs_confirmation', {
                 outcome: 'needs_confirmation',

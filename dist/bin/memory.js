@@ -35,15 +35,20 @@ function readArgs(argv) {
         limit: numberArg(values, 'limit'),
         before: numberArg(values, 'before'),
         after: numberArg(values, 'after'),
+        intervalMs: numberArg(values, 'interval-ms'),
+        maxRuns: numberArg(values, 'max-runs'),
+        promoteLimit: numberArg(values, 'promote-limit'),
         dbPath: stringArg(values, 'db'),
         configPath: stringArg(values, 'config'),
+        watch: values.watch === true,
+        promote: values.promote === true,
         json: values.json === true,
         help: values.help === true || values.h === true,
     };
 }
 function usage() {
     return [
-        'Usage: cogmem memory <status|list|search|show|dream|candidates> [args]',
+        'Usage: cogmem memory <status|list|search|show|dream|govern|candidates> [args]',
         '',
         'Commands:',
         '  status               summarize raw ledger, vector, and dream backlog state',
@@ -52,6 +57,7 @@ function usage() {
         '  recall --query <q>   run agent-facing governed recall with source context',
         '  show --event <id>    show one raw event with surrounding context',
         '  dream                run the Memory Curator / Dream Worker over undreamed raw events',
+        '  govern               apply CPU governance to pending dream/deep-write candidates',
         '  candidates           list dream/deep-write governance candidates',
         '',
         'Common options:',
@@ -61,6 +67,11 @@ function usage() {
         '  --session <id>       scope to one session',
         '  --limit <n>          result limit, default 20',
         '  --status <status>    candidate queue status, default candidate',
+        '  --promote            after dream, run CPU governance over pending candidates',
+        '  --promote-limit <n>  governance candidate limit, default follows --limit or 100',
+        '  --watch              keep running dream as a host-owned foreground worker',
+        '  --interval-ms <n>    watch sleep interval, default 300000',
+        '  --max-runs <n>       stop watch after n iterations; omit for long-running worker',
         '  --agent <id>         agent id for governed recall, default openclaw',
         '  --intent <intent>    memory_recall, previous_session_summary, or forensic_quote',
         '  --db <memory.db>     open an explicit database path',
@@ -78,6 +89,7 @@ function isMemoryCommand(value) {
         || value === 'recall'
         || value === 'show'
         || value === 'dream'
+        || value === 'govern'
         || value === 'candidates';
 }
 function recallIntentArg(values, key) {
@@ -189,11 +201,7 @@ function runStatus(kernel, args) {
         rawEventCount: page.total,
         vectorCount: kernel.vectorStore.getCurrentCount(),
         dreamBacklog: kernel.getDreamBacklogStatus(args.projectId),
-        dreamCandidateQueue: {
-            candidate: kernel.countDreamCandidates({ projectId: args.projectId, statuses: ['candidate'] }),
-            needsConfirmation: kernel.countDreamCandidates({ projectId: args.projectId, statuses: ['needs_confirmation'] }),
-            shadow: kernel.countDreamCandidates({ projectId: args.projectId, statuses: ['shadow'] }),
-        },
+        dreamCandidateQueue: kernel.getDreamCandidateQueue(args.projectId),
     };
 }
 function runList(kernel, args) {
@@ -267,14 +275,67 @@ function runShow(kernel, args) {
         children: context.children.map(eventToJson),
     };
 }
-async function runDream(kernel, args) {
+function runGovern(kernel, args) {
+    const result = kernel.promoteDreamCandidates({
+        projectId: args.projectId,
+        limit: args.promoteLimit || args.limit || 100,
+    });
+    return {
+        ...result,
+        decisions: result.decisions,
+    };
+}
+async function runDreamOnce(kernel, args) {
     const result = await kernel.runDreamCurator({
         projectId: args.projectId,
         limit: args.limit || 100,
     });
-    return {
+    const payload = {
         ...result,
         candidates: result.candidates.map(candidateToJson),
+    };
+    if (args.promote) {
+        payload.governance = kernel.promoteDreamCandidates({
+            projectId: args.projectId,
+            limit: args.promoteLimit || args.limit || 100,
+        });
+    }
+    return payload;
+}
+function sleep(ms) {
+    return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+async function runDream(kernel, args) {
+    if (!args.watch)
+        return runDreamOnce(kernel, args);
+    const intervalMs = args.intervalMs ?? 300000;
+    const maxRuns = args.maxRuns;
+    const runs = [];
+    let completed = 0;
+    while (maxRuns === undefined || completed < maxRuns) {
+        const run = await runDreamOnce(kernel, args);
+        completed += 1;
+        if (maxRuns === undefined) {
+            if (args.json) {
+                console.log(JSON.stringify({ watch: true, intervalMs, run }, null, 2));
+            }
+            else {
+                printHuman('dream', run);
+            }
+        }
+        else {
+            runs.push(run);
+        }
+        if (maxRuns !== undefined && completed >= maxRuns)
+            break;
+        await sleep(intervalMs);
+    }
+    return {
+        watch: true,
+        intervalMs,
+        maxRuns,
+        runs,
+        queue: kernel.getDreamCandidateQueue(args.projectId),
     };
 }
 function runCandidates(kernel, args) {
@@ -298,10 +359,25 @@ function printHuman(command, payload) {
         return;
     }
     if (command === 'dream') {
+        if (payload.watch === true) {
+            const runs = Array.isArray(payload.runs) ? payload.runs : [];
+            console.log(`watch: true intervalMs=${payload.intervalMs}`);
+            console.log(`runs: ${runs.length}`);
+            console.log(`queue: ${JSON.stringify(payload.queue)}`);
+            return;
+        }
         console.log(`processedEvents: ${payload.processedEventCount}`);
         console.log(`dreamableEvents: ${payload.dreamableEventCount}`);
         console.log(`candidates: ${payload.candidateCount}`);
         console.log(`dreamBacklog: ${JSON.stringify(payload.status)}`);
+        if (payload.governance)
+            console.log(`governance: ${JSON.stringify(payload.governance)}`);
+        return;
+    }
+    if (command === 'govern') {
+        const decisions = Array.isArray(payload.decisions) ? payload.decisions : [];
+        console.log(`decisions: ${decisions.length}`);
+        console.log(`queue: ${JSON.stringify(payload.queue)}`);
         return;
     }
     if (command === 'candidates') {
@@ -359,7 +435,9 @@ async function main() {
                             ? runShow(kernel, args)
                             : args.command === 'dream'
                                 ? await runDream(kernel, args)
-                                : runCandidates(kernel, args);
+                                : args.command === 'govern'
+                                    ? runGovern(kernel, args)
+                                    : runCandidates(kernel, args);
         if (args.json) {
             console.log(JSON.stringify(payload, null, 2));
             return;

@@ -21,12 +21,16 @@ export interface DeepWritePromotionPolicyDeps {
     minPromoteConfidence: number;
     promoteCausalLinks?: boolean;
 }
+export interface DeepWritePromotionOptions {
+    projectId?: string;
+}
 export declare class DeepWritePromotionPolicy {
     private readonly deps;
     constructor(deps: DeepWritePromotionPolicyDeps);
     promoteRun(runId: string): DeepWritePromotionDecision[];
-    promotePending(limit?: number): DeepWritePromotionDecision[];
+    promotePending(limit?: number, options?: DeepWritePromotionOptions): DeepWritePromotionDecision[];
     evaluateAndApply(candidate: DeepWriteCandidateRecord): DeepWritePromotionDecision;
+    private promoteOrganizationCandidate;
     private promoteFact;
     private promoteSummary;
     private promoteRelation;

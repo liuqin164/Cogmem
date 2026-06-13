@@ -92,6 +92,7 @@ export class MemoryKernel {
     compilerConfidenceStore;
     summaryStore;
     deepWriteCandidateStore;
+    deepWritePromotionPolicy;
     dreamCuratorWorker;
     topicSummaryBoard;
     topicDecayPolicy;
@@ -180,7 +181,7 @@ export class MemoryKernel {
         const graphCommunityEngine = new GraphCommunityEngine(this.memoryGraph);
         const orphanCleaner = new OrphanCleaner(this.memoryGraph);
         const principleDecayPolicy = new PrincipleDecayPolicy(this.memoryGraph);
-        const deepWritePromotionPolicy = new DeepWritePromotionPolicy({
+        this.deepWritePromotionPolicy = new DeepWritePromotionPolicy({
             candidateStore: this.deepWriteCandidateStore,
             factStore: this.factStore,
             entityStore: this.entityStore,
@@ -195,7 +196,7 @@ export class MemoryKernel {
             beliefStore: this.beliefStore,
             compilerConfidenceStore: this.compilerConfidenceStore,
             semanticCompiler: this.localSemanticCompiler,
-            deepWritePromotionPolicy,
+            deepWritePromotionPolicy: this.deepWritePromotionPolicy,
             topicSummaryBoard: this.topicSummaryBoard,
             topicDecayPolicy: this.topicDecayPolicy,
             memoryConsolidationEngine,
@@ -620,6 +621,26 @@ export class MemoryKernel {
     }
     countDreamCandidates(options = {}) {
         return this.deepWriteCandidateStore.countCandidates(options);
+    }
+    promoteDreamCandidates(options = {}) {
+        const decisions = this.deepWritePromotionPolicy.promotePending(options.limit ?? 100, {
+            projectId: options.projectId,
+        });
+        return {
+            projectId: options.projectId,
+            decisions,
+            queue: this.getDreamCandidateQueue(options.projectId),
+        };
+    }
+    getDreamCandidateQueue(projectId) {
+        return {
+            candidate: this.countDreamCandidates({ projectId, statuses: ['candidate'] }),
+            needsConfirmation: this.countDreamCandidates({ projectId, statuses: ['needs_confirmation'] }),
+            promoted: this.countDreamCandidates({ projectId, statuses: ['promoted'] }),
+            rejected: this.countDreamCandidates({ projectId, statuses: ['rejected'] }),
+            superseded: this.countDreamCandidates({ projectId, statuses: ['superseded'] }),
+            shadow: this.countDreamCandidates({ projectId, statuses: ['shadow'] }),
+        };
     }
     async exportSnapshot(outputPath) {
         const exporter = new SnapshotExporter({

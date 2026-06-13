@@ -22,7 +22,7 @@ import { ConsolidationPipeline } from './engine/ConsolidationPipeline.js';
 import { ConsolidationTrigger } from './engine/ConsolidationTrigger.js';
 import { CrossTopicSynthesizer } from './engine/CrossTopicSynthesizer.js';
 import { CrossTopicTrigger } from './engine/CrossTopicTrigger.js';
-import { DeepWritePromotionPolicy } from './engine/DeepWritePromotionPolicy.js';
+import { DeepWritePromotionPolicy, type DeepWritePromotionDecision } from './engine/DeepWritePromotionPolicy.js';
 import { DreamCuratorWorker, type DreamCuratorRunOptions, type DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 import { EpisodicSemanticDistiller } from './engine/EpisodicSemanticDistiller.js';
 import { EntityResolutionEngine } from './engine/EntityResolutionEngine.js';
@@ -163,6 +163,24 @@ export interface DreamCandidateListOptions {
   projectId?: string;
   runId?: string;
   limit?: number;
+}
+
+export interface DreamGovernanceRunOptions {
+  projectId?: string;
+  limit?: number;
+}
+
+export interface DreamGovernanceRunResult {
+  projectId?: string;
+  decisions: DeepWritePromotionDecision[];
+  queue: {
+    candidate: number;
+    needsConfirmation: number;
+    promoted: number;
+    rejected: number;
+    superseded: number;
+    shadow: number;
+  };
 }
 
 export interface RawMemoryEventInput {
@@ -307,6 +325,7 @@ export class MemoryKernel {
   private readonly compilerConfidenceStore: CompilerConfidenceStore;
   private readonly summaryStore: SummaryStore;
   private readonly deepWriteCandidateStore: DeepWriteCandidateStore;
+  private readonly deepWritePromotionPolicy: DeepWritePromotionPolicy;
   private readonly dreamCuratorWorker: DreamCuratorWorker;
   private readonly topicSummaryBoard: TopicSummaryBoard;
   private readonly topicDecayPolicy: TopicDecayPolicy;
@@ -426,7 +445,7 @@ export class MemoryKernel {
     const graphCommunityEngine = new GraphCommunityEngine(this.memoryGraph);
     const orphanCleaner = new OrphanCleaner(this.memoryGraph);
     const principleDecayPolicy = new PrincipleDecayPolicy(this.memoryGraph);
-    const deepWritePromotionPolicy = new DeepWritePromotionPolicy({
+    this.deepWritePromotionPolicy = new DeepWritePromotionPolicy({
       candidateStore: this.deepWriteCandidateStore,
       factStore: this.factStore,
       entityStore: this.entityStore,
@@ -442,7 +461,7 @@ export class MemoryKernel {
       beliefStore: this.beliefStore,
       compilerConfidenceStore: this.compilerConfidenceStore,
       semanticCompiler: this.localSemanticCompiler,
-      deepWritePromotionPolicy,
+      deepWritePromotionPolicy: this.deepWritePromotionPolicy,
       topicSummaryBoard: this.topicSummaryBoard,
       topicDecayPolicy: this.topicDecayPolicy,
       memoryConsolidationEngine,
@@ -922,6 +941,28 @@ export class MemoryKernel {
 
   countDreamCandidates(options: Omit<DreamCandidateListOptions, 'limit'> = {}): number {
     return this.deepWriteCandidateStore.countCandidates(options);
+  }
+
+  promoteDreamCandidates(options: DreamGovernanceRunOptions = {}): DreamGovernanceRunResult {
+    const decisions = this.deepWritePromotionPolicy.promotePending(options.limit ?? 100, {
+      projectId: options.projectId,
+    });
+    return {
+      projectId: options.projectId,
+      decisions,
+      queue: this.getDreamCandidateQueue(options.projectId),
+    };
+  }
+
+  getDreamCandidateQueue(projectId?: string): DreamGovernanceRunResult['queue'] {
+    return {
+      candidate: this.countDreamCandidates({ projectId, statuses: ['candidate'] }),
+      needsConfirmation: this.countDreamCandidates({ projectId, statuses: ['needs_confirmation'] }),
+      promoted: this.countDreamCandidates({ projectId, statuses: ['promoted'] }),
+      rejected: this.countDreamCandidates({ projectId, statuses: ['rejected'] }),
+      superseded: this.countDreamCandidates({ projectId, statuses: ['superseded'] }),
+      shadow: this.countDreamCandidates({ projectId, statuses: ['shadow'] }),
+    };
   }
 
   async exportSnapshot(outputPath: string): Promise<SnapshotMeta> {

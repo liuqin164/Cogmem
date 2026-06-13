@@ -4,6 +4,7 @@ import { MemoryGraph } from './core/MemoryGraph.js';
 import { type BrainRecallOptions } from './recall/BrainRecall.js';
 import { type RecallGovernanceSuppressionReason } from './recall/RecallGovernance.js';
 import { TopicRegistry } from './recall/TopicRegistry.js';
+import { type DeepWritePromotionDecision } from './engine/DeepWritePromotionPolicy.js';
 import { type DreamCuratorRunOptions, type DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 import { type OfflineConsolidationOutput } from './engine/OfflineConsolidationPipeline.js';
 import { PipelineMetrics } from './engine/PipelineMetrics.js';
@@ -84,6 +85,22 @@ export interface DreamCandidateListOptions {
     projectId?: string;
     runId?: string;
     limit?: number;
+}
+export interface DreamGovernanceRunOptions {
+    projectId?: string;
+    limit?: number;
+}
+export interface DreamGovernanceRunResult {
+    projectId?: string;
+    decisions: DeepWritePromotionDecision[];
+    queue: {
+        candidate: number;
+        needsConfirmation: number;
+        promoted: number;
+        rejected: number;
+        superseded: number;
+        shadow: number;
+    };
 }
 export interface RawMemoryEventInput {
     projectId?: string;
@@ -215,6 +232,7 @@ export declare class MemoryKernel {
     private readonly compilerConfidenceStore;
     private readonly summaryStore;
     private readonly deepWriteCandidateStore;
+    private readonly deepWritePromotionPolicy;
     private readonly dreamCuratorWorker;
     private readonly topicSummaryBoard;
     private readonly topicDecayPolicy;
@@ -288,6 +306,8 @@ export declare class MemoryKernel {
     runDreamCurator(options?: DreamCuratorRunOptions): Promise<DreamCuratorRunResult>;
     listDreamCandidates(options?: DreamCandidateListOptions): DreamCandidateRecord[];
     countDreamCandidates(options?: Omit<DreamCandidateListOptions, 'limit'>): number;
+    promoteDreamCandidates(options?: DreamGovernanceRunOptions): DreamGovernanceRunResult;
+    getDreamCandidateQueue(projectId?: string): DreamGovernanceRunResult['queue'];
     exportSnapshot(outputPath: string): Promise<SnapshotMeta>;
     importSnapshot(snapshotPath: string, opts?: ImportOptions): Promise<ImportResult>;
     getHealthStatus(): {

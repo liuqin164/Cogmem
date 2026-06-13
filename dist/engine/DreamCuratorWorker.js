@@ -208,12 +208,15 @@ export class DreamCuratorWorker {
             raw = await generate(systemPrompt, userPrompt);
         }
         catch (error) {
-            return [this.providerDiagnosticCandidate(events, now, 'dream_curator_provider_exception', error)];
+            const diagnostic = this.providerDiagnosticCandidate(events, now, options.projectId, 'dream_curator_provider_exception', error);
+            return diagnostic ? [diagnostic] : [];
         }
         const parsed = parseJsonObjectFromModel(raw);
         if (!parsed) {
-            return [this.providerDiagnosticCandidate(events, now, 'dream_curator_provider_invalid_output', raw)];
+            const diagnostic = this.providerDiagnosticCandidate(events, now, options.projectId, 'dream_curator_provider_invalid_output', raw);
+            return diagnostic ? [diagnostic] : [];
         }
+        this.supersedeProviderWarnings(options.projectId);
         return this.flattenProviderCandidates(parsed, events, now, status);
     }
     flattenProviderCandidates(parsed, events, now, status) {
@@ -373,15 +376,32 @@ export class DreamCuratorWorker {
         const fallback = selected.length > 0 ? selected : events.slice(0, 4);
         return fallback.map((event) => this.toEvidence(event));
     }
-    providerDiagnosticCandidate(events, now, reason, detail) {
+    providerDiagnosticCandidate(events, now, projectId, reason, detail) {
+        const detailText = truncate(detail instanceof Error ? detail.message : String(detail || ''), 500);
+        const existing = this.deps.candidateStore.listCandidates({
+            projectId,
+            statuses: ['needs_confirmation'],
+            candidateTypes: ['diagnostic_conclusion'],
+            limit: 500,
+        }).some((candidate) => {
+            const content = candidate.content && typeof candidate.content === 'object'
+                ? candidate.content
+                : {};
+            return content.source === 'dream_curator_provider_warning'
+                && content.reason === reason
+                && content.detail === detailText;
+        });
+        if (existing)
+            return undefined;
         return {
             candidateType: 'diagnostic_conclusion',
             status: 'needs_confirmation',
             confidence: 0.4,
             content: {
+                projectId,
                 source: 'dream_curator_provider_warning',
                 reason,
-                detail: truncate(detail instanceof Error ? detail.message : String(detail || ''), 500),
+                detail: detailText,
                 governance: 'candidate_only_cpu_governance_required',
                 recommendation: 'Check [memory_model] provider configuration and rerun cogmem memory dream after fixing the model endpoint.',
             },
@@ -389,6 +409,25 @@ export class DreamCuratorWorker {
             promotionTargetType: 'diagnostic_conclusion',
             createdAt: now,
         };
+    }
+    supersedeProviderWarnings(projectId) {
+        const warnings = this.deps.candidateStore.listCandidates({
+            projectId,
+            statuses: ['needs_confirmation'],
+            candidateTypes: ['diagnostic_conclusion'],
+            limit: 500,
+        });
+        for (const candidate of warnings) {
+            const content = candidate.content && typeof candidate.content === 'object'
+                ? candidate.content
+                : {};
+            if (content.source !== 'dream_curator_provider_warning')
+                continue;
+            this.deps.candidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
+                type: 'diagnostic_conclusion',
+                id: candidate.candidateId,
+            });
+        }
     }
     resolveGenerateText(options) {
         if (options.generateText)

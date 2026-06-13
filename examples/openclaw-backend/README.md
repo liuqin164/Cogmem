@@ -49,11 +49,18 @@ timeout_ms = 60000
 Then run:
 
 ```bash
-./node_modules/.bin/cogmem memory dream --project openclaw --json
+./node_modules/.bin/cogmem memory dream --project openclaw --promote --json
+./node_modules/.bin/cogmem memory govern --project openclaw --json
 ./node_modules/.bin/cogmem memory candidates --project openclaw --status candidate --json
 ```
 
-The Dream Worker proposes candidate memories only. It does not rewrite verified facts or promote tool/LLM output into active memory.
+For a supervised long-running worker instead of cron:
+
+```bash
+./node_modules/.bin/cogmem memory dream --project openclaw --watch --interval-ms 300000 --promote --json
+```
+
+The Dream Worker proposes candidate memories only. CPU governance is a separate step. Use `--promote` or `cogmem memory govern` to turn evidence-backed summaries/preferences into provisional memory and to accept semantic tags, indexing decisions, event relations, and edge adjustments as organization metadata. It does not rewrite verified facts or promote tool/LLM output into active memory.
 
 ## Migrate
 

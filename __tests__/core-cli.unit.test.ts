@@ -670,6 +670,67 @@ test('memory CLI runs dream curator and lists governance candidates', async () =
   expect(JSON.stringify(queue)).toContain('sourceAnchor');
 });
 
+test('memory CLI governs dream candidates and can run a one-iteration watch loop', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-govern-cli-'));
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(join(dir, '.cogmem'), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
+
+  const kernel = createMemoryKernel({ dbPath: join(dir, '.cogmem', 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-memory-govern-cli',
+    userText: '我担心记忆黑盒：如果只注入摘要，agent 不知道原话和上下文在哪里。',
+    assistantText: '需要 sourceContext 和 raw ledger 下钻。',
+    ingestMode: 'raw_then_dream',
+  });
+  kernel.close();
+
+  const watchProc = Bun.spawn({
+    cmd: [
+      'bun',
+      memoryBin,
+      'dream',
+      '--config',
+      configPath,
+      '--project',
+      'demo',
+      '--watch',
+      '--max-runs',
+      '1',
+      '--promote',
+      '--json',
+    ],
+    cwd: coreRoot,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const watchOutput = await new Response(watchProc.stdout).text();
+  const watchError = await new Response(watchProc.stderr).text();
+  expect(await watchProc.exited).toBe(0);
+  expect(watchError).toBe('');
+  const watched = JSON.parse(watchOutput);
+  expect(watched.watch).toBe(true);
+  expect(watched.runs).toHaveLength(1);
+  expect(watched.runs[0].governance.decisions.length).toBeGreaterThan(0);
+
+  const governProc = Bun.spawn({
+    cmd: ['bun', memoryBin, 'govern', '--config', configPath, '--project', 'demo', '--json'],
+    cwd: coreRoot,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const governOutput = await new Response(governProc.stdout).text();
+  const governError = await new Response(governProc.stderr).text();
+  expect(await governProc.exited).toBe(0);
+  expect(governError).toBe('');
+  const governed = JSON.parse(governOutput);
+  expect(governed.queue.promoted).toBeGreaterThan(0);
+  expect(governed.queue.candidate).toBe(0);
+});
+
 test('unified cogmem CLI exposes memory audit commands', async () => {
   const proc = Bun.spawn({
     cmd: ['bun', join(coreRoot, 'src/bin/cogmem.ts'), '--help'],
@@ -687,6 +748,20 @@ test('unified cogmem CLI exposes memory audit commands', async () => {
   expect(output).toContain('audit/search/show raw and compiled memory');
   expect(output).toContain('dream');
   expect(output).toContain('candidates');
+
+  const memoryProc = Bun.spawn({
+    cmd: ['bun', memoryBin, '--help'],
+    cwd: coreRoot,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const memoryOutput = await new Response(memoryProc.stdout).text();
+  const memoryError = await new Response(memoryProc.stderr).text();
+  expect(memoryError).toBe('');
+  expect(await memoryProc.exited).toBe(0);
+  expect(memoryOutput).toContain('govern');
+  expect(memoryOutput).toContain('--watch');
+  expect(memoryOutput).toContain('--promote');
 });
 
 test('vector migration dry-run uses configured vector_dimension by default', async () => {

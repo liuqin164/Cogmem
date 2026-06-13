@@ -40,3 +40,6 @@
 - Added `cogmem-import-openclaw --reindex-raw` / `cogmem-import-hermes --reindex-raw` to backfill raw ledger anchors for records imported by older versions without duplicating compiled memory or hot vectors.
 - Added `cogmem memory recall` as an agent-facing active memory search command using `KernelAgentMemoryBackend.recall()` with query plans and source context, so OpenClaw can query CogMem when automatic prompt injection is empty.
 - Expanded the Memory Curator / Dream Worker with semantic tag, indexing decision, semantic relation, and edge-adjustment candidates for host-owned curation loops without directly mutating verified memory.
+- Added `cogmem memory govern`, `cogmem memory dream --promote`, and `cogmem memory dream --watch` so hosts can run a supervised curation/governance loop without cron-only polling or unbounded candidate backlog.
+- Added CPU promotion handling for source-anchored summaries/preferences and semantic organization candidates while keeping uncertain claims in `needs_confirmation` and never upgrading them to verified facts automatically.
+- Deduplicated Dream Curator provider warnings and supersede stale provider diagnostics after a later successful structured memory-model run.

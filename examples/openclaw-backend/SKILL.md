@@ -215,12 +215,30 @@ timeout_ms = 60000
 Run curation manually or from a host-owned schedule:
 
 ```bash
-./node_modules/.bin/cogmem memory dream --project openclaw --json
+./node_modules/.bin/cogmem memory dream --project openclaw --promote --json
+./node_modules/.bin/cogmem memory govern --project openclaw --json
 ./node_modules/.bin/cogmem memory candidates --project openclaw --status candidate --json
 ```
 
 The Dream Worker only proposes candidates such as user preferences, project memories, long-term goals, boundaries, failure lessons, diagnostic conclusions, session/topic summaries, temporal fact updates, and conflicts. CPU governance decides whether they remain provisional, need confirmation, become promoted, or are superseded/archived.
 It also proposes semantic tags, indexing decisions, event relations, and edge-adjustment candidates so future recall can route by stable cues such as `memory/auditability`, `concept:memory_black_box`, and `need:source_drilldown` instead of matching only the user's full sentence. These are still governance candidates; do not treat them as verified facts until promoted by core governance.
+
+For continuous curation, prefer a host-owned foreground worker over cron when the host can supervise long-running processes:
+
+```bash
+./node_modules/.bin/cogmem memory dream --project openclaw --watch --interval-ms 300000 --promote --json
+```
+
+`--watch` keeps processing new raw events until the host stops the process. `--promote` runs CPU governance after each dream pass, so the candidate queue does not grow forever. Without `--promote` or a separate `cogmem memory govern` run, candidates stay pending and will not become agent-facing compiled/provisional memory.
+
+Queue interpretation:
+
+- `candidate`: proposed but not yet governed; do not assume it will be injected.
+- `promoted`: accepted by CPU governance. Summaries/preferences are provisional memory; semantic tags/indexing decisions/event relations/edge adjustments are organization metadata, not verified facts.
+- `needs_confirmation`: uncertain or risky candidate. Provider warnings here are diagnostics, not user memory.
+- `superseded`: older diagnostic or candidate has been replaced by newer evidence.
+
+If provider warnings mention invalid memory-model output but later curation works, run `cogmem memory dream --project openclaw --promote --json`; recovered provider runs mark older provider warnings as `superseded`.
 
 After package updates or config drift, repair the host wiring:
 
