@@ -10,6 +10,7 @@ import {
 } from '../src/bin/init.js';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
+import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
@@ -711,6 +712,23 @@ test('memory CLI recall falls back to imported Hermes raw ledger when vectors ar
   expect(recalled.recallMode).toBe('raw_ledger_fallback');
   expect(recalled.items.some((item: { text: string }) => item.text.includes('PRECIOUS FRUITS'))).toBe(true);
   expect(recalled.items[0].sourceContext.locator.command).toContain('cogmem memory show --event');
+
+  const mcpRecalled = await callCogmemMcpTool('cogmem_recall', {
+    projectId: 'hermes',
+    query: '我们记录过哪些库存',
+    limit: 5,
+  }, { dbPath: join(dir, '.cogmem', 'memory.db') });
+  const mcpItems = mcpRecalled.structuredContent?.items as Array<{
+    text: string;
+    sourceType?: string;
+    sourceContext?: { locator?: { command?: string } };
+  }>;
+  expect(mcpRecalled.isError).toBeFalsy();
+  expect(mcpRecalled.structuredContent?.recallMode).toBe(recalled.recallMode);
+  expect(mcpRecalled.structuredContent?.fallbackUsed).toBe(recalled.fallbackUsed);
+  expect(mcpItems[0].text).toBe(recalled.items[0].text);
+  expect(mcpItems[0].sourceType).toBe(recalled.items[0].sourceType);
+  expect(mcpItems[0].sourceContext?.locator?.command).toContain('cogmem memory show --event');
 });
 
 test('memory CLI status JSON exposes stable raw and dream counters', async () => {

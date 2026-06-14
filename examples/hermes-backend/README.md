@@ -113,3 +113,5 @@ If a Hermes workspace uses different paths, pass explicit `profilePath` and `ses
 For agent-facing instructions, install or read `SKILL.md`. `cogmem connect hermes --workspace .` copies it to `~/.hermes/skills/cogmem-memory/SKILL.md`.
 
 `cogmem connect hermes --workspace . --auto` patches the Hermes MCP config with a `cogmem` server command. After running it, restart or reload Hermes so the MCP server list is re-read.
+
+The MCP `cogmem_recall` tool uses the same backend as `cogmem memory recall`. A Hermes MCP call with only `projectId: "hermes"` still infers `agentId: "hermes"` and can return `raw_ledger` items with `sourceContext` when vectors are empty.

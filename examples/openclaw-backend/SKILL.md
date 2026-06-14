@@ -298,3 +298,5 @@ Expose these tools to the agent:
 - `cogmem_remember_turn`
 - `cogmem_recall`
 - `cogmem_explain_recall`
+
+Use `cogmem_recall` for normal answers. It uses the same agent-facing recall path as `cogmem memory recall`, so empty vector indexes can still return bounded `raw_ledger` evidence with `sourceContext` and a local `sourceContext.locator.command`. Pass `agentId` and `projectId` when available; if an MCP host sends only `projectId`, Cogmem infers `agentId` from it. Use `cogmem_explain_recall` only when auditing `filteredEvidence`, activation paths, or governance suppression reasons.

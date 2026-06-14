@@ -303,6 +303,14 @@ Then reload MCP inside Hermes:
 /reload-mcp
 ```
 
+Hermes can call the MCP recall tool directly:
+
+```json
+{ "query": "MoneyPrinterTurbo", "projectId": "hermes" }
+```
+
+`cogmem_recall` uses the same agent-facing recall path as `cogmem memory recall`. If `agentId` is omitted, MCP infers it from `projectId`, so project-only Hermes calls can still reach raw ledger fallback and return `items[].sourceContext` when vectors are empty.
+
 Import existing Hermes memory:
 
 ```bash
@@ -341,6 +349,8 @@ cogmem memory show --event <event-id> --before 2 --after 2 --json
 ```
 
 `memory recall` can still return source-anchored raw ledger evidence when `vectors` is `0`. In that state, recall falls back to governed raw FTS and returns `sourceContext` locators instead of claiming vector search succeeded. Broad inventory questions such as `我们记录过哪些库存` are expanded into structured ledger cues such as `库存管理`, `在库`, `产品コード`, and `数量`; if compiled-memory candidates do not contain those cues, raw ledger evidence is preferred.
+
+The MCP `cogmem_recall` tool returns the same agent-facing item shape and fallback behavior. Agents may call it with `query`, `projectId`, and optionally `agentId`; when `agentId` is omitted, MCP uses `projectId` as the agent id before falling back to `openclaw`. `cogmem_explain_recall` remains the audit path for `filteredEvidence` and governance reasons.
 
 `cogmem memory status --json` exposes stable top-level counters:
 

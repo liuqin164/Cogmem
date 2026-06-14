@@ -228,6 +228,8 @@ mcp_servers:
 
 The command path is resolved by `cogmem connect hermes`: it uses `COGMEM_MCP_BIN` when explicitly set, then a workspace-local `node_modules/.bin/cogmem-mcp` when present, then the globally linked `cogmem-mcp` from the one-line installer.
 
+When Hermes calls `cogmem_recall`, it should pass `projectId: "hermes"` and may omit `agentId`; the MCP bridge infers `agentId` from `projectId`. The returned `items` use the same shape as `cogmem memory recall --project hermes --agent hermes --json`, including `raw_ledger` items, `sourceContext`, and `sourceContext.locator.command` when vectors are empty or compiled evidence misses.
+
 Then reload MCP inside Hermes:
 
 ```text

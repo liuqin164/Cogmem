@@ -88,6 +88,39 @@ test('core MCP tools can remember a turn and recall prepared narrative context',
   ))).toBe(true);
 });
 
+test('core MCP recall uses agent-facing raw ledger fallback when only projectId is provided', async () => {
+  const kernel = makeKernel();
+
+  const write = await callCogmemMcpTool('cogmem_remember_turn', {
+    agentId: 'hermes',
+    projectId: 'hermes',
+    sessionId: 'hermes-moneyprinterturbo',
+    userText: 'MoneyPrinterTurbo deployment note: keep the template cache under Hermes control.',
+    assistantText: 'Stored in the raw ledger without immediate compilation.',
+    ingestMode: 'raw_archive_only',
+  }, { kernel });
+
+  expect(write.isError).toBeFalsy();
+  expect(write.structuredContent?.compiled).toBe(false);
+  expect(kernel.vectorStore.getCurrentCount()).toBe(0);
+
+  const recall = await callCogmemMcpTool('cogmem_recall', {
+    projectId: 'hermes',
+    query: 'MoneyPrinterTurbo',
+    limit: 3,
+  }, { kernel });
+
+  expect(recall.isError).toBeFalsy();
+  expect(recall.structuredContent?.agentId).toBe('hermes');
+  expect(recall.structuredContent?.recallMode).toBe('raw_ledger_fallback');
+  expect(recall.structuredContent?.fallbackUsed).toBe(true);
+  expect((recall.structuredContent?.items as Array<{ text: string; sourceType?: string; sourceContext?: unknown }>).some((item) => (
+    item.text.includes('MoneyPrinterTurbo deployment note')
+    && item.sourceType === 'raw_ledger'
+    && Boolean(item.sourceContext)
+  ))).toBe(true);
+});
+
 test('core MCP explain tool returns pulse and temporal recall details', async () => {
   const kernel = makeKernel();
   await kernel.ingest({

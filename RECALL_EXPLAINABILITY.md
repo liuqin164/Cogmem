@@ -35,6 +35,10 @@ cogmem memory recall --query "<user question>" --project <project> --agent <agen
 
 This command returns `queryPlan`, `items`, `sourceAnchor`, and `sourceContext`. It is the preferred fallback before searching legacy host files.
 
+MCP `cogmem_recall` now uses this same agent-facing path. It returns `items` with `sourceType`, `sourceAnchor`, `sourceContext`, `canAnswerExactQuote`, and raw ledger fallback when governed compiled evidence is empty. If a host sends only `projectId`, MCP uses that value as `agentId` before falling back to `openclaw`.
+
+MCP `cogmem_explain_recall` is the audit tool. It reports pulse, temporal, activation, and `filteredEvidence` details from `explainRecallWithKernel()`; use it to inspect why evidence was included or suppressed, not as the raw-ledger recovery path for normal agent answers.
+
 ## Agent Query Plans
 
 `KernelAgentMemoryBackend.recall()` returns a `queryPlan` alongside agent-ready items. The plan records the original query, inferred/explicit intent, primary search text, bounded search cues, `semanticCuePhrases`, and `temporalHints` used for recall. This makes long questions auditable: an adapter can show that a sentence about "CogMem Memory Context 和记忆黑盒" was reduced to stable cues such as `CogMem Memory Context 记忆 黑盒`, `存档 黑盒`, or `黑盒` instead of being treated as one brittle raw string.

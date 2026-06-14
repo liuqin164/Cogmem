@@ -34,7 +34,7 @@ export function listCogmemMcpTools() {
         },
         {
             name: 'cogmem_recall',
-            description: 'Recall governed prepared memory context from cogmem using pulse, temporal, graph, and narrative retrieval. Suppressed evidence is omitted from active context; use cogmem_explain_recall to inspect filteredEvidence.',
+            description: 'Recall governed agent-facing memory context from cogmem using the same path as cogmem memory recall, including raw ledger fallback with sourceContext when vectors or compiled evidence are unavailable. Suppressed evidence is omitted from active context; use cogmem_explain_recall to inspect filteredEvidence.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -115,27 +115,45 @@ async function rememberTurn(kernel, input) {
     return jsonResult({ ok: true, ...result });
 }
 function recall(kernel, input, includeExplanation) {
+    const query = requiredString(input.query, 'query');
+    const requestedAgentId = optionalString(input.agentId);
+    const requestedProjectId = optionalString(input.projectId);
+    const limit = optionalNumber(input.limit);
+    const startTime = optionalTime(input.since, 'since');
+    const endTime = optionalTime(input.until, 'until');
+    if (!includeExplanation) {
+        const agentId = requestedAgentId || requestedProjectId || 'openclaw';
+        const projectId = requestedProjectId || agentId;
+        const memory = new KernelAgentMemoryBackend(kernel);
+        const result = memory.recall({
+            agentId,
+            projectId,
+            query,
+            limit,
+            startTime,
+            endTime,
+        });
+        return jsonResult({
+            query,
+            projectId,
+            agentId,
+            recallMode: result.recallMode,
+            fallbackUsed: result.fallbackUsed,
+            queryPlan: result.queryPlan,
+            narrative: result.narrative,
+            temporalLabels: result.temporalTraversal?.labels,
+            items: result.items,
+        });
+    }
     const explanation = explainRecallWithKernel(kernel, {
-        query: requiredString(input.query, 'query'),
-        agentId: optionalString(input.agentId),
-        projectId: optionalString(input.projectId),
-        limit: optionalNumber(input.limit),
-        startTime: optionalTime(input.since, 'since'),
-        endTime: optionalTime(input.until, 'until'),
+        query,
+        agentId: requestedAgentId,
+        projectId: requestedProjectId,
+        limit,
+        startTime,
+        endTime,
     });
-    const payload = includeExplanation
-        ? explanation
-        : {
-            query: explanation.query,
-            projectId: explanation.projectId,
-            agentId: explanation.agentId,
-            recallMode: explanation.recallMode,
-            fallbackUsed: explanation.fallbackUsed,
-            narrative: explanation.narrative,
-            temporalLabels: explanation.temporalTraversal?.labels,
-            items: explanation.evidence,
-        };
-    return jsonResult(payload);
+    return jsonResult(explanation);
 }
 function openRuntimeKernel(runtime) {
     if (runtime.kernel)
