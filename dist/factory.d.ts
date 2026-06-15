@@ -20,6 +20,7 @@ import type { Embedder } from './store/Embedder.js';
 import { CognitiveGraphStore } from './store/CognitiveGraphStore.js';
 import { type DeepWriteCandidateStatus } from './store/DeepWriteCandidateStore.js';
 import { DreamLedgerStore, type DreamBacklogStatus } from './store/DreamLedgerStore.js';
+import { ActivationStore, type ActivationDecayResult, type ActivationHotspot } from './store/ActivationStore.js';
 import { EntityStore } from './store/EntityStore.js';
 import { EventStore } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
@@ -101,6 +102,71 @@ export interface DreamGovernanceRunResult {
         superseded: number;
         shadow: number;
     };
+}
+export interface MemoryMapOptions {
+    projectId?: string;
+}
+export interface MemoryMapSection {
+    id: string;
+    name: string;
+    role: string;
+    currentCount?: number;
+}
+export interface MemoryDataLane {
+    id: string;
+    name: string;
+    route: string;
+    useWhen: string;
+}
+export interface MemorySelfMap {
+    version: 'memory_map.v1';
+    generatedAt: number;
+    projectId?: string;
+    anatomy: MemoryMapSection[];
+    dataLanes: MemoryDataLane[];
+    bounds: string[];
+    manual: {
+        commands: string[];
+        agentUsage: string[];
+    };
+    counters: {
+        rawEvents: number;
+        neurons: number;
+        vectors: number;
+        activationHotspots: number;
+        dreamBacklog: DreamBacklogStatus;
+        dreamCandidateQueue: DreamGovernanceRunResult['queue'];
+    };
+}
+export interface MaintenanceTickOptions {
+    projectId?: string;
+    activationDecayFactor?: number;
+    activationFloor?: number;
+    now?: number;
+}
+export interface MaintenanceSuggestedAction {
+    kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots';
+    command: string;
+    reason: string;
+}
+export interface MaintenanceTickResult {
+    version: 'maintenance_tick.v1';
+    projectId?: string;
+    ranAt: number;
+    hostOwned: true;
+    chargeVector: {
+        dreamBacklog: number;
+        candidateQueue: number;
+        entityConflicts: number;
+        activationHotspots: number;
+        staleVectors: number;
+    };
+    executed: {
+        activationDecay: ActivationDecayResult;
+        hiddenDaemonStarted: false;
+    };
+    hotspots: ActivationHotspot[];
+    suggestedActions: MaintenanceSuggestedAction[];
 }
 export interface RawMemoryEventInput {
     projectId?: string;
@@ -221,6 +287,7 @@ export declare class MemoryKernel {
     readonly temporalAdjacencyStore: TemporalAdjacencyStore;
     readonly neuronEmbeddingStore: NeuronEmbeddingStore;
     readonly dreamLedgerStore: DreamLedgerStore;
+    readonly activationStore: ActivationStore;
     readonly pipelineMetrics: PipelineMetrics;
     private readonly dbPath;
     private readonly embedder;
@@ -308,6 +375,8 @@ export declare class MemoryKernel {
     countDreamCandidates(options?: Omit<DreamCandidateListOptions, 'limit'>): number;
     promoteDreamCandidates(options?: DreamGovernanceRunOptions): DreamGovernanceRunResult;
     getDreamCandidateQueue(projectId?: string): DreamGovernanceRunResult['queue'];
+    buildMemoryMap(options?: MemoryMapOptions): MemorySelfMap;
+    runMaintenanceTick(options?: MaintenanceTickOptions): MaintenanceTickResult;
     exportSnapshot(outputPath: string): Promise<SnapshotMeta>;
     importSnapshot(snapshotPath: string, opts?: ImportOptions): Promise<ImportResult>;
     getHealthStatus(): {

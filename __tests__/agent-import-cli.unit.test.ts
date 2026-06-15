@@ -807,6 +807,8 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
   expect(hermes).toContain('--state-db ./state.db');
   expect(hermes).toContain('--family jsonl');
   expect(hermes).toContain('cogmem memory dream --project hermes --watch --interval-ms 300000 --promote');
+  expect(hermes).toContain('cogmem memory map --project hermes --json');
+  expect(hermes).toContain('cogmem memory tick --project hermes --json');
   expect(hermes).toContain('--session ./one.md --session ./two.md');
 });
 
@@ -1088,6 +1090,8 @@ test('cogmem-connect hermes --auto patches Hermes MCP config without claiming na
   expect(config).toContain('mcp_servers:');
   expect(config).toContain('cogmem:');
   expect(config).toContain('cogmem-mcp');
+  expect(config).toContain('cogmem_memory_map');
+  expect(config).toContain('cogmem_maintenance_tick');
   expect(config).not.toContain('memory:\n  provider: cogmem');
 });
 

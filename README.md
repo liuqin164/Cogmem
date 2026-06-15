@@ -174,6 +174,15 @@ cogmem memory candidates --project my-agent --status candidate --json
 cogmem memory govern --project my-agent --json
 ```
 
+Inspect the memory anatomy and run one explicit host-owned upkeep tick:
+
+```bash
+cogmem memory map --project my-agent --json
+cogmem memory tick --project my-agent --json
+```
+
+`memory tick` decays activation and returns suggested host actions. It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
+
 ## Import Existing Agent Memory
 
 Configure the embedding provider before importing. Imported records are embedded through the configured kernel embedder, so the configured `vector_dimension` must match the selected embedding model.
@@ -350,7 +359,15 @@ cogmem memory show --event <event-id> --before 2 --after 2 --json
 
 `memory recall` can still return source-anchored raw ledger evidence when `vectors` is `0`. In that state, recall falls back to governed raw FTS and returns `sourceContext` locators instead of claiming vector search succeeded. Broad inventory questions such as `我们记录过哪些库存` are expanded into structured ledger cues such as `库存管理`, `在库`, `产品コード`, and `数量`; if compiled-memory candidates do not contain those cues, raw ledger evidence is preferred.
 
-The MCP `cogmem_recall` tool returns the same agent-facing item shape and fallback behavior. Agents may call it with `query`, `projectId`, and optionally `agentId`; when `agentId` is omitted, MCP uses `projectId` as the agent id before falling back to `openclaw`. `cogmem_explain_recall` remains the audit path for `filteredEvidence` and governance reasons.
+Use collection routing for non-operational artifacts:
+
+```bash
+cogmem memory recall --query "MoneyPrinterTurbo storyboard" --project openclaw --agent openclaw --collection theseus --json
+```
+
+Default recall includes untagged and `collection:anchor` memory only. `collection:theseus` is for creative artifacts and must be requested explicitly so drafts do not pollute the normal agent memory path.
+
+The MCP `cogmem_recall` tool returns the same agent-facing item shape and fallback behavior. Agents may call it with `query`, `projectId`, and optionally `agentId` and `collection`; when `agentId` is omitted, MCP uses `projectId` as the agent id before falling back to `openclaw`. `cogmem_explain_recall` remains the audit path for `filteredEvidence` and governance reasons.
 
 `cogmem memory status --json` exposes stable top-level counters:
 
@@ -408,6 +425,20 @@ const recalled = memory.recall({
 
 console.log(recalled.narrative);
 console.log(recalled.items);
+
+const pack = memory.recallPack({
+  agentId: 'openclaw',
+  projectId: 'openclaw',
+  query: 'what should I remember before answering?',
+});
+
+console.log(pack.slots.direct);
+console.log(pack.slots.associative);
+console.log(pack.slots.entityCards);
+console.log(pack.slots.beliefTouches);
+
+const map = kernel.buildMemoryMap({ projectId: 'openclaw' });
+const tick = kernel.runMaintenanceTick({ projectId: 'openclaw' });
 ```
 
 ## Updating
@@ -446,7 +477,7 @@ cogmem init
 cogmem doctor
 cogmem connect openclaw|hermes
 cogmem update
-cogmem memory recall|search|show|dream|govern|candidates|status
+cogmem memory recall|search|show|dream|govern|candidates|status|map|tick
 cogmem import-openclaw
 cogmem import-hermes
 cogmem normalize-transcript

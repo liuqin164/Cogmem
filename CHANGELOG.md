@@ -41,6 +41,11 @@
 - Added `cogmem memory recall` as an agent-facing active memory search command using `KernelAgentMemoryBackend.recall()` with query plans and source context, so OpenClaw can query CogMem when automatic prompt injection is empty.
 - Expanded the Memory Curator / Dream Worker with semantic tag, indexing decision, semantic relation, and edge-adjustment candidates for host-owned curation loops without directly mutating verified memory.
 - Added `cogmem memory govern`, `cogmem memory dream --promote`, and `cogmem memory dream --watch` so hosts can run a supervised curation/governance loop without cron-only polling or unbounded candidate backlog.
+- Added `KernelAgentMemoryBackend.recallPack()` with direct recall, associative graph/activation neighbors, entity cards, belief touches, and a charge vector for pre-answer agent context assembly.
+- Added persistent activation tracking plus `MemoryKernel.runMaintenanceTick()` and `cogmem memory tick` for explicit host-owned upkeep suggestions without starting a hidden daemon.
+- Added `MemoryKernel.buildMemoryMap()` and `cogmem memory map` so agents and hosts can inspect memory anatomy, data lanes, hard bounds, counters, and recommended commands.
+- Added collection routing via `collection:<name>` tags and `--collection`, keeping `collection:theseus` creative artifacts out of default operational recall unless requested explicitly.
+- Added MCP `collection` support for `cogmem_remember_turn`, `cogmem_recall`, and `cogmem_explain_recall`, plus new `cogmem_memory_map` and `cogmem_maintenance_tick` tools.
 - Added CPU promotion handling for source-anchored summaries/preferences and semantic organization candidates while keeping uncertain claims in `needs_confirmation` and never upgrading them to verified facts automatically.
 - Deduplicated Dream Curator provider warnings and supersede stale provider diagnostics after a later successful structured memory-model run.
 - Added Hermes `state.db` import support for SQLite `messages` history, including explicit `--state-db`, automatic workspace-root discovery, source-anchored raw ledger records, and message timestamp precedence over `InsertTime`.

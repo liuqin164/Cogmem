@@ -57,6 +57,7 @@ export { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
  */
 export { SqliteVecStore } from './store/SqliteVecStore.js';
 export { HnswlibVectorStore } from './store/HnswlibVectorStore.js';
+export { ActivationStore } from './store/ActivationStore.js';
 /** @deprecated Use HnswlibVectorStore. Will be removed in v3.0. */
 export { VectorStore } from './store/VectorStore.js';
 /**

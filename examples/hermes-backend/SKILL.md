@@ -165,6 +165,23 @@ cogmem memory status --project hermes --json
 
 Use top-level counters `rawEvents`, `vectors`, `dreamedRawCount`, `undreamedRawCount`, and `dreamCoverageRate` for machine decisions.
 
+Use collection routing when Hermes stores creative artifacts or drafts that should not pollute normal operational recall:
+
+```bash
+cogmem memory recall --query "<artifact query>" --project hermes --agent hermes --collection theseus --json
+```
+
+Default recall includes untagged and `collection:anchor` memory only. Ask for `collection:theseus` explicitly when the user wants creative/reference artifacts.
+
+For host upkeep, inspect the self-map and run an explicit tick:
+
+```bash
+cogmem memory map --project hermes --json
+cogmem memory tick --project hermes --json
+```
+
+`memory tick` does not start a daemon. Use its `suggestedActions` to decide whether Hermes should run `memory dream`, `memory govern`, entity review, or re-embedding.
+
 ## Runtime Wiring
 
 Use `KernelAgentMemoryBackend` for turn storage and recall:
@@ -203,6 +220,19 @@ const preparedContext = {
 
 Use `recall.narrative` as the compact prompt context and `recall.items` as cited memory evidence. If `recall.recallMode === 'universe_navigation'`, the memory kernel has already prepared related context through the pulse/temporal/narrative path.
 
+If Hermes can consume structured context before answering, prefer `memory.recallPack()` over plain `recall()`:
+
+```ts
+const pack = memory.recallPack({
+  agentId: 'hermes',
+  projectId: 'hermes',
+  query: userText,
+  limit: 5,
+});
+```
+
+Use `pack.slots.direct` for direct memories, `pack.slots.associative` for graph/activation neighbors, `pack.slots.entityCards` for resolved projects/devices/people, and `pack.slots.beliefTouches` for active beliefs with support/conflict counts.
+
 ## Hermes Provider Notes
 
 Hermes external memory providers are activated through `memory.provider` in `~/.hermes/config.yaml` and participate in lifecycle calls such as initialization, prompt context, prefetch, turn sync, session-end extraction, and built-in memory write mirroring.
@@ -224,11 +254,15 @@ mcp_servers:
         - cogmem_remember_turn
         - cogmem_recall
         - cogmem_explain_recall
+        - cogmem_memory_map
+        - cogmem_maintenance_tick
 ```
 
 The command path is resolved by `cogmem connect hermes`: it uses `COGMEM_MCP_BIN` when explicitly set, then a workspace-local `node_modules/.bin/cogmem-mcp` when present, then the globally linked `cogmem-mcp` from the one-line installer.
 
 When Hermes calls `cogmem_recall`, it should pass `projectId: "hermes"` and may omit `agentId`; the MCP bridge infers `agentId` from `projectId`. The returned `items` use the same shape as `cogmem memory recall --project hermes --agent hermes --json`, including `raw_ledger` items, `sourceContext`, and `sourceContext.locator.command` when vectors are empty or compiled evidence misses.
+
+Hermes may pass `collection: "theseus"` to `cogmem_recall` when it wants creative artifacts. Expose `cogmem_memory_map` and `cogmem_maintenance_tick` only to agents that are allowed to inspect memory anatomy or request host-owned upkeep.
 
 Then reload MCP inside Hermes:
 

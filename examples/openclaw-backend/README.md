@@ -61,6 +61,15 @@ cogmem memory dream --project openclaw --watch --interval-ms 300000 --promote --
 
 The Dream Worker proposes candidate memories only. CPU governance is a separate step. Use `--promote` or `cogmem memory govern` to turn evidence-backed summaries/preferences into provisional memory and to accept semantic tags, indexing decisions, event relations, and edge adjustments as organization metadata. It does not rewrite verified facts or promote tool/LLM output into active memory.
 
+For host-owned inspection and upkeep:
+
+```bash
+cogmem memory map --project openclaw --json
+cogmem memory tick --project openclaw --json
+```
+
+`memory tick` returns activation decay results and `suggestedActions`; it does not start a hidden daemon.
+
 ## Migrate
 
 Preview:
@@ -138,6 +147,14 @@ cogmem memory recall --query "<user question>" --project openclaw --agent opencl
 ```
 
 Use `--intent previous_session_summary` for "上个会话我们聊了什么" and `--intent forensic_quote` for "我当时的原话是什么". Only fall back to legacy `memory/` Markdown files after `cogmem memory recall` or `cogmem memory search` fails to find useful evidence.
+
+Use `--collection theseus` only for creative artifacts or drafts:
+
+```bash
+cogmem memory recall --query "<artifact query>" --project openclaw --agent openclaw --collection theseus --json
+```
+
+Default recall includes untagged and `collection:anchor` memory only.
 
 After upgrading an existing OpenClaw workspace that imported old memory before raw ledger anchors were available, run:
 

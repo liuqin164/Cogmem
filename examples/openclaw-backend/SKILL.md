@@ -184,6 +184,23 @@ Use `items[].sourceContext` to understand what the user asked, how the agent ans
 cogmem memory show --event <eventId> --before 2 --after 2 --json
 ```
 
+Use collection routing for creative artifacts or drafts:
+
+```bash
+cogmem memory recall --query "<artifact query>" --project openclaw --agent openclaw --collection theseus --json
+```
+
+Default recall includes untagged and `collection:anchor` memory only. `collection:theseus` must be requested explicitly so creative artifacts do not pollute operational memory.
+
+Use the self-map and explicit tick when the agent needs to understand or maintain the memory system:
+
+```bash
+cogmem memory map --project openclaw --json
+cogmem memory tick --project openclaw --json
+```
+
+`memory tick` decays activation and returns `suggestedActions`; it does not run a hidden daemon.
+
 Only fall back to searching OpenClaw's legacy `memory/` files when `cogmem memory recall` and `cogmem memory search` return no useful evidence or when the user explicitly asks to inspect the legacy files.
 
 If old imported memories do not appear in `cogmem memory recall` after an upgrade, backfill raw ledger anchors before concluding the memory is missing:
@@ -298,5 +315,7 @@ Expose these tools to the agent:
 - `cogmem_remember_turn`
 - `cogmem_recall`
 - `cogmem_explain_recall`
+- `cogmem_memory_map`
+- `cogmem_maintenance_tick`
 
-Use `cogmem_recall` for normal answers. It uses the same agent-facing recall path as `cogmem memory recall`, so empty vector indexes can still return bounded `raw_ledger` evidence with `sourceContext` and a local `sourceContext.locator.command`. Pass `agentId` and `projectId` when available; if an MCP host sends only `projectId`, Cogmem infers `agentId` from it. Use `cogmem_explain_recall` only when auditing `filteredEvidence`, activation paths, or governance suppression reasons.
+Use `cogmem_recall` for normal answers. It uses the same agent-facing recall path as `cogmem memory recall`, so empty vector indexes can still return bounded `raw_ledger` evidence with `sourceContext` and a local `sourceContext.locator.command`. Pass `agentId` and `projectId` when available; if an MCP host sends only `projectId`, Cogmem infers `agentId` from it. Pass `collection: "theseus"` only for creative artifacts. Use `cogmem_explain_recall` only when auditing `filteredEvidence`, activation paths, or governance suppression reasons. Use `cogmem_memory_map` for self-inspection and `cogmem_maintenance_tick` for host-owned upkeep suggestions.

@@ -10,7 +10,8 @@ export function explainRecallWithKernel(kernel, options) {
             startTime: options.startTime,
             endTime: options.endTime,
         });
-        const scoped = navigated.rawEvidence.filter((neuron) => isInAgentScope(neuron, options.agentId));
+        const agentScoped = navigated.rawEvidence.filter((neuron) => isInAgentScope(neuron, options.agentId));
+        const scoped = agentScoped.filter((neuron) => isInCollectionScope(neuron, options.collection));
         const scopedRecallable = scoped.filter((neuron) => isRecallableMemoryEvidence(neuron));
         const included = scopedRecallable.slice(0, limit);
         const filteredEvidence = uniqueFilteredEvidence([
@@ -21,6 +22,9 @@ export function explainRecallWithKernel(kernel, options) {
             ...navigated.rawEvidence
                 .filter((neuron) => !isInAgentScope(neuron, options.agentId))
                 .map((neuron) => toFilteredEvidence(neuron, 'agent_scope_mismatch', undefined, kernel)),
+            ...agentScoped
+                .filter((neuron) => !isInCollectionScope(neuron, options.collection))
+                .map((neuron) => toFilteredEvidence(neuron, 'collection_scope_mismatch', undefined, kernel)),
             ...scopedRecallable
                 .slice(limit)
                 .map((neuron) => toFilteredEvidence(neuron, 'over_context_limit', undefined, kernel)),
@@ -30,6 +34,7 @@ export function explainRecallWithKernel(kernel, options) {
                 query: options.query,
                 projectId: options.projectId,
                 agentId: options.agentId,
+                collection: normalizedCollection(options.collection),
                 recallMode: navigated.recallMode,
                 fallbackUsed: navigated.fallbackUsed,
                 narrative: navigated.navigation?.narrative,
@@ -48,11 +53,13 @@ export function explainRecallWithKernel(kernel, options) {
         const fallbackRawEvidence = fallback.rawEvidence
             .filter((neuron) => !projectId || neuron.metadata.projectId === projectId);
         const fallbackRecallable = fallbackRawEvidence.filter((neuron) => isRecallableMemoryEvidence(neuron));
-        const fallbackScoped = fallbackRecallable.filter((neuron) => isInAgentScope(neuron, options.agentId));
+        const fallbackAgentScoped = fallbackRecallable.filter((neuron) => isInAgentScope(neuron, options.agentId));
+        const fallbackScoped = fallbackAgentScoped.filter((neuron) => isInCollectionScope(neuron, options.collection));
         return {
             query: options.query,
             projectId: options.projectId,
             agentId: options.agentId,
+            collection: normalizedCollection(options.collection),
             recallMode: 'brain_recall_fallback',
             fallbackUsed: true,
             narrative: navigated.navigation?.narrative,
@@ -70,6 +77,9 @@ export function explainRecallWithKernel(kernel, options) {
                 ...fallbackRecallable
                     .filter((neuron) => !isInAgentScope(neuron, options.agentId))
                     .map((neuron) => toFilteredEvidence(neuron, 'agent_scope_mismatch', undefined, kernel)),
+                ...fallbackAgentScoped
+                    .filter((neuron) => !isInCollectionScope(neuron, options.collection))
+                    .map((neuron) => toFilteredEvidence(neuron, 'collection_scope_mismatch', undefined, kernel)),
                 ...fallbackScoped
                     .slice(limit)
                     .map((neuron) => toFilteredEvidence(neuron, 'over_context_limit', undefined, kernel)),
@@ -83,16 +93,21 @@ export function explainRecallWithKernel(kernel, options) {
         startTime: options.startTime,
         endTime: options.endTime,
     });
-    const included = navigated.rawEvidence.slice(0, limit);
+    const collectionScoped = navigated.rawEvidence.filter((neuron) => isInCollectionScope(neuron, options.collection));
+    const included = collectionScoped.slice(0, limit);
     const filteredEvidence = uniqueFilteredEvidence([
         ...toNavigationFilteredEvidence(navigated, kernel),
         ...navigated.rawEvidence
+            .filter((neuron) => !isInCollectionScope(neuron, options.collection))
+            .map((neuron) => toFilteredEvidence(neuron, 'collection_scope_mismatch', undefined, kernel)),
+        ...collectionScoped
             .slice(limit)
             .map((neuron) => toFilteredEvidence(neuron, 'over_context_limit', undefined, kernel)),
     ]);
     return {
         query: options.query,
         projectId: options.projectId,
+        collection: normalizedCollection(options.collection),
         recallMode: navigated.recallMode,
         fallbackUsed: navigated.fallbackUsed,
         narrative: navigated.navigation?.narrative,
@@ -109,6 +124,21 @@ function isInAgentScope(neuron, agentId) {
     if (explicitAgentTags.length === 0)
         return true;
     return explicitAgentTags.includes(`agent:${agentId}`) || tags.includes(agentId);
+}
+function isInCollectionScope(neuron, collection) {
+    const tags = neuron.metadata.tags || [];
+    const collectionTags = tags.filter((tag) => tag.startsWith('collection:'));
+    const requested = normalizedCollection(collection);
+    if (requested) {
+        if (requested === 'anchor' && collectionTags.length === 0)
+            return true;
+        return collectionTags.includes(`collection:${requested}`);
+    }
+    return collectionTags.length === 0 || collectionTags.includes('collection:anchor');
+}
+function normalizedCollection(collection) {
+    const normalized = String(collection || '').trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, '_');
+    return normalized || undefined;
 }
 function toEvidence(neuron, result, agentId, kernel) {
     return {

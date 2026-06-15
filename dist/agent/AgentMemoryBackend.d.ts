@@ -1,11 +1,12 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
-import type { MemoryEvent } from '../types/index.js';
+import type { BeliefRecord, MemoryEvent } from '../types/index.js';
 import { type AgentRecallIntent, type AgentRecallQueryPlan } from './AgentRecallQueryCompiler.js';
 export type AgentTurnIngestMode = 'immediate_compile' | 'selective_compile' | 'raw_archive_only' | 'raw_then_dream';
 export type AgentTurnCompileReason = 'immediate_compile' | 'durable_signal_detected' | 'low_signal_turn' | 'raw_archive_only' | 'raw_then_dream';
 export interface AgentTurnMemory {
     agentId: string;
     projectId: string;
+    collection?: string;
     workspaceId?: string;
     sessionId: string;
     threadId?: string;
@@ -27,6 +28,7 @@ export interface AgentTurnMemoryResult {
 export interface AgentRecallQuery {
     agentId: string;
     projectId: string;
+    collection?: string;
     query: string;
     workspaceId?: string;
     sessionId?: string;
@@ -157,6 +159,53 @@ export interface AgentRecallResult {
     fallbackUsed: boolean;
     queryPlan?: AgentRecallQueryPlan;
 }
+export interface AgentRecallEntityCard {
+    entityId: string;
+    canonicalName: string;
+    type: string;
+    aliases: string[];
+    attributes: Array<{
+        key: string;
+        value: string;
+        updatedAt: number;
+    }>;
+    recentMentions: Array<{
+        neuronId?: string;
+        projectId?: string;
+        mentionType: string;
+        createdAt: number;
+    }>;
+}
+export interface AgentRecallBeliefTouch {
+    beliefId: string;
+    subject: string;
+    predicate: string;
+    objectValue: string;
+    confidence: number;
+    trustScore: number;
+    status: BeliefRecord['status'];
+    supportCount: number;
+    conflictCount: number;
+    explanation?: string;
+}
+export interface AgentRecallPackSlots {
+    direct: AgentRecallItem[];
+    associative: AgentRecallItem[];
+    entityCards: AgentRecallEntityCard[];
+    beliefTouches: AgentRecallBeliefTouch[];
+}
+export interface AgentRecallPackResult extends AgentRecallResult {
+    collection?: string;
+    generatedAt: number;
+    slots: AgentRecallPackSlots;
+    chargeVector: {
+        direct: number;
+        associative: number;
+        entityCards: number;
+        beliefTouches: number;
+        activationHotspots: number;
+    };
+}
 export declare class KernelAgentMemoryBackend {
     private readonly kernel;
     constructor(kernel: MemoryKernel);
@@ -166,6 +215,7 @@ export declare class KernelAgentMemoryBackend {
     ingestToolObservation(observation: AgentToolObservationMemory): Promise<MemoryEvent>;
     ingestTaskEvent(task: AgentTaskEventMemory): Promise<MemoryEvent>;
     recall(query: AgentRecallQuery): AgentRecallResult;
+    recallPack(query: AgentRecallQuery): AgentRecallPackResult;
     private recallPreviousSession;
     private recallForensicQuote;
     private recallForensicAnchor;
@@ -200,6 +250,15 @@ export declare class KernelAgentMemoryBackend {
     private toAgentSourceAnchor;
     private toSourceRef;
     private eventText;
+    private buildAssociativeItems;
+    private buildEntityCards;
+    private buildBeliefTouches;
+    private entityLookupCandidates;
+    private metadataWithCollection;
+    private collectionTags;
+    private normalizeCollection;
+    private isAllowedRawEventCollection;
+    private isAllowedCollectionTags;
     private shouldCompileTurn;
     private hasDurableTurnSignal;
 }

@@ -7,13 +7,14 @@ import type { DeepWriteCandidateRecord, DeepWriteCandidateStatus } from '../stor
 import type { MemoryEvent } from '../types/index.js';
 
 interface MemoryArgs {
-  command?: 'status' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates';
+  command?: 'status' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'map' | 'tick';
   query?: string;
   eventId?: string;
   status?: DeepWriteCandidateStatus;
   agentId?: string;
   intent?: AgentRecallIntent;
   projectId?: string;
+  collection?: string;
   workspaceId?: string;
   threadId?: string;
   sessionId?: string;
@@ -58,6 +59,7 @@ function readArgs(argv: string[]): MemoryArgs {
     agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
     intent: recallIntentArg(values, 'intent'),
     projectId: stringArg(values, 'project') || stringArg(values, 'project-id'),
+    collection: stringArg(values, 'collection'),
     workspaceId: stringArg(values, 'workspace') || stringArg(values, 'workspace-id'),
     threadId: stringArg(values, 'thread') || stringArg(values, 'thread-id'),
     sessionId: stringArg(values, 'session') || stringArg(values, 'session-id'),
@@ -79,7 +81,7 @@ function readArgs(argv: string[]): MemoryArgs {
 
 function usage(): string {
   return [
-    'Usage: cogmem memory <status|list|search|show|dream|govern|candidates> [args]',
+    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|map|tick> [args]',
     '',
     'Commands:',
     '  status               summarize raw ledger, vector, and dream backlog state',
@@ -90,9 +92,12 @@ function usage(): string {
     '  dream                run the Memory Curator / Dream Worker over undreamed raw events',
     '  govern               apply CPU governance to pending dream/deep-write candidates',
     '  candidates           list dream/deep-write governance candidates',
+    '  map                  print the self-describing memory map for agent/host inspection',
+    '  tick                 run one explicit host-owned maintenance tick',
     '',
     'Common options:',
     '  --project <id>       scope to one project',
+    '  --collection <name>  recall from a named collection; default excludes collection:theseus',
     '  --workspace <id>     scope to one workspace',
     '  --thread <id>        scope to one thread',
     '  --session <id>       scope to one session',
@@ -122,7 +127,9 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'show'
     || value === 'dream'
     || value === 'govern'
-    || value === 'candidates';
+    || value === 'candidates'
+    || value === 'map'
+    || value === 'tick';
 }
 
 function recallIntentArg(
@@ -289,6 +296,7 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   const result = backend.recall({
     agentId: args.agentId || 'openclaw',
     projectId: args.projectId || 'openclaw',
+    collection: args.collection,
     workspaceId: args.workspaceId,
     sessionId: args.sessionId,
     threadId: args.threadId,
@@ -301,12 +309,21 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
     query: args.query,
     agentId: args.agentId || 'openclaw',
     projectId: args.projectId || 'openclaw',
+    collection: args.collection,
     recallMode: result.recallMode,
     fallbackUsed: result.fallbackUsed,
     queryPlan: result.queryPlan,
     narrative: result.narrative,
     items: result.items,
   };
+}
+
+function runMap(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  return kernel.buildMemoryMap({ projectId: args.projectId }) as unknown as Record<string, unknown>;
+}
+
+function runTick(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  return kernel.runMaintenanceTick({ projectId: args.projectId }) as unknown as Record<string, unknown>;
 }
 
 function runShow(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
@@ -438,6 +455,21 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     }
     return;
   }
+  if (command === 'map') {
+    const counters = payload.counters as Record<string, unknown> | undefined;
+    console.log(`memoryMap: ${payload.version}`);
+    console.log(`rawEvents: ${counters?.rawEvents}`);
+    console.log(`neurons: ${counters?.neurons}`);
+    console.log(`bounds: ${JSON.stringify(payload.bounds)}`);
+    return;
+  }
+  if (command === 'tick') {
+    console.log(`maintenanceTick: ${payload.version}`);
+    console.log(`hostOwned: ${payload.hostOwned}`);
+    console.log(`chargeVector: ${JSON.stringify(payload.chargeVector)}`);
+    console.log(`suggestedActions: ${JSON.stringify(payload.suggestedActions)}`);
+    return;
+  }
   if (command === 'recall') {
     const items = Array.isArray(payload.items) ? payload.items : [];
     console.log(`recallMode: ${payload.recallMode}`);
@@ -486,7 +518,11 @@ async function main(): Promise<void> {
                 ? await runDream(kernel, args)
                 : args.command === 'govern'
                   ? runGovern(kernel, args)
-                  : runCandidates(kernel, args);
+                  : args.command === 'candidates'
+                    ? runCandidates(kernel, args)
+                    : args.command === 'map'
+                      ? runMap(kernel, args)
+                      : runTick(kernel, args);
     if (args.json) {
       console.log(JSON.stringify(payload, null, 2));
       return;

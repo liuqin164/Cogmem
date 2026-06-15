@@ -1,6 +1,6 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
-import type { MemoryEvent, MemorySourceRef } from '../types/index.js';
+import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
 import {
   compileAgentRecallQuery,
   type AgentRecallIntent,
@@ -23,6 +23,7 @@ export type AgentTurnCompileReason =
 export interface AgentTurnMemory {
   agentId: string;
   projectId: string;
+  collection?: string;
   workspaceId?: string;
   sessionId: string;
   threadId?: string;
@@ -46,6 +47,7 @@ export interface AgentTurnMemoryResult {
 export interface AgentRecallQuery {
   agentId: string;
   projectId: string;
+  collection?: string;
   query: string;
   workspaceId?: string;
   sessionId?: string;
@@ -185,6 +187,57 @@ export interface AgentRecallResult {
   queryPlan?: AgentRecallQueryPlan;
 }
 
+export interface AgentRecallEntityCard {
+  entityId: string;
+  canonicalName: string;
+  type: string;
+  aliases: string[];
+  attributes: Array<{
+    key: string;
+    value: string;
+    updatedAt: number;
+  }>;
+  recentMentions: Array<{
+    neuronId?: string;
+    projectId?: string;
+    mentionType: string;
+    createdAt: number;
+  }>;
+}
+
+export interface AgentRecallBeliefTouch {
+  beliefId: string;
+  subject: string;
+  predicate: string;
+  objectValue: string;
+  confidence: number;
+  trustScore: number;
+  status: BeliefRecord['status'];
+  supportCount: number;
+  conflictCount: number;
+  explanation?: string;
+}
+
+export interface AgentRecallPackSlots {
+  direct: AgentRecallItem[];
+  associative: AgentRecallItem[];
+  entityCards: AgentRecallEntityCard[];
+  beliefTouches: AgentRecallBeliefTouch[];
+}
+
+export interface AgentRecallPackResult extends AgentRecallResult {
+  collection?: string;
+  generatedAt: number;
+  slots: AgentRecallPackSlots;
+  chargeVector: {
+    direct: number;
+    associative: number;
+    entityCards: number;
+    beliefTouches: number;
+    activationHotspots: number;
+  };
+}
+
 export class KernelAgentMemoryBackend {
   constructor(private readonly kernel: MemoryKernel) {}
 
@@ -211,7 +264,7 @@ export class KernelAgentMemoryBackend {
       eventOrdinal: 1,
       occurredAt,
       sourceId,
-      metadata: turn.metadata,
+      metadata: this.metadataWithCollection(turn.metadata, turn.collection),
     });
     const assistantEvent = turn.assistantText
       ? this.kernel.recordRawEvent({
@@ -229,7 +282,7 @@ export class KernelAgentMemoryBackend {
         prevEventId: userEvent.eventId,
         causalityType: 'replies_to',
         sourceId,
-        metadata: turn.metadata,
+        metadata: this.metadataWithCollection(turn.metadata, turn.collection),
       })
       : undefined;
     if (assistantEvent) {
@@ -279,6 +332,7 @@ export class KernelAgentMemoryBackend {
       tags: [
         `agent:${turn.agentId}`,
         `session:${turn.sessionId}`,
+        ...this.collectionTags(turn.collection),
       ],
     });
 
@@ -410,7 +464,7 @@ export class KernelAgentMemoryBackend {
       startTime: query.startTime,
       endTime: query.endTime,
     });
-    const scopedItems = this.filterAgentEvidence(result.rawEvidence, query.agentId)
+    const scopedItems = this.filterAgentEvidence(result.rawEvidence, query.agentId, query.collection)
       .slice(0, limit)
       .map((neuron) => this.toAgentRecallItem(neuron));
     if (scopedItems.length > 0) {
@@ -443,7 +497,7 @@ export class KernelAgentMemoryBackend {
       projectId: query.projectId,
       limit: retrievalLimit,
     });
-    const fallbackItems = this.filterAgentEvidence(fallback.rawEvidence, query.agentId)
+    const fallbackItems = this.filterAgentEvidence(fallback.rawEvidence, query.agentId, query.collection)
       .slice(0, limit)
       .map((neuron) => this.toAgentRecallItem(neuron));
     if (fallbackItems.length > 0) {
@@ -486,6 +540,60 @@ export class KernelAgentMemoryBackend {
     };
   }
 
+  recallPack(query: AgentRecallQuery): AgentRecallPackResult {
+    const generatedAt = Date.now();
+    const result = this.recall(query);
+    const direct = result.items.slice(0, query.limit ?? 5);
+    const directNeuronIds = direct
+      .filter((item) => item.sourceType === 'compiled_memory' || item.sourceType === 'imported_summary')
+      .map((item) => item.id);
+
+    for (const item of direct.filter((candidate) => directNeuronIds.includes(candidate.id))) {
+      this.kernel.activationStore.touch({
+        neuronId: item.id,
+        projectId: item.projectId || query.projectId,
+        delta: 1,
+        source: 'recall_pack:direct',
+        touchedAt: generatedAt,
+      });
+      const neuron = this.kernel.memoryGraph.getNeuron(item.id);
+      if (neuron) {
+        this.kernel.memoryGraph.updateNeuronMetadata(item.id, {
+          lastActivated: generatedAt,
+          activationCount: (neuron.metadata.activationCount || 0) + 1,
+        });
+      }
+    }
+
+    const associative = this.buildAssociativeItems(query, direct, generatedAt);
+    const entityCards = this.buildEntityCards(query);
+    const beliefTouches = this.buildBeliefTouches(query);
+    const activationHotspots = this.kernel.activationStore.getTop({
+      projectId: query.projectId,
+      limit: 8,
+      excludeNeuronIds: direct.map((item) => item.id),
+    });
+
+    return {
+      ...result,
+      collection: query.collection ? this.normalizeCollection(query.collection) : undefined,
+      generatedAt,
+      slots: {
+        direct,
+        associative,
+        entityCards,
+        beliefTouches,
+      },
+      chargeVector: {
+        direct: direct.length,
+        associative: associative.length,
+        entityCards: entityCards.length,
+        beliefTouches: beliefTouches.length,
+        activationHotspots: activationHotspots.length,
+      },
+    };
+  }
+
   private recallPreviousSession(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan): AgentRecallResult {
     const limit = query.limit ?? 5;
     const previousSessionId = this.findPreviousSessionId(query);
@@ -494,6 +602,7 @@ export class KernelAgentMemoryBackend {
       : [];
     const items = events
       .filter((event) => this.isAgentRawEvent(event, query.agentId))
+      .filter((event) => this.isAllowedRawEventCollection(event, query.collection))
       .filter((event) => !this.isOperationalNoiseRawEvent(event))
       .filter((event) => this.hasReadableEventText(event))
       .slice(0, limit)
@@ -522,6 +631,7 @@ export class KernelAgentMemoryBackend {
       ...rawEvents
       .filter((event) => this.isAgentRawEvent(event, query.agentId))
       .filter((event) => this.isAllowedSession(event, query))
+      .filter((event) => this.isAllowedRawEventCollection(event, query.collection))
       .filter((event) => !this.isOperationalNoiseRawEvent(event))
       .filter((event) => this.isQuoteSourceEvent(event))
       .filter((event) => this.hasReadableEventText(event))
@@ -551,6 +661,7 @@ export class KernelAgentMemoryBackend {
     return candidates
       .filter((event) => this.isAgentRawEvent(event, query.agentId))
       .filter((event) => this.isAllowedSession(event, query))
+      .filter((event) => this.isAllowedRawEventCollection(event, query.collection))
       .filter((event) => !this.isOperationalNoiseRawEvent(event))
       .filter((event) => this.isQuoteSourceEvent(event))
       .filter((event) => this.hasReadableEventText(event))
@@ -606,6 +717,7 @@ export class KernelAgentMemoryBackend {
     return rawEvents
       .filter((event) => this.isAgentRawEvent(event, query.agentId))
       .filter((event) => this.isAllowedSession(event, query))
+      .filter((event) => this.isAllowedRawEventCollection(event, query.collection))
       .filter((event) => !this.isOperationalNoiseRawEvent(event))
       .slice(0, limit)
       .map((event) => this.toAgentRawRecallItem(event, {
@@ -776,11 +888,13 @@ export class KernelAgentMemoryBackend {
 
   private filterAgentEvidence(
     neurons: MemoryKernelNavigationResult['rawEvidence'],
-    agentId: string
+    agentId: string,
+    collection?: string
   ): MemoryKernelNavigationResult['rawEvidence'] {
     return neurons.filter((neuron) => {
       if (!isRecallableMemoryEvidence(neuron)) return false;
       const tags = neuron.metadata.tags || [];
+      if (!this.isAllowedCollectionTags(tags, collection)) return false;
       const explicitAgentTags = tags.filter((tag) => tag.startsWith('agent:'));
       if (explicitAgentTags.length === 0) return true;
       return explicitAgentTags.includes(`agent:${agentId}`) || tags.includes(agentId);
@@ -1022,6 +1136,171 @@ export class KernelAgentMemoryBackend {
     if (typeof payload.output === 'string') return payload.output;
     if (typeof payload.title === 'string') return payload.title;
     return JSON.stringify(event.payload);
+  }
+
+  private buildAssociativeItems(query: AgentRecallQuery, direct: AgentRecallItem[], touchedAt: number): AgentRecallItem[] {
+    const seen = new Set<string>();
+    const out: AgentRecallItem[] = [];
+    const directNeuronIds = direct
+      .filter((item) => item.sourceType === 'compiled_memory' || item.sourceType === 'imported_summary')
+      .map((item) => item.id);
+
+    for (const neuronId of directNeuronIds) {
+      const synapses = this.kernel.memoryGraph.getSynapses(neuronId).sort((a, b) => b.weight - a.weight);
+      for (const synapse of synapses) {
+        if (synapse.targetId === neuronId) continue;
+        if (seen.has(synapse.targetId)) continue;
+        const neuron = this.kernel.memoryGraph.getNeuron(synapse.targetId);
+        if (!neuron) continue;
+        if (this.filterAgentEvidence([neuron], query.agentId, query.collection).length === 0) continue;
+        this.kernel.activationStore.touch({
+          neuronId: neuron.id,
+          projectId: neuron.metadata.projectId || query.projectId,
+          delta: Math.max(0.1, synapse.weight * 0.5),
+          source: `recall_pack:${synapse.type}`,
+          touchedAt,
+        });
+        out.push(this.toAgentRecallItem(neuron));
+        seen.add(neuron.id);
+        if (out.length >= 4) return out;
+      }
+    }
+
+    const hotspots = this.kernel.activationStore.getTop({
+      projectId: query.projectId,
+      limit: 8,
+      excludeNeuronIds: uniqueNonEmpty([...direct.map((item) => item.id), ...seen]),
+    });
+    for (const hotspot of hotspots) {
+      const neuron = this.kernel.memoryGraph.getNeuron(hotspot.neuronId);
+      if (!neuron) continue;
+      if (this.filterAgentEvidence([neuron], query.agentId, query.collection).length === 0) continue;
+      out.push(this.toAgentRecallItem(neuron));
+      seen.add(neuron.id);
+      if (out.length >= 4) return out;
+    }
+
+    return out;
+  }
+
+  private buildEntityCards(query: AgentRecallQuery): AgentRecallEntityCard[] {
+    const cards = new Map<string, AgentRecallEntityCard>();
+    for (const candidate of this.entityLookupCandidates(query.query)) {
+      const entity = this.kernel.entityStore.findByAlias(candidate);
+      if (!entity || cards.has(entity.entityId)) continue;
+      const mentions = this.kernel.entityStore.listTimeline({
+        entityId: entity.entityId,
+        projectId: query.projectId,
+        limit: 6,
+      });
+      const attributes = this.kernel.entityStore.listAttributes(entity.entityId).slice(0, 8);
+      cards.set(entity.entityId, {
+        entityId: entity.entityId,
+        canonicalName: entity.canonicalName,
+        type: entity.type,
+        aliases: entity.aliases,
+        attributes: attributes.map((attribute) => ({
+          key: attribute.attributeKey,
+          value: attribute.attributeValue,
+          updatedAt: attribute.updatedAt,
+        })),
+        recentMentions: mentions.map((mention) => ({
+          neuronId: mention.neuronId,
+          projectId: mention.projectId,
+          mentionType: mention.mentionType,
+          createdAt: mention.createdAt,
+        })),
+      });
+      if (cards.size >= 4) break;
+    }
+    return Array.from(cards.values());
+  }
+
+  private buildBeliefTouches(query: AgentRecallQuery): AgentRecallBeliefTouch[] {
+    const beliefs = this.kernel.beliefStore.getActiveBeliefsForQuery({
+      query: query.query,
+      projectId: query.projectId,
+      limit: 6,
+      intent: 'recall',
+    });
+    const history = this.kernel.beliefStore.getBeliefHistoryForCanonicalKeys(
+      beliefs.map((belief) => belief.canonicalKey),
+      { limitPerCanonical: 8 },
+    );
+    return beliefs.map((belief) => {
+      const alternatives = history.get(belief.canonicalKey) || [];
+      return {
+        beliefId: belief.id,
+        subject: belief.subject,
+        predicate: belief.predicate,
+        objectValue: belief.objectValue.normalized || belief.objectValue.raw,
+        confidence: belief.confidence,
+        trustScore: belief.trustScore,
+        status: belief.status,
+        supportCount: alternatives.filter((item) => item.status === 'active' || item.status === 'superseded').length,
+        conflictCount: alternatives.filter((item) => item.status === 'suspect' || item.contradictionGroup).length,
+        explanation: belief.explanation,
+      };
+    });
+  }
+
+  private entityLookupCandidates(query: string): string[] {
+    const tokens = query
+      .split(/[\s,，。！？、:：?？!！/]+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 2);
+    return uniqueNonEmpty([
+      query.trim(),
+      ...tokens,
+      ...tokens.flatMap((token, index) => {
+        const next = tokens[index + 1];
+        return next ? [`${token} ${next}`] : [];
+      }),
+    ]);
+  }
+
+  private metadataWithCollection(
+    metadata: Record<string, unknown> | undefined,
+    collection: string | undefined
+  ): Record<string, unknown> | undefined {
+    const collectionTags = this.collectionTags(collection);
+    if (collectionTags.length === 0) return metadata;
+    const existingTags = Array.isArray(metadata?.tags)
+      ? metadata!.tags.filter((tag): tag is string => typeof tag === 'string')
+      : [];
+    return {
+      ...(metadata || {}),
+      collection: this.normalizeCollection(collection),
+      tags: uniqueNonEmpty([...existingTags, ...collectionTags]),
+    };
+  }
+
+  private collectionTags(collection: string | undefined): string[] {
+    const normalized = this.normalizeCollection(collection);
+    return normalized ? [`collection:${normalized}`] : [];
+  }
+
+  private normalizeCollection(collection: string | undefined): string | undefined {
+    const normalized = String(collection || '').trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, '_');
+    return normalized || undefined;
+  }
+
+  private isAllowedRawEventCollection(event: MemoryEvent, collection: string | undefined): boolean {
+    const payload = event.payload as { metadata?: Record<string, unknown> };
+    const tags = Array.isArray(payload.metadata?.tags)
+      ? payload.metadata.tags.filter((tag): tag is string => typeof tag === 'string')
+      : [];
+    return this.isAllowedCollectionTags(tags, collection);
+  }
+
+  private isAllowedCollectionTags(tags: string[], collection: string | undefined): boolean {
+    const collectionTags = tags.filter((tag) => tag.startsWith('collection:'));
+    const requested = this.normalizeCollection(collection);
+    if (requested) {
+      if (requested === 'anchor' && collectionTags.length === 0) return true;
+      return collectionTags.includes(`collection:${requested}`);
+    }
+    return collectionTags.length === 0 || collectionTags.includes('collection:anchor');
   }
 
   private shouldCompileTurn(

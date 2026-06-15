@@ -114,4 +114,11 @@ For agent-facing instructions, install or read `SKILL.md`. `cogmem connect herme
 
 `cogmem connect hermes --workspace . --auto` patches the Hermes MCP config with a `cogmem` server command. After running it, restart or reload Hermes so the MCP server list is re-read.
 
-The MCP `cogmem_recall` tool uses the same backend as `cogmem memory recall`. A Hermes MCP call with only `projectId: "hermes"` still infers `agentId: "hermes"` and can return `raw_ledger` items with `sourceContext` when vectors are empty.
+The MCP `cogmem_recall` tool uses the same backend as `cogmem memory recall`. A Hermes MCP call with only `projectId: "hermes"` still infers `agentId: "hermes"` and can return `raw_ledger` items with `sourceContext` when vectors are empty. Pass `collection: "theseus"` only when Hermes wants creative artifacts instead of normal operational memory.
+
+Useful host-owned inspection commands:
+
+```bash
+cogmem memory map --project hermes --json
+cogmem memory tick --project hermes --json
+```
