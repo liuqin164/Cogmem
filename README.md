@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `2.0.0`
+Current version: `2.0.2`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
