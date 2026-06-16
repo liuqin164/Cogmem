@@ -118,6 +118,8 @@ function hostConfigSnippet(agent, workspaceRoot, auto) {
         '        - cogmem_remember_turn',
         '        - cogmem_recall',
         '        - cogmem_explain_recall',
+        '        - cogmem_memory_map',
+        '        - cogmem_maintenance_tick',
     ].join('\n');
 }
 function resolveCogmemMcpCommand(workspaceRoot) {
@@ -232,6 +234,8 @@ function patchHermesMcpConfig(original, serverCommand) {
         '        - cogmem_remember_turn',
         '        - cogmem_recall',
         '        - cogmem_explain_recall',
+        '        - cogmem_memory_map',
+        '        - cogmem_maintenance_tick',
     ];
     const mcpIndex = lines.findIndex((line) => /^mcp_servers\s*:\s*(?:\{\})?\s*$/.test(line.trim()));
     if (mcpIndex === -1) {

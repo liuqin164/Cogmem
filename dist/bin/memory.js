@@ -2,6 +2,7 @@
 import { resolve } from 'node:path';
 import { KernelAgentMemoryBackend } from '../agent/index.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
+import { memoryEventCharRange, memoryEventLabel, memoryEventSourceRange, normalizeSourceContextWindow, } from '../recall/SourceContextMetadata.js';
 function readArgs(argv) {
     const [commandCandidate, ...rest] = argv;
     const command = isMemoryCommand(commandCandidate) ? commandCandidate : undefined;
@@ -28,6 +29,7 @@ function readArgs(argv) {
         agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
         intent: recallIntentArg(values, 'intent'),
         projectId: stringArg(values, 'project') || stringArg(values, 'project-id'),
+        collection: stringArg(values, 'collection'),
         workspaceId: stringArg(values, 'workspace') || stringArg(values, 'workspace-id'),
         threadId: stringArg(values, 'thread') || stringArg(values, 'thread-id'),
         sessionId: stringArg(values, 'session') || stringArg(values, 'session-id'),
@@ -48,7 +50,7 @@ function readArgs(argv) {
 }
 function usage() {
     return [
-        'Usage: cogmem memory <status|list|search|show|dream|govern|candidates> [args]',
+        'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|map|tick> [args]',
         '',
         'Commands:',
         '  status               summarize raw ledger, vector, and dream backlog state',
@@ -59,9 +61,12 @@ function usage() {
         '  dream                run the Memory Curator / Dream Worker over undreamed raw events',
         '  govern               apply CPU governance to pending dream/deep-write candidates',
         '  candidates           list dream/deep-write governance candidates',
+        '  map                  print the self-describing memory map for agent/host inspection',
+        '  tick                 run one explicit host-owned maintenance tick',
         '',
         'Common options:',
         '  --project <id>       scope to one project',
+        '  --collection <name>  recall from a named collection; default excludes collection:theseus',
         '  --workspace <id>     scope to one workspace',
         '  --thread <id>        scope to one thread',
         '  --session <id>       scope to one session',
@@ -90,7 +95,9 @@ function isMemoryCommand(value) {
         || value === 'show'
         || value === 'dream'
         || value === 'govern'
-        || value === 'candidates';
+        || value === 'candidates'
+        || value === 'map'
+        || value === 'tick';
 }
 function recallIntentArg(values, key) {
     const raw = stringArg(values, key);
@@ -146,8 +153,10 @@ function eventText(event) {
     return JSON.stringify(event.payload);
 }
 function eventToJson(event) {
+    const text = eventText(event);
     return {
         eventId: event.eventId,
+        label: memoryEventLabel(event),
         globalSeq: event.globalSeq,
         projectId: event.projectId,
         workspaceId: event.workspaceId,
@@ -158,7 +167,10 @@ function eventToJson(event) {
         eventType: event.eventType,
         occurredAt: event.occurredAt,
         localDate: event.localDate,
-        text: eventText(event),
+        charRange: memoryEventCharRange(event),
+        sourceRange: memoryEventSourceRange(event),
+        textLength: text.length,
+        text,
         sourceAnchor: {
             eventId: event.eventId,
             threadId: event.threadId,
@@ -248,6 +260,7 @@ function runRecall(kernel, args) {
     const result = backend.recall({
         agentId: args.agentId || 'openclaw',
         projectId: args.projectId || 'openclaw',
+        collection: args.collection,
         workspaceId: args.workspaceId,
         sessionId: args.sessionId,
         threadId: args.threadId,
@@ -260,6 +273,7 @@ function runRecall(kernel, args) {
         query: args.query,
         agentId: args.agentId || 'openclaw',
         projectId: args.projectId || 'openclaw',
+        collection: args.collection,
         recallMode: result.recallMode,
         fallbackUsed: result.fallbackUsed,
         queryPlan: result.queryPlan,
@@ -267,21 +281,34 @@ function runRecall(kernel, args) {
         items: result.items,
     };
 }
+function runMap(kernel, args) {
+    return kernel.buildMemoryMap({ projectId: args.projectId });
+}
+function runTick(kernel, args) {
+    return kernel.runMaintenanceTick({ projectId: args.projectId });
+}
 function runShow(kernel, args) {
     if (!args.eventId)
         throw new Error(`Missing --event.\n${usage()}`);
+    const beforeCount = args.before ?? 2;
+    const afterCount = args.after ?? 2;
     const context = kernel.getEventContext(args.eventId, {
-        before: args.before ?? 2,
-        after: args.after ?? 2,
+        before: beforeCount,
+        after: afterCount,
     });
     if (!context)
         throw new Error(`No raw ledger event found for ${args.eventId}`);
+    const normalized = normalizeSourceContextWindow(context.event, context.before, context.after, {
+        before: beforeCount,
+        after: afterCount,
+    });
     return {
         event: eventToJson(context.event),
-        before: context.before.map(eventToJson),
-        after: context.after.map(eventToJson),
+        before: normalized.before.map(eventToJson),
+        after: normalized.after.map(eventToJson),
         parent: context.parent ? eventToJson(context.parent) : undefined,
         children: context.children.map(eventToJson),
+        window: normalized.window,
     };
 }
 function runGovern(kernel, args) {
@@ -396,6 +423,21 @@ function printHuman(command, payload) {
         }
         return;
     }
+    if (command === 'map') {
+        const counters = payload.counters;
+        console.log(`memoryMap: ${payload.version}`);
+        console.log(`rawEvents: ${counters?.rawEvents}`);
+        console.log(`neurons: ${counters?.neurons}`);
+        console.log(`bounds: ${JSON.stringify(payload.bounds)}`);
+        return;
+    }
+    if (command === 'tick') {
+        console.log(`maintenanceTick: ${payload.version}`);
+        console.log(`hostOwned: ${payload.hostOwned}`);
+        console.log(`chargeVector: ${JSON.stringify(payload.chargeVector)}`);
+        console.log(`suggestedActions: ${JSON.stringify(payload.suggestedActions)}`);
+        return;
+    }
     if (command === 'recall') {
         const items = Array.isArray(payload.items) ? payload.items : [];
         console.log(`recallMode: ${payload.recallMode}`);
@@ -411,16 +453,18 @@ function printHuman(command, payload) {
     const events = Array.isArray(payload.events) ? payload.events : [payload.event].filter(Boolean);
     for (const event of events) {
         const anchor = event.sourceAnchor;
-        console.log(`- ${event.eventId} ${event.role || 'unknown'} session=${anchor.sessionId || 'unknown'} ${event.text}`);
+        console.log(`- ${event.label || event.eventId} ${event.eventId} ${event.role || 'unknown'} session=${anchor.sessionId || 'unknown'} ${event.text}`);
     }
     if (command === 'show') {
+        if (payload.window)
+            console.log(`window: ${JSON.stringify(payload.window)}`);
         for (const label of ['before', 'after', 'children']) {
             const rows = Array.isArray(payload[label]) ? payload[label] : [];
             if (!rows.length)
                 continue;
             console.log(`${label}:`);
             for (const event of rows)
-                console.log(`- ${event.eventId} ${event.role || 'unknown'} ${event.text}`);
+                console.log(`- ${event.label || event.eventId} ${event.eventId} ${event.role || 'unknown'} ${event.text}`);
         }
     }
 }
@@ -446,7 +490,11 @@ async function main() {
                                 ? await runDream(kernel, args)
                                 : args.command === 'govern'
                                     ? runGovern(kernel, args)
-                                    : runCandidates(kernel, args);
+                                    : args.command === 'candidates'
+                                        ? runCandidates(kernel, args)
+                                        : args.command === 'map'
+                                            ? runMap(kernel, args)
+                                            : runTick(kernel, args);
         if (args.json) {
             console.log(JSON.stringify(payload, null, 2));
             return;

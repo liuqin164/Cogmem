@@ -53,6 +53,7 @@ import { CognitiveGraphStore } from './store/CognitiveGraphStore.js';
 import { CompilerConfidenceStore } from './store/CompilerConfidenceStore.js';
 import { DeepWriteCandidateStore } from './store/DeepWriteCandidateStore.js';
 import { DreamLedgerStore } from './store/DreamLedgerStore.js';
+import { ActivationStore } from './store/ActivationStore.js';
 import { EntityStore } from './store/EntityStore.js';
 import { EventStore } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
@@ -64,7 +65,7 @@ import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
 import { config } from './utils/Config.js';
 import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snapshot/index.js';
-const CORE_VERSION = '2.0.0';
+const CORE_VERSION = '2.5.0';
 const LATEST_SCHEMA_VERSION = 12;
 export class MemoryKernel {
     options;
@@ -81,6 +82,7 @@ export class MemoryKernel {
     temporalAdjacencyStore;
     neuronEmbeddingStore;
     dreamLedgerStore;
+    activationStore;
     pipelineMetrics;
     dbPath;
     embedder;
@@ -141,6 +143,7 @@ export class MemoryKernel {
         this.compilerConfidenceStore = new CompilerConfidenceStore(this.dbPath);
         this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
         this.dreamLedgerStore = new DreamLedgerStore(db);
+        this.activationStore = new ActivationStore(db);
         this.pipelineMetrics = new PipelineMetrics(db);
         this.summaryStore = new SummaryStore(db);
         this.summaryStore.migrateLegacyFactSummaries();
@@ -254,6 +257,7 @@ export class MemoryKernel {
         this.topologyStore.close();
         this.cognitiveGraphStore.close();
         this.temporalAdjacencyStore.close();
+        this.activationStore.close();
         this.interactionUnitStore.close();
         this.compilerConfidenceStore.close();
     }
@@ -421,6 +425,11 @@ export class MemoryKernel {
             parentEventId: input.parentEventId,
             prevEventId: input.prevEventId,
             causalityType: input.causalityType,
+            sourceOffset: input.sourceOffset,
+            lineStart: input.lineStart,
+            lineEnd: input.lineEnd,
+            charStart: input.charStart,
+            charEnd: input.charEnd,
             occurredAt,
             orderingConfidence: 'high',
             payload: {
@@ -640,6 +649,195 @@ export class MemoryKernel {
             rejected: this.countDreamCandidates({ projectId, statuses: ['rejected'] }),
             superseded: this.countDreamCandidates({ projectId, statuses: ['superseded'] }),
             shadow: this.countDreamCandidates({ projectId, statuses: ['shadow'] }),
+        };
+    }
+    buildMemoryMap(options = {}) {
+        const projectId = options.projectId;
+        const rawPage = this.eventStore.queryEvents(1, 1, {
+            projectId: projectId ? [projectId] : undefined,
+        });
+        const projectNeurons = projectId
+            ? this.memoryGraph.getNeuronIdsByProject(projectId).length
+            : this.memoryGraph.getStats().neuronCount;
+        const dreamBacklog = this.getDreamBacklogStatus(projectId);
+        const dreamCandidateQueue = this.getDreamCandidateQueue(projectId);
+        const activationHotspots = this.activationStore.getTop({ projectId, limit: 20 });
+        return {
+            version: 'memory_map.v1',
+            generatedAt: Date.now(),
+            projectId,
+            anatomy: [
+                {
+                    id: 'raw_ledger',
+                    name: 'Raw chronological ledger',
+                    role: 'append-only event source for exact source drill-down and vectors=0 recall fallback',
+                    currentCount: rawPage.total,
+                },
+                {
+                    id: 'compiled_graph',
+                    name: 'Compiled semantic graph',
+                    role: 'governed neurons, synapses, topology, and cognitive graph for associative recall',
+                    currentCount: projectNeurons,
+                },
+                {
+                    id: 'belief_cases',
+                    name: 'Belief cases',
+                    role: 'active beliefs plus support, supersession, and contradiction history',
+                },
+                {
+                    id: 'entity_cards',
+                    name: 'Entity cards',
+                    role: 'resolved people, projects, devices, aliases, attributes, and mention timelines',
+                },
+                {
+                    id: 'activation',
+                    name: 'Activation layer',
+                    role: 'host-visible hot memory traces used by recall packs and maintenance tick',
+                    currentCount: activationHotspots.length,
+                },
+                {
+                    id: 'dream_queue',
+                    name: 'Dream curator queue',
+                    role: 'candidate-only background-compatible consolidation backlog controlled by the host',
+                    currentCount: dreamBacklog.undreamedRawCount,
+                },
+            ],
+            dataLanes: [
+                {
+                    id: 'agent_recall_pack',
+                    name: 'Agent recall pack',
+                    route: 'KernelAgentMemoryBackend.recallPack()',
+                    useWhen: 'Before an agent answer that needs direct memory, beliefs, entities, and associative neighbors.',
+                },
+                {
+                    id: 'collection_routing',
+                    name: 'Collection routing',
+                    route: 'collection:<name> tags on raw events and neurons',
+                    useWhen: 'Store creative Theseus artifacts without polluting default operational recall.',
+                },
+                {
+                    id: 'source_drilldown',
+                    name: 'Source drill-down',
+                    route: 'sourceContext.locator.command',
+                    useWhen: 'Audit exact raw events behind any recalled item.',
+                },
+                {
+                    id: 'maintenance_tick',
+                    name: 'Maintenance tick',
+                    route: 'MemoryKernel.runMaintenanceTick() / cogmem memory tick',
+                    useWhen: 'Let the host decide when to decay activation, run dream, govern candidates, or re-embed.',
+                },
+            ],
+            bounds: [
+                'kernel-only memory layer; no notes app, wiki, or UI ownership',
+                'no hidden daemon; cron/systemd/agent adapters explicitly call memory dream or memory tick',
+                'candidate-only self-improvement unless governance promotes the candidate',
+                'sourceContext remains available for drill-down instead of replacing evidence with summaries',
+                'default recall includes untagged and collection:anchor only; collection:theseus requires an explicit collection query',
+            ],
+            manual: {
+                commands: [
+                    'cogmem memory recall --project <id> --query <q> --json',
+                    'cogmem memory recall --project <id> --collection theseus --query <q> --json',
+                    'cogmem memory show --event <event-id> --before 2 --after 2',
+                    'cogmem memory map --project <id> --json',
+                    'cogmem memory tick --project <id> --json',
+                    'cogmem memory dream --project <id> --watch --interval-ms 300000 --promote',
+                ],
+                agentUsage: [
+                    'Call recallPack() before answering when the host wants direct recall plus associative, belief, and entity context.',
+                    'Use collection "theseus" for creative artifacts and collection "anchor" or no collection for operational memory.',
+                    'Use memory map for self-inspection; use maintenance tick for explicit host-owned upkeep signals.',
+                ],
+            },
+            counters: {
+                rawEvents: rawPage.total,
+                neurons: projectNeurons,
+                vectors: this.vectorStore.getCurrentCount(),
+                activationHotspots: activationHotspots.length,
+                dreamBacklog,
+                dreamCandidateQueue,
+            },
+        };
+    }
+    runMaintenanceTick(options = {}) {
+        const projectId = options.projectId;
+        const ranAt = options.now ?? Date.now();
+        const activationDecay = this.activationStore.decay({
+            projectId,
+            factor: options.activationDecayFactor,
+            floor: options.activationFloor,
+            now: ranAt,
+        });
+        const dreamBacklog = this.getDreamBacklogStatus(projectId);
+        const queue = this.getDreamCandidateQueue(projectId);
+        const entityConflicts = this.entityStore.listAliasConflicts().filter((conflict) => {
+            if (!projectId)
+                return true;
+            return conflict.entityIds.some((entityId) => {
+                const entity = this.entityStore.findByEntityId(entityId);
+                return entity?.metadata?.projectId === projectId
+                    || this.entityStore.listTimeline({ entityId, projectId, limit: 1 }).length > 0;
+            });
+        }).length;
+        const hotspots = this.activationStore.getTop({ projectId, limit: 10 });
+        const reEmbedding = this.getReEmbeddingStatus();
+        const staleVectors = this.getHealthStatus().hasStaleVectors ? reEmbedding.total - reEmbedding.completed : 0;
+        const candidateQueue = queue.candidate + queue.needsConfirmation + queue.shadow;
+        const suggestedActions = [];
+        if (dreamBacklog.undreamedRawCount > 0) {
+            suggestedActions.push({
+                kind: 'dream_curator',
+                command: `cogmem memory dream${projectId ? ` --project ${projectId}` : ''} --promote`,
+                reason: `${dreamBacklog.undreamedRawCount} raw events are waiting for candidate-only Dream Curator processing.`,
+            });
+        }
+        if (candidateQueue > 0) {
+            suggestedActions.push({
+                kind: 'govern_candidates',
+                command: `cogmem memory govern${projectId ? ` --project ${projectId}` : ''}`,
+                reason: `${candidateQueue} dream/deep-write candidates need CPU governance.`,
+            });
+        }
+        if (entityConflicts > 0) {
+            suggestedActions.push({
+                kind: 'resolve_entities',
+                command: 'cogmem memory map --json',
+                reason: `${entityConflicts} active entity alias conflicts need host or agent review.`,
+            });
+        }
+        if (staleVectors > 0) {
+            suggestedActions.push({
+                kind: 're_embed',
+                command: `cogmem-re-embed run${projectId ? ` --project ${projectId}` : ''}`,
+                reason: `${staleVectors} embeddings are stale for the configured embedding model.`,
+            });
+        }
+        if (hotspots.length > 0) {
+            suggestedActions.push({
+                kind: 'inspect_hotspots',
+                command: `cogmem memory map${projectId ? ` --project ${projectId}` : ''} --json`,
+                reason: `${hotspots.length} activation hotspots remain after decay.`,
+            });
+        }
+        return {
+            version: 'maintenance_tick.v1',
+            projectId,
+            ranAt,
+            hostOwned: true,
+            chargeVector: {
+                dreamBacklog: dreamBacklog.undreamedRawCount,
+                candidateQueue,
+                entityConflicts,
+                activationHotspots: hotspots.length,
+                staleVectors,
+            },
+            executed: {
+                activationDecay,
+                hiddenDaemonStarted: false,
+            },
+            hotspots,
+            suggestedActions,
         };
     }
     async exportSnapshot(outputPath) {

@@ -911,21 +911,31 @@ function formatRecallContext(result) {
     const why = item.whyMatched ? '; whyMatched=' + item.whyMatched : '';
     lines.push('  sourceType=' + sourceType + '; confidence=' + confidence + '; canAnswerExactQuote=' + quote + anchor + why);
     if (item.sourceContext && item.sourceContext.event) {
-      lines.push('  sourceContext event=' + item.sourceContext.event.eventId
-        + '; role=' + (item.sourceContext.event.role || 'unknown')
-        + '; text=' + truncateLine(item.sourceContext.event.text || '', 220));
+      const anchorEvent = item.sourceContext.event;
+      const anchorFormatted = formatContextEvent(anchorEvent, 220);
+      lines.push('  sourceContext=' + anchorFormatted.line);
+      lines.push('  sourceWindow=' + formatSourceWindow(item.sourceContext.window, item.sourceContext));
       if (item.sourceContext.locator && item.sourceContext.locator.command) {
         lines.push('  sourceLocator=' + item.sourceContext.locator.command);
       } else if (item.sourceContext.event.eventId) {
         lines.push('  sourceLocator=cogmem memory show --event ' + item.sourceContext.event.eventId + ' --before 2 --after 2');
       }
-      const before = Array.isArray(item.sourceContext.before) ? item.sourceContext.before.slice(-1) : [];
-      const after = Array.isArray(item.sourceContext.after) ? item.sourceContext.after.slice(0, 1) : [];
+      const seenEventIds = new Set([anchorEvent.eventId].filter(Boolean));
+      const before = uniqueWindowEvents(Array.isArray(item.sourceContext.before) ? item.sourceContext.before : [], seenEventIds).slice(-2);
+      const after = uniqueWindowEvents(Array.isArray(item.sourceContext.after) ? item.sourceContext.after : [], seenEventIds).slice(0, 2);
       for (const event of before) {
-        lines.push('  sourceBefore=' + (event.role || 'unknown') + ': ' + truncateLine(event.text || '', 180));
+        lines.push('  sourceBefore=' + formatContextEvent(event, 180).line);
       }
       for (const event of after) {
-        lines.push('  sourceAfter=' + (event.role || 'unknown') + ': ' + truncateLine(event.text || '', 180));
+        lines.push('  sourceAfter=' + formatContextEvent(event, 180).line);
+      }
+      if (anchorFormatted.truncation.truncated) {
+        const lastBefore = before.length ? before[before.length - 1] : undefined;
+        lines.push('  sourceTruncation=truncatedAtMessage=' + contextEventLabel(anchorEvent)
+          + '; truncatedAtChar=' + anchorFormatted.truncation.truncatedAtChar
+          + '; originalChars=' + anchorFormatted.truncation.originalChars
+          + '; remainingChars=' + anchorFormatted.truncation.remainingChars
+          + (lastBefore ? '; lastCompleteMessageBeforeTruncation=' + contextEventLabel(lastBefore) : ''));
       }
     }
     if (sourceType === 'imported_summary') {
@@ -937,9 +947,100 @@ function formatRecallContext(result) {
   return lines.join('\n');
 }
 
-function truncateLine(value, limit) {
+function formatContextEvent(event, limit) {
+  const truncation = truncateLineWithMeta(event && event.text, limit);
+  const label = contextEventLabel(event);
+  const role = event && event.role ? event.role : 'unknown';
+  const eventId = event && event.eventId ? event.eventId : 'unknown';
+  const charRange = event && event.charRange ? '; charRange=' + event.charRange.start + '-' + event.charRange.end : '';
+  const sourceRange = formatSourceRange(event && event.sourceRange);
+  const textLength = Number.isFinite(event && event.textLength) ? event.textLength : truncation.originalChars;
+  const truncated = truncation.truncated
+    ? '; truncatedAtChar=' + truncation.truncatedAtChar + '; visibleChars=' + truncation.visibleChars + '; remainingChars=' + truncation.remainingChars
+    : '';
+  return {
+    line: label + ' event=' + eventId + '; role=' + role + '; textChars=' + textLength + charRange + sourceRange + '; text=' + truncation.text + truncated,
+    truncation,
+  };
+}
+
+function formatSourceWindow(window, context) {
+  const fallbackBeforeCount = Array.isArray(context && context.before) ? context.before.length : 0;
+  const fallbackAfterCount = Array.isArray(context && context.after) ? context.after.length : 0;
+  const before = window && window.before ? window.before : { requestedCount: fallbackBeforeCount, count: fallbackBeforeCount, excludesAnchor: true, ordering: 'chronological', roleFilter: 'all' };
+  const after = window && window.after ? window.after : { requestedCount: fallbackAfterCount, count: fallbackAfterCount, excludesAnchor: true, ordering: 'chronological', roleFilter: 'all' };
+  const overlapEventIds = Array.isArray(window && window.overlapEventIds) ? window.overlapEventIds : [];
+  const dropped = Array.isArray(window && window.droppedOverlapEventIds) ? window.droppedOverlapEventIds : [];
+  return 'before=' + formatWindowSide(before)
+    + '; after=' + formatWindowSide(after)
+    + '; overlap=' + (overlapEventIds.length ? overlapEventIds.join(',') : 'none')
+    + '; droppedOverlap=' + (dropped.length ? dropped.join(',') : 'none')
+    + '; overlapHandling=' + ((window && window.overlapHandling) || 'drop_from_after');
+}
+
+function formatWindowSide(side) {
+  return 'requestedCount=' + Number(side.requestedCount || 0)
+    + ', count=' + Number(side.count || 0)
+    + ', excludesAnchor=' + (side.excludesAnchor !== false)
+    + ', ordering=' + (side.ordering || 'chronological')
+    + ', roleFilter=' + (side.roleFilter || 'all');
+}
+
+function uniqueWindowEvents(events, seenEventIds) {
+  const out = [];
+  for (const event of events) {
+    if (!event || !event.eventId) continue;
+    if (seenEventIds.has(event.eventId)) continue;
+    seenEventIds.add(event.eventId);
+    out.push(event);
+  }
+  return out;
+}
+
+function contextEventLabel(event) {
+  if (!event) return '#unknown';
+  if (event.label) return event.label;
+  if (Number.isFinite(event.globalSeq)) return '#' + event.globalSeq;
+  return event.eventId ? '#' + String(event.eventId).slice(4, 12) : '#unknown';
+}
+
+function formatSourceRange(sourceRange) {
+  if (!sourceRange) return '';
+  const parts = [];
+  if (Number.isFinite(sourceRange.sourceOffset)) parts.push('sourceOffset=' + sourceRange.sourceOffset);
+  if (Number.isFinite(sourceRange.lineStart) || Number.isFinite(sourceRange.lineEnd)) {
+    parts.push('lineRange=' + rangeValue(sourceRange.lineStart) + '-' + rangeValue(sourceRange.lineEnd));
+  }
+  if (Number.isFinite(sourceRange.charStart) || Number.isFinite(sourceRange.charEnd)) {
+    parts.push('sourceCharRange=' + rangeValue(sourceRange.charStart) + '-' + rangeValue(sourceRange.charEnd));
+  }
+  return parts.length ? '; ' + parts.join('; ') : '';
+}
+
+function rangeValue(value) {
+  return Number.isFinite(value) ? String(value) : '?';
+}
+
+function truncateLineWithMeta(value, limit) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
-  return text.length <= limit ? text : text.slice(0, limit) + '...';
+  if (text.length <= limit) {
+    return {
+      text,
+      truncated: false,
+      originalChars: text.length,
+      visibleChars: text.length,
+      truncatedAtChar: text.length,
+      remainingChars: 0,
+    };
+  }
+  return {
+    text: text.slice(0, limit) + '... [truncated]',
+    truncated: true,
+    originalChars: text.length,
+    visibleChars: limit,
+    truncatedAtChar: limit,
+    remainingChars: Math.max(0, text.length - limit),
+  };
 }
 `;
 }

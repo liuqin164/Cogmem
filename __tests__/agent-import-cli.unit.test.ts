@@ -807,6 +807,8 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
   expect(hermes).toContain('--state-db ./state.db');
   expect(hermes).toContain('--family jsonl');
   expect(hermes).toContain('cogmem memory dream --project hermes --watch --interval-ms 300000 --promote');
+  expect(hermes).toContain('cogmem memory map --project hermes --json');
+  expect(hermes).toContain('cogmem memory tick --project hermes --json');
   expect(hermes).toContain('--session ./one.md --session ./two.md');
 });
 
@@ -937,6 +939,11 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(bridgeBody).toContain('sourceType');
   expect(bridgeBody).toContain('canAnswerExactQuote=false');
   expect(bridgeBody).toContain('sourceContext');
+  expect(bridgeBody).toContain('sourceWindow');
+  expect(bridgeBody).toContain('formatContextEvent');
+  expect(bridgeBody).toContain('truncatedAtChar');
+  expect(bridgeBody).toContain('overlapHandling');
+  expect(bridgeBody).toContain('uniqueWindowEvents');
   expect(bridgeBody).toContain('cogmem memory show --event');
   expect(bridgeBody).toContain('Current conversation context is separate');
   expect(bridgeBody).toContain("intent: input.intent || 'memory_recall'");
@@ -1088,6 +1095,8 @@ test('cogmem-connect hermes --auto patches Hermes MCP config without claiming na
   expect(config).toContain('mcp_servers:');
   expect(config).toContain('cogmem:');
   expect(config).toContain('cogmem-mcp');
+  expect(config).toContain('cogmem_memory_map');
+  expect(config).toContain('cogmem_maintenance_tick');
   expect(config).not.toContain('memory:\n  provider: cogmem');
 });
 

@@ -13,8 +13,10 @@ It is not a vector RAG store, a knowledge-base application, a wiki, an Obsidian 
 - Dream Backlog: observable consolidation coverage over raw events so `raw_then_dream` does not silently become unprocessed log accumulation.
 - Dream Candidates: curator output such as user preference candidates, project memories, long-term goals, boundaries, failure lessons, diagnostic conclusions, session/topic summaries, corrections, causal/tool-observation links, temporal invalidation suggestions, and conflict candidates. These remain candidates with source refs, confidence, and governance status; an LLM helper must not directly rewrite verified memory.
 - Active Core: a very small current operating context maintained by the host agent or adapter, not all history.
+- Collection Routing: `collection:<name>` tags split operational anchor memory from specialized lanes such as `collection:theseus` creative artifacts.
 - Associative Graph: pulse-activated local graph, topic, entity, temporal, and cognitive adjacency candidates.
-- Recall Pack / ContextPack: the limited governed context returned for the current agent task.
+- Activation Store: persistent, decaying hot-memory traces touched by recall packs and inspected by host-owned maintenance ticks.
+- Recall Pack / ContextPack: the limited governed context returned for the current agent task. `KernelAgentMemoryBackend.recallPack()` adds direct memory, associative neighbors, entity cards, belief touches, and a charge vector.
 - Filtered Evidence: same-project candidates that were considered but suppressed by status, trust, scope, or budget.
 
 Vector pruning is not memory pruning. Compaction may delete hot vector blobs, temporary embeddings, or stale indexes, but it must not delete raw ledger events, chronological order, sourceRefs, content hashes, or tool-call parent/child links unless the user explicitly requests a privacy deletion.
@@ -66,7 +68,9 @@ cogmem memory candidates --project <project> --status candidate --json
 
 Promotion is a separate CPU-governed step handled by the deep-write promotion policy. Missing evidence, inference-only content, low confidence, assistant/tool-only observations, or unsupported causal links remain `needs_confirmation` or stay candidates. This preserves the rule that dreaming can organize memory but cannot silently turn model guesses or tool output into verified truth.
 
-The worker can be run manually or by a host-owned schedule. Core provides schedule helpers for `manual`, `interval`, `daily`, and `continuous` workflows, but it does not start hidden timers or a daemon. Cron, systemd, OpenClaw, Hermes, or another adapter decides when to call `cogmem memory dream` or `MemoryKernel.runDreamCurator()`.
+The worker can be run manually or by a host-owned schedule. Core provides schedule helpers for `manual`, `interval`, `daily`, and `continuous` workflows, but it does not start hidden timers or a daemon. Cron, systemd, OpenClaw, Hermes, or another adapter decides when to call `cogmem memory dream`, `cogmem memory tick`, `MemoryKernel.runDreamCurator()`, or `MemoryKernel.runMaintenanceTick()`.
+
+`MemoryKernel.runMaintenanceTick()` is the lightweight Charge/heartbeat equivalent. It decays activation, reports dream backlog pressure, candidate queue pressure, entity alias conflicts, stale vectors, and suggested commands. It is explicit and host-owned; it must not be treated as a daemon hidden inside the core.
 
 ## Recall Ranking
 
@@ -77,6 +81,18 @@ Chronological order is for replay and audit. Recall ranking is for selecting use
 Do not use vector topK to reconstruct conversation order. Do not use ledger replay to bypass governed recall. Do not inject an entire thread, day, or transcript into prompt context unless a forensic/audit tool explicitly requests replay.
 
 Cold recall should reactivate evidence in layers: first governed compiled memory and summaries, then bounded raw FTS/metadata search, then optional on-demand reranking of a small raw window. `KernelAgentMemoryBackend.recall()` compiles long user questions into a bounded query plan before raw search, so filler text does not drown out cues such as `CogMem Memory Context`, `记忆`, and `黑盒`. The plan also carries `semanticCuePhrases` and `temporalHints`; for example, a later query about `记忆黑盒` can search raw evidence that originally used `对话存档位置属于黑盒`. If prompt injection is absent or too thin, agents should call `cogmem memory recall --query "<question>" --project <project> --agent <agent> --json` before claiming they do not remember. Forensic follow-ups can pass `anchorEventId` or `anchorText` from the previous recall item to answer "what were my exact words" from the raw ledger instead of guessing from an imported summary. The backend uses raw ledger fallback only after governed universe navigation and BrainRecall fail to produce scoped evidence. Do not restore the old pattern of embedding every raw sentence just to make fuzzy search easier.
+
+For pre-answer agent context, prefer `KernelAgentMemoryBackend.recallPack()` when the host can consume structured slots. The pack preserves normal governed recall results while adding:
+
+- `slots.direct`: bounded agent-facing recall items.
+- `slots.associative`: graph/activation neighbors related to direct items.
+- `slots.entityCards`: resolved entity aliases, attributes, and mention timelines.
+- `slots.beliefTouches`: active beliefs with support/conflict history counts.
+- `chargeVector`: slot counts and activation signal for host scheduling.
+
+Collection routing is enforced in compiled and raw fallback paths. Default recall includes untagged and `collection:anchor` memory. Specialized collections such as `collection:theseus` must be requested explicitly with `collection: "theseus"` or `--collection theseus`.
+
+`MemoryKernel.buildMemoryMap()` and `cogmem memory map` expose a static self-map: anatomy, data lanes, hard bounds, counters, and commands. Agents should use it to understand how to operate the memory kernel, not as a replacement for governed recall.
 
 ## SourceRefs
 
@@ -91,7 +107,7 @@ Semantic memories remain traceable through `sourceRefs`. A source ref may point 
 
 Imported Markdown records preserve line order and block ordinal when available. OpenClaw/Hermes importers also create raw ledger anchor events for imported records before compiled ingest, so old memory files can be searched and shown through `cogmem memory search/show/recall`. Normalized JSON array, JSONL, CSV, and TSV transcript imports emit per-message source anchors before Markdown ingestion so `sourceRefs` can preserve original array index, row line, or block ordinal instead of only the normalized Markdown line. If a source lacks reliable ordering, adapters should set `orderingConfidence: "low"` rather than inventing certainty.
 
-Agent-facing recall items include `sourceAnchor` and, when available, `sourceContext`. `sourceContext` carries the raw event, bounded before/after events, parent/child links, and a local `cogmem memory show --event <eventId> --before 2 --after 2` locator. If `canAnswerExactQuote=false`, the item can still guide the agent to raw evidence, but it must not be quoted as user wording until the raw event is inspected.
+Agent-facing recall items include `sourceAnchor` and, when available, `sourceContext`. `sourceContext` carries the raw event, bounded before/after events, parent/child links, strict window metadata, per-event labels, optional source/character ranges, and a local `cogmem memory show --event <eventId> --before 2 --after 2` locator. The before/after windows are chronological, exclude the anchor, and are de-duplicated with `overlapHandling: "drop_from_after"`. If `canAnswerExactQuote=false`, the item can still guide the agent to raw evidence, but it must not be quoted as user wording until the raw event is inspected.
 
 ## External Mechanisms
 
@@ -102,6 +118,7 @@ Compatible mechanisms translated into the kernel model:
 - Provider lifecycle: routed through `KernelAgentMemoryBackend` and narrow adapters, never through host runtime imports.
 - Behavior memory: stored as candidate/provisional governed memory with source refs and confidence, not as automatically verified fact.
 - Dreaming-style consolidation: implemented as a candidate-only curator that proposes categorized candidates and summaries from raw ledger windows. It may use deterministic rules only, or an explicitly configured OpenAI-compatible memory model, to classify user preferences, project constraints, procedures, failures, diagnostic memories, topic summaries, corrections, semantic tags, indexing decisions, event relations, edge-adjustment proposals, causal tool observations, and temporal supersession/conflict candidates. CPU governance must decide promotion and every candidate must retain source refs.
+- Memory map and maintenance tick: exposed as host-facing inspection/upkeep APIs, never as autonomous self-modification. They may suggest dream, governance, entity-resolution, re-embedding, or hotspot inspection commands, but the host decides whether to run them.
 - Benchmark ideas: expressed as natural-emergence metrics that test recall and inhibition together.
 
 Rejected designs:

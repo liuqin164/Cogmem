@@ -333,6 +333,11 @@ function recordRawImportedEvidence(kernel, projectId, envelope) {
         eventOrdinal,
         occurredAt: record.timestamp,
         sourceId: record.provenance.sourceId,
+        sourceOffset: sourceRef?.sourceOffset,
+        lineStart: sourceRef?.lineStart,
+        lineEnd: sourceRef?.lineEnd,
+        charStart: sourceRef?.charStart,
+        charEnd: sourceRef?.charEnd,
         metadata: {
             ...metadata,
             imported: true,

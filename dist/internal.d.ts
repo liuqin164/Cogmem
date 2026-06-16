@@ -98,6 +98,7 @@ export * from './routing/ToolEvidencePack.js';
 export * from './routing/ToolResultSanitizer.js';
 export * from './routing/ToolUsePolicy.js';
 export * from './store/BackgroundJobStore.js';
+export * from './store/ActivationStore.js';
 export * from './store/CognitiveGraphStore.js';
 export * from './store/CompilerConfidenceStore.js';
 export * from './store/DeepWriteCandidateStore.js';

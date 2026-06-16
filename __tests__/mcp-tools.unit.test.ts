@@ -23,20 +23,28 @@ afterEach(() => {
   }
 });
 
-test('core MCP tool list exposes recall, write, and explain tools', () => {
+test('core MCP tool list exposes recall, write, explain, map, and tick tools', () => {
   const tools = listCogmemMcpTools();
   expect(tools.map((tool) => tool.name)).toEqual([
     'cogmem_remember_turn',
     'cogmem_recall',
     'cogmem_explain_recall',
+    'cogmem_memory_map',
+    'cogmem_maintenance_tick',
   ]);
   const recall = tools.find((tool) => tool.name === 'cogmem_recall');
   const explain = tools.find((tool) => tool.name === 'cogmem_explain_recall');
   const remember = tools.find((tool) => tool.name === 'cogmem_remember_turn');
+  const map = tools.find((tool) => tool.name === 'cogmem_memory_map');
+  const tick = tools.find((tool) => tool.name === 'cogmem_maintenance_tick');
   expect(remember?.inputSchema.properties.ingestMode).toBeTruthy();
+  expect(remember?.inputSchema.properties.collection).toBeTruthy();
+  expect(recall?.inputSchema.properties.collection).toBeTruthy();
   expect(recall?.description).toContain('governed');
   expect(explain?.description).toContain('filteredEvidence');
   expect(explain?.description).toContain('governanceReason');
+  expect(map?.description).toContain('memory map');
+  expect(tick?.description).toContain('maintenance tick');
 });
 
 test('core MCP remember turn supports raw-only mode without creating vectors', async () => {

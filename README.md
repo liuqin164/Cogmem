@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `2.0.2`
+Current version: `2.5.0`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -147,7 +147,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#2.0.0"
+bun add "cogmem@github:liuqin164/cogmem#2.5.0"
 bunx cogmem init
 ```
 
@@ -176,6 +176,15 @@ cogmem memory status --project my-agent --json
 cogmem memory candidates --project my-agent --status candidate --json
 cogmem memory govern --project my-agent --json
 ```
+
+Inspect the memory anatomy and run one explicit host-owned upkeep tick:
+
+```bash
+cogmem memory map --project my-agent --json
+cogmem memory tick --project my-agent --json
+```
+
+`memory tick` decays activation and returns suggested host actions. It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
 
 ## Import Existing Agent Memory
 
@@ -353,7 +362,15 @@ cogmem memory show --event <event-id> --before 2 --after 2 --json
 
 `memory recall` can still return source-anchored raw ledger evidence when `vectors` is `0`. In that state, recall falls back to governed raw FTS and returns `sourceContext` locators instead of claiming vector search succeeded. Broad inventory questions such as `我们记录过哪些库存` are expanded into structured ledger cues such as `库存管理`, `在库`, `产品コード`, and `数量`; if compiled-memory candidates do not contain those cues, raw ledger evidence is preferred.
 
-The MCP `cogmem_recall` tool returns the same agent-facing item shape and fallback behavior. Agents may call it with `query`, `projectId`, and optionally `agentId`; when `agentId` is omitted, MCP uses `projectId` as the agent id before falling back to `openclaw`. `cogmem_explain_recall` remains the audit path for `filteredEvidence` and governance reasons.
+Use collection routing for non-operational artifacts:
+
+```bash
+cogmem memory recall --query "MoneyPrinterTurbo storyboard" --project openclaw --agent openclaw --collection theseus --json
+```
+
+Default recall includes untagged and `collection:anchor` memory only. `collection:theseus` is for creative artifacts and must be requested explicitly so drafts do not pollute the normal agent memory path.
+
+The MCP `cogmem_recall` tool returns the same agent-facing item shape and fallback behavior. Agents may call it with `query`, `projectId`, and optionally `agentId` and `collection`; when `agentId` is omitted, MCP uses `projectId` as the agent id before falling back to `openclaw`. `cogmem_explain_recall` remains the audit path for `filteredEvidence` and governance reasons.
 
 `cogmem memory status --json` exposes stable top-level counters:
 
@@ -373,6 +390,9 @@ Recall results include:
 - `sourceType`
 - `sourceAnchor`
 - `sourceContext`
+- `sourceContext.event.label` and per-event `label` values for matching injected context to `memory show`
+- `sourceContext.window` with requested counts, actual counts, chronological ordering, role filter, anchor exclusion, and overlap handling
+- `sourceContext.event.charRange` / `sourceRange` when the importer or recorder preserved source positions
 - `canAnswerExactQuote`
 - `whyMatched`
 - `governanceReason`
@@ -382,6 +402,8 @@ If `canAnswerExactQuote=false`, the agent must not present the item as the user'
 ```bash
 cogmem memory show --event <eventId> --before 2 --after 2 --json
 ```
+
+`memory show --json` uses the same source context contract. Its `before` and `after` arrays strictly exclude the anchor event, remain chronological, and are de-duplicated. The `window` object reports `requestedCount`, `count`, `excludesAnchor`, `roleFilter`, `ordering`, `overlapEventIds`, and `overlapHandling`. OpenClaw automatic prompt injection renders the same metadata as `sourceWindow`, labels each `sourceBefore` / `sourceAfter` event with `#...`, and adds `sourceTruncation` details when an injected source line is shortened.
 
 ## TypeScript API
 
@@ -411,6 +433,20 @@ const recalled = memory.recall({
 
 console.log(recalled.narrative);
 console.log(recalled.items);
+
+const pack = memory.recallPack({
+  agentId: 'openclaw',
+  projectId: 'openclaw',
+  query: 'what should I remember before answering?',
+});
+
+console.log(pack.slots.direct);
+console.log(pack.slots.associative);
+console.log(pack.slots.entityCards);
+console.log(pack.slots.beliefTouches);
+
+const map = kernel.buildMemoryMap({ projectId: 'openclaw' });
+const tick = kernel.runMaintenanceTick({ projectId: 'openclaw' });
 ```
 
 ## Updating
@@ -449,7 +485,7 @@ cogmem init
 cogmem doctor
 cogmem connect openclaw|hermes
 cogmem update
-cogmem memory recall|search|show|dream|govern|candidates|status
+cogmem memory recall|search|show|dream|govern|candidates|status|map|tick
 cogmem import-openclaw
 cogmem import-hermes
 cogmem normalize-transcript

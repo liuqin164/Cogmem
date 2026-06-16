@@ -21,6 +21,7 @@ export function listCogmemMcpTools() {
                     userText: STRING_SCHEMA,
                     assistantText: STRING_SCHEMA,
                     ingestMode: TURN_INGEST_MODE_SCHEMA,
+                    collection: STRING_SCHEMA,
                     timestamp: NUMBER_SCHEMA,
                 },
                 required: ['agentId', 'projectId', 'sessionId', 'userText'],
@@ -34,13 +35,14 @@ export function listCogmemMcpTools() {
         },
         {
             name: 'cogmem_recall',
-            description: 'Recall governed agent-facing memory context from cogmem using the same path as cogmem memory recall, including raw ledger fallback with sourceContext when vectors or compiled evidence are unavailable. Suppressed evidence is omitted from active context; use cogmem_explain_recall to inspect filteredEvidence.',
+            description: 'Recall governed agent-facing memory context from cogmem using the same path as cogmem memory recall, including raw ledger fallback with labeled sourceContext events, sourceContext.window metadata, char/source ranges when available, and locator commands when vectors or compiled evidence are unavailable. Suppressed evidence is omitted from active context; use cogmem_explain_recall to inspect filteredEvidence.',
             inputSchema: {
                 type: 'object',
                 properties: {
                     query: STRING_SCHEMA,
                     agentId: STRING_SCHEMA,
                     projectId: STRING_SCHEMA,
+                    collection: STRING_SCHEMA,
                     limit: NUMBER_SCHEMA,
                     since: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
                     until: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
@@ -63,6 +65,7 @@ export function listCogmemMcpTools() {
                     query: STRING_SCHEMA,
                     agentId: STRING_SCHEMA,
                     projectId: STRING_SCHEMA,
+                    collection: STRING_SCHEMA,
                     limit: NUMBER_SCHEMA,
                     since: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
                     until: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
@@ -74,6 +77,38 @@ export function listCogmemMcpTools() {
                 readOnlyHint: true,
                 destructiveHint: false,
                 idempotentHint: true,
+            },
+        },
+        {
+            name: 'cogmem_memory_map',
+            description: 'Return the self-describing cogmem memory map: anatomy, data lanes, bounds, counters, and commands an agent should use.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    projectId: STRING_SCHEMA,
+                },
+            },
+            annotations: {
+                title: 'Memory Map',
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+            },
+        },
+        {
+            name: 'cogmem_maintenance_tick',
+            description: 'Run one explicit host-owned maintenance tick. This decays activation and returns suggested upkeep commands; it never starts a hidden daemon.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    projectId: STRING_SCHEMA,
+                },
+            },
+            annotations: {
+                title: 'Maintenance Tick',
+                readOnlyHint: false,
+                destructiveHint: false,
+                idempotentHint: false,
             },
         },
     ];
@@ -89,6 +124,10 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
                 return recall(opened.kernel, input, false);
             case 'cogmem_explain_recall':
                 return recall(opened.kernel, input, true);
+            case 'cogmem_memory_map':
+                return jsonResult(opened.kernel.buildMemoryMap({ projectId: optionalString(input.projectId) }));
+            case 'cogmem_maintenance_tick':
+                return jsonResult(opened.kernel.runMaintenanceTick({ projectId: optionalString(input.projectId) }));
             default:
                 return jsonResult({ error: `Unknown cogmem MCP tool: ${name}` }, true);
         }
@@ -110,6 +149,7 @@ async function rememberTurn(kernel, input) {
         userText: requiredString(input.userText, 'userText'),
         assistantText: optionalString(input.assistantText),
         ingestMode: optionalTurnIngestMode(input.ingestMode),
+        collection: optionalString(input.collection),
         timestamp: optionalNumber(input.timestamp),
     });
     return jsonResult({ ok: true, ...result });
@@ -128,6 +168,7 @@ function recall(kernel, input, includeExplanation) {
         const result = memory.recall({
             agentId,
             projectId,
+            collection: optionalString(input.collection),
             query,
             limit,
             startTime,
@@ -149,6 +190,7 @@ function recall(kernel, input, includeExplanation) {
         query,
         agentId: requestedAgentId,
         projectId: requestedProjectId,
+        collection: optionalString(input.collection),
         limit,
         startTime,
         endTime,

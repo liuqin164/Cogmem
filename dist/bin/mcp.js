@@ -31,7 +31,7 @@ function usage() {
     return [
         'Usage: cogmem-mcp [--db <memory.db>|--config <config.toml>] [--cwd <dir>]',
         '',
-        'Starts a stdio MCP server exposing cogmem_remember_turn, cogmem_recall, and cogmem_explain_recall.',
+        'Starts a stdio MCP server exposing cogmem_remember_turn, cogmem_recall, cogmem_explain_recall, cogmem_memory_map, and cogmem_maintenance_tick.',
     ].join('\n');
 }
 async function main() {

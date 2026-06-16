@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for OpenClaw.
-version: 1.0.0
+version: 2.5.0
 metadata:
   openclaw:
     tags: [memory, cogmem, agent-memory]
@@ -158,10 +158,10 @@ Each `recall.items[]` entry can include:
 - `sourceType`: `compiled_memory`, `raw_ledger`, `raw_ledger_session`, or `imported_summary`.
 - `canAnswerExactQuote`: only `true` means the item can support exact wording.
 - `sourceAnchor`: the raw event/session/thread anchor.
-- `sourceContext`: bounded raw event context with before/after events.
+- `sourceContext`: bounded raw event context with before/after events, stable `label` values, optional `charRange` / `sourceRange`, and `window` metadata.
 - `sourceContext.locator.command`: a local command such as `cogmem memory show --event <eventId> --before 2 --after 2`.
 
-If the user asks for "原话", "具体内容", "完整脉络", "为什么当时这么判断", or "前后发生了什么", use `sourceContext` first. If more context is needed, run the locator command. Do not answer exact quotes from `compiled_memory` or `imported_summary` alone.
+If the user asks for "原话", "具体内容", "完整脉络", "为什么当时这么判断", or "前后发生了什么", use `sourceContext` first. `sourceContext.window` tells you the before/after requested counts, actual counts, `excludesAnchor`, `ordering`, `roleFilter`, and overlap handling; do not infer those semantics from text position. If more context is needed, run the locator command. Do not answer exact quotes from `compiled_memory` or `imported_summary` alone.
 
 ## Active Memory Search
 
@@ -183,6 +183,23 @@ Use `items[].sourceContext` to understand what the user asked, how the agent ans
 ```bash
 cogmem memory show --event <eventId> --before 2 --after 2 --json
 ```
+
+Use collection routing for creative artifacts or drafts:
+
+```bash
+cogmem memory recall --query "<artifact query>" --project openclaw --agent openclaw --collection theseus --json
+```
+
+Default recall includes untagged and `collection:anchor` memory only. `collection:theseus` must be requested explicitly so creative artifacts do not pollute operational memory.
+
+Use the self-map and explicit tick when the agent needs to understand or maintain the memory system:
+
+```bash
+cogmem memory map --project openclaw --json
+cogmem memory tick --project openclaw --json
+```
+
+`memory tick` decays activation and returns `suggestedActions`; it does not run a hidden daemon.
 
 Only fall back to searching OpenClaw's legacy `memory/` files when `cogmem memory recall` and `cogmem memory search` return no useful evidence or when the user explicitly asks to inspect the legacy files.
 
@@ -274,7 +291,7 @@ cogmem explain-recall --query "<user question>" --project openclaw --agent openc
 
 Inspect `sourceAnchor`, `activationPath`, `whyMatched`, `filteredEvidence`, and `governanceReason`. `sourceAnchor` points back to raw ledger events or imported source files. `filteredEvidence` is for audit/debug and must not be injected wholesale into normal prompts.
 
-When normal prompt injection contains `# CogMem Retrieved Memory`, treat it as historical memory selected by the kernel, not as the current conversation and not as a complete transcript. If the injected item includes `sourceContext`, it is allowed to explain what was asked, how it was answered, and nearby context. If it only includes an imported summary and `canAnswerExactQuote=false`, say that only a summary is available unless you can inspect raw source evidence.
+When normal prompt injection contains `# CogMem Retrieved Memory`, treat it as historical memory selected by the kernel, not as the current conversation and not as a complete transcript. If the injected item includes `sourceContext`, `sourceWindow`, `sourceBefore`, or `sourceAfter`, use the `#...` labels and `event=` ids to cross-check the same events in `cogmem memory show`. `sourceWindow` states whether before/after excludes the anchor and whether any overlap was dropped. `sourceTruncation` means the injected source line was shortened; run the locator command before quoting exact wording. If it only includes an imported summary and `canAnswerExactQuote=false`, say that only a summary is available unless you can inspect raw source evidence.
 
 After runtime wiring changes, run:
 
@@ -298,5 +315,7 @@ Expose these tools to the agent:
 - `cogmem_remember_turn`
 - `cogmem_recall`
 - `cogmem_explain_recall`
+- `cogmem_memory_map`
+- `cogmem_maintenance_tick`
 
-Use `cogmem_recall` for normal answers. It uses the same agent-facing recall path as `cogmem memory recall`, so empty vector indexes can still return bounded `raw_ledger` evidence with `sourceContext` and a local `sourceContext.locator.command`. Pass `agentId` and `projectId` when available; if an MCP host sends only `projectId`, Cogmem infers `agentId` from it. Use `cogmem_explain_recall` only when auditing `filteredEvidence`, activation paths, or governance suppression reasons.
+Use `cogmem_recall` for normal answers. It uses the same agent-facing recall path as `cogmem memory recall`, so empty vector indexes can still return bounded `raw_ledger` evidence with `sourceContext` and a local `sourceContext.locator.command`. Pass `agentId` and `projectId` when available; if an MCP host sends only `projectId`, Cogmem infers `agentId` from it. Pass `collection: "theseus"` only for creative artifacts. Use `cogmem_explain_recall` only when auditing `filteredEvidence`, activation paths, or governance suppression reasons. Use `cogmem_memory_map` for self-inspection and `cogmem_maintenance_tick` for host-owned upkeep suggestions.

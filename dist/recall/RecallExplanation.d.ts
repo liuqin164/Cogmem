@@ -5,6 +5,7 @@ export interface RecallExplanationOptions {
     query: string;
     projectId?: string;
     agentId?: string;
+    collection?: string;
     limit?: number;
     startTime?: number;
     endTime?: number;
@@ -27,7 +28,7 @@ export interface RecallExplanationFilteredEvidence {
     tags: string[];
     source?: string;
     sourceAnchor?: RecallExplanationSourceAnchor;
-    reason: 'agent_scope_mismatch' | 'over_context_limit' | 'status_suppressed';
+    reason: 'agent_scope_mismatch' | 'collection_scope_mismatch' | 'over_context_limit' | 'status_suppressed';
     governanceReason?: RecallGovernanceSuppressionReason;
 }
 export interface RecallExplanationSourceAnchor {
@@ -40,6 +41,7 @@ export interface RecallExplanation {
     query: string;
     projectId?: string;
     agentId?: string;
+    collection?: string;
     recallMode: MemoryKernelNavigationResult['recallMode'];
     fallbackUsed: boolean;
     narrative?: NonNullable<MemoryKernelNavigationResult['navigation']>['narrative'];

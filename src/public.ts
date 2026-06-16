@@ -30,10 +30,17 @@ export type {
   DreamCandidateStatus,
   DreamCuratorRunOptions,
   DreamCuratorRunResult,
+  MaintenanceSuggestedAction,
+  MaintenanceTickOptions,
+  MaintenanceTickResult,
+  MemoryDataLane,
   MemoryKernelFromConfigOptions,
   MemoryKernelNavigationOptions,
   MemoryKernelNavigationResult,
   MemoryKernelOptions,
+  MemoryMapOptions,
+  MemoryMapSection,
+  MemorySelfMap,
   RawEventSearchOptions,
   RawMemoryEventInput,
   TaskMemoryEventInput,
@@ -66,8 +73,12 @@ export {
   compileAgentRecallQuery,
   inferAgentRecallIntent,
   KernelAgentMemoryBackend,
+  type AgentRecallBeliefTouch,
+  type AgentRecallEntityCard,
   type AgentRecallIntent,
   type AgentRecallItem,
+  type AgentRecallPackResult,
+  type AgentRecallPackSlots,
   type AgentRecallQuery,
   type AgentRecallQueryPlan,
   type AgentRecallResult,
@@ -184,8 +195,10 @@ export { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
  */
 export { SqliteVecStore } from './store/SqliteVecStore.js';
 export { HnswlibVectorStore } from './store/HnswlibVectorStore.js';
+export { ActivationStore } from './store/ActivationStore.js';
 /** @deprecated Use HnswlibVectorStore. Will be removed in v3.0. */
 export { VectorStore } from './store/VectorStore.js';
+export type { ActivationDecayOptions, ActivationDecayResult, ActivationHotspot, ActivationTouchInput } from './store/ActivationStore.js';
 export type { IVectorStore, VectorBackend, VectorSearchResult, VectorStoreStats } from './store/IVectorStore.js';
 
 /**

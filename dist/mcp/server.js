@@ -5,12 +5,12 @@ import { callCogmemMcpTool, listCogmemMcpTools, } from './CoreMcpTools.js';
 export function createCogmemMcpServer(runtime = {}) {
     const server = new Server({
         name: 'cogmem-core',
-        version: '2.0.0',
+        version: '2.5.0',
     }, {
         capabilities: {
             tools: {},
         },
-        instructions: 'Use cogmem_recall to retrieve prepared memory context and cogmem_remember_turn to write conversation turns.',
+        instructions: 'Use cogmem_recall to retrieve prepared memory context, cogmem_remember_turn to write conversation turns, cogmem_memory_map for memory anatomy, and cogmem_maintenance_tick for host-owned upkeep suggestions.',
     });
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
         tools: listCogmemMcpTools(),

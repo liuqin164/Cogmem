@@ -3,17 +3,24 @@ import { resolve } from 'node:path';
 
 import { KernelAgentMemoryBackend, type AgentRecallIntent } from '../agent/index.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
+import {
+  memoryEventCharRange,
+  memoryEventLabel,
+  memoryEventSourceRange,
+  normalizeSourceContextWindow,
+} from '../recall/SourceContextMetadata.js';
 import type { DeepWriteCandidateRecord, DeepWriteCandidateStatus } from '../store/DeepWriteCandidateStore.js';
 import type { MemoryEvent } from '../types/index.js';
 
 interface MemoryArgs {
-  command?: 'status' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates';
+  command?: 'status' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'map' | 'tick';
   query?: string;
   eventId?: string;
   status?: DeepWriteCandidateStatus;
   agentId?: string;
   intent?: AgentRecallIntent;
   projectId?: string;
+  collection?: string;
   workspaceId?: string;
   threadId?: string;
   sessionId?: string;
@@ -58,6 +65,7 @@ function readArgs(argv: string[]): MemoryArgs {
     agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
     intent: recallIntentArg(values, 'intent'),
     projectId: stringArg(values, 'project') || stringArg(values, 'project-id'),
+    collection: stringArg(values, 'collection'),
     workspaceId: stringArg(values, 'workspace') || stringArg(values, 'workspace-id'),
     threadId: stringArg(values, 'thread') || stringArg(values, 'thread-id'),
     sessionId: stringArg(values, 'session') || stringArg(values, 'session-id'),
@@ -79,7 +87,7 @@ function readArgs(argv: string[]): MemoryArgs {
 
 function usage(): string {
   return [
-    'Usage: cogmem memory <status|list|search|show|dream|govern|candidates> [args]',
+    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|map|tick> [args]',
     '',
     'Commands:',
     '  status               summarize raw ledger, vector, and dream backlog state',
@@ -90,9 +98,12 @@ function usage(): string {
     '  dream                run the Memory Curator / Dream Worker over undreamed raw events',
     '  govern               apply CPU governance to pending dream/deep-write candidates',
     '  candidates           list dream/deep-write governance candidates',
+    '  map                  print the self-describing memory map for agent/host inspection',
+    '  tick                 run one explicit host-owned maintenance tick',
     '',
     'Common options:',
     '  --project <id>       scope to one project',
+    '  --collection <name>  recall from a named collection; default excludes collection:theseus',
     '  --workspace <id>     scope to one workspace',
     '  --thread <id>        scope to one thread',
     '  --session <id>       scope to one session',
@@ -122,7 +133,9 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'show'
     || value === 'dream'
     || value === 'govern'
-    || value === 'candidates';
+    || value === 'candidates'
+    || value === 'map'
+    || value === 'tick';
 }
 
 function recallIntentArg(
@@ -184,8 +197,10 @@ function eventText(event: MemoryEvent): string {
 }
 
 function eventToJson(event: MemoryEvent): Record<string, unknown> {
+  const text = eventText(event);
   return {
     eventId: event.eventId,
+    label: memoryEventLabel(event),
     globalSeq: event.globalSeq,
     projectId: event.projectId,
     workspaceId: event.workspaceId,
@@ -196,7 +211,10 @@ function eventToJson(event: MemoryEvent): Record<string, unknown> {
     eventType: event.eventType,
     occurredAt: event.occurredAt,
     localDate: event.localDate,
-    text: eventText(event),
+    charRange: memoryEventCharRange(event),
+    sourceRange: memoryEventSourceRange(event),
+    textLength: text.length,
+    text,
     sourceAnchor: {
       eventId: event.eventId,
       threadId: event.threadId,
@@ -289,6 +307,7 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   const result = backend.recall({
     agentId: args.agentId || 'openclaw',
     projectId: args.projectId || 'openclaw',
+    collection: args.collection,
     workspaceId: args.workspaceId,
     sessionId: args.sessionId,
     threadId: args.threadId,
@@ -301,6 +320,7 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
     query: args.query,
     agentId: args.agentId || 'openclaw',
     projectId: args.projectId || 'openclaw',
+    collection: args.collection,
     recallMode: result.recallMode,
     fallbackUsed: result.fallbackUsed,
     queryPlan: result.queryPlan,
@@ -309,19 +329,34 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   };
 }
 
+function runMap(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  return kernel.buildMemoryMap({ projectId: args.projectId }) as unknown as Record<string, unknown>;
+}
+
+function runTick(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  return kernel.runMaintenanceTick({ projectId: args.projectId }) as unknown as Record<string, unknown>;
+}
+
 function runShow(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
   if (!args.eventId) throw new Error(`Missing --event.\n${usage()}`);
+  const beforeCount = args.before ?? 2;
+  const afterCount = args.after ?? 2;
   const context = kernel.getEventContext(args.eventId, {
-    before: args.before ?? 2,
-    after: args.after ?? 2,
+    before: beforeCount,
+    after: afterCount,
   });
   if (!context) throw new Error(`No raw ledger event found for ${args.eventId}`);
+  const normalized = normalizeSourceContextWindow(context.event, context.before, context.after, {
+    before: beforeCount,
+    after: afterCount,
+  });
   return {
     event: eventToJson(context.event),
-    before: context.before.map(eventToJson),
-    after: context.after.map(eventToJson),
+    before: normalized.before.map(eventToJson),
+    after: normalized.after.map(eventToJson),
     parent: context.parent ? eventToJson(context.parent) : undefined,
     children: context.children.map(eventToJson),
+    window: normalized.window,
   };
 }
 
@@ -438,6 +473,21 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     }
     return;
   }
+  if (command === 'map') {
+    const counters = payload.counters as Record<string, unknown> | undefined;
+    console.log(`memoryMap: ${payload.version}`);
+    console.log(`rawEvents: ${counters?.rawEvents}`);
+    console.log(`neurons: ${counters?.neurons}`);
+    console.log(`bounds: ${JSON.stringify(payload.bounds)}`);
+    return;
+  }
+  if (command === 'tick') {
+    console.log(`maintenanceTick: ${payload.version}`);
+    console.log(`hostOwned: ${payload.hostOwned}`);
+    console.log(`chargeVector: ${JSON.stringify(payload.chargeVector)}`);
+    console.log(`suggestedActions: ${JSON.stringify(payload.suggestedActions)}`);
+    return;
+  }
   if (command === 'recall') {
     const items = Array.isArray(payload.items) ? payload.items : [];
     console.log(`recallMode: ${payload.recallMode}`);
@@ -452,14 +502,15 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
   const events = Array.isArray(payload.events) ? payload.events : [payload.event].filter(Boolean);
   for (const event of events as Array<Record<string, unknown>>) {
     const anchor = event.sourceAnchor as Record<string, unknown>;
-    console.log(`- ${event.eventId} ${event.role || 'unknown'} session=${anchor.sessionId || 'unknown'} ${event.text}`);
+    console.log(`- ${event.label || event.eventId} ${event.eventId} ${event.role || 'unknown'} session=${anchor.sessionId || 'unknown'} ${event.text}`);
   }
   if (command === 'show') {
+    if (payload.window) console.log(`window: ${JSON.stringify(payload.window)}`);
     for (const label of ['before', 'after', 'children'] as const) {
       const rows = Array.isArray(payload[label]) ? payload[label] as Array<Record<string, unknown>> : [];
       if (!rows.length) continue;
       console.log(`${label}:`);
-      for (const event of rows) console.log(`- ${event.eventId} ${event.role || 'unknown'} ${event.text}`);
+      for (const event of rows) console.log(`- ${event.label || event.eventId} ${event.eventId} ${event.role || 'unknown'} ${event.text}`);
     }
   }
 }
@@ -486,7 +537,11 @@ async function main(): Promise<void> {
                 ? await runDream(kernel, args)
                 : args.command === 'govern'
                   ? runGovern(kernel, args)
-                  : runCandidates(kernel, args);
+                  : args.command === 'candidates'
+                    ? runCandidates(kernel, args)
+                    : args.command === 'map'
+                      ? runMap(kernel, args)
+                      : runTick(kernel, args);
     if (args.json) {
       console.log(JSON.stringify(payload, null, 2));
       return;
