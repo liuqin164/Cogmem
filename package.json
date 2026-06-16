@@ -1,6 +1,8 @@
 {
   "name": "cogmem",
+
   "version": "2.5.0",
+
   "type": "module",
   "description": "cogmem — agent-native memory kernel for a single local-first AI agent",
   "main": "./dist/public.js",

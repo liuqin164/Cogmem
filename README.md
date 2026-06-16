@@ -4,6 +4,9 @@ Agent-native memory kernel for a single AI agent.
 
 `cogmem` is a local-first memory backend for agents and agent frameworks. It stores raw experience, preserves provenance, curates long-term memory candidates, governs what becomes active memory, and recalls bounded context with source anchors.
 
+Cogmem is a lightweight, local-first memory kernel for personal AI agents.
+It lets agents recall and inject relevant source-anchored memory without manually reading memory files.
+
 It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsidian replacement, an agent runtime, or a task scheduler.
 
 ## Status
