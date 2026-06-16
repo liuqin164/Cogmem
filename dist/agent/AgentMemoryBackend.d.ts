@@ -1,4 +1,5 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
+import { type MemoryEventCharRange, type MemoryEventSourceRange, type SourceContextWindowMetadata } from '../recall/SourceContextMetadata.js';
 import type { BeliefRecord, MemoryEvent } from '../types/index.js';
 import { type AgentRecallIntent, type AgentRecallQueryPlan } from './AgentRecallQueryCompiler.js';
 export type AgentTurnIngestMode = 'immediate_compile' | 'selective_compile' | 'raw_archive_only' | 'raw_then_dream';
@@ -58,6 +59,7 @@ export interface AgentRecallSourceAnchor {
 }
 export interface AgentRecallSourceContextEvent {
     eventId: string;
+    label: string;
     role?: MemoryEvent['role'];
     rawEventType?: MemoryEvent['rawEventType'];
     eventType?: MemoryEvent['eventType'];
@@ -71,6 +73,9 @@ export interface AgentRecallSourceContextEvent {
     eventOrdinal?: number;
     occurredAt: number;
     localDate?: string;
+    charRange?: MemoryEventCharRange;
+    sourceRange?: MemoryEventSourceRange;
+    textLength: number;
     text: string;
 }
 export interface AgentRecallSourceContext {
@@ -79,6 +84,7 @@ export interface AgentRecallSourceContext {
     after: AgentRecallSourceContextEvent[];
     parent?: AgentRecallSourceContextEvent;
     children: AgentRecallSourceContextEvent[];
+    window: SourceContextWindowMetadata;
     locator: {
         eventId: string;
         command: string;

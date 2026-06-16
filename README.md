@@ -8,7 +8,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `2.0.0`
+Current version: `2.5.0`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -144,7 +144,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#2.0.0"
+bun add "cogmem@github:liuqin164/cogmem#2.5.0"
 bunx cogmem init
 ```
 
@@ -387,6 +387,9 @@ Recall results include:
 - `sourceType`
 - `sourceAnchor`
 - `sourceContext`
+- `sourceContext.event.label` and per-event `label` values for matching injected context to `memory show`
+- `sourceContext.window` with requested counts, actual counts, chronological ordering, role filter, anchor exclusion, and overlap handling
+- `sourceContext.event.charRange` / `sourceRange` when the importer or recorder preserved source positions
 - `canAnswerExactQuote`
 - `whyMatched`
 - `governanceReason`
@@ -396,6 +399,8 @@ If `canAnswerExactQuote=false`, the agent must not present the item as the user'
 ```bash
 cogmem memory show --event <eventId> --before 2 --after 2 --json
 ```
+
+`memory show --json` uses the same source context contract. Its `before` and `after` arrays strictly exclude the anchor event, remain chronological, and are de-duplicated. The `window` object reports `requestedCount`, `count`, `excludesAnchor`, `roleFilter`, `ordering`, `overlapEventIds`, and `overlapHandling`. OpenClaw automatic prompt injection renders the same metadata as `sourceWindow`, labels each `sourceBefore` / `sourceAfter` event with `#...`, and adds `sourceTruncation` details when an injected source line is shortened.
 
 ## TypeScript API
 

@@ -184,6 +184,11 @@ export interface RawMemoryEventInput {
     prevEventId?: string;
     causalityType?: MemoryEventCausalityType;
     sourceId?: string;
+    sourceOffset?: number;
+    lineStart?: number;
+    lineEnd?: number;
+    charStart?: number;
+    charEnd?: number;
     localDate?: string;
     metadata?: Record<string, unknown>;
 }

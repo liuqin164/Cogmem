@@ -19,13 +19,15 @@ Agent-facing recall is governed by default. `KernelAgentMemoryBackend.recall()` 
 
 For agent lifecycle events, source refs may point to `message`, `tool_call`, `tool_result`, or `task_event` raw ledger entries. For normalized JSON/CSV imports, source refs preserve original source offset and row/line anchors when available, even though ingestion flows through Markdown projection.
 
-`KernelAgentMemoryBackend.recall()` also returns `sourceContext` on agent-facing items when a raw event can be resolved. `sourceContext` contains the raw event text, bounded before/after events, parent/child links, and a `sourceLocator` command:
+`KernelAgentMemoryBackend.recall()` also returns `sourceContext` on agent-facing items when a raw event can be resolved. `sourceContext` contains the raw event text, stable display labels, bounded before/after events, parent/child links, strict window metadata, optional source/character ranges, and a `sourceLocator` command:
 
 ```bash
 cogmem memory show --event <eventId> --before 2 --after 2
 ```
 
 Agents should use `sourceContext` when the user asks what was specifically said, how a conclusion was explained, or what happened before/after a remembered point. If `canAnswerExactQuote=false`, the item is only a clue until the raw source event is inspected.
+
+Every `sourceContext` event has a `label` suitable for prompt injection and cross-reference, usually derived from host message id metadata or the ledger `globalSeq`. When available, `charRange` gives the original source character range and `sourceRange` carries source offset, line range, and source character range. `sourceContext.window` states the requested before/after counts, actual counts, ordering (`chronological`), role filter (`all`), `excludesAnchor=true`, and overlap handling (`drop_from_after`). Agents should prefer these fields over guessing whether before/after includes the anchor.
 
 When automatic prompt injection is missing or insufficient, agents can actively query the same governed path:
 

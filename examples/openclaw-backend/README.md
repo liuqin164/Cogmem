@@ -132,7 +132,7 @@ console.log(recalled.items);
 
 The profile imports memory sources only. It ignores operational files such as `AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md` by default.
 
-When `recalled.items[]` contains `sourceContext`, the agent can answer where the original raw event lives and inspect surrounding context. If the user asks for exact wording or a full thread, use the provided `sourceContext.locator.command`, for example:
+When `recalled.items[]` contains `sourceContext`, the agent can answer where the original raw event lives and inspect surrounding context. Events include stable `label` values, optional `charRange` / `sourceRange`, and `sourceContext.window` metadata describing requested counts, actual counts, anchor exclusion, ordering, role filter, and overlap handling. If the user asks for exact wording or a full thread, use the provided `sourceContext.locator.command`, for example:
 
 ```bash
 cogmem memory show --event <eventId> --before 2 --after 2

@@ -96,7 +96,7 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '2.0.0';
+const CORE_VERSION = '2.5.0';
 const LATEST_SCHEMA_VERSION = 12;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
@@ -272,6 +272,11 @@ export interface RawMemoryEventInput {
   prevEventId?: string;
   causalityType?: MemoryEventCausalityType;
   sourceId?: string;
+  sourceOffset?: number;
+  lineStart?: number;
+  lineEnd?: number;
+  charStart?: number;
+  charEnd?: number;
   localDate?: string;
   metadata?: Record<string, unknown>;
 }
@@ -789,6 +794,11 @@ export class MemoryKernel {
       parentEventId: input.parentEventId,
       prevEventId: input.prevEventId,
       causalityType: input.causalityType,
+      sourceOffset: input.sourceOffset,
+      lineStart: input.lineStart,
+      lineEnd: input.lineEnd,
+      charStart: input.charStart,
+      charEnd: input.charEnd,
       occurredAt,
       orderingConfidence: 'high',
       payload: {

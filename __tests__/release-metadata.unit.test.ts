@@ -22,7 +22,7 @@ function packageJson(): {
 }
 
 describe('core release metadata', () => {
-  test('2.0.0 is released as cogmem through GitHub release assets', () => {
+  test('2.5.0 is released as cogmem through GitHub release assets', () => {
     const manifest = packageJson();
     const readme = readText(join(coreRoot, 'README.md'));
     const contributing = readText(join(coreRoot, 'CONTRIBUTING.md'));
@@ -30,7 +30,7 @@ describe('core release metadata', () => {
     const checklist = readText(join(coreRoot, 'RELEASE_CHECKLIST.md'));
 
     expect(manifest.name).toBe('cogmem');
-    expect(manifest.version).toBe('2.0.0');
+    expect(manifest.version).toBe('2.5.0');
     expect(manifest.description).toContain('agent-native memory kernel');
     expect(readme).toContain('curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash');
     expect(readme).toContain('GitHub Releases');
@@ -38,8 +38,8 @@ describe('core release metadata', () => {
     expect(readme).not.toContain('@CognitiveOS/core');
     expect(contributing).toContain('npm pack --dry-run --json');
     expect(contributing).not.toContain('npm publish');
-    expect(changelog).toContain('2.0.0');
-    expect(checklist).toContain('2.0.0');
+    expect(changelog).toContain('2.5.0');
+    expect(checklist).toContain('2.5.0');
     expect(checklist).toContain('Do not run npm publish');
   });
 

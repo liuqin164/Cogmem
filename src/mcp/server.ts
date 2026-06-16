@@ -16,7 +16,7 @@ import {
 export function createCogmemMcpServer(runtime: CogmemMcpRuntime = {}): Server {
   const server = new Server({
     name: 'cogmem-core',
-    version: '2.0.0',
+    version: '2.5.0',
   }, {
     capabilities: {
       tools: {},

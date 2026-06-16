@@ -2,6 +2,7 @@
 import { resolve } from 'node:path';
 import { KernelAgentMemoryBackend } from '../agent/index.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
+import { memoryEventCharRange, memoryEventLabel, memoryEventSourceRange, normalizeSourceContextWindow, } from '../recall/SourceContextMetadata.js';
 function readArgs(argv) {
     const [commandCandidate, ...rest] = argv;
     const command = isMemoryCommand(commandCandidate) ? commandCandidate : undefined;
@@ -152,8 +153,10 @@ function eventText(event) {
     return JSON.stringify(event.payload);
 }
 function eventToJson(event) {
+    const text = eventText(event);
     return {
         eventId: event.eventId,
+        label: memoryEventLabel(event),
         globalSeq: event.globalSeq,
         projectId: event.projectId,
         workspaceId: event.workspaceId,
@@ -164,7 +167,10 @@ function eventToJson(event) {
         eventType: event.eventType,
         occurredAt: event.occurredAt,
         localDate: event.localDate,
-        text: eventText(event),
+        charRange: memoryEventCharRange(event),
+        sourceRange: memoryEventSourceRange(event),
+        textLength: text.length,
+        text,
         sourceAnchor: {
             eventId: event.eventId,
             threadId: event.threadId,
@@ -284,18 +290,25 @@ function runTick(kernel, args) {
 function runShow(kernel, args) {
     if (!args.eventId)
         throw new Error(`Missing --event.\n${usage()}`);
+    const beforeCount = args.before ?? 2;
+    const afterCount = args.after ?? 2;
     const context = kernel.getEventContext(args.eventId, {
-        before: args.before ?? 2,
-        after: args.after ?? 2,
+        before: beforeCount,
+        after: afterCount,
     });
     if (!context)
         throw new Error(`No raw ledger event found for ${args.eventId}`);
+    const normalized = normalizeSourceContextWindow(context.event, context.before, context.after, {
+        before: beforeCount,
+        after: afterCount,
+    });
     return {
         event: eventToJson(context.event),
-        before: context.before.map(eventToJson),
-        after: context.after.map(eventToJson),
+        before: normalized.before.map(eventToJson),
+        after: normalized.after.map(eventToJson),
         parent: context.parent ? eventToJson(context.parent) : undefined,
         children: context.children.map(eventToJson),
+        window: normalized.window,
     };
 }
 function runGovern(kernel, args) {
@@ -440,16 +453,18 @@ function printHuman(command, payload) {
     const events = Array.isArray(payload.events) ? payload.events : [payload.event].filter(Boolean);
     for (const event of events) {
         const anchor = event.sourceAnchor;
-        console.log(`- ${event.eventId} ${event.role || 'unknown'} session=${anchor.sessionId || 'unknown'} ${event.text}`);
+        console.log(`- ${event.label || event.eventId} ${event.eventId} ${event.role || 'unknown'} session=${anchor.sessionId || 'unknown'} ${event.text}`);
     }
     if (command === 'show') {
+        if (payload.window)
+            console.log(`window: ${JSON.stringify(payload.window)}`);
         for (const label of ['before', 'after', 'children']) {
             const rows = Array.isArray(payload[label]) ? payload[label] : [];
             if (!rows.length)
                 continue;
             console.log(`${label}:`);
             for (const event of rows)
-                console.log(`- ${event.eventId} ${event.role || 'unknown'} ${event.text}`);
+                console.log(`- ${event.label || event.eventId} ${event.eventId} ${event.role || 'unknown'} ${event.text}`);
         }
     }
 }

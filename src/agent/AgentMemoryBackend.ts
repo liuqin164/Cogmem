@@ -1,4 +1,13 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
+import {
+  memoryEventCharRange,
+  memoryEventLabel,
+  memoryEventSourceRange,
+  normalizeSourceContextWindow,
+  type MemoryEventCharRange,
+  type MemoryEventSourceRange,
+  type SourceContextWindowMetadata,
+} from '../recall/SourceContextMetadata.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
 import {
@@ -79,6 +88,7 @@ export interface AgentRecallSourceAnchor {
 
 export interface AgentRecallSourceContextEvent {
   eventId: string;
+  label: string;
   role?: MemoryEvent['role'];
   rawEventType?: MemoryEvent['rawEventType'];
   eventType?: MemoryEvent['eventType'];
@@ -92,6 +102,9 @@ export interface AgentRecallSourceContextEvent {
   eventOrdinal?: number;
   occurredAt: number;
   localDate?: string;
+  charRange?: MemoryEventCharRange;
+  sourceRange?: MemoryEventSourceRange;
+  textLength: number;
   text: string;
 }
 
@@ -101,6 +114,7 @@ export interface AgentRecallSourceContext {
   after: AgentRecallSourceContextEvent[];
   parent?: AgentRecallSourceContextEvent;
   children: AgentRecallSourceContextEvent[];
+  window: SourceContextWindowMetadata;
   locator: {
     eventId: string;
     command: string;
@@ -1039,15 +1053,22 @@ export class KernelAgentMemoryBackend {
   }
 
   private toAgentSourceContext(eventId: string): AgentRecallSourceContext | undefined {
-    const context = this.kernel.getEventContext(eventId, { before: 2, after: 2 });
+    const beforeCount = 2;
+    const afterCount = 2;
+    const context = this.kernel.getEventContext(eventId, { before: beforeCount, after: afterCount });
     if (!context) return undefined;
+    const normalized = normalizeSourceContextWindow(context.event, context.before, context.after, {
+      before: beforeCount,
+      after: afterCount,
+    });
     const event = this.toAgentSourceContextEvent(context.event);
     return {
       event,
-      before: context.before.map((item) => this.toAgentSourceContextEvent(item)),
-      after: context.after.map((item) => this.toAgentSourceContextEvent(item)),
+      before: normalized.before.map((item) => this.toAgentSourceContextEvent(item)),
+      after: normalized.after.map((item) => this.toAgentSourceContextEvent(item)),
       parent: context.parent ? this.toAgentSourceContextEvent(context.parent) : undefined,
       children: context.children.map((item) => this.toAgentSourceContextEvent(item)),
+      window: normalized.window,
       locator: {
         eventId: event.eventId,
         command: `cogmem memory show --event ${event.eventId} --before 2 --after 2`,
@@ -1059,8 +1080,10 @@ export class KernelAgentMemoryBackend {
   }
 
   private toAgentSourceContextEvent(event: MemoryEvent): AgentRecallSourceContextEvent {
+    const text = this.eventText(event);
     return {
       eventId: event.eventId,
+      label: memoryEventLabel(event),
       role: event.role,
       rawEventType: event.rawEventType,
       eventType: event.eventType,
@@ -1074,7 +1097,10 @@ export class KernelAgentMemoryBackend {
       eventOrdinal: event.eventOrdinal,
       occurredAt: event.occurredAt,
       localDate: event.localDate,
-      text: this.eventText(event),
+      charRange: memoryEventCharRange(event),
+      sourceRange: memoryEventSourceRange(event),
+      textLength: text.length,
+      text,
     };
   }
 

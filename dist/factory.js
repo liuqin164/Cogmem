@@ -65,7 +65,7 @@ import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
 import { config } from './utils/Config.js';
 import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snapshot/index.js';
-const CORE_VERSION = '2.0.0';
+const CORE_VERSION = '2.5.0';
 const LATEST_SCHEMA_VERSION = 12;
 export class MemoryKernel {
     options;
@@ -425,6 +425,11 @@ export class MemoryKernel {
             parentEventId: input.parentEventId,
             prevEventId: input.prevEventId,
             causalityType: input.causalityType,
+            sourceOffset: input.sourceOffset,
+            lineStart: input.lineStart,
+            lineEnd: input.lineEnd,
+            charStart: input.charStart,
+            charEnd: input.charEnd,
             occurredAt,
             orderingConfidence: 'high',
             payload: {

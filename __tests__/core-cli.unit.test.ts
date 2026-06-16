@@ -609,7 +609,19 @@ test('memory CLI lists and shows raw ledger events with source anchors', async (
   expect(showError).toBe('');
   const shown = JSON.parse(showOutput);
   expect(shown.event.text).toBe('你能看到记忆内核中存储的记忆吗？还是说它是黑盒的');
+  expect(shown.event.label).toMatch(/^#/);
+  expect(shown.event.textLength).toBe('你能看到记忆内核中存储的记忆吗？还是说它是黑盒的'.length);
   expect(shown.after[0].role).toBe('assistant');
+  expect(shown.after[0].label).toMatch(/^#/);
+  expect(shown.window.before.requestedCount).toBe(0);
+  expect(shown.window.before.count).toBe(0);
+  expect(shown.window.before.excludesAnchor).toBe(true);
+  expect(shown.window.after.requestedCount).toBe(1);
+  expect(shown.window.after.count).toBe(1);
+  expect(shown.window.after.ordering).toBe('chronological');
+  expect(shown.window.after.roleFilter).toBe('all');
+  expect(shown.window.overlapEventIds).toEqual([]);
+  expect(shown.window.overlapHandling).toBe('drop_from_after');
 });
 
 test('memory CLI recall lets agents actively query governed memory with source context', async () => {

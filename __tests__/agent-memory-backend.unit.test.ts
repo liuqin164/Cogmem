@@ -381,6 +381,78 @@ test('agent backend compiled memory recall includes source locator and bounded s
   kernel.close();
 });
 
+test('agent backend source context annotates labels, source positions, and strict window semantics', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-source-window-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  kernel.recordRawEvent({
+    projectId: 'demo',
+    workspaceId: 'demo',
+    threadId: 'thread-source-window',
+    sessionId: 'session-source-window',
+    role: 'assistant',
+    rawEventType: 'message',
+    content: 'Before context from the previous turn.',
+    occurredAt: 1_700_000_000_000,
+    metadata: { messageId: 12694 },
+    sourceOffset: 1,
+    charStart: 0,
+    charEnd: 38,
+  });
+  const anchor = kernel.recordRawEvent({
+    projectId: 'demo',
+    workspaceId: 'demo',
+    threadId: 'thread-source-window',
+    sessionId: 'session-source-window',
+    role: 'user',
+    rawEventType: 'message',
+    content: 'Needle source quote: source windows must be exact and auditable.',
+    occurredAt: 1_700_000_001_000,
+    metadata: { messageId: 12695 },
+    sourceOffset: 2,
+    charStart: 39,
+    charEnd: 104,
+  });
+  kernel.recordRawEvent({
+    projectId: 'demo',
+    workspaceId: 'demo',
+    threadId: 'thread-source-window',
+    sessionId: 'session-source-window',
+    role: 'assistant',
+    rawEventType: 'message',
+    content: 'After context confirms the source locator contract.',
+    occurredAt: 1_700_000_002_000,
+    metadata: { messageId: 12696 },
+    sourceOffset: 3,
+    charStart: 105,
+    charEnd: 154,
+  });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    query: 'Needle source quote exact auditable',
+    limit: 3,
+  });
+
+  const item = recalled.items.find((candidate) => candidate.sourceAnchor?.eventId === anchor.eventId);
+  expect(item).toBeDefined();
+  expect(item?.sourceContext?.event.label).toBe('#12695');
+  expect(item?.sourceContext?.event.charRange).toEqual({ start: 39, end: 104 });
+  expect(item?.sourceContext?.event.textLength).toBe(anchor.payload.text.length);
+  expect(item?.sourceContext?.before.map((event) => event.label)).toContain('#12694');
+  expect(item?.sourceContext?.after.map((event) => event.label)).toContain('#12696');
+  expect(item?.sourceContext?.before.some((event) => event.eventId === anchor.eventId)).toBe(false);
+  expect(item?.sourceContext?.after.some((event) => event.eventId === anchor.eventId)).toBe(false);
+  expect(item?.sourceContext?.window.before.excludesAnchor).toBe(true);
+  expect(item?.sourceContext?.window.after.ordering).toBe('chronological');
+  expect(item?.sourceContext?.window.overlapEventIds).toEqual([]);
+  expect(item?.sourceContext?.window.overlapHandling).toBe('drop_from_after');
+
+  kernel.close();
+});
+
 test('agent backend forensic quote recall can use a prior raw source anchor for vague follow-up questions', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'agent-backend-followup-anchor-'));
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });

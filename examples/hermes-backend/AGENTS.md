@@ -127,6 +127,8 @@ cogmem memory show --event <event-id> --before 2 --after 2 --json
 
 `vectors: 0` does not mean Cogmem has no memory. It means the dense vector index has no hot vectors yet. `memory recall` still falls back to governed raw ledger search and returns `sourceContext` locators. Broad inventory questions are expanded into structured cues such as `库存管理`, `在库`, `产品コード`, and `数量`; if compiled-memory candidates miss those cues, raw ledger evidence is preferred.
 
+`sourceContext` and `memory show --json` now share the same replay contract: each event has a `label`, optional `charRange` / `sourceRange`, and `sourceContext.window` / `window` metadata with requested counts, actual counts, `excludesAnchor`, `ordering`, `roleFilter`, and `overlapHandling`. Use those fields before quoting exact wording or explaining what happened before/after a recalled point.
+
 Check status with:
 
 ```bash
