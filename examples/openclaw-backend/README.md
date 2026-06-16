@@ -140,7 +140,7 @@ cogmem memory show --event <eventId> --before 2 --after 2
 
 Do not quote `compiled_memory` or `imported_summary` items as user wording when `canAnswerExactQuote=false`.
 
-If automatic `# CogMem Retrieved Memory` injection is absent or too thin, the agent should actively query the kernel before saying it does not remember:
+If automatic `<COGMEM_RECALL_CONTEXT>` injection is absent or too thin, the agent should actively query the kernel before saying it does not remember:
 
 ```bash
 cogmem memory recall --query "<user question>" --project openclaw --agent openclaw --json
@@ -173,6 +173,14 @@ cogmem connect openclaw --workspace . --auto --force
 ```
 
 `--auto` installs `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables a local plugin wrapper with `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through the public `cogmem` API via a Bun bridge; core still does not import OpenClaw.
+
+The wrapper does not rewrite OpenClaw's native prompt, tool instructions, skills, or conversation order. It only prepends Cogmem-owned blocks:
+
+- `<COGMEM_RECALL_CONTEXT>`: volatile current-turn recall evidence. It is stripped before queued remember jobs are written.
+- `<COGMEM_TURN_BRIDGE>`: compact memory-use receipt for same-topic follow-ups, stored under `.cogmem/session_bridges/openclaw/`.
+- `<COGMEM_SESSION_STATE>`: short current-session working state, stored under `.cogmem/session_state/openclaw/`.
+
+Do not copy these blocks into long-term memory, dream candidates, or user preferences. If details are needed, re-run recall or inspect `sourceLocator`.
 
 If the package is updated later, repair the OpenClaw wiring with:
 

@@ -109,6 +109,16 @@ Imported Markdown records preserve line order and block ordinal when available. 
 
 Agent-facing recall items include `sourceAnchor` and, when available, `sourceContext`. `sourceContext` carries the raw event, bounded before/after events, parent/child links, strict window metadata, per-event labels, optional source/character ranges, and a local `cogmem memory show --event <eventId> --before 2 --after 2` locator. The before/after windows are chronological, exclude the anchor, and are de-duplicated with `overlapHandling: "drop_from_after"`. If `canAnswerExactQuote=false`, the item can still guide the agent to raw evidence, but it must not be quoted as user wording until the raw event is inspected.
 
+## Host Context Hygiene
+
+Host prompt injection is not a core memory tier. The OpenClaw wrapper uses three bounded, Cogmem-owned blocks without rewriting OpenClaw native context:
+
+- `<COGMEM_RECALL_CONTEXT>`: volatile current-turn recall evidence. It is stripped before raw ledger recording and must not be re-ingested.
+- `<COGMEM_TURN_BRIDGE>`: compact memory-use receipt for same-topic follow-ups. It is session sidecar state, not recalled evidence and not a dream/governance candidate.
+- `<COGMEM_SESSION_STATE>`: short current-session working state. It is useful for continuity but is not a user preference, belief, or durable compiled memory.
+
+Long-term compilation in `selective_compile` is driven by user text only. Assistant conclusions, tool results, task events, bridge text, session state, and recalled memory are evidence or sidecar state, not durable user-owned signals by default.
+
 ## External Mechanisms
 
 Compatible mechanisms translated into the kernel model:

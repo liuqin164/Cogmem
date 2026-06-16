@@ -71,8 +71,15 @@ export type {
  */
 export {
   compileAgentRecallQuery,
+  COGMEM_RECALL_BLOCK_RE,
+  createMemoryUsageReceipt,
+  formatMemoryUsageBridge,
+  formatSessionWorkingState,
   inferAgentRecallIntent,
   KernelAgentMemoryBackend,
+  shouldInjectMemoryUsageBridge,
+  stripCogmemRecallBlocks,
+  updateSessionWorkingState,
   type AgentRecallBeliefTouch,
   type AgentRecallEntityCard,
   type AgentRecallIntent,
@@ -92,6 +99,12 @@ export {
   type AgentTurnIngestMode,
   type AgentTurnMemory,
   type AgentTurnMemoryResult,
+  type CreateMemoryUsageReceiptInput,
+  type MemoryUsageReceipt,
+  type MemoryUsageReceiptSourceAnchor,
+  type SessionWorkingState,
+  type StripCogmemRecallBlocksResult,
+  type UpdateSessionWorkingStateInput,
 } from './agent/index.js';
 
 /**

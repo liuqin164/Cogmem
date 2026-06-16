@@ -1,3 +1,6 @@
 export { KernelAgentMemoryBackend, type AgentRecallBeliefTouch, type AgentRecallEntityCard, type AgentRecallItem, type AgentRecallPackResult, type AgentRecallPackSlots, type AgentRecallQuery, type AgentRecallResult, type AgentRecallSourceAnchor, type AgentRecallSourceContext, type AgentRecallSourceContextEvent, type AgentTaskEventMemory, type AgentToolCallMemory, type AgentToolObservationMemory, type AgentTurnCompileReason, type AgentTurnIngestMode, type AgentTurnMemory, type AgentTurnMemoryResult, } from './AgentMemoryBackend.js';
 export { compileAgentRecallQuery, inferAgentRecallIntent, type AgentRecallIntent, type AgentRecallQueryPlan, } from './AgentRecallQueryCompiler.js';
+export { COGMEM_RECALL_BLOCK_RE, stripCogmemRecallBlocks, type StripCogmemRecallBlocksResult, } from './ContextHygiene.js';
+export { createMemoryUsageReceipt, formatMemoryUsageBridge, shouldInjectMemoryUsageBridge, type CreateMemoryUsageReceiptInput, type MemoryUsageReceipt, type MemoryUsageReceiptSourceAnchor, } from './MemoryUsageReceipt.js';
+export { formatSessionWorkingState, updateSessionWorkingState, type SessionWorkingState, type UpdateSessionWorkingStateInput, } from './SessionWorkingState.js';
 //# sourceMappingURL=index.d.ts.map

@@ -5,6 +5,7 @@
 - Added explicit collection routing for agent recall so operational memory remains the default path while creative artifacts such as `collection:theseus` must be requested intentionally.
 - Added `cogmem memory map` / MCP `cogmem_memory_map` for agent and host self-inspection of raw ledger, compiled memory, recall routes, maintenance surfaces, and safety bounds.
 - Added `cogmem memory tick` / MCP `cogmem_maintenance_tick` for host-owned maintenance ticks with activation decay and upkeep suggestions, without starting hidden daemons.
+- Added OpenClaw context hygiene safeguards: volatile `<COGMEM_RECALL_CONTEXT>`, compact `<COGMEM_TURN_BRIDGE>`, session-only `<COGMEM_SESSION_STATE>`, recall-block stripping before remember, user-only `selective_compile` signals, and current-session compiled-memory exclusion.
 - Added labeled source-context replay metadata. Agent-facing `sourceContext` and `cogmem memory show --json` now expose per-event `label`, `textLength`, optional `charRange` / `sourceRange`, and strict before/after `window` metadata with anchor exclusion, chronological ordering, role filter, and overlap handling.
 - Changed OpenClaw automatic memory injection to render `sourceWindow`, labeled `sourceBefore` / `sourceAfter`, and `sourceTruncation` metadata so agents can cross-reference injected memory with raw ledger drill-down before quoting exact text.
 - Added raw source position propagation from imported source refs into raw ledger events when source offset, line range, or character range is available.
