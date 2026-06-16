@@ -277,6 +277,14 @@ The wrapper registers:
 - `before_prompt_build`: governed recall and prompt context injection.
 - `agent_end`: queued turn recording so slow embedding/database writes do not block responses.
 
+The automatic wrapper keeps OpenClaw's native prompt untouched. Cogmem only prepends its own bounded memory layer:
+
+- `<COGMEM_SESSION_STATE>` is compact current-session working state stored under `.cogmem/session_state/openclaw/`.
+- `<COGMEM_TURN_BRIDGE>` is a short-lived receipt of which memory anchors supported the prior answer, stored under `.cogmem/session_bridges/openclaw/`.
+- `<COGMEM_RECALL_CONTEXT>` is full recall evidence for the current turn only. It is stripped before turn recording and must not be persisted or re-ingested as new memory.
+
+By default, `selective_compile` uses user text as the durable compile signal, excludes current-session compiled memory during recall, injects at most three memory items, and omits full source-window text unless the plugin config enables it.
+
 After updates or config drift:
 
 ```bash
@@ -400,7 +408,7 @@ If `canAnswerExactQuote=false`, the agent must not present the item as the user'
 cogmem memory show --event <eventId> --before 2 --after 2 --json
 ```
 
-`memory show --json` uses the same source context contract. Its `before` and `after` arrays strictly exclude the anchor event, remain chronological, and are de-duplicated. The `window` object reports `requestedCount`, `count`, `excludesAnchor`, `roleFilter`, `ordering`, `overlapEventIds`, and `overlapHandling`. OpenClaw automatic prompt injection renders the same metadata as `sourceWindow`, labels each `sourceBefore` / `sourceAfter` event with `#...`, and adds `sourceTruncation` details when an injected source line is shortened.
+`memory show --json` uses the same source context contract. Its `before` and `after` arrays strictly exclude the anchor event, remain chronological, and are de-duplicated. The `window` object reports `requestedCount`, `count`, `excludesAnchor`, `roleFilter`, `ordering`, `overlapEventIds`, and `overlapHandling`. OpenClaw automatic prompt injection renders this metadata inside `<COGMEM_RECALL_CONTEXT>` as `sourceWindow` and `sourceTruncation`; full `sourceBefore` / `sourceAfter` text is omitted by default and should be requested through `sourceLocator` before quoting exact wording.
 
 ## TypeScript API
 

@@ -325,8 +325,9 @@ export class KernelAgentMemoryBackend {
       `User: ${turn.userText}`,
       turn.assistantText ? `Agent: ${turn.assistantText}` : '',
     ].filter(Boolean).join('\n');
+    const compileSignalText = `User: ${turn.userText}`;
 
-    const decision = this.shouldCompileTurn(mode, content);
+    const decision = this.shouldCompileTurn(mode, compileSignalText);
     const rawEventIds = [userEvent, assistantEvent].filter(Boolean).map((event) => event!.eventId);
     if (!decision.compile) {
       return {
@@ -478,7 +479,7 @@ export class KernelAgentMemoryBackend {
       startTime: query.startTime,
       endTime: query.endTime,
     });
-    const scopedItems = this.filterAgentEvidence(result.rawEvidence, query.agentId, query.collection)
+    const scopedItems = this.filterAgentEvidence(result.rawEvidence, query.agentId, query.collection, query.excludeSessionId)
       .slice(0, limit)
       .map((neuron) => this.toAgentRecallItem(neuron));
     if (scopedItems.length > 0) {
@@ -511,7 +512,7 @@ export class KernelAgentMemoryBackend {
       projectId: query.projectId,
       limit: retrievalLimit,
     });
-    const fallbackItems = this.filterAgentEvidence(fallback.rawEvidence, query.agentId, query.collection)
+    const fallbackItems = this.filterAgentEvidence(fallback.rawEvidence, query.agentId, query.collection, query.excludeSessionId)
       .slice(0, limit)
       .map((neuron) => this.toAgentRecallItem(neuron));
     if (fallbackItems.length > 0) {
@@ -584,9 +585,14 @@ export class KernelAgentMemoryBackend {
     const beliefTouches = this.buildBeliefTouches(query);
     const activationHotspots = this.kernel.activationStore.getTop({
       projectId: query.projectId,
-      limit: 8,
+      limit: 16,
       excludeNeuronIds: direct.map((item) => item.id),
-    });
+    }).filter((hotspot) => {
+      const neuron = this.kernel.memoryGraph.getNeuron(hotspot.neuronId);
+      return neuron
+        ? this.filterAgentEvidence([neuron], query.agentId, query.collection, query.excludeSessionId).length > 0
+        : false;
+    }).slice(0, 8);
 
     return {
       ...result,
@@ -903,11 +909,13 @@ export class KernelAgentMemoryBackend {
   private filterAgentEvidence(
     neurons: MemoryKernelNavigationResult['rawEvidence'],
     agentId: string,
-    collection?: string
+    collection?: string,
+    excludeSessionId?: string,
   ): MemoryKernelNavigationResult['rawEvidence'] {
     return neurons.filter((neuron) => {
       if (!isRecallableMemoryEvidence(neuron)) return false;
       const tags = neuron.metadata.tags || [];
+      if (excludeSessionId && tags.includes(`session:${excludeSessionId}`)) return false;
       if (!this.isAllowedCollectionTags(tags, collection)) return false;
       const explicitAgentTags = tags.filter((tag) => tag.startsWith('agent:'));
       if (explicitAgentTags.length === 0) return true;
@@ -1178,7 +1186,7 @@ export class KernelAgentMemoryBackend {
         if (seen.has(synapse.targetId)) continue;
         const neuron = this.kernel.memoryGraph.getNeuron(synapse.targetId);
         if (!neuron) continue;
-        if (this.filterAgentEvidence([neuron], query.agentId, query.collection).length === 0) continue;
+        if (this.filterAgentEvidence([neuron], query.agentId, query.collection, query.excludeSessionId).length === 0) continue;
         this.kernel.activationStore.touch({
           neuronId: neuron.id,
           projectId: neuron.metadata.projectId || query.projectId,
@@ -1200,7 +1208,7 @@ export class KernelAgentMemoryBackend {
     for (const hotspot of hotspots) {
       const neuron = this.kernel.memoryGraph.getNeuron(hotspot.neuronId);
       if (!neuron) continue;
-      if (this.filterAgentEvidence([neuron], query.agentId, query.collection).length === 0) continue;
+      if (this.filterAgentEvidence([neuron], query.agentId, query.collection, query.excludeSessionId).length === 0) continue;
       out.push(this.toAgentRecallItem(neuron));
       seen.add(neuron.id);
       if (out.length >= 4) return out;

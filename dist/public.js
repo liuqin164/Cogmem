@@ -25,7 +25,7 @@ export { defaultCogmemConfigPath, defaultCogmemHome, loadCogmemConfig, resolveCo
  * Agent framework integration facade.
  * @stable @since 2.0.0
  */
-export { compileAgentRecallQuery, inferAgentRecallIntent, KernelAgentMemoryBackend, } from './agent/index.js';
+export { compileAgentRecallQuery, COGMEM_RECALL_BLOCK_RE, createMemoryUsageReceipt, formatMemoryUsageBridge, formatSessionWorkingState, inferAgentRecallIntent, KernelAgentMemoryBackend, shouldInjectMemoryUsageBridge, stripCogmemRecallBlocks, updateSessionWorkingState, } from './agent/index.js';
 /**
  * Core recall pipeline.
  * @stable @since 1.0.0

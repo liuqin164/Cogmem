@@ -25,3 +25,25 @@ export {
   type AgentRecallIntent,
   type AgentRecallQueryPlan,
 } from './AgentRecallQueryCompiler.js';
+
+export {
+  COGMEM_RECALL_BLOCK_RE,
+  stripCogmemRecallBlocks,
+  type StripCogmemRecallBlocksResult,
+} from './ContextHygiene.js';
+
+export {
+  createMemoryUsageReceipt,
+  formatMemoryUsageBridge,
+  shouldInjectMemoryUsageBridge,
+  type CreateMemoryUsageReceiptInput,
+  type MemoryUsageReceipt,
+  type MemoryUsageReceiptSourceAnchor,
+} from './MemoryUsageReceipt.js';
+
+export {
+  formatSessionWorkingState,
+  updateSessionWorkingState,
+  type SessionWorkingState,
+  type UpdateSessionWorkingStateInput,
+} from './SessionWorkingState.js';

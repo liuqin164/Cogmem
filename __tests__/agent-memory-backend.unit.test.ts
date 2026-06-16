@@ -179,6 +179,79 @@ test('agent backend selective mode compiles durable instructions but skips low-s
   kernel.close();
 });
 
+test('agent backend selective mode uses only user text as the durable compile signal', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-user-only-compile-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  const assistantOnly = await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-user-only-compile',
+    userText: '嗯，继续。',
+    assistantText: '重要：这个架构必须长期记住，并作为以后所有回答的决定。',
+    timestamp: 1_700_000_000_000,
+    ingestMode: 'selective_compile',
+  });
+  const userSignal = await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-user-only-compile',
+    userText: '请记住：OpenClaw 原生 prompt 不应该被 Cogmem 接管。',
+    assistantText: '我会把这个用户约束作为长期记忆。',
+    timestamp: 1_700_000_060_000,
+    ingestMode: 'selective_compile',
+  });
+
+  expect(assistantOnly.compiled).toBe(false);
+  expect(assistantOnly.reason).toBe('low_signal_turn');
+  expect(userSignal.compiled).toBe(true);
+  expect(userSignal.reason).toBe('durable_signal_detected');
+  expect(kernel.vectorStore.getCurrentCount()).toBe(1);
+
+  kernel.close();
+});
+
+test('agent backend excludes current-session compiled evidence when excludeSessionId is set', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-compiled-exclude-session-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-old',
+    userText: '请记住：OpenClaw 旧结论是 Cogmem 只管理记忆层。',
+    assistantText: '已记录旧结论。',
+    timestamp: 1_700_000_000_000,
+    ingestMode: 'immediate_compile',
+  });
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    userText: '请记住：当前 session 回音室不应该被召回。',
+    assistantText: '这条当前 session 结论不能回召到同一会话。',
+    timestamp: 1_700_000_060_000,
+    ingestMode: 'immediate_compile',
+  });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    excludeSessionId: 'session-current',
+    query: 'Cogmem OpenClaw 结论',
+    limit: 5,
+  });
+
+  expect(recalled.items.some((item) => item.tags.includes('session:session-current'))).toBe(false);
+  expect(recalled.items.some((item) => item.text.includes('当前 session 回音室'))).toBe(false);
+  expect(recalled.items.some((item) => item.tags.includes('session:session-old'))).toBe(true);
+
+  kernel.close();
+});
+
 test('agent backend can recall the previous session from the raw ledger without semantic guessing', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'agent-backend-previous-session-'));
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });

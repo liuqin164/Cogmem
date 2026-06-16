@@ -764,6 +764,10 @@ test('README documents complete import usage including single files, batches, an
   expect(readme).toContain('--session ./one.md --session ./two.md');
   expect(readme).toContain('dry-run');
   expect(readme).toContain('Imported records are embedded through the configured kernel embedder');
+  expect(readme).toContain('<COGMEM_RECALL_CONTEXT>');
+  expect(readme).toContain('<COGMEM_TURN_BRIDGE>');
+  expect(readme).toContain('<COGMEM_SESSION_STATE>');
+  expect(readme).toContain('selective_compile` uses user text as the durable compile signal');
 });
 
 test('agent-facing skill files tell OpenClaw and Hermes agents how to self-install, migrate, and recall', async () => {
@@ -796,7 +800,11 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
   expect(openclaw).toContain('Queued remember');
   expect(openclaw).toContain('cogmem explain-recall --query');
   expect(openclaw).toContain('cogmem memory recall --query');
-  expect(openclaw).toContain('If CogMem Retrieved Memory is absent');
+  expect(openclaw).toContain('If `<COGMEM_RECALL_CONTEXT>` is absent');
+  expect(openclaw).toContain('<COGMEM_TURN_BRIDGE>');
+  expect(openclaw).toContain('<COGMEM_SESSION_STATE>');
+  expect(openclaw).toContain('compileSignalSource = "user_only"');
+  expect(openclaw).toContain('excludeCurrentSessionCompiledMemory = true');
   expect(openclaw).toContain('sourceAnchor');
   expect(openclaw).toContain('filteredEvidence');
   expect(openclaw).toContain('--session ./one.md --session ./two.md');
@@ -897,7 +905,18 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(indexBody).toContain('function classifyRecallIntent(query)');
   expect(indexBody).toContain('const intent = classifyRecallIntent(query)');
   expect(indexBody).toContain('anchorEventId: anchor && anchor.eventId');
-  expect(indexBody).toContain('excludeSessionId: sessionId');
+  expect(indexBody).toContain('excludeSessionId: config.excludeCurrentSessionCompiledMemory === false ? undefined : sessionId');
+  expect(indexBody).toContain('function stripCogmemRecallBlocks(text)');
+  expect(indexBody).toContain('function shouldInjectTurnBridge(query, receipt, config)');
+  expect(indexBody).toContain('COGMEM_TURN_BRIDGE');
+  expect(indexBody).toContain('COGMEM_SESSION_STATE');
+  expect(indexBody).toContain('session_bridges');
+  expect(indexBody).toContain('session_state');
+  expect(indexBody).toContain('cleanUser');
+  expect(indexBody).toContain('cleanAssistant');
+  expect(indexBody).toContain('lastRecallForSession');
+  expect(indexBody).toContain('lastRecallForSession.delete(sessionId)');
+  expect(indexBody).toContain('recallItems.length > 0 || recall.context');
   expect(readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8')).toContain('KernelAgentMemoryBackend');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
   expect(manifest.configSchema.type).toBe('object');
@@ -908,6 +927,19 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(manifest.configSchema.properties.rememberStrategy.enum).toContain('queued');
   expect(manifest.configSchema.properties.rememberQueuePath.type).toBe('string');
   expect(manifest.configSchema.properties.auditLog.type).toBe('boolean');
+  expect(manifest.configSchema.properties.stripRecallBlocksBeforeRemember.type).toBe('boolean');
+  expect(manifest.configSchema.properties.compileSignalSource.enum).toContain('user_only');
+  expect(manifest.configSchema.properties.excludeCurrentSessionCompiledMemory.type).toBe('boolean');
+  expect(manifest.configSchema.properties.memoryContextMaxChars.type).toBe('number');
+  expect(manifest.configSchema.properties.memoryContextMaxItems.type).toBe('number');
+  expect(manifest.configSchema.properties.sourceWindowMaxChars.type).toBe('number');
+  expect(manifest.configSchema.properties.includeSourceWindowByDefault.type).toBe('boolean');
+  expect(manifest.configSchema.properties.turnBridgeEnabled.type).toBe('boolean');
+  expect(manifest.configSchema.properties.turnBridgeMaxTurns.type).toBe('number');
+  expect(manifest.configSchema.properties.turnBridgeMaxChars.type).toBe('number');
+  expect(manifest.configSchema.properties.turnBridgeInjectPolicy.enum).toContain('same_topic_only');
+  expect(manifest.configSchema.properties.sessionStateEnabled.type).toBe('boolean');
+  expect(manifest.configSchema.properties.sessionStateMaxChars.type).toBe('number');
 
   const openclawConfig = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
   expect(openclawConfig.plugins.load.paths).toContain(pluginDir);
@@ -919,8 +951,24 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.rememberStrategy).toBe('queued');
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.auditLog).toBe(true);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.publicEntrypoint).toContain('public.js');
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.limit).toBe(3);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.maxQueryChars).toBe(1200);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.maxAssistantChars).toBe(6000);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.stripRecallBlocksBeforeRemember).toBe(true);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.compileSignalSource).toBe('user_only');
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.excludeCurrentSessionCompiledMemory).toBe(true);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.memoryContextMaxChars).toBe(3500);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.memoryContextMaxItems).toBe(3);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.sourceWindowMaxChars).toBe(1200);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.includeSourceWindowByDefault).toBe(false);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeEnabled).toBe(true);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeMaxTurns).toBe(3);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeMaxChars).toBe(1200);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeInjectPolicy).toBe('same_topic_only');
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.sessionStateEnabled).toBe(true);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.sessionStateMaxChars).toBe(1800);
   expect(indexBody).toContain("openclaw-auto-memory.jsonl");
-  expect(indexBody).toContain("action: recalled.context ? 'inject' : 'skip'");
+  expect(indexBody).toContain("action: context ? 'inject' : 'skip'");
   expect(indexBody).toContain('function enqueueRememberJob(config, payload)');
   expect(indexBody).toContain("action: 'enqueue_remember'");
   expect(indexBody).toContain("spawnBridgeDrain(config)");
@@ -935,7 +983,12 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(bridgeBody).toContain('ingestToolCall');
   expect(bridgeBody).toContain('ingestToolObservation');
   expect(bridgeBody).toContain('ingestTaskEvent');
-  expect(bridgeBody).toContain('# CogMem Retrieved Memory');
+  expect(bridgeBody).toContain('function stripCogmemRecallBlocks(text)');
+  expect(bridgeBody).toContain('hygiene');
+  expect(bridgeBody).toContain('<COGMEM_RECALL_CONTEXT');
+  expect(bridgeBody).toContain('persistence="forbidden"');
+  expect(bridgeBody).toContain('lifecycle="current_turn_only"');
+  expect(bridgeBody).toContain('This block must not be persisted or re-ingested as new memory.');
   expect(bridgeBody).toContain('sourceType');
   expect(bridgeBody).toContain('canAnswerExactQuote=false');
   expect(bridgeBody).toContain('sourceContext');
@@ -945,8 +998,15 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(bridgeBody).toContain('overlapHandling');
   expect(bridgeBody).toContain('uniqueWindowEvents');
   expect(bridgeBody).toContain('cogmem memory show --event');
-  expect(bridgeBody).toContain('Current conversation context is separate');
+  expect(bridgeBody).toContain('Use it only as current-turn background memory.');
   expect(bridgeBody).toContain("intent: input.intent || 'memory_recall'");
+
+  const indexCheck = await runCli(['node', '--check', join(pluginDir, 'index.js')]);
+  expect(indexCheck.stderr).toBe('');
+  expect(indexCheck.exitCode).toBe(0);
+  const bridgeCheck = await runCli(['node', '--check', join(pluginDir, 'bridge.mjs')]);
+  expect(bridgeCheck.stderr).toBe('');
+  expect(bridgeCheck.exitCode).toBe(0);
 });
 
 test('doctor --fix can repair OpenClaw automatic memory wiring', async () => {

@@ -37,6 +37,8 @@ cogmem memory recall --query "<user question>" --project <project> --agent <agen
 
 This command returns `queryPlan`, `items`, `sourceAnchor`, and `sourceContext`. It is the preferred fallback before searching legacy host files.
 
+OpenClaw automatic injection wraps full recall evidence in `<COGMEM_RECALL_CONTEXT>`. That block is current-turn-only background memory, not current user intent and not raw ledger history. The wrapper strips it before recording turns. If the prompt also contains `<COGMEM_TURN_BRIDGE>` or `<COGMEM_SESSION_STATE>`, treat those as compact session sidecars for continuity only; re-run recall or inspect `sourceLocator` before relying on detailed evidence.
+
 `--collection <name>` scopes recall to a named collection. Default recall only includes untagged and `collection:anchor` memory. Use `--collection theseus` for creative artifacts or drafts that should not enter normal operational recall.
 
 MCP `cogmem_recall` now uses this same agent-facing path. It returns `items` with `sourceType`, `sourceAnchor`, `sourceContext`, `canAnswerExactQuote`, and raw ledger fallback when governed compiled evidence is empty. If a host sends only `projectId`, MCP uses that value as `agentId` before falling back to `openclaw`. Hosts may also pass `collection`.
