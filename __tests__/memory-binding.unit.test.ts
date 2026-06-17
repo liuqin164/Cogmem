@@ -47,6 +47,252 @@ test('memory binding groups valuable user events under a stable topic path', asy
   rmSync(dir, { recursive: true, force: true });
 });
 
+test('binding classifier generalizes project topics beyond Cogmem-specific rules', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-general-topic-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'general-topic-session',
+    userText: 'MoneyPrinterTurbo 项目的插件架构必须保持本地优先，并且要把渲染队列分类清楚。',
+    assistantText: '这应归到 MoneyPrinterTurbo 的项目架构主题，而不是 Cogmem 专项规则。',
+    ingestMode: 'raw_archive_only',
+  });
+
+  const bindings = kernel.listMemoryBindings({
+    projectId: 'demo',
+    topicPath: 'PROJECT/MoneyPrinterTurbo/architecture',
+  });
+  expect(bindings).toHaveLength(1);
+  expect(bindings[0].entityName).toBe('MoneyPrinterTurbo');
+  expect(bindings[0].bindingType).toBe('boundary');
+
+  kernel.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('memory binding backfills valuable raw user events written outside agent turns', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-backfill-'));
+  const dbPath = join(dir, 'memory.db');
+  const kernel = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
+
+  const event = kernel.recordRawEvent({
+    projectId: 'demo',
+    workspaceId: 'demo',
+    threadId: 'import-thread',
+    sessionId: 'import-session',
+    role: 'user',
+    sourceId: 'imported-history',
+    content: 'MoneyPrinterTurbo 项目的部署策略需要离线优先，并且按照发布事件做时间线分类。',
+  });
+  expect(kernel.listMemoryBindings({ projectId: 'demo' })).toHaveLength(0);
+
+  const result = kernel.bindRawEvents({
+    projectId: 'demo',
+    sinceGlobalSeq: Math.max(0, (event.globalSeq || 0) - 1),
+    limit: 50,
+  });
+  expect(result.scannedEvents).toBe(1);
+  expect(result.boundEvents).toBe(1);
+  expect(result.createdBindings).toBeGreaterThanOrEqual(1);
+
+  const bindings = kernel.listMemoryBindings({ projectId: 'demo' });
+  expect(bindings.length).toBeGreaterThanOrEqual(1);
+  expect(bindings[0].eventId).toBe(event.eventId);
+
+  const proc = Bun.spawn([
+    process.execPath,
+    'src/bin/memory.ts',
+    'bind',
+    '--db',
+    dbPath,
+    '--project',
+    'demo',
+    '--since',
+    String(event.globalSeq || 0),
+    '--json',
+  ], { cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe' });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  expect(exitCode).toBe(0);
+  expect(stderr).toBe('');
+  const payload = JSON.parse(stdout) as { skippedAlreadyBound: number };
+  expect(payload.skippedAlreadyBound).toBeGreaterThanOrEqual(1);
+
+  kernel.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('binding failures are non-fatal but observable through pipeline metrics and maintenance tick', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-failure-metrics-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const original = kernel.bindMemoryEvent.bind(kernel);
+  kernel.bindMemoryEvent = () => {
+    throw new Error('simulated binding breakage');
+  };
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'failure-session',
+    userText: 'Cogmem memory write pipeline 必须在失败时暴露绑定错误。',
+    assistantText: 'Raw ledger must remain authoritative.',
+    ingestMode: 'raw_archive_only',
+  });
+
+  expect(kernel.pipelineMetrics.getNonFatalCount('memory_binding_failed', { projectId: 'demo' })).toBe(1);
+  const tick = kernel.runMaintenanceTick({ projectId: 'demo' });
+  expect(tick.chargeVector.bindingFailures).toBe(1);
+  expect(tick.suggestedActions.some((action) => action.kind === 'inspect_binding_failures')).toBe(true);
+
+  kernel.bindMemoryEvent = original;
+  kernel.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('claim-key clusters prevent over-fusing different diagnostics under one topic', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-claim-key-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'claim-key-session',
+    timestamp: 1000,
+    userText: 'Cogmem memory write pipeline 的问题是写入不看历史，所以每句话都像孤立表格。',
+    assistantText: '记录历史绑定诊断。',
+    ingestMode: 'raw_archive_only',
+  });
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'claim-key-session',
+    timestamp: 2000,
+    userText: 'Cogmem memory write pipeline 的另一个问题是分类树漂移，memory-storage 和 memory-write 会乱分。',
+    assistantText: '记录分类漂移诊断。',
+    ingestMode: 'raw_archive_only',
+  });
+
+  const clusters = kernel.listMemoryClusters({
+    projectId: 'demo',
+    topicPath: 'PROJECT/Cogmem/memory-write-pipeline',
+    clusterType: 'diagnostic',
+  });
+  expect(clusters.length).toBeGreaterThanOrEqual(2);
+  expect(new Set(clusters.map((cluster) => cluster.claimKey)).size).toBe(clusters.length);
+
+  kernel.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('corrections create explicit correction edges without poisoning active clusters', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-correction-edges-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'correction-edge-session',
+    timestamp: 1000,
+    userText: 'Cogmem memory write pipeline 的诊断是写入不看历史，需要先绑定旧记忆。',
+    assistantText: '记录诊断。',
+    ingestMode: 'raw_archive_only',
+  });
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'correction-edge-session',
+    timestamp: 2000,
+    userText: '纠正：Cogmem memory write pipeline 不是写入不看历史的问题，真正问题是分类树漂移。',
+    assistantText: '记录纠正。',
+    ingestMode: 'raw_archive_only',
+  });
+
+  const correction = kernel.listMemoryBindings({
+    projectId: 'demo',
+    topicPath: 'PROJECT/Cogmem/memory-write-pipeline',
+    bindingType: 'correction',
+  })[0];
+  expect(correction.bindingAction).toBe('corrects_prior_memory');
+  expect(correction.relatedEventIds.length).toBeGreaterThan(0);
+
+  const correctionEdges = kernel.listMemoryEdges({
+    projectId: 'demo',
+    sourceId: correction.eventId,
+    relationType: 'CORRECTS',
+  });
+  expect(correctionEdges.length).toBeGreaterThanOrEqual(1);
+
+  const clusters = kernel.listMemoryClusters({
+    projectId: 'demo',
+    topicPath: 'PROJECT/Cogmem/memory-write-pipeline',
+  });
+  expect(clusters.some((cluster) => cluster.clusterType === 'diagnostic' && cluster.status === 'active')).toBe(true);
+  expect(clusters.some((cluster) => cluster.clusterType === 'correction' && cluster.reviewFlags.includes('possible_conflict'))).toBe(true);
+
+  kernel.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('graph recall ranks query-matching anchors ahead of older cluster evidence', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-rerank-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'rerank-session',
+    timestamp: 1000,
+    userText: 'Cogmem memory write pipeline 的问题是写入不看历史，像孤立表格。',
+    assistantText: '记录历史绑定诊断。',
+    ingestMode: 'raw_archive_only',
+  });
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'rerank-session',
+    timestamp: 2000,
+    userText: 'Cogmem memory write pipeline 的问题是分类树漂移，memory-storage 和 memory-write 会乱分。',
+    assistantText: '记录分类树漂移诊断。',
+    ingestMode: 'raw_archive_only',
+  });
+
+  const recall = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    query: '之前说分类树漂移 memory-storage memory-write 是什么问题？',
+    limit: 1,
+  });
+
+  expect(recall.items[0].whyMatched).toBe('memory_binding_graph');
+  expect(recall.items[0].text).toContain('分类树漂移');
+
+  kernel.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('memory binding sidecar schema is governed by schema version 13', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-schema-version-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+
+  const row = kernel.factStore.getDatabase().prepare(`
+    SELECT value FROM _meta WHERE key = 'schema_version'
+  `).get() as { value: string };
+  expect(Number(row.value)).toBeGreaterThanOrEqual(13);
+
+  kernel.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test('memory binding performs historical binding and cluster fusion for same-topic events', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-cluster-fusion-'));
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
@@ -94,7 +340,7 @@ test('memory binding performs historical binding and cluster fusion for same-top
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('memory binding marks corrections as possible conflicts without overwriting prior clusters', async () => {
+test('memory binding marks corrections with review flags without overwriting prior clusters', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-correction-'));
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
@@ -123,7 +369,7 @@ test('memory binding marks corrections as possible conflicts without overwriting
     topicPath: 'PROJECT/Cogmem/memory-write-pipeline',
   });
   const correction = bindings.find((binding) => binding.bindingType === 'correction');
-  expect(correction?.bindingAction).toBe('possible_conflict');
+  expect(correction?.bindingAction).toBe('corrects_prior_memory');
   expect(correction?.relatedEventIds.length).toBeGreaterThan(0);
 
   const clusters = kernel.listMemoryClusters({
@@ -131,7 +377,7 @@ test('memory binding marks corrections as possible conflicts without overwriting
     topicPath: 'PROJECT/Cogmem/memory-write-pipeline',
   });
   expect(clusters.some((cluster) => cluster.status === 'active')).toBe(true);
-  expect(clusters.some((cluster) => cluster.status === 'possible_conflict')).toBe(true);
+  expect(clusters.some((cluster) => cluster.clusterType === 'correction' && cluster.reviewFlags.includes('possible_conflict'))).toBe(true);
 
   kernel.close();
   rmSync(dir, { recursive: true, force: true });

@@ -1,3 +1,5 @@
+export { BindingClassifier, normalizeForBinding } from './BindingClassifier.js';
+export type { BindingTopicDecision } from './BindingClassifier.js';
 export { MemoryBindingService } from './MemoryBindingService.js';
 export type { MemoryBindingEventInput } from './MemoryBindingService.js';
 export type {
@@ -11,6 +13,7 @@ export type {
   MemoryClusterListOptions,
   MemoryClusterRecord,
   MemoryClusterStatus,
+  MemoryEdgeListOptions,
   MemoryEdgeRecord,
   MemoryEdgeRelation,
   MemoryEntityRecord,

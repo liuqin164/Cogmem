@@ -135,7 +135,8 @@ Recall behavior:
 - Use `recall.temporalTraversal?.labels` when the user refers to a day, session, or adjacent work period.
 - Do not run a separate vector search before calling `memory.recall()`. The backend is the first-class memory retrieval path.
 - For each item with `sourceContext`, use event `label` values, optional `charRange` / `sourceRange`, and `sourceContext.window` to understand before/after semantics. Windows are chronological, exclude the anchor, and report overlap handling instead of relying on guesswork.
-- Use `cogmem memory map --project openclaw --json` to inspect Memory Binding and Graph Recall counters. Bindings attach high-value user raw events to stable topic/entity paths, fuse same-topic clusters, and create graph anchors for source drill-down only; they are not verified facts, user preferences, or instructions.
+- Use `cogmem memory map --project openclaw --json` to inspect Memory Binding and Graph Recall counters. Bindings attach high-value user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down only; they are not verified facts, user preferences, or instructions. Correction bindings expose review flags and `CORRECTS` / `CONTRADICTS` edges; inspect the raw ledger before relying on them.
+- If `cogmem memory tick --project openclaw --json` suggests `bind_raw_events`, run `cogmem memory bind --project openclaw --json` to backfill imported or adapter-written raw user events into the binding graph.
 
 Installing the workspace skill makes the kernel procedure discoverable to OpenClaw agents. Installing the local auto wrapper makes future turns call the memory kernel automatically:
 

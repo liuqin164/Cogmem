@@ -77,7 +77,7 @@ Metadata / FTS Index
   Lightweight keyword, source, time, project, and thread indexing for exact lookup.
 
 Memory Binding
-  Deterministic raw-event bindings to stable entity/topic paths, fused clusters, and graph edges for source-anchored organization before fact promotion.
+  Deterministic raw-event bindings to stable entity/topic paths, claim-key clusters, and graph edges for source-anchored organization before fact promotion.
 
 Compiled Memory
   Governed summaries, preferences, constraints, goals, lessons, diagnostics, and topic memories.
@@ -185,11 +185,14 @@ Inspect the memory anatomy and run one explicit host-owned upkeep tick:
 ```bash
 cogmem memory map --project my-agent --json
 cogmem memory tick --project my-agent --json
+cogmem memory bind --project my-agent --json
 ```
 
-`memory tick` decays activation and returns suggested host actions. It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
+`memory tick` decays activation and returns suggested host actions. It reports high-value raw user events that have not been attached to Memory Binding yet and non-fatal binding failures that did not block raw ledger writes. It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
 
-`memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths before any fact promotion, fuse same-topic evidence into clusters, and create graph anchors for source drill-down. Treat bindings, clusters, and graph edges as organization hints, not as verified long-term facts.
+`memory bind` backfills Memory Binding for raw user events written outside the agent turn path, including imported OpenClaw/Hermes history and adapter-written raw events. Use `--since <globalSeq>` to resume from a known ledger sequence.
+
+`memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths before any fact promotion, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down. Correction events create explicit correction edges and review flags instead of poisoning the active cluster. Treat bindings, clusters, and graph edges as organization hints, not as verified long-term facts.
 
 ## Import Existing Agent Memory
 

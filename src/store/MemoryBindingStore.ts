@@ -7,6 +7,7 @@ import type {
   MemoryBindingStats,
   MemoryClusterListOptions,
   MemoryClusterRecord,
+  MemoryEdgeListOptions,
   MemoryEdgeRecord,
   MemoryEdgeRelation,
   MemoryEntityRecord,
@@ -38,7 +39,9 @@ export interface UpsertMemoryClusterInput {
   clusterType: MemoryClusterRecord['clusterType'];
   title: string;
   summary: string;
+  claimKey: string;
   status: MemoryClusterRecord['status'];
+  reviewFlags?: string[];
   confidence: number;
   eventId: string;
   now?: number;
@@ -144,11 +147,12 @@ export class MemoryBindingStore {
     this.db.prepare(`
       INSERT INTO memory_bindings (
         binding_id, event_id, project_id, role, raw_event_type, entity_id, entity_name, entity_type,
-        topic_path, binding_type, confidence, source, signal, binding_action, cluster_id, related_event_ids_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        topic_path, binding_type, confidence, source, signal, claim_key, binding_action, cluster_id, related_event_ids_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(binding_id) DO UPDATE SET
         confidence = excluded.confidence,
         signal = excluded.signal,
+        claim_key = excluded.claim_key,
         binding_action = excluded.binding_action,
         cluster_id = excluded.cluster_id,
         related_event_ids_json = excluded.related_event_ids_json
@@ -166,6 +170,7 @@ export class MemoryBindingStore {
       input.confidence,
       input.source,
       input.signal,
+      input.claimKey,
       input.bindingAction || 'create_new_cluster',
       input.clusterId || null,
       JSON.stringify(input.relatedEventIds || []),
@@ -185,6 +190,7 @@ export class MemoryBindingStore {
       confidence: input.confidence,
       source: input.source,
       signal: input.signal,
+      claimKey: input.claimKey,
       bindingAction: input.bindingAction || 'create_new_cluster',
       clusterId: input.clusterId,
       relatedEventIds: input.relatedEventIds || [],
@@ -194,25 +200,32 @@ export class MemoryBindingStore {
 
   upsertCluster(input: UpsertMemoryClusterInput): MemoryClusterRecord {
     const now = input.now ?? Date.now();
-    const clusterId = clusterIdFor(input.projectId, input.topicPath, input.clusterType);
+    const clusterId = clusterIdFor(input.projectId, input.topicPath, input.clusterType, input.claimKey);
     const existing = this.getCluster(clusterId);
     const evidenceEventIds = existing
       ? Array.from(new Set([...existing.evidenceEventIds, input.eventId]))
       : [input.eventId];
+    const reviewFlags = Array.from(new Set([...(existing?.reviewFlags || []), ...(input.reviewFlags || [])]));
     const createdAt = existing?.createdAt ?? now;
     const supportCount = evidenceEventIds.length;
     const confidence = existing ? Math.max(existing.confidence, input.confidence) : input.confidence;
-    const status = existing?.status === 'possible_conflict' ? existing.status : input.status;
+    const status = input.status === 'superseded'
+      ? input.status
+      : existing?.status && existing.status !== 'possible_conflict'
+        ? existing.status
+        : input.status;
 
     this.db.prepare(`
       INSERT INTO memory_clusters (
-        cluster_id, project_id, topic_path, cluster_type, title, summary, status,
-        confidence, support_count, evidence_event_ids_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        cluster_id, project_id, topic_path, cluster_type, title, summary, claim_key, status,
+        review_flags_json, confidence, support_count, evidence_event_ids_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(cluster_id) DO UPDATE SET
         title = excluded.title,
         summary = excluded.summary,
+        claim_key = excluded.claim_key,
         status = excluded.status,
+        review_flags_json = excluded.review_flags_json,
         confidence = excluded.confidence,
         support_count = excluded.support_count,
         evidence_event_ids_json = excluded.evidence_event_ids_json,
@@ -224,7 +237,9 @@ export class MemoryBindingStore {
       input.clusterType,
       input.title,
       input.summary,
+      input.claimKey,
       status,
+      JSON.stringify(reviewFlags),
       confidence,
       supportCount,
       JSON.stringify(evidenceEventIds),
@@ -239,7 +254,9 @@ export class MemoryBindingStore {
       clusterType: input.clusterType,
       title: input.title,
       summary: input.summary,
+      claimKey: input.claimKey,
       status,
+      reviewFlags,
       confidence,
       supportCount,
       evidenceEventIds,
@@ -327,6 +344,37 @@ export class MemoryBindingStore {
       status: input.status || 'active',
       createdAt: now,
     };
+  }
+
+  listEdges(options: MemoryEdgeListOptions = {}): MemoryEdgeRecord[] {
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+    if (options.projectId) {
+      clauses.push('project_id = ?');
+      params.push(options.projectId);
+    }
+    if (options.sourceId) {
+      clauses.push('source_id = ?');
+      params.push(options.sourceId);
+    }
+    if (options.targetId) {
+      clauses.push('target_id = ?');
+      params.push(options.targetId);
+    }
+    if (options.relationType) {
+      clauses.push('relation_type = ?');
+      params.push(options.relationType);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const limit = Math.max(1, Math.min(options.limit ?? 100, 500));
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM memory_edges
+      ${where}
+      ORDER BY created_at DESC, edge_id DESC
+      LIMIT ?
+    `).all(...params, limit) as MemoryEdgeRow[];
+    return rows.map(mapEdgeRow);
   }
 
   listBindings(options: MemoryBindingListOptions = {}): MemoryBindingRecord[] {
@@ -443,6 +491,7 @@ export class MemoryBindingStore {
         confidence REAL NOT NULL,
         source TEXT NOT NULL,
         signal TEXT NOT NULL,
+        claim_key TEXT NOT NULL DEFAULT 'default',
         binding_action TEXT NOT NULL DEFAULT 'create_new_cluster',
         cluster_id TEXT,
         related_event_ids_json TEXT NOT NULL DEFAULT '[]',
@@ -465,7 +514,9 @@ export class MemoryBindingStore {
         cluster_type TEXT NOT NULL,
         title TEXT NOT NULL,
         summary TEXT NOT NULL,
+        claim_key TEXT NOT NULL DEFAULT 'default',
         status TEXT NOT NULL,
+        review_flags_json TEXT NOT NULL DEFAULT '[]',
         confidence REAL NOT NULL,
         support_count INTEGER NOT NULL,
         evidence_event_ids_json TEXT NOT NULL,
@@ -512,11 +563,23 @@ export class MemoryBindingStore {
     if (!bindingNames.has('binding_action')) {
       this.db.exec(`ALTER TABLE memory_bindings ADD COLUMN binding_action TEXT NOT NULL DEFAULT 'create_new_cluster';`);
     }
+    if (!bindingNames.has('claim_key')) {
+      this.db.exec(`ALTER TABLE memory_bindings ADD COLUMN claim_key TEXT NOT NULL DEFAULT 'default';`);
+    }
     if (!bindingNames.has('cluster_id')) {
       this.db.exec(`ALTER TABLE memory_bindings ADD COLUMN cluster_id TEXT;`);
     }
     if (!bindingNames.has('related_event_ids_json')) {
       this.db.exec(`ALTER TABLE memory_bindings ADD COLUMN related_event_ids_json TEXT NOT NULL DEFAULT '[]';`);
+    }
+
+    const clusterRows = this.db.prepare(`PRAGMA table_info(memory_clusters)`).all() as Array<{ name: string }>;
+    const clusterNames = new Set(clusterRows.map((row) => row.name));
+    if (!clusterNames.has('claim_key')) {
+      this.db.exec(`ALTER TABLE memory_clusters ADD COLUMN claim_key TEXT NOT NULL DEFAULT 'default';`);
+    }
+    if (!clusterNames.has('review_flags_json')) {
+      this.db.exec(`ALTER TABLE memory_clusters ADD COLUMN review_flags_json TEXT NOT NULL DEFAULT '[]';`);
     }
   }
 }
@@ -535,6 +598,7 @@ interface MemoryBindingRow {
   confidence: number;
   source: MemoryBindingRecord['source'];
   signal: string;
+  claim_key: string;
   binding_action: MemoryBindingRecord['bindingAction'];
   cluster_id?: string | null;
   related_event_ids_json?: string | null;
@@ -548,12 +612,28 @@ interface MemoryClusterRow {
   cluster_type: MemoryClusterRecord['clusterType'];
   title: string;
   summary: string;
+  claim_key?: string | null;
   status: MemoryClusterRecord['status'];
+  review_flags_json?: string | null;
   confidence: number;
   support_count: number;
   evidence_event_ids_json: string;
   created_at: number;
   updated_at: number;
+}
+
+interface MemoryEdgeRow {
+  edge_id: string;
+  project_id?: string | null;
+  source_type: MemoryEdgeRecord['sourceType'];
+  source_id: string;
+  relation_type: MemoryEdgeRecord['relationType'];
+  target_type: MemoryEdgeRecord['targetType'];
+  target_id: string;
+  confidence: number;
+  evidence_event_ids_json: string;
+  status: MemoryEdgeRecord['status'];
+  created_at: number;
 }
 
 interface CountRow {
@@ -575,6 +655,7 @@ function mapBindingRow(row: MemoryBindingRow): MemoryBindingRecord {
     confidence: Number(row.confidence),
     source: row.source,
     signal: row.signal,
+    claimKey: row.claim_key || 'default',
     bindingAction: row.binding_action,
     clusterId: row.cluster_id || undefined,
     relatedEventIds: parseStringArray(row.related_event_ids_json),
@@ -590,12 +671,30 @@ function mapClusterRow(row: MemoryClusterRow): MemoryClusterRecord {
     clusterType: row.cluster_type,
     title: row.title,
     summary: row.summary,
+    claimKey: row.claim_key || 'default',
     status: row.status,
+    reviewFlags: parseStringArray(row.review_flags_json),
     confidence: Number(row.confidence),
     supportCount: Number(row.support_count),
     evidenceEventIds: parseStringArray(row.evidence_event_ids_json),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
+  };
+}
+
+function mapEdgeRow(row: MemoryEdgeRow): MemoryEdgeRecord {
+  return {
+    edgeId: row.edge_id,
+    projectId: row.project_id || undefined,
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    relationType: row.relation_type,
+    targetType: row.target_type,
+    targetId: row.target_id,
+    confidence: Number(row.confidence),
+    evidenceEventIds: parseStringArray(row.evidence_event_ids_json),
+    status: row.status,
+    createdAt: Number(row.created_at),
   };
 }
 
@@ -612,8 +711,13 @@ function bindingIdFor(input: MemoryBindingInput): string {
   ].join('\0'))}`;
 }
 
-function clusterIdFor(projectId: string | undefined, topicPath: string, clusterType: MemoryClusterRecord['clusterType']): string {
-  return `cluster-${hash([projectId || '', topicPath, clusterType].join('\0'))}`;
+function clusterIdFor(
+  projectId: string | undefined,
+  topicPath: string,
+  clusterType: MemoryClusterRecord['clusterType'],
+  claimKey: string,
+): string {
+  return `cluster-${hash([projectId || '', topicPath, clusterType, claimKey].join('\0'))}`;
 }
 
 function edgeIdFor(input: UpsertMemoryEdgeInput): string {

@@ -1,5 +1,5 @@
 import { BeliefStore } from './belief/BeliefStore.js';
-import { type MemoryBindingListOptions, type MemoryBindingRecord, type MemoryBindingStats, type MemoryClusterListOptions, type MemoryClusterRecord, type MemoryGraphRecallAnchor } from './binding/index.js';
+import { type MemoryBindingListOptions, type MemoryBindingRecord, type MemoryBindingStats, type MemoryClusterListOptions, type MemoryClusterRecord, type MemoryEdgeListOptions, type MemoryEdgeRecord, type MemoryGraphRecallAnchor } from './binding/index.js';
 import { IngestionCursorStore } from './batch/IngestionCursorStore.js';
 import { MemoryGraph } from './core/MemoryGraph.js';
 import { type BrainRecallOptions } from './recall/BrainRecall.js';
@@ -108,6 +108,28 @@ export interface DreamGovernanceRunResult {
 export interface MemoryMapOptions {
     projectId?: string;
 }
+export interface MemoryBindingBackfillOptions {
+    projectId?: string;
+    workspaceId?: string;
+    threadId?: string;
+    sessionId?: string;
+    sinceGlobalSeq?: number;
+    limit?: number;
+}
+export interface MemoryBindingBackfillResult {
+    projectId?: string;
+    sinceGlobalSeq?: number;
+    scannedEvents: number;
+    bindableEvents: number;
+    boundEvents: number;
+    createdBindings: number;
+    skippedAlreadyBound: number;
+    failedEvents: number;
+    errors: Array<{
+        eventId: string;
+        message: string;
+    }>;
+}
 export interface MemoryMapSection {
     id: string;
     name: string;
@@ -152,7 +174,7 @@ export interface MaintenanceTickOptions {
     now?: number;
 }
 export interface MaintenanceSuggestedAction {
-    kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots';
+    kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots' | 'bind_raw_events' | 'inspect_binding_failures';
     command: string;
     reason: string;
 }
@@ -167,6 +189,8 @@ export interface MaintenanceTickResult {
         entityConflicts: number;
         activationHotspots: number;
         staleVectors: number;
+        unboundRawEvents: number;
+        bindingFailures: number;
     };
     executed: {
         activationDecay: ActivationDecayResult;
@@ -390,13 +414,16 @@ export declare class MemoryKernel {
     listDreamCandidates(options?: DreamCandidateListOptions): DreamCandidateRecord[];
     countDreamCandidates(options?: Omit<DreamCandidateListOptions, 'limit'>): number;
     bindMemoryEvent(event: MemoryEvent): MemoryBindingRecord[];
+    bindRawEvents(options?: MemoryBindingBackfillOptions): MemoryBindingBackfillResult;
     listMemoryBindings(options?: MemoryBindingListOptions): MemoryBindingRecord[];
     listMemoryClusters(options?: MemoryClusterListOptions): MemoryClusterRecord[];
+    listMemoryEdges(options?: MemoryEdgeListOptions): MemoryEdgeRecord[];
     recallMemoryBindingGraph(query: string, options?: {
         projectId?: string;
         limit?: number;
     }): MemoryGraphRecallAnchor[];
     getMemoryBindingStats(projectId?: string): MemoryBindingStats;
+    countUnboundBindableRawEvents(projectId?: string, limit?: number): number;
     promoteDreamCandidates(options?: DreamGovernanceRunOptions): DreamGovernanceRunResult;
     getDreamCandidateQueue(projectId?: string): DreamGovernanceRunResult['queue'];
     buildMemoryMap(options?: MemoryMapOptions): MemorySelfMap;

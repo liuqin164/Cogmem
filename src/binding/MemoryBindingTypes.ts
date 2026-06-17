@@ -24,6 +24,8 @@ export type MemoryBindingAction =
   | 'attach_to_existing'
   | 'strengthen_existing'
   | 'possible_conflict'
+  | 'corrects_prior_memory'
+  | 'refines_prior_memory'
   | 'needs_review';
 
 export type MemoryClusterStatus = 'active' | 'possible_conflict' | 'superseded';
@@ -33,7 +35,11 @@ export type MemoryEdgeRelation =
   | 'MENTIONS'
   | 'SUPPORTS'
   | 'BELONGS_TO'
-  | 'SAME_TOPIC_AS';
+  | 'SAME_TOPIC_AS'
+  | 'CORRECTS'
+  | 'CONTRADICTS'
+  | 'REFINES'
+  | 'SUPERSEDES';
 
 export interface MemoryEntityRecord {
   entityId: string;
@@ -70,6 +76,7 @@ export interface MemoryBindingRecord {
   confidence: number;
   source: MemoryBindingSource;
   signal: string;
+  claimKey: string;
   bindingAction: MemoryBindingAction;
   clusterId?: string;
   relatedEventIds: string[];
@@ -89,6 +96,7 @@ export interface MemoryBindingInput {
   confidence: number;
   source: MemoryBindingSource;
   signal: string;
+  claimKey: string;
   bindingAction?: MemoryBindingAction;
   clusterId?: string;
   relatedEventIds?: string[];
@@ -112,7 +120,9 @@ export interface MemoryClusterRecord {
   clusterType: MemoryBindingType | 'topic';
   title: string;
   summary: string;
+  claimKey: string;
   status: MemoryClusterStatus;
+  reviewFlags: string[];
   confidence: number;
   supportCount: number;
   evidenceEventIds: string[];
@@ -140,6 +150,14 @@ export interface MemoryEdgeRecord {
   evidenceEventIds: string[];
   status: 'active' | 'weak' | 'rejected' | 'superseded';
   createdAt: number;
+}
+
+export interface MemoryEdgeListOptions {
+  projectId?: string;
+  sourceId?: string;
+  targetId?: string;
+  relationType?: MemoryEdgeRelation;
+  limit?: number;
 }
 
 export interface MemoryGraphRecallAnchor {

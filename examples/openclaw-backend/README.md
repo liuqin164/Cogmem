@@ -66,11 +66,12 @@ For host-owned inspection and upkeep:
 ```bash
 cogmem memory map --project openclaw --json
 cogmem memory tick --project openclaw --json
+cogmem memory bind --project openclaw --json
 ```
 
-`memory tick` returns activation decay results and `suggestedActions`; it does not start a hidden daemon.
+`memory tick` returns activation decay results and `suggestedActions`; it does not start a hidden daemon. If it reports `bind_raw_events`, run `memory bind` to attach imported or adapter-written raw user events to Memory Binding.
 
-`memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths, fuse same-topic clusters, and create graph anchors for raw-ledger drill-down; they are not verified long-term facts.
+`memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for raw-ledger drill-down; they are not verified long-term facts. Correction bindings expose review flags and correction edges instead of turning the active cluster into a fact.
 
 ## Migrate
 

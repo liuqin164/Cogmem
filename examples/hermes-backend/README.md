@@ -121,6 +121,7 @@ Useful host-owned inspection commands:
 ```bash
 cogmem memory map --project hermes --json
 cogmem memory tick --project hermes --json
+cogmem memory bind --project hermes --json
 ```
 
-`memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths, fuse same-topic clusters, and create graph anchors for raw-ledger drill-down; they are not verified long-term facts.
+`memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for raw-ledger drill-down; they are not verified long-term facts. If `memory tick` suggests `bind_raw_events`, run `memory bind` to backfill imported Hermes raw user events into the binding graph.

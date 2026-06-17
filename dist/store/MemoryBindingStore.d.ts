@@ -1,5 +1,5 @@
 import Database from 'bun:sqlite';
-import type { MemoryBindingInput, MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingStats, MemoryClusterListOptions, MemoryClusterRecord, MemoryEdgeRecord, MemoryEdgeRelation, MemoryEntityRecord, MemoryEntityType, MemoryTopicRecord } from '../binding/MemoryBindingTypes.js';
+import type { MemoryBindingInput, MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingStats, MemoryClusterListOptions, MemoryClusterRecord, MemoryEdgeListOptions, MemoryEdgeRecord, MemoryEdgeRelation, MemoryEntityRecord, MemoryEntityType, MemoryTopicRecord } from '../binding/MemoryBindingTypes.js';
 export interface UpsertMemoryEntityInput {
     projectId?: string;
     canonicalName: string;
@@ -22,7 +22,9 @@ export interface UpsertMemoryClusterInput {
     clusterType: MemoryClusterRecord['clusterType'];
     title: string;
     summary: string;
+    claimKey: string;
     status: MemoryClusterRecord['status'];
+    reviewFlags?: string[];
     confidence: number;
     eventId: string;
     now?: number;
@@ -50,6 +52,7 @@ export declare class MemoryBindingStore {
     getCluster(clusterId: string): MemoryClusterRecord | null;
     listClusters(options?: MemoryClusterListOptions): MemoryClusterRecord[];
     upsertEdge(input: UpsertMemoryEdgeInput): MemoryEdgeRecord;
+    listEdges(options?: MemoryEdgeListOptions): MemoryEdgeRecord[];
     listBindings(options?: MemoryBindingListOptions): MemoryBindingRecord[];
     getStats(projectId?: string): MemoryBindingStats;
     deleteByProject(projectId: string): number;

@@ -15,14 +15,14 @@
  * @stable @since 1.0.0
  */
 export { MemoryKernel, createMemoryKernel, createMemoryKernelFromConfig, } from './factory.js';
-export type { ForgetUserResult, GovernanceAuditRecord, DreamCandidateListOptions, DreamCandidateRecord, DreamCandidateStatus, DreamCuratorRunOptions, DreamCuratorRunResult, MaintenanceSuggestedAction, MaintenanceTickOptions, MaintenanceTickResult, MemoryDataLane, MemoryKernelFromConfigOptions, MemoryKernelNavigationOptions, MemoryKernelNavigationResult, MemoryKernelOptions, MemoryMapOptions, MemoryMapSection, MemorySelfMap, RawEventSearchOptions, RawMemoryEventInput, TaskMemoryEventInput, ToolCallMemoryEventInput, ToolResultMemoryEventInput, } from './factory.js';
+export type { ForgetUserResult, GovernanceAuditRecord, DreamCandidateListOptions, DreamCandidateRecord, DreamCandidateStatus, DreamCuratorRunOptions, DreamCuratorRunResult, MaintenanceSuggestedAction, MaintenanceTickOptions, MaintenanceTickResult, MemoryDataLane, MemoryBindingBackfillOptions, MemoryBindingBackfillResult, MemoryKernelFromConfigOptions, MemoryKernelNavigationOptions, MemoryKernelNavigationResult, MemoryKernelOptions, MemoryMapOptions, MemoryMapSection, MemorySelfMap, RawEventSearchOptions, RawMemoryEventInput, TaskMemoryEventInput, ToolCallMemoryEventInput, ToolResultMemoryEventInput, } from './factory.js';
 /**
  * Cogmem runtime home and structured configuration helpers.
  * @stable @since 2.0.0
  */
 export { defaultCogmemConfigPath, defaultCogmemHome, loadCogmemConfig, resolveCogmemConfigPath, } from './config/CogmemConfig.js';
 export type { CogmemConfigResolution, CogmemConfigResolutionOptions, LoadedCogmemConfig, LoadCogmemConfigOptions, } from './config/CogmemConfig.js';
-export type { MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingSource, MemoryBindingStats, MemoryBindingType, MemoryClusterListOptions, MemoryClusterRecord, MemoryClusterStatus, MemoryEdgeRecord, MemoryEdgeRelation, MemoryEntityRecord, MemoryEntityType, MemoryGraphRecallAnchor, MemoryTopicRecord, } from './binding/index.js';
+export type { MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingSource, MemoryBindingStats, MemoryBindingType, MemoryBindingAction, MemoryClusterListOptions, MemoryClusterRecord, MemoryClusterStatus, MemoryEdgeListOptions, MemoryEdgeRecord, MemoryEdgeRelation, MemoryEntityRecord, MemoryEntityType, MemoryGraphRecallAnchor, MemoryTopicRecord, } from './binding/index.js';
 /**
  * Agent framework integration facade.
  * @stable @since 2.0.0

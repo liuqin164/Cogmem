@@ -55,8 +55,17 @@ export class KernelAgentMemoryBackend {
         try {
             this.kernel.bindMemoryEvent(userEvent);
         }
-        catch {
+        catch (error) {
             // Binding is an organizational side index; raw ledger writes must remain authoritative.
+            this.kernel.pipelineMetrics.recordNonFatal('memory_binding_failed', {
+                projectId: turn.projectId,
+                message: error instanceof Error ? error.message : String(error),
+                details: {
+                    eventId: userEvent.eventId,
+                    sessionId: turn.sessionId,
+                    agentId: turn.agentId,
+                },
+            });
         }
         const sourceRefs = [userEvent, assistantEvent].filter(Boolean).map((event) => ({
             eventId: event.eventId,
@@ -512,10 +521,17 @@ export class KernelAgentMemoryBackend {
                 ].filter(Boolean),
             });
             seen.add(anchor.eventId);
-            if (items.length >= limit)
-                break;
         }
-        return items;
+        return items
+            .sort((a, b) => this.graphRecallTextScore(b, query) - this.graphRecallTextScore(a, query))
+            .slice(0, limit);
+    }
+    graphRecallTextScore(item, query) {
+        const queryTerms = uniqueNonEmpty(query.query.toLowerCase().split(/[^a-z0-9\u4e00-\u9fff_-]+/))
+            .filter((term) => term.length >= 2 && !/^(cogmem|memory|project|之前|什么|问题|why|did|say)$/i.test(term));
+        const haystack = this.itemSearchableText(item).toLowerCase();
+        const overlap = queryTerms.filter((term) => haystack.includes(term)).length;
+        return overlap + (item.confidence || 0);
     }
     shouldPreferRawLedgerFallback(candidateItems, rawFallbackItems, queryPlan) {
         if (rawFallbackItems.length === 0)

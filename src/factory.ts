@@ -8,6 +8,8 @@ import {
   type MemoryBindingStats,
   type MemoryClusterListOptions,
   type MemoryClusterRecord,
+  type MemoryEdgeListOptions,
+  type MemoryEdgeRecord,
   type MemoryGraphRecallAnchor,
 } from './binding/index.js';
 import { IngestionCursorStore } from './batch/IngestionCursorStore.js';
@@ -107,7 +109,7 @@ import {
 } from './snapshot/index.js';
 
 const CORE_VERSION = '2.7.0';
-const LATEST_SCHEMA_VERSION = 12;
+const LATEST_SCHEMA_VERSION = 13;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 
@@ -198,6 +200,30 @@ export interface MemoryMapOptions {
   projectId?: string;
 }
 
+export interface MemoryBindingBackfillOptions {
+  projectId?: string;
+  workspaceId?: string;
+  threadId?: string;
+  sessionId?: string;
+  sinceGlobalSeq?: number;
+  limit?: number;
+}
+
+export interface MemoryBindingBackfillResult {
+  projectId?: string;
+  sinceGlobalSeq?: number;
+  scannedEvents: number;
+  bindableEvents: number;
+  boundEvents: number;
+  createdBindings: number;
+  skippedAlreadyBound: number;
+  failedEvents: number;
+  errors: Array<{
+    eventId: string;
+    message: string;
+  }>;
+}
+
 export interface MemoryMapSection {
   id: string;
   name: string;
@@ -246,7 +272,14 @@ export interface MaintenanceTickOptions {
 }
 
 export interface MaintenanceSuggestedAction {
-  kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots';
+  kind:
+    | 'dream_curator'
+    | 'govern_candidates'
+    | 'resolve_entities'
+    | 're_embed'
+    | 'inspect_hotspots'
+    | 'bind_raw_events'
+    | 'inspect_binding_failures';
   command: string;
   reason: string;
 }
@@ -262,6 +295,8 @@ export interface MaintenanceTickResult {
     entityConflicts: number;
     activationHotspots: number;
     staleVectors: number;
+    unboundRawEvents: number;
+    bindingFailures: number;
   };
   executed: {
     activationDecay: ActivationDecayResult;
@@ -1054,6 +1089,57 @@ export class MemoryKernel {
     return this.memoryBindingService.bindRawEvent(event);
   }
 
+  bindRawEvents(options: MemoryBindingBackfillOptions = {}): MemoryBindingBackfillResult {
+    const limit = Math.max(1, Math.min(options.limit ?? 500, 5000));
+    const page = this.eventStore.queryEvents(1, limit, {
+      projectId: options.projectId ? [options.projectId] : undefined,
+      workspaceId: options.workspaceId ? [options.workspaceId] : undefined,
+      threadId: options.threadId ? [options.threadId] : undefined,
+      sessionId: options.sessionId ? [options.sessionId] : undefined,
+    });
+    const records = page.records
+      .filter((event) => options.sinceGlobalSeq === undefined || (event.globalSeq || 0) >= options.sinceGlobalSeq)
+      .sort((a, b) => (a.globalSeq || 0) - (b.globalSeq || 0));
+    const result: MemoryBindingBackfillResult = {
+      projectId: options.projectId,
+      sinceGlobalSeq: options.sinceGlobalSeq,
+      scannedEvents: records.length,
+      bindableEvents: 0,
+      boundEvents: 0,
+      createdBindings: 0,
+      skippedAlreadyBound: 0,
+      failedEvents: 0,
+      errors: [],
+    };
+
+    for (const event of records) {
+      if (!this.memoryBindingService.isBindableRawEvent(event)) continue;
+      result.bindableEvents += 1;
+      if (this.memoryBindingStore.listBindings({ eventId: event.eventId, limit: 1 }).length > 0) {
+        result.skippedAlreadyBound += 1;
+        continue;
+      }
+      try {
+        const bindings = this.bindMemoryEvent(event);
+        if (bindings.length > 0) {
+          result.boundEvents += 1;
+          result.createdBindings += bindings.length;
+        }
+      } catch (error) {
+        result.failedEvents += 1;
+        const message = error instanceof Error ? error.message : String(error);
+        result.errors.push({ eventId: event.eventId, message });
+        this.pipelineMetrics.recordNonFatal('memory_binding_failed', {
+          projectId: event.projectId,
+          message,
+          details: { eventId: event.eventId, source: 'bindRawEvents' },
+        });
+      }
+    }
+
+    return result;
+  }
+
   listMemoryBindings(options: MemoryBindingListOptions = {}): MemoryBindingRecord[] {
     return this.memoryBindingStore.listBindings(options);
   }
@@ -1062,12 +1148,29 @@ export class MemoryKernel {
     return this.memoryBindingStore.listClusters(options);
   }
 
+  listMemoryEdges(options: MemoryEdgeListOptions = {}): MemoryEdgeRecord[] {
+    return this.memoryBindingStore.listEdges(options);
+  }
+
   recallMemoryBindingGraph(query: string, options: { projectId?: string; limit?: number } = {}): MemoryGraphRecallAnchor[] {
     return this.memoryBindingService.recallGraphAnchors(query, options);
   }
 
   getMemoryBindingStats(projectId?: string): MemoryBindingStats {
     return this.memoryBindingStore.getStats(projectId);
+  }
+
+  countUnboundBindableRawEvents(projectId?: string, limit: number = 1000): number {
+    const page = this.eventStore.queryEvents(1, Math.max(1, limit), {
+      projectId: projectId ? [projectId] : undefined,
+    });
+    let count = 0;
+    for (const event of page.records) {
+      if (!this.memoryBindingService.isBindableRawEvent(event)) continue;
+      if (this.memoryBindingStore.listBindings({ eventId: event.eventId, limit: 1 }).length > 0) continue;
+      count += 1;
+    }
+    return count;
   }
 
   promoteDreamCandidates(options: DreamGovernanceRunOptions = {}): DreamGovernanceRunResult {
@@ -1179,8 +1282,8 @@ export class MemoryKernel {
         {
           id: 'memory_binding',
           name: 'Memory binding',
-          route: 'MemoryKernel.listMemoryBindings(), listMemoryClusters(), recallMemoryBindingGraph() / cogmem memory map',
-          useWhen: 'Inspect raw-event topic/entity bindings, fused clusters, and graph-recall anchors.',
+          route: 'MemoryKernel.listMemoryBindings(), listMemoryClusters(), listMemoryEdges(), bindRawEvents(), recallMemoryBindingGraph() / cogmem memory map|bind',
+          useWhen: 'Inspect or backfill raw-event topic/entity bindings, claim-key clusters, correction edges, and graph-recall anchors.',
         },
       ],
       bounds: [
@@ -1197,13 +1300,15 @@ export class MemoryKernel {
           'cogmem memory show --event <event-id> --before 2 --after 2',
           'cogmem memory map --project <id> --json',
           'cogmem memory tick --project <id> --json',
+          'cogmem memory bind --project <id> --json',
           'cogmem memory dream --project <id> --watch --interval-ms 300000 --promote',
         ],
         agentUsage: [
           'Call recallPack() before answering when the host wants direct recall plus associative, belief, and entity context.',
           'Use collection "theseus" for creative artifacts and collection "anchor" or no collection for operational memory.',
           'Use memory map for self-inspection; use maintenance tick for explicit host-owned upkeep signals.',
-          'Use memory bindings, clusters, and graph recall anchors as source-anchored organization hints, not as promoted long-term facts.',
+          'Run memory bind when maintenance tick reports bind_raw_events for imported or adapter-written raw user events.',
+          'Use memory bindings, claim-key clusters, correction edges, and graph recall anchors as source-anchored organization hints, not as promoted long-term facts.',
         ],
       },
       counters: {
@@ -1245,6 +1350,8 @@ export class MemoryKernel {
     const reEmbedding = this.getReEmbeddingStatus();
     const staleVectors = this.getHealthStatus().hasStaleVectors ? reEmbedding.total - reEmbedding.completed : 0;
     const candidateQueue = queue.candidate + queue.needsConfirmation + queue.shadow;
+    const unboundRawEvents = this.countUnboundBindableRawEvents(projectId);
+    const bindingFailures = this.pipelineMetrics.getNonFatalCount('memory_binding_failed', { projectId });
     const suggestedActions: MaintenanceSuggestedAction[] = [];
 
     if (dreamBacklog.undreamedRawCount > 0) {
@@ -1275,6 +1382,20 @@ export class MemoryKernel {
         reason: `${staleVectors} embeddings are stale for the configured embedding model.`,
       });
     }
+    if (unboundRawEvents > 0) {
+      suggestedActions.push({
+        kind: 'bind_raw_events',
+        command: `cogmem memory bind${projectId ? ` --project ${projectId}` : ''} --json`,
+        reason: `${unboundRawEvents} high-value raw user events are not attached to memory binding clusters yet.`,
+      });
+    }
+    if (bindingFailures > 0) {
+      suggestedActions.push({
+        kind: 'inspect_binding_failures',
+        command: `cogmem memory tick${projectId ? ` --project ${projectId}` : ''} --json`,
+        reason: `${bindingFailures} non-fatal memory binding failures were recorded; raw ledger writes were preserved.`,
+      });
+    }
     if (hotspots.length > 0) {
       suggestedActions.push({
         kind: 'inspect_hotspots',
@@ -1294,6 +1415,8 @@ export class MemoryKernel {
         entityConflicts,
         activationHotspots: hotspots.length,
         staleVectors,
+        unboundRawEvents,
+        bindingFailures,
       },
       executed: {
         activationDecay,
