@@ -1,5 +1,5 @@
 import { BeliefStore } from './belief/BeliefStore.js';
-import { type MemoryBindingListOptions, type MemoryBindingRecord, type MemoryBindingStats } from './binding/index.js';
+import { type MemoryBindingListOptions, type MemoryBindingRecord, type MemoryBindingStats, type MemoryClusterListOptions, type MemoryClusterRecord, type MemoryGraphRecallAnchor } from './binding/index.js';
 import { IngestionCursorStore } from './batch/IngestionCursorStore.js';
 import { MemoryGraph } from './core/MemoryGraph.js';
 import { type BrainRecallOptions } from './recall/BrainRecall.js';
@@ -139,6 +139,8 @@ export interface MemorySelfMap {
         memoryBindings: number;
         memoryBindingTopics: number;
         memoryBindingEntities: number;
+        memoryBindingClusters: number;
+        memoryBindingEdges: number;
         dreamBacklog: DreamBacklogStatus;
         dreamCandidateQueue: DreamGovernanceRunResult['queue'];
     };
@@ -389,6 +391,11 @@ export declare class MemoryKernel {
     countDreamCandidates(options?: Omit<DreamCandidateListOptions, 'limit'>): number;
     bindMemoryEvent(event: MemoryEvent): MemoryBindingRecord[];
     listMemoryBindings(options?: MemoryBindingListOptions): MemoryBindingRecord[];
+    listMemoryClusters(options?: MemoryClusterListOptions): MemoryClusterRecord[];
+    recallMemoryBindingGraph(query: string, options?: {
+        projectId?: string;
+        limit?: number;
+    }): MemoryGraphRecallAnchor[];
     getMemoryBindingStats(projectId?: string): MemoryBindingStats;
     promoteDreamCandidates(options?: DreamGovernanceRunOptions): DreamGovernanceRunResult;
     getDreamCandidateQueue(projectId?: string): DreamGovernanceRunResult['queue'];

@@ -9,6 +9,7 @@ It is not a vector RAG store, a knowledge-base application, a wiki, an Obsidian 
 - Raw Archive: append-only raw experience events such as user messages, assistant messages, tool observations, task events, imports, and corrections.
 - Chronological Memory Ledger: the ordered event ledger used for audit, replay, source anchoring, and migration consistency.
 - Raw Search Index: FTS/metadata search over raw ledger text for exact source discovery without requiring every event to keep a high-dimensional vector.
+- Memory Binding Graph: deterministic raw-event bindings to stable entity/topic paths, fused clusters, and graph edges. This layer organizes source anchors and supports Graph Recall, but it is not a verified fact or belief store.
 - Compiled Memory: write-time facts, beliefs, events, summaries, graph links, and governance state derived from raw evidence.
 - Dream Backlog: observable consolidation coverage over raw events so `raw_then_dream` does not silently become unprocessed log accumulation.
 - Dream Candidates: curator output such as user preference candidates, project memories, long-term goals, boundaries, failure lessons, diagnostic conclusions, session/topic summaries, corrections, causal/tool-observation links, temporal invalidation suggestions, and conflict candidates. These remain candidates with source refs, confidence, and governance status; an LLM helper must not directly rewrite verified memory.
@@ -82,6 +83,8 @@ Do not use vector topK to reconstruct conversation order. Do not use ledger repl
 
 Cold recall should reactivate evidence in layers: first governed compiled memory and summaries, then bounded raw FTS/metadata search, then optional on-demand reranking of a small raw window. `KernelAgentMemoryBackend.recall()` compiles long user questions into a bounded query plan before raw search, so filler text does not drown out cues such as `CogMem Memory Context`, `记忆`, and `黑盒`. The plan also carries `semanticCuePhrases` and `temporalHints`; for example, a later query about `记忆黑盒` can search raw evidence that originally used `对话存档位置属于黑盒`. If prompt injection is absent or too thin, agents should call `cogmem memory recall --query "<question>" --project <project> --agent <agent> --json` before claiming they do not remember. Forensic follow-ups can pass `anchorEventId` or `anchorText` from the previous recall item to answer "what were my exact words" from the raw ledger instead of guessing from an imported summary. The backend uses raw ledger fallback only after governed universe navigation and BrainRecall fail to produce scoped evidence. Do not restore the old pattern of embedding every raw sentence just to make fuzzy search easier.
 
+Graph Recall v1 runs before the vector/FTS fallback path inside `KernelAgentMemoryBackend.recall()`. It classifies the query into stable binding topics, follows fused clusters and graph edges to raw ledger `eventId` anchors, and returns normal raw-ledger recall items with `sourceContext` and `canAnswerExactQuote=true`. It still obeys agent, project, collection, operational-noise, and `excludeSessionId` filters. A graph recall item means "this raw event belongs to the same organized topic"; it does not mean the cluster summary is a verified user fact.
+
 For pre-answer agent context, prefer `KernelAgentMemoryBackend.recallPack()` when the host can consume structured slots. The pack preserves normal governed recall results while adding:
 
 - `slots.direct`: bounded agent-facing recall items.
@@ -92,7 +95,7 @@ For pre-answer agent context, prefer `KernelAgentMemoryBackend.recallPack()` whe
 
 Collection routing is enforced in compiled and raw fallback paths. Default recall includes untagged and `collection:anchor` memory. Specialized collections such as `collection:theseus` must be requested explicitly with `collection: "theseus"` or `--collection theseus`.
 
-`MemoryKernel.buildMemoryMap()` and `cogmem memory map` expose a static self-map: anatomy, data lanes, hard bounds, counters, and commands. Agents should use it to understand how to operate the memory kernel, not as a replacement for governed recall.
+`MemoryKernel.buildMemoryMap()` and `cogmem memory map` expose a static self-map: anatomy, data lanes, hard bounds, counters, and commands. The memory binding counters include bindings, topics, entities, clusters, and edges. Agents should use the map to understand how to operate the memory kernel, not as a replacement for governed recall.
 
 ## SourceRefs
 

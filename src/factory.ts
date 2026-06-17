@@ -1,7 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { BeliefStore } from './belief/BeliefStore.js';
-import { MemoryBindingService, type MemoryBindingListOptions, type MemoryBindingRecord, type MemoryBindingStats } from './binding/index.js';
+import {
+  MemoryBindingService,
+  type MemoryBindingListOptions,
+  type MemoryBindingRecord,
+  type MemoryBindingStats,
+  type MemoryClusterListOptions,
+  type MemoryClusterRecord,
+  type MemoryGraphRecallAnchor,
+} from './binding/index.js';
 import { IngestionCursorStore } from './batch/IngestionCursorStore.js';
 import { MemoryGraph } from './core/MemoryGraph.js';
 import { Metabolism } from './core/Metabolism.js';
@@ -223,6 +231,8 @@ export interface MemorySelfMap {
     memoryBindings: number;
     memoryBindingTopics: number;
     memoryBindingEntities: number;
+    memoryBindingClusters: number;
+    memoryBindingEdges: number;
     dreamBacklog: DreamBacklogStatus;
     dreamCandidateQueue: DreamGovernanceRunResult['queue'];
   };
@@ -1048,6 +1058,14 @@ export class MemoryKernel {
     return this.memoryBindingStore.listBindings(options);
   }
 
+  listMemoryClusters(options: MemoryClusterListOptions = {}): MemoryClusterRecord[] {
+    return this.memoryBindingStore.listClusters(options);
+  }
+
+  recallMemoryBindingGraph(query: string, options: { projectId?: string; limit?: number } = {}): MemoryGraphRecallAnchor[] {
+    return this.memoryBindingService.recallGraphAnchors(query, options);
+  }
+
   getMemoryBindingStats(projectId?: string): MemoryBindingStats {
     return this.memoryBindingStore.getStats(projectId);
   }
@@ -1123,7 +1141,7 @@ export class MemoryKernel {
         {
           id: 'memory_binding',
           name: 'Memory binding layer',
-          role: 'deterministic raw-event bindings to stable entity and topic paths before governed fact promotion',
+          role: 'deterministic raw-event bindings, clusters, and graph edges before governed fact promotion',
           currentCount: memoryBindingStats.bindings,
         },
         {
@@ -1161,8 +1179,8 @@ export class MemoryKernel {
         {
           id: 'memory_binding',
           name: 'Memory binding',
-          route: 'MemoryKernel.listMemoryBindings() / cogmem memory map',
-          useWhen: 'Inspect which raw user events have been attached to stable people, projects, concepts, and topic paths.',
+          route: 'MemoryKernel.listMemoryBindings(), listMemoryClusters(), recallMemoryBindingGraph() / cogmem memory map',
+          useWhen: 'Inspect raw-event topic/entity bindings, fused clusters, and graph-recall anchors.',
         },
       ],
       bounds: [
@@ -1185,7 +1203,7 @@ export class MemoryKernel {
           'Call recallPack() before answering when the host wants direct recall plus associative, belief, and entity context.',
           'Use collection "theseus" for creative artifacts and collection "anchor" or no collection for operational memory.',
           'Use memory map for self-inspection; use maintenance tick for explicit host-owned upkeep signals.',
-          'Use memory bindings as source-anchored organization hints, not as promoted long-term facts.',
+          'Use memory bindings, clusters, and graph recall anchors as source-anchored organization hints, not as promoted long-term facts.',
         ],
       },
       counters: {
@@ -1196,6 +1214,8 @@ export class MemoryKernel {
         memoryBindings: memoryBindingStats.bindings,
         memoryBindingTopics: memoryBindingStats.topics,
         memoryBindingEntities: memoryBindingStats.entities,
+        memoryBindingClusters: memoryBindingStats.clusters,
+        memoryBindingEdges: memoryBindingStats.edges,
         dreamBacklog,
         dreamCandidateQueue,
       },

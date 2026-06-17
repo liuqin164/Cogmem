@@ -22,7 +22,7 @@ export type { ForgetUserResult, GovernanceAuditRecord, DreamCandidateListOptions
  */
 export { defaultCogmemConfigPath, defaultCogmemHome, loadCogmemConfig, resolveCogmemConfigPath, } from './config/CogmemConfig.js';
 export type { CogmemConfigResolution, CogmemConfigResolutionOptions, LoadedCogmemConfig, LoadCogmemConfigOptions, } from './config/CogmemConfig.js';
-export type { MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingSource, MemoryBindingStats, MemoryBindingType, MemoryEntityRecord, MemoryEntityType, MemoryTopicRecord, } from './binding/index.js';
+export type { MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingSource, MemoryBindingStats, MemoryBindingType, MemoryClusterListOptions, MemoryClusterRecord, MemoryClusterStatus, MemoryEdgeRecord, MemoryEdgeRelation, MemoryEntityRecord, MemoryEntityType, MemoryGraphRecallAnchor, MemoryTopicRecord, } from './binding/index.js';
 /**
  * Agent framework integration facade.
  * @stable @since 2.0.0

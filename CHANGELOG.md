@@ -3,7 +3,8 @@
 ## 2.7.0
 
 - Added Memory Binding v0: high-value user raw events are now deterministically bound to stable topic/entity paths such as `PROJECT/Cogmem/memory-write-pipeline` during agent turn recording. Bindings are source-anchored organization hints, not promoted facts or beliefs.
-- Added `MemoryKernel.listMemoryBindings()` and memory-map counters for binding, topic, and entity organization so agents can inspect where important raw events are attached before relying on long-term compiled memory.
+- Added Historical Binding, Cluster Fusion, and Graph Recall v1 on top of Memory Binding: same-topic user events now strengthen fused clusters, correction events become possible-conflict clusters, and agent recall can follow binding graph anchors back to raw ledger evidence before falling back to vector/FTS paths.
+- Added `MemoryKernel.listMemoryBindings()`, `MemoryKernel.listMemoryClusters()`, `MemoryKernel.recallMemoryBindingGraph()`, and memory-map counters for binding, topic, entity, cluster, and edge organization so agents can inspect where important raw events are attached before relying on long-term compiled memory.
 - Fixed `MemoryKernel.forgetUser(projectId)` to purge durable activation hotspots and memory bindings for the forgotten project, preventing stale memory-map and maintenance-tick exposure.
 - Fixed `cogmem connect hermes --auto` so existing Hermes `cogmem-mcp` entries are updated with missing `cogmem_memory_map` and `cogmem_maintenance_tick` tool allow-list entries.
 - Reviewed the bounded reasoning, tool schema, and Dream Curator prompt changes: Cogmem recall blocks, turn bridges, and session state remain evidence-only and cannot create durable user memory without explicit user evidence and CPU governance.

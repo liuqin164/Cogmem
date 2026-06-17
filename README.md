@@ -77,7 +77,7 @@ Metadata / FTS Index
   Lightweight keyword, source, time, project, and thread indexing for exact lookup.
 
 Memory Binding
-  Deterministic raw-event bindings to stable entity and topic paths such as projects, people, concepts, and write-pipeline diagnostics.
+  Deterministic raw-event bindings to stable entity/topic paths, fused clusters, and graph edges for source-anchored organization before fact promotion.
 
 Compiled Memory
   Governed summaries, preferences, constraints, goals, lessons, diagnostics, and topic memories.
@@ -89,7 +89,7 @@ CPU Governance
   Rule-based promotion, suppression, supersession, and confirmation policy.
 
 Active Recall
-  Bounded context pack assembled with pulse activation, temporal routing, source anchors, and inhibition.
+  Bounded context pack assembled with binding graph anchors, pulse activation, temporal routing, source anchors, and inhibition.
 ```
 
 The core rule is:
@@ -189,7 +189,7 @@ cogmem memory tick --project my-agent --json
 
 `memory tick` decays activation and returns suggested host actions. It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
 
-`memory map` includes Memory Binding v0 counters. Bindings attach valuable user raw events to stable topic/entity paths before any fact promotion, for example `PROJECT/Cogmem/memory-write-pipeline`. Treat them as organization hints for source drill-down, not as verified long-term facts.
+`memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths before any fact promotion, fuse same-topic evidence into clusters, and create graph anchors for source drill-down. Treat bindings, clusters, and graph edges as organization hints, not as verified long-term facts.
 
 ## Import Existing Agent Memory
 

@@ -70,7 +70,7 @@ cogmem memory tick --project openclaw --json
 
 `memory tick` returns activation decay results and `suggestedActions`; it does not start a hidden daemon.
 
-`memory map` includes Memory Binding v0 counters. Bindings attach valuable user raw events to stable topic/entity paths for organization and raw-ledger drill-down; they are not verified long-term facts.
+`memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths, fuse same-topic clusters, and create graph anchors for raw-ledger drill-down; they are not verified long-term facts.
 
 ## Migrate
 

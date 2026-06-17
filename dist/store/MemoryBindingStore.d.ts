@@ -1,5 +1,5 @@
 import Database from 'bun:sqlite';
-import type { MemoryBindingInput, MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingStats, MemoryEntityRecord, MemoryEntityType, MemoryTopicRecord } from '../binding/MemoryBindingTypes.js';
+import type { MemoryBindingInput, MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingStats, MemoryClusterListOptions, MemoryClusterRecord, MemoryEdgeRecord, MemoryEdgeRelation, MemoryEntityRecord, MemoryEntityType, MemoryTopicRecord } from '../binding/MemoryBindingTypes.js';
 export interface UpsertMemoryEntityInput {
     projectId?: string;
     canonicalName: string;
@@ -16,6 +16,29 @@ export interface UpsertMemoryTopicInput {
     summary?: string;
     now?: number;
 }
+export interface UpsertMemoryClusterInput {
+    projectId?: string;
+    topicPath: string;
+    clusterType: MemoryClusterRecord['clusterType'];
+    title: string;
+    summary: string;
+    status: MemoryClusterRecord['status'];
+    confidence: number;
+    eventId: string;
+    now?: number;
+}
+export interface UpsertMemoryEdgeInput {
+    projectId?: string;
+    sourceType: MemoryEdgeRecord['sourceType'];
+    sourceId: string;
+    relationType: MemoryEdgeRelation;
+    targetType: MemoryEdgeRecord['targetType'];
+    targetId: string;
+    confidence: number;
+    evidenceEventIds: string[];
+    status?: MemoryEdgeRecord['status'];
+    createdAt?: number;
+}
 export declare class MemoryBindingStore {
     private readonly db;
     private readonly ownsDb;
@@ -23,6 +46,10 @@ export declare class MemoryBindingStore {
     upsertEntity(input: UpsertMemoryEntityInput): MemoryEntityRecord;
     upsertTopic(input: UpsertMemoryTopicInput): MemoryTopicRecord;
     insertBinding(input: MemoryBindingInput): MemoryBindingRecord;
+    upsertCluster(input: UpsertMemoryClusterInput): MemoryClusterRecord;
+    getCluster(clusterId: string): MemoryClusterRecord | null;
+    listClusters(options?: MemoryClusterListOptions): MemoryClusterRecord[];
+    upsertEdge(input: UpsertMemoryEdgeInput): MemoryEdgeRecord;
     listBindings(options?: MemoryBindingListOptions): MemoryBindingRecord[];
     getStats(projectId?: string): MemoryBindingStats;
     deleteByProject(projectId: string): number;

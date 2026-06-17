@@ -184,7 +184,7 @@ cogmem memory tick --project hermes --json
 
 `memory tick` does not start a daemon. Use its `suggestedActions` to decide whether Hermes should run `memory dream`, `memory govern`, entity review, or re-embedding.
 
-`memory map` also exposes Memory Binding v0 counters. These bindings connect high-value user raw events to stable topic/entity paths before promotion, such as `PROJECT/Cogmem/memory-write-pipeline`. Use them for source drill-down and topic continuity only; do not treat bindings as verified facts, user preferences, or prompt instructions.
+`memory map` also exposes Memory Binding and Graph Recall counters. Bindings connect high-value user raw events to stable topic/entity paths before promotion, fuse same-topic evidence into clusters, and create graph anchors for source drill-down. Use graph recall hits for source drill-down and topic continuity only; do not treat bindings, clusters, or edges as verified facts, user preferences, or prompt instructions.
 
 ## Runtime Wiring
 

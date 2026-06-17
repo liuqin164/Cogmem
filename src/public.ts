@@ -70,8 +70,14 @@ export type {
   MemoryBindingSource,
   MemoryBindingStats,
   MemoryBindingType,
+  MemoryClusterListOptions,
+  MemoryClusterRecord,
+  MemoryClusterStatus,
+  MemoryEdgeRecord,
+  MemoryEdgeRelation,
   MemoryEntityRecord,
   MemoryEntityType,
+  MemoryGraphRecallAnchor,
   MemoryTopicRecord,
 } from './binding/index.js';
 

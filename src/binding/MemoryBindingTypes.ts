@@ -19,6 +19,22 @@ export type MemoryBindingType =
 
 export type MemoryBindingSource = 'deterministic';
 
+export type MemoryBindingAction =
+  | 'create_new_cluster'
+  | 'attach_to_existing'
+  | 'strengthen_existing'
+  | 'possible_conflict'
+  | 'needs_review';
+
+export type MemoryClusterStatus = 'active' | 'possible_conflict' | 'superseded';
+
+export type MemoryEdgeRelation =
+  | 'ABOUT'
+  | 'MENTIONS'
+  | 'SUPPORTS'
+  | 'BELONGS_TO'
+  | 'SAME_TOPIC_AS';
+
 export interface MemoryEntityRecord {
   entityId: string;
   projectId?: string;
@@ -54,6 +70,9 @@ export interface MemoryBindingRecord {
   confidence: number;
   source: MemoryBindingSource;
   signal: string;
+  bindingAction: MemoryBindingAction;
+  clusterId?: string;
+  relatedEventIds: string[];
   createdAt: number;
 }
 
@@ -70,6 +89,9 @@ export interface MemoryBindingInput {
   confidence: number;
   source: MemoryBindingSource;
   signal: string;
+  bindingAction?: MemoryBindingAction;
+  clusterId?: string;
+  relatedEventIds?: string[];
   createdAt?: number;
 }
 
@@ -83,8 +105,56 @@ export interface MemoryBindingListOptions {
   limit?: number;
 }
 
+export interface MemoryClusterRecord {
+  clusterId: string;
+  projectId?: string;
+  topicPath: string;
+  clusterType: MemoryBindingType | 'topic';
+  title: string;
+  summary: string;
+  status: MemoryClusterStatus;
+  confidence: number;
+  supportCount: number;
+  evidenceEventIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MemoryClusterListOptions {
+  projectId?: string;
+  topicPath?: string;
+  clusterType?: MemoryClusterRecord['clusterType'];
+  status?: MemoryClusterStatus;
+  limit?: number;
+}
+
+export interface MemoryEdgeRecord {
+  edgeId: string;
+  projectId?: string;
+  sourceType: 'event' | 'entity' | 'topic' | 'cluster';
+  sourceId: string;
+  relationType: MemoryEdgeRelation;
+  targetType: 'event' | 'entity' | 'topic' | 'cluster';
+  targetId: string;
+  confidence: number;
+  evidenceEventIds: string[];
+  status: 'active' | 'weak' | 'rejected' | 'superseded';
+  createdAt: number;
+}
+
+export interface MemoryGraphRecallAnchor {
+  eventId: string;
+  projectId?: string;
+  topicPath: string;
+  clusterId?: string;
+  confidence: number;
+  whyMatched: 'memory_binding_graph';
+}
+
 export interface MemoryBindingStats {
   bindings: number;
   topics: number;
   entities: number;
+  clusters: number;
+  edges: number;
 }

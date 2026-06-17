@@ -477,6 +477,7 @@ export class KernelAgentMemoryBackend {
     }
 
     const limit = query.limit ?? 5;
+    const graphItems = this.memoryBindingGraphItemsForQuery(query, queryPlan, limit);
     const retrievalLimit = Math.max(limit * 4, 24);
     const result = this.kernel.navigateMemory(queryPlan.primarySearchText, {
       projectId: query.projectId,
@@ -492,7 +493,7 @@ export class KernelAgentMemoryBackend {
       if (this.shouldPreferRawLedgerFallback(scopedItems, rawFallbackItems, queryPlan)) {
         return {
           recallMode: 'raw_ledger_fallback',
-          items: this.mergeRecallItems(rawFallbackItems, scopedItems, limit),
+          items: this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, scopedItems, limit), limit),
           narrative: result.navigation?.narrative,
           pulseTrace: result.navigation?.pulse.trace,
           temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
@@ -503,7 +504,7 @@ export class KernelAgentMemoryBackend {
       }
       return {
         recallMode: result.recallMode,
-        items: scopedItems,
+        items: this.mergeRecallItems(graphItems, scopedItems, limit),
         narrative: result.navigation?.narrative,
         pulseTrace: result.navigation?.pulse.trace,
         temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
@@ -525,7 +526,7 @@ export class KernelAgentMemoryBackend {
       if (this.shouldPreferRawLedgerFallback(fallbackItems, rawFallbackItems, queryPlan)) {
         return {
           recallMode: 'raw_ledger_fallback',
-          items: this.mergeRecallItems(rawFallbackItems, fallbackItems, limit),
+          items: this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, fallbackItems, limit), limit),
           narrative: result.navigation?.narrative,
           pulseTrace: result.navigation?.pulse.trace,
           temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
@@ -536,7 +537,7 @@ export class KernelAgentMemoryBackend {
       }
       return {
         recallMode: 'brain_recall_fallback',
-        items: fallbackItems,
+        items: this.mergeRecallItems(graphItems, fallbackItems, limit),
         narrative: result.navigation?.narrative,
         pulseTrace: result.navigation?.pulse.trace,
         temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
@@ -550,7 +551,7 @@ export class KernelAgentMemoryBackend {
 
     return {
       recallMode: 'raw_ledger_fallback',
-      items: rawItems,
+      items: this.mergeRecallItems(graphItems, rawItems, limit),
       narrative: result.navigation?.narrative,
       pulseTrace: result.navigation?.pulse.trace,
       temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
@@ -750,6 +751,53 @@ export class KernelAgentMemoryBackend {
         whyMatched: 'raw_ledger_text_fallback',
         canAnswerExactQuote: true,
       }));
+  }
+
+  private memoryBindingGraphItemsForQuery(
+    query: AgentRecallQuery,
+    queryPlan: AgentRecallQueryPlan,
+    limit: number
+  ): AgentRecallItem[] {
+    const anchors = this.kernel.recallMemoryBindingGraph(
+      [query.query, queryPlan.primarySearchText, ...queryPlan.searchTexts].join('\n'),
+      {
+        projectId: query.projectId,
+        limit: Math.max(limit * 2, 8),
+      },
+    );
+    const items: AgentRecallItem[] = [];
+    const seen = new Set<string>();
+
+    for (const anchor of anchors) {
+      if (seen.has(anchor.eventId)) continue;
+      const event = this.kernel.getEventContext(anchor.eventId, { before: 0, after: 0 })?.event;
+      if (!event) continue;
+      if (!this.isAgentRawEvent(event, query.agentId)) continue;
+      if (!this.isAllowedSession(event, query)) continue;
+      if (!this.isAllowedRawEventCollection(event, query.collection)) continue;
+      if (this.isOperationalNoiseRawEvent(event)) continue;
+      if (!this.hasReadableEventText(event)) continue;
+
+      const item = this.toAgentRawRecallItem(event, {
+        sourceType: 'raw_ledger',
+        whyMatched: 'memory_binding_graph',
+        canAnswerExactQuote: true,
+      });
+      items.push({
+        ...item,
+        topicPath: anchor.topicPath,
+        confidence: anchor.confidence,
+        tags: [
+          ...item.tags,
+          `topic:${anchor.topicPath}`,
+          anchor.clusterId ? `cluster:${anchor.clusterId}` : '',
+        ].filter(Boolean),
+      });
+      seen.add(anchor.eventId);
+      if (items.length >= limit) break;
+    }
+
+    return items;
   }
 
   private shouldPreferRawLedgerFallback(

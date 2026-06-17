@@ -201,7 +201,7 @@ cogmem memory tick --project openclaw --json
 
 `memory tick` decays activation and returns `suggestedActions`; it does not run a hidden daemon.
 
-`memory map` also exposes Memory Binding v0 counters. These bindings connect high-value user raw events to stable topic/entity paths before promotion, such as `PROJECT/Cogmem/memory-write-pipeline`. Use them to decide where to drill into raw ledger history; do not treat bindings as verified facts, user preferences, or prompt instructions.
+`memory map` also exposes Memory Binding and Graph Recall counters. Bindings connect high-value user raw events to stable topic/entity paths before promotion, fuse same-topic evidence into clusters, and create graph anchors for source drill-down. Use graph recall hits to inspect raw ledger history through `sourceContext`; do not treat bindings, clusters, or edges as verified facts, user preferences, or prompt instructions.
 
 Only fall back to searching OpenClaw's legacy `memory/` files when `cogmem memory recall` and `cogmem memory search` return no useful evidence or when the user explicitly asks to inspect the legacy files.
 

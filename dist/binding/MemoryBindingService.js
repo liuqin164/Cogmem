@@ -52,6 +52,25 @@ export class MemoryBindingService {
                 summary: decision.summary,
                 now: createdAt,
             });
+            const related = this.store.listBindings({
+                projectId: input.projectId,
+                topicPath: decision.topicPath,
+                role: 'user',
+                limit: 8,
+            }).filter((binding) => binding.eventId !== input.eventId);
+            const clusterStatus = decision.bindingType === 'correction' ? 'possible_conflict' : 'active';
+            const cluster = this.store.upsertCluster({
+                projectId: input.projectId,
+                topicPath: decision.topicPath,
+                clusterType: decision.bindingType,
+                title: clusterTitle(decision.topicPath, decision.bindingType),
+                summary: decision.summary,
+                status: clusterStatus,
+                confidence: decision.confidence,
+                eventId: input.eventId,
+                now: createdAt,
+            });
+            const bindingAction = bindingActionFor(decision.bindingType, related, cluster.supportCount);
             const binding = {
                 eventId: input.eventId,
                 projectId: input.projectId,
@@ -65,11 +84,133 @@ export class MemoryBindingService {
                 confidence: decision.confidence,
                 source: 'deterministic',
                 signal: decision.signal,
+                bindingAction,
+                clusterId: cluster.clusterId,
+                relatedEventIds: related.map((item) => item.eventId),
                 createdAt,
             };
-            bindings.push(this.store.insertBinding(binding));
+            const inserted = this.store.insertBinding(binding);
+            this.store.upsertEdge({
+                projectId: input.projectId,
+                sourceType: 'event',
+                sourceId: input.eventId,
+                relationType: 'ABOUT',
+                targetType: 'topic',
+                targetId: decision.topicPath,
+                confidence: decision.confidence,
+                evidenceEventIds: [input.eventId],
+                createdAt,
+            });
+            this.store.upsertEdge({
+                projectId: input.projectId,
+                sourceType: 'event',
+                sourceId: input.eventId,
+                relationType: 'SUPPORTS',
+                targetType: 'cluster',
+                targetId: cluster.clusterId,
+                confidence: decision.confidence,
+                evidenceEventIds: [input.eventId],
+                createdAt,
+            });
+            this.store.upsertEdge({
+                projectId: input.projectId,
+                sourceType: 'cluster',
+                sourceId: cluster.clusterId,
+                relationType: 'BELONGS_TO',
+                targetType: 'topic',
+                targetId: decision.topicPath,
+                confidence: decision.confidence,
+                evidenceEventIds: cluster.evidenceEventIds,
+                createdAt,
+            });
+            if (entity) {
+                this.store.upsertEdge({
+                    projectId: input.projectId,
+                    sourceType: 'event',
+                    sourceId: input.eventId,
+                    relationType: 'MENTIONS',
+                    targetType: 'entity',
+                    targetId: entity.entityId,
+                    confidence: decision.confidence,
+                    evidenceEventIds: [input.eventId],
+                    createdAt,
+                });
+            }
+            for (const relatedBinding of related.slice(0, 5)) {
+                this.store.upsertEdge({
+                    projectId: input.projectId,
+                    sourceType: 'event',
+                    sourceId: input.eventId,
+                    relationType: 'SAME_TOPIC_AS',
+                    targetType: 'event',
+                    targetId: relatedBinding.eventId,
+                    confidence: Math.min(decision.confidence, relatedBinding.confidence),
+                    evidenceEventIds: [input.eventId, relatedBinding.eventId],
+                    createdAt,
+                });
+            }
+            bindings.push(inserted);
         }
         return bindings;
+    }
+    recallGraphAnchors(query, options = {}) {
+        const text = normalizeForBinding(query);
+        if (!text)
+            return [];
+        const decisions = classifyTopics(text);
+        if (decisions.length === 0)
+            return [];
+        const limit = Math.max(1, Math.min(options.limit ?? 8, 50));
+        const anchors = [];
+        const seen = new Set();
+        for (const decision of decisions) {
+            const clusters = this.store.listClusters({
+                projectId: options.projectId,
+                topicPath: decision.topicPath,
+                limit: 8,
+            });
+            for (const cluster of clusters) {
+                for (const eventId of cluster.evidenceEventIds) {
+                    if (seen.has(eventId))
+                        continue;
+                    seen.add(eventId);
+                    anchors.push({
+                        eventId,
+                        projectId: cluster.projectId,
+                        topicPath: cluster.topicPath,
+                        clusterId: cluster.clusterId,
+                        confidence: cluster.confidence,
+                        whyMatched: 'memory_binding_graph',
+                    });
+                    if (anchors.length >= limit)
+                        return anchors;
+                }
+            }
+            if (clusters.length === 0) {
+                const bindings = this.store.listBindings({
+                    projectId: options.projectId,
+                    topicPath: decision.topicPath,
+                    role: 'user',
+                    limit,
+                });
+                for (const binding of bindings) {
+                    if (seen.has(binding.eventId))
+                        continue;
+                    seen.add(binding.eventId);
+                    anchors.push({
+                        eventId: binding.eventId,
+                        projectId: binding.projectId,
+                        topicPath: binding.topicPath,
+                        clusterId: binding.clusterId,
+                        confidence: binding.confidence,
+                        whyMatched: 'memory_binding_graph',
+                    });
+                    if (anchors.length >= limit)
+                        return anchors;
+                }
+            }
+        }
+        return anchors;
     }
 }
 function normalizeForBinding(text) {
@@ -205,6 +346,19 @@ function uniqueTopicDecisions(decisions) {
         seen.add(key);
         return true;
     });
+}
+function bindingActionFor(bindingType, related, supportCount) {
+    if (bindingType === 'correction')
+        return 'possible_conflict';
+    if (related.length === 0 || supportCount <= 1)
+        return 'create_new_cluster';
+    if (related.some((binding) => binding.bindingType === bindingType))
+        return 'strengthen_existing';
+    return 'attach_to_existing';
+}
+function clusterTitle(topicPath, bindingType) {
+    const tail = topicPath.split('/').slice(-1)[0] || topicPath;
+    return `${tail}:${bindingType}`;
 }
 function entityStablePath(entityType, canonicalName) {
     if (entityType === 'project')
