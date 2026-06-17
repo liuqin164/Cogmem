@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `2.5.0`
+Current version: `2.7.0`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -75,6 +75,9 @@ Raw Ledger
 
 Metadata / FTS Index
   Lightweight keyword, source, time, project, and thread indexing for exact lookup.
+
+Memory Binding
+  Deterministic raw-event bindings to stable entity and topic paths such as projects, people, concepts, and write-pipeline diagnostics.
 
 Compiled Memory
   Governed summaries, preferences, constraints, goals, lessons, diagnostics, and topic memories.
@@ -147,7 +150,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#2.5.0"
+bun add "cogmem@github:liuqin164/cogmem#2.7.0"
 bunx cogmem init
 ```
 
@@ -185,6 +188,8 @@ cogmem memory tick --project my-agent --json
 ```
 
 `memory tick` decays activation and returns suggested host actions. It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
+
+`memory map` includes Memory Binding v0 counters. Bindings attach valuable user raw events to stable topic/entity paths before any fact promotion, for example `PROJECT/Cogmem/memory-write-pipeline`. Treat them as organization hints for source drill-down, not as verified long-term facts.
 
 ## Import Existing Agent Memory
 
@@ -311,7 +316,7 @@ This installs the agent-facing skill at:
 ~/.hermes/skills/cogmem-memory/SKILL.md
 ```
 
-With `--auto`, it adds a `cogmem` MCP server entry to:
+With `--auto`, it adds or updates a `cogmem` MCP server entry in:
 
 ```text
 ~/.hermes/config.yaml
@@ -329,7 +334,7 @@ Hermes can call the MCP recall tool directly:
 { "query": "MoneyPrinterTurbo", "projectId": "hermes" }
 ```
 
-`cogmem_recall` uses the same agent-facing recall path as `cogmem memory recall`. If `agentId` is omitted, MCP infers it from `projectId`, so project-only Hermes calls can still reach raw ledger fallback and return `items[].sourceContext` when vectors are empty.
+`cogmem_recall` uses the same agent-facing recall path as `cogmem memory recall`. If `agentId` is omitted, MCP infers it from `projectId`, so project-only Hermes calls can still reach raw ledger fallback and return `items[].sourceContext` when vectors are empty. Re-running `cogmem connect hermes --auto` after an upgrade also patches existing `tools.include` allow-lists with newly supported Cogmem MCP tools.
 
 Import existing Hermes memory:
 
@@ -485,6 +490,8 @@ For Hermes after an update:
 ```bash
 cogmem connect hermes --workspace /path/to/hermes/workspace --auto --force
 ```
+
+This also updates existing Hermes `cogmem-mcp` blocks with missing `cogmem_memory_map` and `cogmem_maintenance_tick` entries.
 
 ## CLI
 

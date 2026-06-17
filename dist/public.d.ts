@@ -22,6 +22,7 @@ export type { ForgetUserResult, GovernanceAuditRecord, DreamCandidateListOptions
  */
 export { defaultCogmemConfigPath, defaultCogmemHome, loadCogmemConfig, resolveCogmemConfigPath, } from './config/CogmemConfig.js';
 export type { CogmemConfigResolution, CogmemConfigResolutionOptions, LoadedCogmemConfig, LoadCogmemConfigOptions, } from './config/CogmemConfig.js';
+export type { MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingSource, MemoryBindingStats, MemoryBindingType, MemoryEntityRecord, MemoryEntityType, MemoryTopicRecord, } from './binding/index.js';
 /**
  * Agent framework integration facade.
  * @stable @since 2.0.0
@@ -86,9 +87,11 @@ export { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
 export { SqliteVecStore } from './store/SqliteVecStore.js';
 export { HnswlibVectorStore } from './store/HnswlibVectorStore.js';
 export { ActivationStore } from './store/ActivationStore.js';
+export { MemoryBindingStore } from './store/MemoryBindingStore.js';
 /** @deprecated Use HnswlibVectorStore. Will be removed in v3.0. */
 export { VectorStore } from './store/VectorStore.js';
 export type { ActivationDecayOptions, ActivationDecayResult, ActivationHotspot, ActivationTouchInput } from './store/ActivationStore.js';
+export type { UpsertMemoryEntityInput, UpsertMemoryTopicInput } from './store/MemoryBindingStore.js';
 export type { IVectorStore, VectorBackend, VectorSearchResult, VectorStoreStats } from './store/IVectorStore.js';
 /**
  * Offline consolidation — advanced use only.

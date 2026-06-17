@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { BeliefStore } from './belief/BeliefStore.js';
+import { MemoryBindingService, type MemoryBindingListOptions, type MemoryBindingRecord, type MemoryBindingStats } from './binding/index.js';
 import { IngestionCursorStore } from './batch/IngestionCursorStore.js';
 import { MemoryGraph } from './core/MemoryGraph.js';
 import { Metabolism } from './core/Metabolism.js';
@@ -71,6 +72,7 @@ import { EntityStore } from './store/EntityStore.js';
 import { EventStore } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
 import { InteractionUnitStore } from './store/InteractionUnitStore.js';
+import { MemoryBindingStore } from './store/MemoryBindingStore.js';
 import { SummaryStore } from './store/SummaryStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
 import { TopologyStore } from './store/TopologyStore.js';
@@ -96,7 +98,7 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '2.5.0';
+const CORE_VERSION = '2.7.0';
 const LATEST_SCHEMA_VERSION = 12;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
@@ -218,6 +220,9 @@ export interface MemorySelfMap {
     neurons: number;
     vectors: number;
     activationHotspots: number;
+    memoryBindings: number;
+    memoryBindingTopics: number;
+    memoryBindingEntities: number;
     dreamBacklog: DreamBacklogStatus;
     dreamCandidateQueue: DreamGovernanceRunResult['queue'];
   };
@@ -365,6 +370,8 @@ export interface ForgetUserResult {
     compiledEvents: number;
     embeddings: number;
     vectors: number;
+    activations: number;
+    memoryBindings: number;
   };
 }
 
@@ -392,6 +399,7 @@ export class MemoryKernel {
   readonly neuronEmbeddingStore: NeuronEmbeddingStore;
   readonly dreamLedgerStore: DreamLedgerStore;
   readonly activationStore: ActivationStore;
+  readonly memoryBindingStore: MemoryBindingStore;
   readonly pipelineMetrics: PipelineMetrics;
 
   private readonly dbPath: string;
@@ -406,6 +414,7 @@ export class MemoryKernel {
   private readonly deepWriteCandidateStore: DeepWriteCandidateStore;
   private readonly deepWritePromotionPolicy: DeepWritePromotionPolicy;
   private readonly dreamCuratorWorker: DreamCuratorWorker;
+  private readonly memoryBindingService: MemoryBindingService;
   private readonly topicSummaryBoard: TopicSummaryBoard;
   private readonly topicDecayPolicy: TopicDecayPolicy;
   private readonly localSemanticCompiler: LocalSemanticCompiler;
@@ -454,6 +463,8 @@ export class MemoryKernel {
     this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
     this.dreamLedgerStore = new DreamLedgerStore(db);
     this.activationStore = new ActivationStore(db);
+    this.memoryBindingStore = new MemoryBindingStore(db);
+    this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore);
     this.pipelineMetrics = new PipelineMetrics(db);
     this.summaryStore = new SummaryStore(db);
     this.summaryStore.migrateLegacyFactSummaries();
@@ -1029,6 +1040,18 @@ export class MemoryKernel {
     return this.deepWriteCandidateStore.countCandidates(options);
   }
 
+  bindMemoryEvent(event: MemoryEvent): MemoryBindingRecord[] {
+    return this.memoryBindingService.bindRawEvent(event);
+  }
+
+  listMemoryBindings(options: MemoryBindingListOptions = {}): MemoryBindingRecord[] {
+    return this.memoryBindingStore.listBindings(options);
+  }
+
+  getMemoryBindingStats(projectId?: string): MemoryBindingStats {
+    return this.memoryBindingStore.getStats(projectId);
+  }
+
   promoteDreamCandidates(options: DreamGovernanceRunOptions = {}): DreamGovernanceRunResult {
     const decisions = this.deepWritePromotionPolicy.promotePending(options.limit ?? 100, {
       projectId: options.projectId,
@@ -1062,6 +1085,7 @@ export class MemoryKernel {
     const dreamBacklog = this.getDreamBacklogStatus(projectId);
     const dreamCandidateQueue = this.getDreamCandidateQueue(projectId);
     const activationHotspots = this.activationStore.getTop({ projectId, limit: 20 });
+    const memoryBindingStats = this.getMemoryBindingStats(projectId);
 
     return {
       version: 'memory_map.v1',
@@ -1097,6 +1121,12 @@ export class MemoryKernel {
           currentCount: activationHotspots.length,
         },
         {
+          id: 'memory_binding',
+          name: 'Memory binding layer',
+          role: 'deterministic raw-event bindings to stable entity and topic paths before governed fact promotion',
+          currentCount: memoryBindingStats.bindings,
+        },
+        {
           id: 'dream_queue',
           name: 'Dream curator queue',
           role: 'candidate-only background-compatible consolidation backlog controlled by the host',
@@ -1128,6 +1158,12 @@ export class MemoryKernel {
           route: 'MemoryKernel.runMaintenanceTick() / cogmem memory tick',
           useWhen: 'Let the host decide when to decay activation, run dream, govern candidates, or re-embed.',
         },
+        {
+          id: 'memory_binding',
+          name: 'Memory binding',
+          route: 'MemoryKernel.listMemoryBindings() / cogmem memory map',
+          useWhen: 'Inspect which raw user events have been attached to stable people, projects, concepts, and topic paths.',
+        },
       ],
       bounds: [
         'kernel-only memory layer; no notes app, wiki, or UI ownership',
@@ -1149,6 +1185,7 @@ export class MemoryKernel {
           'Call recallPack() before answering when the host wants direct recall plus associative, belief, and entity context.',
           'Use collection "theseus" for creative artifacts and collection "anchor" or no collection for operational memory.',
           'Use memory map for self-inspection; use maintenance tick for explicit host-owned upkeep signals.',
+          'Use memory bindings as source-anchored organization hints, not as promoted long-term facts.',
         ],
       },
       counters: {
@@ -1156,6 +1193,9 @@ export class MemoryKernel {
         neurons: projectNeurons,
         vectors: this.vectorStore.getCurrentCount(),
         activationHotspots: activationHotspots.length,
+        memoryBindings: memoryBindingStats.bindings,
+        memoryBindingTopics: memoryBindingStats.topics,
+        memoryBindingEntities: memoryBindingStats.entities,
         dreamBacklog,
         dreamCandidateQueue,
       },
@@ -1345,6 +1385,8 @@ export class MemoryKernel {
       compiledEvents: 0,
       embeddings: 0,
       vectors: 0,
+      activations: 0,
+      memoryBindings: 0,
     };
 
     const placeholders = neuronIds.map(() => '?').join(', ');
@@ -1367,6 +1409,8 @@ export class MemoryKernel {
         runDelete(`UPDATE neurons SET is_deleted = 1, status = 'archived', updated_at = ? WHERE id IN (${placeholders})`, [Date.now(), ...neuronIds]);
       }
       deleted.events += runDelete(`DELETE FROM memory_events WHERE project_id = ?`, [projectId]);
+      deleted.activations += this.activationStore.deleteByProject(projectId);
+      deleted.memoryBindings += this.memoryBindingStore.deleteByProject(projectId);
       runDelete(`DELETE FROM temporal_adjacency WHERE project_id = ?`, [projectId]);
       runDelete(`DELETE FROM cognitive_nodes WHERE project_id = ?`, [projectId]);
       runDelete(`DELETE FROM cognitive_edges WHERE project_id = ?`, [projectId]);

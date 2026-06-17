@@ -186,3 +186,5 @@ The migration command is idempotent. Re-running it skips records already importe
 Hermes integration is currently a skill plus MCP bridge. It does not replace a native Hermes memory provider and it does not patch Hermes runtime internals. `cogmem connect hermes --workspace . --auto` writes or updates the `mcp_servers.cogmem` entry in the Hermes config. Restart or reload Hermes after patching MCP config.
 
 For active memory search through MCP, call `cogmem_recall` with `projectId: "hermes"` and `query`. `agentId` is optional for project-scoped Hermes calls; the MCP bridge infers it from `projectId`. The tool returns the same `items` shape as `cogmem memory recall`, including `raw_ledger` fallback and `sourceContext` locators when vectors are empty.
+
+Use `cogmem memory map --project hermes --json` or MCP `cogmem_memory_map` to inspect Memory Binding v0 counters. Bindings attach high-value user raw events to stable topic/entity paths for organization and drill-down only; they are not verified facts, user preferences, or instructions. Re-run `cogmem connect hermes --workspace . --auto` after upgrades to patch existing MCP allow-lists with new Cogmem tools.

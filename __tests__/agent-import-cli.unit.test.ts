@@ -1160,6 +1160,50 @@ test('cogmem-connect hermes --auto patches Hermes MCP config without claiming na
   expect(config).not.toContain('memory:\n  provider: cogmem');
 });
 
+test('cogmem-connect hermes --auto updates existing Cogmem MCP tool allow-list', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-hermes-existing-'));
+  const workspace = join(dir, 'workspace');
+  const hermesConfig = join(dir, '.hermes', 'config.yaml');
+  mkdirSync(workspace);
+  mkdirSync(dirname(hermesConfig), { recursive: true });
+  writeFileSync(hermesConfig, [
+    'model:',
+    '  provider: test',
+    'mcp_servers:',
+    '  cogmem:',
+    '    command: "cogmem-mcp"',
+    '    args: []',
+    '    enabled: true',
+    '    tools:',
+    '      include:',
+    '        - cogmem_remember_turn',
+    '        - cogmem_recall',
+    '        - cogmem_explain_recall',
+    '',
+  ].join('\n'));
+
+  const installed = await runCli([
+    'bun',
+    connectBin,
+    'hermes',
+    '--workspace',
+    workspace,
+    '--auto',
+    '--hermes-config',
+    hermesConfig,
+    '--json',
+  ], coreRoot, { HOME: dir });
+
+  expect(installed.stderr).toBe('');
+  expect(installed.exitCode).toBe(0);
+  const parsed = JSON.parse(installed.stdout);
+  expect(parsed.hermesMcp.configUpdated).toBe(true);
+  const config = readFileSync(hermesConfig, 'utf8');
+  expect(config).toContain('cogmem_memory_map');
+  expect(config).toContain('cogmem_maintenance_tick');
+  expect(config.match(/cogmem_recall/g)?.length).toBe(1);
+});
+
 test('package exposes agent migration bins', () => {
   const packageJson = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8'));
 

@@ -52,6 +52,12 @@ export class KernelAgentMemoryBackend {
         if (assistantEvent) {
             this.kernel.eventStore.updateNextEventId(userEvent.eventId, assistantEvent.eventId);
         }
+        try {
+            this.kernel.bindMemoryEvent(userEvent);
+        }
+        catch {
+            // Binding is an organizational side index; raw ledger writes must remain authoritative.
+        }
         const sourceRefs = [userEvent, assistantEvent].filter(Boolean).map((event) => ({
             eventId: event.eventId,
             eventType: 'message',

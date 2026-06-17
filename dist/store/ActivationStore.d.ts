@@ -38,6 +38,7 @@ export declare class ActivationStore {
         excludeNeuronIds?: string[];
     }): ActivationHotspot[];
     decay(options?: ActivationDecayOptions): ActivationDecayResult;
+    deleteByProject(projectId: string): number;
     close(): void;
     private initializeSchema;
 }

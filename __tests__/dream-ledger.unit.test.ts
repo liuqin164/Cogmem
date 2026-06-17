@@ -116,87 +116,93 @@ test('dream curator can use explicit memory-model generation to create governanc
   const result = await kernel.runDreamCurator({
     projectId: 'demo',
     limit: 20,
-    generateText: async () => JSON.stringify({
-      userPreferenceCandidates: [
-        {
-          statement: '用户希望记忆系统不是黑盒，并能定位到原始对话。',
-          confidence: 0.78,
-          evidenceEventIds: ['all'],
-          tags: ['memory_black_box', 'auditability'],
-        },
-      ],
-      projectMemoryCandidates: [
-        {
-          statement: 'CogMem 注入摘要必须附带 raw ledger source locator。',
-          confidence: 0.82,
-          evidenceEventIds: ['all'],
-          tags: ['CogMem', 'source_drilldown'],
-        },
-      ],
-      longTermGoalCandidates: [
-        {
-          statement: '长期目标是让 agent 可以自然浮现旧但重要记忆，同时可审计原文。',
-          confidence: 0.74,
-          evidenceEventIds: ['all'],
-        },
-      ],
-      boundaryCandidates: [
-        {
-          statement: '禁止把导入摘要当成用户原话。',
-          confidence: 0.86,
-          evidenceEventIds: ['all'],
-        },
-      ],
-      failureLessonCandidates: [
-        {
-          statement: '只注入摘要会让 agent 知道发生了什么但无法理解完整脉络。',
-          confidence: 0.77,
-          evidenceEventIds: ['all'],
-        },
-      ],
-      diagnosticConclusionCandidates: [
-        {
-          symptom: 'agent 无法回答用户原话',
-          rootCause: '召回项缺少可操作 source context',
-          recommendation: '注入 source locator 并用 memory show 下钻',
-          confidence: 0.8,
-          evidenceEventIds: ['all'],
-        },
-      ],
-      sessionSummaryCandidates: [
-        {
-          summary: '用户指出记忆黑盒和原话定位问题，assistant 承诺用 raw ledger source 治理。',
-          confidence: 0.76,
-          evidenceEventIds: ['all'],
-        },
-      ],
-      topicSummaryCandidates: [
-        {
-          topic: '记忆黑盒',
-          summary: '黑盒问题的核心是注入摘要缺少原始事件定位和上下文。',
-          confidence: 0.75,
-          evidenceEventIds: ['all'],
-        },
-      ],
-      temporalFactUpdateCandidates: [
-        {
-          statement: '导入摘要不能回答原话',
-          validFrom: '2026-06-08T00:00:00.000Z',
-          supersedes: ['legacy-summary-as-source'],
-          confidence: 0.7,
-          evidenceEventIds: ['all'],
-        },
-      ],
-      conflictCandidates: [
-        {
-          newStatement: '原话问题必须走 raw ledger',
-          possiblySupersededStatement: '摘要注入足以回答历史问题',
-          conflictSetId: 'memory-black-box-source',
-          confidence: 0.72,
-          evidenceEventIds: ['all'],
-        },
-      ],
-    }),
+    generateText: async (_systemPrompt, userPrompt) => {
+      const rawLedgerEvents = JSON.parse(userPrompt).rawLedgerEvents as Array<{ eventId: string; role?: string }>;
+      const userEvidenceEventIds = rawLedgerEvents
+        .filter((event) => event.role === 'user')
+        .map((event) => event.eventId);
+      return JSON.stringify({
+        userPreferenceCandidates: [
+          {
+            statement: '用户希望记忆系统不是黑盒，并能定位到原始对话。',
+            confidence: 0.78,
+            evidenceEventIds: userEvidenceEventIds,
+            tags: ['memory_black_box', 'auditability'],
+          },
+        ],
+        projectMemoryCandidates: [
+          {
+            statement: 'CogMem 注入摘要必须附带 raw ledger source locator。',
+            confidence: 0.82,
+            evidenceEventIds: ['all'],
+            tags: ['CogMem', 'source_drilldown'],
+          },
+        ],
+        longTermGoalCandidates: [
+          {
+            statement: '长期目标是让 agent 可以自然浮现旧但重要记忆，同时可审计原文。',
+            confidence: 0.74,
+            evidenceEventIds: userEvidenceEventIds,
+          },
+        ],
+        boundaryCandidates: [
+          {
+            statement: '禁止把导入摘要当成用户原话。',
+            confidence: 0.86,
+            evidenceEventIds: userEvidenceEventIds,
+          },
+        ],
+        failureLessonCandidates: [
+          {
+            statement: '只注入摘要会让 agent 知道发生了什么但无法理解完整脉络。',
+            confidence: 0.77,
+            evidenceEventIds: userEvidenceEventIds,
+          },
+        ],
+        diagnosticConclusionCandidates: [
+          {
+            symptom: 'agent 无法回答用户原话',
+            rootCause: '召回项缺少可操作 source context',
+            recommendation: '注入 source locator 并用 memory show 下钻',
+            confidence: 0.8,
+            evidenceEventIds: ['all'],
+          },
+        ],
+        sessionSummaryCandidates: [
+          {
+            summary: '用户指出记忆黑盒和原话定位问题，assistant 承诺用 raw ledger source 治理。',
+            confidence: 0.76,
+            evidenceEventIds: ['all'],
+          },
+        ],
+        topicSummaryCandidates: [
+          {
+            topic: '记忆黑盒',
+            summary: '黑盒问题的核心是注入摘要缺少原始事件定位和上下文。',
+            confidence: 0.75,
+            evidenceEventIds: ['all'],
+          },
+        ],
+        temporalFactUpdateCandidates: [
+          {
+            statement: '导入摘要不能回答原话',
+            validFrom: '2026-06-08T00:00:00.000Z',
+            supersedes: ['legacy-summary-as-source'],
+            confidence: 0.7,
+            evidenceEventIds: ['all'],
+          },
+        ],
+        conflictCandidates: [
+          {
+            newStatement: '原话问题必须走 raw ledger',
+            possiblySupersededStatement: '摘要注入足以回答历史问题',
+            conflictSetId: 'memory-black-box-source',
+            confidence: 0.72,
+            evidenceEventIds: ['all'],
+          },
+        ],
+      });
+    },
   });
 
   const candidates = kernel.listDreamCandidates({ statuses: ['candidate'], limit: 50 });

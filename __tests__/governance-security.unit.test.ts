@@ -81,13 +81,24 @@ describe('Governance and security v1.14', () => {
     const dbPath = join(dir, 'memory.db');
     const kernel = createMemoryKernel({ dbPath });
 
-    await kernel.ingest({ projectId: 'forget-me', content: 'delete this project memory' });
+    const forgotten = await kernel.ingest({ projectId: 'forget-me', content: 'delete this project memory' });
     await kernel.ingest({ projectId: 'keep-me', content: 'keep this project memory' });
+    kernel.activationStore.touch({
+      neuronId: forgotten.id,
+      projectId: 'forget-me',
+      source: 'test:forget_user',
+    });
+    expect(kernel.buildMemoryMap({ projectId: 'forget-me' }).counters.activationHotspots).toBe(1);
+
     const result = await kernel.forgetUser('forget-me', 'user_requested');
 
     expect(result.deleted.neurons).toBe(1);
+    expect(result.deleted.activations).toBe(1);
     expect(kernel.recall('delete this project memory', { projectId: 'forget-me' }).rawEvidence).toHaveLength(0);
     expect(kernel.recall('keep this project memory', { projectId: 'keep-me' }).rawEvidence.length).toBeGreaterThan(0);
+    expect(kernel.activationStore.getTop({ projectId: 'forget-me' })).toHaveLength(0);
+    expect(kernel.buildMemoryMap({ projectId: 'forget-me' }).counters.activationHotspots).toBe(0);
+    expect(kernel.runMaintenanceTick({ projectId: 'forget-me' }).chargeVector.activationHotspots).toBe(0);
     expect(kernel.getGovernanceAudit('forget-me')[0]?.action).toBe('forgetUser');
     kernel.close();
     rmSync(dir, { recursive: true, force: true });

@@ -11,6 +11,14 @@ import {
 
 type AgentKind = 'openclaw' | 'hermes';
 
+const HERMES_COGMEM_TOOLS = [
+  'cogmem_remember_turn',
+  'cogmem_recall',
+  'cogmem_explain_recall',
+  'cogmem_memory_map',
+  'cogmem_maintenance_tick',
+];
+
 interface ConnectArgs {
   agent?: AgentKind;
   workspaceRoot: string;
@@ -172,11 +180,7 @@ function hostConfigSnippet(agent: AgentKind, workspaceRoot: string, auto: boolea
     '    enabled: true',
     '    tools:',
     '      include:',
-    '        - cogmem_remember_turn',
-    '        - cogmem_recall',
-    '        - cogmem_explain_recall',
-    '        - cogmem_memory_map',
-    '        - cogmem_maintenance_tick',
+    ...HERMES_COGMEM_TOOLS.map((tool) => `        - ${tool}`),
   ].join('\n');
 }
 
@@ -288,7 +292,7 @@ function installHermesMcpConfig(input: {
 
 function patchHermesMcpConfig(original: string, serverCommand: string): string {
   if (/^\s+cogmem\s*:/m.test(original) && original.includes('cogmem-mcp')) {
-    return original.endsWith('\n') ? original : `${original}\n`;
+    return patchExistingHermesCogmemConfig(original);
   }
 
   const lines = original.replace(/\r\n/g, '\n').split('\n');
@@ -299,11 +303,7 @@ function patchHermesMcpConfig(original: string, serverCommand: string): string {
     '    enabled: true',
     '    tools:',
     '      include:',
-    '        - cogmem_remember_turn',
-    '        - cogmem_recall',
-    '        - cogmem_explain_recall',
-    '        - cogmem_memory_map',
-    '        - cogmem_maintenance_tick',
+    ...HERMES_COGMEM_TOOLS.map((tool) => `        - ${tool}`),
   ];
 
   const mcpIndex = lines.findIndex((line) => /^mcp_servers\s*:\s*(?:\{\})?\s*$/.test(line.trim()));
@@ -321,6 +321,65 @@ function patchHermesMcpConfig(original: string, serverCommand: string): string {
   }
   lines.splice(insertAt, 0, ...serverBlock);
   return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
+}
+
+function patchExistingHermesCogmemConfig(original: string): string {
+  const lines = original.replace(/\r\n/g, '\n').split('\n');
+  const cogmemIndex = lines.findIndex((line) => /^\s+cogmem\s*:\s*$/.test(line));
+  if (cogmemIndex === -1) return original.endsWith('\n') ? original : `${original}\n`;
+
+  const cogmemIndent = leadingSpaces(lines[cogmemIndex]);
+  let blockEnd = cogmemIndex + 1;
+  while (blockEnd < lines.length) {
+    const line = lines[blockEnd];
+    if (
+      line.trim()
+      && !line.trim().startsWith('#')
+      && leadingSpaces(line) <= cogmemIndent
+    ) {
+      break;
+    }
+    blockEnd += 1;
+  }
+
+  const block = lines.slice(cogmemIndex, blockEnd);
+  const existingTools = new Set<string>();
+  for (const line of block) {
+    const match = line.match(/^\s*-\s*(cogmem_[\w-]+)\s*$/);
+    if (match?.[1]) existingTools.add(match[1]);
+  }
+  const missing = HERMES_COGMEM_TOOLS.filter((tool) => !existingTools.has(tool));
+  if (missing.length === 0) return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
+
+  const includeRelativeIndex = block.findIndex((line) => /^\s+include\s*:\s*$/.test(line));
+  if (includeRelativeIndex !== -1) {
+    const includeIndex = cogmemIndex + includeRelativeIndex;
+    const includeIndent = leadingSpaces(lines[includeIndex]);
+    let insertAt = includeIndex + 1;
+    while (insertAt < blockEnd) {
+      const line = lines[insertAt];
+      if (!line.trim()) {
+        insertAt += 1;
+        continue;
+      }
+      if (leadingSpaces(line) <= includeIndent) break;
+      if (!/^\s*-\s*/.test(line) && leadingSpaces(line) <= includeIndent + 2) break;
+      insertAt += 1;
+    }
+    const itemIndent = `${' '.repeat(includeIndent + 2)}`;
+    lines.splice(insertAt, 0, ...missing.map((tool) => `${itemIndent}- ${tool}`));
+    return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
+  }
+
+  const childIndent = `${' '.repeat(cogmemIndent + 2)}`;
+  const includeIndent = `${' '.repeat(cogmemIndent + 4)}`;
+  const itemIndent = `${' '.repeat(cogmemIndent + 6)}`;
+  lines.splice(blockEnd, 0, `${childIndent}tools:`, `${includeIndent}include:`, ...HERMES_COGMEM_TOOLS.map((tool) => `${itemIndent}- ${tool}`));
+  return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
+}
+
+function leadingSpaces(line: string): number {
+  return line.match(/^\s*/)?.[0].length ?? 0;
 }
 
 function printHuman(result: ConnectResult): void {

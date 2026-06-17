@@ -1,4 +1,5 @@
 import { BeliefStore } from './belief/BeliefStore.js';
+import { type MemoryBindingListOptions, type MemoryBindingRecord, type MemoryBindingStats } from './binding/index.js';
 import { IngestionCursorStore } from './batch/IngestionCursorStore.js';
 import { MemoryGraph } from './core/MemoryGraph.js';
 import { type BrainRecallOptions } from './recall/BrainRecall.js';
@@ -24,6 +25,7 @@ import { ActivationStore, type ActivationDecayResult, type ActivationHotspot } f
 import { EntityStore } from './store/EntityStore.js';
 import { EventStore } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
+import { MemoryBindingStore } from './store/MemoryBindingStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
 import { TopologyStore } from './store/TopologyStore.js';
 import type { IVectorStore, VectorBackend } from './store/IVectorStore.js';
@@ -134,6 +136,9 @@ export interface MemorySelfMap {
         neurons: number;
         vectors: number;
         activationHotspots: number;
+        memoryBindings: number;
+        memoryBindingTopics: number;
+        memoryBindingEntities: number;
         dreamBacklog: DreamBacklogStatus;
         dreamCandidateQueue: DreamGovernanceRunResult['queue'];
     };
@@ -267,6 +272,8 @@ export interface ForgetUserResult {
         compiledEvents: number;
         embeddings: number;
         vectors: number;
+        activations: number;
+        memoryBindings: number;
     };
 }
 export interface GovernanceAuditRecord {
@@ -293,6 +300,7 @@ export declare class MemoryKernel {
     readonly neuronEmbeddingStore: NeuronEmbeddingStore;
     readonly dreamLedgerStore: DreamLedgerStore;
     readonly activationStore: ActivationStore;
+    readonly memoryBindingStore: MemoryBindingStore;
     readonly pipelineMetrics: PipelineMetrics;
     private readonly dbPath;
     private readonly embedder;
@@ -306,6 +314,7 @@ export declare class MemoryKernel {
     private readonly deepWriteCandidateStore;
     private readonly deepWritePromotionPolicy;
     private readonly dreamCuratorWorker;
+    private readonly memoryBindingService;
     private readonly topicSummaryBoard;
     private readonly topicDecayPolicy;
     private readonly localSemanticCompiler;
@@ -378,6 +387,9 @@ export declare class MemoryKernel {
     runDreamCurator(options?: DreamCuratorRunOptions): Promise<DreamCuratorRunResult>;
     listDreamCandidates(options?: DreamCandidateListOptions): DreamCandidateRecord[];
     countDreamCandidates(options?: Omit<DreamCandidateListOptions, 'limit'>): number;
+    bindMemoryEvent(event: MemoryEvent): MemoryBindingRecord[];
+    listMemoryBindings(options?: MemoryBindingListOptions): MemoryBindingRecord[];
+    getMemoryBindingStats(projectId?: string): MemoryBindingStats;
     promoteDreamCandidates(options?: DreamGovernanceRunOptions): DreamGovernanceRunResult;
     getDreamCandidateQueue(projectId?: string): DreamGovernanceRunResult['queue'];
     buildMemoryMap(options?: MemoryMapOptions): MemorySelfMap;
