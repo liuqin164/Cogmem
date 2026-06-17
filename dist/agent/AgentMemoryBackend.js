@@ -52,6 +52,21 @@ export class KernelAgentMemoryBackend {
         if (assistantEvent) {
             this.kernel.eventStore.updateNextEventId(userEvent.eventId, assistantEvent.eventId);
         }
+        try {
+            this.kernel.bindMemoryEvent(userEvent);
+        }
+        catch (error) {
+            // Binding is an organizational side index; raw ledger writes must remain authoritative.
+            this.kernel.pipelineMetrics.recordNonFatal('memory_binding_failed', {
+                projectId: turn.projectId,
+                message: error instanceof Error ? error.message : String(error),
+                details: {
+                    eventId: userEvent.eventId,
+                    sessionId: turn.sessionId,
+                    agentId: turn.agentId,
+                },
+            });
+        }
         const sourceRefs = [userEvent, assistantEvent].filter(Boolean).map((event) => ({
             eventId: event.eventId,
             eventType: 'message',
@@ -209,6 +224,7 @@ export class KernelAgentMemoryBackend {
             return this.recallForensicQuote(query, queryPlan);
         }
         const limit = query.limit ?? 5;
+        const graphItems = this.memoryBindingGraphItemsForQuery(query, queryPlan, limit);
         const retrievalLimit = Math.max(limit * 4, 24);
         const result = this.kernel.navigateMemory(queryPlan.primarySearchText, {
             projectId: query.projectId,
@@ -224,7 +240,7 @@ export class KernelAgentMemoryBackend {
             if (this.shouldPreferRawLedgerFallback(scopedItems, rawFallbackItems, queryPlan)) {
                 return {
                     recallMode: 'raw_ledger_fallback',
-                    items: this.mergeRecallItems(rawFallbackItems, scopedItems, limit),
+                    items: this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, scopedItems, limit), limit),
                     narrative: result.navigation?.narrative,
                     pulseTrace: result.navigation?.pulse.trace,
                     temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
@@ -235,7 +251,7 @@ export class KernelAgentMemoryBackend {
             }
             return {
                 recallMode: result.recallMode,
-                items: scopedItems,
+                items: this.mergeRecallItems(graphItems, scopedItems, limit),
                 narrative: result.navigation?.narrative,
                 pulseTrace: result.navigation?.pulse.trace,
                 temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
@@ -256,7 +272,7 @@ export class KernelAgentMemoryBackend {
             if (this.shouldPreferRawLedgerFallback(fallbackItems, rawFallbackItems, queryPlan)) {
                 return {
                     recallMode: 'raw_ledger_fallback',
-                    items: this.mergeRecallItems(rawFallbackItems, fallbackItems, limit),
+                    items: this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, fallbackItems, limit), limit),
                     narrative: result.navigation?.narrative,
                     pulseTrace: result.navigation?.pulse.trace,
                     temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
@@ -267,7 +283,7 @@ export class KernelAgentMemoryBackend {
             }
             return {
                 recallMode: 'brain_recall_fallback',
-                items: fallbackItems,
+                items: this.mergeRecallItems(graphItems, fallbackItems, limit),
                 narrative: result.navigation?.narrative,
                 pulseTrace: result.navigation?.pulse.trace,
                 temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
@@ -279,7 +295,7 @@ export class KernelAgentMemoryBackend {
         const rawItems = this.rawLedgerFallbackItemsForQuery(queryPlan, query, limit);
         return {
             recallMode: 'raw_ledger_fallback',
-            items: rawItems,
+            items: this.mergeRecallItems(graphItems, rawItems, limit),
             narrative: result.navigation?.narrative,
             pulseTrace: result.navigation?.pulse.trace,
             temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
@@ -465,6 +481,57 @@ export class KernelAgentMemoryBackend {
             whyMatched: 'raw_ledger_text_fallback',
             canAnswerExactQuote: true,
         }));
+    }
+    memoryBindingGraphItemsForQuery(query, queryPlan, limit) {
+        const anchors = this.kernel.recallMemoryBindingGraph([query.query, queryPlan.primarySearchText, ...queryPlan.searchTexts].join('\n'), {
+            projectId: query.projectId,
+            limit: Math.max(limit * 2, 8),
+        });
+        const items = [];
+        const seen = new Set();
+        for (const anchor of anchors) {
+            if (seen.has(anchor.eventId))
+                continue;
+            const event = this.kernel.getEventContext(anchor.eventId, { before: 0, after: 0 })?.event;
+            if (!event)
+                continue;
+            if (!this.isAgentRawEvent(event, query.agentId))
+                continue;
+            if (!this.isAllowedSession(event, query))
+                continue;
+            if (!this.isAllowedRawEventCollection(event, query.collection))
+                continue;
+            if (this.isOperationalNoiseRawEvent(event))
+                continue;
+            if (!this.hasReadableEventText(event))
+                continue;
+            const item = this.toAgentRawRecallItem(event, {
+                sourceType: 'raw_ledger',
+                whyMatched: 'memory_binding_graph',
+                canAnswerExactQuote: true,
+            });
+            items.push({
+                ...item,
+                topicPath: anchor.topicPath,
+                confidence: anchor.confidence,
+                tags: [
+                    ...item.tags,
+                    `topic:${anchor.topicPath}`,
+                    anchor.clusterId ? `cluster:${anchor.clusterId}` : '',
+                ].filter(Boolean),
+            });
+            seen.add(anchor.eventId);
+        }
+        return items
+            .sort((a, b) => this.graphRecallTextScore(b, query) - this.graphRecallTextScore(a, query))
+            .slice(0, limit);
+    }
+    graphRecallTextScore(item, query) {
+        const queryTerms = uniqueNonEmpty(query.query.toLowerCase().split(/[^a-z0-9\u4e00-\u9fff_-]+/))
+            .filter((term) => term.length >= 2 && !/^(cogmem|memory|project|之前|什么|问题|why|did|say)$/i.test(term));
+        const haystack = this.itemSearchableText(item).toLowerCase();
+        const overlap = queryTerms.filter((term) => haystack.includes(term)).length;
+        return overlap + (item.confidence || 0);
     }
     shouldPreferRawLedgerFallback(candidateItems, rawFallbackItems, queryPlan) {
         if (rawFallbackItems.length === 0)

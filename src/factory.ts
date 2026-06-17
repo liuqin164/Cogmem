@@ -1,6 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { BeliefStore } from './belief/BeliefStore.js';
+import {
+  MemoryBindingService,
+  type MemoryBindingListOptions,
+  type MemoryBindingRecord,
+  type MemoryBindingStats,
+  type MemoryClusterListOptions,
+  type MemoryClusterRecord,
+  type MemoryEdgeListOptions,
+  type MemoryEdgeRecord,
+  type MemoryGraphRecallAnchor,
+} from './binding/index.js';
 import { IngestionCursorStore } from './batch/IngestionCursorStore.js';
 import { MemoryGraph } from './core/MemoryGraph.js';
 import { Metabolism } from './core/Metabolism.js';
@@ -71,6 +82,7 @@ import { EntityStore } from './store/EntityStore.js';
 import { EventStore } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
 import { InteractionUnitStore } from './store/InteractionUnitStore.js';
+import { MemoryBindingStore } from './store/MemoryBindingStore.js';
 import { SummaryStore } from './store/SummaryStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
 import { TopologyStore } from './store/TopologyStore.js';
@@ -96,8 +108,8 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '2.5.0';
-const LATEST_SCHEMA_VERSION = 12;
+const CORE_VERSION = '2.7.0';
+const LATEST_SCHEMA_VERSION = 13;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 
@@ -188,6 +200,30 @@ export interface MemoryMapOptions {
   projectId?: string;
 }
 
+export interface MemoryBindingBackfillOptions {
+  projectId?: string;
+  workspaceId?: string;
+  threadId?: string;
+  sessionId?: string;
+  sinceGlobalSeq?: number;
+  limit?: number;
+}
+
+export interface MemoryBindingBackfillResult {
+  projectId?: string;
+  sinceGlobalSeq?: number;
+  scannedEvents: number;
+  bindableEvents: number;
+  boundEvents: number;
+  createdBindings: number;
+  skippedAlreadyBound: number;
+  failedEvents: number;
+  errors: Array<{
+    eventId: string;
+    message: string;
+  }>;
+}
+
 export interface MemoryMapSection {
   id: string;
   name: string;
@@ -218,6 +254,11 @@ export interface MemorySelfMap {
     neurons: number;
     vectors: number;
     activationHotspots: number;
+    memoryBindings: number;
+    memoryBindingTopics: number;
+    memoryBindingEntities: number;
+    memoryBindingClusters: number;
+    memoryBindingEdges: number;
     dreamBacklog: DreamBacklogStatus;
     dreamCandidateQueue: DreamGovernanceRunResult['queue'];
   };
@@ -231,7 +272,14 @@ export interface MaintenanceTickOptions {
 }
 
 export interface MaintenanceSuggestedAction {
-  kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots';
+  kind:
+    | 'dream_curator'
+    | 'govern_candidates'
+    | 'resolve_entities'
+    | 're_embed'
+    | 'inspect_hotspots'
+    | 'bind_raw_events'
+    | 'inspect_binding_failures';
   command: string;
   reason: string;
 }
@@ -247,6 +295,8 @@ export interface MaintenanceTickResult {
     entityConflicts: number;
     activationHotspots: number;
     staleVectors: number;
+    unboundRawEvents: number;
+    bindingFailures: number;
   };
   executed: {
     activationDecay: ActivationDecayResult;
@@ -365,6 +415,8 @@ export interface ForgetUserResult {
     compiledEvents: number;
     embeddings: number;
     vectors: number;
+    activations: number;
+    memoryBindings: number;
   };
 }
 
@@ -392,6 +444,7 @@ export class MemoryKernel {
   readonly neuronEmbeddingStore: NeuronEmbeddingStore;
   readonly dreamLedgerStore: DreamLedgerStore;
   readonly activationStore: ActivationStore;
+  readonly memoryBindingStore: MemoryBindingStore;
   readonly pipelineMetrics: PipelineMetrics;
 
   private readonly dbPath: string;
@@ -406,6 +459,7 @@ export class MemoryKernel {
   private readonly deepWriteCandidateStore: DeepWriteCandidateStore;
   private readonly deepWritePromotionPolicy: DeepWritePromotionPolicy;
   private readonly dreamCuratorWorker: DreamCuratorWorker;
+  private readonly memoryBindingService: MemoryBindingService;
   private readonly topicSummaryBoard: TopicSummaryBoard;
   private readonly topicDecayPolicy: TopicDecayPolicy;
   private readonly localSemanticCompiler: LocalSemanticCompiler;
@@ -454,6 +508,8 @@ export class MemoryKernel {
     this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
     this.dreamLedgerStore = new DreamLedgerStore(db);
     this.activationStore = new ActivationStore(db);
+    this.memoryBindingStore = new MemoryBindingStore(db);
+    this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore);
     this.pipelineMetrics = new PipelineMetrics(db);
     this.summaryStore = new SummaryStore(db);
     this.summaryStore.migrateLegacyFactSummaries();
@@ -1029,6 +1085,94 @@ export class MemoryKernel {
     return this.deepWriteCandidateStore.countCandidates(options);
   }
 
+  bindMemoryEvent(event: MemoryEvent): MemoryBindingRecord[] {
+    return this.memoryBindingService.bindRawEvent(event);
+  }
+
+  bindRawEvents(options: MemoryBindingBackfillOptions = {}): MemoryBindingBackfillResult {
+    const limit = Math.max(1, Math.min(options.limit ?? 500, 5000));
+    const page = this.eventStore.queryEvents(1, limit, {
+      projectId: options.projectId ? [options.projectId] : undefined,
+      workspaceId: options.workspaceId ? [options.workspaceId] : undefined,
+      threadId: options.threadId ? [options.threadId] : undefined,
+      sessionId: options.sessionId ? [options.sessionId] : undefined,
+    });
+    const records = page.records
+      .filter((event) => options.sinceGlobalSeq === undefined || (event.globalSeq || 0) >= options.sinceGlobalSeq)
+      .sort((a, b) => (a.globalSeq || 0) - (b.globalSeq || 0));
+    const result: MemoryBindingBackfillResult = {
+      projectId: options.projectId,
+      sinceGlobalSeq: options.sinceGlobalSeq,
+      scannedEvents: records.length,
+      bindableEvents: 0,
+      boundEvents: 0,
+      createdBindings: 0,
+      skippedAlreadyBound: 0,
+      failedEvents: 0,
+      errors: [],
+    };
+
+    for (const event of records) {
+      if (!this.memoryBindingService.isBindableRawEvent(event)) continue;
+      result.bindableEvents += 1;
+      if (this.memoryBindingStore.listBindings({ eventId: event.eventId, limit: 1 }).length > 0) {
+        result.skippedAlreadyBound += 1;
+        continue;
+      }
+      try {
+        const bindings = this.bindMemoryEvent(event);
+        if (bindings.length > 0) {
+          result.boundEvents += 1;
+          result.createdBindings += bindings.length;
+        }
+      } catch (error) {
+        result.failedEvents += 1;
+        const message = error instanceof Error ? error.message : String(error);
+        result.errors.push({ eventId: event.eventId, message });
+        this.pipelineMetrics.recordNonFatal('memory_binding_failed', {
+          projectId: event.projectId,
+          message,
+          details: { eventId: event.eventId, source: 'bindRawEvents' },
+        });
+      }
+    }
+
+    return result;
+  }
+
+  listMemoryBindings(options: MemoryBindingListOptions = {}): MemoryBindingRecord[] {
+    return this.memoryBindingStore.listBindings(options);
+  }
+
+  listMemoryClusters(options: MemoryClusterListOptions = {}): MemoryClusterRecord[] {
+    return this.memoryBindingStore.listClusters(options);
+  }
+
+  listMemoryEdges(options: MemoryEdgeListOptions = {}): MemoryEdgeRecord[] {
+    return this.memoryBindingStore.listEdges(options);
+  }
+
+  recallMemoryBindingGraph(query: string, options: { projectId?: string; limit?: number } = {}): MemoryGraphRecallAnchor[] {
+    return this.memoryBindingService.recallGraphAnchors(query, options);
+  }
+
+  getMemoryBindingStats(projectId?: string): MemoryBindingStats {
+    return this.memoryBindingStore.getStats(projectId);
+  }
+
+  countUnboundBindableRawEvents(projectId?: string, limit: number = 1000): number {
+    const page = this.eventStore.queryEvents(1, Math.max(1, limit), {
+      projectId: projectId ? [projectId] : undefined,
+    });
+    let count = 0;
+    for (const event of page.records) {
+      if (!this.memoryBindingService.isBindableRawEvent(event)) continue;
+      if (this.memoryBindingStore.listBindings({ eventId: event.eventId, limit: 1 }).length > 0) continue;
+      count += 1;
+    }
+    return count;
+  }
+
   promoteDreamCandidates(options: DreamGovernanceRunOptions = {}): DreamGovernanceRunResult {
     const decisions = this.deepWritePromotionPolicy.promotePending(options.limit ?? 100, {
       projectId: options.projectId,
@@ -1062,6 +1206,7 @@ export class MemoryKernel {
     const dreamBacklog = this.getDreamBacklogStatus(projectId);
     const dreamCandidateQueue = this.getDreamCandidateQueue(projectId);
     const activationHotspots = this.activationStore.getTop({ projectId, limit: 20 });
+    const memoryBindingStats = this.getMemoryBindingStats(projectId);
 
     return {
       version: 'memory_map.v1',
@@ -1097,6 +1242,12 @@ export class MemoryKernel {
           currentCount: activationHotspots.length,
         },
         {
+          id: 'memory_binding',
+          name: 'Memory binding layer',
+          role: 'deterministic raw-event bindings, clusters, and graph edges before governed fact promotion',
+          currentCount: memoryBindingStats.bindings,
+        },
+        {
           id: 'dream_queue',
           name: 'Dream curator queue',
           role: 'candidate-only background-compatible consolidation backlog controlled by the host',
@@ -1128,6 +1279,12 @@ export class MemoryKernel {
           route: 'MemoryKernel.runMaintenanceTick() / cogmem memory tick',
           useWhen: 'Let the host decide when to decay activation, run dream, govern candidates, or re-embed.',
         },
+        {
+          id: 'memory_binding',
+          name: 'Memory binding',
+          route: 'MemoryKernel.listMemoryBindings(), listMemoryClusters(), listMemoryEdges(), bindRawEvents(), recallMemoryBindingGraph() / cogmem memory map|bind',
+          useWhen: 'Inspect or backfill raw-event topic/entity bindings, claim-key clusters, correction edges, and graph-recall anchors.',
+        },
       ],
       bounds: [
         'kernel-only memory layer; no notes app, wiki, or UI ownership',
@@ -1143,12 +1300,15 @@ export class MemoryKernel {
           'cogmem memory show --event <event-id> --before 2 --after 2',
           'cogmem memory map --project <id> --json',
           'cogmem memory tick --project <id> --json',
+          'cogmem memory bind --project <id> --json',
           'cogmem memory dream --project <id> --watch --interval-ms 300000 --promote',
         ],
         agentUsage: [
           'Call recallPack() before answering when the host wants direct recall plus associative, belief, and entity context.',
           'Use collection "theseus" for creative artifacts and collection "anchor" or no collection for operational memory.',
           'Use memory map for self-inspection; use maintenance tick for explicit host-owned upkeep signals.',
+          'Run memory bind when maintenance tick reports bind_raw_events for imported or adapter-written raw user events.',
+          'Use memory bindings, claim-key clusters, correction edges, and graph recall anchors as source-anchored organization hints, not as promoted long-term facts.',
         ],
       },
       counters: {
@@ -1156,6 +1316,11 @@ export class MemoryKernel {
         neurons: projectNeurons,
         vectors: this.vectorStore.getCurrentCount(),
         activationHotspots: activationHotspots.length,
+        memoryBindings: memoryBindingStats.bindings,
+        memoryBindingTopics: memoryBindingStats.topics,
+        memoryBindingEntities: memoryBindingStats.entities,
+        memoryBindingClusters: memoryBindingStats.clusters,
+        memoryBindingEdges: memoryBindingStats.edges,
         dreamBacklog,
         dreamCandidateQueue,
       },
@@ -1185,6 +1350,8 @@ export class MemoryKernel {
     const reEmbedding = this.getReEmbeddingStatus();
     const staleVectors = this.getHealthStatus().hasStaleVectors ? reEmbedding.total - reEmbedding.completed : 0;
     const candidateQueue = queue.candidate + queue.needsConfirmation + queue.shadow;
+    const unboundRawEvents = this.countUnboundBindableRawEvents(projectId);
+    const bindingFailures = this.pipelineMetrics.getNonFatalCount('memory_binding_failed', { projectId });
     const suggestedActions: MaintenanceSuggestedAction[] = [];
 
     if (dreamBacklog.undreamedRawCount > 0) {
@@ -1215,6 +1382,20 @@ export class MemoryKernel {
         reason: `${staleVectors} embeddings are stale for the configured embedding model.`,
       });
     }
+    if (unboundRawEvents > 0) {
+      suggestedActions.push({
+        kind: 'bind_raw_events',
+        command: `cogmem memory bind${projectId ? ` --project ${projectId}` : ''} --json`,
+        reason: `${unboundRawEvents} high-value raw user events are not attached to memory binding clusters yet.`,
+      });
+    }
+    if (bindingFailures > 0) {
+      suggestedActions.push({
+        kind: 'inspect_binding_failures',
+        command: `cogmem memory tick${projectId ? ` --project ${projectId}` : ''} --json`,
+        reason: `${bindingFailures} non-fatal memory binding failures were recorded; raw ledger writes were preserved.`,
+      });
+    }
     if (hotspots.length > 0) {
       suggestedActions.push({
         kind: 'inspect_hotspots',
@@ -1234,6 +1415,8 @@ export class MemoryKernel {
         entityConflicts,
         activationHotspots: hotspots.length,
         staleVectors,
+        unboundRawEvents,
+        bindingFailures,
       },
       executed: {
         activationDecay,
@@ -1345,6 +1528,8 @@ export class MemoryKernel {
       compiledEvents: 0,
       embeddings: 0,
       vectors: 0,
+      activations: 0,
+      memoryBindings: 0,
     };
 
     const placeholders = neuronIds.map(() => '?').join(', ');
@@ -1367,6 +1552,8 @@ export class MemoryKernel {
         runDelete(`UPDATE neurons SET is_deleted = 1, status = 'archived', updated_at = ? WHERE id IN (${placeholders})`, [Date.now(), ...neuronIds]);
       }
       deleted.events += runDelete(`DELETE FROM memory_events WHERE project_id = ?`, [projectId]);
+      deleted.activations += this.activationStore.deleteByProject(projectId);
+      deleted.memoryBindings += this.memoryBindingStore.deleteByProject(projectId);
       runDelete(`DELETE FROM temporal_adjacency WHERE project_id = ?`, [projectId]);
       runDelete(`DELETE FROM cognitive_nodes WHERE project_id = ?`, [projectId]);
       runDelete(`DELETE FROM cognitive_edges WHERE project_id = ?`, [projectId]);

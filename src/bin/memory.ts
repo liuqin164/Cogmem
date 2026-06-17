@@ -13,7 +13,7 @@ import type { DeepWriteCandidateRecord, DeepWriteCandidateStatus } from '../stor
 import type { MemoryEvent } from '../types/index.js';
 
 interface MemoryArgs {
-  command?: 'status' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'map' | 'tick';
+  command?: 'status' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'map' | 'tick' | 'bind';
   query?: string;
   eventId?: string;
   status?: DeepWriteCandidateStatus;
@@ -28,6 +28,7 @@ interface MemoryArgs {
   limit?: number;
   before?: number;
   after?: number;
+  sinceGlobalSeq?: number;
   intervalMs?: number;
   maxRuns?: number;
   promoteLimit?: number;
@@ -73,6 +74,7 @@ function readArgs(argv: string[]): MemoryArgs {
     limit: numberArg(values, 'limit'),
     before: numberArg(values, 'before'),
     after: numberArg(values, 'after'),
+    sinceGlobalSeq: numberArg(values, 'since') ?? numberArg(values, 'since-global-seq'),
     intervalMs: numberArg(values, 'interval-ms'),
     maxRuns: numberArg(values, 'max-runs'),
     promoteLimit: numberArg(values, 'promote-limit'),
@@ -87,7 +89,7 @@ function readArgs(argv: string[]): MemoryArgs {
 
 function usage(): string {
   return [
-    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|map|tick> [args]',
+    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|map|tick|bind> [args]',
     '',
     'Commands:',
     '  status               summarize raw ledger, vector, and dream backlog state',
@@ -100,6 +102,7 @@ function usage(): string {
     '  candidates           list dream/deep-write governance candidates',
     '  map                  print the self-describing memory map for agent/host inspection',
     '  tick                 run one explicit host-owned maintenance tick',
+    '  bind                 backfill memory bindings for high-value raw user events',
     '',
     'Common options:',
     '  --project <id>       scope to one project',
@@ -108,6 +111,7 @@ function usage(): string {
     '  --thread <id>        scope to one thread',
     '  --session <id>       scope to one session',
     '  --limit <n>          result limit, default 20',
+    '  --since <globalSeq>  for bind, scan raw events at or after a global sequence',
     '  --status <status>    candidate queue status, default candidate',
     '  --promote            after dream, run CPU governance over pending candidates',
     '  --promote-limit <n>  governance candidate limit, default follows --limit or 100',
@@ -135,7 +139,8 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'govern'
     || value === 'candidates'
     || value === 'map'
-    || value === 'tick';
+    || value === 'tick'
+    || value === 'bind';
 }
 
 function recallIntentArg(
@@ -337,6 +342,17 @@ function runTick(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown
   return kernel.runMaintenanceTick({ projectId: args.projectId }) as unknown as Record<string, unknown>;
 }
 
+function runBind(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  return kernel.bindRawEvents({
+    projectId: args.projectId,
+    workspaceId: args.workspaceId,
+    threadId: args.threadId,
+    sessionId: args.sessionId,
+    sinceGlobalSeq: args.sinceGlobalSeq,
+    limit: args.limit || 500,
+  }) as unknown as Record<string, unknown>;
+}
+
 function runShow(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
   if (!args.eventId) throw new Error(`Missing --event.\n${usage()}`);
   const beforeCount = args.before ?? 2;
@@ -488,6 +504,15 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     console.log(`suggestedActions: ${JSON.stringify(payload.suggestedActions)}`);
     return;
   }
+  if (command === 'bind') {
+    console.log(`scannedEvents: ${payload.scannedEvents}`);
+    console.log(`bindableEvents: ${payload.bindableEvents}`);
+    console.log(`boundEvents: ${payload.boundEvents}`);
+    console.log(`createdBindings: ${payload.createdBindings}`);
+    console.log(`skippedAlreadyBound: ${payload.skippedAlreadyBound}`);
+    console.log(`failedEvents: ${payload.failedEvents}`);
+    return;
+  }
   if (command === 'recall') {
     const items = Array.isArray(payload.items) ? payload.items : [];
     console.log(`recallMode: ${payload.recallMode}`);
@@ -541,7 +566,9 @@ async function main(): Promise<void> {
                     ? runCandidates(kernel, args)
                     : args.command === 'map'
                       ? runMap(kernel, args)
-                      : runTick(kernel, args);
+                      : args.command === 'tick'
+                        ? runTick(kernel, args)
+                        : runBind(kernel, args);
     if (args.json) {
       console.log(JSON.stringify(payload, null, 2));
       return;

@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `2.5.0`
+Current version: `2.7.0`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -76,6 +76,9 @@ Raw Ledger
 Metadata / FTS Index
   Lightweight keyword, source, time, project, and thread indexing for exact lookup.
 
+Memory Binding
+  Deterministic raw-event bindings to stable entity/topic paths, claim-key clusters, and graph edges for source-anchored organization before fact promotion.
+
 Compiled Memory
   Governed summaries, preferences, constraints, goals, lessons, diagnostics, and topic memories.
 
@@ -86,7 +89,7 @@ CPU Governance
   Rule-based promotion, suppression, supersession, and confirmation policy.
 
 Active Recall
-  Bounded context pack assembled with pulse activation, temporal routing, source anchors, and inhibition.
+  Bounded context pack assembled with binding graph anchors, pulse activation, temporal routing, source anchors, and inhibition.
 ```
 
 The core rule is:
@@ -147,7 +150,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#2.5.0"
+bun add "cogmem@github:liuqin164/cogmem#2.7.0"
 bunx cogmem init
 ```
 
@@ -182,9 +185,14 @@ Inspect the memory anatomy and run one explicit host-owned upkeep tick:
 ```bash
 cogmem memory map --project my-agent --json
 cogmem memory tick --project my-agent --json
+cogmem memory bind --project my-agent --json
 ```
 
-`memory tick` decays activation and returns suggested host actions. It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
+`memory tick` decays activation and returns suggested host actions. It reports high-value raw user events that have not been attached to Memory Binding yet and non-fatal binding failures that did not block raw ledger writes. It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
+
+`memory bind` backfills Memory Binding for raw user events written outside the agent turn path, including imported OpenClaw/Hermes history and adapter-written raw events. Use `--since <globalSeq>` to resume from a known ledger sequence.
+
+`memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths before any fact promotion, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down. Correction events create explicit correction edges and review flags instead of poisoning the active cluster. Treat bindings, clusters, and graph edges as organization hints, not as verified long-term facts.
 
 ## Import Existing Agent Memory
 
@@ -311,7 +319,7 @@ This installs the agent-facing skill at:
 ~/.hermes/skills/cogmem-memory/SKILL.md
 ```
 
-With `--auto`, it adds a `cogmem` MCP server entry to:
+With `--auto`, it adds or updates a `cogmem` MCP server entry in:
 
 ```text
 ~/.hermes/config.yaml
@@ -329,7 +337,7 @@ Hermes can call the MCP recall tool directly:
 { "query": "MoneyPrinterTurbo", "projectId": "hermes" }
 ```
 
-`cogmem_recall` uses the same agent-facing recall path as `cogmem memory recall`. If `agentId` is omitted, MCP infers it from `projectId`, so project-only Hermes calls can still reach raw ledger fallback and return `items[].sourceContext` when vectors are empty.
+`cogmem_recall` uses the same agent-facing recall path as `cogmem memory recall`. If `agentId` is omitted, MCP infers it from `projectId`, so project-only Hermes calls can still reach raw ledger fallback and return `items[].sourceContext` when vectors are empty. Re-running `cogmem connect hermes --auto` after an upgrade also patches existing `tools.include` allow-lists with newly supported Cogmem MCP tools.
 
 Import existing Hermes memory:
 
@@ -485,6 +493,8 @@ For Hermes after an update:
 ```bash
 cogmem connect hermes --workspace /path/to/hermes/workspace --auto --force
 ```
+
+This also updates existing Hermes `cogmem-mcp` blocks with missing `cogmem_memory_map` and `cogmem_maintenance_tick` entries.
 
 ## CLI
 

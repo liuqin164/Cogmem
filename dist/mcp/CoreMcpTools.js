@@ -97,7 +97,7 @@ export function listCogmemMcpTools() {
         },
         {
             name: 'cogmem_maintenance_tick',
-            description: 'Run one explicit host-owned maintenance tick. This decays activation and returns suggested upkeep commands; it never starts a hidden daemon.',
+            description: 'Run one explicit host-owned maintenance tick. This decays activation and returns suggested upkeep commands such as dream, govern, re-embed, or cogmem memory bind for unbound raw events; it never starts a hidden daemon.',
             inputSchema: {
                 type: 'object',
                 properties: {

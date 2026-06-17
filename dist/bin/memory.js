@@ -37,6 +37,7 @@ function readArgs(argv) {
         limit: numberArg(values, 'limit'),
         before: numberArg(values, 'before'),
         after: numberArg(values, 'after'),
+        sinceGlobalSeq: numberArg(values, 'since') ?? numberArg(values, 'since-global-seq'),
         intervalMs: numberArg(values, 'interval-ms'),
         maxRuns: numberArg(values, 'max-runs'),
         promoteLimit: numberArg(values, 'promote-limit'),
@@ -50,7 +51,7 @@ function readArgs(argv) {
 }
 function usage() {
     return [
-        'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|map|tick> [args]',
+        'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|map|tick|bind> [args]',
         '',
         'Commands:',
         '  status               summarize raw ledger, vector, and dream backlog state',
@@ -63,6 +64,7 @@ function usage() {
         '  candidates           list dream/deep-write governance candidates',
         '  map                  print the self-describing memory map for agent/host inspection',
         '  tick                 run one explicit host-owned maintenance tick',
+        '  bind                 backfill memory bindings for high-value raw user events',
         '',
         'Common options:',
         '  --project <id>       scope to one project',
@@ -71,6 +73,7 @@ function usage() {
         '  --thread <id>        scope to one thread',
         '  --session <id>       scope to one session',
         '  --limit <n>          result limit, default 20',
+        '  --since <globalSeq>  for bind, scan raw events at or after a global sequence',
         '  --status <status>    candidate queue status, default candidate',
         '  --promote            after dream, run CPU governance over pending candidates',
         '  --promote-limit <n>  governance candidate limit, default follows --limit or 100',
@@ -97,7 +100,8 @@ function isMemoryCommand(value) {
         || value === 'govern'
         || value === 'candidates'
         || value === 'map'
-        || value === 'tick';
+        || value === 'tick'
+        || value === 'bind';
 }
 function recallIntentArg(values, key) {
     const raw = stringArg(values, key);
@@ -287,6 +291,16 @@ function runMap(kernel, args) {
 function runTick(kernel, args) {
     return kernel.runMaintenanceTick({ projectId: args.projectId });
 }
+function runBind(kernel, args) {
+    return kernel.bindRawEvents({
+        projectId: args.projectId,
+        workspaceId: args.workspaceId,
+        threadId: args.threadId,
+        sessionId: args.sessionId,
+        sinceGlobalSeq: args.sinceGlobalSeq,
+        limit: args.limit || 500,
+    });
+}
 function runShow(kernel, args) {
     if (!args.eventId)
         throw new Error(`Missing --event.\n${usage()}`);
@@ -438,6 +452,15 @@ function printHuman(command, payload) {
         console.log(`suggestedActions: ${JSON.stringify(payload.suggestedActions)}`);
         return;
     }
+    if (command === 'bind') {
+        console.log(`scannedEvents: ${payload.scannedEvents}`);
+        console.log(`bindableEvents: ${payload.bindableEvents}`);
+        console.log(`boundEvents: ${payload.boundEvents}`);
+        console.log(`createdBindings: ${payload.createdBindings}`);
+        console.log(`skippedAlreadyBound: ${payload.skippedAlreadyBound}`);
+        console.log(`failedEvents: ${payload.failedEvents}`);
+        return;
+    }
     if (command === 'recall') {
         const items = Array.isArray(payload.items) ? payload.items : [];
         console.log(`recallMode: ${payload.recallMode}`);
@@ -494,7 +517,9 @@ async function main() {
                                         ? runCandidates(kernel, args)
                                         : args.command === 'map'
                                             ? runMap(kernel, args)
-                                            : runTick(kernel, args);
+                                            : args.command === 'tick'
+                                                ? runTick(kernel, args)
+                                                : runBind(kernel, args);
         if (args.json) {
             console.log(JSON.stringify(payload, null, 2));
             return;

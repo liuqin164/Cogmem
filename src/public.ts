@@ -34,6 +34,8 @@ export type {
   MaintenanceTickOptions,
   MaintenanceTickResult,
   MemoryDataLane,
+  MemoryBindingBackfillOptions,
+  MemoryBindingBackfillResult,
   MemoryKernelFromConfigOptions,
   MemoryKernelNavigationOptions,
   MemoryKernelNavigationResult,
@@ -64,6 +66,24 @@ export type {
   LoadedCogmemConfig,
   LoadCogmemConfigOptions,
 } from './config/CogmemConfig.js';
+export type {
+  MemoryBindingListOptions,
+  MemoryBindingRecord,
+  MemoryBindingSource,
+  MemoryBindingStats,
+  MemoryBindingType,
+  MemoryBindingAction,
+  MemoryClusterListOptions,
+  MemoryClusterRecord,
+  MemoryClusterStatus,
+  MemoryEdgeListOptions,
+  MemoryEdgeRecord,
+  MemoryEdgeRelation,
+  MemoryEntityRecord,
+  MemoryEntityType,
+  MemoryGraphRecallAnchor,
+  MemoryTopicRecord,
+} from './binding/index.js';
 
 /**
  * Agent framework integration facade.
@@ -209,9 +229,11 @@ export { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
 export { SqliteVecStore } from './store/SqliteVecStore.js';
 export { HnswlibVectorStore } from './store/HnswlibVectorStore.js';
 export { ActivationStore } from './store/ActivationStore.js';
+export { MemoryBindingStore } from './store/MemoryBindingStore.js';
 /** @deprecated Use HnswlibVectorStore. Will be removed in v3.0. */
 export { VectorStore } from './store/VectorStore.js';
 export type { ActivationDecayOptions, ActivationDecayResult, ActivationHotspot, ActivationTouchInput } from './store/ActivationStore.js';
+export type { UpsertMemoryEntityInput, UpsertMemoryTopicInput } from './store/MemoryBindingStore.js';
 export type { IVectorStore, VectorBackend, VectorSearchResult, VectorStoreStats } from './store/IVectorStore.js';
 
 /**

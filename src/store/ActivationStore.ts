@@ -140,6 +140,14 @@ export class ActivationStore {
     };
   }
 
+  deleteByProject(projectId: string): number {
+    const result = this.db.prepare(`
+      DELETE FROM memory_activation
+      WHERE project_id = ?
+    `).run(projectId);
+    return Number(result.changes ?? 0);
+  }
+
   close(): void {
     if (this.ownsDb) this.db.close();
   }

@@ -162,11 +162,27 @@ export class DreamCuratorWorker {
         if (!generate)
             return [];
         const systemPrompt = [
-            'You are the CogMem Memory Curator / Dream Worker.',
+            'You are the Cogmem Memory Curator / Dream Worker.',
             'You inspect raw chronological ledger events and propose memory governance candidates only.',
-            'Do not rewrite verified facts. Do not promote anything to active memory.',
-            'Do not expose hidden chain-of-thought. Return concise structured JSON only.',
-            'Every candidate must be traceable to evidenceEventIds from the supplied raw ledger events.',
+            '',
+            'Authority boundaries:',
+            '- You do not promote anything to active memory.',
+            '- You do not rewrite verified facts.',
+            '- You do not decide final memory status.',
+            '- CPU governance will validate, promote, reject, suppress, or supersede candidates later.',
+            '',
+            'Evidence rules:',
+            '- Every candidate must be traceable to exact evidenceEventIds from the supplied raw ledger events.',
+            '- User-owned durable candidates such as preferences, goals, boundaries, corrections, and long-term constraints must be supported by raw ledger events whose role is "user".',
+            '- Assistant messages may provide conversational context, but they must not be treated as user preferences, user goals, user corrections, or user boundaries unless a user event explicitly confirms them.',
+            '- Tool results and task events are observations only. They may support diagnostic or causal-link candidates, but they must not create user-owned memory by themselves.',
+            '- If an event contains <COGMEM_RECALL_CONTEXT>, <COGMEM_TURN_BRIDGE>, or <COGMEM_SESSION_STATE>, treat that content as host-side memory context metadata, not as user-authored evidence.',
+            '',
+            'Output rules:',
+            '- Return concise strict JSON only.',
+            '- Do not include markdown.',
+            '- Do not expose hidden chain-of-thought.',
+            '- Include uncertainty and source limitations inside candidate fields, not as reasoning prose.',
         ].join('\n');
         const userPrompt = JSON.stringify({
             task: 'Generate candidate-only memory curation output.',
@@ -199,8 +215,28 @@ export class DreamCuratorWorker {
             })),
             outputContract: {
                 format: 'strict JSON object',
-                rule: 'LLM suggests candidates; CPU governance decides status later.',
-                evidenceEventIds: 'array of raw event ids, or ["all"] only when the candidate is supported by the full window',
+                rule: 'LLM suggests candidates only; CPU governance decides status later.',
+                requiredPerCandidate: [
+                    'claim',
+                    'confidence',
+                    'evidenceEventIds',
+                    'evidenceRoles',
+                    'sourceLimitations',
+                ],
+                evidenceEventIds: 'array of exact raw event ids. Use ["all"] only for window-level session/topic summaries, never for user preferences, goals, corrections, or boundaries.',
+                sourcePolicy: {
+                    userOwnedDurableMemory: 'requires at least one explicit user-role evidence event',
+                    assistantEvidence: 'context only unless confirmed by user',
+                    toolEvidence: 'observation only',
+                    taskEventEvidence: 'trace only',
+                    cogmemContextBlocks: 'not user-authored evidence',
+                },
+                forbidden: [
+                    'hidden chain-of-thought',
+                    'promotion decisions',
+                    'durable user memory from assistant/tool/task-only evidence',
+                    'durable user memory from COGMEM_* context blocks',
+                ],
             },
         });
         let raw = '';
@@ -237,15 +273,30 @@ export class DreamCuratorWorker {
             ['edgeAdjustmentCandidates', 'edge_adjustment', 'edge_adjustment'],
         ];
         const candidates = [];
+        const validEventIds = new Set(events.map((event) => event.eventId));
         for (const [bucket, candidateType, promotionTargetType] of buckets) {
             const values = Array.isArray(parsed[bucket]) ? parsed[bucket] : [];
             for (const value of values) {
                 if (!value || typeof value !== 'object')
                     continue;
                 const record = value;
+                const rawEvidenceIds = Array.isArray(record.evidenceEventIds)
+                    ? record.evidenceEventIds.map((id) => String(id)).filter(Boolean)
+                    : [];
+                if (isUserOwnedDurableProviderBucket(bucket)) {
+                    if (rawEvidenceIds.length === 0)
+                        continue;
+                    if (rawEvidenceIds.includes('all'))
+                        continue;
+                    if (rawEvidenceIds.some((id) => !validEventIds.has(id)))
+                        continue;
+                }
                 const evidence = this.providerEvidenceFor(record, events);
                 if (evidence.length === 0)
                     continue;
+                if (isUserOwnedDurableProviderBucket(bucket) && !evidence.some((item) => item.role === 'user')) {
+                    continue;
+                }
                 candidates.push({
                     candidateType,
                     status,
@@ -614,6 +665,14 @@ function memoryIndexImportance(text, event) {
         storeAs: 'raw_ledger_only',
         reason: 'low_signal_event_preserve_raw_without_hot_vector',
     };
+}
+function isUserOwnedDurableProviderBucket(bucket) {
+    return [
+        'userPreferenceCandidates',
+        'longTermGoalCandidates',
+        'boundaryCandidates',
+        'failureLessonCandidates',
+    ].includes(bucket);
 }
 function truncate(value, maxLength) {
     return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;

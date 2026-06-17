@@ -15,13 +15,14 @@
  * @stable @since 1.0.0
  */
 export { MemoryKernel, createMemoryKernel, createMemoryKernelFromConfig, } from './factory.js';
-export type { ForgetUserResult, GovernanceAuditRecord, DreamCandidateListOptions, DreamCandidateRecord, DreamCandidateStatus, DreamCuratorRunOptions, DreamCuratorRunResult, MaintenanceSuggestedAction, MaintenanceTickOptions, MaintenanceTickResult, MemoryDataLane, MemoryKernelFromConfigOptions, MemoryKernelNavigationOptions, MemoryKernelNavigationResult, MemoryKernelOptions, MemoryMapOptions, MemoryMapSection, MemorySelfMap, RawEventSearchOptions, RawMemoryEventInput, TaskMemoryEventInput, ToolCallMemoryEventInput, ToolResultMemoryEventInput, } from './factory.js';
+export type { ForgetUserResult, GovernanceAuditRecord, DreamCandidateListOptions, DreamCandidateRecord, DreamCandidateStatus, DreamCuratorRunOptions, DreamCuratorRunResult, MaintenanceSuggestedAction, MaintenanceTickOptions, MaintenanceTickResult, MemoryDataLane, MemoryBindingBackfillOptions, MemoryBindingBackfillResult, MemoryKernelFromConfigOptions, MemoryKernelNavigationOptions, MemoryKernelNavigationResult, MemoryKernelOptions, MemoryMapOptions, MemoryMapSection, MemorySelfMap, RawEventSearchOptions, RawMemoryEventInput, TaskMemoryEventInput, ToolCallMemoryEventInput, ToolResultMemoryEventInput, } from './factory.js';
 /**
  * Cogmem runtime home and structured configuration helpers.
  * @stable @since 2.0.0
  */
 export { defaultCogmemConfigPath, defaultCogmemHome, loadCogmemConfig, resolveCogmemConfigPath, } from './config/CogmemConfig.js';
 export type { CogmemConfigResolution, CogmemConfigResolutionOptions, LoadedCogmemConfig, LoadCogmemConfigOptions, } from './config/CogmemConfig.js';
+export type { MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingSource, MemoryBindingStats, MemoryBindingType, MemoryBindingAction, MemoryClusterListOptions, MemoryClusterRecord, MemoryClusterStatus, MemoryEdgeListOptions, MemoryEdgeRecord, MemoryEdgeRelation, MemoryEntityRecord, MemoryEntityType, MemoryGraphRecallAnchor, MemoryTopicRecord, } from './binding/index.js';
 /**
  * Agent framework integration facade.
  * @stable @since 2.0.0
@@ -86,9 +87,11 @@ export { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
 export { SqliteVecStore } from './store/SqliteVecStore.js';
 export { HnswlibVectorStore } from './store/HnswlibVectorStore.js';
 export { ActivationStore } from './store/ActivationStore.js';
+export { MemoryBindingStore } from './store/MemoryBindingStore.js';
 /** @deprecated Use HnswlibVectorStore. Will be removed in v3.0. */
 export { VectorStore } from './store/VectorStore.js';
 export type { ActivationDecayOptions, ActivationDecayResult, ActivationHotspot, ActivationTouchInput } from './store/ActivationStore.js';
+export type { UpsertMemoryEntityInput, UpsertMemoryTopicInput } from './store/MemoryBindingStore.js';
 export type { IVectorStore, VectorBackend, VectorSearchResult, VectorStoreStats } from './store/IVectorStore.js';
 /**
  * Offline consolidation — advanced use only.

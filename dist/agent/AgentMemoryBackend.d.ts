@@ -227,6 +227,8 @@ export declare class KernelAgentMemoryBackend {
     private recallForensicAnchor;
     private searchRawEventsByQueryPlan;
     private rawLedgerFallbackItemsForQuery;
+    private memoryBindingGraphItemsForQuery;
+    private graphRecallTextScore;
     private shouldPreferRawLedgerFallback;
     private itemsContainRecallCue;
     private recallCueTerms;

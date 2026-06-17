@@ -1,11 +1,11 @@
-# cogmem 2.5.0 Release Checklist
+# cogmem 2.7.0 Release Checklist
 
 This release is distributed through GitHub Releases. Do not run npm publish.
 
 ## Required Metadata
 
 - `package.json` name is `cogmem`.
-- `package.json` version is `2.5.0`.
+- `package.json` version is `2.7.0`.
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
 - `install.sh` is tracked and uses the latest GitHub release asset.

@@ -4,6 +4,13 @@ export interface StepTiming {
     durationMs: number;
     completedAt: number;
 }
+export interface NonFatalPipelineEventInput {
+    kind: string;
+    projectId?: string;
+    message?: string;
+    details?: Record<string, unknown>;
+    occurredAt?: number;
+}
 export declare class PipelineMetrics {
     private readonly db;
     constructor(db: Database);
@@ -16,6 +23,10 @@ export declare class PipelineMetrics {
         totalMs: number;
     } | undefined;
     getStepAverages(): Record<string, number>;
+    recordNonFatal(kind: string, input?: Omit<NonFatalPipelineEventInput, 'kind'>): void;
+    getNonFatalCount(kind?: string, options?: {
+        projectId?: string;
+    }): number;
     cleanup(retentionMs?: number): void;
 }
 //# sourceMappingURL=PipelineMetrics.d.ts.map

@@ -92,6 +92,13 @@ export class ActivationStore {
             floor,
         };
     }
+    deleteByProject(projectId) {
+        const result = this.db.prepare(`
+      DELETE FROM memory_activation
+      WHERE project_id = ?
+    `).run(projectId);
+        return Number(result.changes ?? 0);
+    }
     close() {
         if (this.ownsDb)
             this.db.close();
