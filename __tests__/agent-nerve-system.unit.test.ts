@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
+import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const memoryBin = join(coreRoot, 'src/bin/memory.ts');
@@ -153,6 +154,172 @@ test('maintenance tick reports host-owned charge without running a hidden daemon
   expect(tick.executed.hiddenDaemonStarted).toBe(false);
   expect(tick.chargeVector.dreamBacklog).toBeGreaterThan(0);
   expect(tick.suggestedActions.some((action) => action.command.includes('cogmem memory dream'))).toBe(true);
+
+  kernel.close();
+});
+
+test('maintenance tick supersedes expired confirmation candidates without deleting fresh review items', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-maintenance-review-ttl-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const store = new DeepWriteCandidateStore(kernel.factStore.getDatabase());
+  const now = new Date('2026-06-18T00:00:00.000Z').getTime();
+  const run = store.insertRun({
+    projectId: 'demo',
+    sourceNeuronIds: [],
+    mode: 'review-ttl-test',
+    promptHash: 'prompt',
+    outputHash: 'output',
+    status: 'succeeded',
+    createdAt: now - 40 * 24 * 60 * 60 * 1000,
+  });
+  const inserted = store.insertCandidates([
+    {
+      runId: run.runId,
+      candidateType: 'conflict_candidate',
+      status: 'needs_confirmation',
+      confidence: 0.7,
+      content: { projectId: 'demo', statement: 'expired' },
+      evidence: [{ eventId: 'evt-old', role: 'user' }],
+      createdAt: now - 31 * 24 * 60 * 60 * 1000,
+    },
+    {
+      runId: run.runId,
+      candidateType: 'conflict_candidate',
+      status: 'needs_confirmation',
+      confidence: 0.7,
+      content: { projectId: 'demo', statement: 'fresh' },
+      evidence: [{ eventId: 'evt-fresh', role: 'user' }],
+      createdAt: now - 2 * 24 * 60 * 60 * 1000,
+    },
+    {
+      runId: run.runId,
+      candidateType: 'conflict_candidate',
+      status: 'candidate',
+      confidence: 0.7,
+      content: { projectId: 'demo', statement: 'recently-entered-review' },
+      evidence: [{ eventId: 'evt-recent-review', role: 'user' }],
+      createdAt: now - 60 * 24 * 60 * 60 * 1000,
+    },
+  ]);
+  store.updateCandidateStatus(inserted[2].candidateId, 'needs_confirmation', {
+    updatedAt: now - 2 * 24 * 60 * 60 * 1000,
+  });
+
+  const tick = kernel.runMaintenanceTick({
+    projectId: 'demo',
+    now,
+    confirmationTtlMs: 30 * 24 * 60 * 60 * 1000,
+  });
+
+  expect(tick.executed.reviewQueueAging.expired).toBe(1);
+  expect(tick.chargeVector.expiredConfirmationCandidates).toBe(1);
+  expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['needs_confirmation'] })).toBe(2);
+  const expired = kernel.listDreamCandidates({ projectId: 'demo', statuses: ['superseded'], limit: 10 });
+  expect(expired).toHaveLength(1);
+  expect(expired[0]?.statusReason).toBe('needs_confirmation_ttl_expired');
+
+  kernel.close();
+});
+
+test('agent recall reports a bounded decision trace for raw-ledger selection', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-recall-decision-trace-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  kernel.recordRawEvent({
+    projectId: 'demo',
+    threadId: 'thread-black-box',
+    sessionId: 'old-session',
+    role: 'user',
+    content: '你能看到记忆内核中存储的记忆吗？还是说它是黑盒的？',
+  });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    query: '你还记得我们聊过的黑盒问题吗',
+    limit: 3,
+  });
+
+  expect(recalled.decisionTrace).toMatchObject({
+    selectedLane: 'raw_ledger',
+    reason: 'raw_ledger_only',
+    selectedCount: 1,
+  });
+  expect(recalled.decisionTrace?.candidateCounts.rawLedger).toBeGreaterThan(0);
+
+  kernel.close();
+});
+
+test('raw-ledger fallback searches beyond the latest event window and prefers the original user anchor', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-recall-old-source-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const original = kernel.recordRawEvent({
+    projectId: 'demo',
+    threadId: 'thread-original',
+    sessionId: 'session-original',
+    turnId: 'turn-original',
+    turnSeq: 1,
+    eventOrdinal: 1,
+    role: 'user',
+    sourceId: 'openclaw:session-original',
+    content: '你能看到记忆内核中存储的记忆吗？还是说它是黑盒的？',
+  });
+  kernel.recordRawEvent({
+    projectId: 'demo',
+    threadId: 'thread-original',
+    sessionId: 'session-original',
+    turnId: 'turn-original',
+    turnSeq: 1,
+    eventOrdinal: 2,
+    role: 'assistant',
+    sourceId: 'openclaw:session-original',
+    content: '部分可见，但召回选择和排序仍然像黑盒。',
+  });
+  for (let index = 0; index < 70; index += 1) {
+    kernel.recordRawEvent({
+      projectId: 'demo',
+      threadId: 'thread-noise',
+      sessionId: 'session-noise',
+      role: 'assistant',
+      sourceId: 'openclaw:session-noise',
+      content: `unrelated historical filler ${index}`,
+    });
+  }
+  const retelling = kernel.recordRawEvent({
+    projectId: 'demo',
+    threadId: 'thread-retelling',
+    sessionId: 'session-retelling',
+    role: 'assistant',
+    sourceId: 'openclaw:session-retelling',
+    content: '后来我总结过黑盒问题，但这只是二手复述。',
+  });
+  await kernel.ingest({
+    projectId: 'demo',
+    content: '后来我总结过黑盒问题，但这只是二手复述。',
+    source: 'openclaw:session-retelling',
+    sourceType: 'llm_inference',
+    tags: ['agent:openclaw', 'session:session-retelling'],
+    sourceRefs: [{
+      eventId: retelling.eventId,
+      sourceId: retelling.sourceId,
+      threadId: retelling.threadId,
+      sessionId: retelling.sessionId,
+      role: retelling.role,
+    }],
+  });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    query: '你还记得我们聊过的黑盒问题吗',
+    limit: 3,
+  });
+
+  expect(recalled.items[0]?.id).toBe(original.eventId);
+  expect(recalled.items[0]?.sourceAnchor?.role).toBe('user');
+  expect(recalled.items[0]?.sourceContext?.after[0]?.role).toBe('assistant');
+  expect(recalled.decisionTrace?.reason).toBe('raw_cue_match_preferred');
 
   kernel.close();
 });

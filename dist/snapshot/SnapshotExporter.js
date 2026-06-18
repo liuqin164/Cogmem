@@ -30,7 +30,7 @@ export class SnapshotExporter {
                 embeddingDimension: this.options.embeddingDimension,
                 neuronCount: this.readNeuronCount(db),
                 createdAt: new Date().toISOString(),
-                coreVersion: this.options.coreVersion ?? '2.7.0',
+                coreVersion: this.options.coreVersion ?? '2.7.1',
                 checksum,
             };
             const headerBytes = Buffer.from(JSON.stringify(header), 'utf8');

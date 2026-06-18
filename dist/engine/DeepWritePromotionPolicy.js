@@ -77,7 +77,8 @@ function hasUserTurnEvidence(candidate) {
     });
 }
 function isOrganizationCandidate(type) {
-    return type === 'semantic_tags'
+    return type === 'correction'
+        || type === 'semantic_tags'
         || type === 'indexing_decision'
         || type === 'semantic_relation'
         || type === 'edge_adjustment';
@@ -493,7 +494,8 @@ export class DeepWritePromotionPolicy {
     mark(candidate, status, decision) {
         this.deps.candidateStore.updateCandidateStatus(candidate.candidateId, status, {
             type: decision.targetType,
-            id: decision.targetId
+            id: decision.targetId,
+            reason: decision.reason,
         });
         return decision;
     }

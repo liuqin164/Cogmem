@@ -1,6 +1,12 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
 import type { MemoryEventContext, MemorySourceRef, Neuron } from '../types/index.js';
 import {
+  KernelAgentMemoryBackend,
+  type AgentRecallDecisionTrace,
+  type AgentRecallItem,
+} from '../agent/AgentMemoryBackend.js';
+import type { AgentRecallQueryPlan } from '../agent/AgentRecallQueryCompiler.js';
+import {
   isRecallableMemoryEvidence,
   recallGovernanceReasonsFor,
   recallSuppressionReasonFor,
@@ -52,7 +58,7 @@ export interface RecallExplanation {
   projectId?: string;
   agentId?: string;
   collection?: string;
-  recallMode: MemoryKernelNavigationResult['recallMode'];
+  recallMode: MemoryKernelNavigationResult['recallMode'] | 'raw_ledger_fallback';
   fallbackUsed: boolean;
   narrative?: NonNullable<MemoryKernelNavigationResult['navigation']>['narrative'];
   pulseTrace?: NonNullable<MemoryKernelNavigationResult['navigation']>['pulse']['trace'];
@@ -60,6 +66,8 @@ export interface RecallExplanation {
   runtime?: NonNullable<MemoryKernelNavigationResult['navigation']>['runtime'];
   evidence: RecallExplanationEvidence[];
   filteredEvidence?: RecallExplanationFilteredEvidence[];
+  queryPlan?: AgentRecallQueryPlan;
+  decisionTrace?: AgentRecallDecisionTrace;
 }
 
 export function explainRecallWithKernel(
@@ -70,6 +78,15 @@ export function explainRecallWithKernel(
   if (options.agentId) {
     const projectId = options.projectId || options.agentId;
     const retrievalLimit = Math.max(limit * 4, 24);
+    const agentRecall = new KernelAgentMemoryBackend(kernel).recall({
+      agentId: options.agentId,
+      projectId,
+      collection: options.collection,
+      query: options.query,
+      limit,
+      startTime: options.startTime,
+      endTime: options.endTime,
+    });
     const navigated = kernel.navigateMemory(options.query, {
       projectId,
       limit: retrievalLimit,
@@ -79,7 +96,6 @@ export function explainRecallWithKernel(
     const agentScoped = navigated.rawEvidence.filter((neuron) => isInAgentScope(neuron, options.agentId!));
     const scoped = agentScoped.filter((neuron) => isInCollectionScope(neuron, options.collection));
     const scopedRecallable = scoped.filter((neuron) => isRecallableMemoryEvidence(neuron));
-    const included = scopedRecallable.slice(0, limit);
     const filteredEvidence = uniqueFilteredEvidence([
       ...toNavigationFilteredEvidence(navigated, kernel),
       ...scoped
@@ -96,63 +112,21 @@ export function explainRecallWithKernel(
         .map((neuron) => toFilteredEvidence(neuron, 'over_context_limit', undefined, kernel)),
     ]);
 
-    if (included.length > 0) {
-      return {
-        query: options.query,
-        projectId: options.projectId,
-        agentId: options.agentId,
-        collection: normalizedCollection(options.collection),
-        recallMode: navigated.recallMode,
-        fallbackUsed: navigated.fallbackUsed,
-        narrative: navigated.navigation?.narrative,
-        pulseTrace: navigated.navigation?.pulse.trace,
-        temporalTraversal: navigated.navigation?.branchSearch.temporalTraversal,
-        runtime: navigated.navigation?.runtime,
-        evidence: included.map((neuron) => toEvidence(neuron, navigated, options.agentId, kernel)),
-        filteredEvidence,
-      };
-    }
-
-    const fallback = kernel.recall(options.query, {
-      projectId,
-      limit: retrievalLimit,
-      includeRawEvidence: true,
-    });
-    const fallbackRawEvidence = fallback.rawEvidence
-      .filter((neuron) => !projectId || neuron.metadata.projectId === projectId);
-    const fallbackRecallable = fallbackRawEvidence.filter((neuron) => isRecallableMemoryEvidence(neuron));
-    const fallbackAgentScoped = fallbackRecallable.filter((neuron) => isInAgentScope(neuron, options.agentId!));
-    const fallbackScoped = fallbackAgentScoped.filter((neuron) => isInCollectionScope(neuron, options.collection));
-
     return {
       query: options.query,
       projectId: options.projectId,
       agentId: options.agentId,
       collection: normalizedCollection(options.collection),
-      recallMode: 'brain_recall_fallback',
-      fallbackUsed: true,
-      narrative: navigated.navigation?.narrative,
-      pulseTrace: navigated.navigation?.pulse.trace,
-      temporalTraversal: navigated.navigation?.branchSearch.temporalTraversal,
-      runtime: navigated.navigation?.runtime,
-      evidence: fallbackScoped
-        .slice(0, limit)
-        .map((neuron) => toEvidence(neuron, navigated, options.agentId, kernel)),
-      filteredEvidence: uniqueFilteredEvidence([
-        ...filteredEvidence,
-        ...fallbackRawEvidence
-          .filter((neuron) => !isRecallableMemoryEvidence(neuron))
-          .map((neuron) => toFilteredEvidence(neuron, 'status_suppressed', undefined, kernel)),
-        ...fallbackRecallable
-          .filter((neuron) => !isInAgentScope(neuron, options.agentId!))
-          .map((neuron) => toFilteredEvidence(neuron, 'agent_scope_mismatch', undefined, kernel)),
-        ...fallbackAgentScoped
-          .filter((neuron) => !isInCollectionScope(neuron, options.collection))
-          .map((neuron) => toFilteredEvidence(neuron, 'collection_scope_mismatch', undefined, kernel)),
-        ...fallbackScoped
-          .slice(limit)
-          .map((neuron) => toFilteredEvidence(neuron, 'over_context_limit', undefined, kernel)),
-      ]),
+      recallMode: agentRecall.recallMode,
+      fallbackUsed: agentRecall.fallbackUsed,
+      narrative: agentRecall.narrative,
+      pulseTrace: agentRecall.pulseTrace,
+      temporalTraversal: agentRecall.temporalTraversal,
+      runtime: agentRecall.runtime,
+      evidence: agentRecall.items.map((item) => toAgentEvidence(item, agentRecall.decisionTrace, options.agentId!, kernel)),
+      filteredEvidence,
+      queryPlan: agentRecall.queryPlan,
+      decisionTrace: agentRecall.decisionTrace,
     };
   }
 
@@ -187,6 +161,56 @@ export function explainRecallWithKernel(
     runtime: navigated.navigation?.runtime,
     evidence: included.map((neuron) => toEvidence(neuron, navigated, undefined, kernel)),
     filteredEvidence,
+  };
+}
+
+function toAgentEvidence(
+  item: AgentRecallItem,
+  decisionTrace: AgentRecallDecisionTrace | undefined,
+  agentId: string,
+  kernel: MemoryKernel,
+): RecallExplanationEvidence {
+  const whyMatched = new Set<string>([`agent_scope:${agentId}`]);
+  if (item.whyMatched) whyMatched.add(item.whyMatched);
+  if (item.sourceAnchor?.eventId) whyMatched.add('provenance:source_event');
+  return {
+    id: item.id,
+    text: item.text,
+    projectId: item.projectId,
+    topicPath: item.topicPath,
+    tags: item.tags,
+    source: item.source,
+    sourceAnchor: sourceAnchorForAgentItem(item, kernel),
+    activationPath: decisionTrace
+      ? [`agent_recall:${decisionTrace.selectedLane}`, `reason:${decisionTrace.reason}`]
+      : ['agent_recall:unavailable'],
+    whyMatched: Array.from(whyMatched),
+  };
+}
+
+function sourceAnchorForAgentItem(
+  item: AgentRecallItem,
+  kernel: MemoryKernel,
+): RecallExplanationSourceAnchor | undefined {
+  if (item.sourceType === 'compiled_memory' || item.sourceType === 'imported_summary') {
+    const neuron = kernel.memoryGraph.getNeuron(item.id);
+    if (neuron) {
+      const semanticAnchor = sourceAnchorFor(neuron, kernel);
+      if (semanticAnchor) return semanticAnchor;
+    }
+  }
+  const eventId = item.sourceAnchor?.eventId;
+  if (!eventId) return undefined;
+  const context = kernel.getEventContext(eventId, { before: 1, after: 1 }) || undefined;
+  const payload = context?.event.payload as { sourceRefs?: unknown } | undefined;
+  const sourceRefs = Array.isArray(payload?.sourceRefs)
+    ? payload.sourceRefs.filter((entry): entry is MemorySourceRef => Boolean(entry && typeof entry === 'object'))
+    : [];
+  return {
+    eventId,
+    sourceEventType: context?.event.eventType,
+    sourceRefs,
+    context,
   };
 }
 

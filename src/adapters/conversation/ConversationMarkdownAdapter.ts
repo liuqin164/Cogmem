@@ -75,15 +75,23 @@ export class ConversationMarkdownAdapter implements SourceAdapter {
     const messages: ParsedMessage[] = [];
     let current: ParsedMessage | null = null;
     let currentDateHint: string | undefined;
+    let currentSessionStartedAt: number | undefined;
     let pendingSourceRef: ParsedSourceRefMarker | undefined;
     let ignoredPrelude = 0;
+    let collapsedAdjacentDuplicates = 0;
 
     const flush = (): void => {
       if (!current) return;
       const text = current.text.trim();
       if (text) {
         const lineSpan = Math.max(1, text.split('\n').length);
-        messages.push({ ...current, text, lineEnd: current.lineNumber + lineSpan - 1 });
+        const message = { ...current, text, lineEnd: current.lineNumber + lineSpan - 1 };
+        const previous = messages[messages.length - 1];
+        if (previous && previous.role === message.role && previous.text === message.text) {
+          collapsedAdjacentDuplicates += 1;
+        } else {
+          messages.push(message);
+        }
       }
       current = null;
     };
@@ -99,9 +107,17 @@ export class ConversationMarkdownAdapter implements SourceAdapter {
         return;
       }
 
+      const sessionStartedAt = parseSessionStartedAt(line);
+      if (sessionStartedAt !== undefined) {
+        currentSessionStartedAt = sessionStartedAt;
+        currentDateHint = new Date(sessionStartedAt).toISOString().slice(0, 10);
+        return;
+      }
+
       const dateHeading = parseLooseDateHeading(line);
       if (dateHeading) {
         currentDateHint = dateHeading;
+        currentSessionStartedAt = undefined;
         return;
       }
 
@@ -111,7 +127,9 @@ export class ConversationMarkdownAdapter implements SourceAdapter {
         current = {
           role: parsed.role,
           text: parsed.text,
-          timestamp: resolveTimestampWithContext(parsed.timestamp, fallbackTime + index, currentDateHint),
+          timestamp: parsed.timestamp
+            ? resolveTimestampWithContext(parsed.timestamp, fallbackTime + index, currentDateHint)
+            : (currentSessionStartedAt ?? fallbackTime) + index,
           lineNumber: index + 1,
           lineEnd: index + 1,
           sourceRef: pendingSourceRef,
@@ -128,6 +146,18 @@ export class ConversationMarkdownAdapter implements SourceAdapter {
     });
 
     flush();
+
+    if (collapsedAdjacentDuplicates > 0) {
+      diagnostics.push({
+        severity: 'warning',
+        code: 'conversation_adjacent_duplicate_collapsed',
+        message: `Collapsed ${collapsedAdjacentDuplicates} adjacent exact duplicate message(s).`,
+        filePath: sourcePath,
+        adapterKind: this.kind,
+        contractHint: 'Adjacent messages with the same role and identical normalized text are treated as export duplicates.',
+        fallbackHint: 'Non-adjacent repeated messages remain separate chronological evidence.',
+      });
+    }
 
     if (messages.length === 0 && lines.some((line) => line.trim())) {
       diagnostics.push({
@@ -230,6 +260,14 @@ export class ConversationMarkdownAdapter implements SourceAdapter {
 
     return records;
   }
+}
+
+function parseSessionStartedAt(line: string): number | undefined {
+  const heading = line.trim().replace(/^#{1,6}\s*/, '');
+  const match = heading.match(/^Session\s*:\s*(.+)$/i);
+  if (!match?.[1]) return undefined;
+  const parsed = Date.parse(match[1].trim());
+  return Number.isNaN(parsed) ? undefined : parsed;
 }
 
 function parseSourceRefMarker(line: string): ParsedSourceRefMarker | undefined {

@@ -121,6 +121,7 @@ test('dream curator can use explicit memory-model generation to create governanc
       const userEvidenceEventIds = rawLedgerEvents
         .filter((event) => event.role === 'user')
         .map((event) => event.eventId);
+      const allEvidenceEventIds = rawLedgerEvents.map((event) => event.eventId);
       return JSON.stringify({
         userPreferenceCandidates: [
           {
@@ -198,7 +199,7 @@ test('dream curator can use explicit memory-model generation to create governanc
             possiblySupersededStatement: '摘要注入足以回答历史问题',
             conflictSetId: 'memory-black-box-source',
             confidence: 0.72,
-            evidenceEventIds: ['all'],
+            evidenceEventIds: allEvidenceEventIds,
           },
         ],
       });
@@ -224,6 +225,41 @@ test('dream curator can use explicit memory-model generation to create governanc
   expect(kernel.vectorStore.getCurrentCount()).toBe(vectorCountBefore);
   expect(JSON.stringify(candidates)).toContain('sourceAnchor');
   expect(JSON.stringify(candidates)).toContain('raw ledger');
+
+  kernel.close();
+});
+
+test('dream curator rejects conflict candidates without two exact window evidence events', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-conflict-evidence-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-conflict-evidence',
+    userText: '请检查黑盒问题，但不要把模型猜测当成真实矛盾。',
+    assistantText: '只有精确的成对原始证据才能生成 conflict candidate。',
+    ingestMode: 'raw_then_dream',
+  });
+
+  await kernel.runDreamCurator({
+    projectId: 'demo',
+    generateText: async () => JSON.stringify({
+      conflictCandidates: [{
+        newStatement: '原话必须走 raw ledger',
+        possiblySupersededStatement: '摘要足以回答原话',
+        confidence: 0.9,
+        evidenceEventIds: ['hallucinated-event-a', 'hallucinated-event-b'],
+      }],
+    }),
+  });
+
+  expect(kernel.listDreamCandidates({
+    projectId: 'demo',
+    candidateTypes: ['conflict_candidate'],
+    limit: 10,
+  })).toHaveLength(0);
 
   kernel.close();
 });
@@ -307,7 +343,7 @@ test('dream governance promotes semantic organization candidates instead of lett
   kernel.close();
 });
 
-test('dream curator records a diagnostic candidate when explicit generation returns invalid output', async () => {
+test('dream curator rejects provider diagnostics without adding them to the review queue', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-llm-invalid-'));
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
@@ -325,12 +361,15 @@ test('dream curator records a diagnostic candidate when explicit generation retu
     projectId: 'demo',
     generateText: async () => 'not json',
   });
-  const candidates = kernel.listDreamCandidates({ statuses: ['needs_confirmation'], limit: 10 });
+  const reviewCandidates = kernel.listDreamCandidates({ statuses: ['needs_confirmation'], limit: 10 });
+  const rejectedDiagnostics = kernel.listDreamCandidates({ statuses: ['rejected'], limit: 10 });
 
   expect(result.skipped).toBe(false);
-  expect(candidates.some((candidate) => candidate.candidateType === 'diagnostic_conclusion')).toBe(true);
-  expect(JSON.stringify(candidates)).toContain('dream_curator_provider_invalid_output');
-  expect(JSON.stringify(candidates)).toContain('sourceAnchor');
+  expect(reviewCandidates).toHaveLength(0);
+  expect(rejectedDiagnostics.some((candidate) => candidate.candidateType === 'diagnostic_conclusion')).toBe(true);
+  expect(JSON.stringify(rejectedDiagnostics)).toContain('dream_curator_provider_invalid_output');
+  expect(JSON.stringify(rejectedDiagnostics)).toContain('sourceAnchor');
+  expect(kernel.pipelineMetrics.getNonFatalCount('dream_curator_provider_invalid_output', { projectId: 'demo' })).toBe(1);
 
   kernel.close();
 });
@@ -362,7 +401,7 @@ test('dream curator deduplicates provider warnings and supersedes them after pro
 
   const warnings = kernel.listDreamCandidates({
     projectId: 'demo',
-    statuses: ['needs_confirmation'],
+    statuses: ['rejected'],
     candidateTypes: ['diagnostic_conclusion'],
     limit: 10,
   });
@@ -389,6 +428,52 @@ test('dream curator deduplicates provider warnings and supersedes them after pro
 
   expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['needs_confirmation'], candidateTypes: ['diagnostic_conclusion'] })).toBe(0);
   expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['superseded'], candidateTypes: ['diagnostic_conclusion'] })).toBe(1);
+
+  kernel.close();
+});
+
+test('dream curator treats user clarification as an organizational correction instead of a contradiction', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-correction-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-correction',
+    userText: '不，我问你关于黑盒问题的原话是什么。',
+    assistantText: '你说得对，我刚才搞混了，现在更正。',
+    ingestMode: 'raw_then_dream',
+  });
+
+  await kernel.runDreamCurator({ projectId: 'demo', limit: 20 });
+  const candidates = kernel.listDreamCandidates({ projectId: 'demo', statuses: ['candidate'], limit: 50 });
+  expect(candidates.some((candidate) => candidate.candidateType === 'correction')).toBe(true);
+  expect(candidates.some((candidate) => candidate.candidateType === 'contradictions')).toBe(false);
+
+  kernel.promoteDreamCandidates({ projectId: 'demo', limit: 50 });
+  expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['needs_confirmation'] })).toBe(0);
+  expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['promoted'], candidateTypes: ['correction'] })).toBe(1);
+
+  kernel.close();
+});
+
+test('dream curator does not classify a negative-form diagnostic question as a correction', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-negative-question-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-diagnostic',
+    userText: '你看一下，现在是不是应该是记忆写入超时阻塞已经修复的状态？',
+    assistantText: '我会检查当前状态。',
+    ingestMode: 'raw_then_dream',
+  });
+
+  await kernel.runDreamCurator({ projectId: 'demo', limit: 20 });
+  expect(kernel.countDreamCandidates({ projectId: 'demo', candidateTypes: ['correction'] })).toBe(0);
 
   kernel.close();
 });

@@ -55,3 +55,14 @@ test('agent recall query compiler expands inventory questions into structured le
   expect(compiled.semanticCuePhrases).toContain('产品コード');
   expect(compiled.searchTexts).toContain('库存管理');
 });
+
+test('agent recall query compiler removes conversational remember-me filler from black-box queries', () => {
+  const compiled = compileAgentRecallQuery({
+    query: '你还记得我们聊过的黑盒问题吗',
+  });
+
+  expect(compiled.keywords).toContain('黑盒');
+  expect(compiled.keywords).not.toContain('还记得');
+  expect(compiled.primarySearchText).toBe('黑盒');
+  expect(compiled.temporalHints).toContain('past');
+});

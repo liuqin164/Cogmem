@@ -67,8 +67,8 @@ import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
 import { config } from './utils/Config.js';
 import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snapshot/index.js';
-const CORE_VERSION = '2.7.0';
-const LATEST_SCHEMA_VERSION = 13;
+const CORE_VERSION = '2.7.1';
+const LATEST_SCHEMA_VERSION = 14;
 export class MemoryKernel {
     options;
     memoryGraph;
@@ -159,6 +159,7 @@ export class MemoryKernel {
             dreamLedgerStore: this.dreamLedgerStore,
             candidateStore: this.deepWriteCandidateStore,
             modelRegistry: this.modelRegistry,
+            pipelineMetrics: this.pipelineMetrics,
         });
         this.topicSummaryBoard = new TopicSummaryBoard(this.memoryGraph, this.summaryStore);
         this.topicDecayPolicy = new TopicDecayPolicy(this.memoryGraph);
@@ -878,6 +879,12 @@ export class MemoryKernel {
             floor: options.activationFloor,
             now: ranAt,
         });
+        const confirmationTtlMs = options.confirmationTtlMs ?? 30 * 24 * 60 * 60 * 1000;
+        const reviewQueueAging = this.deepWriteCandidateStore.expireNeedsConfirmation({
+            projectId,
+            before: ranAt - confirmationTtlMs,
+            now: ranAt,
+        });
         const dreamBacklog = this.getDreamBacklogStatus(projectId);
         const queue = this.getDreamCandidateQueue(projectId);
         const entityConflicts = this.entityStore.listAliasConflicts().filter((conflict) => {
@@ -958,9 +965,14 @@ export class MemoryKernel {
                 staleVectors,
                 unboundRawEvents,
                 bindingFailures,
+                expiredConfirmationCandidates: reviewQueueAging.expired,
             },
             executed: {
                 activationDecay,
+                reviewQueueAging: {
+                    ...reviewQueueAging,
+                    ttlMs: confirmationTtlMs,
+                },
                 hiddenDaemonStarted: false,
             },
             hotspots,

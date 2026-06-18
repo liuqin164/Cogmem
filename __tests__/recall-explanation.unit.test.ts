@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
+import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { explainRecallWithKernel } from '../src/recall/RecallExplanation.js';
 
 test('agent recall explanation includes activation reasons and filtered evidence', async () => {
@@ -171,6 +172,39 @@ test('kernel recall explanation identifies suspect raw user utterances allowed a
     && item.reason === 'status_suppressed'
     && item.governanceReason === 'suspect_llm_inference'
   ))).toBe(true);
+
+  kernel.close();
+});
+
+test('agent explanation uses the same raw-ledger route and evidence ids as agent recall', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'recall-explanation-agent-parity-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  kernel.recordRawEvent({
+    projectId: 'project-a',
+    threadId: 'thread-black-box',
+    sessionId: 'historical-session',
+    role: 'user',
+    content: '你能看到记忆内核中的记忆吗，还是说它是黑盒？',
+  });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'project-a',
+    query: '记忆黑盒问题',
+    limit: 3,
+  });
+  const explanation = explainRecallWithKernel(kernel, {
+    query: '记忆黑盒问题',
+    projectId: 'project-a',
+    agentId: 'openclaw',
+    limit: 3,
+  });
+
+  expect(explanation.recallMode).toBe(recalled.recallMode);
+  expect(explanation.decisionTrace).toEqual(recalled.decisionTrace);
+  expect(explanation.evidence.map((item) => item.id)).toEqual(recalled.items.map((item) => item.id));
+  expect(explanation.evidence[0]?.sourceAnchor?.eventId).toBe(recalled.items[0]?.sourceAnchor?.eventId);
 
   kernel.close();
 });

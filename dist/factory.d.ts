@@ -80,7 +80,9 @@ export interface DreamCandidateRecord {
     evidence: unknown;
     promotionTargetType?: string;
     promotionTargetId?: string;
+    statusReason?: string;
     createdAt: number;
+    updatedAt: number;
 }
 export interface DreamCandidateListOptions {
     statuses?: DreamCandidateStatus[];
@@ -171,6 +173,7 @@ export interface MaintenanceTickOptions {
     projectId?: string;
     activationDecayFactor?: number;
     activationFloor?: number;
+    confirmationTtlMs?: number;
     now?: number;
 }
 export interface MaintenanceSuggestedAction {
@@ -191,9 +194,16 @@ export interface MaintenanceTickResult {
         staleVectors: number;
         unboundRawEvents: number;
         bindingFailures: number;
+        expiredConfirmationCandidates: number;
     };
     executed: {
         activationDecay: ActivationDecayResult;
+        reviewQueueAging: {
+            expired: number;
+            candidateIds: string[];
+            cutoff: number;
+            ttlMs: number;
+        };
         hiddenDaemonStarted: false;
     };
     hotspots: ActivationHotspot[];

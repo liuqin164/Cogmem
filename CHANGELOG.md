@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.7.1
+
+- Fixed OpenClaw Markdown role-boundary parsing for empty `user:` / `assistant:` headers with multiline bodies, preventing assistant self-correction text from being attached to the preceding user event. Adjacent exact duplicate exports are collapsed with an import diagnostic while non-adjacent repeats remain chronological evidence.
+- Preserved source chronology from OpenClaw headings such as `# Session: 2026-06-06 14:00:43 UTC`; imported turns now use the session start as their ordered timestamp base instead of the downloaded file mtime.
+- Changed Dream correction handling so explicit user clarifications become promoted organizational `correction` records instead of false `contradictions`; negative-form questions such as `是不是...` do not trigger correction classification. Assistant self-correction remains conversational evidence and cannot create a user-owned correction.
+- Tightened model-proposed conflict candidates: they now require two or more distinct, exact raw event IDs from the current Dream window. Hallucinated IDs and `evidenceEventIds: ["all"]` are rejected instead of being rebound to unrelated window evidence.
+- Rejected malformed memory-model output as observable non-fatal provider diagnostics instead of adding queue garbage to `needs_confirmation`; later successful provider runs supersede the diagnostic audit record.
+- Added auditable review-queue aging to host-owned maintenance ticks. The default 30-day TTL marks stale `needs_confirmation` candidates `superseded` with a status reason while preserving all evidence rows.
+- Added `agent_recall_decision.v1` traces to API, CLI, MCP, explain-recall, OpenClaw audit output, and volatile prompt context. Agent-scoped explain-recall now uses the same selected evidence path as normal agent recall.
+- Fixed raw-ledger fallback so Chinese/non-FTS text recovery searches the fully scoped ledger instead of only a recent fixed window. Equal raw cue matches prefer the original user event, and past-memory queries prefer a cue-matching raw user anchor over a compiled assistant retelling.
+- Bumped the core schema to version 14 for deep-write candidate `status_reason` and `updated_at` lifecycle metadata.
+
 ## 2.7.0
 
 - Added Memory Binding v0: high-value user raw events are now deterministically bound to stable topic/entity paths such as `PROJECT/Cogmem/memory-write-pipeline` during agent turn recording. Bindings are source-anchored organization hints, not promoted facts or beliefs.

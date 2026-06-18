@@ -25,6 +25,7 @@ export interface DeepWriteCandidateInput {
     evidence: unknown;
     promotionTargetType?: string;
     promotionTargetId?: string;
+    statusReason?: string;
     createdAt?: number;
 }
 export interface DeepWriteRunRecord extends DeepWriteRunInput {
@@ -34,6 +35,7 @@ export interface DeepWriteRunRecord extends DeepWriteRunInput {
 export interface DeepWriteCandidateRecord extends DeepWriteCandidateInput {
     candidateId: string;
     createdAt: number;
+    updatedAt: number;
 }
 export interface DeepWriteCandidateListOptions {
     statuses?: DeepWriteCandidateStatus[];
@@ -60,8 +62,21 @@ export declare class DeepWriteCandidateStore {
     updateCandidateStatus(candidateId: string, status: DeepWriteCandidateStatus, promotionTarget?: {
         type?: string;
         id?: string;
+        reason?: string;
+        updatedAt?: number;
     }): void;
+    expireNeedsConfirmation(input: {
+        projectId?: string;
+        before: number;
+        now?: number;
+        limit?: number;
+    }): {
+        expired: number;
+        candidateIds: string[];
+        cutoff: number;
+    };
     private mapRun;
     private mapCandidate;
+    private ensureColumn;
 }
 //# sourceMappingURL=DeepWriteCandidateStore.d.ts.map

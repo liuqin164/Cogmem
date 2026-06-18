@@ -275,19 +275,24 @@ test('graph recall ranks query-matching anchors ahead of older cluster evidence'
 
   expect(recall.items[0].whyMatched).toBe('memory_binding_graph');
   expect(recall.items[0].text).toContain('分类树漂移');
+  expect(recall.decisionTrace).toMatchObject({
+    selectedLane: 'graph',
+    reason: 'graph_selected',
+    selectedCount: 1,
+  });
 
   kernel.close();
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('memory binding sidecar schema is governed by schema version 13', () => {
+test('memory binding and candidate lifecycle schema is governed by schema version 14', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-schema-version-'));
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
 
   const row = kernel.factStore.getDatabase().prepare(`
     SELECT value FROM _meta WHERE key = 'schema_version'
   `).get() as { value: string };
-  expect(Number(row.value)).toBeGreaterThanOrEqual(13);
+  expect(Number(row.value)).toBeGreaterThanOrEqual(14);
 
   kernel.close();
   rmSync(dir, { recursive: true, force: true });

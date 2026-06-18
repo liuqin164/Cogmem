@@ -108,8 +108,8 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '2.7.0';
-const LATEST_SCHEMA_VERSION = 13;
+const CORE_VERSION = '2.7.1';
+const LATEST_SCHEMA_VERSION = 14;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 
@@ -167,7 +167,9 @@ export interface DreamCandidateRecord {
   evidence: unknown;
   promotionTargetType?: string;
   promotionTargetId?: string;
+  statusReason?: string;
   createdAt: number;
+  updatedAt: number;
 }
 
 export interface DreamCandidateListOptions {
@@ -268,6 +270,7 @@ export interface MaintenanceTickOptions {
   projectId?: string;
   activationDecayFactor?: number;
   activationFloor?: number;
+  confirmationTtlMs?: number;
   now?: number;
 }
 
@@ -297,9 +300,16 @@ export interface MaintenanceTickResult {
     staleVectors: number;
     unboundRawEvents: number;
     bindingFailures: number;
+    expiredConfirmationCandidates: number;
   };
   executed: {
     activationDecay: ActivationDecayResult;
+    reviewQueueAging: {
+      expired: number;
+      candidateIds: string[];
+      cutoff: number;
+      ttlMs: number;
+    };
     hiddenDaemonStarted: false;
   };
   hotspots: ActivationHotspot[];
@@ -519,6 +529,7 @@ export class MemoryKernel {
       dreamLedgerStore: this.dreamLedgerStore,
       candidateStore: this.deepWriteCandidateStore,
       modelRegistry: this.modelRegistry,
+      pipelineMetrics: this.pipelineMetrics,
     });
     this.topicSummaryBoard = new TopicSummaryBoard(this.memoryGraph, this.summaryStore);
     this.topicDecayPolicy = new TopicDecayPolicy(this.memoryGraph);
@@ -1336,6 +1347,12 @@ export class MemoryKernel {
       floor: options.activationFloor,
       now: ranAt,
     });
+    const confirmationTtlMs = options.confirmationTtlMs ?? 30 * 24 * 60 * 60 * 1000;
+    const reviewQueueAging = this.deepWriteCandidateStore.expireNeedsConfirmation({
+      projectId,
+      before: ranAt - confirmationTtlMs,
+      now: ranAt,
+    });
     const dreamBacklog = this.getDreamBacklogStatus(projectId);
     const queue = this.getDreamCandidateQueue(projectId);
     const entityConflicts = this.entityStore.listAliasConflicts().filter((conflict) => {
@@ -1417,9 +1434,14 @@ export class MemoryKernel {
         staleVectors,
         unboundRawEvents,
         bindingFailures,
+        expiredConfirmationCandidates: reviewQueueAging.expired,
       },
       executed: {
         activationDecay,
+        reviewQueueAging: {
+          ...reviewQueueAging,
+          ttlMs: confirmationTtlMs,
+        },
         hiddenDaemonStarted: false,
       },
       hotspots,

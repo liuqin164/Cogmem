@@ -907,6 +907,7 @@ const plugin = {
           contextChars: context.length,
           recallMode: recalled.recallMode,
           fallbackUsed: recalled.fallbackUsed === true,
+          decisionTrace: recalled.decisionTrace,
           anchorEventId: recalled.anchorEventId,
           hygiene: {
             strippedRecallBlocks: cleanQuery.stripped,
@@ -1078,6 +1079,7 @@ try {
       anchorEventId: anchorItem && anchorItem.sourceAnchor && anchorItem.sourceAnchor.eventId,
       anchorText: anchorItem && anchorItem.text,
       queryPlan: result.queryPlan,
+      decisionTrace: result.decisionTrace,
     }));
   } else if (command === 'remember') {
     const result = await rememberPayload(input, config);
@@ -1321,6 +1323,9 @@ function formatRecallContext(result, config) {
   lines.push('- This block must not be persisted or re-ingested as new memory.');
   lines.push('- Use it only as current-turn background memory.');
   lines.push('- If exact wording is needed, inspect sourceLocator/sourceContext.');
+  if (result.decisionTrace) {
+    lines.push('recallDecision=' + formatRecallDecision(result.decisionTrace));
+  }
   lines.push('');
   if (result.narrative && result.narrative.summary) {
     lines.push(result.narrative.summary);
@@ -1376,6 +1381,18 @@ function formatRecallContext(result, config) {
   }
   lines.push('</COGMEM_RECALL_CONTEXT>');
   return clampRecallContext(lines.join('\n'), Number(config.memoryContextMaxChars || 3500));
+}
+
+function formatRecallDecision(trace) {
+  const counts = trace && trace.candidateCounts || {};
+  return 'lane=' + (trace && trace.selectedLane || 'none')
+    + '; reason=' + (trace && trace.reason || 'unknown')
+    + '; selected=' + Number(trace && trace.selectedCount || 0)
+    + '; candidates=graph:' + Number(counts.graph || 0)
+    + ',navigation:' + Number(counts.navigation || 0)
+    + ',scoped:' + Number(counts.scopedNavigation || 0)
+    + ',brain:' + Number(counts.brainFallback || 0)
+    + ',raw:' + Number(counts.rawLedger || 0);
 }
 
 function clampRecallContext(text, maxChars) {

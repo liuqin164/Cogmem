@@ -4,6 +4,7 @@ import type { DreamBacklogStatus, DreamLedgerStore } from '../store/DreamLedgerS
 import type { EventStore } from '../store/EventStore.js';
 import type { ModelRegistry } from '../models/ModelRegistry.js';
 import type { TextGenerateFn } from '../models/ModelRole.js';
+import type { PipelineMetrics } from './PipelineMetrics.js';
 export interface DreamCuratorRunOptions {
     projectId?: string;
     limit?: number;
@@ -28,6 +29,7 @@ export interface DreamCuratorWorkerDeps {
     dreamLedgerStore: DreamLedgerStore;
     candidateStore: DeepWriteCandidateStore;
     modelRegistry?: ModelRegistry;
+    pipelineMetrics?: PipelineMetrics;
 }
 export declare class DreamCuratorWorker {
     private readonly deps;

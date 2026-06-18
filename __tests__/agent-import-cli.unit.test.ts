@@ -992,6 +992,7 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(bridgeBody).toContain('sourceType');
   expect(bridgeBody).toContain('canAnswerExactQuote=false');
   expect(bridgeBody).toContain('sourceContext');
+  expect(bridgeBody).toContain('recallDecision=');
   expect(bridgeBody).toContain('sourceWindow');
   expect(bridgeBody).toContain('formatContextEvent');
   expect(bridgeBody).toContain('truncatedAtChar');

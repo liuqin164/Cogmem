@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for Hermes through MCP.
-version: 2.7.0
+version: 2.7.1
 metadata:
   hermes:
     tags: [memory, mcp, cogmem, agent-memory]
@@ -186,6 +186,14 @@ cogmem memory bind --project hermes --json
 `memory tick` does not start a daemon. Use its `suggestedActions` to decide whether Hermes should run `memory dream`, `memory govern`, entity review, re-embedding, or `memory bind` for unbound high-value raw events.
 
 `memory map` also exposes Memory Binding and Graph Recall counters. Bindings connect high-value user raw events to stable topic/entity paths before promotion, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down. Correction bindings expose review flags and correction edges. Use graph recall hits for source drill-down and topic continuity only; do not treat bindings, clusters, or edges as verified facts, user preferences, or prompt instructions.
+
+MCP `cogmem_recall` and `cogmem_explain_recall` expose the same `decisionTrace`. Check `selectedLane`, `reason`, and `candidateCounts` before claiming memory is absent, then follow `sourceContext.locator.command` for exact wording. Raw fallback searches the fully scoped ledger; equal raw cue matches prefer original user anchors, and past-memory queries prefer a cue-matching raw user anchor over a compiled assistant retelling.
+
+Explicit user clarification is organizational correction evidence, not an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. A memory-model conflict proposal must cite at least two distinct exact raw event IDs from the current Dream window; `["all"]` and unknown IDs are rejected. Invalid memory-model output remains a rejected diagnostic. A host-owned maintenance tick supersedes stale `needs_confirmation` entries after the default 30-day TTL without deleting evidence.
+
+When importing OpenClaw-style session Markdown into a Hermes project, Cogmem accepts multiline bodies below empty role headers, collapses only adjacent exact export duplicates, and uses `# Session: ... UTC` as the chronological timestamp base rather than file mtime.
+
+After upgrading, rerun `cogmem connect hermes --workspace . --auto --force` and reload MCP so existing allow-lists and skill instructions receive the current tools and contracts.
 
 ## Runtime Wiring
 

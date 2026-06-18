@@ -844,22 +844,48 @@ export class EventStore {
       .slice(0, 8);
     if (tokens.length === 0) return [];
 
-    const page = this.queryEvents(1, Math.max(limit * 4, 50), {
-      projectId: options.projectId ? [options.projectId] : undefined,
-      threadId: options.threadId ? [options.threadId] : undefined,
-      startTime: options.startTime,
-      endTime: options.endTime,
-    });
-    return page.records
-      .filter((event) => {
-        if (options.workspaceId && event.workspaceId !== options.workspaceId) return false;
-        if (options.sessionId && event.sessionId !== options.sessionId) return false;
-        if (options.localDate && event.localDate !== options.localDate) return false;
-        const text = this.extractIndexText(event.payload).toLowerCase();
-        return tokens.every((token) => text.includes(token));
-      })
-      .sort((a, b) => (a.globalSeq || 0) - (b.globalSeq || 0) || a.eventId.localeCompare(b.eventId))
-      .slice(0, limit);
+    const conditions = tokens.map(() => `LOWER(memory_events_fts.text) LIKE ? ESCAPE '\\'`);
+    const params: Array<string | number> = tokens.map((token) => `%${escapeSqlLike(token)}%`);
+    if (options.projectId) {
+      conditions.push('e.project_id = ?');
+      params.push(options.projectId);
+    }
+    if (options.workspaceId) {
+      conditions.push('e.workspace_id = ?');
+      params.push(options.workspaceId);
+    }
+    if (options.threadId) {
+      conditions.push('e.thread_id = ?');
+      params.push(options.threadId);
+    }
+    if (options.sessionId) {
+      conditions.push('e.session_id = ?');
+      params.push(options.sessionId);
+    }
+    if (options.localDate) {
+      conditions.push('e.local_date = ?');
+      params.push(options.localDate);
+    }
+    if (options.startTime !== undefined) {
+      conditions.push('e.occurred_at >= ?');
+      params.push(options.startTime);
+    }
+    if (options.endTime !== undefined) {
+      conditions.push('e.occurred_at <= ?');
+      params.push(options.endTime);
+    }
+
+    params.push(limit);
+    const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
+    const rows = this.db.prepare(`
+      SELECT ${columns}
+      FROM memory_events_fts
+      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY COALESCE(e.global_seq, 0) ASC, e.event_id ASC
+      LIMIT ?
+    `).all(...params) as any[];
+    return rows.map((row) => this.mapRow(row));
   }
 
   private encodePayload(payloadJson: string): string {
@@ -869,4 +895,8 @@ export class EventStore {
   private decodePayload(payloadJson: string): string {
     return this.encryptionProvider?.decrypt(payloadJson) ?? payloadJson;
   }
+}
+
+function escapeSqlLike(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
 }

@@ -249,7 +249,9 @@ function candidateToJson(candidate: DeepWriteCandidateRecord): Record<string, un
     evidence: candidate.evidence,
     promotionTargetType: candidate.promotionTargetType,
     promotionTargetId: candidate.promotionTargetId,
+    statusReason: candidate.statusReason,
     createdAt: candidate.createdAt,
+    updatedAt: candidate.updatedAt,
   };
 }
 
@@ -329,6 +331,7 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
     recallMode: result.recallMode,
     fallbackUsed: result.fallbackUsed,
     queryPlan: result.queryPlan,
+    decisionTrace: result.decisionTrace,
     narrative: result.narrative,
     items: result.items,
   };
@@ -517,6 +520,7 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     const items = Array.isArray(payload.items) ? payload.items : [];
     console.log(`recallMode: ${payload.recallMode}`);
     console.log(`fallbackUsed: ${payload.fallbackUsed}`);
+    console.log(`decisionTrace: ${JSON.stringify(payload.decisionTrace)}`);
     for (const item of items as Array<Record<string, unknown>>) {
       console.log(`- ${item.id} ${item.sourceType || 'memory'} ${item.text}`);
       const sourceContext = item.sourceContext as { locator?: { command?: string } } | undefined;

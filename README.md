@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `2.7.0`
+Current version: `2.7.1`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -150,7 +150,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#2.7.0"
+bun add "cogmem@github:liuqin164/cogmem#2.7.1"
 bunx cogmem init
 ```
 
@@ -188,7 +188,7 @@ cogmem memory tick --project my-agent --json
 cogmem memory bind --project my-agent --json
 ```
 
-`memory tick` decays activation and returns suggested host actions. It reports high-value raw user events that have not been attached to Memory Binding yet and non-fatal binding failures that did not block raw ledger writes. It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
+`memory tick` decays activation and returns suggested host actions. It reports high-value raw user events that have not been attached to Memory Binding yet, non-fatal binding failures that did not block raw ledger writes, and `needs_confirmation` candidates older than the default 30-day review TTL. Expired review items are marked `superseded` with `needs_confirmation_ttl_expired`; their evidence is not deleted. It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
 
 `memory bind` backfills Memory Binding for raw user events written outside the agent turn path, including imported OpenClaw/Hermes history and adapter-written raw events. Use `--since <globalSeq>` to resume from a known ledger sequence.
 
@@ -386,7 +386,7 @@ cogmem memory recall --query "MoneyPrinterTurbo storyboard" --project openclaw -
 
 Default recall includes untagged and `collection:anchor` memory only. `collection:theseus` is for creative artifacts and must be requested explicitly so drafts do not pollute the normal agent memory path.
 
-The MCP `cogmem_recall` tool returns the same agent-facing item shape and fallback behavior. Agents may call it with `query`, `projectId`, and optionally `agentId` and `collection`; when `agentId` is omitted, MCP uses `projectId` as the agent id before falling back to `openclaw`. `cogmem_explain_recall` remains the audit path for `filteredEvidence` and governance reasons.
+The MCP `cogmem_recall` tool returns the same agent-facing item shape and fallback behavior. Agents may call it with `query`, `projectId`, and optionally `agentId` and `collection`; when `agentId` is omitted, MCP uses `projectId` as the agent id before falling back to `openclaw`. `cogmem_explain_recall` remains the audit path for `filteredEvidence` and governance reasons. Both surfaces expose `decisionTrace`, and OpenClaw renders its bounded form as `recallDecision`. Inspect `selectedLane`, `reason`, and candidate counts before claiming that memory is absent; then use `sourceLocator` for exact wording.
 
 `cogmem memory status --json` exposes stable top-level counters:
 
@@ -403,6 +403,7 @@ cogmem memory recall --query "我当时关于记忆黑盒的原话是什么" --i
 
 Recall results include:
 
+- `decisionTrace` with the selected recall lane, stable reason, per-lane candidate counts, and selected count
 - `sourceType`
 - `sourceAnchor`
 - `sourceContext`
@@ -420,6 +421,8 @@ cogmem memory show --event <eventId> --before 2 --after 2 --json
 ```
 
 `memory show --json` uses the same source context contract. Its `before` and `after` arrays strictly exclude the anchor event, remain chronological, and are de-duplicated. The `window` object reports `requestedCount`, `count`, `excludesAnchor`, `roleFilter`, `ordering`, `overlapEventIds`, and `overlapHandling`. OpenClaw automatic prompt injection renders this metadata inside `<COGMEM_RECALL_CONTEXT>` as `sourceWindow` and `sourceTruncation`; full `sourceBefore` / `sourceAfter` text is omitted by default and should be requested through `sourceLocator` before quoting exact wording.
+
+Raw-ledger fallback is not limited to the latest fixed event window. When Chinese FTS cannot match a cue directly, Cogmem runs a project/workspace/thread/time-scoped ledger text fallback and prefers an original user event over an assistant retelling when both match equally. Imported OpenClaw Markdown also accepts empty `user:` / `assistant:` headers whose body follows on later lines and collapses only adjacent exact duplicate exports.
 
 ## TypeScript API
 

@@ -1,5 +1,7 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
 import type { MemoryEventContext, MemorySourceRef } from '../types/index.js';
+import { type AgentRecallDecisionTrace } from '../agent/AgentMemoryBackend.js';
+import type { AgentRecallQueryPlan } from '../agent/AgentRecallQueryCompiler.js';
 import { type RecallGovernanceSuppressionReason } from './RecallGovernance.js';
 export interface RecallExplanationOptions {
     query: string;
@@ -42,7 +44,7 @@ export interface RecallExplanation {
     projectId?: string;
     agentId?: string;
     collection?: string;
-    recallMode: MemoryKernelNavigationResult['recallMode'];
+    recallMode: MemoryKernelNavigationResult['recallMode'] | 'raw_ledger_fallback';
     fallbackUsed: boolean;
     narrative?: NonNullable<MemoryKernelNavigationResult['navigation']>['narrative'];
     pulseTrace?: NonNullable<MemoryKernelNavigationResult['navigation']>['pulse']['trace'];
@@ -50,6 +52,8 @@ export interface RecallExplanation {
     runtime?: NonNullable<MemoryKernelNavigationResult['navigation']>['runtime'];
     evidence: RecallExplanationEvidence[];
     filteredEvidence?: RecallExplanationFilteredEvidence[];
+    queryPlan?: AgentRecallQueryPlan;
+    decisionTrace?: AgentRecallDecisionTrace;
 }
 export declare function explainRecallWithKernel(kernel: MemoryKernel, options: RecallExplanationOptions): RecallExplanation;
 //# sourceMappingURL=RecallExplanation.d.ts.map

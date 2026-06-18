@@ -29,15 +29,24 @@ export class ConversationMarkdownAdapter {
         const messages = [];
         let current = null;
         let currentDateHint;
+        let currentSessionStartedAt;
         let pendingSourceRef;
         let ignoredPrelude = 0;
+        let collapsedAdjacentDuplicates = 0;
         const flush = () => {
             if (!current)
                 return;
             const text = current.text.trim();
             if (text) {
                 const lineSpan = Math.max(1, text.split('\n').length);
-                messages.push({ ...current, text, lineEnd: current.lineNumber + lineSpan - 1 });
+                const message = { ...current, text, lineEnd: current.lineNumber + lineSpan - 1 };
+                const previous = messages[messages.length - 1];
+                if (previous && previous.role === message.role && previous.text === message.text) {
+                    collapsedAdjacentDuplicates += 1;
+                }
+                else {
+                    messages.push(message);
+                }
             }
             current = null;
         };
@@ -50,9 +59,16 @@ export class ConversationMarkdownAdapter {
             if (/^<!--\s*cogmem-[a-z0-9_-]+:/i.test(line.trim()) || /^<!--\s*cogmem-normalized\s*:/i.test(line.trim())) {
                 return;
             }
+            const sessionStartedAt = parseSessionStartedAt(line);
+            if (sessionStartedAt !== undefined) {
+                currentSessionStartedAt = sessionStartedAt;
+                currentDateHint = new Date(sessionStartedAt).toISOString().slice(0, 10);
+                return;
+            }
             const dateHeading = parseLooseDateHeading(line);
             if (dateHeading) {
                 currentDateHint = dateHeading;
+                currentSessionStartedAt = undefined;
                 return;
             }
             const parsed = parseMarkdownRoleLine(line);
@@ -61,7 +77,9 @@ export class ConversationMarkdownAdapter {
                 current = {
                     role: parsed.role,
                     text: parsed.text,
-                    timestamp: resolveTimestampWithContext(parsed.timestamp, fallbackTime + index, currentDateHint),
+                    timestamp: parsed.timestamp
+                        ? resolveTimestampWithContext(parsed.timestamp, fallbackTime + index, currentDateHint)
+                        : (currentSessionStartedAt ?? fallbackTime) + index,
                     lineNumber: index + 1,
                     lineEnd: index + 1,
                     sourceRef: pendingSourceRef,
@@ -77,6 +95,17 @@ export class ConversationMarkdownAdapter {
             current.text += `${current.text ? '\n' : ''}${line.trimEnd()}`;
         });
         flush();
+        if (collapsedAdjacentDuplicates > 0) {
+            diagnostics.push({
+                severity: 'warning',
+                code: 'conversation_adjacent_duplicate_collapsed',
+                message: `Collapsed ${collapsedAdjacentDuplicates} adjacent exact duplicate message(s).`,
+                filePath: sourcePath,
+                adapterKind: this.kind,
+                contractHint: 'Adjacent messages with the same role and identical normalized text are treated as export duplicates.',
+                fallbackHint: 'Non-adjacent repeated messages remain separate chronological evidence.',
+            });
+        }
         if (messages.length === 0 && lines.some((line) => line.trim())) {
             diagnostics.push({
                 severity: 'error',
@@ -168,6 +197,14 @@ export class ConversationMarkdownAdapter {
         }
         return records;
     }
+}
+function parseSessionStartedAt(line) {
+    const heading = line.trim().replace(/^#{1,6}\s*/, '');
+    const match = heading.match(/^Session\s*:\s*(.+)$/i);
+    if (!match?.[1])
+        return undefined;
+    const parsed = Date.parse(match[1].trim());
+    return Number.isNaN(parsed) ? undefined : parsed;
 }
 function parseSourceRefMarker(line) {
     const match = line.trim().match(/^<!--\s*(?:cogmem|agent-brain)-source-ref:\s*([^]+?)\s*-->$/i);

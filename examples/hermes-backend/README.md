@@ -71,6 +71,12 @@ cogmem import-hermes --workspace . --project hermes --session ./one.md --session
 The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store.
 Imported records are embedded through the configured kernel embedder during import.
 
+MCP recall JSON includes `decisionTrace`. Check its selected lane, reason, and candidate counts before concluding that a memory is absent, and use `sourceContext.locator.command` for exact wording. Raw text fallback searches the fully scoped ledger and prefers original user anchors over later assistant retellings when cue scores tie.
+
+Dream stores explicit user clarification as organizational correction evidence rather than an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Invalid provider output is rejected diagnostic state; maintenance supersedes stale `needs_confirmation` entries after the default 30-day TTL without deleting evidence.
+
+After upgrades, rerun `cogmem connect hermes --workspace . --auto --force` and reload MCP.
+
 ## Runtime
 
 ```ts

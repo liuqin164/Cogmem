@@ -203,7 +203,9 @@ function candidateToJson(candidate) {
         evidence: candidate.evidence,
         promotionTargetType: candidate.promotionTargetType,
         promotionTargetId: candidate.promotionTargetId,
+        statusReason: candidate.statusReason,
         createdAt: candidate.createdAt,
+        updatedAt: candidate.updatedAt,
     };
 }
 function runStatus(kernel, args) {
@@ -281,6 +283,7 @@ function runRecall(kernel, args) {
         recallMode: result.recallMode,
         fallbackUsed: result.fallbackUsed,
         queryPlan: result.queryPlan,
+        decisionTrace: result.decisionTrace,
         narrative: result.narrative,
         items: result.items,
     };
@@ -465,6 +468,7 @@ function printHuman(command, payload) {
         const items = Array.isArray(payload.items) ? payload.items : [];
         console.log(`recallMode: ${payload.recallMode}`);
         console.log(`fallbackUsed: ${payload.fallbackUsed}`);
+        console.log(`decisionTrace: ${JSON.stringify(payload.decisionTrace)}`);
         for (const item of items) {
             console.log(`- ${item.id} ${item.sourceType || 'memory'} ${item.text}`);
             const sourceContext = item.sourceContext;
