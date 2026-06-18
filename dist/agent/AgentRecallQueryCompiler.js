@@ -35,6 +35,8 @@ const QUERY_FILLERS = [
     '我想知道',
     '你还记不记得',
     '还记不记得',
+    '你还记得',
+    '还记得',
     '你记得吗',
     '记得吗',
     '我们之前讨论过关于',
@@ -192,7 +194,7 @@ function buildSemanticCuePhrases(keywords, query, anchorText) {
 }
 function extractTemporalHints(query) {
     const hints = [];
-    if (/之前|以前|过去|几个月前|半年前|上个月|前几天|昨天|上次|上个|previous|before|last/i.test(query)) {
+    if (/之前|以前|过去|几个月前|半年前|上个月|前几天|昨天|上次|上个|还记得|previous|before|last/i.test(query)) {
         hints.push('past');
     }
     if (/昨天|yesterday/i.test(query))

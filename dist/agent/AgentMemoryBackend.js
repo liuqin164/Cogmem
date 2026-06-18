@@ -235,29 +235,40 @@ export class KernelAgentMemoryBackend {
         const scopedItems = this.filterAgentEvidence(result.rawEvidence, query.agentId, query.collection, query.excludeSessionId)
             .slice(0, limit)
             .map((neuron) => this.toAgentRecallItem(neuron));
+        const rawFallbackItems = this.rawLedgerFallbackItemsForQuery(queryPlan, query, limit);
+        const baseCounts = {
+            graph: graphItems.length,
+            navigation: result.rawEvidence.length,
+            scopedNavigation: scopedItems.length,
+            brainFallback: 0,
+            rawLedger: rawFallbackItems.length,
+        };
         if (scopedItems.length > 0) {
-            const rawFallbackItems = this.rawLedgerFallbackItemsForQuery(queryPlan, query, limit);
             if (this.shouldPreferRawLedgerFallback(scopedItems, rawFallbackItems, queryPlan)) {
+                const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, scopedItems, limit), limit);
                 return {
                     recallMode: 'raw_ledger_fallback',
-                    items: this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, scopedItems, limit), limit),
+                    items,
                     narrative: result.navigation?.narrative,
                     pulseTrace: result.navigation?.pulse.trace,
                     temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
                     runtime: result.navigation?.runtime,
                     fallbackUsed: true,
                     queryPlan,
+                    decisionTrace: recallDecisionTraceForSelection(graphItems, items, 'raw_ledger', 'raw_cue_match_preferred', baseCounts),
                 };
             }
+            const items = this.mergeRecallItems(graphItems, scopedItems, limit);
             return {
                 recallMode: result.recallMode,
-                items: this.mergeRecallItems(graphItems, scopedItems, limit),
+                items,
                 narrative: result.navigation?.narrative,
                 pulseTrace: result.navigation?.pulse.trace,
                 temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
                 runtime: result.navigation?.runtime,
                 fallbackUsed: result.fallbackUsed,
                 queryPlan,
+                decisionTrace: recallDecisionTraceForSelection(graphItems, items, 'compiled', 'compiled_cue_match', baseCounts),
             };
         }
         const fallback = this.kernel.recall(queryPlan.primarySearchText, {
@@ -267,41 +278,49 @@ export class KernelAgentMemoryBackend {
         const fallbackItems = this.filterAgentEvidence(fallback.rawEvidence, query.agentId, query.collection, query.excludeSessionId)
             .slice(0, limit)
             .map((neuron) => this.toAgentRecallItem(neuron));
+        const fallbackCounts = {
+            ...baseCounts,
+            brainFallback: fallbackItems.length,
+        };
         if (fallbackItems.length > 0) {
-            const rawFallbackItems = this.rawLedgerFallbackItemsForQuery(queryPlan, query, limit);
             if (this.shouldPreferRawLedgerFallback(fallbackItems, rawFallbackItems, queryPlan)) {
+                const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, fallbackItems, limit), limit);
                 return {
                     recallMode: 'raw_ledger_fallback',
-                    items: this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, fallbackItems, limit), limit),
+                    items,
                     narrative: result.navigation?.narrative,
                     pulseTrace: result.navigation?.pulse.trace,
                     temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
                     runtime: result.navigation?.runtime,
                     fallbackUsed: true,
                     queryPlan,
+                    decisionTrace: recallDecisionTraceForSelection(graphItems, items, 'raw_ledger', 'raw_cue_match_preferred', fallbackCounts),
                 };
             }
+            const items = this.mergeRecallItems(graphItems, fallbackItems, limit);
             return {
                 recallMode: 'brain_recall_fallback',
-                items: this.mergeRecallItems(graphItems, fallbackItems, limit),
+                items,
                 narrative: result.navigation?.narrative,
                 pulseTrace: result.navigation?.pulse.trace,
                 temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
                 runtime: result.navigation?.runtime,
                 fallbackUsed: true,
                 queryPlan,
+                decisionTrace: recallDecisionTraceForSelection(graphItems, items, 'brain_fallback', 'brain_fallback_selected', fallbackCounts),
             };
         }
-        const rawItems = this.rawLedgerFallbackItemsForQuery(queryPlan, query, limit);
+        const items = this.mergeRecallItems(graphItems, rawFallbackItems, limit);
         return {
             recallMode: 'raw_ledger_fallback',
-            items: this.mergeRecallItems(graphItems, rawItems, limit),
+            items,
             narrative: result.navigation?.narrative,
             pulseTrace: result.navigation?.pulse.trace,
             temporalTraversal: result.navigation?.branchSearch.temporalTraversal,
             runtime: result.navigation?.runtime,
             fallbackUsed: true,
             queryPlan,
+            decisionTrace: recallDecisionTraceForSelection(graphItems, items, rawFallbackItems.length > 0 ? 'raw_ledger' : 'none', rawFallbackItems.length > 0 ? 'raw_ledger_only' : 'no_recall_evidence', fallbackCounts),
         };
     }
     recallPack(query) {
@@ -381,6 +400,13 @@ export class KernelAgentMemoryBackend {
             items,
             fallbackUsed: true,
             queryPlan,
+            decisionTrace: recallDecisionTrace(items.length > 0 ? 'raw_ledger' : 'none', 'previous_session', {
+                graph: 0,
+                navigation: 0,
+                scopedNavigation: 0,
+                brainFallback: 0,
+                rawLedger: items.length,
+            }, items.length),
         };
     }
     recallForensicQuote(query, queryPlan) {
@@ -412,6 +438,13 @@ export class KernelAgentMemoryBackend {
             items,
             fallbackUsed: true,
             queryPlan,
+            decisionTrace: recallDecisionTrace(items.length > 0 ? 'raw_ledger' : 'none', 'forensic_quote', {
+                graph: 0,
+                navigation: 0,
+                scopedNavigation: 0,
+                brainFallback: 0,
+                rawLedger: items.length,
+            }, items.length),
         };
     }
     recallForensicAnchor(query, limit) {
@@ -536,8 +569,19 @@ export class KernelAgentMemoryBackend {
     shouldPreferRawLedgerFallback(candidateItems, rawFallbackItems, queryPlan) {
         if (rawFallbackItems.length === 0)
             return false;
-        return !this.itemsContainRecallCue(candidateItems, queryPlan)
-            && this.itemsContainRecallCue(rawFallbackItems, queryPlan);
+        const rawHasCue = this.itemsContainRecallCue(rawFallbackItems, queryPlan);
+        if (!rawHasCue)
+            return false;
+        if (!this.itemsContainRecallCue(candidateItems, queryPlan))
+            return true;
+        if (queryPlan.temporalHints.includes('past')) {
+            const rawLead = rawFallbackItems.find((item) => this.itemsContainRecallCue([item], queryPlan));
+            const candidateLead = candidateItems.find((item) => this.itemsContainRecallCue([item], queryPlan));
+            if (rawLead?.sourceAnchor?.role === 'user' && candidateLead?.sourceAnchor?.role !== 'user') {
+                return true;
+            }
+        }
+        return false;
     }
     itemsContainRecallCue(items, queryPlan) {
         const cues = this.recallCueTerms(queryPlan);
@@ -648,8 +692,10 @@ export class KernelAgentMemoryBackend {
             }
             const eventScore = this.rawEventCueScore(event, queryPlan);
             const existingScore = this.rawEventCueScore(existing, queryPlan);
+            const rolePriority = this.quoteEventPriority(event) - this.quoteEventPriority(existing);
             if (eventScore > existingScore || (eventScore === existingScore
-                && this.rawEventTextLength(event) > this.rawEventTextLength(existing))) {
+                && (rolePriority < 0
+                    || (rolePriority === 0 && this.rawEventTextLength(event) > this.rawEventTextLength(existing))))) {
                 byTurn.set(key, event);
             }
         }
@@ -1142,6 +1188,26 @@ export class KernelAgentMemoryBackend {
         ];
         return durableSignals.some((signal) => signal.test(normalized));
     }
+}
+function recallDecisionTrace(selectedLane, reason, candidateCounts, selectedCount) {
+    return {
+        version: 'agent_recall_decision.v1',
+        selectedLane,
+        reason,
+        candidateCounts,
+        selectedCount,
+    };
+}
+function recallDecisionTraceForSelection(graphItems, selectedItems, nonGraphLane, nonGraphReason, candidateCounts) {
+    const graphIds = new Set(graphItems.map((item) => item.id));
+    const graphSelected = selectedItems.filter((item) => graphIds.has(item.id)).length;
+    if (graphSelected > 0 && graphSelected === selectedItems.length) {
+        return recallDecisionTrace('graph', 'graph_selected', candidateCounts, selectedItems.length);
+    }
+    if (graphSelected > 0) {
+        return recallDecisionTrace('mixed', nonGraphReason, candidateCounts, selectedItems.length);
+    }
+    return recallDecisionTrace(nonGraphLane, nonGraphReason, candidateCounts, selectedItems.length);
 }
 function uniqueNonEmpty(values) {
     const out = [];

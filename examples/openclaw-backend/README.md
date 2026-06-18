@@ -73,6 +73,10 @@ cogmem memory bind --project openclaw --json
 
 `memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for raw-ledger drill-down; they are not verified long-term facts. Correction bindings expose review flags and correction edges instead of turning the active cluster into a fact.
 
+Recall JSON includes `decisionTrace`; the automatic prompt wrapper renders its compact form as `recallDecision=`. Check the selected lane, reason, and candidate counts before saying memory is absent, then use `sourceLocator` for exact wording. Raw fallback searches the fully scoped ledger and prefers original user anchors over later assistant retellings on equal cue matches.
+
+Dream treats explicit user clarification as organizational correction evidence, not an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Invalid provider output is a rejected diagnostic, and `memory tick` supersedes stale `needs_confirmation` entries after the default 30-day TTL without deleting evidence.
+
 ## Migrate
 
 Preview:

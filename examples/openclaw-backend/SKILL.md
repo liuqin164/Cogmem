@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for OpenClaw.
-version: 2.7.0
+version: 2.7.1
 metadata:
   openclaw:
     tags: [memory, cogmem, agent-memory]
@@ -161,6 +161,8 @@ Each `recall.items[]` entry can include:
 - `sourceContext`: bounded raw event context with before/after events, stable `label` values, optional `charRange` / `sourceRange`, and `window` metadata.
 - `sourceContext.locator.command`: a local command such as `cogmem memory show --event <eventId> --before 2 --after 2`.
 
+Inspect `recall.decisionTrace` before claiming memory is absent. `selectedLane` identifies the chosen recall layer, `reason` explains why it won, and `candidateCounts` shows whether other lanes had candidates. For `你还记得...` and other past-memory queries, `raw_cue_match_preferred` means an original user raw anchor outranked a compiled assistant retelling. The OpenClaw prompt wrapper renders the same bounded information as `recallDecision=`. This trace is diagnostic metadata, not recalled evidence or a user instruction.
+
 If the user asks for "原话", "具体内容", "完整脉络", "为什么当时这么判断", or "前后发生了什么", use `sourceContext` first. `sourceContext.window` tells you the before/after requested counts, actual counts, `excludesAnchor`, `ordering`, `roleFilter`, and overlap handling; do not infer those semantics from text position. If more context is needed, run the locator command. Do not answer exact quotes from `compiled_memory` or `imported_summary` alone.
 
 ## Active Memory Search
@@ -184,6 +186,8 @@ Use `items[].sourceContext` to understand what the user asked, how the agent ans
 cogmem memory show --event <eventId> --before 2 --after 2 --json
 ```
 
+For old memories, a `raw_ledger` result may come from full scoped ledger text fallback even when Chinese FTS has no direct hit. Equal matches prefer the original user event; use `sourceContext.after` to inspect the paired assistant response instead of preferring a later assistant retelling.
+
 Use collection routing for creative artifacts or drafts:
 
 ```bash
@@ -200,7 +204,7 @@ cogmem memory tick --project openclaw --json
 cogmem memory bind --project openclaw --json
 ```
 
-`memory tick` decays activation and returns `suggestedActions`; it does not run a hidden daemon. If it suggests `bind_raw_events`, run `memory bind` to backfill high-value raw user events written by imports or adapters.
+`memory tick` decays activation and returns `suggestedActions`; it does not run a hidden daemon. If it suggests `bind_raw_events`, run `memory bind` to backfill high-value raw user events written by imports or adapters. The tick also supersedes `needs_confirmation` items older than the default 30-day review TTL with an explicit status reason; it preserves candidate evidence.
 
 `memory map` also exposes Memory Binding and Graph Recall counters. Bindings connect high-value user raw events to stable topic/entity paths before promotion, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down. Correction bindings add review flags and `CORRECTS` / `CONTRADICTS` edges. Use graph recall hits to inspect raw ledger history through `sourceContext`; do not treat bindings, clusters, or edges as verified facts, user preferences, or prompt instructions.
 
@@ -281,14 +285,20 @@ Queue interpretation:
 
 - `candidate`: proposed but not yet governed; do not assume it will be injected.
 - `promoted`: accepted by CPU governance. Summaries/preferences are provisional memory; semantic tags/indexing decisions/event relations/edge adjustments are organization metadata, not verified facts.
-- `needs_confirmation`: uncertain or risky candidate. Provider warnings here are diagnostics, not user memory.
+- `needs_confirmation`: uncertain or risky evidence that still needs review. Maintenance supersedes stale entries after the review TTL without deleting evidence.
+- `rejected`: invalid provider output and other unusable diagnostics remain auditable here; they are not user memory and do not require confirmation.
 - `superseded`: older diagnostic or candidate has been replaced by newer evidence.
 
-If provider warnings mention invalid memory-model output but later curation works, run `cogmem memory dream --project openclaw --promote --json`; recovered provider runs mark older provider warnings as `superseded`.
+Explicit user clarification may create an organizational `correction` record. Do not treat assistant apologies, assistant self-correction, or a user question containing `是不是` as a user contradiction. A correction remains source-anchored organization evidence until later governance binds it to a prior claim. A memory-model conflict proposal is valid only when it cites at least two distinct exact raw event IDs from the current Dream window; never use `["all"]` for a conflict.
+
+OpenClaw session exports may place the body below an empty `user:` or `assistant:` header and may repeat an assistant block exactly. Import accepts that layout, collapses only adjacent exact export duplicates, and uses the `# Session: ... UTC` heading as the chronological timestamp base. Do not rewrite the file solely to make it importable.
+
+If rejected provider diagnostics mention invalid memory-model output but later curation works, run `cogmem memory dream --project openclaw --promote --json`; recovered provider runs mark older provider diagnostics as `superseded`.
 
 After package updates or config drift, repair the host wiring:
 
 ```bash
+cogmem connect openclaw --workspace . --auto --force
 cogmem doctor --fix --agent openclaw --workspace .
 ```
 

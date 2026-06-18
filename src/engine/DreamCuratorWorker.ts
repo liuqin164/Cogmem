@@ -7,6 +7,7 @@ import type { DreamBacklogStatus, DreamLedgerStore } from '../store/DreamLedgerS
 import type { EventStore } from '../store/EventStore.js';
 import type { ModelRegistry } from '../models/ModelRegistry.js';
 import type { TextGenerateFn } from '../models/ModelRole.js';
+import type { PipelineMetrics } from './PipelineMetrics.js';
 import type { MemoryEvent } from '../types/index.js';
 
 export interface DreamCuratorRunOptions {
@@ -35,6 +36,7 @@ export interface DreamCuratorWorkerDeps {
   dreamLedgerStore: DreamLedgerStore;
   candidateStore: DeepWriteCandidateStore;
   modelRegistry?: ModelRegistry;
+  pipelineMetrics?: PipelineMetrics;
 }
 
 interface DreamEvidence {
@@ -65,7 +67,8 @@ interface DreamEvidence {
 }
 
 const PREFERENCE_PATTERN = /(请以后|以后请|始终|总是|偏好|喜欢|希望|不要|别|必须|一定要|长期目标|目标是|约束|边界|本地优先|local-first|prefer|preference|always|never|must|do not|don't|goal|constraint|boundary)/iu;
-const CORRECTION_PATTERN = /(不对|不是|纠正|更正|应该是|推翻|修正|actually|correction|instead)/iu;
+const CORRECTION_PATTERN = /((?:^|[。！？.!?\s])不[，,]|(?<!对)不对|(?<!是)不是|纠正|更正|应该是|推翻|修正|actually|correction|instead)/iu;
+const LEADING_CORRECTION_PATTERN = /^\s*不[，,]/u;
 
 export class DreamCuratorWorker {
   constructor(private readonly deps: DreamCuratorWorkerDeps) {}
@@ -188,17 +191,20 @@ export class DreamCuratorWorker {
           createdAt: now,
         });
       }
-      if (CORRECTION_PATTERN.test(text)) {
+      if (isExplicitCorrectionCandidate(text)) {
         candidates.push({
-          candidateType: 'contradictions',
+          candidateType: 'correction',
           status,
-          confidence: 0.72,
+          confidence: 0.78,
           content: {
             projectId: event.projectId || options.projectId,
             statement: text,
+            sourceEventId: event.eventId,
             source: 'explicit_user_statement',
             durability: 'event',
-            risk: 'correction_candidate_requires_review',
+            correctionKind: 'user_clarification_or_revision',
+            governance: 'organizational_trace_only',
+            risk: 'correction_requires_prior_claim_binding_before_belief_change',
           },
           evidence: [this.toEvidence(event)],
           createdAt: now,
@@ -382,6 +388,18 @@ export class DreamCuratorWorker {
           if (rawEvidenceIds.some((id) => !validEventIds.has(id))) continue;
         }
 
+        if (bucket === 'conflictCandidates') {
+          if (!hasPairedConflictClaims(record)) continue;
+          const distinctEvidenceIds = new Set(rawEvidenceIds);
+          if (
+            rawEvidenceIds.includes('all')
+            || distinctEvidenceIds.size < 2
+            || rawEvidenceIds.some((id) => !validEventIds.has(id))
+          ) {
+            continue;
+          }
+        }
+
         const evidence = this.providerEvidenceFor(record, events);
         if (evidence.length === 0) continue;
 
@@ -547,9 +565,15 @@ export class DreamCuratorWorker {
     detail: unknown,
   ): Omit<DeepWriteCandidateInput, 'runId'> | undefined {
     const detailText = truncate(detail instanceof Error ? detail.message : String(detail || ''), 500);
+    this.deps.pipelineMetrics?.recordNonFatal(reason, {
+      projectId,
+      message: detailText,
+      details: { component: 'dream_curator', disposition: 'rejected_diagnostic' },
+      occurredAt: now,
+    });
     const existing = this.deps.candidateStore.listCandidates({
       projectId,
-      statuses: ['needs_confirmation'],
+      statuses: ['needs_confirmation', 'rejected'],
       candidateTypes: ['diagnostic_conclusion'],
       limit: 500,
     }).some((candidate) => {
@@ -564,7 +588,7 @@ export class DreamCuratorWorker {
 
     return {
       candidateType: 'diagnostic_conclusion',
-      status: 'needs_confirmation',
+      status: 'rejected',
       confidence: 0.4,
       content: {
         projectId,
@@ -583,7 +607,7 @@ export class DreamCuratorWorker {
   private supersedeProviderWarnings(projectId: string | undefined): void {
     const warnings = this.deps.candidateStore.listCandidates({
       projectId,
-      statuses: ['needs_confirmation'],
+      statuses: ['needs_confirmation', 'rejected'],
       candidateTypes: ['diagnostic_conclusion'],
       limit: 500,
     });
@@ -595,6 +619,7 @@ export class DreamCuratorWorker {
       this.deps.candidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
         type: 'diagnostic_conclusion',
         id: candidate.candidateId,
+        reason: 'provider_recovered',
       });
     }
   }
@@ -658,6 +683,18 @@ export class DreamCuratorWorker {
     const sessionIds = new Set(events.map((event) => event.sessionId).filter((id): id is string => Boolean(id)));
     return sessionIds.size === 1 ? [...sessionIds][0] : undefined;
   }
+}
+
+function hasPairedConflictClaims(record: Record<string, unknown>): boolean {
+  const incoming = String(record.newStatement || record.claim || '').trim();
+  const prior = String(record.possiblySupersededStatement || record.priorStatement || '').trim();
+  return incoming.length > 0 && prior.length > 0 && incoming !== prior;
+}
+
+function isExplicitCorrectionCandidate(text: string): boolean {
+  if (!CORRECTION_PATTERN.test(text)) return false;
+  if (LEADING_CORRECTION_PATTERN.test(text)) return true;
+  return !/[?？]\s*$/u.test(text);
 }
 
 function eventText(event: MemoryEvent): string {

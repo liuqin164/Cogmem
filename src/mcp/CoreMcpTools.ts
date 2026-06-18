@@ -205,10 +205,10 @@ function recall(
   const limit = optionalNumber(input.limit);
   const startTime = optionalTime(input.since, 'since');
   const endTime = optionalTime(input.until, 'until');
+  const agentId = requestedAgentId || requestedProjectId || 'openclaw';
+  const projectId = requestedProjectId || agentId;
 
   if (!includeExplanation) {
-    const agentId = requestedAgentId || requestedProjectId || 'openclaw';
-    const projectId = requestedProjectId || agentId;
     const memory = new KernelAgentMemoryBackend(kernel);
     const result = memory.recall({
       agentId,
@@ -227,6 +227,7 @@ function recall(
       recallMode: result.recallMode,
       fallbackUsed: result.fallbackUsed,
       queryPlan: result.queryPlan,
+      decisionTrace: result.decisionTrace,
       narrative: result.narrative,
       temporalLabels: result.temporalTraversal?.labels,
       items: result.items,
@@ -235,8 +236,8 @@ function recall(
 
   const explanation = explainRecallWithKernel(kernel, {
     query,
-    agentId: requestedAgentId,
-    projectId: requestedProjectId,
+    agentId,
+    projectId,
     collection: optionalString(input.collection),
     limit,
     startTime,

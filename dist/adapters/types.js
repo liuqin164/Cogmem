@@ -59,12 +59,12 @@ export function parseMarkdownRoleLine(line) {
     if (!trimmed)
         return null;
     const patterns = [
-        /^(?:[-*]|\d+\.)?\s*(?:\[(?<timestamp>[^\]]+)\]|\((?<timestampAlt>[^)]+)\)|(?<timestampLead>(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?(?:\s*[+-]\d{2}:?\d{2})?)?|\d{1,2}:\d{2}(?::\d{2})?)))?\s*(?<role>[A-Za-z][A-Za-z _-]{0,24})\s*[:：\-]\s*(?<text>.+)\s*$/i,
-        /^(?<role>[A-Za-z][A-Za-z _-]{0,24})\s*(?:\[(?<timestamp>[^\]]+)\]|\((?<timestampAlt>[^)]+)\))?\s*[:：\-]\s*(?<text>.+)\s*$/i
+        /^(?:[-*]|\d+\.)?\s*(?:\[(?<timestamp>[^\]]+)\]|\((?<timestampAlt>[^)]+)\)|(?<timestampLead>(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?(?:\s*[+-]\d{2}:?\d{2})?)?|\d{1,2}:\d{2}(?::\d{2})?)))?\s*(?<role>[A-Za-z][A-Za-z _-]{0,24})\s*[:：\-]\s*(?<text>.*)\s*$/i,
+        /^(?<role>[A-Za-z][A-Za-z _-]{0,24})\s*(?:\[(?<timestamp>[^\]]+)\]|\((?<timestampAlt>[^)]+)\))?\s*[:：\-]\s*(?<text>.*)\s*$/i
     ];
     for (const pattern of patterns) {
         const match = trimmed.match(pattern);
-        if (!match?.groups?.role || !match.groups.text)
+        if (!match?.groups?.role || match.groups.text === undefined)
             continue;
         const rawRole = match.groups.role.trim().toLowerCase().replace(/\s+/g, ' ');
         const role = ROLE_ALIASES[rawRole] || ROLE_ALIASES[rawRole.replace(/\s+/g, '')];

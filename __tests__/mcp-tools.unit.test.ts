@@ -129,6 +129,38 @@ test('core MCP recall uses agent-facing raw ledger fallback when only projectId 
   ))).toBe(true);
 });
 
+test('core MCP explain infers agentId from projectId and matches normal recall', async () => {
+  const kernel = makeKernel();
+
+  await callCogmemMcpTool('cogmem_remember_turn', {
+    agentId: 'hermes',
+    projectId: 'hermes',
+    sessionId: 'hermes-black-box',
+    userText: 'The original memory black-box discussion must remain source-drillable.',
+    assistantText: 'Stored only in the raw ledger.',
+    ingestMode: 'raw_archive_only',
+  }, { kernel });
+
+  const recall = await callCogmemMcpTool('cogmem_recall', {
+    projectId: 'hermes',
+    query: 'memory black-box discussion',
+    limit: 3,
+  }, { kernel });
+  const explained = await callCogmemMcpTool('cogmem_explain_recall', {
+    projectId: 'hermes',
+    query: 'memory black-box discussion',
+    limit: 3,
+  }, { kernel });
+
+  expect(explained.isError).toBeFalsy();
+  expect(explained.structuredContent?.agentId).toBe('hermes');
+  expect(explained.structuredContent?.recallMode).toBe(recall.structuredContent?.recallMode);
+  expect(explained.structuredContent?.decisionTrace).toEqual(recall.structuredContent?.decisionTrace);
+  expect((explained.structuredContent?.evidence as Array<{ id: string }>).map((item) => item.id)).toEqual(
+    (recall.structuredContent?.items as Array<{ id: string }>).map((item) => item.id),
+  );
+});
+
 test('core MCP explain tool returns pulse and temporal recall details', async () => {
   const kernel = makeKernel();
   await kernel.ingest({

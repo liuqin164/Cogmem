@@ -164,6 +164,21 @@ export interface AgentRecallResult {
     runtime?: NonNullable<MemoryKernelNavigationResult['navigation']>['runtime'];
     fallbackUsed: boolean;
     queryPlan?: AgentRecallQueryPlan;
+    /** Present on all kernel-produced results. Optional for source compatibility with external result mocks. */
+    decisionTrace?: AgentRecallDecisionTrace;
+}
+export interface AgentRecallDecisionTrace {
+    version: 'agent_recall_decision.v1';
+    selectedLane: 'graph' | 'compiled' | 'brain_fallback' | 'raw_ledger' | 'mixed' | 'none';
+    reason: 'previous_session' | 'forensic_quote' | 'graph_selected' | 'raw_cue_match_preferred' | 'compiled_cue_match' | 'brain_fallback_selected' | 'raw_ledger_only' | 'no_recall_evidence';
+    candidateCounts: {
+        graph: number;
+        navigation: number;
+        scopedNavigation: number;
+        brainFallback: number;
+        rawLedger: number;
+    };
+    selectedCount: number;
 }
 export interface AgentRecallEntityCard {
     entityId: string;

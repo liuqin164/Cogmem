@@ -91,6 +91,17 @@ function printHuman(explanation: ReturnType<typeof explainRecallWithKernel>): vo
   if (explanation.agentId) console.log(`agent: ${explanation.agentId}`);
   console.log(`mode: ${explanation.recallMode}`);
   console.log(`fallback: ${explanation.fallbackUsed}`);
+  if (explanation.queryPlan) {
+    console.log(`queryPlan: ${explanation.queryPlan.searchTexts.join(' | ')}`);
+  }
+  if (explanation.decisionTrace) {
+    const counts = Object.entries(explanation.decisionTrace.candidateCounts)
+      .map(([lane, count]) => `${lane}=${count}`)
+      .join(', ');
+    console.log(
+      `decision: lane=${explanation.decisionTrace.selectedLane} reason=${explanation.decisionTrace.reason} candidates=[${counts}] selected=${explanation.decisionTrace.selectedCount}`,
+    );
+  }
   if (explanation.narrative?.headline) console.log(`headline: ${explanation.narrative.headline}`);
   if (explanation.temporalTraversal?.labels.length) {
     console.log(`temporal: ${explanation.temporalTraversal.labels.join(', ')}`);
