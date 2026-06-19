@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.1.0
+
+- Added validity-window belief lookup and bounded project/entity timelines for milestones, decisions, corrections, and belief versions.
+- Preserved correction reasons, evidence anchors, and supersession history while keeping current-state queries free of stale versions.
+- Added schema migration 18 and public `TemporalMemoryService` access through `MemoryKernel`.
+
 ## 3.0.0
 
 - Added an evidence-backed Belief Graph with ownership, versions, source roles, conflict records, and supersession chains.

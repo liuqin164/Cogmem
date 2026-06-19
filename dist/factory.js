@@ -46,8 +46,9 @@ import { UniverseTraversalExecutor } from './retrieval/UniverseTraversalExecutor
 import { NeuronEmbeddingStore } from './embedding/NeuronEmbeddingStore.js';
 import { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
 import { MemoryGovernanceExecutor, MemoryGovernanceValidator, PiiRedactor, } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, SchemaMigrationRunner } from './migrations/index.js';
+import { migration_0015, migration_0016, migration_0017, migration_0018, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
+import { TemporalMemoryService } from './temporal/index.js';
 import { loadCogmemConfig, resolveCogmemConfigPath, } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
 import { IterativeLLMClarifier } from './routing/IterativeLLMClarifier.js';
@@ -71,8 +72,8 @@ import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
 import { config } from './utils/Config.js';
 import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snapshot/index.js';
-const CORE_VERSION = '3.0.0';
-const LATEST_SCHEMA_VERSION = 17;
+const CORE_VERSION = '3.1.0';
+const LATEST_SCHEMA_VERSION = 18;
 export class MemoryKernel {
     options;
     memoryGraph;
@@ -82,6 +83,7 @@ export class MemoryKernel {
     entityGovernanceService;
     beliefStore;
     beliefGovernanceService;
+    temporalMemoryService;
     cursorStore;
     vectorStore;
     topicRegistry;
@@ -137,7 +139,7 @@ export class MemoryKernel {
         this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
         const db = this.factStore.getDatabase();
         db.exec('PRAGMA busy_timeout = 5000;');
-        new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017]).run();
+        new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018]).run();
         this.ensureMetaTable(db);
         this.entityStore = new EntityStore(db);
         this.ensureGovernanceAuditTable(db);
@@ -148,6 +150,7 @@ export class MemoryKernel {
             const event = this.eventStore.getEvent(eventId);
             return event ? { eventId, projectId: event.projectId, role: event.role } : undefined;
         });
+        this.temporalMemoryService = new TemporalMemoryService(db);
         this.cursorStore = new IngestionCursorStore(this.dbPath);
         this.vectorStore = options.vectorBackend === 'hnswlib'
             ? new VectorStore(vectorDimension)

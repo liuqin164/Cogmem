@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for Hermes through MCP.
-version: 3.0.0
+version: 3.1.0
 metadata:
   hermes:
     tags: [memory, mcp, cogmem, agent-memory]
@@ -22,6 +22,7 @@ Use this skill when a Hermes workspace needs `cogmem` as its durable memory back
 - Do not set `memory.provider: cogmem` in `~/.hermes/config.yaml`; this package uses Hermes MCP integration, not a native Hermes memory provider.
 - Treat entity aliases as governed candidates. Never merge people from pronouns, family labels, job titles, assistant text, or tool output alone; require explicit user evidence and leave uncertain matches pending.
 - Treat Belief Graph nodes as evidence-backed cognition. Assistant/tool-only observations may describe project state but must never become user preferences, goals, boundaries, or facts; inspect source events before accepting or correcting a belief.
+- For "when", "before", "why did this change", or "what was current then" questions, use Temporal Memory validity windows and timeline evidence. Do not present a superseded belief as current or mix old and current project state.
 
 ## Install
 

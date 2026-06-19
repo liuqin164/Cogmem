@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.0.0`
+Current version: `3.1.0`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -153,7 +153,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#3.0.0"
+bun add "cogmem@github:liuqin164/cogmem#3.1.0"
 bunx cogmem init
 ```
 
@@ -215,6 +215,8 @@ cogmem memory bind --project my-agent --json
 Entity identity is owned by `EntityStore`; Memory Binding only writes those canonical entity IDs into its compatibility projection. `EntityGovernanceService` creates evidence-backed merge candidates, requires same-project/same-type entities, and makes every applied merge reversible. Person aliases require explicit user evidence and a higher confidence threshold. Do not auto-merge pronouns, family labels, role names, or assistant/tool-only guesses.
 
 `BeliefGovernanceService` turns repeated evidence into versioned current beliefs without losing the source chain. User-owned preferences, goals, boundaries, and decisions require explicit user events. Assistant and tool evidence may create project observations, but cannot establish user facts. Matching evidence reinforces one node; user corrections supersede the prior version; unsupported contradictions remain `possible_conflict` while the current belief stays active.
+
+`TemporalMemoryService` answers which belief version was valid at a requested time and maintains bounded project/entity timelines for milestones, decisions, corrections, and belief versions. Current answers must not silently mix superseded state with active state. Historical answers should include the relevant validity window, correction reason, and raw evidence anchors when available.
 
 ## Import Existing Agent Memory
 
