@@ -1068,6 +1068,7 @@ test('unified cogmem CLI dispatches doctor and update commands', async () => {
   expect(parsed.nextCommand).toContain('cogmem@github:liuqin164/cogmem#2.0.1');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
   expect(parsed.nextCommand).not.toContain('@CognitiveOS/core');
+  expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
 });
 
 test('cogmem update targets the one-line installer home when cwd has no package dependency', async () => {
@@ -1100,6 +1101,7 @@ test('cogmem update targets the one-line installer home when cwd has no package 
   expect(parsed.releaseAsset).toBe('github:liuqin164/cogmem#2.0.1');
   expect(parsed.nextCommand).toContain('cogmem@github:liuqin164/cogmem#2.0.1');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
+  expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
 });
 
 test('cogmem-connect installs Hermes skill into the real Hermes skills directory by default', async () => {

@@ -62,7 +62,15 @@ import { NeuronEmbeddingStore } from './embedding/NeuronEmbeddingStore.js';
 import { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
 import type { ReEmbeddingStatus } from './embedding/ReEmbeddingStatus.js';
 import type { EncryptionProvider } from './encryption/index.js';
-import { PiiRedactor, type RedactionPolicy } from './governance/index.js';
+import {
+  MemoryGovernanceExecutor,
+  MemoryGovernanceValidator,
+  PiiRedactor,
+  type MemoryGovernanceExecutionResult,
+  type MemoryGovernancePlan,
+  type RedactionPolicy,
+} from './governance/index.js';
+import { migration_0015, SchemaMigrationRunner } from './migrations/index.js';
 import {
   loadCogmemConfig,
   resolveCogmemConfigPath,
@@ -83,6 +91,7 @@ import { EventStore } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
 import { InteractionUnitStore } from './store/InteractionUnitStore.js';
 import { MemoryBindingStore } from './store/MemoryBindingStore.js';
+import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { SummaryStore } from './store/SummaryStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
 import { TopologyStore } from './store/TopologyStore.js';
@@ -108,8 +117,8 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '2.7.1';
-const LATEST_SCHEMA_VERSION = 14;
+const CORE_VERSION = '2.8.0';
+const LATEST_SCHEMA_VERSION = 15;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 
@@ -455,6 +464,8 @@ export class MemoryKernel {
   readonly dreamLedgerStore: DreamLedgerStore;
   readonly activationStore: ActivationStore;
   readonly memoryBindingStore: MemoryBindingStore;
+  readonly memoryGovernanceStore: MemoryGovernanceStore;
+  readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;
   readonly pipelineMetrics: PipelineMetrics;
 
   private readonly dbPath: string;
@@ -500,6 +511,7 @@ export class MemoryKernel {
     this.entityStore = new EntityStore(this.dbPath);
     const db = this.factStore.getDatabase();
     db.exec('PRAGMA busy_timeout = 5000;');
+    new SchemaMigrationRunner(db, [migration_0015]).run();
     this.ensureMetaTable(db);
     this.ensureGovernanceAuditTable(db);
     const vectorDimension = options.vectorDimension ?? config.vector.dimension;
@@ -520,6 +532,23 @@ export class MemoryKernel {
     this.activationStore = new ActivationStore(db);
     this.memoryBindingStore = new MemoryBindingStore(db);
     this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore);
+    this.memoryGovernanceStore = new MemoryGovernanceStore(db);
+    this.memoryGovernanceExecutor = new MemoryGovernanceExecutor(
+      db,
+      this.memoryGovernanceStore,
+      new MemoryGovernanceValidator((eventId) => {
+        const event = this.eventStore.getEvent(eventId);
+        return event ? { eventId, projectId: event.projectId, role: event.role } : undefined;
+      }),
+      {
+        BIND_EVENT: (operation) => {
+          const eventId = typeof operation.payload.eventId === 'string' ? operation.payload.eventId : operation.evidenceEventIds[0];
+          const event = eventId ? this.eventStore.getEvent(eventId) : null;
+          if (!event) throw new Error(`BIND_EVENT requires an existing event: ${eventId || 'missing'}`);
+          this.memoryBindingService.bindRawEvent(event);
+        },
+      },
+    );
     this.pipelineMetrics = new PipelineMetrics(db);
     this.summaryStore = new SummaryStore(db);
     this.summaryStore.migrateLegacyFactSummaries();
@@ -1098,6 +1127,10 @@ export class MemoryKernel {
 
   bindMemoryEvent(event: MemoryEvent): MemoryBindingRecord[] {
     return this.memoryBindingService.bindRawEvent(event);
+  }
+
+  executeMemoryGovernancePlan(plan: MemoryGovernancePlan): MemoryGovernanceExecutionResult {
+    return this.memoryGovernanceExecutor.execute(plan);
   }
 
   bindRawEvents(options: MemoryBindingBackfillOptions = {}): MemoryBindingBackfillResult {

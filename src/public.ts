@@ -187,8 +187,26 @@ export type { ImportOptions, ImportResult, SnapshotHeader, SnapshotMeta } from '
  */
 export { AesGcmEncryptionProvider, isEncryptedPayload } from './encryption/index.js';
 export type { EncryptionProvider } from './encryption/index.js';
-export { PiiRedactor } from './governance/index.js';
-export type { PiiFinding, RedactionPolicy, RedactionResult } from './governance/index.js';
+export {
+  MemoryGovernanceExecutor,
+  MemoryGovernanceStore,
+  MemoryGovernanceValidator,
+  PiiRedactor,
+} from './governance/index.js';
+export type {
+  MemoryEvidenceRole,
+  MemoryGovernanceAuditEntry,
+  MemoryGovernanceExecutionResult,
+  MemoryGovernanceIssue,
+  MemoryGovernanceOperation,
+  MemoryGovernanceOperationType,
+  MemoryGovernancePlan,
+  MemoryGovernanceValidationResult,
+  MemoryOwnership,
+  PiiFinding,
+  RedactionPolicy,
+  RedactionResult,
+} from './governance/index.js';
 
 // ─── @beta ───────────────────────────────────────────────────────────────────
 

@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `2.7.1`
+Current version: `2.8.0`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -77,7 +77,10 @@ Metadata / FTS Index
   Lightweight keyword, source, time, project, and thread indexing for exact lookup.
 
 Memory Binding
-  Deterministic raw-event bindings to stable entity/topic paths, claim-key clusters, and graph edges for source-anchored organization before fact promotion.
+  CPU-canonicalized raw-event bindings to stable entity/topic paths, claim-key clusters, and activation-aware graph edges for source-anchored organization before fact promotion.
+
+Memory Governance Plan
+  Evidence-backed, idempotent semantic operations validated by CPU policy and committed with their audit records in one SQLite transaction.
 
 Compiled Memory
   Governed summaries, preferences, constraints, goals, lessons, diagnostics, and topic memories.
@@ -150,7 +153,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#2.7.1"
+bun add "cogmem@github:liuqin164/cogmem#2.8.0"
 bunx cogmem init
 ```
 
@@ -159,6 +162,21 @@ Validate configuration:
 ```bash
 cogmem doctor
 ```
+
+Upgrade from GitHub Releases and migrate an existing database:
+
+```bash
+cogmem update --yes
+```
+
+`cogmem update --yes` resolves the latest GitHub Release asset, installs it, then runs the newly installed `cogmem migrate --yes --backup`. To inspect changes without writing:
+
+```bash
+cogmem update --dry-run --json
+cogmem migrate --dry-run --json
+```
+
+For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped database backup before changing an on-disk database.
 
 Run the Dream Curator once and promote safe candidates through CPU governance:
 

@@ -1,11 +1,11 @@
-# cogmem 2.7.1 Release Checklist
+# cogmem 2.8.0 Release Checklist
 
 This release is distributed through GitHub Releases. Do not run npm publish.
 
 ## Required Metadata
 
 - `package.json` name is `cogmem`.
-- `package.json` version is `2.7.1`.
+- `package.json` version is `2.8.0`.
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
 - `install.sh` is tracked and uses the latest GitHub release asset.
@@ -28,6 +28,7 @@ This release is distributed through GitHub Releases. Do not run npm publish.
 - `cogmem snapshot`
 - `cogmem re-embed`
 - `cogmem migrate-vectors`
+- `cogmem migrate`
 
 ## Required Documentation
 
@@ -37,6 +38,7 @@ This release is distributed through GitHub Releases. Do not run npm publish.
 - README and integration docs explain labeled `sourceContext`, strict before/after window metadata, `charRange` / `sourceRange`, and OpenClaw `sourceWindow` / `sourceTruncation` injection.
 - README and skills explain collection routing, `cogmem memory map`, and `cogmem memory tick` as host-owned inspection and maintenance surfaces.
 - README and skills explain `decisionTrace` / `recallDecision`, source-first raw fallback, correction semantics, and review-queue aging.
+- README and skills explain `cogmem update --yes`, migration dry-run, backups, and that Raw Ledger evidence is never rewritten by schema migration.
 - OpenClaw skill explains self-install, import, active recall, `--auto`, and `doctor --fix`.
 - Hermes skill explains self-install, MCP wiring, `connect hermes --auto`, and `/reload-mcp`.
 - SECURITY documents local-first storage, explicit external providers, snapshots as sensitive, and governed recall.

@@ -1,7 +1,9 @@
 import { BindingClassifier, normalizeForBinding } from './BindingClassifier.js';
+import { BindingDecisionEngine } from './BindingDecisionEngine.js';
 export class MemoryBindingService {
     store;
     classifier = new BindingClassifier();
+    decisionEngine = new BindingDecisionEngine();
     constructor(store) {
         this.store = store;
     }
@@ -72,7 +74,12 @@ export class MemoryBindingService {
                 eventId: input.eventId,
                 now: createdAt,
             });
-            const bindingAction = bindingActionFor(decision.bindingType, related, cluster.supportCount);
+            const bindingAction = this.decisionEngine.decide({
+                bindingType: decision.bindingType,
+                relatedCount: related.length,
+                supportCount: cluster.supportCount,
+                relatedBindingTypes: related.map((binding) => binding.bindingType),
+            });
             const binding = {
                 eventId: input.eventId,
                 projectId: input.projectId,
@@ -236,17 +243,6 @@ export class MemoryBindingService {
             return payload.title;
         return JSON.stringify(event.payload);
     }
-}
-function bindingActionFor(bindingType, related, supportCount) {
-    if (bindingType === 'correction' && related.length > 0)
-        return 'corrects_prior_memory';
-    if (bindingType === 'correction')
-        return 'possible_conflict';
-    if (related.length === 0 || supportCount <= 1)
-        return 'create_new_cluster';
-    if (related.some((binding) => binding.bindingType === bindingType))
-        return 'strengthen_existing';
-    return 'attach_to_existing';
 }
 function bindingRank(binding, decision) {
     let score = binding.confidence;

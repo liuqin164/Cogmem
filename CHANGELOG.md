@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.8.0
+
+- Added evidence-backed `MemoryGovernancePlan`, strict CPU validation, idempotency keys, project and ownership checks, transactional execution, and audit records. Missing raw evidence and assistant/tool-only user-owned memory are rejected before persistence.
+- Added Memory Binding v1.5 primitives: `TopicPathRegistry`, `ClaimKeyGenerator`, `BindingDecisionEngine`, activation-aware weighted edges, and bounded read-only `BrainGraphView` traversal.
+- Split graph edge confidence, stability, and activation so maintenance decay affects memory surfacing rather than historical truth or provenance.
+- Added schema version 15 and `cogmem migrate` with dry-run, legacy schema adoption, idempotent migration tracking, and optional pre-migration database backup.
+- Changed `cogmem update --yes` to resolve GitHub Releases, install the selected release, and invoke the newly installed schema migration command with backup enabled.
+
 ## 2.7.1
 
 - Fixed OpenClaw Markdown role-boundary parsing for empty `user:` / `assistant:` headers with multiline bodies, preventing assistant self-correction text from being attached to the preceding user event. Adjacent exact duplicate exports are collapsed with an import diagnostic while non-adjacent repeats remain chronological evidence.

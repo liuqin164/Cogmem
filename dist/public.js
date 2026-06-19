@@ -41,7 +41,7 @@ export { ChecksumError, DimensionMismatchError, KernelRunningError, SnapshotExpo
  * @stable @since 1.14.0
  */
 export { AesGcmEncryptionProvider, isEncryptedPayload } from './encryption/index.js';
-export { PiiRedactor } from './governance/index.js';
+export { MemoryGovernanceExecutor, MemoryGovernanceStore, MemoryGovernanceValidator, PiiRedactor, } from './governance/index.js';
 export { EmbeddingUnavailableError, embedOne } from './embedding/EmbeddingProvider.js';
 /**
  * Dream curator scheduling helpers. They describe host-owned schedules; core

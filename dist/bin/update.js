@@ -44,6 +44,13 @@ function buildCommand(manager, spec) {
         return ['pnpm', 'add', `cogmem@${spec}`];
     return ['npm', 'install', `cogmem@${spec}`];
 }
+function buildMigrationExec(manager) {
+    if (manager === 'bun')
+        return ['bun', 'x', 'cogmem', 'migrate', '--yes', '--backup'];
+    if (manager === 'pnpm')
+        return ['pnpm', 'exec', 'cogmem', 'migrate', '--yes', '--backup'];
+    return ['npm', 'exec', '--', 'cogmem', 'migrate', '--yes', '--backup'];
+}
 function installedSpec(cwd) {
     const manifest = readPackageManifest(cwd);
     if (!manifest)
@@ -98,6 +105,7 @@ async function main() {
         targetCwd,
         currentSpec: installedSpec(targetCwd),
         nextCommand: command.join(' '),
+        migrationCommand: 'cogmem migrate --yes --backup',
         followUp: 'Run cogmem doctor --fix --agent openclaw --workspace <openclaw-workspace> after updating if OpenClaw auto memory is configured. For Hermes, rerun cogmem connect hermes and reload MCP.',
     };
     if (args.json) {
@@ -117,7 +125,16 @@ async function main() {
             stdout: 'inherit',
             stderr: 'inherit',
         });
-        process.exit(await proc.exited);
+        const updateExitCode = await proc.exited;
+        if (updateExitCode !== 0)
+            process.exit(updateExitCode);
+        const migration = Bun.spawn({
+            cmd: buildMigrationExec(manager),
+            cwd: targetCwd,
+            stdout: 'inherit',
+            stderr: 'inherit',
+        });
+        process.exit(await migration.exited);
     }
 }
 main().catch((error) => {

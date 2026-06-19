@@ -17,6 +17,7 @@ const COMMANDS = {
     snapshot: 'snapshot',
     're-embed': 're-embed',
     'migrate-vectors': 'migrate-vectors',
+    migrate: 'migrate',
 };
 function usage() {
     return [
@@ -36,6 +37,7 @@ function usage() {
         '  snapshot             export/import snapshots',
         '  re-embed             inspect or run re-embedding',
         '  migrate-vectors      migrate vector backend data',
+        '  migrate              plan or apply schema migrations with optional backup',
     ].join('\n');
 }
 function siblingEntrypoint(command) {

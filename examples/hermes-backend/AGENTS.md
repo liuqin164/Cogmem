@@ -54,6 +54,8 @@ Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2
 
 ## Migrate Existing Hermes Memory
 
+For package upgrades, run `cogmem update --yes`; it installs the latest GitHub Release and then runs `cogmem migrate --yes --backup`. Use `cogmem migrate --dry-run --json` to preview pending schema work. Never delete or rewrite Raw Ledger events during migration.
+
 Default Hermes memory contract:
 
 - `state.db` may contain the real chronological conversation history in SQLite `messages`.

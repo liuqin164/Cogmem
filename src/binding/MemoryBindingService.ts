@@ -8,6 +8,7 @@ import type {
 } from './MemoryBindingTypes.js';
 import { MemoryBindingStore } from '../store/MemoryBindingStore.js';
 import { BindingClassifier, normalizeForBinding, type BindingTopicDecision } from './BindingClassifier.js';
+import { BindingDecisionEngine } from './BindingDecisionEngine.js';
 
 export interface MemoryBindingEventInput {
   eventId: string;
@@ -20,6 +21,7 @@ export interface MemoryBindingEventInput {
 
 export class MemoryBindingService {
   private readonly classifier = new BindingClassifier();
+  private readonly decisionEngine = new BindingDecisionEngine();
 
   constructor(private readonly store: MemoryBindingStore) {}
 
@@ -90,7 +92,12 @@ export class MemoryBindingService {
         eventId: input.eventId,
         now: createdAt,
       });
-      const bindingAction = bindingActionFor(decision.bindingType, related, cluster.supportCount);
+      const bindingAction = this.decisionEngine.decide({
+        bindingType: decision.bindingType,
+        relatedCount: related.length,
+        supportCount: cluster.supportCount,
+        relatedBindingTypes: related.map((binding) => binding.bindingType),
+      });
       const binding: MemoryBindingInput = {
         eventId: input.eventId,
         projectId: input.projectId,
@@ -251,18 +258,6 @@ export class MemoryBindingService {
     if (typeof payload.title === 'string') return payload.title;
     return JSON.stringify(event.payload);
   }
-}
-
-function bindingActionFor(
-  bindingType: BindingTopicDecision['bindingType'],
-  related: MemoryBindingRecord[],
-  supportCount: number,
-): MemoryBindingAction {
-  if (bindingType === 'correction' && related.length > 0) return 'corrects_prior_memory';
-  if (bindingType === 'correction') return 'possible_conflict';
-  if (related.length === 0 || supportCount <= 1) return 'create_new_cluster';
-  if (related.some((binding) => binding.bindingType === bindingType)) return 'strengthen_existing';
-  return 'attach_to_existing';
 }
 
 function bindingRank(binding: MemoryBindingRecord, decision: BindingTopicDecision): number {

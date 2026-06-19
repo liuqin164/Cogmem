@@ -12,6 +12,7 @@ export interface MemoryBindingEventInput {
 export declare class MemoryBindingService {
     private readonly store;
     private readonly classifier;
+    private readonly decisionEngine;
     constructor(store: MemoryBindingStore);
     bindRawEvent(event: MemoryEvent): MemoryBindingRecord[];
     bindEvent(input: MemoryBindingEventInput): MemoryBindingRecord[];
