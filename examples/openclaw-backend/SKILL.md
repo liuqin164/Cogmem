@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for OpenClaw.
-version: 3.1.0
+version: 3.2.0
 metadata:
   openclaw:
     tags: [memory, cogmem, agent-memory]
@@ -22,6 +22,7 @@ Use this skill when an OpenClaw workspace needs `cogmem` as its durable memory b
 - Treat entity aliases as governed candidates. Never merge people from pronouns, family labels, job titles, assistant text, or tool output alone; require explicit user evidence and leave uncertain matches pending.
 - Treat Belief Graph nodes as evidence-backed cognition. Assistant/tool-only observations may describe project state but must never become user preferences, goals, boundaries, or facts; inspect source events before accepting or correcting a belief.
 - For "when", "before", "why did this change", or "what was current then" questions, use Temporal Memory validity windows and timeline evidence. Do not present a superseded belief as current or mix old and current project state.
+- Let Context Cortex decide activation: greetings use no Cogmem memory; short same-topic continuations use Session State and Turn Bridge; exact-quote requests prioritize raw source; other recall remains within the configured memory budget. Read `activationReceipt` before claiming that memory did not exist.
 
 ## Install
 

@@ -25,6 +25,7 @@ export type { CogmemConfigResolution, CogmemConfigResolutionOptions, LoadedCogme
 export type { MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingSource, MemoryBindingStats, MemoryBindingType, MemoryBindingAction, MemoryClusterListOptions, MemoryClusterRecord, MemoryClusterStatus, MemoryEdgeListOptions, MemoryEdgeRecord, MemoryEdgeRelation, MemoryEntityRecord, MemoryEntityType, MemoryGraphRecallAnchor, MemoryTopicRecord, } from './binding/index.js';
 export { BeliefGovernanceService, type ApplyBeliefInput, type BeliefEvidenceLookup, type BeliefEvidenceRecord, type BeliefOwnership, type BeliefRelation, type GovernedBeliefRecord, type GovernedBeliefStatus, type GovernedBeliefType, } from './belief/BeliefGovernanceService.js';
 export { TemporalMemoryService, type RecordTimelineEntryInput, type TemporalBeliefRecord, type TimelineEntryRecord, type TimelineEntryType, type TimelineListOptions, } from './temporal/index.js';
+export { ContextCortex, type ContextActivationPlan, type ContextActivationReceipt, type ContextCandidate, type ContextIntent, type ContextLayer, type ContextPlanInput, type ContextSuppressionReason, } from './context/index.js';
 /**
  * Agent framework integration facade.
  * @stable @since 2.0.0

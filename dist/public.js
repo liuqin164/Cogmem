@@ -23,6 +23,7 @@ export { MemoryKernel, createMemoryKernel, createMemoryKernelFromConfig, } from 
 export { defaultCogmemConfigPath, defaultCogmemHome, loadCogmemConfig, resolveCogmemConfigPath, } from './config/CogmemConfig.js';
 export { BeliefGovernanceService, } from './belief/BeliefGovernanceService.js';
 export { TemporalMemoryService, } from './temporal/index.js';
+export { ContextCortex, } from './context/index.js';
 /**
  * Agent framework integration facade.
  * @stable @since 2.0.0

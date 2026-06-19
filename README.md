@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.1.0`
+Current version: `3.2.0`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -153,7 +153,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#3.1.0"
+bun add "cogmem@github:liuqin164/cogmem#3.2.0"
 bunx cogmem init
 ```
 
@@ -217,6 +217,8 @@ Entity identity is owned by `EntityStore`; Memory Binding only writes those cano
 `BeliefGovernanceService` turns repeated evidence into versioned current beliefs without losing the source chain. User-owned preferences, goals, boundaries, and decisions require explicit user events. Assistant and tool evidence may create project observations, but cannot establish user facts. Matching evidence reinforces one node; user corrections supersede the prior version; unsupported contradictions remain `possible_conflict` while the current belief stays active.
 
 `TemporalMemoryService` answers which belief version was valid at a requested time and maintains bounded project/entity timelines for milestones, decisions, corrections, and belief versions. Current answers must not silently mix superseded state with active state. Historical answers should include the relevant validity window, correction reason, and raw evidence anchors when available.
+
+`ContextCortex` decides whether memory should surface, which layers are eligible, and how much context they may consume. It hard-filters cross-project, superseded, current-session echo, unsupported user-belief, and unnecessary sensitive candidates before ranking. The default memory budget is 25% of available context with a 30% hard ceiling. Every plan emits an activation receipt containing selected and suppressed IDs with reasons. OpenClaw plugin 0.2.0 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Cortex filtering to full recall.
 
 ## Import Existing Agent Memory
 

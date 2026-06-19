@@ -18,6 +18,7 @@ import type { EncryptionProvider } from './encryption/index.js';
 import { MemoryGovernanceExecutor, type MemoryGovernanceExecutionResult, type MemoryGovernancePlan, type RedactionPolicy } from './governance/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
+import { ContextCortex } from './context/index.js';
 import { type EnvLike } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
 import type { Embedder } from './store/Embedder.js';
@@ -334,6 +335,7 @@ export declare class MemoryKernel {
     readonly beliefStore: BeliefStore;
     readonly beliefGovernanceService: BeliefGovernanceService;
     readonly temporalMemoryService: TemporalMemoryService;
+    readonly contextCortex: ContextCortex;
     readonly cursorStore: IngestionCursorStore;
     readonly vectorStore: IVectorStore;
     readonly topicRegistry: TopicRegistry;

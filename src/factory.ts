@@ -71,9 +71,10 @@ import {
   type MemoryGovernancePlan,
   type RedactionPolicy,
 } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, migration_0018, SchemaMigrationRunner } from './migrations/index.js';
+import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
+import { ContextCortex } from './context/index.js';
 import {
   loadCogmemConfig,
   resolveCogmemConfigPath,
@@ -120,8 +121,8 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '3.1.0';
-const LATEST_SCHEMA_VERSION = 18;
+const CORE_VERSION = '3.2.0';
+const LATEST_SCHEMA_VERSION = 19;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 
@@ -460,6 +461,7 @@ export class MemoryKernel {
   readonly beliefStore: BeliefStore;
   readonly beliefGovernanceService: BeliefGovernanceService;
   readonly temporalMemoryService: TemporalMemoryService;
+  readonly contextCortex: ContextCortex;
   readonly cursorStore: IngestionCursorStore;
   readonly vectorStore: IVectorStore;
   readonly topicRegistry: TopicRegistry;
@@ -516,7 +518,7 @@ export class MemoryKernel {
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
     db.exec('PRAGMA busy_timeout = 5000;');
-    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018]).run();
+    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019]).run();
     this.ensureMetaTable(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
@@ -528,6 +530,7 @@ export class MemoryKernel {
       return event ? { eventId, projectId: event.projectId, role: event.role } : undefined;
     });
     this.temporalMemoryService = new TemporalMemoryService(db);
+    this.contextCortex = new ContextCortex(db);
     this.cursorStore = new IngestionCursorStore(this.dbPath);
     this.vectorStore = options.vectorBackend === 'hnswlib'
       ? new VectorStore(vectorDimension)
