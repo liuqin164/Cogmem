@@ -36,6 +36,8 @@ Entity aliases are governed memory. Do not merge people from pronouns, family la
 
 Belief Graph nodes are current cognition, not unsourced summaries. User-owned preferences, goals, boundaries, decisions, and facts require explicit user events. Assistant/tool-only evidence is a project observation; contradictions stay pending unless explicit user correction supersedes the prior belief.
 
+Use Temporal Memory for historical-state questions. Keep the active belief separate from superseded versions and cite the correction reason or source event when explaining a change.
+
 To embed imported memories with a local quantized model, run Ollama locally and configure the kernel before importing:
 
 ```bash

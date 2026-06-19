@@ -95,6 +95,14 @@ export {
   type GovernedBeliefStatus,
   type GovernedBeliefType,
 } from './belief/BeliefGovernanceService.js';
+export {
+  TemporalMemoryService,
+  type RecordTimelineEntryInput,
+  type TemporalBeliefRecord,
+  type TimelineEntryRecord,
+  type TimelineEntryType,
+  type TimelineListOptions,
+} from './temporal/index.js';
 
 /**
  * Agent framework integration facade.
