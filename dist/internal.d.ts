@@ -48,6 +48,7 @@ export * from './governance/ContradictionResolver.js';
 export * from './governance/CredibilityScorer.js';
 export * from './governance/DecayPolicy.js';
 export * from './governance/SupersedeChain.js';
+export * from './governance/index.js';
 export * from './lexicon/coreMemoryLexicon.js';
 export * from './meta/MetaObservationCollector.js';
 export * from './meta/PolicyProposalGenerator.js';

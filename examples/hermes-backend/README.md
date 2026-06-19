@@ -43,6 +43,13 @@ Use the matching vector dimension for the selected model. `qwen3-embedding:4b` u
 
 ## Migrate
 
+Upgrade and migrate the Cogmem database itself before importing host memory:
+
+```bash
+cogmem update --yes
+cogmem migrate --dry-run --json
+```
+
 Preview:
 
 ```bash

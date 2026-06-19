@@ -1,3 +1,7 @@
+import { ClaimKeyGenerator } from './ClaimKeyGenerator.js';
+import { TopicPathRegistry } from './TopicPathRegistry.js';
+const TOPIC_PATH_REGISTRY = new TopicPathRegistry();
+const CLAIM_KEY_GENERATOR = new ClaimKeyGenerator();
 const PROJECT_ALIASES = [
     { canonical: 'Cogmem', aliases: ['cogmem', 'memory kernel', '记忆内核', 'agent brain'] },
     { canonical: 'OpenClaw', aliases: ['openclaw', 'lobster'] },
@@ -203,7 +207,7 @@ function genericProjectTopic(text, projectName) {
 }
 function projectDecision(input) {
     return {
-        topicPath: `PROJECT/${input.project.canonical}/${input.suffix}`,
+        topicPath: TOPIC_PATH_REGISTRY.resolveProjectPath(input.project.canonical, input.suffix),
         topicType: 'project',
         summary: input.summary,
         bindingType: input.bindingType,
@@ -251,10 +255,7 @@ function signalForClaim(text, fallback) {
     return fallback;
 }
 function claimKeyFor(text, fallback) {
-    return signalForClaim(text, fallback)
-        .replace(/[^a-z0-9_-]+/gi, '-')
-        .replace(/^-+|-+$/g, '')
-        .toLowerCase() || fallback;
+    return CLAIM_KEY_GENERATOR.generate(text, signalForClaim(text, fallback));
 }
 function uniqueTopicDecisions(decisions) {
     const seen = new Set();

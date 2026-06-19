@@ -18,6 +18,7 @@ const COMMANDS: Record<string, string> = {
   snapshot: 'snapshot',
   're-embed': 're-embed',
   'migrate-vectors': 'migrate-vectors',
+  migrate: 'migrate',
 };
 
 function usage(): string {
@@ -38,6 +39,7 @@ function usage(): string {
     '  snapshot             export/import snapshots',
     '  re-embed             inspect or run re-embedding',
     '  migrate-vectors      migrate vector backend data',
+    '  migrate              plan or apply schema migrations with optional backup',
   ].join('\n');
 }
 

@@ -1,4 +1,9 @@
 import type { MemoryBindingType, MemoryEntityType } from './MemoryBindingTypes.js';
+import { ClaimKeyGenerator } from './ClaimKeyGenerator.js';
+import { TopicPathRegistry } from './TopicPathRegistry.js';
+
+const TOPIC_PATH_REGISTRY = new TopicPathRegistry();
+const CLAIM_KEY_GENERATOR = new ClaimKeyGenerator();
 
 export interface BindingTopicDecision {
   topicPath: string;
@@ -248,7 +253,7 @@ function projectDecision(input: {
   confidence: number;
 }): BindingTopicDecision {
   return {
-    topicPath: `PROJECT/${input.project.canonical}/${input.suffix}`,
+    topicPath: TOPIC_PATH_REGISTRY.resolveProjectPath(input.project.canonical, input.suffix),
     topicType: 'project',
     summary: input.summary,
     bindingType: input.bindingType,
@@ -293,10 +298,7 @@ function signalForClaim(text: string, fallback: string): string {
 }
 
 function claimKeyFor(text: string, fallback: string): string {
-  return signalForClaim(text, fallback)
-    .replace(/[^a-z0-9_-]+/gi, '-')
-    .replace(/^-+|-+$/g, '')
-    .toLowerCase() || fallback;
+  return CLAIM_KEY_GENERATOR.generate(text, signalForClaim(text, fallback));
 }
 
 function uniqueTopicDecisions(decisions: BindingTopicDecision[]): BindingTopicDecision[] {

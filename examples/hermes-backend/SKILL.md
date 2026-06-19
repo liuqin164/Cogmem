@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for Hermes through MCP.
-version: 2.7.1
+version: 2.8.0
 metadata:
   hermes:
     tags: [memory, mcp, cogmem, agent-memory]
@@ -76,6 +76,15 @@ timeout_ms = 60000
 ```
 
 ## Migrate Existing Hermes Memory
+
+After upgrading Cogmem itself, migrate its database schema before importing or recalling:
+
+```bash
+cogmem update --yes
+# Manual equivalent: cogmem migrate --yes --backup
+```
+
+Agents should inspect `cogmem migrate --dry-run --json` when an operator wants a preview. Schema migration preserves Raw Ledger events; it updates governed projections and indexes only.
 
 Default Hermes memory contract:
 

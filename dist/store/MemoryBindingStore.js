@@ -191,13 +191,21 @@ export class MemoryBindingStore {
         this.db.prepare(`
       INSERT INTO memory_edges (
         edge_id, project_id, source_type, source_id, relation_type, target_type, target_id,
-        confidence, evidence_event_ids_json, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        confidence, base_weight, stability, activation, evidence_event_ids_json, status,
+        valid_from, valid_to, version, source_authority, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(edge_id) DO UPDATE SET
         confidence = MAX(memory_edges.confidence, excluded.confidence),
+        base_weight = excluded.base_weight,
+        stability = MAX(memory_edges.stability, excluded.stability),
+        activation = MAX(memory_edges.activation, excluded.activation),
         evidence_event_ids_json = excluded.evidence_event_ids_json,
-        status = excluded.status
-    `).run(edgeId, input.projectId || null, input.sourceType, input.sourceId, input.relationType, input.targetType, input.targetId, input.confidence, JSON.stringify(evidenceEventIds), input.status || 'active', now);
+        status = excluded.status,
+        valid_to = excluded.valid_to,
+        version = memory_edges.version + 1,
+        source_authority = excluded.source_authority,
+        updated_at = excluded.updated_at
+    `).run(edgeId, input.projectId || null, input.sourceType, input.sourceId, input.relationType, input.targetType, input.targetId, input.confidence, clamp(input.baseWeight ?? 1, 0, 10), clamp(input.stability ?? 1, 0, 1), clamp(input.activation ?? 1, 0, 10), JSON.stringify(evidenceEventIds), input.status || 'active', input.validFrom ?? now, input.validTo ?? null, 1, input.sourceAuthority || 'raw_evidence', now, now);
         return {
             edgeId,
             projectId: input.projectId,
@@ -207,10 +215,32 @@ export class MemoryBindingStore {
             targetType: input.targetType,
             targetId: input.targetId,
             confidence: input.confidence,
+            baseWeight: clamp(input.baseWeight ?? 1, 0, 10),
+            stability: clamp(input.stability ?? 1, 0, 1),
+            activation: clamp(input.activation ?? 1, 0, 10),
             evidenceEventIds,
             status: input.status || 'active',
             createdAt: now,
+            updatedAt: now,
+            validFrom: input.validFrom ?? now,
+            validTo: input.validTo,
+            version: 1,
+            sourceAuthority: input.sourceAuthority || 'raw_evidence',
         };
+    }
+    decayEdgeActivation(options = {}) {
+        const factor = clamp(options.factor ?? 0.85, 0, 1);
+        const floor = Math.max(0, options.floor ?? 0.01);
+        const now = options.now ?? Date.now();
+        const where = options.projectId ? 'WHERE project_id = ?' : '';
+        const params = options.projectId ? [options.projectId] : [];
+        const result = this.db.prepare(`
+      UPDATE memory_edges
+      SET activation = CASE WHEN activation * ? < ? THEN 0 ELSE activation * ? END,
+          updated_at = ?
+      ${where}
+    `).run(factor, floor, factor, now, ...params);
+        return Number(result.changes ?? 0);
     }
     listEdges(options = {}) {
         const clauses = [];
@@ -398,9 +428,17 @@ export class MemoryBindingStore {
         target_type TEXT NOT NULL,
         target_id TEXT NOT NULL,
         confidence REAL NOT NULL,
+        base_weight REAL NOT NULL DEFAULT 1,
+        stability REAL NOT NULL DEFAULT 1,
+        activation REAL NOT NULL DEFAULT 1,
         evidence_event_ids_json TEXT NOT NULL,
         status TEXT NOT NULL,
-        created_at INTEGER NOT NULL
+        valid_from INTEGER NOT NULL DEFAULT 0,
+        valid_to INTEGER,
+        version INTEGER NOT NULL DEFAULT 1,
+        source_authority TEXT NOT NULL DEFAULT 'raw_evidence',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL DEFAULT 0
       );
 
       CREATE INDEX IF NOT EXISTS idx_memory_edges_project_source
@@ -440,6 +478,24 @@ export class MemoryBindingStore {
         if (!clusterNames.has('review_flags_json')) {
             this.db.exec(`ALTER TABLE memory_clusters ADD COLUMN review_flags_json TEXT NOT NULL DEFAULT '[]';`);
         }
+        const edgeRows = this.db.prepare(`PRAGMA table_info(memory_edges)`).all();
+        const edgeNames = new Set(edgeRows.map((row) => row.name));
+        const edgeColumns = [
+            ['base_weight', 'REAL NOT NULL DEFAULT 1'],
+            ['stability', 'REAL NOT NULL DEFAULT 1'],
+            ['activation', 'REAL NOT NULL DEFAULT 1'],
+            ['valid_from', 'INTEGER NOT NULL DEFAULT 0'],
+            ['valid_to', 'INTEGER'],
+            ['version', 'INTEGER NOT NULL DEFAULT 1'],
+            ['source_authority', "TEXT NOT NULL DEFAULT 'raw_evidence'"],
+            ['updated_at', 'INTEGER NOT NULL DEFAULT 0'],
+        ];
+        for (const [name, definition] of edgeColumns) {
+            if (!edgeNames.has(name))
+                this.db.exec(`ALTER TABLE memory_edges ADD COLUMN ${name} ${definition};`);
+        }
+        this.db.exec(`UPDATE memory_edges SET valid_from = created_at WHERE valid_from = 0;`);
+        this.db.exec(`UPDATE memory_edges SET updated_at = created_at WHERE updated_at = 0;`);
     }
 }
 function mapBindingRow(row) {
@@ -492,9 +548,17 @@ function mapEdgeRow(row) {
         targetType: row.target_type,
         targetId: row.target_id,
         confidence: Number(row.confidence),
+        baseWeight: Number(row.base_weight ?? 1),
+        stability: Number(row.stability ?? 1),
+        activation: Number(row.activation ?? 1),
         evidenceEventIds: parseStringArray(row.evidence_event_ids_json),
         status: row.status,
         createdAt: Number(row.created_at),
+        updatedAt: Number(row.updated_at ?? row.created_at),
+        validFrom: Number(row.valid_from ?? row.created_at),
+        validTo: row.valid_to == null ? undefined : Number(row.valid_to),
+        version: Number(row.version ?? 1),
+        sourceAuthority: row.source_authority || 'raw_evidence',
     };
 }
 function entityIdFor(projectId, entityType, canonicalName) {
@@ -538,4 +602,7 @@ function parseStringArray(value) {
 function parentPathFor(topicPath) {
     const index = topicPath.lastIndexOf('/');
     return index > 0 ? topicPath.slice(0, index) : undefined;
+}
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
 }

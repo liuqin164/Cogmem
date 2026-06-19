@@ -103,9 +103,17 @@ export interface MemoryEdgeRecord {
     targetType: 'event' | 'entity' | 'topic' | 'cluster';
     targetId: string;
     confidence: number;
+    baseWeight: number;
+    stability: number;
+    activation: number;
     evidenceEventIds: string[];
     status: 'active' | 'weak' | 'rejected' | 'superseded';
     createdAt: number;
+    updatedAt: number;
+    validFrom: number;
+    validTo?: number;
+    version: number;
+    sourceAuthority: 'raw_evidence' | 'governed_projection' | 'model_candidate';
 }
 export interface MemoryEdgeListOptions {
     projectId?: string;

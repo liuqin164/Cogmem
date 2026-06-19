@@ -79,6 +79,13 @@ Dream treats explicit user clarification as organizational correction evidence, 
 
 ## Migrate
 
+Upgrade and migrate the Cogmem database itself before importing host memory:
+
+```bash
+cogmem update --yes
+cogmem migrate --dry-run --json
+```
+
 Preview:
 
 ```bash

@@ -37,9 +37,21 @@ export interface UpsertMemoryEdgeInput {
     targetType: MemoryEdgeRecord['targetType'];
     targetId: string;
     confidence: number;
+    baseWeight?: number;
+    stability?: number;
+    activation?: number;
     evidenceEventIds: string[];
     status?: MemoryEdgeRecord['status'];
     createdAt?: number;
+    validFrom?: number;
+    validTo?: number;
+    sourceAuthority?: MemoryEdgeRecord['sourceAuthority'];
+}
+export interface DecayMemoryEdgeActivationOptions {
+    projectId?: string;
+    factor?: number;
+    floor?: number;
+    now?: number;
 }
 export declare class MemoryBindingStore {
     private readonly db;
@@ -52,6 +64,7 @@ export declare class MemoryBindingStore {
     getCluster(clusterId: string): MemoryClusterRecord | null;
     listClusters(options?: MemoryClusterListOptions): MemoryClusterRecord[];
     upsertEdge(input: UpsertMemoryEdgeInput): MemoryEdgeRecord;
+    decayEdgeActivation(options?: DecayMemoryEdgeActivationOptions): number;
     listEdges(options?: MemoryEdgeListOptions): MemoryEdgeRecord[];
     listBindings(options?: MemoryBindingListOptions): MemoryBindingRecord[];
     getStats(projectId?: string): MemoryBindingStats;
