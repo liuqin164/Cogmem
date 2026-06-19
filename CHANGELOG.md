@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.0.0
+
+- Added an evidence-backed Belief Graph with ownership, versions, source roles, conflict records, and supersession chains.
+- Enforced explicit user evidence for user-owned preferences, goals, boundaries, decisions, and facts; assistant/tool-only evidence is limited to project observations.
+- Added deterministic reinforcement, correction, and contradiction behavior plus schema migration 17.
+
 ## 2.9.0
 
 - Added evidence-backed, project-scoped entity merge candidates with stricter explicit-user-evidence requirements for person entities.

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { BeliefStore } from './belief/BeliefStore.js';
+import { BeliefGovernanceService } from './belief/BeliefGovernanceService.js';
 import {
   MemoryBindingService,
   type MemoryBindingListOptions,
@@ -70,7 +71,7 @@ import {
   type MemoryGovernancePlan,
   type RedactionPolicy,
 } from './governance/index.js';
-import { migration_0015, migration_0016, SchemaMigrationRunner } from './migrations/index.js';
+import { migration_0015, migration_0016, migration_0017, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import {
   loadCogmemConfig,
@@ -118,8 +119,8 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '2.9.0';
-const LATEST_SCHEMA_VERSION = 16;
+const CORE_VERSION = '3.0.0';
+const LATEST_SCHEMA_VERSION = 17;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 
@@ -456,6 +457,7 @@ export class MemoryKernel {
   readonly entityStore: EntityStore;
   readonly entityGovernanceService: EntityGovernanceService;
   readonly beliefStore: BeliefStore;
+  readonly beliefGovernanceService: BeliefGovernanceService;
   readonly cursorStore: IngestionCursorStore;
   readonly vectorStore: IVectorStore;
   readonly topicRegistry: TopicRegistry;
@@ -512,13 +514,17 @@ export class MemoryKernel {
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
     db.exec('PRAGMA busy_timeout = 5000;');
-    new SchemaMigrationRunner(db, [migration_0015, migration_0016]).run();
+    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017]).run();
     this.ensureMetaTable(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
     const vectorDimension = options.vectorDimension ?? config.vector.dimension;
     this.modelRegistry = options.modelRegistry ?? ModelRegistry.defaults();
     this.beliefStore = new BeliefStore(this.dbPath, this.eventStore);
+    this.beliefGovernanceService = new BeliefGovernanceService(db, (eventId) => {
+      const event = this.eventStore.getEvent(eventId);
+      return event ? { eventId, projectId: event.projectId, role: event.role } : undefined;
+    });
     this.cursorStore = new IngestionCursorStore(this.dbPath);
     this.vectorStore = options.vectorBackend === 'hnswlib'
       ? new VectorStore(vectorDimension)

@@ -4,6 +4,8 @@ Use cogmem as OpenClaw's durable memory backend.
 
 Entity resolution is evidence-backed and reversible. Person aliases require explicit user evidence; OpenClaw must not auto-merge pronouns, relationship labels, role names, assistant claims, or tool observations.
 
+Belief Graph writes keep ownership and evidence roles. OpenClaw may record assistant/tool project observations, but only explicit user events can establish user-owned preferences, goals, boundaries, decisions, or facts.
+
 ## Install
 
 ```bash

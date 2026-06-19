@@ -1,11 +1,11 @@
-# cogmem 2.9.0 Release Checklist
+# cogmem 3.0.0 Release Checklist
 
 This release is distributed through GitHub Releases. Do not run npm publish.
 
 ## Required Metadata
 
 - `package.json` name is `cogmem`.
-- `package.json` version is `2.9.0`.
+- `package.json` version is `3.0.0`.
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
 - `install.sh` is tracked and uses the latest GitHub release asset.
@@ -40,6 +40,7 @@ This release is distributed through GitHub Releases. Do not run npm publish.
 - README and skills explain `decisionTrace` / `recallDecision`, source-first raw fallback, correction semantics, and review-queue aging.
 - README and skills explain `cogmem update --yes`, migration dry-run, backups, and that Raw Ledger evidence is never rewritten by schema migration.
 - README and skills explain that entity aliases are evidence-backed, project-scoped, reversible, and stricter for person entities.
+- README and skills explain Belief Graph ownership, user-evidence requirements, reinforcement, conflict review, and supersession history.
 - OpenClaw skill explains self-install, import, active recall, `--auto`, and `doctor --fix`.
 - Hermes skill explains self-install, MCP wiring, `connect hermes --auto`, and `/reload-mcp`.
 - SECURITY documents local-first storage, explicit external providers, snapshots as sensitive, and governed recall.

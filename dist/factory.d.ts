@@ -1,4 +1,5 @@
 import { BeliefStore } from './belief/BeliefStore.js';
+import { BeliefGovernanceService } from './belief/BeliefGovernanceService.js';
 import { type MemoryBindingListOptions, type MemoryBindingRecord, type MemoryBindingStats, type MemoryClusterListOptions, type MemoryClusterRecord, type MemoryEdgeListOptions, type MemoryEdgeRecord, type MemoryGraphRecallAnchor } from './binding/index.js';
 import { IngestionCursorStore } from './batch/IngestionCursorStore.js';
 import { MemoryGraph } from './core/MemoryGraph.js';
@@ -330,6 +331,7 @@ export declare class MemoryKernel {
     readonly entityStore: EntityStore;
     readonly entityGovernanceService: EntityGovernanceService;
     readonly beliefStore: BeliefStore;
+    readonly beliefGovernanceService: BeliefGovernanceService;
     readonly cursorStore: IngestionCursorStore;
     readonly vectorStore: IVectorStore;
     readonly topicRegistry: TopicRegistry;

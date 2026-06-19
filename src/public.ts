@@ -84,6 +84,17 @@ export type {
   MemoryGraphRecallAnchor,
   MemoryTopicRecord,
 } from './binding/index.js';
+export {
+  BeliefGovernanceService,
+  type ApplyBeliefInput,
+  type BeliefEvidenceLookup,
+  type BeliefEvidenceRecord,
+  type BeliefOwnership,
+  type BeliefRelation,
+  type GovernedBeliefRecord,
+  type GovernedBeliefStatus,
+  type GovernedBeliefType,
+} from './belief/BeliefGovernanceService.js';
 
 /**
  * Agent framework integration facade.
