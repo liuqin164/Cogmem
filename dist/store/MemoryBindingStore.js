@@ -16,7 +16,7 @@ export class MemoryBindingStore {
     }
     upsertEntity(input) {
         const now = input.now ?? Date.now();
-        const entityId = entityIdFor(input.projectId, input.entityType, input.canonicalName);
+        const entityId = input.entityId || entityIdFor(input.projectId, input.entityType, input.canonicalName);
         const aliases = Array.from(new Set([input.canonicalName, ...(input.aliases || [])]))
             .filter(Boolean);
         this.db.prepare(`

@@ -32,6 +32,8 @@ The default install creates:
 
 Use `~/.cogmem/config.toml` or a project `.cogmem/config.toml` as the stable configuration source. Do not create `.cogmem.env` files or pass `--env-path` for normal installs. Environment variables are only for explicit process-level overrides documented by the CLI, not for hidden workspace configuration.
 
+Entity aliases are governed memory. Do not merge people from pronouns, family labels, job titles, assistant claims, or tool output alone. Require explicit user evidence; uncertain identity matches remain pending and applied merges must remain reversible.
+
 Use `cogmem init --yes --agent hermes --scope project` only when this workspace needs its own `.cogmem/` directory.
 
 To embed imported memories with a local quantized model, run Ollama locally and configure the kernel before importing:

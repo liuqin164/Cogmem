@@ -1,6 +1,7 @@
 import Database from 'bun:sqlite';
 import type { MemoryBindingInput, MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingStats, MemoryClusterListOptions, MemoryClusterRecord, MemoryEdgeListOptions, MemoryEdgeRecord, MemoryEdgeRelation, MemoryEntityRecord, MemoryEntityType, MemoryTopicRecord } from '../binding/MemoryBindingTypes.js';
 export interface UpsertMemoryEntityInput {
+    entityId?: string;
     projectId?: string;
     canonicalName: string;
     entityType: MemoryEntityType;

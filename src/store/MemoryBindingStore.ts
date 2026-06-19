@@ -16,6 +16,7 @@ import type {
 } from '../binding/MemoryBindingTypes.js';
 
 export interface UpsertMemoryEntityInput {
+  entityId?: string;
   projectId?: string;
   canonicalName: string;
   entityType: MemoryEntityType;
@@ -90,7 +91,7 @@ export class MemoryBindingStore {
 
   upsertEntity(input: UpsertMemoryEntityInput): MemoryEntityRecord {
     const now = input.now ?? Date.now();
-    const entityId = entityIdFor(input.projectId, input.entityType, input.canonicalName);
+    const entityId = input.entityId || entityIdFor(input.projectId, input.entityType, input.canonicalName);
     const aliases = Array.from(new Set([input.canonicalName, ...(input.aliases || [])]))
       .filter(Boolean);
     this.db.prepare(`

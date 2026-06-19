@@ -2,10 +2,12 @@ import { BindingClassifier, normalizeForBinding } from './BindingClassifier.js';
 import { BindingDecisionEngine } from './BindingDecisionEngine.js';
 export class MemoryBindingService {
     store;
+    entityStore;
     classifier = new BindingClassifier();
     decisionEngine = new BindingDecisionEngine();
-    constructor(store) {
+    constructor(store, entityStore) {
         this.store = store;
+        this.entityStore = entityStore;
     }
     bindRawEvent(event) {
         const payload = event.payload;
@@ -37,8 +39,19 @@ export class MemoryBindingService {
         const createdAt = input.occurredAt ?? Date.now();
         const bindings = [];
         for (const decision of decisions) {
+            const canonicalEntity = decision.entityName && this.entityStore
+                ? this.entityStore.upsertEntity({
+                    canonicalName: decision.entityName,
+                    type: decision.entityType || 'concept',
+                    aliases: decision.aliases,
+                    createdFrom: input.eventId,
+                    metadata: { projectId: input.projectId, evidenceEventId: input.eventId },
+                    createdAt,
+                })
+                : undefined;
             const entity = decision.entityName
                 ? this.store.upsertEntity({
+                    entityId: canonicalEntity?.entityId,
                     projectId: input.projectId,
                     canonicalName: decision.entityName,
                     entityType: decision.entityType || 'concept',

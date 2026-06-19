@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for Hermes through MCP.
-version: 2.8.0
+version: 2.9.0
 metadata:
   hermes:
     tags: [memory, mcp, cogmem, agent-memory]
@@ -20,6 +20,7 @@ Use this skill when a Hermes workspace needs `cogmem` as its durable memory back
 - Do not configure kernel behavior through hidden environment variables; write TOML instead.
 - Do not run a separate vector search before calling `memory.recall()`. `KernelAgentMemoryBackend.recall()` is the first-class recall path and already performs pulse activation, temporal traversal, graph traversal, and narrative assembly.
 - Do not set `memory.provider: cogmem` in `~/.hermes/config.yaml`; this package uses Hermes MCP integration, not a native Hermes memory provider.
+- Treat entity aliases as governed candidates. Never merge people from pronouns, family labels, job titles, assistant text, or tool output alone; require explicit user evidence and leave uncertain matches pending.
 
 ## Install
 

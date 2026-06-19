@@ -7,6 +7,7 @@ import type {
   MemoryGraphRecallAnchor,
 } from './MemoryBindingTypes.js';
 import { MemoryBindingStore } from '../store/MemoryBindingStore.js';
+import { EntityStore } from '../store/EntityStore.js';
 import { BindingClassifier, normalizeForBinding, type BindingTopicDecision } from './BindingClassifier.js';
 import { BindingDecisionEngine } from './BindingDecisionEngine.js';
 
@@ -23,7 +24,10 @@ export class MemoryBindingService {
   private readonly classifier = new BindingClassifier();
   private readonly decisionEngine = new BindingDecisionEngine();
 
-  constructor(private readonly store: MemoryBindingStore) {}
+  constructor(
+    private readonly store: MemoryBindingStore,
+    private readonly entityStore?: EntityStore,
+  ) {}
 
   bindRawEvent(event: MemoryEvent): MemoryBindingRecord[] {
     const payload = event.payload as { text?: unknown; output?: unknown; title?: unknown };
@@ -55,8 +59,19 @@ export class MemoryBindingService {
     const createdAt = input.occurredAt ?? Date.now();
     const bindings: MemoryBindingRecord[] = [];
     for (const decision of decisions) {
+      const canonicalEntity = decision.entityName && this.entityStore
+        ? this.entityStore.upsertEntity({
+          canonicalName: decision.entityName,
+          type: decision.entityType || 'concept',
+          aliases: decision.aliases,
+          createdFrom: input.eventId,
+          metadata: { projectId: input.projectId, evidenceEventId: input.eventId },
+          createdAt,
+        })
+        : undefined;
       const entity = decision.entityName
         ? this.store.upsertEntity({
+          entityId: canonicalEntity?.entityId,
           projectId: input.projectId,
           canonicalName: decision.entityName,
           entityType: decision.entityType || 'concept',

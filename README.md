@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `2.8.0`
+Current version: `2.9.0`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -153,7 +153,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#2.8.0"
+bun add "cogmem@github:liuqin164/cogmem#2.9.0"
 bunx cogmem init
 ```
 
@@ -211,6 +211,8 @@ cogmem memory bind --project my-agent --json
 `memory bind` backfills Memory Binding for raw user events written outside the agent turn path, including imported OpenClaw/Hermes history and adapter-written raw events. Use `--since <globalSeq>` to resume from a known ledger sequence.
 
 `memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths before any fact promotion, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down. Correction events create explicit correction edges and review flags instead of poisoning the active cluster. Treat bindings, clusters, and graph edges as organization hints, not as verified long-term facts.
+
+Entity identity is owned by `EntityStore`; Memory Binding only writes those canonical entity IDs into its compatibility projection. `EntityGovernanceService` creates evidence-backed merge candidates, requires same-project/same-type entities, and makes every applied merge reversible. Person aliases require explicit user evidence and a higher confidence threshold. Do not auto-merge pronouns, family labels, role names, or assistant/tool-only guesses.
 
 ## Import Existing Agent Memory
 

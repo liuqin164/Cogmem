@@ -1,7 +1,7 @@
 {
   "name": "cogmem",
 
-  "version": "2.8.0",
+  "version": "2.9.0",
 
   "type": "module",
   "description": "cogmem — agent-native memory kernel for a single local-first AI agent",

@@ -79,6 +79,8 @@ export type { ReEmbeddingStatus } from './embedding/ReEmbeddingStatus.js';
 export { describeDreamCuratorWorkflow, nextDreamCuratorRunAt, } from './engine/DreamCuratorSchedule.js';
 export type { DreamCuratorScheduleConfig, DreamCuratorScheduleMode, DreamCuratorWorkflowDescription, } from './engine/DreamCuratorSchedule.js';
 export { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
+export { EntityGovernanceService } from './entity/index.js';
+export type { EntityMergeCandidate, EntityMergeCandidateStatus, ProposeEntityMergeInput } from './entity/index.js';
 /**
  * Vector store backends — choose between durable sqlite-vec (recommended)
  * and the legacy in-process hnswlib backend.

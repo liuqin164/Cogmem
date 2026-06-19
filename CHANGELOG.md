@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.9.0
+
+- Added evidence-backed, project-scoped entity merge candidates with stricter explicit-user-evidence requirements for person entities.
+- Made entity merges reversible through alias, redirect, archive, and resolution-log operations; source entities are never destructively deleted.
+- Unified Memory Binding entity IDs with canonical `EntityStore` identity and added schema migration 16.
+
 ## 2.8.0
 
 - Added evidence-backed `MemoryGovernancePlan`, strict CPU validation, idempotency keys, project and ownership checks, transactional execution, and audit records. Missing raw evidence and assistant/tool-only user-owned memory are rejected before persistence.
