@@ -11,6 +11,7 @@ export * from './batch/IngestionCursorStore.js';
 export * from './batch/InstalledBatchProcessor.js';
 export * from './batch/SourceOnboarding.js';
 export * from './belief/BeliefStore.js';
+export { BeliefGovernanceService, type ApplyBeliefInput, type BeliefEvidenceLookup, type BeliefOwnership, type BeliefRelation, type GovernedBeliefRecord, type GovernedBeliefStatus, type GovernedBeliefType, } from './belief/BeliefGovernanceService.js';
 export * from './binding/index.js';
 export * from './benchmark/BenchmarkRegistry.js';
 export * from './benchmark/BenchmarkReport.js';

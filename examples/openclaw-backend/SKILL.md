@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for OpenClaw.
-version: 2.9.0
+version: 3.0.0
 metadata:
   openclaw:
     tags: [memory, cogmem, agent-memory]
@@ -20,6 +20,7 @@ Use this skill when an OpenClaw workspace needs `cogmem` as its durable memory b
 - Do not import `AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`, or `BOOTSTRAP.md`; they are operational instructions, not durable user memory.
 - Do not run a separate vector search before calling `memory.recall()`. `KernelAgentMemoryBackend.recall()` is the first-class recall path and already performs pulse activation, temporal traversal, graph traversal, and narrative assembly.
 - Treat entity aliases as governed candidates. Never merge people from pronouns, family labels, job titles, assistant text, or tool output alone; require explicit user evidence and leave uncertain matches pending.
+- Treat Belief Graph nodes as evidence-backed cognition. Assistant/tool-only observations may describe project state but must never become user preferences, goals, boundaries, or facts; inspect source events before accepting or correcting a belief.
 
 ## Install
 

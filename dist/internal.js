@@ -11,6 +11,7 @@ export * from './batch/IngestionCursorStore.js';
 export * from './batch/InstalledBatchProcessor.js';
 export * from './batch/SourceOnboarding.js';
 export * from './belief/BeliefStore.js';
+export { BeliefGovernanceService, } from './belief/BeliefGovernanceService.js';
 export * from './binding/index.js';
 export * from './benchmark/BenchmarkRegistry.js';
 export * from './benchmark/BenchmarkReport.js';

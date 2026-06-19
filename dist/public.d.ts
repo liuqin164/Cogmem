@@ -23,6 +23,7 @@ export type { ForgetUserResult, GovernanceAuditRecord, DreamCandidateListOptions
 export { defaultCogmemConfigPath, defaultCogmemHome, loadCogmemConfig, resolveCogmemConfigPath, } from './config/CogmemConfig.js';
 export type { CogmemConfigResolution, CogmemConfigResolutionOptions, LoadedCogmemConfig, LoadCogmemConfigOptions, } from './config/CogmemConfig.js';
 export type { MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingSource, MemoryBindingStats, MemoryBindingType, MemoryBindingAction, MemoryClusterListOptions, MemoryClusterRecord, MemoryClusterStatus, MemoryEdgeListOptions, MemoryEdgeRecord, MemoryEdgeRelation, MemoryEntityRecord, MemoryEntityType, MemoryGraphRecallAnchor, MemoryTopicRecord, } from './binding/index.js';
+export { BeliefGovernanceService, type ApplyBeliefInput, type BeliefEvidenceLookup, type BeliefEvidenceRecord, type BeliefOwnership, type BeliefRelation, type GovernedBeliefRecord, type GovernedBeliefStatus, type GovernedBeliefType, } from './belief/BeliefGovernanceService.js';
 /**
  * Agent framework integration facade.
  * @stable @since 2.0.0

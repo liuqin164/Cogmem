@@ -34,6 +34,8 @@ Use `~/.cogmem/config.toml` or a project `.cogmem/config.toml` as the stable con
 
 Entity aliases are governed memory. Do not merge people from pronouns, family labels, job titles, assistant claims, or tool output alone. Require explicit user evidence; uncertain identity matches remain pending and applied merges must remain reversible.
 
+Belief Graph nodes are current cognition, not unsourced summaries. User-owned preferences, goals, boundaries, decisions, and facts require explicit user events. Assistant/tool-only evidence is a project observation; contradictions stay pending unless explicit user correction supersedes the prior belief.
+
 Use `cogmem init --yes --agent hermes --scope project` only when this workspace needs its own `.cogmem/` directory.
 
 To embed imported memories with a local quantized model, run Ollama locally and configure the kernel before importing:

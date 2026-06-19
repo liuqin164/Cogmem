@@ -4,6 +4,8 @@ Use cogmem as a Hermes-compatible durable memory backend through MCP and imports
 
 Entity resolution is evidence-backed and reversible. Person aliases require explicit user evidence; Hermes must not auto-merge pronouns, relationship labels, role names, assistant claims, or tool observations.
 
+Belief Graph writes keep ownership and evidence roles. Hermes may record assistant/tool project observations, but only explicit user events can establish user-owned preferences, goals, boundaries, decisions, or facts.
+
 ## Default Contract
 
 - `profile.md` contains durable profile/persona memory.
