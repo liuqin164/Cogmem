@@ -103,6 +103,16 @@ export {
   type TimelineEntryType,
   type TimelineListOptions,
 } from './temporal/index.js';
+export {
+  ContextCortex,
+  type ContextActivationPlan,
+  type ContextActivationReceipt,
+  type ContextCandidate,
+  type ContextIntent,
+  type ContextLayer,
+  type ContextPlanInput,
+  type ContextSuppressionReason,
+} from './context/index.js';
 
 /**
  * Agent framework integration facade.

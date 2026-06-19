@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.2.0
+
+- Added Context Cortex intent, safety suppression, layer activation, source-first drill-down, and a 25% default/30% maximum memory budget.
+- Added persistent activation receipts that explain selected and suppressed memory IDs and reasons.
+- Updated OpenClaw auto-memory plugin to 0.2.0: greetings skip memory, short continuations use only session state/turn bridge, and full recall is Cortex-filtered.
+- Added schema migration 19.
+
 ## 3.1.0
 
 - Added validity-window belief lookup and bounded project/entity timelines for milestones, decisions, corrections, and belief versions.

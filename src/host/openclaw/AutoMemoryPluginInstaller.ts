@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 
 const PLUGIN_ID = 'cogmem-auto-memory';
-const PLUGIN_VERSION = '0.1.0';
+const PLUGIN_VERSION = '0.2.0';
 
 function defaultPublicEntrypoint(): string {
   return join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), 'public.js');
@@ -192,6 +192,9 @@ function buildPatchedOpenClawConfig(input: {
       memoryContextMaxItems: 3,
       sourceWindowMaxChars: 1200,
       includeSourceWindowByDefault: false,
+      contextCortexEnabled: true,
+      contextAvailableTokens: 16000,
+      contextMemoryMaxRatio: 0.25,
       turnBridgeEnabled: true,
       turnBridgeMaxTurns: 3,
       turnBridgeMaxChars: 1200,
@@ -259,6 +262,9 @@ function buildPluginFiles(): PluginFiles {
           memoryContextMaxItems: { type: 'number' },
           sourceWindowMaxChars: { type: 'number' },
           includeSourceWindowByDefault: { type: 'boolean' },
+          contextCortexEnabled: { type: 'boolean' },
+          contextAvailableTokens: { type: 'number' },
+          contextMemoryMaxRatio: { type: 'number' },
           turnBridgeEnabled: { type: 'boolean' },
           turnBridgeMaxTurns: { type: 'number' },
           turnBridgeMaxChars: { type: 'number' },
@@ -316,6 +322,9 @@ const DEFAULTS = {
   memoryContextMaxItems: 3,
   sourceWindowMaxChars: 1200,
   includeSourceWindowByDefault: false,
+  contextCortexEnabled: true,
+  contextAvailableTokens: 16000,
+  contextMemoryMaxRatio: 0.25,
   turnBridgeEnabled: true,
   turnBridgeMaxTurns: 3,
   turnBridgeMaxChars: 1200,
@@ -657,6 +666,14 @@ function classifyRecallIntent(query) {
   return 'memory_recall';
 }
 
+function classifyContextIntent(query) {
+  const text = String(query || '').trim().toLowerCase();
+  if (/^(hi|hello|hey|你好|您好|早上好|晚上好|嗨)[!！。. ]*$/.test(text)) return 'greeting';
+  if (/^(继续|接着|然后呢|上面那个|刚才说的|这个呢|continue|go on|and then)[?？!！。. ]*$/.test(text)) return 'short_followup';
+  if (/原话|逐字|怎么说的|完整对话|exact quote|verbatim|word for word/.test(text)) return 'exact_quote';
+  return 'memory_query';
+}
+
 function runBridge(command, payload, config, timeoutMs) {
   const bridgePath = path.join(__dirname, 'bridge.mjs');
   const child = spawnSync(config.bunPath || 'bun', [bridgePath, command], {
@@ -688,6 +705,9 @@ function bridgeConfig(config) {
     memoryContextMaxItems: config.memoryContextMaxItems || 3,
     sourceWindowMaxChars: config.sourceWindowMaxChars || 1200,
     includeSourceWindowByDefault: config.includeSourceWindowByDefault === true,
+    contextCortexEnabled: config.contextCortexEnabled !== false,
+    contextAvailableTokens: config.contextAvailableTokens || 16000,
+    contextMemoryMaxRatio: config.contextMemoryMaxRatio || 0.25,
     rememberQueuePath: rememberQueuePath(config),
     rememberMaxAttempts: config.rememberMaxAttempts || 3,
   };
@@ -832,7 +852,7 @@ function audit(config, record) {
 const plugin = {
   id: PLUGIN_ID,
   name: 'CogMem Auto Memory',
-  version: '0.1.0',
+  version: '0.2.0',
   register(api) {
     if (!api || typeof api.on !== 'function') {
       throw new Error('OpenClaw plugin API missing api.on');
@@ -850,6 +870,12 @@ const plugin = {
       if (!query.trim()) {
         lastRecallForSession.delete(sessionId);
         audit(config, { hook: 'before_prompt_build', sessionId, action: 'skip', reason: 'empty_user_query' });
+        return {};
+      }
+      const contextIntent = classifyContextIntent(query);
+      if (config.contextCortexEnabled !== false && contextIntent === 'greeting') {
+        lastRecallForSession.delete(sessionId);
+        audit(config, { hook: 'before_prompt_build', sessionId, action: 'skip', reason: 'context_cortex:greeting' });
         return {};
       }
       try {
@@ -875,16 +901,18 @@ const plugin = {
           memoryLayers.push(...bridges);
           turnBridgeCount = bridges.length;
         }
-        const recalled = runBridge('recall', {
-          query,
-          sessionId,
-          threadId,
-          intent,
-          excludeSessionId: config.excludeCurrentSessionCompiledMemory === false ? undefined : sessionId,
-          anchorEventId: anchor && anchor.eventId,
-          anchorText: anchor && anchor.text,
-          config,
-        }, config, config.recallTimeoutMs || 30000);
+        const recalled = config.contextCortexEnabled !== false && contextIntent === 'short_followup'
+          ? { context: '', items: [], itemCount: 0, intent, recallMode: 'context_cortex_short_followup', fallbackUsed: false }
+          : runBridge('recall', {
+            query,
+            sessionId,
+            threadId,
+            intent,
+            excludeSessionId: config.excludeCurrentSessionCompiledMemory === false ? undefined : sessionId,
+            anchorEventId: anchor && anchor.eventId,
+            anchorText: anchor && anchor.text,
+            config,
+          }, config, config.recallTimeoutMs || 30000);
         lastRecallForSession.set(sessionId, {
           items: Array.isArray(recalled.items) ? recalled.items : [],
           context: recalled.context || '',
@@ -908,6 +936,8 @@ const plugin = {
           recallMode: recalled.recallMode,
           fallbackUsed: recalled.fallbackUsed === true,
           decisionTrace: recalled.decisionTrace,
+          contextIntent,
+          activationReceipt: recalled.activationReceipt,
           anchorEventId: recalled.anchorEventId,
           hygiene: {
             strippedRecallBlocks: cleanQuery.stripped,
@@ -1068,11 +1098,24 @@ try {
       anchorText: input.anchorText,
       limit: Number(config.limit || 3),
     });
-    const anchorItem = result.items.find((item) => item && item.sourceAnchor && item.sourceAnchor.eventId);
+    const activationPlan = config.contextCortexEnabled === false
+      ? undefined
+      : kernel.contextCortex.plan({
+        query: input.query || '',
+        projectId: config.projectId || 'openclaw',
+        currentSessionId: input.sessionId,
+        availableTokens: Number(config.contextAvailableTokens || 16000),
+        maxMemoryRatio: Number(config.contextMemoryMaxRatio || 0.25),
+        candidates: result.items.map(contextCandidateFromRecallItem),
+      });
+    const plannedResult = activationPlan
+      ? { ...result, items: activationPlan.selected.map((candidate) => candidate.recallItem) }
+      : result;
+    const anchorItem = plannedResult.items.find((item) => item && item.sourceAnchor && item.sourceAnchor.eventId);
     console.log(JSON.stringify({
-      context: formatRecallContext(result, config),
-      items: compactRecallItems(result.items, config),
-      itemCount: result.items.length,
+      context: formatRecallContext(plannedResult, config),
+      items: compactRecallItems(plannedResult.items, config),
+      itemCount: plannedResult.items.length,
       recallMode: result.recallMode,
       fallbackUsed: result.fallbackUsed,
       intent: input.intent || 'memory_recall',
@@ -1080,6 +1123,7 @@ try {
       anchorText: anchorItem && anchorItem.text,
       queryPlan: result.queryPlan,
       decisionTrace: result.decisionTrace,
+      activationReceipt: activationPlan && activationPlan.receipt,
     }));
   } else if (command === 'remember') {
     const result = await rememberPayload(input, config);
@@ -1310,6 +1354,24 @@ function compactRecallItems(items, config) {
     sourceAnchor: item.sourceAnchor,
     whyMatched: item.whyMatched,
   }));
+}
+
+function contextCandidateFromRecallItem(item) {
+  const sourceType = String(item && item.sourceType || 'compiled_memory');
+  const raw = sourceType.startsWith('raw_ledger');
+  const sourceRole = item && item.sourceAnchor && item.sourceAnchor.role;
+  return {
+    id: String(item && item.id || 'recall-item'),
+    layer: raw ? 'raw_source' : 'belief',
+    content: String(item && item.text || ''),
+    estimatedTokens: Math.max(1, Math.ceil(String(item && item.text || '').length / 4)),
+    confidence: Number.isFinite(item && item.confidence) ? item.confidence : 0.5,
+    projectId: item && item.projectId,
+    sessionId: item && item.sourceAnchor && item.sourceAnchor.sessionId,
+    sourceRoles: sourceRole ? [sourceRole] : [],
+    superseded: Array.isArray(item && item.tags) && item.tags.includes('status:superseded'),
+    recallItem: item,
+  };
 }
 
 function formatRecallContext(result, config) {

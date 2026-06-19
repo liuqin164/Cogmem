@@ -904,6 +904,9 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(indexBody).toContain("api.on('agent_end', async (event, ctx)");
   expect(indexBody).toContain('function classifyRecallIntent(query)');
   expect(indexBody).toContain('const intent = classifyRecallIntent(query)');
+  expect(indexBody).toContain('function classifyContextIntent(query)');
+  expect(indexBody).toContain("reason: 'context_cortex:greeting'");
+  expect(indexBody).toContain("recallMode: 'context_cortex_short_followup'");
   expect(indexBody).toContain('anchorEventId: anchor && anchor.eventId');
   expect(indexBody).toContain('excludeSessionId: config.excludeCurrentSessionCompiledMemory === false ? undefined : sessionId');
   expect(indexBody).toContain('function stripCogmemRecallBlocks(text)');
@@ -917,7 +920,10 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(indexBody).toContain('lastRecallForSession');
   expect(indexBody).toContain('lastRecallForSession.delete(sessionId)');
   expect(indexBody).toContain('recallItems.length > 0 || recall.context');
-  expect(readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8')).toContain('KernelAgentMemoryBackend');
+  const cortexBridgeBody = readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8');
+  expect(cortexBridgeBody).toContain('KernelAgentMemoryBackend');
+  expect(cortexBridgeBody).toContain('kernel.contextCortex.plan');
+  expect(cortexBridgeBody).toContain('activationReceipt');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
   expect(manifest.configSchema.type).toBe('object');
   expect(manifest.configSchema.properties.configPath.type).toBe('string');
@@ -934,6 +940,9 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(manifest.configSchema.properties.memoryContextMaxItems.type).toBe('number');
   expect(manifest.configSchema.properties.sourceWindowMaxChars.type).toBe('number');
   expect(manifest.configSchema.properties.includeSourceWindowByDefault.type).toBe('boolean');
+  expect(manifest.configSchema.properties.contextCortexEnabled.type).toBe('boolean');
+  expect(manifest.configSchema.properties.contextAvailableTokens.type).toBe('number');
+  expect(manifest.configSchema.properties.contextMemoryMaxRatio.type).toBe('number');
   expect(manifest.configSchema.properties.turnBridgeEnabled.type).toBe('boolean');
   expect(manifest.configSchema.properties.turnBridgeMaxTurns.type).toBe('number');
   expect(manifest.configSchema.properties.turnBridgeMaxChars.type).toBe('number');
@@ -961,6 +970,8 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.memoryContextMaxItems).toBe(3);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.sourceWindowMaxChars).toBe(1200);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.includeSourceWindowByDefault).toBe(false);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.contextCortexEnabled).toBe(true);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.contextMemoryMaxRatio).toBe(0.25);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeEnabled).toBe(true);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeMaxTurns).toBe(3);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeMaxChars).toBe(1200);
