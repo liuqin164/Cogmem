@@ -1,3 +1,4 @@
+import Database from 'bun:sqlite';
 export interface EntityRecord {
     entityId: string;
     canonicalEntityId?: string;
@@ -87,7 +88,9 @@ export interface EntityAliasConflictRecord {
 }
 export declare class EntityStore {
     private db;
-    constructor(dbPath?: string);
+    private readonly ownsDb;
+    constructor(dbOrPath?: Database | string);
+    getDatabase(): Database;
     private initializeSchema;
     upsertEntity(input: {
         canonicalName: string;
@@ -159,6 +162,20 @@ export declare class EntityStore {
     }): PendingEntityResolutionRecord[];
     listAliasConflicts(type?: string): EntityAliasConflictRecord[];
     close(): void;
+    addAlias(entityId: string, alias: string, updatedAt?: number): void;
+    removeAlias(entityId: string, alias: string, updatedAt?: number): void;
+    redirectInstance(input: {
+        sourceEntityId: string;
+        targetCanonicalEntityId: string;
+        status?: EntityRecord['status'];
+        updatedAt?: number;
+    }): void;
+    restoreInstance(input: {
+        entityId: string;
+        canonicalEntityId: string;
+        status: EntityRecord['status'];
+        updatedAt?: number;
+    }): void;
     private upsertAliases;
     private touchEntity;
     private ensureCanonicalEntity;

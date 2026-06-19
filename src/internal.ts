@@ -41,6 +41,7 @@ export * from './engine/DeepWriteMemoryOrchestrator.js';
 export * from './engine/DeepWritePromotionPolicy.js';
 export * from './engine/DeepWriteRedactor.js';
 export * from './engine/EntityResolutionEngine.js';
+export * from './entity/index.js';
 export * from './engine/EvolutionVerifier.js';
 export * from './engine/LocalSemanticCompiler.js';
 export * from './engine/MemoryGate.js';

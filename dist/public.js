@@ -50,6 +50,7 @@ export { EmbeddingUnavailableError, embedOne } from './embedding/EmbeddingProvid
  */
 export { describeDreamCuratorWorkflow, nextDreamCuratorRunAt, } from './engine/DreamCuratorSchedule.js';
 export { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
+export { EntityGovernanceService } from './entity/index.js';
 /**
  * Vector store backends — choose between durable sqlite-vec (recommended)
  * and the legacy in-process hnswlib backend.

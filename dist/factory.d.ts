@@ -15,6 +15,7 @@ import { NeuronEmbeddingStore } from './embedding/NeuronEmbeddingStore.js';
 import type { ReEmbeddingStatus } from './embedding/ReEmbeddingStatus.js';
 import type { EncryptionProvider } from './encryption/index.js';
 import { MemoryGovernanceExecutor, type MemoryGovernanceExecutionResult, type MemoryGovernancePlan, type RedactionPolicy } from './governance/index.js';
+import { EntityGovernanceService } from './entity/index.js';
 import { type EnvLike } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
 import type { Embedder } from './store/Embedder.js';
@@ -327,6 +328,7 @@ export declare class MemoryKernel {
     readonly eventStore: EventStore;
     readonly factStore: FactStore;
     readonly entityStore: EntityStore;
+    readonly entityGovernanceService: EntityGovernanceService;
     readonly beliefStore: BeliefStore;
     readonly cursorStore: IngestionCursorStore;
     readonly vectorStore: IVectorStore;

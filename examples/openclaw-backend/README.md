@@ -2,6 +2,8 @@
 
 Use cogmem as OpenClaw's durable memory backend.
 
+Entity resolution is evidence-backed and reversible. Person aliases require explicit user evidence; OpenClaw must not auto-merge pronouns, relationship labels, role names, assistant claims, or tool observations.
+
 ## Install
 
 ```bash

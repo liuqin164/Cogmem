@@ -3,9 +3,20 @@ import { randomUUID } from 'crypto';
 import { extractDeviceCandidate, extractProjectCandidate, extractRelativeReferences, inferReferenceType, isLatestReference, isPreviousReference, normalizeLexiconText } from '../lexicon/coreMemoryLexicon.js';
 export class EntityStore {
     db;
-    constructor(dbPath = ':memory:') {
-        this.db = new Database(dbPath);
+    ownsDb;
+    constructor(dbOrPath = ':memory:') {
+        if (typeof dbOrPath === 'string') {
+            this.db = new Database(dbOrPath);
+            this.ownsDb = true;
+        }
+        else {
+            this.db = dbOrPath;
+            this.ownsDb = false;
+        }
         this.initializeSchema();
+    }
+    getDatabase() {
+        return this.db;
     }
     initializeSchema() {
         this.db.exec(`
@@ -647,7 +658,42 @@ export class EntityStore {
         }));
     }
     close() {
-        this.db.close();
+        if (this.ownsDb)
+            this.db.close();
+    }
+    addAlias(entityId, alias, updatedAt = Date.now()) {
+        const entity = this.findByEntityId(entityId);
+        if (!entity || !alias.trim())
+            return;
+        const aliases = Array.from(new Set([...entity.aliases, alias.trim()]));
+        this.db.prepare(`UPDATE entity_instances SET aliases_json = ?, updated_at = ? WHERE instance_id = ?`)
+            .run(JSON.stringify(aliases), updatedAt, entityId);
+        this.upsertAliases(entityId, entity.type, [alias], updatedAt);
+    }
+    removeAlias(entityId, alias, updatedAt = Date.now()) {
+        const entity = this.findByEntityId(entityId);
+        if (!entity || entity.canonicalName === alias)
+            return;
+        const normalized = this.normalizeAlias(alias);
+        const aliases = entity.aliases.filter((item) => this.normalizeAlias(item) !== normalized);
+        this.db.prepare(`UPDATE entity_instances SET aliases_json = ?, updated_at = ? WHERE instance_id = ?`)
+            .run(JSON.stringify(aliases), updatedAt, entityId);
+        this.db.prepare(`DELETE FROM entity_aliases WHERE entity_id = ? AND normalized_alias = ?`).run(entityId, normalized);
+        this.refreshAliasConflict(normalized, entity.type, updatedAt);
+    }
+    redirectInstance(input) {
+        this.db.prepare(`
+      UPDATE entity_instances
+      SET canonical_entity_id = ?, status = ?, updated_at = ?
+      WHERE instance_id = ?
+    `).run(input.targetCanonicalEntityId, input.status || 'archived', input.updatedAt ?? Date.now(), input.sourceEntityId);
+    }
+    restoreInstance(input) {
+        this.db.prepare(`
+      UPDATE entity_instances
+      SET canonical_entity_id = ?, status = ?, updated_at = ?
+      WHERE instance_id = ?
+    `).run(input.canonicalEntityId, input.status, input.updatedAt ?? Date.now(), input.entityId);
     }
     upsertAliases(entityId, entityType, aliases, timestamp) {
         const stmt = this.db.prepare(`

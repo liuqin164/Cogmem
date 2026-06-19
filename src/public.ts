@@ -238,6 +238,8 @@ export type {
   DreamCuratorWorkflowDescription,
 } from './engine/DreamCuratorSchedule.js';
 export { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
+export { EntityGovernanceService } from './entity/index.js';
+export type { EntityMergeCandidate, EntityMergeCandidateStatus, ProposeEntityMergeInput } from './entity/index.js';
 
 /**
  * Vector store backends — choose between durable sqlite-vec (recommended)
