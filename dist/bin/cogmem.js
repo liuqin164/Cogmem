@@ -21,6 +21,8 @@ const COMMANDS = {
     prospective: 'prospective',
     strategy: 'strategy',
     'brain-eval': 'brain-eval',
+    episode: 'episode',
+    dream: 'dream',
 };
 function usage() {
     return [
@@ -44,6 +46,8 @@ function usage() {
         '  prospective          manage confirmed-only future-memory candidates; never executes tasks',
         '  strategy             inspect current-turn memory policy and read-only outcome telemetry',
         '  brain-eval           evaluate recall, provenance, leakage, budget, and false activation',
+        '  episode              append, import, inspect, seal, or repair conversation episodes',
+        '  dream                conditionally process sealed episode backlog',
     ].join('\n');
 }
 function siblingEntrypoint(command) {

@@ -32,6 +32,29 @@ export interface BrainEvalSample {
         expectedEventId: string;
         resolvedEventId: string;
     }>;
+    episodeGroupingChecks?: Array<{
+        expectedGroup: string;
+        selectedGroup: string;
+    }>;
+    episodeBoundaryChecks?: Array<{
+        expectedSealed: boolean;
+        selectedSealed: boolean;
+    }>;
+    episodeEvidenceChecks?: Array<{
+        sourceEventIds: string[];
+        candidateEvidenceEventIds: string[];
+    }>;
+    episodeAssignmentChecks?: Array<{
+        assigned: boolean;
+    }>;
+    dreamCandidateChecks?: Array<{
+        grounded: boolean;
+        bypassedGovernance: boolean;
+    }>;
+    hermesImportParityChecks?: Array<{
+        liveShape: string;
+        importedShape: string;
+    }>;
 }
 export interface BrainEvalMetrics {
     recall: number;
@@ -47,6 +70,13 @@ export interface BrainEvalMetrics {
     temporalCurrentTruthAccuracy: number;
     contextPollutionRate: number;
     sourceFidelity: number;
+    episodeGroupingAccuracy: number;
+    episodeBoundaryAccuracy: number;
+    episodeEvidenceCoverage: number;
+    unassignedRawRate: number;
+    dreamCandidateGrounding: number;
+    dreamBypassRate: number;
+    hermesImportParity: number;
 }
 export interface BrainEvalReport {
     passed: boolean;

@@ -117,10 +117,12 @@ cogmem normalize-transcript --input ./hermes-sessions.jsonl --output ./hermes.no
 cogmem import-hermes --workspace . --project hermes --session ./hermes.normalized.md
 ```
 
-After import, run curation and CPU governance as a supervised worker:
+After import, inspect the batch-sealed episodes, run one conditional curation tick, then invoke CPU governance separately:
 
 ```bash
-cogmem memory dream --project hermes --watch --interval-ms 300000 --promote
+cogmem episode status --project hermes --json
+cogmem dream tick --project hermes --mode auto --json
+cogmem memory govern --project hermes --json
 ```
 
 ## Active Memory Search
@@ -200,6 +202,8 @@ The migration command is idempotent. Re-running it skips records already importe
 Hermes integration is currently a skill plus MCP bridge. It does not replace a native Hermes memory provider and it does not patch Hermes runtime internals. `cogmem connect hermes --workspace . --auto` writes or updates the `mcp_servers.cogmem` entry in the Hermes config. Restart or reload Hermes after patching MCP config.
 
 For active memory search through MCP, call `cogmem_recall` with `projectId: "hermes"` and `query`. `agentId` is optional for project-scoped Hermes calls; the MCP bridge infers it from `projectId`. The tool returns the same `items` shape as `cogmem memory recall`, including `raw_ledger` fallback, `sourceContext` locators, and `decisionTrace`. Inspect its selected lane, reason, and candidate counts before claiming memory is absent. For equal raw matches, prefer the original user anchor and inspect `sourceContext.after` rather than relying on a later assistant retelling.
+
+When Hermes has no lifecycle hook, use `cogmem_episode_append` for one message or bounded `cogmem_episode_import` for a session batch. Supply stable external message IDs so retries are idempotent. These tools write Raw Ledger and episode control metadata only; they do not run Dream or create durable beliefs. Use `cogmem_episode_status` to inspect boundaries, `cogmem_episode_seal` for an explicit boundary, and `cogmem_dream_tick` only as an operator/host-owned background action. Then run normal governance.
 
 Use `cogmem memory map --project hermes --json` or MCP `cogmem_memory_map` to inspect Memory Binding and Graph Recall counters. Bindings attach high-value user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down only; they are not verified facts, user preferences, or instructions. Correction bindings expose review flags and correction edges. If `cogmem memory tick --project hermes --json` suggests `bind_raw_events`, run `cogmem memory bind --project hermes --json`. Re-run `cogmem connect hermes --workspace . --auto` after upgrades to patch existing MCP allow-lists with new Cogmem tools.
 

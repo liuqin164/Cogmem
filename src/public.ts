@@ -30,6 +30,14 @@ export type {
   DreamCandidateStatus,
   DreamCuratorRunOptions,
   DreamCuratorRunResult,
+  DreamTickOptions,
+  DreamTickResult,
+  EpisodeClosureReceipt,
+  EpisodeDreamStatus,
+  EpisodeListOptions,
+  EpisodeMessageInput,
+  EpisodeMessageResult,
+  MemoryEpisode,
   MaintenanceSuggestedAction,
   MaintenanceTickOptions,
   MaintenanceTickResult,
@@ -49,6 +57,19 @@ export type {
   ToolCallMemoryEventInput,
   ToolResultMemoryEventInput,
 } from './factory.js';
+export {
+  EpisodeAssembler,
+  EpisodeStore,
+  classifyTurnRelation,
+  type EpisodeClosureMode,
+  type EpisodeDreamState,
+  type EpisodeEventLink,
+  type EpisodeStatus,
+  type EpisodeType,
+  type TurnRelation,
+  type TurnRelationDecision,
+} from './episode/index.js';
+export { DreamScheduler, type DreamTickMode, type SelectedDreamMode } from './dream/index.js';
 
 /**
  * Cogmem runtime home and structured configuration helpers.

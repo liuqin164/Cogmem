@@ -30,6 +30,12 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
     'cogmem_recall',
     'cogmem_explain_recall',
     'cogmem_strategy_plan',
+    'cogmem_episode_append',
+    'cogmem_episode_import',
+    'cogmem_episode_status',
+    'cogmem_episode_seal',
+    'cogmem_dream_tick',
+    'cogmem_dream_status',
     'cogmem_memory_map',
     'cogmem_maintenance_tick',
     'cogmem_prospective',
@@ -48,6 +54,9 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
   expect(explain?.description).toContain('governanceReason');
   expect(strategy?.annotations?.readOnlyHint).toBe(true);
   expect(strategy?.description).toContain('no instruction authority');
+  expect(tools.find((tool) => tool.name === 'cogmem_episode_status')?.annotations?.readOnlyHint).toBe(true);
+  expect(tools.find((tool) => tool.name === 'cogmem_episode_append')?.description).toContain('never runs Dream');
+  expect(tools.find((tool) => tool.name === 'cogmem_dream_tick')?.description).toContain('sealed episodes only');
   expect(map?.description).toContain('memory map');
   expect(tick?.description).toContain('maintenance tick');
   const prospective = tools.find((tool) => tool.name === 'cogmem_prospective');

@@ -814,7 +814,8 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
   expect(hermes).toContain('memory.provider');
   expect(hermes).toContain('--state-db ./state.db');
   expect(hermes).toContain('--family jsonl');
-  expect(hermes).toContain('cogmem memory dream --project hermes --watch --interval-ms 300000 --promote');
+  expect(hermes).toContain('cogmem dream tick --project hermes --mode auto --json');
+  expect(hermes).toContain('cogmem episode status --project hermes --json');
   expect(hermes).toContain('cogmem memory map --project hermes --json');
   expect(hermes).toContain('cogmem memory tick --project hermes --json');
   expect(hermes).toContain('--session ./one.md --session ./two.md');
@@ -1004,6 +1005,9 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(bridgeBody).toContain('ingestToolObservation');
   expect(bridgeBody).toContain('ingestTaskEvent');
   expect(bridgeBody).toContain('function stripCogmemRecallBlocks(text)');
+  expect(bridgeBody).toContain('COGMEM_TURN_BRIDGE');
+  expect(bridgeBody).toContain('COGMEM_SESSION_STATE');
+  expect(bridgeBody).toContain('COGMEM_STRATEGY_CONTEXT');
   expect(bridgeBody).toContain('hygiene');
   expect(bridgeBody).toContain('<COGMEM_RECALL_CONTEXT');
   expect(bridgeBody).toContain('persistence="forbidden"');

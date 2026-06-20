@@ -36,12 +36,12 @@ test('cogmem migrate plans and upgrades a 2.7.1 database with a backup', async (
 
   const dryRun = await run(['--db', dbPath, '--dry-run', '--json']);
   expect(dryRun.exitCode).toBe(0);
-  expect(JSON.parse(dryRun.stdout).pending).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021']);
+  expect(JSON.parse(dryRun.stdout).pending).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022']);
 
   const applied = await run(['--db', dbPath, '--yes', '--backup', '--json']);
   expect(applied.exitCode).toBe(0);
   const result = JSON.parse(applied.stdout);
-  expect(result.applied).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021']);
+  expect(result.applied).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022']);
   expect(existsSync(result.backupPath)).toBe(true);
   const backup = new Database(result.backupPath, { readonly: true });
   expect(backup.prepare('SELECT value FROM legacy_wal_evidence').get()).toEqual({
@@ -59,7 +59,8 @@ test('cogmem migrate plans and upgrades a 2.7.1 database with a backup', async (
   expect(transitionIndexes.map((index) => index.name)).toContain('idx_prospective_transitions_candidate');
   const strategyIndexes = migrated.prepare(`PRAGMA index_list(context_strategy_outcomes)`).all() as Array<{ name: string }>;
   expect(strategyIndexes.map((index) => index.name)).toContain('idx_context_strategy_project_time');
-  expect(migrated.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '21' });
+  expect(migrated.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '22' });
+  expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_episodes'`).get()).toEqual({ name: 'memory_episodes' });
   migrated.close();
 
   const repeated = await run(['--db', dbPath, '--yes', '--json']);

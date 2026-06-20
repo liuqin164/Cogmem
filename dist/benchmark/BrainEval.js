@@ -12,6 +12,13 @@ const THRESHOLDS = {
     temporalCurrentTruthAccuracy: { operator: '>=', value: 0.95 },
     contextPollutionRate: { operator: '=', value: 0 },
     sourceFidelity: { operator: '=', value: 1 },
+    episodeGroupingAccuracy: { operator: '>=', value: 0.9 },
+    episodeBoundaryAccuracy: { operator: '>=', value: 0.9 },
+    episodeEvidenceCoverage: { operator: '>=', value: 0.95 },
+    unassignedRawRate: { operator: '=', value: 0 },
+    dreamCandidateGrounding: { operator: '=', value: 1 },
+    dreamBypassRate: { operator: '=', value: 0 },
+    hermesImportParity: { operator: '=', value: 1 },
 };
 export class BrainEvalRunner {
     evaluate(samples) {
@@ -36,6 +43,19 @@ export class BrainEvalRunner {
         let pollutedContextCount = 0;
         let sourceFidelityCheckCount = 0;
         let exactSourceCount = 0;
+        let episodeGroupingCount = 0;
+        let correctEpisodeGroupingCount = 0;
+        let episodeBoundaryCount = 0;
+        let correctEpisodeBoundaryCount = 0;
+        let episodeEvidenceExpectedCount = 0;
+        let episodeEvidenceCoveredCount = 0;
+        let episodeAssignmentCount = 0;
+        let unassignedEpisodeCount = 0;
+        let dreamCandidateCount = 0;
+        let groundedDreamCandidateCount = 0;
+        let dreamBypassCount = 0;
+        let hermesParityCount = 0;
+        let correctHermesParityCount = 0;
         for (const sample of samples) {
             const expected = new Set(sample.expectedIds);
             const selected = new Set(sample.selectedIds);
@@ -87,6 +107,38 @@ export class BrainEvalRunner {
                 if (check.expectedEventId === check.resolvedEventId)
                     exactSourceCount += 1;
             }
+            for (const check of sample.episodeGroupingChecks ?? []) {
+                episodeGroupingCount += 1;
+                if (check.expectedGroup === check.selectedGroup)
+                    correctEpisodeGroupingCount += 1;
+            }
+            for (const check of sample.episodeBoundaryChecks ?? []) {
+                episodeBoundaryCount += 1;
+                if (check.expectedSealed === check.selectedSealed)
+                    correctEpisodeBoundaryCount += 1;
+            }
+            for (const check of sample.episodeEvidenceChecks ?? []) {
+                const actual = new Set(check.candidateEvidenceEventIds);
+                episodeEvidenceExpectedCount += check.sourceEventIds.length;
+                episodeEvidenceCoveredCount += check.sourceEventIds.filter((id) => actual.has(id)).length;
+            }
+            for (const check of sample.episodeAssignmentChecks ?? []) {
+                episodeAssignmentCount += 1;
+                if (!check.assigned)
+                    unassignedEpisodeCount += 1;
+            }
+            for (const check of sample.dreamCandidateChecks ?? []) {
+                dreamCandidateCount += 1;
+                if (check.grounded)
+                    groundedDreamCandidateCount += 1;
+                if (check.bypassedGovernance)
+                    dreamBypassCount += 1;
+            }
+            for (const check of sample.hermesImportParityChecks ?? []) {
+                hermesParityCount += 1;
+                if (check.liveShape === check.importedShape)
+                    correctHermesParityCount += 1;
+            }
         }
         const metrics = {
             recall: expectedCount === 0 ? 1 : relevantSelectedCount / expectedCount,
@@ -104,6 +156,13 @@ export class BrainEvalRunner {
             temporalCurrentTruthAccuracy: temporalTruthCheckCount === 0 ? 0 : correctTemporalTruthCount / temporalTruthCheckCount,
             contextPollutionRate: contextPollutionCheckCount === 0 ? 1 : pollutedContextCount / contextPollutionCheckCount,
             sourceFidelity: sourceFidelityCheckCount === 0 ? 0 : exactSourceCount / sourceFidelityCheckCount,
+            episodeGroupingAccuracy: episodeGroupingCount === 0 ? 0 : correctEpisodeGroupingCount / episodeGroupingCount,
+            episodeBoundaryAccuracy: episodeBoundaryCount === 0 ? 0 : correctEpisodeBoundaryCount / episodeBoundaryCount,
+            episodeEvidenceCoverage: episodeEvidenceExpectedCount === 0 ? 0 : episodeEvidenceCoveredCount / episodeEvidenceExpectedCount,
+            unassignedRawRate: episodeAssignmentCount === 0 ? 1 : unassignedEpisodeCount / episodeAssignmentCount,
+            dreamCandidateGrounding: dreamCandidateCount === 0 ? 0 : groundedDreamCandidateCount / dreamCandidateCount,
+            dreamBypassRate: dreamCandidateCount === 0 ? 1 : dreamBypassCount / dreamCandidateCount,
+            hermesImportParity: hermesParityCount === 0 ? 0 : correctHermesParityCount / hermesParityCount,
         };
         const failedMetrics = Object.keys(metrics).filter((key) => {
             const threshold = THRESHOLDS[key];

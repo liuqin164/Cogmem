@@ -15,7 +15,9 @@
  * @stable @since 1.0.0
  */
 export { MemoryKernel, createMemoryKernel, createMemoryKernelFromConfig, } from './factory.js';
-export type { ForgetUserResult, GovernanceAuditRecord, DreamCandidateListOptions, DreamCandidateRecord, DreamCandidateStatus, DreamCuratorRunOptions, DreamCuratorRunResult, MaintenanceSuggestedAction, MaintenanceTickOptions, MaintenanceTickResult, MemoryDataLane, MemoryBindingBackfillOptions, MemoryBindingBackfillResult, MemoryKernelFromConfigOptions, MemoryKernelNavigationOptions, MemoryKernelNavigationResult, MemoryKernelOptions, MemoryMapOptions, MemoryMapSection, MemorySelfMap, RawEventSearchOptions, RawMemoryEventInput, TaskMemoryEventInput, ToolCallMemoryEventInput, ToolResultMemoryEventInput, } from './factory.js';
+export type { ForgetUserResult, GovernanceAuditRecord, DreamCandidateListOptions, DreamCandidateRecord, DreamCandidateStatus, DreamCuratorRunOptions, DreamCuratorRunResult, DreamTickOptions, DreamTickResult, EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeListOptions, EpisodeMessageInput, EpisodeMessageResult, MemoryEpisode, MaintenanceSuggestedAction, MaintenanceTickOptions, MaintenanceTickResult, MemoryDataLane, MemoryBindingBackfillOptions, MemoryBindingBackfillResult, MemoryKernelFromConfigOptions, MemoryKernelNavigationOptions, MemoryKernelNavigationResult, MemoryKernelOptions, MemoryMapOptions, MemoryMapSection, MemorySelfMap, RawEventSearchOptions, RawMemoryEventInput, TaskMemoryEventInput, ToolCallMemoryEventInput, ToolResultMemoryEventInput, } from './factory.js';
+export { EpisodeAssembler, EpisodeStore, classifyTurnRelation, type EpisodeClosureMode, type EpisodeDreamState, type EpisodeEventLink, type EpisodeStatus, type EpisodeType, type TurnRelation, type TurnRelationDecision, } from './episode/index.js';
+export { DreamScheduler, type DreamTickMode, type SelectedDreamMode } from './dream/index.js';
 /**
  * Cogmem runtime home and structured configuration helpers.
  * @stable @since 2.0.0

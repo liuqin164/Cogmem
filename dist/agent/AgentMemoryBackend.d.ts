@@ -237,6 +237,7 @@ export declare class KernelAgentMemoryBackend {
     ingestToolCall(call: AgentToolCallMemory): Promise<MemoryEvent>;
     ingestToolObservation(observation: AgentToolObservationMemory): Promise<MemoryEvent>;
     ingestTaskEvent(task: AgentTaskEventMemory): Promise<MemoryEvent>;
+    private tryAppendAuxiliaryEvent;
     recall(query: AgentRecallQuery): AgentRecallResult;
     recallPack(query: AgentRecallQuery): AgentRecallPackResult;
     private recallPreviousSession;

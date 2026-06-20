@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 const PLUGIN_ID = 'cogmem-auto-memory';
-const PLUGIN_VERSION = '0.3.0';
+const PLUGIN_VERSION = '0.4.0';
 function defaultPublicEntrypoint() {
     return join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), 'public.js');
 }
@@ -338,7 +338,7 @@ function stripCogmemRecallBlocks(text) {
   let strippedChars = 0;
   let blockCount = 0;
   const output = input
-    .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, (match) => {
+    .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, (match) => {
       strippedChars += match.length;
       blockCount += 1;
       return '';
@@ -824,7 +824,7 @@ function audit(config, record) {
 const plugin = {
   id: PLUGIN_ID,
   name: 'CogMem Auto Memory',
-  version: '0.3.0',
+  version: '0.4.0',
   register(api) {
     if (!api || typeof api.on !== 'function') {
       throw new Error('OpenClaw plugin API missing api.on');
@@ -1172,7 +1172,7 @@ function stripCogmemRecallBlocks(text) {
   let strippedChars = 0;
   let blockCount = 0;
   const output = input
-    .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, (match) => {
+    .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, (match) => {
       strippedChars += match.length;
       blockCount += 1;
       return '';

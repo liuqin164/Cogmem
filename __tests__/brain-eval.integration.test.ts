@@ -29,6 +29,15 @@ describe('BrainEval multilingual release fixture', () => {
           { expectedEventId: 'evt-ja-original', resolvedEventId: 'evt-ja-original' },
           { expectedEventId: 'evt-en-original', resolvedEventId: 'evt-en-original' },
         ],
+        episodeGroupingChecks: [{ expectedGroup: 'release-episode', selectedGroup: 'release-episode' }],
+        episodeBoundaryChecks: [{ expectedSealed: true, selectedSealed: true }],
+        episodeEvidenceChecks: [{
+          sourceEventIds: ['evt-zh-original', 'evt-ja-original', 'evt-en-original'],
+          candidateEvidenceEventIds: ['evt-zh-original', 'evt-ja-original', 'evt-en-original'],
+        }],
+        episodeAssignmentChecks: [{ assigned: true }, { assigned: true }, { assigned: true }],
+        dreamCandidateChecks: [{ grounded: true, bypassedGovernance: false }],
+        hermesImportParityChecks: [{ liveShape: 'episode.v1', importedShape: 'episode.v1' }],
       },
     ];
 

@@ -97,7 +97,7 @@ function usage(): string {
     '  search --query <q>   search raw ledger text without requiring hot vectors',
     '  recall --query <q>   run agent-facing governed recall with source context',
     '  show --event <id>    show one raw event with surrounding context',
-    '  dream                run the Memory Curator / Dream Worker over undreamed raw events',
+    '  dream                compatibility alias for a conditional sealed-episode Dream tick',
     '  govern               apply CPU governance to pending dream/deep-write candidates',
     '  candidates           list dream/deep-write governance candidates',
     '  map                  print the self-describing memory map for agent/host inspection',
@@ -115,7 +115,7 @@ function usage(): string {
     '  --status <status>    candidate queue status, default candidate',
     '  --promote            after dream, run CPU governance over pending candidates',
     '  --promote-limit <n>  governance candidate limit, default follows --limit or 100',
-    '  --watch              keep running dream as a host-owned foreground worker',
+    '  --watch              keep issuing conditional Dream ticks as a host-owned worker',
     '  --interval-ms <n>    watch sleep interval, default 300000',
     '  --max-runs <n>       stop watch after n iterations; omit for long-running worker',
     '  --agent <id>         agent id for governed recall, default openclaw',
@@ -124,7 +124,8 @@ function usage(): string {
     '  --config <toml>      open a cogmem TOML config',
     '  --json               print machine-readable JSON',
     '',
-    'Dream uses deterministic local rules unless [memory_model] in TOML explicitly configures an OpenAI-compatible local Ollama or cloud chat model.',
+    'Dream processes sealed episodes only. A timer may call the conditional tick, but recall and message ingestion never run Dream.',
+    'Candidate interpretation uses deterministic rules unless [memory_model] configures an OpenAI-compatible local or cloud chat model.',
     'This is a local audit console, not a notes app or UI dashboard. It exposes provenance so memory is not a black box.',
   ].join('\n');
 }
@@ -263,6 +264,7 @@ function runStatus(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
     sessionId: args.sessionId ? [args.sessionId] : undefined,
   });
   const dreamBacklog = kernel.getDreamBacklogStatus(args.projectId);
+  const episodeDream = kernel.getEpisodeDreamStatus(args.projectId);
   const dreamCandidateQueue = kernel.getDreamCandidateQueue(args.projectId);
   return {
     rawEventCount: page.total,
@@ -275,6 +277,7 @@ function runStatus(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
     lastDreamedGlobalSeq: dreamBacklog.lastDreamedGlobalSeq,
     lastDreamedAt: dreamBacklog.lastDreamedAt,
     dreamBacklog,
+    episodeDream,
     dreamCandidateQueue,
   };
 }
@@ -399,13 +402,16 @@ function runGovern(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
 }
 
 async function runDreamOnce(kernel: MemoryKernel, args: MemoryArgs): Promise<Record<string, unknown>> {
-  const result = await kernel.runDreamCurator({
+  const result = await kernel.runDreamTick({
     projectId: args.projectId,
-    limit: args.limit || 100,
+    maxEpisodes: args.limit || 10,
   });
   const payload: Record<string, unknown> = {
     ...result,
-    candidates: result.candidates.map(candidateToJson),
+    processedEventCount: 0,
+    dreamableEventCount: result.processedEpisodeCount,
+    status: kernel.getEpisodeDreamStatus(args.projectId),
+    candidates: result.candidateIds,
   };
   if (args.promote) {
     payload.governance = kernel.promoteDreamCandidates({
@@ -469,6 +475,7 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     console.log(`rawEvents: ${payload.rawEventCount}`);
     console.log(`vectors: ${payload.vectorCount}`);
     console.log(`dreamBacklog: ${JSON.stringify(payload.dreamBacklog)}`);
+    console.log(`episodeDream: ${JSON.stringify(payload.episodeDream)}`);
     console.log(`dreamCandidateQueue: ${JSON.stringify(payload.dreamCandidateQueue)}`);
     return;
   }
@@ -480,8 +487,8 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
       console.log(`queue: ${JSON.stringify(payload.queue)}`);
       return;
     }
-    console.log(`processedEvents: ${payload.processedEventCount}`);
-    console.log(`dreamableEvents: ${payload.dreamableEventCount}`);
+    console.log(`processedEpisodes: ${payload.processedEpisodeCount}`);
+    console.log(`selectedMode: ${payload.selectedMode}`);
     console.log(`candidates: ${payload.candidateCount}`);
     console.log(`dreamBacklog: ${JSON.stringify(payload.status)}`);
     if (payload.governance) console.log(`governance: ${JSON.stringify(payload.governance)}`);

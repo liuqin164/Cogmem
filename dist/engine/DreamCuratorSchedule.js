@@ -41,7 +41,7 @@ function baseDescription(mode, trigger) {
         mode,
         trigger,
         hostResponsibility: 'cron/systemd/agent adapter decides when to call cogmem memory dream; core does not run a hidden daemon',
-        coreResponsibility: 'process raw ledger windows and write candidate-only governance records',
+        coreResponsibility: 'conditionally process sealed episodes and write candidate-only governance records',
     };
 }
 function positive(value, fallback) {

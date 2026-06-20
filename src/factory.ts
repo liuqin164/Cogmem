@@ -72,13 +72,15 @@ import {
   type MemoryGovernancePlan,
   type RedactionPolicy,
 } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, SchemaMigrationRunner } from './migrations/index.js';
+import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
+import { EpisodeAssembler, EpisodeStore, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode } from './episode/index.js';
+import { DreamScheduler, type DreamTickOptions, type DreamTickResult } from './dream/index.js';
 import {
   loadCogmemConfig,
   resolveCogmemConfigPath,
@@ -125,10 +127,12 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '3.4.0';
-const LATEST_SCHEMA_VERSION = 21;
+const CORE_VERSION = '3.5.0';
+const LATEST_SCHEMA_VERSION = 22;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
+export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
+export type { EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeListOptions, MemoryEpisode } from './episode/index.js';
 
 export interface MemoryKernelOptions {
   dbPath?: string;
@@ -278,6 +282,9 @@ export interface MemorySelfMap {
     memoryBindingEntities: number;
     memoryBindingClusters: number;
     memoryBindingEdges: number;
+    episodes: number;
+    unassignedRawEvents: number;
+    episodeDream: EpisodeDreamStatus;
     dreamBacklog: DreamBacklogStatus;
     dreamCandidateQueue: DreamGovernanceRunResult['queue'];
   };
@@ -299,7 +306,8 @@ export interface MaintenanceSuggestedAction {
     | 're_embed'
     | 'inspect_hotspots'
     | 'bind_raw_events'
-    | 'inspect_binding_failures';
+    | 'inspect_binding_failures'
+    | 'repair_episodes';
   command: string;
   reason: string;
 }
@@ -318,6 +326,8 @@ export interface MaintenanceTickResult {
     unboundRawEvents: number;
     bindingFailures: number;
     expiredConfirmationCandidates: number;
+    episodeDreamBacklog: number;
+    unassignedEpisodeRawEvents: number;
   };
   executed: {
     activationDecay: ActivationDecayResult;
@@ -334,6 +344,7 @@ export interface MaintenanceTickResult {
 }
 
 export interface RawMemoryEventInput {
+  eventId?: string;
   projectId?: string;
   workspaceId?: string;
   threadId: string;
@@ -356,6 +367,29 @@ export interface RawMemoryEventInput {
   charEnd?: number;
   localDate?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface EpisodeMessageInput {
+  projectId: string;
+  sessionId: string;
+  sourceAgent: string;
+  role: MemoryEventRole;
+  text: string;
+  externalMessageId?: string;
+  timestamp?: number;
+  threadId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface EpisodeMessageResult {
+  created: boolean;
+  eventId: string;
+  episodeId?: string;
+  assigned: boolean;
+  ignored: boolean;
+  sealed: boolean;
+  dreamRecommended: boolean;
+  dreamRan: false;
 }
 
 export interface ToolCallMemoryEventInput {
@@ -444,6 +478,7 @@ export interface ForgetUserResult {
     vectors: number;
     activations: number;
     memoryBindings: number;
+    episodes: number;
     brainProjections: number;
     entityRecords: number;
   };
@@ -485,6 +520,8 @@ export class MemoryKernel {
   readonly memoryGovernanceStore: MemoryGovernanceStore;
   readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;
   readonly pipelineMetrics: PipelineMetrics;
+  readonly episodeStore: EpisodeStore;
+  readonly episodeAssembler: EpisodeAssembler;
 
   private readonly dbPath: string;
   private readonly embedder: Embedder;
@@ -498,6 +535,7 @@ export class MemoryKernel {
   private readonly deepWriteCandidateStore: DeepWriteCandidateStore;
   private readonly deepWritePromotionPolicy: DeepWritePromotionPolicy;
   private readonly dreamCuratorWorker: DreamCuratorWorker;
+  private readonly dreamScheduler: DreamScheduler;
   private readonly memoryBindingService: MemoryBindingService;
   private readonly topicSummaryBoard: TopicSummaryBoard;
   private readonly topicDecayPolicy: TopicDecayPolicy;
@@ -528,7 +566,7 @@ export class MemoryKernel {
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
     db.exec('PRAGMA busy_timeout = 5000;');
-    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021]).run();
+    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022]).run();
     this.ensureMetaTable(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
@@ -566,6 +604,8 @@ export class MemoryKernel {
     this.compilerConfidenceStore = new CompilerConfidenceStore(this.dbPath);
     this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
     this.dreamLedgerStore = new DreamLedgerStore(db);
+    this.episodeStore = new EpisodeStore(db);
+    this.episodeAssembler = new EpisodeAssembler(this.episodeStore);
     this.activationStore = new ActivationStore(db);
     this.memoryBindingStore = new MemoryBindingStore(db);
     this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
@@ -643,6 +683,7 @@ export class MemoryKernel {
       modelRegistry: this.modelRegistry,
       pipelineMetrics: this.pipelineMetrics,
     });
+    this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker);
     this.topicSummaryBoard = new TopicSummaryBoard(this.memoryGraph, this.summaryStore);
     this.topicDecayPolicy = new TopicDecayPolicy(this.memoryGraph);
     this.localSemanticCompiler = new LocalSemanticCompiler();
@@ -954,6 +995,7 @@ export class MemoryKernel {
     const text = this.piiRedactor ? this.piiRedactor.redact(input.content).text : input.content;
     const occurredAt = input.occurredAt ?? Date.now();
     return this.eventStore.append({
+      eventId: input.eventId,
       streamId: input.threadId,
       streamType: 'thread',
       eventType: 'RAW_EVENT_RECORDED',
@@ -1200,6 +1242,176 @@ export class MemoryKernel {
     return this.dreamCuratorWorker.run(options);
   }
 
+  async runDreamTick(options: DreamTickOptions = {}): Promise<DreamTickResult> {
+    return this.dreamScheduler.tick(options);
+  }
+
+  assembleEpisodeTurn(
+    events: MemoryEvent[],
+    input: { projectId: string; sessionId: string; sourceAgent?: string; now?: number; batchSeal?: boolean },
+  ) {
+    return this.episodeAssembler.appendTurn(events, input);
+  }
+
+  appendRawEventToEpisode(
+    event: MemoryEvent,
+    input: { projectId: string; sessionId: string; sourceAgent?: string; now?: number },
+  ) {
+    return this.episodeAssembler.appendEvent(event, input);
+  }
+
+  appendEpisodeMessage(input: EpisodeMessageInput): EpisodeMessageResult {
+    let reservedEventId: string | undefined;
+    if (input.externalMessageId) {
+      const proposedEventId = `evt-episode-${createHash('sha256')
+        .update(JSON.stringify([input.projectId, input.sourceAgent, input.sessionId, input.externalMessageId]))
+        .digest('hex')}`;
+      this.episodeStore.recordIngestKey({
+        projectId: input.projectId,
+        sourceAgent: input.sourceAgent,
+        sourceSessionId: input.sessionId,
+        externalMessageId: input.externalMessageId,
+        eventId: proposedEventId,
+        now: input.timestamp,
+      });
+      reservedEventId = this.episodeStore.getIngestedEvent(
+        input.projectId,
+        input.sourceAgent,
+        input.sessionId,
+        input.externalMessageId,
+      );
+      const existingEvent = reservedEventId ? this.eventStore.getEvent(reservedEventId) : null;
+      if (existingEvent) {
+        this.assertEpisodeIngestIdentity(existingEvent, input);
+        return this.resumeEpisodeMessage(existingEvent, input, false);
+      }
+    }
+    let event: MemoryEvent<{ text: string; metadata?: Record<string, unknown> }>;
+    try {
+      event = this.recordRawEvent({
+        eventId: reservedEventId,
+        projectId: input.projectId,
+        workspaceId: input.projectId,
+        threadId: input.threadId || input.sessionId,
+        sessionId: input.sessionId,
+        role: input.role,
+        content: input.text,
+        occurredAt: input.timestamp,
+        sourceId: `${input.sourceAgent}:${input.sessionId}`,
+        metadata: { ...input.metadata, externalMessageId: input.externalMessageId, sourceAgent: input.sourceAgent },
+      });
+    } catch (error) {
+      const concurrent = reservedEventId ? this.eventStore.getEvent(reservedEventId) : null;
+      if (!concurrent) throw error;
+      this.assertEpisodeIngestIdentity(concurrent, input);
+      return this.resumeEpisodeMessage(concurrent, input, false);
+    }
+    return this.resumeEpisodeMessage(event, input, true);
+  }
+
+  private resumeEpisodeMessage(event: MemoryEvent, input: EpisodeMessageInput, created: boolean): EpisodeMessageResult {
+    let link = this.episodeStore.getEventLink(event.eventId);
+    let ignored = this.episodeStore.hasEventDisposition(event.eventId);
+    if (!link && !ignored) {
+      const assembly = this.assembleEpisodeTurn([event], {
+        projectId: input.projectId,
+        sessionId: event.sessionId || input.sessionId,
+        sourceAgent: input.sourceAgent,
+        now: event.occurredAt,
+      });
+      link = this.episodeStore.getEventLink(event.eventId);
+      ignored = assembly.ignoredEventIds.includes(event.eventId);
+    }
+    const episode = link ? this.episodeStore.getEpisode(link.episodeId) : undefined;
+    return {
+      created,
+      eventId: event.eventId,
+      episodeId: episode?.episodeId,
+      assigned: Boolean(link),
+      ignored,
+      sealed: episode?.status === 'sealed',
+      dreamRecommended: episode?.status === 'sealed',
+      dreamRan: false,
+    };
+  }
+
+  private assertEpisodeIngestIdentity(event: MemoryEvent, input: EpisodeMessageInput): void {
+    const payload = event.payload as { text?: unknown } | undefined;
+    const expectedText = this.piiRedactor ? this.piiRedactor.redact(input.text).text : input.text;
+    if (
+      event.projectId !== input.projectId
+      || event.sessionId !== input.sessionId
+      || event.role !== input.role
+      || payload?.text !== expectedText
+    ) {
+      throw new Error(`episode_ingest_identity_conflict:${input.externalMessageId || event.eventId}`);
+    }
+  }
+
+  listEpisodes(options: EpisodeListOptions = {}): MemoryEpisode[] {
+    return this.episodeStore.listEpisodes(options);
+  }
+
+  getEpisode(episodeId: string): MemoryEpisode | undefined {
+    return this.episodeStore.getEpisode(episodeId);
+  }
+
+  sealEpisode(episodeId: string, input: { mode: EpisodeClosureMode; reason: string; now?: number }): EpisodeClosureReceipt {
+    return this.episodeStore.sealEpisode(episodeId, input);
+  }
+
+  sealIdleEpisodes(input: { projectId?: string; idleBefore: number; now?: number }): EpisodeClosureReceipt[] {
+    return this.episodeStore.sealIdleEpisodes(input);
+  }
+
+  listEpisodeClosureReceipts(options: { episodeId?: string; projectId?: string; limit?: number } = {}): EpisodeClosureReceipt[] {
+    return this.episodeStore.listClosureReceipts(options);
+  }
+
+  listEpisodeEventLinks(episodeId: string) {
+    return this.episodeStore.listEventLinks(episodeId);
+  }
+
+  getEpisodeDreamStatus(projectId?: string): EpisodeDreamStatus {
+    return this.episodeStore.getDreamStatus(projectId);
+  }
+
+  retryFailedEpisodeDreams(projectId?: string): number {
+    return this.episodeStore.retryFailed(projectId);
+  }
+
+  repairEpisodes(options: { projectId?: string; sinceGlobalSeq?: number; limit?: number } = {}) {
+    const page = this.eventStore.queryEvents(1, Math.max(1, Math.min(options.limit ?? 500, 5000)), {
+      projectId: options.projectId ? [options.projectId] : undefined,
+    });
+    const events = page.records
+      .filter((event) => event.eventType === 'RAW_EVENT_RECORDED')
+      .filter((event) => options.sinceGlobalSeq === undefined || (event.globalSeq || 0) >= options.sinceGlobalSeq)
+      .filter((event) => !this.episodeStore.getEventLink(event.eventId))
+      .filter((event) => !this.episodeStore.hasEventDisposition(event.eventId))
+      .sort((a, b) => (a.globalSeq || 0) - (b.globalSeq || 0));
+    let assigned = 0;
+    const unassignedEventIds: string[] = [];
+    for (const event of events) {
+      const projectId = event.projectId || options.projectId;
+      const sessionId = event.sessionId || event.threadId;
+      if (!projectId || !sessionId) { unassignedEventIds.push(event.eventId); continue; }
+      try {
+        const result = this.assembleEpisodeTurn([event], {
+          projectId, sessionId, sourceAgent: event.sourceId, now: event.occurredAt,
+        });
+        if (result.assignedEventIds.includes(event.eventId)) assigned += 1;
+        else unassignedEventIds.push(event.eventId);
+      } catch (error) {
+        unassignedEventIds.push(event.eventId);
+        this.pipelineMetrics.recordNonFatal('episode_repair_failed', {
+          projectId, message: error instanceof Error ? error.message : String(error), details: { eventId: event.eventId },
+        });
+      }
+    }
+    return { scanned: events.length, assigned, unassigned: unassignedEventIds.length, unassignedEventIds };
+  }
+
   listDreamCandidates(options: DreamCandidateListOptions = {}): DreamCandidateRecord[] {
     return this.deepWriteCandidateStore.listCandidates(options);
   }
@@ -1334,6 +1546,9 @@ export class MemoryKernel {
     const dreamCandidateQueue = this.getDreamCandidateQueue(projectId);
     const activationHotspots = this.activationStore.getTop({ projectId, limit: 20 });
     const memoryBindingStats = this.getMemoryBindingStats(projectId);
+    const episodes = this.listEpisodes({ projectId, limit: 1000 });
+    const episodeDream = this.getEpisodeDreamStatus(projectId);
+    const unassignedRawEvents = this.episodeStore.countUnassignedRawEvents(projectId);
 
     return {
       version: 'memory_map.v1',
@@ -1375,13 +1590,25 @@ export class MemoryKernel {
           currentCount: memoryBindingStats.bindings,
         },
         {
+          id: 'episode_assembler',
+          name: 'Episode assembler',
+          role: 'groups raw session events into auditable open, soft-sealed, and sealed consolidation units',
+          currentCount: episodes.length,
+        },
+        {
           id: 'dream_queue',
           name: 'Dream curator queue',
-          role: 'candidate-only background-compatible consolidation backlog controlled by the host',
-          currentCount: dreamBacklog.undreamedRawCount,
+          role: 'sealed-episode candidate-only consolidation backlog controlled by explicit host ticks',
+          currentCount: episodeDream.pending + episodeDream.failed,
         },
       ],
       dataLanes: [
+        {
+          id: 'episode_dream',
+          name: 'Episode Dream',
+          route: 'cogmem episode status|repair and cogmem dream tick|status',
+          useWhen: 'Inspect conversation boundaries, repair unassigned raw events, or conditionally consolidate sealed episodes.',
+        },
         {
           id: 'agent_recall_pack',
           name: 'Agent recall pack',
@@ -1415,7 +1642,7 @@ export class MemoryKernel {
       ],
       bounds: [
         'kernel-only memory layer; no notes app, wiki, or UI ownership',
-        'no hidden daemon; cron/systemd/agent adapters explicitly call memory dream or memory tick',
+        'no hidden daemon; cron/systemd/agent adapters explicitly call dream tick or memory tick',
         'candidate-only self-improvement unless governance promotes the candidate',
         'sourceContext remains available for drill-down instead of replacing evidence with summaries',
         'default recall includes untagged and collection:anchor only; collection:theseus requires an explicit collection query',
@@ -1428,13 +1655,16 @@ export class MemoryKernel {
           'cogmem memory map --project <id> --json',
           'cogmem memory tick --project <id> --json',
           'cogmem memory bind --project <id> --json',
-          'cogmem memory dream --project <id> --watch --interval-ms 300000 --promote',
+          'cogmem episode status --project <id> --json',
+          'cogmem episode repair --project <id> --json',
+          'cogmem dream tick --project <id> --mode auto --json',
         ],
         agentUsage: [
           'Call recallPack() before answering when the host wants direct recall plus associative, belief, and entity context.',
           'Use collection "theseus" for creative artifacts and collection "anchor" or no collection for operational memory.',
           'Use memory map for self-inspection; use maintenance tick for explicit host-owned upkeep signals.',
           'Run memory bind when maintenance tick reports bind_raw_events for imported or adapter-written raw user events.',
+          'Use episode append/import for hookless agents; call dream tick only from an explicit host schedule or operator action.',
           'Use memory bindings, claim-key clusters, correction edges, and graph recall anchors as source-anchored organization hints, not as promoted long-term facts.',
         ],
       },
@@ -1448,6 +1678,9 @@ export class MemoryKernel {
         memoryBindingEntities: memoryBindingStats.entities,
         memoryBindingClusters: memoryBindingStats.clusters,
         memoryBindingEdges: memoryBindingStats.edges,
+        episodes: episodes.length,
+        unassignedRawEvents,
+        episodeDream,
         dreamBacklog,
         dreamCandidateQueue,
       },
@@ -1470,6 +1703,8 @@ export class MemoryKernel {
       now: ranAt,
     });
     const dreamBacklog = this.getDreamBacklogStatus(projectId);
+    const episodeDream = this.getEpisodeDreamStatus(projectId);
+    const unassignedEpisodeRawEvents = this.episodeStore.countUnassignedRawEvents(projectId);
     const queue = this.getDreamCandidateQueue(projectId);
     const entityConflicts = this.entityStore.listAliasConflicts().filter((conflict) => {
       if (!projectId) return true;
@@ -1487,11 +1722,18 @@ export class MemoryKernel {
     const bindingFailures = this.pipelineMetrics.getNonFatalCount('memory_binding_failed', { projectId });
     const suggestedActions: MaintenanceSuggestedAction[] = [];
 
-    if (dreamBacklog.undreamedRawCount > 0) {
+    if (episodeDream.pending + episodeDream.failed > 0) {
       suggestedActions.push({
         kind: 'dream_curator',
-        command: `cogmem memory dream${projectId ? ` --project ${projectId}` : ''} --promote`,
-        reason: `${dreamBacklog.undreamedRawCount} raw events are waiting for candidate-only Dream Curator processing.`,
+        command: `cogmem dream tick${projectId ? ` --project ${projectId}` : ''} --mode auto`,
+        reason: `${episodeDream.pending + episodeDream.failed} sealed episodes are waiting for candidate-only Dream processing.`,
+      });
+    }
+    if (unassignedEpisodeRawEvents > 0) {
+      suggestedActions.push({
+        kind: 'repair_episodes',
+        command: `cogmem episode repair${projectId ? ` --project ${projectId}` : ''} --json`,
+        reason: `${unassignedEpisodeRawEvents} raw events are not assigned to an episode; the raw evidence remains intact.`,
       });
     }
     if (candidateQueue > 0) {
@@ -1551,6 +1793,8 @@ export class MemoryKernel {
         unboundRawEvents,
         bindingFailures,
         expiredConfirmationCandidates: reviewQueueAging.expired,
+        episodeDreamBacklog: episodeDream.pending + episodeDream.failed,
+        unassignedEpisodeRawEvents,
       },
       executed: {
         activationDecay,
@@ -1668,6 +1912,7 @@ export class MemoryKernel {
       vectors: 0,
       activations: 0,
       memoryBindings: 0,
+      episodes: 0,
       brainProjections: 0,
       entityRecords: 0,
     };
@@ -1711,6 +1956,7 @@ export class MemoryKernel {
         runDelete(`DELETE FROM neurons_fts WHERE id IN (${placeholders})`, neuronIds);
         runDelete(`UPDATE neurons SET is_deleted = 1, status = 'archived', updated_at = ? WHERE id IN (${placeholders})`, [Date.now(), ...neuronIds]);
       }
+      deleted.episodes += this.episodeStore.deleteByProject(projectId);
       deleted.events += runDelete(`DELETE FROM memory_events WHERE project_id = ?`, [projectId]);
       deleted.activations += this.activationStore.deleteByProject(projectId);
       deleted.memoryBindings += this.memoryBindingStore.deleteByProject(projectId);
