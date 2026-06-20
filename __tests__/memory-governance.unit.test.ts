@@ -102,4 +102,18 @@ describe('memory governance foundation', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM applied_effects').get()).toEqual({ count: 1 });
     db.close();
   });
+
+  test('never records an operation as applied when no mutation handler exists', () => {
+    const db = new Database(':memory:');
+    const store = new MemoryGovernanceStore(db);
+    const executor = new MemoryGovernanceExecutor(
+      db,
+      store,
+      new MemoryGovernanceValidator((eventId) => ({ eventId, projectId: 'brain', role: 'user' })),
+    );
+
+    expect(() => executor.execute(plan())).toThrow('unsupported_governance_operation:CREATE_BELIEF');
+    expect(store.listAppliedOperations('plan-1')).toEqual([]);
+    db.close();
+  });
 });

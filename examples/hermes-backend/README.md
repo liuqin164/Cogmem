@@ -129,7 +129,7 @@ If a Hermes workspace uses different paths, pass explicit `profilePath` and `ses
 
 For agent-facing instructions, install or read `SKILL.md`. `cogmem connect hermes --workspace .` copies it to `~/.hermes/skills/cogmem-memory/SKILL.md`.
 
-`cogmem connect hermes --workspace . --auto` patches the Hermes MCP config with a `cogmem` server command. Re-running it after an upgrade updates existing `cogmem-mcp` allow-lists with newly supported tools such as `cogmem_memory_map` and `cogmem_maintenance_tick`. After running it, restart or reload Hermes so the MCP server list is re-read.
+`cogmem connect hermes --workspace . --auto` patches the Hermes MCP config with a `cogmem` server command. Re-running it after an upgrade updates existing `cogmem-mcp` allow-lists with newly supported tools such as `cogmem_memory_map`, `cogmem_maintenance_tick`, and `cogmem_prospective`. The prospective tool changes candidate state only and never executes work. After running it, restart or reload Hermes so the MCP server list is re-read.
 
 The MCP `cogmem_recall` tool uses the same backend as `cogmem memory recall`. A Hermes MCP call with only `projectId: "hermes"` still infers `agentId: "hermes"` and can return `raw_ledger` items with labeled `sourceContext` events, `sourceContext.window`, and locator commands when vectors are empty. Pass `collection: "theseus"` only when Hermes wants creative artifacts instead of normal operational memory.
 

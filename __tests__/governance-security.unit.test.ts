@@ -88,17 +88,84 @@ describe('Governance and security v1.14', () => {
       projectId: 'forget-me',
       source: 'test:forget_user',
     });
+    const evidence = kernel.recordRawEvent({
+      threadId: 'forget-thread', projectId: 'forget-me', role: 'user',
+      content: 'Remind me to remove this private release follow-up.',
+    });
+    kernel.prospectiveMemoryService.propose({
+      projectId: 'forget-me', candidateType: 'reminder', canonicalKey: 'private:release',
+      title: 'Private release follow-up', evidenceEventIds: [evidence.eventId], proposedBy: 'deterministic',
+    });
+    kernel.beliefGovernanceService.apply({
+      projectId: 'forget-me', ownership: 'user', beliefType: 'boundary', canonicalKey: 'private:boundary',
+      statement: 'Private project boundary.', evidenceEventIds: [evidence.eventId],
+    });
+    kernel.temporalMemoryService.record({
+      projectId: 'forget-me', entryType: 'decision', title: 'Private decision', evidenceEventIds: [evidence.eventId],
+    });
+    kernel.contextCortex.plan({
+      query: 'private project status', projectId: 'forget-me', availableTokens: 100,
+      candidates: [{ id: 'private-context', layer: 'raw_source', content: 'Private context', projectId: 'forget-me' }],
+    });
+    kernel.executeMemoryGovernancePlan({
+      planId: 'forget-plan', projectId: 'forget-me', proposedBy: 'deterministic', createdAt: Date.now(),
+      operations: [{
+        operationId: 'forget-bind', type: 'BIND_EVENT', projectId: 'forget-me',
+        evidenceEventIds: [evidence.eventId], sourceRole: 'user', ownership: 'project',
+        idempotencyKey: 'forget:bind', payload: { eventId: evidence.eventId },
+      }],
+    });
+    const forgottenEntity = kernel.entityStore.upsertEntity({
+      canonicalName: 'Shared Person', type: 'person', aliases: ['Forgotten Alias'],
+      metadata: { projectId: 'forget-me' }, instanceMode: 'new_instance',
+    });
+    const keptEntity = kernel.entityStore.upsertEntity({
+      canonicalName: 'Shared Person', type: 'person', aliases: ['Kept Alias'],
+      metadata: { projectId: 'keep-me' }, instanceMode: 'new_instance',
+    });
+    const legacyMentionOnlyEntity = kernel.entityStore.upsertEntity({
+      canonicalName: 'Legacy Private Person', type: 'person', aliases: ['Legacy Private Alias'],
+      instanceMode: 'new_instance',
+    });
+    kernel.entityStore.recordMention({
+      entityId: legacyMentionOnlyEntity.entityId, projectId: 'forget-me', mentionType: 'referenced',
+    });
+    const otherProjectOwnedEntity = kernel.entityStore.upsertEntity({
+      canonicalName: 'Other Project Person', type: 'person', aliases: ['Other Project Alias'],
+      metadata: { projectId: 'keep-me' }, instanceMode: 'new_instance',
+    });
+    kernel.entityStore.recordMention({
+      entityId: otherProjectOwnedEntity.entityId, projectId: 'forget-me', mentionType: 'referenced',
+    });
     expect(kernel.buildMemoryMap({ projectId: 'forget-me' }).counters.activationHotspots).toBe(1);
 
     const result = await kernel.forgetUser('forget-me', 'user_requested');
 
     expect(result.deleted.neurons).toBe(1);
     expect(result.deleted.activations).toBe(1);
+    expect(result.deleted.brainProjections).toBeGreaterThan(0);
+    expect(result.deleted.entityRecords).toBeGreaterThan(0);
     expect(kernel.recall('delete this project memory', { projectId: 'forget-me' }).rawEvidence).toHaveLength(0);
     expect(kernel.recall('keep this project memory', { projectId: 'keep-me' }).rawEvidence.length).toBeGreaterThan(0);
     expect(kernel.activationStore.getTop({ projectId: 'forget-me' })).toHaveLength(0);
     expect(kernel.buildMemoryMap({ projectId: 'forget-me' }).counters.activationHotspots).toBe(0);
     expect(kernel.runMaintenanceTick({ projectId: 'forget-me' }).chargeVector.activationHotspots).toBe(0);
+    const db = kernel.factStore.getDatabase();
+    for (const table of [
+      'prospective_memories', 'context_activation_receipts', 'memory_timeline_entries',
+      'belief_graph_nodes', 'entity_merge_candidates', 'memory_governance_plans',
+    ]) {
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE project_id = ?`).get('forget-me')).toEqual({ count: 0 });
+    }
+    expect(kernel.entityStore.findByEntityId(forgottenEntity.entityId)).toBeNull();
+    expect(kernel.entityStore.findByEntityId(legacyMentionOnlyEntity.entityId)).toBeNull();
+    expect(kernel.entityStore.findByEntityId(keptEntity.entityId)).not.toBeNull();
+    expect(kernel.entityStore.findByEntityId(otherProjectOwnedEntity.entityId)).not.toBeNull();
+    const canonical = db.prepare(`SELECT aliases_json, metadata_json FROM entities WHERE entity_id = ?`)
+      .get(keptEntity.canonicalEntityId!) as { aliases_json: string; metadata_json: string };
+    expect(canonical.aliases_json).not.toContain('Forgotten Alias');
+    expect(canonical.aliases_json).toContain('Kept Alias');
+    expect(canonical.metadata_json).not.toContain('forget-me');
     expect(kernel.getGovernanceAudit('forget-me')[0]?.action).toBe('forgetUser');
     kernel.close();
     rmSync(dir, { recursive: true, force: true });

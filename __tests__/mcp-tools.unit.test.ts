@@ -23,7 +23,7 @@ afterEach(() => {
   }
 });
 
-test('core MCP tool list exposes recall, write, explain, map, and tick tools', () => {
+test('core MCP tool list exposes recall, write, explain, map, tick, and prospective tools', () => {
   const tools = listCogmemMcpTools();
   expect(tools.map((tool) => tool.name)).toEqual([
     'cogmem_remember_turn',
@@ -31,6 +31,7 @@ test('core MCP tool list exposes recall, write, explain, map, and tick tools', (
     'cogmem_explain_recall',
     'cogmem_memory_map',
     'cogmem_maintenance_tick',
+    'cogmem_prospective',
   ]);
   const recall = tools.find((tool) => tool.name === 'cogmem_recall');
   const explain = tools.find((tool) => tool.name === 'cogmem_explain_recall');
@@ -45,6 +46,40 @@ test('core MCP tool list exposes recall, write, explain, map, and tick tools', (
   expect(explain?.description).toContain('governanceReason');
   expect(map?.description).toContain('memory map');
   expect(tick?.description).toContain('maintenance tick');
+  const prospective = tools.find((tool) => tool.name === 'cogmem_prospective');
+  expect(prospective?.description).toContain('never executes');
+  expect(prospective?.annotations?.destructiveHint).toBe(true);
+});
+
+test('core MCP prospective tool requires distinct user confirmation and never executes tasks', async () => {
+  const kernel = makeKernel();
+  const request = kernel.recordRawEvent({
+    threadId: 'thread', projectId: 'brain', role: 'user', content: 'Remind me to check CI.',
+  });
+  const confirmation = kernel.recordRawEvent({
+    threadId: 'thread', projectId: 'brain', role: 'user', content: 'Confirm the CI reminder.',
+  });
+
+  const created = await callCogmemMcpTool('cogmem_prospective', {
+    action: 'create', projectId: 'brain', candidateType: 'reminder', canonicalKey: 'release:ci',
+    title: 'Check CI', evidenceEventIds: [request.eventId], dueAt: 100,
+  }, { kernel });
+  expect(created.isError).toBeFalsy();
+  const candidateId = String(created.structuredContent?.candidateId);
+  const rejectedConfirmation = await callCogmemMcpTool('cogmem_prospective', {
+    action: 'confirm', projectId: 'brain', candidateId, confirmationEvidenceEventId: request.eventId,
+  }, { kernel });
+  expect(rejectedConfirmation.isError).toBe(true);
+
+  const confirmed = await callCogmemMcpTool('cogmem_prospective', {
+    action: 'confirm', projectId: 'brain', candidateId, confirmationEvidenceEventId: confirmation.eventId,
+  }, { kernel });
+  expect(confirmed.isError).toBeFalsy();
+  const due = await callCogmemMcpTool('cogmem_prospective', {
+    action: 'due', projectId: 'brain', atTime: 200,
+  }, { kernel });
+  expect(due.structuredContent).toEqual(expect.objectContaining({ items: [expect.objectContaining({ candidateId })] }));
+  expect('execute' in kernel.prospectiveMemoryService).toBe(false);
 });
 
 test('core MCP remember turn supports raw-only mode without creating vectors', async () => {

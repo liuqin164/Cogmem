@@ -1,7 +1,7 @@
 {
   "name": "cogmem",
 
-  "version": "3.2.0",
+  "version": "3.3.0",
 
   "type": "module",
   "description": "cogmem — agent-native memory kernel for a single local-first AI agent",
@@ -33,7 +33,9 @@
     "cogmem-snapshot": "dist/bin/snapshot.js",
     "cogmem-re-embed": "dist/bin/re-embed.js",
     "cogmem-migrate-vectors": "dist/bin/migrate-vectors.js",
-    "cogmem-migrate": "dist/bin/migrate.js"
+    "cogmem-migrate": "dist/bin/migrate.js",
+    "cogmem-prospective": "dist/bin/prospective.js",
+    "cogmem-brain-eval": "dist/bin/brain-eval.js"
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",

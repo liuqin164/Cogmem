@@ -39,7 +39,7 @@ export function resolveReleasePayloadSpec(payload: unknown, repo: string = DEFAU
 
   const tag = typeof release.tag_name === 'string' ? release.tag_name.trim() : '';
   if (tag) return `github:${repo}#${tag}`;
-  return `github:${repo}#main`;
+  throw new Error(`latest_release_unavailable: GitHub returned no release asset or tag for ${repo}. Retry later or pass --from explicitly.`);
 }
 
 async function fetchReleaseJson(url: string, timeoutMs: number): Promise<unknown> {

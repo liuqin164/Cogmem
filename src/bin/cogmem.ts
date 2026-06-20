@@ -19,6 +19,8 @@ const COMMANDS: Record<string, string> = {
   're-embed': 're-embed',
   'migrate-vectors': 'migrate-vectors',
   migrate: 'migrate',
+  prospective: 'prospective',
+  'brain-eval': 'brain-eval',
 };
 
 function usage(): string {
@@ -40,6 +42,8 @@ function usage(): string {
     '  re-embed             inspect or run re-embedding',
     '  migrate-vectors      migrate vector backend data',
     '  migrate              plan or apply schema migrations with optional backup',
+    '  prospective          manage confirmed-only future-memory candidates; never executes tasks',
+    '  brain-eval           evaluate recall, provenance, leakage, budget, and false activation',
   ].join('\n');
 }
 

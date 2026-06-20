@@ -1171,6 +1171,7 @@ test('cogmem-connect hermes --auto patches Hermes MCP config without claiming na
   expect(config).toContain('cogmem-mcp');
   expect(config).toContain('cogmem_memory_map');
   expect(config).toContain('cogmem_maintenance_tick');
+  expect(config).toContain('cogmem_prospective');
   expect(config).not.toContain('memory:\n  provider: cogmem');
 });
 
@@ -1215,6 +1216,7 @@ test('cogmem-connect hermes --auto updates existing Cogmem MCP tool allow-list',
   const config = readFileSync(hermesConfig, 'utf8');
   expect(config).toContain('cogmem_memory_map');
   expect(config).toContain('cogmem_maintenance_tick');
+  expect(config).toContain('cogmem_prospective');
   expect(config.match(/cogmem_recall/g)?.length).toBe(1);
 });
 

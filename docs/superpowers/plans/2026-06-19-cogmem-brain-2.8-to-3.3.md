@@ -20,7 +20,7 @@
 - Create: `src/migrations/0015_memory_governance.ts`
 - Test: `__tests__/memory-governance.unit.test.ts`
 
-- [ ] **Step 1: Write failing tests for evidence, ownership, idempotency, stale versions, and rollback**
+- [x] **Step 1: Write failing tests for evidence, ownership, idempotency, stale versions, and rollback**
 
 ```ts
 test('rejects durable operations without raw event evidence', () => {
@@ -41,13 +41,13 @@ test('executes a plan once and rolls back every operation on failure', () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused test and confirm RED**
+- [x] **Step 2: Run the focused test and confirm RED**
 
 Run: `bun test __tests__/memory-governance.unit.test.ts`
 
 Expected: imports or assertions fail because the governance modules do not exist.
 
-- [ ] **Step 3: Implement semantic operations and strict validation**
+- [x] **Step 3: Implement semantic operations and strict validation**
 
 ```ts
 export type MemoryGovernanceOperationType =
@@ -70,11 +70,11 @@ export interface MemoryGovernanceOperation {
 }
 ```
 
-- [ ] **Step 4: Execute validated operations and audit rows in one SQLite transaction**
+- [x] **Step 4: Execute validated operations and audit rows in one SQLite transaction**
 
 The executor must call `db.transaction(() => { ... })()` and write both operation state and audit records inside that transaction. It must never resolve mutation targets by fuzzy title.
 
-- [ ] **Step 5: Run focused and full tests**
+- [x] **Step 5: Run focused and full tests**
 
 Run: `bun test __tests__/memory-governance.unit.test.ts && bun run typecheck`
 
@@ -91,11 +91,11 @@ Run: `bun test __tests__/memory-governance.unit.test.ts && bun run typecheck`
 - Modify: `src/store/MemoryBindingStore.ts`
 - Test: `__tests__/memory-binding-v15.unit.test.ts`
 
-- [ ] Write RED tests proving stable multilingual paths, distinct claims, canonical entity IDs, activation-only edge decay, and read-only graph traversal.
-- [ ] Implement registry-driven canonical paths; models may suggest a candidate label but CPU code owns the accepted path.
-- [ ] Split edge state into `confidence`, `stability`, and `activation`; provenance relations never lose confidence through activation decay.
-- [ ] Implement bounded one/two-hop `BrainGraphView` queries returning evidence IDs and suppression reasons.
-- [ ] Run focused tests, existing binding tests, typecheck, and build.
+- [x] Write RED tests proving stable multilingual paths, distinct claims, canonical entity IDs, activation-only edge decay, and read-only graph traversal.
+- [x] Implement registry-driven canonical paths; models may suggest a candidate label but CPU code owns the accepted path.
+- [x] Split edge state into `confidence`, `stability`, and `activation`; provenance relations never lose confidence through activation decay.
+- [x] Implement bounded one/two-hop `BrainGraphView` queries returning evidence IDs and suppression reasons.
+- [x] Run focused tests, existing binding tests, typecheck, and build.
 
 ### Task 3: Upgrade and migration commands
 
@@ -108,20 +108,20 @@ Run: `bun test __tests__/memory-governance.unit.test.ts && bun run typecheck`
 - Test: `__tests__/schema-migration.unit.test.ts`
 - Test: `__tests__/update-release.unit.test.ts`
 
-- [ ] Write RED tests for dry-run, backup-before-write, idempotent migration, old-schema replay, and update follow-up migration.
-- [ ] Implement `cogmem migrate [--db|--config] [--dry-run] [--backup] [--json]`.
-- [ ] Make `cogmem update --yes` install the release selected through GitHub Releases, then run the newly installed `cogmem migrate --backup` command.
-- [ ] Never rewrite Raw Ledger rows; migrations may add projections, indexes, versions, or backfill canonical references.
-- [ ] Run CLI tests and migration replay fixtures.
+- [x] Write RED tests for dry-run, backup-before-write, idempotent migration, old-schema replay, and update follow-up migration.
+- [x] Implement `cogmem migrate [--db|--config] [--dry-run] [--backup] [--json]`.
+- [x] Make `cogmem update --yes` install the release selected through GitHub Releases, then run the newly installed `cogmem migrate --backup` command.
+- [x] Never rewrite Raw Ledger rows; migrations may add projections, indexes, versions, or backfill canonical references.
+- [x] Run CLI tests and migration replay fixtures.
 
 ### Task 4: Release 2.8.0
 
 **Files:** `README.md`, `MEMORY_MODEL.md`, `CHANGELOG.md`, `RELEASE_CHECKLIST.md`, `examples/*-backend/{README,AGENTS,SKILL}.md`, `package.json`, `src/factory.ts`
 
-- [ ] Document governance operations, migration, graph inspection, failure recovery, and agent usage.
-- [ ] Set package/core version to `2.8.0` and schema version to `15`.
-- [ ] Run `bun test __tests__`, `bun run typecheck`, `bun run build`, and `npm pack --dry-run --json` serially.
-- [ ] Commit and push `codex/brain-2.8.0`.
+- [x] Document governance operations, migration, graph inspection, failure recovery, and agent usage.
+- [x] Set package/core version to `2.8.0` and schema version to `15`.
+- [x] Run `bun test __tests__`, `bun run typecheck`, `bun run build`, and `npm pack --dry-run --json` serially.
+- [x] Commit and push `codex/brain-2.8.0`.
 
 ### Task 5: 2.9.0 entity governance v2
 
@@ -132,11 +132,11 @@ Run: `bun test __tests__/memory-governance.unit.test.ts && bun run typecheck`
 - Modify: `src/binding/MemoryBindingService.ts`
 - Test: `__tests__/entity-governance-v2.unit.test.ts`
 
-- [ ] RED-test multilingual aliases, ambiguous people, pending merge candidates, reversible merges, project isolation, and person privacy.
-- [ ] Reuse `EntityStore` as the sole canonical owner; binding rows reference its IDs and legacy `memory_entities` becomes a compatibility projection.
-- [ ] Require explicit evidence and high thresholds for person merges; medium confidence remains pending and low confidence remains a mention.
-- [ ] Add entity merge audit and timeline entries without deleting source entities or aliases.
-- [ ] Set version `2.9.0`, schema `16`; update docs, verify, commit, and push `codex/brain-2.9.0`.
+- [x] RED-test multilingual aliases, ambiguous people, pending merge candidates, reversible merges, project isolation, and person privacy.
+- [x] Reuse `EntityStore` as the sole canonical owner; binding rows reference its IDs and legacy `memory_entities` becomes a compatibility projection.
+- [x] Require explicit evidence and high thresholds for person merges; medium confidence remains pending and low confidence remains a mention.
+- [x] Add entity merge audit and timeline entries without deleting source entities or aliases.
+- [x] Set version `2.9.0`, schema `16`; update docs, verify, commit, and push `codex/brain-2.9.0`.
 
 ### Task 6: 3.0.0 belief governance v2
 
@@ -147,10 +147,10 @@ Run: `bun test __tests__/memory-governance.unit.test.ts && bun run typecheck`
 - Modify: `src/governance/MemoryGovernanceExecutor.ts`
 - Test: `__tests__/belief-governance-v2.unit.test.ts`
 
-- [ ] RED-test evidence-backed creation, reinforcement, conflict, correction, supersede, source ownership, and current/history queries.
-- [ ] Remove the unchecked belief boundary and enforce typed evidence links and version numbers.
-- [ ] Assistant/tool evidence may create project observations but never user preferences, goals, or boundaries without explicit user evidence.
-- [ ] Set version `3.0.0`, schema `17`; update docs, verify, commit, and push `codex/brain-3.0.0`.
+- [x] RED-test evidence-backed creation, reinforcement, conflict, correction, supersede, source ownership, and current/history queries.
+- [x] Remove the unchecked belief boundary and enforce typed evidence links and version numbers.
+- [x] Assistant/tool evidence may create project observations but never user preferences, goals, or boundaries without explicit user evidence.
+- [x] Set version `3.0.0`, schema `17`; update docs, verify, commit, and push `codex/brain-3.0.0`.
 
 ### Task 7: 3.1.0 temporal versioning v1
 
@@ -161,10 +161,10 @@ Run: `bun test __tests__/memory-governance.unit.test.ts && bun run typecheck`
 - Modify: `src/belief/BeliefStore.ts`
 - Test: `__tests__/temporal-memory-v1.unit.test.ts`
 
-- [ ] RED-test current truth, historical truth, correction time, decision reason, valid intervals, and project milestones.
-- [ ] Reuse existing belief validity and topology data; add a unified version chain and typed time anchors rather than parallel truth tables.
-- [ ] Preserve exact evidence and source locators for every version transition.
-- [ ] Set version `3.1.0`, schema `18`; update docs, verify, commit, and push `codex/brain-3.1.0`.
+- [x] RED-test current truth, historical truth, correction time, decision reason, valid intervals, and project milestones.
+- [x] Reuse existing belief validity and topology data; add a unified version chain and typed time anchors rather than parallel truth tables.
+- [x] Preserve exact evidence and source locators for every version transition.
+- [x] Set version `3.1.0`, schema `18`; update docs, verify, commit, and push `codex/brain-3.1.0`.
 
 ### Task 8: 3.2.0 context cortex v1
 
@@ -176,26 +176,26 @@ Run: `bun test __tests__/memory-governance.unit.test.ts && bun run typecheck`
 - Modify: `src/agent/RecallContextFormatter.ts`
 - Test: `__tests__/context-cortex-v1.unit.test.ts`
 
-- [ ] RED-test greeting suppression, same-topic continuation, new-topic isolation, source drill-down, conflict surfacing, privacy suppression, and hard token budgets.
-- [ ] Compose existing intent, activation, bridge, session-state, graph, belief, and source components into one explainable activation plan.
-- [ ] Use `immediate`, `working`, `background`, and `source` bands; suppression is an audit receipt, never injected content.
-- [ ] Cap Cogmem at 25% of available context; source drill-down replaces lower bands rather than adding beyond the cap.
-- [ ] Set version `3.2.0`, schema `19`; update plugin/skill docs, verify, commit, and push `codex/brain-3.2.0`.
+- [x] RED-test greeting suppression, same-topic continuation, new-topic isolation, source drill-down, conflict surfacing, privacy suppression, and hard token budgets.
+- [x] Compose existing intent, activation, bridge, session-state, graph, belief, and source components into one explainable activation plan.
+- [x] Use `immediate`, `working`, `background`, and `source` bands; suppression is an audit receipt, never injected content.
+- [x] Cap Cogmem at 25% of available context; source drill-down replaces lower bands rather than adding beyond the cap.
+- [x] Set version `3.2.0`, schema `19`; update plugin/skill docs, verify, commit, and push `codex/brain-3.2.0`.
 
 ### Task 9: 3.3.0 prospective memory v1
 
 **Files:**
-- Create: `src/prospective/ProspectiveMemoryStore.ts`
+- Changed: prospective persistence is kept inside `ProspectiveMemoryService` because it is a single-table transactional boundary; a one-consumer store wrapper would not add isolation.
 - Create: `src/prospective/ProspectiveMemoryService.ts`
 - Create: `src/migrations/0020_prospective_memory.ts`
 - Modify: `src/governance/MemoryGovernanceExecutor.ts`
 - Modify: `src/mcp/CoreMcpTools.ts`
 - Test: `__tests__/prospective-memory-v1.unit.test.ts`
 
-- [ ] RED-test candidate creation, explicit confirmation, defer, reject, expiry, privacy, project isolation, and non-execution.
-- [ ] Store future intentions as candidates only; Cogmem core must expose no external-action executor.
-- [ ] Rejected/deferred candidates must not repeatedly surface unless new user evidence changes their version.
-- [ ] Set version `3.3.0`, schema `20`; update all docs and host skills, verify, commit, and push `codex/brain-3.3.0`.
+- [x] RED-test candidate creation, explicit confirmation, defer, reject, expiry, privacy, project isolation, and non-execution.
+- [x] Store future intentions as candidates only; Cogmem core must expose no external-action executor.
+- [x] Rejected/deferred candidates must not repeatedly surface unless new user evidence changes their version.
+- [x] Set version `3.3.0`, schema `20`; update all docs and host skills, verify, commit, and push `codex/brain-3.3.0`.
 
 ### Task 10: BrainEval and final adversarial verification
 
@@ -204,10 +204,10 @@ Run: `bun test __tests__/memory-governance.unit.test.ts && bun run typecheck`
 - Create: `__tests__/brain-eval.integration.test.ts`
 - Modify: `BENCHMARKS.md`
 
-- [ ] Add binding purity, entity false-merge, belief ownership, temporal current-truth, context pollution, source fidelity, and prospective false-positive metrics.
-- [ ] Replay anonymized multilingual fixtures, vectors=0 mode, old schema migration, concurrent maintenance, current-session exclusion, and `forgetUser` erasure.
-- [ ] Run full tests, typecheck, build, package dry-run, CLI smoke, MCP tool listing, and migration replay from 2.7.1.
-- [ ] Inspect the complete diff and run an adversarial review; fix every confirmed issue and repeat verification until no known release-blocking defect remains.
+- [x] Add binding purity, entity false-merge, belief ownership, temporal current-truth, context pollution, source fidelity, and prospective false-positive metrics.
+- [x] Replay anonymized multilingual fixtures, vectors=0 mode, old schema migration, concurrent maintenance, current-session exclusion, and `forgetUser` erasure.
+- [x] Run full tests, typecheck, build, package dry-run, CLI smoke, MCP tool listing, and migration replay from 2.7.1.
+- [x] Inspect the complete diff and run an adversarial review; fix every confirmed issue and repeat verification until no known release-blocking defect remains.
 
 ## Self-review
 

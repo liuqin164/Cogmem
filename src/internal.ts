@@ -54,6 +54,8 @@ export * from './engine/EntityResolutionEngine.js';
 export * from './entity/index.js';
 export * from './temporal/index.js';
 export * from './context/index.js';
+export * from './prospective/index.js';
+export * from './benchmark/BrainEval.js';
 export * from './engine/EvolutionVerifier.js';
 export * from './engine/LocalSemanticCompiler.js';
 export * from './engine/MemoryGate.js';

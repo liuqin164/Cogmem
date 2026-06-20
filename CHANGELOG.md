@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.3.0
+
+- Added confirmed-only Prospective Memory for intentions, commitments, reminders, open loops, and plans. Rejected items require new evidence to create a new version, and no execution/dispatch API exists.
+- Added `cogmem prospective` candidate-state CLI and `cogmem brain-eval` safety/quality release gate.
+- Added `cogmem_prospective` MCP state management with explicit project boundaries and distinct user confirmation evidence; it exposes no execution path.
+- Added BrainEval metrics for recall, precision, provenance, budget compliance, stale/cross-project leakage, and unconfirmed prospective activation.
+- Added schema migration 20 and completed the 2.8.0-3.3.0 cumulative migration path.
+- Made migration backups transaction-consistent and WAL-aware through SQLite's native backup path.
+- Extended `forgetUser(projectId)` across governance, entity, belief, temporal, context-receipt, and prospective projections, including shared canonical-alias rebuilding.
+- Changed `cogmem update` to fail closed when GitHub has no latest-release metadata instead of silently installing mutable `main`.
+
 ## 3.2.0
 
 - Added Context Cortex intent, safety suppression, layer activation, source-first drill-down, and a 25% default/30% maximum memory budget.

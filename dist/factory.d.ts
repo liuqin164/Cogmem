@@ -19,6 +19,7 @@ import { MemoryGovernanceExecutor, type MemoryGovernanceExecutionResult, type Me
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
+import { ProspectiveMemoryService } from './prospective/index.js';
 import { type EnvLike } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
 import type { Embedder } from './store/Embedder.js';
@@ -315,6 +316,8 @@ export interface ForgetUserResult {
         vectors: number;
         activations: number;
         memoryBindings: number;
+        brainProjections: number;
+        entityRecords: number;
     };
 }
 export interface GovernanceAuditRecord {
@@ -336,6 +339,7 @@ export declare class MemoryKernel {
     readonly beliefGovernanceService: BeliefGovernanceService;
     readonly temporalMemoryService: TemporalMemoryService;
     readonly contextCortex: ContextCortex;
+    readonly prospectiveMemoryService: ProspectiveMemoryService;
     readonly cursorStore: IngestionCursorStore;
     readonly vectorStore: IVectorStore;
     readonly topicRegistry: TopicRegistry;

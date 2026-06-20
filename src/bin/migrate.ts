@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import Database from 'bun:sqlite';
-import { copyFileSync, existsSync } from 'node:fs';
+import { existsSync, renameSync, rmSync } from 'node:fs';
 
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { ALL_MIGRATIONS, SchemaMigrationRunner } from '../migrations/index.js';
@@ -45,21 +45,29 @@ function resolveDbPath(args: MigrateArgs): string {
   return loaded.options.dbPath;
 }
 
-function backupDatabase(dbPath: string): string | undefined {
-  if (dbPath === ':memory:' || !existsSync(dbPath)) return undefined;
+function backupDatabase(db: Database, dbPath: string): string | undefined {
+  if (dbPath === ':memory:') return undefined;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupPath = `${dbPath}.pre-migrate-${stamp}.bak`;
-  copyFileSync(dbPath, backupPath);
-  return backupPath;
+  const temporaryPath = `${backupPath}.tmp`;
+  try {
+    // VACUUM INTO includes committed WAL pages and produces a standalone backup.
+    db.prepare('VACUUM INTO ?').run(temporaryPath);
+    renameSync(temporaryPath, backupPath);
+    return backupPath;
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const dbPath = resolveDbPath(args);
-  const backupPath = !args.dryRun && args.backup ? backupDatabase(dbPath) : undefined;
+  const shouldBackup = !args.dryRun && args.backup && dbPath !== ':memory:' && existsSync(dbPath);
   const db = new Database(dbPath);
   db.exec('PRAGMA busy_timeout = 5000;');
   try {
+    const backupPath = shouldBackup ? backupDatabase(db, dbPath) : undefined;
     const runner = new SchemaMigrationRunner(db, ALL_MIGRATIONS);
     const result = runner.run({ dryRun: args.dryRun });
     if (!args.dryRun) {
