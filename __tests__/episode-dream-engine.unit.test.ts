@@ -22,10 +22,10 @@ test('turn relation classifier separates continuation, correction, closure, and 
   expect(classifyTurnRelation('不对，我的意思是只在空闲时整理').relation).toBe('corrects_previous');
   expect(classifyTurnRelation('按这个方案做，就这样').relation).toBe('closes_episode');
   expect(classifyTurnRelation('谢谢').relation).toBe('noise');
-  expect(classifyTurnRelation('换个话题，我们讨论 Hermes 导入。').relation).toBe('switches_topic');
+  expect(classifyTurnRelation('换个话题，我们讨论 Hermes 导入。').relation).toBe('ambiguous_shift');
 });
 
-test('explicit topic switch seals the previous episode and noise stays raw without becoming unassigned work', async () => {
+test('ambiguous same-domain topic switch soft-seals the previous episode and noise stays raw without becoming unassigned work', async () => {
   const { dir, kernel, backend } = createTestKernel('cogmem-episode-switch-');
   try {
     await backend.rememberTurnWithResult({
@@ -38,10 +38,10 @@ test('explicit topic switch seals the previous episode and noise stays raw witho
     });
     const episodes = kernel.listEpisodes({ projectId: 'brain' });
     expect(episodes).toHaveLength(2);
-    expect(episodes.map((episode) => episode.status).sort()).toEqual(['open', 'sealed']);
-    const sealed = episodes.find((episode) => episode.status === 'sealed')!;
+    expect(episodes.map((episode) => episode.status).sort()).toEqual(['open', 'soft_sealed']);
+    const sealed = episodes.find((episode) => episode.status === 'soft_sealed')!;
     expect(kernel.listEpisodeClosureReceipts({ episodeId: sealed.episodeId })).toEqual([
-      expect.objectContaining({ closureReason: 'explicit_topic_switch' }),
+      expect.objectContaining({ closureReason: 'ambiguous_topic_shift', requiresReview: true }),
     ]);
 
     const beforeNoiseLinks = episodes.reduce((total, episode) => total + kernel.listEpisodeEventLinks(episode.episodeId).length, 0);
@@ -240,7 +240,7 @@ test('auto scheduler selects normal for a batch, explicit deep is preserved, and
   }
 });
 
-test('expired Dream leases stop processing at the attempt limit and remain manually retryable', async () => {
+test('expired Dream leases stop processing at the attempt limit and become terminal', async () => {
   const db = new Database(':memory:');
   const store = new EpisodeStore(db);
   const scheduler = new DreamScheduler(store, { run: async () => ({ candidates: [] }) } as never);
@@ -255,8 +255,11 @@ test('expired Dream leases stop processing at the attempt limit and remain manua
 
     expect(await scheduler.tick({ projectId: 'brain', now: 300, maxAttempts: 1 })).toEqual(expect.objectContaining({ skipped: true }));
     expect(store.getDreamStatus('brain')).toEqual(expect.objectContaining({ processing: 0, failed: 1 }));
-    expect(store.retryFailed('brain')).toBe(1);
-    expect(await scheduler.tick({ projectId: 'brain', now: 400, maxAttempts: 1 })).toEqual(expect.objectContaining({ processedEpisodeCount: 1 }));
+    expect(store.getEpisode(episode.episodeId)).toEqual(expect.objectContaining({
+      dreamStatus: 'failed', dreamError: 'dream_lease_expired_at_attempt_limit',
+    }));
+    expect(store.retryFailed('brain')).toBe(0);
+    expect(await scheduler.tick({ projectId: 'brain', now: 400, maxAttempts: 1 })).toEqual(expect.objectContaining({ skipped: true }));
   } finally {
     db.close();
   }
@@ -437,8 +440,14 @@ test('episode import CLI is idempotent and dream CLI processes its batch-sealed 
     const common = ['import', '--db', dbPath, '--project', 'hermes', '--session', 's1', '--source-agent', 'hermes', '--file', inputPath, '--seal-batch', '--json'];
     expect(await run('src/bin/episode.ts', common)).toEqual(expect.objectContaining({ imported: 2, duplicates: 0, dreamRan: false }));
     expect(await run('src/bin/episode.ts', common)).toEqual(expect.objectContaining({ imported: 0, duplicates: 2, dreamRan: false }));
+    writeFileSync(inputPath, [
+      JSON.stringify({ role: 'system', text: 'inserted before the prior messages', timestamp: 999 }),
+      JSON.stringify({ role: 'user', text: '请以后记住 episode 必须引用原始事件。', timestamp: 1000 }),
+      JSON.stringify({ role: 'assistant', text: '候选会保留 raw event ids。', timestamp: 1001 }),
+    ].join('\n'));
+    expect(await run('src/bin/episode.ts', common)).toEqual(expect.objectContaining({ imported: 1, duplicates: 2, dreamRan: false }));
     const dreamed = await run('src/bin/dream.ts', ['tick', '--db', dbPath, '--project', 'hermes', '--json']);
-    expect(dreamed).toEqual(expect.objectContaining({ processedEpisodeCount: 1, skipped: false }));
+    expect(dreamed).toEqual(expect.objectContaining({ processedEpisodeCount: 2, skipped: false }));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

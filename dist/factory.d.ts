@@ -481,8 +481,10 @@ export declare class MemoryKernel {
         projectId: string;
         sessionId: string;
         sourceAgent?: string;
+        conversationThreadId?: string;
         now?: number;
         batchSeal?: boolean;
+        forceBatchSeal?: boolean;
     }): import("./episode/EpisodeAssembler.js").EpisodeAssemblyResult;
     appendRawEventToEpisode(event: MemoryEvent, input: {
         projectId: string;
@@ -498,6 +500,11 @@ export declare class MemoryKernel {
     sealEpisode(episodeId: string, input: {
         mode: EpisodeClosureMode;
         reason: string;
+        now?: number;
+    }): EpisodeClosureReceipt;
+    sealImportedEpisode(episodeId: string, input: {
+        reason: string;
+        force?: boolean;
         now?: number;
     }): EpisodeClosureReceipt;
     sealIdleEpisodes(input: {

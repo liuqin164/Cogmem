@@ -9,6 +9,7 @@ import type { ModelRegistry } from '../models/ModelRegistry.js';
 import type { TextGenerateFn } from '../models/ModelRole.js';
 import type { PipelineMetrics } from './PipelineMetrics.js';
 import type { MemoryEvent } from '../types/index.js';
+import type { EpisodeSemanticSummary, EpisodeType } from '../episode/EpisodeTypes.js';
 
 export interface DreamCuratorRunOptions {
   projectId?: string;
@@ -19,6 +20,13 @@ export interface DreamCuratorRunOptions {
   /** Internal episode path: process only these authoritative raw events. */
   eventIds?: string[];
   sourceEpisodeId?: string;
+  sourceEpisodeEventIds?: string[];
+  dreamMode?: 'micro' | 'normal' | 'deep';
+  maxCandidates?: number;
+  episodeType?: EpisodeType;
+  closureReason?: string;
+  semanticSummary?: EpisodeSemanticSummary;
+  episodeRelations?: Array<{ eventId: string; relation: string }>;
 }
 
 export interface DreamCuratorRunResult {
@@ -106,12 +114,28 @@ export class DreamCuratorWorker {
     const now = options.now ?? Date.now();
     const maxGlobalSeq = Math.max(...events.map((event) => event.globalSeq || 0));
     const dreamableEvents = events.filter((event) => this.isDreamableEvent(event));
-    const candidateInputs = (await this.buildCandidates(dreamableEvents, options, now)).map((candidate) => ({
-      ...candidate,
-      content: options.sourceEpisodeId
-        ? { ...objectRecord(candidate.content), sourceEpisodeId: options.sourceEpisodeId, evidenceAuthority: 'raw_event_ids_only' }
-        : candidate.content,
-    }));
+    const allowedEvidence = new Set(options.sourceEpisodeEventIds || events.map((event) => event.eventId));
+    const candidateInputs = (await this.buildCandidates(dreamableEvents, options, now))
+      .filter((candidate) => {
+        const evidence = Array.isArray(candidate.evidence) ? candidate.evidence as Array<{ eventId?: unknown }> : [];
+        return evidence.length > 0
+          && evidence.every((item) => typeof item.eventId === 'string' && allowedEvidence.has(item.eventId));
+      })
+      .slice(0, Math.max(1, Math.min(options.maxCandidates ?? 500, 500)))
+      .map((candidate) => ({
+        ...candidate,
+        content: options.sourceEpisodeId
+          ? {
+            ...objectRecord(candidate.content),
+            sourceEpisodeId: options.sourceEpisodeId,
+            evidenceAuthority: 'raw_event_ids_only',
+            evidenceEventIds: (candidate.evidence as Array<{ eventId?: string }>).map((item) => item.eventId).filter(Boolean),
+            dreamMode: options.dreamMode || 'normal',
+            episodeType: options.episodeType,
+            closureReason: options.closureReason,
+          }
+          : candidate.content,
+      }));
     const providerConfig = this.resolveProviderConfig(options);
     const run = this.deps.candidateStore.insertRun({
       projectId: options.projectId,
@@ -119,7 +143,7 @@ export class DreamCuratorWorker {
       sourceNeuronIds: [],
       modelProvider: providerConfig.provider,
       modelName: providerConfig.modelName,
-      mode: `dream_curator_${providerConfig.provider}_${options.mode ?? 'candidate'}_v1`,
+      mode: `dream_curator_${providerConfig.provider}_${options.mode ?? 'candidate'}_${options.dreamMode ?? 'normal'}_v1`,
       promptHash: hash(JSON.stringify(events.map((event) => ({
         eventId: event.eventId,
         globalSeq: event.globalSeq,
@@ -220,10 +244,63 @@ export class DreamCuratorWorker {
             source: 'explicit_user_statement',
             durability: 'event',
             correctionKind: 'user_clarification_or_revision',
+            correctedClaimKey: null,
+            correctedBeliefCandidateIds: [],
+            correctionTargetSearchQuery: truncate(text, 240),
             governance: 'organizational_trace_only',
             risk: 'correction_requires_prior_claim_binding_before_belief_change',
           },
           evidence: [this.toEvidence(event)],
+          createdAt: now,
+        });
+      }
+    }
+
+    if (options.episodeType === 'decision' || options.semanticSummary?.candidateTypes.includes('decision')) {
+      const decisionEvidence = userEvents.length ? userEvents : events;
+      candidates.push({
+        candidateType: 'temporal_fact_update',
+        status,
+        confidence: userEvents.length ? 0.82 : 0.58,
+        content: {
+          projectId: options.projectId,
+          timelineType: 'decision',
+          statement: options.semanticSummary?.decision || summarizeEvents(decisionEvidence),
+          occurredAt: Math.min(...decisionEvidence.map((event) => event.occurredAt)),
+          startSeq: minDefined(decisionEvidence.map((event) => event.globalSeq)),
+          endSeq: maxDefined(decisionEvidence.map((event) => event.globalSeq)),
+          source: userEvents.length ? 'explicit_user_decision_episode' : 'mixed_decision_episode_requires_review',
+          governance: 'candidate_only_cpu_governance_required',
+        },
+        evidence: decisionEvidence.map((event) => this.toEvidence(event)),
+        promotionTargetType: 'temporal_decision',
+        createdAt: now,
+      });
+    }
+
+    const relationByEvent = new Map((options.episodeRelations || []).map((item) => [item.eventId, item.relation]));
+    for (let index = 1; index < events.length; index += 1) {
+      const confirmation = events[index];
+      const proposal = events[index - 1];
+      if (
+        relationByEvent.get(proposal.eventId) === 'assistant_proposal'
+        && relationByEvent.get(confirmation.eventId) === 'accepts_assistant_proposal'
+        && confirmation.role === 'user'
+      ) {
+        candidates.push({
+          candidateType: 'semantic_relation',
+          status,
+          confidence: 0.88,
+          content: {
+            projectId: options.projectId,
+            relation: 'assistant_proposal_confirmed_by_user',
+            proposalEvidenceEventId: proposal.eventId,
+            confirmationEvidenceEventId: confirmation.eventId,
+            evidenceKind: 'assistant_proposal_confirmed_by_user',
+            governance: 'candidate_only_cpu_governance_required',
+          },
+          evidence: [this.toEvidence(proposal), this.toEvidence(confirmation)],
+          promotionTargetType: 'confirmed_proposal_relation',
           createdAt: now,
         });
       }
@@ -289,10 +366,21 @@ export class DreamCuratorWorker {
       '- Do not include markdown.',
       '- Do not expose hidden chain-of-thought.',
       '- Include uncertainty and source limitations inside candidate fields, not as reasoning prose.',
+      '',
+      'Dream mode rules:',
+      '- micro: extract only direct high-value candidates from this episode; do not infer cross-episode conclusions.',
+      '- normal: perform bounded deduplication and conflict hints inside the supplied episode.',
+      '- deep: inspect consistency across all supplied raw events, but never invent or scan evidence outside them.',
     ].join('\n');
 
     const userPrompt = JSON.stringify({
       task: 'Generate candidate-only memory curation output.',
+      dreamMode: options.dreamMode || 'normal',
+      episodeType: options.episodeType,
+      closureReason: options.closureReason,
+      semanticSummaryHint: options.semanticSummary
+        ? { ...options.semanticSummary, evidencePolicy: 'hint_only_not_evidence' }
+        : undefined,
       allowedCandidateBuckets: [
         'userPreferenceCandidates',
         'projectMemoryCandidates',
@@ -330,8 +418,9 @@ export class DreamCuratorWorker {
           'evidenceRoles',
           'sourceLimitations',
         ],
-        evidenceEventIds:
-          'array of exact raw event ids. Use ["all"] only for window-level session/topic summaries, never for user preferences, goals, corrections, or boundaries.',
+        evidenceEventIds: options.sourceEpisodeId
+          ? 'non-empty array of exact raw event ids from this episode. Never use ["all"].'
+          : 'array of exact raw event ids. Use ["all"] only for legacy window-level session/topic summaries, never for user preferences, goals, corrections, or boundaries.',
         sourcePolicy: {
           userOwnedDurableMemory: 'requires at least one explicit user-role evidence event',
           assistantEvidence: 'context only unless confirmed by user',
@@ -361,7 +450,7 @@ export class DreamCuratorWorker {
       return diagnostic ? [diagnostic] : [];
     }
     this.supersedeProviderWarnings(options.projectId);
-    return this.flattenProviderCandidates(parsed, events, now, status);
+    return this.flattenProviderCandidates(parsed, events, now, status, Boolean(options.sourceEpisodeId));
   }
 
   private flattenProviderCandidates(
@@ -369,6 +458,7 @@ export class DreamCuratorWorker {
     events: MemoryEvent[],
     now: number,
     status: 'candidate' | 'shadow',
+    requireExactEvidence = false,
   ): Array<Omit<DeepWriteCandidateInput, 'runId'>> {
     const buckets: Array<[string, string, string]> = [
       ['userPreferenceCandidates', 'user_preference', 'user_preference'],
@@ -398,6 +488,8 @@ export class DreamCuratorWorker {
         const rawEvidenceIds = Array.isArray(record.evidenceEventIds)
           ? record.evidenceEventIds.map((id) => String(id)).filter(Boolean)
           : [];
+
+        if (requireExactEvidence && (rawEvidenceIds.length === 0 || rawEvidenceIds.includes('all'))) continue;
 
         if (isUserOwnedDurableProviderBucket(bucket)) {
           if (rawEvidenceIds.length === 0) continue;
@@ -837,6 +929,16 @@ function isUserOwnedDurableProviderBucket(bucket: string): boolean {
     'boundaryCandidates',
     'failureLessonCandidates',
   ].includes(bucket);
+}
+
+function minDefined(values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((value): value is number => Number.isFinite(value));
+  return defined.length ? Math.min(...defined) : undefined;
+}
+
+function maxDefined(values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((value): value is number => Number.isFinite(value));
+  return defined.length ? Math.max(...defined) : undefined;
 }
 
 function truncate(value: string, maxLength: number): string {

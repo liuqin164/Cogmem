@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
+import type { MemoryEvent } from '../types/index.js';
+import { summarizeEpisode } from './EpisodeSemanticSummarizer.js';
 
 import type {
   EpisodeClosureMode,
+  EpisodeClosureReasonCode,
   EpisodeClosureReceipt,
   EpisodeDreamState,
   EpisodeDreamStatus,
@@ -18,12 +21,18 @@ interface CreateEpisodeInput {
   projectId: string;
   sessionId: string;
   sourceAgent?: string;
+  conversationThreadId?: string;
   topicPath?: string;
   episodeType: EpisodeType;
   importance: number;
   eventId: string;
   globalSeq?: number;
   occurredAt: number;
+  episodeTags?: string[];
+  candidateTypes?: MemoryEpisode['candidateTypes'];
+  importanceSignals?: string[];
+  importanceReason?: string;
+  linkedEpisodeId?: string;
 }
 
 export interface ClaimedEpisodeDreamJob {
@@ -35,7 +44,7 @@ export interface ClaimedEpisodeDreamJob {
 }
 
 export class EpisodeStore {
-  constructor(private readonly db: Database) {
+  constructor(private readonly db: Database, private readonly resolveEvent?: (eventId: string) => MemoryEvent | null | undefined) {
     this.initializeSchema();
   }
 
@@ -43,26 +52,60 @@ export class EpisodeStore {
     const episodeId = `episode-${randomUUID()}`;
     this.db.prepare(`
       INSERT INTO memory_episodes (
-        episode_id, project_id, session_id, source_agent, topic_path, episode_type, status,
+        episode_id, project_id, session_id, source_agent, conversation_thread_id, topic_path, episode_type, status,
         importance, start_event_id, end_event_id, start_seq, end_seq, event_count,
-        started_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, ?, ?)
+        started_at, updated_at, episode_tags_json, candidate_types_json, importance_signals_json,
+        importance_reason, linked_episode_id, dream_status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, 'none')
     `).run(
-      episodeId, input.projectId, input.sessionId, input.sourceAgent || null, input.topicPath || null,
+      episodeId, input.projectId, input.sessionId, input.sourceAgent || null, input.conversationThreadId || null, input.topicPath || null,
       input.episodeType, input.importance, input.eventId, input.eventId,
       input.globalSeq ?? null, input.globalSeq ?? null, input.occurredAt, input.occurredAt,
+      JSON.stringify(input.episodeTags || []), JSON.stringify(input.candidateTypes || []),
+      JSON.stringify(input.importanceSignals || []), input.importanceReason || null, input.linkedEpisodeId || null,
     );
     return this.getEpisode(episodeId)!;
   }
 
-  findActiveEpisode(projectId: string, sessionId: string): MemoryEpisode | undefined {
-    const row = this.db.prepare(`
+  findActiveEpisode(projectId: string, sessionId: string, sourceAgent?: string, conversationThreadId?: string): MemoryEpisode | undefined {
+    const exact = this.findActiveEpisodeRow(projectId, sessionId, sourceAgent, conversationThreadId);
+    if (exact) return mapEpisode(exact);
+
+    // Episodes created before source/thread scoping have both fields unset. Reuse
+    // only that legacy shape so an upgrade does not split an in-flight episode or
+    // merge modern episodes that already carry explicit ownership metadata.
+    if (!sourceAgent && !conversationThreadId) return undefined;
+    const legacy = this.db.prepare(`
       SELECT * FROM memory_episodes
       WHERE project_id = ? AND session_id = ? AND status IN ('open', 'soft_sealed')
-      ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC
-      LIMIT 1
+        AND source_agent IS NULL AND conversation_thread_id IS NULL
+      ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC LIMIT 1
     `).get(projectId, sessionId) as EpisodeRow | null;
-    return row ? mapEpisode(row) : undefined;
+    return legacy ? mapEpisode(legacy) : undefined;
+  }
+
+  private findActiveEpisodeRow(projectId: string, sessionId: string, sourceAgent?: string, conversationThreadId?: string): EpisodeRow | null {
+    const where = [`project_id = ?`, `session_id = ?`, `status IN ('open', 'soft_sealed')`];
+    const params: Array<string> = [projectId, sessionId];
+    if (sourceAgent) { where.push('source_agent = ?'); params.push(sourceAgent); }
+    if (conversationThreadId) { where.push('conversation_thread_id = ?'); params.push(conversationThreadId); }
+    return this.db.prepare(`
+      SELECT * FROM memory_episodes WHERE ${where.join(' AND ')}
+      ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC LIMIT 1
+    `).get(...params) as EpisodeRow | null;
+  }
+
+  claimLegacyEpisodeScope(episodeId: string, sourceAgent?: string, conversationThreadId?: string): MemoryEpisode | undefined {
+    if (!sourceAgent && !conversationThreadId) return this.getEpisode(episodeId);
+    this.db.prepare(`
+      UPDATE memory_episodes SET source_agent = ?, conversation_thread_id = ?
+      WHERE episode_id = ? AND source_agent IS NULL AND conversation_thread_id IS NULL
+    `).run(sourceAgent || null, conversationThreadId || null, episodeId);
+    const episode = this.getEpisode(episodeId);
+    if (!episode) return undefined;
+    if (sourceAgent && episode.sourceAgent !== sourceAgent) return undefined;
+    if (conversationThreadId && episode.conversationThreadId !== conversationThreadId) return undefined;
+    return episode;
   }
 
   getEpisode(episodeId: string): MemoryEpisode | undefined {
@@ -96,6 +139,9 @@ export class EpisodeStore {
     episodeType?: EpisodeType;
     importance?: number;
     summaryText?: string;
+    candidateTypes?: MemoryEpisode['candidateTypes'];
+    importanceSignals?: string[];
+    importanceReason?: string;
   }): EpisodeEventLink {
     const existing = this.getEventLink(input.eventId);
     if (existing) return existing;
@@ -107,16 +153,20 @@ export class EpisodeStore {
         INSERT INTO memory_episode_events (episode_id, event_id, position, relation, confidence, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(input.episodeId, input.eventId, position, input.relation, input.confidence, input.occurredAt);
+      const candidateTypes = [...new Set([...episode.candidateTypes, ...(input.candidateTypes || [])])];
+      const importanceSignals = [...new Set([...episode.importanceSignals, ...(input.importanceSignals || [])])];
       this.db.prepare(`
         UPDATE memory_episodes SET
           end_event_id = ?, end_seq = COALESCE(?, end_seq), event_count = ?, updated_at = ?,
           episode_type = COALESCE(?, episode_type), importance = MAX(importance, ?),
-          summary = CASE WHEN ? IS NULL OR ? = '' THEN summary ELSE SUBSTR(COALESCE(summary || '\n', '') || ?, 1, 1600) END
+          summary = CASE WHEN ? IS NULL OR ? = '' THEN summary ELSE SUBSTR(COALESCE(summary || '\n', '') || ?, 1, 1600) END,
+          candidate_types_json = ?, importance_signals_json = ?, importance_reason = COALESCE(?, importance_reason)
         WHERE episode_id = ?
       `).run(
         input.eventId, input.globalSeq ?? null, position, input.occurredAt,
         input.episodeType || null, input.importance ?? episode.importance,
-        input.summaryText || null, input.summaryText || '', input.summaryText || '', input.episodeId,
+        input.summaryText || null, input.summaryText || '', input.summaryText || '',
+        JSON.stringify(candidateTypes), JSON.stringify(importanceSignals), input.importanceReason || null, input.episodeId,
       );
     })();
     return { episodeId: input.episodeId, eventId: input.eventId, position, relation: input.relation, confidence: input.confidence, createdAt: input.occurredAt };
@@ -135,15 +185,25 @@ export class EpisodeStore {
 
   reopenSoftEpisode(episodeId: string, now: number): MemoryEpisode {
     const result = this.db.prepare(`
-      UPDATE memory_episodes SET status = 'open', sealed_at = NULL, updated_at = ?
+      UPDATE memory_episodes SET status = 'open', sealed_at = NULL, updated_at = ?, dream_status = 'none', dream_error = NULL
       WHERE episode_id = ? AND status = 'soft_sealed'
     `).run(now, episodeId);
     if (!result.changes) throw new Error(`episode_not_soft_sealed:${episodeId}`);
-    this.db.prepare(`DELETE FROM episode_dream_jobs WHERE episode_id = ? AND state IN ('pending', 'failed')`).run(episodeId);
+    this.db.prepare(`DELETE FROM episode_dream_jobs WHERE episode_id = ? AND state IN ('pending', 'failed_retryable', 'retry_scheduled')`).run(episodeId);
     return this.getEpisode(episodeId)!;
   }
 
-  sealEpisode(episodeId: string, input: { mode: EpisodeClosureMode; reason: string; now?: number }): EpisodeClosureReceipt {
+  sealEpisode(episodeId: string, input: {
+    mode: EpisodeClosureMode;
+    reason: string;
+    reasonCode?: EpisodeClosureReasonCode;
+    reasonDetail?: string;
+    requiresReview?: boolean;
+    semanticSummary?: MemoryEpisode['semanticSummary'];
+    ignoredNearbyEventIds?: string[];
+    unassignedNearbyEventIds?: string[];
+    now?: number;
+  }): EpisodeClosureReceipt {
     const now = input.now ?? Date.now();
     const episode = this.getEpisode(episodeId);
     if (!episode) throw new Error(`episode_not_found:${episodeId}`);
@@ -153,6 +213,11 @@ export class EpisodeStore {
       if (existing) return existing;
     }
     const links = this.listEventLinks(episodeId);
+    const semanticSummary = input.semanticSummary || summarizeEpisode(
+      episode,
+      links.map((link) => this.resolveEvent?.(link.eventId)).filter((event): event is MemoryEvent => Boolean(event)),
+      links.map((link) => link.eventId),
+    );
     const dreamMode = episode.importance >= 0.8 || ['decision', 'correction', 'preference', 'goal', 'prospective'].includes(episode.episodeType)
       ? 'micro' as const : 'normal' as const;
     const receipt: EpisodeClosureReceipt = {
@@ -161,6 +226,8 @@ export class EpisodeStore {
       projectId: episode.projectId,
       closureMode: input.mode,
       closureReason: input.reason,
+      closureReasonCode: input.reasonCode || normalizeClosureReasonCode(input.reason, input.mode),
+      closureReasonDetail: input.reasonDetail || input.reason,
       sourceEventIds: links.map((link) => link.eventId),
       startSeq: episode.startSeq,
       endSeq: episode.endSeq,
@@ -169,23 +236,32 @@ export class EpisodeStore {
       importance: episode.importance,
       dreamRecommended: links.length > 0,
       dreamMode,
+      requiresReview: input.requiresReview === true,
+      ignoredNearbyEventIds: input.ignoredNearbyEventIds || [],
+      unassignedNearbyEventIds: input.unassignedNearbyEventIds || [],
       createdAt: now,
     };
     this.db.transaction(() => {
-      this.db.prepare(`UPDATE memory_episodes SET status = ?, sealed_at = ?, updated_at = ? WHERE episode_id = ?`)
-        .run(status, now, now, episodeId);
+      this.db.prepare(`
+        UPDATE memory_episodes SET status = ?, sealed_at = ?, updated_at = ?,
+          semantic_summary_json = COALESCE(?, semantic_summary_json)
+        WHERE episode_id = ?
+      `).run(status, now, now, JSON.stringify(semanticSummary), episodeId);
       this.db.prepare(`
         INSERT INTO episode_closure_receipts (
           receipt_id, episode_id, project_id, closure_mode, closure_reason, source_event_ids_json,
-          start_seq, end_seq, topic_path, episode_type, importance, dream_recommended, dream_mode, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          start_seq, end_seq, topic_path, episode_type, importance, dream_recommended, dream_mode, created_at,
+          closure_reason_code, closure_reason_detail, requires_review,
+          ignored_nearby_event_ids_json, unassigned_nearby_event_ids_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         receipt.receiptId, episodeId, episode.projectId, input.mode, input.reason,
         JSON.stringify(receipt.sourceEventIds), receipt.startSeq ?? null, receipt.endSeq ?? null,
         receipt.topicPath || null, receipt.episodeType, receipt.importance, receipt.dreamRecommended ? 1 : 0,
-        receipt.dreamMode, now,
+        receipt.dreamMode, now, receipt.closureReasonCode, receipt.closureReasonDetail || null,
+        receipt.requiresReview ? 1 : 0, JSON.stringify(receipt.ignoredNearbyEventIds), JSON.stringify(receipt.unassignedNearbyEventIds),
       );
-      if (status === 'sealed' && receipt.dreamRecommended) this.enqueueDreamJob(episode, dreamMode, now);
+      if (status === 'sealed' && receipt.dreamRecommended && !receipt.requiresReview) this.enqueueDreamJob(episode, dreamMode, now);
     })();
     return receipt;
   }
@@ -216,17 +292,41 @@ export class EpisodeStore {
     return episodes.length;
   }
 
-  claimDreamJobs(input: { projectId?: string; limit: number; now: number; leaseMs: number; maxAttempts: number }): ClaimedEpisodeDreamJob[] {
+  claimDreamJobs(input: { projectId?: string; limit: number; now: number; leaseMs: number; maxAttempts: number; runId?: string }): ClaimedEpisodeDreamJob[] {
     this.db.prepare(`
-      UPDATE episode_dream_jobs SET state = 'failed', lease_id = NULL, lease_until = NULL,
+      UPDATE episode_dream_jobs SET state = 'failed_terminal', lease_id = NULL, lease_until = NULL,
+        failure_category = 'lease_attempt_limit',
         last_error = COALESCE(last_error, 'dream_lease_expired_at_attempt_limit'), updated_at = ?
       WHERE state = 'processing' AND lease_until IS NOT NULL AND lease_until < ? AND attempts >= ?
     `).run(input.now, input.now, input.maxAttempts);
     this.db.prepare(`
-      UPDATE episode_dream_jobs SET state = 'pending', lease_id = NULL, lease_until = NULL, updated_at = ?
+      UPDATE memory_episodes SET dream_status = 'failed', dream_error = 'dream_lease_expired_at_attempt_limit'
+      WHERE episode_id IN (
+        SELECT episode_id FROM episode_dream_jobs
+        WHERE state = 'failed_terminal' AND failure_category = 'lease_attempt_limit' AND updated_at = ?
+      )
+    `).run(input.now);
+    this.db.prepare(`
+      UPDATE episode_dream_jobs SET state = 'failed_retryable', retry_after = ?, lease_id = NULL, lease_until = NULL,
+        failure_category = 'lease_expired', last_error = COALESCE(last_error, 'dream_lease_expired'), updated_at = ?
       WHERE state = 'processing' AND lease_until IS NOT NULL AND lease_until < ? AND attempts < ?
+    `).run(input.now + retryDelayMs(1), input.now, input.now, input.maxAttempts);
+    this.db.prepare(`
+      UPDATE memory_episodes SET dream_status = 'failed', dream_error = 'dream_lease_expired'
+      WHERE episode_id IN (
+        SELECT episode_id FROM episode_dream_jobs
+        WHERE state = 'failed_retryable' AND failure_category = 'lease_expired' AND updated_at = ?
+      )
+    `).run(input.now);
+    this.db.prepare(`
+      UPDATE episode_dream_jobs SET state = 'retry_scheduled', updated_at = ?
+      WHERE state = 'failed_retryable' AND retry_after IS NOT NULL AND retry_after <= ? AND attempts < ?
     `).run(input.now, input.now, input.maxAttempts);
-    const where = [`state IN ('pending', 'failed')`, 'attempts < ?'];
+    this.db.prepare(`
+      UPDATE memory_episodes SET dream_status = 'queued', dream_error = NULL
+      WHERE episode_id IN (SELECT episode_id FROM episode_dream_jobs WHERE state = 'retry_scheduled' AND updated_at = ?)
+    `).run(input.now);
+    const where = [`(state = 'pending' OR (state = 'retry_scheduled' AND attempts < ?))`];
     const params: Array<string | number> = [input.maxAttempts];
     if (input.projectId) { where.push('project_id = ?'); params.push(input.projectId); }
     const rows = this.db.prepare(`
@@ -237,10 +337,17 @@ export class EpisodeStore {
     for (const row of rows) {
       const leaseId = `dream-lease-${randomUUID()}`;
       const result = this.db.prepare(`
-        UPDATE episode_dream_jobs SET state = 'processing', lease_id = ?, lease_until = ?, attempts = attempts + 1, updated_at = ?
-        WHERE episode_id = ? AND state IN ('pending', 'failed')
+        UPDATE episode_dream_jobs SET state = 'processing', lease_id = ?, lease_until = ?, attempts = attempts + 1,
+          retry_after = NULL, updated_at = ?
+        WHERE episode_id = ? AND state IN ('pending', 'retry_scheduled')
       `).run(leaseId, input.now + input.leaseMs, input.now, row.episode_id);
-      if (result.changes) claimed.push({ episodeId: row.episode_id, projectId: row.project_id, leaseId, modeHint: row.mode_hint, attempts: row.attempts + 1 });
+      if (result.changes) {
+        this.db.prepare(`
+          UPDATE memory_episodes SET dream_status = 'processing', last_dream_run_id = ?, dream_error = NULL
+          WHERE episode_id = ?
+        `).run(input.runId || null, row.episode_id);
+        claimed.push({ episodeId: row.episode_id, projectId: row.project_id, leaseId, modeHint: row.mode_hint, attempts: row.attempts + 1 });
+      }
     }
     return claimed;
   }
@@ -248,23 +355,44 @@ export class EpisodeStore {
   completeDreamJob(episodeId: string, leaseId: string, candidateIds: string[], now: number): void {
     const result = this.db.prepare(`
       UPDATE episode_dream_jobs SET state = 'processed', candidate_ids_json = ?, lease_id = NULL,
-        lease_until = NULL, last_error = NULL, updated_at = ?
+        lease_until = NULL, retry_after = NULL, failure_category = NULL, last_error = NULL, updated_at = ?
       WHERE episode_id = ? AND state = 'processing' AND lease_id = ?
     `).run(JSON.stringify(candidateIds), now, episodeId, leaseId);
     if (!result.changes) throw new Error(`episode_dream_lease_lost:${episodeId}`);
+    this.db.prepare(`
+      UPDATE memory_episodes SET dream_status = 'processed', last_dreamed_at = ?,
+        dream_candidate_count = ?, dream_error = NULL WHERE episode_id = ?
+    `).run(now, candidateIds.length, episodeId);
   }
 
-  failDreamJob(episodeId: string, leaseId: string, error: string, now: number): void {
-    this.db.prepare(`
-      UPDATE episode_dream_jobs SET state = 'failed', last_error = ?, lease_id = NULL, lease_until = NULL, updated_at = ?
+  failDreamJob(episodeId: string, leaseId: string, error: string, input: {
+    now: number;
+    failureCategory: string;
+    terminal: boolean;
+    retryAfter?: number;
+  }): void {
+    const state: EpisodeDreamState = input.terminal ? 'failed_terminal' : 'failed_retryable';
+    const result = this.db.prepare(`
+      UPDATE episode_dream_jobs SET state = ?, last_error = ?, failure_category = ?, retry_after = ?,
+        lease_id = NULL, lease_until = NULL, updated_at = ?
       WHERE episode_id = ? AND state = 'processing' AND lease_id = ?
-    `).run(error.slice(0, 2000), now, episodeId, leaseId);
+    `).run(state, error.slice(0, 2000), input.failureCategory, input.retryAfter ?? null, input.now, episodeId, leaseId);
+    if (!result.changes) return;
+    this.db.prepare(`UPDATE memory_episodes SET dream_status = 'failed', dream_error = ? WHERE episode_id = ?`)
+      .run(error.slice(0, 2000), episodeId);
   }
 
   retryFailed(projectId?: string): number {
     const result = projectId
-      ? this.db.prepare(`UPDATE episode_dream_jobs SET state = 'pending', attempts = 0, lease_id = NULL, lease_until = NULL, last_error = NULL, updated_at = ? WHERE project_id = ? AND state = 'failed'`).run(Date.now(), projectId)
-      : this.db.prepare(`UPDATE episode_dream_jobs SET state = 'pending', attempts = 0, lease_id = NULL, lease_until = NULL, last_error = NULL, updated_at = ? WHERE state = 'failed'`).run(Date.now());
+      ? this.db.prepare(`UPDATE episode_dream_jobs SET state = 'pending', retry_after = NULL, lease_id = NULL, lease_until = NULL, updated_at = ? WHERE project_id = ? AND state = 'failed_retryable'`).run(Date.now(), projectId)
+      : this.db.prepare(`UPDATE episode_dream_jobs SET state = 'pending', retry_after = NULL, lease_id = NULL, lease_until = NULL, updated_at = ? WHERE state = 'failed_retryable'`).run(Date.now());
+    if (result.changes) {
+      const where = projectId
+        ? `episode_id IN (SELECT episode_id FROM episode_dream_jobs WHERE project_id = ? AND state = 'pending')`
+        : `episode_id IN (SELECT episode_id FROM episode_dream_jobs WHERE state = 'pending')`;
+      const statement = this.db.prepare(`UPDATE memory_episodes SET dream_status = 'queued', dream_error = NULL WHERE ${where}`);
+      projectId ? statement.run(projectId) : statement.run();
+    }
     return Number(result.changes || 0);
   }
 
@@ -272,8 +400,20 @@ export class EpisodeStore {
     const rows = (projectId
       ? this.db.prepare(`SELECT state, COUNT(*) AS count FROM episode_dream_jobs WHERE project_id = ? GROUP BY state`).all(projectId)
       : this.db.prepare(`SELECT state, COUNT(*) AS count FROM episode_dream_jobs GROUP BY state`).all()) as Array<{ state: EpisodeDreamState; count: number }>;
-    const status: EpisodeDreamStatus = { projectId, pending: 0, processing: 0, processed: 0, failed: 0, skipped: 0 };
-    for (const row of rows) status[row.state] = row.count;
+    const status: EpisodeDreamStatus = {
+      projectId, pending: 0, processing: 0, processed: 0, failed: 0,
+      failedRetryable: 0, failedTerminal: 0, retryScheduled: 0, skipped: 0,
+    };
+    for (const row of rows) {
+      if (row.state === 'failed_retryable') status.failedRetryable = row.count;
+      else if (row.state === 'failed_terminal') status.failedTerminal = row.count;
+      else if (row.state === 'retry_scheduled') status.retryScheduled = row.count;
+      else if (row.state === 'pending') status.pending = row.count;
+      else if (row.state === 'processing') status.processing = row.count;
+      else if (row.state === 'processed') status.processed = row.count;
+      else if (row.state === 'skipped') status.skipped = row.count;
+    }
+    status.failed = status.failedRetryable + status.failedTerminal;
     return status;
   }
 
@@ -365,6 +505,8 @@ export class EpisodeStore {
       VALUES (?, ?, 'pending', ?, ?, ?, ?)
       ON CONFLICT(episode_id) DO NOTHING
     `).run(episode.episodeId, episode.projectId, priority, modeHint, now, now);
+    this.db.prepare(`UPDATE memory_episodes SET dream_status = 'queued', dream_error = NULL WHERE episode_id = ?`)
+      .run(episode.episodeId);
   }
 
   private initializeSchema(): void {
@@ -372,9 +514,13 @@ export class EpisodeStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_episodes (
         episode_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, session_id TEXT NOT NULL, source_agent TEXT,
-        topic_path TEXT, episode_type TEXT NOT NULL, status TEXT NOT NULL, importance REAL NOT NULL,
+        conversation_thread_id TEXT, topic_path TEXT, episode_type TEXT NOT NULL, status TEXT NOT NULL, importance REAL NOT NULL,
         summary TEXT, start_event_id TEXT NOT NULL, end_event_id TEXT NOT NULL, start_seq INTEGER, end_seq INTEGER,
-        event_count INTEGER NOT NULL, started_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sealed_at INTEGER
+        event_count INTEGER NOT NULL, started_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sealed_at INTEGER,
+        semantic_summary_json TEXT, episode_tags_json TEXT NOT NULL DEFAULT '[]', candidate_types_json TEXT NOT NULL DEFAULT '[]',
+        importance_signals_json TEXT NOT NULL DEFAULT '[]', importance_reason TEXT, linked_episode_id TEXT,
+        dream_status TEXT NOT NULL DEFAULT 'none', last_dream_run_id TEXT, last_dreamed_at INTEGER,
+        dream_candidate_count INTEGER NOT NULL DEFAULT 0, dream_error TEXT
       );
       CREATE TABLE IF NOT EXISTS memory_episode_events (
         episode_id TEXT NOT NULL, event_id TEXT NOT NULL UNIQUE, position INTEGER NOT NULL,
@@ -385,12 +531,15 @@ export class EpisodeStore {
         receipt_id TEXT PRIMARY KEY, episode_id TEXT NOT NULL, project_id TEXT NOT NULL, closure_mode TEXT NOT NULL,
         closure_reason TEXT NOT NULL, source_event_ids_json TEXT NOT NULL, start_seq INTEGER, end_seq INTEGER,
         topic_path TEXT, episode_type TEXT NOT NULL, importance REAL NOT NULL, dream_recommended INTEGER NOT NULL,
-        dream_mode TEXT NOT NULL, created_at INTEGER NOT NULL
+        dream_mode TEXT NOT NULL, created_at INTEGER NOT NULL, closure_reason_code TEXT NOT NULL DEFAULT 'manual',
+        closure_reason_detail TEXT, requires_review INTEGER NOT NULL DEFAULT 0,
+        ignored_nearby_event_ids_json TEXT NOT NULL DEFAULT '[]', unassigned_nearby_event_ids_json TEXT NOT NULL DEFAULT '[]'
       );
       CREATE TABLE IF NOT EXISTS episode_dream_jobs (
         episode_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, state TEXT NOT NULL, priority INTEGER NOT NULL,
         mode_hint TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, lease_id TEXT, lease_until INTEGER,
-        last_error TEXT, candidate_ids_json TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        last_error TEXT, retry_after INTEGER, failure_category TEXT,
+        candidate_ids_json TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS episode_dream_runs (
         run_id TEXT PRIMARY KEY, project_id TEXT, requested_mode TEXT NOT NULL, selected_mode TEXT NOT NULL,
@@ -411,8 +560,13 @@ export class EpisodeStore {
 }
 
 interface EpisodeRow {
-  episode_id: string; project_id: string; session_id: string; source_agent?: string | null; topic_path?: string | null;
+  episode_id: string; project_id: string; session_id: string; source_agent?: string | null;
+  conversation_thread_id?: string | null; topic_path?: string | null;
   episode_type: EpisodeType; status: EpisodeStatus; importance: number; summary?: string | null;
+  semantic_summary_json?: string | null; episode_tags_json?: string | null; candidate_types_json?: string | null;
+  importance_signals_json?: string | null; importance_reason?: string | null; linked_episode_id?: string | null;
+  dream_status?: MemoryEpisode['dreamStatus']; last_dream_run_id?: string | null; last_dreamed_at?: number | null;
+  dream_candidate_count?: number; dream_error?: string | null;
   start_event_id: string; end_event_id: string; start_seq?: number | null; end_seq?: number | null;
   event_count: number; started_at: number; updated_at: number; sealed_at?: number | null;
 }
@@ -421,13 +575,22 @@ interface ClosureRow {
   receipt_id: string; episode_id: string; project_id: string; closure_mode: EpisodeClosureMode; closure_reason: string;
   source_event_ids_json: string; start_seq?: number | null; end_seq?: number | null; topic_path?: string | null;
   episode_type: EpisodeType; importance: number; dream_recommended: number; dream_mode: 'micro' | 'normal' | 'deep'; created_at: number;
+  closure_reason_code?: EpisodeClosureReasonCode | null; closure_reason_detail?: string | null; requires_review?: number;
+  ignored_nearby_event_ids_json?: string | null; unassigned_nearby_event_ids_json?: string | null;
 }
 
 function mapEpisode(row: EpisodeRow): MemoryEpisode {
   return {
     episodeId: row.episode_id, projectId: row.project_id, sessionId: row.session_id,
-    sourceAgent: row.source_agent || undefined, topicPath: row.topic_path || undefined,
+    sourceAgent: row.source_agent || undefined, conversationThreadId: row.conversation_thread_id || undefined,
+    topicPath: row.topic_path || undefined,
     episodeType: row.episode_type, status: row.status, importance: row.importance, summary: row.summary || undefined,
+    semanticSummary: parseJson(row.semantic_summary_json, undefined),
+    episodeTags: parseJson(row.episode_tags_json, []), candidateTypes: parseJson(row.candidate_types_json, []),
+    importanceSignals: parseJson(row.importance_signals_json, []), importanceReason: row.importance_reason || undefined,
+    linkedEpisodeId: row.linked_episode_id || undefined, dreamStatus: row.dream_status || 'none',
+    lastDreamRunId: row.last_dream_run_id || undefined, lastDreamedAt: row.last_dreamed_at ?? undefined,
+    dreamCandidateCount: row.dream_candidate_count || 0, dreamError: row.dream_error || undefined,
     startEventId: row.start_event_id, endEventId: row.end_event_id,
     startSeq: row.start_seq ?? undefined, endSeq: row.end_seq ?? undefined, eventCount: row.event_count,
     startedAt: row.started_at, updatedAt: row.updated_at, sealedAt: row.sealed_at ?? undefined,
@@ -440,8 +603,33 @@ function mapClosure(row: ClosureRow): EpisodeClosureReceipt {
   return {
     receiptId: row.receipt_id, episodeId: row.episode_id, projectId: row.project_id,
     closureMode: row.closure_mode, closureReason: row.closure_reason,
+    closureReasonCode: row.closure_reason_code || normalizeClosureReasonCode(row.closure_reason, row.closure_mode),
+    closureReasonDetail: row.closure_reason_detail || undefined,
     sourceEventIds: JSON.parse(row.source_event_ids_json) as string[], startSeq: row.start_seq ?? undefined,
     endSeq: row.end_seq ?? undefined, topicPath: row.topic_path || undefined, episodeType: row.episode_type,
-    importance: row.importance, dreamRecommended: row.dream_recommended === 1, dreamMode: row.dream_mode, createdAt: row.created_at,
+    importance: row.importance, dreamRecommended: row.dream_recommended === 1, dreamMode: row.dream_mode,
+    requiresReview: row.requires_review === 1,
+    ignoredNearbyEventIds: parseJson(row.ignored_nearby_event_ids_json, []),
+    unassignedNearbyEventIds: parseJson(row.unassigned_nearby_event_ids_json, []),
+    createdAt: row.created_at,
   };
+}
+
+function normalizeClosureReasonCode(reason: string, mode: EpisodeClosureMode): EpisodeClosureReasonCode {
+  if (reason.includes('topic_switch')) return 'topic_switch';
+  if (reason.includes('batch')) return 'batch_boundary';
+  if (reason.includes('idle')) return 'idle_timeout';
+  if (reason.includes('soft_seal_stabilized')) return 'soft_seal_stabilized';
+  if (reason.includes('repair')) return 'repair';
+  if (reason.includes('explicit_user_closure')) return 'explicit_user_closure';
+  return mode === 'manual' ? 'manual' : 'manual';
+}
+
+function parseJson<T>(value: string | null | undefined, fallback: T): T {
+  if (!value) return fallback;
+  try { return JSON.parse(value) as T; } catch { return fallback; }
+}
+
+function retryDelayMs(attempts: number): number {
+  return Math.min(60 * 60_000, 30_000 * 2 ** Math.max(0, attempts - 1));
 }

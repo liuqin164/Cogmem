@@ -224,6 +224,18 @@ export class DeepWritePromotionPolicy {
         if (evidenceArray(candidate).length === 0) {
             return this.mark(candidate, 'rejected', { outcome: 'reject', reason: 'missing_evidence' });
         }
+        if (candidate.candidateType === 'correction') {
+            const targetIds = Array.isArray(content.correctedBeliefCandidateIds)
+                ? content.correctedBeliefCandidateIds.filter((value) => typeof value === 'string' && value)
+                : [];
+            const claimKey = stringField(content, ['correctedClaimKey', 'targetClaimKey', 'targetBeliefId']);
+            if (!claimKey && targetIds.length === 0) {
+                return this.mark(candidate, 'needs_confirmation', {
+                    outcome: 'needs_confirmation',
+                    reason: 'orphan_correction_requires_target_review',
+                });
+            }
+        }
         return this.mark(candidate, 'promoted', {
             outcome: 'promote_provisional',
             reason: 'semantic_organization_candidate_accepted',

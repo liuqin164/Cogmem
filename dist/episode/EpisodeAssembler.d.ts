@@ -11,14 +11,17 @@ export interface EpisodeAssemblyResult {
 }
 export declare class EpisodeAssembler {
     private readonly store;
+    private readonly resolveEvent?;
     private readonly softReopenWindowMs;
-    constructor(store: EpisodeStore, softReopenWindowMs?: number);
+    constructor(store: EpisodeStore, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, softReopenWindowMs?: number);
     appendTurn(events: MemoryEvent[], input: {
         projectId: string;
         sessionId: string;
         sourceAgent?: string;
+        conversationThreadId?: string;
         now?: number;
         batchSeal?: boolean;
+        forceBatchSeal?: boolean;
     }): EpisodeAssemblyResult;
     appendEvent(event: MemoryEvent, input: {
         projectId: string;
@@ -26,5 +29,7 @@ export declare class EpisodeAssembler {
         sourceAgent?: string;
         now?: number;
     }): EpisodeAssemblyResult;
+    private classificationContext;
+    private classifyPrimary;
 }
 //# sourceMappingURL=EpisodeAssembler.d.ts.map

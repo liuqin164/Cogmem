@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
 import { KernelAgentMemoryBackend } from '../agent/index.js';
+import { createStableImportIdentityFactory } from '../episode/EpisodeImportIdentity.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, } from '../factory.js';
 import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
 const STRING_SCHEMA = { type: 'string' };
@@ -132,6 +132,7 @@ export function listCogmemMcpTools() {
                     projectId: STRING_SCHEMA, sessionId: STRING_SCHEMA, sourceAgent: STRING_SCHEMA,
                     messages: { type: 'array', items: EPISODE_MESSAGE_SCHEMA, maxItems: 200 },
                     sealBatch: { type: 'boolean' },
+                    forceSeal: { type: 'boolean' },
                 },
                 required: ['projectId', 'sessionId', 'sourceAgent', 'messages'],
             },
@@ -154,9 +155,14 @@ export function listCogmemMcpTools() {
         },
         {
             name: 'cogmem_dream_tick',
-            description: 'Run one explicit conditional Dream tick over sealed episodes only. It creates candidates but does not execute tools or bypass governance.',
+            description: 'Maintenance-only conditional Dream tick over sealed episodes only. Do not call during normal answer generation. Without maintenanceMode=true it returns a recommendation and does not process backlog.',
             inputSchema: {
-                type: 'object', properties: { projectId: STRING_SCHEMA, mode: { type: 'string', enum: ['auto', 'micro', 'normal', 'deep'] }, maxEpisodes: NUMBER_SCHEMA },
+                type: 'object', properties: {
+                    projectId: STRING_SCHEMA,
+                    mode: { type: 'string', enum: ['auto', 'micro', 'normal', 'deep'] },
+                    maxEpisodes: NUMBER_SCHEMA,
+                    maintenanceMode: { type: 'boolean' },
+                },
             },
             annotations: { title: 'Dream Tick', readOnlyHint: false, destructiveHint: false, idempotentHint: false },
         },
@@ -255,18 +261,16 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
             case 'cogmem_episode_import':
                 return episodeImport(opened.kernel, input);
             case 'cogmem_episode_status':
-                return jsonResult({
-                    episodes: opened.kernel.listEpisodes({
-                        projectId: optionalString(input.projectId), sessionId: optionalString(input.sessionId), limit: optionalNumber(input.limit),
-                    }),
-                    dream: opened.kernel.getEpisodeDreamStatus(optionalString(input.projectId)),
-                });
+                return episodeStatus(opened.kernel, input);
             case 'cogmem_episode_seal':
                 return jsonResult(opened.kernel.sealEpisode(requiredString(input.episodeId, 'episodeId'), {
                     mode: optionalEpisodeClosureMode(input.mode),
                     reason: optionalString(input.reason) || 'mcp_manual_seal',
                 }));
             case 'cogmem_dream_tick':
+                if (input.maintenanceMode !== true) {
+                    return jsonResult(dreamRecommendation(opened.kernel, optionalString(input.projectId), optionalDreamMode(input.mode)));
+                }
                 return jsonResult(await opened.kernel.runDreamTick({
                     projectId: optionalString(input.projectId), mode: optionalDreamMode(input.mode), maxEpisodes: optionalNumber(input.maxEpisodes),
                 }));
@@ -292,8 +296,8 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
 }
 function episodeAppend(kernel, input) {
     const text = requiredString(input.text, 'text');
-    if (text.length > 64_000)
-        throw new Error('text exceeds the 64000 character MCP episode limit');
+    if (text.length > 16_000)
+        throw new Error('text exceeds the 16000 character MCP episode limit');
     return jsonResult(kernel.appendEpisodeMessage({
         projectId: requiredString(input.projectId, 'projectId'),
         sessionId: requiredString(input.sessionId, 'sessionId'),
@@ -310,6 +314,7 @@ function episodeImport(kernel, input) {
     const projectId = requiredString(input.projectId, 'projectId');
     const sessionId = requiredString(input.sessionId, 'sessionId');
     const sourceAgent = requiredString(input.sourceAgent, 'sourceAgent');
+    const stableIdentity = createStableImportIdentityFactory(sourceAgent, sessionId);
     let totalChars = 0;
     const messages = input.messages.map((value, index) => {
         if (!value || typeof value !== 'object')
@@ -317,20 +322,20 @@ function episodeImport(kernel, input) {
         const message = value;
         const text = requiredString(message.text, `messages[${index}].text`);
         totalChars += text.length;
-        if (text.length > 64_000 || totalChars > 1_000_000)
+        if (text.length > 16_000 || totalChars > 1_000_000)
             throw new Error('episode import exceeds bounded text limits');
         const role = requiredEpisodeRole(message.role);
         const timestamp = optionalNumber(message.timestamp);
         return {
             role, text, timestamp,
             externalMessageId: optionalString(message.externalMessageId)
-                || stableImportMessageId(sessionId, role, text, timestamp, index),
+                || stableIdentity({ role, text, timestamp }),
         };
     });
     const results = messages.map((message) => kernel.appendEpisodeMessage({ projectId, sessionId, sourceAgent, ...message }));
     const episodeIds = [...new Set(results.map((result) => result.episodeId).filter((id) => Boolean(id)))];
     const receipts = input.sealBatch === true
-        ? episodeIds.map((episodeId) => kernel.sealEpisode(episodeId, { mode: 'batch', reason: 'mcp_batch_boundary' }))
+        ? episodeIds.map((episodeId) => kernel.sealImportedEpisode(episodeId, { reason: 'mcp_batch_boundary', force: input.forceSeal === true }))
         : [];
     return jsonResult({
         imported: results.filter((result) => result.created).length,
@@ -341,8 +346,45 @@ function episodeImport(kernel, input) {
         closureReceipts: receipts, dreamRan: false,
     });
 }
-function stableImportMessageId(sessionId, role, text, timestamp, index) {
-    return `import-${createHash('sha256').update(JSON.stringify([sessionId, role, timestamp ?? null, index, text])).digest('hex')}`;
+function episodeStatus(kernel, input) {
+    const projectId = optionalString(input.projectId);
+    const episodes = kernel.listEpisodes({
+        projectId, sessionId: optionalString(input.sessionId), limit: optionalNumber(input.limit),
+    });
+    const dream = kernel.getEpisodeDreamStatus(projectId);
+    const dreamBacklogAvailable = dream.pending + dream.retryScheduled + dream.processing > 0;
+    const failedDreamAvailable = dream.failedRetryable + dream.failedTerminal > 0;
+    const recentRawAvailable = episodes.length > 0 || kernel.episodeStore.countUnassignedRawEvents(projectId) > 0;
+    const recommendedAction = dreamBacklogAvailable
+        ? 'cogmem_dream_tick_with_maintenance_mode'
+        : dream.failedRetryable > 0
+            ? 'cogmem_dream_retry'
+            : dream.failedTerminal > 0
+                ? 'inspect_terminal_dream_failure'
+                : 'none';
+    return jsonResult({
+        episodes,
+        dream,
+        recentRawAvailable,
+        recentEpisodesAvailable: episodes.length > 0,
+        dreamBacklogAvailable,
+        semanticMemoryMayLag: dreamBacklogAvailable || failedDreamAvailable,
+        recommendedAction,
+        warnings: recentRawAvailable ? [] : ['no_recent_episode_ingestion_detected'],
+    });
+}
+function dreamRecommendation(kernel, projectId, requestedMode) {
+    const status = kernel.getEpisodeDreamStatus(projectId);
+    const backlog = status.pending + status.retryScheduled;
+    return {
+        dryRun: true,
+        maintenanceModeRequired: true,
+        requestedMode: requestedMode || 'auto',
+        recommendedMode: backlog === 0 ? 'none' : backlog === 1 ? 'micro' : 'normal',
+        backlog,
+        status,
+        instruction: 'Call only during idle maintenance or an explicit user/admin maintenance request with maintenanceMode=true.',
+    };
 }
 function optionalEpisodeClosureMode(value) {
     const mode = optionalString(value) || 'manual';

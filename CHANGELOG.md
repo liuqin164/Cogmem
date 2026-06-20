@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.5.1
+
+- Hardened Episode classification with previous assistant/user context, explicit assistant-side relations, confidence and audit signals, safe subtopic/ambiguous/hard switch handling, and an advisory-only hybrid review API that cannot write memory.
+- Added non-evidence semantic episode summaries, multi-tag importance metadata, normalized closure reasons, source/thread-scoped active lookup with legacy upgrade fallback, and separate episode/Dream lifecycle state.
+- Made micro, normal, and deep Dream modes change curator scope and candidate limits; added retryable, scheduled, and terminal failure states with backoff and episode-level error visibility.
+- Enforced raw-event evidence subsets for episode candidates, paired assistant-proposal/user-confirmation evidence, orphan-correction review, decision temporal candidates, and existing prospective-memory deduplication boundaries.
+- Replaced line-index import identity with stable source/session/role/time/content identity; added streaming JSONL checkpoints, resume support, confidence-aware batch sealing, and bounded MCP imports.
+- Guarded MCP `cogmem_dream_tick` behind `maintenanceMode: true`, enriched hookless-agent status guidance, added schema migration 23, and updated OpenClaw plugin 0.4.1 plus OpenClaw/Hermes skills.
+
 ## 3.5.0
 
 - Added Episode Dream Engine v1. Raw messages are still written immediately, while deterministic session-scoped episode assembly gives Dream a bounded conversation-level unit instead of an arbitrary raw-event window.

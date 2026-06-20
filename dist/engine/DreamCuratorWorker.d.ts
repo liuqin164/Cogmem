@@ -5,6 +5,7 @@ import type { EventStore } from '../store/EventStore.js';
 import type { ModelRegistry } from '../models/ModelRegistry.js';
 import type { TextGenerateFn } from '../models/ModelRole.js';
 import type { PipelineMetrics } from './PipelineMetrics.js';
+import type { EpisodeSemanticSummary, EpisodeType } from '../episode/EpisodeTypes.js';
 export interface DreamCuratorRunOptions {
     projectId?: string;
     limit?: number;
@@ -14,6 +15,16 @@ export interface DreamCuratorRunOptions {
     /** Internal episode path: process only these authoritative raw events. */
     eventIds?: string[];
     sourceEpisodeId?: string;
+    sourceEpisodeEventIds?: string[];
+    dreamMode?: 'micro' | 'normal' | 'deep';
+    maxCandidates?: number;
+    episodeType?: EpisodeType;
+    closureReason?: string;
+    semanticSummary?: EpisodeSemanticSummary;
+    episodeRelations?: Array<{
+        eventId: string;
+        relation: string;
+    }>;
 }
 export interface DreamCuratorRunResult {
     runId?: string;

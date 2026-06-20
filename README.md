@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.5.0`
+Current version: `3.5.1`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -161,7 +161,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#3.5.0"
+bun add "cogmem@github:liuqin164/cogmem#3.5.1"
 bunx cogmem init
 ```
 
@@ -200,7 +200,9 @@ For a host timer, call `dream tick`; the timer only wakes the scheduler. An empt
 cogmem dream tick --project my-agent --mode auto --max-episodes 10 --json
 ```
 
-Raw events are always written first. `KernelAgentMemoryBackend` and the OpenClaw plugin assemble live turns automatically. Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands assemble the same episode schema and hard-seal explicit import batches. Episode summaries and closure receipts are control metadata, never durable evidence; every Dream candidate must cite raw event IDs and still pass CPU governance.
+Raw events are always written first. `KernelAgentMemoryBackend` and the OpenClaw plugin assemble live turns automatically. The classifier uses deterministic rules and previous assistant/user context in the foreground; ambiguous or high-value classifications may be reviewed asynchronously by an advisory model, but model output cannot mutate memory. Same-project subtopic shifts stay together, cross-domain switches hard-seal, and ambiguous switches create reviewable soft links.
+
+Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands use stable content identities and the same episode schema. Low-confidence imported groups soft-seal for review unless an operator explicitly forces sealing. Episode semantic summaries and closure receipts are control hints, never durable evidence; every Dream candidate must cite a non-empty subset of the episode's raw event IDs and still pass CPU governance.
 
 Inspect queue state:
 
@@ -241,7 +243,7 @@ cogmem strategy plan --project hermes --query "我当时的原话是什么？" -
 cogmem strategy outcomes --project hermes --json
 ```
 
-OpenClaw plugin 0.4.0 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Its queued `agent_end` write stores Raw Ledger evidence and updates the Episode Assembler without running Dream in the response path. It records a read-only context outcome after the turn for offline evaluation; the judge cannot mutate belief, entity, temporal, prospective, or episode memory.
+OpenClaw plugin 0.4.1 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Its queued `agent_end` write stores Raw Ledger evidence and updates the Episode Assembler without running Dream in the response path. Episode assembly uses assistant context for short replies such as confirmations and corrections. It records a read-only context outcome after the turn for offline evaluation; the judge cannot mutate belief, entity, temporal, prospective, or episode memory.
 
 `ProspectiveMemoryService` stores future intentions, commitments, reminders, open loops, and plans as candidates only. A candidate is not actionable until an explicit user event confirms it. Rejected candidates stay suppressed unless genuinely new evidence creates a new version. The service and `cogmem prospective` CLI manage state only; they expose no task or tool execution capability.
 
@@ -409,7 +411,7 @@ Hermes can call the MCP recall tool directly:
 
 `cogmem_recall` uses the same agent-facing recall path as `cogmem memory recall` and returns its `strategyCapsule`. `cogmem_strategy_plan` exposes that deterministic, read-only memory policy without performing recall. If `agentId` is omitted, MCP infers it from `projectId`, so project-only Hermes calls can still reach raw ledger fallback and return `items[].sourceContext` when vectors are empty. Re-running `cogmem connect hermes --auto` after an upgrade also patches existing `tools.include` allow-lists with newly supported Cogmem MCP tools.
 
-For Hermes sessions without lifecycle hooks, use `cogmem_episode_append` with a required stable `externalMessageId` for one message or `cogmem_episode_import` for a bounded batch. These tools only write Raw Ledger and episode metadata. They never run Dream. Inspect with `cogmem_episode_status`, seal explicitly with `cogmem_episode_seal`, and call `cogmem_dream_tick` only when the host wants background candidate generation.
+For Hermes sessions without lifecycle hooks, use `cogmem_episode_append` with a required stable `externalMessageId` for one message or `cogmem_episode_import` for a bounded batch. These tools only write Raw Ledger and episode metadata. They never run Dream. Inspect with `cogmem_episode_status`, seal explicitly with `cogmem_episode_seal`, and call MCP `cogmem_dream_tick` with `maintenanceMode: true` only during idle upkeep or an explicit user/admin maintenance request. Without that flag it returns a recommendation-only dry run.
 
 `externalMessageId` is idempotent inside `(projectId, sourceAgent, sessionId)`. Reusing the same ID with different role/text is rejected instead of silently replacing evidence. Deterministic noise remains in Raw Ledger and is returned as `ignoredEventIds`, not as repairable `unassignedEventIds`.
 

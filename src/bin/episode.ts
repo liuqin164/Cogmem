@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
 
+import { createStableImportIdentityFactory } from '../episode/EpisodeImportIdentity.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 
 type Args = Record<string, string | boolean> & { command?: string };
@@ -24,7 +25,7 @@ function usage(): string {
   return [
     'Usage: cogmem episode <append|import|list|get|seal|status|repair> [args]',
     '  append --project <id> --session <id> --source-agent <id> --role <role> --text <text>',
-    '  import --project <id> --session <id> --source-agent <id> --format jsonl --file <path> [--seal-batch]',
+    '  import --project <id> --session <id> --source-agent <id> --format jsonl --file <path> [--seal-batch] [--force-seal] [--chunk-size <n>] [--checkpoint-file <path>] [--resume]',
     '  list|status [--project <id>] [--session <id>] [--json]',
     '  get --episode <id> [--json]',
     '  seal --episode <id> [--mode soft|hard|manual|batch] [--reason <reason>]',
@@ -55,7 +56,7 @@ async function main(): Promise<void> {
         externalMessageId: stringArg(args, 'external-id'), timestamp: numberArg(args, 'timestamp'),
       });
     } else if (args.command === 'import') {
-      result = importJsonl(kernel, args);
+      result = await importJsonl(kernel, args);
     } else if (args.command === 'list') {
       result = { episodes: kernel.listEpisodes({ projectId, sessionId, limit: numberArg(args, 'limit') }) };
     } else if (args.command === 'status') {
@@ -78,7 +79,7 @@ async function main(): Promise<void> {
   }
 }
 
-function importJsonl(kernel: MemoryKernel, args: Args) {
+async function importJsonl(kernel: MemoryKernel, args: Args) {
   const format = stringArg(args, 'format') || 'jsonl';
   if (format !== 'jsonl' && format !== 'generic-chat') {
     throw new Error('episode import supports jsonl/generic-chat; use import-openclaw or import-hermes for source-specific formats');
@@ -86,44 +87,73 @@ function importJsonl(kernel: MemoryKernel, args: Args) {
   const projectId = requiredArg(args, 'project');
   const sessionId = requiredArg(args, 'session');
   const sourceAgent = requiredArg(args, 'source-agent');
-  const lines = readFileSync(requiredArg(args, 'file'), 'utf8').split('\n').map((line) => line.trim()).filter(Boolean);
-  if (lines.length > 100_000) throw new Error('episode import is limited to 100000 messages per command');
-  const messages = lines.map((line, index) => {
-    const message = JSON.parse(line) as Record<string, unknown>;
+  const file = requiredArg(args, 'file');
+  const checkpointFile = stringArg(args, 'checkpoint-file') || `${file}.cogmem-checkpoint.json`;
+  const chunkSize = Math.max(1, Math.min(Math.trunc(numberArg(args, 'chunk-size') ?? 500), 5000));
+  const checkpoint = args.resume === true && existsSync(checkpointFile)
+    ? JSON.parse(readFileSync(checkpointFile, 'utf8')) as { processedLine?: number }
+    : {};
+  const resumeAfter = Math.max(0, checkpoint.processedLine || 0);
+  const identities = new Map<string, ReturnType<typeof createStableImportIdentityFactory>>();
+  const getIdentity = (resolvedSessionId: string) => {
+    let identity = identities.get(resolvedSessionId);
+    if (!identity) { identity = createStableImportIdentityFactory(sourceAgent, resolvedSessionId); identities.set(resolvedSessionId, identity); }
+    return identity;
+  };
+  const episodeIds = new Set<string>();
+  const unassignedEventIds: string[] = [];
+  const ignoredEventIds: string[] = [];
+  let imported = 0;
+  let duplicates = 0;
+  let processed = 0;
+  let lineNumber = 0;
+  const reader = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
+  for await (const rawLine of reader) {
+    lineNumber += 1;
+    if (!rawLine.trim()) continue;
+    if (lineNumber > 100_000) throw new Error('episode import is limited to 100000 lines per command');
+    const message = JSON.parse(rawLine) as Record<string, unknown>;
     const text = typeof message.text === 'string' ? message.text : typeof message.content === 'string' ? message.content : undefined;
-    if (!text) throw new Error(`line ${index + 1} is missing text/content`);
-    if (text.length > 64_000) throw new Error(`line ${index + 1} exceeds the 64000 character message limit`);
+    if (!text) throw new Error(`line ${lineNumber} is missing text/content`);
+    if (text.length > 64_000) throw new Error(`line ${lineNumber} exceeds the 64000 character CLI message limit`);
     const resolvedSessionId = typeof message.sessionId === 'string' ? message.sessionId : sessionId;
     const role = roleValue(message.role);
     const timestamp = timeValue(message.timestamp);
-    return {
-      sessionId: resolvedSessionId, role, text, timestamp,
-      externalMessageId: typeof message.externalMessageId === 'string'
-        ? message.externalMessageId
-        : typeof message.id === 'string'
-          ? message.id
-          : stableImportMessageId(resolvedSessionId, role, text, timestamp, index),
-    };
-  });
-  const results = messages.map((message) => kernel.appendEpisodeMessage({
-    projectId, sourceAgent, ...message, metadata: { imported: true, importFormat: format },
-  }));
-  const episodeIds = [...new Set(results.map((item) => item.episodeId).filter((id): id is string => Boolean(id)))];
+    const externalMessageId = typeof message.externalMessageId === 'string'
+      ? message.externalMessageId
+      : typeof message.id === 'string'
+        ? message.id
+        : getIdentity(resolvedSessionId)({ role, text, timestamp });
+    // Rebuild occurrence counters while streaming past the checkpoint. This
+    // keeps generated IDs stable when identical messages straddle a resume.
+    if (lineNumber <= resumeAfter) continue;
+    const result = kernel.appendEpisodeMessage({
+      projectId, sourceAgent, sessionId: resolvedSessionId, role, text, timestamp,
+      externalMessageId,
+      metadata: { imported: true, importFormat: format },
+    });
+    processed += 1;
+    result.created ? imported += 1 : duplicates += 1;
+    if (result.episodeId) episodeIds.add(result.episodeId);
+    if (!result.assigned && !result.ignored) unassignedEventIds.push(result.eventId);
+    if (result.ignored) ignoredEventIds.push(result.eventId);
+    if (processed % chunkSize === 0) writeCheckpoint(checkpointFile, { processedLine: lineNumber, processed, projectId, sourceAgent, sessionId });
+  }
+  writeCheckpoint(checkpointFile, { processedLine: lineNumber, processed, projectId, sourceAgent, sessionId, completed: true });
   const closureReceipts = args['seal-batch'] === true
-    ? episodeIds.map((episodeId) => kernel.sealEpisode(episodeId, { mode: 'batch', reason: 'cli_batch_boundary' }))
+    ? [...episodeIds].map((episodeId) => kernel.sealImportedEpisode(episodeId, { reason: 'cli_batch_boundary', force: args['force-seal'] === true }))
     : [];
   return {
-    imported: results.filter((item) => item.created).length,
-    duplicates: results.filter((item) => !item.created).length,
-    episodeIds,
-    unassignedEventIds: results.filter((item) => !item.assigned && !item.ignored).map((item) => item.eventId),
-    ignoredEventIds: results.filter((item) => item.ignored).map((item) => item.eventId),
-    closureReceipts, dreamRan: false,
+    importId: `episode-import:${sourceAgent}:${sessionId}`,
+    imported, duplicates, processed, resumeFrom: lineNumber + 1, checkpointFile,
+    episodeIds: [...episodeIds], unassignedEventIds, ignoredEventIds, closureReceipts, dreamRan: false,
   };
 }
 
-function stableImportMessageId(sessionId: string, role: string, text: string, timestamp: number | undefined, index: number): string {
-  return `import-${createHash('sha256').update(JSON.stringify([sessionId, role, timestamp ?? null, index, text])).digest('hex')}`;
+function writeCheckpoint(path: string, value: Record<string, unknown>): void {
+  const temporary = `${path}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  renameSync(temporary, path);
 }
 
 function stringArg(args: Args, key: string): string | undefined { return typeof args[key] === 'string' && args[key] ? args[key] as string : undefined; }

@@ -72,7 +72,7 @@ import {
   type MemoryGovernancePlan,
   type RedactionPolicy,
 } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, SchemaMigrationRunner } from './migrations/index.js';
+import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -127,8 +127,8 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '3.5.0';
-const LATEST_SCHEMA_VERSION = 22;
+const CORE_VERSION = '3.5.1';
+const LATEST_SCHEMA_VERSION = 23;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
@@ -566,7 +566,7 @@ export class MemoryKernel {
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
     db.exec('PRAGMA busy_timeout = 5000;');
-    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022]).run();
+    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023]).run();
     this.ensureMetaTable(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
@@ -604,8 +604,8 @@ export class MemoryKernel {
     this.compilerConfidenceStore = new CompilerConfidenceStore(this.dbPath);
     this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
     this.dreamLedgerStore = new DreamLedgerStore(db);
-    this.episodeStore = new EpisodeStore(db);
-    this.episodeAssembler = new EpisodeAssembler(this.episodeStore);
+    this.episodeStore = new EpisodeStore(db, (eventId) => this.eventStore.getEvent(eventId));
+    this.episodeAssembler = new EpisodeAssembler(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId));
     this.activationStore = new ActivationStore(db);
     this.memoryBindingStore = new MemoryBindingStore(db);
     this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
@@ -1248,7 +1248,10 @@ export class MemoryKernel {
 
   assembleEpisodeTurn(
     events: MemoryEvent[],
-    input: { projectId: string; sessionId: string; sourceAgent?: string; now?: number; batchSeal?: boolean },
+    input: {
+      projectId: string; sessionId: string; sourceAgent?: string; conversationThreadId?: string;
+      now?: number; batchSeal?: boolean; forceBatchSeal?: boolean;
+    },
   ) {
     return this.episodeAssembler.appendTurn(events, input);
   }
@@ -1317,6 +1320,7 @@ export class MemoryKernel {
         projectId: input.projectId,
         sessionId: event.sessionId || input.sessionId,
         sourceAgent: input.sourceAgent,
+        conversationThreadId: input.threadId || event.threadId || input.sessionId,
         now: event.occurredAt,
       });
       link = this.episodeStore.getEventLink(event.eventId);
@@ -1358,6 +1362,21 @@ export class MemoryKernel {
 
   sealEpisode(episodeId: string, input: { mode: EpisodeClosureMode; reason: string; now?: number }): EpisodeClosureReceipt {
     return this.episodeStore.sealEpisode(episodeId, input);
+  }
+
+  sealImportedEpisode(episodeId: string, input: { reason: string; force?: boolean; now?: number }): EpisodeClosureReceipt {
+    const links = this.episodeStore.listEventLinks(episodeId);
+    const averageConfidence = links.length
+      ? links.reduce((total, link) => total + link.confidence, 0) / links.length
+      : 0;
+    const requiresReview = input.force !== true && averageConfidence < 0.6;
+    return this.episodeStore.sealEpisode(episodeId, {
+      mode: requiresReview ? 'soft' : 'batch',
+      reason: requiresReview ? 'batch_low_confidence_review' : input.reason,
+      reasonCode: 'batch_boundary',
+      requiresReview,
+      now: input.now,
+    });
   }
 
   sealIdleEpisodes(input: { projectId?: string; idleBefore: number; now?: number }): EpisodeClosureReceipt[] {

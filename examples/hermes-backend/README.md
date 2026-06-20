@@ -129,7 +129,9 @@ If a Hermes workspace uses different paths, pass explicit `profilePath` and `ses
 
 For agent-facing instructions, install or read `SKILL.md`. `cogmem connect hermes --workspace .` copies it to `~/.hermes/skills/cogmem-memory/SKILL.md`.
 
-`cogmem connect hermes --workspace . --auto` patches the Hermes MCP config with a `cogmem` server command. Re-running it after an upgrade updates existing allow-lists with strategy, episode, conditional Dream, memory-map, maintenance, and prospective tools. Episode append/import never run Dream, Dream tick never executes tools, and durable semantic changes still require governance. After running it, restart or reload Hermes so the MCP server list is re-read.
+`cogmem connect hermes --workspace . --auto` patches the Hermes MCP config with a `cogmem` server command. Re-running it after an upgrade updates existing allow-lists with strategy, episode, conditional Dream, memory-map, maintenance, and prospective tools. Cogmem cannot observe Hermes conversations unless Hermes calls append/import. Episode append/import never run Dream; MCP Dream tick mutates only with `maintenanceMode: true`, never executes tools, and durable semantic changes still require governance. After running it, restart or reload Hermes so the MCP server list is re-read.
+
+Use MCP append/import only for bounded traffic. Large JSONL histories belong on the streaming `cogmem episode import` CLI with checkpoint/resume. Stable generated identities do not depend on line index, so inserting an older export line does not duplicate every following message. Low-confidence batches soft-seal for review unless the operator explicitly forces sealing.
 
 The MCP `cogmem_recall` tool uses the same backend as `cogmem memory recall`. A Hermes MCP call with only `projectId: "hermes"` still infers `agentId: "hermes"` and can return `raw_ledger` items with labeled `sourceContext` events, `sourceContext.window`, and locator commands when vectors are empty. Pass `collection: "theseus"` only when Hermes wants creative artifacts instead of normal operational memory.
 

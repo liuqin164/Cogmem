@@ -16,7 +16,7 @@
  * @stable @since 1.0.0
  */
 export { MemoryKernel, createMemoryKernel, createMemoryKernelFromConfig, } from './factory.js';
-export { EpisodeAssembler, EpisodeStore, classifyTurnRelation, } from './episode/index.js';
+export { EpisodeAssembler, EpisodeStore, classifyAssistantRelation, classifyTurnRelation, classifyTurnRelationHybrid, createStableImportIdentityFactory, summarizeEpisode, } from './episode/index.js';
 export { DreamScheduler } from './dream/index.js';
 /**
  * Cogmem runtime home and structured configuration helpers.
