@@ -20,6 +20,8 @@ import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
+import { StrategyCortex } from './strategy/index.js';
+import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
 import { type EnvLike } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
 import type { Embedder } from './store/Embedder.js';
@@ -339,6 +341,9 @@ export declare class MemoryKernel {
     readonly beliefGovernanceService: BeliefGovernanceService;
     readonly temporalMemoryService: TemporalMemoryService;
     readonly contextCortex: ContextCortex;
+    readonly strategyCortex: StrategyCortex;
+    readonly memoryUseJudge: MemoryUseJudge;
+    readonly contextOutcomeStore: ContextOutcomeStore;
     readonly prospectiveMemoryService: ProspectiveMemoryService;
     readonly cursorStore: IngestionCursorStore;
     readonly vectorStore: IVectorStore;

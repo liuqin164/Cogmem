@@ -23,12 +23,13 @@ afterEach(() => {
   }
 });
 
-test('core MCP tool list exposes recall, write, explain, map, tick, and prospective tools', () => {
+test('core MCP tool list exposes recall, write, explain, strategy, map, tick, and prospective tools', () => {
   const tools = listCogmemMcpTools();
   expect(tools.map((tool) => tool.name)).toEqual([
     'cogmem_remember_turn',
     'cogmem_recall',
     'cogmem_explain_recall',
+    'cogmem_strategy_plan',
     'cogmem_memory_map',
     'cogmem_maintenance_tick',
     'cogmem_prospective',
@@ -36,6 +37,7 @@ test('core MCP tool list exposes recall, write, explain, map, tick, and prospect
   const recall = tools.find((tool) => tool.name === 'cogmem_recall');
   const explain = tools.find((tool) => tool.name === 'cogmem_explain_recall');
   const remember = tools.find((tool) => tool.name === 'cogmem_remember_turn');
+  const strategy = tools.find((tool) => tool.name === 'cogmem_strategy_plan');
   const map = tools.find((tool) => tool.name === 'cogmem_memory_map');
   const tick = tools.find((tool) => tool.name === 'cogmem_maintenance_tick');
   expect(remember?.inputSchema.properties.ingestMode).toBeTruthy();
@@ -44,11 +46,26 @@ test('core MCP tool list exposes recall, write, explain, map, tick, and prospect
   expect(recall?.description).toContain('governed');
   expect(explain?.description).toContain('filteredEvidence');
   expect(explain?.description).toContain('governanceReason');
+  expect(strategy?.annotations?.readOnlyHint).toBe(true);
+  expect(strategy?.description).toContain('no instruction authority');
   expect(map?.description).toContain('memory map');
   expect(tick?.description).toContain('maintenance tick');
   const prospective = tools.find((tool) => tool.name === 'cogmem_prospective');
   expect(prospective?.description).toContain('never executes');
   expect(prospective?.annotations?.destructiveHint).toBe(true);
+});
+
+test('core MCP strategy plan is deterministic metadata and does not perform recall', async () => {
+  const kernel = makeKernel();
+  const planned = await callCogmemMcpTool('cogmem_strategy_plan', {
+    projectId: 'brain', query: '我当时的原话是什么？',
+  }, { kernel });
+
+  expect(planned.isError).toBeFalsy();
+  expect(planned.structuredContent).toMatchObject({
+    templateId: 'source-first', instructionAuthority: 'none', persistAllowed: false,
+  });
+  expect(kernel.eventStore.getEventCount()).toBe(0);
 });
 
 test('core MCP prospective tool requires distinct user confirmation and never executes tasks', async () => {

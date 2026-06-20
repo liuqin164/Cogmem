@@ -72,11 +72,13 @@ import {
   type MemoryGovernancePlan,
   type RedactionPolicy,
 } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, SchemaMigrationRunner } from './migrations/index.js';
+import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
+import { StrategyCortex } from './strategy/index.js';
+import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
 import {
   loadCogmemConfig,
   resolveCogmemConfigPath,
@@ -123,8 +125,8 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '3.3.0';
-const LATEST_SCHEMA_VERSION = 20;
+const CORE_VERSION = '3.4.0';
+const LATEST_SCHEMA_VERSION = 21;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 
@@ -466,6 +468,9 @@ export class MemoryKernel {
   readonly beliefGovernanceService: BeliefGovernanceService;
   readonly temporalMemoryService: TemporalMemoryService;
   readonly contextCortex: ContextCortex;
+  readonly strategyCortex: StrategyCortex;
+  readonly memoryUseJudge: MemoryUseJudge;
+  readonly contextOutcomeStore: ContextOutcomeStore;
   readonly prospectiveMemoryService: ProspectiveMemoryService;
   readonly cursorStore: IngestionCursorStore;
   readonly vectorStore: IVectorStore;
@@ -523,7 +528,7 @@ export class MemoryKernel {
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
     db.exec('PRAGMA busy_timeout = 5000;');
-    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020]).run();
+    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021]).run();
     this.ensureMetaTable(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
@@ -536,6 +541,9 @@ export class MemoryKernel {
     });
     this.temporalMemoryService = new TemporalMemoryService(db);
     this.contextCortex = new ContextCortex(db);
+    this.strategyCortex = new StrategyCortex();
+    this.memoryUseJudge = new MemoryUseJudge();
+    this.contextOutcomeStore = new ContextOutcomeStore(db);
     this.prospectiveMemoryService = new ProspectiveMemoryService(db, (eventId) => {
       const event = this.eventStore.getEvent(eventId);
       return event ? {
@@ -1720,6 +1728,7 @@ export class MemoryKernel {
 
       deleted.brainProjections += runDelete(`DELETE FROM prospective_memory_transitions WHERE candidate_id IN (SELECT candidate_id FROM prospective_memories WHERE project_id = ?)`, [projectId]);
       deleted.brainProjections += runDelete(`DELETE FROM prospective_memories WHERE project_id = ?`, [projectId]);
+      deleted.brainProjections += runDelete(`DELETE FROM context_strategy_outcomes WHERE project_id = ?`, [projectId]);
       deleted.brainProjections += runDelete(`DELETE FROM context_activation_receipts WHERE project_id = ?`, [projectId]);
       deleted.brainProjections += runDelete(`DELETE FROM memory_timeline_entries WHERE project_id = ?`, [projectId]);
       deleted.brainProjections += runDelete(`DELETE FROM belief_graph_evidence WHERE belief_id IN (SELECT belief_id FROM belief_graph_nodes WHERE project_id = ?)`, [projectId]);

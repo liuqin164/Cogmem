@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.3.0`
+Current version: `3.4.0`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -93,7 +93,12 @@ CPU Governance
 
 Active Recall
   Bounded context pack assembled with binding graph anchors, pulse activation, temporal routing, source anchors, and inhibition.
+
+Strategy Cortex
+  CPU-owned current-turn policy that selects retrieval lanes, layer order, source requirements, and memory budget before recall.
 ```
+
+Strategy Cortex borrows StraTA's separation between a compact global strategy and local execution, while deliberately excluding its online reinforcement-learning loop. Cogmem uses deterministic templates online and reserves diverse strategy comparison and critical memory-use judgment for offline BrainEval. See [StraTA](https://arxiv.org/abs/2605.06642).
 
 The core rule is:
 
@@ -153,7 +158,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#3.3.0"
+bun add "cogmem@github:liuqin164/cogmem#3.4.0"
 bunx cogmem init
 ```
 
@@ -218,7 +223,18 @@ Entity identity is owned by `EntityStore`; Memory Binding only writes those cano
 
 `TemporalMemoryService` answers which belief version was valid at a requested time and maintains bounded project/entity timelines for milestones, decisions, corrections, and belief versions. Current answers must not silently mix superseded state with active state. Historical answers should include the relevant validity window, correction reason, and raw evidence anchors when available.
 
-`ContextCortex` decides whether memory should surface, which layers are eligible, and how much context they may consume. It hard-filters cross-project, superseded, current-session echo, unsupported user-belief, and unnecessary sensitive candidates before ranking. The default memory budget is 25% of available context with a 30% hard ceiling. Every plan emits an activation receipt containing selected and suppressed IDs with reasons. OpenClaw plugin 0.2.0 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Cortex filtering to full recall.
+`ContextCortex` decides whether memory should surface, which layers are eligible, and how much context they may consume. It hard-filters cross-project, superseded, current-session echo, unsupported user-belief, and unnecessary sensitive candidates before ranking. The default memory budget is 25% of available context with a 30% hard ceiling. Every plan emits an activation receipt containing selected and suppressed IDs with reasons.
+
+`StrategyCortex` runs before recall for non-trivial memory queries. It selects one CPU-owned template such as `source-first`, `temporal-first`, `user-belief-first`, `project-state`, `graph-source`, or `balanced-memory`, then constrains which graph/compiled/raw lanes may run and how Context Cortex orders the resulting layers. A capsule is fixed only for the current turn. Intent/project changes, an unmet exact-source requirement, evidence conflict, or an unsatisfied required-layer budget may trigger at most one deterministic replan. The capsule has `instructionAuthority: "none"`: it cannot override the user, host policy, tool authorization, or memory governance.
+
+Inspect this policy and its read-only outcome telemetry with:
+
+```bash
+cogmem strategy plan --project hermes --query "我当时的原话是什么？" --json
+cogmem strategy outcomes --project hermes --json
+```
+
+OpenClaw plugin 0.3.0 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. It records a read-only context outcome after the turn for offline evaluation; the judge cannot mutate belief, entity, temporal, or prospective memory.
 
 `ProspectiveMemoryService` stores future intentions, commitments, reminders, open loops, and plans as candidates only. A candidate is not actionable until an explicit user event confirms it. Rejected candidates stay suppressed unless genuinely new evidence creates a new version. The service and `cogmem prospective` CLI manage state only; they expose no task or tool execution capability.
 
@@ -231,6 +247,14 @@ cogmem prospective due --project hermes
 Every mutation requires the candidate project. Confirmation evidence must be a distinct Raw Ledger user event in that project. A due result is memory state, not permission to run a tool.
 
 Run `cogmem brain-eval --input samples.json` to measure recall, precision, provenance coverage, context-budget compliance, stale/cross-project leakage, and unconfirmed prospective activation. The command exits non-zero when a safety threshold fails.
+
+Compare precomputed memory-policy rollouts offline with:
+
+```bash
+cogmem brain-eval --input strategy-outcomes.json --strategy-rollout --json
+```
+
+This mode never generates online rollouts. It reports median and worst-decile quality, source fidelity, strategy adherence, unsafe/stale/cross-project leakage, budget compliance, and p95 latency. Top-fraction score is diagnostic potential only and cannot override a failed safety gate.
 
 ## Import Existing Agent Memory
 
@@ -330,6 +354,7 @@ The automatic wrapper keeps OpenClaw's native prompt untouched. Cogmem only prep
 
 - `<COGMEM_SESSION_STATE>` is compact current-session working state stored under `.cogmem/session_state/openclaw/`.
 - `<COGMEM_TURN_BRIDGE>` is a short-lived receipt of which memory anchors supported the prior answer, stored under `.cogmem/session_bridges/openclaw/`.
+- `<COGMEM_STRATEGY_CONTEXT>` is the current-turn, no-authority memory-use policy. It is not evidence or an instruction and is stripped before recording.
 - `<COGMEM_RECALL_CONTEXT>` is full recall evidence for the current turn only. It is stripped before turn recording and must not be persisted or re-ingested as new memory.
 
 By default, `selective_compile` uses user text as the durable compile signal, excludes current-session compiled memory during recall, injects at most three memory items, and omits full source-window text unless the plugin config enables it.
@@ -375,7 +400,7 @@ Hermes can call the MCP recall tool directly:
 { "query": "MoneyPrinterTurbo", "projectId": "hermes" }
 ```
 
-`cogmem_recall` uses the same agent-facing recall path as `cogmem memory recall`. If `agentId` is omitted, MCP infers it from `projectId`, so project-only Hermes calls can still reach raw ledger fallback and return `items[].sourceContext` when vectors are empty. Re-running `cogmem connect hermes --auto` after an upgrade also patches existing `tools.include` allow-lists with newly supported Cogmem MCP tools.
+`cogmem_recall` uses the same agent-facing recall path as `cogmem memory recall` and returns its `strategyCapsule`. `cogmem_strategy_plan` exposes that deterministic, read-only memory policy without performing recall. If `agentId` is omitted, MCP infers it from `projectId`, so project-only Hermes calls can still reach raw ledger fallback and return `items[].sourceContext` when vectors are empty. Re-running `cogmem connect hermes --auto` after an upgrade also patches existing `tools.include` allow-lists with newly supported Cogmem MCP tools.
 
 Import existing Hermes memory:
 
@@ -424,7 +449,7 @@ cogmem memory recall --query "MoneyPrinterTurbo storyboard" --project openclaw -
 
 Default recall includes untagged and `collection:anchor` memory only. `collection:theseus` is for creative artifacts and must be requested explicitly so drafts do not pollute the normal agent memory path.
 
-The MCP `cogmem_recall` tool returns the same agent-facing item shape and fallback behavior. Agents may call it with `query`, `projectId`, and optionally `agentId` and `collection`; when `agentId` is omitted, MCP uses `projectId` as the agent id before falling back to `openclaw`. `cogmem_explain_recall` remains the audit path for `filteredEvidence` and governance reasons. Both surfaces expose `decisionTrace`, and OpenClaw renders its bounded form as `recallDecision`. Inspect `selectedLane`, `reason`, and candidate counts before claiming that memory is absent; then use `sourceLocator` for exact wording.
+The MCP `cogmem_recall` tool returns the same agent-facing item shape and fallback behavior. Agents may call it with `query`, `projectId`, and optionally `agentId` and `collection`; when `agentId` is omitted, MCP uses `projectId` as the agent id before falling back to `openclaw`. `cogmem_strategy_plan` is the read-only strategy inspection path, while `cogmem_explain_recall` remains the audit path for `filteredEvidence` and governance reasons. Recall and explain surfaces expose `decisionTrace`, and OpenClaw renders its bounded form as `recallDecision`. Inspect `selectedLane`, `reason`, and candidate counts before claiming that memory is absent; then use `sourceLocator` for exact wording.
 
 `cogmem memory status --json` exposes stable top-level counters:
 
@@ -536,7 +561,7 @@ For Hermes after an update:
 cogmem connect hermes --workspace /path/to/hermes/workspace --auto --force
 ```
 
-This also updates existing Hermes `cogmem-mcp` blocks with missing `cogmem_memory_map`, `cogmem_maintenance_tick`, and `cogmem_prospective` entries.
+This also updates existing Hermes `cogmem-mcp` blocks with missing `cogmem_strategy_plan`, `cogmem_memory_map`, `cogmem_maintenance_tick`, and `cogmem_prospective` entries.
 
 ## CLI
 

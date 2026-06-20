@@ -55,3 +55,21 @@ test('brain-eval CLI returns non-zero when safety metrics fail', async () => {
   expect(JSON.parse(result.stdout).passed).toBe(false);
   expect(result.stderr).toBe('');
 });
+
+test('brain-eval CLI compares precomputed strategy rollouts without online generation', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-strategy-eval-'));
+  const inputPath = join(dir, 'strategy-outcomes.json');
+  writeFileSync(inputPath, JSON.stringify({ outcomes: [{
+    outcomeId: 'outcome-1', receiptId: 'receipt-1', strategyId: 'strategy-1',
+    strategyTemplate: 'source-first', intent: 'exact_quote', score: 1,
+    followedStrategy: true, violations: [], usefulMemoryIds: ['raw'], harmfulMemoryIds: [],
+    missingLayers: [], sourceFidelity: 1, unsafeLeak: false, staleLeak: false,
+    crossProjectLeak: false, overBudget: false, latencyMs: 20, createdAt: 100,
+  }] }));
+  const cli = join(import.meta.dir, '..', 'src', 'bin', 'brain-eval.ts');
+  const result = await run(cli, ['--input', inputPath, '--strategy-rollout', '--json']);
+
+  expect(result.exitCode).toBe(0);
+  expect(JSON.parse(result.stdout)).toMatchObject({ strategyCount: 1, generatedOnlineRollouts: 0, passed: true });
+  expect(result.stderr).toBe('');
+});

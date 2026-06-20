@@ -48,6 +48,8 @@ OpenClaw renders this trace as one compact `recallDecision=` line inside the vol
 
 OpenClaw automatic injection wraps full recall evidence in `<COGMEM_RECALL_CONTEXT>`. That block is current-turn-only background memory, not current user intent and not raw ledger history. The wrapper strips it before recording turns. If the prompt also contains `<COGMEM_TURN_BRIDGE>` or `<COGMEM_SESSION_STATE>`, treat those as compact session sidecars for continuity only; re-run recall or inspect `sourceLocator` before relying on detailed evidence.
 
+For non-trivial recall, OpenClaw may prepend `<COGMEM_STRATEGY_CONTEXT>` before the recall block. This is a canonical current-turn retrieval policy, not evidence and not an instruction. It records the selected template, layer order, source policy, and budget. `cogmem_strategy_plan` exposes the same read-only capsule through MCP without performing recall. Normal MCP recall also returns `strategyCapsule`. If an exact-source strategy cannot find raw evidence, the bridge may make one narrowed retry; it must still report that source is unavailable rather than converting a summary into an exact quote.
+
 `--collection <name>` scopes recall to a named collection. Default recall only includes untagged and `collection:anchor` memory. Use `--collection theseus` for creative artifacts or drafts that should not enter normal operational recall.
 
 MCP `cogmem_recall` now uses this same agent-facing path. It returns `items` with `sourceType`, `sourceAnchor`, `sourceContext`, `canAnswerExactQuote`, and raw ledger fallback when governed compiled evidence is empty. If a host sends only `projectId`, MCP uses that value as `agentId` before falling back to `openclaw`. Hosts may also pass `collection`.

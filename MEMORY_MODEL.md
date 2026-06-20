@@ -106,7 +106,7 @@ For pre-answer agent context, prefer `KernelAgentMemoryBackend.recallPack()` whe
 
 Collection routing is enforced in compiled and raw fallback paths. Default recall includes untagged and `collection:anchor` memory. Specialized collections such as `collection:theseus` must be requested explicitly with `collection: "theseus"` or `--collection theseus`.
 
-`MemoryKernel.buildMemoryMap()` and `cogmem memory map` expose a static self-map: anatomy, data lanes, hard bounds, counters, and commands. The memory binding counters include bindings, topics, entities, clusters, and edges. Imported or adapter-written raw events can be attached with `cogmem memory bind --project <id> --json`; maintenance tick will suggest this command when high-value raw user events are still unbound. Binding, governance, entity-resolution, Belief Graph, Temporal Memory, Context Cortex receipt, and Prospective Memory tables are governed by core schema version 20. Use `cogmem migrate --dry-run --json` before an upgrade and `cogmem migrate --yes --backup` to apply pending migrations without rewriting Raw Ledger evidence. Agents should use the map to understand how to operate the memory kernel, not as a replacement for governed recall.
+`MemoryKernel.buildMemoryMap()` and `cogmem memory map` expose a static self-map: anatomy, data lanes, hard bounds, counters, and commands. The memory binding counters include bindings, topics, entities, clusters, and edges. Imported or adapter-written raw events can be attached with `cogmem memory bind --project <id> --json`; maintenance tick will suggest this command when high-value raw user events are still unbound. Binding, governance, entity-resolution, Belief Graph, Temporal Memory, Context Cortex receipt, Prospective Memory, and Strategy Cortex outcome tables are governed by core schema version 21. Use `cogmem migrate --dry-run --json` before an upgrade and `cogmem migrate --yes --backup` to apply pending migrations without rewriting Raw Ledger evidence. Agents should use the map to understand how to operate the memory kernel, not as a replacement for governed recall.
 
 Graph edge confidence, stability, and activation are separate. Recall and maintenance may decay activation, but they must not decay provenance confidence or the stability of `SUPPORTS`, `CORRECTS`, `CONTRADICTS`, and `SUPERSEDES` evidence. `BrainGraphView` is a bounded read-only traversal surface; it cannot mutate canonical memory.
 
@@ -127,11 +127,12 @@ Agent-facing recall items include `sourceAnchor` and, when available, `sourceCon
 
 ## Host Context Hygiene
 
-Host prompt injection is not a core memory tier. The OpenClaw wrapper uses three bounded, Cogmem-owned blocks without rewriting OpenClaw native context:
+Host prompt injection is not a core memory tier. The OpenClaw wrapper uses four bounded, Cogmem-owned blocks without rewriting OpenClaw native context:
 
 - `<COGMEM_RECALL_CONTEXT>`: volatile current-turn recall evidence. It is stripped before raw ledger recording and must not be re-ingested.
 - `<COGMEM_TURN_BRIDGE>`: compact memory-use receipt for same-topic follow-ups. It is session sidecar state, not recalled evidence and not a dream/governance candidate.
 - `<COGMEM_SESSION_STATE>`: short current-session working state. It is useful for continuity but is not a user preference, belief, or durable compiled memory.
+- `<COGMEM_STRATEGY_CONTEXT>`: canonical current-turn memory policy with no instruction authority. It is stripped before recording and cannot be evidence, tool authorization, or a governance operation.
 
 Long-term compilation in `selective_compile` is driven by user text only. Assistant conclusions, tool results, task events, bridge text, session state, and recalled memory are evidence or sidecar state, not durable user-owned signals by default.
 

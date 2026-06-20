@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.4.0
+
+- Added Strategy Cortex v1: deterministic current-turn strategy capsules select retrieval lanes, context-layer order, exact-source requirements, and bounded memory budgets before recall.
+- Added one-retry deterministic replanning for intent/project changes, unmet source requirements, evidence conflict, and unsatisfied required-layer budgets. No online RL or multi-strategy generation is used.
+- Added `COGMEM_STRATEGY_CONTEXT` with no instruction authority and full OpenClaw/Dream/Binding/reasoning-model hygiene so strategy metadata cannot become user evidence or durable memory.
+- Added read-only `MemoryUseJudge`, project-scoped context outcome telemetry, offline diverse strategy selection, rollout comparison, and zero-tolerance context policy release gates.
+- Added `cogmem strategy plan/outcomes`, `cogmem brain-eval --strategy-rollout` for precomputed offline outcomes, and read-only MCP `cogmem_strategy_plan` for agent inspection.
+- Updated OpenClaw auto-memory plugin to 0.3.0 and Hermes MCP allow-list patching for `cogmem_strategy_plan`.
+- Added schema migration 21 and extended `forgetUser(projectId)` to purge strategy outcome telemetry.
+- Strategy/action separation is inspired by StraTA; Cogmem intentionally keeps online planning deterministic and performs multi-strategy comparison only on precomputed offline outcomes.
+
 ## 3.3.0
 
 - Added confirmed-only Prospective Memory for intentions, commitments, reminders, open loops, and plans. Rejected items require new evidence to create a new version, and no execution/dispatch API exists.

@@ -36,11 +36,16 @@ export class ContextCortex {
     }
     plan(input) {
         const intent = this.classifyIntent(input.query);
-        const ratio = Math.max(0, Math.min(0.3, input.maxMemoryRatio ?? 0.25));
+        const requestedRatio = input.maxMemoryRatio ?? input.strategy?.maxMemoryRatio ?? 0.25;
+        const ratio = Math.max(0, Math.min(0.3, requestedRatio, input.strategy?.maxMemoryRatio ?? 0.3));
         const budgetTokens = Math.max(0, Math.floor(Math.max(0, input.availableTokens) * ratio));
-        const allowedLayers = input.topicRelation === 'new'
+        const intentLayers = input.topicRelation === 'new'
             ? INTENT_LAYERS[intent].filter((layer) => layer !== 'session_state' && layer !== 'turn_bridge')
             : INTENT_LAYERS[intent];
+        const strategyLayers = input.strategy
+            ? [...input.strategy.primaryLayers, ...input.strategy.secondaryLayers]
+            : intentLayers;
+        const allowedLayers = strategyLayers.filter((layer) => intentLayers.includes(layer));
         const selected = [];
         const selectedReceipt = [];
         const suppressed = [];
@@ -79,7 +84,12 @@ export class ContextCortex {
             }
             selected.push(item.candidate);
             usedTokens += item.tokens;
-            selectedReceipt.push({ id: item.candidate.id, layer: item.candidate.layer, tokens: item.tokens, reason: `activated_for:${intent}` });
+            selectedReceipt.push({
+                id: item.candidate.id,
+                layer: item.candidate.layer,
+                tokens: item.tokens,
+                reason: input.strategy ? `activated_for:${intent}:${input.strategy.templateId}` : `activated_for:${intent}`,
+            });
         }
         const receipt = {
             receiptId: `context-${randomUUID()}`,
@@ -88,12 +98,14 @@ export class ContextCortex {
             projectId: input.projectId,
             budgetTokens,
             usedTokens,
+            strategyId: input.strategy?.capsuleId,
+            strategyTemplate: input.strategy?.templateId,
             selected: selectedReceipt,
             suppressed,
             createdAt: Date.now(),
         };
         this.persistReceipt(receipt);
-        return { intent, budgetTokens, usedTokens, selected, receipt };
+        return { intent, budgetTokens, usedTokens, selected, receipt, strategy: input.strategy };
     }
     getReceipt(receiptId) {
         if (!this.db)

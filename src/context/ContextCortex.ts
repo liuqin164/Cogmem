@@ -1,6 +1,8 @@
 import Database from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
 
+import type { StrategyCapsule, StrategyTemplateId } from '../strategy/StrategyCapsule.js';
+
 export type ContextIntent =
   | 'greeting'
   | 'short_followup'
@@ -52,6 +54,8 @@ export interface ContextActivationReceipt {
   projectId?: string;
   budgetTokens: number;
   usedTokens: number;
+  strategyId?: string;
+  strategyTemplate?: StrategyTemplateId;
   selected: Array<{ id: string; layer: ContextLayer; tokens: number; reason: string }>;
   suppressed: Array<{ id: string; layer: ContextLayer; reason: ContextSuppressionReason }>;
   createdAt: number;
@@ -66,6 +70,7 @@ export interface ContextPlanInput {
   currentSessionId?: string;
   topicRelation?: 'same' | 'new' | 'unknown';
   allowSensitive?: boolean;
+  strategy?: StrategyCapsule;
 }
 
 export interface ContextActivationPlan {
@@ -74,6 +79,7 @@ export interface ContextActivationPlan {
   usedTokens: number;
   selected: ContextCandidate[];
   receipt: ContextActivationReceipt;
+  strategy?: StrategyCapsule;
 }
 
 const INTENT_LAYERS: Record<ContextIntent, ContextLayer[]> = {
@@ -106,11 +112,16 @@ export class ContextCortex {
 
   plan(input: ContextPlanInput): ContextActivationPlan {
     const intent = this.classifyIntent(input.query);
-    const ratio = Math.max(0, Math.min(0.3, input.maxMemoryRatio ?? 0.25));
+    const requestedRatio = input.maxMemoryRatio ?? input.strategy?.maxMemoryRatio ?? 0.25;
+    const ratio = Math.max(0, Math.min(0.3, requestedRatio, input.strategy?.maxMemoryRatio ?? 0.3));
     const budgetTokens = Math.max(0, Math.floor(Math.max(0, input.availableTokens) * ratio));
-    const allowedLayers = input.topicRelation === 'new'
+    const intentLayers = input.topicRelation === 'new'
       ? INTENT_LAYERS[intent].filter((layer) => layer !== 'session_state' && layer !== 'turn_bridge')
       : INTENT_LAYERS[intent];
+    const strategyLayers = input.strategy
+      ? [...input.strategy.primaryLayers, ...input.strategy.secondaryLayers]
+      : intentLayers;
+    const allowedLayers = strategyLayers.filter((layer) => intentLayers.includes(layer));
     const selected: ContextCandidate[] = [];
     const selectedReceipt: ContextActivationReceipt['selected'] = [];
     const suppressed: ContextActivationReceipt['suppressed'] = [];
@@ -152,7 +163,12 @@ export class ContextCortex {
       }
       selected.push(item.candidate);
       usedTokens += item.tokens;
-      selectedReceipt.push({ id: item.candidate.id, layer: item.candidate.layer, tokens: item.tokens, reason: `activated_for:${intent}` });
+      selectedReceipt.push({
+        id: item.candidate.id,
+        layer: item.candidate.layer,
+        tokens: item.tokens,
+        reason: input.strategy ? `activated_for:${intent}:${input.strategy.templateId}` : `activated_for:${intent}`,
+      });
     }
 
     const receipt: ContextActivationReceipt = {
@@ -162,12 +178,14 @@ export class ContextCortex {
       projectId: input.projectId,
       budgetTokens,
       usedTokens,
+      strategyId: input.strategy?.capsuleId,
+      strategyTemplate: input.strategy?.templateId,
       selected: selectedReceipt,
       suppressed,
       createdAt: Date.now(),
     };
     this.persistReceipt(receipt);
-    return { intent, budgetTokens, usedTokens, selected, receipt };
+    return { intent, budgetTokens, usedTokens, selected, receipt, strategy: input.strategy };
   }
 
   getReceipt(receiptId: string): ContextActivationReceipt | null {

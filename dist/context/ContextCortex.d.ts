@@ -1,4 +1,5 @@
 import Database from 'bun:sqlite';
+import type { StrategyCapsule, StrategyTemplateId } from '../strategy/StrategyCapsule.js';
 export type ContextIntent = 'greeting' | 'short_followup' | 'exact_quote' | 'decision_history' | 'preference_lookup' | 'project_status' | 'debugging' | 'general_memory';
 export type ContextLayer = 'session_state' | 'turn_bridge' | 'belief' | 'temporal' | 'graph' | 'raw_source' | 'vector';
 export interface ContextCandidate {
@@ -22,6 +23,8 @@ export interface ContextActivationReceipt {
     projectId?: string;
     budgetTokens: number;
     usedTokens: number;
+    strategyId?: string;
+    strategyTemplate?: StrategyTemplateId;
     selected: Array<{
         id: string;
         layer: ContextLayer;
@@ -44,6 +47,7 @@ export interface ContextPlanInput {
     currentSessionId?: string;
     topicRelation?: 'same' | 'new' | 'unknown';
     allowSensitive?: boolean;
+    strategy?: StrategyCapsule;
 }
 export interface ContextActivationPlan {
     intent: ContextIntent;
@@ -51,6 +55,7 @@ export interface ContextActivationPlan {
     usedTokens: number;
     selected: ContextCandidate[];
     receipt: ContextActivationReceipt;
+    strategy?: StrategyCapsule;
 }
 export declare class ContextCortex {
     private readonly db?;

@@ -1,6 +1,7 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
 import { type MemoryEventCharRange, type MemoryEventSourceRange, type SourceContextWindowMetadata } from '../recall/SourceContextMetadata.js';
 import type { BeliefRecord, MemoryEvent } from '../types/index.js';
+import type { StrategyRetrievalPolicy } from '../strategy/StrategyCapsule.js';
 import { type AgentRecallIntent, type AgentRecallQueryPlan } from './AgentRecallQueryCompiler.js';
 export type AgentTurnIngestMode = 'immediate_compile' | 'selective_compile' | 'raw_archive_only' | 'raw_then_dream';
 export type AgentTurnCompileReason = 'immediate_compile' | 'durable_signal_detected' | 'low_signal_turn' | 'raw_archive_only' | 'raw_then_dream';
@@ -41,6 +42,7 @@ export interface AgentRecallQuery {
     limit?: number;
     startTime?: number;
     endTime?: number;
+    retrievalPolicy?: StrategyRetrievalPolicy;
 }
 export interface AgentRecallSourceAnchor {
     eventId?: string;

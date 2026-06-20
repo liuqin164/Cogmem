@@ -138,6 +138,12 @@ describe('Governance and security v1.14', () => {
       entityId: otherProjectOwnedEntity.entityId, projectId: 'forget-me', mentionType: 'referenced',
     });
     expect(kernel.buildMemoryMap({ projectId: 'forget-me' }).counters.activationHotspots).toBe(1);
+    const capsule = kernel.strategyCortex.plan({ query: 'project status', intent: 'project_status', projectId: 'forget-me' });
+    kernel.contextOutcomeStore.record(kernel.memoryUseJudge.judge({
+      receiptId: 'forget-outcome', capsule,
+      selected: [{ id: 'memory', layer: 'belief', hasSourceEvidence: true }],
+      usedTokens: 10, budgetTokens: 100, latencyMs: 5,
+    }));
 
     const result = await kernel.forgetUser('forget-me', 'user_requested');
 
@@ -152,7 +158,7 @@ describe('Governance and security v1.14', () => {
     expect(kernel.runMaintenanceTick({ projectId: 'forget-me' }).chargeVector.activationHotspots).toBe(0);
     const db = kernel.factStore.getDatabase();
     for (const table of [
-      'prospective_memories', 'context_activation_receipts', 'memory_timeline_entries',
+      'prospective_memories', 'context_strategy_outcomes', 'context_activation_receipts', 'memory_timeline_entries',
       'belief_graph_nodes', 'entity_merge_candidates', 'memory_governance_plans',
     ]) {
       expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE project_id = ?`).get('forget-me')).toEqual({ count: 0 });
