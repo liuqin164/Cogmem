@@ -1,5 +1,5 @@
 export const COGMEM_RECALL_BLOCK_RE =
-  /<COGMEM_RECALL_CONTEXT\b[\s\S]*?<\/COGMEM_RECALL_CONTEXT>/g;
+  /<(COGMEM_RECALL_CONTEXT|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g;
 
 export interface StripCogmemRecallBlocksResult {
   text: string;

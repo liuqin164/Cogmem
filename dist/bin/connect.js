@@ -8,6 +8,7 @@ const HERMES_COGMEM_TOOLS = [
     'cogmem_remember_turn',
     'cogmem_recall',
     'cogmem_explain_recall',
+    'cogmem_strategy_plan',
     'cogmem_memory_map',
     'cogmem_maintenance_tick',
     'cogmem_prospective',

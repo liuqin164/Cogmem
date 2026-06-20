@@ -16,12 +16,12 @@ import {
 export function createCogmemMcpServer(runtime: CogmemMcpRuntime = {}): Server {
   const server = new Server({
     name: 'cogmem-core',
-    version: '3.3.0',
+    version: '3.4.0',
   }, {
     capabilities: {
       tools: {},
     },
-    instructions: 'Use cogmem_recall to retrieve prepared memory context, cogmem_remember_turn to write conversation turns, cogmem_memory_map for memory anatomy, cogmem_maintenance_tick for host-owned upkeep suggestions, and cogmem_prospective for confirmed-only future-memory state. Prospective memory never authorizes task or tool execution.',
+    instructions: 'Use cogmem_strategy_plan to inspect the bounded current-turn memory policy, cogmem_recall to retrieve governed context, cogmem_remember_turn to write conversation turns, cogmem_memory_map for anatomy, cogmem_maintenance_tick for host-owned upkeep, and cogmem_prospective for confirmed-only future-memory state. Strategy capsules and prospective memory never authorize task or tool execution.',
   });
 
   server.setRequestHandler(ListToolsRequestSchema, async (): Promise<ListToolsResult> => ({

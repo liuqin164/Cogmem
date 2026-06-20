@@ -263,9 +263,15 @@ function runRecall(kernel, args) {
     if (!args.query)
         throw new Error(`Missing --query.\n${usage()}`);
     const backend = new KernelAgentMemoryBackend(kernel);
+    const projectId = args.projectId || 'openclaw';
+    const strategyCapsule = kernel.strategyCortex.plan({
+        query: args.query,
+        intent: kernel.contextCortex.classifyIntent(args.query),
+        projectId,
+    });
     const result = backend.recall({
         agentId: args.agentId || 'openclaw',
-        projectId: args.projectId || 'openclaw',
+        projectId,
         collection: args.collection,
         workspaceId: args.workspaceId,
         sessionId: args.sessionId,
@@ -274,16 +280,18 @@ function runRecall(kernel, args) {
         intent: args.intent,
         query: args.query,
         limit: args.limit || 5,
+        retrievalPolicy: strategyCapsule.retrievalPolicy,
     });
     return {
         query: args.query,
         agentId: args.agentId || 'openclaw',
-        projectId: args.projectId || 'openclaw',
+        projectId,
         collection: args.collection,
         recallMode: result.recallMode,
         fallbackUsed: result.fallbackUsed,
         queryPlan: result.queryPlan,
         decisionTrace: result.decisionTrace,
+        strategyCapsule,
         narrative: result.narrative,
         items: result.items,
     };

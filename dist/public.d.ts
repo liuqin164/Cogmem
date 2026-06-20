@@ -28,6 +28,8 @@ export { TemporalMemoryService, type RecordTimelineEntryInput, type TemporalBeli
 export { ContextCortex, type ContextActivationPlan, type ContextActivationReceipt, type ContextCandidate, type ContextIntent, type ContextLayer, type ContextPlanInput, type ContextSuppressionReason, } from './context/index.js';
 export { ProspectiveMemoryService, type ProposeProspectiveMemoryInput, type ProspectiveEvidenceLookup, type ProspectiveEvidenceRecord, type ProspectiveMemoryListOptions, type ProspectiveMemoryProposer, type ProspectiveMemoryRecord, type ProspectiveMemoryStatus, type ProspectiveMemoryType, type ResolveProspectiveMemoryInput, } from './prospective/index.js';
 export { BrainEvalRunner, type BrainEvalMetrics, type BrainEvalReport, type BrainEvalSample, } from './benchmark/BrainEval.js';
+export { StrategyConditionedCandidateBuilder, StrategyCortex, StrategyTemplateRegistry, formatStrategyContext, type RetrievalLane, type StrategyCapsule, type StrategyPlanInput, type StrategyReplanDecision, type StrategyReplanObservation, type StrategyReplanReason, type StrategyRetrievalPolicy, type StrategySourcePolicy, type StrategyTemplate, type StrategyTemplateId, } from './strategy/index.js';
+export { ContextOutcomeStore, ContextPolicyScorer, MemoryUseJudge, StrategyDiversitySelector, StrategyRolloutEvaluator, type ContextPolicyScore, type JudgedMemorySelection, type MemoryUseJudgeInput, type MemoryUseViolation, type StrategyRolloutOutcome, type StrategyRolloutReport, type StrategyVectorCandidate, } from './eval/strategy/index.js';
 /**
  * Agent framework integration facade.
  * @stable @since 2.0.0

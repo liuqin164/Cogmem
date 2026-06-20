@@ -197,6 +197,7 @@ The wrapper does not rewrite OpenClaw's native prompt, tool instructions, skills
 - `<COGMEM_RECALL_CONTEXT>`: volatile current-turn recall evidence. It is stripped before queued remember jobs are written.
 - `<COGMEM_TURN_BRIDGE>`: compact memory-use receipt for same-topic follow-ups, stored under `.cogmem/session_bridges/openclaw/`.
 - `<COGMEM_SESSION_STATE>`: short current-session working state, stored under `.cogmem/session_state/openclaw/`.
+- `<COGMEM_STRATEGY_CONTEXT>`: CPU-owned current-turn memory policy with no instruction authority. It is stripped before recording and never becomes evidence.
 
 Do not copy these blocks into long-term memory, dream candidates, or user preferences. If details are needed, re-run recall or inspect `sourceLocator`.
 

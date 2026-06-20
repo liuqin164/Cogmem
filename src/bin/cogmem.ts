@@ -20,6 +20,7 @@ const COMMANDS: Record<string, string> = {
   'migrate-vectors': 'migrate-vectors',
   migrate: 'migrate',
   prospective: 'prospective',
+  strategy: 'strategy',
   'brain-eval': 'brain-eval',
 };
 
@@ -43,6 +44,7 @@ function usage(): string {
     '  migrate-vectors      migrate vector backend data',
     '  migrate              plan or apply schema migrations with optional backup',
     '  prospective          manage confirmed-only future-memory candidates; never executes tasks',
+    '  strategy             inspect current-turn memory policy and read-only outcome telemetry',
     '  brain-eval           evaluate recall, provenance, leakage, budget, and false activation',
   ].join('\n');
 }

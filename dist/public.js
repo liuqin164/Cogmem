@@ -26,6 +26,8 @@ export { TemporalMemoryService, } from './temporal/index.js';
 export { ContextCortex, } from './context/index.js';
 export { ProspectiveMemoryService, } from './prospective/index.js';
 export { BrainEvalRunner, } from './benchmark/BrainEval.js';
+export { StrategyConditionedCandidateBuilder, StrategyCortex, StrategyTemplateRegistry, formatStrategyContext, } from './strategy/index.js';
+export { ContextOutcomeStore, ContextPolicyScorer, MemoryUseJudge, StrategyDiversitySelector, StrategyRolloutEvaluator, } from './eval/strategy/index.js';
 /**
  * Agent framework integration facade.
  * @stable @since 2.0.0

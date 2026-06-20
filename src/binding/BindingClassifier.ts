@@ -132,6 +132,7 @@ export function normalizeForBinding(text: string): string {
     .replace(/<COGMEM_RECALL_CONTEXT\b[\s\S]*?<\/COGMEM_RECALL_CONTEXT>/g, ' ')
     .replace(/<COGMEM_TURN_BRIDGE\b[\s\S]*?<\/COGMEM_TURN_BRIDGE>/g, ' ')
     .replace(/<COGMEM_SESSION_STATE\b[\s\S]*?<\/COGMEM_SESSION_STATE>/g, ' ')
+    .replace(/<COGMEM_STRATEGY_CONTEXT\b[\s\S]*?<\/COGMEM_STRATEGY_CONTEXT>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -271,7 +272,7 @@ function hasMemoryWritePipelineCue(lowered: string): boolean {
 }
 
 function hasContextHygieneCue(text: string): boolean {
-  return /COGMEM_RECALL_CONTEXT|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|context hygiene|recall block|上下文|污染|长期记忆|清洗|注入/.test(text);
+  return /COGMEM_RECALL_CONTEXT|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|COGMEM_STRATEGY_CONTEXT|context hygiene|recall block|上下文|污染|长期记忆|清洗|注入/.test(text);
 }
 
 function hasOpenClawCue(lowered: string): boolean {

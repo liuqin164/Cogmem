@@ -913,6 +913,7 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(indexBody).toContain('function shouldInjectTurnBridge(query, receipt, config)');
   expect(indexBody).toContain('COGMEM_TURN_BRIDGE');
   expect(indexBody).toContain('COGMEM_SESSION_STATE');
+  expect(indexBody).toContain('COGMEM_STRATEGY_CONTEXT');
   expect(indexBody).toContain('session_bridges');
   expect(indexBody).toContain('session_state');
   expect(indexBody).toContain('cleanUser');
@@ -923,6 +924,12 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   const cortexBridgeBody = readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8');
   expect(cortexBridgeBody).toContain('KernelAgentMemoryBackend');
   expect(cortexBridgeBody).toContain('kernel.contextCortex.plan');
+  expect(cortexBridgeBody).toContain('kernel.strategyCortex.plan');
+  expect(cortexBridgeBody).toContain('kernel.strategyCortex.replan');
+  expect(cortexBridgeBody).toContain('retrievalPolicy');
+  expect(cortexBridgeBody).toContain('formatStrategyContext');
+  expect(cortexBridgeBody).toContain('kernel.memoryUseJudge.judge');
+  expect(cortexBridgeBody).toContain('kernel.contextOutcomeStore.record');
   expect(cortexBridgeBody).toContain('activationReceipt');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
   expect(manifest.configSchema.type).toBe('object');
@@ -941,6 +948,7 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(manifest.configSchema.properties.sourceWindowMaxChars.type).toBe('number');
   expect(manifest.configSchema.properties.includeSourceWindowByDefault.type).toBe('boolean');
   expect(manifest.configSchema.properties.contextCortexEnabled.type).toBe('boolean');
+  expect(manifest.configSchema.properties.strategyCortexEnabled.type).toBe('boolean');
   expect(manifest.configSchema.properties.contextAvailableTokens.type).toBe('number');
   expect(manifest.configSchema.properties.contextMemoryMaxRatio.type).toBe('number');
   expect(manifest.configSchema.properties.turnBridgeEnabled.type).toBe('boolean');
@@ -972,6 +980,7 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.includeSourceWindowByDefault).toBe(false);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.contextCortexEnabled).toBe(true);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.contextMemoryMaxRatio).toBe(0.25);
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.strategyCortexEnabled).toBe(true);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeEnabled).toBe(true);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeMaxTurns).toBe(3);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeMaxChars).toBe(1200);
@@ -1172,6 +1181,7 @@ test('cogmem-connect hermes --auto patches Hermes MCP config without claiming na
   expect(config).toContain('cogmem_memory_map');
   expect(config).toContain('cogmem_maintenance_tick');
   expect(config).toContain('cogmem_prospective');
+  expect(config).toContain('cogmem_strategy_plan');
   expect(config).not.toContain('memory:\n  provider: cogmem');
 });
 
@@ -1217,6 +1227,7 @@ test('cogmem-connect hermes --auto updates existing Cogmem MCP tool allow-list',
   expect(config).toContain('cogmem_memory_map');
   expect(config).toContain('cogmem_maintenance_tick');
   expect(config).toContain('cogmem_prospective');
+  expect(config).toContain('cogmem_strategy_plan');
   expect(config.match(/cogmem_recall/g)?.length).toBe(1);
 });
 

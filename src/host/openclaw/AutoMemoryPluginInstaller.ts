@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 
 const PLUGIN_ID = 'cogmem-auto-memory';
-const PLUGIN_VERSION = '0.2.0';
+const PLUGIN_VERSION = '0.3.0';
 
 function defaultPublicEntrypoint(): string {
   return join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), 'public.js');
@@ -193,6 +193,7 @@ function buildPatchedOpenClawConfig(input: {
       sourceWindowMaxChars: 1200,
       includeSourceWindowByDefault: false,
       contextCortexEnabled: true,
+      strategyCortexEnabled: true,
       contextAvailableTokens: 16000,
       contextMemoryMaxRatio: 0.25,
       turnBridgeEnabled: true,
@@ -263,6 +264,7 @@ function buildPluginFiles(): PluginFiles {
           sourceWindowMaxChars: { type: 'number' },
           includeSourceWindowByDefault: { type: 'boolean' },
           contextCortexEnabled: { type: 'boolean' },
+          strategyCortexEnabled: { type: 'boolean' },
           contextAvailableTokens: { type: 'number' },
           contextMemoryMaxRatio: { type: 'number' },
           turnBridgeEnabled: { type: 'boolean' },
@@ -323,6 +325,7 @@ const DEFAULTS = {
   sourceWindowMaxChars: 1200,
   includeSourceWindowByDefault: false,
   contextCortexEnabled: true,
+  strategyCortexEnabled: true,
   contextAvailableTokens: 16000,
   contextMemoryMaxRatio: 0.25,
   turnBridgeEnabled: true,
@@ -395,7 +398,7 @@ function stripCogmemRecallBlocks(text) {
   let strippedChars = 0;
   let blockCount = 0;
   const output = input
-    .replace(/<COGMEM_RECALL_CONTEXT\b[\s\S]*?<\/COGMEM_RECALL_CONTEXT>/g, (match) => {
+    .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, (match) => {
       strippedChars += match.length;
       blockCount += 1;
       return '';
@@ -706,6 +709,7 @@ function bridgeConfig(config) {
     sourceWindowMaxChars: config.sourceWindowMaxChars || 1200,
     includeSourceWindowByDefault: config.includeSourceWindowByDefault === true,
     contextCortexEnabled: config.contextCortexEnabled !== false,
+    strategyCortexEnabled: config.strategyCortexEnabled !== false,
     contextAvailableTokens: config.contextAvailableTokens || 16000,
     contextMemoryMaxRatio: config.contextMemoryMaxRatio || 0.25,
     rememberQueuePath: rememberQueuePath(config),
@@ -826,6 +830,34 @@ function extractLifecyclePayload(event) {
   };
 }
 
+function contextOutcomePayload(recall, config) {
+  if (!recall || !recall.strategyCapsule || !recall.activationReceipt) return undefined;
+  const items = Array.isArray(recall.items) ? recall.items : [];
+  return {
+    receiptId: recall.activationReceipt.receiptId,
+    capsule: recall.strategyCapsule,
+    selected: items.map((item) => {
+      const sourceType = String(item && item.sourceType || 'compiled_memory');
+      const sourceRole = item && item.sourceAnchor && item.sourceAnchor.role;
+      const tags = Array.isArray(item && item.tags) ? item.tags : [];
+      return {
+        id: String(item && item.id || 'recall-item'),
+        layer: item && item.whyMatched === 'memory_binding_graph' ? 'graph'
+          : sourceType.startsWith('raw_ledger') ? 'raw_source' : 'belief',
+        hasSourceEvidence: Boolean(item && item.sourceAnchor && item.sourceAnchor.eventId),
+        superseded: tags.includes('status:superseded'),
+        crossProject: Boolean(item && item.projectId && item.projectId !== (config.projectId || 'openclaw')),
+        ownership: tags.includes('ownership:user') ? 'user' : undefined,
+        sourceRoles: sourceRole ? [sourceRole] : [],
+        containsStrategyContext: String(item && item.text || '').includes('<COGMEM_STRATEGY_CONTEXT'),
+      };
+    }),
+    usedTokens: Number(recall.activationReceipt.usedTokens || 0),
+    budgetTokens: Number(recall.activationReceipt.budgetTokens || 0),
+    latencyMs: Number(recall.recallLatencyMs || 0),
+  };
+}
+
 function logWarn(api, message) {
   if (api && api.logger && typeof api.logger.warn === 'function') {
     api.logger.warn(message);
@@ -852,7 +884,7 @@ function audit(config, record) {
 const plugin = {
   id: PLUGIN_ID,
   name: 'CogMem Auto Memory',
-  version: '0.2.0',
+  version: '0.3.0',
   register(api) {
     if (!api || typeof api.on !== 'function') {
       throw new Error('OpenClaw plugin API missing api.on');
@@ -916,6 +948,9 @@ const plugin = {
         lastRecallForSession.set(sessionId, {
           items: Array.isArray(recalled.items) ? recalled.items : [],
           context: recalled.context || '',
+          activationReceipt: recalled.activationReceipt,
+          strategyCapsule: recalled.strategyCapsule,
+          recallLatencyMs: recalled.recallLatencyMs,
         });
         if (recalled.anchorEventId) {
           lastRecallAnchors.set(sessionId, {
@@ -938,6 +973,9 @@ const plugin = {
           decisionTrace: recalled.decisionTrace,
           contextIntent,
           activationReceipt: recalled.activationReceipt,
+          strategyCapsule: recalled.strategyCapsule,
+          strategyReplanned: recalled.strategyReplanned === true,
+          strategyReplanReason: recalled.strategyReplanReason,
           anchorEventId: recalled.anchorEventId,
           hygiene: {
             strippedRecallBlocks: cleanQuery.stripped,
@@ -1000,6 +1038,7 @@ const plugin = {
           assistantText: assistantText.slice(0, config.maxAssistantChars || 6000),
           config: bridgeConfig(config),
           hygiene,
+          contextOutcome: contextOutcomePayload(lastRecallForSession.get(sessionId), config),
           ...lifecycle,
         });
         spawnBridgeDrain(config);
@@ -1080,13 +1119,18 @@ if (!config.configPath) {
   throw new Error('missing cogmem configPath');
 }
 
-const { createMemoryKernelFromConfig, KernelAgentMemoryBackend } = await loadCogmemApi(config);
+const { createMemoryKernelFromConfig, KernelAgentMemoryBackend, formatStrategyContext } = await loadCogmemApi(config);
 const kernel = createMemoryKernelFromConfig({ configPath: config.configPath });
 const memory = new KernelAgentMemoryBackend(kernel);
 
 try {
   if (command === 'recall') {
-    const result = await memory.recall({
+    const recallStartedAt = Date.now();
+    const contextIntent = kernel.contextCortex.classifyIntent(input.query || '');
+    let strategyCapsule = config.strategyCortexEnabled === false ? undefined : kernel.strategyCortex.plan({
+      query: input.query || '', intent: contextIntent, projectId: config.projectId || 'openclaw',
+    });
+    let result = await memory.recall({
       agentId: config.agentId || 'openclaw',
       projectId: config.projectId || 'openclaw',
       query: input.query || '',
@@ -1097,7 +1141,30 @@ try {
       anchorEventId: input.anchorEventId,
       anchorText: input.anchorText,
       limit: Number(config.limit || 3),
+      retrievalPolicy: strategyCapsule && strategyCapsule.retrievalPolicy,
     });
+    const sourceRequirementSatisfied = result.items.some((item) => item && item.sourceType && String(item.sourceType).startsWith('raw_ledger'));
+    const replan = strategyCapsule ? kernel.strategyCortex.replan(strategyCapsule, {
+      intent: contextIntent,
+      projectId: config.projectId || 'openclaw',
+      sourceRequirementSatisfied,
+    }) : { replanned: false, capsule: undefined };
+    if (replan.replanned) {
+      strategyCapsule = replan.capsule;
+      result = await memory.recall({
+        agentId: config.agentId || 'openclaw',
+        projectId: config.projectId || 'openclaw',
+        query: input.query || '',
+        sessionId: input.sessionId,
+        threadId: input.threadId,
+        excludeSessionId: input.excludeSessionId,
+        intent: input.intent || 'memory_recall',
+        anchorEventId: input.anchorEventId,
+        anchorText: input.anchorText,
+        limit: Number(config.limit || 3),
+        retrievalPolicy: strategyCapsule && strategyCapsule.retrievalPolicy,
+      });
+    }
     const activationPlan = config.contextCortexEnabled === false
       ? undefined
       : kernel.contextCortex.plan({
@@ -1106,14 +1173,16 @@ try {
         currentSessionId: input.sessionId,
         availableTokens: Number(config.contextAvailableTokens || 16000),
         maxMemoryRatio: Number(config.contextMemoryMaxRatio || 0.25),
+        strategy: strategyCapsule,
         candidates: result.items.map(contextCandidateFromRecallItem),
       });
     const plannedResult = activationPlan
       ? { ...result, items: activationPlan.selected.map((candidate) => candidate.recallItem) }
       : result;
     const anchorItem = plannedResult.items.find((item) => item && item.sourceAnchor && item.sourceAnchor.eventId);
+    const recallContext = formatRecallContext(plannedResult, config);
     console.log(JSON.stringify({
-      context: formatRecallContext(plannedResult, config),
+      context: recallContext ? (strategyCapsule ? formatStrategyContext(strategyCapsule) + '\n\n' : '') + recallContext : '',
       items: compactRecallItems(plannedResult.items, config),
       itemCount: plannedResult.items.length,
       recallMode: result.recallMode,
@@ -1124,6 +1193,10 @@ try {
       queryPlan: result.queryPlan,
       decisionTrace: result.decisionTrace,
       activationReceipt: activationPlan && activationPlan.receipt,
+      strategyCapsule,
+      strategyReplanned: replan.replanned,
+      strategyReplanReason: replan.reason,
+      recallLatencyMs: Date.now() - recallStartedAt,
     }));
   } else if (command === 'remember') {
     const result = await rememberPayload(input, config);
@@ -1160,7 +1233,7 @@ function stripCogmemRecallBlocks(text) {
   let strippedChars = 0;
   let blockCount = 0;
   const output = input
-    .replace(/<COGMEM_RECALL_CONTEXT\b[\s\S]*?<\/COGMEM_RECALL_CONTEXT>/g, (match) => {
+    .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, (match) => {
       strippedChars += match.length;
       blockCount += 1;
       return '';
@@ -1285,12 +1358,20 @@ async function rememberPayload(payload, bridgeConfig) {
     taskEventCount += 1;
   }
 
+  let contextOutcomeId;
+  if (payload.contextOutcome) {
+    const outcome = kernel.memoryUseJudge.judge(payload.contextOutcome);
+    kernel.contextOutcomeStore.record(outcome);
+    contextOutcomeId = outcome.outcomeId;
+  }
+
   return {
     ...result,
     hygiene,
     toolCallCount,
     toolResultCount,
     taskEventCount,
+    contextOutcomeId,
   };
 }
 
@@ -1351,6 +1432,7 @@ function compactRecallItems(items, config) {
     text: truncateLineWithMeta(item.text, 300).text,
     tags: Array.isArray(item.tags) ? item.tags.slice(0, 12) : [],
     sourceType: item.sourceType,
+    projectId: item.projectId,
     sourceAnchor: item.sourceAnchor,
     whyMatched: item.whyMatched,
   }));
@@ -1359,10 +1441,11 @@ function compactRecallItems(items, config) {
 function contextCandidateFromRecallItem(item) {
   const sourceType = String(item && item.sourceType || 'compiled_memory');
   const raw = sourceType.startsWith('raw_ledger');
+  const graph = item && item.whyMatched === 'memory_binding_graph';
   const sourceRole = item && item.sourceAnchor && item.sourceAnchor.role;
   return {
     id: String(item && item.id || 'recall-item'),
-    layer: raw ? 'raw_source' : 'belief',
+    layer: graph ? 'graph' : raw ? 'raw_source' : 'belief',
     content: String(item && item.text || ''),
     estimatedTokens: Math.max(1, Math.ceil(String(item && item.text || '').length / 4)),
     confidence: Number.isFinite(item && item.confidence) ? item.confidence : 0.5,

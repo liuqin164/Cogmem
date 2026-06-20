@@ -81,6 +81,24 @@ export function listCogmemMcpTools() {
             },
         },
         {
+            name: 'cogmem_strategy_plan',
+            description: 'Return the deterministic current-turn memory strategy capsule with no instruction authority. This tool does not recall, write, or mutate memory.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    query: STRING_SCHEMA,
+                    projectId: STRING_SCHEMA,
+                },
+                required: ['query'],
+            },
+            annotations: {
+                title: 'Plan Memory Strategy',
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+            },
+        },
+        {
             name: 'cogmem_memory_map',
             description: 'Return the self-describing cogmem memory map: anatomy, data lanes, bounds, counters, and commands an agent should use.',
             inputSchema: {
@@ -155,6 +173,15 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
                 return recall(opened.kernel, input, false);
             case 'cogmem_explain_recall':
                 return recall(opened.kernel, input, true);
+            case 'cogmem_strategy_plan': {
+                const query = requiredString(input.query, 'query');
+                const intent = opened.kernel.contextCortex.classifyIntent(query);
+                return jsonResult(opened.kernel.strategyCortex.plan({
+                    query,
+                    intent,
+                    projectId: optionalString(input.projectId),
+                }));
+            }
             case 'cogmem_memory_map':
                 return jsonResult(opened.kernel.buildMemoryMap({ projectId: optionalString(input.projectId) }));
             case 'cogmem_maintenance_tick':
@@ -247,6 +274,8 @@ function recall(kernel, input, includeExplanation) {
     const projectId = requestedProjectId || agentId;
     if (!includeExplanation) {
         const memory = new KernelAgentMemoryBackend(kernel);
+        const intent = kernel.contextCortex.classifyIntent(query);
+        const strategyCapsule = kernel.strategyCortex.plan({ query, intent, projectId });
         const result = memory.recall({
             agentId,
             projectId,
@@ -255,6 +284,7 @@ function recall(kernel, input, includeExplanation) {
             limit,
             startTime,
             endTime,
+            retrievalPolicy: strategyCapsule.retrievalPolicy,
         });
         return jsonResult({
             query,
@@ -264,6 +294,7 @@ function recall(kernel, input, includeExplanation) {
             fallbackUsed: result.fallbackUsed,
             queryPlan: result.queryPlan,
             decisionTrace: result.decisionTrace,
+            strategyCapsule,
             narrative: result.narrative,
             temporalLabels: result.temporalTraversal?.labels,
             items: result.items,

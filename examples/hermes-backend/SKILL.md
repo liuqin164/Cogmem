@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for Hermes through MCP.
-version: 3.3.0
+version: 3.4.0
 metadata:
   hermes:
     tags: [memory, mcp, cogmem, agent-memory]
@@ -287,6 +287,7 @@ mcp_servers:
         - cogmem_remember_turn
         - cogmem_recall
         - cogmem_explain_recall
+        - cogmem_strategy_plan
         - cogmem_memory_map
         - cogmem_maintenance_tick
         - cogmem_prospective
@@ -296,7 +297,7 @@ The command path is resolved by `cogmem connect hermes`: it uses `COGMEM_MCP_BIN
 
 When Hermes calls `cogmem_recall`, it should pass `projectId: "hermes"` and may omit `agentId`; the MCP bridge infers `agentId` from `projectId`. The returned `items` use the same shape as `cogmem memory recall --project hermes --agent hermes --json`, including `raw_ledger` items, labeled `sourceContext` events, `sourceContext.window`, and `sourceContext.locator.command` when vectors are empty or compiled evidence misses.
 
-Hermes may pass `collection: "theseus"` to `cogmem_recall` when it wants creative artifacts. Expose `cogmem_memory_map` and `cogmem_maintenance_tick` only to agents that are allowed to inspect memory anatomy or request host-owned upkeep. `cogmem_prospective` manages candidate state only; even a confirmed due item requires normal host authorization before any action.
+Hermes may pass `collection: "theseus"` to `cogmem_recall` when it wants creative artifacts. `cogmem_strategy_plan` is a read-only inspection tool: its capsule has no instruction authority and never authorizes work. Expose `cogmem_memory_map` and `cogmem_maintenance_tick` only to agents that are allowed to inspect memory anatomy or request host-owned upkeep. `cogmem_prospective` manages candidate state only; even a confirmed due item requires normal host authorization before any action.
 
 Then reload MCP inside Hermes:
 

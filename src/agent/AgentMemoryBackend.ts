@@ -10,6 +10,7 @@ import {
 } from '../recall/SourceContextMetadata.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
+import type { StrategyRetrievalPolicy } from '../strategy/StrategyCapsule.js';
 import {
   compileAgentRecallQuery,
   type AgentRecallIntent,
@@ -68,6 +69,7 @@ export interface AgentRecallQuery {
   limit?: number;
   startTime?: number;
   endTime?: number;
+  retrievalPolicy?: StrategyRetrievalPolicy;
 }
 
 export interface AgentRecallSourceAnchor {
@@ -510,18 +512,29 @@ export class KernelAgentMemoryBackend {
     }
 
     const limit = query.limit ?? 5;
-    const graphItems = this.memoryBindingGraphItemsForQuery(query, queryPlan, limit);
+    const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
+    const allowsCompiled = laneAllowed(query.retrievalPolicy, 'compiled');
+    const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
+    const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, limit) : [];
     const retrievalLimit = Math.max(limit * 4, 24);
-    const result = this.kernel.navigateMemory(queryPlan.primarySearchText, {
-      projectId: query.projectId,
-      limit: retrievalLimit,
-      startTime: query.startTime,
-      endTime: query.endTime,
-    });
+    const result: MemoryKernelNavigationResult = allowsCompiled
+      ? this.kernel.navigateMemory(queryPlan.primarySearchText, {
+        projectId: query.projectId,
+        limit: retrievalLimit,
+        startTime: query.startTime,
+        endTime: query.endTime,
+      })
+      : {
+        query: queryPlan.primarySearchText,
+        projectId: query.projectId,
+        recallMode: 'brain_recall_fallback',
+        fallbackUsed: true,
+        rawEvidence: [],
+      };
     const scopedItems = this.filterAgentEvidence(result.rawEvidence, query.agentId, query.collection, query.excludeSessionId)
       .slice(0, limit)
       .map((neuron) => this.toAgentRecallItem(neuron));
-    const rawFallbackItems = this.rawLedgerFallbackItemsForQuery(queryPlan, query, limit);
+    const rawFallbackItems = allowsRawSource ? this.rawLedgerFallbackItemsForQuery(queryPlan, query, limit) : [];
     const baseCounts = {
       graph: graphItems.length,
       navigation: result.rawEvidence.length,
@@ -570,13 +583,14 @@ export class KernelAgentMemoryBackend {
       };
     }
 
-    const fallback = this.kernel.recall(queryPlan.primarySearchText, {
-      projectId: query.projectId,
-      limit: retrievalLimit,
-    });
-    const fallbackItems = this.filterAgentEvidence(fallback.rawEvidence, query.agentId, query.collection, query.excludeSessionId)
-      .slice(0, limit)
-      .map((neuron) => this.toAgentRecallItem(neuron));
+    const fallbackItems = allowsCompiled
+      ? this.filterAgentEvidence(this.kernel.recall(queryPlan.primarySearchText, {
+        projectId: query.projectId,
+        limit: retrievalLimit,
+      }).rawEvidence, query.agentId, query.collection, query.excludeSessionId)
+        .slice(0, limit)
+        .map((neuron) => this.toAgentRecallItem(neuron))
+      : [];
     const fallbackCounts = {
       ...baseCounts,
       brainFallback: fallbackItems.length,
@@ -1616,4 +1630,8 @@ function uniqueNonEmpty(values: string[]): string[] {
     out.push(normalized);
   }
   return out;
+}
+
+function laneAllowed(policy: StrategyRetrievalPolicy | undefined, lane: StrategyRetrievalPolicy['allowedLanes'][number]): boolean {
+  return !policy || policy.allowedLanes.includes(lane);
 }

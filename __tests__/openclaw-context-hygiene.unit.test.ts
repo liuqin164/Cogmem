@@ -49,6 +49,20 @@ test('context hygiene does not strip ordinary user, system, tool, or skill text'
   });
 });
 
+test('context hygiene removes strategy context so it cannot be re-ingested', () => {
+  const result = stripCogmemRecallBlocks([
+    'User question',
+    '<COGMEM_STRATEGY_CONTEXT volatile="true">',
+    'template=source-first',
+    '</COGMEM_STRATEGY_CONTEXT>',
+    'Assistant answer',
+  ].join('\n'));
+
+  expect(result.text).toBe('User question\n\nAssistant answer');
+  expect(result.blockCount).toBe(1);
+  expect(result.stripped).toBe(true);
+});
+
 test('memory usage bridge is compact, non-durable, and same-topic gated', () => {
   const receipt = createMemoryUsageReceipt({
     sessionId: 'session-hygiene',
