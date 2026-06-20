@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for OpenClaw.
-version: 3.2.0
+version: 3.3.0
 metadata:
   openclaw:
     tags: [memory, cogmem, agent-memory]
@@ -23,6 +23,13 @@ Use this skill when an OpenClaw workspace needs `cogmem` as its durable memory b
 - Treat Belief Graph nodes as evidence-backed cognition. Assistant/tool-only observations may describe project state but must never become user preferences, goals, boundaries, or facts; inspect source events before accepting or correcting a belief.
 - For "when", "before", "why did this change", or "what was current then" questions, use Temporal Memory validity windows and timeline evidence. Do not present a superseded belief as current or mix old and current project state.
 - Let Context Cortex decide activation: greetings use no Cogmem memory; short same-topic continuations use Session State and Turn Bridge; exact-quote requests prioritize raw source; other recall remains within the configured memory budget. Read `activationReceipt` before claiming that memory did not exist.
+- Prospective Memory is candidate state, not an instruction queue. Only explicit user evidence can confirm a reminder/commitment; listing a due candidate never authorizes tool or task execution. Use `cogmem prospective` to inspect or resolve state and `cogmem brain-eval` before release.
+
+```bash
+cogmem prospective list --project <projectId>
+cogmem prospective confirm --project <projectId> --id <candidateId> --evidence <distinctUserEventId>
+cogmem prospective due --project <projectId>
+```
 
 ## Install
 
@@ -360,5 +367,6 @@ Expose these tools to the agent:
 - `cogmem_explain_recall`
 - `cogmem_memory_map`
 - `cogmem_maintenance_tick`
+- `cogmem_prospective`
 
-Use `cogmem_recall` for normal answers. It uses the same agent-facing recall path as `cogmem memory recall`, so empty vector indexes can still return bounded `raw_ledger` evidence with `sourceContext` and a local `sourceContext.locator.command`. Pass `agentId` and `projectId` when available; if an MCP host sends only `projectId`, Cogmem infers `agentId` from it. Pass `collection: "theseus"` only for creative artifacts. Use `cogmem_explain_recall` only when auditing `filteredEvidence`, activation paths, or governance suppression reasons. Use `cogmem_memory_map` for self-inspection and `cogmem_maintenance_tick` for host-owned upkeep suggestions.
+Use `cogmem_recall` for normal answers. It uses the same agent-facing recall path as `cogmem memory recall`, so empty vector indexes can still return bounded `raw_ledger` evidence with `sourceContext` and a local `sourceContext.locator.command`. Pass `agentId` and `projectId` when available; if an MCP host sends only `projectId`, Cogmem infers `agentId` from it. Pass `collection: "theseus"` only for creative artifacts. Use `cogmem_explain_recall` only when auditing `filteredEvidence`, activation paths, or governance suppression reasons. Use `cogmem_memory_map` for self-inspection, `cogmem_maintenance_tick` for host-owned upkeep suggestions, and `cogmem_prospective` only to manage candidate state. A due candidate is never authorization to execute.

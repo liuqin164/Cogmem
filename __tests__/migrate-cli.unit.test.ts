@@ -21,30 +21,43 @@ test('cogmem migrate plans and upgrades a 2.7.1 database with a backup', async (
   const dbPath = join(dir, 'memory.db');
   const db = new Database(dbPath);
   db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA wal_autocheckpoint = 0;
     CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     INSERT INTO _meta (key, value) VALUES ('schema_version', '14');
+    CREATE TABLE legacy_wal_evidence (value TEXT NOT NULL);
+    INSERT INTO legacy_wal_evidence (value) VALUES ('must-survive-backup');
     CREATE TABLE memory_edges (
       edge_id TEXT PRIMARY KEY, project_id TEXT, source_type TEXT NOT NULL, source_id TEXT NOT NULL,
       relation_type TEXT NOT NULL, target_type TEXT NOT NULL, target_id TEXT NOT NULL,
       confidence REAL NOT NULL, evidence_event_ids_json TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL
     );
   `);
-  db.close();
 
   const dryRun = await run(['--db', dbPath, '--dry-run', '--json']);
   expect(dryRun.exitCode).toBe(0);
-  expect(JSON.parse(dryRun.stdout).pending).toEqual(['0015', '0016', '0017', '0018', '0019']);
+  expect(JSON.parse(dryRun.stdout).pending).toEqual(['0015', '0016', '0017', '0018', '0019', '0020']);
 
   const applied = await run(['--db', dbPath, '--yes', '--backup', '--json']);
   expect(applied.exitCode).toBe(0);
   const result = JSON.parse(applied.stdout);
-  expect(result.applied).toEqual(['0015', '0016', '0017', '0018', '0019']);
+  expect(result.applied).toEqual(['0015', '0016', '0017', '0018', '0019', '0020']);
   expect(existsSync(result.backupPath)).toBe(true);
+  const backup = new Database(result.backupPath, { readonly: true });
+  expect(backup.prepare('SELECT value FROM legacy_wal_evidence').get()).toEqual({
+    value: 'must-survive-backup',
+  });
+  backup.close();
+  db.close();
 
   const migrated = new Database(dbPath);
   const columns = migrated.prepare('PRAGMA table_info(memory_edges)').all() as Array<{ name: string }>;
   expect(columns.map((column) => column.name)).toContain('activation');
-  expect(migrated.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '19' });
+  const prospectiveIndexes = migrated.prepare(`PRAGMA index_list(prospective_memories)`).all() as Array<{ name: string }>;
+  expect(prospectiveIndexes.map((index) => index.name)).toContain('idx_prospective_project_status_deferred');
+  const transitionIndexes = migrated.prepare(`PRAGMA index_list(prospective_memory_transitions)`).all() as Array<{ name: string }>;
+  expect(transitionIndexes.map((index) => index.name)).toContain('idx_prospective_transitions_candidate');
+  expect(migrated.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '20' });
   migrated.close();
 
   const repeated = await run(['--db', dbPath, '--yes', '--json']);

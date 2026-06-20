@@ -113,6 +113,24 @@ export {
   type ContextPlanInput,
   type ContextSuppressionReason,
 } from './context/index.js';
+export {
+  ProspectiveMemoryService,
+  type ProposeProspectiveMemoryInput,
+  type ProspectiveEvidenceLookup,
+  type ProspectiveEvidenceRecord,
+  type ProspectiveMemoryListOptions,
+  type ProspectiveMemoryProposer,
+  type ProspectiveMemoryRecord,
+  type ProspectiveMemoryStatus,
+  type ProspectiveMemoryType,
+  type ResolveProspectiveMemoryInput,
+} from './prospective/index.js';
+export {
+  BrainEvalRunner,
+  type BrainEvalMetrics,
+  type BrainEvalReport,
+  type BrainEvalSample,
+} from './benchmark/BrainEval.js';
 
 /**
  * Agent framework integration facade.

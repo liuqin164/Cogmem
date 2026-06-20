@@ -22,7 +22,10 @@ export class MemoryGovernanceExecutor {
             for (const operation of plan.operations) {
                 if (this.store.isOperationApplied(operation.idempotencyKey))
                     continue;
-                this.handlers[operation.type]?.(operation, { db: this.db, plan });
+                const handler = this.handlers[operation.type];
+                if (!handler)
+                    throw new Error(`unsupported_governance_operation:${operation.type}`);
+                handler(operation, { db: this.db, plan });
                 this.store.recordOperation(plan, operation);
                 appliedOperationIds.push(operation.operationId);
             }

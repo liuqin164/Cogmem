@@ -21,7 +21,7 @@ export function resolveReleasePayloadSpec(payload, repo = DEFAULT_RELEASE_REPO) 
     const tag = typeof release.tag_name === 'string' ? release.tag_name.trim() : '';
     if (tag)
         return `github:${repo}#${tag}`;
-    return `github:${repo}#main`;
+    throw new Error(`latest_release_unavailable: GitHub returned no release asset or tag for ${repo}. Retry later or pass --from explicitly.`);
 }
 async function fetchReleaseJson(url, timeoutMs) {
     const controller = new AbortController();

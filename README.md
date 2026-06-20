@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.2.0`
+Current version: `3.3.0`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -153,7 +153,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#3.2.0"
+bun add "cogmem@github:liuqin164/cogmem#3.3.0"
 bunx cogmem init
 ```
 
@@ -176,7 +176,7 @@ cogmem update --dry-run --json
 cogmem migrate --dry-run --json
 ```
 
-For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped database backup before changing an on-disk database.
+For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
 Run the Dream Curator once and promote safe candidates through CPU governance:
 
@@ -219,6 +219,18 @@ Entity identity is owned by `EntityStore`; Memory Binding only writes those cano
 `TemporalMemoryService` answers which belief version was valid at a requested time and maintains bounded project/entity timelines for milestones, decisions, corrections, and belief versions. Current answers must not silently mix superseded state with active state. Historical answers should include the relevant validity window, correction reason, and raw evidence anchors when available.
 
 `ContextCortex` decides whether memory should surface, which layers are eligible, and how much context they may consume. It hard-filters cross-project, superseded, current-session echo, unsupported user-belief, and unnecessary sensitive candidates before ranking. The default memory budget is 25% of available context with a 30% hard ceiling. Every plan emits an activation receipt containing selected and suppressed IDs with reasons. OpenClaw plugin 0.2.0 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Cortex filtering to full recall.
+
+`ProspectiveMemoryService` stores future intentions, commitments, reminders, open loops, and plans as candidates only. A candidate is not actionable until an explicit user event confirms it. Rejected candidates stay suppressed unless genuinely new evidence creates a new version. The service and `cogmem prospective` CLI manage state only; they expose no task or tool execution capability.
+
+```bash
+cogmem prospective create --project hermes --type reminder --key release:check-ci --title "Check CI" --evidence <request-event-id> --due <epoch-ms>
+cogmem prospective confirm --project hermes --id <candidate-id> --evidence <distinct-user-confirmation-event-id>
+cogmem prospective due --project hermes
+```
+
+Every mutation requires the candidate project. Confirmation evidence must be a distinct Raw Ledger user event in that project. A due result is memory state, not permission to run a tool.
+
+Run `cogmem brain-eval --input samples.json` to measure recall, precision, provenance coverage, context-budget compliance, stale/cross-project leakage, and unconfirmed prospective activation. The command exits non-zero when a safety threshold fails.
 
 ## Import Existing Agent Memory
 
@@ -507,8 +519,9 @@ https://github.com/liuqin164/cogmem/releases/latest
 ```
 
 The updater resolves that release dynamically. It prefers a `.tgz` asset whose
-name or URL contains `cogmem`, falls back to the latest release tag when no
-package asset is attached, and only then falls back to `github:liuqin164/cogmem#main`.
+name or URL contains `cogmem`; when no package asset is attached, it uses that
+release's immutable tag. If GitHub does not return release metadata, the update
+stops instead of installing mutable `main`; use `--from` only when you intentionally want another ref.
 
 For OpenClaw after an update:
 
@@ -523,7 +536,7 @@ For Hermes after an update:
 cogmem connect hermes --workspace /path/to/hermes/workspace --auto --force
 ```
 
-This also updates existing Hermes `cogmem-mcp` blocks with missing `cogmem_memory_map` and `cogmem_maintenance_tick` entries.
+This also updates existing Hermes `cogmem-mcp` blocks with missing `cogmem_memory_map`, `cogmem_maintenance_tick`, and `cogmem_prospective` entries.
 
 ## CLI
 

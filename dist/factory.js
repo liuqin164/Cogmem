@@ -46,10 +46,11 @@ import { UniverseTraversalExecutor } from './retrieval/UniverseTraversalExecutor
 import { NeuronEmbeddingStore } from './embedding/NeuronEmbeddingStore.js';
 import { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
 import { MemoryGovernanceExecutor, MemoryGovernanceValidator, PiiRedactor, } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, SchemaMigrationRunner } from './migrations/index.js';
+import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
+import { ProspectiveMemoryService } from './prospective/index.js';
 import { loadCogmemConfig, resolveCogmemConfigPath, } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
 import { IterativeLLMClarifier } from './routing/IterativeLLMClarifier.js';
@@ -73,8 +74,8 @@ import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
 import { config } from './utils/Config.js';
 import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snapshot/index.js';
-const CORE_VERSION = '3.2.0';
-const LATEST_SCHEMA_VERSION = 19;
+const CORE_VERSION = '3.3.0';
+const LATEST_SCHEMA_VERSION = 20;
 export class MemoryKernel {
     options;
     memoryGraph;
@@ -86,6 +87,7 @@ export class MemoryKernel {
     beliefGovernanceService;
     temporalMemoryService;
     contextCortex;
+    prospectiveMemoryService;
     cursorStore;
     vectorStore;
     topicRegistry;
@@ -141,7 +143,7 @@ export class MemoryKernel {
         this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
         const db = this.factStore.getDatabase();
         db.exec('PRAGMA busy_timeout = 5000;');
-        new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019]).run();
+        new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020]).run();
         this.ensureMetaTable(db);
         this.entityStore = new EntityStore(db);
         this.ensureGovernanceAuditTable(db);
@@ -154,6 +156,16 @@ export class MemoryKernel {
         });
         this.temporalMemoryService = new TemporalMemoryService(db);
         this.contextCortex = new ContextCortex(db);
+        this.prospectiveMemoryService = new ProspectiveMemoryService(db, (eventId) => {
+            const event = this.eventStore.getEvent(eventId);
+            return event ? {
+                eventId,
+                projectId: event.projectId,
+                role: event.role,
+                globalSeq: event.globalSeq,
+                content: eventPayloadText(event.payload),
+            } : undefined;
+        });
         this.cursorStore = new IngestionCursorStore(this.dbPath);
         this.vectorStore = options.vectorBackend === 'hnswlib'
             ? new VectorStore(vectorDimension)
@@ -184,6 +196,50 @@ export class MemoryKernel {
                 if (!event)
                     throw new Error(`BIND_EVENT requires an existing event: ${eventId || 'missing'}`);
                 this.memoryBindingService.bindRawEvent(event);
+            },
+            CREATE_PROSPECTIVE_MEMORY: (operation, context) => {
+                const projectId = operation.projectId ?? context.plan.projectId;
+                if (!projectId)
+                    throw new Error('CREATE_PROSPECTIVE_MEMORY requires projectId');
+                this.prospectiveMemoryService.propose({
+                    projectId,
+                    candidateType: operation.payload.candidateType,
+                    canonicalKey: requiredGovernancePayloadString(operation.payload, 'canonicalKey'),
+                    title: requiredGovernancePayloadString(operation.payload, 'title'),
+                    details: optionalGovernancePayloadString(operation.payload, 'details'),
+                    evidenceEventIds: operation.evidenceEventIds,
+                    proposedBy: context.plan.proposedBy,
+                    dueAt: optionalGovernancePayloadNumber(operation.payload, 'dueAt'),
+                });
+            },
+            RESOLVE_PROSPECTIVE_MEMORY: (operation) => {
+                const projectId = operation.projectId;
+                if (!projectId)
+                    throw new Error('RESOLVE_PROSPECTIVE_MEMORY requires projectId');
+                const candidateId = requiredGovernancePayloadString(operation.payload, 'candidateId');
+                const action = requiredGovernancePayloadString(operation.payload, 'action');
+                if (action === 'confirm') {
+                    const confirmationEvidenceEventId = requiredGovernancePayloadString(operation.payload, 'confirmationEvidenceEventId');
+                    if (!operation.evidenceEventIds.includes(confirmationEvidenceEventId)) {
+                        throw new Error('confirmation evidence must be included in governance operation evidence');
+                    }
+                    this.prospectiveMemoryService.resolve(candidateId, {
+                        action,
+                        confirmationEvidenceEventId,
+                    }, projectId);
+                }
+                else if (action === 'defer') {
+                    const deferredUntil = optionalGovernancePayloadNumber(operation.payload, 'deferredUntil');
+                    if (deferredUntil === undefined)
+                        throw new Error('RESOLVE_PROSPECTIVE_MEMORY defer requires deferredUntil');
+                    this.prospectiveMemoryService.resolve(candidateId, { action, deferredUntil }, projectId);
+                }
+                else if (action === 'reject' || action === 'complete' || action === 'expire') {
+                    this.prospectiveMemoryService.resolve(candidateId, { action }, projectId);
+                }
+                else {
+                    throw new Error(`invalid_prospective_memory_action:${action}`);
+                }
             },
         });
         this.pipelineMetrics = new PipelineMetrics(db);
@@ -1111,14 +1167,35 @@ export class MemoryKernel {
             vectors: 0,
             activations: 0,
             memoryBindings: 0,
+            brainProjections: 0,
+            entityRecords: 0,
         };
+        const projectMentionRows = (neuronIds.length > 0
+            ? db.prepare(`
+          SELECT DISTINCT entity_id FROM entity_mentions
+          WHERE project_id = ? OR neuron_id IN (${neuronIds.map(() => '?').join(', ')})
+        `).all(projectId, ...neuronIds)
+            : db.prepare(`SELECT DISTINCT entity_id FROM entity_mentions WHERE project_id = ?`).all(projectId));
+        const projectMentionEntityIds = new Set(projectMentionRows.map((row) => row.entity_id));
+        const projectEntityInstances = db.prepare(`
+      SELECT instance_id, canonical_entity_id, aliases_json, metadata_json
+      FROM entity_instances
+    `).all()
+            .filter((row) => {
+            const ownerProjectId = parseJsonObject(row.metadata_json).projectId;
+            return ownerProjectId === projectId || (!ownerProjectId && projectMentionEntityIds.has(row.instance_id));
+        });
+        const projectEntityIds = projectEntityInstances.map((row) => row.instance_id);
+        const affectedCanonicalEntityIds = uniqueStrings(projectEntityInstances.map((row) => row.canonical_entity_id));
         const placeholders = neuronIds.map(() => '?').join(', ');
         const runDelete = (sql, params = []) => {
             try {
                 return Number(db.prepare(sql).run(...params).changes ?? 0);
             }
-            catch {
-                return 0;
+            catch (error) {
+                if (error instanceof Error && /no such table/i.test(error.message))
+                    return 0;
+                throw error;
             }
         };
         db.transaction(() => {
@@ -1134,9 +1211,50 @@ export class MemoryKernel {
             deleted.events += runDelete(`DELETE FROM memory_events WHERE project_id = ?`, [projectId]);
             deleted.activations += this.activationStore.deleteByProject(projectId);
             deleted.memoryBindings += this.memoryBindingStore.deleteByProject(projectId);
-            runDelete(`DELETE FROM temporal_adjacency WHERE project_id = ?`, [projectId]);
+            runDelete(`DELETE FROM time_bucket_entries WHERE project_id = ?`, [projectId]);
+            runDelete(`DELETE FROM branch_links WHERE parent_branch_id IN (SELECT branch_id FROM project_branches WHERE project_id = ?) OR child_branch_id IN (SELECT branch_id FROM project_branches WHERE project_id = ?)`, [projectId, projectId]);
+            runDelete(`DELETE FROM branch_entries WHERE branch_id IN (SELECT branch_id FROM project_branches WHERE project_id = ?)`, [projectId]);
+            runDelete(`DELETE FROM project_branches WHERE project_id = ?`, [projectId]);
+            runDelete(`DELETE FROM task_branch_entries WHERE task_id IN (SELECT task_id FROM task_branches WHERE project_id = ?)`, [projectId]);
+            runDelete(`DELETE FROM task_branches WHERE project_id = ?`, [projectId]);
+            runDelete(`DELETE FROM event_cluster_entries WHERE cluster_id IN (SELECT cluster_id FROM event_clusters WHERE project_id = ?)`, [projectId]);
+            runDelete(`DELETE FROM event_clusters WHERE project_id = ?`, [projectId]);
+            runDelete(`DELETE FROM topology_membership WHERE project_id = ?`, [projectId]);
             runDelete(`DELETE FROM cognitive_nodes WHERE project_id = ?`, [projectId]);
             runDelete(`DELETE FROM cognitive_edges WHERE project_id = ?`, [projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM prospective_memory_transitions WHERE candidate_id IN (SELECT candidate_id FROM prospective_memories WHERE project_id = ?)`, [projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM prospective_memories WHERE project_id = ?`, [projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM context_activation_receipts WHERE project_id = ?`, [projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM memory_timeline_entries WHERE project_id = ?`, [projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM belief_graph_evidence WHERE belief_id IN (SELECT belief_id FROM belief_graph_nodes WHERE project_id = ?)`, [projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM belief_graph_versions WHERE belief_id IN (SELECT belief_id FROM belief_graph_nodes WHERE project_id = ?)`, [projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM belief_graph_conflicts WHERE project_id = ?`, [projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM belief_graph_nodes WHERE project_id = ?`, [projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM entity_resolution_log WHERE candidate_id IN (SELECT candidate_id FROM entity_merge_candidates WHERE project_id = ?)`, [projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM entity_merge_candidates WHERE project_id = ?`, [projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM memory_governance_audit WHERE project_id = ?`, [projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM memory_governance_plans WHERE project_id = ? OR plan_id IN (SELECT plan_id FROM memory_governance_operations WHERE project_id = ?)`, [projectId, projectId]);
+            deleted.brainProjections += runDelete(`DELETE FROM memory_governance_operations WHERE project_id = ?`, [projectId]);
+            deleted.entityRecords += runDelete(`DELETE FROM entity_mentions WHERE project_id = ?`, [projectId]);
+            if (projectEntityIds.length > 0) {
+                const entityPlaceholders = projectEntityIds.map(() => '?').join(', ');
+                deleted.entityRecords += runDelete(`DELETE FROM entity_resolution_log WHERE source_entity_id IN (${entityPlaceholders}) OR target_entity_id IN (${entityPlaceholders})`, [...projectEntityIds, ...projectEntityIds]);
+                deleted.entityRecords += runDelete(`DELETE FROM entity_merge_candidates WHERE source_entity_id IN (${entityPlaceholders}) OR target_entity_id IN (${entityPlaceholders})`, [...projectEntityIds, ...projectEntityIds]);
+                deleted.entityRecords += runDelete(`DELETE FROM entity_aliases WHERE entity_id IN (${entityPlaceholders})`, projectEntityIds);
+                deleted.entityRecords += runDelete(`DELETE FROM entity_attributes WHERE entity_id IN (${entityPlaceholders})`, projectEntityIds);
+                deleted.entityRecords += runDelete(`DELETE FROM entity_relations WHERE source_entity_id IN (${entityPlaceholders}) OR target_entity_id IN (${entityPlaceholders})`, [...projectEntityIds, ...projectEntityIds]);
+                deleted.entityRecords += runDelete(`DELETE FROM pending_entity_resolution WHERE resolved_entity_id IN (${entityPlaceholders})`, projectEntityIds);
+                deleted.entityRecords += runDelete(`DELETE FROM entity_instances WHERE instance_id IN (${entityPlaceholders})`, projectEntityIds);
+                scrubEntityAliasConflicts(db, projectEntityIds);
+            }
+            if (neuronIds.length > 0) {
+                deleted.entityRecords += runDelete(`DELETE FROM entity_attributes WHERE source_neuron_id IN (${placeholders})`, neuronIds);
+                deleted.entityRecords += runDelete(`DELETE FROM entity_relations WHERE source_neuron_id IN (${placeholders})`, neuronIds);
+                deleted.entityRecords += runDelete(`DELETE FROM pending_entity_resolution WHERE context_neuron_id IN (${placeholders})`, neuronIds);
+            }
+            for (const canonicalEntityId of affectedCanonicalEntityIds) {
+                rebuildCanonicalEntityAfterForget(db, canonicalEntityId, runDelete);
+            }
             db.prepare(`
         INSERT INTO governance_audit_log (
           audit_id, action, project_id, reason, details_json, created_at
@@ -1274,6 +1392,87 @@ export function createMemoryKernelFromConfig(input = {}) {
         throw new Error(`${error.code}: ${error.message}`);
     const { configPath: _configPath, cwd: _cwd, env: _env, ...explicitOptions } = options;
     return createMemoryKernel({ ...loaded.options, ...explicitOptions });
+}
+function requiredGovernancePayloadString(payload, field) {
+    const value = payload[field];
+    if (typeof value !== 'string' || value.trim() === '')
+        throw new Error(`governance payload requires ${field}`);
+    return value;
+}
+function eventPayloadText(payload) {
+    if (!payload || typeof payload !== 'object')
+        return undefined;
+    const text = payload.text;
+    return typeof text === 'string' ? text : undefined;
+}
+function parseJsonObject(value) {
+    if (!value)
+        return {};
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    }
+    catch {
+        return {};
+    }
+}
+function parseJsonStringArray(value) {
+    if (!value)
+        return [];
+    try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+    }
+    catch {
+        return [];
+    }
+}
+function scrubEntityAliasConflicts(db, deletedEntityIds) {
+    const deleted = new Set(deletedEntityIds);
+    const rows = db.prepare(`SELECT conflict_id, entity_ids_json FROM entity_alias_conflicts`).all();
+    for (const row of rows) {
+        const remaining = parseJsonStringArray(row.entity_ids_json).filter((entityId) => !deleted.has(entityId));
+        if (remaining.length < 2) {
+            db.prepare(`DELETE FROM entity_alias_conflicts WHERE conflict_id = ?`).run(row.conflict_id);
+        }
+        else {
+            db.prepare(`UPDATE entity_alias_conflicts SET entity_ids_json = ?, updated_at = ? WHERE conflict_id = ?`)
+                .run(JSON.stringify(remaining), Date.now(), row.conflict_id);
+        }
+    }
+}
+function rebuildCanonicalEntityAfterForget(db, canonicalEntityId, runDelete) {
+    const remaining = db.prepare(`
+    SELECT aliases_json FROM entity_instances WHERE canonical_entity_id = ?
+  `).all(canonicalEntityId);
+    if (remaining.length === 0) {
+        runDelete(`DELETE FROM entities WHERE entity_id = ?`, [canonicalEntityId]);
+        return;
+    }
+    const aliases = uniqueStrings(remaining.flatMap((row) => parseJsonStringArray(row.aliases_json)));
+    const canonical = db.prepare(`SELECT metadata_json FROM entities WHERE entity_id = ?`).get(canonicalEntityId);
+    const metadata = parseJsonObject(canonical?.metadata_json);
+    for (const key of ['projectId', 'rawMention', 'answerDisplayName', 'ens1RawMention', 'ens1RawMentions', 'ens1AnswerDisplayName']) {
+        delete metadata[key];
+    }
+    db.prepare(`UPDATE entities SET aliases_json = ?, metadata_json = ?, updated_at = ? WHERE entity_id = ?`)
+        .run(JSON.stringify(aliases), JSON.stringify(metadata), Date.now(), canonicalEntityId);
+}
+function optionalGovernancePayloadString(payload, field) {
+    const value = payload[field];
+    if (value === undefined || value === null)
+        return undefined;
+    if (typeof value !== 'string')
+        throw new Error(`governance payload ${field} must be a string`);
+    return value;
+}
+function optionalGovernancePayloadNumber(payload, field) {
+    const value = payload[field];
+    if (value === undefined || value === null)
+        return undefined;
+    if (typeof value !== 'number' || !Number.isFinite(value))
+        throw new Error(`governance payload ${field} must be a finite number`);
+    return value;
 }
 function uniqueStrings(values) {
     return Array.from(new Set(values.filter(Boolean)));

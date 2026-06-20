@@ -29,13 +29,12 @@ describe('cogmem update release resolution', () => {
     expect(spec).toBe('github:liuqin164/cogmem#2.0.2');
   });
 
-  test('does not fabricate releases/latest/download/cogmem.tgz when release metadata is missing', async () => {
-    const spec = await resolveLatestReleaseSpec({
+  test('fails closed instead of installing main when release metadata is missing', async () => {
+    const promise = resolveLatestReleaseSpec({
       repo: 'liuqin164/cogmem',
       fetchJson: async () => ({}),
     });
 
-    expect(spec).toBe('github:liuqin164/cogmem#main');
-    expect(spec).not.toContain('releases/latest/download/cogmem.tgz');
+    await expect(promise).rejects.toThrow('latest_release_unavailable');
   });
 });

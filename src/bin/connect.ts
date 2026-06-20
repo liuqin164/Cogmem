@@ -17,6 +17,7 @@ const HERMES_COGMEM_TOOLS = [
   'cogmem_explain_recall',
   'cogmem_memory_map',
   'cogmem_maintenance_tick',
+  'cogmem_prospective',
 ];
 
 interface ConnectArgs {
