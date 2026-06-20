@@ -80,7 +80,7 @@ These slots are bounded and governed. They are meant for agent prompt assembly a
 
 ## Dream Candidate Audit
 
-`raw_then_dream` makes dream backlog visible before semantic compilation happens. `cogmem memory dream` runs the Memory Curator / Dream Worker over undreamed raw events and `cogmem memory candidates` shows the resulting governance queue.
+`raw_then_dream` makes episode and Dream backlog state visible before semantic compilation happens. `cogmem episode status` shows conversation boundaries, `cogmem dream tick` conditionally processes sealed episodes, and `cogmem memory candidates` shows the resulting governance queue. Open episodes are not Dream input.
 
 Each candidate includes:
 
@@ -89,10 +89,11 @@ Each candidate includes:
 - `confidence`: a bounded extraction confidence, not truth confidence.
 - `content`: the proposed memory payload.
 - `evidence`: raw event anchors with `eventId`, role, global/thread order, parent/previous links, and source text excerpts.
+- `content.sourceEpisodeId`: the sealed conversation unit used for curation. It is an audit pointer, not evidence by itself.
 
 Candidates explain organization, not truth. A preference candidate can show that the user explicitly said a constraint, but it is still queued for governance. A tool-result causal candidate can show that one tool result belongs to a tool call, but it must not become a verified real-world fact merely because the tool returned text.
 
-An explicit user clarification may produce an organizational `correction` candidate. It does not automatically produce a contradiction or rewrite a belief. Assistant apologies/self-corrections and negative-form user questions are not sufficient user-owned correction evidence. A model-proposed conflict requires at least two distinct exact event IDs from the current Dream window; `["all"]` and unknown IDs are rejected. Invalid memory-model output is retained as a rejected diagnostic rather than a `needs_confirmation` item.
+An explicit user clarification may produce an organizational `correction` candidate. It does not automatically produce a contradiction or rewrite a belief. Assistant apologies/self-corrections and negative-form user questions are not sufficient user-owned correction evidence. A model-proposed conflict requires at least two distinct exact event IDs from the current sealed episode; `["all"]` and unknown IDs are rejected. Invalid memory-model output is retained as a rejected diagnostic rather than a `needs_confirmation` item.
 
 Semantic organization candidates are also advisory. `semantic_tags` and `indexing_decision` can make future recall less brittle than full-sentence matching, while `semantic_relation` and `edge_adjustment` can propose local graph activation changes. They do not rewrite existing memories or promote facts by themselves.
 
@@ -129,7 +130,8 @@ Use the local audit CLI when the user needs to inspect memory directly:
 - `cogmem memory search --query <text>`
 - `cogmem memory recall --query <text> --agent <agent>`
 - `cogmem memory show --event <eventId> --before 2 --after 2`
-- `cogmem memory dream --project <project>`
+- `cogmem episode status --project <project>`
+- `cogmem dream tick --project <project> --mode auto`
 - `cogmem memory candidates --project <project> --status candidate`
 - `cogmem memory map --project <project> --json`
 - `cogmem memory tick --project <project> --json`

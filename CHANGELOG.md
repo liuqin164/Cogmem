@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.5.0
+
+- Added Episode Dream Engine v1. Raw messages are still written immediately, while deterministic session-scoped episode assembly gives Dream a bounded conversation-level unit instead of an arbitrary raw-event window.
+- Added auditable open, soft-sealed, and sealed episode lifecycle, closure receipts, safe soft reopen, hard-seal protection, one-event-one-episode assignment, repair of unassigned raw evidence, and project-scoped forget cleanup.
+- Added conditional `cogmem dream tick`: timers now wake a scheduler that chooses no work, micro, normal, or deep processing from the sealed backlog. Recall and OpenClaw foreground hooks never run Dream.
+- Added leased, retryable, idempotent episode Dream jobs and run receipts. Every episode-derived candidate retains `sourceEpisodeId` plus exact raw event evidence and still requires existing CPU governance.
+- Scoped message import idempotency to project, source agent, and source session; conflicting reuse is rejected, reserved identities can recover a missing Raw Ledger write, and exhausted Dream leases remain explicitly retryable.
+- Added `cogmem episode` and `cogmem dream` CLIs plus bounded MCP episode append/import/status/seal and Dream tick/status tools for hookless Hermes-style agents.
+- Unified existing OpenClaw/Hermes imports and live turn recording behind the same episode schema, with explicit batch sealing and duplicate-message protection.
+- Added BrainEval episode grouping, boundary, evidence coverage, unassigned rate, candidate grounding, governance bypass, and Hermes import parity gates.
+- Updated OpenClaw auto-memory plugin to 0.4.0, Hermes MCP allow-list repair, schema migration 22, package migration/update docs, and all agent-facing skills for the episode-first workflow.
+
 ## 3.4.0
 
 - Added Strategy Cortex v1: deterministic current-turn strategy capsules select retrieval lanes, context-layer order, exact-source requirements, and bounded memory budgets before recall.

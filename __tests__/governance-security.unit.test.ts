@@ -144,11 +144,17 @@ describe('Governance and security v1.14', () => {
       selected: [{ id: 'memory', layer: 'belief', hasSourceEvidence: true }],
       usedTokens: 10, budgetTokens: 100, latencyMs: 5,
     }));
+    const episodeMessage = kernel.appendEpisodeMessage({
+      projectId: 'forget-me', sessionId: 'forget-session', sourceAgent: 'test', role: 'user',
+      text: 'Forget this episode too.', externalMessageId: 'forget-episode-message',
+    });
+    kernel.sealEpisode(episodeMessage.episodeId!, { mode: 'manual', reason: 'test' });
 
     const result = await kernel.forgetUser('forget-me', 'user_requested');
 
     expect(result.deleted.neurons).toBe(1);
     expect(result.deleted.activations).toBe(1);
+    expect(result.deleted.episodes).toBeGreaterThan(0);
     expect(result.deleted.brainProjections).toBeGreaterThan(0);
     expect(result.deleted.entityRecords).toBeGreaterThan(0);
     expect(kernel.recall('delete this project memory', { projectId: 'forget-me' }).rawEvidence).toHaveLength(0);
@@ -160,6 +166,7 @@ describe('Governance and security v1.14', () => {
     for (const table of [
       'prospective_memories', 'context_strategy_outcomes', 'context_activation_receipts', 'memory_timeline_entries',
       'belief_graph_nodes', 'entity_merge_candidates', 'memory_governance_plans',
+      'memory_episodes', 'episode_dream_jobs', 'episode_closure_receipts', 'episode_ingest_keys',
     ]) {
       expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE project_id = ?`).get('forget-me')).toEqual({ count: 0 });
     }

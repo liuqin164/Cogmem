@@ -52,7 +52,8 @@ timeout_ms = 60000
 Then run:
 
 ```bash
-cogmem memory dream --project openclaw --promote --json
+cogmem episode status --project openclaw --json
+cogmem dream tick --project openclaw --mode auto --json
 cogmem memory govern --project openclaw --json
 cogmem memory candidates --project openclaw --status candidate --json
 ```
@@ -60,10 +61,10 @@ cogmem memory candidates --project openclaw --status candidate --json
 For a supervised long-running worker instead of cron:
 
 ```bash
-cogmem memory dream --project openclaw --watch --interval-ms 300000 --promote --json
+cogmem dream tick --project openclaw --mode auto --max-episodes 10 --json
 ```
 
-The Dream Worker proposes candidate memories only. CPU governance is a separate step. Use `--promote` or `cogmem memory govern` to turn evidence-backed summaries/preferences into provisional memory and to accept semantic tags, indexing decisions, event relations, and edge adjustments as organization metadata. It does not rewrite verified facts or promote tool/LLM output into active memory.
+The OpenClaw hook writes Raw Ledger evidence and updates an episode, then returns without running Dream. A host timer may call `cogmem dream tick`; an empty or still-open backlog does nothing. The Dream Worker processes sealed episodes and proposes candidate memories only. CPU governance is a separate step. Use `cogmem memory govern` to evaluate evidence-backed candidates. Dream does not rewrite verified facts or promote tool/LLM output into active memory.
 
 For host-owned inspection and upkeep:
 

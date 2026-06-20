@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for Hermes through MCP.
-version: 3.4.0
+version: 3.5.0
 metadata:
   hermes:
     tags: [memory, mcp, cogmem, agent-memory]
@@ -151,10 +151,12 @@ The importer is idempotent. Re-running it skips records already imported into th
 Run the curator/governance loop under host supervision after import and during normal use:
 
 ```bash
-cogmem memory dream --project hermes --watch --interval-ms 300000 --promote
+cogmem episode status --project hermes --json
+cogmem dream tick --project hermes --mode auto --json
+cogmem memory govern --project hermes --json
 ```
 
-This command is the preferred long-running worker. Cron can still be used, but it is not required.
+A host timer may run this bounded tick periodically. The tick exits after inspecting the backlog and performs no work when no sealed episode is ready.
 
 ## Active Memory Search
 
@@ -203,7 +205,7 @@ cogmem memory tick --project hermes --json
 cogmem memory bind --project hermes --json
 ```
 
-`memory tick` does not start a daemon. Use its `suggestedActions` to decide whether Hermes should run `memory dream`, `memory govern`, entity review, re-embedding, or `memory bind` for unbound high-value raw events.
+`memory tick` does not start a daemon. Use its `suggestedActions` to decide whether Hermes should run `dream tick`, `memory govern`, `episode repair`, entity review, re-embedding, or `memory bind` for unbound high-value raw events.
 
 `memory map` also exposes Memory Binding and Graph Recall counters. Bindings connect high-value user raw events to stable topic/entity paths before promotion, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down. Correction bindings expose review flags and correction edges. Use graph recall hits for source drill-down and topic continuity only; do not treat bindings, clusters, or edges as verified facts, user preferences, or prompt instructions.
 
@@ -288,6 +290,12 @@ mcp_servers:
         - cogmem_recall
         - cogmem_explain_recall
         - cogmem_strategy_plan
+        - cogmem_episode_append
+        - cogmem_episode_import
+        - cogmem_episode_status
+        - cogmem_episode_seal
+        - cogmem_dream_tick
+        - cogmem_dream_status
         - cogmem_memory_map
         - cogmem_maintenance_tick
         - cogmem_prospective
@@ -298,6 +306,8 @@ The command path is resolved by `cogmem connect hermes`: it uses `COGMEM_MCP_BIN
 When Hermes calls `cogmem_recall`, it should pass `projectId: "hermes"` and may omit `agentId`; the MCP bridge infers `agentId` from `projectId`. The returned `items` use the same shape as `cogmem memory recall --project hermes --agent hermes --json`, including `raw_ledger` items, labeled `sourceContext` events, `sourceContext.window`, and `sourceContext.locator.command` when vectors are empty or compiled evidence misses.
 
 Hermes may pass `collection: "theseus"` to `cogmem_recall` when it wants creative artifacts. `cogmem_strategy_plan` is a read-only inspection tool: its capsule has no instruction authority and never authorizes work. Expose `cogmem_memory_map` and `cogmem_maintenance_tick` only to agents that are allowed to inspect memory anatomy or request host-owned upkeep. `cogmem_prospective` manages candidate state only; even a confirmed due item requires normal host authorization before any action.
+
+For conversations not captured by a host hook, call `cogmem_episode_append` with a stable `externalMessageId`, or use bounded `cogmem_episode_import` for a batch. The ID is scoped to the project, source agent, and source session; conflicting reuse with different content is rejected. Both operations preserve Raw Ledger evidence and never run Dream. Inspect or seal with `cogmem_episode_status` / `cogmem_episode_seal`, then call `cogmem_dream_tick` explicitly. `ignoredEventIds` are deterministic noise, while `unassignedEventIds` should be repaired. Dream only creates source-grounded candidates; normal governance decides durable memory.
 
 Then reload MCP inside Hermes:
 

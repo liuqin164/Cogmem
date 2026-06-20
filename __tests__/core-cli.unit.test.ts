@@ -795,6 +795,8 @@ test('memory CLI runs dream curator and lists governance candidates', async () =
     assistantText: '明白，我会把本地优先和显式 provider 作为治理约束处理。',
     ingestMode: 'raw_then_dream',
   });
+  const episode = kernel.listEpisodes({ projectId: 'demo' })[0];
+  kernel.sealEpisode(episode.episodeId, { mode: 'manual', reason: 'cli_test' });
   kernel.close();
 
   const dreamProc = Bun.spawn({
@@ -808,9 +810,9 @@ test('memory CLI runs dream curator and lists governance candidates', async () =
   expect(await dreamProc.exited).toBe(0);
   expect(dreamError).toBe('');
   const dreamed = JSON.parse(dreamOutput);
-  expect(dreamed.processedEventCount).toBe(2);
+  expect(dreamed.processedEpisodeCount).toBe(1);
   expect(dreamed.candidateCount).toBeGreaterThan(0);
-  expect(dreamed.status.undreamedRawCount).toBe(0);
+  expect(dreamed.status.processed).toBe(1);
 
   const candidateProc = Bun.spawn({
     cmd: ['bun', memoryBin, 'candidates', '--config', configPath, '--project', 'demo', '--json'],
@@ -828,7 +830,7 @@ test('memory CLI runs dream curator and lists governance candidates', async () =
   expect(JSON.stringify(queue)).toContain('sourceAnchor');
 });
 
-test('memory CLI dream --max-runs 1 commits dreamed raw progress across processes', async () => {
+test('memory CLI dream --max-runs 1 commits sealed episode progress across processes', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-dream-cli-progress-'));
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
@@ -844,6 +846,8 @@ test('memory CLI dream --max-runs 1 commits dreamed raw progress across processe
     assistantText: 'The next dream run should skip these raw events.',
     ingestMode: 'raw_then_dream',
   });
+  const episode = kernel.listEpisodes({ projectId: 'hermes' })[0];
+  kernel.sealEpisode(episode.episodeId, { mode: 'manual', reason: 'cli_test' });
   kernel.close();
 
   const firstProc = Bun.spawn({
@@ -857,9 +861,8 @@ test('memory CLI dream --max-runs 1 commits dreamed raw progress across processe
   expect(await firstProc.exited).toBe(0);
   expect(firstError).toBe('');
   const first = JSON.parse(firstOutput);
-  expect(first.processedEventCount).toBe(2);
-  expect(first.status.undreamedRawCount).toBe(0);
-  expect(first.status.lastDreamedGlobalSeq).toBeGreaterThan(0);
+  expect(first.processedEpisodeCount).toBe(1);
+  expect(first.status.processed).toBe(1);
 
   const secondProc = Bun.spawn({
     cmd: ['bun', memoryBin, 'dream', '--config', configPath, '--project', 'hermes', '--max-runs', '1', '--json'],
@@ -873,8 +876,8 @@ test('memory CLI dream --max-runs 1 commits dreamed raw progress across processe
   expect(secondError).toBe('');
   const second = JSON.parse(secondOutput);
   expect(second.skipped).toBe(true);
-  expect(second.reason).toBe('no_undreamed_raw_events');
-  expect(second.processedEventCount).toBe(0);
+  expect(second.reason).toBe('no_sealed_episode_backlog');
+  expect(second.processedEpisodeCount).toBe(0);
 });
 
 test('memory CLI governs dream candidates and can run a one-iteration watch loop', async () => {
@@ -893,6 +896,8 @@ test('memory CLI governs dream candidates and can run a one-iteration watch loop
     assistantText: '需要 sourceContext 和 raw ledger 下钻。',
     ingestMode: 'raw_then_dream',
   });
+  const episode = kernel.listEpisodes({ projectId: 'demo' })[0];
+  kernel.sealEpisode(episode.episodeId, { mode: 'manual', reason: 'cli_test' });
   kernel.close();
 
   const watchProc = Bun.spawn({

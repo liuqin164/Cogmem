@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { KernelAgentMemoryBackend } from '../agent/index.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, } from '../factory.js';
 import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
@@ -7,6 +8,16 @@ const STRING_ARRAY_SCHEMA = { type: 'array', items: STRING_SCHEMA };
 const TURN_INGEST_MODE_SCHEMA = {
     type: 'string',
     enum: ['immediate_compile', 'selective_compile', 'raw_archive_only', 'raw_then_dream'],
+};
+const EPISODE_MESSAGE_SCHEMA = {
+    type: 'object',
+    properties: {
+        role: { type: 'string', enum: ['user', 'assistant', 'agent', 'tool', 'system', 'narrator'] },
+        text: STRING_SCHEMA,
+        externalMessageId: STRING_SCHEMA,
+        timestamp: NUMBER_SCHEMA,
+    },
+    required: ['role', 'text'],
 };
 export function listCogmemMcpTools() {
     return [
@@ -99,6 +110,63 @@ export function listCogmemMcpTools() {
             },
         },
         {
+            name: 'cogmem_episode_append',
+            description: 'Append one bounded raw message and assign it to a session episode. This never runs Dream or promotes durable memory.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    projectId: STRING_SCHEMA, sessionId: STRING_SCHEMA, sourceAgent: STRING_SCHEMA,
+                    role: { type: 'string', enum: ['user', 'assistant', 'agent', 'tool', 'system', 'narrator'] },
+                    text: STRING_SCHEMA, externalMessageId: STRING_SCHEMA, timestamp: NUMBER_SCHEMA,
+                },
+                required: ['projectId', 'sessionId', 'sourceAgent', 'role', 'text', 'externalMessageId'],
+            },
+            annotations: { title: 'Append Episode Message', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+        },
+        {
+            name: 'cogmem_episode_import',
+            description: 'Import up to 200 bounded messages into Raw Ledger and the shared episode assembler. Dream is never implicit.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    projectId: STRING_SCHEMA, sessionId: STRING_SCHEMA, sourceAgent: STRING_SCHEMA,
+                    messages: { type: 'array', items: EPISODE_MESSAGE_SCHEMA, maxItems: 200 },
+                    sealBatch: { type: 'boolean' },
+                },
+                required: ['projectId', 'sessionId', 'sourceAgent', 'messages'],
+            },
+            annotations: { title: 'Import Episode Messages', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+        },
+        {
+            name: 'cogmem_episode_status',
+            description: 'Inspect open and sealed episodes plus Dream backlog. Read-only.',
+            inputSchema: { type: 'object', properties: { projectId: STRING_SCHEMA, sessionId: STRING_SCHEMA, limit: NUMBER_SCHEMA } },
+            annotations: { title: 'Episode Status', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+        },
+        {
+            name: 'cogmem_episode_seal',
+            description: 'Explicitly seal one episode and enqueue it for conditional Dream processing.',
+            inputSchema: {
+                type: 'object', properties: { episodeId: STRING_SCHEMA, mode: { type: 'string', enum: ['soft', 'hard', 'manual', 'batch'] }, reason: STRING_SCHEMA },
+                required: ['episodeId'],
+            },
+            annotations: { title: 'Seal Episode', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+        },
+        {
+            name: 'cogmem_dream_tick',
+            description: 'Run one explicit conditional Dream tick over sealed episodes only. It creates candidates but does not execute tools or bypass governance.',
+            inputSchema: {
+                type: 'object', properties: { projectId: STRING_SCHEMA, mode: { type: 'string', enum: ['auto', 'micro', 'normal', 'deep'] }, maxEpisodes: NUMBER_SCHEMA },
+            },
+            annotations: { title: 'Dream Tick', readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+        },
+        {
+            name: 'cogmem_dream_status',
+            description: 'Inspect the episode Dream backlog without running consolidation.',
+            inputSchema: { type: 'object', properties: { projectId: STRING_SCHEMA } },
+            annotations: { title: 'Dream Status', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+        },
+        {
             name: 'cogmem_memory_map',
             description: 'Return the self-describing cogmem memory map: anatomy, data lanes, bounds, counters, and commands an agent should use.',
             inputSchema: {
@@ -182,6 +250,28 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
                     projectId: optionalString(input.projectId),
                 }));
             }
+            case 'cogmem_episode_append':
+                return episodeAppend(opened.kernel, input);
+            case 'cogmem_episode_import':
+                return episodeImport(opened.kernel, input);
+            case 'cogmem_episode_status':
+                return jsonResult({
+                    episodes: opened.kernel.listEpisodes({
+                        projectId: optionalString(input.projectId), sessionId: optionalString(input.sessionId), limit: optionalNumber(input.limit),
+                    }),
+                    dream: opened.kernel.getEpisodeDreamStatus(optionalString(input.projectId)),
+                });
+            case 'cogmem_episode_seal':
+                return jsonResult(opened.kernel.sealEpisode(requiredString(input.episodeId, 'episodeId'), {
+                    mode: optionalEpisodeClosureMode(input.mode),
+                    reason: optionalString(input.reason) || 'mcp_manual_seal',
+                }));
+            case 'cogmem_dream_tick':
+                return jsonResult(await opened.kernel.runDreamTick({
+                    projectId: optionalString(input.projectId), mode: optionalDreamMode(input.mode), maxEpisodes: optionalNumber(input.maxEpisodes),
+                }));
+            case 'cogmem_dream_status':
+                return jsonResult(opened.kernel.getEpisodeDreamStatus(optionalString(input.projectId)));
             case 'cogmem_memory_map':
                 return jsonResult(opened.kernel.buildMemoryMap({ projectId: optionalString(input.projectId) }));
             case 'cogmem_maintenance_tick':
@@ -199,6 +289,66 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
         if (opened.shouldClose)
             opened.kernel.close();
     }
+}
+function episodeAppend(kernel, input) {
+    const text = requiredString(input.text, 'text');
+    if (text.length > 64_000)
+        throw new Error('text exceeds the 64000 character MCP episode limit');
+    return jsonResult(kernel.appendEpisodeMessage({
+        projectId: requiredString(input.projectId, 'projectId'),
+        sessionId: requiredString(input.sessionId, 'sessionId'),
+        sourceAgent: requiredString(input.sourceAgent, 'sourceAgent'),
+        role: requiredEpisodeRole(input.role), text,
+        externalMessageId: requiredString(input.externalMessageId, 'externalMessageId'), timestamp: optionalNumber(input.timestamp),
+    }));
+}
+function episodeImport(kernel, input) {
+    if (!Array.isArray(input.messages))
+        throw new Error('messages must be an array');
+    if (input.messages.length > 200)
+        throw new Error('messages exceeds the 200 item MCP import limit');
+    const projectId = requiredString(input.projectId, 'projectId');
+    const sessionId = requiredString(input.sessionId, 'sessionId');
+    const sourceAgent = requiredString(input.sourceAgent, 'sourceAgent');
+    let totalChars = 0;
+    const messages = input.messages.map((value, index) => {
+        if (!value || typeof value !== 'object')
+            throw new Error(`messages[${index}] must be an object`);
+        const message = value;
+        const text = requiredString(message.text, `messages[${index}].text`);
+        totalChars += text.length;
+        if (text.length > 64_000 || totalChars > 1_000_000)
+            throw new Error('episode import exceeds bounded text limits');
+        const role = requiredEpisodeRole(message.role);
+        const timestamp = optionalNumber(message.timestamp);
+        return {
+            role, text, timestamp,
+            externalMessageId: optionalString(message.externalMessageId)
+                || stableImportMessageId(sessionId, role, text, timestamp, index),
+        };
+    });
+    const results = messages.map((message) => kernel.appendEpisodeMessage({ projectId, sessionId, sourceAgent, ...message }));
+    const episodeIds = [...new Set(results.map((result) => result.episodeId).filter((id) => Boolean(id)))];
+    const receipts = input.sealBatch === true
+        ? episodeIds.map((episodeId) => kernel.sealEpisode(episodeId, { mode: 'batch', reason: 'mcp_batch_boundary' }))
+        : [];
+    return jsonResult({
+        imported: results.filter((result) => result.created).length,
+        duplicates: results.filter((result) => !result.created).length,
+        episodeIds,
+        unassignedEventIds: results.filter((result) => !result.assigned && !result.ignored).map((result) => result.eventId),
+        ignoredEventIds: results.filter((result) => result.ignored).map((result) => result.eventId),
+        closureReceipts: receipts, dreamRan: false,
+    });
+}
+function stableImportMessageId(sessionId, role, text, timestamp, index) {
+    return `import-${createHash('sha256').update(JSON.stringify([sessionId, role, timestamp ?? null, index, text])).digest('hex')}`;
+}
+function optionalEpisodeClosureMode(value) {
+    const mode = optionalString(value) || 'manual';
+    if (mode === 'soft' || mode === 'hard' || mode === 'manual' || mode === 'batch')
+        return mode;
+    throw new Error('mode must be soft, hard, manual, or batch');
 }
 function prospective(kernel, input) {
     const service = kernel.prospectiveMemoryService;
@@ -369,6 +519,20 @@ function optionalTurnIngestMode(value) {
         return value;
     }
     throw new Error('ingestMode must be one of immediate_compile, selective_compile, raw_archive_only, raw_then_dream');
+}
+function requiredEpisodeRole(value) {
+    const role = requiredString(value, 'role');
+    if (role === 'user' || role === 'assistant' || role === 'agent' || role === 'tool' || role === 'system' || role === 'narrator')
+        return role;
+    throw new Error('role must be one of user, assistant, agent, tool, system, narrator');
+}
+function optionalDreamMode(value) {
+    const mode = optionalString(value);
+    if (!mode)
+        return undefined;
+    if (mode === 'auto' || mode === 'micro' || mode === 'normal' || mode === 'deep')
+        return mode;
+    throw new Error('mode must be one of auto, micro, normal, deep');
 }
 function optionalTime(value, field) {
     if (value === undefined || value === null)

@@ -342,6 +342,20 @@ export class KernelAgentMemoryBackend {
         },
       });
     }
+    try {
+      this.kernel.assembleEpisodeTurn([userEvent, assistantEvent].filter((event): event is NonNullable<typeof event> => Boolean(event)), {
+        projectId: turn.projectId,
+        sessionId: turn.sessionId,
+        sourceAgent: turn.agentId,
+        now: occurredAt,
+      });
+    } catch (error) {
+      this.kernel.pipelineMetrics.recordNonFatal('episode_assembly_failed', {
+        projectId: turn.projectId,
+        message: error instanceof Error ? error.message : String(error),
+        details: { eventIds: [userEvent.eventId, assistantEvent?.eventId].filter(Boolean), sessionId: turn.sessionId },
+      });
+    }
 
     const sourceRefs = [userEvent, assistantEvent].filter(Boolean).map((event) => ({
       eventId: event!.eventId,
@@ -402,7 +416,7 @@ export class KernelAgentMemoryBackend {
 
   async ingestToolCall(call: AgentToolCallMemory): Promise<MemoryEvent> {
     const threadId = call.threadId || call.sessionId;
-    return this.kernel.recordToolCall({
+    const event = this.kernel.recordToolCall({
       projectId: call.projectId,
       workspaceId: call.workspaceId,
       threadId,
@@ -418,6 +432,8 @@ export class KernelAgentMemoryBackend {
       sourceId: `${call.agentId}:${call.sessionId}`,
       metadata: call.metadata,
     });
+    this.tryAppendAuxiliaryEvent(event, call.projectId, call.sessionId, call.agentId);
+    return event;
   }
 
   async ingestToolObservation(observation: AgentToolObservationMemory): Promise<MemoryEvent> {
@@ -439,6 +455,7 @@ export class KernelAgentMemoryBackend {
       sourceId,
       metadata: observation.metadata,
     });
+    this.tryAppendAuxiliaryEvent(event, observation.projectId, observation.sessionId, observation.agentId);
 
     await this.kernel.ingest({
       content: `Tool ${observation.toolName} result:\n${observation.output}`,
@@ -478,6 +495,7 @@ export class KernelAgentMemoryBackend {
       sourceId,
       metadata: task.metadata,
     });
+    this.tryAppendAuxiliaryEvent(event, task.projectId, task.sessionId, task.agentId);
 
     await this.kernel.ingest({
       content: `Task event${task.title ? ` (${task.title})` : ''}:\n${task.content}`,
@@ -496,6 +514,18 @@ export class KernelAgentMemoryBackend {
     });
 
     return event;
+  }
+
+  private tryAppendAuxiliaryEvent(event: MemoryEvent, projectId: string, sessionId: string, agentId: string): void {
+    try {
+      this.kernel.appendRawEventToEpisode(event, { projectId, sessionId, sourceAgent: agentId, now: event.occurredAt });
+    } catch (error) {
+      this.kernel.pipelineMetrics.recordNonFatal('episode_assembly_failed', {
+        projectId,
+        message: error instanceof Error ? error.message : String(error),
+        details: { eventId: event.eventId, sessionId, agentId },
+      });
+    }
   }
 
   recall(query: AgentRecallQuery): AgentRecallResult {

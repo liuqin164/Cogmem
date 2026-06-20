@@ -146,6 +146,8 @@ test('maintenance tick reports host-owned charge without running a hidden daemon
     assistantText: 'This should show up as dream backlog pressure.',
     ingestMode: 'raw_then_dream',
   });
+  const episode = kernel.listEpisodes({ projectId: 'demo' })[0];
+  kernel.sealEpisode(episode.episodeId, { mode: 'manual', reason: 'maintenance_test' });
 
   const tick = kernel.runMaintenanceTick({ projectId: 'demo' });
 
@@ -153,7 +155,7 @@ test('maintenance tick reports host-owned charge without running a hidden daemon
   expect(tick.hostOwned).toBe(true);
   expect(tick.executed.hiddenDaemonStarted).toBe(false);
   expect(tick.chargeVector.dreamBacklog).toBeGreaterThan(0);
-  expect(tick.suggestedActions.some((action) => action.command.includes('cogmem memory dream'))).toBe(true);
+  expect(tick.suggestedActions.some((action) => action.command.includes('cogmem dream tick'))).toBe(true);
 
   kernel.close();
 });

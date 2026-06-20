@@ -16,6 +16,9 @@ export interface DreamCuratorRunOptions {
   mode?: 'candidate' | 'shadow';
   now?: number;
   generateText?: TextGenerateFn;
+  /** Internal episode path: process only these authoritative raw events. */
+  eventIds?: string[];
+  sourceEpisodeId?: string;
 }
 
 export interface DreamCuratorRunResult {
@@ -75,16 +78,23 @@ export class DreamCuratorWorker {
 
   async run(options: DreamCuratorRunOptions = {}): Promise<DreamCuratorRunResult> {
     const before = this.deps.dreamLedgerStore.getStatus(options.projectId);
-    const events = this.deps.eventStore.listRawEventsAfterGlobalSeq({
-      projectId: options.projectId,
-      afterGlobalSeq: before.lastDreamedGlobalSeq,
-      limit: options.limit ?? 100,
-    });
+    const explicitEpisodeRun = Array.isArray(options.eventIds);
+    const events = explicitEpisodeRun
+      ? options.eventIds!
+        .slice(0, Math.max(1, Math.min(options.limit ?? 100, 500)))
+        .map((eventId) => this.deps.eventStore.getEvent(eventId))
+        .filter((event): event is MemoryEvent => Boolean(event))
+        .filter((event) => !options.projectId || event.projectId === options.projectId)
+      : this.deps.eventStore.listRawEventsAfterGlobalSeq({
+        projectId: options.projectId,
+        afterGlobalSeq: before.lastDreamedGlobalSeq,
+        limit: options.limit ?? 100,
+      });
     if (events.length === 0) {
       return {
         projectId: options.projectId,
         skipped: true,
-        reason: 'no_undreamed_raw_events',
+        reason: explicitEpisodeRun ? 'episode_has_no_raw_events' : 'no_undreamed_raw_events',
         processedEventCount: 0,
         dreamableEventCount: 0,
         candidateCount: 0,
@@ -96,7 +106,12 @@ export class DreamCuratorWorker {
     const now = options.now ?? Date.now();
     const maxGlobalSeq = Math.max(...events.map((event) => event.globalSeq || 0));
     const dreamableEvents = events.filter((event) => this.isDreamableEvent(event));
-    const candidateInputs = await this.buildCandidates(dreamableEvents, options, now);
+    const candidateInputs = (await this.buildCandidates(dreamableEvents, options, now)).map((candidate) => ({
+      ...candidate,
+      content: options.sourceEpisodeId
+        ? { ...objectRecord(candidate.content), sourceEpisodeId: options.sourceEpisodeId, evidenceAuthority: 'raw_event_ids_only' }
+        : candidate.content,
+    }));
     const providerConfig = this.resolveProviderConfig(options);
     const run = this.deps.candidateStore.insertRun({
       projectId: options.projectId,
@@ -121,7 +136,9 @@ export class DreamCuratorWorker {
     const inserted = this.deps.candidateStore.insertCandidates(
       candidateInputs.map((candidate) => ({ ...candidate, runId: run.runId, createdAt: now }))
     );
-    const status = this.deps.dreamLedgerStore.markDreamed(options.projectId, maxGlobalSeq, now);
+    const status = explicitEpisodeRun
+      ? before
+      : this.deps.dreamLedgerStore.markDreamed(options.projectId, maxGlobalSeq, now);
 
     return {
       runId: run.runId,
@@ -596,7 +613,7 @@ export class DreamCuratorWorker {
         reason,
         detail: detailText,
         governance: 'candidate_only_cpu_governance_required',
-        recommendation: 'Check [memory_model] provider configuration and rerun cogmem memory dream after fixing the model endpoint.',
+        recommendation: 'Check [memory_model] provider configuration and rerun cogmem dream retry followed by cogmem dream tick.',
       },
       evidence: events.slice(0, 4).map((event) => this.toEvidence(event)),
       promotionTargetType: 'diagnostic_conclusion',
@@ -699,10 +716,21 @@ function isExplicitCorrectionCandidate(text: string): boolean {
 
 function eventText(event: MemoryEvent): string {
   const payload = event.payload as { text?: unknown; output?: unknown; title?: unknown };
-  if (typeof payload.text === 'string') return payload.text;
-  if (typeof payload.output === 'string') return payload.output;
-  if (typeof payload.title === 'string') return payload.title;
-  return JSON.stringify(event.payload);
+  const text = typeof payload.text === 'string'
+    ? payload.text
+    : typeof payload.output === 'string'
+      ? payload.output
+      : typeof payload.title === 'string'
+        ? payload.title
+        : JSON.stringify(event.payload);
+  return stripCogmemControlBlocks(text);
+}
+
+function stripCogmemControlBlocks(text: string): string {
+  return text
+    .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function summarizeEvents(events: MemoryEvent[]): string {
@@ -813,6 +841,12 @@ function isUserOwnedDurableProviderBucket(bucket: string): boolean {
 
 function truncate(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : { value };
 }
 
 function hash(value: string): string {

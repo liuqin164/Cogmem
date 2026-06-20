@@ -22,6 +22,8 @@ const COMMANDS: Record<string, string> = {
   prospective: 'prospective',
   strategy: 'strategy',
   'brain-eval': 'brain-eval',
+  episode: 'episode',
+  dream: 'dream',
 };
 
 function usage(): string {
@@ -46,6 +48,8 @@ function usage(): string {
     '  prospective          manage confirmed-only future-memory candidates; never executes tasks',
     '  strategy             inspect current-turn memory policy and read-only outcome telemetry',
     '  brain-eval           evaluate recall, provenance, leakage, budget, and false activation',
+    '  episode              append, import, inspect, seal, or repair conversation episodes',
+    '  dream                conditionally process sealed episode backlog',
   ].join('\n');
 }
 

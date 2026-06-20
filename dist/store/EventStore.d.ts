@@ -11,6 +11,7 @@ export interface ProjectionCheckpoint {
     metadata?: Record<string, unknown>;
 }
 export interface AppendEventInput<TPayload = Record<string, unknown>> {
+    eventId?: string;
     streamId: string;
     streamType: StreamType;
     eventType: MemoryEventType;

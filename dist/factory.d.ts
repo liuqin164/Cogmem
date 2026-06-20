@@ -22,6 +22,8 @@ import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
+import { EpisodeAssembler, EpisodeStore, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode } from './episode/index.js';
+import { type DreamTickOptions, type DreamTickResult } from './dream/index.js';
 import { type EnvLike } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
 import type { Embedder } from './store/Embedder.js';
@@ -40,6 +42,8 @@ import type { IVectorStore, VectorBackend } from './store/IVectorStore.js';
 import type { IngestInput, MemoryEvent, MemoryEventCausalityType, MemoryEventContext, MemoryRawEventType, MemoryEventRole, Neuron } from './types/index.js';
 import { type ImportOptions, type ImportResult, type SnapshotMeta } from './snapshot/index.js';
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
+export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
+export type { EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeListOptions, MemoryEpisode } from './episode/index.js';
 export interface MemoryKernelOptions {
     dbPath?: string;
     embedder?: Embedder;
@@ -173,6 +177,9 @@ export interface MemorySelfMap {
         memoryBindingEntities: number;
         memoryBindingClusters: number;
         memoryBindingEdges: number;
+        episodes: number;
+        unassignedRawEvents: number;
+        episodeDream: EpisodeDreamStatus;
         dreamBacklog: DreamBacklogStatus;
         dreamCandidateQueue: DreamGovernanceRunResult['queue'];
     };
@@ -185,7 +192,7 @@ export interface MaintenanceTickOptions {
     now?: number;
 }
 export interface MaintenanceSuggestedAction {
-    kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots' | 'bind_raw_events' | 'inspect_binding_failures';
+    kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots' | 'bind_raw_events' | 'inspect_binding_failures' | 'repair_episodes';
     command: string;
     reason: string;
 }
@@ -203,6 +210,8 @@ export interface MaintenanceTickResult {
         unboundRawEvents: number;
         bindingFailures: number;
         expiredConfirmationCandidates: number;
+        episodeDreamBacklog: number;
+        unassignedEpisodeRawEvents: number;
     };
     executed: {
         activationDecay: ActivationDecayResult;
@@ -218,6 +227,7 @@ export interface MaintenanceTickResult {
     suggestedActions: MaintenanceSuggestedAction[];
 }
 export interface RawMemoryEventInput {
+    eventId?: string;
     projectId?: string;
     workspaceId?: string;
     threadId: string;
@@ -240,6 +250,27 @@ export interface RawMemoryEventInput {
     charEnd?: number;
     localDate?: string;
     metadata?: Record<string, unknown>;
+}
+export interface EpisodeMessageInput {
+    projectId: string;
+    sessionId: string;
+    sourceAgent: string;
+    role: MemoryEventRole;
+    text: string;
+    externalMessageId?: string;
+    timestamp?: number;
+    threadId?: string;
+    metadata?: Record<string, unknown>;
+}
+export interface EpisodeMessageResult {
+    created: boolean;
+    eventId: string;
+    episodeId?: string;
+    assigned: boolean;
+    ignored: boolean;
+    sealed: boolean;
+    dreamRecommended: boolean;
+    dreamRan: false;
 }
 export interface ToolCallMemoryEventInput {
     projectId?: string;
@@ -318,6 +349,7 @@ export interface ForgetUserResult {
         vectors: number;
         activations: number;
         memoryBindings: number;
+        episodes: number;
         brainProjections: number;
         entityRecords: number;
     };
@@ -358,6 +390,8 @@ export declare class MemoryKernel {
     readonly memoryGovernanceStore: MemoryGovernanceStore;
     readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;
     readonly pipelineMetrics: PipelineMetrics;
+    readonly episodeStore: EpisodeStore;
+    readonly episodeAssembler: EpisodeAssembler;
     private readonly dbPath;
     private readonly embedder;
     private readonly embeddingProvider?;
@@ -370,6 +404,7 @@ export declare class MemoryKernel {
     private readonly deepWriteCandidateStore;
     private readonly deepWritePromotionPolicy;
     private readonly dreamCuratorWorker;
+    private readonly dreamScheduler;
     private readonly memoryBindingService;
     private readonly topicSummaryBoard;
     private readonly topicDecayPolicy;
@@ -441,6 +476,53 @@ export declare class MemoryKernel {
     getDreamBacklogStatus(projectId?: string): DreamBacklogStatus;
     markDreamed(projectId: string | undefined, globalSeq: number, dreamedAt?: number): DreamBacklogStatus;
     runDreamCurator(options?: DreamCuratorRunOptions): Promise<DreamCuratorRunResult>;
+    runDreamTick(options?: DreamTickOptions): Promise<DreamTickResult>;
+    assembleEpisodeTurn(events: MemoryEvent[], input: {
+        projectId: string;
+        sessionId: string;
+        sourceAgent?: string;
+        now?: number;
+        batchSeal?: boolean;
+    }): import("./episode/EpisodeAssembler.js").EpisodeAssemblyResult;
+    appendRawEventToEpisode(event: MemoryEvent, input: {
+        projectId: string;
+        sessionId: string;
+        sourceAgent?: string;
+        now?: number;
+    }): import("./episode/EpisodeAssembler.js").EpisodeAssemblyResult;
+    appendEpisodeMessage(input: EpisodeMessageInput): EpisodeMessageResult;
+    private resumeEpisodeMessage;
+    private assertEpisodeIngestIdentity;
+    listEpisodes(options?: EpisodeListOptions): MemoryEpisode[];
+    getEpisode(episodeId: string): MemoryEpisode | undefined;
+    sealEpisode(episodeId: string, input: {
+        mode: EpisodeClosureMode;
+        reason: string;
+        now?: number;
+    }): EpisodeClosureReceipt;
+    sealIdleEpisodes(input: {
+        projectId?: string;
+        idleBefore: number;
+        now?: number;
+    }): EpisodeClosureReceipt[];
+    listEpisodeClosureReceipts(options?: {
+        episodeId?: string;
+        projectId?: string;
+        limit?: number;
+    }): EpisodeClosureReceipt[];
+    listEpisodeEventLinks(episodeId: string): import("./episode/EpisodeTypes.js").EpisodeEventLink[];
+    getEpisodeDreamStatus(projectId?: string): EpisodeDreamStatus;
+    retryFailedEpisodeDreams(projectId?: string): number;
+    repairEpisodes(options?: {
+        projectId?: string;
+        sinceGlobalSeq?: number;
+        limit?: number;
+    }): {
+        scanned: number;
+        assigned: number;
+        unassigned: number;
+        unassignedEventIds: string[];
+    };
     listDreamCandidates(options?: DreamCandidateListOptions): DreamCandidateRecord[];
     countDreamCandidates(options?: Omit<DreamCandidateListOptions, 'limit'>): number;
     bindMemoryEvent(event: MemoryEvent): MemoryBindingRecord[];

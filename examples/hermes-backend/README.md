@@ -79,7 +79,7 @@ cogmem import-hermes --workspace . --project hermes --session ./one.md
 cogmem import-hermes --workspace . --project hermes --session ./one.md --session ./two.md
 ```
 
-The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store.
+The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store. Imported raw records enter the same Episode Assembler used by live turns and are sealed at the explicit import batch boundary.
 Imported records are embedded through the configured kernel embedder during import.
 
 MCP recall JSON includes `decisionTrace`. Check its selected lane, reason, and candidate counts before concluding that a memory is absent, and use `sourceContext.locator.command` for exact wording. Raw text fallback searches the fully scoped ledger and prefers original user anchors over later assistant retellings when cue scores tie.
@@ -129,7 +129,7 @@ If a Hermes workspace uses different paths, pass explicit `profilePath` and `ses
 
 For agent-facing instructions, install or read `SKILL.md`. `cogmem connect hermes --workspace .` copies it to `~/.hermes/skills/cogmem-memory/SKILL.md`.
 
-`cogmem connect hermes --workspace . --auto` patches the Hermes MCP config with a `cogmem` server command. Re-running it after an upgrade updates existing `cogmem-mcp` allow-lists with newly supported tools such as `cogmem_strategy_plan`, `cogmem_memory_map`, `cogmem_maintenance_tick`, and `cogmem_prospective`. Strategy planning is read-only, and the prospective tool changes candidate state only; neither executes work. After running it, restart or reload Hermes so the MCP server list is re-read.
+`cogmem connect hermes --workspace . --auto` patches the Hermes MCP config with a `cogmem` server command. Re-running it after an upgrade updates existing allow-lists with strategy, episode, conditional Dream, memory-map, maintenance, and prospective tools. Episode append/import never run Dream, Dream tick never executes tools, and durable semantic changes still require governance. After running it, restart or reload Hermes so the MCP server list is re-read.
 
 The MCP `cogmem_recall` tool uses the same backend as `cogmem memory recall`. A Hermes MCP call with only `projectId: "hermes"` still infers `agentId: "hermes"` and can return `raw_ledger` items with labeled `sourceContext` events, `sourceContext.window`, and locator commands when vectors are empty. Pass `collection: "theseus"` only when Hermes wants creative artifacts instead of normal operational memory.
 
@@ -139,6 +139,8 @@ Useful host-owned inspection commands:
 cogmem memory map --project hermes --json
 cogmem memory tick --project hermes --json
 cogmem memory bind --project hermes --json
+cogmem episode status --project hermes --json
+cogmem dream tick --project hermes --mode auto --json
 ```
 
 `memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for raw-ledger drill-down; they are not verified long-term facts. If `memory tick` suggests `bind_raw_events`, run `memory bind` to backfill imported Hermes raw user events into the binding graph.

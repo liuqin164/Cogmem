@@ -160,7 +160,7 @@ export class EventStore {
         const globalSeq = this.getNextGlobalSeq();
         const createdAt = Date.now();
         const event = {
-            eventId: `evt-${randomUUID()}`,
+            eventId: input.eventId || `evt-${randomUUID()}`,
             globalSeq,
             streamId: input.streamId,
             streamType: input.streamType,

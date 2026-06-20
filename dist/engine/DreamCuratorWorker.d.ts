@@ -11,6 +11,9 @@ export interface DreamCuratorRunOptions {
     mode?: 'candidate' | 'shadow';
     now?: number;
     generateText?: TextGenerateFn;
+    /** Internal episode path: process only these authoritative raw events. */
+    eventIds?: string[];
+    sourceEpisodeId?: string;
 }
 export interface DreamCuratorRunResult {
     runId?: string;

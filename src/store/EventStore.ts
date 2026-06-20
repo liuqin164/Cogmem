@@ -25,6 +25,7 @@ export interface ProjectionCheckpoint {
 }
 
 export interface AppendEventInput<TPayload = Record<string, unknown>> {
+  eventId?: string;
   streamId: string;
   streamType: StreamType;
   eventType: MemoryEventType;
@@ -224,7 +225,7 @@ export class EventStore {
     const globalSeq = this.getNextGlobalSeq();
     const createdAt = Date.now();
     const event: MemoryEvent<TPayload> = {
-      eventId: `evt-${randomUUID()}`,
+      eventId: input.eventId || `evt-${randomUUID()}`,
       globalSeq,
       streamId: input.streamId,
       streamType: input.streamType,

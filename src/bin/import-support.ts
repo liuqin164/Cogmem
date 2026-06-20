@@ -253,6 +253,7 @@ async function importSources(input: {
   window: AgentImportResult['window'];
 }): Promise<AgentImportResult> {
   const opened = openKernel(input.args, input.workspaceRoot);
+  const importedEpisodeIds = new Set<string>();
   const processor = new InstalledBatchProcessor({
     cursorStore: opened.kernel.cursorStore,
     ingestBatch: async (items) => {
@@ -260,7 +261,11 @@ async function importSources(input: {
       for (const item of items) neurons.push(await opened.kernel.ingest(item));
       return neurons;
     },
-    recordRawEvidence: (envelope) => recordRawImportedEvidence(opened.kernel, input.projectId, envelope).event,
+    recordRawEvidence: (envelope) => {
+      const anchored = recordRawImportedEvidence(opened.kernel, input.projectId, envelope);
+      if (anchored.episodeId) importedEpisodeIds.add(anchored.episodeId);
+      return anchored.event;
+    },
     runOfflineWindow: (window) => opened.kernel.consolidate({
       projectId: input.projectId,
       startTime: window.start,
@@ -274,6 +279,12 @@ async function importSources(input: {
       window: input.window,
       sources: input.sources,
     });
+    for (const episodeId of importedEpisodeIds) {
+      const episode = opened.kernel.getEpisode(episodeId);
+      if (episode?.status !== 'sealed') {
+        opened.kernel.sealEpisode(episodeId, { mode: 'batch', reason: `${input.agent}_import_batch_boundary` });
+      }
+    }
     return {
       agent: input.agent,
       workspaceRoot: input.workspaceRoot,
@@ -325,6 +336,7 @@ function reindexRawSources(input: {
   let recordsParsed = 0;
   let rawRecordsAnchored = 0;
   let skippedRecords = 0;
+  const importedEpisodeIds = new Set<string>();
 
   try {
     for (const source of input.sources) {
@@ -339,6 +351,7 @@ function reindexRawSources(input: {
       for (const record of adapted.records) {
         const envelope = buildEpisodeEnvelope(source, record);
         const anchored = recordRawImportedEvidence(opened.kernel, input.projectId, envelope);
+        if (anchored.episodeId) importedEpisodeIds.add(anchored.episodeId);
         if (anchored.created) {
           sourceAnchored += 1;
         } else {
@@ -358,6 +371,12 @@ function reindexRawSources(input: {
         skippedRecords: sourceSkipped,
         diagnostics: adapted.diagnostics || [],
       });
+    }
+    for (const episodeId of importedEpisodeIds) {
+      const episode = opened.kernel.getEpisode(episodeId);
+      if (episode?.status !== 'sealed') {
+        opened.kernel.sealEpisode(episodeId, { mode: 'batch', reason: `${input.agent}_reindex_batch_boundary` });
+      }
     }
 
     return {
@@ -389,7 +408,7 @@ function recordRawImportedEvidence(
   kernel: MemoryKernel,
   projectId: string,
   envelope: BatchEpisodeEnvelope,
-): { event: ReturnType<MemoryKernel['recordRawEvent']>; created: boolean } {
+): { event: ReturnType<MemoryKernel['recordRawEvent']>; created: boolean; episodeId?: string } {
   const sourceRef = envelope.ingestInput.sourceRefs?.[0];
   const record = envelope.record;
   const metadata = record.metadata || {};
@@ -422,7 +441,19 @@ function recordRawImportedEvidence(
     importAnchor,
     contentHash: createHash('sha256').update(record.text).digest('hex'),
   });
-  if (existing) return { event: existing as ReturnType<MemoryKernel['recordRawEvent']>, created: false };
+  if (existing) {
+    let link = kernel.episodeStore.getEventLink(existing.eventId);
+    if (!link && !kernel.episodeStore.hasEventDisposition(existing.eventId)) {
+      kernel.assembleEpisodeTurn([existing], {
+        projectId,
+        sessionId,
+        sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
+        now: record.timestamp,
+      });
+      link = kernel.episodeStore.getEventLink(existing.eventId);
+    }
+    return { event: existing as ReturnType<MemoryKernel['recordRawEvent']>, created: false, episodeId: link?.episodeId };
+  }
 
   const event = kernel.recordRawEvent({
     projectId,
@@ -454,7 +485,13 @@ function recordRawImportedEvidence(
       tags: envelope.ingestInput.tags || [],
     },
   });
-  return { event, created: true };
+  const assembly = kernel.assembleEpisodeTurn([event], {
+    projectId,
+    sessionId,
+    sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
+    now: record.timestamp,
+  });
+  return { event, created: true, episodeId: assembly.episode?.episodeId };
 }
 
 function findImportedRawAnchor(

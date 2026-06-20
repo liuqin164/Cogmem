@@ -2,6 +2,30 @@ import { describe, expect, test } from 'bun:test';
 
 import { BrainEvalRunner } from '../src/benchmark/BrainEval.js';
 
+test('BrainEval gates episode grouping, evidence, governance, and Hermes import parity', () => {
+  const report = new BrainEvalRunner().evaluate([{
+    expectedIds: [], selectedIds: [], selectedWithEvidenceIds: [], staleSelectedIds: [], crossProjectSelectedIds: [],
+    usedTokens: 0, budgetTokens: 1, prospectiveTriggeredIds: [], confirmedProspectiveIds: [],
+    episodeGroupingChecks: [{ expectedGroup: 'episode-a', selectedGroup: 'episode-a' }],
+    episodeBoundaryChecks: [{ expectedSealed: true, selectedSealed: true }],
+    episodeEvidenceChecks: [{ sourceEventIds: ['e1', 'e2'], candidateEvidenceEventIds: ['e1', 'e2'] }],
+    episodeAssignmentChecks: [{ assigned: true }],
+    dreamCandidateChecks: [{ grounded: true, bypassedGovernance: false }],
+    hermesImportParityChecks: [{ liveShape: 'episode.v1', importedShape: 'episode.v1' }],
+    bindingChecks: [{ expectedTopicPath: 'x', selectedTopicPath: 'x' }],
+    entityMergeChecks: [{ accepted: false, correct: true }],
+    beliefOwnershipChecks: [{ ownership: 'user', hasExplicitUserEvidence: true }],
+    temporalTruthChecks: [{ expectedVersionId: 'v1', selectedVersionId: 'v1' }],
+    contextPollutionChecks: [{ memoryId: 'm1', polluted: false }],
+    sourceFidelityChecks: [{ expectedEventId: 'e1', resolvedEventId: 'e1' }],
+  }]);
+  expect(report.passed).toBe(true);
+  expect(report.metrics).toEqual(expect.objectContaining({
+    episodeGroupingAccuracy: 1, episodeBoundaryAccuracy: 1, episodeEvidenceCoverage: 1,
+    unassignedRawRate: 0, dreamCandidateGrounding: 1, dreamBypassRate: 0, hermesImportParity: 1,
+  }));
+});
+
 describe('brain eval v1', () => {
   test('passes a clean memory-brain sample set', () => {
     const report = new BrainEvalRunner().evaluate([
@@ -15,6 +39,12 @@ describe('brain eval v1', () => {
         temporalTruthChecks: [{ expectedVersionId: 'v2', selectedVersionId: 'v2' }],
         contextPollutionChecks: [{ memoryId: 'a', polluted: false }],
         sourceFidelityChecks: [{ expectedEventId: 'evt-a', resolvedEventId: 'evt-a' }],
+        episodeGroupingChecks: [{ expectedGroup: 'episode-a', selectedGroup: 'episode-a' }],
+        episodeBoundaryChecks: [{ expectedSealed: true, selectedSealed: true }],
+        episodeEvidenceChecks: [{ sourceEventIds: ['evt-a'], candidateEvidenceEventIds: ['evt-a'] }],
+        episodeAssignmentChecks: [{ assigned: true }],
+        dreamCandidateChecks: [{ grounded: true, bypassedGovernance: false }],
+        hermesImportParityChecks: [{ liveShape: 'episode.v1', importedShape: 'episode.v1' }],
       },
       {
         expectedIds: ['c'], selectedIds: ['c'], selectedWithEvidenceIds: ['c'],
@@ -55,6 +85,8 @@ describe('brain eval v1', () => {
       'provenanceCoverage', 'prospectiveFalseActivationRate',
       'bindingPurity', 'entityFalseMergeRate', 'beliefOwnershipCompliance',
       'temporalCurrentTruthAccuracy', 'contextPollutionRate', 'sourceFidelity',
+      'episodeGroupingAccuracy', 'episodeBoundaryAccuracy', 'episodeEvidenceCoverage',
+      'unassignedRawRate', 'dreamCandidateGrounding', 'dreamBypassRate', 'hermesImportParity',
     ]));
   });
 

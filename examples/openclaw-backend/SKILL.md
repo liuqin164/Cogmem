@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for OpenClaw.
-version: 3.4.0
+version: 3.5.0
 metadata:
   openclaw:
     tags: [memory, cogmem, agent-memory]
@@ -286,7 +286,8 @@ timeout_ms = 60000
 Run curation manually or from a host-owned schedule:
 
 ```bash
-cogmem memory dream --project openclaw --promote --json
+cogmem episode status --project openclaw --json
+cogmem dream tick --project openclaw --mode auto --json
 cogmem memory govern --project openclaw --json
 cogmem memory candidates --project openclaw --status candidate --json
 ```
@@ -294,13 +295,13 @@ cogmem memory candidates --project openclaw --status candidate --json
 The Dream Worker only proposes candidates such as user preferences, project memories, long-term goals, boundaries, failure lessons, diagnostic conclusions, session/topic summaries, temporal fact updates, and conflicts. CPU governance decides whether they remain provisional, need confirmation, become promoted, or are superseded/archived.
 It also proposes semantic tags, indexing decisions, event relations, and edge-adjustment candidates so future recall can route by stable cues such as `memory/auditability`, `concept:memory_black_box`, and `need:source_drilldown` instead of matching only the user's full sentence. These are still governance candidates; do not treat them as verified facts until promoted by core governance.
 
-For continuous curation, prefer a host-owned foreground worker over cron when the host can supervise long-running processes:
+For periodic curation, let the host timer wake one bounded tick:
 
 ```bash
-cogmem memory dream --project openclaw --watch --interval-ms 300000 --promote --json
+cogmem dream tick --project openclaw --mode auto --max-episodes 10 --json
 ```
 
-`--watch` keeps processing new raw events until the host stops the process. `--promote` runs CPU governance after each dream pass, so the candidate queue does not grow forever. Without `--promote` or a separate `cogmem memory govern` run, candidates stay pending and will not become agent-facing compiled/provisional memory.
+The timer does not force a full Dream run. `dream tick` inspects sealed episode jobs, chooses no work, micro, normal, or deep mode, then exits. Run `cogmem memory govern` separately; candidates stay pending until governance evaluates them.
 
 Queue interpretation:
 
@@ -310,11 +311,11 @@ Queue interpretation:
 - `rejected`: invalid provider output and other unusable diagnostics remain auditable here; they are not user memory and do not require confirmation.
 - `superseded`: older diagnostic or candidate has been replaced by newer evidence.
 
-Explicit user clarification may create an organizational `correction` record. Do not treat assistant apologies, assistant self-correction, or a user question containing `是不是` as a user contradiction. A correction remains source-anchored organization evidence until later governance binds it to a prior claim. A memory-model conflict proposal is valid only when it cites at least two distinct exact raw event IDs from the current Dream window; never use `["all"]` for a conflict.
+Explicit user clarification may create an organizational `correction` record. Do not treat assistant apologies, assistant self-correction, or a user question containing `是不是` as a user contradiction. A correction remains source-anchored organization evidence until later governance binds it to a prior claim. A memory-model conflict proposal is valid only when it cites at least two distinct exact raw event IDs from the current sealed episode; never use `["all"]` for a conflict.
 
 OpenClaw session exports may place the body below an empty `user:` or `assistant:` header and may repeat an assistant block exactly. Import accepts that layout, collapses only adjacent exact export duplicates, and uses the `# Session: ... UTC` heading as the chronological timestamp base. Do not rewrite the file solely to make it importable.
 
-If rejected provider diagnostics mention invalid memory-model output but later curation works, run `cogmem memory dream --project openclaw --promote --json`; recovered provider runs mark older provider diagnostics as `superseded`.
+If rejected provider diagnostics mention invalid memory-model output but later curation works, seal or repair the affected episode, run `cogmem dream tick --project openclaw --mode auto --json`, then run `cogmem memory govern --project openclaw --json`; recovered provider runs mark older provider diagnostics as `superseded`.
 
 After package updates or config drift, repair the host wiring:
 
@@ -369,8 +370,16 @@ Expose these tools to the agent:
 - `cogmem_recall`
 - `cogmem_explain_recall`
 - `cogmem_strategy_plan`
+- `cogmem_episode_append`
+- `cogmem_episode_import`
+- `cogmem_episode_status`
+- `cogmem_episode_seal`
+- `cogmem_dream_tick`
+- `cogmem_dream_status`
 - `cogmem_memory_map`
 - `cogmem_maintenance_tick`
 - `cogmem_prospective`
 
 Use `cogmem_recall` for normal answers. It uses the same agent-facing recall path as `cogmem memory recall`, so empty vector indexes can still return bounded `raw_ledger` evidence with `sourceContext` and a local `sourceContext.locator.command`. Pass `agentId` and `projectId` when available; if an MCP host sends only `projectId`, Cogmem infers `agentId` from it. Pass `collection: "theseus"` only for creative artifacts. Use `cogmem_strategy_plan` to inspect the read-only strategy capsule without performing recall, and `cogmem_explain_recall` only when auditing `filteredEvidence`, activation paths, or governance suppression reasons. Use `cogmem_memory_map` for self-inspection, `cogmem_maintenance_tick` for host-owned upkeep suggestions, and `cogmem_prospective` only to manage candidate state. A strategy capsule or due candidate is never authorization to execute.
+
+The OpenClaw `agent_end` queue writes raw evidence and updates a session episode using deterministic CPU rules. It does not run Dream. Related turns remain in one open episode; explicit user closure or a host/import boundary can hard-seal it, while idle closure is soft and may safely reopen. A timer should call `cogmem dream tick`, not force a full raw-ledger scan. Dream creates candidates grounded in raw event IDs; `cogmem memory govern` remains the separate durable-memory decision.

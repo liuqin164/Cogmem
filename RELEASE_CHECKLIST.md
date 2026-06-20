@@ -1,11 +1,11 @@
-# cogmem 3.4.0 Release Checklist
+# cogmem 3.5.0 Release Checklist
 
 This release is distributed through GitHub Releases. Do not run npm publish.
 
 ## Required Metadata
 
 - `package.json` name is `cogmem`.
-- `package.json` version is `3.4.0`.
+- `package.json` version is `3.5.0`.
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
 - `install.sh` is tracked and uses the latest GitHub release asset.
@@ -32,8 +32,10 @@ This release is distributed through GitHub Releases. Do not run npm publish.
 - `cogmem prospective`
 - `cogmem strategy`
 - `cogmem brain-eval`
+- `cogmem episode`
+- `cogmem dream`
 
-MCP `tools/list` includes `cogmem_strategy_plan` and `cogmem_prospective`; strategy planning is read-only, and create/confirm/due smoke tests prove project isolation, distinct user confirmation, and the absence of any task executor.
+MCP `tools/list` includes strategy, episode append/import/status/seal, conditional Dream tick/status, and prospective tools. Episode append/import never run Dream, and Dream candidate generation never bypasses governance or executes tasks.
 
 ## Required Documentation
 
@@ -50,6 +52,7 @@ MCP `tools/list` includes `cogmem_strategy_plan` and `cogmem_prospective`; strat
 - README and skills explain Context Cortex intent suppression, 25% default/30% maximum budget, source drill-down, and activation receipts.
 - README and skills explain that Prospective Memory is confirmed-only state with no task execution capability, and how to use BrainEval as a release gate.
 - README and skills explain Strategy Cortex templates, no-instruction-authority lifecycle, one-retry replanning, strategy-conditioned retrieval, offline-only rollout comparison, and read-only MemoryUseJudge telemetry.
+- README and skills explain Raw Ledger-first episode assembly, soft/hard sealing, explicit conditional Dream ticks, raw-event evidence grounding, repair/retry, and hookless Hermes MCP/import usage.
 - OpenClaw skill explains self-install, import, active recall, `--auto`, and `doctor --fix`.
 - Hermes skill explains self-install, MCP wiring, `connect hermes --auto`, and `/reload-mcp`.
 - SECURITY documents local-first storage, explicit external providers, snapshots as sensitive, and governed recall.

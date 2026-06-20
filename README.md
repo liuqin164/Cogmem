@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.4.0`
+Current version: `3.5.0`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -79,6 +79,9 @@ Metadata / FTS Index
 Memory Binding
   CPU-canonicalized raw-event bindings to stable entity/topic paths, claim-key clusters, and activation-aware graph edges for source-anchored organization before fact promotion.
 
+Episode Assembler
+  Deterministic, session-scoped grouping of raw messages into auditable open, soft-sealed, and sealed conversation episodes.
+
 Memory Governance Plan
   Evidence-backed, idempotent semantic operations validated by CPU policy and committed with their audit records in one SQLite transaction.
 
@@ -86,7 +89,7 @@ Compiled Memory
   Governed summaries, preferences, constraints, goals, lessons, diagnostics, and topic memories.
 
 Dream Curator
-  Background curation worker that reads raw ledger windows and proposes candidates only.
+  Conditional background curation that processes sealed episodes and proposes raw-event-grounded candidates only.
 
 CPU Governance
   Rule-based promotion, suppression, supersession, and confirmation policy.
@@ -158,7 +161,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#3.4.0"
+bun add "cogmem@github:liuqin164/cogmem#3.5.0"
 bunx cogmem init
 ```
 
@@ -183,17 +186,21 @@ cogmem migrate --dry-run --json
 
 For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
-Run the Dream Curator once and promote safe candidates through CPU governance:
+Inspect and conditionally process sealed conversation episodes:
 
 ```bash
-cogmem memory dream --project my-agent --promote --json
+cogmem episode status --project my-agent --json
+cogmem dream tick --project my-agent --mode auto --json
+cogmem memory govern --project my-agent --json
 ```
 
-Run it as a foreground worker supervised by your host:
+For a host timer, call `dream tick`; the timer only wakes the scheduler. An empty backlog performs no Dream work:
 
 ```bash
-cogmem memory dream --project my-agent --watch --interval-ms 300000 --promote --json
+cogmem dream tick --project my-agent --mode auto --max-episodes 10 --json
 ```
+
+Raw events are always written first. `KernelAgentMemoryBackend` and the OpenClaw plugin assemble live turns automatically. Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands assemble the same episode schema and hard-seal explicit import batches. Episode summaries and closure receipts are control metadata, never durable evidence; every Dream candidate must cite raw event IDs and still pass CPU governance.
 
 Inspect queue state:
 
@@ -234,7 +241,7 @@ cogmem strategy plan --project hermes --query "我当时的原话是什么？" -
 cogmem strategy outcomes --project hermes --json
 ```
 
-OpenClaw plugin 0.3.0 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. It records a read-only context outcome after the turn for offline evaluation; the judge cannot mutate belief, entity, temporal, or prospective memory.
+OpenClaw plugin 0.4.0 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Its queued `agent_end` write stores Raw Ledger evidence and updates the Episode Assembler without running Dream in the response path. It records a read-only context outcome after the turn for offline evaluation; the judge cannot mutate belief, entity, temporal, prospective, or episode memory.
 
 `ProspectiveMemoryService` stores future intentions, commitments, reminders, open loops, and plans as candidates only. A candidate is not actionable until an explicit user event confirms it. Rejected candidates stay suppressed unless genuinely new evidence creates a new version. The service and `cogmem prospective` CLI manage state only; they expose no task or tool execution capability.
 
@@ -402,6 +409,21 @@ Hermes can call the MCP recall tool directly:
 
 `cogmem_recall` uses the same agent-facing recall path as `cogmem memory recall` and returns its `strategyCapsule`. `cogmem_strategy_plan` exposes that deterministic, read-only memory policy without performing recall. If `agentId` is omitted, MCP infers it from `projectId`, so project-only Hermes calls can still reach raw ledger fallback and return `items[].sourceContext` when vectors are empty. Re-running `cogmem connect hermes --auto` after an upgrade also patches existing `tools.include` allow-lists with newly supported Cogmem MCP tools.
 
+For Hermes sessions without lifecycle hooks, use `cogmem_episode_append` with a required stable `externalMessageId` for one message or `cogmem_episode_import` for a bounded batch. These tools only write Raw Ledger and episode metadata. They never run Dream. Inspect with `cogmem_episode_status`, seal explicitly with `cogmem_episode_seal`, and call `cogmem_dream_tick` only when the host wants background candidate generation.
+
+`externalMessageId` is idempotent inside `(projectId, sourceAgent, sessionId)`. Reusing the same ID with different role/text is rejected instead of silently replacing evidence. Deterministic noise remains in Raw Ledger and is returned as `ignoredEventIds`, not as repairable `unassignedEventIds`.
+
+```json
+{
+  "projectId": "hermes",
+  "sessionId": "session-42",
+  "sourceAgent": "hermes",
+  "role": "user",
+  "text": "Continue the release discussion.",
+  "externalMessageId": "msg-42"
+}
+```
+
 Import existing Hermes memory:
 
 ```bash
@@ -561,7 +583,7 @@ For Hermes after an update:
 cogmem connect hermes --workspace /path/to/hermes/workspace --auto --force
 ```
 
-This also updates existing Hermes `cogmem-mcp` blocks with missing `cogmem_strategy_plan`, `cogmem_memory_map`, `cogmem_maintenance_tick`, and `cogmem_prospective` entries.
+This also updates existing Hermes `cogmem-mcp` blocks with missing strategy, episode, Dream, memory-map, maintenance, and prospective tools.
 
 ## CLI
 

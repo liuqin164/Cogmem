@@ -76,6 +76,8 @@ export * from './meta/types.js';
 export * from './migrations/0001_init.js';
 export * from './migrations/0010_skill_neurons.js';
 export * from './migrations/index.js';
+export * from './episode/index.js';
+export * from './dream/index.js';
 export * from './models/ModelCapabilityRouter.js';
 export * from './models/ModelRegistry.js';
 export * from './models/ModelRole.js';
