@@ -66,6 +66,8 @@ Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2
 
 For package upgrades, run `cogmem update --yes`; it installs the latest GitHub Release and then runs `cogmem migrate --yes --backup`. Use `cogmem migrate --dry-run --json` to preview pending schema work. Never delete or rewrite Raw Ledger events during migration.
 
+Episode Dream is not part of the answer path. `agent_end` only queues Raw Ledger and episode assembly. Treat semantic episode summaries as routing hints, never evidence; durable candidates must cite raw event IDs. Retry `failed_retryable` Dream jobs only during maintenance, and inspect `failed_terminal` jobs instead of repeatedly ticking them.
+
 Preview first:
 
 ```bash

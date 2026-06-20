@@ -23,6 +23,7 @@ export class DreamScheduler {
             now: startedAt,
             leaseMs: Math.max(5_000, options.leaseMs ?? 5 * 60_000),
             maxAttempts: Math.max(1, options.maxAttempts ?? 3),
+            runId,
         });
         if (!jobs.length) {
             const result = {
@@ -39,12 +40,22 @@ export class DreamScheduler {
         let failures = 0;
         for (const job of jobs) {
             const links = this.episodeStore.listEventLinks(job.episodeId);
+            const episode = this.episodeStore.getEpisode(job.episodeId);
+            const receipt = this.episodeStore.listClosureReceipts({ episodeId: job.episodeId, limit: 1 })[0];
             try {
+                const limits = curatorLimits(selectedMode);
                 const run = await this.curator.run({
                     projectId: job.projectId,
                     eventIds: links.map((link) => link.eventId),
                     sourceEpisodeId: job.episodeId,
-                    limit: 500,
+                    sourceEpisodeEventIds: links.map((link) => link.eventId),
+                    dreamMode: selectedMode,
+                    maxCandidates: limits.maxCandidates,
+                    episodeType: episode?.episodeType,
+                    closureReason: receipt?.closureReasonCode || receipt?.closureReason,
+                    semanticSummary: episode?.semanticSummary,
+                    episodeRelations: links.map((link) => ({ eventId: link.eventId, relation: link.relation })),
+                    limit: limits.eventLimit,
                     now: startedAt,
                 });
                 const ids = run.candidates.map((candidate) => candidate.candidateId);
@@ -54,7 +65,9 @@ export class DreamScheduler {
             }
             catch (error) {
                 failures += 1;
-                this.episodeStore.failDreamJob(job.episodeId, job.leaseId, error instanceof Error ? error.message : String(error), startedAt);
+                const message = error instanceof Error ? error.message : String(error);
+                const failure = classifyFailure(message, job.attempts, startedAt);
+                this.episodeStore.failDreamJob(job.episodeId, job.leaseId, message, failure);
             }
         }
         const result = {
@@ -73,6 +86,25 @@ export class DreamScheduler {
             candidateIds: result.candidateIds, status, durationMs: result.durationMs, createdAt,
         });
     }
+}
+function curatorLimits(mode) {
+    if (mode === 'micro')
+        return { eventLimit: 20, maxCandidates: 20 };
+    if (mode === 'normal')
+        return { eventLimit: 100, maxCandidates: 100 };
+    return { eventLimit: 500, maxCandidates: 500 };
+}
+function classifyFailure(message, attempts, now) {
+    if (/(candidate_evidence|project_mismatch|validation|schema|episode_has_no_raw_events)/iu.test(message)) {
+        return { now, failureCategory: 'validation', terminal: true };
+    }
+    const category = /(rate|429)/iu.test(message)
+        ? 'rate_limit'
+        : /(timeout|network|provider|busy|locked|temporar)/iu.test(message)
+            ? 'transient_provider'
+            : 'unknown_retryable';
+    const delay = Math.min(60 * 60_000, 30_000 * 2 ** Math.max(0, attempts - 1));
+    return { now, failureCategory: category, terminal: false, retryAfter: now + delay };
 }
 function modeLimit(mode) {
     if (mode === 'micro')

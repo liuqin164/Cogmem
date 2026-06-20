@@ -1,15 +1,22 @@
 import type Database from 'bun:sqlite';
-import type { EpisodeClosureMode, EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeEventLink, EpisodeListOptions, EpisodeType, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
+import type { MemoryEvent } from '../types/index.js';
+import type { EpisodeClosureMode, EpisodeClosureReasonCode, EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeEventLink, EpisodeListOptions, EpisodeType, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
 interface CreateEpisodeInput {
     projectId: string;
     sessionId: string;
     sourceAgent?: string;
+    conversationThreadId?: string;
     topicPath?: string;
     episodeType: EpisodeType;
     importance: number;
     eventId: string;
     globalSeq?: number;
     occurredAt: number;
+    episodeTags?: string[];
+    candidateTypes?: MemoryEpisode['candidateTypes'];
+    importanceSignals?: string[];
+    importanceReason?: string;
+    linkedEpisodeId?: string;
 }
 export interface ClaimedEpisodeDreamJob {
     episodeId: string;
@@ -20,9 +27,12 @@ export interface ClaimedEpisodeDreamJob {
 }
 export declare class EpisodeStore {
     private readonly db;
-    constructor(db: Database);
+    private readonly resolveEvent?;
+    constructor(db: Database, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined);
     createEpisode(input: CreateEpisodeInput): MemoryEpisode;
-    findActiveEpisode(projectId: string, sessionId: string): MemoryEpisode | undefined;
+    findActiveEpisode(projectId: string, sessionId: string, sourceAgent?: string, conversationThreadId?: string): MemoryEpisode | undefined;
+    private findActiveEpisodeRow;
+    claimLegacyEpisodeScope(episodeId: string, sourceAgent?: string, conversationThreadId?: string): MemoryEpisode | undefined;
     getEpisode(episodeId: string): MemoryEpisode | undefined;
     listEpisodes(options?: EpisodeListOptions): MemoryEpisode[];
     appendEvent(input: {
@@ -35,6 +45,9 @@ export declare class EpisodeStore {
         episodeType?: EpisodeType;
         importance?: number;
         summaryText?: string;
+        candidateTypes?: MemoryEpisode['candidateTypes'];
+        importanceSignals?: string[];
+        importanceReason?: string;
     }): EpisodeEventLink;
     getEventLink(eventId: string): EpisodeEventLink | undefined;
     listEventLinks(episodeId: string): EpisodeEventLink[];
@@ -42,6 +55,12 @@ export declare class EpisodeStore {
     sealEpisode(episodeId: string, input: {
         mode: EpisodeClosureMode;
         reason: string;
+        reasonCode?: EpisodeClosureReasonCode;
+        reasonDetail?: string;
+        requiresReview?: boolean;
+        semanticSummary?: MemoryEpisode['semanticSummary'];
+        ignoredNearbyEventIds?: string[];
+        unassignedNearbyEventIds?: string[];
         now?: number;
     }): EpisodeClosureReceipt;
     listClosureReceipts(options?: {
@@ -65,9 +84,15 @@ export declare class EpisodeStore {
         now: number;
         leaseMs: number;
         maxAttempts: number;
+        runId?: string;
     }): ClaimedEpisodeDreamJob[];
     completeDreamJob(episodeId: string, leaseId: string, candidateIds: string[], now: number): void;
-    failDreamJob(episodeId: string, leaseId: string, error: string, now: number): void;
+    failDreamJob(episodeId: string, leaseId: string, error: string, input: {
+        now: number;
+        failureCategory: string;
+        terminal: boolean;
+        retryAfter?: number;
+    }): void;
     retryFailed(projectId?: string): number;
     getDreamStatus(projectId?: string): EpisodeDreamStatus;
     countUnassignedRawEvents(projectId?: string): number;

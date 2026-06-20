@@ -64,7 +64,9 @@ For a supervised long-running worker instead of cron:
 cogmem dream tick --project openclaw --mode auto --max-episodes 10 --json
 ```
 
-The OpenClaw hook writes Raw Ledger evidence and updates an episode, then returns without running Dream. A host timer may call `cogmem dream tick`; an empty or still-open backlog does nothing. The Dream Worker processes sealed episodes and proposes candidate memories only. CPU governance is a separate step. Use `cogmem memory govern` to evaluate evidence-backed candidates. Dream does not rewrite verified facts or promote tool/LLM output into active memory.
+The OpenClaw hook writes Raw Ledger evidence and updates a source/thread-scoped episode, then returns without running Dream. Classification uses previous assistant context for short acceptance, rejection, answer, and continuation messages. Same-project subtopics stay together; ambiguous switches soft-seal for review; only clear cross-domain switches hard-seal. A host timer may call `cogmem dream tick`; an empty or still-open backlog does nothing.
+
+The Dream Worker processes sealed episodes and proposes candidate memories only. Micro, normal, and deep modes change curator scope as well as batch size. Episode semantic summaries help routing but are not evidence: candidates must cite raw event IDs from the episode. CPU governance is a separate step. Use `cogmem memory govern` to evaluate evidence-backed candidates. Dream does not rewrite verified facts or promote tool/LLM output into active memory.
 
 For host-owned inspection and upkeep:
 

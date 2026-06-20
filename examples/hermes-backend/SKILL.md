@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for Hermes through MCP.
-version: 3.5.0
+version: 3.5.1
 metadata:
   hermes:
     tags: [memory, mcp, cogmem, agent-memory]
@@ -307,7 +307,9 @@ When Hermes calls `cogmem_recall`, it should pass `projectId: "hermes"` and may 
 
 Hermes may pass `collection: "theseus"` to `cogmem_recall` when it wants creative artifacts. `cogmem_strategy_plan` is a read-only inspection tool: its capsule has no instruction authority and never authorizes work. Expose `cogmem_memory_map` and `cogmem_maintenance_tick` only to agents that are allowed to inspect memory anatomy or request host-owned upkeep. `cogmem_prospective` manages candidate state only; even a confirmed due item requires normal host authorization before any action.
 
-For conversations not captured by a host hook, call `cogmem_episode_append` with a stable `externalMessageId`, or use bounded `cogmem_episode_import` for a batch. The ID is scoped to the project, source agent, and source session; conflicting reuse with different content is rejected. Both operations preserve Raw Ledger evidence and never run Dream. Inspect or seal with `cogmem_episode_status` / `cogmem_episode_seal`, then call `cogmem_dream_tick` explicitly. `ignoredEventIds` are deterministic noise, while `unassignedEventIds` should be repaired. Dream only creates source-grounded candidates; normal governance decides durable memory.
+Cogmem cannot observe Hermes conversations without a host hook or explicit MCP/import call. After meaningful conversation, call `cogmem_episode_append` with a stable `externalMessageId`, or use bounded `cogmem_episode_import` for a batch. Before answering memory questions, call `cogmem_recall`. The ID is scoped to the project, source agent, and source session; conflicting reuse with different content is rejected. Generated import IDs use role, timestamp, and normalized content rather than line position.
+
+Append/import preserve Raw Ledger evidence and never run Dream. MCP import is capped at 200 messages and 16,000 characters per message; use the streaming CLI with checkpoints for large histories. Inspect with `cogmem_episode_status`; `semanticMemoryMayLag` and `recommendedAction` distinguish queued, retryable, and terminal work. Call `cogmem_dream_tick` with `maintenanceMode: true` only during idle upkeep or an explicit user/admin maintenance request. Without that flag it is dry-run only. `ignoredEventIds` are deterministic noise, while `unassignedEventIds` should be repaired. Semantic summaries are hints only; Dream candidates must cite raw episode events and normal governance decides durable memory.
 
 Then reload MCP inside Hermes:
 

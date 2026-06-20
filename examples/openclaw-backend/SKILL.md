@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for OpenClaw.
-version: 3.5.0
+version: 3.5.1
 metadata:
   openclaw:
     tags: [memory, cogmem, agent-memory]
@@ -303,6 +303,10 @@ cogmem dream tick --project openclaw --mode auto --max-episodes 10 --json
 
 The timer does not force a full Dream run. `dream tick` inspects sealed episode jobs, chooses no work, micro, normal, or deep mode, then exits. Run `cogmem memory govern` separately; candidates stay pending until governance evaluates them.
 
+Episode classification is contextual but remains CPU-owned in the live hook. Short user replies are interpreted against the previous assistant response or proposal. A same-project subtopic shift stays in the current episode; a clear cross-domain switch hard-seals; an ambiguous switch soft-seals and links a review episode. Any optional model review runs asynchronously and can only suggest normalized relation metadata. It cannot write belief, entity, temporal, prospective, or governance state.
+
+At seal time Cogmem creates a semantic summary for Dream routing. This summary is a hint, not evidence. A candidate is valid only when `evidenceEventIds` is a non-empty subset of the sealed episode's raw events. Treat `dreamStatus=failed_retryable` as operator-retryable after backoff and `failed_terminal` as an evidence/schema problem that needs inspection rather than repeated ticks.
+
 Queue interpretation:
 
 - `candidate`: proposed but not yet governed; do not assume it will be injected.
@@ -382,4 +386,4 @@ Expose these tools to the agent:
 
 Use `cogmem_recall` for normal answers. It uses the same agent-facing recall path as `cogmem memory recall`, so empty vector indexes can still return bounded `raw_ledger` evidence with `sourceContext` and a local `sourceContext.locator.command`. Pass `agentId` and `projectId` when available; if an MCP host sends only `projectId`, Cogmem infers `agentId` from it. Pass `collection: "theseus"` only for creative artifacts. Use `cogmem_strategy_plan` to inspect the read-only strategy capsule without performing recall, and `cogmem_explain_recall` only when auditing `filteredEvidence`, activation paths, or governance suppression reasons. Use `cogmem_memory_map` for self-inspection, `cogmem_maintenance_tick` for host-owned upkeep suggestions, and `cogmem_prospective` only to manage candidate state. A strategy capsule or due candidate is never authorization to execute.
 
-The OpenClaw `agent_end` queue writes raw evidence and updates a session episode using deterministic CPU rules. It does not run Dream. Related turns remain in one open episode; explicit user closure or a host/import boundary can hard-seal it, while idle closure is soft and may safely reopen. A timer should call `cogmem dream tick`, not force a full raw-ledger scan. Dream creates candidates grounded in raw event IDs; `cogmem memory govern` remains the separate durable-memory decision.
+The OpenClaw `agent_end` queue writes raw evidence and updates a source/thread-scoped session episode using deterministic CPU rules. It does not run Dream. Related turns remain in one open episode; explicit user closure or a high-confidence host/import boundary can hard-seal it, while idle or uncertain closure is soft and may safely reopen. A timer should call `cogmem dream tick`, not force a full raw-ledger scan. Dream creates candidates grounded in raw event IDs; `cogmem memory govern` remains the separate durable-memory decision.

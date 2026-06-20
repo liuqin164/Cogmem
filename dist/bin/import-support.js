@@ -189,7 +189,7 @@ async function importSources(input) {
         for (const episodeId of importedEpisodeIds) {
             const episode = opened.kernel.getEpisode(episodeId);
             if (episode?.status !== 'sealed') {
-                opened.kernel.sealEpisode(episodeId, { mode: 'batch', reason: `${input.agent}_import_batch_boundary` });
+                opened.kernel.sealImportedEpisode(episodeId, { reason: `${input.agent}_import_batch_boundary` });
             }
         }
         return {
@@ -278,7 +278,7 @@ function reindexRawSources(input) {
         for (const episodeId of importedEpisodeIds) {
             const episode = opened.kernel.getEpisode(episodeId);
             if (episode?.status !== 'sealed') {
-                opened.kernel.sealEpisode(episodeId, { mode: 'batch', reason: `${input.agent}_reindex_batch_boundary` });
+                opened.kernel.sealImportedEpisode(episodeId, { reason: `${input.agent}_reindex_batch_boundary` });
             }
         }
         return {

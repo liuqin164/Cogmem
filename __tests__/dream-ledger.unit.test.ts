@@ -452,8 +452,8 @@ test('dream curator treats user clarification as an organizational correction in
   expect(candidates.some((candidate) => candidate.candidateType === 'contradictions')).toBe(false);
 
   kernel.promoteDreamCandidates({ projectId: 'demo', limit: 50 });
-  expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['needs_confirmation'] })).toBe(0);
-  expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['promoted'], candidateTypes: ['correction'] })).toBe(1);
+  expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['needs_confirmation'], candidateTypes: ['correction'] })).toBe(1);
+  expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['promoted'], candidateTypes: ['correction'] })).toBe(0);
 
   kernel.close();
 });

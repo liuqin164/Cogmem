@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 const PLUGIN_ID = 'cogmem-auto-memory';
-const PLUGIN_VERSION = '0.4.0';
+const PLUGIN_VERSION = '0.4.1';
 function defaultPublicEntrypoint() {
     return join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), 'public.js');
 }
@@ -824,7 +824,7 @@ function audit(config, record) {
 const plugin = {
   id: PLUGIN_ID,
   name: 'CogMem Auto Memory',
-  version: '0.4.0',
+  version: '0.4.1',
   register(api) {
     if (!api || typeof api.on !== 'function') {
       throw new Error('OpenClaw plugin API missing api.on');
