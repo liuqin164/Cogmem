@@ -2,6 +2,7 @@
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { DEFAULT_VECTOR_DIMENSION, parseVectorDimensionValue } from '../config/VectorDimension.js';
 import { compactStorage } from '../storage/StorageCompactor.js';
+import { printCliJson } from './CliJson.js';
 function parseArgs(argv) {
     let dbPath = '';
     let configPath = '';
@@ -79,7 +80,7 @@ async function main() {
         dimension: args.dimension ?? loaded?.options.vectorDimension ?? DEFAULT_VECTOR_DIMENSION,
     });
     if (args.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printCliJson('compact', result);
         return;
     }
     console.log(`cogmem compact ${result.dryRun ? 'dry-run' : 'applied'}`);

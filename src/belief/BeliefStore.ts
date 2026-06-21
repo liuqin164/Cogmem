@@ -93,6 +93,16 @@ export class BeliefStore {
     return rows.map((row) => this.mapBelief(row));
   }
 
+  countActive(projectId?: string): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM beliefs
+      WHERE status = 'active'
+        AND (? IS NULL OR project_id = ?)
+    `).get(projectId || null, projectId || null) as { count: number };
+    return row.count;
+  }
+
   listByTimeRange(
     startTime: number,
     endTime: number,

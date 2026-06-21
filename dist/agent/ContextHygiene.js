@@ -1,4 +1,4 @@
-export const COGMEM_RECALL_BLOCK_RE = /<(COGMEM_RECALL_CONTEXT|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g;
+export const COGMEM_RECALL_BLOCK_RE = /<(COGMEM_RECALL_CONTEXT|COGMEM_MEMORY_ATLAS|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g;
 export function stripCogmemRecallBlocks(text) {
     const input = String(text || '');
     let strippedChars = 0;

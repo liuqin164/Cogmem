@@ -4,6 +4,7 @@ import { existsSync, renameSync, rmSync } from 'node:fs';
 
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { ALL_MIGRATIONS, SchemaMigrationRunner } from '../migrations/index.js';
+import { printCliJson } from './CliJson.js';
 
 interface MigrateArgs {
   dbPath?: string;
@@ -76,7 +77,7 @@ async function main(): Promise<void> {
       db.prepare(`INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', ?)`).run(String(numericVersion));
     }
     const output = { command: 'migrate', dbPath, backupPath, ...result };
-    if (args.json) console.log(JSON.stringify(output, null, 2));
+    if (args.json) printCliJson('migrate', output);
     else {
       console.log(`cogmem migrate ${args.dryRun ? 'dry-run' : 'complete'}`);
       console.log(`database: ${dbPath}`);

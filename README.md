@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.5.2`
+Current version: `3.6.0`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -78,6 +78,9 @@ Metadata / FTS Index
 
 Memory Binding
   CPU-canonicalized raw-event bindings to stable entity/topic paths, claim-key clusters, and activation-aware graph edges for source-anchored organization before fact promotion.
+
+Memory Atlas
+  A bounded, project-scoped content map over topics, entities, clusters, episodes, beliefs, actions, time, and their source-anchored relations. Agents use it to inventory, filter, navigate, and then drill down to Raw Ledger evidence.
 
 User-Shaped Topic Ontology
   A stable memory-class skeleton plus project-scoped topic names, aliases, parent paths, relations, and reversible audit operations learned from explicit user language.
@@ -164,7 +167,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#3.5.2"
+bun add "cogmem@github:liuqin164/cogmem#3.6.0"
 bunx cogmem init
 ```
 
@@ -189,6 +192,14 @@ cogmem migrate --dry-run --json
 
 For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
+Upgrading a 3.5.2 database to 3.6.0 is one command:
+
+```bash
+cogmem migrate --yes --backup --json
+```
+
+Schema 25 backfills the rebuildable Atlas projection without rewriting Raw Ledger, episodes, bindings, beliefs, or governed topic state. The command is idempotent.
+
 Inspect and conditionally process sealed conversation episodes:
 
 ```bash
@@ -203,7 +214,7 @@ For a host timer, call `dream tick`; the timer only wakes the scheduler. An empt
 cogmem dream tick --project my-agent --mode auto --max-episodes 10 --json
 ```
 
-Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.5.0 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
+Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.6.0 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
 
 Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands use stable content identities and the same episode schema. Low-confidence imported groups soft-seal for review unless an operator explicitly forces sealing. Episode semantic summaries and closure receipts are control hints, never durable evidence; every Dream candidate must cite a non-empty subset of the episode's raw event IDs and still pass CPU governance.
 
@@ -217,6 +228,41 @@ Inspect queue state:
 cogmem memory status --project my-agent --json
 cogmem memory candidates --project my-agent --status candidate --json
 cogmem memory govern --project my-agent --json
+```
+
+## Memory Atlas: let an agent see what it remembers
+
+`cogmem memory map` remains the system anatomy map. Memory Atlas is the content map. It does not replace recall or create a second fact store; it projects existing topics, entities, clusters, episodes, beliefs, action frames, time buckets, bindings, and evidence into a bounded navigation surface.
+
+```bash
+cogmem memory graph --project my-agent --json
+cogmem memory graph-search --project my-agent --query "Hermes" --json
+cogmem memory graph-explore --project my-agent --query "去年我让你对 Hermes 做过什么" --json
+cogmem memory graph-node --project my-agent --id "entity:<id>" --json
+cogmem memory graph-neighbors --project my-agent --id "entity:<id>" --hops 2 --json
+cogmem memory graph-path --project my-agent --from "entity:<id>" --to "action:<id>" --json
+cogmem memory graph-timeline --project my-agent --query "2025 Hermes 的决策和修复" --json
+```
+
+Atlas filtering is not limited to entity + time + action. The query compiler combines available facets such as project, time range, topic, person/object, event, decision, correction, goal, preference, plan, action, and ordinary keywords. Exact multi-facet matches may surface cold nodes even when their activation has decayed. Project scope and raw evidence validation are never bypassed.
+
+Defaults are 8 nodes, one hop, and two evidence IDs per node. Hard limits are 30 nodes, two hops, ten evidence IDs, six path hops, and 2,000 visited nodes. Raw excerpts are omitted unless `--include-evidence` or `includeEvidence: true` is explicit. Every evidence item carries an `eventId` and a `cogmem memory show` drilldown command.
+
+Agents should use Atlas for broad inventory, history, and relationship questions; use normal recall for a direct fact. See [MEMORY_ATLAS.md](./MEMORY_ATLAS.md) for the complete CLI, MCP, OpenClaw, activation, and provenance contract.
+
+## CLI JSON contract
+
+Every documented `--json` command emits `schemaVersion: "cogmem.cli.v1"` and a stable `command` identifier without hiding the command payload under a generic wrapper. Array results use `items`. Queue-bearing commands expose `candidate`, `promoted`, `needs_confirmation`, and `beliefs` at the top level. Existing nested queue objects remain available during 3.6.x for compatibility.
+
+```json
+{
+  "schemaVersion": "cogmem.cli.v1",
+  "command": "memory.status",
+  "candidate": 15190,
+  "promoted": 4953,
+  "needs_confirmation": 281,
+  "beliefs": 244
+}
 ```
 
 Inspect the memory anatomy and run one explicit host-owned upkeep tick:
@@ -250,7 +296,7 @@ cogmem strategy plan --project hermes --query "我当时的原话是什么？" -
 cogmem strategy outcomes --project hermes --json
 ```
 
-OpenClaw plugin 0.5.0 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Its queued `agent_end` write stores Raw Ledger evidence and updates the Episode Assembler through the CPU-only foreground path without running Dream. Episode assembly uses assistant context for short replies such as confirmations, factual answers, and corrections. It records a read-only context outcome after the turn for offline evaluation; the judge cannot mutate belief, entity, temporal, prospective, topic, or episode memory.
+OpenClaw plugin 0.6.0 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Broad inventory/history/relationship questions call the direct kernel Atlas bridge and inject a bounded volatile `<COGMEM_MEMORY_ATLAS>` block; OpenClaw does not need MCP for this path. Its queued `agent_end` write strips Atlas/recall blocks, stores Raw Ledger evidence, and updates the Episode Assembler through the CPU-only foreground path without running Dream.
 
 `ProspectiveMemoryService` stores future intentions, commitments, reminders, open loops, and plans as candidates only. A candidate is not actionable until an explicit user event confirms it. Rejected candidates stay suppressed unless genuinely new evidence creates a new version. The service and `cogmem prospective` CLI manage state only; they expose no task or tool execution capability.
 

@@ -458,6 +458,7 @@ export type {
 export { callCogmemMcpTool, listCogmemMcpTools } from './mcp/CoreMcpTools.js';
 export type { CogmemMcpCallResult, CogmemMcpRuntime, CogmemMcpTool } from './mcp/CoreMcpTools.js';
 export type { DreamBacklogStatus } from './store/DreamLedgerStore.js';
+export * from './atlas/index.js';
 
 // ─── @experimental ───────────────────────────────────────────────────────────
 

@@ -4,6 +4,7 @@ import { SnapshotImporter, createMemoryKernel, createMemoryKernelFromConfig } fr
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { parseVectorDimensionValue } from '../config/VectorDimension.js';
 import { config } from '../utils/Config.js';
+import { printCliJson } from './CliJson.js';
 function parseArgs(argv) {
     const args = {};
     for (let index = 0; index < argv.length; index += 1) {
@@ -73,7 +74,7 @@ async function main() {
             : createMemoryKernel({ dbPath });
         const meta = await kernel.exportSnapshot(outputPath);
         kernel.close();
-        console.log(JSON.stringify(meta, null, 2));
+        printCliJson('snapshot.export', meta);
         return;
     }
     if (command === 'import') {
@@ -88,7 +89,7 @@ async function main() {
             dryRun: args['dry-run'] === true,
             overwrite: args.overwrite === true,
         });
-        console.log(JSON.stringify(result, null, 2));
+        printCliJson('snapshot.import', result);
         return;
     }
     throw new Error('Usage: snapshot.ts export [--config <config.toml>|--db <db>] [--out <snap>] | import --snap <snap> [--config <config.toml>|--db <db>] [--dry-run] [--overwrite]');

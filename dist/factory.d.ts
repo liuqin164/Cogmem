@@ -36,6 +36,8 @@ import { EntityStore } from './store/EntityStore.js';
 import { EventStore } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
 import { MemoryBindingStore } from './store/MemoryBindingStore.js';
+import { MemoryAtlasStore } from './store/MemoryAtlasStore.js';
+import { MemoryAtlasService, type MemoryAtlasNodeDetail, type MemoryAtlasPathResult, type MemoryAtlasQueryOptions, type MemoryAtlasSlice, type MemoryAtlasTimelineResult } from './atlas/index.js';
 import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
 import { TopologyStore } from './store/TopologyStore.js';
@@ -217,6 +219,11 @@ export interface MaintenanceTickResult {
     };
     executed: {
         activationDecay: ActivationDecayResult;
+        memoryAtlasRefresh: {
+            documents: number;
+            actions: number;
+        };
+        memoryAtlasActivationDecay: number;
         reviewQueueAging: {
             expired: number;
             candidateIds: string[];
@@ -428,6 +435,8 @@ export declare class MemoryKernel {
     readonly dreamLedgerStore: DreamLedgerStore;
     readonly activationStore: ActivationStore;
     readonly memoryBindingStore: MemoryBindingStore;
+    readonly memoryAtlasStore: MemoryAtlasStore;
+    readonly memoryAtlasService: MemoryAtlasService;
     readonly memoryGovernanceStore: MemoryGovernanceStore;
     readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;
     readonly pipelineMetrics: PipelineMetrics;
@@ -451,6 +460,7 @@ export declare class MemoryKernel {
     private readonly dreamCuratorWorker;
     private readonly dreamScheduler;
     private readonly memoryBindingService;
+    private readonly memoryAtlasIndexer;
     private readonly topicSummaryBoard;
     private readonly topicDecayPolicy;
     private readonly localSemanticCompiler;
@@ -600,6 +610,30 @@ export declare class MemoryKernel {
         limit?: number;
     }): MemoryGraphRecallAnchor[];
     getMemoryBindingStats(projectId?: string): MemoryBindingStats;
+    rebuildMemoryAtlas(options?: {
+        projectId?: string;
+    }): {
+        documents: number;
+        actions: number;
+    };
+    ensureMemoryAtlas(options: {
+        projectId: string;
+    }): {
+        documents: number;
+        actions: number;
+        refreshed: boolean;
+    };
+    graphOverview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
+    graphSearch(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
+    graphExplore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
+    graphNode(nodeId: string, options: MemoryAtlasQueryOptions): MemoryAtlasNodeDetail | null;
+    graphNeighbors(nodeId: string, options: MemoryAtlasQueryOptions & {
+        hops?: number;
+    }): MemoryAtlasSlice;
+    graphPath(from: string, to: string, options: MemoryAtlasQueryOptions & {
+        maxHops?: number;
+    }): MemoryAtlasPathResult;
+    graphTimeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult;
     countUnboundBindableRawEvents(projectId?: string, limit?: number): number;
     promoteDreamCandidates(options?: DreamGovernanceRunOptions): DreamGovernanceRunResult;
     getDreamCandidateQueue(projectId?: string): DreamGovernanceRunResult['queue'];

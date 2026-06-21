@@ -139,3 +139,10 @@ Use the local audit CLI when the user needs to inspect memory directly:
 - `cogmem memory tick --project <project> --json`
 
 Ledger replay can show raw evidence. It must not replace governed recall, pulse activation, inhibition, or ContextPack budgeting.
+## Memory Atlas versus direct recall
+
+Use Memory Atlas before direct recall when the user asks what is remembered, asks a broad project/history question, or needs relationships between multiple memory areas. Use direct recall for a concrete factual question. Atlas narrows the search space; it does not answer from summaries alone.
+
+The expected sequence is `graphExplore` or `graphSearch`, then `graphNode`/`graphPath`/`graphTimeline`, then exact Raw Ledger drill-down. Atlas evidence includes `eventId` and a `cogmem memory show` command. Raw excerpts are omitted unless `includeEvidence=true`.
+
+`coldMemoryResurrected=true` means query facets surfaced a low-activation node. It is a ranking explanation, not proof that the node is true or newly promoted. Inspect the node status, confidence, and raw source before making a claim.

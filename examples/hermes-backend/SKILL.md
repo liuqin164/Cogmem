@@ -1,11 +1,6 @@
 ---
 name: cogmem-memory-backend
-description: Install and connect cogmem as a durable memory backend for Hermes through MCP.
-version: 3.5.2
-metadata:
-  hermes:
-    tags: [memory, mcp, cogmem, agent-memory]
-    category: memory
+description: Install, connect, migrate, inspect, and navigate cogmem as Hermes's durable MCP memory backend. Use for broad memory inventory, historical or relationship questions, exact source drill-down, Memory Atlas graph exploration, episode/Dream maintenance, or MCP wiring repair.
 ---
 
 # cogmem Memory Backend for Hermes
@@ -88,6 +83,12 @@ timeout_ms = 60000
 
 ## Migrate Existing Hermes Memory
 
+Upgrade a 3.5.2 database to schema 25 in one backed-up command:
+
+```bash
+cogmem migrate --yes --backup --json
+```
+
 After upgrading Cogmem itself, migrate its database schema before importing or recalling:
 
 ```bash
@@ -159,6 +160,18 @@ cogmem memory govern --project hermes --json
 A host timer may run this bounded tick periodically. The tick exits after inspecting the backlog and performs no work when no sealed episode is ready.
 
 ## Active Memory Search
+
+Choose the graph tool from the question shape:
+
+- Broad inventory/history: `cogmem_graph_explore`.
+- Known concept: `cogmem_graph_search`, then `cogmem_graph_node`.
+- Nearby relations: `cogmem_graph_neighbors`.
+- Connection between known nodes: `cogmem_graph_path`.
+- Time-ordered reconstruction: `cogmem_graph_timeline`.
+- Direct factual question: `cogmem_recall`.
+- Exact wording: follow an event ID with `cogmem memory show`.
+
+Atlas combines whatever conditions the user supplies like table filters. Do not require entity + time + action. Project, time, topic, entity/target, memory kind, and ordinary cues may revive cold nodes together. Activation is visibility, not truth. Atlas summaries are hints and never replace raw evidence.
 
 When the prompt does not contain enough injected Cogmem context, do not search legacy memory files first. Ask Cogmem directly:
 
@@ -301,6 +314,13 @@ mcp_servers:
         - cogmem_dream_tick
         - cogmem_dream_status
         - cogmem_memory_map
+        - cogmem_graph_overview
+        - cogmem_graph_search
+        - cogmem_graph_explore
+        - cogmem_graph_node
+        - cogmem_graph_neighbors
+        - cogmem_graph_path
+        - cogmem_graph_timeline
         - cogmem_maintenance_tick
         - cogmem_prospective
 ```

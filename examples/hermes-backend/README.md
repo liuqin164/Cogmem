@@ -51,7 +51,7 @@ Upgrade and migrate the Cogmem database itself before importing host memory:
 
 ```bash
 cogmem update --yes
-cogmem migrate --dry-run --json
+cogmem migrate --yes --backup --json
 ```
 
 Preview:
@@ -87,6 +87,8 @@ MCP recall JSON includes `decisionTrace`. Check its selected lane, reason, and c
 Dream stores explicit user clarification as organizational correction evidence rather than an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Invalid provider output is rejected diagnostic state; maintenance supersedes stale `needs_confirmation` entries after the default 30-day TTL without deleting evidence.
 
 After upgrades, rerun `cogmem connect hermes --workspace . --auto --force` and reload MCP.
+
+Cogmem 3.6.0 exposes Memory Atlas through seven canonical-memory-safe MCP tools: overview, search, explore, node, neighbors, path, and timeline. They record non-destructive access/activation telemetry, so MCP does not label them strictly read-only or idempotent. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Always follow returned event IDs to raw evidence before quoting exact wording.
 
 ## Runtime
 

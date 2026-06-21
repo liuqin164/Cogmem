@@ -9,6 +9,7 @@ export declare class BeliefStore {
     constructor(dbPath?: string, eventStore?: EventStore | undefined);
     private initializeSchema;
     findByCanonicalKey(canonicalKey: string): BeliefRecord[];
+    countActive(projectId?: string): number;
     listByTimeRange(startTime: number, endTime: number, options?: {
         projectId?: string;
         statuses?: Array<'active' | 'superseded' | 'revoked' | 'suspect' | 'expired'>;

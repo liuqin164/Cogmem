@@ -28,7 +28,7 @@ This establishes 100% coverage of the known scope and observed release gates. It
 - Raw events remain immutable evidence; Atlas documents and summaries are never a source of truth.
 - Every Atlas query is project-scoped and bounded.
 - Provider or model output cannot override project, source, session, thread, evidence, or action-frame ownership.
-- Exact entity + time + action constraints may resurrect cold memories; activation only changes default visibility.
+- The available project/time/topic/entity/memory-kind/keyword constraints may resurrect cold memories in any supported combination; activation only changes default visibility.
 - Graph queries never mutate canonical memory. Access receipts and activation are separate, non-evidentiary state.
 - Existing `memory_map.v1` remains the system anatomy map. `memory_atlas.v1` is the content-navigation map.
 - Recall remains available and unchanged for direct factual queries.
@@ -102,7 +102,7 @@ This establishes 100% coverage of the known scope and observed release gates. It
 2. Use live canonical adapters plus the projection; do not copy canonical edge truth.
 3. Enforce defaults/hard bounds: 8/30 nodes, 1/2 hops, 2/10 evidence items, 6 path hops, 2,000 visited nodes.
 4. Rank by lexical constraint match, confidence, support, activation, recency, project, entity, time, action, and conflict state.
-5. Implement temporal resurrection: exact entity/time/action constraints bypass visibility floors but never project scope or evidence validation.
+5. Implement generic faceted resurrection: exact combinations of the available project/time/topic/entity/memory-kind/keyword constraints bypass visibility floors but never project scope or evidence validation.
 6. Return bounded nodes/edges, provenance, warnings, and typed `nextActions`; every evidence result includes `eventId` and an exact `cogmem memory show` command.
 7. Hide raw excerpts unless `includeEvidence=true`; sanitize control blocks and oversized content.
 8. Record only non-evidentiary access receipts and activation changes; assert canonical source tables are unchanged.
@@ -204,7 +204,7 @@ This establishes 100% coverage of the known scope and observed release gates. It
 | Topic/entity/cluster/event relationships | 3, 4 | node/neighbor edge assertions |
 | Precise raw drilldown | 4, 6, 7 | evidence ID + command assertions |
 | Hot/warm/cold visibility | 4, 5 | activation/decay/resurrection tests |
-| Hermes + last year + action path | 3, 4, 6 | temporal action-chain fixture |
+| Generic condition-driven resurrection | 3, 4, 6 | faceted cold-memory fixture plus temporal action-chain fixture |
 | Existing rules plus graph placement | 3, 5 | deterministic incremental index tests |
 | MCP access | 7 | tool schema/handler tests |
 | OpenClaw without MCP | 8 | direct bridge integration tests |
@@ -221,4 +221,3 @@ Before release, repeat this loop until no uncovered known risk remains:
 3. Add a failing test or explicit documented boundary before changing code.
 4. Rerun targeted gates, then the full release gates.
 5. Stop only when the mismatch list is empty and every command exits zero.
-

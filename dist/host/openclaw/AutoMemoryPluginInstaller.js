@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 const PLUGIN_ID = 'cogmem-auto-memory';
-const PLUGIN_VERSION = '0.5.0';
+const PLUGIN_VERSION = '0.6.0';
 function defaultPublicEntrypoint() {
     return join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), 'public.js');
 }
@@ -124,6 +124,9 @@ function buildPatchedOpenClawConfig(input) {
             projectId: input.projectId,
             autoRecall: true,
             autoRemember: true,
+            autoAtlas: true,
+            atlasLimit: 8,
+            atlasMaxChars: 3000,
             limit: 3,
             maxQueryChars: 1200,
             maxAssistantChars: 6000,
@@ -187,6 +190,9 @@ function buildPluginFiles() {
                     projectId: { type: 'string' },
                     autoRecall: { type: 'boolean' },
                     autoRemember: { type: 'boolean' },
+                    autoAtlas: { type: 'boolean' },
+                    atlasLimit: { type: 'number' },
+                    atlasMaxChars: { type: 'number' },
                     limit: { type: 'number' },
                     maxQueryChars: { type: 'number' },
                     maxAssistantChars: { type: 'number' },
@@ -253,6 +259,9 @@ const DEFAULTS = {
   projectId: 'openclaw',
   autoRecall: true,
   autoRemember: true,
+  autoAtlas: true,
+  atlasLimit: 8,
+  atlasMaxChars: 3000,
   limit: 3,
   maxQueryChars: 1200,
   maxAssistantChars: 6000,
@@ -338,7 +347,7 @@ function stripCogmemRecallBlocks(text) {
   let strippedChars = 0;
   let blockCount = 0;
   const output = input
-    .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, (match) => {
+    .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_MEMORY_ATLAS|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, (match) => {
       strippedChars += match.length;
       blockCount += 1;
       return '';
@@ -617,6 +626,12 @@ function classifyContextIntent(query) {
   return 'memory_query';
 }
 
+function classifyMemoryNavigationIntent(query) {
+  const text = String(query || '').trim().toLowerCase();
+  if (/(我记得什么|有哪些记忆|记忆里有什么|之前聊过什么|项目.{0,8}状态|历史|去年|前年|做过什么|关联|关系|路径|what do (i|you) remember|memory inventory|project state|history|last year|related)/i.test(text)) return 'atlas_explore';
+  return 'direct_fact';
+}
+
 function runBridge(command, payload, config, timeoutMs) {
   const bridgePath = path.join(__dirname, 'bridge.mjs');
   const child = spawnSync(config.bunPath || 'bun', [bridgePath, command], {
@@ -652,6 +667,8 @@ function bridgeConfig(config) {
     strategyCortexEnabled: config.strategyCortexEnabled !== false,
     contextAvailableTokens: config.contextAvailableTokens || 16000,
     contextMemoryMaxRatio: config.contextMemoryMaxRatio || 0.25,
+    atlasLimit: config.atlasLimit || 8,
+    atlasMaxChars: config.atlasMaxChars || 3000,
     rememberQueuePath: rememberQueuePath(config),
     rememberMaxAttempts: config.rememberMaxAttempts || 3,
   };
@@ -824,7 +841,7 @@ function audit(config, record) {
 const plugin = {
   id: PLUGIN_ID,
   name: 'CogMem Auto Memory',
-  version: '0.5.0',
+  version: '0.6.0',
   register(api) {
     if (!api || typeof api.on !== 'function') {
       throw new Error('OpenClaw plugin API missing api.on');
@@ -872,6 +889,15 @@ const plugin = {
             .filter(Boolean);
           memoryLayers.push(...bridges);
           turnBridgeCount = bridges.length;
+        }
+        const navigationIntent = classifyMemoryNavigationIntent(query);
+        let atlasInjected = false;
+        if (config.autoAtlas !== false && navigationIntent === 'atlas_explore') {
+          const atlas = runBridge('graph-explore', { query, config }, config, config.recallTimeoutMs || 30000);
+          if (atlas && atlas.context) {
+            memoryLayers.push(atlas.context);
+            atlasInjected = true;
+          }
         }
         const recalled = config.contextCortexEnabled !== false && contextIntent === 'short_followup'
           ? { context: '', items: [], itemCount: 0, intent, recallMode: 'context_cortex_short_followup', fallbackUsed: false }
@@ -924,6 +950,8 @@ const plugin = {
           },
           turnBridgeCount,
           sessionStateInjected,
+          navigationIntent,
+          atlasInjected,
         });
         if (!context) return {};
         return { prependContext: context };
@@ -1042,6 +1070,7 @@ module.exports.__testing = {
   shouldInjectTurnBridge,
   formatMemoryUsageBridge,
   formatSessionWorkingState,
+  classifyMemoryNavigationIntent,
 };
 `;
 }
@@ -1063,7 +1092,24 @@ const kernel = createMemoryKernelFromConfig({ configPath: config.configPath });
 const memory = new KernelAgentMemoryBackend(kernel);
 
 try {
-  if (command === 'recall') {
+  if (command === 'graph-explore') {
+    const projectId = config.projectId || 'openclaw';
+    kernel.ensureMemoryAtlas({ projectId });
+    const result = kernel.graphExplore(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) });
+    console.log(JSON.stringify({ context: formatAtlasContext(result, Number(config.atlasMaxChars || 3000)), result }));
+  } else if (command === 'graph-node') {
+    const projectId = config.projectId || 'openclaw';
+    kernel.ensureMemoryAtlas({ projectId });
+    console.log(JSON.stringify(kernel.graphNode(input.id, { projectId, includeEvidence: input.includeEvidence === true })));
+  } else if (command === 'graph-path') {
+    const projectId = config.projectId || 'openclaw';
+    kernel.ensureMemoryAtlas({ projectId });
+    console.log(JSON.stringify(kernel.graphPath(input.from, input.to, { projectId })));
+  } else if (command === 'graph-timeline') {
+    const projectId = config.projectId || 'openclaw';
+    kernel.ensureMemoryAtlas({ projectId });
+    console.log(JSON.stringify(kernel.graphTimeline(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) })));
+  } else if (command === 'recall') {
     const recallStartedAt = Date.now();
     const contextIntent = kernel.contextCortex.classifyIntent(input.query || '');
     let strategyCapsule = config.strategyCortexEnabled === false ? undefined : kernel.strategyCortex.plan({
@@ -1172,7 +1218,7 @@ function stripCogmemRecallBlocks(text) {
   let strippedChars = 0;
   let blockCount = 0;
   const output = input
-    .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, (match) => {
+    .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_MEMORY_ATLAS|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, (match) => {
       strippedChars += match.length;
       blockCount += 1;
       return '';
@@ -1185,6 +1231,48 @@ function stripCogmemRecallBlocks(text) {
     strippedChars,
     blockCount,
   };
+}
+
+function formatAtlasContext(result, maxChars) {
+  const nodes = Array.isArray(result && result.nodes) ? result.nodes : [];
+  if (!nodes.length) return '';
+  const edges = Array.isArray(result && result.edges) ? result.edges : [];
+  const actions = Array.isArray(result && result.nextActions) ? result.nextActions : [];
+  const lines = [
+    '<COGMEM_MEMORY_ATLAS version="memory_atlas.v1" volatile="true" persistence="forbidden" evidence_authority="raw_event_ids_only">',
+    'Bounded navigation map; use it to choose nodes and paths, not as durable evidence.',
+    'Matched facets: ' + safeAtlasText(JSON.stringify(result.facets || {}), 1000),
+    'Cold memory resurrected: ' + String(result.coldMemoryResurrected === true),
+    '',
+    'Nodes:',
+    ...nodes.slice(0, 30).map((node) => '- ' + JSON.stringify({
+      id: safeAtlasText(node.id, 500), type: safeAtlasText(node.nodeType, 80),
+      label: safeAtlasText(node.label, 500), summary: safeAtlasText(node.summary, 500),
+    })),
+    '',
+    'Edges:',
+    ...edges.slice(0, 60).map((edge) => '- ' + JSON.stringify({
+      source: safeAtlasText(edge.source, 500), relation: safeAtlasText(edge.relation, 100), target: safeAtlasText(edge.target, 500),
+    })),
+    '',
+    'Next actions:',
+    ...actions.slice(0, 8).map((action) => '- ' + safeAtlasText(action.tool, 120) + ' ' + safeAtlasText(JSON.stringify(action.args || {}), 1000)),
+    '',
+    'Rules: summaries are navigation hints; drill down to eventId evidence before making exact claims.',
+    '</COGMEM_MEMORY_ATLAS>',
+  ];
+  const text = lines.join('\n');
+  const limit = Math.max(500, Math.min(Number(maxChars || 3000), 12000));
+  if (text.length <= limit) return text;
+  return text.slice(0, Math.max(200, limit - 64)).trimEnd() + '\n... [truncated]\n</COGMEM_MEMORY_ATLAS>';
+}
+
+function safeAtlasText(input, limit) {
+  const clean = stripCogmemRecallBlocks(String(input || '')).text
+    .replace(/[<>]/g, (value) => value === '<' ? '\\u003c' : '\\u003e')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean.slice(0, Math.max(0, Number(limit || 500)));
 }
 
 async function rememberPayload(payload, bridgeConfig) {

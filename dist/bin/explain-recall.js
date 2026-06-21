@@ -2,6 +2,7 @@
 import { resolve } from 'node:path';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
+import { printCliJson } from './CliJson.js';
 function readArgs(argv) {
     const values = {};
     for (let index = 0; index < argv.length; index += 1) {
@@ -123,7 +124,7 @@ async function main() {
             endTime: args.endTime,
         });
         if (args.json) {
-            console.log(JSON.stringify(explanation, null, 2));
+            printCliJson('explain-recall', explanation);
             return;
         }
         printHuman(explanation);

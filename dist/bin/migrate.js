@@ -3,6 +3,7 @@ import Database from 'bun:sqlite';
 import { existsSync, renameSync, rmSync } from 'node:fs';
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { ALL_MIGRATIONS, SchemaMigrationRunner } from '../migrations/index.js';
+import { printCliJson } from './CliJson.js';
 function parseArgs(argv) {
     let dbPath;
     let configPath;
@@ -74,7 +75,7 @@ async function main() {
         }
         const output = { command: 'migrate', dbPath, backupPath, ...result };
         if (args.json)
-            console.log(JSON.stringify(output, null, 2));
+            printCliJson('migrate', output);
         else {
             console.log(`cogmem migrate ${args.dryRun ? 'dry-run' : 'complete'}`);
             console.log(`database: ${dbPath}`);

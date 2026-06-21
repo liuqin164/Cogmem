@@ -17,6 +17,9 @@ test('BrainEval gates episode grouping, evidence, governance, and Hermes import 
     repairInvalidationChecks: [{ oldCandidatesStale: true, dreamRequeued: true }],
     importResumeChecks: [{ resumedWithoutDuplicate: true, checkpointComplete: true }],
     hooklessWarningChecks: [{ ingestionMissing: true, warningPresent: true }],
+    atlasChecks: [{ crossProjectLeak: false, nodeCount: 8, maxNodes: 30, hopCount: 2, maxHops: 2,
+      evidenceEventIdPresent: true, drilldownPresent: true, expectedPathConnected: true, actualPathConnected: true,
+      matchedFacetCount: 3, coldNodeReturned: true, canonicalSourceMutated: false }],
     bindingChecks: [{ expectedTopicPath: 'x', selectedTopicPath: 'x' }],
     entityMergeChecks: [{ accepted: false, correct: true }],
     beliefOwnershipChecks: [{ ownership: 'user', hasExplicitUserEvidence: true }],
@@ -28,6 +31,22 @@ test('BrainEval gates episode grouping, evidence, governance, and Hermes import 
   expect(report.metrics).toEqual(expect.objectContaining({
     episodeGroupingAccuracy: 1, episodeBoundaryAccuracy: 1, episodeEvidenceCoverage: 1,
     unassignedRawRate: 0, dreamCandidateGrounding: 1, dreamBypassRate: 0, hermesImportParity: 1,
+  }));
+});
+
+test('BrainEval gates Atlas scope, bounds, evidence, path, faceted resurrection, and source immutability', () => {
+  const report = new BrainEvalRunner().evaluate([{
+    expectedIds: [], selectedIds: [], selectedWithEvidenceIds: [], staleSelectedIds: [], crossProjectSelectedIds: [],
+    usedTokens: 0, budgetTokens: 1, prospectiveTriggeredIds: [], confirmedProspectiveIds: [],
+    atlasChecks: [{
+      crossProjectLeak: false, nodeCount: 8, maxNodes: 30, hopCount: 2, maxHops: 2,
+      evidenceEventIdPresent: true, drilldownPresent: true, expectedPathConnected: true,
+      actualPathConnected: true, matchedFacetCount: 3, coldNodeReturned: true, canonicalSourceMutated: false,
+    }],
+  }]);
+  expect(report.metrics).toEqual(expect.objectContaining({
+    atlasScopeIsolation: 1, atlasBoundCompliance: 1, atlasEvidenceCoverage: 1,
+    atlasPathReconstruction: 1, atlasFacetedResurrection: 1, atlasCanonicalImmutability: 1,
   }));
 });
 
@@ -55,6 +74,9 @@ describe('brain eval v1', () => {
         repairInvalidationChecks: [{ oldCandidatesStale: true, dreamRequeued: true }],
         importResumeChecks: [{ resumedWithoutDuplicate: true, checkpointComplete: true }],
         hooklessWarningChecks: [{ ingestionMissing: true, warningPresent: true }],
+        atlasChecks: [{ crossProjectLeak: false, nodeCount: 8, maxNodes: 30, hopCount: 2, maxHops: 2,
+          evidenceEventIdPresent: true, drilldownPresent: true, expectedPathConnected: true, actualPathConnected: true,
+          matchedFacetCount: 3, coldNodeReturned: true, canonicalSourceMutated: false }],
       },
       {
         expectedIds: ['c'], selectedIds: ['c'], selectedWithEvidenceIds: ['c'],
@@ -99,6 +121,8 @@ describe('brain eval v1', () => {
       'unassignedRawRate', 'dreamCandidateGrounding', 'dreamBypassRate', 'hermesImportParity',
       'topicMutationLeakageRate', 'topicAuditRollbackCompliance', 'repairInvalidationCompliance',
       'importResumeReliability', 'hooklessWarningCoverage',
+      'atlasScopeIsolation', 'atlasBoundCompliance', 'atlasEvidenceCoverage',
+      'atlasPathReconstruction', 'atlasFacetedResurrection', 'atlasCanonicalImmutability',
     ]));
   });
 
@@ -133,6 +157,8 @@ describe('brain eval v1', () => {
       'temporalCurrentTruthAccuracy', 'contextPollutionRate', 'sourceFidelity',
       'topicMutationLeakageRate', 'topicAuditRollbackCompliance', 'repairInvalidationCompliance',
       'importResumeReliability', 'hooklessWarningCoverage',
+      'atlasScopeIsolation', 'atlasBoundCompliance', 'atlasEvidenceCoverage',
+      'atlasPathReconstruction', 'atlasFacetedResurrection', 'atlasCanonicalImmutability',
     ]));
   });
 });

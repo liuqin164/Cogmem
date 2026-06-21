@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { basename, resolve } from 'node:path';
+import { printCliJson } from './CliJson.js';
 import { buildEpisodeEnvelope, ConversationMarkdownAdapter, HermesWorkspaceProfile, HermesStateDbAdapter, MarkdownSourceLoader, OpenClawDailyMemoryAdapter, OpenClawMemoryIndexAdapter, OpenClawPersonaAdapter, OpenClawSessionAdapter, OpenClawUserProfileAdapter, OpenClawWorkspaceProfile, SoulMarkdownAdapter, } from '../adapters/index.js';
 import { InstalledBatchProcessor } from '../batch/InstalledBatchProcessor.js';
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
@@ -108,7 +109,7 @@ async function runAgentImport(input) {
                 window,
             });
     if (input.args.values.json === true) {
-        console.log(JSON.stringify(result, null, 2));
+        printCliJson(`import-${input.agent}`, result);
         return;
     }
     printHumanSummary(result);

@@ -74,6 +74,20 @@ export interface BrainEvalSample {
         ingestionMissing: boolean;
         warningPresent: boolean;
     }>;
+    atlasChecks?: Array<{
+        crossProjectLeak: boolean;
+        nodeCount: number;
+        maxNodes: number;
+        hopCount: number;
+        maxHops: number;
+        evidenceEventIdPresent: boolean;
+        drilldownPresent: boolean;
+        expectedPathConnected: boolean;
+        actualPathConnected: boolean;
+        matchedFacetCount: number;
+        coldNodeReturned: boolean;
+        canonicalSourceMutated: boolean;
+    }>;
 }
 export interface BrainEvalMetrics {
     recall: number;
@@ -101,6 +115,12 @@ export interface BrainEvalMetrics {
     repairInvalidationCompliance: number;
     importResumeReliability: number;
     hooklessWarningCoverage: number;
+    atlasScopeIsolation: number;
+    atlasBoundCompliance: number;
+    atlasEvidenceCoverage: number;
+    atlasPathReconstruction: number;
+    atlasFacetedResurrection: number;
+    atlasCanonicalImmutability: number;
 }
 export interface BrainEvalReport {
     passed: boolean;

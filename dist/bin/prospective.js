@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
+import { printCliJson } from './CliJson.js';
 function parseArgs(argv) {
     const [command, ...rest] = argv;
     const values = new Map();
@@ -93,7 +94,7 @@ async function main() {
             else
                 throw new Error(`unknown prospective command: ${args.command}`);
         }
-        console.log(JSON.stringify(result, null, 2));
+        printCliJson(`prospective.${String(args.command)}`, result);
     }
     finally {
         kernel.close();

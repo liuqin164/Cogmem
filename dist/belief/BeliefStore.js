@@ -76,6 +76,15 @@ export class BeliefStore {
     `).all(canonicalKey);
         return rows.map((row) => this.mapBelief(row));
     }
+    countActive(projectId) {
+        const row = this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM beliefs
+      WHERE status = 'active'
+        AND (? IS NULL OR project_id = ?)
+    `).get(projectId || null, projectId || null);
+        return row.count;
+    }
     listByTimeRange(startTime, endTime, options) {
         const statuses = options?.statuses ?? ['active', 'superseded', 'suspect', 'expired', 'revoked'];
         const rows = this.db.prepare(`

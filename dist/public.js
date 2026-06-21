@@ -106,6 +106,7 @@ export { UniverseTraversalExecutor } from './retrieval/UniverseTraversalExecutor
  */
 export { explainRecallWithKernel } from './recall/RecallExplanation.js';
 export { callCogmemMcpTool, listCogmemMcpTools } from './mcp/CoreMcpTools.js';
+export * from './atlas/index.js';
 // ─── @experimental ───────────────────────────────────────────────────────────
 /**
  * Chinese-language lexicons for entity hints, stopwords, and topic classification.

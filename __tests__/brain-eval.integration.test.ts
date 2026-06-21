@@ -43,6 +43,9 @@ describe('BrainEval multilingual release fixture', () => {
         repairInvalidationChecks: [{ oldCandidatesStale: true, dreamRequeued: true }],
         importResumeChecks: [{ resumedWithoutDuplicate: true, checkpointComplete: true }],
         hooklessWarningChecks: [{ ingestionMissing: true, warningPresent: true }],
+        atlasChecks: [{ crossProjectLeak: false, nodeCount: 8, maxNodes: 30, hopCount: 2, maxHops: 2,
+          evidenceEventIdPresent: true, drilldownPresent: true, expectedPathConnected: true, actualPathConnected: true,
+          matchedFacetCount: 3, coldNodeReturned: true, canonicalSourceMutated: false }],
       },
     ];
 

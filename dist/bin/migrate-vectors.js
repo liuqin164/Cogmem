@@ -4,6 +4,7 @@ import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfi
 import { DEFAULT_VECTOR_DIMENSION, parseVectorDimensionValue } from '../config/VectorDimension.js';
 import { NeuronEmbeddingStore } from '../embedding/NeuronEmbeddingStore.js';
 import { SqliteVecStore } from '../store/SqliteVecStore.js';
+import { printCliJson } from './CliJson.js';
 function parseArgs(argv) {
     let dbPath = '';
     let configPath = '';
@@ -54,14 +55,14 @@ async function main() {
                 vector: Array.from(row.vector),
             })));
         }
-        console.log(JSON.stringify({
+        printCliJson('migrate-vectors', {
             migrated: args.dryRun ? 0 : compatible.length,
             eligible: compatible.length,
             skippedDimensionMismatch: embeddings.length - compatible.length,
             dimension,
             backend: sqliteVec.getStats().backend,
             dryRun: args.dryRun,
-        }, null, 2));
+        });
     }
     finally {
         db.close();

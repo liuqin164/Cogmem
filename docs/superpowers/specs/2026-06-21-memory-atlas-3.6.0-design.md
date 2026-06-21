@@ -4,8 +4,9 @@
 
 Make an agent aware of what it remembers, then let it navigate from a bounded
 content graph to exact raw evidence. Existing recall remains the direct factual
-lookup path. Memory Atlas is a read-only navigation layer over source-owned
-memory structures, not a new source of truth.
+lookup path. Memory Atlas never mutates canonical memory; it records only
+non-destructive navigation access/activation telemetry and is not a new source
+of truth.
 
 ## Confidence contract
 
@@ -21,7 +22,7 @@ Release is blocked when any of these are unproven:
   backfill receipts;
 - every Atlas query is project-isolated, bounded, source-anchored, and useful
   without vectors or an LLM;
-- cold memory remains reachable by exact entity/time/action constraints;
+- cold memory remains reachable through exact combinations of the conditions present in the query;
 - graph summaries never replace raw evidence;
 - MCP, OpenClaw direct integration, CLI, docs, plugin files, and agent skills
   describe the same tool-selection contract;
@@ -104,16 +105,11 @@ Raw events are evidence leaves. They are not returned in overview by default.
 
 ### Stable relations
 
-Existing governed relations are preserved. Atlas also exposes derived,
-source-anchored navigation relations:
-
-- `PART_OF_PROJECT`
-- `EVIDENCED_BY`
-- `OCCURRED_IN`
-- `TARGETS`
-- `PART_OF_EPISODE`
-- `MENTIONED_IN`
-- `NEXT_EPISODE`
+Existing active Binding Graph and governed Topic Ontology relations are
+preserved. Atlas v1 additionally derives two source-anchored navigation
+relations from action frames: `OCCURRED_IN` and `TARGETS`. Raw evidence is
+returned as typed drilldown records rather than materialized as millions of
+default graph edges.
 
 Derived edges never claim new facts. Their metadata names the deterministic
 derivation and evidence IDs.
@@ -127,12 +123,13 @@ year?” Atlas therefore indexes deterministic action frames from user evidence:
 type MemoryActionFrame = {
   actionId: string;
   projectId: string;
-  frameType: 'request' | 'operation' | 'configuration' | 'repair' | 'install' |
-    'connect' | 'update' | 'compare' | 'decision' | 'plan';
+  frameType: 'operation' | 'configuration' | 'repair' | 'install' |
+    'connect' | 'update' | 'compare';
   actor: 'user';
   action: string;
-  targetEntityIds: string[];
-  topicPaths: string[];
+  targetEntityId?: string;
+  targetLabel?: string;
+  topicPath?: string;
   occurredAt: number;
   episodeId?: string;
   evidenceEventIds: string[];
@@ -148,17 +145,22 @@ labels through Dream, but cannot activate or replace a frame's evidence.
 
 ### `overview`
 
-Returns hot topics, entities, clusters, projects, conflicts, and active areas.
-It favors activation and recency, but is not exhaustive.
+Returns a bounded ranked union of project, topic, entity, cluster, episode,
+belief, action, and time nodes. Correction/contradiction clusters and
+review-state nodes remain visible as ordinary source-anchored nodes rather
+than being copied into a second conflict store. It favors activation,
+support, and recency, but is not exhaustive.
 
 ### `search`
 
-Locates nodes only. Exact aliases and stable IDs outrank FTS. Exact search does
-not suppress cold nodes.
+Locates nodes only through project-scoped FTS with a parameterized lexical
+fallback. Governed topic canonical names and active aliases are indexed.
+Stable IDs use `node`, not text search. Exact search does not suppress cold
+nodes.
 
 ### `explore`
 
-Compiles broad text into lexical, entity, time, action, topic, and project cues.
+Compiles broad text into the available lexical, entity, time, action, memory-kind, topic, and project cues. No fixed cue tuple is required.
 It returns a bounded graph slice and executable next actions.
 
 ### `node`
@@ -168,18 +170,22 @@ requested, and exact `cogmem memory show` commands.
 
 ### `neighbors`
 
-Default one hop, hard maximum two hops. Optional relation filter.
+Default one hop, hard maximum two hops.
 
 ### `path`
 
-Bounded bidirectional traversal between two known nodes. Hard maximum six hops.
+Bounded traversal between two known nodes. Hard maximum six hops, with exact
+edge checks and chunked frontier expansion so dense high-confidence branches
+cannot silently hide an older exact path.
 It never traverses another project.
 
 ### `timeline`
 
-Entity/topic/action plus time-window traversal. This is the preferred route for
-questions such as “去年我让你对 Hermes 做过什么操作”. It groups source events by
-episode and returns action frames even when activation has decayed.
+Applies whichever timestamp, memory-kind, topic/entity keyword, and action cues
+are present. This is the preferred route for questions such as “去年我让你对
+Hermes 做过什么操作”, but it also reconstructs decisions, corrections, and
+other timestamped nodes without requiring an action frame. Results carry
+episode IDs when the source event already belongs to an episode.
 
 ## Bounds
 
@@ -193,23 +199,23 @@ episode and returns action frames even when activation has decayed.
   are the baseline;
 - all inputs have length/range allow-lists before FTS or traversal.
 
-## Visibility and temporal resurrection
+## Visibility and faceted resurrection
 
 Atlas visibility is an operational score, not memory truth:
 
 ```text
-visibility = lexical/path match + confidence + support + activation + recency
-             + project/entity/time/action boosts - conflict penalty
+visibility = lexical/path match + support + activation + source updated time
+             + available project/time/kind/action filters
 ```
 
 Successful graph use records an access receipt in a separate Atlas activation
 table. It does not mutate Raw Ledger, beliefs, topics, or evidence. Maintenance
 tick decays Atlas node activation and existing edge activation deterministically.
 
-Low activation affects overview only. Exact node IDs, aliases, entity + time,
-or entity + action queries bypass the visibility floor. This is temporal
-resurrection: cold memory becomes visible when the query supplies strong
-constraints.
+Low activation affects overview ranking only. Exact node IDs, governed aliases,
+or any sufficiently selective available facet combination can still surface a
+cold node. This is faceted resurrection: no entity + time + action tuple is
+required.
 
 ## Dream responsibilities
 
@@ -229,13 +235,15 @@ destination and navigation surface, not the classifier or authority.
 
 ### Core API
 
-`MemoryKernel` exposes read-oriented `memoryAtlasOverview`, `memoryAtlasSearch`,
-`memoryAtlasExplore`, `memoryAtlasNode`, `memoryAtlasNeighbors`,
-`memoryAtlasPath`, and `memoryAtlasTimeline` methods.
+`MemoryKernel` exposes read-oriented `graphOverview`, `graphSearch`,
+`graphExplore`, `graphNode`, `graphNeighbors`, `graphPath`, and `graphTimeline`
+methods.
 
 ### MCP
 
-Expose matching `cogmem_graph_*` tools with `readOnlyHint=true`. Server
+Expose matching `cogmem_graph_*` tools with `destructiveHint=false` and with
+`readOnlyHint=false`/`idempotentHint=false` because successful navigation
+records access activation. Server
 instructions teach broad inventory -> explore, known node -> search/node,
 relationship -> neighbors/path/timeline, direct fact -> recall, source proof ->
 node evidence/memory show.
@@ -256,7 +264,7 @@ Add `memory graph`, `graph-search`, `graph-explore`, `graph-node`,
 
 All command JSON remains unwrapped: primary fields stay at the top level. A
 shared formatter adds `schemaVersion` and `command` without moving existing
-fields. Arrays are emitted under a documented command-specific collection key.
+fields. A command whose primary result is an array emits that array as `items`.
 
 Queue-producing memory commands also expose canonical top-level snake-case
 counters while retaining legacy nested objects during 3.6.x:
@@ -309,7 +317,7 @@ altering source memory.
 - CLI JSON top-level counters, metadata, compatibility, and command matrix;
 - project isolation across every Atlas method and adapter;
 - bounded nodes/hops/evidence and traversal visit budget;
-- exact cold-memory resurrection with entity/time/action constraints;
+- exact cold-memory resurrection with arbitrary supported facet combinations;
 - source event IDs and drill-down commands;
 - zero bindings, vectors unavailable, and no LLM;
 - action frames require raw user evidence;

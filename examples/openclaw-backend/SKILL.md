@@ -1,10 +1,6 @@
 ---
 name: cogmem-memory-backend
-description: Install and connect cogmem as a durable memory backend for OpenClaw.
-version: 3.5.2
-metadata:
-  openclaw:
-    tags: [memory, cogmem, agent-memory]
+description: Install, connect, migrate, inspect, and navigate cogmem as OpenClaw's durable memory backend. Use for broad memory inventory, historical or relationship questions, exact source drill-down, Memory Atlas graph exploration, episode/Dream maintenance, or OpenClaw plugin repair.
 ---
 
 # cogmem Memory Backend for OpenClaw
@@ -86,6 +82,12 @@ timeout_ms = 60000
 ```
 
 ## Migrate Existing OpenClaw Memory
+
+Upgrade a 3.5.2 database to schema 25 in one backed-up command:
+
+```bash
+cogmem migrate --yes --backup --json
+```
 
 After upgrading Cogmem itself, migrate its database schema before importing or recalling:
 
@@ -186,6 +188,19 @@ Inspect `recall.decisionTrace` before claiming memory is absent. `selectedLane` 
 If the user asks for "原话", "具体内容", "完整脉络", "为什么当时这么判断", or "前后发生了什么", use `sourceContext` first. `sourceContext.window` tells you the before/after requested counts, actual counts, `excludesAnchor`, `ordering`, `roleFilter`, and overlap handling; do not infer those semantics from text position. If more context is needed, run the locator command. Do not answer exact quotes from `compiled_memory` or `imported_summary` alone.
 
 ## Active Memory Search
+
+For broad inventory, project history, or relationship questions, navigate Memory Atlas before direct recall:
+
+```bash
+cogmem memory graph-explore --project openclaw --query "我们关于 Hermes 做过哪些工作" --json
+cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --json
+cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
+cogmem memory graph-timeline --project openclaw --query "去年与 Hermes 有关的决定和操作" --json
+```
+
+Atlas combines the conditions present in the user's message like table filters. Do not force every question into entity + time + action. Project, time, topic, entity/target, memory kind, and ordinary cues may independently or jointly revive cold nodes. Activation changes visibility only. Follow returned event IDs with `cogmem memory show`; never treat an Atlas summary as evidence.
+
+The OpenClaw auto plugin calls the Atlas core directly and injects a bounded volatile `<COGMEM_MEMORY_ATLAS>` block. It does not require MCP. Use normal `memory recall` for a direct factual question and `memory show` for exact wording.
 
 If `<COGMEM_RECALL_CONTEXT>` is absent, thin, or does not answer the user's question, do not answer "I do not remember" until you actively query CogMem. Use the kernel first, not the old `memory/` Markdown files:
 
@@ -385,6 +400,13 @@ Expose these tools to the agent:
 - `cogmem_dream_tick`
 - `cogmem_dream_status`
 - `cogmem_memory_map`
+- `cogmem_graph_overview`
+- `cogmem_graph_search`
+- `cogmem_graph_explore`
+- `cogmem_graph_node`
+- `cogmem_graph_neighbors`
+- `cogmem_graph_path`
+- `cogmem_graph_timeline`
 - `cogmem_maintenance_tick`
 - `cogmem_prospective`
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
+import { printCliJson } from './CliJson.js';
 
 type Args = Record<string, string | boolean> & { command?: string };
 
@@ -24,6 +25,7 @@ function usage(): string {
     '  status [--project <id>] [--json]',
     '  retry [--project <id>] [--json]',
     'A tick is explicit and conditional. It processes sealed episodes only and never executes tools.',
+    '--json emits cogmem.cli.v1 with command payload fields at the top level.',
   ].join('\n');
 }
 
@@ -45,7 +47,7 @@ async function main(): Promise<void> {
         : args.command === 'retry'
           ? { retried: kernel.retryFailedEpisodeDreams(projectId), status: kernel.getEpisodeDreamStatus(projectId) }
           : (() => { throw new Error(usage()); })();
-    console.log(JSON.stringify(result, null, 2));
+    printCliJson(`dream.${args.command}`, result);
   } finally { kernel.close(); }
 }
 

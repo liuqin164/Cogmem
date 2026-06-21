@@ -20,6 +20,7 @@ import { migration_0021 } from './0021_strategy_cortex.js';
 import { migration_0022 } from './0022_episode_dream_engine.js';
 import { migration_0023 } from './0023_episode_dream_hardening.js';
 import { migration_0024 } from './0024_episode_ontology_reliability.js';
+import { migration_0025 } from './0025_memory_atlas.js';
 
 /**
  * Ordered list of all schema migrations.
@@ -48,9 +49,10 @@ export const ALL_MIGRATIONS: Migration[] = [
   migration_0022,
   migration_0023,
   migration_0024,
+  migration_0025,
 ];
 
-export { migration_0001, migration_0002, migration_0003, migration_0004, migration_0005, migration_0006, migration_0007, migration_0009, migration_0010, migration_0011, migration_0012, migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024 };
+export { migration_0001, migration_0002, migration_0003, migration_0004, migration_0005, migration_0006, migration_0007, migration_0009, migration_0010, migration_0011, migration_0012, migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025 };
 export { SchemaMigrationRunner } from './SchemaMigrationRunner.js';
 export type { SchemaMigrationResult, SchemaMigrationRunOptions } from './SchemaMigrationRunner.js';
 export type { Migration };

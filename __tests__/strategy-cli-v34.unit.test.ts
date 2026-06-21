@@ -21,6 +21,10 @@ test('strategy CLI plans read-only policy and lists outcome telemetry', async ()
 
   const outcomes = await run(['outcomes', '--db', dbPath, '--project', 'brain', '--json']);
   expect(outcomes.exitCode).toBe(0);
-  expect(JSON.parse(outcomes.stdout)).toEqual([]);
+  expect(JSON.parse(outcomes.stdout)).toEqual({
+    schemaVersion: 'cogmem.cli.v1',
+    command: 'strategy.outcomes',
+    items: [],
+  });
   expect(outcomes.stderr).toBe('');
 });

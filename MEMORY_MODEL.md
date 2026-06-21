@@ -166,3 +166,14 @@ Rejected designs:
 - Markdown projection as source of truth
 - unbounded graph traversal
 - fixed recent-six-turn context as the memory model
+## Memory Atlas projection
+
+Memory Atlas v1 is a canonical-memory-safe navigation projection over governed memory and source-anchored organization. Queries record only non-evidentiary access/activation telemetry; they do not replace or rewrite Raw Ledger, recall, Memory Binding, Episode Dream, beliefs, topics, or governance, and an Atlas summary is never evidence.
+
+Atlas nodes project topics, entities, clusters, episodes, beliefs, action frames, and time buckets. Edges project existing memory relations plus deterministic action target/time links. Every evidentiary route terminates in raw event IDs and a `cogmem memory show` locator.
+
+Broad questions use `graphExplore`; known concepts use `graphSearch` then `graphNode`; relationship questions use `graphNeighbors`, `graphPath`, or `graphTimeline`. Query compilation combines the conditions actually present in the message, including project, time range, target/entity, topic, memory kind, and ordinary cues. These conditions behave like table filters, not a fixed entity-time-action template.
+
+Activation controls default visibility only. Access raises a node's navigation activation and explicit maintenance decays it. A cold node can re-enter the result set when exact project-scoped facets match, but resurrection never changes source authority, confidence, belief status, ownership, or promotion state.
+
+Projection freshness is write-driven. Schema-25 triggers mark the affected project dirty; the next Atlas query refreshes that project and unchanged queries reuse the projection. There is no hidden model loop or daemon. Dream may improve governed source structures during explicit maintenance, while deterministic Atlas refresh handles indexing.

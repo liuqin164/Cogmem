@@ -13,6 +13,7 @@ import {
   type NormalizedMessage,
   type NormalizedMessageSource,
 } from '../utils/ConversationMarkdownNormalization.js';
+import { printCliJson } from './CliJson.js';
 
 const USAGE = [
   'Usage: cogmem-normalize-transcript --input <file> --output <file> [--family json-array|jsonl|csv|tsv|app-private-mixed-event|jsonl-mixed-event-log] [--title <title>] [--dry-run] [--json]',
@@ -78,7 +79,7 @@ export async function runNormalizeTranscript(argv: string[]): Promise<NormalizeT
   };
 
   if (args.values.json === true) {
-    console.log(JSON.stringify(result, null, 2));
+    printCliJson('normalize-transcript', result);
   } else {
     printHumanSummary(result);
   }

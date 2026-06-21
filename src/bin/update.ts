@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { DEFAULT_RELEASE_REPO, resolveLatestReleaseSpec } from './update-release.js';
+import { printCliJson } from './CliJson.js';
 
 interface UpdateArgs {
   dryRun: boolean;
@@ -124,7 +125,7 @@ async function main(): Promise<void> {
   };
 
   if (args.json) {
-    console.log(JSON.stringify(result, null, 2));
+    printCliJson('update', result);
   } else {
     console.log(`cogmem update ${args.dryRun ? 'dry-run' : 'running'}`);
     console.log(`target: ${result.targetCwd}`);

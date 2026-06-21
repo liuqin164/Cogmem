@@ -226,6 +226,27 @@ export function listCogmemMcpTools() {
                 idempotentHint: true,
             },
         },
+        graphTool('cogmem_graph_overview', 'Overview Memory Atlas', 'List a bounded content map of remembered topics, entities, clusters, episodes, actions, and time nodes.', {
+            projectId: STRING_SCHEMA, limit: NUMBER_SCHEMA,
+        }, ['projectId']),
+        graphTool('cogmem_graph_search', 'Search Memory Atlas', 'Locate matching Memory Atlas nodes without expanding the graph.', {
+            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA,
+        }, ['projectId', 'query']),
+        graphTool('cogmem_graph_explore', 'Explore Memory Atlas', 'Use for broad memory inventory, project-state, or historical questions; returns a bounded local graph and drilldown actions.', {
+            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA,
+        }, ['projectId', 'query']),
+        graphTool('cogmem_graph_node', 'Inspect Memory Node', 'Inspect one source-anchored node, its neighbors, evidence event ids, and exact raw drilldown commands.', {
+            projectId: STRING_SCHEMA, id: STRING_SCHEMA, includeEvidence: { type: 'boolean' }, evidenceLimit: NUMBER_SCHEMA,
+        }, ['projectId', 'id']),
+        graphTool('cogmem_graph_neighbors', 'Expand Memory Neighbors', 'Expand one Memory Atlas node by one or two bounded hops.', {
+            projectId: STRING_SCHEMA, id: STRING_SCHEMA, hops: NUMBER_SCHEMA, limit: NUMBER_SCHEMA,
+        }, ['projectId', 'id']),
+        graphTool('cogmem_graph_path', 'Find Memory Path', 'Find an evidence-backed bounded path between two Memory Atlas nodes.', {
+            projectId: STRING_SCHEMA, from: STRING_SCHEMA, to: STRING_SCHEMA, maxHops: NUMBER_SCHEMA,
+        }, ['projectId', 'from', 'to']),
+        graphTool('cogmem_graph_timeline', 'Reconstruct Memory Timeline', 'Reconstruct timestamped memory with the available query facets; action frames are included when applicable but are not required.', {
+            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, includeEvidence: { type: 'boolean' }, now: NUMBER_SCHEMA,
+        }, ['projectId', 'query']),
         {
             name: 'cogmem_maintenance_tick',
             description: 'Run one explicit host-owned maintenance tick. This decays activation and returns suggested upkeep commands such as dream, govern, re-embed, or cogmem memory bind for unbound raw events; it never starts a hidden daemon.',
@@ -333,6 +354,44 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
                 return jsonResult(opened.kernel.getEpisodeDreamStatus(optionalString(input.projectId)));
             case 'cogmem_memory_map':
                 return jsonResult(opened.kernel.buildMemoryMap({ projectId: optionalString(input.projectId) }));
+            case 'cogmem_graph_overview': {
+                const projectId = requiredString(input.projectId, 'projectId');
+                opened.kernel.ensureMemoryAtlas({ projectId });
+                return jsonResult(opened.kernel.graphOverview({ projectId, limit: optionalNumber(input.limit) }));
+            }
+            case 'cogmem_graph_search': {
+                const projectId = requiredString(input.projectId, 'projectId');
+                opened.kernel.ensureMemoryAtlas({ projectId });
+                return jsonResult(opened.kernel.graphSearch(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit) }));
+            }
+            case 'cogmem_graph_explore': {
+                const projectId = requiredString(input.projectId, 'projectId');
+                opened.kernel.ensureMemoryAtlas({ projectId });
+                return jsonResult(opened.kernel.graphExplore(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit) }));
+            }
+            case 'cogmem_graph_node': {
+                const projectId = requiredString(input.projectId, 'projectId');
+                opened.kernel.ensureMemoryAtlas({ projectId });
+                const result = opened.kernel.graphNode(requiredString(input.id, 'id'), { projectId, includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit) });
+                if (!result)
+                    throw new Error('Memory Atlas node not found in the requested project');
+                return jsonResult(result);
+            }
+            case 'cogmem_graph_neighbors': {
+                const projectId = requiredString(input.projectId, 'projectId');
+                opened.kernel.ensureMemoryAtlas({ projectId });
+                return jsonResult(opened.kernel.graphNeighbors(requiredString(input.id, 'id'), { projectId, hops: optionalNumber(input.hops), limit: optionalNumber(input.limit) }));
+            }
+            case 'cogmem_graph_path': {
+                const projectId = requiredString(input.projectId, 'projectId');
+                opened.kernel.ensureMemoryAtlas({ projectId });
+                return jsonResult(opened.kernel.graphPath(requiredString(input.from, 'from'), requiredString(input.to, 'to'), { projectId, maxHops: optionalNumber(input.maxHops) }));
+            }
+            case 'cogmem_graph_timeline': {
+                const projectId = requiredString(input.projectId, 'projectId');
+                opened.kernel.ensureMemoryAtlas({ projectId });
+                return jsonResult(opened.kernel.graphTimeline(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit), includeEvidence: input.includeEvidence === true, now: optionalNumber(input.now) }));
+            }
             case 'cogmem_maintenance_tick':
                 return jsonResult(opened.kernel.runMaintenanceTick({ projectId: optionalString(input.projectId) }));
             case 'cogmem_prospective':
@@ -348,6 +407,14 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
         if (opened.shouldClose)
             opened.kernel.close();
     }
+}
+function graphTool(name, title, description, properties, required) {
+    return {
+        name,
+        description: `${description} Canonical memory remains unchanged; the query records non-destructive Atlas access/activation telemetry.`,
+        inputSchema: { type: 'object', properties, required },
+        annotations: { title, readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    };
 }
 async function episodeAppend(kernel, input) {
     const text = requiredString(input.text, 'text');

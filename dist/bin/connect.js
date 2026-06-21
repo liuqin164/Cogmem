@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { printCliJson } from './CliJson.js';
 import { installOpenClawAutoMemoryPlugin, } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 const HERMES_COGMEM_TOOLS = [
     'cogmem_remember_turn',
@@ -20,6 +21,13 @@ const HERMES_COGMEM_TOOLS = [
     'cogmem_dream_tick',
     'cogmem_dream_status',
     'cogmem_memory_map',
+    'cogmem_graph_overview',
+    'cogmem_graph_search',
+    'cogmem_graph_explore',
+    'cogmem_graph_node',
+    'cogmem_graph_neighbors',
+    'cogmem_graph_path',
+    'cogmem_graph_timeline',
     'cogmem_maintenance_tick',
     'cogmem_prospective',
 ];
@@ -361,7 +369,7 @@ async function main() {
     }
     const result = installSkill(args);
     if (args.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printCliJson(`connect.${result.agent}`, result);
         return;
     }
     printHuman(result);

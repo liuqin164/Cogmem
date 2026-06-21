@@ -1,11 +1,11 @@
-# cogmem 3.5.2 Release Checklist
+# cogmem 3.6.0 Release Checklist
 
 This release is distributed through GitHub Releases. Do not run npm publish.
 
 ## Required Metadata
 
 - `package.json` name is `cogmem`.
-- `package.json` version is `3.5.2`.
+- `package.json` version is `3.6.0`.
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
 - `install.sh` is tracked and uses the latest GitHub release asset.
@@ -35,7 +35,7 @@ This release is distributed through GitHub Releases. Do not run npm publish.
 - `cogmem episode`
 - `cogmem dream`
 
-MCP `tools/list` includes strategy, episode append/import/status/seal/repair, topic list/operate/rollback, conditional Dream tick/status, and prospective tools. Episode append/import never run Dream. MCP Dream tick requires `maintenanceMode: true` to process work; otherwise it is recommendation-only. Dream candidate generation never bypasses governance or executes tasks.
+MCP `tools/list` includes strategy, episode append/import/status/seal/repair, topic list/operate/rollback, conditional Dream tick/status, prospective tools, and all seven canonical-memory-safe Memory Atlas tools. Atlas tools declare their non-destructive access/activation side effect instead of claiming strict read-only/idempotent semantics. Episode append/import never run Dream. MCP Dream tick requires `maintenanceMode: true` to process work; otherwise it is recommendation-only. Dream candidate generation never bypasses governance or executes tasks.
 
 ## Required Documentation
 
@@ -55,10 +55,15 @@ MCP `tools/list` includes strategy, episode append/import/status/seal/repair, to
 - README and skills explain Raw Ledger-first episode assembly, soft/hard sealing, explicit conditional Dream ticks, raw-event evidence grounding, repair/retry, and hookless Hermes MCP/import usage.
 - README and skills explain CPU foreground versus hybrid background classification, contextual short replies, registry-aware topic boundaries, safe reopen, semantic-summary non-evidence status, per-job Dream modes/failures, stable import identity, and schema migration 24.
 - README and skills explain user-shaped topic operations, user-explicit versus model-candidate authority, alias collision review, operation rollback, and project isolation.
+- README, `MEMORY_ATLAS.md`, and skills distinguish the system anatomy map from the content Atlas; explain graph overview/search/explore/node/neighbors/path/timeline, generic multi-facet cold-memory resurrection, activation visibility, source drill-down, and project isolation.
+- README documents `cogmem.cli.v1`: object payloads are top-level, array payloads use `items`, and queue counters expose top-level compatibility aliases.
+- README documents the one-line schema-25 migration from 3.5.2 with backup, and the migration test proves source counts are preserved and reruns are idempotent.
 - README and skills explain episode surgery, closure recomputation, stale-candidate invalidation, cross-reference/audit preservation, and sealed-only Dream requeue.
 - README and Hermes skill explain per-message import checkpoints, stable `externalMessageId` requirements across split batches, source-agent validation, CLI range/error controls, and hookless recall freshness warnings.
 - OpenClaw skill explains self-install, import, active recall, `--auto`, and `doctor --fix`.
 - Hermes skill explains self-install, MCP wiring, `connect hermes --auto`, and `/reload-mcp`.
+- OpenClaw skill explains the direct plugin Atlas route without MCP; Hermes skill explains graph-first MCP tool selection and exact evidence drill-down.
+- BrainEval fixtures cover Atlas scope isolation, traversal bounds, evidence locators, path reconstruction, faceted resurrection, and canonical-source immutability.
 - SECURITY documents local-first storage, explicit external providers, snapshots as sensitive, and governed recall.
 
 ## Verification

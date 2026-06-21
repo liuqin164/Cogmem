@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { KernelAgentMemoryBackend } from '../agent/index.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 import { memoryEventCharRange, memoryEventLabel, memoryEventSourceRange, normalizeSourceContextWindow, } from '../recall/SourceContextMetadata.js';
+import { printCliJson } from './CliJson.js';
 function readArgs(argv) {
     const [commandCandidate, ...rest] = argv;
     const command = isMemoryCommand(commandCandidate) ? commandCandidate : undefined;
@@ -25,6 +26,11 @@ function readArgs(argv) {
         command,
         query: stringArg(values, 'query') || stringArg(values, 'q'),
         eventId: stringArg(values, 'event') || stringArg(values, 'event-id'),
+        nodeId: stringArg(values, 'id') || stringArg(values, 'node-id'),
+        fromId: stringArg(values, 'from'),
+        toId: stringArg(values, 'to'),
+        hops: numberArg(values, 'hops'),
+        maxHops: numberArg(values, 'max-hops'),
         status: candidateStatusArg(values, 'status'),
         agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
         intent: recallIntentArg(values, 'intent'),
@@ -46,12 +52,13 @@ function readArgs(argv) {
         watch: values.watch === true,
         promote: values.promote === true,
         json: values.json === true,
+        includeEvidence: values['include-evidence'] === true,
         help: values.help === true || values.h === true,
     };
 }
 function usage() {
     return [
-        'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|map|tick|bind> [args]',
+        'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|map|tick|bind|graph...> [args]',
         '',
         'Commands:',
         '  status               summarize raw ledger, vector, and dream backlog state',
@@ -65,6 +72,13 @@ function usage() {
         '  map                  print the self-describing memory map for agent/host inspection',
         '  tick                 run one explicit host-owned maintenance tick',
         '  bind                 backfill memory bindings for high-value raw user events',
+        '  graph                show a bounded overview of remembered topics, entities, clusters, actions, and time',
+        '  graph-search         locate Atlas nodes by --query without expanding the graph',
+        '  graph-explore        return a bounded local graph for a broad --query',
+        '  graph-node           inspect --id with neighbors and evidence drilldown commands',
+        '  graph-neighbors      expand --id by --hops 1..2',
+        '  graph-path           find a bounded path from --from to --to',
+        '  graph-timeline       reconstruct entity/time/action history for --query',
         '',
         'Common options:',
         '  --project <id>       scope to one project',
@@ -84,7 +98,8 @@ function usage() {
         '  --intent <intent>    memory_recall, previous_session_summary, or forensic_quote',
         '  --db <memory.db>     open an explicit database path',
         '  --config <toml>      open a cogmem TOML config',
-        '  --json               print machine-readable JSON',
+        '  --include-evidence   include bounded raw excerpts; event ids are always returned',
+        '  --json               print cogmem.cli.v1 JSON; queue counters are stable top-level fields',
         '',
         'Dream processes sealed episodes only. A timer may call the conditional tick, but recall and message ingestion never run Dream.',
         'Candidate interpretation uses deterministic rules unless [memory_model] configures an OpenAI-compatible local or cloud chat model.',
@@ -102,7 +117,14 @@ function isMemoryCommand(value) {
         || value === 'candidates'
         || value === 'map'
         || value === 'tick'
-        || value === 'bind';
+        || value === 'bind'
+        || value === 'graph'
+        || value === 'graph-search'
+        || value === 'graph-explore'
+        || value === 'graph-node'
+        || value === 'graph-neighbors'
+        || value === 'graph-path'
+        || value === 'graph-timeline';
 }
 function recallIntentArg(values, key) {
     const raw = stringArg(values, key);
@@ -315,6 +337,46 @@ function runBind(kernel, args) {
         limit: args.limit || 500,
     });
 }
+function runGraphCommand(kernel, args) {
+    const projectId = args.projectId;
+    if (!projectId)
+        throw new Error(`Memory Atlas commands require --project.\n${usage()}`);
+    kernel.ensureMemoryAtlas({ projectId });
+    const options = { projectId, limit: args.limit, includeEvidence: args.includeEvidence };
+    if (args.command === 'graph')
+        return kernel.graphOverview(options);
+    if (args.command === 'graph-search') {
+        if (!args.query)
+            throw new Error(`graph-search requires --query.\n${usage()}`);
+        return kernel.graphSearch(args.query, options);
+    }
+    if (args.command === 'graph-explore') {
+        if (!args.query)
+            throw new Error(`graph-explore requires --query.\n${usage()}`);
+        return kernel.graphExplore(args.query, options);
+    }
+    if (args.command === 'graph-node') {
+        if (!args.nodeId)
+            throw new Error(`graph-node requires --id.\n${usage()}`);
+        const result = kernel.graphNode(args.nodeId, options);
+        if (!result)
+            throw new Error(`No Memory Atlas node found for ${args.nodeId}`);
+        return result;
+    }
+    if (args.command === 'graph-neighbors') {
+        if (!args.nodeId)
+            throw new Error(`graph-neighbors requires --id.\n${usage()}`);
+        return kernel.graphNeighbors(args.nodeId, { ...options, hops: args.hops });
+    }
+    if (args.command === 'graph-path') {
+        if (!args.fromId || !args.toId)
+            throw new Error(`graph-path requires --from and --to.\n${usage()}`);
+        return kernel.graphPath(args.fromId, args.toId, { ...options, maxHops: args.maxHops });
+    }
+    if (!args.query)
+        throw new Error(`graph-timeline requires --query.\n${usage()}`);
+    return kernel.graphTimeline(args.query, options);
+}
 function runShow(kernel, args) {
     if (!args.eventId)
         throw new Error(`Missing --event.\n${usage()}`);
@@ -384,7 +446,7 @@ async function runDream(kernel, args) {
         completed += 1;
         if (maxRuns === undefined) {
             if (args.json) {
-                console.log(JSON.stringify({ watch: true, intervalMs, run }, null, 2));
+                printCliJson('memory.dream.watch', { watch: true, intervalMs, run });
             }
             else {
                 printHuman('dream', run);
@@ -479,6 +541,27 @@ function printHuman(command, payload) {
         console.log(`failedEvents: ${payload.failedEvents}`);
         return;
     }
+    if (command === 'graph' || command.startsWith('graph-')) {
+        console.log(`memoryAtlas: ${payload.version || 'memory_atlas.v1'} project=${payload.projectId || 'unknown'}`);
+        const rows = Array.isArray(payload.nodes) ? payload.nodes
+            : Array.isArray(payload.path) ? payload.path
+                : Array.isArray(payload.actions) ? payload.actions
+                    : payload.id ? [payload] : [];
+        for (const row of rows) {
+            const label = row.label || [row.targetLabel, row.action].filter(Boolean).join(' ') || row.id;
+            console.log(`- ${row.id} [${row.nodeType || row.frameType || 'node'}] ${label}`);
+            const evidence = Array.isArray(row.evidence) ? row.evidence : [];
+            for (const item of evidence)
+                if (item.drilldown)
+                    console.log(`  ${item.drilldown}`);
+        }
+        const nextActions = Array.isArray(payload.nextActions) ? payload.nextActions : [];
+        for (const action of nextActions)
+            console.log(`next: ${action.tool} ${JSON.stringify(action.args || {})}`);
+        if (payload.truncated === true)
+            console.log('truncated: true');
+        return;
+    }
     if (command === 'recall') {
         const items = Array.isArray(payload.items) ? payload.items : [];
         console.log(`recallMode: ${payload.recallMode}`);
@@ -538,9 +621,23 @@ async function main() {
                                             ? runMap(kernel, args)
                                             : args.command === 'tick'
                                                 ? runTick(kernel, args)
-                                                : runBind(kernel, args);
+                                                : args.command === 'bind'
+                                                    ? runBind(kernel, args)
+                                                    : runGraphCommand(kernel, args);
         if (args.json) {
-            console.log(JSON.stringify(payload, null, 2));
+            const queue = args.command === 'status'
+                ? payload.dreamCandidateQueue
+                : args.command === 'dream' && payload.governance
+                    ? payload.governance.queue
+                    : args.command === 'dream' && payload.queue
+                        ? payload.queue
+                        : args.command === 'govern'
+                            ? payload.queue
+                            : undefined;
+            printCliJson(`memory.${args.command}`, payload, {
+                queue,
+                beliefs: queue ? kernel.beliefStore.countActive(args.projectId) : undefined,
+            });
             return;
         }
         printHuman(args.command, payload);

@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { BrainEvalRunner, type BrainEvalSample } from '../benchmark/BrainEval.js';
 import { StrategyRolloutEvaluator, type StrategyRolloutOutcome } from '../eval/strategy/index.js';
+import { printCliJson } from './CliJson.js';
 
 function usage(): string {
   return [
@@ -30,14 +31,14 @@ async function main(): Promise<void> {
     const outcomes = Array.isArray(parsed) ? parsed as StrategyRolloutOutcome[] : 'outcomes' in parsed ? parsed.outcomes : undefined;
     if (!Array.isArray(outcomes)) throw new Error('Strategy rollout input must contain an outcomes array.');
     const report = new StrategyRolloutEvaluator().evaluate(outcomes);
-    console.log(JSON.stringify(report, null, 2));
+    printCliJson('brain-eval.strategy-rollout', report);
     if (!report.passed) process.exitCode = 1;
     return;
   }
   const samples = Array.isArray(parsed) ? parsed as BrainEvalSample[] : 'samples' in parsed ? parsed.samples : undefined;
   if (!Array.isArray(samples)) throw new Error('BrainEval input must contain a samples array.');
   const report = new BrainEvalRunner().evaluate(samples);
-  console.log(JSON.stringify(report, null, 2));
+  printCliJson('brain-eval', report);
   if (!report.passed) process.exitCode = 1;
 }
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.6.0
+
+- Added Memory Atlas v1, a bounded, project-scoped content graph over existing topics, entities, clusters, episodes, beliefs, action frames, time buckets, relations, and exact raw-event evidence. It is canonical-memory-safe and records only non-evidentiary access/activation telemetry, not a second fact store.
+- Added generic query-facet resurrection. Time, target/entity, topic, memory kind, and ordinary query cues work like combined table filters; exact scoped matches can surface cold memory without changing truth, confidence, ownership, or governance state.
+- Added graph overview, search, explore, node, neighbors, path, and timeline APIs through the kernel, CLI, and canonical-memory-safe MCP tools. Queries record non-destructive Atlas access/activation telemetry, and every evidence result carries an event ID plus a `cogmem memory show` drill-down command.
+- Added deterministic Atlas activation and decay. Frequent navigation raises visibility, maintenance decays it, and cold evidence remains recoverable through exact facets. Database triggers mark only changed projects dirty so normal queries do not rebuild the entire graph.
+- Added OpenClaw direct graph exploration through the generated plugin bridge, with bounded volatile `COGMEM_MEMORY_ATLAS` context and no MCP requirement. Hermes receives the same graph surface through MCP.
+- Standardized every documented CLI `--json` command on `cogmem.cli.v1`: object payload fields are available at the top level, arrays use `items`, and Dream/status queue counters have stable top-level aliases while legacy nested objects remain during the compatibility window.
+- Added schema migration 25 with transaction-safe Atlas projection, action evidence, access/activation, FTS, and dirty-state tables. A 3.5.2 database upgrades with `cogmem migrate --yes --backup --json`; Raw Ledger evidence is preserved.
+- Bumped the OpenClaw plugin to 0.6.0 and updated OpenClaw/Hermes skills and runbooks with graph-first navigation and exact-source drill-down rules.
+
 ## 3.5.2
 
 - Added the user-shaped Memory Ontology and project-scoped topic path, alias, relation, and governance registries. Explicit user operations are active, audited, and reversible; model proposals stay candidates and alias collisions fail closed for review.

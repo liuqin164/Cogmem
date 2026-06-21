@@ -210,3 +210,9 @@ Use `cogmem_topic_operate` with actor `user_explicit` only for explicit user nam
 Use `cogmem memory map --project hermes --json` or MCP `cogmem_memory_map` to inspect Memory Binding and Graph Recall counters. Bindings attach high-value user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down only; they are not verified facts, user preferences, or instructions. Correction bindings expose review flags and correction edges. If `cogmem memory tick --project hermes --json` suggests `bind_raw_events`, run `cogmem memory bind --project hermes --json`. Re-run `cogmem connect hermes --workspace . --auto` after upgrades to patch existing MCP allow-lists with new Cogmem tools.
 
 Dream correction records require explicit user clarification; assistant self-correction and questions containing `是不是` are not user-owned contradictions. Invalid provider output is a rejected diagnostic. Maintenance ticks supersede `needs_confirmation` entries older than the default 30-day TTL and retain their evidence rows.
+
+## Memory Atlas navigation
+
+For broad inventory or historical questions call `cogmem_graph_explore`. Use `cogmem_graph_search` and `cogmem_graph_node` for known concepts, `cogmem_graph_neighbors`/`cogmem_graph_path` for relations, and `cogmem_graph_timeline` for ordered reconstruction. Use `cogmem_recall` for a direct fact and follow event IDs to `cogmem memory show` for exact wording.
+
+Combine the filters present in the user's message, including project, time, topic, entity/target, memory kind, and ordinary cues. Do not force an entity + time + action tuple. A cold result is newly visible, not newly verified or promoted.

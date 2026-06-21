@@ -50,6 +50,9 @@ function usage(): string {
     '  brain-eval           evaluate recall, provenance, leakage, budget, and false activation',
     '  episode              append, import, inspect, seal, or repair conversation episodes',
     '  dream                conditionally process sealed episode backlog',
+    '',
+    'JSON output: commands with --json emit cogmem.cli.v1. Object fields stay top-level; arrays use items.',
+    'Queue commands expose candidate, promoted, needs_confirmation, and beliefs at the top level.',
   ].join('\n');
 }
 
