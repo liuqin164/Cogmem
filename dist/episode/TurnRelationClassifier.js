@@ -11,37 +11,43 @@ const PROSPECTIVE = /(提醒我|记得在|明天|下周|到时候|remind me|tomo
 const DEBUGGING = /(bug|错误|失败|报错|根因|修复|debug|exception)/iu;
 const SHORT_ACCEPT = /^\s*(对|是|可以|确认|就这个|第二个|第[一二三四五六七八九十\d]+个|yes|yep|correct|sounds good|そう|はい)[。.!！\s]*$/iu;
 const SHORT_REJECT = /^\s*(不对|不是|不行|不要|否|no|nope|違う|いいえ)[。.!！\s]*$/iu;
-const ASSISTANT_PROPOSAL = /(建议|可以选|选项|should we|recommend|option|propose|どうですか)|(?:方案|采用|下一版).{0,80}(?:吗|[?？])/iu;
+const ASSISTANT_PROPOSAL = /(建议|可以选|选项|should we|recommend|option|propose|どうですか)|^\s*(下一版|应该|推荐|可以考虑)|(?:方案|采用|下一版).{0,80}(?:吗|[?？])/iu;
 const ASSISTANT_QUESTION = /[?？]\s*$|(?:是否|要不要|可以吗|确认吗|which|what|when|do you|should we)/iu;
-const MEMORY_DOMAIN = /(cogmem|memory|记忆|dream|episode|hermes|openclaw|mcp|belief|context|召回|治理)/iu;
-const CAR_DOMAIN = /(汽车|车子|烧机油|机油|发动机|轮胎|刹车|car|engine|oil)/iu;
-const HEALTH_DOMAIN = /(健康|症状|医生|药|疼|发烧|medical|health)/iu;
-const TRANSLATION_DOMAIN = /(翻译|日语|英语|translate|translation)/iu;
-export function classifyTurnRelation(input) {
+const EPISODE_TYPES = new Set(['discussion', 'decision', 'correction', 'preference', 'goal', 'debugging', 'planning', 'prospective', 'general']);
+const SWITCH_KINDS = new Set(['hard', 'subtopic', 'ambiguous']);
+function classifyTurnRelationBase(input) {
     const context = typeof input === 'string' ? { currentUserText: input } : input;
     const text = String(context.currentUserText || '').trim();
     const previousAssistant = String(context.previousAssistantText || '').trim();
     const signals = [];
     if (!text || NOISE.test(text))
         return decision('noise', 0.98, 'general', 0.05, 'deterministic_noise', ['noise'], false, []);
-    if (SHORT_ACCEPT.test(text) && previousAssistant && (ASSISTANT_PROPOSAL.test(previousAssistant) || ASSISTANT_QUESTION.test(previousAssistant))) {
-        signals.push('short_accept', ASSISTANT_PROPOSAL.test(previousAssistant) ? 'assistant_proposal' : 'assistant_question');
-        return decision('accepts_assistant_proposal', 0.91, inferEpisodeType(previousAssistant), 0.88, 'assistant_context_acceptance', signals, false, inferCandidateTypes(previousAssistant));
+    if (SHORT_ACCEPT.test(text) && previousAssistant) {
+        if (ASSISTANT_PROPOSAL.test(previousAssistant)) {
+            return decision('accepts_assistant_proposal', 0.91, inferEpisodeType(previousAssistant), 0.88, 'assistant_context_acceptance', ['short_accept', 'assistant_proposal'], false, inferCandidateTypes(previousAssistant));
+        }
+        if (ASSISTANT_QUESTION.test(previousAssistant)) {
+            return decision('answers_assistant_question', 0.9, inferEpisodeType(text), inferImportance(text), 'assistant_question_confirmation', ['short_accept', 'assistant_question'], false, inferCandidateTypes(text));
+        }
+        return decision('confirms_assistant_fact', 0.86, inferEpisodeType(previousAssistant), inferImportance(previousAssistant), 'assistant_fact_confirmation', ['short_accept', 'assistant_fact'], false, inferCandidateTypes(previousAssistant));
     }
     if (SHORT_REJECT.test(text) && previousAssistant) {
-        return decision('rejects_assistant_proposal', 0.9, 'correction', 0.9, 'assistant_context_rejection', ['short_reject', 'assistant_context'], false, ['correction']);
+        if (ASSISTANT_PROPOSAL.test(previousAssistant)) {
+            return decision('rejects_assistant_proposal', 0.9, 'correction', 0.9, 'assistant_context_rejection', ['short_reject', 'assistant_proposal'], false, ['correction']);
+        }
+        return decision('corrects_previous', 0.9, 'correction', 0.9, 'assistant_fact_or_question_correction', ['short_reject', ASSISTANT_QUESTION.test(previousAssistant) ? 'assistant_question' : 'assistant_fact'], false, ['correction']);
     }
     if (CORRECTION.test(text)) {
         return decision('corrects_previous', 0.94, 'correction', 0.9, 'explicit_correction', ['correction_marker'], false, ['correction']);
     }
     if (EXPLICIT_SWITCH.test(text)) {
-        const active = `${context.activeEpisodeSummary || ''} ${context.activeEpisodeTopicPath || ''}`;
-        const shift = classifySwitch(text, active);
+        const active = `${context.activeEpisodeSummary || ''} ${context.activeEpisodeTopicPath || ''}`.trim();
+        const shift = active && hasSpecificTopicPayload(text) ? 'hard' : 'ambiguous';
         if (shift === 'hard')
             return { ...decision('hard_topic_switch', 0.94, inferEpisodeType(text), inferImportance(text), 'cross_domain_topic_switch', ['explicit_topic_switch', 'cross_domain'], true, inferCandidateTypes(text)), switchKind: shift };
         return { ...decision('ambiguous_shift', 0.54, inferEpisodeType(text), inferImportance(text), 'ambiguous_topic_switch', ['explicit_topic_switch', 'domain_uncertain'], true, inferCandidateTypes(text), true), switchKind: shift };
     }
-    if (SUBTOPIC.test(text) && sameDomain(text, `${context.activeEpisodeSummary || ''} ${context.activeEpisodeTopicPath || ''}`)) {
+    if (SUBTOPIC.test(text) && hasConfirmedOverlap(context, text)) {
         return { ...decision('subtopic_shift', 0.86, inferEpisodeType(text), inferImportance(text), 'same_domain_subtopic', ['subtopic_marker', 'same_domain'], false, inferCandidateTypes(text)), switchKind: 'subtopic' };
     }
     if (CLOSURE.test(text))
@@ -53,9 +59,16 @@ export function classifyTurnRelation(input) {
     }
     if (PROSPECTIVE.test(text))
         return decision('confirms_future_intent', 0.82, 'prospective', 0.86, 'prospective_signal', ['prospective_marker'], false, ['prospective']);
+    if (hasConfirmedOverlap(context, text)) {
+        return decision('continues_previous', 0.8, inferEpisodeType(text), inferImportance(text), 'confirmed_topic_or_entity_overlap', ['topic_overlap'], false, inferCandidateTypes(text));
+    }
     const candidateTypes = inferCandidateTypes(text);
-    const highValueAmbiguous = candidateTypes.length > 0;
-    return decision('continues_previous', highValueAmbiguous ? 0.68 : 0.62, inferEpisodeType(text), inferImportance(text), 'bounded_session_continuity', highValueAmbiguous ? ['high_value_ambiguous'] : ['session_continuity'], false, candidateTypes, highValueAmbiguous);
+    return decision('ambiguous_shift', candidateTypes.length ? 0.58 : 0.46, inferEpisodeType(text), inferImportance(text), 'unconfirmed_topic_continuity', candidateTypes.length ? ['high_value_ambiguous'] : ['topic_continuity_unconfirmed'], false, candidateTypes, true);
+}
+export function classifyTurnRelation(input) {
+    const context = typeof input === 'string' ? { currentUserText: input } : input;
+    const result = classifyTurnRelationBase(context);
+    return result.topicPath || !context.currentTopicPath ? result : { ...result, topicPath: context.currentTopicPath };
 }
 export function classifyAssistantRelation(text, role = 'assistant') {
     const input = String(text || '').trim();
@@ -99,30 +112,37 @@ export async function classifyTurnRelationHybrid(context, reviewer) {
         confidence,
         candidateTypes: [...new Set(candidateTypes)],
         closureCandidate: typeof record.closureCandidate === 'boolean' ? record.closureCandidate : cpuDecision.closureCandidate,
+        topicPath: validTopicPath(record.topicPath) ? record.topicPath : cpuDecision.topicPath,
+        episodeType: isEpisodeType(record.episodeType) ? record.episodeType : cpuDecision.episodeType,
+        importance: boundedNumber(record.importance, cpuDecision.importance),
+        switchKind: isSwitchKind(record.switchKind) ? record.switchKind : cpuDecision.switchKind,
+        importanceSignals: Array.isArray(record.importanceSignals)
+            ? [...new Set(record.importanceSignals.filter((item) => typeof item === 'string' && item.length <= 80))].slice(0, 20)
+            : cpuDecision.importanceSignals,
         signals: [...new Set([...cpuDecision.signals, 'advisory_review_applied'])],
         rationale: typeof record.rationale === 'string' ? record.rationale.slice(0, 240) : cpuDecision.rationale,
     };
 }
-function classifySwitch(text, active) {
-    const nextDomain = domainOf(text);
-    const activeDomain = domainOf(active);
-    return nextDomain && activeDomain && nextDomain !== activeDomain ? 'hard' : 'ambiguous';
+function hasConfirmedOverlap(context, text) {
+    if (context.topicPathMatch === true || context.projectMatch === true)
+        return true;
+    if ((context.entityOverlap ?? 0) >= 0.5 || (context.semanticSimilarity ?? 0) >= 0.72)
+        return true;
+    const active = `${context.activeEpisodeSummary || ''} ${context.activeEpisodeTopicPath || ''}`;
+    if (!active.trim())
+        return false;
+    const left = tokenSet(text);
+    const right = tokenSet(active);
+    return [...left].some((token) => token.length >= 3 && right.has(token));
 }
-function sameDomain(text, active) {
-    const nextDomain = domainOf(text);
-    const activeDomain = domainOf(active);
-    return Boolean(nextDomain && activeDomain && nextDomain === activeDomain);
+function tokenSet(value) {
+    return new Set(String(value || '').toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) || []);
 }
-function domainOf(text) {
-    if (MEMORY_DOMAIN.test(text))
-        return 'memory';
-    if (CAR_DOMAIN.test(text))
-        return 'car';
-    if (HEALTH_DOMAIN.test(text))
-        return 'health';
-    if (TRANSLATION_DOMAIN.test(text))
-        return 'translation';
-    return undefined;
+function hasSpecificTopicPayload(text) {
+    const payload = text.replace(EXPLICIT_SWITCH, '').replace(/[\s，。,.!?！？]/g, '');
+    if (/^(这个|那个|此事|之后再说|这个之后再说)$/u.test(payload))
+        return false;
+    return payload.length >= 5;
 }
 function inferCandidateTypes(text) {
     const types = [];
@@ -145,6 +165,7 @@ function isEpisodeCandidateType(value) {
 function isTurnRelation(value) {
     return typeof value === 'string' && new Set([
         'continues_previous', 'clarifies_previous', 'corrects_previous', 'answers_assistant_question',
+        'confirms_assistant_fact',
         'accepts_assistant_proposal', 'rejects_assistant_proposal', 'assistant_response', 'assistant_proposal',
         'assistant_summary', 'assistant_question', 'assistant_clarification', 'tool_result_context',
         'hard_topic_switch', 'subtopic_shift', 'ambiguous_shift', 'switches_topic', 'starts_new_topic',
@@ -176,5 +197,9 @@ function inferImportance(text) {
     return 0.55;
 }
 function decision(relation, confidence, episodeType, importance, rationale, signals, closureCandidate, candidateTypes, needsLlmReview = false) {
-    return { relation, confidence, episodeType, importance, rationale, signals, needsLlmReview, candidateTypes, closureCandidate };
+    return { relation, confidence, episodeType, importance, importanceSignals: signals, rationale, signals, needsLlmReview, candidateTypes, closureCandidate };
 }
+function isEpisodeType(value) { return typeof value === 'string' && EPISODE_TYPES.has(value); }
+function isSwitchKind(value) { return typeof value === 'string' && SWITCH_KINDS.has(value); }
+function boundedNumber(value, fallback) { return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback; }
+function validTopicPath(value) { return typeof value === 'string' && value.length > 0 && value.length <= 240 && !value.includes('..'); }

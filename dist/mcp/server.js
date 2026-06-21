@@ -5,7 +5,7 @@ import { callCogmemMcpTool, listCogmemMcpTools, } from './CoreMcpTools.js';
 export function createCogmemMcpServer(runtime = {}) {
     const server = new Server({
         name: 'cogmem-core',
-        version: '3.5.1',
+        version: '3.5.2',
     }, {
         capabilities: {
             tools: {},

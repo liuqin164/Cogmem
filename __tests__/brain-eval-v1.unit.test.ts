@@ -12,6 +12,11 @@ test('BrainEval gates episode grouping, evidence, governance, and Hermes import 
     episodeAssignmentChecks: [{ assigned: true }],
     dreamCandidateChecks: [{ grounded: true, bypassedGovernance: false }],
     hermesImportParityChecks: [{ liveShape: 'episode.v1', importedShape: 'episode.v1' }],
+    topicMutationIsolationChecks: [{ crossProjectMutation: false }],
+    topicAuditRollbackChecks: [{ audited: true, rollbackRestored: true }],
+    repairInvalidationChecks: [{ oldCandidatesStale: true, dreamRequeued: true }],
+    importResumeChecks: [{ resumedWithoutDuplicate: true, checkpointComplete: true }],
+    hooklessWarningChecks: [{ ingestionMissing: true, warningPresent: true }],
     bindingChecks: [{ expectedTopicPath: 'x', selectedTopicPath: 'x' }],
     entityMergeChecks: [{ accepted: false, correct: true }],
     beliefOwnershipChecks: [{ ownership: 'user', hasExplicitUserEvidence: true }],
@@ -45,6 +50,11 @@ describe('brain eval v1', () => {
         episodeAssignmentChecks: [{ assigned: true }],
         dreamCandidateChecks: [{ grounded: true, bypassedGovernance: false }],
         hermesImportParityChecks: [{ liveShape: 'episode.v1', importedShape: 'episode.v1' }],
+        topicMutationIsolationChecks: [{ crossProjectMutation: false }],
+        topicAuditRollbackChecks: [{ audited: true, rollbackRestored: true }],
+        repairInvalidationChecks: [{ oldCandidatesStale: true, dreamRequeued: true }],
+        importResumeChecks: [{ resumedWithoutDuplicate: true, checkpointComplete: true }],
+        hooklessWarningChecks: [{ ingestionMissing: true, warningPresent: true }],
       },
       {
         expectedIds: ['c'], selectedIds: ['c'], selectedWithEvidenceIds: ['c'],
@@ -87,6 +97,8 @@ describe('brain eval v1', () => {
       'temporalCurrentTruthAccuracy', 'contextPollutionRate', 'sourceFidelity',
       'episodeGroupingAccuracy', 'episodeBoundaryAccuracy', 'episodeEvidenceCoverage',
       'unassignedRawRate', 'dreamCandidateGrounding', 'dreamBypassRate', 'hermesImportParity',
+      'topicMutationLeakageRate', 'topicAuditRollbackCompliance', 'repairInvalidationCompliance',
+      'importResumeReliability', 'hooklessWarningCoverage',
     ]));
   });
 
@@ -119,6 +131,8 @@ describe('brain eval v1', () => {
     expect(report.failedMetrics).toEqual(expect.arrayContaining([
       'bindingPurity', 'entityFalseMergeRate', 'beliefOwnershipCompliance',
       'temporalCurrentTruthAccuracy', 'contextPollutionRate', 'sourceFidelity',
+      'topicMutationLeakageRate', 'topicAuditRollbackCompliance', 'repairInvalidationCompliance',
+      'importResumeReliability', 'hooklessWarningCoverage',
     ]));
   });
 });

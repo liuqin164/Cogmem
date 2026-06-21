@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for Hermes through MCP.
-version: 3.5.1
+version: 3.5.2
 metadata:
   hermes:
     tags: [memory, mcp, cogmem, agent-memory]
@@ -293,6 +293,10 @@ mcp_servers:
         - cogmem_episode_append
         - cogmem_episode_import
         - cogmem_episode_status
+        - cogmem_topic_list
+        - cogmem_topic_operate
+        - cogmem_topic_rollback
+        - cogmem_episode_repair
         - cogmem_episode_seal
         - cogmem_dream_tick
         - cogmem_dream_status
@@ -307,9 +311,11 @@ When Hermes calls `cogmem_recall`, it should pass `projectId: "hermes"` and may 
 
 Hermes may pass `collection: "theseus"` to `cogmem_recall` when it wants creative artifacts. `cogmem_strategy_plan` is a read-only inspection tool: its capsule has no instruction authority and never authorizes work. Expose `cogmem_memory_map` and `cogmem_maintenance_tick` only to agents that are allowed to inspect memory anatomy or request host-owned upkeep. `cogmem_prospective` manages candidate state only; even a confirmed due item requires normal host authorization before any action.
 
-Cogmem cannot observe Hermes conversations without a host hook or explicit MCP/import call. After meaningful conversation, call `cogmem_episode_append` with a stable `externalMessageId`, or use bounded `cogmem_episode_import` for a batch. Before answering memory questions, call `cogmem_recall`. The ID is scoped to the project, source agent, and source session; conflicting reuse with different content is rejected. Generated import IDs use role, timestamp, and normalized content rather than line position.
+Cogmem cannot observe Hermes conversations without a host hook or explicit MCP/import call. After meaningful conversation, call `cogmem_episode_append` with a stable `externalMessageId`, or use bounded `cogmem_episode_import` for a batch. Before answering memory questions, call `cogmem_recall`. The ID is scoped to project, source agent, and source session; conflicting role, text, or `sourceAgent` metadata is rejected. If any batch item lacks an ID, honor `auto_identity_not_safe_across_split_batches`: assign stable IDs before splitting/retrying the batch.
 
-Append/import preserve Raw Ledger evidence and never run Dream. MCP import is capped at 200 messages and 16,000 characters per message; use the streaming CLI with checkpoints for large histories. Inspect with `cogmem_episode_status`; `semanticMemoryMayLag` and `recommendedAction` distinguish queued, retryable, and terminal work. Call `cogmem_dream_tick` with `maintenanceMode: true` only during idle upkeep or an explicit user/admin maintenance request. Without that flag it is dry-run only. `ignoredEventIds` are deterministic noise, while `unassignedEventIds` should be repaired. Semantic summaries are hints only; Dream candidates must cite raw episode events and normal governance decides durable memory.
+Append/import preserve Raw Ledger evidence and never run Dream. MCP import is capped at 200 messages and reports `processedCount`, `failedIndex`, `resumeFromIndex`, and per-message results. Use the streaming CLI with checkpoints and line/error bounds for large histories. Inspect `recommendedActions`, not a single action. If recall/status warns `no_recent_episode_ingestion_detected`, append/import recent messages; if it warns `semantic_memory_may_lag`, inspect open/soft-sealed episodes and Dream failures before claiming memory is current. Call `cogmem_dream_tick` with `maintenanceMode: true` only during explicit background upkeep.
+
+Use `cogmem_topic_operate` with actor `user_explicit` only for the user's explicit naming, alias, move, merge, split, or relation instruction. Model guesses use `model_candidate` and must not become active automatically. Inspect project-scoped nodes with `cogmem_topic_list`; alias collisions require review, and undo with `cogmem_topic_rollback` plus the returned `operationId`. Use `cogmem_episode_repair` for bad boundaries so closure receipts, stale candidates, Dream requeue, cross-references, and audit state remain consistent; never patch SQLite rows manually.
 
 Then reload MCP inside Hermes:
 

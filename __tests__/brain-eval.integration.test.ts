@@ -38,6 +38,11 @@ describe('BrainEval multilingual release fixture', () => {
         episodeAssignmentChecks: [{ assigned: true }, { assigned: true }, { assigned: true }],
         dreamCandidateChecks: [{ grounded: true, bypassedGovernance: false }],
         hermesImportParityChecks: [{ liveShape: 'episode.v1', importedShape: 'episode.v1' }],
+        topicMutationIsolationChecks: [{ crossProjectMutation: false }],
+        topicAuditRollbackChecks: [{ audited: true, rollbackRestored: true }],
+        repairInvalidationChecks: [{ oldCandidatesStale: true, dreamRequeued: true }],
+        importResumeChecks: [{ resumedWithoutDuplicate: true, checkpointComplete: true }],
+        hooklessWarningChecks: [{ ingestionMissing: true, warningPresent: true }],
       },
     ];
 

@@ -368,7 +368,10 @@ test('dream curator rejects provider diagnostics without adding them to the revi
   expect(reviewCandidates).toHaveLength(0);
   expect(rejectedDiagnostics.some((candidate) => candidate.candidateType === 'diagnostic_conclusion')).toBe(true);
   expect(JSON.stringify(rejectedDiagnostics)).toContain('dream_curator_provider_invalid_output');
-  expect(JSON.stringify(rejectedDiagnostics)).toContain('sourceAnchor');
+  expect(rejectedDiagnostics[0].content).toEqual(expect.objectContaining({ evidenceAuthority: 'system_diagnostic_only' }));
+  expect(rejectedDiagnostics[0].evidence).toEqual([expect.objectContaining({
+    eventId: expect.stringMatching(/^system-diagnostic:/), role: 'system',
+  })]);
   expect(kernel.pipelineMetrics.getNonFatalCount('dream_curator_provider_invalid_output', { projectId: 'demo' })).toBe(1);
 
   kernel.close();
@@ -447,8 +450,10 @@ test('dream curator treats user clarification as an organizational correction in
   });
 
   await kernel.runDreamCurator({ projectId: 'demo', limit: 20 });
-  const candidates = kernel.listDreamCandidates({ projectId: 'demo', statuses: ['candidate'], limit: 50 });
-  expect(candidates.some((candidate) => candidate.candidateType === 'correction')).toBe(true);
+  const candidates = kernel.listDreamCandidates({ projectId: 'demo', statuses: ['candidate', 'needs_confirmation'], limit: 50 });
+  expect(candidates.find((candidate) => candidate.candidateType === 'correction')).toEqual(expect.objectContaining({
+    status: 'needs_confirmation', statusReason: 'orphan_correction_requires_target_review',
+  }));
   expect(candidates.some((candidate) => candidate.candidateType === 'contradictions')).toBe(false);
 
   kernel.promoteDreamCandidates({ projectId: 'demo', limit: 50 });

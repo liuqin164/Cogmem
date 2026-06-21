@@ -304,7 +304,7 @@ export class KernelAgentMemoryBackend {
       eventOrdinal: 1,
       occurredAt,
       sourceId,
-      metadata: this.metadataWithCollection(turn.metadata, turn.collection),
+      metadata: this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
     });
     const assistantEvent = turn.assistantText
       ? this.kernel.recordRawEvent({
@@ -322,7 +322,7 @@ export class KernelAgentMemoryBackend {
         prevEventId: userEvent.eventId,
         causalityType: 'replies_to',
         sourceId,
-        metadata: this.metadataWithCollection(turn.metadata, turn.collection),
+        metadata: this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
       })
       : undefined;
     if (assistantEvent) {

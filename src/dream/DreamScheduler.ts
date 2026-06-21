@@ -14,6 +14,7 @@ export interface DreamTickOptions {
   softSealGraceMs?: number;
   leaseMs?: number;
   maxAttempts?: number;
+  maintenanceReason?: 'daily' | 'upgrade_repair';
 }
 
 export interface DreamTickResult {
@@ -21,6 +22,7 @@ export interface DreamTickResult {
   projectId?: string;
   requestedMode: DreamTickMode;
   selectedMode: SelectedDreamMode;
+  selectedModes: { micro: number; normal: number; deep: number };
   skipped: boolean;
   reason: string;
   processedEpisodeCount: number;
@@ -29,6 +31,7 @@ export interface DreamTickResult {
   episodeIds: string[];
   candidateIds: string[];
   durationMs: number;
+  failedEpisodes: Array<{ episodeId: string; error: string; failureCategory: string; retryAfter?: number }>;
 }
 
 export class DreamScheduler {
@@ -41,6 +44,7 @@ export class DreamScheduler {
     const startedAt = options.now ?? Date.now();
     const requestedMode = options.mode ?? 'auto';
     const runId = `episode-dream-run-${randomUUID()}`;
+    const backlogBefore = this.episodeStore.getDreamStatus(options.projectId);
     const graceMs = Math.max(0, options.softSealGraceMs ?? 5 * 60_000);
     this.episodeStore.finalizeMatureSoftSeals({
       projectId: options.projectId,
@@ -61,27 +65,37 @@ export class DreamScheduler {
         runId, projectId: options.projectId, requestedMode, selectedMode: 'none', skipped: true,
         reason: 'no_sealed_episode_backlog', processedEpisodeCount: 0, failedEpisodeCount: 0,
         candidateCount: 0, episodeIds: [], candidateIds: [], durationMs: elapsed(startedAt, options.now),
+        selectedModes: { micro: 0, normal: 0, deep: 0 }, failedEpisodes: [],
       };
       this.recordRun(result, startedAt, 'skipped');
       return result;
     }
 
-    const selectedMode = selectMode(requestedMode, jobs.map((job) => job.modeHint));
+    const effectiveModes = jobs.map((job) => effectiveModeForJob({
+      requestedMode, jobModeHint: job.modeHint, jobCreatedAt: job.createdAt, now: startedAt,
+      backlogCount: backlogBefore.pending + backlogBefore.retryScheduled + backlogBefore.failedRetryable,
+      maintenanceReason: options.maintenanceReason,
+    }));
+    const selectedMode = selectMode(requestedMode, effectiveModes);
     const episodeIds: string[] = [];
     const candidateIds: string[] = [];
+    const selectedModes = { micro: 0, normal: 0, deep: 0 };
+    const failedEpisodes: DreamTickResult['failedEpisodes'] = [];
     let failures = 0;
-    for (const job of jobs) {
+    for (const [jobIndex, job] of jobs.entries()) {
       const links = this.episodeStore.listEventLinks(job.episodeId);
       const episode = this.episodeStore.getEpisode(job.episodeId);
       const receipt = this.episodeStore.listClosureReceipts({ episodeId: job.episodeId, limit: 1 })[0];
+      const effectiveMode = effectiveModes[jobIndex];
+      selectedModes[effectiveMode] += 1;
       try {
-        const limits = curatorLimits(selectedMode);
+        const limits = curatorLimits(effectiveMode);
         const run = await this.curator.run({
           projectId: job.projectId,
           eventIds: links.map((link) => link.eventId),
           sourceEpisodeId: job.episodeId,
           sourceEpisodeEventIds: links.map((link) => link.eventId),
-          dreamMode: selectedMode,
+          dreamMode: effectiveMode,
           maxCandidates: limits.maxCandidates,
           episodeType: episode?.episodeType,
           closureReason: receipt?.closureReasonCode || receipt?.closureReason,
@@ -99,6 +113,7 @@ export class DreamScheduler {
         const message = error instanceof Error ? error.message : String(error);
         const failure = classifyFailure(message, job.attempts, startedAt);
         this.episodeStore.failDreamJob(job.episodeId, job.leaseId, message, failure);
+        failedEpisodes.push({ episodeId: job.episodeId, error: message, failureCategory: failure.failureCategory, retryAfter: failure.retryAfter });
       }
     }
     const result: DreamTickResult = {
@@ -106,6 +121,7 @@ export class DreamScheduler {
       reason: failures ? 'episode_dream_completed_with_failures' : 'sealed_episode_backlog',
       processedEpisodeCount: episodeIds.length, failedEpisodeCount: failures,
       candidateCount: candidateIds.length, episodeIds, candidateIds, durationMs: elapsed(startedAt, options.now),
+      selectedModes, failedEpisodes,
     };
     this.recordRun(result, startedAt, failures ? 'partial' : 'succeeded');
     return result;
@@ -116,8 +132,25 @@ export class DreamScheduler {
       runId: result.runId, projectId: result.projectId, requestedMode: result.requestedMode,
       selectedMode: result.selectedMode, reason: result.reason, episodeIds: result.episodeIds,
       candidateIds: result.candidateIds, status, durationMs: result.durationMs, createdAt,
+      failedEpisodes: result.failedEpisodes,
     });
   }
+}
+
+function effectiveModeForJob(input: {
+  requestedMode: DreamTickMode;
+  jobModeHint: 'micro' | 'normal' | 'deep';
+  jobCreatedAt: number;
+  now: number;
+  backlogCount: number;
+  maintenanceReason?: 'daily' | 'upgrade_repair';
+}): 'micro' | 'normal' | 'deep' {
+  if (input.requestedMode !== 'auto') return input.requestedMode;
+  if (input.jobModeHint === 'deep') return 'deep';
+  if (input.maintenanceReason === 'daily' || input.maintenanceReason === 'upgrade_repair') return 'deep';
+  if (input.backlogCount >= 20) return 'deep';
+  if (input.now - input.jobCreatedAt >= 24 * 60 * 60_000) return 'deep';
+  return input.jobModeHint;
 }
 
 function curatorLimits(mode: Exclude<SelectedDreamMode, 'none'>): { eventLimit: number; maxCandidates: number } {

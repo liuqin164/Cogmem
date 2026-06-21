@@ -6,6 +6,7 @@ import type { ModelRegistry } from '../models/ModelRegistry.js';
 import type { TextGenerateFn } from '../models/ModelRole.js';
 import type { PipelineMetrics } from './PipelineMetrics.js';
 import type { EpisodeSemanticSummary, EpisodeType } from '../episode/EpisodeTypes.js';
+import type { CorrectionResolver } from '../episode/CorrectionResolver.js';
 export interface DreamCuratorRunOptions {
     projectId?: string;
     limit?: number;
@@ -44,6 +45,7 @@ export interface DreamCuratorWorkerDeps {
     candidateStore: DeepWriteCandidateStore;
     modelRegistry?: ModelRegistry;
     pipelineMetrics?: PipelineMetrics;
+    correctionResolver?: CorrectionResolver;
 }
 export declare class DreamCuratorWorker {
     private readonly deps;

@@ -1,7 +1,7 @@
 ---
 name: cogmem-memory-backend
 description: Install and connect cogmem as a durable memory backend for OpenClaw.
-version: 3.5.1
+version: 3.5.2
 metadata:
   openclaw:
     tags: [memory, cogmem, agent-memory]
@@ -303,7 +303,11 @@ cogmem dream tick --project openclaw --mode auto --max-episodes 10 --json
 
 The timer does not force a full Dream run. `dream tick` inspects sealed episode jobs, chooses no work, micro, normal, or deep mode, then exits. Run `cogmem memory govern` separately; candidates stay pending until governance evaluates them.
 
-Episode classification is contextual but remains CPU-owned in the live hook. Short user replies are interpreted against the previous assistant response or proposal. A same-project subtopic shift stays in the current episode; a clear cross-domain switch hard-seals; an ambiguous switch soft-seals and links a review episode. Any optional model review runs asynchronously and can only suggest normalized relation metadata. It cannot write belief, entity, temporal, prospective, or governance state.
+Episode classification is contextual but remains CPU-owned in the live hook. Short user replies are interpreted against whether the previous assistant turn was a proposal, question, or factual statement. Unknown turns default to an ambiguous review boundary; continuation needs explicit continuation language or topic/entity/project overlap. Background import or repair may use hybrid review, but normalized reviewer fields are allow-listed and cannot write belief, entity, temporal, prospective, topic, or governance state.
+
+User topic language is durable structure only through audited topic operations. Explicit “call this X” or “move this under Y” requests may use `cogmem_topic_operate` with actor `user_explicit`; model-inferred topics must use actor `model_candidate` and remain candidates. Inspect with `cogmem_topic_list`. Never expand a hard-coded domain keyword dictionary to force routing, and never auto-resolve an alias collision.
+
+For a confirmed bad boundary, use `cogmem_episode_repair` or `cogmem episode split|merge|move-event|reclassify|requeue-dream`. Repair preserves raw ownership, recomputes closure receipts, marks old derived candidates stale, adds cross-references, requeues sealed episodes, and records an audit row. Do not hand-edit episode tables.
 
 At seal time Cogmem creates a semantic summary for Dream routing. This summary is a hint, not evidence. A candidate is valid only when `evidenceEventIds` is a non-empty subset of the sealed episode's raw events. Treat `dreamStatus=failed_retryable` as operator-retryable after backoff and `failed_terminal` as an evidence/schema problem that needs inspection rather than repeated ticks.
 

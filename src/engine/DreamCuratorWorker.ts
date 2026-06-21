@@ -10,6 +10,8 @@ import type { TextGenerateFn } from '../models/ModelRole.js';
 import type { PipelineMetrics } from './PipelineMetrics.js';
 import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeSemanticSummary, EpisodeType } from '../episode/EpisodeTypes.js';
+import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
+import type { CorrectionResolver } from '../episode/CorrectionResolver.js';
 
 export interface DreamCuratorRunOptions {
   projectId?: string;
@@ -48,6 +50,7 @@ export interface DreamCuratorWorkerDeps {
   candidateStore: DeepWriteCandidateStore;
   modelRegistry?: ModelRegistry;
   pipelineMetrics?: PipelineMetrics;
+  correctionResolver?: CorrectionResolver;
 }
 
 interface DreamEvidence {
@@ -118,13 +121,19 @@ export class DreamCuratorWorker {
     const candidateInputs = (await this.buildCandidates(dreamableEvents, options, now))
       .filter((candidate) => {
         const evidence = Array.isArray(candidate.evidence) ? candidate.evidence as Array<{ eventId?: unknown }> : [];
+        const content = objectRecord(candidate.content);
+        if (candidate.status === 'rejected' && content.source === 'dream_curator_provider_warning') {
+          return evidence.length === 1
+            && typeof evidence[0].eventId === 'string'
+            && evidence[0].eventId.startsWith('system-diagnostic:');
+        }
         return evidence.length > 0
           && evidence.every((item) => typeof item.eventId === 'string' && allowedEvidence.has(item.eventId));
       })
       .slice(0, Math.max(1, Math.min(options.maxCandidates ?? 500, 500)))
       .map((candidate) => ({
         ...candidate,
-        content: options.sourceEpisodeId
+        content: options.sourceEpisodeId && objectRecord(candidate.content).source !== 'dream_curator_provider_warning'
           ? {
             ...objectRecord(candidate.content),
             sourceEpisodeId: options.sourceEpisodeId,
@@ -200,6 +209,9 @@ export class DreamCuratorWorker {
           topics: extractTopics(events.map(eventText).join('\n')),
           source: 'mixed_user_assistant_raw_ledger',
           durability: 'session',
+          session_hint_only: true,
+          not_user_owned: true,
+          not_durable_belief: true,
           risk: 'curator_summary_candidate_requires_governance',
           windowStart: Math.min(...events.map((event) => event.occurredAt)),
           windowEnd: Math.max(...events.map((event) => event.occurredAt)),
@@ -233,9 +245,18 @@ export class DreamCuratorWorker {
         });
       }
       if (isExplicitCorrectionCandidate(text)) {
+        const resolution = this.deps.correctionResolver?.resolve({
+          projectId: event.projectId || options.projectId || '', query: text,
+          topicPath: typeof event.payload === 'object' && event.payload && typeof (event.payload as Record<string, unknown>).topicPath === 'string'
+            ? String((event.payload as Record<string, unknown>).topicPath)
+            : undefined,
+        }) ?? { status: 'needs_review' as const, candidates: [], reason: 'correction_resolver_unavailable' };
         candidates.push({
           candidateType: 'correction',
-          status,
+          status: resolution.status === 'resolved' ? status : 'needs_confirmation',
+          statusReason: resolution.status === 'resolved'
+            ? undefined
+            : 'orphan_correction_requires_target_review',
           confidence: 0.78,
           content: {
             projectId: event.projectId || options.projectId,
@@ -244,8 +265,10 @@ export class DreamCuratorWorker {
             source: 'explicit_user_statement',
             durability: 'event',
             correctionKind: 'user_clarification_or_revision',
-            correctedClaimKey: null,
-            correctedBeliefCandidateIds: [],
+            correctedClaimKey: resolution.target?.canonicalKey || null,
+            correctedBeliefCandidateIds: resolution.target ? [resolution.target.beliefId] : [],
+            correctionResolution: resolution.status,
+            correctionResolutionReason: resolution.reason,
             correctionTargetSearchQuery: truncate(text, 240),
             governance: 'organizational_trace_only',
             risk: 'correction_requires_prior_claim_binding_before_belief_change',
@@ -260,7 +283,7 @@ export class DreamCuratorWorker {
       const decisionEvidence = userEvents.length ? userEvents : events;
       candidates.push({
         candidateType: 'temporal_fact_update',
-        status,
+        status: userEvents.length ? status : 'needs_confirmation',
         confidence: userEvents.length ? 0.82 : 0.58,
         content: {
           projectId: options.projectId,
@@ -271,6 +294,7 @@ export class DreamCuratorWorker {
           endSeq: maxDefined(decisionEvidence.map((event) => event.globalSeq)),
           source: userEvents.length ? 'explicit_user_decision_episode' : 'mixed_decision_episode_requires_review',
           governance: 'candidate_only_cpu_governance_required',
+          notDurableWithoutUserEvidence: userEvents.length === 0,
         },
         evidence: decisionEvidence.map((event) => this.toEvidence(event)),
         promotionTargetType: 'temporal_decision',
@@ -279,14 +303,22 @@ export class DreamCuratorWorker {
     }
 
     const relationByEvent = new Map((options.episodeRelations || []).map((item) => [item.eventId, item.relation]));
-    for (let index = 1; index < events.length; index += 1) {
+    for (let index = 0; index < events.length; index += 1) {
       const confirmation = events[index];
-      const proposal = events[index - 1];
-      if (
-        relationByEvent.get(proposal.eventId) === 'assistant_proposal'
-        && relationByEvent.get(confirmation.eventId) === 'accepts_assistant_proposal'
-        && confirmation.role === 'user'
-      ) {
+      if (relationByEvent.get(confirmation.eventId) !== 'accepts_assistant_proposal' || confirmation.role !== 'user') continue;
+      let proposal: MemoryEvent | undefined;
+      for (let priorIndex = index - 1; priorIndex >= Math.max(0, index - 8); priorIndex -= 1) {
+        const prior = events[priorIndex];
+        const relation = relationByEvent.get(prior.eventId);
+        if (prior.role === 'user' && (relation === 'rejects_assistant_proposal' || relation === 'corrects_previous')) break;
+        if (relation === 'assistant_proposal'
+          && prior.sessionId === confirmation.sessionId
+          && (!prior.threadId || !confirmation.threadId || prior.threadId === confirmation.threadId)) {
+          proposal = prior;
+          break;
+        }
+      }
+      if (proposal) {
         candidates.push({
           candidateType: 'semantic_relation',
           status,
@@ -327,7 +359,7 @@ export class DreamCuratorWorker {
       }
     }
 
-    candidates.push(...this.buildSemanticOrganizationCandidates(events, now, status));
+    candidates.push(...this.buildSemanticOrganizationCandidates(events, now, status, options));
 
     const providerCandidates = await this.buildProviderCandidates(events, options, now, status);
     candidates.push(...providerCandidates);
@@ -450,7 +482,7 @@ export class DreamCuratorWorker {
       return diagnostic ? [diagnostic] : [];
     }
     this.supersedeProviderWarnings(options.projectId);
-    return this.flattenProviderCandidates(parsed, events, now, status, Boolean(options.sourceEpisodeId));
+    return this.flattenProviderCandidates(parsed, events, now, status, Boolean(options.sourceEpisodeId), options.projectId);
   }
 
   private flattenProviderCandidates(
@@ -459,6 +491,7 @@ export class DreamCuratorWorker {
     now: number,
     status: 'candidate' | 'shadow',
     requireExactEvidence = false,
+    authoritativeProjectId?: string,
   ): Array<Omit<DeepWriteCandidateInput, 'runId'>> {
     const buckets: Array<[string, string, string]> = [
       ['userPreferenceCandidates', 'user_preference', 'user_preference'],
@@ -489,7 +522,11 @@ export class DreamCuratorWorker {
           ? record.evidenceEventIds.map((id) => String(id)).filter(Boolean)
           : [];
 
-        if (requireExactEvidence && (rawEvidenceIds.length === 0 || rawEvidenceIds.includes('all'))) continue;
+        if (requireExactEvidence && (
+          rawEvidenceIds.length === 0
+          || rawEvidenceIds.includes('all')
+          || rawEvidenceIds.some((id) => !validEventIds.has(id))
+        )) continue;
 
         if (isUserOwnedDurableProviderBucket(bucket)) {
           if (rawEvidenceIds.length === 0) continue;
@@ -524,7 +561,10 @@ export class DreamCuratorWorker {
             ...record,
             source: 'llm_dream_curator_candidate',
             governance: 'candidate_only_cpu_governance_required',
-            projectId: typeof record.projectId === 'string' ? record.projectId : events[0]?.projectId,
+            projectId: authoritativeProjectId || events[0]?.projectId,
+            ...(typeof record.projectId === 'string' && record.projectId !== (authoritativeProjectId || events[0]?.projectId)
+              ? { providerProjectIdWarning: record.projectId }
+              : {}),
             candidateBucket: bucket,
           },
           evidence,
@@ -540,6 +580,7 @@ export class DreamCuratorWorker {
     events: MemoryEvent[],
     now: number,
     status: 'candidate' | 'shadow',
+    options: DreamCuratorRunOptions,
   ): Array<Omit<DeepWriteCandidateInput, 'runId'>> {
     const candidates: Array<Omit<DeepWriteCandidateInput, 'runId'>> = [];
     const readable = events.filter((event) => eventText(event).trim());
@@ -600,7 +641,11 @@ export class DreamCuratorWorker {
       const current = readable[index];
       const next = readable[index + 1];
 
-      if (current.sessionId && next.sessionId && current.sessionId !== next.sessionId) continue;
+      if (!current.sessionId || !next.sessionId || current.sessionId !== next.sessionId) continue;
+      if (current.threadId && next.threadId && current.threadId !== next.threadId) continue;
+      if (current.orderingConfidence === 'low' || next.orderingConfidence === 'low') continue;
+      const nextRelation = options.episodeRelations?.find((item) => item.eventId === next.eventId)?.relation;
+      if (nextRelation && ['hard_topic_switch', 'ambiguous_shift', 'starts_new_topic', 'switches_topic'].includes(nextRelation)) continue;
 
       const relation = current.role === 'user' && next.role === 'assistant'
         ? 'answered_by'
@@ -662,8 +707,7 @@ export class DreamCuratorWorker {
     const selected = ids.includes('all')
       ? events
       : events.filter((event) => ids.includes(event.eventId));
-    const fallback = selected.length > 0 ? selected : events.slice(0, 4);
-    return fallback.map((event) => this.toEvidence(event));
+    return selected.map((event) => this.toEvidence(event));
   }
 
   private providerDiagnosticCandidate(
@@ -706,8 +750,21 @@ export class DreamCuratorWorker {
         detail: detailText,
         governance: 'candidate_only_cpu_governance_required',
         recommendation: 'Check [memory_model] provider configuration and rerun cogmem dream retry followed by cogmem dream tick.',
+        evidenceAuthority: 'system_diagnostic_only',
       },
-      evidence: events.slice(0, 4).map((event) => this.toEvidence(event)),
+      evidence: [{
+        eventId: `system-diagnostic:${hash(`${projectId || 'global'}:${reason}:${detailText}`)}`,
+        role: 'system',
+        rawEventType: 'system_diagnostic',
+        projectId,
+        occurredAt: now,
+        textExcerpt: detailText,
+        sourceAnchor: {
+          eventId: `system-diagnostic:${hash(`${projectId || 'global'}:${reason}:${detailText}`)}`,
+          role: 'system',
+          orderingConfidence: 'high',
+        },
+      }],
       promotionTargetType: 'diagnostic_conclusion',
       createdAt: now,
     };
@@ -807,22 +864,7 @@ function isExplicitCorrectionCandidate(text: string): boolean {
 }
 
 function eventText(event: MemoryEvent): string {
-  const payload = event.payload as { text?: unknown; output?: unknown; title?: unknown };
-  const text = typeof payload.text === 'string'
-    ? payload.text
-    : typeof payload.output === 'string'
-      ? payload.output
-      : typeof payload.title === 'string'
-        ? payload.title
-        : JSON.stringify(event.payload);
-  return stripCogmemControlBlocks(text);
-}
-
-function stripCogmemControlBlocks(text: string): string {
-  return text
-    .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return eventTextForMemory(event);
 }
 
 function summarizeEvents(events: MemoryEvent[]): string {

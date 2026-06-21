@@ -101,7 +101,7 @@ export type BatchProgressEvent =
 interface InstalledBatchProcessorDependencies {
   cursorStore: IngestionCursorStore;
   ingestBatch: (inputs: IngestInput[]) => Promise<Neuron[]>;
-  recordRawEvidence?: (envelope: BatchEpisodeEnvelope) => MemoryEvent | undefined;
+  recordRawEvidence?: (envelope: BatchEpisodeEnvelope) => MemoryEvent | undefined | Promise<MemoryEvent | undefined>;
   runOfflineWindow: (window: BatchConsolidationWindow) => Promise<OfflineConsolidationOutput>;
   onProgress?: (event: BatchProgressEvent) => void;
 }
@@ -199,8 +199,8 @@ export class InstalledBatchProcessor {
           pendingRecords: pending.length
         });
         const envelopes = pending.map((record) => buildEpisodeEnvelope(source, record));
-        const inputs = envelopes.map((item) => {
-          const rawEvent = this.deps.recordRawEvidence?.(item);
+        const inputs = await Promise.all(envelopes.map(async (item) => {
+          const rawEvent = await this.deps.recordRawEvidence?.(item);
           if (!rawEvent) return item.ingestInput;
           const sourceRefs = item.ingestInput.sourceRefs || [];
           const rawRef: MemorySourceRef = {
@@ -226,7 +226,7 @@ export class InstalledBatchProcessor {
             sourceEventId: rawEvent.eventId,
             sourceRefs: [...sourceRefs, rawRef],
           };
-        });
+        }));
         const neurons = await this.deps.ingestBatch(inputs);
         recordsIngested += envelopes.length;
         envelopes.forEach((item, index) => {

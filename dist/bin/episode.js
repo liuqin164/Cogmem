@@ -23,13 +23,18 @@ function parseArgs(argv) {
 }
 function usage() {
     return [
-        'Usage: cogmem episode <append|import|list|get|seal|status|repair> [args]',
+        'Usage: cogmem episode <append|import|list|get|seal|status|repair|split|merge|move-event|reclassify|requeue-dream> [args]',
         '  append --project <id> --session <id> --source-agent <id> --role <role> --text <text>',
-        '  import --project <id> --session <id> --source-agent <id> --format jsonl --file <path> [--seal-batch] [--force-seal] [--chunk-size <n>] [--checkpoint-file <path>] [--resume]',
+        '  import --project <id> --session <id> --source-agent <id> --format jsonl --file <path> [--seal-batch] [--force-seal] [--chunk-size <n>] [--checkpoint-file <path>] [--resume] [--start-line <n>] [--end-line <n>] [--max-lines <n>] [--skip-errors] [--max-errors <n>]',
         '  list|status [--project <id>] [--session <id>] [--json]',
         '  get --episode <id> [--json]',
         '  seal --episode <id> [--mode soft|hard|manual|batch] [--reason <reason>]',
         '  repair [--project <id>] [--since <globalSeq>] [--limit <n>]',
+        '  split --project <id> --episode <id> --events <eventId,eventId>',
+        '  merge --project <id> --source-episode <id> --target-episode <id>',
+        '  move-event --project <id> --event <id> --target-episode <id>',
+        '  reclassify --project <id> --episode <id> [--episode-type <type>] [--topic-path <path>] [--importance <0..1>]',
+        '  requeue-dream --project <id> --episode <id> [--mode micro|normal|deep]',
         'Existing source-specific imports remain: cogmem import-openclaw and cogmem import-hermes.',
     ].join('\n');
 }
@@ -78,6 +83,27 @@ async function main() {
         else if (args.command === 'repair') {
             result = kernel.repairEpisodes({ projectId, sinceGlobalSeq: numberArg(args, 'since'), limit: numberArg(args, 'limit') });
         }
+        else if (args.command === 'split') {
+            result = kernel.repairEpisode({ operation: 'split', projectId: requiredArg(args, 'project'),
+                episodeId: requiredArg(args, 'episode'), eventIds: requiredArg(args, 'events').split(',').map((item) => item.trim()).filter(Boolean) });
+        }
+        else if (args.command === 'merge') {
+            result = kernel.repairEpisode({ operation: 'merge', projectId: requiredArg(args, 'project'),
+                sourceEpisodeId: requiredArg(args, 'source-episode'), targetEpisodeId: requiredArg(args, 'target-episode') });
+        }
+        else if (args.command === 'move-event') {
+            result = kernel.repairEpisode({ operation: 'move-event', projectId: requiredArg(args, 'project'),
+                eventId: requiredArg(args, 'event'), targetEpisodeId: requiredArg(args, 'target-episode') });
+        }
+        else if (args.command === 'reclassify') {
+            result = kernel.repairEpisode({ operation: 'reclassify', projectId: requiredArg(args, 'project'),
+                episodeId: requiredArg(args, 'episode'), episodeType: episodeTypeArg(stringArg(args, 'episode-type')),
+                topicPath: stringArg(args, 'topic-path'), importance: numberArg(args, 'importance') });
+        }
+        else if (args.command === 'requeue-dream') {
+            result = kernel.repairEpisode({ operation: 'requeue-dream', projectId: requiredArg(args, 'project'),
+                episodeId: requiredArg(args, 'episode'), mode: dreamModeArg(stringArg(args, 'mode')) });
+        }
         else {
             throw new Error(usage());
         }
@@ -102,6 +128,11 @@ async function importJsonl(kernel, args) {
         ? JSON.parse(readFileSync(checkpointFile, 'utf8'))
         : {};
     const resumeAfter = Math.max(0, checkpoint.processedLine || 0);
+    const startLine = Math.max(1, Math.trunc(numberArg(args, 'start-line') ?? 1));
+    const endLine = Math.max(startLine, Math.trunc(numberArg(args, 'end-line') ?? Number.MAX_SAFE_INTEGER));
+    const maxLines = Math.max(1, Math.trunc(numberArg(args, 'max-lines') ?? Number.MAX_SAFE_INTEGER));
+    const skipErrors = args['skip-errors'] === true;
+    const maxErrors = Math.max(0, Math.trunc(numberArg(args, 'max-errors') ?? (skipErrors ? 100 : 0)));
     const identities = new Map();
     const getIdentity = (resolvedSessionId) => {
         let identity = identities.get(resolvedSessionId);
@@ -118,46 +149,61 @@ async function importJsonl(kernel, args) {
     let duplicates = 0;
     let processed = 0;
     let lineNumber = 0;
+    let selectedLines = 0;
+    const errors = [];
     const reader = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
     for await (const rawLine of reader) {
         lineNumber += 1;
         if (!rawLine.trim())
             continue;
-        if (lineNumber > 100_000)
-            throw new Error('episode import is limited to 100000 lines per command');
-        const message = JSON.parse(rawLine);
-        const text = typeof message.text === 'string' ? message.text : typeof message.content === 'string' ? message.content : undefined;
-        if (!text)
-            throw new Error(`line ${lineNumber} is missing text/content`);
-        if (text.length > 64_000)
-            throw new Error(`line ${lineNumber} exceeds the 64000 character CLI message limit`);
-        const resolvedSessionId = typeof message.sessionId === 'string' ? message.sessionId : sessionId;
-        const role = roleValue(message.role);
-        const timestamp = timeValue(message.timestamp);
-        const externalMessageId = typeof message.externalMessageId === 'string'
-            ? message.externalMessageId
-            : typeof message.id === 'string'
-                ? message.id
-                : getIdentity(resolvedSessionId)({ role, text, timestamp });
-        // Rebuild occurrence counters while streaming past the checkpoint. This
-        // keeps generated IDs stable when identical messages straddle a resume.
-        if (lineNumber <= resumeAfter)
-            continue;
-        const result = kernel.appendEpisodeMessage({
-            projectId, sourceAgent, sessionId: resolvedSessionId, role, text, timestamp,
-            externalMessageId,
-            metadata: { imported: true, importFormat: format },
-        });
-        processed += 1;
-        result.created ? imported += 1 : duplicates += 1;
-        if (result.episodeId)
-            episodeIds.add(result.episodeId);
-        if (!result.assigned && !result.ignored)
-            unassignedEventIds.push(result.eventId);
-        if (result.ignored)
-            ignoredEventIds.push(result.eventId);
-        if (processed % chunkSize === 0)
-            writeCheckpoint(checkpointFile, { processedLine: lineNumber, processed, projectId, sourceAgent, sessionId });
+        if (lineNumber > endLine || selectedLines >= maxLines)
+            break;
+        try {
+            const message = JSON.parse(rawLine);
+            const text = typeof message.text === 'string' ? message.text : typeof message.content === 'string' ? message.content : undefined;
+            if (!text)
+                throw new Error(`line ${lineNumber} is missing text/content`);
+            if (text.length > 64_000)
+                throw new Error(`line ${lineNumber} exceeds the 64000 character CLI message limit`);
+            const resolvedSessionId = typeof message.sessionId === 'string' ? message.sessionId : sessionId;
+            const role = roleValue(message.role);
+            const timestamp = timeValue(message.timestamp);
+            const externalMessageId = typeof message.externalMessageId === 'string'
+                ? message.externalMessageId
+                : typeof message.id === 'string'
+                    ? message.id
+                    : getIdentity(resolvedSessionId)({ role, text, timestamp });
+            // Rebuild occurrence counters while streaming past the checkpoint/start line.
+            if (lineNumber <= resumeAfter || lineNumber < startLine)
+                continue;
+            selectedLines += 1;
+            const result = await kernel.appendEpisodeMessageAsync({
+                projectId, sourceAgent, sessionId: resolvedSessionId, role, text, timestamp,
+                externalMessageId,
+                metadata: { imported: true, importFormat: format },
+            });
+            processed += 1;
+            result.created ? imported += 1 : duplicates += 1;
+            if (result.episodeId)
+                episodeIds.add(result.episodeId);
+            if (!result.assigned && !result.ignored)
+                unassignedEventIds.push(result.eventId);
+            if (result.ignored)
+                ignoredEventIds.push(result.eventId);
+            if (processed % chunkSize === 0)
+                writeCheckpoint(checkpointFile, { processedLine: lineNumber, lastProcessedLine: lineNumber, processed, projectId, sourceAgent, sessionId });
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            errors.push({ line: lineNumber, error: message });
+            writeCheckpoint(checkpointFile, {
+                failedAtLine: lineNumber, error: message, resumeFrom: lineNumber,
+                lastProcessedLine: Math.max(resumeAfter, lineNumber - 1), processedLine: Math.max(resumeAfter, lineNumber - 1),
+                processed, projectId, sourceAgent, sessionId,
+            });
+            if (!skipErrors || errors.length > maxErrors)
+                throw error;
+        }
     }
     writeCheckpoint(checkpointFile, { processedLine: lineNumber, processed, projectId, sourceAgent, sessionId, completed: true });
     const closureReceipts = args['seal-batch'] === true
@@ -165,7 +211,7 @@ async function importJsonl(kernel, args) {
         : [];
     return {
         importId: `episode-import:${sourceAgent}:${sessionId}`,
-        imported, duplicates, processed, resumeFrom: lineNumber + 1, checkpointFile,
+        imported, duplicates, processed, errors, resumeFrom: lineNumber + 1, checkpointFile,
         episodeIds: [...episodeIds], unassignedEventIds, ignoredEventIds, closureReceipts, dreamRan: false,
     };
 }
@@ -192,6 +238,20 @@ function closureModeArg(value) {
     if (value === 'soft' || value === 'hard' || value === 'manual' || value === 'batch')
         return value;
     throw new Error('mode must be soft, hard, manual, or batch');
+}
+function dreamModeArg(value) {
+    if (!value)
+        return 'normal';
+    if (value === 'micro' || value === 'normal' || value === 'deep')
+        return value;
+    throw new Error('mode must be micro, normal, or deep');
+}
+function episodeTypeArg(value) {
+    if (!value)
+        return undefined;
+    if (['discussion', 'decision', 'correction', 'preference', 'goal', 'debugging', 'planning', 'prospective', 'general'].includes(value))
+        return value;
+    throw new Error('invalid episode type');
 }
 function timeValue(value) {
     if (typeof value === 'number' && Number.isFinite(value))

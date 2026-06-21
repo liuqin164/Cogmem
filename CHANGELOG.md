@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.5.2
+
+- Added the user-shaped Memory Ontology and project-scoped topic path, alias, relation, and governance registries. Explicit user operations are active, audited, and reversible; model proposals stay candidates and alias collisions fail closed for review.
+- Wired advisory hybrid classification into asynchronous assembly/import paths while preserving the CPU-only foreground hook. Unknown turns now default to ambiguous review, reviewer fields are allow-listed, assistant context distinguishes proposal acceptance from question/fact answers, and unsafe soft-seal reopen paths are blocked.
+- Hardened episode Dream evidence and ownership: invalid provider evidence is rejected without fallback, CPU project scope wins, assistant-only decisions and orphan corrections require confirmation, proposal confirmation uses bounded same-thread history, and summaries remain non-evidence hints.
+- Added per-job Dream modes, deep recommendations, persisted per-episode failure diagnostics, multi-action episode status, and hookless recall freshness warnings.
+- Added resumable CLI/MCP import diagnostics, ingest-key lifecycle state, source-agent identity validation, and unified asynchronous episode assembly for source imports.
+- Added audited episode split, merge, move-event, reclassify, and Dream requeue/invalidation surgery with closure recomputation, cross-references, stale-candidate invalidation, and Dream requeue.
+- Added shared malformed `COGMEM_*` block stripping, payload text allow-listing, schema migration 24/parity coverage, new BrainEval reliability gates, OpenClaw plugin 0.5.0, and updated OpenClaw/Hermes agent skills.
+
 ## 3.5.1
 
 - Hardened Episode classification with previous assistant/user context, explicit assistant-side relations, confidence and audit signals, safe subtopic/ambiguous/hard switch handling, and an advisory-only hybrid review API that cannot write memory.

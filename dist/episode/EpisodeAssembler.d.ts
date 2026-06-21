@@ -1,4 +1,5 @@
 import type { MemoryEvent } from '../types/index.js';
+import { type TurnClassificationContext, type TurnRelationAdvisoryReviewer } from './TurnRelationClassifier.js';
 import type { EpisodeClosureReceipt, MemoryEpisode } from './EpisodeTypes.js';
 import { EpisodeStore } from './EpisodeStore.js';
 export interface EpisodeAssemblyResult {
@@ -13,7 +14,9 @@ export declare class EpisodeAssembler {
     private readonly store;
     private readonly resolveEvent?;
     private readonly softReopenWindowMs;
-    constructor(store: EpisodeStore, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, softReopenWindowMs?: number);
+    private readonly reviewer?;
+    private readonly resolveTopicContext?;
+    constructor(store: EpisodeStore, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, softReopenWindowMs?: number, reviewer?: TurnRelationAdvisoryReviewer | undefined, resolveTopicContext?: ((primary: MemoryEvent, episode?: MemoryEpisode) => Partial<TurnClassificationContext>) | undefined);
     appendTurn(events: MemoryEvent[], input: {
         projectId: string;
         sessionId: string;
@@ -23,12 +26,28 @@ export declare class EpisodeAssembler {
         batchSeal?: boolean;
         forceBatchSeal?: boolean;
     }): EpisodeAssemblyResult;
+    appendTurnAsync(events: MemoryEvent[], input: {
+        projectId: string;
+        sessionId: string;
+        sourceAgent?: string;
+        conversationThreadId?: string;
+        now?: number;
+        batchSeal?: boolean;
+        forceBatchSeal?: boolean;
+    }): Promise<EpisodeAssemblyResult>;
+    private appendTurnClassified;
     appendEvent(event: MemoryEvent, input: {
         projectId: string;
         sessionId: string;
         sourceAgent?: string;
         now?: number;
     }): EpisodeAssemblyResult;
+    appendEventAsync(event: MemoryEvent, input: {
+        projectId: string;
+        sessionId: string;
+        sourceAgent?: string;
+        now?: number;
+    }): Promise<EpisodeAssemblyResult>;
     private classificationContext;
     private classifyPrimary;
 }

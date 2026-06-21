@@ -5,7 +5,7 @@ export type EpisodeClosureMode = 'soft' | 'hard' | 'manual' | 'batch';
 export type EpisodeClosureReasonCode = 'explicit_user_closure' | 'topic_switch' | 'batch_boundary' | 'idle_timeout' | 'manual' | 'soft_seal_stabilized' | 'repair';
 export type EpisodeType = 'discussion' | 'decision' | 'correction' | 'preference' | 'goal' | 'debugging' | 'planning' | 'prospective' | 'general';
 export type EpisodeCandidateType = 'belief' | 'entity' | 'temporal' | 'prospective' | 'correction' | 'preference' | 'goal' | 'decision';
-export type TurnRelation = 'continues_previous' | 'clarifies_previous' | 'corrects_previous' | 'answers_assistant_question' | 'accepts_assistant_proposal' | 'rejects_assistant_proposal' | 'assistant_response' | 'assistant_proposal' | 'assistant_summary' | 'assistant_question' | 'assistant_clarification' | 'tool_result_context' | 'hard_topic_switch' | 'subtopic_shift' | 'ambiguous_shift' | 'switches_topic' | 'starts_new_topic' | 'returns_to_old_topic' | 'confirms_future_intent' | 'closes_episode' | 'noise';
+export type TurnRelation = 'continues_previous' | 'clarifies_previous' | 'corrects_previous' | 'answers_assistant_question' | 'confirms_assistant_fact' | 'accepts_assistant_proposal' | 'rejects_assistant_proposal' | 'assistant_response' | 'assistant_proposal' | 'assistant_summary' | 'assistant_question' | 'assistant_clarification' | 'tool_result_context' | 'hard_topic_switch' | 'subtopic_shift' | 'ambiguous_shift' | 'switches_topic' | 'starts_new_topic' | 'returns_to_old_topic' | 'confirms_future_intent' | 'closes_episode' | 'noise';
 export interface MemoryEpisode {
     episodeId: string;
     projectId: string;

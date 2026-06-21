@@ -167,7 +167,7 @@ async function runAgentImport(input: {
         window,
       })
     : reindexRaw
-      ? reindexRawSources({
+      ? await reindexRawSources({
           agent: input.agent,
           args: input.args,
           workspaceRoot: input.workspaceRoot,
@@ -261,8 +261,8 @@ async function importSources(input: {
       for (const item of items) neurons.push(await opened.kernel.ingest(item));
       return neurons;
     },
-    recordRawEvidence: (envelope) => {
-      const anchored = recordRawImportedEvidence(opened.kernel, input.projectId, envelope);
+    recordRawEvidence: async (envelope) => {
+      const anchored = await recordRawImportedEvidence(opened.kernel, input.projectId, envelope);
       if (anchored.episodeId) importedEpisodeIds.add(anchored.episodeId);
       return anchored.event;
     },
@@ -319,14 +319,14 @@ async function importSources(input: {
   }
 }
 
-function reindexRawSources(input: {
+async function reindexRawSources(input: {
   agent: AgentKind;
   args: ParsedArgs;
   workspaceRoot: string;
   projectId: string;
   sources: SourceDefinition[];
   window: AgentImportResult['window'];
-}): AgentImportResult {
+}): Promise<AgentImportResult> {
   const opened = openKernel(input.args, input.workspaceRoot);
   const loader = new MarkdownSourceLoader();
   const adapters = buildAdapterMap();
@@ -350,7 +350,7 @@ function reindexRawSources(input: {
       let sourceSkipped = 0;
       for (const record of adapted.records) {
         const envelope = buildEpisodeEnvelope(source, record);
-        const anchored = recordRawImportedEvidence(opened.kernel, input.projectId, envelope);
+        const anchored = await recordRawImportedEvidence(opened.kernel, input.projectId, envelope);
         if (anchored.episodeId) importedEpisodeIds.add(anchored.episodeId);
         if (anchored.created) {
           sourceAnchored += 1;
@@ -404,11 +404,11 @@ function reindexRawSources(input: {
   }
 }
 
-function recordRawImportedEvidence(
+async function recordRawImportedEvidence(
   kernel: MemoryKernel,
   projectId: string,
   envelope: BatchEpisodeEnvelope,
-): { event: ReturnType<MemoryKernel['recordRawEvent']>; created: boolean; episodeId?: string } {
+): Promise<{ event: ReturnType<MemoryKernel['recordRawEvent']>; created: boolean; episodeId?: string }> {
   const sourceRef = envelope.ingestInput.sourceRefs?.[0];
   const record = envelope.record;
   const metadata = record.metadata || {};
@@ -444,7 +444,7 @@ function recordRawImportedEvidence(
   if (existing) {
     let link = kernel.episodeStore.getEventLink(existing.eventId);
     if (!link && !kernel.episodeStore.hasEventDisposition(existing.eventId)) {
-      kernel.assembleEpisodeTurn([existing], {
+      await kernel.assembleEpisodeTurnAsync([existing], {
         projectId,
         sessionId,
         sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
@@ -479,13 +479,14 @@ function recordRawImportedEvidence(
       importAnchor,
       sourcePath: record.provenance.sourcePath,
       sourceType: record.provenance.sourceType,
+      sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
       adapterVersion: record.provenance.adapterVersion,
       reliabilityClass: record.provenance.reliabilityClass,
       sourceRef,
       tags: envelope.ingestInput.tags || [],
     },
   });
-  const assembly = kernel.assembleEpisodeTurn([event], {
+  const assembly = await kernel.assembleEpisodeTurnAsync([event], {
     projectId,
     sessionId,
     sourceAgent: record.provenance.sourceType || record.provenance.sourceId,

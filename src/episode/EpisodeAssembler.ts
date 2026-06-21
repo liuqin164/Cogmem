@@ -1,5 +1,6 @@
 import type { MemoryEvent } from '../types/index.js';
-import { classifyAssistantRelation, classifyTurnRelation, type TurnClassificationContext, type TurnRelationDecision } from './TurnRelationClassifier.js';
+import { eventTextForMemory } from './CogmemBlockStripper.js';
+import { classifyAssistantRelation, classifyTurnRelation, classifyTurnRelationHybrid, type TurnClassificationContext, type TurnRelationAdvisoryReviewer, type TurnRelationDecision } from './TurnRelationClassifier.js';
 import type { EpisodeClosureReceipt, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
 import { EpisodeStore } from './EpisodeStore.js';
 
@@ -17,6 +18,8 @@ export class EpisodeAssembler {
     private readonly store: EpisodeStore,
     private readonly resolveEvent?: (eventId: string) => MemoryEvent | null | undefined,
     private readonly softReopenWindowMs = 30 * 60_000,
+    private readonly reviewer?: TurnRelationAdvisoryReviewer,
+    private readonly resolveTopicContext?: (primary: MemoryEvent, episode?: MemoryEpisode) => Partial<TurnClassificationContext>,
   ) {}
 
   appendTurn(events: MemoryEvent[], input: {
@@ -28,6 +31,38 @@ export class EpisodeAssembler {
     batchSeal?: boolean;
     forceBatchSeal?: boolean;
   }): EpisodeAssemblyResult {
+    return this.appendTurnClassified(events, input);
+  }
+
+  async appendTurnAsync(events: MemoryEvent[], input: {
+    projectId: string;
+    sessionId: string;
+    sourceAgent?: string;
+    conversationThreadId?: string;
+    now?: number;
+    batchSeal?: boolean;
+    forceBatchSeal?: boolean;
+  }): Promise<EpisodeAssemblyResult> {
+    const ordered = [...events].sort((a, b) => (a.eventOrdinal || 0) - (b.eventOrdinal || 0));
+    if (!ordered.length) return { assignedEventIds: [], unassignedEventIds: [], ignoredEventIds: [], reopened: false };
+    const primary = ordered.find((event) => event.role === 'user') || ordered[0];
+    const threadId = input.conversationThreadId || primary.threadId || input.sessionId;
+    const episode = this.store.findActiveEpisode(input.projectId, input.sessionId, input.sourceAgent, threadId);
+    const decision = primary.role === 'user'
+      ? await classifyTurnRelationHybrid(this.classificationContext(primary, episode, ordered), this.reviewer)
+      : this.classifyPrimary(primary, episode, ordered);
+    return this.appendTurnClassified(ordered, input, decision);
+  }
+
+  private appendTurnClassified(events: MemoryEvent[], input: {
+    projectId: string;
+    sessionId: string;
+    sourceAgent?: string;
+    conversationThreadId?: string;
+    now?: number;
+    batchSeal?: boolean;
+    forceBatchSeal?: boolean;
+  }, decisionOverride?: TurnRelationDecision): EpisodeAssemblyResult {
     const ordered = [...events].sort((a, b) => (a.eventOrdinal || 0) - (b.eventOrdinal || 0));
     if (!ordered.length) return { assignedEventIds: [], unassignedEventIds: [], ignoredEventIds: [], reopened: false };
     const mismatched = ordered.find((event) => event.projectId && event.projectId !== input.projectId);
@@ -35,13 +70,16 @@ export class EpisodeAssembler {
     const primary = ordered.find((event) => event.role === 'user') || ordered[0];
     const conversationThreadId = input.conversationThreadId || primary.threadId || input.sessionId;
     let episode = this.store.findActiveEpisode(input.projectId, input.sessionId, input.sourceAgent, conversationThreadId);
+    let legacyLinkedEpisodeId: string | undefined;
     if (episode && !episode.sourceAgent && !episode.conversationThreadId) {
-      episode = this.store.claimLegacyEpisodeScope(episode.episodeId, input.sourceAgent, conversationThreadId);
+      const legacyEpisodeId = episode.episodeId;
+      episode = this.store.claimLegacyEpisodeScope(legacyEpisodeId, input.sourceAgent, conversationThreadId);
+      if (!episode) legacyLinkedEpisodeId = legacyEpisodeId;
     }
-    const decision = this.classifyPrimary(primary, episode);
+    const decision = decisionOverride ?? this.classifyPrimary(primary, episode, ordered);
     let reopened = false;
     let closureReceipt: EpisodeClosureReceipt | undefined;
-    let linkedEpisodeId: string | undefined;
+    let linkedEpisodeId: string | undefined = legacyLinkedEpisodeId;
     const now = input.now ?? Math.max(...ordered.map((event) => event.occurredAt || Date.now()));
 
     if (decision.relation === 'noise') {
@@ -53,7 +91,7 @@ export class EpisodeAssembler {
       return { assignedEventIds: [], unassignedEventIds: [], ignoredEventIds: ordered.map((event) => event.eventId), reopened: false };
     }
 
-    if (episode?.status === 'open' && decision.relation === 'hard_topic_switch') {
+    if (episode?.status === 'open' && ['hard_topic_switch', 'starts_new_topic', 'switches_topic'].includes(decision.relation)) {
       closureReceipt = this.store.sealEpisode(episode.episodeId, {
         mode: 'hard', reason: 'explicit_topic_switch', reasonCode: 'topic_switch', now,
       });
@@ -68,8 +106,10 @@ export class EpisodeAssembler {
     }
 
     if (episode?.status === 'soft_sealed') {
-      const mayReopen = decision.relation !== 'starts_new_topic'
-        && decision.relation !== 'switches_topic'
+      const mayReopen = new Set<TurnRelation>([
+        'continues_previous', 'clarifies_previous', 'corrects_previous', 'returns_to_old_topic',
+        'answers_assistant_question', 'accepts_assistant_proposal', 'rejects_assistant_proposal', 'confirms_assistant_fact',
+      ]).has(decision.relation)
         && now - (episode.sealedAt || episode.updatedAt) <= this.softReopenWindowMs;
       if (mayReopen) {
         episode = this.store.reopenSoftEpisode(episode.episodeId, now);
@@ -82,11 +122,12 @@ export class EpisodeAssembler {
       episode = this.store.createEpisode({
         projectId: input.projectId, sessionId: input.sessionId, sourceAgent: input.sourceAgent,
         conversationThreadId,
+        topicPath: decision.topicPath,
         episodeType: decision.episodeType, importance: decision.importance,
         eventId: primary.eventId, globalSeq: primary.globalSeq, occurredAt: primary.occurredAt || now,
         episodeTags: [decision.episodeType, ...decision.candidateTypes],
         candidateTypes: decision.candidateTypes,
-        importanceSignals: decision.signals,
+        importanceSignals: decision.importanceSignals,
         importanceReason: decision.rationale,
         linkedEpisodeId,
       });
@@ -108,7 +149,7 @@ export class EpisodeAssembler {
         episodeType: decision.episodeType, importance: decision.importance,
         summaryText: summaryLine(event),
         candidateTypes: decision.candidateTypes,
-        importanceSignals: decision.signals,
+        importanceSignals: decision.importanceSignals,
         importanceReason: decision.rationale,
       });
       assignedEventIds.push(event.eventId);
@@ -122,7 +163,9 @@ export class EpisodeAssembler {
         reasonCode: 'batch_boundary', requiresReview, now,
       });
     } else if (decision.relation === 'closes_episode') {
-      closureReceipt = this.store.sealEpisode(episode.episodeId, { mode: 'hard', reason: 'explicit_user_closure', now });
+      closureReceipt = this.store.sealEpisode(episode.episodeId, {
+        mode: 'hard', reason: 'explicit_user_closure', reasonCode: 'explicit_user_closure', now,
+      });
     }
     return { episode: this.store.getEpisode(episode.episodeId), assignedEventIds, unassignedEventIds: [], ignoredEventIds: [], closureReceipt, reopened };
   }
@@ -135,12 +178,24 @@ export class EpisodeAssembler {
     return this.appendTurn([event], input);
   }
 
-  private classificationContext(primary: MemoryEvent, episode?: MemoryEpisode): TurnClassificationContext {
+  async appendEventAsync(event: MemoryEvent, input: { projectId: string; sessionId: string; sourceAgent?: string; now?: number }): Promise<EpisodeAssemblyResult> {
+    const active = this.store.findActiveEpisode(input.projectId, input.sessionId, input.sourceAgent, event.threadId || input.sessionId);
+    if (!active && event.role !== 'user') {
+      return { assignedEventIds: [], unassignedEventIds: [event.eventId], ignoredEventIds: [], reopened: false };
+    }
+    return this.appendTurnAsync([event], input);
+  }
+
+  private classificationContext(primary: MemoryEvent, episode?: MemoryEpisode, currentEvents: MemoryEvent[] = []): TurnClassificationContext {
     const context: TurnClassificationContext = {
       currentUserText: eventText(primary),
       activeEpisodeSummary: episode?.semanticSummary?.userPosition || episode?.summary,
       activeEpisodeTopicPath: episode?.topicPath,
+      currentAssistantText: currentEvents.find((event) => event.role === 'assistant' || event.role === 'agent')
+        ? eventText(currentEvents.find((event) => event.role === 'assistant' || event.role === 'agent')!)
+        : undefined,
     };
+    Object.assign(context, this.resolveTopicContext?.(primary, episode) || {});
     if (!episode || !this.resolveEvent) return context;
     const prior = this.store.listEventLinks(episode.episodeId)
       .map((link) => this.resolveEvent!(link.eventId))
@@ -153,8 +208,8 @@ export class EpisodeAssembler {
     return context;
   }
 
-  private classifyPrimary(primary: MemoryEvent, episode?: MemoryEpisode): TurnRelationDecision {
-    if (primary.role === 'user') return classifyTurnRelation(this.classificationContext(primary, episode));
+  private classifyPrimary(primary: MemoryEvent, episode?: MemoryEpisode, currentEvents: MemoryEvent[] = []): TurnRelationDecision {
+    if (primary.role === 'user') return classifyTurnRelation(this.classificationContext(primary, episode, currentEvents));
     return {
       relation: classifyAssistantRelation(eventText(primary), primary.role || 'assistant'),
       confidence: 0.9,
@@ -164,19 +219,14 @@ export class EpisodeAssembler {
       closureCandidate: false,
       episodeType: 'discussion',
       importance: 0.3,
+      importanceSignals: ['non_user_context_only'],
       rationale: 'non_user_event_requires_later_user_evidence',
     };
   }
 }
 
 function eventText(event: MemoryEvent): string {
-  const payload = event.payload as { text?: unknown } | undefined;
-  return typeof payload?.text === 'string'
-    ? payload.text
-      .replace(/<(COGMEM_RECALL_CONTEXT|COGMEM_TURN_BRIDGE|COGMEM_SESSION_STATE|COGMEM_STRATEGY_CONTEXT)\b[\s\S]*?<\/\1>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-    : '';
+  return eventTextForMemory(event);
 }
 
 function summaryLine(event: MemoryEvent): string {

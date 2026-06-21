@@ -24,6 +24,7 @@ export type TurnRelation =
   | 'clarifies_previous'
   | 'corrects_previous'
   | 'answers_assistant_question'
+  | 'confirms_assistant_fact'
   | 'accepts_assistant_proposal'
   | 'rejects_assistant_proposal'
   | 'assistant_response'

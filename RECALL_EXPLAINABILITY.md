@@ -54,6 +54,8 @@ For non-trivial recall, OpenClaw may prepend `<COGMEM_STRATEGY_CONTEXT>` before 
 
 MCP `cogmem_recall` now uses this same agent-facing path. It returns `items` with `sourceType`, `sourceAnchor`, `sourceContext`, `canAnswerExactQuote`, and raw ledger fallback when governed compiled evidence is empty. If a host sends only `projectId`, MCP uses that value as `agentId` before falling back to `openclaw`. Hosts may also pass `collection`.
 
+Hookless hosts must also inspect recall warning metadata. `no_recent_episode_ingestion_detected` means Cogmem has not observed recent conversation traffic; `semantic_memory_may_lag` means open/soft-sealed high-value episodes, Dream backlog/failures, or recent raw evidence have not completed semantic curation. These warnings do not erase returned evidence, but the agent must append/import the missing messages or disclose that semantic freshness is uncertain before claiming memory is current.
+
 For past-memory queries such as `你还记得...`, a cue-matching raw user anchor outranks a compiled assistant retelling even when both contain the same topic words. The assistant retelling may remain as supporting evidence, but the original user event is first and retains its source locator.
 
 MCP `cogmem_explain_recall` is the audit tool. Like normal MCP recall, it derives `agentId` from `projectId` when the caller omits `agentId`. It reports the same selected evidence IDs and `decisionTrace` as agent recall, plus pulse, temporal, activation, and `filteredEvidence` details from `explainRecallWithKernel()`; use it to inspect why evidence was included or suppressed, not as a separate competing recall implementation.
@@ -93,7 +95,7 @@ Each candidate includes:
 
 Candidates explain organization, not truth. A preference candidate can show that the user explicitly said a constraint, but it is still queued for governance. A tool-result causal candidate can show that one tool result belongs to a tool call, but it must not become a verified real-world fact merely because the tool returned text.
 
-An explicit user clarification may produce an organizational `correction` candidate. It does not automatically produce a contradiction or rewrite a belief. Assistant apologies/self-corrections and negative-form user questions are not sufficient user-owned correction evidence. A model-proposed conflict requires at least two distinct exact event IDs from the current sealed episode; `["all"]` and unknown IDs are rejected. Invalid memory-model output is retained as a rejected diagnostic rather than a `needs_confirmation` item.
+An explicit user clarification may produce an organizational `correction` candidate. It does not automatically produce a contradiction or rewrite a belief. `CorrectionResolver` must bind it to an active same-project claim/belief; orphan or ambiguous corrections stay `needs_confirmation` with `orphan_correction_requires_target_review`. Assistant apologies/self-corrections and negative-form user questions are not sufficient user-owned correction evidence. A provider candidate must cite exact current episode event IDs; `["all"]`, unknown IDs, and fallback to unrelated leading events are rejected. Provider project labels cannot override CPU-owned project scope.
 
 Semantic organization candidates are also advisory. `semantic_tags` and `indexing_decision` can make future recall less brittle than full-sentence matching, while `semantic_relation` and `edge_adjustment` can propose local graph activation changes. They do not rewrite existing memories or promote facts by themselves.
 
