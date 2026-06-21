@@ -91,7 +91,7 @@ async function runAgentImport(input) {
             window,
         })
         : reindexRaw
-            ? reindexRawSources({
+            ? await reindexRawSources({
                 agent: input.agent,
                 args: input.args,
                 workspaceRoot: input.workspaceRoot,
@@ -168,8 +168,8 @@ async function importSources(input) {
                 neurons.push(await opened.kernel.ingest(item));
             return neurons;
         },
-        recordRawEvidence: (envelope) => {
-            const anchored = recordRawImportedEvidence(opened.kernel, input.projectId, envelope);
+        recordRawEvidence: async (envelope) => {
+            const anchored = await recordRawImportedEvidence(opened.kernel, input.projectId, envelope);
             if (anchored.episodeId)
                 importedEpisodeIds.add(anchored.episodeId);
             return anchored.event;
@@ -226,7 +226,7 @@ async function importSources(input) {
         opened.kernel.close();
     }
 }
-function reindexRawSources(input) {
+async function reindexRawSources(input) {
     const opened = openKernel(input.args, input.workspaceRoot);
     const loader = new MarkdownSourceLoader();
     const adapters = buildAdapterMap();
@@ -250,7 +250,7 @@ function reindexRawSources(input) {
             let sourceSkipped = 0;
             for (const record of adapted.records) {
                 const envelope = buildEpisodeEnvelope(source, record);
-                const anchored = recordRawImportedEvidence(opened.kernel, input.projectId, envelope);
+                const anchored = await recordRawImportedEvidence(opened.kernel, input.projectId, envelope);
                 if (anchored.episodeId)
                     importedEpisodeIds.add(anchored.episodeId);
                 if (anchored.created) {
@@ -306,7 +306,7 @@ function reindexRawSources(input) {
         opened.kernel.close();
     }
 }
-function recordRawImportedEvidence(kernel, projectId, envelope) {
+async function recordRawImportedEvidence(kernel, projectId, envelope) {
     const sourceRef = envelope.ingestInput.sourceRefs?.[0];
     const record = envelope.record;
     const metadata = record.metadata || {};
@@ -342,7 +342,7 @@ function recordRawImportedEvidence(kernel, projectId, envelope) {
     if (existing) {
         let link = kernel.episodeStore.getEventLink(existing.eventId);
         if (!link && !kernel.episodeStore.hasEventDisposition(existing.eventId)) {
-            kernel.assembleEpisodeTurn([existing], {
+            await kernel.assembleEpisodeTurnAsync([existing], {
                 projectId,
                 sessionId,
                 sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
@@ -376,13 +376,14 @@ function recordRawImportedEvidence(kernel, projectId, envelope) {
             importAnchor,
             sourcePath: record.provenance.sourcePath,
             sourceType: record.provenance.sourceType,
+            sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
             adapterVersion: record.provenance.adapterVersion,
             reliabilityClass: record.provenance.reliabilityClass,
             sourceRef,
             tags: envelope.ingestInput.tags || [],
         },
     });
-    const assembly = kernel.assembleEpisodeTurn([event], {
+    const assembly = await kernel.assembleEpisodeTurnAsync([event], {
         projectId,
         sessionId,
         sourceAgent: record.provenance.sourceType || record.provenance.sourceId,

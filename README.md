@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.5.1`
+Current version: `3.5.2`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -78,6 +78,9 @@ Metadata / FTS Index
 
 Memory Binding
   CPU-canonicalized raw-event bindings to stable entity/topic paths, claim-key clusters, and activation-aware graph edges for source-anchored organization before fact promotion.
+
+User-Shaped Topic Ontology
+  A stable memory-class skeleton plus project-scoped topic names, aliases, parent paths, relations, and reversible audit operations learned from explicit user language.
 
 Episode Assembler
   Deterministic, session-scoped grouping of raw messages into auditable open, soft-sealed, and sealed conversation episodes.
@@ -161,7 +164,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#3.5.1"
+bun add "cogmem@github:liuqin164/cogmem#3.5.2"
 bunx cogmem init
 ```
 
@@ -200,9 +203,13 @@ For a host timer, call `dream tick`; the timer only wakes the scheduler. An empt
 cogmem dream tick --project my-agent --mode auto --max-episodes 10 --json
 ```
 
-Raw events are always written first. `KernelAgentMemoryBackend` and the OpenClaw plugin assemble live turns automatically. The classifier uses deterministic rules and previous assistant/user context in the foreground; ambiguous or high-value classifications may be reviewed asynchronously by an advisory model, but model output cannot mutate memory. Same-project subtopic shifts stay together, cross-domain switches hard-seal, and ambiguous switches create reviewable soft links.
+Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.5.0 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
 
 Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands use stable content identities and the same episode schema. Low-confidence imported groups soft-seal for review unless an operator explicitly forces sealing. Episode semantic summaries and closure receipts are control hints, never durable evidence; every Dream candidate must cite a non-empty subset of the episode's raw event IDs and still pass CPU governance.
+
+User-shaped topic state is project-scoped. Explicit user operations become active and auditable; model-proposed topics, aliases, and relations remain candidates. Use MCP `cogmem_topic_list` to inspect nodes, `cogmem_topic_operate` to create, rename, alias, move, merge, split, or relate topics, and `cogmem_topic_rollback` to reverse an audited operation. Alias collisions fail closed as `needs_review`; applications can also call `TopicGovernance.rollback()` through the public API.
+
+Episode surgery is available through `cogmem episode split|merge|move-event|reclassify|requeue-dream` or MCP `cogmem_episode_repair`. Structural repair recomputes closure receipts, invalidates candidates derived from the old episode boundary, preserves cross-references, requeues eligible sealed episodes, and writes an audit record.
 
 Inspect queue state:
 
@@ -243,7 +250,7 @@ cogmem strategy plan --project hermes --query "我当时的原话是什么？" -
 cogmem strategy outcomes --project hermes --json
 ```
 
-OpenClaw plugin 0.4.1 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Its queued `agent_end` write stores Raw Ledger evidence and updates the Episode Assembler without running Dream in the response path. Episode assembly uses assistant context for short replies such as confirmations and corrections. It records a read-only context outcome after the turn for offline evaluation; the judge cannot mutate belief, entity, temporal, prospective, or episode memory.
+OpenClaw plugin 0.5.0 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Its queued `agent_end` write stores Raw Ledger evidence and updates the Episode Assembler through the CPU-only foreground path without running Dream. Episode assembly uses assistant context for short replies such as confirmations, factual answers, and corrections. It records a read-only context outcome after the turn for offline evaluation; the judge cannot mutate belief, entity, temporal, prospective, topic, or episode memory.
 
 `ProspectiveMemoryService` stores future intentions, commitments, reminders, open loops, and plans as candidates only. A candidate is not actionable until an explicit user event confirms it. Rejected candidates stay suppressed unless genuinely new evidence creates a new version. The service and `cogmem prospective` CLI manage state only; they expose no task or tool execution capability.
 
@@ -413,7 +420,9 @@ Hermes can call the MCP recall tool directly:
 
 For Hermes sessions without lifecycle hooks, use `cogmem_episode_append` with a required stable `externalMessageId` for one message or `cogmem_episode_import` for a bounded batch. These tools only write Raw Ledger and episode metadata. They never run Dream. Inspect with `cogmem_episode_status`, seal explicitly with `cogmem_episode_seal`, and call MCP `cogmem_dream_tick` with `maintenanceMode: true` only during idle upkeep or an explicit user/admin maintenance request. Without that flag it returns a recommendation-only dry run.
 
-`externalMessageId` is idempotent inside `(projectId, sourceAgent, sessionId)`. Reusing the same ID with different role/text is rejected instead of silently replacing evidence. Deterministic noise remains in Raw Ledger and is returned as `ignoredEventIds`, not as repairable `unassignedEventIds`.
+`externalMessageId` is idempotent inside `(projectId, sourceAgent, sessionId)`. Reusing the same ID with different role, text, or `sourceAgent` metadata is rejected instead of silently replacing evidence. A bounded MCP batch that omits IDs returns `auto_identity_not_safe_across_split_batches`; do not split and retry such a batch without assigning stable IDs. Import results include per-message checkpoints. Deterministic noise remains in Raw Ledger and is returned as `ignoredEventIds`, not as repairable `unassignedEventIds`.
+
+If recall reports `no_recent_episode_ingestion_detected` or `semantic_memory_may_lag`, the hookless host must append/import recent messages before trusting semantic freshness. For large JSONL files use `cogmem episode import` with `--start-line`, `--end-line`, `--max-lines`, `--skip-errors`, and `--max-errors`; failures report `failedAtLine`, `lastProcessedLine`, and `resumeFrom`.
 
 ```json
 {

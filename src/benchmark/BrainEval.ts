@@ -20,6 +20,11 @@ export interface BrainEvalSample {
   episodeAssignmentChecks?: Array<{ assigned: boolean }>;
   dreamCandidateChecks?: Array<{ grounded: boolean; bypassedGovernance: boolean }>;
   hermesImportParityChecks?: Array<{ liveShape: string; importedShape: string }>;
+  topicMutationIsolationChecks?: Array<{ crossProjectMutation: boolean }>;
+  topicAuditRollbackChecks?: Array<{ audited: boolean; rollbackRestored: boolean }>;
+  repairInvalidationChecks?: Array<{ oldCandidatesStale: boolean; dreamRequeued: boolean }>;
+  importResumeChecks?: Array<{ resumedWithoutDuplicate: boolean; checkpointComplete: boolean }>;
+  hooklessWarningChecks?: Array<{ ingestionMissing: boolean; warningPresent: boolean }>;
 }
 
 export interface BrainEvalMetrics {
@@ -43,6 +48,11 @@ export interface BrainEvalMetrics {
   dreamCandidateGrounding: number;
   dreamBypassRate: number;
   hermesImportParity: number;
+  topicMutationLeakageRate: number;
+  topicAuditRollbackCompliance: number;
+  repairInvalidationCompliance: number;
+  importResumeReliability: number;
+  hooklessWarningCoverage: number;
 }
 
 export interface BrainEvalReport {
@@ -73,6 +83,11 @@ const THRESHOLDS: Record<keyof BrainEvalMetrics, { operator: '>=' | '='; value: 
   dreamCandidateGrounding: { operator: '=', value: 1 },
   dreamBypassRate: { operator: '=', value: 0 },
   hermesImportParity: { operator: '=', value: 1 },
+  topicMutationLeakageRate: { operator: '=', value: 0 },
+  topicAuditRollbackCompliance: { operator: '=', value: 1 },
+  repairInvalidationCompliance: { operator: '=', value: 1 },
+  importResumeReliability: { operator: '=', value: 1 },
+  hooklessWarningCoverage: { operator: '=', value: 1 },
 };
 
 export class BrainEvalRunner {
@@ -111,6 +126,11 @@ export class BrainEvalRunner {
     let dreamBypassCount = 0;
     let hermesParityCount = 0;
     let correctHermesParityCount = 0;
+    let topicMutationChecks = 0; let topicMutationLeaks = 0;
+    let topicAuditChecks = 0; let topicAuditPasses = 0;
+    let repairChecks = 0; let repairPasses = 0;
+    let importResumeCheckCount = 0; let importResumePasses = 0;
+    let hooklessChecks = 0; let hooklessPasses = 0;
 
     for (const sample of samples) {
       const expected = new Set(sample.expectedIds);
@@ -182,6 +202,11 @@ export class BrainEvalRunner {
         hermesParityCount += 1;
         if (check.liveShape === check.importedShape) correctHermesParityCount += 1;
       }
+      for (const check of sample.topicMutationIsolationChecks ?? []) { topicMutationChecks += 1; if (check.crossProjectMutation) topicMutationLeaks += 1; }
+      for (const check of sample.topicAuditRollbackChecks ?? []) { topicAuditChecks += 1; if (check.audited && check.rollbackRestored) topicAuditPasses += 1; }
+      for (const check of sample.repairInvalidationChecks ?? []) { repairChecks += 1; if (check.oldCandidatesStale && check.dreamRequeued) repairPasses += 1; }
+      for (const check of sample.importResumeChecks ?? []) { importResumeCheckCount += 1; if (check.resumedWithoutDuplicate && check.checkpointComplete) importResumePasses += 1; }
+      for (const check of sample.hooklessWarningChecks ?? []) { hooklessChecks += 1; if (!check.ingestionMissing || check.warningPresent) hooklessPasses += 1; }
     }
 
     const metrics: BrainEvalMetrics = {
@@ -207,6 +232,11 @@ export class BrainEvalRunner {
       dreamCandidateGrounding: dreamCandidateCount === 0 ? 0 : groundedDreamCandidateCount / dreamCandidateCount,
       dreamBypassRate: dreamCandidateCount === 0 ? 1 : dreamBypassCount / dreamCandidateCount,
       hermesImportParity: hermesParityCount === 0 ? 0 : correctHermesParityCount / hermesParityCount,
+      topicMutationLeakageRate: topicMutationChecks === 0 ? 1 : topicMutationLeaks / topicMutationChecks,
+      topicAuditRollbackCompliance: topicAuditChecks === 0 ? 0 : topicAuditPasses / topicAuditChecks,
+      repairInvalidationCompliance: repairChecks === 0 ? 0 : repairPasses / repairChecks,
+      importResumeReliability: importResumeCheckCount === 0 ? 0 : importResumePasses / importResumeCheckCount,
+      hooklessWarningCoverage: hooklessChecks === 0 ? 0 : hooklessPasses / hooklessChecks,
     };
     const failedMetrics = (Object.keys(metrics) as Array<keyof BrainEvalMetrics>).filter((key) => {
       const threshold = THRESHOLDS[key];

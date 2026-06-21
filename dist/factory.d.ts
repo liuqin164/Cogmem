@@ -15,6 +15,7 @@ import type { EmbeddingProvider } from './embedding/EmbeddingProvider.js';
 import { NeuronEmbeddingStore } from './embedding/NeuronEmbeddingStore.js';
 import type { ReEmbeddingStatus } from './embedding/ReEmbeddingStatus.js';
 import type { EncryptionProvider } from './encryption/index.js';
+import { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPathRegistry, TopicRelationGraph } from './topic/index.js';
 import { MemoryGovernanceExecutor, type MemoryGovernanceExecutionResult, type MemoryGovernancePlan, type RedactionPolicy } from './governance/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
@@ -22,7 +23,7 @@ import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
-import { EpisodeAssembler, EpisodeStore, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode } from './episode/index.js';
+import { EpisodeAssembler, EpisodeStore, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
 import { type DreamTickOptions, type DreamTickResult } from './dream/index.js';
 import { type EnvLike } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
@@ -54,6 +55,7 @@ export interface MemoryKernelOptions {
     vectorDimension?: number;
     encryptionProvider?: EncryptionProvider;
     redactionPolicy?: RedactionPolicy | false;
+    turnRelationReviewer?: TurnRelationAdvisoryReviewer;
 }
 export interface MemoryKernelFromConfigOptions extends MemoryKernelOptions {
     configPath?: string;
@@ -272,6 +274,45 @@ export interface EpisodeMessageResult {
     dreamRecommended: boolean;
     dreamRan: false;
 }
+export type EpisodeRepairInput = {
+    operation: 'move-event';
+    projectId: string;
+    eventId: string;
+    targetEpisodeId: string;
+    now?: number;
+} | {
+    operation: 'split';
+    projectId: string;
+    episodeId: string;
+    eventIds: string[];
+    now?: number;
+} | {
+    operation: 'merge';
+    projectId: string;
+    sourceEpisodeId: string;
+    targetEpisodeId: string;
+    now?: number;
+} | {
+    operation: 'reclassify';
+    projectId: string;
+    episodeId: string;
+    episodeType?: MemoryEpisode['episodeType'];
+    topicPath?: string;
+    importance?: number;
+    now?: number;
+} | {
+    operation: 'requeue-dream' | 'invalidate-dream-run';
+    projectId: string;
+    episodeId: string;
+    mode?: 'micro' | 'normal' | 'deep';
+    now?: number;
+};
+export interface EpisodeRepairResult {
+    repairId: string;
+    operation: EpisodeRepairInput['operation'];
+    affectedEpisodeIds: string[];
+    staleCandidateIds: string[];
+}
 export interface ToolCallMemoryEventInput {
     projectId?: string;
     workspaceId?: string;
@@ -392,6 +433,10 @@ export declare class MemoryKernel {
     readonly pipelineMetrics: PipelineMetrics;
     readonly episodeStore: EpisodeStore;
     readonly episodeAssembler: EpisodeAssembler;
+    readonly userTopicPathRegistry: UserTopicPathRegistry;
+    readonly topicAliasRegistry: TopicAliasRegistry;
+    readonly topicRelationGraph: TopicRelationGraph;
+    readonly topicGovernance: TopicGovernance;
     private readonly dbPath;
     private readonly embedder;
     private readonly embeddingProvider?;
@@ -486,6 +531,15 @@ export declare class MemoryKernel {
         batchSeal?: boolean;
         forceBatchSeal?: boolean;
     }): import("./episode/EpisodeAssembler.js").EpisodeAssemblyResult;
+    assembleEpisodeTurnAsync(events: MemoryEvent[], input: {
+        projectId: string;
+        sessionId: string;
+        sourceAgent?: string;
+        conversationThreadId?: string;
+        now?: number;
+        batchSeal?: boolean;
+        forceBatchSeal?: boolean;
+    }): Promise<import("./episode/EpisodeAssembler.js").EpisodeAssemblyResult>;
     appendRawEventToEpisode(event: MemoryEvent, input: {
         projectId: string;
         sessionId: string;
@@ -493,7 +547,9 @@ export declare class MemoryKernel {
         now?: number;
     }): import("./episode/EpisodeAssembler.js").EpisodeAssemblyResult;
     appendEpisodeMessage(input: EpisodeMessageInput): EpisodeMessageResult;
+    appendEpisodeMessageAsync(input: EpisodeMessageInput): Promise<EpisodeMessageResult>;
     private resumeEpisodeMessage;
+    private resumeEpisodeMessageAsync;
     private assertEpisodeIngestIdentity;
     listEpisodes(options?: EpisodeListOptions): MemoryEpisode[];
     getEpisode(episodeId: string): MemoryEpisode | undefined;
@@ -530,6 +586,7 @@ export declare class MemoryKernel {
         unassigned: number;
         unassignedEventIds: string[];
     };
+    repairEpisode(input: EpisodeRepairInput): EpisodeRepairResult;
     listDreamCandidates(options?: DreamCandidateListOptions): DreamCandidateRecord[];
     countDreamCandidates(options?: Omit<DreamCandidateListOptions, 'limit'>): number;
     bindMemoryEvent(event: MemoryEvent): MemoryBindingRecord[];

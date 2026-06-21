@@ -180,6 +180,44 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
       annotations: { title: 'Episode Status', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
     {
+      name: 'cogmem_topic_list',
+      description: 'List project-scoped user-shaped topic nodes and audited relations. Read-only.',
+      inputSchema: { type: 'object', properties: { projectId: STRING_SCHEMA }, required: ['projectId'] },
+      annotations: { title: 'List Memory Topics', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: 'cogmem_topic_operate',
+      description: 'Apply an auditable user-explicit or model-candidate topic create/rename/alias/move/merge/split/relation operation. Model operations never activate directly.',
+      inputSchema: {
+        type: 'object', properties: {
+          projectId: STRING_SCHEMA, operationType: STRING_SCHEMA, actor: { type: 'string', enum: ['user_explicit', 'model_candidate', 'import', 'repair'] },
+          targetTopicId: STRING_SCHEMA, payload: { type: 'object' }, evidenceEventIds: STRING_ARRAY_SCHEMA,
+        }, required: ['projectId', 'operationType', 'actor', 'payload'],
+      },
+      annotations: { title: 'Operate Memory Topic', readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+    },
+    {
+      name: 'cogmem_topic_rollback',
+      description: 'Revert one audited topic operation inside its original project scope.',
+      inputSchema: {
+        type: 'object', properties: { projectId: STRING_SCHEMA, operationId: STRING_SCHEMA },
+        required: ['projectId', 'operationId'],
+      },
+      annotations: { title: 'Rollback Memory Topic Operation', readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    {
+      name: 'cogmem_episode_repair',
+      description: 'Run audited episode surgery: split, merge, move-event, reclassify, requeue-dream, or invalidate-dream-run.',
+      inputSchema: {
+        type: 'object', properties: {
+          projectId: STRING_SCHEMA, operation: STRING_SCHEMA, episodeId: STRING_SCHEMA, sourceEpisodeId: STRING_SCHEMA,
+          targetEpisodeId: STRING_SCHEMA, eventId: STRING_SCHEMA, eventIds: STRING_ARRAY_SCHEMA,
+          episodeType: STRING_SCHEMA, topicPath: STRING_SCHEMA, importance: NUMBER_SCHEMA, mode: STRING_SCHEMA,
+        }, required: ['projectId', 'operation'],
+      },
+      annotations: { title: 'Repair Episode', readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+    },
+    {
       name: 'cogmem_episode_seal',
       description: 'Explicitly seal one episode and enqueue it for conditional Dream processing.',
       inputSchema: {
@@ -297,11 +335,30 @@ export async function callCogmemMcpTool(
         }));
       }
       case 'cogmem_episode_append':
-        return episodeAppend(opened.kernel, input);
+        return await episodeAppend(opened.kernel, input);
       case 'cogmem_episode_import':
-        return episodeImport(opened.kernel, input);
+        return await episodeImport(opened.kernel, input);
       case 'cogmem_episode_status':
         return episodeStatus(opened.kernel, input);
+      case 'cogmem_topic_list': {
+        const projectId = requiredString(input.projectId, 'projectId');
+        return jsonResult({ topics: opened.kernel.userTopicPathRegistry.list(projectId), relations: opened.kernel.topicRelationGraph.list(projectId) });
+      }
+      case 'cogmem_topic_operate':
+        return jsonResult(opened.kernel.topicGovernance.apply({
+          projectId: requiredString(input.projectId, 'projectId'),
+          operationType: requiredString(input.operationType, 'operationType') as never,
+          actor: requiredString(input.actor, 'actor') as never,
+          targetTopicId: optionalString(input.targetTopicId),
+          payload: input.payload && typeof input.payload === 'object' ? input.payload as Record<string, unknown> : {},
+          evidenceEventIds: Array.isArray(input.evidenceEventIds) ? input.evidenceEventIds.map(String) : [],
+        }));
+      case 'cogmem_topic_rollback':
+        return jsonResult(opened.kernel.topicGovernance.rollback(
+          requiredString(input.operationId, 'operationId'), requiredString(input.projectId, 'projectId'),
+        ));
+      case 'cogmem_episode_repair':
+        return jsonResult(episodeRepair(opened.kernel, input));
       case 'cogmem_episode_seal':
         return jsonResult(opened.kernel.sealEpisode(requiredString(input.episodeId, 'episodeId'), {
           mode: optionalEpisodeClosureMode(input.mode),
@@ -332,10 +389,10 @@ export async function callCogmemMcpTool(
   }
 }
 
-function episodeAppend(kernel: MemoryKernel, input: Record<string, unknown>): CogmemMcpCallResult {
+async function episodeAppend(kernel: MemoryKernel, input: Record<string, unknown>): Promise<CogmemMcpCallResult> {
   const text = requiredString(input.text, 'text');
   if (text.length > 16_000) throw new Error('text exceeds the 16000 character MCP episode limit');
-  return jsonResult(kernel.appendEpisodeMessage({
+  return jsonResult(await kernel.appendEpisodeMessageAsync({
     projectId: requiredString(input.projectId, 'projectId'),
     sessionId: requiredString(input.sessionId, 'sessionId'),
     sourceAgent: requiredString(input.sourceAgent, 'sourceAgent'),
@@ -344,7 +401,7 @@ function episodeAppend(kernel: MemoryKernel, input: Record<string, unknown>): Co
   }));
 }
 
-function episodeImport(kernel: MemoryKernel, input: Record<string, unknown>): CogmemMcpCallResult {
+async function episodeImport(kernel: MemoryKernel, input: Record<string, unknown>): Promise<CogmemMcpCallResult> {
   if (!Array.isArray(input.messages)) throw new Error('messages must be an array');
   if (input.messages.length > 200) throw new Error('messages exceeds the 200 item MCP import limit');
   const projectId = requiredString(input.projectId, 'projectId');
@@ -352,6 +409,7 @@ function episodeImport(kernel: MemoryKernel, input: Record<string, unknown>): Co
   const sourceAgent = requiredString(input.sourceAgent, 'sourceAgent');
   const stableIdentity = createStableImportIdentityFactory(sourceAgent, sessionId);
   let totalChars = 0;
+  let autoIdentityUsed = false;
   const messages = input.messages.map((value, index) => {
     if (!value || typeof value !== 'object') throw new Error(`messages[${index}] must be an object`);
     const message = value as Record<string, unknown>;
@@ -360,13 +418,31 @@ function episodeImport(kernel: MemoryKernel, input: Record<string, unknown>): Co
     if (text.length > 16_000 || totalChars > 1_000_000) throw new Error('episode import exceeds bounded text limits');
     const role = requiredEpisodeRole(message.role);
     const timestamp = optionalNumber(message.timestamp);
+    const suppliedIdentity = optionalString(message.externalMessageId);
+    if (!suppliedIdentity) autoIdentityUsed = true;
     return {
       role, text, timestamp,
-      externalMessageId: optionalString(message.externalMessageId)
+      externalMessageId: suppliedIdentity
         || stableIdentity({ role, text, timestamp }),
     };
   });
-  const results = messages.map((message) => kernel.appendEpisodeMessage({ projectId, sessionId, sourceAgent, ...message }));
+  const results: Awaited<ReturnType<MemoryKernel['appendEpisodeMessageAsync']>>[] = [];
+  const messageResults: Array<Record<string, unknown>> = [];
+  for (const [index, message] of messages.entries()) {
+    try {
+      const result = await kernel.appendEpisodeMessageAsync({ projectId, sessionId, sourceAgent, ...message });
+      results.push(result);
+      messageResults.push({ index, processed: true, externalMessageId: message.externalMessageId, ...result });
+    } catch (error) {
+      const failedMessage = error instanceof Error ? error.message : String(error);
+      messageResults.push({ index, processed: false, externalMessageId: message.externalMessageId, error: failedMessage });
+      return jsonResult({
+        processedCount: results.length, failedIndex: index, failedMessage,
+        resumeFromIndex: index, messageResults,
+        warnings: autoIdentityUsed ? ['auto_identity_not_safe_across_split_batches'] : [],
+      }, true);
+    }
+  }
   const episodeIds = [...new Set(results.map((result) => result.episodeId).filter((id): id is string => Boolean(id)))];
   const receipts = input.sealBatch === true
     ? episodeIds.map((episodeId) => kernel.sealImportedEpisode(episodeId, { reason: 'mcp_batch_boundary', force: input.forceSeal === true }))
@@ -378,6 +454,8 @@ function episodeImport(kernel: MemoryKernel, input: Record<string, unknown>): Co
     unassignedEventIds: results.filter((result) => !result.assigned && !result.ignored).map((result) => result.eventId),
     ignoredEventIds: results.filter((result) => result.ignored).map((result) => result.eventId),
     closureReceipts: receipts, dreamRan: false,
+    processedCount: results.length, messageResults,
+    warnings: autoIdentityUsed ? ['auto_identity_not_safe_across_split_batches'] : [],
   });
 }
 
@@ -390,23 +468,50 @@ function episodeStatus(kernel: MemoryKernel, input: Record<string, unknown>): Co
   const dreamBacklogAvailable = dream.pending + dream.retryScheduled + dream.processing > 0;
   const failedDreamAvailable = dream.failedRetryable + dream.failedTerminal > 0;
   const recentRawAvailable = episodes.length > 0 || kernel.episodeStore.countUnassignedRawEvents(projectId) > 0;
-  const recommendedAction = dreamBacklogAvailable
-    ? 'cogmem_dream_tick_with_maintenance_mode'
-    : dream.failedRetryable > 0
-      ? 'cogmem_dream_retry'
-      : dream.failedTerminal > 0
-        ? 'inspect_terminal_dream_failure'
-        : 'none';
+  const recommendedActions: string[] = [];
+  if (dreamBacklogAvailable) recommendedActions.push('cogmem_dream_tick_with_maintenance_mode');
+  if (dream.failedRetryable > 0) recommendedActions.push('cogmem_dream_retry');
+  if (dream.failedTerminal > 0) recommendedActions.push('inspect_terminal_dream_failure');
+  if (kernel.episodeStore.countUnassignedRawEvents(projectId) > 0) recommendedActions.push('cogmem_episode_repair');
+  const highValueOpen = episodes.some((episode) => episode.status === 'open' && episode.importance >= 0.8);
+  const maturingSoftSeal = episodes.some((episode) => episode.status === 'soft_sealed');
+  const semanticMemoryMayLag = dreamBacklogAvailable || failedDreamAvailable || highValueOpen || maturingSoftSeal
+    || kernel.episodeStore.countUnassignedRawEvents(projectId) > 0;
   return jsonResult({
     episodes,
     dream,
     recentRawAvailable,
     recentEpisodesAvailable: episodes.length > 0,
     dreamBacklogAvailable,
-    semanticMemoryMayLag: dreamBacklogAvailable || failedDreamAvailable,
-    recommendedAction,
+    semanticMemoryMayLag,
+    recommendedActions,
+    recommendedAction: recommendedActions[0] || 'none',
     warnings: recentRawAvailable ? [] : ['no_recent_episode_ingestion_detected'],
   });
+}
+
+function episodeRepair(kernel: MemoryKernel, input: Record<string, unknown>) {
+  const projectId = requiredString(input.projectId, 'projectId');
+  const operation = requiredString(input.operation, 'operation');
+  if (operation === 'move-event') return kernel.repairEpisode({
+    operation, projectId, eventId: requiredString(input.eventId, 'eventId'), targetEpisodeId: requiredString(input.targetEpisodeId, 'targetEpisodeId'),
+  });
+  if (operation === 'split') return kernel.repairEpisode({
+    operation, projectId, episodeId: requiredString(input.episodeId, 'episodeId'),
+    eventIds: Array.isArray(input.eventIds) ? input.eventIds.map(String) : [],
+  });
+  if (operation === 'merge') return kernel.repairEpisode({
+    operation, projectId, sourceEpisodeId: requiredString(input.sourceEpisodeId, 'sourceEpisodeId'),
+    targetEpisodeId: requiredString(input.targetEpisodeId, 'targetEpisodeId'),
+  });
+  if (operation === 'reclassify') return kernel.repairEpisode({
+    operation, projectId, episodeId: requiredString(input.episodeId, 'episodeId'),
+    episodeType: optionalString(input.episodeType) as never, topicPath: optionalString(input.topicPath), importance: optionalNumber(input.importance),
+  });
+  if (operation === 'requeue-dream' || operation === 'invalidate-dream-run') return kernel.repairEpisode({
+    operation, projectId, episodeId: requiredString(input.episodeId, 'episodeId'), mode: optionalDreamMode(input.mode) === 'auto' ? 'normal' : optionalDreamMode(input.mode) as never,
+  });
+  throw new Error(`invalid episode repair operation: ${operation}`);
 }
 
 function dreamRecommendation(kernel: MemoryKernel, projectId: string | undefined, requestedMode: string | undefined) {
@@ -523,6 +628,12 @@ function recall(
       endTime,
       retrievalPolicy: strategyCapsule.retrievalPolicy,
     });
+    const episodes = kernel.listEpisodes({ projectId, limit: 20 });
+    const recentEpisodeIngestion = episodes.length > 0;
+    const semanticMemoryMayLag = !recentEpisodeIngestion
+      || episodes.some((episode) => episode.status !== 'sealed' || episode.dreamStatus === 'queued' || episode.dreamStatus === 'failed')
+      || kernel.episodeStore.countUnassignedRawEvents(projectId) > 0;
+    const warnings = recentEpisodeIngestion ? [] : ['no_recent_episode_ingestion_detected', 'semantic_memory_may_lag'];
 
     return jsonResult({
       query,
@@ -536,6 +647,9 @@ function recall(
       narrative: result.narrative,
       temporalLabels: result.temporalTraversal?.labels,
       items: result.items,
+      warnings,
+      semanticMemoryMayLag,
+      suggestedTool: recentEpisodeIngestion ? undefined : 'cogmem_episode_append_or_import',
     });
   }
 

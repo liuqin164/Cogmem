@@ -37,6 +37,8 @@ export type {
   EpisodeListOptions,
   EpisodeMessageInput,
   EpisodeMessageResult,
+  EpisodeRepairInput,
+  EpisodeRepairResult,
   MemoryEpisode,
   MaintenanceSuggestedAction,
   MaintenanceTickOptions,
@@ -81,6 +83,21 @@ export {
   type TurnRelationDecision,
 } from './episode/index.js';
 export { DreamScheduler, type DreamTickMode, type SelectedDreamMode } from './dream/index.js';
+export { MEMORY_ONTOLOGY_CLASSES, isMemoryOntologyClass, type MemoryOntologyClass } from './ontology/MemoryOntology.js';
+export {
+  TopicAliasRegistry,
+  TopicGovernance,
+  TopicPathRegistry as UserTopicPathRegistry,
+  TopicRelationGraph,
+  type TopicAliasRecord,
+  type TopicCreatedBy,
+  type TopicNode,
+  type TopicOperationInput,
+  type TopicOperationRecord,
+  type TopicOperationType,
+  type TopicRelationRecord,
+  type TopicStatus,
+} from './topic/index.js';
 
 /**
  * Cogmem runtime home and structured configuration helpers.

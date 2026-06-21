@@ -10,12 +10,18 @@ export interface DreamTickOptions {
     softSealGraceMs?: number;
     leaseMs?: number;
     maxAttempts?: number;
+    maintenanceReason?: 'daily' | 'upgrade_repair';
 }
 export interface DreamTickResult {
     runId: string;
     projectId?: string;
     requestedMode: DreamTickMode;
     selectedMode: SelectedDreamMode;
+    selectedModes: {
+        micro: number;
+        normal: number;
+        deep: number;
+    };
     skipped: boolean;
     reason: string;
     processedEpisodeCount: number;
@@ -24,6 +30,12 @@ export interface DreamTickResult {
     episodeIds: string[];
     candidateIds: string[];
     durationMs: number;
+    failedEpisodes: Array<{
+        episodeId: string;
+        error: string;
+        failureCategory: string;
+        retryAfter?: number;
+    }>;
 }
 export declare class DreamScheduler {
     private readonly episodeStore;

@@ -24,11 +24,14 @@ export interface ClaimedEpisodeDreamJob {
     leaseId: string;
     modeHint: 'micro' | 'normal' | 'deep';
     attempts: number;
+    createdAt: number;
 }
 export declare class EpisodeStore {
     private readonly db;
     private readonly resolveEvent?;
-    constructor(db: Database, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined);
+    constructor(db: Database, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, options?: {
+        initializeSchemaForTests?: boolean;
+    });
     createEpisode(input: CreateEpisodeInput): MemoryEpisode;
     findActiveEpisode(projectId: string, sessionId: string, sourceAgent?: string, conversationThreadId?: string): MemoryEpisode | undefined;
     private findActiveEpisodeRow;
@@ -51,6 +54,37 @@ export declare class EpisodeStore {
     }): EpisodeEventLink;
     getEventLink(eventId: string): EpisodeEventLink | undefined;
     listEventLinks(episodeId: string): EpisodeEventLink[];
+    addCrossReference(input: {
+        projectId: string;
+        episodeId: string;
+        referencedEpisodeId?: string;
+        eventId?: string;
+        relation: string;
+        createdBy: string;
+        confidence?: number;
+        now?: number;
+    }): string;
+    moveEventForRepair(eventId: string, targetEpisodeId: string, now?: number): {
+        sourceEpisodeId: string;
+        targetEpisodeId: string;
+    };
+    reclassifyForRepair(episodeId: string, input: {
+        episodeType?: EpisodeType;
+        topicPath?: string;
+        importance?: number;
+        now?: number;
+    }): MemoryEpisode;
+    requeueDreamForRepair(episodeId: string, modeHint?: 'micro' | 'normal' | 'deep', now?: number): void;
+    recordRepairAudit(input: {
+        projectId: string;
+        operation: string;
+        payload: unknown;
+        before: unknown;
+        after: unknown;
+        now?: number;
+    }): string;
+    private invalidateEpisodeDerivedState;
+    private resequenceEpisode;
     reopenSoftEpisode(episodeId: string, now: number): MemoryEpisode;
     sealEpisode(episodeId: string, input: {
         mode: EpisodeClosureMode;
@@ -116,6 +150,12 @@ export declare class EpisodeStore {
         durationMs: number;
         error?: string;
         createdAt: number;
+        failedEpisodes?: Array<{
+            episodeId: string;
+            error: string;
+            failureCategory: string;
+            retryAfter?: number;
+        }>;
     }): void;
     getIngestedEvent(projectId: string, sourceAgent: string, sourceSessionId: string, externalMessageId: string): string | undefined;
     recordIngestKey(input: {
@@ -126,6 +166,21 @@ export declare class EpisodeStore {
         eventId: string;
         now?: number;
     }): void;
+    markIngestState(input: {
+        projectId: string;
+        sourceAgent: string;
+        sourceSessionId: string;
+        externalMessageId: string;
+        state: 'reserved' | 'committed' | 'failed';
+        error?: string;
+        now?: number;
+    }): void;
+    getIngestState(projectId: string, sourceAgent: string, sourceSessionId: string, externalMessageId: string): {
+        eventId: string;
+        state: 'reserved' | 'committed' | 'failed';
+        error?: string;
+        updatedAt?: number;
+    } | undefined;
     deleteByProject(projectId: string): number;
     private enqueueDreamJob;
     private initializeSchema;

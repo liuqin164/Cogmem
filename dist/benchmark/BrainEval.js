@@ -19,6 +19,11 @@ const THRESHOLDS = {
     dreamCandidateGrounding: { operator: '=', value: 1 },
     dreamBypassRate: { operator: '=', value: 0 },
     hermesImportParity: { operator: '=', value: 1 },
+    topicMutationLeakageRate: { operator: '=', value: 0 },
+    topicAuditRollbackCompliance: { operator: '=', value: 1 },
+    repairInvalidationCompliance: { operator: '=', value: 1 },
+    importResumeReliability: { operator: '=', value: 1 },
+    hooklessWarningCoverage: { operator: '=', value: 1 },
 };
 export class BrainEvalRunner {
     evaluate(samples) {
@@ -56,6 +61,16 @@ export class BrainEvalRunner {
         let dreamBypassCount = 0;
         let hermesParityCount = 0;
         let correctHermesParityCount = 0;
+        let topicMutationChecks = 0;
+        let topicMutationLeaks = 0;
+        let topicAuditChecks = 0;
+        let topicAuditPasses = 0;
+        let repairChecks = 0;
+        let repairPasses = 0;
+        let importResumeCheckCount = 0;
+        let importResumePasses = 0;
+        let hooklessChecks = 0;
+        let hooklessPasses = 0;
         for (const sample of samples) {
             const expected = new Set(sample.expectedIds);
             const selected = new Set(sample.selectedIds);
@@ -139,6 +154,31 @@ export class BrainEvalRunner {
                 if (check.liveShape === check.importedShape)
                     correctHermesParityCount += 1;
             }
+            for (const check of sample.topicMutationIsolationChecks ?? []) {
+                topicMutationChecks += 1;
+                if (check.crossProjectMutation)
+                    topicMutationLeaks += 1;
+            }
+            for (const check of sample.topicAuditRollbackChecks ?? []) {
+                topicAuditChecks += 1;
+                if (check.audited && check.rollbackRestored)
+                    topicAuditPasses += 1;
+            }
+            for (const check of sample.repairInvalidationChecks ?? []) {
+                repairChecks += 1;
+                if (check.oldCandidatesStale && check.dreamRequeued)
+                    repairPasses += 1;
+            }
+            for (const check of sample.importResumeChecks ?? []) {
+                importResumeCheckCount += 1;
+                if (check.resumedWithoutDuplicate && check.checkpointComplete)
+                    importResumePasses += 1;
+            }
+            for (const check of sample.hooklessWarningChecks ?? []) {
+                hooklessChecks += 1;
+                if (!check.ingestionMissing || check.warningPresent)
+                    hooklessPasses += 1;
+            }
         }
         const metrics = {
             recall: expectedCount === 0 ? 1 : relevantSelectedCount / expectedCount,
@@ -163,6 +203,11 @@ export class BrainEvalRunner {
             dreamCandidateGrounding: dreamCandidateCount === 0 ? 0 : groundedDreamCandidateCount / dreamCandidateCount,
             dreamBypassRate: dreamCandidateCount === 0 ? 1 : dreamBypassCount / dreamCandidateCount,
             hermesImportParity: hermesParityCount === 0 ? 0 : correctHermesParityCount / hermesParityCount,
+            topicMutationLeakageRate: topicMutationChecks === 0 ? 1 : topicMutationLeaks / topicMutationChecks,
+            topicAuditRollbackCompliance: topicAuditChecks === 0 ? 0 : topicAuditPasses / topicAuditChecks,
+            repairInvalidationCompliance: repairChecks === 0 ? 0 : repairPasses / repairChecks,
+            importResumeReliability: importResumeCheckCount === 0 ? 0 : importResumePasses / importResumeCheckCount,
+            hooklessWarningCoverage: hooklessChecks === 0 ? 0 : hooklessPasses / hooklessChecks,
         };
         const failedMetrics = Object.keys(metrics).filter((key) => {
             const threshold = THRESHOLDS[key];

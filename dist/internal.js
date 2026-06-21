@@ -69,6 +69,8 @@ export * from './migrations/0010_skill_neurons.js';
 export * from './migrations/index.js';
 export * from './episode/index.js';
 export * from './dream/index.js';
+export * from './ontology/MemoryOntology.js';
+export { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPathRegistry, TopicRelationGraph, } from './topic/index.js';
 export * from './models/ModelCapabilityRouter.js';
 export * from './models/ModelRegistry.js';
 export * from './models/ModelRole.js';

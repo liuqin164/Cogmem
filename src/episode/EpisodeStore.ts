@@ -41,11 +41,16 @@ export interface ClaimedEpisodeDreamJob {
   leaseId: string;
   modeHint: 'micro' | 'normal' | 'deep';
   attempts: number;
+  createdAt: number;
 }
 
 export class EpisodeStore {
-  constructor(private readonly db: Database, private readonly resolveEvent?: (eventId: string) => MemoryEvent | null | undefined) {
-    this.initializeSchema();
+  constructor(
+    private readonly db: Database,
+    private readonly resolveEvent?: (eventId: string) => MemoryEvent | null | undefined,
+    options: { initializeSchemaForTests?: boolean } = {},
+  ) {
+    if (options.initializeSchemaForTests !== false) this.initializeSchema();
   }
 
   createEpisode(input: CreateEpisodeInput): MemoryEpisode {
@@ -97,6 +102,17 @@ export class EpisodeStore {
 
   claimLegacyEpisodeScope(episodeId: string, sourceAgent?: string, conversationThreadId?: string): MemoryEpisode | undefined {
     if (!sourceAgent && !conversationThreadId) return this.getEpisode(episodeId);
+    if (this.resolveEvent) {
+      const events = this.listEventLinks(episodeId).slice(-10)
+        .map((link) => this.resolveEvent!(link.eventId)).filter((event): event is MemoryEvent => Boolean(event));
+      const mismatch = events.some((event) => {
+        const metadata = (event.payload as { metadata?: { sourceAgent?: unknown } } | undefined)?.metadata;
+        const eventSourceAgent = typeof metadata?.sourceAgent === 'string' ? metadata.sourceAgent : undefined;
+        return (sourceAgent && eventSourceAgent && eventSourceAgent !== sourceAgent)
+          || (conversationThreadId && event.threadId && event.threadId !== conversationThreadId);
+      });
+      if (mismatch) return undefined;
+    }
     this.db.prepare(`
       UPDATE memory_episodes SET source_agent = ?, conversation_thread_id = ?
       WHERE episode_id = ? AND source_agent IS NULL AND conversation_thread_id IS NULL
@@ -183,6 +199,103 @@ export class EpisodeStore {
     `).all(episodeId) as EpisodeEventRow[]).map(mapEventLink);
   }
 
+  addCrossReference(input: {
+    projectId: string; episodeId: string; referencedEpisodeId?: string; eventId?: string;
+    relation: string; createdBy: string; confidence?: number; now?: number;
+  }): string {
+    const episode = this.getEpisode(input.episodeId);
+    if (!episode) throw new Error(`episode_not_found:${input.episodeId}`);
+    if (episode.projectId !== input.projectId) throw new Error(`episode_project_mismatch:${input.episodeId}`);
+    if (input.referencedEpisodeId) {
+      const referenced = this.getEpisode(input.referencedEpisodeId);
+      if (!referenced || referenced.projectId !== input.projectId) throw new Error(`episode_cross_ref_project_mismatch:${input.referencedEpisodeId}`);
+    }
+    const id = `episode-cross-ref-${randomUUID()}`;
+    this.db.prepare(`
+      INSERT INTO episode_cross_refs (cross_ref_id, project_id, episode_id, referenced_episode_id, event_id,
+        relation, created_by, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, input.projectId, input.episodeId, input.referencedEpisodeId || null, input.eventId || null,
+      input.relation, input.createdBy, Math.max(0, Math.min(1, input.confidence ?? 1)), input.now ?? Date.now());
+    return id;
+  }
+
+  moveEventForRepair(eventId: string, targetEpisodeId: string, now = Date.now()): { sourceEpisodeId: string; targetEpisodeId: string } {
+    const link = this.getEventLink(eventId);
+    if (!link) throw new Error(`episode_event_not_linked:${eventId}`);
+    const source = this.getEpisode(link.episodeId);
+    const target = this.getEpisode(targetEpisodeId);
+    if (!source || !target) throw new Error('episode_not_found');
+    if (source.projectId !== target.projectId) throw new Error('episode_project_mismatch');
+    this.db.transaction(() => {
+      const nextPosition = this.listEventLinks(targetEpisodeId).length + 1;
+      this.db.prepare(`UPDATE memory_episode_events SET episode_id = ?, position = ?, created_at = ? WHERE event_id = ?`)
+        .run(targetEpisodeId, nextPosition, now, eventId);
+      this.resequenceEpisode(source.episodeId, now);
+      this.resequenceEpisode(targetEpisodeId, now);
+      this.invalidateEpisodeDerivedState(source.episodeId, now);
+      this.invalidateEpisodeDerivedState(targetEpisodeId, now);
+    })();
+    return { sourceEpisodeId: source.episodeId, targetEpisodeId };
+  }
+
+  reclassifyForRepair(episodeId: string, input: { episodeType?: EpisodeType; topicPath?: string; importance?: number; now?: number }): MemoryEpisode {
+    const episode = this.getEpisode(episodeId);
+    if (!episode) throw new Error(`episode_not_found:${episodeId}`);
+    this.db.prepare(`
+      UPDATE memory_episodes SET episode_type = ?, topic_path = ?, importance = ?, updated_at = ? WHERE episode_id = ?
+    `).run(input.episodeType || episode.episodeType, input.topicPath ?? episode.topicPath ?? null,
+      input.importance === undefined ? episode.importance : Math.max(0, Math.min(1, input.importance)), input.now ?? Date.now(), episodeId);
+    this.invalidateEpisodeDerivedState(episodeId, input.now ?? Date.now());
+    return this.getEpisode(episodeId)!;
+  }
+
+  requeueDreamForRepair(episodeId: string, modeHint: 'micro' | 'normal' | 'deep' = 'normal', now = Date.now()): void {
+    const episode = this.getEpisode(episodeId);
+    if (!episode) throw new Error(`episode_not_found:${episodeId}`);
+    if (episode.eventCount === 0) throw new Error(`episode_empty:${episodeId}`);
+    if (episode.status !== 'sealed') throw new Error(`episode_not_sealed:${episodeId}`);
+    this.db.prepare(`
+      INSERT INTO episode_dream_jobs (episode_id, project_id, state, priority, mode_hint, attempts, candidate_ids_json, created_at, updated_at)
+      VALUES (?, ?, 'pending', ?, ?, 0, '[]', ?, ?)
+      ON CONFLICT(episode_id) DO UPDATE SET state = 'pending', mode_hint = excluded.mode_hint, attempts = 0,
+        lease_id = NULL, lease_until = NULL, last_error = NULL, retry_after = NULL, failure_category = NULL,
+        candidate_ids_json = '[]', updated_at = excluded.updated_at
+    `).run(episodeId, episode.projectId, Math.round(episode.importance * 100), modeHint, now, now);
+    this.db.prepare(`UPDATE memory_episodes SET dream_status = 'queued', dream_error = NULL, last_dream_run_id = NULL WHERE episode_id = ?`).run(episodeId);
+  }
+
+  recordRepairAudit(input: { projectId: string; operation: string; payload: unknown; before: unknown; after: unknown; now?: number }): string {
+    const repairId = `episode-repair-${randomUUID()}`;
+    this.db.prepare(`
+      INSERT INTO episode_repair_audit (repair_id, project_id, operation, payload_json, before_json, after_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(repairId, input.projectId, input.operation, JSON.stringify(input.payload), JSON.stringify(input.before),
+      JSON.stringify(input.after), input.now ?? Date.now());
+    return repairId;
+  }
+
+  private invalidateEpisodeDerivedState(episodeId: string, now: number): void {
+    this.db.prepare(`DELETE FROM episode_dream_jobs WHERE episode_id = ?`).run(episodeId);
+    this.db.prepare(`
+      UPDATE memory_episodes SET dream_status = 'none', last_dream_run_id = NULL, last_dreamed_at = NULL,
+        dream_candidate_count = 0, dream_error = NULL, updated_at = ? WHERE episode_id = ?
+    `).run(now, episodeId);
+  }
+
+  private resequenceEpisode(episodeId: string, now: number): void {
+    const links = this.listEventLinks(episodeId);
+    for (const [index, link] of links.entries()) {
+      if (link.position !== index + 1) this.db.prepare(`UPDATE memory_episode_events SET position = ? WHERE event_id = ?`).run(index + 1, link.eventId);
+    }
+    const events = links.map((link) => this.resolveEvent?.(link.eventId)).filter((event): event is MemoryEvent => Boolean(event));
+    const first = events[0];
+    const last = events.at(-1);
+    this.db.prepare(`
+      UPDATE memory_episodes SET event_count = ?, start_event_id = COALESCE(?, start_event_id),
+        end_event_id = COALESCE(?, end_event_id), start_seq = ?, end_seq = ?, updated_at = ? WHERE episode_id = ?
+    `).run(links.length, first?.eventId || null, last?.eventId || null, first?.globalSeq ?? null, last?.globalSeq ?? null, now, episodeId);
+  }
+
   reopenSoftEpisode(episodeId: string, now: number): MemoryEpisode {
     const result = this.db.prepare(`
       UPDATE memory_episodes SET status = 'open', sealed_at = NULL, updated_at = ?, dream_status = 'none', dream_error = NULL
@@ -208,18 +321,23 @@ export class EpisodeStore {
     const episode = this.getEpisode(episodeId);
     if (!episode) throw new Error(`episode_not_found:${episodeId}`);
     const status: EpisodeStatus = input.mode === 'soft' ? 'soft_sealed' : 'sealed';
-    if (episode.status === status) {
+    const auditReseal = input.mode === 'manual' || input.reasonCode === 'repair' || /repair|force|recompute/iu.test(input.reason);
+    if (episode.status === status && !auditReseal) {
       const existing = this.listClosureReceipts({ episodeId, limit: 1 })[0];
       if (existing) return existing;
     }
     const links = this.listEventLinks(episodeId);
+    if (links.length === 0 && input.mode !== 'soft') throw new Error(`episode_empty:${episodeId}`);
+    const requiresReview = input.requiresReview === true || links.length === 0;
     const semanticSummary = input.semanticSummary || summarizeEpisode(
       episode,
       links.map((link) => this.resolveEvent?.(link.eventId)).filter((event): event is MemoryEvent => Boolean(event)),
       links.map((link) => link.eventId),
     );
-    const dreamMode = episode.importance >= 0.8 || ['decision', 'correction', 'preference', 'goal', 'prospective'].includes(episode.episodeType)
-      ? 'micro' as const : 'normal' as const;
+    const dreamMode = episode.eventCount >= 100
+      ? 'deep' as const
+      : episode.importance >= 0.8 || ['decision', 'correction', 'preference', 'goal', 'prospective'].includes(episode.episodeType)
+        ? 'micro' as const : 'normal' as const;
     const receipt: EpisodeClosureReceipt = {
       receiptId: `episode-closure-${randomUUID()}`,
       episodeId,
@@ -234,9 +352,9 @@ export class EpisodeStore {
       topicPath: episode.topicPath,
       episodeType: episode.episodeType,
       importance: episode.importance,
-      dreamRecommended: links.length > 0,
+      dreamRecommended: links.length > 0 && !requiresReview,
       dreamMode,
-      requiresReview: input.requiresReview === true,
+      requiresReview,
       ignoredNearbyEventIds: input.ignoredNearbyEventIds || [],
       unassignedNearbyEventIds: input.unassignedNearbyEventIds || [],
       createdAt: now,
@@ -330,9 +448,11 @@ export class EpisodeStore {
     const params: Array<string | number> = [input.maxAttempts];
     if (input.projectId) { where.push('project_id = ?'); params.push(input.projectId); }
     const rows = this.db.prepare(`
-      SELECT episode_id, project_id, mode_hint, attempts FROM episode_dream_jobs
+      SELECT episode_id, project_id, mode_hint, attempts, created_at FROM episode_dream_jobs
       WHERE ${where.join(' AND ')} ORDER BY priority DESC, created_at LIMIT ?
-    `).all(...params, Math.max(1, Math.min(Math.trunc(input.limit), 100))) as Array<{ episode_id: string; project_id: string; mode_hint: 'micro' | 'normal' | 'deep'; attempts: number }>;
+    `).all(...params, Math.max(1, Math.min(Math.trunc(input.limit), 100))) as Array<{
+      episode_id: string; project_id: string; mode_hint: 'micro' | 'normal' | 'deep'; attempts: number; created_at: number;
+    }>;
     const claimed: ClaimedEpisodeDreamJob[] = [];
     for (const row of rows) {
       const leaseId = `dream-lease-${randomUUID()}`;
@@ -346,7 +466,10 @@ export class EpisodeStore {
           UPDATE memory_episodes SET dream_status = 'processing', last_dream_run_id = ?, dream_error = NULL
           WHERE episode_id = ?
         `).run(input.runId || null, row.episode_id);
-        claimed.push({ episodeId: row.episode_id, projectId: row.project_id, leaseId, modeHint: row.mode_hint, attempts: row.attempts + 1 });
+        claimed.push({
+          episodeId: row.episode_id, projectId: row.project_id, leaseId, modeHint: row.mode_hint,
+          attempts: row.attempts + 1, createdAt: row.created_at,
+        });
       }
     }
     return claimed;
@@ -449,16 +572,18 @@ export class EpisodeStore {
   recordDreamRun(input: {
     runId: string; projectId?: string; requestedMode: string; selectedMode: string; reason: string;
     episodeIds: string[]; candidateIds: string[]; status: string; durationMs: number; error?: string; createdAt: number;
+    failedEpisodes?: Array<{ episodeId: string; error: string; failureCategory: string; retryAfter?: number }>;
   }): void {
     this.db.prepare(`
       INSERT INTO episode_dream_runs (
         run_id, project_id, requested_mode, selected_mode, reason, episode_ids_json,
-        candidate_ids_json, status, duration_ms, error, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        candidate_ids_json, status, duration_ms, error, created_at, failed_episode_ids_json, failure_details_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.runId, input.projectId || null, input.requestedMode, input.selectedMode, input.reason,
       JSON.stringify(input.episodeIds), JSON.stringify(input.candidateIds), input.status,
       input.durationMs, input.error || null, input.createdAt,
+      JSON.stringify((input.failedEpisodes || []).map((item) => item.episodeId)), JSON.stringify(input.failedEpisodes || []),
     );
   }
 
@@ -471,14 +596,38 @@ export class EpisodeStore {
   }
 
   recordIngestKey(input: { projectId: string; sourceAgent: string; sourceSessionId: string; externalMessageId: string; eventId: string; now?: number }): void {
+    const now = input.now ?? Date.now();
     this.db.prepare(`
       INSERT OR IGNORE INTO episode_ingest_keys (
-        ingest_key, project_id, source_agent, source_session_id, external_message_id, event_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ingest_key, project_id, source_agent, source_session_id, external_message_id, event_id, state, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
     `).run(
       `${input.projectId}\u0000${input.sourceAgent}\u0000${input.sourceSessionId}\u0000${input.externalMessageId}`,
-      input.projectId, input.sourceAgent, input.sourceSessionId, input.externalMessageId, input.eventId, input.now ?? Date.now(),
+      input.projectId, input.sourceAgent, input.sourceSessionId, input.externalMessageId, input.eventId, now, now,
     );
+  }
+
+  markIngestState(input: {
+    projectId: string; sourceAgent: string; sourceSessionId: string; externalMessageId: string;
+    state: 'reserved' | 'committed' | 'failed'; error?: string; now?: number;
+  }): void {
+    this.db.prepare(`
+      UPDATE episode_ingest_keys SET state = ?, last_error = ?, updated_at = ?
+      WHERE project_id = ? AND source_agent = ? AND source_session_id = ? AND external_message_id = ?
+    `).run(input.state, input.error?.slice(0, 2000) || null, input.now ?? Date.now(),
+      input.projectId, input.sourceAgent, input.sourceSessionId, input.externalMessageId);
+  }
+
+  getIngestState(projectId: string, sourceAgent: string, sourceSessionId: string, externalMessageId: string): {
+    eventId: string; state: 'reserved' | 'committed' | 'failed'; error?: string; updatedAt?: number;
+  } | undefined {
+    const row = this.db.prepare(`
+      SELECT event_id, state, last_error, updated_at FROM episode_ingest_keys
+      WHERE project_id = ? AND source_agent = ? AND source_session_id = ? AND external_message_id = ?
+    `).get(projectId, sourceAgent, sourceSessionId, externalMessageId) as {
+      event_id: string; state: 'reserved' | 'committed' | 'failed'; last_error?: string | null; updated_at?: number | null;
+    } | null;
+    return row ? { eventId: row.event_id, state: row.state, error: row.last_error || undefined, updatedAt: row.updated_at ?? undefined } : undefined;
   }
 
   deleteByProject(projectId: string): number {
@@ -498,7 +647,7 @@ export class EpisodeStore {
     return count;
   }
 
-  private enqueueDreamJob(episode: MemoryEpisode, modeHint: 'micro' | 'normal', now: number): void {
+  private enqueueDreamJob(episode: MemoryEpisode, modeHint: 'micro' | 'normal' | 'deep', now: number): void {
     const priority = Math.round(episode.importance * 100) + (['correction', 'decision', 'prospective'].includes(episode.episodeType) ? 30 : 0);
     this.db.prepare(`
       INSERT INTO episode_dream_jobs (episode_id, project_id, state, priority, mode_hint, created_at, updated_at)
@@ -544,16 +693,26 @@ export class EpisodeStore {
       CREATE TABLE IF NOT EXISTS episode_dream_runs (
         run_id TEXT PRIMARY KEY, project_id TEXT, requested_mode TEXT NOT NULL, selected_mode TEXT NOT NULL,
         reason TEXT NOT NULL, episode_ids_json TEXT NOT NULL, candidate_ids_json TEXT NOT NULL, status TEXT NOT NULL,
-        duration_ms INTEGER NOT NULL, error TEXT, created_at INTEGER NOT NULL
+        duration_ms INTEGER NOT NULL, error TEXT, created_at INTEGER NOT NULL,
+        failed_episode_ids_json TEXT NOT NULL DEFAULT '[]', failure_details_json TEXT NOT NULL DEFAULT '[]'
       );
       CREATE TABLE IF NOT EXISTS episode_ingest_keys (
         ingest_key TEXT PRIMARY KEY, project_id TEXT NOT NULL, source_agent TEXT NOT NULL,
         source_session_id TEXT NOT NULL, external_message_id TEXT NOT NULL,
-        event_id TEXT NOT NULL, created_at INTEGER NOT NULL
+        event_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'committed', created_at INTEGER NOT NULL,
+        updated_at INTEGER, last_error TEXT
       );
       CREATE TABLE IF NOT EXISTS episode_event_dispositions (
         event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, disposition TEXT NOT NULL,
         reason TEXT NOT NULL, created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS episode_cross_refs (
+        cross_ref_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, episode_id TEXT NOT NULL, referenced_episode_id TEXT,
+        event_id TEXT, relation TEXT NOT NULL, created_by TEXT NOT NULL, confidence REAL NOT NULL, created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS episode_repair_audit (
+        repair_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL,
+        before_json TEXT NOT NULL, after_json TEXT NOT NULL, created_at INTEGER NOT NULL
       );
     `);
   }

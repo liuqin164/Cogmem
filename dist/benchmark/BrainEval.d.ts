@@ -55,6 +55,25 @@ export interface BrainEvalSample {
         liveShape: string;
         importedShape: string;
     }>;
+    topicMutationIsolationChecks?: Array<{
+        crossProjectMutation: boolean;
+    }>;
+    topicAuditRollbackChecks?: Array<{
+        audited: boolean;
+        rollbackRestored: boolean;
+    }>;
+    repairInvalidationChecks?: Array<{
+        oldCandidatesStale: boolean;
+        dreamRequeued: boolean;
+    }>;
+    importResumeChecks?: Array<{
+        resumedWithoutDuplicate: boolean;
+        checkpointComplete: boolean;
+    }>;
+    hooklessWarningChecks?: Array<{
+        ingestionMissing: boolean;
+        warningPresent: boolean;
+    }>;
 }
 export interface BrainEvalMetrics {
     recall: number;
@@ -77,6 +96,11 @@ export interface BrainEvalMetrics {
     dreamCandidateGrounding: number;
     dreamBypassRate: number;
     hermesImportParity: number;
+    topicMutationLeakageRate: number;
+    topicAuditRollbackCompliance: number;
+    repairInvalidationCompliance: number;
+    importResumeReliability: number;
+    hooklessWarningCoverage: number;
 }
 export interface BrainEvalReport {
     passed: boolean;

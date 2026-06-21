@@ -18,6 +18,8 @@
 export { MemoryKernel, createMemoryKernel, createMemoryKernelFromConfig, } from './factory.js';
 export { EpisodeAssembler, EpisodeStore, classifyAssistantRelation, classifyTurnRelation, classifyTurnRelationHybrid, createStableImportIdentityFactory, summarizeEpisode, } from './episode/index.js';
 export { DreamScheduler } from './dream/index.js';
+export { MEMORY_ONTOLOGY_CLASSES, isMemoryOntologyClass } from './ontology/MemoryOntology.js';
+export { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPathRegistry, TopicRelationGraph, } from './topic/index.js';
 /**
  * Cogmem runtime home and structured configuration helpers.
  * @stable @since 2.0.0

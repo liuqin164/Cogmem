@@ -6,7 +6,12 @@ export interface TurnClassificationContext {
     previousAssistantText?: string;
     activeEpisodeSummary?: string;
     activeEpisodeTopicPath?: string;
+    currentTopicPath?: string;
     recentRelations?: TurnRelation[];
+    topicPathMatch?: boolean;
+    entityOverlap?: number;
+    projectMatch?: boolean;
+    semanticSimilarity?: number;
 }
 export interface TurnRelationDecision {
     relation: TurnRelation;
@@ -19,6 +24,7 @@ export interface TurnRelationDecision {
     switchKind?: 'hard' | 'subtopic' | 'ambiguous';
     episodeType: EpisodeType;
     importance: number;
+    importanceSignals: string[];
     rationale: string;
 }
 export interface TurnRelationAdvisoryReviewer {

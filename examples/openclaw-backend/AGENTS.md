@@ -68,6 +68,10 @@ For package upgrades, run `cogmem update --yes`; it installs the latest GitHub R
 
 Episode Dream is not part of the answer path. `agent_end` only queues Raw Ledger and episode assembly. Treat semantic episode summaries as routing hints, never evidence; durable candidates must cite raw event IDs. Retry `failed_retryable` Dream jobs only during maintenance, and inspect `failed_terminal` jobs instead of repeatedly ticking them.
 
+Keep live `agent_end` classification CPU-only. Background import/repair may use the hybrid reviewer, but reviewer output is allow-listed and advisory. Unknown turns are ambiguous until continuation is supported by explicit language or topic/entity/project overlap. Do not add domain-specific routing regexes.
+
+When the user explicitly names, aliases, moves, merges, splits, or relates a topic, record an audited `user_explicit` topic operation. Model-derived topic structure stays `model_candidate`; inspect collisions with `cogmem_topic_list`. For incorrect episode boundaries use the repair API/CLI, which recomputes receipts, invalidates derived candidates, cross-references the old boundary, and requeues Dream. Do not edit SQLite rows directly.
+
 Preview first:
 
 ```bash

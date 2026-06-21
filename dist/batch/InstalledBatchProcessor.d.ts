@@ -73,7 +73,7 @@ export type BatchProgressEvent = {
 interface InstalledBatchProcessorDependencies {
     cursorStore: IngestionCursorStore;
     ingestBatch: (inputs: IngestInput[]) => Promise<Neuron[]>;
-    recordRawEvidence?: (envelope: BatchEpisodeEnvelope) => MemoryEvent | undefined;
+    recordRawEvidence?: (envelope: BatchEpisodeEnvelope) => MemoryEvent | undefined | Promise<MemoryEvent | undefined>;
     runOfflineWindow: (window: BatchConsolidationWindow) => Promise<OfflineConsolidationOutput>;
     onProgress?: (event: BatchProgressEvent) => void;
 }

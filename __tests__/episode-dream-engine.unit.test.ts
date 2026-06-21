@@ -38,10 +38,10 @@ test('ambiguous same-domain topic switch soft-seals the previous episode and noi
     });
     const episodes = kernel.listEpisodes({ projectId: 'brain' });
     expect(episodes).toHaveLength(2);
-    expect(episodes.map((episode) => episode.status).sort()).toEqual(['open', 'soft_sealed']);
-    const sealed = episodes.find((episode) => episode.status === 'soft_sealed')!;
+    expect(episodes.map((episode) => episode.status).sort()).toEqual(['open', 'sealed']);
+    const sealed = episodes.find((episode) => episode.status === 'sealed')!;
     expect(kernel.listEpisodeClosureReceipts({ episodeId: sealed.episodeId })).toEqual([
-      expect.objectContaining({ closureReason: 'ambiguous_topic_shift', requiresReview: true }),
+      expect.objectContaining({ closureReason: 'explicit_topic_switch', requiresReview: false }),
     ]);
 
     const beforeNoiseLinks = episodes.reduce((total, episode) => total + kernel.listEpisodeEventLinks(episode.episodeId).length, 0);
@@ -378,6 +378,7 @@ test('idempotent append retries episode assignment when the raw write previously
       projectId: 'hermes', workspaceId: 'hermes', threadId: 'session-recovery', sessionId: 'session-recovery',
       role: 'user', content: '这条 raw event 已落盘，但第一次 episode 分配失败。',
       sourceId: 'hermes:session-recovery',
+      metadata: { sourceAgent: 'hermes' },
     });
     kernel.episodeStore.recordIngestKey({
       projectId: 'hermes', sourceAgent: 'hermes', sourceSessionId: 'session-recovery',
