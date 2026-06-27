@@ -7,6 +7,7 @@ export const migration_0025 = {
         node_id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         node_type TEXT NOT NULL,
+        memory_kind TEXT,
         source_id TEXT NOT NULL,
         label TEXT NOT NULL,
         summary TEXT,
@@ -206,6 +207,21 @@ export function backfillAtlasDocuments(db, projectId) {
     SELECT node_id, project_id, node_type, label, COALESCE(summary, ''), COALESCE(topic_path, '')
     FROM memory_atlas_documents${ftsWhere};
   `).run(...projectParams);
+    db.exec(`
+    UPDATE memory_atlas_documents SET memory_kind = CASE
+      WHEN node_type IN ('action','project','event','time') THEN node_type
+      WHEN lower(json_extract(metadata_json, '$.clusterType')) IN ('decision','correction','goal','preference','plan','event','evidence')
+        THEN lower(json_extract(metadata_json, '$.clusterType'))
+      WHEN lower(json_extract(metadata_json, '$.episodeType')) IN ('decision','correction','goal','preference','plan','event','evidence')
+        THEN lower(json_extract(metadata_json, '$.episodeType'))
+      WHEN lower(json_extract(metadata_json, '$.ontologyClass')) IN ('person','place','project','object','decision','correction','goal','preference','plan','event','evidence')
+        THEN lower(json_extract(metadata_json, '$.ontologyClass'))
+      WHEN lower(json_extract(metadata_json, '$.entityType')) IN ('person','place','project','object')
+        THEN lower(json_extract(metadata_json, '$.entityType'))
+      ELSE NULL
+    END
+    WHERE memory_kind IS NULL;
+  `);
 }
 export function installAtlasProjectionDirtyTriggers(db) {
     const sources = [

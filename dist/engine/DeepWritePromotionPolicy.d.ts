@@ -24,12 +24,15 @@ export interface DeepWritePromotionPolicyDeps {
 export interface DeepWritePromotionOptions {
     projectId?: string;
 }
+export interface DeepWriteEvaluationOptions {
+    reviewConfirmed?: boolean;
+}
 export declare class DeepWritePromotionPolicy {
     private readonly deps;
     constructor(deps: DeepWritePromotionPolicyDeps);
     promoteRun(runId: string): DeepWritePromotionDecision[];
     promotePending(limit?: number, options?: DeepWritePromotionOptions): DeepWritePromotionDecision[];
-    evaluateAndApply(candidate: DeepWriteCandidateRecord): DeepWritePromotionDecision;
+    evaluateAndApply(candidate: DeepWriteCandidateRecord, options?: DeepWriteEvaluationOptions): DeepWritePromotionDecision;
     private promoteOrganizationCandidate;
     private promoteFact;
     private promoteSummary;

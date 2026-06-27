@@ -8,6 +8,7 @@ export interface MemoryAtlasNode {
     id: string;
     projectId: string;
     nodeType: MemoryAtlasNodeType;
+    memoryKind?: string;
     sourceId: string;
     label: string;
     summary?: string;
@@ -19,6 +20,10 @@ export interface MemoryAtlasNode {
     activation: number;
     score: number;
     evidenceCount: number;
+    /** Total source evidence known for this node. */
+    evidenceTotal: number;
+    /** Number of evidence records returned in this response. */
+    evidenceReturned?: number;
 }
 export interface MemoryAtlasEdge {
     source: string;

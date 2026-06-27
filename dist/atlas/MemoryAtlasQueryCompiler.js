@@ -1,4 +1,4 @@
-const STOP_WORDS = new Set(['我', '你', '让', '对', '做过', '什么', '去年', 'the', 'a', 'an', 'what', 'did', 'do', 'to']);
+const STOP_WORDS = new Set(['我', '你', '让', '对', '的', '年', '做过', '什么', '去年', '今年', 'the', 'a', 'an', 'what', 'did', 'do', 'to', 'last', 'year']);
 const ACTION_MARKERS = /配置|连接|安装|修复|更新|升级|比较|操作|设置|调试|configure|connect|install|repair|fix|update|upgrade|compare|setup|debug/iu;
 const MEMORY_KIND_MARKERS = [
     [/决策|决定|decision/iu, 'decision'], [/修正|纠正|correction/iu, 'correction'],
@@ -27,13 +27,23 @@ export function compileAtlasQuery(query, now = Date.now()) {
             && !ACTION_MARKERS.test(token)
             && !MEMORY_KIND_MARKERS.some(([pattern]) => pattern.test(token)));
     const memoryKinds = MEMORY_KIND_MARKERS.filter(([pattern]) => pattern.test(text)).map(([, kind]) => kind);
-    return { text, tokens, target, actionIntent: ACTION_MARKERS.test(text), range, memoryKinds };
+    const keywords = tokens.filter((token) => token !== target
+        && token !== explicitYear
+        && !ACTION_MARKERS.test(token)
+        && !MEMORY_KIND_MARKERS.some(([pattern]) => pattern.test(token)));
+    return { text, tokens, keywords, target, actionIntent: ACTION_MARKERS.test(text), range, memoryKinds };
 }
 export function actionMarker(value) {
-    const match = value.match(ACTION_MARKERS)?.[0];
-    if (!match)
-        return undefined;
-    const lower = match.toLowerCase();
+    return actionMarkers(value)[0];
+}
+export function actionMarkers(value) {
+    const matches = value.match(new RegExp(ACTION_MARKERS.source, 'giu')) || [];
+    return Array.from(new Set(matches.map((match) => match.toLocaleLowerCase()))).map((action) => ({
+        frameType: frameTypeForAction(action),
+        action,
+    }));
+}
+function frameTypeForAction(lower) {
     const frameType = /修复|fix|repair|调试|debug/u.test(lower) ? 'repair'
         : /安装|install/u.test(lower) ? 'install'
             : /连接|connect/u.test(lower) ? 'connect'
@@ -41,5 +51,5 @@ export function actionMarker(value) {
                     : /比较|compare/u.test(lower) ? 'compare'
                         : /配置|设置|configure|setup/u.test(lower) ? 'configuration'
                             : 'operation';
-    return { frameType, action: match };
+    return frameType;
 }

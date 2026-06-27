@@ -20,6 +20,7 @@ export class BeliefStore {
         global: 1
     };
     db;
+    closed = false;
     constructor(dbPath = ':memory:', eventStore) {
         this.eventStore = eventStore;
         this.db = new Database(dbPath);
@@ -889,6 +890,9 @@ export class BeliefStore {
         return Math.max(min, Math.min(max, value));
     }
     close() {
+        if (this.closed)
+            return;
         this.db.close();
+        this.closed = true;
     }
 }

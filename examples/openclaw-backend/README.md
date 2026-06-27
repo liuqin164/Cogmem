@@ -78,7 +78,7 @@ cogmem memory tick --project openclaw --json
 cogmem memory bind --project openclaw --json
 ```
 
-Cogmem 3.6.0 adds Memory Atlas content navigation. The auto plugin calls the shared Atlas core directly, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
+Cogmem 3.6.0 hardens Memory Atlas content navigation. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
 
 ```bash
 cogmem memory graph-explore --project openclaw --query "去年与 Hermes 有关的决定" --json
@@ -86,7 +86,7 @@ cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --
 cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
 ```
 
-Use Atlas to locate a bounded source-backed slice, then use `memory show` for exact evidence. Node activation controls default visibility and decays during explicit maintenance; exact scoped facets can still revive cold memory without promoting or rewriting it.
+Use Atlas to locate a bounded source-backed slice, then use `memory show` for exact evidence. Graph reads do not change activation; explicitly touch only nodes the agent actually uses. Activation controls default visibility and decays during explicit maintenance; exact scoped facets can still revive cold memory without promoting or rewriting it.
 
 `memory tick` returns activation decay results and `suggestedActions`; it does not start a hidden daemon. If it reports `bind_raw_events`, run `memory bind` to attach imported or adapter-written raw user events to Memory Binding.
 
@@ -94,7 +94,7 @@ Use Atlas to locate a bounded source-backed slice, then use `memory show` for ex
 
 Recall JSON includes `decisionTrace`; the automatic prompt wrapper renders its compact form as `recallDecision=`. Check the selected lane, reason, and candidate counts before saying memory is absent, then use `sourceLocator` for exact wording. Raw fallback searches the fully scoped ledger and prefers original user anchors over later assistant retellings on equal cue matches.
 
-Dream treats explicit user clarification as organizational correction evidence, not an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Invalid provider output is a rejected diagnostic, and `memory tick` supersedes stale `needs_confirmation` entries after the default 30-day TTL without deleting evidence.
+Dream treats explicit user clarification as organizational correction evidence, not an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Review `needs_confirmation` with `cogmem memory review`; `memory tick` only supersedes entries left stale past the default 30-day TTL.
 
 ## Migrate
 
@@ -197,7 +197,7 @@ cogmem import-openclaw --workspace . --project openclaw --config .cogmem/config.
 
 This backfills searchable raw anchors for old imported memories without duplicating compiled memory or vectors.
 
-For agent-facing instructions, install or read `SKILL.md`. `cogmem connect openclaw --workspace .` copies it to `<workspace>/skills/cogmem-memory/SKILL.md`.
+For agent-facing instructions, run `cogmem connect openclaw --workspace .`. It installs `SKILL.md` plus `references/operations.md`, a complete command-selection, migration, import, recall, Atlas, governance, repair, backup, and maintenance handbook.
 
 To make future OpenClaw turns automatically recall and record memory, run:
 

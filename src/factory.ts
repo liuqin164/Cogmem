@@ -67,14 +67,17 @@ import type { EncryptionProvider } from './encryption/index.js';
 import { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPathRegistry, TopicRelationGraph } from './topic/index.js';
 import { CorrectionResolver } from './episode/CorrectionResolver.js';
 import {
+  CandidateReviewService,
   MemoryGovernanceExecutor,
   MemoryGovernanceValidator,
   PiiRedactor,
   type MemoryGovernanceExecutionResult,
   type MemoryGovernancePlan,
   type RedactionPolicy,
+  type CandidateReviewInput,
+  type CandidateReviewResult,
 } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, SchemaMigrationRunner } from './migrations/index.js';
+import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -96,6 +99,7 @@ import type { Embedder } from './store/Embedder.js';
 import { CognitiveGraphStore } from './store/CognitiveGraphStore.js';
 import { CompilerConfidenceStore } from './store/CompilerConfidenceStore.js';
 import { DeepWriteCandidateStore, type DeepWriteCandidateStatus } from './store/DeepWriteCandidateStore.js';
+import { CandidateReviewStore, type CandidateReviewRecord } from './store/CandidateReviewStore.js';
 import { DreamLedgerStore, type DreamBacklogStatus } from './store/DreamLedgerStore.js';
 import { ActivationStore, type ActivationDecayResult, type ActivationHotspot } from './store/ActivationStore.js';
 import { EntityStore } from './store/EntityStore.js';
@@ -309,6 +313,7 @@ export interface MaintenanceTickOptions {
   activationFloor?: number;
   confirmationTtlMs?: number;
   now?: number;
+  atlasAccessRetentionMs?: number;
 }
 
 export interface MaintenanceSuggestedAction {
@@ -344,8 +349,9 @@ export interface MaintenanceTickResult {
   };
   executed: {
     activationDecay: ActivationDecayResult;
-    memoryAtlasRefresh: { documents: number; actions: number };
+    memoryAtlasRefresh: { documents: number; actions: number; refreshed: boolean; errors?: Array<{ projectId: string; error: string }> };
     memoryAtlasActivationDecay: number;
+    memoryAtlasAccessPruned: number;
     reviewQueueAging: {
       expired: number;
       candidateIds: string[];
@@ -569,6 +575,8 @@ export class MemoryKernel {
   private readonly summaryStore: SummaryStore;
   private readonly deepWriteCandidateStore: DeepWriteCandidateStore;
   private readonly deepWritePromotionPolicy: DeepWritePromotionPolicy;
+  private readonly candidateReviewStore: CandidateReviewStore;
+  private readonly candidateReviewService: CandidateReviewService;
   private readonly dreamCuratorWorker: DreamCuratorWorker;
   private readonly dreamScheduler: DreamScheduler;
   private readonly memoryBindingService: MemoryBindingService;
@@ -592,6 +600,7 @@ export class MemoryKernel {
   private lastEmbedSuccessAt?: number;
   private lastEmbedErrorAt?: number;
   private initialized = false;
+  private closed = false;
 
   constructor(private readonly options: MemoryKernelOptions = {}) {
     this.dbPath = options.dbPath ?? ':memory:';
@@ -602,7 +611,7 @@ export class MemoryKernel {
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
     db.exec('PRAGMA busy_timeout = 5000;');
-    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025]).run();
+    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026]).run();
     this.ensureMetaTable(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
@@ -819,6 +828,14 @@ export class MemoryKernel {
       summaryStore: this.summaryStore,
       minPromoteConfidence: 0.86,
     });
+    this.candidateReviewStore = new CandidateReviewStore(db);
+    this.candidateReviewService = new CandidateReviewService(
+      db,
+      this.deepWriteCandidateStore,
+      this.candidateReviewStore,
+      this.deepWritePromotionPolicy,
+      (eventId) => this.eventStore.getEvent(eventId),
+    );
     const workingMemoryDelta = new WorkingMemoryDelta(db, this.memoryGraph);
 
     this.offlineConsolidationPipeline = new OfflineConsolidationPipeline({
@@ -889,7 +906,11 @@ export class MemoryKernel {
   }
 
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     this.stop();
+    this.beliefStore.close();
+    this.cursorStore.close();
     this.memoryGraph.close();
     this.eventStore.close();
     this.factStore.close();
@@ -1720,6 +1741,14 @@ export class MemoryKernel {
     return this.deepWriteCandidateStore.countCandidates(options);
   }
 
+  reviewDreamCandidate(input: CandidateReviewInput): CandidateReviewResult {
+    return this.candidateReviewService.review(input);
+  }
+
+  listDreamCandidateReviews(options: { projectId?: string; candidateId?: string; limit?: number } = {}): CandidateReviewRecord[] {
+    return this.candidateReviewStore.list(options);
+  }
+
   bindMemoryEvent(event: MemoryEvent): MemoryBindingRecord[] {
     return this.memoryBindingService.bindRawEvent(event);
   }
@@ -1808,31 +1837,45 @@ export class MemoryKernel {
   }
 
   graphOverview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
+    this.ensureMemoryAtlas({ projectId: options.projectId });
     return this.memoryAtlasService.overview(options);
   }
 
   graphSearch(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
+    this.ensureMemoryAtlas({ projectId: options.projectId });
     return this.memoryAtlasService.search(query, options);
   }
 
   graphExplore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
+    this.ensureMemoryAtlas({ projectId: options.projectId });
     return this.memoryAtlasService.explore(query, options);
   }
 
   graphNode(nodeId: string, options: MemoryAtlasQueryOptions): MemoryAtlasNodeDetail | null {
+    this.ensureMemoryAtlas({ projectId: options.projectId });
     return this.memoryAtlasService.node(nodeId, options);
   }
 
   graphNeighbors(nodeId: string, options: MemoryAtlasQueryOptions & { hops?: number }): MemoryAtlasSlice {
+    this.ensureMemoryAtlas({ projectId: options.projectId });
     return this.memoryAtlasService.neighbors(nodeId, options);
   }
 
   graphPath(from: string, to: string, options: MemoryAtlasQueryOptions & { maxHops?: number }): MemoryAtlasPathResult {
+    this.ensureMemoryAtlas({ projectId: options.projectId });
     return this.memoryAtlasService.path(from, to, options);
   }
 
   graphTimeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult {
+    this.ensureMemoryAtlas({ projectId: options.projectId });
     return this.memoryAtlasService.timeline(query, options);
+  }
+
+  touchMemoryAtlas(input: { projectId: string; nodeIds: string[]; reason: string; query?: string; now?: number }): { touched: number } {
+    if (!input.projectId?.trim()) throw new Error('projectId is required');
+    if (!input.reason?.trim()) throw new Error('reason is required');
+    const valid = Array.from(new Set(input.nodeIds)).filter((id) => this.memoryAtlasStore.getNode(id, input.projectId)).slice(0, 30);
+    return { touched: this.memoryAtlasStore.recordAccess(input.projectId, valid, input.reason, input.query, input.now) };
   }
 
   countUnboundBindableRawEvents(projectId?: string, limit: number = 1000): number {
@@ -2048,8 +2091,19 @@ export class MemoryKernel {
       floor: options.activationFloor,
       now: ranAt,
     });
-    const memoryAtlasRefresh = this.rebuildMemoryAtlas({ projectId });
+    let memoryAtlasRefresh: MaintenanceTickResult['executed']['memoryAtlasRefresh'];
+    try {
+      memoryAtlasRefresh = projectId
+        ? { ...this.ensureMemoryAtlas({ projectId }), errors: [] }
+        : this.memoryAtlasIndexer.ensureAllFresh();
+    } catch (error) {
+      memoryAtlasRefresh = { documents: this.memoryAtlasStore.countDocuments(projectId), actions: 0, refreshed: false,
+        errors: [{ projectId: projectId || '__global__', error: error instanceof Error ? error.message : String(error) }] };
+    }
     const memoryAtlasActivationDecay = this.memoryAtlasStore.decay(projectId, options.activationDecayFactor ?? 0.85, ranAt);
+    const memoryAtlasAccessPruned = this.memoryAtlasStore.cleanupAccess({
+      projectId, before: ranAt - (options.atlasAccessRetentionMs ?? 90 * 24 * 60 * 60 * 1000),
+    });
     const confirmationTtlMs = options.confirmationTtlMs ?? 30 * 24 * 60 * 60 * 1000;
     const reviewQueueAging = this.deepWriteCandidateStore.expireNeedsConfirmation({
       projectId,
@@ -2154,6 +2208,7 @@ export class MemoryKernel {
         activationDecay,
         memoryAtlasRefresh,
         memoryAtlasActivationDecay,
+        memoryAtlasAccessPruned,
         reviewQueueAging: {
           ...reviewQueueAging,
           ttlMs: confirmationTtlMs,

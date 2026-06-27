@@ -87,7 +87,7 @@ cogmem memory candidates --project <project> --status candidate --json
 
 Promotion is a separate CPU-governed step handled by the deep-write promotion policy. Missing evidence, inference-only content, low confidence, assistant/tool-only observations, or unsupported causal links remain `needs_confirmation` or stay candidates. This preserves the rule that dreaming can organize memory but cannot silently turn model guesses or tool output into verified truth.
 
-`needs_confirmation` is an audit queue, not permanent memory. An explicit host-owned maintenance tick marks items older than the default 30-day TTL `superseded` with reason `needs_confirmation_ttl_expired`. The candidate and evidence rows remain available for audit; core never starts a hidden cleanup daemon.
+`needs_confirmation` is an operator review queue, not permanent memory. Use `cogmem memory review` or MCP `cogmem_candidate_review` to approve, reject, defer, supersede, or relink a correction. Approval/relink require distinct same-project user evidence, and relink requires an active same-project belief. A host-owned maintenance tick only supersedes items left untouched past the default 30-day TTL; candidate, evidence, and review audit rows remain available.
 
 The worker can be run manually or by a host-owned schedule, but the schedule only calls one bounded `cogmem dream tick`. Core does not start hidden timers or a daemon. Cron, systemd, OpenClaw, Hermes, or another adapter decides when to call `cogmem dream tick`, `cogmem memory tick`, `MemoryKernel.runDreamTick()`, or `MemoryKernel.runMaintenanceTick()`. MCP `cogmem_dream_tick` is additionally guarded: without `maintenanceMode: true` it returns a recommendation-only dry run.
 
@@ -168,12 +168,12 @@ Rejected designs:
 - fixed recent-six-turn context as the memory model
 ## Memory Atlas projection
 
-Memory Atlas v1 is a canonical-memory-safe navigation projection over governed memory and source-anchored organization. Queries record only non-evidentiary access/activation telemetry; they do not replace or rewrite Raw Ledger, recall, Memory Binding, Episode Dream, beliefs, topics, or governance, and an Atlas summary is never evidence.
+Memory Atlas v1 is a canonical-memory-safe navigation projection over governed memory and source-anchored organization. Query tools are pure reads; only explicit `cogmem_graph_touch` records non-evidentiary activation telemetry for nodes the agent used. Atlas does not replace or rewrite Raw Ledger, recall, Memory Binding, Episode Dream, beliefs, topics, or governance, and an Atlas summary is never evidence.
 
 Atlas nodes project topics, entities, clusters, episodes, beliefs, action frames, and time buckets. Edges project existing memory relations plus deterministic action target/time links. Every evidentiary route terminates in raw event IDs and a `cogmem memory show` locator.
 
 Broad questions use `graphExplore`; known concepts use `graphSearch` then `graphNode`; relationship questions use `graphNeighbors`, `graphPath`, or `graphTimeline`. Query compilation combines the conditions actually present in the message, including project, time range, target/entity, topic, memory kind, and ordinary cues. These conditions behave like table filters, not a fixed entity-time-action template.
 
-Activation controls default visibility only. Access raises a node's navigation activation and explicit maintenance decays it. A cold node can re-enter the result set when exact project-scoped facets match, but resurrection never changes source authority, confidence, belief status, ownership, or promotion state.
+Activation controls default visibility only. Pure Atlas queries do not raise it. Explicit `cogmem_graph_touch` records nodes the agent actually used, and maintenance decays that telemetry. A cold node can re-enter the result set when exact project-scoped facets match, but resurrection never changes source authority, confidence, belief status, ownership, or promotion state.
 
-Projection freshness is write-driven. Schema-25 triggers mark the affected project dirty; the next Atlas query refreshes that project and unchanged queries reuse the projection. There is no hidden model loop or daemon. Dream may improve governed source structures during explicit maintenance, while deterministic Atlas refresh handles indexing.
+Projection freshness is write-driven. Schema-25/26 triggers mark the affected project dirty; the next Kernel, CLI, MCP, or plugin Atlas query refreshes only that project and unchanged queries reuse the projection. Failed refreshes record `last_error` without blocking unrelated maintenance. There is no hidden model loop or daemon.

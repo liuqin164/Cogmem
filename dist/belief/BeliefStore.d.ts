@@ -6,6 +6,7 @@ export declare class BeliefStore {
     private static readonly SOURCE_TRUST;
     private static readonly SCOPE_PRIORITY;
     private db;
+    private closed;
     constructor(dbPath?: string, eventStore?: EventStore | undefined);
     private initializeSchema;
     findByCanonicalKey(canonicalKey: string): BeliefRecord[];

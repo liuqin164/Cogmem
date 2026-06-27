@@ -35,7 +35,7 @@ This release is distributed through GitHub Releases. Do not run npm publish.
 - `cogmem episode`
 - `cogmem dream`
 
-MCP `tools/list` includes strategy, episode append/import/status/seal/repair, topic list/operate/rollback, conditional Dream tick/status, prospective tools, and all seven canonical-memory-safe Memory Atlas tools. Atlas tools declare their non-destructive access/activation side effect instead of claiming strict read-only/idempotent semantics. Episode append/import never run Dream. MCP Dream tick requires `maintenanceMode: true` to process work; otherwise it is recommendation-only. Dream candidate generation never bypasses governance or executes tasks.
+MCP `tools/list` includes strategy, episode append/import/status/seal/repair, topic list/operate/rollback, candidate review, conditional Dream tick/status, prospective tools, all seven read-only Memory Atlas queries, and explicit `cogmem_graph_touch`. Atlas queries declare read-only/idempotent semantics and never change activation; only touch records selected-node use. Episode append/import never run Dream. MCP Dream tick requires `maintenanceMode: true` to process work; otherwise it is recommendation-only.
 
 ## Required Documentation
 
@@ -44,7 +44,7 @@ MCP `tools/list` includes strategy, episode append/import/status/seal/repair, to
 - README distinguishes embedding models from Dream Curator memory-model LLMs.
 - README and integration docs explain labeled `sourceContext`, strict before/after window metadata, `charRange` / `sourceRange`, and OpenClaw `sourceWindow` / `sourceTruncation` injection.
 - README and skills explain collection routing, `cogmem memory map`, and `cogmem memory tick` as host-owned inspection and maintenance surfaces.
-- README and skills explain `decisionTrace` / `recallDecision`, source-first raw fallback, correction semantics, and review-queue aging.
+- README and skills explain `decisionTrace` / `recallDecision`, source-first raw fallback, correction semantics, audited review actions, and review-queue aging.
 - README and skills explain `cogmem update --yes`, migration dry-run, backups, and that Raw Ledger evidence is never rewritten by schema migration.
 - README and skills explain that entity aliases are evidence-backed, project-scoped, reversible, and stricter for person entities.
 - README and skills explain Belief Graph ownership, user-evidence requirements, reinforcement, conflict review, and supersession history.
@@ -57,13 +57,14 @@ MCP `tools/list` includes strategy, episode append/import/status/seal/repair, to
 - README and skills explain user-shaped topic operations, user-explicit versus model-candidate authority, alias collision review, operation rollback, and project isolation.
 - README, `MEMORY_ATLAS.md`, and skills distinguish the system anatomy map from the content Atlas; explain graph overview/search/explore/node/neighbors/path/timeline, generic multi-facet cold-memory resurrection, activation visibility, source drill-down, and project isolation.
 - README documents `cogmem.cli.v1`: object payloads are top-level, array payloads use `items`, and queue counters expose top-level compatibility aliases.
-- README documents the one-line schema-25 migration from 3.5.2 with backup, and the migration test proves source counts are preserved and reruns are idempotent.
+- README documents the one-line schema-24 plus pre-release schema-25 to schema-26 migration with backup, and migration tests prove source counts are preserved and reruns are idempotent.
 - README and skills explain episode surgery, closure recomputation, stale-candidate invalidation, cross-reference/audit preservation, and sealed-only Dream requeue.
 - README and Hermes skill explain per-message import checkpoints, stable `externalMessageId` requirements across split batches, source-agent validation, CLI range/error controls, and hookless recall freshness warnings.
-- OpenClaw skill explains self-install, import, active recall, `--auto`, and `doctor --fix`.
-- Hermes skill explains self-install, MCP wiring, `connect hermes --auto`, and `/reload-mcp`.
+- OpenClaw installation includes `SKILL.md` plus the complete `references/operations.md` command handbook covering migration, import, review, Atlas, repair, backup, and maintenance.
+- Hermes installation includes the same complete handbook, MCP wiring, `connect hermes --auto`, and `/reload-mcp`.
 - OpenClaw skill explains the direct plugin Atlas route without MCP; Hermes skill explains graph-first MCP tool selection and exact evidence drill-down.
 - BrainEval fixtures cover Atlas scope isolation, traversal bounds, evidence locators, path reconstruction, faceted resurrection, and canonical-source immutability.
+- Concurrency fixtures prove read-only inspection while another connection is open; Atlas fixtures prove pure reads, explicit touch, dirty-only rebuild, error state, retention, weighted path, and exact facet composition.
 - SECURITY documents local-first storage, explicit external providers, snapshots as sensitive, and governed recall.
 
 ## Verification

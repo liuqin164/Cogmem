@@ -10,30 +10,31 @@ export class MemoryAtlasService {
   overview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
     const limit = boundedLimit(options.limit);
     const nodes = this.store.listNodes(requiredProject(options.projectId), limit);
-    this.store.recordAccess(options.projectId, nodes.map((node) => node.id), 'overview');
     return slice(options.projectId, nodes, this.edgesFor(nodes, options.projectId));
   }
 
   search(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
     const projectId = requiredProject(options.projectId); const nodes = this.store.search(boundedQuery(query), projectId, boundedLimit(options.limit));
-    this.store.recordAccess(projectId, nodes.map((node) => node.id), 'search', query);
     return slice(projectId, nodes, this.edgesFor(nodes, projectId), query);
   }
 
   explore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
     const projectId = requiredProject(options.projectId); const limit = boundedLimit(options.limit);
     const compiled = compileAtlasQuery(boundedQuery(query), options.now);
+    const target = this.store.resolveTargetNodeIds(projectId, compiled.text);
     let nodes = this.store.searchFaceted(query, projectId, limit, {
       from: compiled.range?.from, to: compiled.range?.to, memoryKinds: compiled.memoryKinds,
+      keywords: target.nodeIds.length ? compiled.keywords : compiled.tokens,
+      targetNodeIds: target.nodeIds.length ? target.nodeIds : undefined,
     });
     if (compiled.actionIntent) {
-      const actions = this.store.listActions(projectId, { target: compiled.target, from: compiled.range?.from, to: compiled.range?.to, limit });
+      const actions = this.store.listActions(projectId, { target: compiled.target, targetEntityIds: target.entitySourceIds,
+        from: compiled.range?.from, to: compiled.range?.to, limit });
       nodes = uniqueNodes([...actions.map((action) => this.store.getNode(action.id, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node)), ...nodes]).slice(0, limit);
     }
     const edges = this.edgesFor(nodes, projectId);
-    this.store.recordAccess(projectId, nodes.map((node) => node.id), 'explore', query);
     const result = slice(projectId, nodes, edges, query);
-    result.facets = { time: compiled.range, target: compiled.target, memoryKinds: compiled.memoryKinds, keywords: compiled.tokens };
+    result.facets = { time: compiled.range, target: target.labels.join(', ') || compiled.target, memoryKinds: compiled.memoryKinds, keywords: compiled.keywords };
     const hasFacet = Boolean(compiled.range || compiled.target || compiled.memoryKinds.length || compiled.tokens.length);
     result.coldMemoryResurrected = hasFacet && nodes.some((node) => node.activation <= 0.1);
     return result;
@@ -44,8 +45,8 @@ export class MemoryAtlasService {
     if (!node) return null;
     const evidence = this.evidence(node.id, projectId, options.evidenceLimit, options.includeEvidence);
     const neighbors = this.safeEdges(this.store.listEdgesForNodes(projectId, [node.id], 30), projectId);
-    this.store.recordAccess(projectId, [node.id], 'node');
-    return { ...node, evidenceCount: evidence.length, evidence, neighbors };
+    const evidenceTotal = this.store.evidenceTotal(node.id, projectId);
+    return { ...node, evidenceCount: evidenceTotal, evidenceTotal, evidenceReturned: evidence.length, evidence, neighbors };
   }
 
   neighbors(nodeId: string, options: MemoryAtlasQueryOptions & { hops?: number }): MemoryAtlasSlice {
@@ -63,35 +64,37 @@ export class MemoryAtlasService {
       frontier = next;
     }
     const nodes = Array.from(seen).map((id) => this.store.getNode(id, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node)).slice(0, limit);
-    this.store.recordAccess(projectId, nodes.map((node) => node.id), 'neighbors');
     return slice(projectId, nodes, this.safeEdges(selectedEdges.filter((edge) => seen.has(edge.source) && seen.has(edge.target)).slice(0, 60), projectId));
   }
 
   path(from: string, to: string, options: MemoryAtlasQueryOptions & { maxHops?: number }): MemoryAtlasPathResult {
     const projectId = requiredProject(options.projectId); const maxHops = Math.max(1, Math.min(options.maxHops ?? 6, 6));
     const start = boundedId(from); const target = boundedId(to);
-    const visited = new Set([start]); const parents = new Map<string, { previous: string; edge: MemoryAtlasEdge }>();
-    let frontier = [start]; let found = start === target; let depth = 0;
-    while (frontier.length && !found && depth < maxHops && visited.size < 2000) {
-      const direct = this.directEdgesToTarget(projectId, frontier, target)[0];
-      if (direct && !visited.has(target)) {
-        const previous = direct.source === target ? direct.target : direct.source;
-        visited.add(target); parents.set(target, { previous, edge: direct }); found = true;
+    const parents = new Map<string, { previous: string; edge: MemoryAtlasEdge }>();
+    const best = new Map<string, number>([[start, 0]]);
+    const queue: Array<{ id: string; cost: number; hops: number }> = [{ id: start, cost: 0, hops: 0 }];
+    const expanded = new Set<string>();
+    let found = start === target;
+    while (queue.length && expanded.size < 2000) {
+      queue.sort((left, right) => left.cost - right.cost || left.hops - right.hops);
+      const current = queue.shift()!;
+      if (current.cost !== best.get(current.id)) continue;
+      if (current.id === target) { found = true; break; }
+      if (current.hops >= maxHops) continue;
+      expanded.add(current.id);
+      const adjacent = uniqueEdges([
+        ...this.adjacentEdges(projectId, [current.id], 4000),
+        ...this.directEdgesToTarget(projectId, [current.id], target),
+      ]);
+      for (const edge of adjacent) {
+        const next = edge.source === current.id ? edge.target : edge.target === current.id ? edge.source : undefined;
+        if (!next) continue;
+        if (next !== target && !this.store.getNode(next, projectId)) continue;
+        const nextCost = current.cost + edgeTraversalCost(edge);
+        if (nextCost >= (best.get(next) ?? Number.POSITIVE_INFINITY)) continue;
+        best.set(next, nextCost); parents.set(next, { previous: current.id, edge });
+        queue.push({ id: next, cost: nextCost, hops: current.hops + 1 });
       }
-      if (found) break;
-      const adjacentEdges = this.adjacentEdges(projectId, frontier, 4000);
-      const nextFrontier: string[] = [];
-      for (const current of frontier) {
-        for (const edge of adjacentEdges) {
-          const next = edge.source === current ? edge.target : edge.target === current ? edge.source : undefined;
-          if (!next || visited.has(next)) continue;
-          visited.add(next); parents.set(next, { previous: current, edge }); nextFrontier.push(next);
-          if (next === target) { found = true; break; }
-          if (visited.size >= 2000) break;
-        }
-        if (found || visited.size >= 2000) break;
-      }
-      frontier = nextFrontier; depth += 1;
     }
     const pathIds: string[] = []; const pathEdges: MemoryAtlasEdge[] = [];
     if (found) {
@@ -103,23 +106,26 @@ export class MemoryAtlasService {
       pathIds.reverse(); pathEdges.reverse();
     }
     const path = found ? pathIds.map((id) => this.store.getNode(id, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node)) : [];
-    this.store.recordAccess(projectId, path.map((node) => node.id), 'path');
     return { version: 'memory_atlas.v1', projectId, from: start, to: target, path,
-      edges: found ? this.safeEdges(pathEdges, projectId) : [], truncated: visited.size >= 2000 };
+      edges: found ? this.safeEdges(pathEdges, projectId) : [], truncated: expanded.size >= 2000 };
   }
 
   timeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult {
     const projectId = requiredProject(options.projectId); const compiled = compileAtlasQuery(boundedQuery(query), options.now);
     const limit = boundedLimit(options.limit);
+    const target = this.store.resolveTargetNodeIds(projectId, compiled.text);
     const nodes = this.store.searchFaceted(query, projectId, limit, {
       from: compiled.range?.from, to: compiled.range?.to, memoryKinds: compiled.memoryKinds,
+      keywords: target.nodeIds.length ? compiled.keywords : compiled.tokens,
+      targetNodeIds: target.nodeIds.length ? target.nodeIds : undefined,
     }).sort((left, right) => Number(right.occurredAt || 0) - Number(left.occurredAt || 0)).map((node) => {
       const evidence = this.evidence(node.id, projectId, options.evidenceLimit, options.includeEvidence);
-      return { ...node, evidenceCount: evidence.length, evidence, neighbors: [] };
+      const evidenceTotal = this.store.evidenceTotal(node.id, projectId);
+      return { ...node, evidenceCount: evidenceTotal, evidenceTotal, evidenceReturned: evidence.length, evidence, neighbors: [] };
     });
-    const actions = this.store.listActions(projectId, { target: compiled.target, from: compiled.range?.from, to: compiled.range?.to, limit: boundedLimit(options.limit) })
+    const actions = this.store.listActions(projectId, { target: compiled.target, targetEntityIds: target.entitySourceIds,
+      from: compiled.range?.from, to: compiled.range?.to, limit: boundedLimit(options.limit) })
       .map((action) => ({ ...action, evidence: this.evidence(action.id, projectId, options.evidenceLimit, options.includeEvidence) }));
-    this.store.recordAccess(projectId, uniqueIds([...nodes.map((node) => node.id), ...actions.map((action) => action.id)]), 'timeline', query);
     return { version: 'memory_atlas.v1', projectId, query, range: compiled.range,
       temporalResurrection: Boolean(compiled.range && [...nodes, ...actions].length), nodes, actions, warnings: [] };
   }
@@ -164,6 +170,12 @@ function uniqueNodes(nodes: MemoryAtlasNode[]): MemoryAtlasNode[] { return Array
 function uniqueIds(ids: string[]): string[] { return Array.from(new Set(ids)); }
 function uniqueEdges(edges: MemoryAtlasEdge[]): MemoryAtlasEdge[] {
   return Array.from(new Map(edges.map((edge) => [`${edge.source}\0${edge.relation}\0${edge.target}`, edge])).values());
+}
+function edgeTraversalCost(edge: MemoryAtlasEdge): number {
+  const confidence = Math.max(0.01, Math.min(1, edge.confidence));
+  const relationPenalty = /^(EVIDENCED_BY|DERIVED_FROM|TARGETS|OCCURRED_IN|SUPPORTS|ABOUT|MENTIONS)$/u.test(edge.relation)
+    ? 0 : /^(CONTRADICTS|CORRECTS)$/u.test(edge.relation) ? 0.2 : 0.1;
+  return -Math.log(confidence) + 0.12 + relationPenalty;
 }
 function chunked<T>(values: T[], size: number): T[][] {
   const chunks: T[][] = [];

@@ -25,6 +25,8 @@ test('memory graph CLI commands use the shared JSON contract and source drilldow
   const event = kernel.eventStore.append({ eventId: 'evt-cli-hermes', streamId: 't', streamType: 'thread', eventType: 'MESSAGE', rawEventType: 'message', projectId: 'cogmem', role: 'user', occurredAt: Date.UTC(2025, 3, 1), payload: { text: '给 Hermes 配置 MCP' } });
   const entity = kernel.memoryBindingStore.upsertEntity({ projectId: 'cogmem', canonicalName: 'Hermes', entityType: 'project' });
   kernel.memoryBindingStore.insertBinding({ eventId: event.eventId, projectId: 'cogmem', role: 'user', entityId: entity.entityId, entityName: 'Hermes', entityType: 'project', topicPath: 'cogmem/hermes', bindingType: 'about', confidence: 1, source: 'deterministic', signal: 'Hermes', claimKey: 'mcp' });
+  const second = kernel.eventStore.append({ eventId: 'evt-cli-hermes-2', streamId: 't2', streamType: 'thread', eventType: 'MESSAGE', rawEventType: 'message', projectId: 'cogmem', role: 'user', occurredAt: Date.UTC(2025, 4, 1), payload: { text: '更新 Hermes 配置' } });
+  kernel.memoryBindingStore.insertBinding({ eventId: second.eventId, projectId: 'cogmem', role: 'user', entityId: entity.entityId, entityName: 'Hermes', entityType: 'project', topicPath: 'cogmem/hermes', bindingType: 'about', confidence: 1, source: 'deterministic', signal: 'Hermes', claimKey: 'mcp-update' });
   kernel.close();
 
   const search = await run(['graph-search', '--query', 'Hermes', '--project', 'cogmem', '--db', dbPath, '--json']);
@@ -38,4 +40,12 @@ test('memory graph CLI commands use the shared JSON contract and source drilldow
   const human = await runHuman(['graph-node', '--id', `entity:${entity.entityId}`, '--project', 'cogmem', '--db', dbPath]);
   expect(human).toContain('Hermes');
   expect(human).toContain('cogmem memory show --event evt-cli-hermes');
+
+  const boundedNode = await run(['graph-node', '--id', `entity:${entity.entityId}`, '--evidence-limit', '1', '--project', 'cogmem', '--db', dbPath, '--json']);
+  expect((boundedNode.evidence as unknown[])).toHaveLength(1);
+
+  const timeline = await run(['graph-timeline', '--query', '去年 Hermes 操作', '--now', String(Date.UTC(2026, 4, 1)),
+    '--evidence-limit', '1', '--project', 'cogmem', '--db', dbPath, '--json']);
+  expect(timeline.range).toEqual(expect.objectContaining({ label: '2025' }));
+  expect((timeline.actions as Array<{ evidence: unknown[] }>).every((action) => action.evidence.length <= 1)).toBe(true);
 });

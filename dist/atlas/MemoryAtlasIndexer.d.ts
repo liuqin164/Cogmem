@@ -19,5 +19,14 @@ export declare class MemoryAtlasIndexer {
         actions: number;
         refreshed: boolean;
     };
+    ensureAllFresh(): {
+        documents: number;
+        actions: number;
+        refreshed: boolean;
+        errors: Array<{
+            projectId: string;
+            error: string;
+        }>;
+    };
 }
 //# sourceMappingURL=MemoryAtlasIndexer.d.ts.map

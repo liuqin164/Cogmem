@@ -84,11 +84,11 @@ Imported records are embedded through the configured kernel embedder during impo
 
 MCP recall JSON includes `decisionTrace`. Check its selected lane, reason, and candidate counts before concluding that a memory is absent, and use `sourceContext.locator.command` for exact wording. Raw text fallback searches the fully scoped ledger and prefers original user anchors over later assistant retellings when cue scores tie.
 
-Dream stores explicit user clarification as organizational correction evidence rather than an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Invalid provider output is rejected diagnostic state; maintenance supersedes stale `needs_confirmation` entries after the default 30-day TTL without deleting evidence.
+Dream stores explicit user clarification as organizational correction evidence rather than an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Resolve `needs_confirmation` with `cogmem_candidate_review` or `cogmem memory review`; maintenance only supersedes entries left stale past the default 30-day TTL.
 
 After upgrades, rerun `cogmem connect hermes --workspace . --auto --force` and reload MCP.
 
-Cogmem 3.6.0 exposes Memory Atlas through seven canonical-memory-safe MCP tools: overview, search, explore, node, neighbors, path, and timeline. They record non-destructive access/activation telemetry, so MCP does not label them strictly read-only or idempotent. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Always follow returned event IDs to raw evidence before quoting exact wording.
+Cogmem 3.6.0 exposes seven read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Touch only nodes actually used, and follow returned event IDs to raw evidence before quoting exact wording.
 
 ## Runtime
 
@@ -129,9 +129,9 @@ console.log(recalled.items);
 
 If a Hermes workspace uses different paths, pass explicit `profilePath` and `sessionDir` values instead of changing core.
 
-For agent-facing instructions, install or read `SKILL.md`. `cogmem connect hermes --workspace .` copies it to `~/.hermes/skills/cogmem-memory/SKILL.md`.
+For agent-facing instructions, run `cogmem connect hermes --workspace .`. It installs `SKILL.md` plus `references/operations.md`, a complete command-selection, migration, import, recall, Atlas, review, repair, backup, and maintenance handbook.
 
-`cogmem connect hermes --workspace . --auto` patches the Hermes MCP config with a `cogmem` server command. Re-running it after an upgrade updates existing allow-lists with strategy, topic, episode repair, conditional Dream, memory-map, maintenance, and prospective tools. Cogmem cannot observe Hermes conversations unless Hermes calls append/import. Episode append/import never run Dream; MCP Dream tick mutates only with `maintenanceMode: true`, never executes tools, and durable semantic changes still require governance. After running it, restart or reload Hermes so the MCP server list is re-read.
+`cogmem connect hermes --workspace . --auto` patches the Hermes MCP config with a `cogmem` server command. Re-running it after an upgrade updates existing allow-lists with strategy, topic, episode repair, candidate review, graph touch, conditional Dream, memory-map, maintenance, and prospective tools. Cogmem cannot observe Hermes conversations unless Hermes calls append/import. Episode append/import never run Dream; MCP Dream tick mutates only with `maintenanceMode: true`, never executes tools, and durable semantic changes still require governance. After running it, restart or reload Hermes so the MCP server list is re-read.
 
 Use MCP append/import only for bounded traffic. Supply `externalMessageId` for every message that may cross request boundaries; if a batch returns `auto_identity_not_safe_across_split_batches`, assign IDs before splitting or retrying it. MCP reports per-message progress/failure checkpoints. Large JSONL histories belong on `cogmem episode import` with checkpoint/resume plus `--start-line`, `--end-line`, `--max-lines`, `--skip-errors`, and `--max-errors`.
 

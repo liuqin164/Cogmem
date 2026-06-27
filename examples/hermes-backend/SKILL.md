@@ -7,6 +7,8 @@ description: Install, connect, migrate, inspect, and navigate cogmem as Hermes's
 
 Use this skill when a Hermes workspace needs `cogmem` as its durable memory backend.
 
+For the complete command matrix, migration/import recipes, governance actions, Atlas filters, repair commands, backup flow, and scheduler guidance, read [references/operations.md](references/operations.md).
+
 ## Ground Rules
 
 - Use TOML config only: `~/.cogmem/config.toml` or project `.cogmem/config.toml`.
@@ -83,7 +85,7 @@ timeout_ms = 60000
 
 ## Migrate Existing Hermes Memory
 
-Upgrade a 3.5.2 database to schema 25 in one backed-up command:
+Upgrade a 3.5.2 database, or a pre-release schema-25 test database, to schema 26 in one backed-up command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -224,7 +226,7 @@ cogmem memory bind --project hermes --json
 
 MCP `cogmem_recall` and `cogmem_explain_recall` expose the same `decisionTrace`. Check `selectedLane`, `reason`, and `candidateCounts` before claiming memory is absent, then follow `sourceContext.locator.command` for exact wording. Raw fallback searches the fully scoped ledger; equal raw cue matches prefer original user anchors, and past-memory queries prefer a cue-matching raw user anchor over a compiled assistant retelling.
 
-Explicit user clarification is organizational correction evidence, not an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. A memory-model conflict proposal must cite at least two distinct exact raw event IDs from the current Dream window; `["all"]` and unknown IDs are rejected. Invalid memory-model output remains a rejected diagnostic. A host-owned maintenance tick supersedes stale `needs_confirmation` entries after the default 30-day TTL without deleting evidence.
+Explicit user clarification is organizational correction evidence, not an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. A memory-model conflict proposal must cite at least two distinct exact raw event IDs from the current Dream window; `["all"]` and unknown IDs are rejected. Invalid memory-model output remains a rejected diagnostic. Review `needs_confirmation` with `cogmem_candidate_review` or `cogmem memory review`; maintenance only supersedes entries that remain stale past the default 30-day TTL.
 
 When importing OpenClaw-style session Markdown into a Hermes project, Cogmem accepts multiline bodies below empty role headers, collapses only adjacent exact export duplicates, and uses `# Session: ... UTC` as the chronological timestamp base rather than file mtime.
 
@@ -287,7 +289,7 @@ Hermes external memory providers are activated through `memory.provider` in `~/.
 
 Do not edit `~/.hermes/config.yaml` to point `memory.provider` at `cogmem` until a Hermes native provider plugin exists on disk. The supported bridge in this package is MCP.
 
-`cogmem connect hermes` installs this file into `~/.hermes/skills/cogmem-memory/SKILL.md`, which is Hermes's primary skill directory.
+`cogmem connect hermes` installs this file plus `references/operations.md` into `~/.hermes/skills/cogmem-memory/`, which is Hermes's primary skill directory.
 
 `cogmem connect hermes --workspace . --auto --force` patches `~/.hermes/config.yaml` with this MCP server:
 
@@ -321,6 +323,8 @@ mcp_servers:
         - cogmem_graph_neighbors
         - cogmem_graph_path
         - cogmem_graph_timeline
+        - cogmem_graph_touch
+        - cogmem_candidate_review
         - cogmem_maintenance_tick
         - cogmem_prospective
 ```

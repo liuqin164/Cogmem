@@ -130,6 +130,8 @@ test('graph node returns evidence locators but hides raw excerpts by default', (
     expect(node?.evidence.some((item) => item.eventId === privateEventId)).toBe(false);
     expect(node?.evidence[0]?.drilldown).toContain(`memory show --event ${hermesEventId}`);
     expect(node?.evidence[0]?.excerpt).toBeUndefined();
+    expect(node?.evidenceTotal).toBeGreaterThanOrEqual(node?.evidenceReturned || 0);
+    expect(node?.evidenceReturned).toBe(node?.evidence.length);
     expect(node?.neighbors.flatMap((edge) => edge.evidenceEventIds)).not.toContain(privateEventId);
     expect(node?.neighbors.flatMap((edge) => edge.evidenceEventIds)).toContain(hermesEventId);
 
@@ -195,6 +197,70 @@ test('one precise available facet can revive cold memory without a fixed tuple',
   } finally { kernel.close(); }
 });
 
+test('facet-only time queries never fall back to an unfiltered node list', () => {
+  const { kernel } = createFixture();
+  try {
+    kernel.memoryAtlasStore.upsertDocument({ id: 'event:old', projectId: 'cogmem', nodeType: 'event', sourceId: 'old',
+      label: 'old event', confidence: 1, supportCount: 1, status: 'active', occurredAt: Date.UTC(2024, 2, 1) });
+    kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });
+    const result = kernel.graphExplore('去年', { projectId: 'cogmem', now: Date.UTC(2026, 5, 21), limit: 30 });
+    expect(result.nodes.length).toBeGreaterThan(0);
+    expect(result.nodes.every((node) => !node.occurredAt || new Date(node.occurredAt).getUTCFullYear() === 2025)).toBe(true);
+    expect(result.nodes.some((node) => node.id === 'event:old')).toBe(false);
+  } finally { kernel.close(); }
+});
+
+test('target time and kind facets are intersected exactly like table filters', () => {
+  const { kernel, hermesClusterId } = createFixture();
+  try {
+    const openclawEvent = kernel.eventStore.append({
+      eventId: 'evt-openclaw-decision', streamId: 'thread-openclaw', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: 'cogmem', sessionId: 'session-openclaw', role: 'user',
+      occurredAt: Date.UTC(2025, 4, 1), payload: { text: 'OpenClaw deployment decision' },
+    });
+    kernel.memoryBindingStore.upsertCluster({ projectId: 'cogmem', topicPath: 'cogmem/openclaw', clusterType: 'decision',
+      title: 'OpenClaw decision', summary: 'unrelated decision', status: 'active', confidence: 0.99,
+      claimKey: 'openclaw-decision', eventId: openclawEvent.eventId, now: Date.UTC(2025, 5, 1) });
+    kernel.memoryBindingStore.upsertCluster({ projectId: 'cogmem', topicPath: 'cogmem/hermes', clusterType: 'goal',
+      title: 'Hermes goal', summary: 'unrelated memory kind', status: 'active', confidence: 0.99,
+      claimKey: 'hermes-goal', eventId: 'evt-hermes-config', now: Date.UTC(2025, 5, 1) });
+    kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });
+    const result = kernel.graphExplore('2025 年 Hermes 的决策', { projectId: 'cogmem', limit: 30 });
+    expect(result.nodes.some((node) => node.id === `cluster:${hermesClusterId}`)).toBe(true);
+    expect(result.nodes.filter((node) => node.nodeType === 'cluster').every((node) => node.id === `cluster:${hermesClusterId}`)).toBe(true);
+  } finally { kernel.close(); }
+});
+
+test('memory kind filtering uses structured kind fields rather than summary text', () => {
+  const { kernel } = createFixture();
+  try {
+    kernel.memoryBindingStore.upsertCluster({ projectId: 'cogmem', topicPath: 'cogmem/hermes', clusterType: 'diagnostic',
+      title: 'Diagnostic mentioning plan', summary: 'The word plan appears but this is not a plan memory',
+      status: 'active', confidence: 0.9, claimKey: 'diagnostic-plan-word', eventId: 'evt-hermes-config', now: Date.UTC(2025, 5, 1) });
+    kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });
+    const result = kernel.graphExplore('Hermes plan', { projectId: 'cogmem', limit: 30 });
+    expect(result.nodes.some((node) => node.label === 'Diagnostic mentioning plan')).toBe(false);
+  } finally { kernel.close(); }
+});
+
+test('ActionFrame extraction scans raw events, captures every action, and aggregates year evidence', () => {
+  const { kernel, hermesEventId } = createFixture();
+  try {
+    const unbound = kernel.eventStore.append({
+      eventId: 'evt-hermes-update', streamId: 'thread-hermes', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: 'cogmem', sessionId: 'session-hermes', role: 'user',
+      occurredAt: Date.UTC(2025, 7, 1), payload: { text: '请更新 Hermes。' },
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });
+    const actions = kernel.graphTimeline('2025 Hermes 操作', { projectId: 'cogmem', limit: 30 }).actions;
+    expect(actions.map((action) => action.action)).toEqual(expect.arrayContaining(['配置', '连接', '更新']));
+    expect(actions.flatMap((action) => action.evidence.map((item) => item.eventId))).toEqual(expect.arrayContaining([hermesEventId, unbound.eventId]));
+    const year = kernel.graphNode('time:cogmem:2025', { projectId: 'cogmem', evidenceLimit: 10 });
+    expect(year?.supportCount).toBeGreaterThanOrEqual(2);
+    expect(year?.evidence.map((item) => item.eventId)).toEqual(expect.arrayContaining([hermesEventId, unbound.eventId]));
+  } finally { kernel.close(); }
+});
+
 test('path and explore return a bounded source-anchored local graph without vectors', () => {
   const { kernel, hermesEntityId } = createFixture();
   try {
@@ -255,5 +321,25 @@ test('path traversal expands every bounded frontier chunk instead of only the fi
 
     const path = kernel.memoryAtlasService.path(start, 'cluster:target', { projectId: 'cogmem', maxHops: 3 });
     expect(path.path.map((node) => node.id)).toEqual([start, 'cluster:branch-30', 'cluster:middle', 'cluster:target']);
+  } finally { kernel.close(); }
+});
+
+test('path ranking prefers a stronger evidence route over a weak shorter BFS route', () => {
+  const { kernel, hermesEntityId } = createFixture();
+  try {
+    kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });
+    const db = kernel.memoryAtlasStore.db;
+    kernel.memoryAtlasStore.upsertDocument({ id: 'cluster:strong-middle', projectId: 'cogmem', nodeType: 'cluster', sourceId: 'strong-middle',
+      label: 'strong middle', confidence: 1, supportCount: 2, status: 'active' });
+    kernel.memoryAtlasStore.upsertDocument({ id: 'cluster:weighted-target', projectId: 'cogmem', nodeType: 'cluster', sourceId: 'weighted-target',
+      label: 'weighted target', confidence: 1, supportCount: 2, status: 'active' });
+    const insert = db.prepare(`INSERT INTO memory_edges(
+      edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,confidence,stability,activation,status,evidence_event_ids_json,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    insert.run('weak-shortcut', 'cogmem', 'entity', hermesEntityId, 'RELATED_TO', 'cluster', 'weighted-target', 0.1, 1, 0, 'active', '[]', 1, 1);
+    insert.run('strong-first', 'cogmem', 'entity', hermesEntityId, 'ABOUT', 'cluster', 'strong-middle', 0.98, 1, 0, 'active', '[]', 2, 2);
+    insert.run('strong-second', 'cogmem', 'cluster', 'strong-middle', 'SUPPORTS', 'cluster', 'weighted-target', 0.98, 1, 0, 'active', '[]', 3, 3);
+    const result = kernel.graphPath(`entity:${hermesEntityId}`, 'cluster:weighted-target', { projectId: 'cogmem', maxHops: 3 });
+    expect(result.path.map((node) => node.id)).toEqual([`entity:${hermesEntityId}`, 'cluster:strong-middle', 'cluster:weighted-target']);
   } finally { kernel.close(); }
 });

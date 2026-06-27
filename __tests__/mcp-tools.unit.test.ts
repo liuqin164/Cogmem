@@ -41,6 +41,7 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
     'cogmem_dream_tick',
     'cogmem_dream_status',
     'cogmem_memory_map',
+    'cogmem_candidate_review',
     'cogmem_graph_overview',
     'cogmem_graph_search',
     'cogmem_graph_explore',
@@ -48,6 +49,7 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
     'cogmem_graph_neighbors',
     'cogmem_graph_path',
     'cogmem_graph_timeline',
+    'cogmem_graph_touch',
     'cogmem_maintenance_tick',
     'cogmem_prospective',
   ]);

@@ -226,6 +226,31 @@ export function listCogmemMcpTools() {
                 idempotentHint: true,
             },
         },
+        {
+            name: 'cogmem_candidate_review',
+            description: 'Apply one audited human review action to a needs-confirmation Dream candidate. Approve and correction relink require a distinct same-project raw user confirmation event; review never bypasses missing evidence or project scope.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    candidateId: STRING_SCHEMA,
+                    projectId: STRING_SCHEMA,
+                    action: { type: 'string', enum: ['approve', 'reject', 'defer', 'supersede', 'relink'] },
+                    actor: STRING_SCHEMA,
+                    reason: STRING_SCHEMA,
+                    confirmationEventId: STRING_SCHEMA,
+                    targetBeliefId: STRING_SCHEMA,
+                    replacementCandidateId: STRING_SCHEMA,
+                    reviewAfter: NUMBER_SCHEMA,
+                },
+                required: ['candidateId', 'projectId', 'action', 'actor', 'reason'],
+            },
+            annotations: {
+                title: 'Review Memory Candidate',
+                readOnlyHint: false,
+                destructiveHint: true,
+                idempotentHint: false,
+            },
+        },
         graphTool('cogmem_graph_overview', 'Overview Memory Atlas', 'List a bounded content map of remembered topics, entities, clusters, episodes, actions, and time nodes.', {
             projectId: STRING_SCHEMA, limit: NUMBER_SCHEMA,
         }, ['projectId']),
@@ -233,7 +258,7 @@ export function listCogmemMcpTools() {
             projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA,
         }, ['projectId', 'query']),
         graphTool('cogmem_graph_explore', 'Explore Memory Atlas', 'Use for broad memory inventory, project-state, or historical questions; returns a bounded local graph and drilldown actions.', {
-            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA,
+            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, evidenceLimit: NUMBER_SCHEMA, now: NUMBER_SCHEMA,
         }, ['projectId', 'query']),
         graphTool('cogmem_graph_node', 'Inspect Memory Node', 'Inspect one source-anchored node, its neighbors, evidence event ids, and exact raw drilldown commands.', {
             projectId: STRING_SCHEMA, id: STRING_SCHEMA, includeEvidence: { type: 'boolean' }, evidenceLimit: NUMBER_SCHEMA,
@@ -245,8 +270,16 @@ export function listCogmemMcpTools() {
             projectId: STRING_SCHEMA, from: STRING_SCHEMA, to: STRING_SCHEMA, maxHops: NUMBER_SCHEMA,
         }, ['projectId', 'from', 'to']),
         graphTool('cogmem_graph_timeline', 'Reconstruct Memory Timeline', 'Reconstruct timestamped memory with the available query facets; action frames are included when applicable but are not required.', {
-            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, includeEvidence: { type: 'boolean' }, now: NUMBER_SCHEMA,
+            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, includeEvidence: { type: 'boolean' }, evidenceLimit: NUMBER_SCHEMA, now: NUMBER_SCHEMA,
         }, ['projectId', 'query']),
+        {
+            name: 'cogmem_graph_touch',
+            description: 'Explicitly record that selected Atlas nodes were used in an answer or decision. Discovery queries stay read-only; call this only for nodes actually consumed.',
+            inputSchema: { type: 'object', properties: {
+                    projectId: STRING_SCHEMA, nodeIds: STRING_ARRAY_SCHEMA, reason: STRING_SCHEMA, query: STRING_SCHEMA,
+                }, required: ['projectId', 'nodeIds', 'reason'] },
+            annotations: { title: 'Touch Used Memory Nodes', readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+        },
         {
             name: 'cogmem_maintenance_tick',
             description: 'Run one explicit host-owned maintenance tick. This decays activation and returns suggested upkeep commands such as dream, govern, re-embed, or cogmem memory bind for unbound raw events; it never starts a hidden daemon.',
@@ -354,6 +387,18 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
                 return jsonResult(opened.kernel.getEpisodeDreamStatus(optionalString(input.projectId)));
             case 'cogmem_memory_map':
                 return jsonResult(opened.kernel.buildMemoryMap({ projectId: optionalString(input.projectId) }));
+            case 'cogmem_candidate_review':
+                return jsonResult(opened.kernel.reviewDreamCandidate({
+                    candidateId: requiredString(input.candidateId, 'candidateId'),
+                    projectId: requiredString(input.projectId, 'projectId'),
+                    action: requiredCandidateReviewAction(input.action),
+                    actor: requiredString(input.actor, 'actor'),
+                    reason: requiredString(input.reason, 'reason'),
+                    confirmationEventId: optionalString(input.confirmationEventId),
+                    targetBeliefId: optionalString(input.targetBeliefId),
+                    replacementCandidateId: optionalString(input.replacementCandidateId),
+                    reviewAfter: optionalNumber(input.reviewAfter),
+                }));
             case 'cogmem_graph_overview': {
                 const projectId = requiredString(input.projectId, 'projectId');
                 opened.kernel.ensureMemoryAtlas({ projectId });
@@ -367,7 +412,8 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
             case 'cogmem_graph_explore': {
                 const projectId = requiredString(input.projectId, 'projectId');
                 opened.kernel.ensureMemoryAtlas({ projectId });
-                return jsonResult(opened.kernel.graphExplore(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit) }));
+                return jsonResult(opened.kernel.graphExplore(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit),
+                    evidenceLimit: optionalNumber(input.evidenceLimit), now: optionalNumber(input.now) }));
             }
             case 'cogmem_graph_node': {
                 const projectId = requiredString(input.projectId, 'projectId');
@@ -390,8 +436,14 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
             case 'cogmem_graph_timeline': {
                 const projectId = requiredString(input.projectId, 'projectId');
                 opened.kernel.ensureMemoryAtlas({ projectId });
-                return jsonResult(opened.kernel.graphTimeline(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit), includeEvidence: input.includeEvidence === true, now: optionalNumber(input.now) }));
+                return jsonResult(opened.kernel.graphTimeline(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit), includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit), now: optionalNumber(input.now) }));
             }
+            case 'cogmem_graph_touch':
+                return jsonResult(opened.kernel.touchMemoryAtlas({
+                    projectId: requiredString(input.projectId, 'projectId'),
+                    nodeIds: requiredStringArray(input.nodeIds, 'nodeIds'),
+                    reason: requiredString(input.reason, 'reason'), query: optionalString(input.query),
+                }));
             case 'cogmem_maintenance_tick':
                 return jsonResult(opened.kernel.runMaintenanceTick({ projectId: optionalString(input.projectId) }));
             case 'cogmem_prospective':
@@ -411,9 +463,9 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
 function graphTool(name, title, description, properties, required) {
     return {
         name,
-        description: `${description} Canonical memory remains unchanged; the query records non-destructive Atlas access/activation telemetry.`,
+        description: `${description} Canonical memory and activation telemetry remain unchanged until cogmem_graph_touch explicitly records selected nodes.`,
         inputSchema: { type: 'object', properties, required },
-        annotations: { title, readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+        annotations: { title, readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     };
 }
 async function episodeAppend(kernel, input) {
@@ -721,6 +773,12 @@ function requiredString(value, field) {
 }
 function optionalString(value) {
     return typeof value === 'string' && value.trim() ? value : undefined;
+}
+function requiredCandidateReviewAction(value) {
+    const action = requiredString(value, 'action');
+    if (action === 'approve' || action === 'reject' || action === 'defer' || action === 'supersede' || action === 'relink')
+        return action;
+    throw new Error('action must be approve, reject, defer, supersede, or relink');
 }
 function requiredStringArray(value, field) {
     if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== 'string' || item.trim() === '')) {

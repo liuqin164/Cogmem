@@ -25,6 +25,7 @@ export interface ProcessedSourceRecord {
 }
 export declare class IngestionCursorStore {
     private db;
+    private closed;
     constructor(dbPath?: string);
     private initializeSchema;
     registerSource(source: SourceDefinition): void;

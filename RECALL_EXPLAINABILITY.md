@@ -135,6 +135,8 @@ Use the local audit CLI when the user needs to inspect memory directly:
 - `cogmem episode status --project <project>`
 - `cogmem dream tick --project <project> --mode auto`
 - `cogmem memory candidates --project <project> --status candidate`
+- `cogmem memory candidates --project <project> --status needs_confirmation`
+- `cogmem memory review --project <project> --id <candidateId> --action <approve|reject|defer|supersede|relink> --actor <operator> --reason <reason>`
 - `cogmem memory map --project <project> --json`
 - `cogmem memory tick --project <project> --json`
 
@@ -146,3 +148,5 @@ Use Memory Atlas before direct recall when the user asks what is remembered, ask
 The expected sequence is `graphExplore` or `graphSearch`, then `graphNode`/`graphPath`/`graphTimeline`, then exact Raw Ledger drill-down. Atlas evidence includes `eventId` and a `cogmem memory show` command. Raw excerpts are omitted unless `includeEvidence=true`.
 
 `coldMemoryResurrected=true` means query facets surfaced a low-activation node. It is a ranking explanation, not proof that the node is true or newly promoted. Inspect the node status, confidence, and raw source before making a claim.
+
+Atlas query tools are read-only and do not change activation. If the agent actually uses a returned node, MCP `cogmem_graph_touch` records that selected-node use separately. Evidence output distinguishes the node's full `evidenceTotal` from the bounded `evidenceReturned` payload.

@@ -25,7 +25,7 @@ Atlas summaries are `hint_only_not_evidence` in effect. Project scope, raw evide
 
 ## Faceted cold-memory resurrection
 
-Activation controls default visibility, not existence. Maintenance decays Atlas activation deterministically; access raises it. A query can still surface a cold node when its available facets match.
+Activation controls default visibility, not existence. Maintenance decays Atlas activation deterministically; an explicit `cogmem_graph_touch` raises nodes that the agent actually used. Read-only overview/search/explore calls do not change ranking. A query can still surface a cold node when its available facets match.
 
 Facets include project, time, topic, person/object, event, decision, correction, goal, preference, plan, action, and ordinary keywords. The engine combines the facets actually present in the message, similar to filtering multiple columns in a table. It does not require the fixed combination entity + time + action.
 
@@ -64,6 +64,8 @@ cogmem memory graph-path --project <id> --from <node-id> --to <node-id> --json
 cogmem memory graph-timeline --project <id> --query <query> --json
 ```
 
+`graph-explore` and `graph-timeline` accept `--now <epoch-ms>` for deterministic relative-time parsing and `--evidence-limit <1..10>` for bounded evidence. Node results distinguish `evidenceTotal` from `evidenceReturned`.
+
 ## MCP
 
 The canonical-memory-safe tools are:
@@ -75,11 +77,12 @@ The canonical-memory-safe tools are:
 - `cogmem_graph_neighbors`
 - `cogmem_graph_path`
 - `cogmem_graph_timeline`
+- `cogmem_graph_touch`
 
-They never rewrite Raw Ledger, topics, beliefs, episodes, or evidence. They do
-record non-destructive Atlas access/activation telemetry so frequently used
-nodes become more visible; MCP therefore declares them non-idempotent rather
-than claiming strict read-only semantics.
+The seven query tools never rewrite Raw Ledger, topics, beliefs, episodes,
+evidence, or activation. MCP declares them read-only and idempotent. An agent
+may call `cogmem_graph_touch` after it actually selects/uses returned nodes;
+that explicit telemetry operation changes visibility only.
 
 Hermes and other hookless agents use these through MCP. They still need `cogmem_episode_append` or `cogmem_episode_import` because Cogmem cannot observe their conversation automatically.
 
@@ -93,4 +96,4 @@ Upgrade an existing 3.5.2 database with:
 cogmem migrate --yes --backup --json
 ```
 
-Migration 0025 creates and backfills the disposable projection while preserving canonical source tables. It is safe to rerun. `cogmem memory tick` refreshes projection rows and decays navigation activation without starting a daemon.
+Migration 0025 creates and backfills the disposable projection. Migration 0026 adds exact memory-kind metadata, projection health, and candidate-review audit state. A 3.5.2 schema-24 database, or a pre-release schema-25 test database, reaches the 3.6.0 schema-26 state with the same command. `cogmem memory tick` refreshes only dirty projects, records rebuild errors, prunes old access telemetry, and decays navigation activation without starting a daemon.

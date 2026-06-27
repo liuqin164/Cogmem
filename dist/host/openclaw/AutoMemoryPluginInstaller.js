@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 const PLUGIN_ID = 'cogmem-auto-memory';
-const PLUGIN_VERSION = '0.6.0';
+const PLUGIN_VERSION = '0.6.1';
 function defaultPublicEntrypoint() {
     return join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), 'public.js');
 }
@@ -841,7 +841,7 @@ function audit(config, record) {
 const plugin = {
   id: PLUGIN_ID,
   name: 'CogMem Auto Memory',
-  version: '0.6.0',
+  version: '0.6.1',
   register(api) {
     if (!api || typeof api.on !== 'function') {
       throw new Error('OpenClaw plugin API missing api.on');
@@ -892,16 +892,9 @@ const plugin = {
         }
         const navigationIntent = classifyMemoryNavigationIntent(query);
         let atlasInjected = false;
-        if (config.autoAtlas !== false && navigationIntent === 'atlas_explore') {
-          const atlas = runBridge('graph-explore', { query, config }, config, config.recallTimeoutMs || 30000);
-          if (atlas && atlas.context) {
-            memoryLayers.push(atlas.context);
-            atlasInjected = true;
-          }
-        }
         const recalled = config.contextCortexEnabled !== false && contextIntent === 'short_followup'
           ? { context: '', items: [], itemCount: 0, intent, recallMode: 'context_cortex_short_followup', fallbackUsed: false }
-          : runBridge('recall', {
+          : runBridge(navigationIntent === 'atlas_explore' && config.autoAtlas !== false ? 'context' : 'recall', {
             query,
             sessionId,
             threadId,
@@ -911,6 +904,10 @@ const plugin = {
             anchorText: anchor && anchor.text,
             config,
           }, config, config.recallTimeoutMs || 30000);
+        if (recalled.atlasContext) {
+          memoryLayers.push(recalled.atlasContext);
+          atlasInjected = true;
+        }
         lastRecallForSession.set(sessionId, {
           items: Array.isArray(recalled.items) ? recalled.items : [],
           context: recalled.context || '',
@@ -1092,7 +1089,21 @@ const kernel = createMemoryKernelFromConfig({ configPath: config.configPath });
 const memory = new KernelAgentMemoryBackend(kernel);
 
 try {
-  if (command === 'graph-explore') {
+  if (command === 'context') {
+    const projectId = config.projectId || 'openclaw';
+    const atlas = kernel.graphExplore(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) });
+    const nodeDetails = atlas.nodes.slice(0, 4).map((node) => kernel.graphNode(node.id, {
+      projectId, evidenceLimit: 2, includeEvidence: false,
+    })).filter(Boolean);
+    const timeline = kernel.graphTimeline(input.query || '', { projectId, limit: Math.min(6, Number(config.atlasLimit || 8)) });
+    const atlasResult = { ...atlas, nodeDetails, timeline };
+    const recalled = await recallPayload(input, config, kernel, memory, formatStrategyContext);
+    console.log(JSON.stringify({
+      ...recalled,
+      atlasContext: formatAtlasContext(atlasResult, Number(config.atlasMaxChars || 3000)),
+      atlasResult,
+    }));
+  } else if (command === 'graph-explore') {
     const projectId = config.projectId || 'openclaw';
     kernel.ensureMemoryAtlas({ projectId });
     const result = kernel.graphExplore(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) });
@@ -1110,79 +1121,7 @@ try {
     kernel.ensureMemoryAtlas({ projectId });
     console.log(JSON.stringify(kernel.graphTimeline(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) })));
   } else if (command === 'recall') {
-    const recallStartedAt = Date.now();
-    const contextIntent = kernel.contextCortex.classifyIntent(input.query || '');
-    let strategyCapsule = config.strategyCortexEnabled === false ? undefined : kernel.strategyCortex.plan({
-      query: input.query || '', intent: contextIntent, projectId: config.projectId || 'openclaw',
-    });
-    let result = await memory.recall({
-      agentId: config.agentId || 'openclaw',
-      projectId: config.projectId || 'openclaw',
-      query: input.query || '',
-      sessionId: input.sessionId,
-      threadId: input.threadId,
-      excludeSessionId: input.excludeSessionId,
-      intent: input.intent || 'memory_recall',
-      anchorEventId: input.anchorEventId,
-      anchorText: input.anchorText,
-      limit: Number(config.limit || 3),
-      retrievalPolicy: strategyCapsule && strategyCapsule.retrievalPolicy,
-    });
-    const sourceRequirementSatisfied = result.items.some((item) => item && item.sourceType && String(item.sourceType).startsWith('raw_ledger'));
-    const replan = strategyCapsule ? kernel.strategyCortex.replan(strategyCapsule, {
-      intent: contextIntent,
-      projectId: config.projectId || 'openclaw',
-      sourceRequirementSatisfied,
-    }) : { replanned: false, capsule: undefined };
-    if (replan.replanned) {
-      strategyCapsule = replan.capsule;
-      result = await memory.recall({
-        agentId: config.agentId || 'openclaw',
-        projectId: config.projectId || 'openclaw',
-        query: input.query || '',
-        sessionId: input.sessionId,
-        threadId: input.threadId,
-        excludeSessionId: input.excludeSessionId,
-        intent: input.intent || 'memory_recall',
-        anchorEventId: input.anchorEventId,
-        anchorText: input.anchorText,
-        limit: Number(config.limit || 3),
-        retrievalPolicy: strategyCapsule && strategyCapsule.retrievalPolicy,
-      });
-    }
-    const activationPlan = config.contextCortexEnabled === false
-      ? undefined
-      : kernel.contextCortex.plan({
-        query: input.query || '',
-        projectId: config.projectId || 'openclaw',
-        currentSessionId: input.sessionId,
-        availableTokens: Number(config.contextAvailableTokens || 16000),
-        maxMemoryRatio: Number(config.contextMemoryMaxRatio || 0.25),
-        strategy: strategyCapsule,
-        candidates: result.items.map(contextCandidateFromRecallItem),
-      });
-    const plannedResult = activationPlan
-      ? { ...result, items: activationPlan.selected.map((candidate) => candidate.recallItem) }
-      : result;
-    const anchorItem = plannedResult.items.find((item) => item && item.sourceAnchor && item.sourceAnchor.eventId);
-    const recallContext = formatRecallContext(plannedResult, config);
-    console.log(JSON.stringify({
-      context: recallContext ? (strategyCapsule ? formatStrategyContext(strategyCapsule) + '\n\n' : '') + recallContext : '',
-      items: compactRecallItems(plannedResult.items, config),
-      itemCount: plannedResult.items.length,
-      recallMode: result.recallMode,
-      fallbackUsed: result.fallbackUsed,
-      intent: input.intent || 'memory_recall',
-      anchorEventId: anchorItem && anchorItem.sourceAnchor && anchorItem.sourceAnchor.eventId,
-      anchorText: anchorItem && anchorItem.text,
-      queryPlan: result.queryPlan,
-      decisionTrace: result.decisionTrace,
-      activationReceipt: activationPlan && activationPlan.receipt,
-      strategyCapsule,
-      strategyReplanned: replan.replanned,
-      strategyReplanReason: replan.reason,
-      recallLatencyMs: Date.now() - recallStartedAt,
-    }));
+    console.log(JSON.stringify(await recallPayload(input, config, kernel, memory, formatStrategyContext)));
   } else if (command === 'remember') {
     const result = await rememberPayload(input, config);
     console.log(JSON.stringify({ remembered: true, ...result }));
@@ -1194,6 +1133,56 @@ try {
   }
 } finally {
   kernel.close();
+}
+
+async function recallPayload(input, config, kernel, memory, formatStrategyContext) {
+  const recallStartedAt = Date.now();
+  const contextIntent = kernel.contextCortex.classifyIntent(input.query || '');
+  let strategyCapsule = config.strategyCortexEnabled === false ? undefined : kernel.strategyCortex.plan({
+    query: input.query || '', intent: contextIntent, projectId: config.projectId || 'openclaw',
+  });
+  let result = await memory.recall({
+    agentId: config.agentId || 'openclaw', projectId: config.projectId || 'openclaw',
+    query: input.query || '', sessionId: input.sessionId, threadId: input.threadId,
+    excludeSessionId: input.excludeSessionId, intent: input.intent || 'memory_recall',
+    anchorEventId: input.anchorEventId, anchorText: input.anchorText,
+    limit: Number(config.limit || 3), retrievalPolicy: strategyCapsule && strategyCapsule.retrievalPolicy,
+  });
+  const sourceRequirementSatisfied = result.items.some((item) => item && item.sourceType && String(item.sourceType).startsWith('raw_ledger'));
+  const replan = strategyCapsule ? kernel.strategyCortex.replan(strategyCapsule, {
+    intent: contextIntent, projectId: config.projectId || 'openclaw', sourceRequirementSatisfied,
+  }) : { replanned: false, capsule: undefined };
+  if (replan.replanned) {
+    strategyCapsule = replan.capsule;
+    result = await memory.recall({
+      agentId: config.agentId || 'openclaw', projectId: config.projectId || 'openclaw',
+      query: input.query || '', sessionId: input.sessionId, threadId: input.threadId,
+      excludeSessionId: input.excludeSessionId, intent: input.intent || 'memory_recall',
+      anchorEventId: input.anchorEventId, anchorText: input.anchorText,
+      limit: Number(config.limit || 3), retrievalPolicy: strategyCapsule && strategyCapsule.retrievalPolicy,
+    });
+  }
+  const activationPlan = config.contextCortexEnabled === false ? undefined : kernel.contextCortex.plan({
+    query: input.query || '', projectId: config.projectId || 'openclaw', currentSessionId: input.sessionId,
+    availableTokens: Number(config.contextAvailableTokens || 16000),
+    maxMemoryRatio: Number(config.contextMemoryMaxRatio || 0.25), strategy: strategyCapsule,
+    candidates: result.items.map(contextCandidateFromRecallItem),
+  });
+  const plannedResult = activationPlan
+    ? { ...result, items: activationPlan.selected.map((candidate) => candidate.recallItem) }
+    : result;
+  const anchorItem = plannedResult.items.find((item) => item && item.sourceAnchor && item.sourceAnchor.eventId);
+  const recallContext = formatRecallContext(plannedResult, config);
+  return {
+    context: recallContext ? (strategyCapsule ? formatStrategyContext(strategyCapsule) + '\n\n' : '') + recallContext : '',
+    items: compactRecallItems(plannedResult.items, config), itemCount: plannedResult.items.length,
+    recallMode: result.recallMode, fallbackUsed: result.fallbackUsed, intent: input.intent || 'memory_recall',
+    anchorEventId: anchorItem && anchorItem.sourceAnchor && anchorItem.sourceAnchor.eventId,
+    anchorText: anchorItem && anchorItem.text, queryPlan: result.queryPlan, decisionTrace: result.decisionTrace,
+    activationReceipt: activationPlan && activationPlan.receipt, strategyCapsule,
+    strategyReplanned: replan.replanned, strategyReplanReason: replan.reason,
+    recallLatencyMs: Date.now() - recallStartedAt,
+  };
 }
 
 async function loadCogmemApi(bridgeConfig) {
@@ -1238,6 +1227,7 @@ function formatAtlasContext(result, maxChars) {
   if (!nodes.length) return '';
   const edges = Array.isArray(result && result.edges) ? result.edges : [];
   const actions = Array.isArray(result && result.nextActions) ? result.nextActions : [];
+  const nodeDetails = Array.isArray(result && result.nodeDetails) ? result.nodeDetails : [];
   const lines = [
     '<COGMEM_MEMORY_ATLAS version="memory_atlas.v1" volatile="true" persistence="forbidden" evidence_authority="raw_event_ids_only">',
     'Bounded navigation map; use it to choose nodes and paths, not as durable evidence.',
@@ -1247,7 +1237,14 @@ function formatAtlasContext(result, maxChars) {
     'Nodes:',
     ...nodes.slice(0, 30).map((node) => '- ' + JSON.stringify({
       id: safeAtlasText(node.id, 500), type: safeAtlasText(node.nodeType, 80),
-      label: safeAtlasText(node.label, 500), summary: safeAtlasText(node.summary, 500),
+      label: safeAtlasText(node.label, 500), summary: safeAtlasText(node.summary, 500), evidenceTotal: node.evidenceTotal,
+    })),
+    '',
+    'Evidence drilldown:',
+    ...nodeDetails.slice(0, 8).map((node) => '- ' + JSON.stringify({
+      nodeId: safeAtlasText(node.id, 500),
+      evidenceEventIds: (Array.isArray(node.evidence) ? node.evidence : []).map((item) => safeAtlasText(item.eventId, 500)).filter(Boolean),
+      drilldown: (Array.isArray(node.evidence) ? node.evidence : []).map((item) => safeAtlasText(item.drilldown, 1000)).filter(Boolean),
     })),
     '',
     'Edges:',

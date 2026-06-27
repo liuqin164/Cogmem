@@ -34,6 +34,7 @@ export class BeliefStore {
   };
 
   private db: Database;
+  private closed = false;
 
   constructor(dbPath: string = ':memory:', private eventStore?: EventStore) {
     this.db = new Database(dbPath);
@@ -1149,6 +1150,8 @@ export class BeliefStore {
   }
 
   close(): void {
+    if (this.closed) return;
     this.db.close();
+    this.closed = true;
   }
 }
