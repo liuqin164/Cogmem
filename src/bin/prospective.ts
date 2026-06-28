@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 import type { ProspectiveMemoryStatus, ProspectiveMemoryType } from '../prospective/index.js';
+import { printCliJson } from './CliJson.js';
 
 interface Args {
   command?: string;
@@ -85,7 +86,7 @@ async function main(): Promise<void> {
         result = service.resolve(candidateId, { action: 'defer', deferredUntil }, projectId);
       } else throw new Error(`unknown prospective command: ${args.command}`);
     }
-    console.log(JSON.stringify(result, null, 2));
+    printCliJson(`prospective.${String(args.command)}`, result);
   } finally {
     kernel.close();
   }

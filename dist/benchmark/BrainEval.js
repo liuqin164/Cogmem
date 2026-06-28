@@ -24,6 +24,12 @@ const THRESHOLDS = {
     repairInvalidationCompliance: { operator: '=', value: 1 },
     importResumeReliability: { operator: '=', value: 1 },
     hooklessWarningCoverage: { operator: '=', value: 1 },
+    atlasScopeIsolation: { operator: '=', value: 1 },
+    atlasBoundCompliance: { operator: '=', value: 1 },
+    atlasEvidenceCoverage: { operator: '=', value: 1 },
+    atlasPathReconstruction: { operator: '=', value: 1 },
+    atlasFacetedResurrection: { operator: '=', value: 1 },
+    atlasCanonicalImmutability: { operator: '=', value: 1 },
 };
 export class BrainEvalRunner {
     evaluate(samples) {
@@ -71,6 +77,13 @@ export class BrainEvalRunner {
         let importResumePasses = 0;
         let hooklessChecks = 0;
         let hooklessPasses = 0;
+        let atlasChecks = 0;
+        let atlasScopePasses = 0;
+        let atlasBoundPasses = 0;
+        let atlasEvidencePasses = 0;
+        let atlasPathPasses = 0;
+        let atlasResurrectionPasses = 0;
+        let atlasImmutabilityPasses = 0;
         for (const sample of samples) {
             const expected = new Set(sample.expectedIds);
             const selected = new Set(sample.selectedIds);
@@ -179,6 +192,21 @@ export class BrainEvalRunner {
                 if (!check.ingestionMissing || check.warningPresent)
                     hooklessPasses += 1;
             }
+            for (const check of sample.atlasChecks ?? []) {
+                atlasChecks += 1;
+                if (!check.crossProjectLeak)
+                    atlasScopePasses += 1;
+                if (check.nodeCount <= check.maxNodes && check.hopCount <= check.maxHops)
+                    atlasBoundPasses += 1;
+                if (check.evidenceEventIdPresent && check.drilldownPresent)
+                    atlasEvidencePasses += 1;
+                if (check.expectedPathConnected === check.actualPathConnected)
+                    atlasPathPasses += 1;
+                if (check.matchedFacetCount < 2 || check.coldNodeReturned)
+                    atlasResurrectionPasses += 1;
+                if (!check.canonicalSourceMutated)
+                    atlasImmutabilityPasses += 1;
+            }
         }
         const metrics = {
             recall: expectedCount === 0 ? 1 : relevantSelectedCount / expectedCount,
@@ -208,6 +236,12 @@ export class BrainEvalRunner {
             repairInvalidationCompliance: repairChecks === 0 ? 0 : repairPasses / repairChecks,
             importResumeReliability: importResumeCheckCount === 0 ? 0 : importResumePasses / importResumeCheckCount,
             hooklessWarningCoverage: hooklessChecks === 0 ? 0 : hooklessPasses / hooklessChecks,
+            atlasScopeIsolation: atlasChecks === 0 ? 0 : atlasScopePasses / atlasChecks,
+            atlasBoundCompliance: atlasChecks === 0 ? 0 : atlasBoundPasses / atlasChecks,
+            atlasEvidenceCoverage: atlasChecks === 0 ? 0 : atlasEvidencePasses / atlasChecks,
+            atlasPathReconstruction: atlasChecks === 0 ? 0 : atlasPathPasses / atlasChecks,
+            atlasFacetedResurrection: atlasChecks === 0 ? 0 : atlasResurrectionPasses / atlasChecks,
+            atlasCanonicalImmutability: atlasChecks === 0 ? 0 : atlasImmutabilityPasses / atlasChecks,
         };
         const failedMetrics = Object.keys(metrics).filter((key) => {
             const threshold = THRESHOLDS[key];

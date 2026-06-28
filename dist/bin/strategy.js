@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
+import { printCliJson } from './CliJson.js';
 function parse(argv) {
     const [command, ...rest] = argv;
     const values = new Map();
@@ -37,9 +38,9 @@ async function main() {
             if (!query)
                 throw new Error('plan requires --query <text>');
             const intent = kernel.contextCortex.classifyIntent(query);
-            console.log(JSON.stringify(kernel.strategyCortex.plan({
+            printCliJson('strategy.plan', kernel.strategyCortex.plan({
                 query, intent, projectId: args.values.get('project'),
-            }), null, 2));
+            }));
             return;
         }
         if (args.command === 'outcomes') {
@@ -50,7 +51,7 @@ async function main() {
             const limit = rawLimit === undefined ? 100 : Number(rawLimit);
             if (!Number.isInteger(limit) || limit <= 0)
                 throw new Error('--limit must be a positive integer');
-            console.log(JSON.stringify(kernel.contextOutcomeStore.list(projectId, limit), null, 2));
+            printCliJson('strategy.outcomes', kernel.contextOutcomeStore.list(projectId, limit));
             return;
         }
         throw new Error(`unknown strategy command: ${args.command}`);

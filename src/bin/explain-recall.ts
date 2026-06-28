@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
+import { printCliJson } from './CliJson.js';
 
 interface ExplainArgs {
   query?: string;
@@ -138,7 +139,7 @@ async function main(): Promise<void> {
       endTime: args.endTime,
     });
     if (args.json) {
-      console.log(JSON.stringify(explanation, null, 2));
+      printCliJson('explain-recall', explanation);
       return;
     }
     printHuman(explanation);

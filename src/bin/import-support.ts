@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { basename, resolve } from 'node:path';
+import { printCliJson } from './CliJson.js';
 
 import {
   buildEpisodeEnvelope,
@@ -185,7 +186,7 @@ async function runAgentImport(input: {
       });
 
   if (input.args.values.json === true) {
-    console.log(JSON.stringify(result, null, 2));
+    printCliJson(`import-${input.agent}`, result);
     return;
   }
 

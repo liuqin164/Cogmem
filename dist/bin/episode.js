@@ -3,6 +3,7 @@ import { createReadStream, existsSync, readFileSync, renameSync, writeFileSync }
 import { createInterface } from 'node:readline';
 import { createStableImportIdentityFactory } from '../episode/EpisodeImportIdentity.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
+import { printCliJson } from './CliJson.js';
 function parseArgs(argv) {
     const [command, ...rest] = argv;
     const args = { command };
@@ -36,6 +37,7 @@ function usage() {
         '  reclassify --project <id> --episode <id> [--episode-type <type>] [--topic-path <path>] [--importance <0..1>]',
         '  requeue-dream --project <id> --episode <id> [--mode micro|normal|deep]',
         'Existing source-specific imports remain: cogmem import-openclaw and cogmem import-hermes.',
+        '--json emits cogmem.cli.v1; array results are returned under items.',
     ].join('\n');
 }
 function openKernel(args) {
@@ -107,7 +109,7 @@ async function main() {
         else {
             throw new Error(usage());
         }
-        console.log(JSON.stringify(result, null, args.json === true ? 2 : 2));
+        printCliJson(`episode.${args.command}`, result);
     }
     finally {
         kernel.close();

@@ -29,6 +29,7 @@ export interface ProcessedSourceRecord {
 
 export class IngestionCursorStore {
   private db: Database;
+  private closed = false;
 
   constructor(dbPath: string = ':memory:') {
     this.db = new Database(dbPath);
@@ -206,7 +207,9 @@ export class IngestionCursorStore {
   }
 
   close(): void {
+    if (this.closed) return;
     this.db.close();
+    this.closed = true;
   }
 
   private mapCursor(row: any): IngestionSourceCursor {

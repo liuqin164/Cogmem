@@ -34,6 +34,7 @@ export class BeliefStore {
   };
 
   private db: Database;
+  private closed = false;
 
   constructor(dbPath: string = ':memory:', private eventStore?: EventStore) {
     this.db = new Database(dbPath);
@@ -91,6 +92,16 @@ export class BeliefStore {
       ORDER BY valid_from DESC, created_at DESC
     `).all(canonicalKey) as any[];
     return rows.map((row) => this.mapBelief(row));
+  }
+
+  countActive(projectId?: string): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM beliefs
+      WHERE status = 'active'
+        AND (? IS NULL OR project_id = ?)
+    `).get(projectId || null, projectId || null) as { count: number };
+    return row.count;
   }
 
   listByTimeRange(
@@ -1139,6 +1150,8 @@ export class BeliefStore {
   }
 
   close(): void {
+    if (this.closed) return;
     this.db.close();
+    this.closed = true;
   }
 }

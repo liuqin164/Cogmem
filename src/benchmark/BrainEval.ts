@@ -25,6 +25,20 @@ export interface BrainEvalSample {
   repairInvalidationChecks?: Array<{ oldCandidatesStale: boolean; dreamRequeued: boolean }>;
   importResumeChecks?: Array<{ resumedWithoutDuplicate: boolean; checkpointComplete: boolean }>;
   hooklessWarningChecks?: Array<{ ingestionMissing: boolean; warningPresent: boolean }>;
+  atlasChecks?: Array<{
+    crossProjectLeak: boolean;
+    nodeCount: number;
+    maxNodes: number;
+    hopCount: number;
+    maxHops: number;
+    evidenceEventIdPresent: boolean;
+    drilldownPresent: boolean;
+    expectedPathConnected: boolean;
+    actualPathConnected: boolean;
+    matchedFacetCount: number;
+    coldNodeReturned: boolean;
+    canonicalSourceMutated: boolean;
+  }>;
 }
 
 export interface BrainEvalMetrics {
@@ -53,6 +67,12 @@ export interface BrainEvalMetrics {
   repairInvalidationCompliance: number;
   importResumeReliability: number;
   hooklessWarningCoverage: number;
+  atlasScopeIsolation: number;
+  atlasBoundCompliance: number;
+  atlasEvidenceCoverage: number;
+  atlasPathReconstruction: number;
+  atlasFacetedResurrection: number;
+  atlasCanonicalImmutability: number;
 }
 
 export interface BrainEvalReport {
@@ -88,6 +108,12 @@ const THRESHOLDS: Record<keyof BrainEvalMetrics, { operator: '>=' | '='; value: 
   repairInvalidationCompliance: { operator: '=', value: 1 },
   importResumeReliability: { operator: '=', value: 1 },
   hooklessWarningCoverage: { operator: '=', value: 1 },
+  atlasScopeIsolation: { operator: '=', value: 1 },
+  atlasBoundCompliance: { operator: '=', value: 1 },
+  atlasEvidenceCoverage: { operator: '=', value: 1 },
+  atlasPathReconstruction: { operator: '=', value: 1 },
+  atlasFacetedResurrection: { operator: '=', value: 1 },
+  atlasCanonicalImmutability: { operator: '=', value: 1 },
 };
 
 export class BrainEvalRunner {
@@ -131,6 +157,9 @@ export class BrainEvalRunner {
     let repairChecks = 0; let repairPasses = 0;
     let importResumeCheckCount = 0; let importResumePasses = 0;
     let hooklessChecks = 0; let hooklessPasses = 0;
+    let atlasChecks = 0; let atlasScopePasses = 0; let atlasBoundPasses = 0;
+    let atlasEvidencePasses = 0; let atlasPathPasses = 0; let atlasResurrectionPasses = 0;
+    let atlasImmutabilityPasses = 0;
 
     for (const sample of samples) {
       const expected = new Set(sample.expectedIds);
@@ -207,6 +236,15 @@ export class BrainEvalRunner {
       for (const check of sample.repairInvalidationChecks ?? []) { repairChecks += 1; if (check.oldCandidatesStale && check.dreamRequeued) repairPasses += 1; }
       for (const check of sample.importResumeChecks ?? []) { importResumeCheckCount += 1; if (check.resumedWithoutDuplicate && check.checkpointComplete) importResumePasses += 1; }
       for (const check of sample.hooklessWarningChecks ?? []) { hooklessChecks += 1; if (!check.ingestionMissing || check.warningPresent) hooklessPasses += 1; }
+      for (const check of sample.atlasChecks ?? []) {
+        atlasChecks += 1;
+        if (!check.crossProjectLeak) atlasScopePasses += 1;
+        if (check.nodeCount <= check.maxNodes && check.hopCount <= check.maxHops) atlasBoundPasses += 1;
+        if (check.evidenceEventIdPresent && check.drilldownPresent) atlasEvidencePasses += 1;
+        if (check.expectedPathConnected === check.actualPathConnected) atlasPathPasses += 1;
+        if (check.matchedFacetCount < 2 || check.coldNodeReturned) atlasResurrectionPasses += 1;
+        if (!check.canonicalSourceMutated) atlasImmutabilityPasses += 1;
+      }
     }
 
     const metrics: BrainEvalMetrics = {
@@ -237,6 +275,12 @@ export class BrainEvalRunner {
       repairInvalidationCompliance: repairChecks === 0 ? 0 : repairPasses / repairChecks,
       importResumeReliability: importResumeCheckCount === 0 ? 0 : importResumePasses / importResumeCheckCount,
       hooklessWarningCoverage: hooklessChecks === 0 ? 0 : hooklessPasses / hooklessChecks,
+      atlasScopeIsolation: atlasChecks === 0 ? 0 : atlasScopePasses / atlasChecks,
+      atlasBoundCompliance: atlasChecks === 0 ? 0 : atlasBoundPasses / atlasChecks,
+      atlasEvidenceCoverage: atlasChecks === 0 ? 0 : atlasEvidencePasses / atlasChecks,
+      atlasPathReconstruction: atlasChecks === 0 ? 0 : atlasPathPasses / atlasChecks,
+      atlasFacetedResurrection: atlasChecks === 0 ? 0 : atlasResurrectionPasses / atlasChecks,
+      atlasCanonicalImmutability: atlasChecks === 0 ? 0 : atlasImmutabilityPasses / atlasChecks,
     };
     const failedMetrics = (Object.keys(metrics) as Array<keyof BrainEvalMetrics>).filter((key) => {
       const threshold = THRESHOLDS[key];

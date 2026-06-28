@@ -1,15 +1,13 @@
 ---
 name: cogmem-memory-backend
-description: Install and connect cogmem as a durable memory backend for OpenClaw.
-version: 3.5.2
-metadata:
-  openclaw:
-    tags: [memory, cogmem, agent-memory]
+description: Install, connect, migrate, inspect, and navigate cogmem as OpenClaw's durable memory backend. Use for broad memory inventory, historical or relationship questions, exact source drill-down, Memory Atlas graph exploration, episode/Dream maintenance, or OpenClaw plugin repair.
 ---
 
 # cogmem Memory Backend for OpenClaw
 
 Use this skill when an OpenClaw workspace needs `cogmem` as its durable memory backend.
+
+For the complete command matrix, migration/import recipes, governance actions, Atlas filters, repair commands, backup flow, and scheduler guidance, read [references/operations.md](references/operations.md).
 
 ## Ground Rules
 
@@ -86,6 +84,12 @@ timeout_ms = 60000
 ```
 
 ## Migrate Existing OpenClaw Memory
+
+Upgrade a 3.5.2 database, or a pre-release schema-25 test database, to schema 26 in one backed-up command:
+
+```bash
+cogmem migrate --yes --backup --json
+```
 
 After upgrading Cogmem itself, migrate its database schema before importing or recalling:
 
@@ -187,6 +191,19 @@ If the user asks for "原话", "具体内容", "完整脉络", "为什么当时�
 
 ## Active Memory Search
 
+For broad inventory, project history, or relationship questions, navigate Memory Atlas before direct recall:
+
+```bash
+cogmem memory graph-explore --project openclaw --query "我们关于 Hermes 做过哪些工作" --json
+cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --json
+cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
+cogmem memory graph-timeline --project openclaw --query "去年与 Hermes 有关的决定和操作" --json
+```
+
+Atlas combines the conditions present in the user's message like table filters. Do not force every question into entity + time + action. Project, time, topic, entity/target, memory kind, and ordinary cues may independently or jointly revive cold nodes. Graph reads do not change activation; explicitly touch only nodes the agent actually uses. Activation changes visibility only. Follow returned event IDs with `cogmem memory show`; never treat an Atlas summary as evidence.
+
+The OpenClaw auto plugin calls the Atlas core directly and injects a bounded volatile `<COGMEM_MEMORY_ATLAS>` block. It does not require MCP. Use normal `memory recall` for a direct factual question and `memory show` for exact wording.
+
 If `<COGMEM_RECALL_CONTEXT>` is absent, thin, or does not answer the user's question, do not answer "I do not remember" until you actively query CogMem. Use the kernel first, not the old `memory/` Markdown files:
 
 ```bash
@@ -240,7 +257,7 @@ This command is idempotent. It does not duplicate compiled memory or hot vectors
 
 ## OpenClaw Host Integration Notes
 
-`cogmem connect openclaw` installs this file into `<workspace>/skills/cogmem-memory/SKILL.md`, which is OpenClaw's workspace skill location. That makes the procedure discoverable without changing OpenClaw host config.
+`cogmem connect openclaw` installs this file plus `references/operations.md` into `<workspace>/skills/cogmem-memory/`, which is OpenClaw's workspace skill location. That makes the full operating procedure discoverable without changing OpenClaw host config.
 
 Current OpenClaw memory config is OpenClaw-owned. Its documented backend selector is `memory.backend` with values such as `"builtin"` and `"qmd"`, and the built-in memory surface exposes tools such as `memory_search` and `memory_get`. Do not write `plugins.slots.memory` or other unknown OpenClaw config fields for cogmem; OpenClaw uses strict config validation and unknown fields can prevent the Gateway from starting.
 
@@ -315,7 +332,7 @@ Queue interpretation:
 
 - `candidate`: proposed but not yet governed; do not assume it will be injected.
 - `promoted`: accepted by CPU governance. Summaries/preferences are provisional memory; semantic tags/indexing decisions/event relations/edge adjustments are organization metadata, not verified facts.
-- `needs_confirmation`: uncertain or risky evidence that still needs review. Maintenance supersedes stale entries after the review TTL without deleting evidence.
+- `needs_confirmation`: uncertain or risky evidence that requires `cogmem memory review` or MCP `cogmem_candidate_review`. Approval/relink require distinct same-project user evidence; maintenance only supersedes entries that remain stale past the review TTL.
 - `rejected`: invalid provider output and other unusable diagnostics remain auditable here; they are not user memory and do not require confirmation.
 - `superseded`: older diagnostic or candidate has been replaced by newer evidence.
 
@@ -385,6 +402,15 @@ Expose these tools to the agent:
 - `cogmem_dream_tick`
 - `cogmem_dream_status`
 - `cogmem_memory_map`
+- `cogmem_graph_overview`
+- `cogmem_graph_search`
+- `cogmem_graph_explore`
+- `cogmem_graph_node`
+- `cogmem_graph_neighbors`
+- `cogmem_graph_path`
+- `cogmem_graph_timeline`
+- `cogmem_graph_touch`
+- `cogmem_candidate_review`
 - `cogmem_maintenance_tick`
 - `cogmem_prospective`
 

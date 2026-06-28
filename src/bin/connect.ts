@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { printCliJson } from './CliJson.js';
 
 import {
   type OpenClawAutoMemoryInstallResult,
@@ -27,6 +28,15 @@ const HERMES_COGMEM_TOOLS = [
   'cogmem_dream_tick',
   'cogmem_dream_status',
   'cogmem_memory_map',
+  'cogmem_graph_overview',
+  'cogmem_graph_search',
+  'cogmem_graph_explore',
+  'cogmem_graph_node',
+  'cogmem_graph_neighbors',
+  'cogmem_graph_path',
+  'cogmem_graph_timeline',
+  'cogmem_graph_touch',
+  'cogmem_candidate_review',
   'cogmem_maintenance_tick',
   'cogmem_prospective',
 ];
@@ -53,6 +63,7 @@ interface ConnectResult {
   agent: AgentKind;
   workspaceRoot: string;
   skillPath: string;
+  skillFiles: string[];
   templatePath: string;
   dryRun: boolean;
   installed: boolean;
@@ -124,6 +135,10 @@ function templatePathFor(agent: AgentKind): string {
   return join(packageRoot(), 'examples', `${agent}-backend`, 'SKILL.md');
 }
 
+function operationsTemplatePathFor(agent: AgentKind): string {
+  return join(packageRoot(), 'examples', `${agent}-backend`, 'references', 'operations.md');
+}
+
 function defaultSkillPath(agent: AgentKind, workspaceRoot: string): string {
   if (agent === 'openclaw') {
     return join(workspaceRoot, 'skills', 'cogmem-memory', 'SKILL.md');
@@ -154,11 +169,11 @@ function usage(): string {
   return [
     'Usage: cogmem-connect <openclaw|hermes> [--workspace <dir>] [--output <SKILL.md>] [--auto] [--config <config.toml>] [--openclaw-config <openclaw.json>] [--hermes-config <config.yaml>] [--dry-run] [--force] [--json]',
     '',
-    'Installs the agent-facing cogmem memory skill file into:',
-    '  OpenClaw: <workspace>/skills/cogmem-memory/SKILL.md',
-    '  Hermes:   ~/.hermes/skills/cogmem-memory/SKILL.md',
+    'Installs the agent-facing cogmem memory skill bundle into:',
+    '  OpenClaw: <workspace>/skills/cogmem-memory/',
+    '  Hermes:   ~/.hermes/skills/cogmem-memory/',
     '',
-    'By default this command installs only the agent-facing skill file.',
+    'The bundle includes SKILL.md plus references/operations.md with migration, import, recall, Atlas, governance, repair, and backup commands.',
     'For OpenClaw, pass --auto to install the local automatic recall/remember plugin wrapper and patch OpenClaw plugin config.',
     'For Hermes, pass --auto to patch ~/.hermes/config.yaml with a cogmem MCP server entry.',
   ].join('\n');
@@ -212,13 +227,22 @@ function resolveCogmemMcpCommand(workspaceRoot: string): string {
 function installSkill(args: ConnectArgs): ConnectResult {
   if (!args.agent) throw new Error(usage());
   const templatePath = templatePathFor(args.agent);
-  if (!existsSync(templatePath)) {
-    throw new Error(`Missing packaged skill template: ${templatePath}`);
+  const operationsTemplatePath = operationsTemplatePathFor(args.agent);
+  for (const requiredPath of [templatePath, operationsTemplatePath]) {
+    if (!existsSync(requiredPath)) {
+      throw new Error(`Missing packaged skill template: ${requiredPath}`);
+    }
   }
 
   const template = readFileSync(templatePath, 'utf8');
+  const operationsTemplate = readFileSync(operationsTemplatePath, 'utf8');
   const skillPath = resolve(args.outputPath || defaultSkillPath(args.agent, args.workspaceRoot));
-  const alreadyCurrent = existsSync(skillPath) && readFileSync(skillPath, 'utf8') === template;
+  const operationsPath = join(dirname(skillPath), 'references', 'operations.md');
+  const skillFiles = [skillPath, operationsPath];
+  const alreadyCurrent = existsSync(skillPath)
+    && readFileSync(skillPath, 'utf8') === template
+    && existsSync(operationsPath)
+    && readFileSync(operationsPath, 'utf8') === operationsTemplate;
   let autoMemory: OpenClawAutoMemoryInstallResult | undefined;
   let hermesMcp: HermesMcpInstallResult | undefined;
 
@@ -228,6 +252,8 @@ function installSkill(args: ConnectArgs): ConnectResult {
     }
     mkdirSync(dirname(skillPath), { recursive: true });
     writeFileSync(skillPath, template, 'utf8');
+    mkdirSync(dirname(operationsPath), { recursive: true });
+    writeFileSync(operationsPath, operationsTemplate, 'utf8');
   }
 
   if (args.agent === 'openclaw' && args.auto) {
@@ -255,6 +281,7 @@ function installSkill(args: ConnectArgs): ConnectResult {
     agent: args.agent,
     workspaceRoot: args.workspaceRoot,
     skillPath,
+    skillFiles,
     templatePath,
     dryRun: args.dryRun,
     installed: !args.dryRun && !alreadyCurrent,
@@ -398,6 +425,7 @@ function printHuman(result: ConnectResult): void {
   console.log(`cogmem ${result.agent} skill ${result.dryRun ? 'dry-run' : result.installed ? 'installed' : 'already current'}`);
   console.log(`workspace: ${result.workspaceRoot}`);
   console.log(`skill: ${result.skillPath}`);
+  console.log(`reference: ${result.skillFiles[1]}`);
   console.log('');
   console.log('Host config snippet:');
   console.log(result.hostConfigSnippet);
@@ -435,7 +463,7 @@ async function main(): Promise<void> {
 
   const result = installSkill(args);
   if (args.json) {
-    console.log(JSON.stringify(result, null, 2));
+    printCliJson(`connect.${result.agent}`, result);
     return;
   }
   printHuman(result);

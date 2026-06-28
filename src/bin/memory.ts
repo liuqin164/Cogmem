@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 import { KernelAgentMemoryBackend, type AgentRecallIntent } from '../agent/index.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
+import { loadCogmemConfig } from '../config/CogmemConfig.js';
 import {
   memoryEventCharRange,
   memoryEventLabel,
@@ -10,13 +11,30 @@ import {
   normalizeSourceContextWindow,
 } from '../recall/SourceContextMetadata.js';
 import type { DeepWriteCandidateRecord, DeepWriteCandidateStatus } from '../store/DeepWriteCandidateStore.js';
+import { MemoryInspectionStore } from '../store/MemoryInspectionStore.js';
 import type { MemoryEvent } from '../types/index.js';
+import { printCliJson } from './CliJson.js';
 
 interface MemoryArgs {
-  command?: 'status' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'map' | 'tick' | 'bind';
+  command?: 'status' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
+    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline';
   query?: string;
   eventId?: string;
+  nodeId?: string;
+  fromId?: string;
+  toId?: string;
+  hops?: number;
+  maxHops?: number;
   status?: DeepWriteCandidateStatus;
+  reviewAction?: 'approve' | 'reject' | 'defer' | 'supersede' | 'relink';
+  actor?: string;
+  reason?: string;
+  confirmationEventId?: string;
+  targetBeliefId?: string;
+  replacementCandidateId?: string;
+  reviewAfter?: number;
+  now?: number;
+  evidenceLimit?: number;
   agentId?: string;
   intent?: AgentRecallIntent;
   projectId?: string;
@@ -37,6 +55,7 @@ interface MemoryArgs {
   watch: boolean;
   promote: boolean;
   json: boolean;
+  includeEvidence: boolean;
   help: boolean;
 }
 
@@ -62,7 +81,21 @@ function readArgs(argv: string[]): MemoryArgs {
     command,
     query: stringArg(values, 'query') || stringArg(values, 'q'),
     eventId: stringArg(values, 'event') || stringArg(values, 'event-id'),
+    nodeId: stringArg(values, 'id') || stringArg(values, 'node-id'),
+    fromId: stringArg(values, 'from'),
+    toId: stringArg(values, 'to'),
+    hops: numberArg(values, 'hops'),
+    maxHops: numberArg(values, 'max-hops'),
     status: candidateStatusArg(values, 'status'),
+    reviewAction: reviewActionArg(values, 'action'),
+    actor: stringArg(values, 'actor'),
+    reason: stringArg(values, 'reason'),
+    confirmationEventId: stringArg(values, 'confirmation-event'),
+    targetBeliefId: stringArg(values, 'target-belief'),
+    replacementCandidateId: stringArg(values, 'replacement'),
+    reviewAfter: numberArg(values, 'review-after'),
+    now: numberArg(values, 'now'),
+    evidenceLimit: numberArg(values, 'evidence-limit'),
     agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
     intent: recallIntentArg(values, 'intent'),
     projectId: stringArg(values, 'project') || stringArg(values, 'project-id'),
@@ -83,13 +116,14 @@ function readArgs(argv: string[]): MemoryArgs {
     watch: values.watch === true,
     promote: values.promote === true,
     json: values.json === true,
+    includeEvidence: values['include-evidence'] === true,
     help: values.help === true || values.h === true,
   };
 }
 
 function usage(): string {
   return [
-    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|map|tick|bind> [args]',
+    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|graph...> [args]',
     '',
     'Commands:',
     '  status               summarize raw ledger, vector, and dream backlog state',
@@ -100,9 +134,17 @@ function usage(): string {
     '  dream                compatibility alias for a conditional sealed-episode Dream tick',
     '  govern               apply CPU governance to pending dream/deep-write candidates',
     '  candidates           list dream/deep-write governance candidates',
+    '  review               approve, reject, defer, supersede, or relink one needs-confirmation candidate',
     '  map                  print the self-describing memory map for agent/host inspection',
     '  tick                 run one explicit host-owned maintenance tick',
     '  bind                 backfill memory bindings for high-value raw user events',
+    '  graph                show a bounded overview of remembered topics, entities, clusters, actions, and time',
+    '  graph-search         locate Atlas nodes by --query without expanding the graph',
+    '  graph-explore        return a bounded local graph for a broad --query',
+    '  graph-node           inspect --id with neighbors and evidence drilldown commands',
+    '  graph-neighbors      expand --id by --hops 1..2',
+    '  graph-path           find a bounded path from --from to --to',
+    '  graph-timeline       reconstruct entity/time/action history for --query',
     '',
     'Common options:',
     '  --project <id>       scope to one project',
@@ -113,6 +155,14 @@ function usage(): string {
     '  --limit <n>          result limit, default 20',
     '  --since <globalSeq>  for bind, scan raw events at or after a global sequence',
     '  --status <status>    candidate queue status, default candidate',
+    '  --id <candidate>     candidate id for review',
+    '  --action <action>    review action: approve, reject, defer, supersede, or relink',
+    '  --actor <name>       audited operator identity for review',
+    '  --reason <text>      required audited review reason',
+    '  --confirmation-event <id>  distinct same-project raw user evidence for approve/relink',
+    '  --target-belief <id>       active same-project belief for correction relink',
+    '  --replacement <id>         replacement candidate for supersede',
+    '  --review-after <ms>         future epoch milliseconds for defer',
     '  --promote            after dream, run CPU governance over pending candidates',
     '  --promote-limit <n>  governance candidate limit, default follows --limit or 100',
     '  --watch              keep issuing conditional Dream ticks as a host-owned worker',
@@ -122,7 +172,10 @@ function usage(): string {
     '  --intent <intent>    memory_recall, previous_session_summary, or forensic_quote',
     '  --db <memory.db>     open an explicit database path',
     '  --config <toml>      open a cogmem TOML config',
-    '  --json               print machine-readable JSON',
+    '  --include-evidence   include bounded raw excerpts; event ids are always returned',
+    '  --evidence-limit <n> bound evidence locators per Atlas node, default 2, maximum 10',
+    '  --now <epoch-ms>     deterministic reference time for relative Atlas time facets',
+    '  --json               print cogmem.cli.v1 JSON; queue counters are stable top-level fields',
     '',
     'Dream processes sealed episodes only. A timer may call the conditional tick, but recall and message ingestion never run Dream.',
     'Candidate interpretation uses deterministic rules unless [memory_model] configures an OpenAI-compatible local or cloud chat model.',
@@ -139,9 +192,24 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'dream'
     || value === 'govern'
     || value === 'candidates'
+    || value === 'review'
     || value === 'map'
     || value === 'tick'
-    || value === 'bind';
+    || value === 'bind'
+    || value === 'graph'
+    || value === 'graph-search'
+    || value === 'graph-explore'
+    || value === 'graph-node'
+    || value === 'graph-neighbors'
+    || value === 'graph-path'
+    || value === 'graph-timeline';
+}
+
+function reviewActionArg(values: Record<string, string | boolean>, key: string): MemoryArgs['reviewAction'] {
+  const raw = stringArg(values, key);
+  if (!raw) return undefined;
+  if (raw === 'approve' || raw === 'reject' || raw === 'defer' || raw === 'supersede' || raw === 'relink') return raw;
+  throw new Error(`--${key} must be one of approve, reject, defer, supersede, relink`);
 }
 
 function recallIntentArg(
@@ -192,6 +260,46 @@ function openKernel(args: MemoryArgs): MemoryKernel {
     configPath: args.configPath ? resolve(args.configPath) : undefined,
     cwd: process.cwd(),
   });
+}
+
+function inspectionDbPath(args: MemoryArgs): string {
+  if (args.dbPath) return resolve(args.dbPath);
+  const loaded = loadCogmemConfig({
+    configPath: args.configPath ? resolve(args.configPath) : undefined,
+    cwd: process.cwd(),
+  });
+  if (!loaded.options.dbPath) throw new Error('Cogmem config does not define core.db_path');
+  return loaded.options.dbPath;
+}
+
+function runReadOnlyInspection(args: MemoryArgs): void {
+  const inspection = new MemoryInspectionStore(inspectionDbPath(args));
+  try {
+    if (args.command === 'status') {
+      const payload = inspection.status({
+        projectId: args.projectId, workspaceId: args.workspaceId,
+        threadId: args.threadId, sessionId: args.sessionId,
+      });
+      if (args.json) {
+        printCliJson('memory.status', payload, {
+          queue: payload.dreamCandidateQueue,
+          beliefs: payload.activeBeliefs,
+        });
+      } else printHuman('status', payload as unknown as Record<string, unknown>);
+      return;
+    }
+    const status = args.status || 'candidate';
+    const candidates = inspection.listCandidates({
+      projectId: args.projectId,
+      status,
+      limit: args.limit || 50,
+    });
+    const payload = { total: candidates.length, status, candidates: candidates.map(candidateToJson) };
+    if (args.json) printCliJson('memory.candidates', payload);
+    else printHuman('candidates', payload);
+  } finally {
+    inspection.close();
+  }
 }
 
 function eventText(event: MemoryEvent): string {
@@ -251,6 +359,7 @@ function candidateToJson(candidate: DeepWriteCandidateRecord): Record<string, un
     promotionTargetType: candidate.promotionTargetType,
     promotionTargetId: candidate.promotionTargetId,
     statusReason: candidate.statusReason,
+    reviewAfter: candidate.reviewAfter,
     createdAt: candidate.createdAt,
     updatedAt: candidate.updatedAt,
   };
@@ -367,6 +476,39 @@ function runBind(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown
   }) as unknown as Record<string, unknown>;
 }
 
+function runGraphCommand(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  const projectId = args.projectId;
+  if (!projectId) throw new Error(`Memory Atlas commands require --project.\n${usage()}`);
+  kernel.ensureMemoryAtlas({ projectId });
+  const options = { projectId, limit: args.limit, includeEvidence: args.includeEvidence,
+    evidenceLimit: args.evidenceLimit, now: args.now };
+  if (args.command === 'graph') return kernel.graphOverview(options) as unknown as Record<string, unknown>;
+  if (args.command === 'graph-search') {
+    if (!args.query) throw new Error(`graph-search requires --query.\n${usage()}`);
+    return kernel.graphSearch(args.query, options) as unknown as Record<string, unknown>;
+  }
+  if (args.command === 'graph-explore') {
+    if (!args.query) throw new Error(`graph-explore requires --query.\n${usage()}`);
+    return kernel.graphExplore(args.query, options) as unknown as Record<string, unknown>;
+  }
+  if (args.command === 'graph-node') {
+    if (!args.nodeId) throw new Error(`graph-node requires --id.\n${usage()}`);
+    const result = kernel.graphNode(args.nodeId, options);
+    if (!result) throw new Error(`No Memory Atlas node found for ${args.nodeId}`);
+    return result as unknown as Record<string, unknown>;
+  }
+  if (args.command === 'graph-neighbors') {
+    if (!args.nodeId) throw new Error(`graph-neighbors requires --id.\n${usage()}`);
+    return kernel.graphNeighbors(args.nodeId, { ...options, hops: args.hops }) as unknown as Record<string, unknown>;
+  }
+  if (args.command === 'graph-path') {
+    if (!args.fromId || !args.toId) throw new Error(`graph-path requires --from and --to.\n${usage()}`);
+    return kernel.graphPath(args.fromId, args.toId, { ...options, maxHops: args.maxHops }) as unknown as Record<string, unknown>;
+  }
+  if (!args.query) throw new Error(`graph-timeline requires --query.\n${usage()}`);
+  return kernel.graphTimeline(args.query, options) as unknown as Record<string, unknown>;
+}
+
 function runShow(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
   if (!args.eventId) throw new Error(`Missing --event.\n${usage()}`);
   const beforeCount = args.before ?? 2;
@@ -391,6 +533,25 @@ function runShow(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown
 }
 
 function runGovern(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  if (args.status && args.status !== 'candidate') {
+    if (args.status === 'needs_confirmation') {
+      const candidates = kernel.listDreamCandidates({
+        projectId: args.projectId,
+        statuses: ['needs_confirmation'],
+        limit: args.limit || 50,
+      });
+      return {
+        status: 'needs_confirmation',
+        total: candidates.length,
+        candidates: candidates.map(candidateToJson),
+        decisions: [],
+        queue: kernel.getDreamCandidateQueue(args.projectId),
+        warning: 'memory govern does not process needs_confirmation candidates. Use memory review for approve, reject, defer, supersede, or relink.',
+        reviewCommand: 'cogmem memory review --project <projectId> --id <candidateId> --action <approve|reject|defer|supersede|relink> --actor <operator> --reason <reason>',
+      };
+    }
+    throw new Error(`memory govern processes only candidate status; ${args.status} requires "cogmem memory review --id <candidateId> --action <action>"`);
+  }
   const result = kernel.promoteDreamCandidates({
     projectId: args.projectId,
     limit: args.promoteLimit || args.limit || 100,
@@ -399,6 +560,26 @@ function runGovern(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
     ...result,
     decisions: result.decisions,
   };
+}
+
+function runReview(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  if (!args.nodeId) throw new Error(`memory review requires --id.\n${usage()}`);
+  if (!args.reviewAction) throw new Error(`memory review requires --action.\n${usage()}`);
+  if (!args.projectId) throw new Error(`memory review requires --project.\n${usage()}`);
+  if (!args.actor) throw new Error(`memory review requires --actor.\n${usage()}`);
+  if (!args.reason) throw new Error(`memory review requires --reason.\n${usage()}`);
+  const result = kernel.reviewDreamCandidate({
+    candidateId: args.nodeId,
+    projectId: args.projectId,
+    action: args.reviewAction,
+    actor: args.actor,
+    reason: args.reason,
+    confirmationEventId: args.confirmationEventId,
+    targetBeliefId: args.targetBeliefId,
+    replacementCandidateId: args.replacementCandidateId,
+    reviewAfter: args.reviewAfter,
+  });
+  return { review: result.review, reviewedCandidate: result.candidate, decision: result.decision, queue: kernel.getDreamCandidateQueue(args.projectId) };
 }
 
 async function runDreamOnce(kernel: MemoryKernel, args: MemoryArgs): Promise<Record<string, unknown>> {
@@ -438,7 +619,7 @@ async function runDream(kernel: MemoryKernel, args: MemoryArgs): Promise<Record<
     completed += 1;
     if (maxRuns === undefined) {
       if (args.json) {
-        console.log(JSON.stringify({ watch: true, intervalMs, run }, null, 2));
+        printCliJson('memory.dream.watch', { watch: true, intervalMs, run });
       } else {
         printHuman('dream', run);
       }
@@ -496,8 +677,14 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
   }
   if (command === 'govern') {
     const decisions = Array.isArray(payload.decisions) ? payload.decisions : [];
+    if (payload.warning) console.log(`warning: ${payload.warning}`);
+    if (payload.reviewCommand) console.log(`reviewCommand: ${payload.reviewCommand}`);
     console.log(`decisions: ${decisions.length}`);
     console.log(`queue: ${JSON.stringify(payload.queue)}`);
+    const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
+    for (const candidate of candidates as Array<Record<string, unknown>>) {
+      console.log(`- ${candidate.candidateId} ${candidate.candidateType} ${candidate.status} confidence=${candidate.confidence}`);
+    }
     return;
   }
   if (command === 'candidates') {
@@ -505,6 +692,13 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     for (const candidate of candidates as Array<Record<string, unknown>>) {
       console.log(`- ${candidate.candidateId} ${candidate.candidateType} ${candidate.status} confidence=${candidate.confidence}`);
     }
+    return;
+  }
+  if (command === 'review') {
+    const candidate = payload.reviewedCandidate as Record<string, unknown> | undefined;
+    const review = payload.review as Record<string, unknown> | undefined;
+    console.log(`candidate: ${candidate?.candidateId} status=${candidate?.status}`);
+    console.log(`review: ${review?.reviewId} action=${review?.action}`);
     return;
   }
   if (command === 'map') {
@@ -529,6 +723,23 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     console.log(`createdBindings: ${payload.createdBindings}`);
     console.log(`skippedAlreadyBound: ${payload.skippedAlreadyBound}`);
     console.log(`failedEvents: ${payload.failedEvents}`);
+    return;
+  }
+  if (command === 'graph' || command.startsWith('graph-')) {
+    console.log(`memoryAtlas: ${payload.version || 'memory_atlas.v1'} project=${payload.projectId || 'unknown'}`);
+    const rows = Array.isArray(payload.nodes) ? payload.nodes
+      : Array.isArray(payload.path) ? payload.path
+        : Array.isArray(payload.actions) ? payload.actions
+          : payload.id ? [payload] : [];
+    for (const row of rows as Array<Record<string, unknown>>) {
+      const label = row.label || [row.targetLabel, row.action].filter(Boolean).join(' ') || row.id;
+      console.log(`- ${row.id} [${row.nodeType || row.frameType || 'node'}] ${label}`);
+      const evidence = Array.isArray(row.evidence) ? row.evidence as Array<Record<string, unknown>> : [];
+      for (const item of evidence) if (item.drilldown) console.log(`  ${item.drilldown}`);
+    }
+    const nextActions = Array.isArray(payload.nextActions) ? payload.nextActions as Array<Record<string, unknown>> : [];
+    for (const action of nextActions) console.log(`next: ${action.tool} ${JSON.stringify(action.args || {})}`);
+    if (payload.truncated === true) console.log('truncated: true');
     return;
   }
   if (command === 'recall') {
@@ -565,34 +776,57 @@ async function main(): Promise<void> {
     console.log(usage());
     return;
   }
-  const kernel = openKernel(args);
+  if (args.command === 'status' || args.command === 'candidates') {
+    runReadOnlyInspection(args);
+    return;
+  }
+  const kernelArgs: MemoryArgs = { ...args };
+  const kernel = openKernel(kernelArgs);
   try {
-    const payload = args.command === 'status'
-      ? runStatus(kernel, args)
-      : args.command === 'list'
-        ? runList(kernel, args)
-        : args.command === 'search'
-          ? runSearch(kernel, args)
-          : args.command === 'recall'
-            ? runRecall(kernel, args)
-            : args.command === 'show'
-              ? runShow(kernel, args)
-              : args.command === 'dream'
-                ? await runDream(kernel, args)
-                : args.command === 'govern'
-                  ? runGovern(kernel, args)
-                  : args.command === 'candidates'
-                    ? runCandidates(kernel, args)
-                    : args.command === 'map'
-                      ? runMap(kernel, args)
-                      : args.command === 'tick'
-                        ? runTick(kernel, args)
-                        : runBind(kernel, args);
-    if (args.json) {
-      console.log(JSON.stringify(payload, null, 2));
+    const payload = kernelArgs.command === 'status'
+      ? runStatus(kernel, kernelArgs)
+      : kernelArgs.command === 'list'
+        ? runList(kernel, kernelArgs)
+        : kernelArgs.command === 'search'
+          ? runSearch(kernel, kernelArgs)
+          : kernelArgs.command === 'recall'
+            ? runRecall(kernel, kernelArgs)
+            : kernelArgs.command === 'show'
+              ? runShow(kernel, kernelArgs)
+              : kernelArgs.command === 'dream'
+                ? await runDream(kernel, kernelArgs)
+                : kernelArgs.command === 'govern'
+                  ? runGovern(kernel, kernelArgs)
+                  : kernelArgs.command === 'candidates'
+                    ? runCandidates(kernel, kernelArgs)
+                    : kernelArgs.command === 'review'
+                      ? runReview(kernel, kernelArgs)
+                    : kernelArgs.command === 'map'
+                      ? runMap(kernel, kernelArgs)
+                      : kernelArgs.command === 'tick'
+                        ? runTick(kernel, kernelArgs)
+                      : kernelArgs.command === 'bind'
+                        ? runBind(kernel, kernelArgs)
+                        : runGraphCommand(kernel, kernelArgs);
+    if (kernelArgs.json) {
+      const queue = kernelArgs.command === 'status'
+        ? payload.dreamCandidateQueue as ReturnType<MemoryKernel['getDreamCandidateQueue']>
+        : kernelArgs.command === 'dream' && payload.governance
+          ? (payload.governance as { queue?: ReturnType<MemoryKernel['getDreamCandidateQueue']> }).queue
+          : kernelArgs.command === 'dream' && payload.queue
+            ? payload.queue as ReturnType<MemoryKernel['getDreamCandidateQueue']>
+            : kernelArgs.command === 'govern'
+              ? payload.queue as ReturnType<MemoryKernel['getDreamCandidateQueue']>
+              : kernelArgs.command === 'review'
+                ? payload.queue as ReturnType<MemoryKernel['getDreamCandidateQueue']>
+              : undefined;
+      printCliJson(`memory.${kernelArgs.command}`, payload, {
+        queue,
+        beliefs: queue ? kernel.beliefStore.countActive(kernelArgs.projectId) : undefined,
+      });
       return;
     }
-    printHuman(args.command, payload);
+    printHuman(kernelArgs.command!, payload);
   } finally {
     kernel.close();
   }

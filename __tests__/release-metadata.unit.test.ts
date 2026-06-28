@@ -22,7 +22,7 @@ function packageJson(): {
 }
 
 describe('core release metadata', () => {
-  test('3.5.2 is released as cogmem through GitHub release assets', () => {
+  test('3.6.0 is released as cogmem through GitHub release assets', () => {
     const manifest = packageJson();
     const readme = readText(join(coreRoot, 'README.md'));
     const contributing = readText(join(coreRoot, 'CONTRIBUTING.md'));
@@ -30,7 +30,7 @@ describe('core release metadata', () => {
     const checklist = readText(join(coreRoot, 'RELEASE_CHECKLIST.md'));
 
     expect(manifest.name).toBe('cogmem');
-    expect(manifest.version).toBe('3.5.2');
+    expect(manifest.version).toBe('3.6.0');
     expect(manifest.description).toContain('agent-native memory kernel');
     expect(readme).toContain('curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash');
     expect(readme).toContain('GitHub Releases');
@@ -38,8 +38,8 @@ describe('core release metadata', () => {
     expect(readme).not.toContain('@CognitiveOS/core');
     expect(contributing).toContain('npm pack --dry-run --json');
     expect(contributing).not.toContain('npm publish');
-    expect(changelog).toContain('3.5.2');
-    expect(checklist).toContain('3.5.2');
+    expect(changelog).toContain('3.6.0');
+    expect(checklist).toContain('3.6.0');
     expect(checklist).toContain('Do not run npm publish');
   });
 
@@ -139,6 +139,7 @@ describe('core release metadata', () => {
     const manifest = packageJson();
 
     expect(manifest.files).toContain('README.md');
+    expect(manifest.files).toContain('MEMORY_ATLAS.md');
     expect(manifest.files).toContain('examples/**/*.md');
     expect(manifest.files).toContain('install.sh');
     expect(manifest.files).toContain('MEMORY_MODEL.md');
@@ -161,6 +162,7 @@ describe('core release metadata', () => {
     expect(memoryModel).toContain('chronological order is not recall ranking');
     expect(memoryModel).toContain('sourceRefs');
     expect(memoryModel).toContain('not a vector RAG store');
+    expect(memoryModel).toContain('Memory Atlas projection');
     expect(memoryModel).toContain('rawEventType');
     expect(memoryModel).toContain('tool_result');
     expect(memoryModel).toContain('Normalized JSON array, JSONL, CSV, and TSV transcript imports');
@@ -169,6 +171,7 @@ describe('core release metadata', () => {
     expect(explainability).toContain('same-project');
     expect(explainability).toContain('tool_call');
     expect(explainability).toContain('normalized JSON/CSV imports');
+    expect(explainability).toContain('Memory Atlas versus direct recall');
     expect(benchmarks).toContain('memory_natural_emergence');
     expect(benchmarks).toContain('critical_memory_recall_rate');
     expect(benchmarks).toContain('inhibition_correctness_rate');

@@ -7,4 +7,8 @@ export { MemoryGovernanceValidator } from './MemoryGovernanceValidator.js';
 export type { GovernanceEvidenceLookup, GovernanceEvidenceRecord } from './MemoryGovernanceValidator.js';
 export { MemoryGovernanceStore } from '../store/MemoryGovernanceStore.js';
 export type { MemoryGovernanceAuditEntry } from '../store/MemoryGovernanceStore.js';
+export { CandidateReviewService } from './CandidateReviewService.js';
+export type { CandidateReviewInput, CandidateReviewResult } from './CandidateReviewService.js';
+export { CandidateReviewStore } from '../store/CandidateReviewStore.js';
+export type { CandidateReviewAction, CandidateReviewRecord } from '../store/CandidateReviewStore.js';
 //# sourceMappingURL=index.d.ts.map

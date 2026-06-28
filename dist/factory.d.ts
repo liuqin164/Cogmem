@@ -16,7 +16,7 @@ import { NeuronEmbeddingStore } from './embedding/NeuronEmbeddingStore.js';
 import type { ReEmbeddingStatus } from './embedding/ReEmbeddingStatus.js';
 import type { EncryptionProvider } from './encryption/index.js';
 import { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPathRegistry, TopicRelationGraph } from './topic/index.js';
-import { MemoryGovernanceExecutor, type MemoryGovernanceExecutionResult, type MemoryGovernancePlan, type RedactionPolicy } from './governance/index.js';
+import { MemoryGovernanceExecutor, type MemoryGovernanceExecutionResult, type MemoryGovernancePlan, type RedactionPolicy, type CandidateReviewInput, type CandidateReviewResult } from './governance/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -30,12 +30,15 @@ import { ModelRegistry } from './models/ModelRegistry.js';
 import type { Embedder } from './store/Embedder.js';
 import { CognitiveGraphStore } from './store/CognitiveGraphStore.js';
 import { type DeepWriteCandidateStatus } from './store/DeepWriteCandidateStore.js';
+import { type CandidateReviewRecord } from './store/CandidateReviewStore.js';
 import { DreamLedgerStore, type DreamBacklogStatus } from './store/DreamLedgerStore.js';
 import { ActivationStore, type ActivationDecayResult, type ActivationHotspot } from './store/ActivationStore.js';
 import { EntityStore } from './store/EntityStore.js';
 import { EventStore } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
 import { MemoryBindingStore } from './store/MemoryBindingStore.js';
+import { MemoryAtlasStore } from './store/MemoryAtlasStore.js';
+import { MemoryAtlasService, type MemoryAtlasNodeDetail, type MemoryAtlasPathResult, type MemoryAtlasQueryOptions, type MemoryAtlasSlice, type MemoryAtlasTimelineResult } from './atlas/index.js';
 import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
 import { TopologyStore } from './store/TopologyStore.js';
@@ -192,6 +195,7 @@ export interface MaintenanceTickOptions {
     activationFloor?: number;
     confirmationTtlMs?: number;
     now?: number;
+    atlasAccessRetentionMs?: number;
 }
 export interface MaintenanceSuggestedAction {
     kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots' | 'bind_raw_events' | 'inspect_binding_failures' | 'repair_episodes';
@@ -217,6 +221,17 @@ export interface MaintenanceTickResult {
     };
     executed: {
         activationDecay: ActivationDecayResult;
+        memoryAtlasRefresh: {
+            documents: number;
+            actions: number;
+            refreshed: boolean;
+            errors?: Array<{
+                projectId: string;
+                error: string;
+            }>;
+        };
+        memoryAtlasActivationDecay: number;
+        memoryAtlasAccessPruned: number;
         reviewQueueAging: {
             expired: number;
             candidateIds: string[];
@@ -428,6 +443,8 @@ export declare class MemoryKernel {
     readonly dreamLedgerStore: DreamLedgerStore;
     readonly activationStore: ActivationStore;
     readonly memoryBindingStore: MemoryBindingStore;
+    readonly memoryAtlasStore: MemoryAtlasStore;
+    readonly memoryAtlasService: MemoryAtlasService;
     readonly memoryGovernanceStore: MemoryGovernanceStore;
     readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;
     readonly pipelineMetrics: PipelineMetrics;
@@ -448,9 +465,12 @@ export declare class MemoryKernel {
     private readonly summaryStore;
     private readonly deepWriteCandidateStore;
     private readonly deepWritePromotionPolicy;
+    private readonly candidateReviewStore;
+    private readonly candidateReviewService;
     private readonly dreamCuratorWorker;
     private readonly dreamScheduler;
     private readonly memoryBindingService;
+    private readonly memoryAtlasIndexer;
     private readonly topicSummaryBoard;
     private readonly topicDecayPolicy;
     private readonly localSemanticCompiler;
@@ -470,6 +490,7 @@ export declare class MemoryKernel {
     private lastEmbedSuccessAt?;
     private lastEmbedErrorAt?;
     private initialized;
+    private closed;
     constructor(options?: MemoryKernelOptions);
     initialize(skipWarmup?: boolean): Promise<void>;
     start(): Promise<void>;
@@ -589,6 +610,12 @@ export declare class MemoryKernel {
     repairEpisode(input: EpisodeRepairInput): EpisodeRepairResult;
     listDreamCandidates(options?: DreamCandidateListOptions): DreamCandidateRecord[];
     countDreamCandidates(options?: Omit<DreamCandidateListOptions, 'limit'>): number;
+    reviewDreamCandidate(input: CandidateReviewInput): CandidateReviewResult;
+    listDreamCandidateReviews(options?: {
+        projectId?: string;
+        candidateId?: string;
+        limit?: number;
+    }): CandidateReviewRecord[];
     bindMemoryEvent(event: MemoryEvent): MemoryBindingRecord[];
     executeMemoryGovernancePlan(plan: MemoryGovernancePlan): MemoryGovernanceExecutionResult;
     bindRawEvents(options?: MemoryBindingBackfillOptions): MemoryBindingBackfillResult;
@@ -600,6 +627,39 @@ export declare class MemoryKernel {
         limit?: number;
     }): MemoryGraphRecallAnchor[];
     getMemoryBindingStats(projectId?: string): MemoryBindingStats;
+    rebuildMemoryAtlas(options?: {
+        projectId?: string;
+    }): {
+        documents: number;
+        actions: number;
+    };
+    ensureMemoryAtlas(options: {
+        projectId: string;
+    }): {
+        documents: number;
+        actions: number;
+        refreshed: boolean;
+    };
+    graphOverview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
+    graphSearch(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
+    graphExplore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
+    graphNode(nodeId: string, options: MemoryAtlasQueryOptions): MemoryAtlasNodeDetail | null;
+    graphNeighbors(nodeId: string, options: MemoryAtlasQueryOptions & {
+        hops?: number;
+    }): MemoryAtlasSlice;
+    graphPath(from: string, to: string, options: MemoryAtlasQueryOptions & {
+        maxHops?: number;
+    }): MemoryAtlasPathResult;
+    graphTimeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult;
+    touchMemoryAtlas(input: {
+        projectId: string;
+        nodeIds: string[];
+        reason: string;
+        query?: string;
+        now?: number;
+    }): {
+        touched: number;
+    };
     countUnboundBindableRawEvents(projectId?: string, limit?: number): number;
     promoteDreamCandidates(options?: DreamGovernanceRunOptions): DreamGovernanceRunResult;
     getDreamCandidateQueue(projectId?: string): DreamGovernanceRunResult['queue'];

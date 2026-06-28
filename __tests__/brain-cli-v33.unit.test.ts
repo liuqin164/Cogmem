@@ -41,7 +41,7 @@ test('prospective CLI creates, confirms, and lists a due candidate without execu
 
   const due = await run(cli, ['due', '--db', dbPath, '--project', 'brain', '--at', '200']);
   expect(due.exitCode).toBe(0);
-  expect(JSON.parse(due.stdout)[0].candidateId).toBe(candidate.candidateId);
+  expect(JSON.parse(due.stdout).items[0].candidateId).toBe(candidate.candidateId);
 });
 
 test('brain-eval CLI returns non-zero when safety metrics fail', async () => {

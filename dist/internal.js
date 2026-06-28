@@ -123,6 +123,8 @@ export * from './store/EventStore.js';
 export * from './store/FactStore.js';
 export * from './store/InteractionUnitStore.js';
 export * from './store/MemoryBindingStore.js';
+export * from './store/MemoryAtlasStore.js';
+export * from './atlas/index.js';
 export * from './store/PlanRuntimeStore.js';
 export * from './store/PolicyExecutionProjector.js';
 export * from './store/PolicyExecutionStore.js';

@@ -2,6 +2,7 @@
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { DEFAULT_VECTOR_DIMENSION, parseVectorDimensionValue } from '../config/VectorDimension.js';
 import { compactStorage, type CompactableNeuronStatus } from '../storage/StorageCompactor.js';
+import { printCliJson } from './CliJson.js';
 
 interface Args {
   dbPath?: string;
@@ -80,7 +81,7 @@ async function main(): Promise<void> {
     dimension: args.dimension ?? loaded?.options.vectorDimension ?? DEFAULT_VECTOR_DIMENSION,
   });
   if (args.json) {
-    console.log(JSON.stringify(result, null, 2));
+    printCliJson('compact', result);
     return;
   }
   console.log(`cogmem compact ${result.dryRun ? 'dry-run' : 'applied'}`);

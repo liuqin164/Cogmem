@@ -66,7 +66,7 @@ cogmem dream tick --project openclaw --mode auto --max-episodes 10 --json
 
 The OpenClaw hook writes Raw Ledger evidence and updates a source/thread-scoped episode, then returns without running Dream. Live classification stays CPU-only and uses previous assistant context to separate proposal acceptance, question/fact answers, rejection, and correction. Unknown turns become ambiguous review boundaries unless user-defined aliases, topic/entity/project overlap, or explicit continuation supports continuity. Background imports may use the advisory hybrid reviewer; it cannot mutate durable memory.
 
-Cogmem 3.5.2 adds a project-scoped user-shaped topic ontology. Explicit user naming and organization requests may become audited active topic operations; model-proposed nodes, aliases, and relations remain candidates. For bad episode boundaries, use the split/merge/move/reclassify repair commands instead of editing SQLite; repair recalculates receipts, invalidates old candidates, preserves cross-references, and requeues sealed work.
+Cogmem 3.5.2 added a project-scoped user-shaped topic ontology. Explicit user naming and organization requests may become audited active topic operations; model-proposed nodes, aliases, and relations remain candidates. For bad episode boundaries, use the split/merge/move/reclassify repair commands instead of editing SQLite; repair recalculates receipts, invalidates old candidates, preserves cross-references, and requeues sealed work.
 
 The Dream Worker processes sealed episodes and proposes candidate memories only. Micro, normal, and deep modes change curator scope as well as batch size. Episode semantic summaries help routing but are not evidence: candidates must cite raw event IDs from the episode. CPU governance is a separate step. Use `cogmem memory govern` to evaluate evidence-backed candidates. Dream does not rewrite verified facts or promote tool/LLM output into active memory.
 
@@ -78,13 +78,23 @@ cogmem memory tick --project openclaw --json
 cogmem memory bind --project openclaw --json
 ```
 
+Cogmem 3.6.0 hardens Memory Atlas content navigation. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
+
+```bash
+cogmem memory graph-explore --project openclaw --query "去年与 Hermes 有关的决定" --json
+cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --json
+cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
+```
+
+Use Atlas to locate a bounded source-backed slice, then use `memory show` for exact evidence. Graph reads do not change activation; explicitly touch only nodes the agent actually uses. Activation controls default visibility and decays during explicit maintenance; exact scoped facets can still revive cold memory without promoting or rewriting it.
+
 `memory tick` returns activation decay results and `suggestedActions`; it does not start a hidden daemon. If it reports `bind_raw_events`, run `memory bind` to attach imported or adapter-written raw user events to Memory Binding.
 
 `memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for raw-ledger drill-down; they are not verified long-term facts. Correction bindings expose review flags and correction edges instead of turning the active cluster into a fact.
 
 Recall JSON includes `decisionTrace`; the automatic prompt wrapper renders its compact form as `recallDecision=`. Check the selected lane, reason, and candidate counts before saying memory is absent, then use `sourceLocator` for exact wording. Raw fallback searches the fully scoped ledger and prefers original user anchors over later assistant retellings on equal cue matches.
 
-Dream treats explicit user clarification as organizational correction evidence, not an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Invalid provider output is a rejected diagnostic, and `memory tick` supersedes stale `needs_confirmation` entries after the default 30-day TTL without deleting evidence.
+Dream treats explicit user clarification as organizational correction evidence, not an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Review `needs_confirmation` with `cogmem memory review`; `memory tick` only supersedes entries left stale past the default 30-day TTL.
 
 ## Migrate
 
@@ -92,7 +102,7 @@ Upgrade and migrate the Cogmem database itself before importing host memory:
 
 ```bash
 cogmem update --yes
-cogmem migrate --dry-run --json
+cogmem migrate --yes --backup --json
 ```
 
 Preview:
@@ -187,7 +197,7 @@ cogmem import-openclaw --workspace . --project openclaw --config .cogmem/config.
 
 This backfills searchable raw anchors for old imported memories without duplicating compiled memory or vectors.
 
-For agent-facing instructions, install or read `SKILL.md`. `cogmem connect openclaw --workspace .` copies it to `<workspace>/skills/cogmem-memory/SKILL.md`.
+For agent-facing instructions, run `cogmem connect openclaw --workspace .`. It installs `SKILL.md` plus `references/operations.md`, a complete command-selection, migration, import, recall, Atlas, governance, repair, backup, and maintenance handbook.
 
 To make future OpenClaw turns automatically recall and record memory, run:
 

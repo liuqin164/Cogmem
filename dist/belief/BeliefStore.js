@@ -20,6 +20,7 @@ export class BeliefStore {
         global: 1
     };
     db;
+    closed = false;
     constructor(dbPath = ':memory:', eventStore) {
         this.eventStore = eventStore;
         this.db = new Database(dbPath);
@@ -75,6 +76,15 @@ export class BeliefStore {
       ORDER BY valid_from DESC, created_at DESC
     `).all(canonicalKey);
         return rows.map((row) => this.mapBelief(row));
+    }
+    countActive(projectId) {
+        const row = this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM beliefs
+      WHERE status = 'active'
+        AND (? IS NULL OR project_id = ?)
+    `).get(projectId || null, projectId || null);
+        return row.count;
     }
     listByTimeRange(startTime, endTime, options) {
         const statuses = options?.statuses ?? ['active', 'superseded', 'suspect', 'expired', 'revoked'];
@@ -880,6 +890,9 @@ export class BeliefStore {
         return Math.max(min, Math.min(max, value));
     }
     close() {
+        if (this.closed)
+            return;
         this.db.close();
+        this.closed = true;
     }
 }

@@ -26,6 +26,7 @@ export interface DeepWriteCandidateInput {
     promotionTargetType?: string;
     promotionTargetId?: string;
     statusReason?: string;
+    reviewAfter?: number;
     createdAt?: number;
 }
 export interface DeepWriteRunRecord extends DeepWriteRunInput {
@@ -63,6 +64,17 @@ export declare class DeepWriteCandidateStore {
         type?: string;
         id?: string;
         reason?: string;
+        reviewAfter?: number | null;
+        updatedAt?: number;
+    }): void;
+    updateCandidateReviewData(candidateId: string, input: {
+        content: unknown;
+        evidence: unknown;
+        promotionTargetType?: string;
+        promotionTargetId?: string;
+        status: DeepWriteCandidateStatus;
+        statusReason: string;
+        reviewAfter?: number | null;
         updatedAt?: number;
     }): void;
     expireNeedsConfirmation(input: {

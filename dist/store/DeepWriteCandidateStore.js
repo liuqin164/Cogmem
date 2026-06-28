@@ -33,6 +33,7 @@ export class DeepWriteCandidateStore {
         promotion_target_type TEXT,
         promotion_target_id TEXT,
         status_reason TEXT,
+        review_after INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         FOREIGN KEY(run_id) REFERENCES deep_write_runs(run_id)
@@ -48,6 +49,7 @@ export class DeepWriteCandidateStore {
         ON deep_write_candidates(status, candidate_type);
     `);
         this.ensureColumn('deep_write_candidates', 'status_reason', 'TEXT');
+        this.ensureColumn('deep_write_candidates', 'review_after', 'INTEGER');
         this.ensureColumn('deep_write_candidates', 'updated_at', 'INTEGER');
         this.db.exec(`
       UPDATE deep_write_candidates
@@ -80,12 +82,12 @@ export class DeepWriteCandidateStore {
       INSERT INTO deep_write_candidates (
         candidate_id, run_id, candidate_type, status, confidence, content_json,
         evidence_json, promotion_target_type, promotion_target_id, status_reason,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        review_after, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
         this.db.transaction(() => {
             for (const record of records) {
-                stmt.run(record.candidateId, record.runId, record.candidateType, record.status, record.confidence, JSON.stringify(record.content), JSON.stringify(record.evidence), record.promotionTargetType || null, record.promotionTargetId || null, record.statusReason || null, record.createdAt, record.updatedAt);
+                stmt.run(record.candidateId, record.runId, record.candidateType, record.status, record.confidence, JSON.stringify(record.content), JSON.stringify(record.evidence), record.promotionTargetType || null, record.promotionTargetId || null, record.statusReason || null, record.reviewAfter ?? null, record.createdAt, record.updatedAt);
             }
         })();
         return records;
@@ -200,9 +202,18 @@ export class DeepWriteCandidateStore {
           promotion_target_type = COALESCE(?, promotion_target_type),
           promotion_target_id = COALESCE(?, promotion_target_id),
           status_reason = COALESCE(?, status_reason),
+          review_after = COALESCE(?, review_after),
           updated_at = ?
       WHERE candidate_id = ?
-    `).run(status, promotionTarget?.type || null, promotionTarget?.id || null, promotionTarget?.reason || null, promotionTarget?.updatedAt ?? Date.now(), candidateId);
+    `).run(status, promotionTarget?.type || null, promotionTarget?.id || null, promotionTarget?.reason || null, promotionTarget?.reviewAfter ?? null, promotionTarget?.updatedAt ?? Date.now(), candidateId);
+    }
+    updateCandidateReviewData(candidateId, input) {
+        this.db.prepare(`
+      UPDATE deep_write_candidates
+      SET content_json=?, evidence_json=?, promotion_target_type=?, promotion_target_id=?,
+          status=?, status_reason=?, review_after=?, updated_at=?
+      WHERE candidate_id=?
+    `).run(JSON.stringify(input.content), JSON.stringify(input.evidence), input.promotionTargetType || null, input.promotionTargetId || null, input.status, input.statusReason, input.reviewAfter ?? null, input.updatedAt ?? Date.now(), candidateId);
     }
     expireNeedsConfirmation(input) {
         const params = [input.before];
@@ -265,6 +276,7 @@ export class DeepWriteCandidateStore {
             promotionTargetType: row.promotion_target_type || undefined,
             promotionTargetId: row.promotion_target_id || undefined,
             statusReason: row.status_reason || undefined,
+            reviewAfter: row.review_after ?? undefined,
             createdAt: row.created_at,
             updatedAt: row.updated_at || row.created_at
         };

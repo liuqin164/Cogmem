@@ -2,6 +2,7 @@
 import Database from 'bun:sqlite';
 import { NeuronEmbeddingStore } from '../embedding/NeuronEmbeddingStore.js';
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
+import { printCliJson } from './CliJson.js';
 function parseArgs(argv) {
     const args = {};
     for (let index = 0; index < argv.length; index += 1) {
@@ -41,5 +42,5 @@ const status = {
     percentComplete: progress.total === 0 ? 100 : Math.min(100, (completedOrFailed / progress.total) * 100),
     estimatedRemainingMs: null,
 };
-console.log(JSON.stringify(status, null, 2));
+printCliJson('re-embed.status', status);
 db.close();

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_RELEASE_REPO, resolveLatestReleaseSpec } from './update-release.js';
+import { printCliJson } from './CliJson.js';
 function readArgs(argv) {
     const values = {};
     for (let index = 0; index < argv.length; index += 1) {
@@ -109,7 +110,7 @@ async function main() {
         followUp: 'Run cogmem doctor --fix --agent openclaw --workspace <openclaw-workspace> after updating if OpenClaw auto memory is configured. For Hermes, rerun cogmem connect hermes and reload MCP.',
     };
     if (args.json) {
-        console.log(JSON.stringify(result, null, 2));
+        printCliJson('update', result);
     }
     else {
         console.log(`cogmem update ${args.dryRun ? 'dry-run' : 'running'}`);

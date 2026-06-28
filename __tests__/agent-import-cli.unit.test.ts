@@ -818,12 +818,15 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
   expect(hermes).toContain('cogmem episode status --project hermes --json');
   expect(hermes).toContain('cogmem memory map --project hermes --json');
   expect(hermes).toContain('cogmem memory tick --project hermes --json');
+  expect(hermes).toContain('cogmem_candidate_review');
+  expect(hermes).toContain('cogmem_graph_touch');
   expect(hermes).toContain('--session ./one.md --session ./two.md');
 });
 
 test('cogmem-connect installs an agent skill into a workspace without migrating data', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-openclaw-'));
   const skillPath = join(dir, 'skills', 'cogmem-memory', 'SKILL.md');
+  const operationsPath = join(dir, 'skills', 'cogmem-memory', 'references', 'operations.md');
 
   const dryRun = await runCli([
     'bun',
@@ -841,7 +844,9 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   expect(dryRunParsed.agent).toBe('openclaw');
   expect(dryRunParsed.dryRun).toBe(true);
   expect(dryRunParsed.skillPath).toBe(skillPath);
+  expect(dryRunParsed.skillFiles).toEqual([skillPath, operationsPath]);
   expect(existsSync(skillPath)).toBe(false);
+  expect(existsSync(operationsPath)).toBe(false);
 
   const installed = await runCli([
     'bun',
@@ -860,9 +865,23 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   expect(installedParsed.hostConfigSnippet).toContain('Do not write unknown OpenClaw config fields');
   expect(installedParsed.hostConfigSnippet).not.toContain('plugins.slots.memory');
   expect(existsSync(skillPath)).toBe(true);
+  expect(existsSync(operationsPath)).toBe(true);
   const body = readFileSync(skillPath, 'utf8');
+  const operations = readFileSync(operationsPath, 'utf8');
   expect(body).toStartWith('---\nname: cogmem-memory-backend');
   expect(body).toContain('OpenClaw');
+  expect(body).toContain('references/operations.md');
+  for (const command of [
+    'cogmem migrate --dry-run --json',
+    'cogmem import-openclaw',
+    'cogmem memory review',
+    'cogmem memory graph-explore',
+    'cogmem episode repair',
+    'cogmem snapshot export',
+    'cogmem brain-eval',
+  ]) {
+    expect(operations).toContain(command);
+  }
 });
 
 test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', async () => {
@@ -933,6 +952,7 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(cortexBridgeBody).toContain('kernel.contextOutcomeStore.record');
   expect(cortexBridgeBody).toContain('activationReceipt');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
+  expect(manifest.version).toBe('0.6.1');
   expect(manifest.configSchema.type).toBe('object');
   expect(manifest.configSchema.properties.configPath.type).toBe('string');
   expect(manifest.configSchema.properties.autoRecall.type).toBe('boolean');
@@ -1133,6 +1153,7 @@ test('cogmem-connect installs Hermes skill into the real Hermes skills directory
   const workspace = join(dir, 'workspace');
   mkdirSync(workspace);
   const skillPath = join(dir, '.hermes', 'skills', 'cogmem-memory', 'SKILL.md');
+  const operationsPath = join(dir, '.hermes', 'skills', 'cogmem-memory', 'references', 'operations.md');
 
   const installed = await runCli([
     'bun',
@@ -1147,10 +1168,18 @@ test('cogmem-connect installs Hermes skill into the real Hermes skills directory
   expect(installed.exitCode).toBe(0);
   const parsed = JSON.parse(installed.stdout);
   expect(parsed.skillPath).toBe(skillPath);
+  expect(parsed.skillFiles).toEqual([skillPath, operationsPath]);
   expect(parsed.hostConfigSnippet).toContain('mcp_servers:');
   expect(parsed.hostConfigSnippet).toContain('cogmem-mcp');
+  expect(parsed.hostConfigSnippet).toContain('cogmem_candidate_review');
+  expect(parsed.hostConfigSnippet).toContain('cogmem_graph_touch');
   expect(existsSync(skillPath)).toBe(true);
+  expect(existsSync(operationsPath)).toBe(true);
   expect(readFileSync(skillPath, 'utf8')).toStartWith('---\nname: cogmem-memory-backend');
+  const operations = readFileSync(operationsPath, 'utf8');
+  expect(operations).toContain('cogmem import-hermes');
+  expect(operations).toContain('cogmem memory review');
+  expect(operations).toContain('cogmem memory graph-timeline');
 });
 
 test('cogmem-connect hermes --auto patches Hermes MCP config without claiming native memory provider', async () => {

@@ -663,7 +663,7 @@ test('memory CLI recall lets agents actively query governed memory with source c
   });
   const recallOutput = await new Response(recallProc.stdout).text();
   const recallError = await new Response(recallProc.stderr).text();
-  expect(await recallProc.exited).toBe(0);
+  expect({ exitCode: await recallProc.exited, stderr: recallError }).toEqual({ exitCode: 0, stderr: '' });
   expect(recallError).toBe('');
   const recalled = JSON.parse(recallOutput);
   expect(recalled.items.some((item: { text: string }) => item.text.includes('存档位置'))).toBe(true);
@@ -718,7 +718,7 @@ test('memory CLI recall falls back to imported Hermes raw ledger when vectors ar
   });
   const recallOutput = await new Response(recallProc.stdout).text();
   const recallError = await new Response(recallProc.stderr).text();
-  expect(await recallProc.exited).toBe(0);
+  expect({ exitCode: await recallProc.exited, stderr: recallError }).toEqual({ exitCode: 0, stderr: '' });
   expect(recallError).toBe('');
   const recalled = JSON.parse(recallOutput);
   expect(recalled.recallMode).toBe('raw_ledger_fallback');
@@ -807,7 +807,7 @@ test('memory CLI runs dream curator and lists governance candidates', async () =
   });
   const dreamOutput = await new Response(dreamProc.stdout).text();
   const dreamError = await new Response(dreamProc.stderr).text();
-  expect(await dreamProc.exited).toBe(0);
+  expect({ exitCode: await dreamProc.exited, stderr: dreamError }).toEqual({ exitCode: 0, stderr: '' });
   expect(dreamError).toBe('');
   const dreamed = JSON.parse(dreamOutput);
   expect(dreamed.processedEpisodeCount).toBe(1);
@@ -858,7 +858,7 @@ test('memory CLI dream --max-runs 1 commits sealed episode progress across proce
   });
   const firstOutput = await new Response(firstProc.stdout).text();
   const firstError = await new Response(firstProc.stderr).text();
-  expect(await firstProc.exited).toBe(0);
+  expect({ exitCode: await firstProc.exited, stderr: firstError }).toEqual({ exitCode: 0, stderr: '' });
   expect(firstError).toBe('');
   const first = JSON.parse(firstOutput);
   expect(first.processedEpisodeCount).toBe(1);

@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { BrainEvalRunner } from '../benchmark/BrainEval.js';
 import { StrategyRolloutEvaluator } from '../eval/strategy/index.js';
+import { printCliJson } from './CliJson.js';
 function usage() {
     return [
         'Usage: cogmem brain-eval --input <samples.json> [--json]',
@@ -26,7 +27,7 @@ async function main() {
         if (!Array.isArray(outcomes))
             throw new Error('Strategy rollout input must contain an outcomes array.');
         const report = new StrategyRolloutEvaluator().evaluate(outcomes);
-        console.log(JSON.stringify(report, null, 2));
+        printCliJson('brain-eval.strategy-rollout', report);
         if (!report.passed)
             process.exitCode = 1;
         return;
@@ -35,7 +36,7 @@ async function main() {
     if (!Array.isArray(samples))
         throw new Error('BrainEval input must contain a samples array.');
     const report = new BrainEvalRunner().evaluate(samples);
-    console.log(JSON.stringify(report, null, 2));
+    printCliJson('brain-eval', report);
     if (!report.passed)
         process.exitCode = 1;
 }

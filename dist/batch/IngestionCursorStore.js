@@ -1,6 +1,7 @@
 import Database from 'bun:sqlite';
 export class IngestionCursorStore {
     db;
+    closed = false;
     constructor(dbPath = ':memory:') {
         this.db = new Database(dbPath);
         this.initializeSchema();
@@ -129,7 +130,10 @@ export class IngestionCursorStore {
         return rows.map((row) => this.mapCursor(row));
     }
     close() {
+        if (this.closed)
+            return;
         this.db.close();
+        this.closed = true;
     }
     mapCursor(row) {
         return {

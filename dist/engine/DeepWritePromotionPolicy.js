@@ -144,7 +144,7 @@ export class DeepWritePromotionPolicy {
             : this.deps.candidateStore.listCandidatesByStatus(['candidate'], { limit });
         return candidates.map((candidate) => this.evaluateAndApply(candidate));
     }
-    evaluateAndApply(candidate) {
+    evaluateAndApply(candidate, options = {}) {
         if (candidate.status !== 'candidate') {
             return this.keep(candidate, `status_${candidate.status}_not_promotable`);
         }
@@ -153,10 +153,10 @@ export class DeepWritePromotionPolicy {
             return this.mark(candidate, 'rejected', { outcome: 'reject', reason: 'missing_evidence' });
         }
         if (isOrganizationCandidate(candidate.candidateType)) {
-            return this.promoteOrganizationCandidate(candidate, content);
+            return this.promoteOrganizationCandidate(candidate, content, options);
         }
         if (isSummaryLikeCandidate(candidate.candidateType)) {
-            if (candidate.confidence < 0.72) {
+            if (candidate.confidence < 0.72 && !options.reviewConfirmed) {
                 return this.mark(candidate, 'needs_confirmation', {
                     outcome: 'needs_confirmation',
                     reason: 'summary_like_below_min_promote_confidence'
@@ -165,13 +165,13 @@ export class DeepWritePromotionPolicy {
             return this.promoteSummary(candidate, promotedSummaryContent(candidate.candidateType, content));
         }
         if (isPreferenceLikeCandidate(candidate.candidateType)) {
-            if (candidate.confidence < 0.74) {
+            if (candidate.confidence < 0.74 && !options.reviewConfirmed) {
                 return this.mark(candidate, 'needs_confirmation', {
                     outcome: 'needs_confirmation',
                     reason: 'preference_like_below_min_promote_confidence'
                 });
             }
-            if (!hasExplicitUserSource(content) && !hasUserTurnEvidence(candidate)) {
+            if (!hasExplicitUserSource(content) && !hasUserTurnEvidence(candidate) && !options.reviewConfirmed) {
                 return this.mark(candidate, 'needs_confirmation', {
                     outcome: 'needs_confirmation',
                     reason: 'preference_like_requires_user_evidence'
@@ -179,13 +179,13 @@ export class DeepWritePromotionPolicy {
             }
             return this.promotePreference(candidate, promotedPreferenceContent(candidate.candidateType, content));
         }
-        if (candidate.confidence < this.deps.minPromoteConfidence) {
+        if (candidate.confidence < this.deps.minPromoteConfidence && !options.reviewConfirmed) {
             return this.mark(candidate, 'needs_confirmation', {
                 outcome: 'needs_confirmation',
                 reason: 'below_min_promote_confidence'
             });
         }
-        if (isInferenceOnly(content)) {
+        if (isInferenceOnly(content) && !options.reviewConfirmed) {
             return this.mark(candidate, 'needs_confirmation', {
                 outcome: 'needs_confirmation',
                 reason: 'inference_or_assistant_claim_not_auto_promoted'
@@ -197,7 +197,7 @@ export class DeepWritePromotionPolicy {
             return this.promoteRelation(candidate, content);
         if (candidate.candidateType === 'causalLinks')
             return this.promoteCausalLink(candidate, content);
-        if (!hasExplicitUserSource(content)) {
+        if (!hasExplicitUserSource(content) && !options.reviewConfirmed) {
             return this.mark(candidate, 'needs_confirmation', {
                 outcome: 'needs_confirmation',
                 reason: 'not_explicit_user_source'
@@ -214,8 +214,8 @@ export class DeepWritePromotionPolicy {
             reason: `${candidate.candidateType}_requires_review`
         });
     }
-    promoteOrganizationCandidate(candidate, content) {
-        if (candidate.confidence < 0.6) {
+    promoteOrganizationCandidate(candidate, content, options = {}) {
+        if (candidate.confidence < 0.6 && !options.reviewConfirmed) {
             return this.mark(candidate, 'needs_confirmation', {
                 outcome: 'needs_confirmation',
                 reason: 'organization_candidate_below_min_confidence'
@@ -240,7 +240,7 @@ export class DeepWritePromotionPolicy {
             outcome: 'promote_provisional',
             reason: 'semantic_organization_candidate_accepted',
             targetType: candidate.promotionTargetType || candidate.candidateType,
-            targetId: stringField(content, ['sourceEventId', 'targetEventId', 'topicPath']) || candidate.candidateId
+            targetId: candidate.promotionTargetId || stringField(content, ['sourceEventId', 'targetEventId', 'topicPath']) || candidate.candidateId
         });
     }
     promoteFact(candidate, content) {

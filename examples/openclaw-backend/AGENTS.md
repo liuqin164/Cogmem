@@ -184,3 +184,9 @@ cogmem doctor --fix --agent openclaw --workspace .
 ```
 
 The migration command is idempotent. Re-running it skips records already imported into the same memory database.
+
+## Memory Atlas navigation
+
+Use the direct OpenClaw Atlas adapter for broad inventory, historical reconstruction, or relationship questions. Start with graph explore, narrow with node/neighbors/path/timeline, and use direct recall for a concrete fact. Follow event IDs with `cogmem memory show` before quoting exact source.
+
+Treat the query as a set of available filters. Combine project, time, topic, entity/target, memory kind, and ordinary cues that are actually present; do not require a fixed entity + time + action shape. Cold-node resurrection affects visibility only and does not promote, verify, or rewrite memory.
