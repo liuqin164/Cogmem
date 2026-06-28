@@ -876,6 +876,8 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
     'cogmem import-openclaw',
     'cogmem memory review',
     'cogmem memory graph-explore',
+    'cogmem openclaw diagnose',
+    'cogmem repair project-scope',
     'cogmem episode repair',
     'cogmem snapshot export',
     'cogmem brain-eval',
@@ -1013,6 +1015,11 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(indexBody).toContain('function enqueueRememberJob(config, payload)');
   expect(indexBody).toContain("action: 'enqueue_remember'");
   expect(indexBody).toContain("spawnBridgeDrain(config)");
+  expect(indexBody).toContain('function queueLockIsFresh(config)');
+  expect(indexBody).toContain("action: 'skip_spawn_drain'");
+  expect(indexBody).toContain('function injectionResult(context, warning)');
+  expect(indexBody).toContain('returnedInjectionShape');
+  expect(indexBody).toContain('dbLocked');
   const agentEndBody = indexBody.slice(indexBody.indexOf("api.on('agent_end'"));
   expect(agentEndBody).not.toContain("runBridge('remember'");
   const bridgeBody = readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8');
@@ -1021,6 +1028,8 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(bridgeBody).toContain('rememberTurnWithResult');
   expect(bridgeBody).toContain("ingestMode: bridgeConfig.ingestMode || 'selective_compile'");
   expect(bridgeBody).toContain("command === 'drain-remember-queue'");
+  expect(bridgeBody).toContain('function acquireRememberQueueLock(bridgeConfig)');
+  expect(bridgeBody.indexOf("if (command === 'drain-remember-queue')")).toBeLessThan(bridgeBody.indexOf('await loadCogmemApi(config)'));
   expect(bridgeBody).toContain('ingestToolCall');
   expect(bridgeBody).toContain('ingestToolObservation');
   expect(bridgeBody).toContain('ingestTaskEvent');
@@ -1082,6 +1091,83 @@ test('doctor --fix can repair OpenClaw automatic memory wiring', async () => {
   expect(fixed.stdout).toContain('OK openclaw auto memory integration fixed');
   const openclawConfig = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].enabled).toBe(true);
+});
+
+test('doctor plugin-only and openclaw diagnose inspect stale plugin without opening kernel', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-plugin-diagnose-'));
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  const openclawConfigPath = join(dir, 'openclaw.json');
+  const pluginDir = join(dir, 'extensions', 'cogmem-auto-memory');
+  mkdirSync(pluginDir, { recursive: true });
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+  writeFileSync(openclawConfigPath, JSON.stringify({}, null, 2));
+  writeFileSync(join(pluginDir, 'index.js'), 'module.exports = {};\n');
+  mkdirSync(join(dir, '.cogmem', 'logs'), { recursive: true });
+  writeFileSync(join(dir, '.cogmem', 'logs', 'openclaw-auto-memory.jsonl'), JSON.stringify({
+    hook: 'before_prompt_build',
+    action: 'error',
+    reason: 'database is locked',
+    bridgeCommand: 'recall',
+    dbLocked: true,
+    returnedInjectionShape: 'empty',
+    contextChars: 0,
+    itemCount: 0,
+  }) + '\n');
+
+  const inspected = await runCli([
+    'bun',
+    doctorBin,
+    '--config',
+    configPath,
+    '--agent',
+    'openclaw',
+    '--workspace',
+    dir,
+    '--plugin-only',
+    '--json',
+  ]);
+
+  expect(inspected.stderr).toBe('');
+  expect(inspected.exitCode).toBe(0);
+  const inspectedJson = JSON.parse(inspected.stdout);
+  expect(inspectedJson.openclaw.plugin.current).toBe(false);
+  expect(inspectedJson.openclaw.audit.lastBeforePromptBuild.dbLocked).toBe(true);
+
+  const fixed = await runCli([
+    'bun',
+    doctorBin,
+    '--config',
+    configPath,
+    '--fix',
+    '--agent',
+    'openclaw',
+    '--workspace',
+    dir,
+    '--openclaw-config',
+    openclawConfigPath,
+    '--plugin-only',
+    '--json',
+  ]);
+
+  expect(fixed.stderr).toBe('');
+  expect(fixed.exitCode).toBe(0);
+  expect(JSON.parse(fixed.stdout).openclaw.plugin.current).toBe(true);
+
+  const diagnosed = await runCli([
+    'bun',
+    cogmemBin,
+    'openclaw',
+    'diagnose',
+    '--workspace',
+    dir,
+    '--json',
+  ]);
+  expect(diagnosed.stderr).toBe('');
+  expect(diagnosed.exitCode).toBe(0);
+  const diagnosedJson = JSON.parse(diagnosed.stdout);
+  expect(diagnosedJson.plugin.current).toBe(true);
+  expect(diagnosedJson.audit.lastBeforePromptBuild.reason).toBe('database is locked');
 });
 
 test('unified cogmem CLI dispatches doctor and update commands', async () => {

@@ -1,4 +1,4 @@
-# Cogmem 3.6.0 Operations Reference for Hermes
+# Cogmem 3.6.1 Operations Reference for Hermes
 
 Read this file when installing, upgrading, importing, repairing, or operating Cogmem. `SKILL.md` contains the decision rules; this file records the operational commands.
 
@@ -38,7 +38,7 @@ cogmem doctor
 cogmem connect hermes --workspace . --auto --force --json
 ```
 
-The backed-up command upgrades 3.5.2 schema 24, or a pre-release schema-25 test database, to the 3.6.0 schema-26 state in one run and preserves Raw Ledger evidence. Reload MCP after reconnecting.
+The backed-up command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.1 schema-27 state in one run and preserves Raw Ledger evidence. Reload MCP after reconnecting.
 
 ## Import Hermes memory
 

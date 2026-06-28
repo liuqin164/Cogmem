@@ -88,7 +88,7 @@ Dream stores explicit user clarification as organizational correction evidence r
 
 After upgrades, rerun `cogmem connect hermes --workspace . --auto --force` and reload MCP.
 
-Cogmem 3.6.0 exposes seven read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Touch only nodes actually used, and follow returned event IDs to raw evidence before quoting exact wording.
+Cogmem 3.6.1 exposes seven read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Touch only nodes actually used, and follow returned event IDs to raw evidence before quoting exact wording.
 
 ## Runtime
 

@@ -85,7 +85,7 @@ timeout_ms = 60000
 
 ## Migrate Existing Hermes Memory
 
-Upgrade a 3.5.2 database, or a pre-release schema-25 test database, to schema 26 in one backed-up command:
+Upgrade a 3.5.2 database, an existing 3.6.0 database, or a pre-release schema-25 test database to schema 27 in one backed-up command:
 
 ```bash
 cogmem migrate --yes --backup --json

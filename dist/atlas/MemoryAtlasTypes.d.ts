@@ -101,5 +101,7 @@ export interface MemoryAtlasQueryOptions {
     includeEvidence?: boolean;
     evidenceLimit?: number;
     now?: number;
+    refresh?: boolean;
+    staleOk?: boolean;
 }
 //# sourceMappingURL=MemoryAtlasTypes.d.ts.map

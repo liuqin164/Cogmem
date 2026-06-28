@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.6.1
+
+- Fixed OpenClaw upgrade regressions after 3.5.2 -> 3.6.0 by adding plugin-only repair/diagnose paths, generated-plugin hash inspection, and clearer `cogmem update` follow-up instructions.
+- Made the generated OpenClaw remember-queue drainer acquire the queue lock before loading Cogmem or opening SQLite, and debounced parent-side drainer spawning when a fresh queue lock already exists.
+- Added richer `before_prompt_build` audit diagnostics, including bridge command, DB-lock detection, returned injection shape, context size, and item count.
+- Added schema migration 27 and changed migration 26 so Atlas projections are dirty after upgrade until the real action/time projection rebuild runs.
+- Let Atlas graph reads return existing projections with `atlasFresh=false` when refresh is blocked by SQLite busy, and added `--refresh`, `--no-refresh`, and `--stale-ok` graph CLI controls.
+- Added `cogmem repair project-scope` for conservative empty-project upgrade residue repair, plus OpenClaw operations documentation for migration, plugin refresh, diagnose, and repair flows.
+
 ## 3.6.0
 
 - Closed the `needs_confirmation` queue with audited CLI/MCP approve, reject, defer, supersede, and correction-relink actions. Use `cogmem memory candidates --status needs_confirmation`, then `cogmem memory review`; `govern --status needs_confirmation` now lists the queue and points operators at review instead of silently promoting the wrong status.

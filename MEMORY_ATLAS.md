@@ -66,6 +66,8 @@ cogmem memory graph-timeline --project <id> --query <query> --json
 
 `graph-explore` and `graph-timeline` accept `--now <epoch-ms>` for deterministic relative-time parsing and `--evidence-limit <1..10>` for bounded evidence. Node results distinguish `evidenceTotal` from `evidenceReturned`.
 
+Graph reads try to refresh dirty Atlas state, but they default to stale-safe operation for diagnostics. If refresh is blocked by SQLite busy, JSON includes `atlasFresh: false` and `refreshError` while returning the existing projection. Use `--refresh` to force a fresh rebuild or `--no-refresh` to inspect the current projection only.
+
 ## MCP
 
 The canonical-memory-safe tools are:
@@ -96,4 +98,4 @@ Upgrade an existing 3.5.2 database with:
 cogmem migrate --yes --backup --json
 ```
 
-Migration 0025 creates and backfills the disposable projection. Migration 0026 adds exact memory-kind metadata, projection health, and candidate-review audit state. A 3.5.2 schema-24 database, or a pre-release schema-25 test database, reaches the 3.6.0 schema-26 state with the same command. `cogmem memory tick` refreshes only dirty projects, records rebuild errors, prunes old access telemetry, and decays navigation activation without starting a daemon.
+Migration 0025 creates and backfills the disposable projection. Migration 0026 adds exact memory-kind metadata, projection health, and candidate-review audit state. Migration 0027 corrects 3.6.0-upgraded databases by marking Atlas projections dirty until the real action/time rebuild runs. A 3.5.2 schema-24 database, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database reaches the 3.6.1 schema-27 state with the same command. `cogmem memory tick` refreshes only dirty projects, records rebuild errors, prunes old access telemetry, and decays navigation activation without starting a daemon.

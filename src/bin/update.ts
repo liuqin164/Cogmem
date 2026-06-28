@@ -121,7 +121,7 @@ async function main(): Promise<void> {
     currentSpec: installedSpec(targetCwd),
     nextCommand: command.join(' '),
     migrationCommand: 'cogmem migrate --yes --backup',
-    followUp: 'Run cogmem doctor --fix --agent openclaw --workspace <openclaw-workspace> after updating if OpenClaw auto memory is configured. For Hermes, rerun cogmem connect hermes and reload MCP.',
+    followUp: 'If OpenClaw auto memory is configured, run cogmem doctor --fix --agent openclaw --workspace <openclaw-workspace> --plugin-only, then restart the OpenClaw gateway. For Hermes, rerun cogmem connect hermes and reload MCP.',
   };
 
   if (args.json) {

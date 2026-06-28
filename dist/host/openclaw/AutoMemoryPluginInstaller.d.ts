@@ -23,7 +23,23 @@ export interface OpenClawAutoMemoryInstallResult {
     hookNames: string[];
     nextCommands: string[];
 }
+export interface OpenClawAutoMemoryPluginInspection {
+    pluginId: string;
+    pluginDir: string;
+    installed: boolean;
+    current: boolean;
+    version?: string;
+    expectedVersion: string;
+    files: Array<{
+        path: string;
+        exists: boolean;
+        current: boolean;
+        expectedSha256: string;
+        actualSha256?: string;
+    }>;
+}
 export declare function defaultOpenClawConfigPath(workspaceRoot: string, env?: NodeJS.ProcessEnv): string;
 export declare function defaultOpenClawAutoMemoryPluginDir(workspaceRoot: string): string;
 export declare function installOpenClawAutoMemoryPlugin(options: OpenClawAutoMemoryInstallOptions): OpenClawAutoMemoryInstallResult;
+export declare function inspectOpenClawAutoMemoryPlugin(options: Pick<OpenClawAutoMemoryInstallOptions, 'workspaceRoot' | 'pluginDir'>): OpenClawAutoMemoryPluginInspection;
 //# sourceMappingURL=AutoMemoryPluginInstaller.d.ts.map

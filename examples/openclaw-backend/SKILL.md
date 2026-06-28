@@ -85,7 +85,7 @@ timeout_ms = 60000
 
 ## Migrate Existing OpenClaw Memory
 
-Upgrade a 3.5.2 database, or a pre-release schema-25 test database, to schema 26 in one backed-up command:
+Upgrade a 3.5.2 database, an existing 3.6.0 database, or a pre-release schema-25 test database to schema 27 in one backed-up command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -99,6 +99,33 @@ cogmem update --yes
 ```
 
 Agents should inspect `cogmem migrate --dry-run --json` when an operator wants a preview. Schema migration preserves Raw Ledger events; it updates governed projections and indexes only.
+
+After any 3.5.2 -> 3.6.x OpenClaw upgrade, refresh the generated OpenClaw plugin files. Use the plugin-only path first when OpenClaw is misbehaving, because it does not open the Cogmem database:
+
+```bash
+cogmem doctor --fix --agent openclaw --workspace . --plugin-only --json
+openclaw gateway restart
+```
+
+Diagnose plugin staleness and hook failures without opening SQLite:
+
+```bash
+cogmem openclaw diagnose --workspace . --json
+```
+
+Interpret the audit:
+
+- no `before_prompt_build` records means the plugin is probably not loaded.
+- `action=error` with `dbLocked=true` means recall was skipped because SQLite was busy.
+- `action=skip` with `reason=empty_recall_context` means the bridge ran but found no usable context.
+- `action=inject` plus no visible memory block means the host hook return shape should be checked.
+
+If old records are under an empty project scope, repair only after a dry run confirms this is a single OpenClaw install:
+
+```bash
+cogmem repair project-scope --from "" --to openclaw --dry-run --json
+cogmem repair project-scope --from "" --to openclaw --apply --json
+```
 
 Always preview first:
 
@@ -199,6 +226,8 @@ cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --
 cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
 cogmem memory graph-timeline --project openclaw --query "去年与 Hermes 有关的决定和操作" --json
 ```
+
+Graph reads default to stale-safe diagnostics. If a drainer or gateway has SQLite busy, JSON may include `atlasFresh=false` and `refreshError` while returning the existing projection. Use `--refresh` when the operator explicitly wants rebuild-or-fail, and `--no-refresh` when investigating locks.
 
 Atlas combines the conditions present in the user's message like table filters. Do not force every question into entity + time + action. Project, time, topic, entity/target, memory kind, and ordinary cues may independently or jointly revive cold nodes. Graph reads do not change activation; explicitly touch only nodes the agent actually uses. Activation changes visibility only. Follow returned event IDs with `cogmem memory show`; never treat an Atlas summary as evidence.
 

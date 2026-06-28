@@ -56,6 +56,8 @@ interface MemoryArgs {
   promote: boolean;
   json: boolean;
   includeEvidence: boolean;
+  refresh: boolean;
+  staleOk: boolean;
   help: boolean;
 }
 
@@ -117,6 +119,8 @@ function readArgs(argv: string[]): MemoryArgs {
     promote: values.promote === true,
     json: values.json === true,
     includeEvidence: values['include-evidence'] === true,
+    refresh: values.refresh === true,
+    staleOk: values['stale-ok'] === true || values['no-refresh'] === true,
     help: values.help === true || values.h === true,
   };
 }
@@ -172,10 +176,13 @@ function usage(): string {
     '  --intent <intent>    memory_recall, previous_session_summary, or forensic_quote',
     '  --db <memory.db>     open an explicit database path',
     '  --config <toml>      open a cogmem TOML config',
-    '  --include-evidence   include bounded raw excerpts; event ids are always returned',
-    '  --evidence-limit <n> bound evidence locators per Atlas node, default 2, maximum 10',
-    '  --now <epoch-ms>     deterministic reference time for relative Atlas time facets',
-    '  --json               print cogmem.cli.v1 JSON; queue counters are stable top-level fields',
+  '  --include-evidence   include bounded raw excerpts; event ids are always returned',
+  '  --evidence-limit <n> bound evidence locators per Atlas node, default 2, maximum 10',
+  '  --now <epoch-ms>     deterministic reference time for relative Atlas time facets',
+  '  --refresh            force Atlas refresh before graph reads; default returns stale projection on SQLite busy',
+  '  --no-refresh         skip Atlas refresh and read the existing projection',
+  '  --stale-ok           allow stale graph reads if refresh is blocked by a SQLite lock',
+  '  --json               print cogmem.cli.v1 JSON; queue counters are stable top-level fields',
     '',
     'Dream processes sealed episodes only. A timer may call the conditional tick, but recall and message ingestion never run Dream.',
     'Candidate interpretation uses deterministic rules unless [memory_model] configures an OpenAI-compatible local or cloud chat model.',
@@ -479,9 +486,10 @@ function runBind(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown
 function runGraphCommand(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
   const projectId = args.projectId;
   if (!projectId) throw new Error(`Memory Atlas commands require --project.\n${usage()}`);
-  kernel.ensureMemoryAtlas({ projectId });
   const options = { projectId, limit: args.limit, includeEvidence: args.includeEvidence,
-    evidenceLimit: args.evidenceLimit, now: args.now };
+    evidenceLimit: args.evidenceLimit, now: args.now,
+    refresh: args.refresh ? true : (args.staleOk ? false : undefined),
+    staleOk: args.staleOk || !args.refresh };
   if (args.command === 'graph') return kernel.graphOverview(options) as unknown as Record<string, unknown>;
   if (args.command === 'graph-search') {
     if (!args.query) throw new Error(`graph-search requires --query.\n${usage()}`);

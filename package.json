@@ -1,7 +1,7 @@
 {
   "name": "cogmem",
 
-  "version": "3.6.0",
+  "version": "3.6.1",
 
   "type": "module",
   "description": "cogmem — agent-native memory kernel for a single local-first AI agent",
@@ -23,8 +23,10 @@
     "cogmem-doctor": "dist/bin/doctor.js",
     "cogmem-connect": "dist/bin/connect.js",
     "cogmem-update": "dist/bin/update.js",
+    "cogmem-openclaw": "dist/bin/openclaw.js",
     "cogmem-compact": "dist/bin/compact.js",
     "cogmem-memory": "dist/bin/memory.js",
+    "cogmem-repair": "dist/bin/repair.js",
     "cogmem-explain-recall": "dist/bin/explain-recall.js",
     "cogmem-mcp": "dist/bin/mcp.js",
     "cogmem-import-openclaw": "dist/bin/import-openclaw.js",

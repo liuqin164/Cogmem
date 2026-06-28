@@ -78,7 +78,7 @@ cogmem memory tick --project openclaw --json
 cogmem memory bind --project openclaw --json
 ```
 
-Cogmem 3.6.0 hardens Memory Atlas content navigation. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
+Cogmem 3.6.1 hardens Memory Atlas content navigation and OpenClaw upgrade reliability. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
 
 ```bash
 cogmem memory graph-explore --project openclaw --query "去年与 Hermes 有关的决定" --json

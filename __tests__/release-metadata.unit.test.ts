@@ -22,7 +22,7 @@ function packageJson(): {
 }
 
 describe('core release metadata', () => {
-  test('3.6.0 is released as cogmem through GitHub release assets', () => {
+  test('3.6.1 is released as cogmem through GitHub release assets', () => {
     const manifest = packageJson();
     const readme = readText(join(coreRoot, 'README.md'));
     const contributing = readText(join(coreRoot, 'CONTRIBUTING.md'));
@@ -30,7 +30,7 @@ describe('core release metadata', () => {
     const checklist = readText(join(coreRoot, 'RELEASE_CHECKLIST.md'));
 
     expect(manifest.name).toBe('cogmem');
-    expect(manifest.version).toBe('3.6.0');
+    expect(manifest.version).toBe('3.6.1');
     expect(manifest.description).toContain('agent-native memory kernel');
     expect(readme).toContain('curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash');
     expect(readme).toContain('GitHub Releases');
@@ -38,8 +38,8 @@ describe('core release metadata', () => {
     expect(readme).not.toContain('@CognitiveOS/core');
     expect(contributing).toContain('npm pack --dry-run --json');
     expect(contributing).not.toContain('npm publish');
-    expect(changelog).toContain('3.6.0');
-    expect(checklist).toContain('3.6.0');
+    expect(changelog).toContain('3.6.1');
+    expect(checklist).toContain('3.6.1');
     expect(checklist).toContain('Do not run npm publish');
   });
 
@@ -121,8 +121,10 @@ describe('core release metadata', () => {
       'cogmem-migrate',
       'cogmem-migrate-vectors',
       'cogmem-normalize-transcript',
+      'cogmem-openclaw',
       'cogmem-prospective',
       'cogmem-re-embed',
+      'cogmem-repair',
       'cogmem-snapshot',
       'cogmem-strategy',
       'cogmem-update',
