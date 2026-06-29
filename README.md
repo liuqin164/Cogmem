@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.6.0`
+Current version: `3.6.1`
 
 Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
 
@@ -167,7 +167,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#3.6.0"
+bun add "cogmem@github:liuqin164/cogmem#3.6.1"
 bunx cogmem init
 ```
 
@@ -192,13 +192,33 @@ cogmem migrate --dry-run --json
 
 For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
-Upgrade a 3.5.2 database, or a pre-release schema-25 test database, into the 3.6.0 schema set with one command:
+Upgrade a 3.5.2 database, a 3.6.0 database, or a pre-release schema-25 test database into the 3.6.1 schema set with one command:
 
 ```bash
 cogmem migrate --yes --backup --json
 ```
 
-Schema 25 backfills the rebuildable Atlas projection. Schema 26 adds audited candidate reviews and exact Atlas projection metadata. Both preserve Raw Ledger, episodes, bindings, beliefs, and governed topic state; the command is idempotent.
+Schema 25 backfills the rebuildable Atlas projection. Schema 26 adds audited candidate reviews and exact Atlas projection metadata. Schema 27 marks 3.6.0-upgraded Atlas projections dirty so the first real action/time rebuild is not skipped. All preserve Raw Ledger, episodes, bindings, beliefs, and governed topic state; the command is idempotent.
+
+For OpenClaw upgrades, refresh the generated plugin files after the package/database update. This path does not open the Cogmem database, so it still works while an old drainer has the DB busy:
+
+```bash
+cogmem doctor --fix --agent openclaw --workspace <openclaw-workspace> --plugin-only --json
+openclaw gateway restart
+```
+
+Diagnose plugin staleness and hook failures without touching the DB:
+
+```bash
+cogmem openclaw diagnose --workspace <openclaw-workspace> --json
+```
+
+If old 3.5.2-era rows were imported with an empty `project_id`, preview and apply the conservative single-project repair:
+
+```bash
+cogmem repair project-scope --from "" --to openclaw --dry-run --json
+cogmem repair project-scope --from "" --to openclaw --apply --json
+```
 
 Inspect and conditionally process sealed conversation episodes:
 
@@ -214,7 +234,7 @@ For a host timer, call `dream tick`; the timer only wakes the scheduler. An empt
 cogmem dream tick --project my-agent --mode auto --max-episodes 10 --json
 ```
 
-Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.6.1 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
+Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.6.2 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
 
 Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands use stable content identities and the same episode schema. Low-confidence imported groups soft-seal for review unless an operator explicitly forces sealing. Episode semantic summaries and closure receipts are control hints, never durable evidence; every Dream candidate must cite a non-empty subset of the episode's raw event IDs and still pass CPU governance.
 
@@ -310,7 +330,7 @@ cogmem strategy plan --project hermes --query "我当时的原话是什么？" -
 cogmem strategy outcomes --project hermes --json
 ```
 
-OpenClaw plugin 0.6.1 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Navigation turns use one bridge/kernel lifecycle for Atlas exploration, evidence-bearing node/timeline drill-down, and recall. The bounded volatile `<COGMEM_MEMORY_ATLAS>` block includes evidence event IDs and drill-down commands; OpenClaw does not need MCP for this path.
+OpenClaw plugin 0.6.2 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Navigation turns use one bridge/kernel lifecycle for Atlas exploration, evidence-bearing node/timeline drill-down, and recall. The bounded volatile `<COGMEM_MEMORY_ATLAS>` block includes evidence event IDs and drill-down commands; OpenClaw does not need MCP for this path.
 
 `ProspectiveMemoryService` stores future intentions, commitments, reminders, open loops, and plans as candidates only. A candidate is not actionable until an explicit user event confirms it. Rejected candidates stay suppressed unless genuinely new evidence creates a new version. The service and `cogmem prospective` CLI manage state only; they expose no task or tool execution capability.
 

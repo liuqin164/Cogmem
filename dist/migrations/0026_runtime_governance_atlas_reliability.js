@@ -47,9 +47,9 @@ export const migration_0026 = {
         ELSE NULL END
       WHERE memory_kind IS NULL;
       INSERT INTO memory_atlas_projection_state(project_id,projection_name,cursor_value,status,last_rebuild_at,last_error,metadata_json)
-      SELECT DISTINCT project_id,'memory_atlas.v1',CAST(strftime('%s','now') AS TEXT),'clean',unixepoch()*1000,NULL,'{"migration":"0026"}'
+      SELECT DISTINCT project_id,'memory_atlas.v1',CAST(strftime('%s','now') AS TEXT),'dirty',NULL,NULL,'{"migration":"0026","reason":"requires_rebuild_after_schema_migration"}'
       FROM memory_atlas_documents WHERE project_id<>''
-      ON CONFLICT(project_id,projection_name) DO UPDATE SET status='clean',last_error=NULL;
+      ON CONFLICT(project_id,projection_name) DO UPDATE SET status='dirty',last_error=NULL,metadata_json='{"migration":"0026","reason":"requires_rebuild_after_schema_migration"}';
     `);
     },
     down(db) {

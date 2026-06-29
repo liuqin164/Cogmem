@@ -77,7 +77,7 @@ import {
   type CandidateReviewInput,
   type CandidateReviewResult,
 } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, SchemaMigrationRunner } from './migrations/index.js';
+import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -143,8 +143,8 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '3.6.0';
-const LATEST_SCHEMA_VERSION = 25;
+const CORE_VERSION = '3.6.1';
+const LATEST_SCHEMA_VERSION = 27;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
@@ -611,7 +611,7 @@ export class MemoryKernel {
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
     db.exec('PRAGMA busy_timeout = 5000;');
-    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026]).run();
+    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027]).run();
     this.ensureMetaTable(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
@@ -1836,39 +1836,64 @@ export class MemoryKernel {
     return this.memoryAtlasIndexer.ensureFresh(options);
   }
 
+  private prepareMemoryAtlasRead(options: MemoryAtlasQueryOptions): { atlasFresh: boolean; refreshError?: string } {
+    if (options.refresh === false) {
+      const state = this.memoryAtlasStore.getProjectionState(options.projectId);
+      return { atlasFresh: state?.status === 'clean' };
+    }
+    try {
+      this.ensureMemoryAtlas({ projectId: options.projectId });
+      return { atlasFresh: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (options.staleOk !== false && /database is locked|SQLITE_BUSY|SQLITE_LOCKED/i.test(message)) {
+        return { atlasFresh: false, refreshError: message };
+      }
+      throw error;
+    }
+  }
+
+  private withAtlasFreshness<T extends object>(result: T, freshness: { atlasFresh: boolean; refreshError?: string }): T {
+    return Object.assign(result, {
+      atlasFresh: freshness.atlasFresh,
+      ...(freshness.refreshError ? { refreshError: freshness.refreshError } : {}),
+    });
+  }
+
   graphOverview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
-    this.ensureMemoryAtlas({ projectId: options.projectId });
-    return this.memoryAtlasService.overview(options);
+    const freshness = this.prepareMemoryAtlasRead(options);
+    return this.withAtlasFreshness(this.memoryAtlasService.overview(options), freshness);
   }
 
   graphSearch(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
-    this.ensureMemoryAtlas({ projectId: options.projectId });
-    return this.memoryAtlasService.search(query, options);
+    const freshness = this.prepareMemoryAtlasRead(options);
+    return this.withAtlasFreshness(this.memoryAtlasService.search(query, options), freshness);
   }
 
   graphExplore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
-    this.ensureMemoryAtlas({ projectId: options.projectId });
-    return this.memoryAtlasService.explore(query, options);
+    const freshness = this.prepareMemoryAtlasRead(options);
+    return this.withAtlasFreshness(this.memoryAtlasService.explore(query, options), freshness);
   }
 
   graphNode(nodeId: string, options: MemoryAtlasQueryOptions): MemoryAtlasNodeDetail | null {
-    this.ensureMemoryAtlas({ projectId: options.projectId });
-    return this.memoryAtlasService.node(nodeId, options);
+    const freshness = this.prepareMemoryAtlasRead(options);
+    const result = this.memoryAtlasService.node(nodeId, options);
+    return result ? this.withAtlasFreshness(result, freshness) : result;
   }
 
   graphNeighbors(nodeId: string, options: MemoryAtlasQueryOptions & { hops?: number }): MemoryAtlasSlice {
-    this.ensureMemoryAtlas({ projectId: options.projectId });
-    return this.memoryAtlasService.neighbors(nodeId, options);
+    const freshness = this.prepareMemoryAtlasRead(options);
+    return this.withAtlasFreshness(this.memoryAtlasService.neighbors(nodeId, options), freshness);
   }
 
   graphPath(from: string, to: string, options: MemoryAtlasQueryOptions & { maxHops?: number }): MemoryAtlasPathResult {
-    this.ensureMemoryAtlas({ projectId: options.projectId });
-    return this.memoryAtlasService.path(from, to, options);
+    const freshness = this.prepareMemoryAtlasRead(options);
+    return this.withAtlasFreshness(this.memoryAtlasService.path(from, to, options), freshness);
   }
 
   graphTimeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult {
-    this.ensureMemoryAtlas({ projectId: options.projectId });
-    return this.memoryAtlasService.timeline(query, options);
+    const freshness = this.prepareMemoryAtlasRead(options);
+    return this.withAtlasFreshness(this.memoryAtlasService.timeline(query, options), freshness);
   }
 
   touchMemoryAtlas(input: { projectId: string; nodeIds: string[]; reason: string; query?: string; now?: number }): { touched: number } {

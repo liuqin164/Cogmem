@@ -640,6 +640,8 @@ export declare class MemoryKernel {
         actions: number;
         refreshed: boolean;
     };
+    private prepareMemoryAtlasRead;
+    private withAtlasFreshness;
     graphOverview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     graphSearch(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     graphExplore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;

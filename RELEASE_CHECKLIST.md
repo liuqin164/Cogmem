@@ -1,11 +1,11 @@
-# cogmem 3.6.0 Release Checklist
+# cogmem 3.6.1 Release Checklist
 
 This release is distributed through GitHub Releases. Do not run npm publish.
 
 ## Required Metadata
 
 - `package.json` name is `cogmem`.
-- `package.json` version is `3.6.0`.
+- `package.json` version is `3.6.1`.
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
 - `install.sh` is tracked and uses the latest GitHub release asset.
@@ -18,8 +18,10 @@ This release is distributed through GitHub Releases. Do not run npm publish.
 - `cogmem doctor`
 - `cogmem connect`
 - `cogmem update`
+- `cogmem openclaw diagnose`
 - `cogmem-compact`
 - `cogmem memory`
+- `cogmem repair`
 - `cogmem explain-recall`
 - `cogmem-mcp`
 - `cogmem import-openclaw`
@@ -57,7 +59,8 @@ MCP `tools/list` includes strategy, episode append/import/status/seal/repair, to
 - README and skills explain user-shaped topic operations, user-explicit versus model-candidate authority, alias collision review, operation rollback, and project isolation.
 - README, `MEMORY_ATLAS.md`, and skills distinguish the system anatomy map from the content Atlas; explain graph overview/search/explore/node/neighbors/path/timeline, generic multi-facet cold-memory resurrection, activation visibility, source drill-down, and project isolation.
 - README documents `cogmem.cli.v1`: object payloads are top-level, array payloads use `items`, and queue counters expose top-level compatibility aliases.
-- README documents the one-line schema-24 plus pre-release schema-25 to schema-26 migration with backup, and migration tests prove source counts are preserved and reruns are idempotent.
+- README documents the one-line schema-24/schema-26/pre-release schema-25 to schema-27 migration with backup, and migration tests prove source counts are preserved, Atlas projection is dirty after upgrade, and reruns are idempotent.
+- README and OpenClaw skill document plugin-only repair, plugin/audit diagnose, stale graph reads, and conservative empty-project project-scope repair for 3.5.2 -> 3.6.x upgrades.
 - README and skills explain episode surgery, closure recomputation, stale-candidate invalidation, cross-reference/audit preservation, and sealed-only Dream requeue.
 - README and Hermes skill explain per-message import checkpoints, stable `externalMessageId` requirements across split batches, source-agent validation, CLI range/error controls, and hookless recall freshness warnings.
 - OpenClaw installation includes `SKILL.md` plus the complete `references/operations.md` command handbook covering migration, import, review, Atlas, repair, backup, and maintenance.

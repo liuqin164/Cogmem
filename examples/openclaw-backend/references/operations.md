@@ -1,4 +1,4 @@
-# Cogmem 3.6.0 Operations Reference for OpenClaw
+# Cogmem 3.6.1 Operations Reference for OpenClaw
 
 Read this file when installing, upgrading, importing, repairing, or operating Cogmem. `SKILL.md` contains the decision rules; this file is the command reference.
 
@@ -7,7 +7,10 @@ Read this file when installing, upgrading, importing, repairing, or operating Co
 | Need | Use |
 |---|---|
 | Verify installation or config | `cogmem doctor` |
+| Refresh only the generated OpenClaw plugin | `cogmem doctor --fix --agent openclaw --plugin-only` |
+| Diagnose OpenClaw hook/plugin failures | `cogmem openclaw diagnose` |
 | Upgrade an existing database | `cogmem migrate` |
+| Repair empty project scope from old imports | `cogmem repair project-scope` |
 | Import OpenClaw files | `cogmem import-openclaw` |
 | Import generic message JSONL | `cogmem episode import` |
 | Answer one direct memory question | `cogmem memory recall` or `cogmem_recall` |
@@ -38,11 +41,51 @@ Preview first, then create a backup and apply every pending migration:
 ```bash
 cogmem migrate --dry-run --json
 cogmem migrate --yes --backup --json
-cogmem doctor
+cogmem doctor --fix --agent openclaw --workspace . --plugin-only --json
+openclaw gateway restart
+cogmem openclaw diagnose --workspace . --json
+```
+
+The second command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.1 schema-27 state in one run. It preserves Raw Ledger evidence. Keep the returned `backupPath` until verification passes.
+
+After upgrading the package/database, refresh OpenClaw's generated plugin files. `doctor --plugin-only` avoids opening the Cogmem kernel, so it can repair stale `extensions/cogmem-auto-memory/index.js` and `bridge.mjs` even when an old drainer has SQLite busy. Use `connect --auto --force` when intentionally reinstalling the full integration and patching OpenClaw config:
+
+```bash
 cogmem connect openclaw --workspace . --auto --force --json
 ```
 
-The second command upgrades 3.5.2 schema 24, or a pre-release schema-25 test database, to the 3.6.0 schema-26 state in one run. It preserves Raw Ledger evidence. Keep the returned `backupPath` until verification passes.
+Use `cogmem openclaw diagnose --workspace . --json` when automatic memory blocks are missing. Check:
+
+- `plugin.current=false`: generated files are stale; run plugin-only fix and restart gateway.
+- no `audit.lastBeforePromptBuild`: plugin is not loaded or the hook did not fire.
+- `audit.lastBeforePromptBuild.action=error`: bridge or DB failure; inspect `reason`, `bridgeCommand`, and `dbLocked`.
+- `action=inject` but no visible block: inspect `returnedInjectionShape`. Plugin 0.6.2 returns `prependContext`, `context`, and `promptPrefix`; if OpenClaw still ignores all three, the host hook contract changed and the OpenClaw plugin API must be checked before blaming recall.
+
+Plugin 0.6.2 queue behavior:
+
+- `agent_end` only appends durable JSONL jobs, then starts at most one drainer through queue/spawn locks.
+- `drain-remember-queue` acquires the queue lock before opening Cogmem or SQLite. A second drainer exits without opening the DB.
+- Stale `.cogmem/queue/openclaw-remember.jsonl.lock` and `.spawn.lock` directories older than `rememberDrainTimeoutMs` are recovered automatically and carry `owner.json` metadata for diagnosis.
+- `rememberDrainBatchSize` defaults to `20`, so a busy workspace drains bounded batches and releases DB handles quickly. Lower it temporarily if OpenClaw shares a slow SQLite disk.
+- Failed jobs retry up to `rememberMaxAttempts`; exhausted jobs move to `.dead.jsonl`.
+
+If the queue is not draining, diagnose before deleting files:
+
+```bash
+cogmem openclaw diagnose --workspace . --json
+ls -la .cogmem/queue/
+cat .cogmem/queue/openclaw-remember.jsonl.lock/owner.json 2>/dev/null || true
+cat .cogmem/queue/openclaw-remember.jsonl.spawn.lock/owner.json 2>/dev/null || true
+```
+
+If upgraded records exist under empty project scope, repair only after preview:
+
+```bash
+cogmem repair project-scope --from "" --to openclaw --dry-run --json
+cogmem repair project-scope --from "" --to openclaw --apply --json
+```
+
+The repair refuses an empty-to-OpenClaw merge when another non-OpenClaw project is present.
 
 ## Import
 
@@ -110,6 +153,15 @@ cogmem memory graph-neighbors --project openclaw --id <node-id> --hops 2 --json
 cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
 cogmem memory graph-timeline --project openclaw --query "去年与 Hermes 有关的修复" --now 1782057600000 --evidence-limit 4 --json
 ```
+
+Graph commands default to stale-safe diagnostics. If refresh hits `SQLITE_BUSY`, JSON includes `atlasFresh: false` and `refreshError` while returning the existing projection. Use:
+
+```bash
+cogmem memory graph-explore --project openclaw --query "OpenClaw 去年做过什么" --no-refresh --json
+cogmem memory graph-explore --project openclaw --query "OpenClaw 去年做过什么" --refresh --json
+```
+
+Use `--no-refresh` during lock incidents and `--refresh` when the operator wants rebuild-or-fail behavior.
 
 Graph reads are pure: overview/search/explore do not brighten what they display. In MCP, call `cogmem_graph_touch` only after the agent actually selects or uses nodes. Activation changes visibility, never evidence or truth. Exact scoped facets may revive cold nodes.
 

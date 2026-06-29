@@ -48,7 +48,7 @@ import { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
 import { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPathRegistry, TopicRelationGraph } from './topic/index.js';
 import { CorrectionResolver } from './episode/CorrectionResolver.js';
 import { CandidateReviewService, MemoryGovernanceExecutor, MemoryGovernanceValidator, PiiRedactor, } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, SchemaMigrationRunner } from './migrations/index.js';
+import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -83,8 +83,8 @@ import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
 import { config } from './utils/Config.js';
 import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snapshot/index.js';
-const CORE_VERSION = '3.6.0';
-const LATEST_SCHEMA_VERSION = 25;
+const CORE_VERSION = '3.6.1';
+const LATEST_SCHEMA_VERSION = 27;
 export class MemoryKernel {
     options;
     memoryGraph;
@@ -168,7 +168,7 @@ export class MemoryKernel {
         this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
         const db = this.factStore.getDatabase();
         db.exec('PRAGMA busy_timeout = 5000;');
-        new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026]).run();
+        new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027]).run();
         this.ensureMetaTable(db);
         this.entityStore = new EntityStore(db);
         this.ensureGovernanceAuditTable(db);
@@ -1262,33 +1262,57 @@ export class MemoryKernel {
     ensureMemoryAtlas(options) {
         return this.memoryAtlasIndexer.ensureFresh(options);
     }
+    prepareMemoryAtlasRead(options) {
+        if (options.refresh === false) {
+            const state = this.memoryAtlasStore.getProjectionState(options.projectId);
+            return { atlasFresh: state?.status === 'clean' };
+        }
+        try {
+            this.ensureMemoryAtlas({ projectId: options.projectId });
+            return { atlasFresh: true };
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (options.staleOk !== false && /database is locked|SQLITE_BUSY|SQLITE_LOCKED/i.test(message)) {
+                return { atlasFresh: false, refreshError: message };
+            }
+            throw error;
+        }
+    }
+    withAtlasFreshness(result, freshness) {
+        return Object.assign(result, {
+            atlasFresh: freshness.atlasFresh,
+            ...(freshness.refreshError ? { refreshError: freshness.refreshError } : {}),
+        });
+    }
     graphOverview(options) {
-        this.ensureMemoryAtlas({ projectId: options.projectId });
-        return this.memoryAtlasService.overview(options);
+        const freshness = this.prepareMemoryAtlasRead(options);
+        return this.withAtlasFreshness(this.memoryAtlasService.overview(options), freshness);
     }
     graphSearch(query, options) {
-        this.ensureMemoryAtlas({ projectId: options.projectId });
-        return this.memoryAtlasService.search(query, options);
+        const freshness = this.prepareMemoryAtlasRead(options);
+        return this.withAtlasFreshness(this.memoryAtlasService.search(query, options), freshness);
     }
     graphExplore(query, options) {
-        this.ensureMemoryAtlas({ projectId: options.projectId });
-        return this.memoryAtlasService.explore(query, options);
+        const freshness = this.prepareMemoryAtlasRead(options);
+        return this.withAtlasFreshness(this.memoryAtlasService.explore(query, options), freshness);
     }
     graphNode(nodeId, options) {
-        this.ensureMemoryAtlas({ projectId: options.projectId });
-        return this.memoryAtlasService.node(nodeId, options);
+        const freshness = this.prepareMemoryAtlasRead(options);
+        const result = this.memoryAtlasService.node(nodeId, options);
+        return result ? this.withAtlasFreshness(result, freshness) : result;
     }
     graphNeighbors(nodeId, options) {
-        this.ensureMemoryAtlas({ projectId: options.projectId });
-        return this.memoryAtlasService.neighbors(nodeId, options);
+        const freshness = this.prepareMemoryAtlasRead(options);
+        return this.withAtlasFreshness(this.memoryAtlasService.neighbors(nodeId, options), freshness);
     }
     graphPath(from, to, options) {
-        this.ensureMemoryAtlas({ projectId: options.projectId });
-        return this.memoryAtlasService.path(from, to, options);
+        const freshness = this.prepareMemoryAtlasRead(options);
+        return this.withAtlasFreshness(this.memoryAtlasService.path(from, to, options), freshness);
     }
     graphTimeline(query, options) {
-        this.ensureMemoryAtlas({ projectId: options.projectId });
-        return this.memoryAtlasService.timeline(query, options);
+        const freshness = this.prepareMemoryAtlasRead(options);
+        return this.withAtlasFreshness(this.memoryAtlasService.timeline(query, options), freshness);
     }
     touchMemoryAtlas(input) {
         if (!input.projectId?.trim())

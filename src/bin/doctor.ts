@@ -1,7 +1,14 @@
 #!/usr/bin/env bun
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
-import { installOpenClawAutoMemoryPlugin } from '../host/openclaw/AutoMemoryPluginInstaller.js';
+import {
+  defaultOpenClawAutoMemoryPluginDir,
+  inspectOpenClawAutoMemoryPlugin,
+  installOpenClawAutoMemoryPlugin,
+} from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { compactStorage } from '../storage/StorageCompactor.js';
 
 function readArg(name: string): string | undefined {
@@ -42,6 +49,8 @@ const openclawConfigPath = readArg('--openclaw-config');
 const pluginDir = readArg('--plugin-dir');
 const bunPath = readArg('--bun');
 const storage = hasFlag('--storage');
+const pluginOnly = hasFlag('--plugin-only');
+const json = hasFlag('--json');
 
 if (envPath) {
   fail('--env-path is no longer supported. Use cogmem-init to create .cogmem/config.toml, then run cogmem-doctor --config <config.toml>.');
@@ -51,6 +60,43 @@ if (envPath) {
   const loaded = loadCogmemConfig({ configPath: resolution.path });
   const error = loaded.diagnostics.find((diagnostic) => diagnostic.severity === 'error');
   if (error) fail(`${error.code}: ${error.message}`);
+  if (pluginOnly) {
+    if (agent && agent !== 'openclaw') fail('doctor --plugin-only currently supports --agent openclaw.');
+    const workspaceRoot = workspace || loaded.integrations.openclaw.workspaceDir || process.cwd();
+    let fixed = undefined as ReturnType<typeof installOpenClawAutoMemoryPlugin> | undefined;
+    if (fix) {
+      fixed = installOpenClawAutoMemoryPlugin({
+        workspaceRoot,
+        configPath: resolution.path,
+        openclawConfigPath,
+        pluginDir,
+        bunPath,
+        force: true,
+      });
+    }
+    const inspection = inspectOpenClawAutoMemoryPlugin({
+      workspaceRoot,
+      pluginDir: pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot),
+    });
+    const audit = readLatestOpenClawAudit(workspaceRoot);
+    if (json) {
+      console.log(JSON.stringify({
+        schemaVersion: 'cogmem.cli.v1',
+        command: 'doctor',
+        pluginOnly: true,
+        configPath: resolution.path,
+        openclaw: { plugin: inspection, fixed, audit },
+      }));
+    } else {
+      printWarnings(loaded.diagnostics);
+      ok('configuration parsed');
+      ok(`openclaw plugin ${inspection.current ? 'current' : 'stale'} at ${inspection.pluginDir}`);
+      if (!inspection.current) warn('openclaw_plugin_stale', 'Run cogmem doctor --fix --agent openclaw --plugin-only --workspace <workspace>.');
+      if (fixed) ok(`openclaw auto memory integration fixed at ${fixed.pluginDir}`);
+      if (audit.lastBeforePromptBuild) ok(`last before_prompt_build action=${audit.lastBeforePromptBuild.action || 'unknown'} reason=${audit.lastBeforePromptBuild.reason || ''}`);
+    }
+    process.exit(0);
+  }
   printWarnings(loaded.diagnostics);
   ok('configuration parsed');
   ok(`cogmem home ${loaded.homeDir}`);
@@ -91,4 +137,34 @@ if (envPath) {
     ok(`openclaw auto memory integration fixed at ${result.pluginDir}`);
     ok(`openclaw config patched at ${result.openclawConfigPath}`);
   }
+  if (agent === 'openclaw' || workspace) {
+    const workspaceRoot = workspace || loaded.integrations.openclaw.workspaceDir || process.cwd();
+    const inspection = inspectOpenClawAutoMemoryPlugin({
+      workspaceRoot,
+      pluginDir: pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot),
+    });
+    if (inspection.installed) {
+      ok(`openclaw plugin ${inspection.current ? 'current' : 'stale'} at ${inspection.pluginDir}`);
+      if (!inspection.current) warn('openclaw_plugin_stale', 'Run cogmem connect openclaw --workspace <workspace> --auto --force or cogmem doctor --fix --agent openclaw --plugin-only.');
+    }
+    const audit = readLatestOpenClawAudit(workspaceRoot);
+    if (audit.lastBeforePromptBuild) {
+      ok(`last before_prompt_build action=${audit.lastBeforePromptBuild.action || 'unknown'} reason=${audit.lastBeforePromptBuild.reason || ''}`);
+    }
+  }
+}
+
+function readLatestOpenClawAudit(workspaceRoot: string): { lastBeforePromptBuild?: Record<string, unknown> } {
+  const logPath = join(workspaceRoot, '.cogmem', 'logs', 'openclaw-auto-memory.jsonl');
+  if (!existsSync(logPath)) return {};
+  const lines = readFileSync(logPath, 'utf8').split('\n').map((line) => line.trim()).filter(Boolean).slice(-200);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const record = JSON.parse(lines[index]) as Record<string, unknown>;
+      if (record.hook === 'before_prompt_build') return { lastBeforePromptBuild: record };
+    } catch {
+      // Ignore malformed audit rows.
+    }
+  }
+  return {};
 }

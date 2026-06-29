@@ -401,23 +401,19 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
                 }));
             case 'cogmem_graph_overview': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                opened.kernel.ensureMemoryAtlas({ projectId });
                 return jsonResult(opened.kernel.graphOverview({ projectId, limit: optionalNumber(input.limit) }));
             }
             case 'cogmem_graph_search': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                opened.kernel.ensureMemoryAtlas({ projectId });
                 return jsonResult(opened.kernel.graphSearch(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit) }));
             }
             case 'cogmem_graph_explore': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                opened.kernel.ensureMemoryAtlas({ projectId });
                 return jsonResult(opened.kernel.graphExplore(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit),
                     evidenceLimit: optionalNumber(input.evidenceLimit), now: optionalNumber(input.now) }));
             }
             case 'cogmem_graph_node': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                opened.kernel.ensureMemoryAtlas({ projectId });
                 const result = opened.kernel.graphNode(requiredString(input.id, 'id'), { projectId, includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit) });
                 if (!result)
                     throw new Error('Memory Atlas node not found in the requested project');
@@ -425,17 +421,14 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
             }
             case 'cogmem_graph_neighbors': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                opened.kernel.ensureMemoryAtlas({ projectId });
                 return jsonResult(opened.kernel.graphNeighbors(requiredString(input.id, 'id'), { projectId, hops: optionalNumber(input.hops), limit: optionalNumber(input.limit) }));
             }
             case 'cogmem_graph_path': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                opened.kernel.ensureMemoryAtlas({ projectId });
                 return jsonResult(opened.kernel.graphPath(requiredString(input.from, 'from'), requiredString(input.to, 'to'), { projectId, maxHops: optionalNumber(input.maxHops) }));
             }
             case 'cogmem_graph_timeline': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                opened.kernel.ensureMemoryAtlas({ projectId });
                 return jsonResult(opened.kernel.graphTimeline(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit), includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit), now: optionalNumber(input.now) }));
             }
             case 'cogmem_graph_touch':

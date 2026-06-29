@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -6,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 
 const PLUGIN_ID = 'cogmem-auto-memory';
-const PLUGIN_VERSION = '0.6.1';
+const PLUGIN_VERSION = '0.6.2';
 
 function defaultPublicEntrypoint(): string {
   return join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), 'public.js');
@@ -44,6 +45,22 @@ interface PluginFiles {
   manifestJson: string;
   indexJs: string;
   bridgeMjs: string;
+}
+
+export interface OpenClawAutoMemoryPluginInspection {
+  pluginId: string;
+  pluginDir: string;
+  installed: boolean;
+  current: boolean;
+  version?: string;
+  expectedVersion: string;
+  files: Array<{
+    path: string;
+    exists: boolean;
+    current: boolean;
+    expectedSha256: string;
+    actualSha256?: string;
+  }>;
 }
 
 export function defaultOpenClawConfigPath(workspaceRoot: string, env = process.env): string {
@@ -135,6 +152,51 @@ export function installOpenClawAutoMemoryPlugin(
   };
 }
 
+export function inspectOpenClawAutoMemoryPlugin(options: Pick<OpenClawAutoMemoryInstallOptions, 'workspaceRoot' | 'pluginDir'>): OpenClawAutoMemoryPluginInspection {
+  const workspaceRoot = resolve(options.workspaceRoot);
+  const pluginDir = resolve(options.pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot));
+  const files = buildPluginFiles();
+  const desiredFiles = new Map<string, string>([
+    [join(pluginDir, 'package.json'), files.packageJson],
+    [join(pluginDir, 'openclaw.plugin.json'), files.manifestJson],
+    [join(pluginDir, 'index.js'), files.indexJs],
+    [join(pluginDir, 'bridge.mjs'), files.bridgeMjs],
+  ]);
+  const fileResults = Array.from(desiredFiles.entries()).map(([path, body]) => {
+    const exists = existsSync(path);
+    const actual = exists ? readFileSync(path, 'utf8') : undefined;
+    return {
+      path,
+      exists,
+      current: actual === body,
+      expectedSha256: sha256(body),
+      actualSha256: actual ? sha256(actual) : undefined,
+    };
+  });
+  let version: string | undefined;
+  const packagePath = join(pluginDir, 'package.json');
+  if (existsSync(packagePath)) {
+    try {
+      version = JSON.parse(readFileSync(packagePath, 'utf8')).version;
+    } catch {
+      version = undefined;
+    }
+  }
+  return {
+    pluginId: PLUGIN_ID,
+    pluginDir,
+    installed: fileResults.some((file) => file.exists),
+    current: fileResults.every((file) => file.current),
+    version,
+    expectedVersion: PLUGIN_VERSION,
+    files: fileResults,
+  };
+}
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+
 function buildPatchedOpenClawConfig(input: {
   openclawConfigPath: string;
   pluginDir: string;
@@ -210,6 +272,7 @@ function buildPatchedOpenClawConfig(input: {
       rememberStrategy: 'queued',
       rememberQueuePath: '',
       rememberDrainTimeoutMs: 60000,
+      rememberDrainBatchSize: 20,
       rememberMaxAttempts: 3,
       auditLog: true,
     },
@@ -290,6 +353,7 @@ function buildPluginFiles(): PluginFiles {
           },
           rememberQueuePath: { type: 'string' },
           rememberDrainTimeoutMs: { type: 'number' },
+          rememberDrainBatchSize: { type: 'number' },
           rememberMaxAttempts: { type: 'number' },
           auditLog: { type: 'boolean' },
           auditLogPath: { type: 'string' },
@@ -306,7 +370,7 @@ function pluginIndexJs(): string {
 
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
-const { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
 const PLUGIN_ID = 'cogmem-auto-memory';
@@ -348,6 +412,7 @@ const DEFAULTS = {
   rememberStrategy: 'queued',
   rememberQueuePath: '',
   rememberDrainTimeoutMs: 60000,
+  rememberDrainBatchSize: 20,
   rememberMaxAttempts: 3,
   auditLog: true,
   auditLogPath: '',
@@ -710,6 +775,21 @@ function runBridge(command, payload, config, timeoutMs) {
   return child.stdout ? JSON.parse(child.stdout) : {};
 }
 
+function bridgeErrorInfo(error) {
+  const message = error && error.message || String(error || '');
+  return {
+    reason: message,
+    errorClass: error && error.name || 'Error',
+    dbLocked: /database is locked|SQLITE_BUSY|SQLITE_LOCKED/i.test(message),
+  };
+}
+
+function injectionResult(context, warning) {
+  const result = context ? { prependContext: context, context, promptPrefix: context } : {};
+  if (warning) result.warning = warning;
+  return result;
+}
+
 function bridgeConfig(config) {
   return {
     configPath: config.configPath,
@@ -731,11 +811,61 @@ function bridgeConfig(config) {
     atlasMaxChars: config.atlasMaxChars || 3000,
     rememberQueuePath: rememberQueuePath(config),
     rememberMaxAttempts: config.rememberMaxAttempts || 3,
+    rememberDrainBatchSize: config.rememberDrainBatchSize || 20,
   };
 }
 
 function rememberQueuePath(config) {
   return config.rememberQueuePath || path.join(config.cwd || process.cwd(), '.cogmem', 'queue', 'openclaw-remember.jsonl');
+}
+
+function rememberQueueLockPath(config) {
+  return rememberQueuePath(config) + '.lock';
+}
+
+function queueLockIsFresh(config) {
+  const lockPath = rememberQueueLockPath(config);
+  if (!existsSync(lockPath)) return false;
+  try {
+    const ageMs = Date.now() - statSync(lockPath).mtimeMs;
+    return ageMs >= 0 && ageMs < Number(config.rememberDrainTimeoutMs || 60000);
+  } catch {
+    return true;
+  }
+}
+
+function rememberQueueSpawnLockPath(config) {
+  return rememberQueuePath(config) + '.spawn.lock';
+}
+
+function acquireRememberQueueSpawnLock(config) {
+  const lockPath = rememberQueueSpawnLockPath(config);
+  const timeoutMs = Number(config.rememberDrainTimeoutMs || 60000);
+  try {
+    mkdirSync(lockPath, { recursive: false });
+    writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      purpose: 'spawn-remember-drainer',
+    }) + '\n');
+    return { acquired: true, lockPath };
+  } catch {
+    try {
+      const ageMs = Date.now() - statSync(lockPath).mtimeMs;
+      if (Number.isFinite(ageMs) && ageMs > timeoutMs) {
+        rmSync(lockPath, { recursive: true, force: true });
+        mkdirSync(lockPath, { recursive: false });
+        writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          staleLockRecovered: true,
+          purpose: 'spawn-remember-drainer',
+        }) + '\n');
+        return { acquired: true, lockPath };
+      }
+    } catch {}
+    return { acquired: false, lockPath };
+  }
 }
 
 function stableJobId(payload) {
@@ -766,12 +896,46 @@ function enqueueRememberJob(config, payload) {
 }
 
 function spawnBridgeDrain(config) {
+  if (queueLockIsFresh(config)) {
+    audit(config, {
+      hook: 'agent_end',
+      action: 'skip_spawn_drain',
+      reason: 'remember_queue_locked',
+      queuePath: rememberQueuePath(config),
+    });
+    return;
+  }
+  const spawnLock = acquireRememberQueueSpawnLock(config);
+  if (!spawnLock.acquired) {
+    audit(config, {
+      hook: 'agent_end',
+      action: 'skip_spawn_drain',
+      reason: 'remember_queue_spawn_locked',
+      queuePath: rememberQueuePath(config),
+    });
+    return;
+  }
   const bridgePath = path.join(__dirname, 'bridge.mjs');
-  const child = spawn(config.bunPath || 'bun', [bridgePath, 'drain-remember-queue'], {
-    cwd: config.cwd || process.cwd(),
-    detached: true,
-    stdio: ['pipe', 'ignore', 'ignore'],
-  });
+  let child;
+  try {
+    child = spawn(config.bunPath || 'bun', [bridgePath, 'drain-remember-queue'], {
+      cwd: config.cwd || process.cwd(),
+      detached: false,
+      stdio: ['pipe', 'ignore', 'ignore'],
+    });
+  } catch (error) {
+    rmSync(spawnLock.lockPath, { recursive: true, force: true });
+    audit(config, {
+      hook: 'agent_end',
+      action: 'error',
+      reason: error && error.message || String(error || 'failed to spawn remember drainer'),
+      bridgeCommand: 'drain-remember-queue',
+      queuePath: rememberQueuePath(config),
+    });
+    return;
+  }
+  child.once('exit', () => rmSync(spawnLock.lockPath, { recursive: true, force: true }));
+  child.once('error', () => rmSync(spawnLock.lockPath, { recursive: true, force: true }));
   child.stdin.end(JSON.stringify({ config: bridgeConfig(config) }));
   child.unref();
 }
@@ -901,7 +1065,7 @@ function audit(config, record) {
 const plugin = {
   id: PLUGIN_ID,
   name: 'CogMem Auto Memory',
-  version: '0.6.1',
+  version: '0.6.2',
   register(api) {
     if (!api || typeof api.on !== 'function') {
       throw new Error('OpenClaw plugin API missing api.on');
@@ -1005,23 +1169,34 @@ const plugin = {
             strippedBlockCount: cleanQuery.blockCount,
             strippedChars: cleanQuery.strippedChars,
           },
+          bridgeCommand: navigationIntent === 'atlas_explore' && config.autoAtlas !== false ? 'context' : 'recall',
+          returnedInjectionShape: context ? 'prependContext+context+promptPrefix' : 'empty',
           turnBridgeCount,
           sessionStateInjected,
           navigationIntent,
           atlasInjected,
         });
-        if (!context) return {};
-        return { prependContext: context };
+        return injectionResult(context);
       } catch (error) {
         lastRecallForSession.delete(sessionId);
+        const info = bridgeErrorInfo(error);
         audit(config, {
           hook: 'before_prompt_build',
           sessionId,
           action: 'error',
-          reason: error && error.message || String(error),
+          reason: info.reason,
+          errorClass: info.errorClass,
+          bridgeCommand: 'recall',
+          dbLocked: info.dbLocked,
+          returnedInjectionShape: 'empty',
+          contextChars: 0,
+          itemCount: 0,
         });
-        logWarn(api, '[cogmem-auto-memory] recall skipped: ' + (error && error.message || String(error)));
-        return {};
+        const warning = info.dbLocked
+          ? '[cogmem-auto-memory] recall skipped because Cogmem SQLite is busy; run cogmem doctor --agent openclaw --workspace <workspace> --plugin-only if this persists.'
+          : '[cogmem-auto-memory] recall skipped: ' + info.reason;
+        logWarn(api, warning);
+        return injectionResult('', warning);
       }
     }, { priority: 10 });
 
@@ -1134,22 +1309,31 @@ module.exports.__testing = {
 
 function pluginBridgeMjs(): string {
   return String.raw`#!/usr/bin/env bun
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const command = process.argv[2];
-const input = JSON.parse(readFileSync(0, 'utf8') || '{}');
+const input = JSON.parse(readFileSync(0, 'utf8') || process.env.COGMEM_BRIDGE_STDIN || '{}');
 const config = input.config || {};
 if (!config.configPath) {
   throw new Error('missing cogmem configPath');
 }
 
-const { createMemoryKernelFromConfig, KernelAgentMemoryBackend, formatStrategyContext } = await loadCogmemApi(config);
-const kernel = createMemoryKernelFromConfig({ configPath: config.configPath });
-const memory = new KernelAgentMemoryBackend(kernel);
+let drainQueueLock;
+if (command === 'drain-remember-queue') {
+  drainQueueLock = acquireRememberQueueLock(config);
+  if (!drainQueueLock.acquired) {
+    console.log(JSON.stringify({ drained: 0, failed: 0, locked: drainQueueLock.locked, empty: drainQueueLock.empty === true }));
+    process.exit(0);
+  }
+}
 
+let kernel;
 try {
+  const { createMemoryKernelFromConfig, KernelAgentMemoryBackend, formatStrategyContext } = await loadCogmemApi(config);
+  kernel = createMemoryKernelFromConfig({ configPath: config.configPath });
+  const memory = new KernelAgentMemoryBackend(kernel);
   if (command === 'context') {
     const projectId = config.projectId || 'openclaw';
     const atlas = kernel.graphExplore(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) });
@@ -1166,34 +1350,33 @@ try {
     }));
   } else if (command === 'graph-explore') {
     const projectId = config.projectId || 'openclaw';
-    kernel.ensureMemoryAtlas({ projectId });
     const result = kernel.graphExplore(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) });
     console.log(JSON.stringify({ context: formatAtlasContext(result, Number(config.atlasMaxChars || 3000)), result }));
   } else if (command === 'graph-node') {
     const projectId = config.projectId || 'openclaw';
-    kernel.ensureMemoryAtlas({ projectId });
     console.log(JSON.stringify(kernel.graphNode(input.id, { projectId, includeEvidence: input.includeEvidence === true })));
   } else if (command === 'graph-path') {
     const projectId = config.projectId || 'openclaw';
-    kernel.ensureMemoryAtlas({ projectId });
     console.log(JSON.stringify(kernel.graphPath(input.from, input.to, { projectId })));
   } else if (command === 'graph-timeline') {
     const projectId = config.projectId || 'openclaw';
-    kernel.ensureMemoryAtlas({ projectId });
     console.log(JSON.stringify(kernel.graphTimeline(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) })));
   } else if (command === 'recall') {
     console.log(JSON.stringify(await recallPayload(input, config, kernel, memory, formatStrategyContext)));
   } else if (command === 'remember') {
-    const result = await rememberPayload(input, config);
+    const result = await rememberPayload(input, config, kernel, memory);
     console.log(JSON.stringify({ remembered: true, ...result }));
   } else if (command === 'drain-remember-queue') {
-    const result = await drainRememberQueue(config);
+    const result = await drainRememberQueueWithLock(config, drainQueueLock, kernel, memory);
     console.log(JSON.stringify(result));
   } else {
     throw new Error('unknown cogmem bridge command: ' + command);
   }
 } finally {
-  kernel.close();
+  if (kernel) kernel.close();
+  if (drainQueueLock && drainQueueLock.acquired) {
+    rmSync(drainQueueLock.lockPath, { recursive: true, force: true });
+  }
 }
 
 async function recallPayload(input, config, kernel, memory, formatStrategyContext) {
@@ -1333,7 +1516,7 @@ function safeAtlasText(input, limit) {
   return clean.slice(0, Math.max(0, Number(limit || 500)));
 }
 
-async function rememberPayload(payload, bridgeConfig) {
+async function rememberPayload(payload, bridgeConfig, kernel, memory) {
   const cleanUser = bridgeConfig.stripRecallBlocksBeforeRemember === false
     ? { text: payload.userText || '', stripped: false, strippedChars: 0, blockCount: 0 }
     : stripCogmemRecallBlocks(payload.userText || '');
@@ -1461,21 +1644,57 @@ async function rememberPayload(payload, bridgeConfig) {
 }
 
 async function drainRememberQueue(bridgeConfig) {
+  const { createMemoryKernelFromConfig, KernelAgentMemoryBackend } = await loadCogmemApi(bridgeConfig);
+  const kernel = createMemoryKernelFromConfig({ configPath: bridgeConfig.configPath });
+  try {
+    const memory = new KernelAgentMemoryBackend(kernel);
+    return drainRememberQueueWithLock(bridgeConfig, acquireRememberQueueLock(bridgeConfig), kernel, memory);
+  } finally {
+    kernel.close();
+  }
+}
+
+function acquireRememberQueueLock(bridgeConfig) {
   const queuePath = bridgeConfig.rememberQueuePath;
   if (!queuePath) throw new Error('missing rememberQueuePath');
   mkdirSync(dirname(queuePath), { recursive: true });
-  if (!existsSync(queuePath)) return { drained: 0, failed: 0, locked: false };
-
   const lockPath = queuePath + '.lock';
+  if (!existsSync(queuePath)) return { acquired: false, locked: false, empty: true, lockPath };
+  const timeoutMs = Number(bridgeConfig.rememberDrainTimeoutMs || 60000);
   try {
     mkdirSync(lockPath);
+    writeFileSync(join(lockPath, 'owner.json'), JSON.stringify({
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      queuePath,
+    }) + '\n');
   } catch {
-    return { drained: 0, failed: 0, locked: true };
+    try {
+      const ageMs = Date.now() - statSync(lockPath).mtimeMs;
+      if (Number.isFinite(ageMs) && ageMs > timeoutMs) {
+        rmSync(lockPath, { recursive: true, force: true });
+        mkdirSync(lockPath);
+        writeFileSync(join(lockPath, 'owner.json'), JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          staleLockRecovered: true,
+          queuePath,
+        }) + '\n');
+        return { acquired: true, locked: false, empty: false, lockPath, staleRecovered: true };
+      }
+    } catch {}
+    return { acquired: false, locked: true, empty: false, lockPath };
   }
+  return { acquired: true, locked: false, empty: false, lockPath };
+}
 
+async function drainRememberQueueWithLock(bridgeConfig, queueLock, kernel, memory) {
+  if (!queueLock.acquired) return { drained: 0, failed: 0, locked: queueLock.locked, empty: queueLock.empty === true };
+  const queuePath = bridgeConfig.rememberQueuePath;
   const processingPath = queuePath + '.' + Date.now() + '.' + process.pid + '.processing';
   let drained = 0;
   let failed = 0;
+  let deferred = 0;
   try {
     if (!existsSync(queuePath)) return { drained: 0, failed: 0, locked: false };
     renameSync(queuePath, processingPath);
@@ -1483,11 +1702,15 @@ async function drainRememberQueue(bridgeConfig) {
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean);
-    for (const line of lines) {
+    const batchSize = Math.max(1, Math.min(Number(bridgeConfig.rememberDrainBatchSize || 20), 100));
+    const activeLines = lines.slice(0, batchSize);
+    const deferredLines = lines.slice(batchSize);
+    deferred = deferredLines.length;
+    for (const line of activeLines) {
       let job;
       try {
         job = JSON.parse(line);
-        await rememberPayload(job.payload || {}, job.payload?.config || bridgeConfig);
+        await rememberPayload(job.payload || {}, job.payload?.config || bridgeConfig, kernel, memory);
         drained += 1;
       } catch (error) {
         failed += 1;
@@ -1503,11 +1726,14 @@ async function drainRememberQueue(bridgeConfig) {
         appendFileSync(targetPath, JSON.stringify(failedJob) + '\n');
       }
     }
+    for (const line of deferredLines) {
+      appendFileSync(queuePath, line + '\n');
+    }
     rmSync(processingPath, { force: true });
   } finally {
-    rmSync(lockPath, { recursive: true, force: true });
+    if (queueLock.acquired) rmSync(queueLock.lockPath, { recursive: true, force: true });
   }
-  return { drained, failed, locked: false };
+  return { drained, failed, deferred, locked: false, staleRecovered: queueLock.staleRecovered === true };
 }
 
 function compactRecallItems(items, config) {

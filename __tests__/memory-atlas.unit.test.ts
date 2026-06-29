@@ -62,6 +62,26 @@ test('overview and search expose bounded project-scoped memory nodes', () => {
   } finally { kernel.close(); }
 });
 
+test('graph reads return stale projection metadata when refresh hits SQLite busy', () => {
+  const { kernel } = createFixture();
+  try {
+    kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });
+    const indexer = (kernel as unknown as { memoryAtlasIndexer: { ensureFresh: () => unknown } }).memoryAtlasIndexer;
+    const original = indexer.ensureFresh;
+    indexer.ensureFresh = () => {
+      throw new Error('database is locked');
+    };
+    try {
+      const overview = kernel.graphOverview({ projectId: 'cogmem', staleOk: true });
+      expect((overview as unknown as { atlasFresh: boolean }).atlasFresh).toBe(false);
+      expect((overview as unknown as { refreshError: string }).refreshError).toContain('database is locked');
+      expect(overview.nodes.some((node) => node.label === 'Hermes')).toBe(true);
+    } finally {
+      indexer.ensureFresh = original;
+    }
+  } finally { kernel.close(); }
+});
+
 test('Atlas projects user-shaped topic names and aliases from the governed topic registry', () => {
   const { kernel, hermesEventId } = createFixture();
   try {
