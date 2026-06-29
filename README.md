@@ -234,7 +234,7 @@ For a host timer, call `dream tick`; the timer only wakes the scheduler. An empt
 cogmem dream tick --project my-agent --mode auto --max-episodes 10 --json
 ```
 
-Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.6.1 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
+Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.6.2 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
 
 Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands use stable content identities and the same episode schema. Low-confidence imported groups soft-seal for review unless an operator explicitly forces sealing. Episode semantic summaries and closure receipts are control hints, never durable evidence; every Dream candidate must cite a non-empty subset of the episode's raw event IDs and still pass CPU governance.
 
@@ -330,7 +330,7 @@ cogmem strategy plan --project hermes --query "我当时的原话是什么？" -
 cogmem strategy outcomes --project hermes --json
 ```
 
-OpenClaw plugin 0.6.1 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Navigation turns use one bridge/kernel lifecycle for Atlas exploration, evidence-bearing node/timeline drill-down, and recall. The bounded volatile `<COGMEM_MEMORY_ATLAS>` block includes evidence event IDs and drill-down commands; OpenClaw does not need MCP for this path.
+OpenClaw plugin 0.6.2 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Navigation turns use one bridge/kernel lifecycle for Atlas exploration, evidence-bearing node/timeline drill-down, and recall. The bounded volatile `<COGMEM_MEMORY_ATLAS>` block includes evidence event IDs and drill-down commands; OpenClaw does not need MCP for this path.
 
 `ProspectiveMemoryService` stores future intentions, commitments, reminders, open loops, and plans as candidates only. A candidate is not actionable until an explicit user event confirms it. Rejected candidates stay suppressed unless genuinely new evidence creates a new version. The service and `cogmem prospective` CLI manage state only; they expose no task or tool execution capability.
 

@@ -20,6 +20,7 @@ cogmem init --yes --agent openclaw --scope project
 cogmem doctor --fix --agent openclaw --workspace .
 cogmem connect openclaw --workspace .
 cogmem connect openclaw --workspace . --auto --force
+cogmem openclaw diagnose --workspace . --json
 ```
 
 The OpenClaw workspace install creates:
@@ -180,7 +181,9 @@ After updating the package or editing OpenClaw config, repair wiring with:
 
 ```bash
 cogmem connect openclaw --workspace . --auto --force
-cogmem doctor --fix --agent openclaw --workspace .
+cogmem doctor --fix --agent openclaw --workspace . --plugin-only --json
+openclaw gateway restart
+cogmem openclaw diagnose --workspace . --json
 ```
 
 The migration command is idempotent. Re-running it skips records already imported into the same memory database.

@@ -298,7 +298,23 @@ cogmem connect openclaw --workspace . --auto --force
 
 `--auto` writes `<workspace>/extensions/cogmem-auto-memory/`, patches `plugins.load.paths`, and enables `hooks.allowPromptInjection=true` and `hooks.allowConversationAccess=true` for the wrapper. The wrapper registers `before_prompt_build` for governed recall and `agent_end` for turn recording, then calls `KernelAgentMemoryBackend` through `cogmem` public API via a Bun bridge. Core does not import OpenClaw.
 
-Queued remember is the default. `agent_end` appends a durable JSONL job under `.cogmem/queue/openclaw-remember.jsonl` and spawns a background drain process, so Telegram or gateway responses are not blocked by embeddings, SQLite writes, or slow local models. If a drain fails, the job is retried and then moved to a dead-letter file instead of being silently discarded.
+Queued remember is the default. `agent_end` appends a durable JSONL job under `.cogmem/queue/openclaw-remember.jsonl` and starts a singleton drainer, so Telegram or gateway responses are not blocked by embeddings, SQLite writes, or slow local models. Plugin 0.6.2 acquires the queue lock before opening Cogmem, recovers stale lock directories older than `rememberDrainTimeoutMs`, writes `owner.json` lock metadata, and processes bounded batches controlled by `rememberDrainBatchSize` (default `20`). If a drain fails, the job is retried and then moved to a dead-letter file instead of being silently discarded.
+
+When automatic memory recording looks stuck, do not delete queue files first. Diagnose the plugin and locks:
+
+```bash
+cogmem openclaw diagnose --workspace . --json
+ls -la .cogmem/queue/
+cat .cogmem/queue/openclaw-remember.jsonl.lock/owner.json 2>/dev/null || true
+cat .cogmem/queue/openclaw-remember.jsonl.spawn.lock/owner.json 2>/dev/null || true
+```
+
+If `plugin.current=false`, refresh without opening the database:
+
+```bash
+cogmem doctor --fix --agent openclaw --workspace . --plugin-only --json
+openclaw gateway restart
+```
 
 The wrapper keeps OpenClaw's native prompt, tool instructions, skills, and message order untouched. It only prepends Cogmem-owned context blocks:
 

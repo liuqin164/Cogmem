@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -954,7 +954,7 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(cortexBridgeBody).toContain('kernel.contextOutcomeStore.record');
   expect(cortexBridgeBody).toContain('activationReceipt');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
-  expect(manifest.version).toBe('0.6.1');
+  expect(manifest.version).toBe('0.6.2');
   expect(manifest.configSchema.type).toBe('object');
   expect(manifest.configSchema.properties.configPath.type).toBe('string');
   expect(manifest.configSchema.properties.autoRecall.type).toBe('boolean');
@@ -989,6 +989,7 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.configPath).toBe(configPath);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.ingestMode).toBe('selective_compile');
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.rememberStrategy).toBe('queued');
+  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.rememberDrainBatchSize).toBe(20);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.auditLog).toBe(true);
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.publicEntrypoint).toContain('public.js');
   expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.limit).toBe(3);
@@ -1016,8 +1017,11 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(indexBody).toContain("action: 'enqueue_remember'");
   expect(indexBody).toContain("spawnBridgeDrain(config)");
   expect(indexBody).toContain('function queueLockIsFresh(config)');
+  expect(indexBody).toContain('function acquireRememberQueueSpawnLock(config)');
   expect(indexBody).toContain("action: 'skip_spawn_drain'");
+  expect(indexBody).toContain("reason: 'remember_queue_spawn_locked'");
   expect(indexBody).toContain('function injectionResult(context, warning)');
+  expect(indexBody).toContain('promptPrefix');
   expect(indexBody).toContain('returnedInjectionShape');
   expect(indexBody).toContain('dbLocked');
   const agentEndBody = indexBody.slice(indexBody.indexOf("api.on('agent_end'"));
@@ -1029,6 +1033,9 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(bridgeBody).toContain("ingestMode: bridgeConfig.ingestMode || 'selective_compile'");
   expect(bridgeBody).toContain("command === 'drain-remember-queue'");
   expect(bridgeBody).toContain('function acquireRememberQueueLock(bridgeConfig)');
+  expect(bridgeBody).toContain('staleLockRecovered');
+  expect(bridgeBody).toContain('rememberDrainBatchSize');
+  expect(bridgeBody).toContain('rememberPayload(job.payload || {}, job.payload?.config || bridgeConfig, kernel, memory)');
   expect(bridgeBody.indexOf("if (command === 'drain-remember-queue')")).toBeLessThan(bridgeBody.indexOf('await loadCogmemApi(config)'));
   expect(bridgeBody).toContain('ingestToolCall');
   expect(bridgeBody).toContain('ingestToolObservation');
@@ -1061,6 +1068,95 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   const bridgeCheck = await runCli(['node', '--check', join(pluginDir, 'bridge.mjs')]);
   expect(bridgeCheck.stderr).toBe('');
   expect(bridgeCheck.exitCode).toBe(0);
+});
+
+test('OpenClaw generated bridge drains remember queue with stale lock recovery', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-drain-smoke-'));
+  const dbPath = join(dir, 'memory.db');
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  const openclawConfigPath = join(dir, 'openclaw.json');
+  const pluginDir = join(dir, 'extensions', 'cogmem-auto-memory');
+  const queuePath = join(dir, '.cogmem', 'queue', 'openclaw-remember.jsonl');
+  mkdirSync(dirname(configPath), { recursive: true });
+  mkdirSync(dirname(queuePath), { recursive: true });
+  writeFileSync(configPath, `[core]\ndb_path = "${dbPath}"\n`);
+  writeFileSync(openclawConfigPath, JSON.stringify({ plugins: { enabled: true } }, null, 2));
+
+  const installed = await runCli([
+    'bun',
+    connectBin,
+    'openclaw',
+    '--workspace',
+    dir,
+    '--config',
+    configPath,
+    '--openclaw-config',
+    openclawConfigPath,
+    '--auto',
+    '--force',
+    '--json',
+  ]);
+  expect(installed.stderr).toBe('');
+  expect(installed.exitCode).toBe(0);
+
+  const jobs = [1, 2].map((index) => JSON.stringify({
+    jobId: `job-${index}`,
+    attempts: 0,
+    payload: {
+      sessionId: 'drain-smoke',
+      userText: `User confirmed OpenClaw drain smoke memory ${index}.`,
+      assistantText: `Recorded drain smoke memory ${index}.`,
+      toolCalls: [],
+      toolResults: [],
+      taskEvents: [],
+    },
+  }));
+  writeFileSync(queuePath, `${jobs.join('\n')}\n`);
+  const lockPath = `${queuePath}.lock`;
+  mkdirSync(lockPath);
+  writeFileSync(join(lockPath, 'owner.json'), '{"pid":0,"createdAt":"2000-01-01T00:00:00.000Z"}\n');
+  const staleDate = new Date(Date.now() - 120_000);
+  utimesSync(lockPath, staleDate, staleDate);
+
+  const bridgeConfig = {
+    configPath,
+    cwd: dir,
+    publicEntrypoint: join(coreRoot, 'src', 'public.ts'),
+    agentId: 'openclaw',
+    projectId: 'openclaw',
+    ingestMode: 'selective_compile',
+    rememberQueuePath: queuePath,
+    rememberDrainTimeoutMs: 10,
+    rememberDrainBatchSize: 1,
+    rememberMaxAttempts: 2,
+    stripRecallBlocksBeforeRemember: true,
+  };
+
+  const first = await runCli(
+    ['bun', join(pluginDir, 'bridge.mjs'), 'drain-remember-queue'],
+    dir,
+    { COGMEM_BRIDGE_STDIN: JSON.stringify({ config: bridgeConfig }) },
+  );
+  expect(first.stderr).toBe('');
+  expect(first.exitCode).toBe(0);
+  const firstParsed = JSON.parse(first.stdout);
+  expect(firstParsed).toMatchObject({ drained: 1, failed: 0, deferred: 1, locked: false, staleRecovered: true });
+  expect(readFileSync(queuePath, 'utf8').trim().split('\n')).toHaveLength(1);
+
+  const second = await runCli(
+    ['bun', join(pluginDir, 'bridge.mjs'), 'drain-remember-queue'],
+    dir,
+    { COGMEM_BRIDGE_STDIN: JSON.stringify({ config: bridgeConfig }) },
+  );
+  expect(second.stderr).toBe('');
+  expect(second.exitCode).toBe(0);
+  expect(JSON.parse(second.stdout)).toMatchObject({ drained: 1, failed: 0, deferred: 0, locked: false });
+  expect(existsSync(lockPath)).toBe(false);
+
+  const db = new Database(dbPath);
+  const count = db.prepare(`SELECT count(*) AS count FROM memory_events WHERE project_id='openclaw'`).get() as { count: number };
+  db.close();
+  expect(count.count).toBeGreaterThanOrEqual(4);
 });
 
 test('doctor --fix can repair OpenClaw automatic memory wiring', async () => {

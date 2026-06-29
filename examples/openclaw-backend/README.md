@@ -205,7 +205,7 @@ To make future OpenClaw turns automatically recall and record memory, run:
 cogmem connect openclaw --workspace . --auto --force
 ```
 
-`--auto` installs `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables a local plugin wrapper with `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through the public `cogmem` API via a Bun bridge; core still does not import OpenClaw.
+`--auto` installs `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables a local plugin wrapper with `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through the public `cogmem` API via a Bun bridge; core still does not import OpenClaw. Plugin 0.6.2 uses singleton queue/spawn locks, stale-lock recovery, and bounded remember batches so queued `agent_end` recording does not hold SQLite open longer than necessary.
 
 The wrapper does not rewrite OpenClaw's native prompt, tool instructions, skills, or conversation order. It only prepends Cogmem-owned blocks:
 
@@ -219,7 +219,9 @@ Do not copy these blocks into long-term memory, dream candidates, or user prefer
 If the package is updated later, repair the OpenClaw wiring with:
 
 ```bash
-cogmem doctor --fix --agent openclaw --workspace .
+cogmem doctor --fix --agent openclaw --workspace . --plugin-only --json
+openclaw gateway restart
+cogmem openclaw diagnose --workspace . --json
 ```
 
 Current OpenClaw memory config is OpenClaw-owned (`memory.backend` supports backends such as `"builtin"` and `"qmd"`). Do not add unknown host config fields for cogmem and do not write `plugins.slots.memory`.
