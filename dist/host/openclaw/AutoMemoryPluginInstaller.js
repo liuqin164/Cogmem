@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 const PLUGIN_ID = 'cogmem-auto-memory';
-const PLUGIN_VERSION = '0.6.2';
+const PLUGIN_VERSION = '0.6.3';
 function defaultPublicEntrypoint() {
     return join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), 'public.js');
 }
@@ -735,6 +735,7 @@ function bridgeConfig(config) {
     rememberQueuePath: rememberQueuePath(config),
     rememberMaxAttempts: config.rememberMaxAttempts || 3,
     rememberDrainBatchSize: config.rememberDrainBatchSize || 20,
+    rememberDrainTimeoutMs: config.rememberDrainTimeoutMs || 60000,
   };
 }
 
@@ -988,7 +989,7 @@ function audit(config, record) {
 const plugin = {
   id: PLUGIN_ID,
   name: 'CogMem Auto Memory',
-  version: '0.6.2',
+  version: '0.6.3',
   register(api) {
     if (!api || typeof api.on !== 'function') {
       throw new Error('OpenClaw plugin API missing api.on');
@@ -1231,7 +1232,7 @@ module.exports.__testing = {
 }
 function pluginBridgeMjs() {
     return String.raw `#!/usr/bin/env bun
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -1581,7 +1582,8 @@ function acquireRememberQueueLock(bridgeConfig) {
   if (!queuePath) throw new Error('missing rememberQueuePath');
   mkdirSync(dirname(queuePath), { recursive: true });
   const lockPath = queuePath + '.lock';
-  if (!existsSync(queuePath)) return { acquired: false, locked: false, empty: true, lockPath };
+  const recoveredProcessing = recoverStaleProcessingFiles(bridgeConfig);
+  if (!existsSync(queuePath)) return { acquired: false, locked: false, empty: true, lockPath, recoveredProcessing };
   const timeoutMs = Number(bridgeConfig.rememberDrainTimeoutMs || 60000);
   try {
     mkdirSync(lockPath);
@@ -1602,12 +1604,12 @@ function acquireRememberQueueLock(bridgeConfig) {
           staleLockRecovered: true,
           queuePath,
         }) + '\n');
-        return { acquired: true, locked: false, empty: false, lockPath, staleRecovered: true };
+        return { acquired: true, locked: false, empty: false, lockPath, staleRecovered: true, recoveredProcessing };
       }
     } catch {}
     return { acquired: false, locked: true, empty: false, lockPath };
   }
-  return { acquired: true, locked: false, empty: false, lockPath };
+  return { acquired: true, locked: false, empty: false, lockPath, recoveredProcessing };
 }
 
 async function drainRememberQueueWithLock(bridgeConfig, queueLock, kernel, memory) {
@@ -1655,7 +1657,29 @@ async function drainRememberQueueWithLock(bridgeConfig, queueLock, kernel, memor
   } finally {
     if (queueLock.acquired) rmSync(queueLock.lockPath, { recursive: true, force: true });
   }
-  return { drained, failed, deferred, locked: false, staleRecovered: queueLock.staleRecovered === true };
+  return { drained, failed, deferred, locked: false, staleRecovered: queueLock.staleRecovered === true, recoveredProcessing: queueLock.recoveredProcessing || 0 };
+}
+
+function recoverStaleProcessingFiles(bridgeConfig) {
+  const queuePath = bridgeConfig.rememberQueuePath;
+  const dir = dirname(queuePath);
+  const prefix = queuePath.split('/').pop() + '.';
+  const timeoutMs = Number(bridgeConfig.rememberDrainTimeoutMs || 60000);
+  let recovered = 0;
+  if (!existsSync(dir)) return recovered;
+  for (const entry of readdirSync(dir)) {
+    if (!entry.startsWith(prefix) || !entry.endsWith('.processing')) continue;
+    const path = join(dir, entry);
+    try {
+      const ageMs = Date.now() - statSync(path).mtimeMs;
+      if (!Number.isFinite(ageMs) || ageMs < timeoutMs) continue;
+      const lines = readFileSync(path, 'utf8').split('\n').map((line) => line.trim()).filter(Boolean);
+      for (const line of lines) appendFileSync(queuePath, line + '\n');
+      rmSync(path, { force: true });
+      recovered += lines.length;
+    } catch {}
+  }
+  return recovered;
 }
 
 function compactRecallItems(items, config) {

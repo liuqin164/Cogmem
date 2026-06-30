@@ -16,6 +16,14 @@ cogmem connect openclaw --workspace .
 cogmem connect openclaw --workspace . --auto --force
 ```
 
+If Bun is already installed, npm global install is also supported:
+
+```bash
+npm install -g cogmem@latest
+cogmem init --yes --agent openclaw --scope project
+cogmem connect openclaw --workspace . --auto --force
+```
+
 ## Local Quantized Embeddings
 
 Imports use the configured kernel embedder. To import existing OpenClaw memory through a local quantized model, configure the kernel before running the import command:
@@ -78,7 +86,7 @@ cogmem memory tick --project openclaw --json
 cogmem memory bind --project openclaw --json
 ```
 
-Cogmem 3.6.2 keeps the 3.6.x Memory Atlas and OpenClaw reliability work, then makes npm the default install and update channel. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
+Cogmem 3.6.3 keeps the 3.6.x Memory Atlas and OpenClaw reliability work, then makes npm the default install and update channel. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
 
 ```bash
 cogmem memory graph-explore --project openclaw --query "去年与 Hermes 有关的决定" --json
@@ -206,7 +214,7 @@ To make future OpenClaw turns automatically recall and record memory, run:
 cogmem connect openclaw --workspace . --auto --force
 ```
 
-`--auto` installs `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables a local plugin wrapper with `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through the public `cogmem` API via a Bun bridge; core still does not import OpenClaw. Plugin 0.6.2 uses singleton queue/spawn locks, stale-lock recovery, and bounded remember batches so queued `agent_end` recording does not hold SQLite open longer than necessary.
+`--auto` installs `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables a local plugin wrapper with `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through the public `cogmem` API via a Bun bridge; core still does not import OpenClaw. Plugin 0.6.3 uses singleton queue/spawn locks, stale-lock and stale-processing recovery, and bounded remember batches so queued `agent_end` recording does not hold SQLite open longer than necessary.
 
 The wrapper does not rewrite OpenClaw's native prompt, tool instructions, skills, or conversation order. It only prepends Cogmem-owned blocks:
 

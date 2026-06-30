@@ -954,7 +954,7 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(cortexBridgeBody).toContain('kernel.contextOutcomeStore.record');
   expect(cortexBridgeBody).toContain('activationReceipt');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
-  expect(manifest.version).toBe('0.6.2');
+  expect(manifest.version).toBe('0.6.3');
   expect(manifest.configSchema.type).toBe('object');
   expect(manifest.configSchema.properties.configPath.type).toBe('string');
   expect(manifest.configSchema.properties.autoRecall.type).toBe('boolean');
@@ -1112,6 +1112,21 @@ test('OpenClaw generated bridge drains remember queue with stale lock recovery',
     },
   }));
   writeFileSync(queuePath, `${jobs.join('\n')}\n`);
+  const processingPath = `${queuePath}.old.999.processing`;
+  writeFileSync(processingPath, JSON.stringify({
+    jobId: 'job-processing',
+    attempts: 0,
+    payload: {
+      sessionId: 'drain-smoke',
+      userText: 'User confirmed OpenClaw recovered processing memory.',
+      assistantText: 'Recorded recovered processing memory.',
+      toolCalls: [],
+      toolResults: [],
+      taskEvents: [],
+    },
+  }) + '\n');
+  const oldProcessingDate = new Date(Date.now() - 120_000);
+  utimesSync(processingPath, oldProcessingDate, oldProcessingDate);
   const lockPath = `${queuePath}.lock`;
   mkdirSync(lockPath);
   writeFileSync(join(lockPath, 'owner.json'), '{"pid":0,"createdAt":"2000-01-01T00:00:00.000Z"}\n');
@@ -1140,8 +1155,9 @@ test('OpenClaw generated bridge drains remember queue with stale lock recovery',
   expect(first.stderr).toBe('');
   expect(first.exitCode).toBe(0);
   const firstParsed = JSON.parse(first.stdout);
-  expect(firstParsed).toMatchObject({ drained: 1, failed: 0, deferred: 1, locked: false, staleRecovered: true });
-  expect(readFileSync(queuePath, 'utf8').trim().split('\n')).toHaveLength(1);
+  expect(firstParsed).toMatchObject({ drained: 1, failed: 0, deferred: 2, locked: false, staleRecovered: true, recoveredProcessing: 1 });
+  expect(readFileSync(queuePath, 'utf8').trim().split('\n')).toHaveLength(2);
+  expect(existsSync(processingPath)).toBe(false);
 
   const second = await runCli(
     ['bun', join(pluginDir, 'bridge.mjs'), 'drain-remember-queue'],
@@ -1150,13 +1166,21 @@ test('OpenClaw generated bridge drains remember queue with stale lock recovery',
   );
   expect(second.stderr).toBe('');
   expect(second.exitCode).toBe(0);
-  expect(JSON.parse(second.stdout)).toMatchObject({ drained: 1, failed: 0, deferred: 0, locked: false });
+  expect(JSON.parse(second.stdout)).toMatchObject({ drained: 1, failed: 0, deferred: 1, locked: false });
+  const third = await runCli(
+    ['bun', join(pluginDir, 'bridge.mjs'), 'drain-remember-queue'],
+    dir,
+    { COGMEM_BRIDGE_STDIN: JSON.stringify({ config: bridgeConfig }) },
+  );
+  expect(third.stderr).toBe('');
+  expect(third.exitCode).toBe(0);
+  expect(JSON.parse(third.stdout)).toMatchObject({ drained: 1, failed: 0, deferred: 0, locked: false });
   expect(existsSync(lockPath)).toBe(false);
 
   const db = new Database(dbPath);
   const count = db.prepare(`SELECT count(*) AS count FROM memory_events WHERE project_id='openclaw'`).get() as { count: number };
   db.close();
-  expect(count.count).toBeGreaterThanOrEqual(4);
+  expect(count.count).toBeGreaterThanOrEqual(6);
 });
 
 test('doctor --fix can repair OpenClaw automatic memory wiring', async () => {
@@ -1210,6 +1234,12 @@ test('doctor plugin-only and openclaw diagnose inspect stale plugin without open
     contextChars: 0,
     itemCount: 0,
   }) + '\n');
+  mkdirSync(join(dir, '.cogmem', 'queue'), { recursive: true });
+  writeFileSync(join(dir, '.cogmem', 'queue', 'openclaw-remember.jsonl'), '{"jobId":"pending"}\n');
+  writeFileSync(join(dir, '.cogmem', 'queue', 'openclaw-remember.jsonl.dead.jsonl'), '{"jobId":"dead"}\n');
+  mkdirSync(join(dir, '.cogmem', 'queue', 'openclaw-remember.jsonl.lock'));
+  writeFileSync(join(dir, '.cogmem', 'queue', 'openclaw-remember.jsonl.lock', 'owner.json'), '{"pid":123,"purpose":"test"}\n');
+  writeFileSync(join(dir, '.cogmem', 'queue', 'openclaw-remember.jsonl.1.123.processing'), '{"jobId":"processing"}\n');
 
   const inspected = await runCli([
     'bun',
@@ -1264,6 +1294,10 @@ test('doctor plugin-only and openclaw diagnose inspect stale plugin without open
   const diagnosedJson = JSON.parse(diagnosed.stdout);
   expect(diagnosedJson.plugin.current).toBe(true);
   expect(diagnosedJson.audit.lastBeforePromptBuild.reason).toBe('database is locked');
+  expect(diagnosedJson.queue.pendingLines).toBe(1);
+  expect(diagnosedJson.queue.deadLines).toBe(1);
+  expect(diagnosedJson.queue.lock.owner.pid).toBe(123);
+  expect(diagnosedJson.queue.processingFiles).toHaveLength(1);
 });
 
 test('unified cogmem CLI dispatches doctor and update commands', async () => {
@@ -1280,7 +1314,7 @@ test('unified cogmem CLI dispatches doctor and update commands', async () => {
   const update = await runCli(
     ['bun', cogmemBin, 'update', '--dry-run', '--json', '--config', configPath],
     coreRoot,
-    { COGMEM_NPM_SPEC: '3.6.2' },
+    { COGMEM_NPM_SPEC: '3.6.3' },
   );
   expect(update.stderr).toBe('');
   expect(update.exitCode).toBe(0);
@@ -1289,9 +1323,10 @@ test('unified cogmem CLI dispatches doctor and update commands', async () => {
   expect(parsed.dryRun).toBe(true);
   expect(parsed.from).toBe('latest');
   expect(parsed.source).toBe('npm');
-  expect(parsed.packageSpec).toBe('3.6.2');
+  expect(parsed.packageSpec).toBe('3.6.3');
   expect(parsed.targetCwd).toBe(coreRoot);
-  expect(parsed.nextCommand).toContain('cogmem@3.6.2');
+  expect(parsed.installKind).toBe('source_checkout');
+  expect(parsed.nextCommand).toContain('cogmem@3.6.3');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
   expect(parsed.nextCommand).not.toContain('@CognitiveOS/core');
   expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
@@ -1319,7 +1354,7 @@ test('cogmem update targets the one-line installer home when cwd has no package 
     {
       HOME: home,
       COGMEM_INSTALL_HOME: installHome,
-      COGMEM_NPM_SPEC: '3.6.2',
+      COGMEM_NPM_SPEC: '3.6.3',
     },
   );
 
@@ -1328,11 +1363,33 @@ test('cogmem update targets the one-line installer home when cwd has no package 
   const parsed = JSON.parse(update.stdout);
   expect(parsed.targetCwd).toBe(installHome);
   expect(parsed.currentSpec).toContain('cogmem.tgz');
-  expect(parsed.packageSpec).toBe('3.6.2');
-  expect(parsed.nextCommand).toContain('cogmem@3.6.2');
+  expect(parsed.packageSpec).toBe('3.6.3');
+  expect(parsed.nextCommand).toContain('cogmem@3.6.3');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
   expect(parsed.migrationCommand).toBeUndefined();
   expect(parsed.migrationSkippedReason).toContain('missing_config');
+});
+
+test('cogmem update targets npm global installs without writing a local package dependency', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-update-global-'));
+  mkdirSync(dir, { recursive: true });
+
+  const update = await runCli(
+    ['bun', cogmemBin, 'update', '--dry-run', '--json'],
+    dir,
+    {
+      COGMEM_INSTALL_KIND: 'npm_global',
+      COGMEM_NPM_SPEC: '3.6.3',
+    },
+  );
+
+  expect(update.stderr).toBe('');
+  expect(update.exitCode).toBe(0);
+  const parsed = JSON.parse(update.stdout);
+  expect(parsed.installKind).toBe('npm_global');
+  expect(parsed.currentSpec).toBe('npm:global');
+  expect(parsed.nextCommand).toBe('npm install -g cogmem@3.6.3');
+  expect(parsed.migrationCommand).toBeUndefined();
 });
 
 test('cogmem-connect installs Hermes skill into the real Hermes skills directory by default', async () => {

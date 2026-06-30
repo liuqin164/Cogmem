@@ -18,10 +18,10 @@ bun run typecheck
 bun test
 npm pack --dry-run --json
 npm publish --dry-run --access public
-npm publish --access public
+npm publish --provenance --access public
 ```
 
-`cogmem` is distributed through the npm registry. Use `npm pack --dry-run --json` to verify package contents, then `npm publish --dry-run --access public` before `npm publish --access public`. Keep the GitHub branch or release synchronized for source review and for older GitHub-installed users migrating onto the npm-first updater.
+`cogmem` is distributed through the npm registry. Use `npm pack --dry-run --json` to verify package contents. Normal publishing happens by creating a GitHub Release from the matching version tag; `.github/workflows/publish.yml` is intentionally triggered by the release `published` event, not by tag pushes. Use `npm publish --provenance --access public` only as an emergency manual fallback.
 
 ## API Discipline
 

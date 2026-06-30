@@ -50,6 +50,12 @@ link_cli() {
     fi
   done
   log "Installed CLI: $BIN_DIR/cogmem"
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *)
+      log "Warning: $BIN_DIR is not on PATH. Add it to PATH or run $BIN_DIR/cogmem directly."
+      ;;
+  esac
 }
 
 main() {

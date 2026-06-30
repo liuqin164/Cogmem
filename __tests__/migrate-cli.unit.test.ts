@@ -37,6 +37,7 @@ test('cogmem migrate plans and upgrades a 2.7.1 database with a backup', async (
   const dryRun = await run(['--db', dbPath, '--dry-run', '--json']);
   expect(dryRun.exitCode).toBe(0);
   expect(JSON.parse(dryRun.stdout).pending).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027']);
+  expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='_schema_migrations'`).get()).toBeNull();
 
   const applied = await run(['--db', dbPath, '--yes', '--backup', '--json']);
   expect(applied.exitCode).toBe(0);

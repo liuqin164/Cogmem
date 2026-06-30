@@ -1,9 +1,13 @@
 export class SchemaMigrationRunner {
     db;
     migrations;
-    constructor(db, migrations) {
+    options;
+    constructor(db, migrations, options = {}) {
         this.db = db;
         this.migrations = migrations;
+        this.options = options;
+        if (this.options.readonly)
+            return;
         this.db.exec(`
       CREATE TABLE IF NOT EXISTS _schema_migrations (
         version TEXT PRIMARY KEY,
@@ -14,7 +18,7 @@ export class SchemaMigrationRunner {
         this.adoptLegacyVersion();
     }
     plan() {
-        const applied = new Set(this.db.prepare(`SELECT version FROM _schema_migrations`).all().map((row) => row.version));
+        const applied = this.appliedVersions();
         return [...this.migrations]
             .sort((a, b) => a.version.localeCompare(b.version))
             .filter((migration) => !applied.has(migration.version));
@@ -39,20 +43,57 @@ export class SchemaMigrationRunner {
         return { pending: pending.map((item) => item.version), applied, currentVersion: this.currentVersion(), dryRun: false };
     }
     currentVersion() {
+        const legacyCurrent = this.legacyCurrentVersion();
+        if (!this.schemaMigrationsTableExists()) {
+            return legacyCurrent;
+        }
         const row = this.db.prepare(`
       SELECT version FROM _schema_migrations ORDER BY version DESC LIMIT 1
     `).get();
-        return row?.version;
+        return [row?.version, legacyCurrent].filter((version) => Boolean(version)).sort((a, b) => b.localeCompare(a))[0];
     }
-    adoptLegacyVersion() {
+    appliedVersions() {
+        const applied = new Set();
+        const legacyVersion = this.legacySchemaVersion();
+        for (const migration of this.migrations) {
+            if (legacyVersion !== undefined && Number.parseInt(migration.version, 10) <= legacyVersion) {
+                applied.add(migration.version);
+            }
+        }
+        if (!this.schemaMigrationsTableExists()) {
+            return applied;
+        }
+        for (const row of this.db.prepare(`SELECT version FROM _schema_migrations`).all()) {
+            applied.add(row.version);
+        }
+        return applied;
+    }
+    schemaMigrationsTableExists() {
+        return Boolean(this.db.prepare(`
+      SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_schema_migrations'
+    `).get());
+    }
+    legacySchemaVersion() {
         const metaExists = this.db.prepare(`
       SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_meta'
     `).get();
         if (!metaExists)
-            return;
+            return undefined;
         const row = this.db.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get();
         const legacyVersion = Number.parseInt(row?.value || '', 10);
-        if (!Number.isFinite(legacyVersion))
+        return Number.isFinite(legacyVersion) ? legacyVersion : undefined;
+    }
+    legacyCurrentVersion() {
+        const legacyVersion = this.legacySchemaVersion();
+        if (legacyVersion === undefined)
+            return undefined;
+        return [...this.migrations]
+            .filter((migration) => Number.parseInt(migration.version, 10) <= legacyVersion)
+            .sort((a, b) => b.version.localeCompare(a.version))[0]?.version;
+    }
+    adoptLegacyVersion() {
+        const legacyVersion = this.legacySchemaVersion();
+        if (legacyVersion === undefined)
             return;
         const insert = this.db.prepare(`
       INSERT OR IGNORE INTO _schema_migrations (version, description, applied_at)

@@ -1,4 +1,4 @@
-# Cogmem 3.6.2 Operations Reference for OpenClaw
+# Cogmem 3.6.3 Operations Reference for OpenClaw
 
 Read this file when installing, upgrading, importing, repairing, or operating Cogmem. `SKILL.md` contains the decision rules; this file is the command reference.
 
@@ -33,6 +33,14 @@ cogmem doctor
 cogmem connect openclaw --workspace . --auto --force --json
 ```
 
+If Bun is already installed and the operator prefers npm global installation:
+
+```bash
+npm install -g cogmem@latest
+cogmem init --yes --agent openclaw --scope project
+cogmem connect openclaw --workspace . --auto --force --json
+```
+
 Restart the OpenClaw Gateway after plugin or config changes. `connect --auto` installs the direct OpenClaw hook bridge; OpenClaw does not need MCP for automatic recall, recording, or Atlas navigation.
 
 ## Upgrade and migrate
@@ -44,7 +52,7 @@ cogmem update --yes
 openclaw gateway restart
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, then runs post-install work through the newly installed local CLI. With a valid config it runs `cogmem migrate --yes --backup --config <config>`. When OpenClaw integration is enabled, it also runs `cogmem doctor --fix --agent openclaw --plugin-only --config <config> --workspace <workspace>` so stale generated plugin files are replaced before restart.
+`cogmem update --yes` installs `cogmem@latest` from npm, then runs post-install work through the newly installed CLI. For npm global installs it uses `npm install -g cogmem@latest`; for the one-line installer it updates `~/.cogmem/pkg`; for a workspace dependency it updates that workspace. With a valid config it runs `cogmem migrate --yes --backup --config <config>`. When OpenClaw integration is enabled, it also runs `cogmem doctor --fix --agent openclaw --plugin-only --config <config> --workspace <workspace>` so stale generated plugin files are replaced before restart.
 
 Preview the package, migration, and plugin-refresh plan without writing:
 
@@ -62,7 +70,7 @@ openclaw gateway restart
 cogmem openclaw diagnose --workspace . --json
 ```
 
-The second command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.2 schema-27 state in one run. It preserves Raw Ledger evidence. Keep the returned `backupPath` until verification passes.
+The second command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.3 schema-27 state in one run. It preserves Raw Ledger evidence. Keep the returned `backupPath` until verification passes. `--dry-run` is read-only and does not create `_schema_migrations`.
 
 After upgrading the package/database, refresh OpenClaw's generated plugin files. `doctor --plugin-only` avoids opening the Cogmem kernel, so it can repair stale `extensions/cogmem-auto-memory/index.js` and `bridge.mjs` even when an old drainer has SQLite busy. Use `connect --auto --force` when intentionally reinstalling the full integration and patching OpenClaw config:
 
@@ -75,15 +83,16 @@ Use `cogmem openclaw diagnose --workspace . --json` when automatic memory blocks
 - `plugin.current=false`: generated files are stale; run plugin-only fix and restart gateway.
 - no `audit.lastBeforePromptBuild`: plugin is not loaded or the hook did not fire.
 - `audit.lastBeforePromptBuild.action=error`: bridge or DB failure; inspect `reason`, `bridgeCommand`, and `dbLocked`.
-- `action=inject` but no visible block: inspect `returnedInjectionShape`. Plugin 0.6.2 returns `prependContext`, `context`, and `promptPrefix`; if OpenClaw still ignores all three, the host hook contract changed and the OpenClaw plugin API must be checked before blaming recall.
+- `action=inject` but no visible block: inspect `returnedInjectionShape`. Plugin 0.6.3 returns `prependContext`, `context`, and `promptPrefix`; if OpenClaw still ignores all three, the host hook contract changed and the OpenClaw plugin API must be checked before blaming recall.
 
-Plugin 0.6.2 queue behavior:
+Plugin 0.6.3 queue behavior:
 
 - `agent_end` only appends durable JSONL jobs, then starts at most one drainer through queue/spawn locks.
 - `drain-remember-queue` acquires the queue lock before opening Cogmem or SQLite. A second drainer exits without opening the DB.
-- Stale `.cogmem/queue/openclaw-remember.jsonl.lock` and `.spawn.lock` directories older than `rememberDrainTimeoutMs` are recovered automatically and carry `owner.json` metadata for diagnosis.
+- Stale `.cogmem/queue/openclaw-remember.jsonl.lock`, `.spawn.lock`, and `.processing` files older than `rememberDrainTimeoutMs` are recovered automatically and carry enough metadata for diagnosis.
 - `rememberDrainBatchSize` defaults to `20`, so a busy workspace drains bounded batches and releases DB handles quickly. Lower it temporarily if OpenClaw shares a slow SQLite disk.
 - Failed jobs retry up to `rememberMaxAttempts`; exhausted jobs move to `.dead.jsonl`.
+- `cogmem openclaw diagnose --workspace . --json` reports pending queue lines, dead-letter lines, lock owners, spawn-lock owners, and `.processing` files.
 
 If the queue is not draining, diagnose before deleting files:
 

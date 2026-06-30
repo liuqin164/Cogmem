@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.6.3
+
+- Added a GitHub Release `published` workflow for npm Trusted Publishing with OIDC provenance, full tests, build, version-tag validation, and package dry-run verification before `npm publish`.
+- Fixed `cogmem migrate --dry-run` so it opens SQLite read-only and plans legacy `_meta.schema_version` adoption without creating `_schema_migrations` or writing migration rows.
+- Hardened `cogmem update` target resolution for npm global installs, one-line installer homes, local project dependencies, and source checkouts so `cogmem update --yes` does not silently install into an arbitrary current directory.
+- Updated OpenClaw diagnostics and generated bridge behavior to propagate `rememberDrainTimeoutMs`, recover stale `.processing` queue files, and report pending/dead/lock/processing queue state.
+
 ## 3.6.2
 
 - Switched the public distribution channel to the npm registry while keeping GitHub as the source and review mirror.
