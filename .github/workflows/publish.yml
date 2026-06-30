@@ -1,64 +1,67 @@
-name: Publish Package
+name: Publish npm package
 
 on:
   release:
     types: [published]
 
 permissions:
-  id-token: write
   contents: read
-
-concurrency:
-  group: npm-publish-${{ github.event.release.tag_name }}
-  cancel-in-progress: false
+  id-token: write
 
 jobs:
   publish:
-    name: Publish to npm
+    name: Publish release to npm
     runs-on: ubuntu-latest
-
-    if: ${{ !github.event.release.prerelease }}
-
+    environment: npm publish
+    if: ${{ !github.event.release.draft }}
     steps:
-      - name: Checkout release tag
-        uses: actions/checkout@v6
+      - name: Check out release tag
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.release.tag_name }}
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-          package-manager-cache: false
+          node-version: 22
+          registry-url: https://registry.npmjs.org
 
-      - name: Setup Bun
+      - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
+
+      - name: Verify release version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$RELEASE_TAG" != "$VERSION" ] && [ "$RELEASE_TAG" != "v$VERSION" ]; then
+            echo "Release tag '$RELEASE_TAG' must match package.json version '$VERSION' or 'v$VERSION'." >&2
+            exit 1
+          fi
+          if npm view "cogmem@$VERSION" version >/dev/null 2>&1; then
+            echo "cogmem@$VERSION is already published on npm." >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Test release gates
-        run: bun test __tests__/release-metadata.unit.test.ts __tests__/update-release.unit.test.ts __tests__/agent-import-cli.unit.test.ts
+      - name: Test
+        run: bun test __tests__
 
       - name: Build
         run: bun run build
 
-      - name: Verify package version matches release tag
-        run: |
-          PKG_VERSION="$(node -p "require('./package.json').version")"
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          echo "package.json version: $PKG_VERSION"
-          echo "release tag version: $TAG_VERSION"
-          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-            echo "Version mismatch: package.json is $PKG_VERSION but release tag is $TAG_VERSION"
-            exit 1
-          fi
+      - name: Verify package contents
+        run: npm pack --dry-run --json
 
       - name: Publish to npm
-        run: npm publish --access public
+        run: npm publish --provenance --access public
