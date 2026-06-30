@@ -1,4 +1,4 @@
-# Cogmem 3.6.1 Operations Reference for OpenClaw
+# Cogmem 3.6.2 Operations Reference for OpenClaw
 
 Read this file when installing, upgrading, importing, repairing, or operating Cogmem. `SKILL.md` contains the decision rules; this file is the command reference.
 
@@ -7,6 +7,7 @@ Read this file when installing, upgrading, importing, repairing, or operating Co
 | Need | Use |
 |---|---|
 | Verify installation or config | `cogmem doctor` |
+| Upgrade package, migrate DB, and refresh configured plugin | `cogmem update --yes` |
 | Refresh only the generated OpenClaw plugin | `cogmem doctor --fix --agent openclaw --plugin-only` |
 | Diagnose OpenClaw hook/plugin failures | `cogmem openclaw diagnose` |
 | Upgrade an existing database | `cogmem migrate` |
@@ -36,6 +37,21 @@ Restart the OpenClaw Gateway after plugin or config changes. `connect --auto` in
 
 ## Upgrade and migrate
 
+For normal upgrades, use one command:
+
+```bash
+cogmem update --yes
+openclaw gateway restart
+```
+
+`cogmem update --yes` installs `cogmem@latest` from npm, then runs post-install work through the newly installed local CLI. With a valid config it runs `cogmem migrate --yes --backup --config <config>`. When OpenClaw integration is enabled, it also runs `cogmem doctor --fix --agent openclaw --plugin-only --config <config> --workspace <workspace>` so stale generated plugin files are replaced before restart.
+
+Preview the package, migration, and plugin-refresh plan without writing:
+
+```bash
+cogmem update --dry-run --json
+```
+
 Preview first, then create a backup and apply every pending migration:
 
 ```bash
@@ -46,7 +62,7 @@ openclaw gateway restart
 cogmem openclaw diagnose --workspace . --json
 ```
 
-The second command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.1 schema-27 state in one run. It preserves Raw Ledger evidence. Keep the returned `backupPath` until verification passes.
+The second command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.2 schema-27 state in one run. It preserves Raw Ledger evidence. Keep the returned `backupPath` until verification passes.
 
 After upgrading the package/database, refresh OpenClaw's generated plugin files. `doctor --plugin-only` avoids opening the Cogmem kernel, so it can repair stale `extensions/cogmem-auto-memory/index.js` and `bridge.mjs` even when an old drainer has SQLite busy. Use `connect --auto --force` when intentionally reinstalling the full integration and patching OpenClaw config:
 

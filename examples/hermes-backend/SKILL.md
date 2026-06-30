@@ -98,7 +98,7 @@ cogmem update --yes
 # Manual equivalent: cogmem migrate --yes --backup
 ```
 
-Agents should inspect `cogmem migrate --dry-run --json` when an operator wants a preview. Schema migration preserves Raw Ledger events; it updates governed projections and indexes only.
+`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration with the resolved config, and then reports that the Hermes MCP server or agent host must be reloaded. Agents should inspect `cogmem update --dry-run --json` or `cogmem migrate --dry-run --json` when an operator wants a preview. Schema migration preserves Raw Ledger events; it updates governed projections and indexes only.
 
 Default Hermes memory contract:
 

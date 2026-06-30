@@ -22,7 +22,7 @@ function packageJson(): {
 }
 
 describe('core release metadata', () => {
-  test('3.6.1 is released as cogmem through GitHub release assets', () => {
+  test('3.6.2 is released as cogmem through npm with GitHub source mirrors', () => {
     const manifest = packageJson();
     const readme = readText(join(coreRoot, 'README.md'));
     const contributing = readText(join(coreRoot, 'CONTRIBUTING.md'));
@@ -30,27 +30,29 @@ describe('core release metadata', () => {
     const checklist = readText(join(coreRoot, 'RELEASE_CHECKLIST.md'));
 
     expect(manifest.name).toBe('cogmem');
-    expect(manifest.version).toBe('3.6.1');
+    expect(manifest.version).toBe('3.6.2');
     expect(manifest.description).toContain('agent-native memory kernel');
     expect(readme).toContain('curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash');
-    expect(readme).toContain('GitHub Releases');
+    expect(readme).toContain('npm registry');
+    expect(readme).toContain('npm install cogmem@latest');
     expect(readme).not.toContain('CognitiveOS-core');
     expect(readme).not.toContain('@CognitiveOS/core');
     expect(contributing).toContain('npm pack --dry-run --json');
-    expect(contributing).not.toContain('npm publish');
-    expect(changelog).toContain('3.6.1');
-    expect(checklist).toContain('3.6.1');
-    expect(checklist).toContain('Do not run npm publish');
+    expect(contributing).toContain('npm publish --access public');
+    expect(changelog).toContain('3.6.2');
+    expect(checklist).toContain('3.6.2');
+    expect(checklist).toContain('npm publish --access public');
   });
 
-  test('one-line installer is tracked and uses GitHub latest release assets', () => {
+  test('one-line installer is tracked and installs the npm package', () => {
     const installer = readText(join(coreRoot, 'install.sh'));
 
-    expect(installer).toContain('liuqin164/cogmem');
-    expect(installer).toContain('/releases/latest');
+    expect(installer).toContain('PACKAGE_SPEC');
+    expect(installer).toContain('cogmem@$PACKAGE_SPEC');
     expect(installer).toContain('bun add');
     expect(installer).toContain('"$BIN_DIR/cogmem" init');
     expect(installer).toContain('/dev/tty');
+    expect(installer).not.toContain('/releases/latest');
     expect(installer).not.toContain('CognitiveOS-core');
     expect(installer).not.toContain('@CognitiveOS/core');
   });

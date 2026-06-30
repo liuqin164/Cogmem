@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.6.2
+
+- Switched the public distribution channel to the npm registry while keeping GitHub as the source and review mirror.
+- Changed `cogmem update --yes` to install `cogmem@latest` from npm by default, then run post-install work through the newly installed local CLI.
+- Added upgrade preflight and audit output for resolved config, backed-up migration command, OpenClaw plugin-only refresh command, skipped post-install reasons, and required agent restarts.
+- Updated the one-line installer, release checklist, README, and installed OpenClaw/Hermes agent skill handbooks for npm install, one-command update, migration, import, repair, and restart workflows.
+
 ## 3.6.1
 
 - Fixed OpenClaw upgrade regressions after 3.5.2 -> 3.6.0 by adding plugin-only repair/diagnose paths, generated-plugin hash inspection, and clearer `cogmem update` follow-up instructions.

@@ -11,9 +11,9 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.6.1`
+Current version: `3.6.2`
 
-Distribution: GitHub Releases. The package is installed from release tarballs, not npm publishing.
+Distribution: npm registry. GitHub remains the source mirror and hosts this installer, but package install and upgrade resolve `cogmem` from npm by default.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 The installer:
 
 1. Ensures Bun is available.
-2. Installs the latest `cogmem` release asset into `~/.cogmem/pkg`.
+2. Installs `cogmem@latest` from the npm registry into `~/.cogmem/pkg`.
 3. Links the `cogmem` CLI into `~/.bun/bin`.
 4. Starts the interactive setup wizard from `/dev/tty`, so `curl | bash` installs still receive real keyboard input.
 
@@ -167,8 +167,15 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | 
 Or install into an existing Bun workspace:
 
 ```bash
-bun add "cogmem@github:liuqin164/cogmem#3.6.1"
+bun add cogmem@latest
 bunx cogmem init
+```
+
+Or install with npm in a Node workspace that already uses Bun to run the Cogmem CLI:
+
+```bash
+npm install cogmem@latest
+./node_modules/.bin/cogmem init
 ```
 
 Validate configuration:
@@ -177,13 +184,13 @@ Validate configuration:
 cogmem doctor
 ```
 
-Upgrade from GitHub Releases and migrate an existing database:
+Upgrade from npm and migrate an existing database:
 
 ```bash
 cogmem update --yes
 ```
 
-`cogmem update --yes` resolves the latest GitHub Release asset, installs it, then runs the newly installed `cogmem migrate --yes --backup`. To inspect changes without writing:
+`cogmem update --yes` installs `cogmem@latest` from npm, then runs the newly installed `cogmem migrate --yes --backup --config <resolved-config>`. If OpenClaw is configured, the updater also runs the newly installed plugin-only repair command so stale `index.js` and `bridge.mjs` files are refreshed before you restart the agent. To inspect changes without writing:
 
 ```bash
 cogmem update --dry-run --json
@@ -192,7 +199,7 @@ cogmem migrate --dry-run --json
 
 For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
-Upgrade a 3.5.2 database, a 3.6.0 database, or a pre-release schema-25 test database into the 3.6.1 schema set with one command:
+Upgrade a 3.5.2 database, a 3.6.0 database, or a pre-release schema-25 test database into the 3.6.2 schema set with one command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -200,7 +207,7 @@ cogmem migrate --yes --backup --json
 
 Schema 25 backfills the rebuildable Atlas projection. Schema 26 adds audited candidate reviews and exact Atlas projection metadata. Schema 27 marks 3.6.0-upgraded Atlas projections dirty so the first real action/time rebuild is not skipped. All preserve Raw Ledger, episodes, bindings, beliefs, and governed topic state; the command is idempotent.
 
-For OpenClaw upgrades, refresh the generated plugin files after the package/database update. This path does not open the Cogmem database, so it still works while an old drainer has the DB busy:
+For OpenClaw upgrades, `cogmem update --yes` now runs this refresh automatically when the config has `[integrations.openclaw] enabled = true`. You can also run it manually; this path does not open the Cogmem database, so it still works while an old drainer has the DB busy:
 
 ```bash
 cogmem doctor --fix --agent openclaw --workspace <openclaw-workspace> --plugin-only --json
@@ -653,25 +660,22 @@ const tick = kernel.runMaintenanceTick({ projectId: 'openclaw' });
 cogmem update --yes
 ```
 
-`cogmem update` installs the latest release asset from:
+`cogmem update` installs the latest package from:
 
 ```text
-https://github.com/liuqin164/cogmem/releases/latest
+npm:cogmem@latest
 ```
 
-The updater resolves that release dynamically. It prefers a `.tgz` asset whose
-name or URL contains `cogmem`; when no package asset is attached, it uses that
-release's immutable tag. If GitHub does not return release metadata, the update
-stops instead of installing mutable `main`; use `--from` only when you intentionally want another ref.
+The updater resolves `latest` to npm by default, installs into the current package or the one-line installer home, then runs post-install work through the newly installed local `node_modules/.bin/cogmem`. That post-install path runs a backed-up schema migration with the resolved config, refreshes the OpenClaw plugin when OpenClaw is configured, and reports which agent hosts must be restarted. Use `--from <version|tag|tarball>` only when you intentionally want another package spec.
 
-For OpenClaw after an update:
+For OpenClaw after an update, restart the gateway or host after `cogmem update --yes` finishes. To repair only the plugin without opening SQLite:
 
 ```bash
 cd ~/.openclaw/workspace
-cogmem doctor --fix --agent openclaw --workspace .
+cogmem doctor --fix --agent openclaw --workspace . --plugin-only
 ```
 
-For Hermes after an update:
+For Hermes after an update, reload the MCP server or restart the agent host. If MCP wiring changed:
 
 ```bash
 cogmem connect hermes --workspace /path/to/hermes/workspace --auto --force
@@ -725,9 +729,10 @@ bun run typecheck
 bun run build
 bun test
 npm pack --dry-run --json
+npm publish --dry-run --access public
 ```
 
-The package is release-asset distributed. Do not run `npm publish` for this release channel.
+Publish with `npm publish --access public` after the dry run and full tests pass. Keep GitHub branches/releases in sync so old GitHub-installed 3.6.1 users have a discoverable bridge to the npm-first 3.6.2 updater.
 
 ## Security and Privacy
 

@@ -1,14 +1,15 @@
-# cogmem 3.6.1 Release Checklist
+# cogmem 3.6.2 Release Checklist
 
-This release is distributed through GitHub Releases. Do not run npm publish.
+This release is distributed through the npm registry. GitHub remains the source and review mirror.
 
 ## Required Metadata
 
 - `package.json` name is `cogmem`.
-- `package.json` version is `3.6.1`.
+- `package.json` version is `3.6.2`.
+- `package.json` has `publishConfig.access = public`.
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
-- `install.sh` is tracked and uses the latest GitHub release asset.
+- `install.sh` is tracked and installs `cogmem@latest` from npm by default.
 - Local databases, SQLite sidecars, `.DS_Store`, and `dist/.tsbuildinfo` are not tracked.
 
 ## Required Binaries
@@ -47,7 +48,7 @@ MCP `tools/list` includes strategy, episode append/import/status/seal/repair, to
 - README and integration docs explain labeled `sourceContext`, strict before/after window metadata, `charRange` / `sourceRange`, and OpenClaw `sourceWindow` / `sourceTruncation` injection.
 - README and skills explain collection routing, `cogmem memory map`, and `cogmem memory tick` as host-owned inspection and maintenance surfaces.
 - README and skills explain `decisionTrace` / `recallDecision`, source-first raw fallback, correction semantics, audited review actions, and review-queue aging.
-- README and skills explain `cogmem update --yes`, migration dry-run, backups, and that Raw Ledger evidence is never rewritten by schema migration.
+- README and skills explain `cogmem update --yes`, npm install resolution, automatic backed-up migration, automatic OpenClaw plugin-only refresh when configured, migration dry-run, backups, and that Raw Ledger evidence is never rewritten by schema migration.
 - README and skills explain that entity aliases are evidence-backed, project-scoped, reversible, and stricter for person entities.
 - README and skills explain Belief Graph ownership, user-evidence requirements, reinforcement, conflict review, and supersession history.
 - README and skills explain Temporal Memory validity windows, historical lookup, correction reasons, and current-state stale suppression.
@@ -79,6 +80,13 @@ bun run typecheck
 bun run build
 bun test
 npm pack --dry-run --json
+npm publish --dry-run --access public
 ```
 
 The pack dry-run must include built public API files, CLI files, examples, docs, and `install.sh`. It must not include local databases or machine-specific files.
+
+After verification, publish with:
+
+```bash
+npm publish --access public
+```

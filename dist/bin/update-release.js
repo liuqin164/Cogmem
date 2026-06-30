@@ -1,4 +1,12 @@
 export const DEFAULT_RELEASE_REPO = 'liuqin164/cogmem';
+export const DEFAULT_NPM_PACKAGE = 'cogmem';
+export function resolveLatestNpmSpec(options = {}) {
+    const env = options.env || {};
+    return env.COGMEM_NPM_SPEC?.trim()
+        || env.COGMEM_PACKAGE_SPEC?.trim()
+        || env.COGMEM_RELEASE_TARBALL?.trim()
+        || 'latest';
+}
 export async function resolveLatestReleaseSpec(options = {}) {
     const env = options.env || {};
     const override = env.COGMEM_RELEASE_TARBALL?.trim();

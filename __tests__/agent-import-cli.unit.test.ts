@@ -1278,9 +1278,9 @@ test('unified cogmem CLI dispatches doctor and update commands', async () => {
   expect(doctor.stdout).toContain('OK kernel ready');
 
   const update = await runCli(
-    ['bun', cogmemBin, 'update', '--dry-run', '--json'],
+    ['bun', cogmemBin, 'update', '--dry-run', '--json', '--config', configPath],
     coreRoot,
-    { COGMEM_RELEASE_TARBALL: 'github:liuqin164/cogmem#2.0.1' },
+    { COGMEM_NPM_SPEC: '3.6.2' },
   );
   expect(update.stderr).toBe('');
   expect(update.exitCode).toBe(0);
@@ -1288,21 +1288,24 @@ test('unified cogmem CLI dispatches doctor and update commands', async () => {
   expect(parsed.command).toBe('update');
   expect(parsed.dryRun).toBe(true);
   expect(parsed.from).toBe('latest');
-  expect(parsed.releaseRepo).toBe('liuqin164/cogmem');
-  expect(parsed.releaseAsset).toBe('github:liuqin164/cogmem#2.0.1');
+  expect(parsed.source).toBe('npm');
+  expect(parsed.packageSpec).toBe('3.6.2');
   expect(parsed.targetCwd).toBe(coreRoot);
-  expect(parsed.nextCommand).toContain('cogmem@github:liuqin164/cogmem#2.0.1');
+  expect(parsed.nextCommand).toContain('cogmem@3.6.2');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
   expect(parsed.nextCommand).not.toContain('@CognitiveOS/core');
   expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
+  expect(parsed.migrationCommand).toContain(configPath);
 });
 
 test('cogmem update targets the one-line installer home when cwd has no package dependency', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-update-home-'));
   const installHome = join(dir, 'pkg');
   const randomCwd = join(dir, 'work');
+  const home = join(dir, 'home');
   mkdirSync(installHome, { recursive: true });
   mkdirSync(randomCwd, { recursive: true });
+  mkdirSync(home, { recursive: true });
   writeFileSync(join(installHome, 'package.json'), JSON.stringify({
     private: true,
     dependencies: {
@@ -1314,8 +1317,9 @@ test('cogmem update targets the one-line installer home when cwd has no package 
     ['bun', cogmemBin, 'update', '--dry-run', '--json'],
     randomCwd,
     {
+      HOME: home,
       COGMEM_INSTALL_HOME: installHome,
-      COGMEM_RELEASE_TARBALL: 'github:liuqin164/cogmem#2.0.1',
+      COGMEM_NPM_SPEC: '3.6.2',
     },
   );
 
@@ -1324,10 +1328,11 @@ test('cogmem update targets the one-line installer home when cwd has no package 
   const parsed = JSON.parse(update.stdout);
   expect(parsed.targetCwd).toBe(installHome);
   expect(parsed.currentSpec).toContain('cogmem.tgz');
-  expect(parsed.releaseAsset).toBe('github:liuqin164/cogmem#2.0.1');
-  expect(parsed.nextCommand).toContain('cogmem@github:liuqin164/cogmem#2.0.1');
+  expect(parsed.packageSpec).toBe('3.6.2');
+  expect(parsed.nextCommand).toContain('cogmem@3.6.2');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
-  expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
+  expect(parsed.migrationCommand).toBeUndefined();
+  expect(parsed.migrationSkippedReason).toContain('missing_config');
 });
 
 test('cogmem-connect installs Hermes skill into the real Hermes skills directory by default', async () => {

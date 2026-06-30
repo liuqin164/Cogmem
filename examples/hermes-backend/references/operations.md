@@ -1,4 +1,4 @@
-# Cogmem 3.6.1 Operations Reference for Hermes
+# Cogmem 3.6.2 Operations Reference for Hermes
 
 Read this file when installing, upgrading, importing, repairing, or operating Cogmem. `SKILL.md` contains the decision rules; this file records the operational commands.
 
@@ -7,6 +7,7 @@ Read this file when installing, upgrading, importing, repairing, or operating Co
 | Need | Use |
 |---|---|
 | Verify installation or config | `cogmem doctor` |
+| Upgrade package and migrate DB | `cogmem update --yes` |
 | Upgrade an existing database | `cogmem migrate` |
 | Import Hermes state/profile/sessions | `cogmem import-hermes` |
 | Import generic message JSONL | `cogmem episode import` |
@@ -31,6 +32,20 @@ Then run `/reload-mcp` inside Hermes. `connect --auto` installs this skill bundl
 
 ## Upgrade and migrate
 
+For normal upgrades, use one command:
+
+```bash
+cogmem update --yes
+```
+
+`cogmem update --yes` installs `cogmem@latest` from npm, then runs post-install work through the newly installed local CLI. With a valid config it runs `cogmem migrate --yes --backup --config <config>` and reports that the Hermes MCP server or agent host must be reloaded.
+
+Preview the package and migration plan without writing:
+
+```bash
+cogmem update --dry-run --json
+```
+
 ```bash
 cogmem migrate --dry-run --json
 cogmem migrate --yes --backup --json
@@ -38,7 +53,7 @@ cogmem doctor
 cogmem connect hermes --workspace . --auto --force --json
 ```
 
-The backed-up command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.1 schema-27 state in one run and preserves Raw Ledger evidence. Reload MCP after reconnecting.
+The backed-up command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.2 schema-27 state in one run and preserves Raw Ledger evidence. Reload MCP after reconnecting.
 
 ## Import Hermes memory
 

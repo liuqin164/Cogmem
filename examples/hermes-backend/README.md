@@ -51,8 +51,9 @@ Upgrade and migrate the Cogmem database itself before importing host memory:
 
 ```bash
 cogmem update --yes
-cogmem migrate --yes --backup --json
 ```
+
+`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration, and then tells the operator to reload the Hermes MCP server or restart the agent host. Use `cogmem update --dry-run --json` to see the install and migration commands first.
 
 Preview:
 
@@ -86,9 +87,9 @@ MCP recall JSON includes `decisionTrace`. Check its selected lane, reason, and c
 
 Dream stores explicit user clarification as organizational correction evidence rather than an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Resolve `needs_confirmation` with `cogmem_candidate_review` or `cogmem memory review`; maintenance only supersedes entries left stale past the default 30-day TTL.
 
-After upgrades, rerun `cogmem connect hermes --workspace . --auto --force` and reload MCP.
+After upgrades, reload MCP. Rerun `cogmem connect hermes --workspace . --auto --force` when MCP wiring, allow-listed tools, or the installed skill bundle changed.
 
-Cogmem 3.6.1 exposes seven read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Touch only nodes actually used, and follow returned event IDs to raw evidence before quoting exact wording.
+Cogmem 3.6.2 exposes seven read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`, and installs from npm by default. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Touch only nodes actually used, and follow returned event IDs to raw evidence before quoting exact wording.
 
 ## Runtime
 

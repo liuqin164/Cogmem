@@ -1,7 +1,7 @@
 {
   "name": "cogmem",
 
-  "version": "3.6.1",
+  "version": "3.6.2",
 
   "type": "module",
   "description": "cogmem — agent-native memory kernel for a single local-first AI agent",
@@ -46,6 +46,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "prepare": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "prepublishOnly": "bun run typecheck && bun test __tests__/release-metadata.unit.test.ts __tests__/update-release.unit.test.ts __tests__/agent-import-cli.unit.test.ts && bun run build",
     "type": "tsc -p tsconfig.json --noEmit",
     "test": "bun test __tests__",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -82,5 +83,8 @@
     "SECURITY.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "license": "MIT"
 }

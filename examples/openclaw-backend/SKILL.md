@@ -95,10 +95,10 @@ After upgrading Cogmem itself, migrate its database schema before importing or r
 
 ```bash
 cogmem update --yes
-# Manual equivalent: cogmem migrate --yes --backup
+# Manual equivalent: cogmem migrate --yes --backup && cogmem doctor --fix --agent openclaw --workspace . --plugin-only
 ```
 
-Agents should inspect `cogmem migrate --dry-run --json` when an operator wants a preview. Schema migration preserves Raw Ledger events; it updates governed projections and indexes only.
+`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration with the resolved config, refreshes OpenClaw's generated plugin files when the integration is configured, and then reports that the OpenClaw gateway or agent host must be restarted. Agents should inspect `cogmem update --dry-run --json` or `cogmem migrate --dry-run --json` when an operator wants a preview. Schema migration preserves Raw Ledger events; it updates governed projections and indexes only.
 
 After any 3.5.2 -> 3.6.x OpenClaw upgrade, refresh the generated OpenClaw plugin files. Use the plugin-only path first when OpenClaw is misbehaving, because it does not open the Cogmem database:
 

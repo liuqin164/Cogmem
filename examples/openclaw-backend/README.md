@@ -78,7 +78,7 @@ cogmem memory tick --project openclaw --json
 cogmem memory bind --project openclaw --json
 ```
 
-Cogmem 3.6.1 hardens Memory Atlas content navigation and OpenClaw upgrade reliability. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
+Cogmem 3.6.2 keeps the 3.6.x Memory Atlas and OpenClaw reliability work, then makes npm the default install and update channel. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
 
 ```bash
 cogmem memory graph-explore --project openclaw --query "去年与 Hermes 有关的决定" --json
@@ -102,8 +102,9 @@ Upgrade and migrate the Cogmem database itself before importing host memory:
 
 ```bash
 cogmem update --yes
-cogmem migrate --yes --backup --json
 ```
+
+`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration, refreshes configured OpenClaw plugin files, and then tells the operator to restart the OpenClaw gateway or agent host. Use `cogmem update --dry-run --json` to see the install, migration, and plugin-refresh commands first.
 
 Preview:
 

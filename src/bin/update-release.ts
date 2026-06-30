@@ -1,4 +1,9 @@
 export const DEFAULT_RELEASE_REPO = 'liuqin164/cogmem';
+export const DEFAULT_NPM_PACKAGE = 'cogmem';
+
+export interface ResolveLatestNpmSpecOptions {
+  env?: Record<string, string | undefined>;
+}
 
 export interface ResolveLatestReleaseSpecOptions {
   repo?: string;
@@ -15,6 +20,14 @@ interface GitHubReleaseAsset {
 interface GitHubReleasePayload {
   tag_name?: unknown;
   assets?: unknown;
+}
+
+export function resolveLatestNpmSpec(options: ResolveLatestNpmSpecOptions = {}): string {
+  const env = options.env || {};
+  return env.COGMEM_NPM_SPEC?.trim()
+    || env.COGMEM_PACKAGE_SPEC?.trim()
+    || env.COGMEM_RELEASE_TARBALL?.trim()
+    || 'latest';
 }
 
 export async function resolveLatestReleaseSpec(options: ResolveLatestReleaseSpecOptions = {}): Promise<string> {

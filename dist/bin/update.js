@@ -2,8 +2,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_RELEASE_REPO, resolveLatestReleaseSpec } from './update-release.js';
+import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { printCliJson } from './CliJson.js';
+import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
 function readArgs(argv) {
     const values = {};
     for (let index = 0; index < argv.length; index += 1) {
@@ -29,6 +30,9 @@ function readArgs(argv) {
         from: typeof values.from === 'string' ? values.from : 'latest',
         installHome: typeof values['install-home'] === 'string' ? values['install-home'] : undefined,
         manager,
+        configPath: typeof values.config === 'string' ? values.config : undefined,
+        skipMigrate: values['skip-migrate'] === true,
+        skipAgentRefresh: values['skip-agent-refresh'] === true,
     };
 }
 function detectManager(cwd) {
@@ -45,12 +49,31 @@ function buildCommand(manager, spec) {
         return ['pnpm', 'add', `cogmem@${spec}`];
     return ['npm', 'install', `cogmem@${spec}`];
 }
-function buildMigrationExec(manager) {
-    if (manager === 'bun')
-        return ['bun', 'x', 'cogmem', 'migrate', '--yes', '--backup'];
-    if (manager === 'pnpm')
-        return ['pnpm', 'exec', 'cogmem', 'migrate', '--yes', '--backup'];
-    return ['npm', 'exec', '--', 'cogmem', 'migrate', '--yes', '--backup'];
+function localCogmemBin(cwd) {
+    return join(cwd, 'node_modules', '.bin', 'cogmem');
+}
+function buildMigrationExec(targetCwd, configPath) {
+    return [
+        localCogmemBin(targetCwd),
+        'migrate',
+        '--yes',
+        '--backup',
+        ...(configPath ? ['--config', configPath] : []),
+    ];
+}
+function buildOpenClawRepairExec(targetCwd, configPath, workspaceRoot) {
+    return [
+        localCogmemBin(targetCwd),
+        'doctor',
+        '--fix',
+        '--agent',
+        'openclaw',
+        '--plugin-only',
+        '--config',
+        configPath,
+        '--workspace',
+        workspaceRoot,
+    ];
 }
 function installedSpec(cwd) {
     const manifest = readPackageManifest(cwd);
@@ -87,27 +110,71 @@ function resolveUpdateCwd(args, env) {
         return installHome;
     return cwd;
 }
+function loadConfigForUpdate(args) {
+    const resolution = resolveCogmemConfigPath({ configPath: args.configPath, cwd: process.cwd() });
+    if (resolution.kind === 'missing') {
+        return { configPath: undefined, skippedReason: `missing_config:${resolution.path}` };
+    }
+    const loaded = loadCogmemConfig({ configPath: resolution.path });
+    const error = loaded.diagnostics.find((diagnostic) => diagnostic.severity === 'error');
+    if (error) {
+        throw new Error(`config_error:${error.code}: ${error.message}`);
+    }
+    return { configPath: resolution.path, loaded };
+}
+async function runCommand(cmd, cwd) {
+    const proc = Bun.spawn({
+        cmd,
+        cwd,
+        stdout: 'inherit',
+        stderr: 'inherit',
+    });
+    return proc.exited;
+}
 async function main() {
     const args = readArgs(process.argv.slice(2));
-    const releaseRepo = process.env.COGMEM_REPO || DEFAULT_RELEASE_REPO;
     const resolvedSpec = args.from === 'latest'
-        ? await resolveLatestReleaseSpec({ repo: releaseRepo, env: process.env })
+        ? resolveLatestNpmSpec({ env: process.env })
         : args.from;
     const targetCwd = resolveUpdateCwd(args, process.env);
     const manager = args.manager || detectManager(targetCwd);
     const command = buildCommand(manager, resolvedSpec);
+    const config = loadConfigForUpdate(args);
+    const migrationExec = !args.skipMigrate && config.configPath
+        ? buildMigrationExec(targetCwd, config.configPath)
+        : undefined;
+    const openclawWorkspace = config.loaded?.integrations.openclaw.enabled
+        ? config.loaded.integrations.openclaw.workspaceDir || process.cwd()
+        : undefined;
+    const openclawRepairExec = !args.skipAgentRefresh && openclawWorkspace && config.configPath
+        ? buildOpenClawRepairExec(targetCwd, config.configPath, openclawWorkspace)
+        : undefined;
+    const restartRequired = [
+        ...(openclawWorkspace ? ['restart OpenClaw gateway or agent host'] : []),
+        ...(config.loaded?.integrations.hermes.enabled ? ['reload Hermes MCP server or restart the Hermes agent host'] : []),
+    ];
     const result = {
         command: 'update',
         dryRun: args.dryRun,
         manager,
         from: args.from,
-        releaseRepo,
-        releaseAsset: resolvedSpec,
+        source: 'npm',
+        npmPackage: DEFAULT_NPM_PACKAGE,
+        packageSpec: resolvedSpec,
         targetCwd,
         currentSpec: installedSpec(targetCwd),
         nextCommand: command.join(' '),
-        migrationCommand: 'cogmem migrate --yes --backup',
-        followUp: 'If OpenClaw auto memory is configured, run cogmem doctor --fix --agent openclaw --workspace <openclaw-workspace> --plugin-only, then restart the OpenClaw gateway. For Hermes, rerun cogmem connect hermes and reload MCP.',
+        configPath: config.configPath,
+        migrationCommand: migrationExec?.join(' '),
+        migrationSkippedReason: migrationExec ? undefined : (args.skipMigrate ? 'skip_migrate_flag' : config.skippedReason),
+        openclawRepairCommand: openclawRepairExec?.join(' '),
+        openclawRepairSkippedReason: openclawRepairExec
+            ? undefined
+            : (args.skipAgentRefresh ? 'skip_agent_refresh_flag' : (config.loaded?.integrations.openclaw.enabled ? undefined : 'openclaw_not_configured')),
+        restartRequired,
+        followUp: restartRequired.length > 0
+            ? `After update finishes, ${restartRequired.join('; ')}.`
+            : 'After update finishes, restart any running agent host so it loads the new Cogmem CLI.',
     };
     if (args.json) {
         printCliJson('update', result);
@@ -117,25 +184,29 @@ async function main() {
         console.log(`target: ${result.targetCwd}`);
         console.log(`current: ${result.currentSpec || 'not listed in package.json'}`);
         console.log(`command: ${result.nextCommand}`);
+        if (result.migrationCommand)
+            console.log(`migrate: ${result.migrationCommand}`);
+        if (result.openclawRepairCommand)
+            console.log(`openclaw: ${result.openclawRepairCommand}`);
         console.log(result.followUp);
     }
     if (!args.dryRun) {
-        const proc = Bun.spawn({
-            cmd: command,
-            cwd: targetCwd,
-            stdout: 'inherit',
-            stderr: 'inherit',
-        });
-        const updateExitCode = await proc.exited;
+        const updateExitCode = await runCommand(command, targetCwd);
         if (updateExitCode !== 0)
             process.exit(updateExitCode);
-        const migration = Bun.spawn({
-            cmd: buildMigrationExec(manager),
-            cwd: targetCwd,
-            stdout: 'inherit',
-            stderr: 'inherit',
-        });
-        process.exit(await migration.exited);
+        if (migrationExec) {
+            const migrationExitCode = await runCommand(migrationExec, process.cwd());
+            if (migrationExitCode !== 0)
+                process.exit(migrationExitCode);
+        }
+        if (openclawRepairExec) {
+            const repairExitCode = await runCommand(openclawRepairExec, process.cwd());
+            if (repairExitCode !== 0)
+                process.exit(repairExitCode);
+        }
+        if (!args.json)
+            console.log(result.followUp);
+        process.exit(0);
     }
 }
 main().catch((error) => {

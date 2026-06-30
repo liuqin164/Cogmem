@@ -66,7 +66,7 @@ Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2
 
 ## Migrate Existing Hermes Memory
 
-For package upgrades, run `cogmem update --yes`; it installs the latest GitHub Release and then runs `cogmem migrate --yes --backup`. Use `cogmem migrate --dry-run --json` to preview pending schema work. Never delete or rewrite Raw Ledger events during migration.
+For package upgrades, run `cogmem update --yes`; it installs `cogmem@latest` from npm, runs the newly installed backed-up migration with the resolved config, and then reports that the Hermes MCP server or agent host must be reloaded. Use `cogmem update --dry-run --json` or `cogmem migrate --dry-run --json` to preview pending work. Never delete or rewrite Raw Ledger events during migration.
 
 Default Hermes memory contract:
 

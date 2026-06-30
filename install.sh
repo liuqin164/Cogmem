@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${COGMEM_REPO:-liuqin164/cogmem}"
 INSTALL_HOME="${COGMEM_INSTALL_HOME:-$HOME/.cogmem/pkg}"
 BIN_DIR="${COGMEM_BIN_DIR:-$HOME/.bun/bin}"
-ASSET_URL="${COGMEM_RELEASE_TARBALL:-}"
+PACKAGE_SPEC="${COGMEM_PACKAGE_SPEC:-${COGMEM_NPM_SPEC:-${COGMEM_RELEASE_TARBALL:-latest}}}"
 
 log() {
   printf 'cogmem: %s\n' "$*"
@@ -28,33 +27,6 @@ ensure_bun() {
     log "Bun install finished but bun is still not on PATH."
     log "Add $HOME/.bun/bin to PATH and rerun this installer."
     exit 1
-  fi
-}
-
-latest_release_asset() {
-  if [ -n "$ASSET_URL" ]; then
-    printf '%s\n' "$ASSET_URL"
-    return
-  fi
-
-  local api="https://api.github.com/repos/$REPO/releases/latest"
-  local payload
-  payload="$(curl -fsSL "$api" || true)"
-
-  local asset
-  asset="$(printf '%s\n' "$payload" | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*cogmem[^"]*\.tgz\)".*/\1/p' | head -n 1)"
-  if [ -n "$asset" ]; then
-    printf '%s\n' "$asset"
-    return
-  fi
-
-  local tag
-  tag="$(printf '%s\n' "$payload" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-
-  if [ -n "$tag" ]; then
-    printf 'github:%s#%s\n' "$REPO" "$tag"
-  else
-    printf 'github:%s#main\n' "$REPO"
   fi
 }
 
@@ -84,12 +56,10 @@ main() {
   ensure_bun
   ensure_install_home
 
-  local asset
-  asset="$(latest_release_asset)"
-  log "Installing latest release from $asset"
+  log "Installing cogmem@$PACKAGE_SPEC from npm-compatible package resolution."
   (
     cd "$INSTALL_HOME"
-    bun add "cogmem@$asset"
+    bun add "cogmem@$PACKAGE_SPEC"
   )
   link_cli
 

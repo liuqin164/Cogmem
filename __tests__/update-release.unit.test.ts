@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { resolveLatestReleaseSpec } from '../src/bin/update-release';
+import { resolveLatestNpmSpec, resolveLatestReleaseSpec } from '../src/bin/update-release';
 
 describe('cogmem update release resolution', () => {
+  test('defaults update resolution to npm latest without network metadata', () => {
+    expect(resolveLatestNpmSpec({ env: {} })).toBe('latest');
+    expect(resolveLatestNpmSpec({ env: { COGMEM_NPM_SPEC: '3.6.2' } })).toBe('3.6.2');
+    expect(resolveLatestNpmSpec({ env: { COGMEM_PACKAGE_SPEC: 'file:./cogmem.tgz' } })).toBe('file:./cogmem.tgz');
+  });
+
   test('prefers a cogmem release tgz asset from the GitHub latest release payload', async () => {
     const spec = await resolveLatestReleaseSpec({
       repo: 'liuqin164/cogmem',
