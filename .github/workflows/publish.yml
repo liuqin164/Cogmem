@@ -1,0 +1,67 @@
+name: Publish npm package
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish release to npm
+    runs-on: ubuntu-latest
+    environment: npm publish
+    if: ${{ !github.event.release.draft }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Verify release version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$RELEASE_TAG" != "$VERSION" ] && [ "$RELEASE_TAG" != "v$VERSION" ]; then
+            echo "Release tag '$RELEASE_TAG' must match package.json version '$VERSION' or 'v$VERSION'." >&2
+            exit 1
+          fi
+          if npm view "cogmem@$VERSION" version >/dev/null 2>&1; then
+            echo "cogmem@$VERSION is already published on npm." >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test __tests__
+
+      - name: Build
+        run: bun run build
+
+      - name: Verify package contents
+        run: npm pack --dry-run --json
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public

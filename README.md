@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.6.2`
+Current version: `3.6.3`
 
 Distribution: npm registry. GitHub remains the source mirror and hosts this installer, but package install and upgrade resolve `cogmem` from npm by default.
 
@@ -178,6 +178,13 @@ npm install cogmem@latest
 ./node_modules/.bin/cogmem init
 ```
 
+Or install globally with npm when Bun is already on PATH:
+
+```bash
+npm install -g cogmem@latest
+cogmem init
+```
+
 Validate configuration:
 
 ```bash
@@ -190,7 +197,7 @@ Upgrade from npm and migrate an existing database:
 cogmem update --yes
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, then runs the newly installed `cogmem migrate --yes --backup --config <resolved-config>`. If OpenClaw is configured, the updater also runs the newly installed plugin-only repair command so stale `index.js` and `bridge.mjs` files are refreshed before you restart the agent. To inspect changes without writing:
+`cogmem update --yes` installs `cogmem@latest` from npm, then runs the newly installed `cogmem migrate --yes --backup --config <resolved-config>`. It updates npm-global installs with `npm install -g`, the one-line installer home under `~/.cogmem/pkg`, or the current workspace dependency when Cogmem is a project dependency. If OpenClaw is configured, the updater also runs the newly installed plugin-only repair command so stale `index.js` and `bridge.mjs` files are refreshed before you restart the agent. To inspect changes without writing:
 
 ```bash
 cogmem update --dry-run --json
@@ -199,7 +206,7 @@ cogmem migrate --dry-run --json
 
 For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
-Upgrade a 3.5.2 database, a 3.6.0 database, or a pre-release schema-25 test database into the 3.6.2 schema set with one command:
+Upgrade a 3.5.2 database, a 3.6.0 database, or a pre-release schema-25 test database into the 3.6.3 schema set with one command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -241,7 +248,7 @@ For a host timer, call `dream tick`; the timer only wakes the scheduler. An empt
 cogmem dream tick --project my-agent --mode auto --max-episodes 10 --json
 ```
 
-Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.6.2 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
+Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.6.3 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
 
 Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands use stable content identities and the same episode schema. Low-confidence imported groups soft-seal for review unless an operator explicitly forces sealing. Episode semantic summaries and closure receipts are control hints, never durable evidence; every Dream candidate must cite a non-empty subset of the episode's raw event IDs and still pass CPU governance.
 
@@ -337,7 +344,7 @@ cogmem strategy plan --project hermes --query "我当时的原话是什么？" -
 cogmem strategy outcomes --project hermes --json
 ```
 
-OpenClaw plugin 0.6.2 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Navigation turns use one bridge/kernel lifecycle for Atlas exploration, evidence-bearing node/timeline drill-down, and recall. The bounded volatile `<COGMEM_MEMORY_ATLAS>` block includes evidence event IDs and drill-down commands; OpenClaw does not need MCP for this path.
+OpenClaw plugin 0.6.3 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Navigation turns use one bridge/kernel lifecycle for Atlas exploration, evidence-bearing node/timeline drill-down, and recall. The bounded volatile `<COGMEM_MEMORY_ATLAS>` block includes evidence event IDs and drill-down commands; OpenClaw does not need MCP for this path.
 
 `ProspectiveMemoryService` stores future intentions, commitments, reminders, open loops, and plans as candidates only. A candidate is not actionable until an explicit user event confirms it. Rejected candidates stay suppressed unless genuinely new evidence creates a new version. The service and `cogmem prospective` CLI manage state only; they expose no task or tool execution capability.
 
@@ -732,7 +739,15 @@ npm pack --dry-run --json
 npm publish --dry-run --access public
 ```
 
-Publish with `npm publish --access public` after the dry run and full tests pass. Keep GitHub branches/releases in sync so old GitHub-installed 3.6.1 users have a discoverable bridge to the npm-first 3.6.2 updater.
+Create a GitHub Release from the matching version tag, for example `v3.6.3`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
+
+Publish manually only for emergency fallback:
+
+```bash
+npm publish --provenance --access public
+```
+
+Keep GitHub branches/releases in sync so old GitHub-installed users have a discoverable bridge to the npm-first updater.
 
 ## Security and Privacy
 

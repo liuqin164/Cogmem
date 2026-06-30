@@ -40,6 +40,14 @@ cogmem doctor
 cogmem connect hermes --workspace . --auto --force
 ```
 
+If Bun is already installed and the operator wants npm global installation instead of the one-line installer, use:
+
+```bash
+npm install -g cogmem@latest
+cogmem init --yes --agent hermes
+cogmem connect hermes --workspace . --auto --force
+```
+
 Use project-local config only when this workspace needs isolation:
 
 ```bash
@@ -98,7 +106,7 @@ cogmem update --yes
 # Manual equivalent: cogmem migrate --yes --backup
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration with the resolved config, and then reports that the Hermes MCP server or agent host must be reloaded. Agents should inspect `cogmem update --dry-run --json` or `cogmem migrate --dry-run --json` when an operator wants a preview. Schema migration preserves Raw Ledger events; it updates governed projections and indexes only.
+`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration with the resolved config, and then reports that the Hermes MCP server or agent host must be reloaded. For npm global installs, `cogmem update --yes` resolves to `npm install -g cogmem@latest` instead of writing into the current directory. Agents should inspect `cogmem update --dry-run --json` or `cogmem migrate --dry-run --json` when an operator wants a preview. Schema migration preserves Raw Ledger events; dry-run is read-only and updates governed projections and indexes only during apply.
 
 Default Hermes memory contract:
 

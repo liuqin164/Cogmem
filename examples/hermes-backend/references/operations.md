@@ -1,4 +1,4 @@
-# Cogmem 3.6.2 Operations Reference for Hermes
+# Cogmem 3.6.3 Operations Reference for Hermes
 
 Read this file when installing, upgrading, importing, repairing, or operating Cogmem. `SKILL.md` contains the decision rules; this file records the operational commands.
 
@@ -28,6 +28,14 @@ cogmem doctor
 cogmem connect hermes --workspace . --auto --force --json
 ```
 
+If Bun is already installed and the operator prefers npm global installation:
+
+```bash
+npm install -g cogmem@latest
+cogmem init --yes --agent hermes
+cogmem connect hermes --workspace . --auto --force --json
+```
+
 Then run `/reload-mcp` inside Hermes. `connect --auto` installs this skill bundle and updates the Hermes MCP allow-list; it does not claim a native `memory.provider` integration.
 
 ## Upgrade and migrate
@@ -38,7 +46,7 @@ For normal upgrades, use one command:
 cogmem update --yes
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, then runs post-install work through the newly installed local CLI. With a valid config it runs `cogmem migrate --yes --backup --config <config>` and reports that the Hermes MCP server or agent host must be reloaded.
+`cogmem update --yes` installs `cogmem@latest` from npm, then runs post-install work through the newly installed CLI. For npm global installs it uses `npm install -g cogmem@latest`; for the one-line installer it updates `~/.cogmem/pkg`; for a workspace dependency it updates that workspace. With a valid config it runs `cogmem migrate --yes --backup --config <config>` and reports that the Hermes MCP server or agent host must be reloaded.
 
 Preview the package and migration plan without writing:
 
@@ -53,7 +61,7 @@ cogmem doctor
 cogmem connect hermes --workspace . --auto --force --json
 ```
 
-The backed-up command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.2 schema-27 state in one run and preserves Raw Ledger evidence. Reload MCP after reconnecting.
+The backed-up command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.3 schema-27 state in one run and preserves Raw Ledger evidence. `--dry-run` is read-only and does not create `_schema_migrations`. Reload MCP after reconnecting.
 
 ## Import Hermes memory
 

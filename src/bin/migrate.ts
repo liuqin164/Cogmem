@@ -65,11 +65,12 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const dbPath = resolveDbPath(args);
   const shouldBackup = !args.dryRun && args.backup && dbPath !== ':memory:' && existsSync(dbPath);
-  const db = new Database(dbPath);
+  const db = new Database(dbPath, args.dryRun && dbPath !== ':memory:' ? { readonly: true, create: false } : undefined);
   db.exec('PRAGMA busy_timeout = 5000;');
+  if (args.dryRun) db.exec('PRAGMA query_only = ON;');
   try {
     const backupPath = shouldBackup ? backupDatabase(db, dbPath) : undefined;
-    const runner = new SchemaMigrationRunner(db, ALL_MIGRATIONS);
+    const runner = new SchemaMigrationRunner(db, ALL_MIGRATIONS, { readonly: args.dryRun });
     const result = runner.run({ dryRun: args.dryRun });
     if (!args.dryRun) {
       db.exec(`CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);

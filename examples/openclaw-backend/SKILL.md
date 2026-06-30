@@ -40,6 +40,14 @@ cogmem doctor
 cogmem connect openclaw --workspace . --auto --force
 ```
 
+If Bun is already installed and the operator wants npm global installation instead of the one-line installer, use:
+
+```bash
+npm install -g cogmem@latest
+cogmem init --yes --agent openclaw --scope project
+cogmem connect openclaw --workspace . --auto --force
+```
+
 This creates project-local kernel config and storage under `.cogmem/`, which is the recommended OpenClaw workspace setup.
 
 ```bash
@@ -98,7 +106,7 @@ cogmem update --yes
 # Manual equivalent: cogmem migrate --yes --backup && cogmem doctor --fix --agent openclaw --workspace . --plugin-only
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration with the resolved config, refreshes OpenClaw's generated plugin files when the integration is configured, and then reports that the OpenClaw gateway or agent host must be restarted. Agents should inspect `cogmem update --dry-run --json` or `cogmem migrate --dry-run --json` when an operator wants a preview. Schema migration preserves Raw Ledger events; it updates governed projections and indexes only.
+`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration with the resolved config, refreshes OpenClaw's generated plugin files when the integration is configured, and then reports that the OpenClaw gateway or agent host must be restarted. For npm global installs, `cogmem update --yes` resolves to `npm install -g cogmem@latest` instead of writing into the current directory. Agents should inspect `cogmem update --dry-run --json` or `cogmem migrate --dry-run --json` when an operator wants a preview. Schema migration preserves Raw Ledger events; dry-run is read-only and updates governed projections and indexes only during apply.
 
 After any 3.5.2 -> 3.6.x OpenClaw upgrade, refresh the generated OpenClaw plugin files. Use the plugin-only path first when OpenClaw is misbehaving, because it does not open the Cogmem database:
 
@@ -298,7 +306,7 @@ cogmem connect openclaw --workspace . --auto --force
 
 `--auto` writes `<workspace>/extensions/cogmem-auto-memory/`, patches `plugins.load.paths`, and enables `hooks.allowPromptInjection=true` and `hooks.allowConversationAccess=true` for the wrapper. The wrapper registers `before_prompt_build` for governed recall and `agent_end` for turn recording, then calls `KernelAgentMemoryBackend` through `cogmem` public API via a Bun bridge. Core does not import OpenClaw.
 
-Queued remember is the default. `agent_end` appends a durable JSONL job under `.cogmem/queue/openclaw-remember.jsonl` and starts a singleton drainer, so Telegram or gateway responses are not blocked by embeddings, SQLite writes, or slow local models. Plugin 0.6.2 acquires the queue lock before opening Cogmem, recovers stale lock directories older than `rememberDrainTimeoutMs`, writes `owner.json` lock metadata, and processes bounded batches controlled by `rememberDrainBatchSize` (default `20`). If a drain fails, the job is retried and then moved to a dead-letter file instead of being silently discarded.
+Queued remember is the default. `agent_end` appends a durable JSONL job under `.cogmem/queue/openclaw-remember.jsonl` and starts a singleton drainer, so Telegram or gateway responses are not blocked by embeddings, SQLite writes, or slow local models. Plugin 0.6.3 acquires the queue lock before opening Cogmem, recovers stale lock directories and stale `.processing` queue files older than `rememberDrainTimeoutMs`, writes `owner.json` lock metadata, and processes bounded batches controlled by `rememberDrainBatchSize` (default `20`). If a drain fails, the job is retried and then moved to a dead-letter file instead of being silently discarded.
 
 When automatic memory recording looks stuck, do not delete queue files first. Diagnose the plugin and locks:
 
@@ -308,6 +316,8 @@ ls -la .cogmem/queue/
 cat .cogmem/queue/openclaw-remember.jsonl.lock/owner.json 2>/dev/null || true
 cat .cogmem/queue/openclaw-remember.jsonl.spawn.lock/owner.json 2>/dev/null || true
 ```
+
+`openclaw diagnose` reports pending queue lines, dead-letter lines, active lock metadata, spawn-lock metadata, and stale `.processing` files. Use that JSON before deleting anything manually.
 
 If `plugin.current=false`, refresh without opening the database:
 

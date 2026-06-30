@@ -1,11 +1,11 @@
-# cogmem 3.6.2 Release Checklist
+# cogmem 3.6.3 Release Checklist
 
 This release is distributed through the npm registry. GitHub remains the source and review mirror.
 
 ## Required Metadata
 
 - `package.json` name is `cogmem`.
-- `package.json` version is `3.6.2`.
+- `package.json` version is `3.6.3`.
 - `package.json` has `publishConfig.access = public`.
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
@@ -85,8 +85,10 @@ npm publish --dry-run --access public
 
 The pack dry-run must include built public API files, CLI files, examples, docs, and `install.sh`. It must not include local databases or machine-specific files.
 
-After verification, publish with:
+After verification, create a GitHub Release from the matching version tag, for example `v3.6.3`. The release workflow publishes through npm Trusted Publishing when the release is published. It must not publish on tag push alone.
+
+Emergency manual fallback:
 
 ```bash
-npm publish --access public
+npm publish --provenance --access public
 ```

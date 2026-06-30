@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 
 import {
   defaultOpenClawAutoMemoryPluginDir,
@@ -48,6 +48,54 @@ function readAudit(workspaceRoot: string): { logPath: string; lastBeforePromptBu
   };
 }
 
+function countJsonlLines(path: string): number {
+  if (!existsSync(path)) return 0;
+  return readFileSync(path, 'utf8').split('\n').map((line) => line.trim()).filter(Boolean).length;
+}
+
+function readLock(path: string): Record<string, unknown> | undefined {
+  if (!existsSync(path)) return undefined;
+  const ownerPath = join(path, 'owner.json');
+  let owner: Record<string, unknown> | undefined;
+  if (existsSync(ownerPath)) {
+    try {
+      owner = JSON.parse(readFileSync(ownerPath, 'utf8')) as Record<string, unknown>;
+    } catch {
+      owner = { parseError: true };
+    }
+  }
+  const stat = statSync(path);
+  return {
+    path,
+    mtimeMs: stat.mtimeMs,
+    ageMs: Date.now() - stat.mtimeMs,
+    owner,
+  };
+}
+
+function inspectQueue(workspaceRoot: string): Record<string, unknown> {
+  const queuePath = join(workspaceRoot, '.cogmem', 'queue', 'openclaw-remember.jsonl');
+  const queueDir = dirname(queuePath);
+  const processingFiles = existsSync(queueDir)
+    ? readdirSync(queueDir)
+      .filter((entry) => entry.startsWith('openclaw-remember.jsonl.') && entry.endsWith('.processing'))
+      .map((entry) => {
+        const path = join(queueDir, entry);
+        const stat = statSync(path);
+        return { path, lines: countJsonlLines(path), mtimeMs: stat.mtimeMs, ageMs: Date.now() - stat.mtimeMs };
+      })
+    : [];
+  return {
+    queuePath,
+    pendingLines: countJsonlLines(queuePath),
+    deadPath: `${queuePath}.dead.jsonl`,
+    deadLines: countJsonlLines(`${queuePath}.dead.jsonl`),
+    lock: readLock(`${queuePath}.lock`),
+    spawnLock: readLock(`${queuePath}.spawn.lock`),
+    processingFiles,
+  };
+}
+
 function main(): void {
   const [command] = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
   if (command !== 'diagnose' || hasFlag('--help') || hasFlag('-h')) {
@@ -60,12 +108,14 @@ function main(): void {
   const pluginDir = readArg('--plugin-dir') || defaultOpenClawAutoMemoryPluginDir(workspaceRoot);
   const plugin = inspectOpenClawAutoMemoryPlugin({ workspaceRoot, pluginDir });
   const audit = readAudit(workspaceRoot);
+  const queue = inspectQueue(workspaceRoot);
   const payload = {
     schemaVersion: 'cogmem.cli.v1',
     command: 'openclaw diagnose',
     workspaceRoot,
     plugin,
     audit,
+    queue,
   };
   if (hasFlag('--json')) {
     console.log(JSON.stringify(payload));
@@ -78,6 +128,7 @@ function main(): void {
   } else {
     console.log('last before_prompt_build: none');
   }
+  console.log(`queue: pending=${queue.pendingLines} dead=${queue.deadLines} processing=${Array.isArray(queue.processingFiles) ? queue.processingFiles.length : 0}`);
 }
 
 main();

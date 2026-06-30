@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
 import { printCliJson } from './CliJson.js';
@@ -13,6 +14,8 @@ interface UpdateArgs {
   json: boolean;
   from: string;
   installHome?: string;
+  global: boolean;
+  localDev: boolean;
   manager?: 'bun' | 'npm' | 'pnpm';
   configPath?: string;
   skipMigrate: boolean;
@@ -42,6 +45,8 @@ function readArgs(argv: string[]): UpdateArgs {
     json: values.json === true,
     from: typeof values.from === 'string' ? values.from : 'latest',
     installHome: typeof values['install-home'] === 'string' ? values['install-home'] : undefined,
+    global: values.global === true,
+    localDev: values['local-dev'] === true,
     manager,
     configPath: typeof values.config === 'string' ? values.config : undefined,
     skipMigrate: values['skip-migrate'] === true,
@@ -55,7 +60,17 @@ function detectManager(cwd: string): 'bun' | 'npm' | 'pnpm' {
   return 'npm';
 }
 
-function buildCommand(manager: 'bun' | 'npm' | 'pnpm', spec: string): string[] {
+interface UpdateTarget {
+  cwd: string;
+  kind: 'install_home' | 'local_project' | 'npm_global' | 'source_checkout' | 'cwd_fallback';
+  manager: 'bun' | 'npm' | 'pnpm';
+  bin: string;
+  warning?: string;
+}
+
+function buildCommand(target: UpdateTarget, spec: string): string[] {
+  if (target.kind === 'npm_global') return ['npm', 'install', '-g', `cogmem@${spec}`];
+  const manager = target.manager;
   if (manager === 'bun') return ['bun', 'add', `cogmem@${spec}`];
   if (manager === 'pnpm') return ['pnpm', 'add', `cogmem@${spec}`];
   return ['npm', 'install', `cogmem@${spec}`];
@@ -65,9 +80,9 @@ function localCogmemBin(cwd: string): string {
   return join(cwd, 'node_modules', '.bin', 'cogmem');
 }
 
-function buildMigrationExec(targetCwd: string, configPath?: string): string[] {
+function buildMigrationExecForTarget(target: UpdateTarget, configPath?: string): string[] {
   return [
-    localCogmemBin(targetCwd),
+    target.bin,
     'migrate',
     '--yes',
     '--backup',
@@ -75,9 +90,9 @@ function buildMigrationExec(targetCwd: string, configPath?: string): string[] {
   ];
 }
 
-function buildOpenClawRepairExec(targetCwd: string, configPath: string, workspaceRoot: string): string[] {
+function buildOpenClawRepairExecForTarget(target: UpdateTarget, configPath: string, workspaceRoot: string): string[] {
   return [
-    localCogmemBin(targetCwd),
+    target.bin,
     'doctor',
     '--fix',
     '--agent',
@@ -121,14 +136,59 @@ function shouldUpdateCwd(cwd: string): boolean {
   return manifest?.name === 'cogmem' || installedSpec(cwd) !== undefined;
 }
 
-function resolveUpdateCwd(args: UpdateArgs, env: Record<string, string | undefined>): string {
+function isCogmemSourceCheckout(cwd: string): boolean {
+  const manifest = readPackageManifest(cwd);
+  return manifest?.name === 'cogmem'
+    && existsSync(join(cwd, 'src', 'bin', 'update.ts'))
+    && existsSync(join(cwd, '.git'));
+}
+
+function ownPackageRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+}
+
+function isLikelyNpmGlobalInstall(env: Record<string, string | undefined>): boolean {
+  if (env.COGMEM_INSTALL_KIND === 'npm_global') return true;
+  const root = ownPackageRoot();
+  const marker = `${sep}node_modules${sep}cogmem`;
+  if (!root.includes(marker)) return false;
+  const cwd = resolve(process.cwd());
+  return !cwd.startsWith(root + sep);
+}
+
+function resolveUpdateTarget(args: UpdateArgs, env: Record<string, string | undefined>): UpdateTarget {
   const cwd = process.cwd();
-  if (args.installHome) return args.installHome;
-  if (shouldUpdateCwd(cwd)) return cwd;
+  if (args.global || isLikelyNpmGlobalInstall(env)) {
+    return { cwd, kind: 'npm_global', manager: 'npm', bin: 'cogmem' };
+  }
+  if (args.installHome) {
+    const targetCwd = args.installHome;
+    return { cwd: targetCwd, kind: 'install_home', manager: args.manager || detectManager(targetCwd), bin: localCogmemBin(targetCwd) };
+  }
+  if (isCogmemSourceCheckout(cwd)) {
+    return {
+      cwd,
+      kind: 'source_checkout',
+      manager: args.manager || detectManager(cwd),
+      bin: localCogmemBin(cwd),
+      warning: args.localDev ? undefined : 'source_checkout_requires_local_dev_for_write',
+    };
+  }
+  if (shouldUpdateCwd(cwd)) {
+    return { cwd, kind: 'local_project', manager: args.manager || detectManager(cwd), bin: localCogmemBin(cwd) };
+  }
 
   const installHome = defaultInstallHome(env);
-  if (existsSync(join(installHome, 'package.json'))) return installHome;
-  return cwd;
+  if (existsSync(join(installHome, 'package.json'))) {
+    return { cwd: installHome, kind: 'install_home', manager: args.manager || detectManager(installHome), bin: localCogmemBin(installHome) };
+  }
+  return {
+    cwd,
+    kind: 'cwd_fallback',
+    manager: args.manager || detectManager(cwd),
+    bin: localCogmemBin(cwd),
+    warning: 'no_install_home_or_project_dependency_detected',
+  };
 }
 
 function loadConfigForUpdate(args: UpdateArgs): { configPath?: string; loaded?: LoadedCogmemConfig; skippedReason?: string } {
@@ -159,18 +219,24 @@ async function main(): Promise<void> {
   const resolvedSpec = args.from === 'latest'
     ? resolveLatestNpmSpec({ env: process.env })
     : args.from;
-  const targetCwd = resolveUpdateCwd(args, process.env);
-  const manager = args.manager || detectManager(targetCwd);
-  const command = buildCommand(manager, resolvedSpec);
+  const target = resolveUpdateTarget(args, process.env);
+  if (!args.dryRun && target.kind === 'source_checkout' && !args.localDev) {
+    throw new Error('Refusing to update the Cogmem source checkout. Pass --local-dev for an intentional development update, --global for npm global, or --install-home <dir> for the one-line installer home.');
+  }
+  if (!args.dryRun && target.kind === 'cwd_fallback') {
+    throw new Error('Unable to find an installed Cogmem package to update. Pass --global for npm global installs or --install-home <dir> for the one-line installer home.');
+  }
+  const manager = target.manager;
+  const command = buildCommand(target, resolvedSpec);
   const config = loadConfigForUpdate(args);
   const migrationExec = !args.skipMigrate && config.configPath
-    ? buildMigrationExec(targetCwd, config.configPath)
+    ? buildMigrationExecForTarget(target, config.configPath)
     : undefined;
   const openclawWorkspace = config.loaded?.integrations.openclaw.enabled
     ? config.loaded.integrations.openclaw.workspaceDir || process.cwd()
     : undefined;
   const openclawRepairExec = !args.skipAgentRefresh && openclawWorkspace && config.configPath
-    ? buildOpenClawRepairExec(targetCwd, config.configPath, openclawWorkspace)
+    ? buildOpenClawRepairExecForTarget(target, config.configPath, openclawWorkspace)
     : undefined;
   const restartRequired = [
     ...(openclawWorkspace ? ['restart OpenClaw gateway or agent host'] : []),
@@ -180,13 +246,15 @@ async function main(): Promise<void> {
     command: 'update',
     dryRun: args.dryRun,
     manager,
+    installKind: target.kind,
     from: args.from,
     source: 'npm',
     npmPackage: DEFAULT_NPM_PACKAGE,
     packageSpec: resolvedSpec,
-    targetCwd,
-    currentSpec: installedSpec(targetCwd),
+    targetCwd: target.cwd,
+    currentSpec: target.kind === 'npm_global' ? 'npm:global' : installedSpec(target.cwd),
     nextCommand: command.join(' '),
+    updateWarning: target.warning,
     configPath: config.configPath,
     migrationCommand: migrationExec?.join(' '),
     migrationSkippedReason: migrationExec ? undefined : (args.skipMigrate ? 'skip_migrate_flag' : config.skippedReason),
@@ -205,6 +273,7 @@ async function main(): Promise<void> {
   } else {
     console.log(`cogmem update ${args.dryRun ? 'dry-run' : 'running'}`);
     console.log(`target: ${result.targetCwd}`);
+    if (result.updateWarning) console.log(`warning: ${result.updateWarning}`);
     console.log(`current: ${result.currentSpec || 'not listed in package.json'}`);
     console.log(`command: ${result.nextCommand}`);
     if (result.migrationCommand) console.log(`migrate: ${result.migrationCommand}`);
@@ -213,7 +282,7 @@ async function main(): Promise<void> {
   }
 
   if (!args.dryRun) {
-    const updateExitCode = await runCommand(command, targetCwd);
+    const updateExitCode = await runCommand(command, target.cwd);
     if (updateExitCode !== 0) process.exit(updateExitCode);
     if (migrationExec) {
       const migrationExitCode = await runCommand(migrationExec, process.cwd());

@@ -21,6 +21,14 @@ cogmem connect hermes --workspace . --auto
 cogmem connect hermes --workspace .
 ```
 
+If Bun is already installed, npm global install is also supported:
+
+```bash
+npm install -g cogmem@latest
+cogmem init --yes --agent hermes
+cogmem connect hermes --workspace . --auto --force
+```
+
 Hermes integration is currently a skill plus MCP bridge. It does not replace a native Hermes memory provider and it does not patch Hermes runtime internals.
 
 ## Local Quantized Embeddings
@@ -89,7 +97,7 @@ Dream stores explicit user clarification as organizational correction evidence r
 
 After upgrades, reload MCP. Rerun `cogmem connect hermes --workspace . --auto --force` when MCP wiring, allow-listed tools, or the installed skill bundle changed.
 
-Cogmem 3.6.2 exposes seven read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`, and installs from npm by default. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Touch only nodes actually used, and follow returned event IDs to raw evidence before quoting exact wording.
+Cogmem 3.6.3 exposes seven read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`, and installs from npm by default. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Touch only nodes actually used, and follow returned event IDs to raw evidence before quoting exact wording.
 
 ## Runtime
 

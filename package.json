@@ -1,10 +1,14 @@
 {
   "name": "cogmem",
 
-  "version": "3.6.2",
+  "version": "3.6.3",
 
   "type": "module",
   "description": "cogmem — agent-native memory kernel for a single local-first AI agent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liuqin164/cogmem.git"
+  },
   "main": "./dist/public.js",
   "types": "./dist/public.d.ts",
   "exports": {
@@ -46,7 +50,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "prepare": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
-    "prepublishOnly": "bun run typecheck && bun test __tests__/release-metadata.unit.test.ts __tests__/update-release.unit.test.ts __tests__/agent-import-cli.unit.test.ts && bun run build",
+    "prepublishOnly": "bun run typecheck && bun test __tests__ && bun run build && npm pack --dry-run --json",
     "type": "tsc -p tsconfig.json --noEmit",
     "test": "bun test __tests__",
     "typecheck": "tsc -p tsconfig.json --noEmit"
