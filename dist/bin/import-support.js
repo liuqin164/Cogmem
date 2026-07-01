@@ -152,6 +152,7 @@ function previewSources(input) {
         recordsIngested: 0,
         skippedRecords: 0,
         rawRecordsAnchored: 0,
+        emptyEpisodesSkipped: 0,
         reindexRaw: false,
         processedSourceIds: [],
         diagnostics,
@@ -161,6 +162,7 @@ function previewSources(input) {
 async function importSources(input) {
     const opened = openKernel(input.args, input.workspaceRoot);
     const importedEpisodeIds = new Set();
+    let emptyEpisodesSkipped = 0;
     const processor = new InstalledBatchProcessor({
         cursorStore: opened.kernel.cursorStore,
         ingestBatch: async (items) => {
@@ -190,7 +192,7 @@ async function importSources(input) {
         for (const episodeId of importedEpisodeIds) {
             const episode = opened.kernel.getEpisode(episodeId);
             if (episode?.status !== 'sealed') {
-                opened.kernel.sealImportedEpisode(episodeId, { reason: `${input.agent}_import_batch_boundary` });
+                emptyEpisodesSkipped += sealImportedEpisodeIfReady(opened.kernel, episodeId, `${input.agent}_import_batch_boundary`) ? 0 : 1;
             }
         }
         return {
@@ -207,6 +209,7 @@ async function importSources(input) {
             recordsIngested: summary.recordsIngested,
             skippedRecords: summary.skippedRecords,
             rawRecordsAnchored: summary.recordsIngested,
+            emptyEpisodesSkipped,
             reindexRaw: false,
             processedSourceIds: summary.processedSourceIds,
             diagnostics: summary.adapterDiagnostics,
@@ -238,6 +241,7 @@ async function reindexRawSources(input) {
     let rawRecordsAnchored = 0;
     let skippedRecords = 0;
     const importedEpisodeIds = new Set();
+    let emptyEpisodesSkipped = 0;
     try {
         for (const source of input.sources) {
             const adapter = adapters.get(source.adapterKind);
@@ -279,7 +283,7 @@ async function reindexRawSources(input) {
         for (const episodeId of importedEpisodeIds) {
             const episode = opened.kernel.getEpisode(episodeId);
             if (episode?.status !== 'sealed') {
-                opened.kernel.sealImportedEpisode(episodeId, { reason: `${input.agent}_reindex_batch_boundary` });
+                emptyEpisodesSkipped += sealImportedEpisodeIfReady(opened.kernel, episodeId, `${input.agent}_reindex_batch_boundary`) ? 0 : 1;
             }
         }
         return {
@@ -297,6 +301,7 @@ async function reindexRawSources(input) {
             recordsIngested: rawRecordsAnchored,
             skippedRecords,
             rawRecordsAnchored,
+            emptyEpisodesSkipped,
             processedSourceIds,
             diagnostics,
             sourceResults,
@@ -306,6 +311,12 @@ async function reindexRawSources(input) {
         opened.kernel.cursorStore.close();
         opened.kernel.close();
     }
+}
+function sealImportedEpisodeIfReady(kernel, episodeId, reason) {
+    if (kernel.listEpisodeEventLinks(episodeId).length === 0)
+        return false;
+    kernel.sealImportedEpisode(episodeId, { reason });
+    return true;
 }
 async function recordRawImportedEvidence(kernel, projectId, envelope) {
     const sourceRef = envelope.ingestInput.sourceRefs?.[0];
@@ -483,6 +494,8 @@ function printHumanSummary(result) {
     console.log(`records ${action}: ${result.dryRun ? result.recordsWouldIngest : result.recordsIngested}`);
     if (result.rawRecordsAnchored !== undefined)
         console.log(`raw ledger anchors: ${result.rawRecordsAnchored}`);
+    if (result.emptyEpisodesSkipped)
+        console.log(`empty episodes skipped: ${result.emptyEpisodesSkipped}`);
     console.log(`records skipped: ${result.skippedRecords}`);
     if (result.diagnostics.length > 0) {
         console.log('diagnostics:');

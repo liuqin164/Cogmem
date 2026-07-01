@@ -142,6 +142,12 @@ export class EpisodeStore {
       SELECT * FROM memory_episode_events WHERE episode_id = ? ORDER BY position
     `).all(episodeId).map(mapEventLink);
     }
+    isEpisodeEmpty(episodeId) {
+        const episode = this.getEpisode(episodeId);
+        if (!episode)
+            throw new Error(`episode_not_found:${episodeId}`);
+        return this.listEventLinks(episodeId).length === 0;
+    }
     addCrossReference(input) {
         const episode = this.getEpisode(input.episodeId);
         if (!episode)
@@ -334,9 +340,18 @@ export class EpisodeStore {
         const now = input.now ?? Date.now();
         const episodes = this.listEpisodes({ projectId: input.projectId, statuses: ['soft_sealed'], limit: 1000 })
             .filter((episode) => (episode.sealedAt || episode.updatedAt) <= input.sealedBefore);
-        for (const episode of episodes)
+        let sealed = 0;
+        for (const episode of episodes) {
+            if (this.isEpisodeEmpty(episode.episodeId)) {
+                if (episode.dreamError !== 'episode_empty_soft_seal_not_promoted') {
+                    this.markEmptyEpisodeDreamSkipped(episode.episodeId, now, 'episode_empty_soft_seal_not_promoted');
+                }
+                continue;
+            }
             this.sealEpisode(episode.episodeId, { mode: 'hard', reason: 'soft_seal_stabilized', now });
-        return episodes.length;
+            sealed += 1;
+        }
+        return sealed;
     }
     claimDreamJobs(input) {
         this.db.prepare(`
@@ -372,15 +387,21 @@ export class EpisodeStore {
       UPDATE memory_episodes SET dream_status = 'queued', dream_error = NULL
       WHERE episode_id IN (SELECT episode_id FROM episode_dream_jobs WHERE state = 'retry_scheduled' AND updated_at = ?)
     `).run(input.now);
-        const where = [`(state = 'pending' OR (state = 'retry_scheduled' AND attempts < ?))`];
+        this.skipEmptyDreamJobs({ projectId: input.projectId, now: input.now });
+        const where = [`(j.state = 'pending' OR (j.state = 'retry_scheduled' AND j.attempts < ?))`];
         const params = [input.maxAttempts];
         if (input.projectId) {
-            where.push('project_id = ?');
+            where.push('j.project_id = ?');
             params.push(input.projectId);
         }
         const rows = this.db.prepare(`
-      SELECT episode_id, project_id, mode_hint, attempts, created_at FROM episode_dream_jobs
-      WHERE ${where.join(' AND ')} ORDER BY priority DESC, created_at LIMIT ?
+      SELECT j.episode_id, j.project_id, j.mode_hint, j.attempts, j.created_at
+      FROM episode_dream_jobs j
+      JOIN memory_episodes e ON e.episode_id = j.episode_id
+      WHERE ${where.join(' AND ')}
+        AND e.event_count > 0
+        AND EXISTS (SELECT 1 FROM memory_episode_events ee WHERE ee.episode_id = j.episode_id)
+      ORDER BY j.priority DESC, j.created_at LIMIT ?
     `).all(...params, Math.max(1, Math.min(Math.trunc(input.limit), 100)));
         const claimed = [];
         for (const row of rows) {
@@ -402,6 +423,32 @@ export class EpisodeStore {
             }
         }
         return claimed;
+    }
+    skipEmptyDreamJobs(input) {
+        const now = input.now ?? Date.now();
+        const params = [];
+        const where = [
+            `j.state IN ('pending', 'failed_retryable', 'retry_scheduled')`,
+            `(COALESCE(e.event_count, 0) = 0 OR NOT EXISTS (
+        SELECT 1 FROM memory_episode_events ee WHERE ee.episode_id = j.episode_id
+      ))`,
+        ];
+        if (input.projectId) {
+            where.push(`j.project_id = ?`);
+            params.push(input.projectId);
+        }
+        const rows = this.db.prepare(`
+      SELECT j.episode_id FROM episode_dream_jobs j
+      LEFT JOIN memory_episodes e ON e.episode_id = j.episode_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY j.updated_at DESC
+      LIMIT 1000
+    `).all(...params);
+        const episodeIds = rows.map((row) => row.episode_id);
+        if (!episodeIds.length)
+            return 0;
+        this.markEmptyEpisodeDreamSkippedMany(episodeIds, now, 'episode_empty_skipped_no_raw_evidence');
+        return episodeIds.length;
     }
     completeDreamJob(episodeId, leaseId, candidateIds, now) {
         const result = this.db.prepare(`
@@ -440,6 +487,28 @@ export class EpisodeStore {
             projectId ? statement.run(projectId) : statement.run();
         }
         return Number(result.changes || 0);
+    }
+    markEmptyEpisodeDreamSkipped(episodeId, now, reason) {
+        this.markEmptyEpisodeDreamSkippedMany([episodeId], now, reason);
+    }
+    markEmptyEpisodeDreamSkippedMany(episodeIds, now, reason) {
+        if (!episodeIds.length)
+            return;
+        const placeholders = episodeIds.map(() => '?').join(', ');
+        this.db.transaction(() => {
+            this.db.prepare(`
+        UPDATE episode_dream_jobs SET state = 'skipped', lease_id = NULL, lease_until = NULL,
+          retry_after = NULL, failure_category = 'episode_empty', last_error = ?, candidate_ids_json = '[]',
+          updated_at = ?
+        WHERE episode_id IN (${placeholders})
+          AND state IN ('pending', 'processing', 'failed_retryable', 'retry_scheduled')
+      `).run(reason, now, ...episodeIds);
+            this.db.prepare(`
+        UPDATE memory_episodes SET dream_status = 'failed', dream_error = ?, last_dream_run_id = NULL,
+          dream_candidate_count = 0, updated_at = ?
+        WHERE episode_id IN (${placeholders})
+      `).run(reason, now, ...episodeIds);
+        })();
     }
     getDreamStatus(projectId) {
         const rows = (projectId

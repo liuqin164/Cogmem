@@ -29,7 +29,8 @@ function stringArg(values, key) {
 }
 function usage() {
     return [
-        'Usage: cogmem-mcp [--db <memory.db>|--config <config.toml>] [--cwd <dir>]',
+        'Usage: cogmem mcp [--db <memory.db>|--config <config.toml>] [--cwd <dir>]',
+        '       cogmem-mcp [--db <memory.db>|--config <config.toml>] [--cwd <dir>]',
         '',
         'Starts a stdio MCP server exposing recall, strategy, episode append/import/status/seal, conditional dream tick/status, memory map, maintenance, and prospective-memory tools.',
     ].join('\n');

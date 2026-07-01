@@ -31,30 +31,51 @@ cogmem prospective due --project <projectId>
 
 ## Install
 
-Run from the OpenClaw workspace root:
+Run from the OpenClaw workspace root. Prefer a workspace-local npm dependency so OpenClaw and Cogmem upgrade together:
 
 ```bash
-COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-cogmem init --yes --agent openclaw --scope project
-cogmem doctor
-cogmem connect openclaw --workspace . --auto --force
+npm install cogmem@latest --save
+COGMEM="./node_modules/.bin/cogmem"
+"$COGMEM" doctor
+"$COGMEM" connect openclaw --workspace . --auto --force --json
 ```
 
-If Bun is already installed and the operator wants npm global installation instead of the one-line installer, use:
+If the workspace already has Cogmem installed locally, keep using the local binary. If there is no local binary but a global install exists, use global. If neither exists, install first:
+
+```bash
+if [ -x ./node_modules/.bin/cogmem ]; then
+  COGMEM="./node_modules/.bin/cogmem"
+elif command -v cogmem >/dev/null 2>&1; then
+  COGMEM="cogmem"
+else
+  npm install cogmem@latest --save
+  COGMEM="./node_modules/.bin/cogmem"
+fi
+```
+
+Global npm is also supported when the operator wants one CLI for every workspace:
 
 ```bash
 npm install -g cogmem@latest
-cogmem init --yes --agent openclaw --scope project
-cogmem connect openclaw --workspace . --auto --force
+COGMEM="cogmem"
+"$COGMEM" connect openclaw --workspace . --auto --force --json
 ```
 
-This creates project-local kernel config and storage under `.cogmem/`, which is the recommended OpenClaw workspace setup.
+The one-line installer remains available for machines that do not already have Bun. Use `COGMEM_SKIP_INIT=1` for agent-run installs so the installer does not start the interactive wizard:
 
 ```bash
-cogmem init --yes --agent openclaw --scope project
+COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
+COGMEM="cogmem"
+"$COGMEM" connect openclaw --workspace . --auto --force --json
 ```
 
-The install creates:
+Do not run `cogmem init` as an unattended agent action. `cogmem init` is an interactive configuration wizard. Use it only when an operator is present or explicitly asks for a guided setup:
+
+```bash
+"$COGMEM" init --agent openclaw --scope project
+```
+
+OpenClaw workspaces should normally use project-local kernel config and storage:
 
 ```text
 .cogmem/config.toml
@@ -155,6 +176,21 @@ cogmem import-openclaw --workspace . --project openclaw --json
 
 The importer is idempotent. Re-running it skips records already imported into the same memory database.
 Real non-JSON imports print source-level and embedding+ingest progress to stderr. Use `--json --progress` to keep JSON on stdout while streaming progress to stderr, or `--no-progress` when a wrapper needs quiet stderr.
+Cogmem 3.6.4 skips import batch sealing for empty episode boundaries and Dream skips legacy empty episode jobs instead of blocking the whole queue. If `episode status` shows `dreamError` beginning with `episode_empty`, inspect the source events and use episode repair instead of editing SQLite rows.
+
+After import, run the maintenance loop in this order. `needs_confirmation` is a human review queue, not the Dream backlog, and `memory govern` promotes only ordinary `candidate` rows:
+
+```bash
+cogmem memory status --project openclaw --json
+cogmem episode status --project openclaw --json
+cogmem dream status --project openclaw --json
+cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
+cogmem memory candidates --project openclaw --status candidate --json
+cogmem memory govern --project openclaw --limit 100 --json
+cogmem memory candidates --project openclaw --status needs_confirmation --json
+cogmem memory review --project openclaw --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <distinct-user-event-id> --json
+cogmem memory recall --query "<verification question>" --project openclaw --agent openclaw --json
+```
 
 Imported sources:
 
@@ -359,7 +395,7 @@ Run curation manually or from a host-owned schedule:
 
 ```bash
 cogmem episode status --project openclaw --json
-cogmem dream tick --project openclaw --mode auto --json
+cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
 cogmem memory govern --project openclaw --json
 cogmem memory candidates --project openclaw --status candidate --json
 ```
@@ -395,7 +431,7 @@ Explicit user clarification may create an organizational `correction` record. Do
 
 OpenClaw session exports may place the body below an empty `user:` or `assistant:` header and may repeat an assistant block exactly. Import accepts that layout, collapses only adjacent exact export duplicates, and uses the `# Session: ... UTC` heading as the chronological timestamp base. Do not rewrite the file solely to make it importable.
 
-If rejected provider diagnostics mention invalid memory-model output but later curation works, seal or repair the affected episode, run `cogmem dream tick --project openclaw --mode auto --json`, then run `cogmem memory govern --project openclaw --json`; recovered provider runs mark older provider diagnostics as `superseded`.
+If rejected provider diagnostics mention invalid memory-model output but later curation works, seal or repair the affected episode, run `cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json`, then run `cogmem memory govern --project openclaw --json`; recovered provider runs mark older provider diagnostics as `superseded`.
 
 After package updates or config drift, repair the host wiring:
 
@@ -441,8 +477,10 @@ openclaw gateway restart
 If the OpenClaw environment exposes an MCP client, use the core MCP bridge instead of writing a native plugin first:
 
 ```bash
-cogmem-mcp
+cogmem mcp
 ```
+
+`cogmem-mcp` remains a compatibility bin for older host configs.
 
 Expose these tools to the agent:
 

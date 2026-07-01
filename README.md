@@ -11,15 +11,24 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.6.3`
+Current version: `3.6.4`
 
 Distribution: npm registry. GitHub remains the source mirror and hosts this installer, but package install and upgrade resolve `cogmem` from npm by default.
+
+Default workspace install:
+
+```bash
+npm install cogmem@latest --save
+./node_modules/.bin/cogmem doctor
+```
+
+One-line installer for machines that need Bun bootstrapping:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
 ```
 
-The installer:
+The one-line installer:
 
 1. Ensures Bun is available.
 2. Installs `cogmem@latest` from the npm registry into `~/.cogmem/pkg`.
@@ -158,10 +167,11 @@ High-dimensional vectors grow quickly. Prefer `raw_then_dream` or `selective_com
 
 ## Quick Start
 
-Install globally:
+Install into an agent workspace with npm:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
+npm install cogmem@latest --save
+./node_modules/.bin/cogmem doctor
 ```
 
 Or install into an existing Bun workspace:
@@ -185,6 +195,19 @@ npm install -g cogmem@latest
 cogmem init
 ```
 
+Or use the one-line installer for machines that do not already have Bun:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
+```
+
+For agent-run installs, skip the interactive wizard and connect the host explicitly:
+
+```bash
+COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
+cogmem doctor
+```
+
 Validate configuration:
 
 ```bash
@@ -206,7 +229,7 @@ cogmem migrate --dry-run --json
 
 For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
-Upgrade a 3.5.2 database, a 3.6.0 database, or a pre-release schema-25 test database into the 3.6.3 schema set with one command:
+Upgrade a 3.5.2 database, a 3.6.0 database, or a pre-release schema-25 test database into the 3.6.4 schema set with one command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -237,9 +260,14 @@ cogmem repair project-scope --from "" --to openclaw --apply --json
 Inspect and conditionally process sealed conversation episodes:
 
 ```bash
+cogmem memory status --project my-agent --json
 cogmem episode status --project my-agent --json
-cogmem dream tick --project my-agent --mode auto --json
+cogmem dream status --project my-agent --json
+cogmem dream tick --project my-agent --mode auto --max-episodes 20 --json
+cogmem memory candidates --project my-agent --status candidate --json
 cogmem memory govern --project my-agent --json
+cogmem memory candidates --project my-agent --status needs_confirmation --json
+cogmem memory review --project my-agent --id <candidate-id> --action approve --actor <operator> --reason "confirmed" --confirmation-event <user-event-id> --json
 ```
 
 For a host timer, call `dream tick`; the timer only wakes the scheduler. An empty backlog performs no Dream work:
@@ -250,7 +278,7 @@ cogmem dream tick --project my-agent --mode auto --max-episodes 10 --json
 
 Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.6.3 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
 
-Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands use stable content identities and the same episode schema. Low-confidence imported groups soft-seal for review unless an operator explicitly forces sealing. Episode semantic summaries and closure receipts are control hints, never durable evidence; every Dream candidate must cite a non-empty subset of the episode's raw event IDs and still pass CPU governance.
+Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands use stable content identities and the same episode schema. Low-confidence imported groups soft-seal for review unless an operator explicitly forces sealing. Cogmem 3.6.4 skips import batch sealing for empty episode boundaries and skips legacy empty Dream jobs so one bad imported episode cannot block the queue. Episode semantic summaries and closure receipts are control hints, never durable evidence; every Dream candidate must cite a non-empty subset of the episode's raw event IDs and still pass CPU governance.
 
 User-shaped topic state is project-scoped. Explicit user operations become active and auditable; model-proposed topics, aliases, and relations remain candidates. Use MCP `cogmem_topic_list` to inspect nodes, `cogmem_topic_operate` to create, rename, alias, move, merge, split, or relate topics, and `cogmem_topic_rollback` to reverse an audited operation. Alias collisions fail closed as `needs_review`; applications can also call `TopicGovernance.rollback()` through the public API.
 
@@ -482,8 +510,8 @@ Hermes integration is MCP-based in this release. cogmem does not claim to be a n
 Install the skill and patch Hermes MCP config:
 
 ```bash
-cogmem init --agent hermes
-cogmem connect hermes --workspace /path/to/hermes/workspace --auto --force
+npm install cogmem@latest --save
+./node_modules/.bin/cogmem connect hermes --workspace /path/to/hermes/workspace --auto --force
 ```
 
 This installs the agent-facing skill bundle at:
@@ -500,6 +528,8 @@ With `--auto`, it adds or updates a `cogmem` MCP server entry in:
 ```text
 ~/.hermes/config.yaml
 ```
+
+New Hermes configs start the server with `cogmem mcp`. Existing `cogmem-mcp` entries remain supported and are updated in place for tool allow-list changes.
 
 Then reload MCP inside Hermes:
 
@@ -688,7 +718,7 @@ For Hermes after an update, reload the MCP server or restart the agent host. If 
 cogmem connect hermes --workspace /path/to/hermes/workspace --auto --force
 ```
 
-This also updates existing Hermes `cogmem-mcp` blocks with missing strategy, episode, Dream, memory-map, maintenance, and prospective tools.
+This also updates existing Hermes MCP blocks with missing strategy, episode, Dream, memory-map, maintenance, and prospective tools. New configs use `cogmem mcp`; `cogmem-mcp` remains a compatibility bin.
 
 ## Documentation
 
@@ -710,6 +740,7 @@ Installed OpenClaw and Hermes skills include their own `references/operations.md
 cogmem init
 cogmem doctor
 cogmem connect openclaw|hermes
+cogmem mcp
 cogmem update
 cogmem memory recall|search|show|dream|govern|candidates|review|status|map|tick|bind
 cogmem memory graph|graph-search|graph-explore|graph-node|graph-neighbors|graph-path|graph-timeline
@@ -739,7 +770,7 @@ npm pack --dry-run --json
 npm publish --dry-run --access public
 ```
 
-Create a GitHub Release from the matching version tag, for example `v3.6.3`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
+Create a GitHub Release from the matching version tag, for example `v3.6.4`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
 
 Publish manually only for emergency fallback:
 

@@ -9,19 +9,16 @@ Belief Graph writes keep ownership and evidence roles. OpenClaw may record assis
 ## Install
 
 ```bash
-COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-cogmem init --yes --agent openclaw --scope project
-cogmem doctor --fix --agent openclaw --workspace .
-cogmem connect openclaw --workspace .
-cogmem connect openclaw --workspace . --auto --force
+npm install cogmem@latest --save
+COGMEM="./node_modules/.bin/cogmem"
+"$COGMEM" doctor
+"$COGMEM" connect openclaw --workspace . --auto --force --json
 ```
 
-If Bun is already installed, npm global install is also supported:
+Use `cogmem init` only as an interactive operator wizard, not as an unattended agent install step:
 
 ```bash
-npm install -g cogmem@latest
-cogmem init --yes --agent openclaw --scope project
-cogmem connect openclaw --workspace . --auto --force
+"$COGMEM" init --agent openclaw --scope project
 ```
 
 ## Local Quantized Embeddings
@@ -61,7 +58,7 @@ Then run:
 
 ```bash
 cogmem episode status --project openclaw --json
-cogmem dream tick --project openclaw --mode auto --json
+cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
 cogmem memory govern --project openclaw --json
 cogmem memory candidates --project openclaw --status candidate --json
 ```
@@ -86,7 +83,7 @@ cogmem memory tick --project openclaw --json
 cogmem memory bind --project openclaw --json
 ```
 
-Cogmem 3.6.3 keeps the 3.6.x Memory Atlas and OpenClaw reliability work, then makes npm the default install and update channel. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
+Cogmem 3.6.4 keeps the 3.6.x Memory Atlas and OpenClaw reliability work, makes npm the default install and update channel, and prevents empty imported episodes from blocking Dream. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
 
 ```bash
 cogmem memory graph-explore --project openclaw --query "去年与 Hermes 有关的决定" --json
@@ -124,6 +121,19 @@ Import:
 
 ```bash
 cogmem import-openclaw --workspace . --project openclaw
+```
+
+After import:
+
+```bash
+cogmem memory status --project openclaw --json
+cogmem episode status --project openclaw --json
+cogmem dream status --project openclaw --json
+cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
+cogmem memory candidates --project openclaw --status candidate --json
+cogmem memory govern --project openclaw --limit 100 --json
+cogmem memory candidates --project openclaw --status needs_confirmation --json
+cogmem memory review --project openclaw --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
 ```
 
 Single source files and batches can be imported explicitly:

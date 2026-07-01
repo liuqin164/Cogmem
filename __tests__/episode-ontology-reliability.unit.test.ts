@@ -5,6 +5,7 @@ import { CogmemBlockStripper, eventTextForMemory } from '../src/episode/CogmemBl
 import { EpisodeAssembler } from '../src/episode/EpisodeAssembler.js';
 import { EpisodeStore } from '../src/episode/EpisodeStore.js';
 import { classifyTurnRelation, classifyTurnRelationHybrid } from '../src/episode/TurnRelationClassifier.js';
+import { createMemoryKernel } from '../src/factory.js';
 import { migration_0024 } from '../src/migrations/0024_episode_ontology_reliability.js';
 import { TopicAliasRegistry } from '../src/topic/TopicAliasRegistry.js';
 import { TopicGovernance } from '../src/topic/TopicGovernance.js';
@@ -215,5 +216,25 @@ test('manual reseal creates an audit receipt and empty normal seals fail', () =>
     expect(store.listClosureReceipts({ episodeId: episode.episodeId })).toHaveLength(2);
   } finally {
     db.close();
+  }
+});
+
+test('import batch sealing rejects empty episodes before they enter Dream backlog', () => {
+  const kernel = createMemoryKernel({ dbPath: ':memory:', vectorBackend: 'sqlite-vec' });
+  try {
+    const empty = kernel.episodeStore.createEpisode({
+      projectId: 'brain', sessionId: 'empty-import', episodeType: 'discussion', importance: 0.2,
+      eventId: 'evt-empty-import', occurredAt: 1,
+    });
+
+    expect(() => kernel.sealImportedEpisode(empty.episodeId, { reason: 'openclaw_import_batch_boundary' }))
+      .toThrow('episode_empty');
+    expect(kernel.getEpisode(empty.episodeId)).toEqual(expect.objectContaining({
+      status: 'open',
+      dreamStatus: 'none',
+    }));
+    expect(kernel.getEpisodeDreamStatus('brain').pending).toBe(0);
+  } finally {
+    kernel.close();
   }
 });

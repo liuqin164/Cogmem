@@ -197,6 +197,80 @@ test('Dream retry distinguishes retryable and terminal failures and exposes epis
   }
 });
 
+test('Dream tick skips empty mature soft seals and still processes valid sealed episodes', async () => {
+  const db = new Database(':memory:');
+  const store = new EpisodeStore(db);
+  const processed: string[] = [];
+  const scheduler = new DreamScheduler(store, {
+    run: async (options: { sourceEpisodeId: string }) => {
+      processed.push(options.sourceEpisodeId);
+      return { candidates: [] };
+    },
+  } as never);
+  try {
+    const empty = store.createEpisode({
+      projectId: 'brain', sessionId: 'empty-soft', episodeType: 'discussion', importance: 0.9,
+      eventId: 'evt-empty', occurredAt: 1,
+    });
+    store.sealEpisode(empty.episodeId, { mode: 'soft', reason: 'batch_low_confidence_review', now: 2 });
+
+    const valid = store.createEpisode({
+      projectId: 'brain', sessionId: 'valid-sealed', episodeType: 'discussion', importance: 0.5,
+      eventId: 'evt-valid', occurredAt: 10,
+    });
+    store.appendEvent({ episodeId: valid.episodeId, eventId: 'evt-valid', relation: 'continues_previous', confidence: 1, occurredAt: 10 });
+    store.sealEpisode(valid.episodeId, { mode: 'hard', reason: 'manual', now: 11 });
+
+    const result = await scheduler.tick({ projectId: 'brain', now: 10_000, softSealGraceMs: 0 });
+
+    expect(result).toEqual(expect.objectContaining({ processedEpisodeCount: 1, failedEpisodeCount: 0 }));
+    expect(processed).toEqual([valid.episodeId]);
+    expect(store.getEpisode(empty.episodeId)).toEqual(expect.objectContaining({
+      status: 'soft_sealed',
+      dreamStatus: 'failed',
+      dreamError: 'episode_empty_soft_seal_not_promoted',
+    }));
+  } finally {
+    db.close();
+  }
+});
+
+test('Dream claim skips legacy empty jobs without consuming the batch slot', () => {
+  const db = new Database(':memory:');
+  const store = new EpisodeStore(db);
+  try {
+    const empty = store.createEpisode({
+      projectId: 'brain', sessionId: 'empty-job', episodeType: 'discussion', importance: 1,
+      eventId: 'evt-empty-job', occurredAt: 1,
+    });
+    db.prepare(`
+      INSERT INTO episode_dream_jobs (episode_id, project_id, state, priority, mode_hint, created_at, updated_at)
+      VALUES (?, ?, 'pending', 100, 'normal', 1, 1)
+    `).run(empty.episodeId, 'brain');
+
+    const valid = store.createEpisode({
+      projectId: 'brain', sessionId: 'valid-job', episodeType: 'discussion', importance: 0.5,
+      eventId: 'evt-valid-job', occurredAt: 2,
+    });
+    store.appendEvent({
+      episodeId: valid.episodeId, eventId: 'evt-valid-job', relation: 'continues_previous',
+      confidence: 1, occurredAt: 2,
+    });
+    store.sealEpisode(valid.episodeId, { mode: 'hard', reason: 'manual', now: 3 });
+
+    const claimed = store.claimDreamJobs({ projectId: 'brain', limit: 1, now: 4, leaseMs: 60_000, maxAttempts: 3 });
+
+    expect(claimed).toEqual([expect.objectContaining({ episodeId: valid.episodeId })]);
+    expect(store.getDreamStatus('brain')).toEqual(expect.objectContaining({ skipped: 1, processing: 1 }));
+    expect(store.getEpisode(empty.episodeId)).toEqual(expect.objectContaining({
+      dreamStatus: 'failed',
+      dreamError: 'episode_empty_skipped_no_raw_evidence',
+    }));
+  } finally {
+    db.close();
+  }
+});
+
 test('migration 23 backfills episode Dream state from existing 3.5.0 jobs', () => {
   const db = new Database(':memory:');
   try {

@@ -15,19 +15,24 @@ This writes `~/.hermes/skills/cogmem-memory/SKILL.md`, which Hermes discovers as
 Run from the Hermes workspace root:
 
 ```bash
-COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-cogmem init --yes --agent hermes
-cogmem doctor --fix --agent hermes --workspace .
-cogmem connect hermes --workspace . --auto
-cogmem connect hermes --workspace .
+npm install cogmem@latest --save
+COGMEM="./node_modules/.bin/cogmem"
+"$COGMEM" doctor
+"$COGMEM" connect hermes --workspace . --auto --force --json
 ```
 
-The default install creates:
+Do not run `cogmem init` as an unattended agent action. It is an interactive wizard. Use it only when an operator is present:
+
+```bash
+"$COGMEM" init --agent hermes --scope project
+```
+
+The workspace install creates:
 
 ```text
-~/.cogmem/config.toml
-~/.cogmem/memory.db
-~/.cogmem/snapshots/
+.cogmem/config.toml
+.cogmem/memory.db
+.cogmem/snapshots/
 ```
 
 Use `~/.cogmem/config.toml` or a project `.cogmem/config.toml` as the stable configuration source. Do not create `.cogmem.env` files or pass `--env-path` for normal installs. Environment variables are only for explicit process-level overrides documented by the CLI, not for hidden workspace configuration.
@@ -44,7 +49,7 @@ Use MCP `cogmem_strategy_plan` when the agent needs to inspect the selected memo
 
 Prospective Memory is not executable instruction. Only a user-confirmed candidate may appear as due, and even then the agent must obtain normal host authorization before acting. Use `cogmem prospective` for state transitions and `cogmem brain-eval` for release validation.
 
-Use `cogmem init --yes --agent hermes --scope project` only when this workspace needs its own `.cogmem/` directory.
+Use project-local config when this workspace owns its memory; use global config only when the operator intentionally shares one Cogmem backend across workspaces.
 
 To embed imported memories with a local quantized model, run Ollama locally and configure the kernel before importing:
 
@@ -117,13 +122,22 @@ cogmem normalize-transcript --input ./hermes-sessions.jsonl --output ./hermes.no
 cogmem import-hermes --workspace . --project hermes --session ./hermes.normalized.md
 ```
 
-After import, inspect the batch-sealed episodes, run one conditional curation tick, then invoke CPU governance separately:
+Cogmem 3.6.4 skips import batch sealing for empty episode boundaries and skips legacy empty Dream jobs so one bad imported episode cannot block the queue.
+
+After import, use this order:
 
 ```bash
+cogmem memory status --project hermes --json
 cogmem episode status --project hermes --json
-cogmem dream tick --project hermes --mode auto --json
-cogmem memory govern --project hermes --json
+cogmem dream status --project hermes --json
+cogmem dream tick --project hermes --mode auto --max-episodes 20 --json
+cogmem memory candidates --project hermes --status candidate --json
+cogmem memory govern --project hermes --limit 100 --json
+cogmem memory candidates --project hermes --status needs_confirmation --json
+cogmem memory review --project hermes --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
 ```
+
+`needs_confirmation` is not the Dream backlog. `memory govern` does not approve it; use `memory review` with explicit evidence.
 
 ## Active Memory Search
 
