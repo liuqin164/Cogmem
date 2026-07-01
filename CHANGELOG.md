@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.6.4
+
+- Fixed OpenClaw/Hermes imports so empty imported episode boundaries are not batch-sealed into Dream work, and mature empty soft seals no longer abort `dream tick`.
+- Added Dream queue cleanup for legacy empty episode jobs so one bad upgraded/imported episode is marked skipped and does not consume maintenance batch slots.
+- Updated OpenClaw and Hermes auto-installed skills, runbooks, and README examples to prefer npm workspace-local installs, reserve `cogmem init` for interactive operator setup, and document the full import -> dream -> candidate governance -> `needs_confirmation` review flow.
+- Standardized MCP guidance on `cogmem mcp` for new Hermes/OpenClaw host configs while keeping `cogmem-mcp` as a compatibility bin for existing configs.
+
 ## 3.6.3
 
 - Added a GitHub Release `published` workflow for npm Trusted Publishing with OIDC provenance, full tests, build, version-tag validation, and package dry-run verification before `npm publish`.

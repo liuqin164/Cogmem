@@ -78,6 +78,7 @@ interface HermesMcpInstallResult {
   enabled: true;
   configPath: string;
   serverCommand: string;
+  serverArgs: string[];
   dryRun: boolean;
   configUpdated: boolean;
   backupPath?: string;
@@ -149,19 +150,18 @@ function defaultSkillPath(agent: AgentKind, workspaceRoot: string): string {
 function nextCommands(agent: AgentKind): string[] {
   if (agent === 'openclaw') {
     return [
-      './node_modules/.bin/cogmem-init --agent openclaw --scope project',
-      './node_modules/.bin/cogmem-doctor',
-      './node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --dry-run',
-      './node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw',
-      './node_modules/.bin/cogmem-connect openclaw --workspace . --auto --force',
+      './node_modules/.bin/cogmem doctor',
+      './node_modules/.bin/cogmem openclaw diagnose --workspace . --json',
+      './node_modules/.bin/cogmem import-openclaw --workspace . --project openclaw --dry-run',
+      './node_modules/.bin/cogmem import-openclaw --workspace . --project openclaw',
+      './node_modules/.bin/cogmem memory status --project openclaw --json',
     ];
   }
   return [
-    './node_modules/.bin/cogmem-init --agent hermes',
-    './node_modules/.bin/cogmem-doctor',
-    './node_modules/.bin/cogmem-connect hermes --workspace . --auto --force',
-    './node_modules/.bin/cogmem-import-hermes --workspace . --project hermes --dry-run',
-    './node_modules/.bin/cogmem-import-hermes --workspace . --project hermes',
+    './node_modules/.bin/cogmem doctor',
+    './node_modules/.bin/cogmem import-hermes --workspace . --project hermes --dry-run',
+    './node_modules/.bin/cogmem import-hermes --workspace . --project hermes',
+    './node_modules/.bin/cogmem memory status --project hermes --json',
   ];
 }
 
@@ -198,12 +198,12 @@ function hostConfigSnippet(agent: AgentKind, workspaceRoot: string, auto: boolea
     ].join('\n');
   }
 
-  const mcpBin = resolveCogmemMcpCommand(workspaceRoot);
+  const mcpServer = resolveCogmemMcpServer(workspaceRoot);
   return [
     'mcp_servers:',
     '  cogmem:',
-    `    command: "${mcpBin}"`,
-    '    args: []',
+    `    command: "${mcpServer.command}"`,
+    `    args: ${JSON.stringify(mcpServer.args)}`,
     '    enabled: true',
     '    tools:',
     '      include:',
@@ -211,17 +211,25 @@ function hostConfigSnippet(agent: AgentKind, workspaceRoot: string, auto: boolea
   ].join('\n');
 }
 
-function resolveCogmemMcpCommand(workspaceRoot: string): string {
-  if (process.env.COGMEM_MCP_BIN) return process.env.COGMEM_MCP_BIN;
-  const workspaceBin = join(workspaceRoot, 'node_modules', '.bin', 'cogmem-mcp');
-  if (existsSync(workspaceBin)) return workspaceBin;
+function resolveCogmemMcpServer(workspaceRoot: string): { command: string; args: string[] } {
+  if (process.env.COGMEM_MCP_BIN) return { command: process.env.COGMEM_MCP_BIN, args: [] };
+  if (process.env.COGMEM_BIN) return { command: process.env.COGMEM_BIN, args: ['mcp'] };
+  const workspaceCli = join(workspaceRoot, 'node_modules', '.bin', 'cogmem');
+  if (existsSync(workspaceCli)) return { command: workspaceCli, args: ['mcp'] };
   const pathValue = process.env.PATH || '';
   for (const segment of pathValue.split(':')) {
     if (!segment) continue;
-    const candidate = join(segment, 'cogmem-mcp');
-    if (existsSync(candidate)) return candidate;
+    const candidate = join(segment, 'cogmem');
+    if (existsSync(candidate)) return { command: candidate, args: ['mcp'] };
   }
-  return 'cogmem-mcp';
+  const workspaceMcp = join(workspaceRoot, 'node_modules', '.bin', 'cogmem-mcp');
+  if (existsSync(workspaceMcp)) return { command: workspaceMcp, args: [] };
+  for (const segment of pathValue.split(':')) {
+    if (!segment) continue;
+    const candidate = join(segment, 'cogmem-mcp');
+    if (existsSync(candidate)) return { command: candidate, args: [] };
+  }
+  return { command: 'cogmem', args: ['mcp'] };
 }
 
 function installSkill(args: ConnectArgs): ConnectResult {
@@ -304,9 +312,9 @@ function installHermesMcpConfig(input: {
   force: boolean;
 }): HermesMcpInstallResult {
   const configPath = resolve(input.configPath || defaultHermesConfigPath());
-  const serverCommand = resolveCogmemMcpCommand(resolve(input.workspaceRoot));
+  const server = resolveCogmemMcpServer(resolve(input.workspaceRoot));
   const original = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
-  const patched = patchHermesMcpConfig(original, serverCommand);
+  const patched = patchHermesMcpConfig(original, server.command, server.args);
   const changed = patched !== original;
   let backupPath: string | undefined;
 
@@ -322,15 +330,16 @@ function installHermesMcpConfig(input: {
   return {
     enabled: true,
     configPath,
-    serverCommand,
+    serverCommand: server.command,
+    serverArgs: server.args,
     dryRun: input.dryRun,
     configUpdated: changed || input.force,
     backupPath,
   };
 }
 
-function patchHermesMcpConfig(original: string, serverCommand: string): string {
-  if (/^\s+cogmem\s*:/m.test(original) && original.includes('cogmem-mcp')) {
+function patchHermesMcpConfig(original: string, serverCommand: string, serverArgs: string[]): string {
+  if (/^\s+cogmem\s*:/m.test(original)) {
     return patchExistingHermesCogmemConfig(original);
   }
 
@@ -338,7 +347,7 @@ function patchHermesMcpConfig(original: string, serverCommand: string): string {
   const serverBlock = [
     '  cogmem:',
     `    command: "${serverCommand}"`,
-    '    args: []',
+    `    args: ${JSON.stringify(serverArgs)}`,
     '    enabled: true',
     '    tools:',
     '      include:',
@@ -441,7 +450,7 @@ function printHuman(result: ConnectResult): void {
     console.log('');
     console.log('Hermes MCP integration:');
     console.log(`  config: ${result.hermesMcp.configPath}`);
-    console.log(`  command: ${result.hermesMcp.serverCommand}`);
+    console.log(`  command: ${result.hermesMcp.serverCommand} ${result.hermesMcp.serverArgs.join(' ')}`.trimEnd());
     if (result.hermesMcp.backupPath) console.log(`  backup: ${result.hermesMcp.backupPath}`);
     console.log('  reload: /reload-mcp');
   }

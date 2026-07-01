@@ -15,12 +15,17 @@ This writes `<workspace>/skills/cogmem-memory/SKILL.md`, which OpenClaw discover
 Run from the OpenClaw workspace root:
 
 ```bash
-COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-cogmem init --yes --agent openclaw --scope project
-cogmem doctor --fix --agent openclaw --workspace .
-cogmem connect openclaw --workspace .
-cogmem connect openclaw --workspace . --auto --force
-cogmem openclaw diagnose --workspace . --json
+npm install cogmem@latest --save
+COGMEM="./node_modules/.bin/cogmem"
+"$COGMEM" doctor
+"$COGMEM" connect openclaw --workspace . --auto --force --json
+"$COGMEM" openclaw diagnose --workspace . --json
+```
+
+Do not run `cogmem init` as an unattended agent action. It is an interactive wizard. Use it only when an operator is present:
+
+```bash
+"$COGMEM" init --agent openclaw --scope project
 ```
 
 The OpenClaw workspace install creates:
@@ -92,6 +97,22 @@ cogmem import-openclaw --workspace . --project openclaw --json
 ```
 
 Real non-JSON imports print source-level and embedding+ingest progress to stderr. Use `--json --progress` to keep JSON on stdout while streaming progress to stderr, or `--no-progress` when a wrapper needs quiet stderr.
+Cogmem 3.6.4 skips import batch sealing for empty episode boundaries and skips legacy empty Dream jobs so one bad imported episode cannot block the queue.
+
+After import, use this order:
+
+```bash
+cogmem memory status --project openclaw --json
+cogmem episode status --project openclaw --json
+cogmem dream status --project openclaw --json
+cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
+cogmem memory candidates --project openclaw --status candidate --json
+cogmem memory govern --project openclaw --limit 100 --json
+cogmem memory candidates --project openclaw --status needs_confirmation --json
+cogmem memory review --project openclaw --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
+```
+
+`needs_confirmation` is not the Dream backlog. `memory govern` does not approve it; use `memory review` with explicit evidence.
 
 Import scope:
 

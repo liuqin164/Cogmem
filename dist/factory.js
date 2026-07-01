@@ -83,7 +83,7 @@ import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
 import { config } from './utils/Config.js';
 import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snapshot/index.js';
-const CORE_VERSION = '3.6.3';
+const CORE_VERSION = '3.6.4';
 const LATEST_SCHEMA_VERSION = 27;
 export class MemoryKernel {
     options;
@@ -983,6 +983,8 @@ export class MemoryKernel {
     }
     sealImportedEpisode(episodeId, input) {
         const links = this.episodeStore.listEventLinks(episodeId);
+        if (!links.length)
+            throw new Error(`episode_empty:${episodeId}`);
         const averageConfidence = links.length
             ? links.reduce((total, link) => total + link.confidence, 0) / links.length
             : 0;

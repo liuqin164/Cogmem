@@ -1,4 +1,4 @@
-# Cogmem 3.6.3 Operations Reference for Hermes
+# Cogmem 3.6.4 Operations Reference for Hermes
 
 Read this file when installing, upgrading, importing, repairing, or operating Cogmem. `SKILL.md` contains the decision rules; this file records the operational commands.
 
@@ -21,22 +21,35 @@ Read this file when installing, upgrading, importing, repairing, or operating Co
 
 ## Install, connect, and reload
 
-```bash
-COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-cogmem init --yes --agent hermes
-cogmem doctor
-cogmem connect hermes --workspace . --auto --force --json
-```
-
-If Bun is already installed and the operator prefers npm global installation:
+Recommended workspace-local npm install:
 
 ```bash
-npm install -g cogmem@latest
-cogmem init --yes --agent hermes
-cogmem connect hermes --workspace . --auto --force --json
+npm install cogmem@latest --save
+COGMEM="./node_modules/.bin/cogmem"
+"$COGMEM" doctor
+"$COGMEM" connect hermes --workspace . --auto --force --json
 ```
 
-Then run `/reload-mcp` inside Hermes. `connect --auto` installs this skill bundle and updates the Hermes MCP allow-list; it does not claim a native `memory.provider` integration.
+Use this resolver in agent-run scripts:
+
+```bash
+if [ -x ./node_modules/.bin/cogmem ]; then
+  COGMEM="./node_modules/.bin/cogmem"
+elif command -v cogmem >/dev/null 2>&1; then
+  COGMEM="cogmem"
+else
+  npm install cogmem@latest --save
+  COGMEM="./node_modules/.bin/cogmem"
+fi
+```
+
+Use `npm install -g cogmem@latest` only when the operator wants a global CLI. The one-line installer is still supported with `COGMEM_SKIP_INIT=1`, but do not run `cogmem init` unattended. `cogmem init` is an interactive wizard; run it only with an operator present:
+
+```bash
+"$COGMEM" init --agent hermes --scope project
+```
+
+Then run `/reload-mcp` inside Hermes. `connect --auto` installs this skill bundle and updates the Hermes MCP allow-list; it does not claim a native `memory.provider` integration. New configs start the bridge as `cogmem mcp`; `cogmem-mcp` remains a compatibility bin for older host configs.
 
 ## Upgrade and migrate
 
@@ -61,7 +74,7 @@ cogmem doctor
 cogmem connect hermes --workspace . --auto --force --json
 ```
 
-The backed-up command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.3 schema-27 state in one run and preserves Raw Ledger evidence. `--dry-run` is read-only and does not create `_schema_migrations`. Reload MCP after reconnecting.
+The backed-up command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.4 schema-27 state in one run and preserves Raw Ledger evidence. `--dry-run` is read-only and does not create `_schema_migrations`. Reload MCP after reconnecting.
 
 ## Import Hermes memory
 
@@ -97,6 +110,22 @@ cogmem episode import --project hermes --session import-2026 --source-agent herm
 ```
 
 Use stable `externalMessageId` values for MCP append/import. If an MCP batch warns `auto_identity_not_safe_across_split_batches`, assign IDs before splitting or retrying.
+
+After import, verify semantic maintenance in this exact order:
+
+```bash
+cogmem memory status --project hermes --json
+cogmem episode status --project hermes --json
+cogmem dream status --project hermes --json
+cogmem dream tick --project hermes --mode auto --max-episodes 20 --json
+cogmem memory candidates --project hermes --status candidate --json
+cogmem memory govern --project hermes --limit 100 --json
+cogmem memory candidates --project hermes --status needs_confirmation --json
+cogmem memory review --project hermes --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <distinct-user-event-id> --json
+cogmem memory recall --query "<verification question>" --project hermes --agent hermes --json
+```
+
+`needs_confirmation` is not a Dream backlog. `memory govern` does not approve it. Use `memory review` with explicit evidence. Cogmem 3.6.4 skips import batch sealing for empty episode boundaries and marks legacy empty Dream jobs as skipped so one bad imported episode cannot block the queue. If `episode status` reports `episode_empty_*`, inspect the episode and repair boundaries with the audited episode repair commands.
 
 ## Inspect, recall, and drill down
 

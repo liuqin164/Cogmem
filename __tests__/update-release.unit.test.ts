@@ -4,7 +4,7 @@ import { resolveLatestNpmSpec, resolveLatestReleaseSpec } from '../src/bin/updat
 describe('cogmem update release resolution', () => {
   test('defaults update resolution to npm latest without network metadata', () => {
     expect(resolveLatestNpmSpec({ env: {} })).toBe('latest');
-    expect(resolveLatestNpmSpec({ env: { COGMEM_NPM_SPEC: '3.6.3' } })).toBe('3.6.3');
+    expect(resolveLatestNpmSpec({ env: { COGMEM_NPM_SPEC: '3.6.4' } })).toBe('3.6.4');
     expect(resolveLatestNpmSpec({ env: { COGMEM_PACKAGE_SPEC: 'file:./cogmem.tgz' } })).toBe('file:./cogmem.tgz');
   });
 

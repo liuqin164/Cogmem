@@ -22,6 +22,7 @@ export interface AgentImportResult {
     recordsIngested: number;
     skippedRecords: number;
     rawRecordsAnchored?: number;
+    emptyEpisodesSkipped?: number;
     reindexRaw?: boolean;
     processedSourceIds: string[];
     diagnostics: SourceAdapterDiagnostic[];

@@ -14,19 +14,16 @@ Belief Graph writes keep ownership and evidence roles. Hermes may record assista
 ## Install
 
 ```bash
-COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-cogmem init --yes --agent hermes
-cogmem doctor --fix --agent hermes --workspace .
-cogmem connect hermes --workspace . --auto
-cogmem connect hermes --workspace .
+npm install cogmem@latest --save
+COGMEM="./node_modules/.bin/cogmem"
+"$COGMEM" doctor
+"$COGMEM" connect hermes --workspace . --auto --force --json
 ```
 
-If Bun is already installed, npm global install is also supported:
+Use `cogmem init` only as an interactive operator wizard, not as an unattended agent install step:
 
 ```bash
-npm install -g cogmem@latest
-cogmem init --yes --agent hermes
-cogmem connect hermes --workspace . --auto --force
+"$COGMEM" init --agent hermes --scope project
 ```
 
 Hermes integration is currently a skill plus MCP bridge. It does not replace a native Hermes memory provider and it does not patch Hermes runtime internals.
@@ -75,6 +72,19 @@ Import:
 cogmem import-hermes --workspace . --project hermes
 ```
 
+After import:
+
+```bash
+cogmem memory status --project hermes --json
+cogmem episode status --project hermes --json
+cogmem dream status --project hermes --json
+cogmem dream tick --project hermes --mode auto --max-episodes 20 --json
+cogmem memory candidates --project hermes --status candidate --json
+cogmem memory govern --project hermes --limit 100 --json
+cogmem memory candidates --project hermes --status needs_confirmation --json
+cogmem memory review --project hermes --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
+```
+
 If Hermes stores memory somewhere else:
 
 ```bash
@@ -97,7 +107,7 @@ Dream stores explicit user clarification as organizational correction evidence r
 
 After upgrades, reload MCP. Rerun `cogmem connect hermes --workspace . --auto --force` when MCP wiring, allow-listed tools, or the installed skill bundle changed.
 
-Cogmem 3.6.3 exposes seven read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`, and installs from npm by default. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Touch only nodes actually used, and follow returned event IDs to raw evidence before quoting exact wording.
+Cogmem 3.6.4 exposes seven read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`, installs from npm by default, and prevents empty imported episodes from blocking Dream. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Touch only nodes actually used, and follow returned event IDs to raw evidence before quoting exact wording.
 
 ## Runtime
 
@@ -155,7 +165,7 @@ cogmem memory map --project hermes --json
 cogmem memory tick --project hermes --json
 cogmem memory bind --project hermes --json
 cogmem episode status --project hermes --json
-cogmem dream tick --project hermes --mode auto --json
+cogmem dream tick --project hermes --mode auto --max-episodes 20 --json
 ```
 
 `memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for raw-ledger drill-down; they are not verified long-term facts. If `memory tick` suggests `bind_raw_events`, run `memory bind` to backfill imported Hermes raw user events into the binding graph.

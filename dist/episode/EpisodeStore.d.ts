@@ -54,6 +54,7 @@ export declare class EpisodeStore {
     }): EpisodeEventLink;
     getEventLink(eventId: string): EpisodeEventLink | undefined;
     listEventLinks(episodeId: string): EpisodeEventLink[];
+    isEpisodeEmpty(episodeId: string): boolean;
     addCrossReference(input: {
         projectId: string;
         episodeId: string;
@@ -120,6 +121,10 @@ export declare class EpisodeStore {
         maxAttempts: number;
         runId?: string;
     }): ClaimedEpisodeDreamJob[];
+    skipEmptyDreamJobs(input: {
+        projectId?: string;
+        now?: number;
+    }): number;
     completeDreamJob(episodeId: string, leaseId: string, candidateIds: string[], now: number): void;
     failDreamJob(episodeId: string, leaseId: string, error: string, input: {
         now: number;
@@ -128,6 +133,8 @@ export declare class EpisodeStore {
         retryAfter?: number;
     }): void;
     retryFailed(projectId?: string): number;
+    private markEmptyEpisodeDreamSkipped;
+    private markEmptyEpisodeDreamSkippedMany;
     getDreamStatus(projectId?: string): EpisodeDreamStatus;
     countUnassignedRawEvents(projectId?: string): number;
     markEventDisposition(input: {

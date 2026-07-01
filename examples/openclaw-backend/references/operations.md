@@ -1,4 +1,4 @@
-# Cogmem 3.6.3 Operations Reference for OpenClaw
+# Cogmem 3.6.4 Operations Reference for OpenClaw
 
 Read this file when installing, upgrading, importing, repairing, or operating Cogmem. `SKILL.md` contains the decision rules; this file is the command reference.
 
@@ -26,19 +26,32 @@ Read this file when installing, upgrading, importing, repairing, or operating Co
 
 ## Install and connect
 
+Recommended workspace-local npm install:
+
 ```bash
-COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-cogmem init --yes --agent openclaw --scope project
-cogmem doctor
-cogmem connect openclaw --workspace . --auto --force --json
+npm install cogmem@latest --save
+COGMEM="./node_modules/.bin/cogmem"
+"$COGMEM" doctor
+"$COGMEM" connect openclaw --workspace . --auto --force --json
 ```
 
-If Bun is already installed and the operator prefers npm global installation:
+Use this resolver in agent-run scripts:
 
 ```bash
-npm install -g cogmem@latest
-cogmem init --yes --agent openclaw --scope project
-cogmem connect openclaw --workspace . --auto --force --json
+if [ -x ./node_modules/.bin/cogmem ]; then
+  COGMEM="./node_modules/.bin/cogmem"
+elif command -v cogmem >/dev/null 2>&1; then
+  COGMEM="cogmem"
+else
+  npm install cogmem@latest --save
+  COGMEM="./node_modules/.bin/cogmem"
+fi
+```
+
+Use `npm install -g cogmem@latest` only when the operator wants a global CLI. The one-line installer is still supported with `COGMEM_SKIP_INIT=1`, but do not run `cogmem init` unattended. `cogmem init` is an interactive wizard; run it only with an operator present:
+
+```bash
+"$COGMEM" init --agent openclaw --scope project
 ```
 
 Restart the OpenClaw Gateway after plugin or config changes. `connect --auto` installs the direct OpenClaw hook bridge; OpenClaw does not need MCP for automatic recall, recording, or Atlas navigation.
@@ -70,7 +83,7 @@ openclaw gateway restart
 cogmem openclaw diagnose --workspace . --json
 ```
 
-The second command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.3 schema-27 state in one run. It preserves Raw Ledger evidence. Keep the returned `backupPath` until verification passes. `--dry-run` is read-only and does not create `_schema_migrations`.
+The second command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.4 schema-27 state in one run. It preserves Raw Ledger evidence. Keep the returned `backupPath` until verification passes. `--dry-run` is read-only and does not create `_schema_migrations`.
 
 After upgrading the package/database, refresh OpenClaw's generated plugin files. `doctor --plugin-only` avoids opening the Cogmem kernel, so it can repair stale `extensions/cogmem-auto-memory/index.js` and `bridge.mjs` even when an old drainer has SQLite busy. Use `connect --auto --force` when intentionally reinstalling the full integration and patching OpenClaw config:
 
@@ -120,6 +133,22 @@ Preview OpenClaw discovery, then import idempotently:
 cogmem import-openclaw --workspace . --project openclaw --dry-run --json
 cogmem import-openclaw --workspace . --project openclaw --json
 ```
+
+After import, verify semantic maintenance in this exact order:
+
+```bash
+cogmem memory status --project openclaw --json
+cogmem episode status --project openclaw --json
+cogmem dream status --project openclaw --json
+cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
+cogmem memory candidates --project openclaw --status candidate --json
+cogmem memory govern --project openclaw --limit 100 --json
+cogmem memory candidates --project openclaw --status needs_confirmation --json
+cogmem memory review --project openclaw --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <distinct-user-event-id> --json
+cogmem memory recall --query "<verification question>" --project openclaw --agent openclaw --json
+```
+
+`needs_confirmation` is not a Dream backlog. `memory govern` does not approve it. Use `memory review` with explicit evidence. Cogmem 3.6.4 skips import batch sealing for empty episode boundaries and marks legacy empty Dream jobs as skipped so one bad imported episode cannot block the queue. If `episode status` reports `episode_empty_*`, inspect the episode and repair boundaries with the audited episode repair commands.
 
 Pass explicit sources when discovery is not enough:
 
@@ -266,6 +295,7 @@ cogmem prospective confirm --project openclaw --id <candidate-id> --evidence <us
 ## MCP and direct-plugin choice
 
 - OpenClaw automatic hooks use the direct bridge installed by `connect --auto`.
+- Start the MCP bridge with `cogmem mcp`; `cogmem-mcp` remains a compatibility bin for older host configs.
 - Use MCP tools when an agent host supports MCP and needs explicit graph/review operations.
 - Broad inventory/history: `cogmem_graph_explore`.
 - Known node: `cogmem_graph_search`, then `cogmem_graph_node`.
