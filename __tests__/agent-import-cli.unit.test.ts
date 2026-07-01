@@ -876,6 +876,11 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   expect(installed.exitCode).toBe(0);
   const installedParsed = JSON.parse(installed.stdout);
   expect(installedParsed.installed).toBe(true);
+  expect(installedParsed.nextCommands.join('\n')).not.toContain('cogmem-init');
+  expect(installedParsed.nextCommands.join('\n')).not.toContain('cogmem init');
+  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem doctor');
+  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem openclaw diagnose --workspace . --json');
+  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem import-openclaw --workspace . --project openclaw --dry-run');
   expect(installedParsed.hostConfigSnippet).toContain('does not modify OpenClaw host config');
   expect(installedParsed.hostConfigSnippet).toContain('Do not write unknown OpenClaw config fields');
   expect(installedParsed.hostConfigSnippet).not.toContain('plugins.slots.memory');
@@ -1428,6 +1433,10 @@ test('cogmem-connect installs Hermes skill into the real Hermes skills directory
   const parsed = JSON.parse(installed.stdout);
   expect(parsed.skillPath).toBe(skillPath);
   expect(parsed.skillFiles).toEqual([skillPath, operationsPath]);
+  expect(parsed.nextCommands.join('\n')).not.toContain('cogmem-init');
+  expect(parsed.nextCommands.join('\n')).not.toContain('cogmem init');
+  expect(parsed.nextCommands).toContain('./node_modules/.bin/cogmem doctor');
+  expect(parsed.nextCommands).toContain('./node_modules/.bin/cogmem import-hermes --workspace . --project hermes --dry-run');
   expect(parsed.hostConfigSnippet).toContain('mcp_servers:');
   expect(parsed.hostConfigSnippet).toContain('command: "cogmem"');
   expect(parsed.hostConfigSnippet).toContain('args: ["mcp"]');

@@ -92,19 +92,18 @@ function defaultSkillPath(agent, workspaceRoot) {
 function nextCommands(agent) {
     if (agent === 'openclaw') {
         return [
-            './node_modules/.bin/cogmem-init --agent openclaw --scope project',
-            './node_modules/.bin/cogmem-doctor',
-            './node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw --dry-run',
-            './node_modules/.bin/cogmem-import-openclaw --workspace . --project openclaw',
-            './node_modules/.bin/cogmem-connect openclaw --workspace . --auto --force',
+            './node_modules/.bin/cogmem doctor',
+            './node_modules/.bin/cogmem openclaw diagnose --workspace . --json',
+            './node_modules/.bin/cogmem import-openclaw --workspace . --project openclaw --dry-run',
+            './node_modules/.bin/cogmem import-openclaw --workspace . --project openclaw',
+            './node_modules/.bin/cogmem memory status --project openclaw --json',
         ];
     }
     return [
-        './node_modules/.bin/cogmem-init --agent hermes',
-        './node_modules/.bin/cogmem-doctor',
-        './node_modules/.bin/cogmem-connect hermes --workspace . --auto --force',
-        './node_modules/.bin/cogmem-import-hermes --workspace . --project hermes --dry-run',
-        './node_modules/.bin/cogmem-import-hermes --workspace . --project hermes',
+        './node_modules/.bin/cogmem doctor',
+        './node_modules/.bin/cogmem import-hermes --workspace . --project hermes --dry-run',
+        './node_modules/.bin/cogmem import-hermes --workspace . --project hermes',
+        './node_modules/.bin/cogmem memory status --project hermes --json',
     ];
 }
 function usage() {
