@@ -97,12 +97,14 @@ cogmem import-openclaw --workspace . --project openclaw --json
 ```
 
 Real non-JSON imports print source-level and embedding+ingest progress to stderr. Use `--json --progress` to keep JSON on stdout while streaming progress to stderr, or `--no-progress` when a wrapper needs quiet stderr.
-Cogmem 3.6.4 skips import batch sealing for empty episode boundaries and skips legacy empty Dream jobs so one bad imported episode cannot block the queue.
+Cogmem 3.6.4 and later skip import batch sealing for empty episode boundaries and skip legacy empty Dream jobs so one bad imported episode cannot block the queue.
 
 After import, use this order:
 
 ```bash
+cogmem memory plan --project openclaw --json
 cogmem memory status --project openclaw --json
+cogmem memory candidates --project openclaw --json
 cogmem episode status --project openclaw --json
 cogmem dream status --project openclaw --json
 cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
@@ -110,9 +112,10 @@ cogmem memory candidates --project openclaw --status candidate --json
 cogmem memory govern --project openclaw --limit 100 --json
 cogmem memory candidates --project openclaw --status needs_confirmation --json
 cogmem memory review --project openclaw --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
+cogmem memory recall --query "<verification question>" --project openclaw --agent openclaw --json
 ```
 
-`needs_confirmation` is not the Dream backlog. `memory govern` does not approve it; use `memory review` with explicit evidence.
+`memory plan` is the first agent-safe health and next-action command. Only run `dream_tick` when it appears in `nextActions`; if `nonBlocking` contains `raw_dream_ledger_lag` with `resolvableByDreamTick:false`, inspect raw sources or episode/import boundaries instead of retrying `dream tick`. Default `memory candidates --json` groups ordinary, `needs_confirmation`, and deferred review queues; use `--status` only when a human asks for one queue. `needs_confirmation` is not the Dream backlog. `memory govern` does not approve it; use `memory review` with explicit evidence.
 
 Import scope:
 
@@ -180,6 +183,8 @@ Recall behavior:
 - For each item with `sourceContext`, use event `label` values, optional `charRange` / `sourceRange`, and `sourceContext.window` to understand before/after semantics. Windows are chronological, exclude the anchor, and report overlap handling instead of relying on guesswork.
 - Use `cogmem memory map --project openclaw --json` to inspect Memory Binding and Graph Recall counters. Bindings attach high-value user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down only; they are not verified facts, user preferences, or instructions. Correction bindings expose review flags and `CORRECTS` / `CONTRADICTS` edges; inspect the raw ledger before relying on them.
 - If `cogmem memory tick --project openclaw --json` suggests `bind_raw_events`, run `cogmem memory bind --project openclaw --json` to backfill imported or adapter-written raw user events into the binding graph.
+- For “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, or missing injection cases, run `cogmem memory recall --query "<past discussion question>" --intent historical_discussion --project openclaw --agent openclaw --json` before claiming no memory.
+- For ledger audits or resumable checks, use `cogmem memory list --project openclaw --since <globalSeq> --order asc --json`; list rows and Atlas search/explore evidence include `sourceLocator` commands in 3.6.5.
 
 Installing the workspace skill makes the kernel procedure discoverable to OpenClaw agents. Installing the local auto wrapper makes future turns call the memory kernel automatically:
 
@@ -187,7 +192,7 @@ Installing the workspace skill makes the kernel procedure discoverable to OpenCl
 cogmem connect openclaw --workspace . --auto --force
 ```
 
-This writes `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through `cogmem` public API via a Bun bridge; core does not import OpenClaw.
+This writes `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through `cogmem` public API via a Bun bridge; core does not import OpenClaw. In JSON output, follow only `nextCommands` for unattended agent work; unsafe operator or host steps such as interactive init and gateway restart are listed under `nextSteps` with `safeForAutomation=false`.
 
 The auto wrapper keeps OpenClaw native prompt/tool/skill context untouched. It prepends only Cogmem-owned context blocks:
 

@@ -75,7 +75,9 @@ cogmem import-hermes --workspace . --project hermes
 After import:
 
 ```bash
+cogmem memory plan --project hermes --json
 cogmem memory status --project hermes --json
+cogmem memory candidates --project hermes --json
 cogmem episode status --project hermes --json
 cogmem dream status --project hermes --json
 cogmem dream tick --project hermes --mode auto --max-episodes 20 --json
@@ -101,13 +103,13 @@ cogmem import-hermes --workspace . --project hermes --session ./one.md --session
 The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store. Imported raw records enter the same Episode Assembler used by live turns and are sealed at the explicit import batch boundary.
 Imported records are embedded through the configured kernel embedder during import.
 
-MCP recall JSON includes `decisionTrace`. Check its selected lane, reason, and candidate counts before concluding that a memory is absent, and use `sourceContext.locator.command` for exact wording. Raw text fallback searches the fully scoped ledger and prefers original user anchors over later assistant retellings when cue scores tie.
+MCP recall JSON includes `decisionTrace`. Check its selected lane, reason, and candidate counts before concluding that a memory is absent, and use `sourceContext.locator.command` for exact wording. Raw text fallback searches the fully scoped ledger and prefers original user anchors over later assistant retellings when cue scores tie. For old-discussion questions, run `cogmem memory recall --query "<past discussion>" --intent historical_discussion --project hermes --agent hermes --json`, then follow `sourceLocator` or inspect `cogmem memory list --project hermes --since <globalSeq> --order asc --json`.
 
 Dream stores explicit user clarification as organizational correction evidence rather than an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Resolve `needs_confirmation` with `cogmem_candidate_review` or `cogmem memory review`; maintenance only supersedes entries left stale past the default 30-day TTL.
 
-After upgrades, reload MCP. Rerun `cogmem connect hermes --workspace . --auto --force` when MCP wiring, allow-listed tools, or the installed skill bundle changed.
+After upgrades, reload MCP. Rerun `cogmem connect hermes --workspace . --auto --force --json` when MCP wiring, allow-listed tools, or the installed skill bundle changed. Follow only JSON `nextCommands` for unattended agent work; operator/host actions are in `nextSteps` with `safeForAutomation=false`.
 
-Cogmem 3.6.4 exposes seven read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`, installs from npm by default, and prevents empty imported episodes from blocking Dream. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Touch only nodes actually used, and follow returned event IDs to raw evidence before quoting exact wording.
+Cogmem 3.6.5 exposes seven read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`, installs from npm by default, prevents empty imported episodes from blocking Dream, and adds an agent-safe operations protocol. Use `memory plan` for the next safe command, grouped `memory candidates --json` for queue state, `historical_discussion` recall for old-discussion questions, and returned `sourceLocator` commands for exact evidence. Only run `dream_tick` when it appears in `memory plan.nextActions`; `raw_dream_ledger_lag` in `nonBlocking` has `resolvableByDreamTick:false` and is not fixed by looping `dream tick`. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Touch only nodes actually used, and follow returned event IDs or `sourceLocator` commands to raw evidence before quoting exact wording.
 
 ## Runtime
 

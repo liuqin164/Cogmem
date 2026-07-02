@@ -143,7 +143,7 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '3.6.4';
+const CORE_VERSION = '3.6.5';
 const LATEST_SCHEMA_VERSION = 27;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
@@ -252,6 +252,8 @@ export interface MemoryBindingBackfillOptions {
 export interface MemoryBindingBackfillResult {
   projectId?: string;
   sinceGlobalSeq?: number;
+  nextGlobalSeq?: number;
+  hasMore: boolean;
   scannedEvents: number;
   bindableEvents: number;
   boundEvents: number;
@@ -1760,18 +1762,22 @@ export class MemoryKernel {
 
   bindRawEvents(options: MemoryBindingBackfillOptions = {}): MemoryBindingBackfillResult {
     const limit = Math.max(1, Math.min(options.limit ?? 500, 5000));
-    const page = this.eventStore.queryEvents(1, limit, {
-      projectId: options.projectId ? [options.projectId] : undefined,
-      workspaceId: options.workspaceId ? [options.workspaceId] : undefined,
-      threadId: options.threadId ? [options.threadId] : undefined,
-      sessionId: options.sessionId ? [options.sessionId] : undefined,
+    const afterGlobalSeq = options.sinceGlobalSeq === undefined
+      ? undefined
+      : Math.max(-1, options.sinceGlobalSeq - 1);
+    const records = this.eventStore.listRawEventsAfterGlobalSeq({
+      projectId: options.projectId,
+      workspaceId: options.workspaceId,
+      threadId: options.threadId,
+      sessionId: options.sessionId,
+      afterGlobalSeq,
+      limit,
     });
-    const records = page.records
-      .filter((event) => options.sinceGlobalSeq === undefined || (event.globalSeq || 0) >= options.sinceGlobalSeq)
-      .sort((a, b) => (a.globalSeq || 0) - (b.globalSeq || 0));
     const result: MemoryBindingBackfillResult = {
       projectId: options.projectId,
       sinceGlobalSeq: options.sinceGlobalSeq,
+      nextGlobalSeq: records.at(-1)?.globalSeq,
+      hasMore: records.length >= limit,
       scannedEvents: records.length,
       bindableEvents: 0,
       boundEvents: 0,
@@ -1905,14 +1911,25 @@ export class MemoryKernel {
   }
 
   countUnboundBindableRawEvents(projectId?: string, limit: number = 1000): number {
-    const page = this.eventStore.queryEvents(1, Math.max(1, limit), {
-      projectId: projectId ? [projectId] : undefined,
-    });
+    const max = Math.max(1, limit);
+    let afterGlobalSeq: number | undefined;
     let count = 0;
-    for (const event of page.records) {
-      if (!this.memoryBindingService.isBindableRawEvent(event)) continue;
-      if (this.memoryBindingStore.listBindings({ eventId: event.eventId, limit: 1 }).length > 0) continue;
-      count += 1;
+    while (count < max) {
+      const batchLimit = Math.min(500, max);
+      const events = this.eventStore.listRawEventsAfterGlobalSeq({
+        projectId,
+        afterGlobalSeq,
+        limit: batchLimit,
+      });
+      if (events.length === 0) break;
+      afterGlobalSeq = events.at(-1)?.globalSeq ?? afterGlobalSeq;
+      for (const event of events) {
+        if (!this.memoryBindingService.isBindableRawEvent(event)) continue;
+        if (this.memoryBindingStore.listBindings({ eventId: event.eventId, limit: 1 }).length > 0) continue;
+        count += 1;
+        if (count >= max) break;
+      }
+      if (events.length < batchLimit) break;
     }
     return count;
   }

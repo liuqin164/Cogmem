@@ -414,7 +414,53 @@ test('agent backend cue recall finds old black-box archive wording and returns d
   expect(recalled.items[0].sourceContext?.event.text).toContain('存档位置');
   expect(recalled.items[0].sourceContext?.after[0].text).toContain('记忆可审计性');
   expect(recalled.items[0].sourceContext?.locator.command).toContain('cogmem memory show --event');
+  expect(recalled.items[0].sourceContext?.locator.command).toContain('--project demo');
+  expect(recalled.queryPlan?.intent).toBe('historical_discussion');
   expect(recalled.queryPlan?.semanticCuePhrases).toContain('存档 黑盒');
+
+  kernel.close();
+});
+
+test('agent backend historical discussion recall prefers original memory-context black box source over later graph runtime issue', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-historical-discussion-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-0606',
+    userText: '我们聊过 CogMem Memory Context 的记忆黑盒问题：上下文注入太像黑盒，必须能用 sourceContext 下钻原文。',
+    assistantText: '结论是 recall 不能只给摘要，需要 source locator 打开 raw ledger。',
+    timestamp: Date.UTC(2026, 5, 6),
+    ingestMode: 'raw_archive_only',
+  });
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-0628',
+    userText: 'memory graph database locked zombie process 也是一种记忆黑盒体验。',
+    assistantText: '这是 graph runtime 锁问题，和 Memory Context 原文下钻不同。',
+    timestamp: Date.UTC(2026, 5, 28),
+    ingestMode: 'raw_archive_only',
+  });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    excludeSessionId: 'session-current',
+    query: '你记得我们聊过关于记忆黑盒的事吗？',
+    limit: 3,
+  });
+
+  expect(recalled.queryPlan?.intent).toBe('historical_discussion');
+  expect(recalled.decisionTrace?.reason).toBe('historical_discussion');
+  expect(recalled.items[0].text).toContain('CogMem Memory Context');
+  expect(recalled.items[0].text).toContain('sourceContext');
+  expect(recalled.items[0].text).not.toContain('zombie');
+  expect(recalled.items[0].sourceType).toBe('raw_ledger');
+  expect(recalled.items[0].sourceContext?.locator.command).toContain('--project demo');
 
   kernel.close();
 });

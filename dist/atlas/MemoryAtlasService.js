@@ -15,7 +15,8 @@ export class MemoryAtlasService {
     search(query, options) {
         const projectId = requiredProject(options.projectId);
         const nodes = this.store.search(boundedQuery(query), projectId, boundedLimit(options.limit));
-        return slice(projectId, nodes, this.edgesFor(nodes, projectId), query);
+        const withEvidence = this.attachEvidence(nodes, projectId, options);
+        return slice(projectId, withEvidence, this.edgesFor(withEvidence, projectId), query);
     }
     explore(query, options) {
         const projectId = requiredProject(options.projectId);
@@ -32,8 +33,9 @@ export class MemoryAtlasService {
                 from: compiled.range?.from, to: compiled.range?.to, limit });
             nodes = uniqueNodes([...actions.map((action) => this.store.getNode(action.id, projectId)).filter((node) => Boolean(node)), ...nodes]).slice(0, limit);
         }
-        const edges = this.edgesFor(nodes, projectId);
-        const result = slice(projectId, nodes, edges, query);
+        const nodesWithEvidence = this.attachEvidence(nodes, projectId, options);
+        const edges = this.edgesFor(nodesWithEvidence, projectId);
+        const result = slice(projectId, nodesWithEvidence, edges, query);
         result.facets = { time: compiled.range, target: target.labels.join(', ') || compiled.target, memoryKinds: compiled.memoryKinds, keywords: compiled.keywords };
         const hasFacet = Boolean(compiled.range || compiled.target || compiled.memoryKinds.length || compiled.tokens.length);
         result.coldMemoryResurrected = hasFacet && nodes.some((node) => node.activation <= 0.1);
@@ -155,14 +157,28 @@ export class MemoryAtlasService {
         return { version: 'memory_atlas.v1', projectId, query, range: compiled.range,
             temporalResurrection: Boolean(compiled.range && [...nodes, ...actions].length), nodes, actions, warnings: [] };
     }
+    attachEvidence(nodes, projectId, options) {
+        return nodes.map((node) => {
+            const evidence = this.evidence(node.id, projectId, options.evidenceLimit, options.includeEvidence);
+            const evidenceTotal = this.store.evidenceTotal(node.id, projectId);
+            return { ...node, evidenceCount: evidenceTotal, evidenceTotal, evidenceReturned: evidence.length, evidence };
+        });
+    }
     evidence(nodeId, projectId, requested, includeExcerpt) {
         const limit = Math.max(1, Math.min(requested ?? 2, 10));
         return this.store.evidenceIds(nodeId, projectId, limit).flatMap((eventId) => {
             const event = this.eventStore.getEvent(eventId);
             if (!event || event.projectId !== projectId)
                 return [];
-            return [{ eventId, drilldown: `cogmem memory show --event ${eventId} --project ${projectId} --json`,
-                    excerpt: includeExcerpt ? eventTextForMemory(event).slice(0, 500) : undefined }];
+            const sourceLocator = atlasSourceLocator(event, projectId);
+            return [{
+                    eventId,
+                    globalSeq: event.globalSeq,
+                    projectId,
+                    drilldown: sourceLocator.command,
+                    sourceLocator,
+                    excerpt: includeExcerpt ? eventTextForMemory(event).slice(0, 500) : undefined,
+                }];
         });
     }
     edgesFor(nodes, projectId) {
@@ -214,3 +230,21 @@ function chunked(values, size) {
     return chunks;
 }
 function slice(projectId, nodes, edges, query) { return { version: 'memory_atlas.v1', projectId, query, nodes, edges, nextActions: nodes.slice(0, 5).map((node) => ({ label: `Inspect ${node.label}`, tool: 'cogmem_graph_node', args: { id: node.id, projectId } })), warnings: [] }; }
+function atlasSourceLocator(event, projectId) {
+    const project = projectId || event.projectId;
+    const projectArg = project ? ` --project ${cliArg(project)}` : '';
+    const base = `cogmem memory show --event ${cliArg(event.eventId)}${projectArg}`;
+    return {
+        eventId: event.eventId,
+        globalSeq: event.globalSeq,
+        projectId: project,
+        threadId: event.threadId,
+        sessionId: event.sessionId,
+        localDate: event.localDate,
+        command: `${base} --before 2 --after 2 --json`,
+        contextCommand: `${base} --before 3 --after 3 --json`,
+    };
+}
+function cliArg(value) {
+    return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+}

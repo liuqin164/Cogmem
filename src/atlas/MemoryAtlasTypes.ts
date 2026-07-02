@@ -2,7 +2,19 @@ export type MemoryAtlasNodeType = 'project' | 'topic' | 'entity' | 'cluster' | '
 
 export interface MemoryAtlasEvidence {
   eventId: string;
+  globalSeq?: number;
+  projectId?: string;
   drilldown: string;
+  sourceLocator?: {
+    eventId: string;
+    globalSeq?: number;
+    projectId?: string;
+    threadId?: string;
+    sessionId?: string;
+    localDate?: string;
+    command: string;
+    contextCommand: string;
+  };
   excerpt?: string;
 }
 
@@ -26,6 +38,8 @@ export interface MemoryAtlasNode {
   evidenceTotal: number;
   /** Number of evidence records returned in this response. */
   evidenceReturned?: number;
+  /** Bounded first-hop raw evidence locators for agent-facing graph search/explore responses. */
+  evidence?: MemoryAtlasEvidence[];
 }
 
 export interface MemoryAtlasEdge {

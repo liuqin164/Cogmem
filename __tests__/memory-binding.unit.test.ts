@@ -128,6 +128,48 @@ test('memory binding backfills valuable raw user events written outside agent tu
   rmSync(dir, { recursive: true, force: true });
 });
 
+test('memory binding backfill scans forward from old global sequence instead of only latest raw page', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-backfill-cursor-'));
+  const dbPath = join(dir, 'memory.db');
+  const kernel = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
+
+  const old = kernel.recordRawEvent({
+    projectId: 'demo',
+    workspaceId: 'demo',
+    threadId: 'old-thread',
+    sessionId: 'old-session',
+    role: 'user',
+    sourceId: 'legacy-import',
+    content: 'Cogmem memory write pipeline 需要写入时回看旧记忆，并绑定到同一个分类路径。',
+  });
+  for (let index = 0; index < 40; index += 1) {
+    kernel.recordRawEvent({
+      projectId: 'demo',
+      workspaceId: 'demo',
+      threadId: `new-thread-${index}`,
+      sessionId: `new-session-${index}`,
+      role: 'user',
+      sourceId: 'legacy-import',
+      content: `newer low-signal filler ${index}`,
+    });
+  }
+  expect(kernel.listMemoryBindings({ projectId: 'demo' })).toHaveLength(0);
+
+  const result = kernel.bindRawEvents({
+    projectId: 'demo',
+    sinceGlobalSeq: old.globalSeq,
+    limit: 5,
+  });
+
+  expect(result.scannedEvents).toBe(5);
+  expect(result.nextGlobalSeq).toBeGreaterThanOrEqual(old.globalSeq || 0);
+  expect(result.hasMore).toBe(true);
+  expect(kernel.listMemoryBindings({ projectId: 'demo', limit: 20 }).some((binding) => binding.eventId === old.eventId)).toBe(true);
+
+  kernel.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test('binding failures are non-fatal but observable through pipeline metrics and maintenance tick', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-failure-metrics-'));
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });

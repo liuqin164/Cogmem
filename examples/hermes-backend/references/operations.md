@@ -1,4 +1,4 @@
-# Cogmem 3.6.4 Operations Reference for Hermes
+# Cogmem 3.6.5 Operations Reference for Hermes
 
 Read this file when installing, upgrading, importing, repairing, or operating Cogmem. `SKILL.md` contains the decision rules; this file records the operational commands.
 
@@ -11,9 +11,11 @@ Read this file when installing, upgrading, importing, repairing, or operating Co
 | Upgrade an existing database | `cogmem migrate` |
 | Import Hermes state/profile/sessions | `cogmem import-hermes` |
 | Import generic message JSONL | `cogmem episode import` |
+| Decide the next safe agent operation | `cogmem memory plan` |
 | Answer one direct memory question | `cogmem_recall` or `cogmem memory recall` |
 | See what memory exists or reconstruct history | Atlas `cogmem_graph_*` tools |
 | Quote exact source | `cogmem memory show` |
+| Audit ledger sequence ranges | `cogmem memory list --since/--until/--order` |
 | Resolve uncertain candidates | `cogmem_candidate_review` or `memory review` |
 | Promote ordinary candidates | `memory govern` |
 | Correct episode boundaries | `cogmem_episode_repair` or episode repair CLI |
@@ -74,7 +76,7 @@ cogmem doctor
 cogmem connect hermes --workspace . --auto --force --json
 ```
 
-The backed-up command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.4 schema-27 state in one run and preserves Raw Ledger evidence. `--dry-run` is read-only and does not create `_schema_migrations`. Reload MCP after reconnecting.
+The backed-up command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.5 schema-27 state in one run and preserves Raw Ledger evidence. `--dry-run` is read-only and does not create `_schema_migrations`. Reload MCP after reconnecting.
 
 ## Import Hermes memory
 
@@ -114,7 +116,9 @@ Use stable `externalMessageId` values for MCP append/import. If an MCP batch war
 After import, verify semantic maintenance in this exact order:
 
 ```bash
+cogmem memory plan --project hermes --json
 cogmem memory status --project hermes --json
+cogmem memory candidates --project hermes --json
 cogmem episode status --project hermes --json
 cogmem dream status --project hermes --json
 cogmem dream tick --project hermes --mode auto --max-episodes 20 --json
@@ -125,23 +129,27 @@ cogmem memory review --project hermes --id <candidate-id> --action approve --act
 cogmem memory recall --query "<verification question>" --project hermes --agent hermes --json
 ```
 
-`needs_confirmation` is not a Dream backlog. `memory govern` does not approve it. Use `memory review` with explicit evidence. Cogmem 3.6.4 skips import batch sealing for empty episode boundaries and marks legacy empty Dream jobs as skipped so one bad imported episode cannot block the queue. If `episode status` reports `episode_empty_*`, inspect the episode and repair boundaries with the audited episode repair commands.
+`memory plan` is the first agent-safe health and next-action command. It reports queue state, blocking and non-blocking actions, Dream backlog hints, vector fallback state, and safe commands. Only run `dream_tick` when it appears in `nextActions`; if `nonBlocking` contains `raw_dream_ledger_lag` with `resolvableByDreamTick:false`, inspect raw sources or episode/import boundaries instead of retrying `dream tick`. Default `memory candidates --json` groups ordinary candidates, `needs_confirmation`, and deferred review entries; use `--status` only for one explicit queue. `needs_confirmation` is not a Dream backlog. `memory govern` does not approve it. Use `memory review` with explicit evidence. Cogmem 3.6.4 and later skip import batch sealing for empty episode boundaries and mark legacy empty Dream jobs as skipped so one bad imported episode cannot block the queue. If `episode status` reports `episode_empty_*`, inspect the episode and repair boundaries with the audited episode repair commands.
 
 ## Inspect, recall, and drill down
 
 ```bash
+cogmem memory plan --project hermes --json
 cogmem memory status --project hermes --json
+cogmem memory candidates --project hermes --json
 cogmem memory candidates --project hermes --status needs_confirmation --json
 cogmem episode status --project hermes --json
 cogmem dream status --project hermes --json
 cogmem memory recall --query "<question>" --project hermes --agent hermes --json
+cogmem memory recall --query "<past discussion question>" --intent historical_discussion --project hermes --agent hermes --json
 cogmem explain-recall --query "<question>" --project hermes --agent hermes --json
 cogmem memory show --event <event-id> --before 2 --after 2 --json
+cogmem memory list --project hermes --since <globalSeq> --order asc --json
 ```
 
 JSON uses `cogmem.cli.v1`: object fields are top-level, arrays use `items`, and queue counters remain top-level. `vectors: 0` is not a recall failure; inspect `vectorState`.
 
-Read-only status/candidates use a lightweight SQLite path and should not require stopping the MCP server.
+Use `historical_discussion` for “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, and missing MCP memory cases. Raw list rows include `sourceLocator`; run the locator before quoting exact words or saying the event cannot be found. Read-only plan/status/candidates use a lightweight SQLite path and should not require stopping the MCP server.
 
 ## Memory Atlas as composable filters
 
@@ -166,7 +174,7 @@ Use MCP by question shape:
 - Direct fact: `cogmem_recall`.
 - Exact source: follow `evidenceEventIds` with `memory show`.
 
-Graph reads are pure and declared read-only/idempotent. Call `cogmem_graph_touch` only after using selected nodes. Overview display alone must not change future ranking. `evidenceTotal` is all known evidence; `evidenceReturned` is the bounded payload.
+Graph reads are pure and declared read-only/idempotent. Call `cogmem_graph_touch` only after using selected nodes. Overview display alone must not change future ranking. `evidenceTotal` is all known evidence; `evidenceReturned` is the bounded payload. Search/explore evidence includes `sourceLocator.command` and `sourceLocator.contextCommand`; use those locators before treating an Atlas summary as evidence.
 
 ## Candidate governance and review
 
