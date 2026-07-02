@@ -986,5 +986,8 @@ export interface EventAuditPage {
     sessionId?: string[];
     startTime?: number;
     endTime?: number;
+    sinceGlobalSeq?: number;
+    untilGlobalSeq?: number;
+    order?: 'asc' | 'desc';
   };
 }

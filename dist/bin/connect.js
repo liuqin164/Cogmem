@@ -90,21 +90,92 @@ function defaultSkillPath(agent, workspaceRoot) {
     return join(process.env.HOME || homedir(), '.hermes', 'skills', 'cogmem-memory', 'SKILL.md');
 }
 function nextCommands(agent) {
-    if (agent === 'openclaw') {
-        return [
-            './node_modules/.bin/cogmem doctor',
-            './node_modules/.bin/cogmem openclaw diagnose --workspace . --json',
-            './node_modules/.bin/cogmem import-openclaw --workspace . --project openclaw --dry-run',
-            './node_modules/.bin/cogmem import-openclaw --workspace . --project openclaw',
-            './node_modules/.bin/cogmem memory status --project openclaw --json',
-        ];
-    }
-    return [
-        './node_modules/.bin/cogmem doctor',
-        './node_modules/.bin/cogmem import-hermes --workspace . --project hermes --dry-run',
-        './node_modules/.bin/cogmem import-hermes --workspace . --project hermes',
-        './node_modules/.bin/cogmem memory status --project hermes --json',
+    return nextSteps(agent)
+        .filter((step) => step.safeForAutomation && step.actor === 'agent')
+        .map((step) => step.command);
+}
+function nextSteps(agent) {
+    const project = agent === 'openclaw' ? 'openclaw' : 'hermes';
+    const importCommand = agent === 'openclaw' ? 'import-openclaw' : 'import-hermes';
+    const steps = [
+        {
+            id: 'doctor',
+            actor: 'agent',
+            safeForAutomation: true,
+            command: './node_modules/.bin/cogmem doctor',
+            when: 'after installation or update',
+            purpose: 'verify package, config, and database access',
+        },
+        {
+            id: 'import_dry_run',
+            actor: 'agent',
+            safeForAutomation: true,
+            command: `./node_modules/.bin/cogmem ${importCommand} --workspace . --project ${project} --dry-run --json`,
+            when: 'before importing legacy memory',
+            purpose: 'preview source discovery and import counts',
+        },
+        {
+            id: 'import_apply',
+            actor: 'agent',
+            safeForAutomation: true,
+            command: `./node_modules/.bin/cogmem ${importCommand} --workspace . --project ${project} --json`,
+            when: 'after dry-run looks correct',
+            purpose: 'idempotently import legacy memory into Cogmem',
+        },
+        {
+            id: 'memory_plan',
+            actor: 'agent',
+            safeForAutomation: true,
+            command: `./node_modules/.bin/cogmem memory plan --project ${project} --json`,
+            when: 'after import, update, or user asks for governance progress',
+            purpose: 'read agent-safe next actions instead of guessing from raw counters',
+        },
+        {
+            id: 'memory_status',
+            actor: 'agent',
+            safeForAutomation: true,
+            command: `./node_modules/.bin/cogmem memory status --project ${project} --json`,
+            when: 'for read-only health checks',
+            purpose: 'inspect raw ledger, vector fallback, dream backlog, and queue summary',
+        },
+        {
+            id: 'interactive_init',
+            actor: 'operator',
+            safeForAutomation: false,
+            command: `./node_modules/.bin/cogmem init --agent ${agent} --scope project`,
+            when: 'only if no Cogmem config exists and a human operator is present',
+            purpose: 'interactive first-time config wizard; agents must not run this unattended',
+        },
     ];
+    if (agent === 'openclaw') {
+        steps.splice(1, 0, {
+            id: 'openclaw_diagnose',
+            actor: 'agent',
+            safeForAutomation: true,
+            command: './node_modules/.bin/cogmem openclaw diagnose --workspace . --json',
+            when: 'after connect --auto --force or before investigating injection failures',
+            purpose: 'verify generated plugin files, audit log, queue lock, and hook diagnostics',
+        });
+        steps.push({
+            id: 'restart_gateway',
+            actor: 'host',
+            safeForAutomation: false,
+            command: 'openclaw gateway restart',
+            when: 'after plugin files or OpenClaw config changed',
+            purpose: 'reload OpenClaw hooks so the refreshed Cogmem plugin is active',
+        });
+    }
+    else {
+        steps.push({
+            id: 'reload_hermes',
+            actor: 'host',
+            safeForAutomation: false,
+            command: 'restart or reload Hermes MCP server',
+            when: 'after Hermes MCP config changed',
+            purpose: 'reload the cogmem MCP server entry',
+        });
+    }
+    return steps;
 }
 function usage() {
     return [
@@ -238,6 +309,7 @@ function installSkill(args) {
         installed: !args.dryRun && !alreadyCurrent,
         alreadyCurrent,
         nextCommands: nextCommands(args.agent),
+        nextSteps: nextSteps(args.agent),
         hostConfigSnippet: hostConfigSnippet(args.agent, args.workspaceRoot, args.auto),
         autoMemory,
         hermesMcp,

@@ -16,7 +16,7 @@ import type { MemoryEvent } from '../types/index.js';
 import { printCliJson } from './CliJson.js';
 
 interface MemoryArgs {
-  command?: 'status' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
+  command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
     | 'graph' | 'graph-search' | 'graph-explore' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline';
   query?: string;
   eventId?: string;
@@ -47,6 +47,8 @@ interface MemoryArgs {
   before?: number;
   after?: number;
   sinceGlobalSeq?: number;
+  untilGlobalSeq?: number;
+  order?: 'asc' | 'desc';
   intervalMs?: number;
   maxRuns?: number;
   promoteLimit?: number;
@@ -110,6 +112,8 @@ function readArgs(argv: string[]): MemoryArgs {
     before: numberArg(values, 'before'),
     after: numberArg(values, 'after'),
     sinceGlobalSeq: numberArg(values, 'since') ?? numberArg(values, 'since-global-seq'),
+    untilGlobalSeq: numberArg(values, 'until') ?? numberArg(values, 'until-global-seq'),
+    order: orderArg(values, 'order'),
     intervalMs: numberArg(values, 'interval-ms'),
     maxRuns: numberArg(values, 'max-runs'),
     promoteLimit: numberArg(values, 'promote-limit'),
@@ -131,6 +135,7 @@ function usage(): string {
     '',
     'Commands:',
     '  status               summarize raw ledger, vector, and dream backlog state',
+    '  plan                 summarize status as agent-safe next actions',
     '  list                 list raw ledger events with source anchors',
     '  search --query <q>   search raw ledger text without requiring hot vectors',
     '  recall --query <q>   run agent-facing governed recall with source context',
@@ -157,7 +162,9 @@ function usage(): string {
     '  --thread <id>        scope to one thread',
     '  --session <id>       scope to one session',
     '  --limit <n>          result limit, default 20',
-    '  --since <globalSeq>  for bind, scan raw events at or after a global sequence',
+    '  --since <globalSeq>  list/bind events at or after a global sequence',
+    '  --until <globalSeq>  list events at or before a global sequence',
+    '  --order <asc|desc>   list raw ledger order, default desc',
     '  --status <status>    candidate queue status, default candidate',
     '  --id <candidate>     candidate id for review',
     '  --action <action>    review action: approve, reject, defer, supersede, or relink',
@@ -173,7 +180,7 @@ function usage(): string {
     '  --interval-ms <n>    watch sleep interval, default 300000',
     '  --max-runs <n>       stop watch after n iterations; omit for long-running worker',
     '  --agent <id>         agent id for governed recall, default openclaw',
-    '  --intent <intent>    memory_recall, previous_session_summary, or forensic_quote',
+    '  --intent <intent>    memory_recall, previous_session_summary, forensic_quote, or historical_discussion',
     '  --db <memory.db>     open an explicit database path',
     '  --config <toml>      open a cogmem TOML config',
   '  --include-evidence   include bounded raw excerpts; event ids are always returned',
@@ -192,6 +199,7 @@ function usage(): string {
 
 function isMemoryCommand(value: string | undefined): value is NonNullable<MemoryArgs['command']> {
   return value === 'status'
+    || value === 'plan'
     || value === 'list'
     || value === 'search'
     || value === 'recall'
@@ -225,8 +233,15 @@ function recallIntentArg(
 ): AgentRecallIntent | undefined {
   const raw = stringArg(values, key);
   if (!raw) return undefined;
-  if (raw === 'memory_recall' || raw === 'previous_session_summary' || raw === 'forensic_quote') return raw;
-  throw new Error(`--${key} must be one of memory_recall, previous_session_summary, forensic_quote`);
+  if (raw === 'memory_recall' || raw === 'previous_session_summary' || raw === 'forensic_quote' || raw === 'historical_discussion') return raw;
+  throw new Error(`--${key} must be one of memory_recall, previous_session_summary, forensic_quote, historical_discussion`);
+}
+
+function orderArg(values: Record<string, string | boolean>, key: string): MemoryArgs['order'] {
+  const raw = stringArg(values, key);
+  if (!raw) return undefined;
+  if (raw === 'asc' || raw === 'desc') return raw;
+  throw new Error(`--${key} must be one of asc, desc`);
 }
 
 function stringArg(values: Record<string, string | boolean>, key: string): string | undefined {
@@ -282,27 +297,29 @@ function inspectionDbPath(args: MemoryArgs): string {
 function runReadOnlyInspection(args: MemoryArgs): void {
   const inspection = new MemoryInspectionStore(inspectionDbPath(args));
   try {
-    if (args.command === 'status') {
+    if (args.command === 'status' || args.command === 'plan') {
       const payload = inspection.status({
         projectId: args.projectId, workspaceId: args.workspaceId,
         threadId: args.threadId, sessionId: args.sessionId,
       });
+      const queueSummary = buildCandidateQueueSummary(inspection, args.projectId, args.limit || 5000);
+      const plan = buildMemoryPlan(payload, queueSummary, args.projectId);
+      const enrichedPayload = args.command === 'plan'
+        ? plan
+        : { ...payload, queueSummary, nextActions: plan.nextActions, blocking: plan.blocking, nonBlocking: plan.nonBlocking };
       if (args.json) {
-        printCliJson('memory.status', payload, {
+        printCliJson(`memory.${args.command}`, enrichedPayload, {
           queue: payload.dreamCandidateQueue,
           beliefs: payload.activeBeliefs,
         });
-      } else printHuman('status', payload as unknown as Record<string, unknown>);
+      } else printHuman(args.command, enrichedPayload as unknown as Record<string, unknown>);
       return;
     }
-    const status = args.status || 'candidate';
-    const candidates = inspection.listCandidates({
-      projectId: args.projectId,
-      status,
-      limit: args.limit || 50,
-    });
-    const payload = { total: candidates.length, status, candidates: candidates.map(candidateToJson) };
-    if (args.json) printCliJson('memory.candidates', payload);
+    const queueSummary = buildCandidateQueueSummary(inspection, args.projectId, args.limit || 50);
+    const payload = args.status
+      ? buildSpecificCandidatePayload(inspection, args.projectId, args.status, args.limit || 50, queueSummary)
+      : buildGroupedCandidatePayload(queueSummary);
+    if (args.json) printCliJson('memory.candidates', payload, { queue: queueSummary });
     else printHuman('candidates', payload);
   } finally {
     inspection.close();
@@ -319,6 +336,7 @@ function eventText(event: MemoryEvent): string {
 
 function eventToJson(event: MemoryEvent): Record<string, unknown> {
   const text = eventText(event);
+  const locator = eventSourceLocator(event, 2, 2);
   return {
     eventId: event.eventId,
     label: memoryEventLabel(event),
@@ -351,6 +369,22 @@ function eventToJson(event: MemoryEvent): Record<string, unknown> {
       causalityType: event.causalityType,
       orderingConfidence: event.orderingConfidence,
     },
+    sourceLocator: locator,
+  };
+}
+
+function eventSourceLocator(event: MemoryEvent, before: number, after: number): Record<string, unknown> {
+  const projectArg = event.projectId ? ` --project ${cliArg(event.projectId)}` : '';
+  const base = `cogmem memory show --event ${cliArg(event.eventId)}${projectArg}`;
+  return {
+    eventId: event.eventId,
+    globalSeq: event.globalSeq,
+    projectId: event.projectId,
+    threadId: event.threadId,
+    sessionId: event.sessionId,
+    localDate: event.localDate,
+    command: `${base} --before ${before} --after ${after} --json`,
+    contextCommand: `${base} --before 3 --after 3 --json`,
   };
 }
 
@@ -370,6 +404,176 @@ function candidateToJson(candidate: DeepWriteCandidateRecord): Record<string, un
     createdAt: candidate.createdAt,
     updatedAt: candidate.updatedAt,
   };
+}
+
+interface CandidateQueueSummary {
+  candidate: number;
+  needs_confirmation: number;
+  activeNeedsConfirmation: number;
+  deferredNeedsConfirmation: number;
+  promoted: number;
+  rejected: number;
+  superseded: number;
+  shadow: number;
+  groups: {
+    candidate: ReturnType<typeof candidateToJson>[];
+    needs_confirmation: ReturnType<typeof candidateToJson>[];
+    deferred: ReturnType<typeof candidateToJson>[];
+  };
+}
+
+function buildCandidateQueueSummary(
+  inspection: MemoryInspectionStore,
+  projectId: string | undefined,
+  limit: number,
+): CandidateQueueSummary {
+  const status = inspection.status({ projectId });
+  const queue = status.dreamCandidateQueue;
+  const candidateRows = inspection.listCandidates({ projectId, status: 'candidate', limit });
+  const needsRows = inspection.listCandidates({ projectId, status: 'needs_confirmation', limit: Math.max(limit, 5000) });
+  const now = Date.now();
+  const deferredRows = needsRows.filter((candidate) => candidate.reviewAfter !== undefined && candidate.reviewAfter > now);
+  const activeNeedsRows = needsRows.filter((candidate) => !(candidate.reviewAfter !== undefined && candidate.reviewAfter > now));
+  return {
+    candidate: queue.candidate,
+    needs_confirmation: queue.needsConfirmation,
+    activeNeedsConfirmation: Math.max(0, queue.needsConfirmation - deferredRows.length),
+    deferredNeedsConfirmation: deferredRows.length,
+    promoted: queue.promoted,
+    rejected: queue.rejected,
+    superseded: queue.superseded,
+    shadow: queue.shadow,
+    groups: {
+      candidate: candidateRows.slice(0, limit).map(candidateToJson),
+      needs_confirmation: activeNeedsRows.slice(0, limit).map(candidateToJson),
+      deferred: deferredRows.slice(0, limit).map(candidateToJson),
+    },
+  };
+}
+
+function buildSpecificCandidatePayload(
+  inspection: MemoryInspectionStore,
+  projectId: string | undefined,
+  status: DeepWriteCandidateStatus,
+  limit: number,
+  queueSummary: CandidateQueueSummary,
+): Record<string, unknown> {
+  const candidates = inspection.listCandidates({ projectId, status, limit });
+  const payload: Record<string, unknown> = {
+    total: candidates.length,
+    status,
+    candidates: candidates.map(candidateToJson),
+    queueSummary,
+  };
+  if (status === 'candidate') {
+    payload.warning = 'This lists only status=candidate. Use memory candidates without --status for grouped candidate and needs_confirmation queues.';
+  } else if (status === 'needs_confirmation') {
+    payload.warning = 'memory govern does not process needs_confirmation. Use memory review with explicit user evidence, or defer with review_after.';
+  }
+  return payload;
+}
+
+function buildGroupedCandidatePayload(queueSummary: CandidateQueueSummary): Record<string, unknown> {
+  return {
+    total: queueSummary.groups.candidate.length + queueSummary.groups.needs_confirmation.length + queueSummary.groups.deferred.length,
+    status: 'grouped',
+    queueSummary,
+    groups: queueSummary.groups,
+    nextActions: candidateNextActions(queueSummary, undefined),
+  };
+}
+
+function buildMemoryPlan(
+  status: ReturnType<MemoryInspectionStore['status']>,
+  queueSummary: CandidateQueueSummary,
+  projectId?: string,
+): Record<string, unknown> {
+  const nextActions: Array<Record<string, unknown>> = [];
+  const blocking: Array<Record<string, unknown>> = [];
+  const nonBlocking: Array<Record<string, unknown>> = [];
+  const projectArg = projectId ? ` --project ${cliArg(projectId)}` : '';
+  const episodeDream = status.episodeDream as Record<string, unknown>;
+  const pendingEpisodes = asCount(episodeDream.pending) + asCount(episodeDream.retryScheduled);
+  const undreamedRawCount = asCount(status.undreamedRawCount);
+  if (pendingEpisodes > 0) {
+    nextActions.push({
+      priority: 'high',
+      type: 'dream_tick',
+      safeForAutomation: true,
+      reason: `${pendingEpisodes} sealed episode Dream jobs can be processed`,
+      command: `cogmem dream tick${projectArg} --mode auto --max-episodes 20 --json`,
+    });
+  }
+  if (undreamedRawCount > 0) {
+    nonBlocking.push({
+      type: 'raw_dream_ledger_lag',
+      count: undreamedRawCount,
+      episodeDreamPending: pendingEpisodes,
+      resolvableByDreamTick: false,
+      safeForAutomation: false,
+      reason: pendingEpisodes > 0
+        ? 'Raw ledger dream coverage is tracked separately from sealed episode Dream jobs; dream tick may process episodes but does not guarantee this counter will clear.'
+        : 'Raw ledger dream coverage is behind, but there are no sealed episode Dream jobs. Do not run dream tick for this signal alone.',
+      command: `cogmem memory list${projectArg} --order asc --limit 20 --json`,
+    });
+  }
+  nextActions.push(...candidateNextActions(queueSummary, projectId));
+  if (queueSummary.activeNeedsConfirmation > 0) {
+    blocking.push({
+      type: 'needs_confirmation',
+      count: queueSummary.activeNeedsConfirmation,
+      reason: 'Manual review requires explicit user evidence; memory govern will not process these candidates.',
+      command: `cogmem memory candidates${projectArg} --status needs_confirmation --json`,
+    });
+  }
+  if (queueSummary.deferredNeedsConfirmation > 0) {
+    nonBlocking.push({
+      type: 'deferred_confirmation',
+      count: queueSummary.deferredNeedsConfirmation,
+      reason: 'Deferred needs_confirmation remains in the review queue until review_after.',
+      command: `cogmem memory candidates${projectArg} --json`,
+    });
+  }
+  return {
+    healthy: nextActions.length === 0 && blocking.length === 0,
+    projectId,
+    queueSummary,
+    dreamBacklog: status.dreamBacklog,
+    episodeDream: status.episodeDream,
+    vectorState: status.vectorState,
+    nextActions,
+    blocking,
+    nonBlocking,
+  };
+}
+
+function candidateNextActions(queueSummary: CandidateQueueSummary, projectId?: string): Array<Record<string, unknown>> {
+  const projectArg = projectId ? ` --project ${cliArg(projectId)}` : '';
+  const actions: Array<Record<string, unknown>> = [];
+  if (queueSummary.candidate > 0) {
+    actions.push({
+      priority: 'high',
+      type: 'govern',
+      safeForAutomation: true,
+      reason: `${queueSummary.candidate} ordinary candidates are ready for deterministic governance`,
+      command: `cogmem memory govern${projectArg} --limit 100 --json`,
+    });
+  }
+  if (queueSummary.activeNeedsConfirmation > 0) {
+    actions.push({
+      priority: 'medium',
+      type: 'review_needs_confirmation',
+      safeForAutomation: false,
+      reason: `${queueSummary.activeNeedsConfirmation} candidates need explicit operator/user confirmation`,
+      command: `cogmem memory candidates${projectArg} --status needs_confirmation --json`,
+      reviewCommand: `cogmem memory review${projectArg} --id <candidate-id> --action <approve|reject|defer|supersede|relink> --actor <operator> --reason <reason> --json`,
+    });
+  }
+  return actions;
+}
+
+function asCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 function runStatus(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
@@ -404,9 +608,15 @@ function runList(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown
     workspaceId: args.workspaceId ? [args.workspaceId] : undefined,
     threadId: args.threadId ? [args.threadId] : undefined,
     sessionId: args.sessionId ? [args.sessionId] : undefined,
+    sinceGlobalSeq: args.sinceGlobalSeq,
+    untilGlobalSeq: args.untilGlobalSeq,
+    order: args.order,
   });
   return {
     total: page.total,
+    sinceGlobalSeq: args.sinceGlobalSeq,
+    untilGlobalSeq: args.untilGlobalSeq,
+    order: args.order || 'desc',
     events: page.records.map(eventToJson),
   };
 }
@@ -660,12 +870,22 @@ function runCandidates(kernel: MemoryKernel, args: MemoryArgs): Record<string, u
 }
 
 function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record<string, unknown>): void {
-  if (command === 'status') {
+  if (command === 'status' || command === 'plan') {
+    if (command === 'plan') {
+      console.log(`healthy: ${payload.healthy}`);
+      console.log(`queueSummary: ${JSON.stringify(payload.queueSummary)}`);
+      console.log(`nextActions: ${JSON.stringify(payload.nextActions)}`);
+      console.log(`blocking: ${JSON.stringify(payload.blocking)}`);
+      console.log(`nonBlocking: ${JSON.stringify(payload.nonBlocking)}`);
+      return;
+    }
     console.log(`rawEvents: ${payload.rawEventCount}`);
     console.log(`vectors: ${payload.vectorCount}`);
     console.log(`dreamBacklog: ${JSON.stringify(payload.dreamBacklog)}`);
     console.log(`episodeDream: ${JSON.stringify(payload.episodeDream)}`);
     console.log(`dreamCandidateQueue: ${JSON.stringify(payload.dreamCandidateQueue)}`);
+    if (payload.queueSummary) console.log(`queueSummary: ${JSON.stringify(payload.queueSummary)}`);
+    if (payload.nextActions) console.log(`nextActions: ${JSON.stringify(payload.nextActions)}`);
     return;
   }
   if (command === 'dream') {
@@ -696,6 +916,17 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     return;
   }
   if (command === 'candidates') {
+    if (payload.queueSummary) console.log(`queueSummary: ${JSON.stringify(payload.queueSummary)}`);
+    const groups = payload.groups as Record<string, unknown[]> | undefined;
+    if (groups) {
+      for (const [group, values] of Object.entries(groups)) {
+        console.log(`${group}: ${values.length}`);
+        for (const candidate of values as Array<Record<string, unknown>>) {
+          console.log(`- ${candidate.candidateId} ${candidate.candidateType} ${candidate.status} confidence=${candidate.confidence}`);
+        }
+      }
+      return;
+    }
     const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
     for (const candidate of candidates as Array<Record<string, unknown>>) {
       console.log(`- ${candidate.candidateId} ${candidate.candidateType} ${candidate.status} confidence=${candidate.confidence}`);
@@ -784,7 +1015,7 @@ async function main(): Promise<void> {
     console.log(usage());
     return;
   }
-  if (args.command === 'status' || args.command === 'candidates') {
+  if (args.command === 'status' || args.command === 'plan' || args.command === 'candidates') {
     runReadOnlyInspection(args);
     return;
   }
@@ -844,3 +1075,7 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
+
+function cliArg(value: string): string {
+  return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+}

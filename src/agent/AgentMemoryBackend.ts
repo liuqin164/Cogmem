@@ -90,6 +90,7 @@ export interface AgentRecallSourceAnchor {
 
 export interface AgentRecallSourceContextEvent {
   eventId: string;
+  globalSeq?: number;
   label: string;
   role?: MemoryEvent['role'];
   rawEventType?: MemoryEvent['rawEventType'];
@@ -119,7 +120,10 @@ export interface AgentRecallSourceContext {
   window: SourceContextWindowMetadata;
   locator: {
     eventId: string;
+    globalSeq?: number;
+    projectId?: string;
     command: string;
+    contextCommand?: string;
     threadId?: string;
     sessionId?: string;
     localDate?: string;
@@ -211,6 +215,7 @@ export interface AgentRecallDecisionTrace {
   reason:
     | 'previous_session'
     | 'forensic_quote'
+    | 'historical_discussion'
     | 'graph_selected'
     | 'raw_cue_match_preferred'
     | 'compiled_cue_match'
@@ -540,6 +545,9 @@ export class KernelAgentMemoryBackend {
     if (query.intent === 'forensic_quote') {
       return this.recallForensicQuote(query, queryPlan);
     }
+    if (queryPlan.intent === 'historical_discussion') {
+      return this.recallHistoricalDiscussion(query, queryPlan);
+    }
 
     const limit = query.limit ?? 5;
     const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
@@ -818,6 +826,52 @@ export class KernelAgentMemoryBackend {
           scopedNavigation: 0,
           brainFallback: 0,
           rawLedger: items.length,
+        },
+        items.length,
+      ),
+    };
+  }
+
+  private recallHistoricalDiscussion(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan): AgentRecallResult {
+    const limit = query.limit ?? 5;
+    const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
+    const allowsCompiled = laneAllowed(query.retrievalPolicy, 'compiled');
+    const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
+    const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, limit) : [];
+    const rawItems = allowsRawSource ? this.rawLedgerFallbackItemsForQuery(queryPlan, query, Math.max(limit * 2, 10)) : [];
+    const retrievalLimit = Math.max(limit * 4, 24);
+    const compiledItems = allowsCompiled
+      ? this.filterAgentEvidence(this.kernel.navigateMemory(queryPlan.primarySearchText, {
+        projectId: query.projectId,
+        limit: retrievalLimit,
+        startTime: query.startTime,
+        endTime: query.endTime,
+      }).rawEvidence, query.agentId, query.collection, query.excludeSessionId)
+        .slice(0, limit)
+        .map((neuron) => this.toAgentRecallItem(neuron))
+      : [];
+    const items = this.mergeRecallItems(rawItems, this.mergeRecallItems(graphItems, compiledItems, limit), limit);
+    const selectedLane = rawItems.length > 0
+      ? 'raw_ledger'
+      : graphItems.length > 0
+        ? 'graph'
+        : compiledItems.length > 0
+          ? 'compiled'
+          : 'none';
+    return {
+      recallMode: rawItems.length > 0 ? 'raw_ledger_fallback' : 'brain_recall_fallback',
+      items,
+      fallbackUsed: true,
+      queryPlan,
+      decisionTrace: recallDecisionTrace(
+        selectedLane,
+        'historical_discussion',
+        {
+          graph: graphItems.length,
+          navigation: compiledItems.length,
+          scopedNavigation: compiledItems.length,
+          brainFallback: 0,
+          rawLedger: rawItems.length,
         },
         items.length,
       ),
@@ -1301,7 +1355,10 @@ export class KernelAgentMemoryBackend {
       window: normalized.window,
       locator: {
         eventId: event.eventId,
-        command: `cogmem memory show --event ${event.eventId} --before 2 --after 2`,
+        globalSeq: event.globalSeq,
+        projectId: event.projectId,
+        command: `cogmem memory show --event ${cliArg(event.eventId)}${event.projectId ? ` --project ${cliArg(event.projectId)}` : ''} --before 2 --after 2 --json`,
+        contextCommand: `cogmem memory show --event ${cliArg(event.eventId)}${event.projectId ? ` --project ${cliArg(event.projectId)}` : ''} --before 3 --after 3 --json`,
         threadId: event.threadId,
         sessionId: event.sessionId,
         localDate: event.localDate,
@@ -1313,6 +1370,7 @@ export class KernelAgentMemoryBackend {
     const text = this.eventText(event);
     return {
       eventId: event.eventId,
+      globalSeq: event.globalSeq,
       label: memoryEventLabel(event),
       role: event.role,
       rawEventType: event.rawEventType,
@@ -1664,4 +1722,8 @@ function uniqueNonEmpty(values: string[]): string[] {
 
 function laneAllowed(policy: StrategyRetrievalPolicy | undefined, lane: StrategyRetrievalPolicy['allowedLanes'][number]): boolean {
   return !policy || policy.allowedLanes.includes(lane);
+}
+
+function cliArg(value: string): string {
+  return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 }

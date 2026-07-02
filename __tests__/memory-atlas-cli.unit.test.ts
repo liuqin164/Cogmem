@@ -32,7 +32,13 @@ test('memory graph CLI commands use the shared JSON contract and source drilldow
   const search = await run(['graph-search', '--query', 'Hermes', '--project', 'cogmem', '--db', dbPath, '--json']);
   expect(search.schemaVersion).toBe('cogmem.cli.v1');
   expect(search.command).toBe('memory.graph-search');
-  expect((search.nodes as Array<Record<string, unknown>>).some((node) => node.label === 'Hermes')).toBe(true);
+  const searchNode = (search.nodes as Array<Record<string, any>>).find((node) => node.label === 'Hermes');
+  expect(searchNode).toBeDefined();
+  expect(searchNode?.evidenceReturned).toBeGreaterThanOrEqual(1);
+  expect(searchNode?.evidence[0].sourceLocator.command).toContain('cogmem memory show --event evt-cli-hermes');
+  expect(searchNode?.evidence[0].sourceLocator.command).toContain('--project cogmem');
+  expect(searchNode?.evidence[0].sourceLocator.command).toContain('--json');
+  expect(searchNode?.evidence[0].sourceLocator.contextCommand).toContain('--before 3 --after 3 --json');
 
   const node = await run(['graph-node', '--id', `entity:${entity.entityId}`, '--project', 'cogmem', '--db', dbPath, '--json']);
   expect(((node.evidence as Array<Record<string, unknown>>)[0]?.drilldown as string)).toContain('memory show --event evt-cli-hermes');

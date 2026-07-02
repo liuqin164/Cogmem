@@ -138,6 +138,8 @@ export interface MemoryBindingBackfillOptions {
 export interface MemoryBindingBackfillResult {
     projectId?: string;
     sinceGlobalSeq?: number;
+    nextGlobalSeq?: number;
+    hasMore: boolean;
     scannedEvents: number;
     bindableEvents: number;
     boundEvents: number;

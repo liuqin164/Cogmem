@@ -180,12 +180,14 @@ cogmem import-hermes --workspace . --project hermes --session ./hermes.normalize
 
 The importer is idempotent. Re-running it skips records already imported into the same memory database.
 
-Cogmem 3.6.4 skips import batch sealing for empty episode boundaries and Dream skips legacy empty episode jobs instead of blocking the whole queue. If `episode status` shows `dreamError` beginning with `episode_empty`, inspect the source events and use episode repair instead of editing SQLite rows.
+Cogmem 3.6.4 and later skip import batch sealing for empty episode boundaries and Dream skips legacy empty episode jobs instead of blocking the whole queue. If `episode status` shows `dreamError` beginning with `episode_empty`, inspect the source events and use episode repair instead of editing SQLite rows.
 
 Run the maintenance loop under host supervision after import and during normal use. `needs_confirmation` is a human review queue, not the Dream backlog, and `memory govern` promotes only ordinary `candidate` rows:
 
 ```bash
+cogmem memory plan --project hermes --json
 cogmem memory status --project hermes --json
+cogmem memory candidates --project hermes --json
 cogmem episode status --project hermes --json
 cogmem dream status --project hermes --json
 cogmem dream tick --project hermes --mode auto --max-episodes 20 --json
@@ -195,6 +197,8 @@ cogmem memory candidates --project hermes --status needs_confirmation --json
 cogmem memory review --project hermes --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <distinct-user-event-id> --json
 cogmem memory recall --query "<verification question>" --project hermes --agent hermes --json
 ```
+
+`memory plan` is the first agent-safe health and next-action command. It explains which queues block release, which work is non-blocking, whether vectors are empty but fallback recall is available, and what command should run next. Only run `dream_tick` when it appears in `nextActions`; if `nonBlocking` contains `raw_dream_ledger_lag` with `resolvableByDreamTick:false`, inspect raw sources or episode/import boundaries instead of retrying `dream tick`. Default `memory candidates --json` groups ordinary candidates, `needs_confirmation`, and deferred review entries; use `--status` only when the operator asks for one queue.
 
 A host timer may run this bounded tick periodically. The tick exits after inspecting the backlog and performs no work when no sealed episode is ready.
 
@@ -233,9 +237,25 @@ cogmem memory show --event <event-id> --before 2 --after 2 --json
 
 `sourceContext` entries include stable `label` values, optional `charRange` / `sourceRange`, and `sourceContext.window` metadata. Use `window.before.requestedCount`, `window.before.count`, `window.after.requestedCount`, `window.after.count`, `excludesAnchor`, `ordering`, `roleFilter`, and `overlapHandling` to understand the before/after replay. `memory show --json` returns the same contract, so the labels in MCP recall can be matched to the local CLI output.
 
+For “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, MCP memory gaps, or other old-discussion questions, force the historical-discussion lane before saying memory is absent:
+
+```bash
+cogmem memory recall --query "<past discussion question>" --intent historical_discussion --project hermes --agent hermes --json
+```
+
+If the answer depends on exact wording or nearby context, run the returned `sourceLocator` or use a Raw Ledger cursor:
+
+```bash
+cogmem memory show --event <eventId> --project hermes --before 2 --after 2 --json
+cogmem memory list --project hermes --since <globalSeq> --order asc --json
+```
+
+In 3.6.5, raw list rows and Atlas search/explore evidence include `sourceLocator.command` and a deeper `sourceLocator.contextCommand`. Use those commands before claiming an event ID is missing, before quoting exact words, or before treating an Atlas summary as the source.
+
 `vectors: 0` does not mean memory is unavailable. It means dense vector search has no hot index yet; `memory recall` still has governed raw-ledger fallback. Broad inventory questions are expanded into structured cues such as `库存管理`, `在库`, `产品コード`, and `数量`; when compiled candidates miss those cues, prefer the raw ledger result and use its `sourceContext` for details. Check status with:
 
 ```bash
+cogmem memory plan --project hermes --json
 cogmem memory status --project hermes --json
 ```
 
@@ -252,12 +272,13 @@ Default recall includes untagged and `collection:anchor` memory only. Ask for `c
 For host upkeep, inspect the self-map and run an explicit tick:
 
 ```bash
+cogmem memory plan --project hermes --json
 cogmem memory map --project hermes --json
 cogmem memory tick --project hermes --json
 cogmem memory bind --project hermes --json
 ```
 
-`memory tick` does not start a daemon. Use its `suggestedActions` to decide whether Hermes should run `dream tick`, `memory govern`, `episode repair`, entity review, re-embedding, or `memory bind` for unbound high-value raw events.
+`memory tick` does not start a daemon. Use its `suggestedActions` to decide whether Hermes should run `dream tick`, `memory govern`, `episode repair`, entity review, re-embedding, or `memory bind` for unbound high-value raw events. `undreamedRawCount` by itself is Raw Ledger coverage lag, not a sealed-episode job; do not loop `dream tick` unless `memory plan.nextActions` contains `dream_tick`. In 3.6.5, `memory bind` scans the historical Raw Ledger by cursor instead of only the latest page; resume large repairs with `--since <globalSeq>`.
 
 `memory map` also exposes Memory Binding and Graph Recall counters. Bindings connect high-value user raw events to stable topic/entity paths before promotion, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down. Correction bindings expose review flags and correction edges. Use graph recall hits for source drill-down and topic continuity only; do not treat bindings, clusters, or edges as verified facts, user preferences, or prompt instructions.
 
@@ -267,7 +288,7 @@ Explicit user clarification is organizational correction evidence, not an automa
 
 When importing OpenClaw-style session Markdown into a Hermes project, Cogmem accepts multiline bodies below empty role headers, collapses only adjacent exact export duplicates, and uses `# Session: ... UTC` as the chronological timestamp base rather than file mtime.
 
-After upgrading, rerun `cogmem connect hermes --workspace . --auto --force` and reload MCP so existing allow-lists and skill instructions receive the current tools and contracts.
+After upgrading, rerun `cogmem connect hermes --workspace . --auto --force --json` and reload MCP so existing allow-lists and skill instructions receive the current tools and contracts. In JSON output, follow only `nextCommands` for unattended agent work; unsafe operator or host steps such as interactive init and `/reload-mcp` are listed under `nextSteps` with `safeForAutomation=false`.
 
 ## Runtime Wiring
 

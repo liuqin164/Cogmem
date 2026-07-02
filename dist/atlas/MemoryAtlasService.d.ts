@@ -16,6 +16,7 @@ export declare class MemoryAtlasService {
         maxHops?: number;
     }): MemoryAtlasPathResult;
     timeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult;
+    private attachEvidence;
     private evidence;
     private edgesFor;
     private safeEdges;

@@ -878,9 +878,15 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   expect(installedParsed.installed).toBe(true);
   expect(installedParsed.nextCommands.join('\n')).not.toContain('cogmem-init');
   expect(installedParsed.nextCommands.join('\n')).not.toContain('cogmem init');
+  expect(installedParsed.nextCommands.join('\n')).not.toContain('openclaw gateway restart');
   expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem doctor');
   expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem openclaw diagnose --workspace . --json');
-  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem import-openclaw --workspace . --project openclaw --dry-run');
+  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem import-openclaw --workspace . --project openclaw --dry-run --json');
+  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem memory plan --project openclaw --json');
+  expect(installedParsed.nextSteps).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: 'interactive_init', safeForAutomation: false, actor: 'operator' }),
+    expect.objectContaining({ id: 'restart_gateway', safeForAutomation: false, actor: 'host' }),
+  ]));
   expect(installedParsed.hostConfigSnippet).toContain('does not modify OpenClaw host config');
   expect(installedParsed.hostConfigSnippet).toContain('Do not write unknown OpenClaw config fields');
   expect(installedParsed.hostConfigSnippet).not.toContain('plugins.slots.memory');
@@ -1334,7 +1340,7 @@ test('unified cogmem CLI dispatches doctor and update commands', async () => {
   const update = await runCli(
     ['bun', cogmemBin, 'update', '--dry-run', '--json', '--config', configPath],
     coreRoot,
-    { COGMEM_NPM_SPEC: '3.6.4' },
+    { COGMEM_NPM_SPEC: '3.6.5' },
   );
   expect(update.stderr).toBe('');
   expect(update.exitCode).toBe(0);
@@ -1343,10 +1349,10 @@ test('unified cogmem CLI dispatches doctor and update commands', async () => {
   expect(parsed.dryRun).toBe(true);
   expect(parsed.from).toBe('latest');
   expect(parsed.source).toBe('npm');
-  expect(parsed.packageSpec).toBe('3.6.4');
+  expect(parsed.packageSpec).toBe('3.6.5');
   expect(parsed.targetCwd).toBe(coreRoot);
   expect(parsed.installKind).toBe('source_checkout');
-  expect(parsed.nextCommand).toContain('cogmem@3.6.4');
+  expect(parsed.nextCommand).toContain('cogmem@3.6.5');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
   expect(parsed.nextCommand).not.toContain('@CognitiveOS/core');
   expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
@@ -1374,7 +1380,7 @@ test('cogmem update targets the one-line installer home when cwd has no package 
     {
       HOME: home,
       COGMEM_INSTALL_HOME: installHome,
-      COGMEM_NPM_SPEC: '3.6.4',
+      COGMEM_NPM_SPEC: '3.6.5',
     },
   );
 
@@ -1383,8 +1389,8 @@ test('cogmem update targets the one-line installer home when cwd has no package 
   const parsed = JSON.parse(update.stdout);
   expect(parsed.targetCwd).toBe(installHome);
   expect(parsed.currentSpec).toContain('cogmem.tgz');
-  expect(parsed.packageSpec).toBe('3.6.4');
-  expect(parsed.nextCommand).toContain('cogmem@3.6.4');
+  expect(parsed.packageSpec).toBe('3.6.5');
+  expect(parsed.nextCommand).toContain('cogmem@3.6.5');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
   expect(parsed.migrationCommand).toBeUndefined();
   expect(parsed.migrationSkippedReason).toContain('missing_config');
@@ -1399,7 +1405,7 @@ test('cogmem update targets npm global installs without writing a local package 
     dir,
     {
       COGMEM_INSTALL_KIND: 'npm_global',
-      COGMEM_NPM_SPEC: '3.6.4',
+      COGMEM_NPM_SPEC: '3.6.5',
     },
   );
 
@@ -1408,7 +1414,7 @@ test('cogmem update targets npm global installs without writing a local package 
   const parsed = JSON.parse(update.stdout);
   expect(parsed.installKind).toBe('npm_global');
   expect(parsed.currentSpec).toBe('npm:global');
-  expect(parsed.nextCommand).toBe('npm install -g cogmem@3.6.4');
+  expect(parsed.nextCommand).toBe('npm install -g cogmem@3.6.5');
   expect(parsed.migrationCommand).toBeUndefined();
 });
 
@@ -1436,7 +1442,12 @@ test('cogmem-connect installs Hermes skill into the real Hermes skills directory
   expect(parsed.nextCommands.join('\n')).not.toContain('cogmem-init');
   expect(parsed.nextCommands.join('\n')).not.toContain('cogmem init');
   expect(parsed.nextCommands).toContain('./node_modules/.bin/cogmem doctor');
-  expect(parsed.nextCommands).toContain('./node_modules/.bin/cogmem import-hermes --workspace . --project hermes --dry-run');
+  expect(parsed.nextCommands).toContain('./node_modules/.bin/cogmem import-hermes --workspace . --project hermes --dry-run --json');
+  expect(parsed.nextCommands).toContain('./node_modules/.bin/cogmem memory plan --project hermes --json');
+  expect(parsed.nextSteps).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: 'interactive_init', safeForAutomation: false, actor: 'operator' }),
+    expect.objectContaining({ id: 'reload_hermes', safeForAutomation: false, actor: 'host' }),
+  ]));
   expect(parsed.hostConfigSnippet).toContain('mcp_servers:');
   expect(parsed.hostConfigSnippet).toContain('command: "cogmem"');
   expect(parsed.hostConfigSnippet).toContain('args: ["mcp"]');

@@ -26,7 +26,7 @@ export function installOpenClawAutoMemoryPlugin(options) {
         ? { kind: 'toml', path: resolve(options.configPath) }
         : resolveCogmemConfigPath({ cwd: workspaceRoot });
     if (configResolution.kind !== 'toml') {
-        throw new Error(`Missing cogmem config at ${configResolution.path}. Run cogmem-init --agent openclaw --scope project first.`);
+        throw new Error(`Missing cogmem config at ${configResolution.path}. Ask an operator to run the interactive setup: cogmem init --agent openclaw --scope project.`);
     }
     const configPath = configResolution.path;
     const pluginDir = resolve(options.pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot));
@@ -662,6 +662,9 @@ function classifyRecallIntent(query) {
   }
   if (/原话|怎么说的|完整对话|上一句|下一句|exact quote|verbatim/.test(text)) {
     return 'forensic_quote';
+  }
+  if (/记得.{0,12}(聊过|讨论过|说过)|还记得|之前.{0,12}(聊过|讨论过|说过)|以前.{0,12}(聊过|讨论过|说过)|(过去|几个月前|半年前|上个月|前几天|昨天|上次|上个).{0,20}(聊过|讨论过|说过)|当时.{0,12}(聊|说|问)|那次.{0,12}(聊|说|问)|有没有.{0,12}(记录|聊过|讨论过)|have we discussed|did we talk about|previously discussed/.test(text)) {
+    return 'historical_discussion';
   }
   return 'memory_recall';
 }
@@ -1754,7 +1757,8 @@ function formatRecallContext(result, config) {
       if (item.sourceContext.locator && item.sourceContext.locator.command) {
         lines.push('  sourceLocator=' + item.sourceContext.locator.command);
       } else if (item.sourceContext.event.eventId) {
-        lines.push('  sourceLocator=cogmem memory show --event ' + item.sourceContext.event.eventId + ' --before 2 --after 2');
+        const project = item.sourceContext.event.projectId ? ' --project ' + item.sourceContext.event.projectId : '';
+        lines.push('  sourceLocator=cogmem memory show --event ' + item.sourceContext.event.eventId + project + ' --before 2 --after 2 --json');
       }
       const seenEventIds = new Set([anchorEvent.eventId].filter(Boolean));
       const before = uniqueWindowEvents(Array.isArray(item.sourceContext.before) ? item.sourceContext.before : [], seenEventIds).slice(-2);

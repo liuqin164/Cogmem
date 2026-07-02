@@ -99,6 +99,9 @@ export function inferAgentRecallIntent(query) {
     if (/原话|怎么说的|完整对话|上一句|下一句|exact quote|verbatim/.test(text)) {
         return 'forensic_quote';
     }
+    if (/记得.{0,12}(聊过|讨论过|说过)|还记得|之前.{0,12}(聊过|讨论过|说过)|以前.{0,12}(聊过|讨论过|说过)|(过去|几个月前|半年前|上个月|前几天|昨天|上次|上个).{0,20}(聊过|讨论过|说过)|当时.{0,12}(聊|说|问)|那次.{0,12}(聊|说|问)|有没有.{0,12}(记录|聊过|讨论过)|have we discussed|did we talk about|previously discussed/.test(text)) {
+        return 'historical_discussion';
+    }
     return 'memory_recall';
 }
 export function extractRecallKeywords(text) {
@@ -168,10 +171,19 @@ function buildSemanticCuePhrases(keywords, query, anchorText) {
     const hasBlackBox = merged.includes('黑盒') || /黑盒|black\s*box/iu.test(text);
     if (hasMemory && hasBlackBox) {
         out.push('记忆 黑盒');
+        out.push('记忆黑盒');
+        out.push('CogMem Memory Context');
+        out.push('Memory Context');
+        out.push('上下文注入');
+        out.push('sourceContext 原文下钻');
         out.push('存档 黑盒');
         out.push('对话 存档 黑盒');
         out.push('上下文 黑盒');
         out.push('黑盒');
+        if (/graph|图|卡死|database locked|zombie|锁/iu.test(text)) {
+            out.push('memory graph 黑盒');
+            out.push('database locked zombie');
+        }
     }
     else if (hasBlackBox) {
         out.push('黑盒');

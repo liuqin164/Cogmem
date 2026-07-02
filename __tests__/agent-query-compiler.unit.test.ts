@@ -34,10 +34,12 @@ test('agent recall query compiler expands semantic cue phrases across wording dr
     query: '几个月前我们是不是讨论过记忆黑盒的问题？',
   });
 
-  expect(compiled.intent).toBe('memory_recall');
+  expect(compiled.intent).toBe('historical_discussion');
   expect(compiled.keywords).toContain('记忆');
   expect(compiled.keywords).toContain('黑盒');
   expect(compiled.semanticCuePhrases).toContain('记忆 黑盒');
+  expect(compiled.semanticCuePhrases).toContain('CogMem Memory Context');
+  expect(compiled.semanticCuePhrases).toContain('sourceContext 原文下钻');
   expect(compiled.semanticCuePhrases).toContain('存档 黑盒');
   expect(compiled.searchTexts).toContain('黑盒');
   expect(compiled.temporalHints).toContain('past');
@@ -65,4 +67,5 @@ test('agent recall query compiler removes conversational remember-me filler from
   expect(compiled.keywords).not.toContain('还记得');
   expect(compiled.primarySearchText).toBe('黑盒');
   expect(compiled.temporalHints).toContain('past');
+  expect(compiled.intent).toBe('historical_discussion');
 });

@@ -378,6 +378,9 @@ export class EventStore {
 
   listRawEventsAfterGlobalSeq(options: {
     projectId?: string;
+    workspaceId?: string;
+    threadId?: string;
+    sessionId?: string;
     afterGlobalSeq?: number;
     limit?: number;
   } = {}): MemoryEvent[] {
@@ -386,6 +389,18 @@ export class EventStore {
     if (options.projectId) {
       conditions.push('project_id = ?');
       params.push(options.projectId);
+    }
+    if (options.workspaceId) {
+      conditions.push('workspace_id = ?');
+      params.push(options.workspaceId);
+    }
+    if (options.threadId) {
+      conditions.push('thread_id = ?');
+      params.push(options.threadId);
+    }
+    if (options.sessionId) {
+      conditions.push('session_id = ?');
+      params.push(options.sessionId);
     }
     if (options.afterGlobalSeq !== undefined) {
       conditions.push('COALESCE(global_seq, 0) > ?');
@@ -429,6 +444,9 @@ export class EventStore {
       sessionId?: string[];
       startTime?: number;
       endTime?: number;
+      sinceGlobalSeq?: number;
+      untilGlobalSeq?: number;
+      order?: 'asc' | 'desc';
     }
   ): EventAuditPage {
     const safePage = Math.max(1, page);
@@ -485,8 +503,19 @@ export class EventStore {
       conditions.push('occurred_at <= ?');
       params.push(filters.endTime);
     }
+    if (filters?.sinceGlobalSeq !== undefined) {
+      conditions.push('COALESCE(global_seq, 0) >= ?');
+      params.push(filters.sinceGlobalSeq);
+    }
+    if (filters?.untilGlobalSeq !== undefined) {
+      conditions.push('COALESCE(global_seq, 0) <= ?');
+      params.push(filters.untilGlobalSeq);
+    }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const orderSql = filters?.order === 'asc'
+      ? 'COALESCE(global_seq, 0) ASC, occurred_at ASC, event_id ASC'
+      : 'COALESCE(global_seq, 0) DESC, occurred_at DESC, event_id DESC';
     const totalRow = this.db.prepare(`
       SELECT COUNT(*) AS count FROM memory_events ${where}
     `).get(...params) as { count: number } | null;
@@ -494,7 +523,7 @@ export class EventStore {
       SELECT ${MEMORY_EVENT_COLUMNS}
       FROM memory_events
       ${where}
-      ORDER BY COALESCE(global_seq, 0) DESC, occurred_at DESC, event_id DESC
+      ORDER BY ${orderSql}
       LIMIT ? OFFSET ?
     `).all(...params, safePageSize, offset) as any[];
 
@@ -515,7 +544,10 @@ export class EventStore {
         threadId: filters?.threadId,
         sessionId: filters?.sessionId,
         startTime: filters?.startTime,
-        endTime: filters?.endTime
+        endTime: filters?.endTime,
+        sinceGlobalSeq: filters?.sinceGlobalSeq,
+        untilGlobalSeq: filters?.untilGlobalSeq,
+        order: filters?.order,
       }
     };
   }

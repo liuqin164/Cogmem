@@ -244,7 +244,7 @@ test('agent recall reports a bounded decision trace for raw-ledger selection', (
 
   expect(recalled.decisionTrace).toMatchObject({
     selectedLane: 'raw_ledger',
-    reason: 'raw_ledger_only',
+    reason: 'historical_discussion',
     selectedCount: 1,
   });
   expect(recalled.decisionTrace?.candidateCounts.rawLedger).toBeGreaterThan(0);
@@ -321,7 +321,8 @@ test('raw-ledger fallback searches beyond the latest event window and prefers th
   expect(recalled.items[0]?.id).toBe(original.eventId);
   expect(recalled.items[0]?.sourceAnchor?.role).toBe('user');
   expect(recalled.items[0]?.sourceContext?.after[0]?.role).toBe('assistant');
-  expect(recalled.decisionTrace?.reason).toBe('raw_cue_match_preferred');
+  expect(recalled.decisionTrace?.reason).toBe('historical_discussion');
+  expect(recalled.decisionTrace?.selectedLane).toBe('raw_ledger');
 
   kernel.close();
 });

@@ -78,20 +78,23 @@ The Dream Worker processes sealed episodes and proposes candidate memories only.
 For host-owned inspection and upkeep:
 
 ```bash
+cogmem memory plan --project openclaw --json
 cogmem memory map --project openclaw --json
 cogmem memory tick --project openclaw --json
 cogmem memory bind --project openclaw --json
 ```
 
-Cogmem 3.6.4 keeps the 3.6.x Memory Atlas and OpenClaw reliability work, makes npm the default install and update channel, and prevents empty imported episodes from blocking Dream. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
+Cogmem 3.6.5 keeps the 3.6.x Memory Atlas and OpenClaw reliability work, makes npm the default install and update channel, prevents empty imported episodes from blocking Dream, and adds an agent-safe operations protocol. Use `memory plan` for the next safe command, grouped `memory candidates --json` for queue state, `historical_discussion` recall for old-discussion questions, and returned `sourceLocator` commands for exact evidence. Only run `dream_tick` when it appears in `memory plan.nextActions`; `raw_dream_ledger_lag` in `nonBlocking` has `resolvableByDreamTick:false` and is not fixed by looping `dream tick`. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
 
 ```bash
+cogmem memory plan --project openclaw --json
 cogmem memory graph-explore --project openclaw --query "去年与 Hermes 有关的决定" --json
 cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --json
 cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
+cogmem memory recall --query "几个月前我们是不是讨论过 Cogmem 的记忆黑盒" --intent historical_discussion --project openclaw --agent openclaw --json
 ```
 
-Use Atlas to locate a bounded source-backed slice, then use `memory show` for exact evidence. Graph reads do not change activation; explicitly touch only nodes the agent actually uses. Activation controls default visibility and decays during explicit maintenance; exact scoped facets can still revive cold memory without promoting or rewriting it.
+Use Atlas to locate a bounded source-backed slice, then use `memory show` or the returned `sourceLocator` for exact evidence. Graph reads do not change activation; explicitly touch only nodes the agent actually uses. Activation controls default visibility and decays during explicit maintenance; exact scoped facets can still revive cold memory without promoting or rewriting it.
 
 `memory tick` returns activation decay results and `suggestedActions`; it does not start a hidden daemon. If it reports `bind_raw_events`, run `memory bind` to attach imported or adapter-written raw user events to Memory Binding.
 
@@ -126,7 +129,9 @@ cogmem import-openclaw --workspace . --project openclaw
 After import:
 
 ```bash
+cogmem memory plan --project openclaw --json
 cogmem memory status --project openclaw --json
+cogmem memory candidates --project openclaw --json
 cogmem episode status --project openclaw --json
 cogmem dream status --project openclaw --json
 cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json

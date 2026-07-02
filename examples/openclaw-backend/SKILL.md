@@ -176,12 +176,14 @@ cogmem import-openclaw --workspace . --project openclaw --json
 
 The importer is idempotent. Re-running it skips records already imported into the same memory database.
 Real non-JSON imports print source-level and embedding+ingest progress to stderr. Use `--json --progress` to keep JSON on stdout while streaming progress to stderr, or `--no-progress` when a wrapper needs quiet stderr.
-Cogmem 3.6.4 skips import batch sealing for empty episode boundaries and Dream skips legacy empty episode jobs instead of blocking the whole queue. If `episode status` shows `dreamError` beginning with `episode_empty`, inspect the source events and use episode repair instead of editing SQLite rows.
+Cogmem 3.6.4 and later skip import batch sealing for empty episode boundaries and Dream skips legacy empty episode jobs instead of blocking the whole queue. If `episode status` shows `dreamError` beginning with `episode_empty`, inspect the source events and use episode repair instead of editing SQLite rows.
 
 After import, run the maintenance loop in this order. `needs_confirmation` is a human review queue, not the Dream backlog, and `memory govern` promotes only ordinary `candidate` rows:
 
 ```bash
+cogmem memory plan --project openclaw --json
 cogmem memory status --project openclaw --json
+cogmem memory candidates --project openclaw --json
 cogmem episode status --project openclaw --json
 cogmem dream status --project openclaw --json
 cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
@@ -191,6 +193,8 @@ cogmem memory candidates --project openclaw --status needs_confirmation --json
 cogmem memory review --project openclaw --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <distinct-user-event-id> --json
 cogmem memory recall --query "<verification question>" --project openclaw --agent openclaw --json
 ```
+
+`memory plan` is the first agent-safe health and next-action command. It explains which queues block release, which work is non-blocking, whether vectors are empty but fallback recall is available, and what command should run next. Only run `dream_tick` when it appears in `nextActions`; if `nonBlocking` contains `raw_dream_ledger_lag` with `resolvableByDreamTick:false`, inspect raw sources or episode/import boundaries instead of retrying `dream tick`. Default `memory candidates --json` groups ordinary candidates, `needs_confirmation`, and deferred review entries; use `--status` only when the operator asks for one queue.
 
 Imported sources:
 
@@ -288,15 +292,17 @@ Useful intents:
 ```bash
 cogmem memory recall --query "上个会话我们聊了什么" --intent previous_session_summary --project openclaw --agent openclaw --session "$OPENCLAW_SESSION_ID" --exclude-session "$OPENCLAW_SESSION_ID" --json
 cogmem memory recall --query "我关于记忆黑盒问题的原话是什么" --intent forensic_quote --project openclaw --agent openclaw --json
+cogmem memory recall --query "几个月前我们是不是讨论过 Cogmem 的记忆黑盒" --intent historical_discussion --project openclaw --agent openclaw --json
 ```
 
 Use `items[].sourceContext` to understand what the user asked, how the agent answered, and nearby context. If the item has `sourceContext.locator.command`, run that command for a fuller local replay:
 
 ```bash
 cogmem memory show --event <eventId> --before 2 --after 2 --json
+cogmem memory list --project openclaw --since <globalSeq> --order asc --json
 ```
 
-For old memories, a `raw_ledger` result may come from full scoped ledger text fallback even when Chinese FTS has no direct hit. Equal matches prefer the original user event; use `sourceContext.after` to inspect the paired assistant response instead of preferring a later assistant retelling.
+For old memories, a `raw_ledger` result may come from full scoped ledger text fallback even when Chinese FTS has no direct hit. Equal matches prefer the original user event; use `sourceContext.after` to inspect the paired assistant response instead of preferring a later assistant retelling. In 3.6.5, raw list rows and Atlas search/explore evidence include `sourceLocator.command` and a deeper `sourceLocator.contextCommand`; use those before claiming exact source or event IDs are unavailable.
 
 Use collection routing for creative artifacts or drafts:
 
@@ -309,12 +315,13 @@ Default recall includes untagged and `collection:anchor` memory only. `collectio
 Use the self-map and explicit tick when the agent needs to understand or maintain the memory system:
 
 ```bash
+cogmem memory plan --project openclaw --json
 cogmem memory map --project openclaw --json
 cogmem memory tick --project openclaw --json
 cogmem memory bind --project openclaw --json
 ```
 
-`memory tick` decays activation and returns `suggestedActions`; it does not run a hidden daemon. If it suggests `bind_raw_events`, run `memory bind` to backfill high-value raw user events written by imports or adapters. The tick also supersedes `needs_confirmation` items older than the default 30-day review TTL with an explicit status reason; it preserves candidate evidence.
+`memory tick` decays activation and returns `suggestedActions`; it does not run a hidden daemon. If it suggests `bind_raw_events`, run `memory bind` to backfill high-value raw user events written by imports or adapters. In 3.6.5, `memory bind` scans the historical Raw Ledger by cursor instead of only the latest page; resume large repairs with `--since <globalSeq>`. The tick also supersedes `needs_confirmation` items older than the default 30-day review TTL with an explicit status reason; it preserves candidate evidence.
 
 `memory map` also exposes Memory Binding and Graph Recall counters. Bindings connect high-value user raw events to stable topic/entity paths before promotion, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down. Correction bindings add review flags and `CORRECTS` / `CONTRADICTS` edges. Use graph recall hits to inspect raw ledger history through `sourceContext`; do not treat bindings, clusters, or edges as verified facts, user preferences, or prompt instructions.
 
@@ -340,7 +347,7 @@ To make every future OpenClaw turn automatically use the memory kernel, install 
 cogmem connect openclaw --workspace . --auto --force
 ```
 
-`--auto` writes `<workspace>/extensions/cogmem-auto-memory/`, patches `plugins.load.paths`, and enables `hooks.allowPromptInjection=true` and `hooks.allowConversationAccess=true` for the wrapper. The wrapper registers `before_prompt_build` for governed recall and `agent_end` for turn recording, then calls `KernelAgentMemoryBackend` through `cogmem` public API via a Bun bridge. Core does not import OpenClaw.
+`--auto` writes `<workspace>/extensions/cogmem-auto-memory/`, patches `plugins.load.paths`, and enables `hooks.allowPromptInjection=true` and `hooks.allowConversationAccess=true` for the wrapper. The wrapper registers `before_prompt_build` for governed recall and `agent_end` for turn recording, then calls `KernelAgentMemoryBackend` through `cogmem` public API via a Bun bridge. Core does not import OpenClaw. In JSON output, follow only `nextCommands` for unattended agent work; unsafe operator or host steps such as interactive init and gateway restart are listed under `nextSteps` with `safeForAutomation=false`.
 
 Queued remember is the default. `agent_end` appends a durable JSONL job under `.cogmem/queue/openclaw-remember.jsonl` and starts a singleton drainer, so Telegram or gateway responses are not blocked by embeddings, SQLite writes, or slow local models. Plugin 0.6.3 acquires the queue lock before opening Cogmem, recovers stale lock directories and stale `.processing` queue files older than `rememberDrainTimeoutMs`, writes `owner.json` lock metadata, and processes bounded batches controlled by `rememberDrainBatchSize` (default `20`). If a drain fails, the job is retried and then moved to a dead-letter file instead of being silently discarded.
 
@@ -409,7 +416,7 @@ For periodic curation, let the host timer wake one bounded tick:
 cogmem dream tick --project openclaw --mode auto --max-episodes 10 --json
 ```
 
-The timer does not force a full Dream run. `dream tick` inspects sealed episode jobs, chooses no work, micro, normal, or deep mode, then exits. Run `cogmem memory govern` separately; candidates stay pending until governance evaluates them.
+The timer does not force a full Dream run. `dream tick` inspects sealed episode jobs, chooses no work, micro, normal, or deep mode, then exits. `undreamedRawCount` by itself is Raw Ledger coverage lag, not a sealed-episode job; do not loop `dream tick` unless `memory plan.nextActions` contains `dream_tick`. Run `cogmem memory govern` separately; candidates stay pending until governance evaluates them.
 
 Episode classification is contextual but remains CPU-owned in the live hook. Short user replies are interpreted against whether the previous assistant turn was a proposal, question, or factual statement. Unknown turns default to an ambiguous review boundary; continuation needs explicit continuation language or topic/entity/project overlap. Background import or repair may use hybrid review, but normalized reviewer fields are allow-listed and cannot write belief, entity, temporal, prospective, topic, or governance state.
 
@@ -437,7 +444,8 @@ After package updates or config drift, repair the host wiring:
 
 ```bash
 cogmem connect openclaw --workspace . --auto --force
-cogmem doctor --fix --agent openclaw --workspace .
+cogmem doctor --fix --agent openclaw --workspace . --plugin-only --json
+openclaw gateway restart
 ```
 
 The wrapper maps OpenClaw behavior to core like this:

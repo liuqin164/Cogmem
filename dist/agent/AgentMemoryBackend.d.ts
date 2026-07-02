@@ -61,6 +61,7 @@ export interface AgentRecallSourceAnchor {
 }
 export interface AgentRecallSourceContextEvent {
     eventId: string;
+    globalSeq?: number;
     label: string;
     role?: MemoryEvent['role'];
     rawEventType?: MemoryEvent['rawEventType'];
@@ -89,7 +90,10 @@ export interface AgentRecallSourceContext {
     window: SourceContextWindowMetadata;
     locator: {
         eventId: string;
+        globalSeq?: number;
+        projectId?: string;
         command: string;
+        contextCommand?: string;
         threadId?: string;
         sessionId?: string;
         localDate?: string;
@@ -172,7 +176,7 @@ export interface AgentRecallResult {
 export interface AgentRecallDecisionTrace {
     version: 'agent_recall_decision.v1';
     selectedLane: 'graph' | 'compiled' | 'brain_fallback' | 'raw_ledger' | 'mixed' | 'none';
-    reason: 'previous_session' | 'forensic_quote' | 'graph_selected' | 'raw_cue_match_preferred' | 'compiled_cue_match' | 'brain_fallback_selected' | 'raw_ledger_only' | 'no_recall_evidence';
+    reason: 'previous_session' | 'forensic_quote' | 'historical_discussion' | 'graph_selected' | 'raw_cue_match_preferred' | 'compiled_cue_match' | 'brain_fallback_selected' | 'raw_ledger_only' | 'no_recall_evidence';
     candidateCounts: {
         graph: number;
         navigation: number;
@@ -242,6 +246,7 @@ export declare class KernelAgentMemoryBackend {
     recallPack(query: AgentRecallQuery): AgentRecallPackResult;
     private recallPreviousSession;
     private recallForensicQuote;
+    private recallHistoricalDiscussion;
     private recallForensicAnchor;
     private searchRawEventsByQueryPlan;
     private rawLedgerFallbackItemsForQuery;

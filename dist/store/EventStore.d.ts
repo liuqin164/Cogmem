@@ -61,6 +61,9 @@ export declare class EventStore {
     getLatestEvent(): MemoryEvent | null;
     listRawEventsAfterGlobalSeq(options?: {
         projectId?: string;
+        workspaceId?: string;
+        threadId?: string;
+        sessionId?: string;
         afterGlobalSeq?: number;
         limit?: number;
     }): MemoryEvent[];
@@ -78,6 +81,9 @@ export declare class EventStore {
         sessionId?: string[];
         startTime?: number;
         endTime?: number;
+        sinceGlobalSeq?: number;
+        untilGlobalSeq?: number;
+        order?: 'asc' | 'desc';
     }): EventAuditPage;
     getEvent(eventId: string): MemoryEvent | null;
     getThreadEvents(threadId: string, options?: {

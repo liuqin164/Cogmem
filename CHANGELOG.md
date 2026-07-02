@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.6.5
+
+- Added `cogmem memory plan` as a read-only agent operations summary with queue state, blocking/non-blocking next actions, Dream backlog hints, and vector fallback state.
+- Made default `cogmem memory candidates --json` return grouped ordinary, `needs_confirmation`, and deferred queues with actionable `nextActions`, while explicit `--status` still lists one queue.
+- Fixed `cogmem memory list --since/--until/--order` so raw-ledger inspection can resume from global sequence cursors instead of silently ignoring the filters.
+- Added `sourceLocator` drill-down commands to raw ledger list rows and Atlas search/explore evidence so agents can move from summaries to exact `memory show` context before quoting or claiming absence.
+- Added a `historical_discussion` recall intent for “did we discuss this before?” questions, with raw-ledger-first routing and expanded cues for Cogmem/OpenClaw memory-black-box discussions.
+- Changed Memory Binding backfill to scan raw events by cursor across the historical ledger rather than only the latest page, so old imported high-value user events can be bound after upgrade.
+- Changed `cogmem connect ... --json` to expose structured `nextSteps` and keep unsafe operator/host actions such as interactive init and host restart out of agent-safe `nextCommands`.
+- Fixed `cogmem memory plan` so Raw Ledger dream coverage lag is reported as non-blocking `raw_dream_ledger_lag` with `resolvableByDreamTick:false` instead of misleading agents into looping `dream tick` when no sealed episode backlog exists.
+- Updated the auto-installed OpenClaw/Hermes skills and operations handbooks with the full npm install, update, migration, import, `memory plan`, historical recall, source drill-down, governance, and maintenance command playbook.
+
 ## 3.6.4
 
 - Fixed OpenClaw/Hermes imports so empty imported episode boundaries are not batch-sealed into Dream work, and mature empty soft seals no longer abort `dream tick`.
