@@ -114,7 +114,7 @@ timeout_ms = 60000
 
 ## Migrate Existing OpenClaw Memory
 
-Upgrade a 3.5.2 database, an existing 3.6.0 database, or a pre-release schema-25 test database to schema 27 in one backed-up command:
+Upgrade a 3.5.2 database, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.0 schema/projection set in one backed-up command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -176,7 +176,7 @@ cogmem import-openclaw --workspace . --project openclaw --json
 
 The importer is idempotent. Re-running it skips records already imported into the same memory database.
 Real non-JSON imports print source-level and embedding+ingest progress to stderr. Use `--json --progress` to keep JSON on stdout while streaming progress to stderr, or `--no-progress` when a wrapper needs quiet stderr.
-Cogmem 3.6.4 and later skip import batch sealing for empty episode boundaries and Dream skips legacy empty episode jobs instead of blocking the whole queue. If `episode status` shows `dreamError` beginning with `episode_empty`, inspect the source events and use episode repair instead of editing SQLite rows.
+Cogmem skips import batch sealing for empty episode boundaries and Dream skips legacy empty episode jobs instead of blocking the whole queue. If `episode status` shows `dreamError` beginning with `episode_empty`, inspect the source events and use episode repair instead of editing SQLite rows.
 
 After import, run the maintenance loop in this order. `needs_confirmation` is a human review queue, not the Dream backlog, and `memory govern` promotes only ordinary `candidate` rows:
 
@@ -270,6 +270,7 @@ For broad inventory, project history, or relationship questions, navigate Memory
 
 ```bash
 cogmem memory graph-explore --project openclaw --query "我们关于 Hermes 做过哪些工作" --json
+cogmem memory graph-explore --project openclaw --query "6月6号关于记忆黑盒聊过什么" --json
 cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --json
 cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
 cogmem memory graph-timeline --project openclaw --query "去年与 Hermes 有关的决定和操作" --json
@@ -277,9 +278,13 @@ cogmem memory graph-timeline --project openclaw --query "去年与 Hermes 有关
 
 Graph reads default to stale-safe diagnostics. If a drainer or gateway has SQLite busy, JSON may include `atlasFresh=false` and `refreshError` while returning the existing projection. Use `--refresh` when the operator explicitly wants rebuild-or-fail, and `--no-refresh` when investigating locks.
 
-Atlas combines the conditions present in the user's message like table filters. Do not force every question into entity + time + action. Project, time, topic, entity/target, memory kind, and ordinary cues may independently or jointly revive cold nodes. Graph reads do not change activation; explicitly touch only nodes the agent actually uses. Activation changes visibility only. Follow returned event IDs with `cogmem memory show`; never treat an Atlas summary as evidence.
+Atlas combines the conditions present in the user's message like table filters. Do not force every question into entity + time + action. Project, day/month/year, topic, issue, entity/target, session/thread, memory kind, action kind, and ordinary cues may independently or jointly revive cold nodes. Graph reads do not change activation; explicitly touch only nodes the agent actually uses. Activation changes visibility only.
 
-The OpenClaw auto plugin calls the Atlas core directly and injects a bounded volatile `<COGMEM_MEMORY_ATLAS>` block. It does not require MCP. Use normal `memory recall` for a direct factual question and `memory show` for exact wording.
+In 3.7.0, `graph-search`, `graph-explore`, and historical recall can return `cards[]`. Prefer cards over raw node labels for past-discussion questions. A card's `canonicalId` is the single episode identity; `matchedFacets` explains time/topic/issue/entity matches; `matchedPaths` explains how the card was reached; `relatedButNotSelected` is context only and must not replace the selected answer; `sourceLocator.command` is the command to inspect exact original text. If `relaxationTrace` exists, say the answer is a relaxed nearby match, not an exact hit.
+
+Follow returned `sourceLocator.command` or event IDs with `cogmem memory show`; never treat an Atlas summary or title as evidence.
+
+The OpenClaw auto plugin calls the Atlas core directly and injects bounded volatile `<COGMEM_RECALL_CONTEXT>` / `<COGMEM_MEMORY_ATLAS>` blocks. For `historical_discussion`, the recall context includes selected episode cards, `matchedFacets`, `selectedLane`, `strictFacetsMatched`-style decision metadata when available, `relatedButNotSelected`, and `relaxationTrace`. It does not require MCP. Use normal `memory recall` for a direct factual question and `memory show` for exact wording.
 
 If `<COGMEM_RECALL_CONTEXT>` is absent, thin, or does not answer the user's question, do not answer "I do not remember" until you actively query CogMem. Use the kernel first, not the old `memory/` Markdown files:
 
@@ -302,7 +307,7 @@ cogmem memory show --event <eventId> --before 2 --after 2 --json
 cogmem memory list --project openclaw --since <globalSeq> --order asc --json
 ```
 
-For old memories, a `raw_ledger` result may come from full scoped ledger text fallback even when Chinese FTS has no direct hit. Equal matches prefer the original user event; use `sourceContext.after` to inspect the paired assistant response instead of preferring a later assistant retelling. In 3.6.5, raw list rows and Atlas search/explore evidence include `sourceLocator.command` and a deeper `sourceLocator.contextCommand`; use those before claiming exact source or event IDs are unavailable.
+For old memories, a `raw_ledger` result may come from full scoped ledger text fallback even when Chinese FTS has no direct hit. Equal matches prefer the original user event; use `sourceContext.after` to inspect the paired assistant response instead of preferring a later assistant retelling. Raw list rows and Atlas search/explore evidence include `sourceLocator.command` and a deeper `sourceLocator.contextCommand`; use those before claiming exact source or event IDs are unavailable.
 
 Use collection routing for creative artifacts or drafts:
 
@@ -321,7 +326,7 @@ cogmem memory tick --project openclaw --json
 cogmem memory bind --project openclaw --json
 ```
 
-`memory tick` decays activation and returns `suggestedActions`; it does not run a hidden daemon. If it suggests `bind_raw_events`, run `memory bind` to backfill high-value raw user events written by imports or adapters. In 3.6.5, `memory bind` scans the historical Raw Ledger by cursor instead of only the latest page; resume large repairs with `--since <globalSeq>`. The tick also supersedes `needs_confirmation` items older than the default 30-day review TTL with an explicit status reason; it preserves candidate evidence.
+`memory tick` decays activation and returns `suggestedActions`; it does not run a hidden daemon. If it suggests `bind_raw_events`, run `memory bind` to backfill high-value raw user events written by imports or adapters. `memory bind` scans the historical Raw Ledger by cursor instead of only the latest page; resume large repairs with `--since <globalSeq>`. The tick also supersedes `needs_confirmation` items older than the default 30-day review TTL with an explicit status reason; it preserves candidate evidence.
 
 `memory map` also exposes Memory Binding and Graph Recall counters. Bindings connect high-value user raw events to stable topic/entity paths before promotion, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down. Correction bindings add review flags and `CORRECTS` / `CONTRADICTS` edges. Use graph recall hits to inspect raw ledger history through `sourceContext`; do not treat bindings, clusters, or edges as verified facts, user preferences, or prompt instructions.
 
@@ -349,7 +354,7 @@ cogmem connect openclaw --workspace . --auto --force
 
 `--auto` writes `<workspace>/extensions/cogmem-auto-memory/`, patches `plugins.load.paths`, and enables `hooks.allowPromptInjection=true` and `hooks.allowConversationAccess=true` for the wrapper. The wrapper registers `before_prompt_build` for governed recall and `agent_end` for turn recording, then calls `KernelAgentMemoryBackend` through `cogmem` public API via a Bun bridge. Core does not import OpenClaw. In JSON output, follow only `nextCommands` for unattended agent work; unsafe operator or host steps such as interactive init and gateway restart are listed under `nextSteps` with `safeForAutomation=false`.
 
-Queued remember is the default. `agent_end` appends a durable JSONL job under `.cogmem/queue/openclaw-remember.jsonl` and starts a singleton drainer, so Telegram or gateway responses are not blocked by embeddings, SQLite writes, or slow local models. Plugin 0.6.3 acquires the queue lock before opening Cogmem, recovers stale lock directories and stale `.processing` queue files older than `rememberDrainTimeoutMs`, writes `owner.json` lock metadata, and processes bounded batches controlled by `rememberDrainBatchSize` (default `20`). If a drain fails, the job is retried and then moved to a dead-letter file instead of being silently discarded.
+Queued remember is the default. `agent_end` appends a durable JSONL job under `.cogmem/queue/openclaw-remember.jsonl` and starts a singleton drainer, so Telegram or gateway responses are not blocked by embeddings, SQLite writes, or slow local models. Plugin 0.7.0 acquires the queue lock before opening Cogmem, recovers stale lock directories and stale `.processing` queue files older than `rememberDrainTimeoutMs`, writes `owner.json` lock metadata, and processes bounded batches controlled by `rememberDrainBatchSize` (default `20`). If a drain fails, the job is retried and then moved to a dead-letter file instead of being silently discarded.
 
 When automatic memory recording looks stuck, do not delete queue files first. Diagnose the plugin and locks:
 

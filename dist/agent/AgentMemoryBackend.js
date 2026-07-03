@@ -498,39 +498,80 @@ export class KernelAgentMemoryBackend {
         const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
         const allowsCompiled = laneAllowed(query.retrievalPolicy, 'compiled');
         const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
+        const facetResult = allowsGraph ? this.facetGraphItemsForQuery(query, limit) : { items: [], cards: [], relatedButNotSelected: [], relaxationTrace: [] };
+        const facetItems = allowsRawSource ? facetResult.items : [];
         const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, limit) : [];
         const rawItems = allowsRawSource ? this.rawLedgerFallbackItemsForQuery(queryPlan, query, Math.max(limit * 2, 10)) : [];
-        const retrievalLimit = Math.max(limit * 4, 24);
         const compiledItems = allowsCompiled
-            ? this.filterAgentEvidence(this.kernel.navigateMemory(queryPlan.primarySearchText, {
-                projectId: query.projectId,
-                limit: retrievalLimit,
-                startTime: query.startTime,
-                endTime: query.endTime,
-            }).rawEvidence, query.agentId, query.collection, query.excludeSessionId)
-                .slice(0, limit)
-                .map((neuron) => this.toAgentRecallItem(neuron))
+            ? this.compiledItemsForHistoricalQuery(queryPlan, query, limit)
             : [];
-        const items = this.mergeRecallItems(rawItems, this.mergeRecallItems(graphItems, compiledItems, limit), limit);
-        const selectedLane = rawItems.length > 0
-            ? 'raw_ledger'
-            : graphItems.length > 0
-                ? 'graph'
-                : compiledItems.length > 0
-                    ? 'compiled'
-                    : 'none';
+        const items = this.mergeHistoricalRecallItems(facetItems, rawItems, graphItems, compiledItems, limit);
+        const selectedLane = facetItems.length > 0
+            ? 'facet_graph_raw_ledger'
+            : rawItems.length > 0
+                ? 'raw_ledger'
+                : graphItems.length > 0
+                    ? 'graph'
+                    : compiledItems.length > 0
+                        ? 'compiled'
+                        : 'none';
         return {
-            recallMode: rawItems.length > 0 ? 'raw_ledger_fallback' : 'brain_recall_fallback',
+            recallMode: facetItems.length > 0 || rawItems.length > 0 ? 'raw_ledger_fallback' : 'brain_recall_fallback',
             items,
             fallbackUsed: true,
             queryPlan,
+            atlasCards: facetResult.cards,
+            relatedButNotSelected: facetResult.relatedButNotSelected,
+            relaxationTrace: facetResult.relaxationTrace,
             decisionTrace: recallDecisionTrace(selectedLane, 'historical_discussion', {
-                graph: graphItems.length,
+                graph: graphItems.length + facetItems.length,
                 navigation: compiledItems.length,
                 scopedNavigation: compiledItems.length,
                 brainFallback: 0,
-                rawLedger: rawItems.length,
+                rawLedger: rawItems.length + facetItems.length,
             }, items.length),
+        };
+    }
+    facetGraphItemsForQuery(query, limit) {
+        try {
+            const atlas = this.kernel.graphExplore(query.query, {
+                projectId: query.projectId,
+                limit,
+                includeEvidence: true,
+                evidenceLimit: 2,
+                refresh: true,
+                staleOk: true,
+            });
+            const cards = (atlas.cards ?? []).slice(0, limit);
+            const items = cards.map((card) => this.toAgentRecallItemFromAtlasCard(card, query)).filter((item) => Boolean(item));
+            const relatedButNotSelected = cards.flatMap((card) => card.relatedButNotSelected ?? []).slice(0, 8);
+            return { items, cards, relatedButNotSelected, relaxationTrace: atlas.relaxationTrace ?? [] };
+        }
+        catch {
+            return { items: [], cards: [], relatedButNotSelected: [], relaxationTrace: [] };
+        }
+    }
+    toAgentRecallItemFromAtlasCard(card, query) {
+        const eventId = card.sourceLocator?.eventId ?? card.evidenceEventIds[0];
+        const sourceContext = eventId ? this.toAgentSourceContext(eventId) : undefined;
+        const anchorEvent = sourceContext?.event;
+        return {
+            id: `facet:${card.canonicalId}`,
+            text: [card.displayTitle, card.oneLineSummary].filter(Boolean).join(': '),
+            projectId: query.projectId,
+            topicPath: card.parentTopics[0],
+            canonicalId: card.canonicalId,
+            displayTitle: card.displayTitle,
+            matchedFacets: card.matchedFacets,
+            matchedPaths: card.matchedPaths,
+            tags: ['facet_graph', card.eventKind, card.issueType].filter((tag) => Boolean(tag)),
+            source: 'memory_atlas',
+            sourceType: 'raw_ledger',
+            sourceAnchor: anchorEvent ? this.toAgentSourceAnchorFromContextEvent(anchorEvent) : eventId ? { eventId } : undefined,
+            sourceContext,
+            confidence: Math.min(1, 0.7 + card.matchedFacets.length * 0.08),
+            whyMatched: card.whyMatched,
+            canAnswerExactQuote: Boolean(sourceContext),
         };
     }
     recallForensicAnchor(query, limit) {
@@ -698,12 +739,52 @@ export class KernelAgentMemoryBackend {
         const out = [];
         const seen = new Set();
         for (const item of [...primary, ...secondary]) {
-            if (seen.has(item.id))
+            const keys = [item.canonicalId, item.sourceAnchor?.eventId, item.id].filter((value) => Boolean(value));
+            if (keys.some((key) => seen.has(key)))
                 continue;
-            seen.add(item.id);
+            for (const key of keys)
+                seen.add(key);
             out.push(item);
             if (out.length >= limit)
                 break;
+        }
+        return out;
+    }
+    mergeHistoricalRecallItems(facetItems, rawItems, graphItems, compiledItems, limit) {
+        const merged = this.mergeRecallItems(facetItems, this.mergeRecallItems(rawItems, this.mergeRecallItems(graphItems, compiledItems, limit), limit), limit);
+        if (merged.some((item) => item.sourceType === 'imported_summary'))
+            return merged;
+        const importedSupport = compiledItems.find((item) => item.sourceType === 'imported_summary');
+        if (!importedSupport)
+            return merged;
+        const withoutDuplicate = merged.filter((item) => item.id !== importedSupport.id && item.sourceAnchor?.eventId !== importedSupport.sourceAnchor?.eventId);
+        if (withoutDuplicate.length < limit)
+            return [...withoutDuplicate, importedSupport];
+        return [...withoutDuplicate.slice(0, Math.max(0, limit - 1)), importedSupport];
+    }
+    compiledItemsForHistoricalQuery(queryPlan, query, limit) {
+        const retrievalLimit = Math.max(limit * 4, 24);
+        const out = [];
+        const seen = new Set();
+        for (const searchText of uniqueNonEmpty([queryPlan.primarySearchText, ...queryPlan.searchTexts, queryPlan.originalQuery])) {
+            const rawEvidence = this.kernel.navigateMemory(searchText, {
+                projectId: query.projectId,
+                limit: retrievalLimit,
+                startTime: query.startTime,
+                endTime: query.endTime,
+            }).rawEvidence;
+            const items = this.filterAgentEvidence(rawEvidence, query.agentId, query.collection, query.excludeSessionId)
+                .map((neuron) => this.toAgentRecallItem(neuron));
+            for (const item of items) {
+                const key = item.id || item.sourceAnchor?.eventId;
+                if (key && seen.has(key))
+                    continue;
+                if (key)
+                    seen.add(key);
+                out.push(item);
+                if (out.length >= limit)
+                    return out;
+            }
         }
         return out;
     }

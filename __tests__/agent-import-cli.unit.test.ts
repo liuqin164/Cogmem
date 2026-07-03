@@ -224,11 +224,12 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
   });
   kernel.close();
 
-  const item = recalled.items.find((candidate) => candidate.text.includes('记忆黑盒'));
+  const item = recalled.items.find((candidate) => candidate.text.includes('Memory Context 黑盒') || candidate.text.includes('sourceContext'));
   expect(item).toBeDefined();
-  expect(item?.sourceType).toBe('imported_summary');
-  expect(item?.canAnswerExactQuote).toBe(false);
-  expect(item?.sourceContext?.event.text).toContain('sourceContext');
+  expect(item?.sourceType).toBe('raw_ledger');
+  expect(item?.canonicalId).toMatch(/^episode:/);
+  expect(item?.matchedFacets?.some((facet) => facet.type === 'issue' && facet.value === 'memory-context-blackbox')).toBe(true);
+  expect(item?.sourceAnchor?.eventId).toBeTruthy();
 });
 
 test('OpenClaw migrated records are visible through KernelAgentMemoryBackend recall', async () => {
@@ -980,7 +981,7 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(cortexBridgeBody).toContain('kernel.contextOutcomeStore.record');
   expect(cortexBridgeBody).toContain('activationReceipt');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
-  expect(manifest.version).toBe('0.6.3');
+  expect(manifest.version).toBe('0.7.0');
   expect(manifest.configSchema.type).toBe('object');
   expect(manifest.configSchema.properties.configPath.type).toBe('string');
   expect(manifest.configSchema.properties.autoRecall.type).toBe('boolean');

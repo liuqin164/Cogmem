@@ -1,4 +1,5 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
+import type { MemoryAtlasCard, MemoryAtlasRelatedCard, MemoryAtlasRelaxationStep } from '../atlas/MemoryAtlasTypes.js';
 import { type MemoryEventCharRange, type MemoryEventSourceRange, type SourceContextWindowMetadata } from '../recall/SourceContextMetadata.js';
 import type { BeliefRecord, MemoryEvent } from '../types/index.js';
 import type { StrategyRetrievalPolicy } from '../strategy/StrategyCapsule.js';
@@ -152,6 +153,10 @@ export interface AgentRecallItem {
     text: string;
     projectId?: string;
     topicPath?: string;
+    canonicalId?: string;
+    displayTitle?: string;
+    matchedFacets?: MemoryAtlasCard['matchedFacets'];
+    matchedPaths?: MemoryAtlasCard['matchedPaths'];
     tags: string[];
     source?: string;
     sourceType?: 'compiled_memory' | 'imported_summary' | 'raw_ledger' | 'raw_ledger_session';
@@ -170,12 +175,15 @@ export interface AgentRecallResult {
     runtime?: NonNullable<MemoryKernelNavigationResult['navigation']>['runtime'];
     fallbackUsed: boolean;
     queryPlan?: AgentRecallQueryPlan;
+    atlasCards?: MemoryAtlasCard[];
+    relatedButNotSelected?: MemoryAtlasRelatedCard[];
+    relaxationTrace?: MemoryAtlasRelaxationStep[];
     /** Present on all kernel-produced results. Optional for source compatibility with external result mocks. */
     decisionTrace?: AgentRecallDecisionTrace;
 }
 export interface AgentRecallDecisionTrace {
     version: 'agent_recall_decision.v1';
-    selectedLane: 'graph' | 'compiled' | 'brain_fallback' | 'raw_ledger' | 'mixed' | 'none';
+    selectedLane: 'facet_graph_raw_ledger' | 'graph' | 'compiled' | 'brain_fallback' | 'raw_ledger' | 'mixed' | 'none';
     reason: 'previous_session' | 'forensic_quote' | 'historical_discussion' | 'graph_selected' | 'raw_cue_match_preferred' | 'compiled_cue_match' | 'brain_fallback_selected' | 'raw_ledger_only' | 'no_recall_evidence';
     candidateCounts: {
         graph: number;
@@ -247,6 +255,8 @@ export declare class KernelAgentMemoryBackend {
     private recallPreviousSession;
     private recallForensicQuote;
     private recallHistoricalDiscussion;
+    private facetGraphItemsForQuery;
+    private toAgentRecallItemFromAtlasCard;
     private recallForensicAnchor;
     private searchRawEventsByQueryPlan;
     private rawLedgerFallbackItemsForQuery;
@@ -257,6 +267,8 @@ export declare class KernelAgentMemoryBackend {
     private recallCueTerms;
     private itemSearchableText;
     private mergeRecallItems;
+    private mergeHistoricalRecallItems;
+    private compiledItemsForHistoricalQuery;
     private dedupeRawEventsByTurnPreferUser;
     private expandRawSearchTexts;
     private findPreviousSessionId;

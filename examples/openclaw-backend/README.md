@@ -84,11 +84,12 @@ cogmem memory tick --project openclaw --json
 cogmem memory bind --project openclaw --json
 ```
 
-Cogmem 3.6.5 keeps the 3.6.x Memory Atlas and OpenClaw reliability work, makes npm the default install and update channel, prevents empty imported episodes from blocking Dream, and adds an agent-safe operations protocol. Use `memory plan` for the next safe command, grouped `memory candidates --json` for queue state, `historical_discussion` recall for old-discussion questions, and returned `sourceLocator` commands for exact evidence. Only run `dream_tick` when it appears in `memory plan.nextActions`; `raw_dream_ledger_lag` in `nonBlocking` has `resolvableByDreamTick:false` and is not fixed by looping `dream tick`. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, time, topic, entity/target, memory-kind, action, and keyword conditions like table filters; no fixed entity-time-action tuple is required.
+Cogmem 3.7.0 keeps npm as the default install/update channel and upgrades Memory Atlas into a multi-dimensional navigation graph. Use `memory plan` for the next safe command, grouped `memory candidates --json` for queue state, `historical_discussion` recall for old-discussion questions, and returned `sourceLocator` commands for exact evidence. Only run `dream_tick` when it appears in `memory plan.nextActions`; `raw_dream_ledger_lag` in `nonBlocking` has `resolvableByDreamTick:false` and is not fixed by looping `dream tick`. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, day/month/year, topic, issue, entity/target, session/thread, memory-kind, action-kind, and keyword conditions like table filters; no fixed entity-time-action tuple is required. Prefer returned `cards[]` for historical discussion: `canonicalId` dedupes the episode, `matchedFacets` explains why it matched, `relatedButNotSelected` is only side context, and `sourceLocator` opens the raw evidence.
 
 ```bash
 cogmem memory plan --project openclaw --json
 cogmem memory graph-explore --project openclaw --query "去年与 Hermes 有关的决定" --json
+cogmem memory graph-explore --project openclaw --query "6月6号关于记忆黑盒聊过什么" --json
 cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --json
 cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
 cogmem memory recall --query "几个月前我们是不是讨论过 Cogmem 的记忆黑盒" --intent historical_discussion --project openclaw --agent openclaw --json
@@ -229,7 +230,7 @@ To make future OpenClaw turns automatically recall and record memory, run:
 cogmem connect openclaw --workspace . --auto --force
 ```
 
-`--auto` installs `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables a local plugin wrapper with `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through the public `cogmem` API via a Bun bridge; core still does not import OpenClaw. Plugin 0.6.3 uses singleton queue/spawn locks, stale-lock and stale-processing recovery, and bounded remember batches so queued `agent_end` recording does not hold SQLite open longer than necessary.
+`--auto` installs `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables a local plugin wrapper with `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through the public `cogmem` API via a Bun bridge; core still does not import OpenClaw. Plugin 0.7.0 uses singleton queue/spawn locks, stale-lock and stale-processing recovery, and bounded remember batches so queued `agent_end` recording does not hold SQLite open longer than necessary.
 
 The wrapper does not rewrite OpenClaw's native prompt, tool instructions, skills, or conversation order. It only prepends Cogmem-owned blocks:
 

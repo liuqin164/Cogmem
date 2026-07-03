@@ -1,9 +1,10 @@
 import type { EventStore } from '../store/EventStore.js';
-import type { MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
+import { type MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
 import type { MemoryAtlasNodeDetail, MemoryAtlasPathResult, MemoryAtlasQueryOptions, MemoryAtlasSlice, MemoryAtlasTimelineResult } from './MemoryAtlasTypes.js';
 export declare class MemoryAtlasService {
     private store;
     private eventStore;
+    private readonly facetPlanner;
     constructor(store: MemoryAtlasStore, eventStore: EventStore);
     overview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     search(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
@@ -16,7 +17,9 @@ export declare class MemoryAtlasService {
         maxHops?: number;
     }): MemoryAtlasPathResult;
     timeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult;
+    private searchFacetCardsWithRelaxation;
     private attachEvidence;
+    private attachCardEvidence;
     private evidence;
     private edgesFor;
     private safeEdges;

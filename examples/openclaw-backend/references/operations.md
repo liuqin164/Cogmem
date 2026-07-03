@@ -1,4 +1,4 @@
-# Cogmem 3.6.5 Operations Reference for OpenClaw
+# Cogmem 3.7.0 Operations Reference for OpenClaw
 
 Read this file when installing, upgrading, importing, repairing, or operating Cogmem. `SKILL.md` contains the decision rules; this file is the command reference.
 
@@ -85,7 +85,7 @@ openclaw gateway restart
 cogmem openclaw diagnose --workspace . --json
 ```
 
-The second command upgrades 3.5.2 schema 24, an existing 3.6.0 schema-26 database, or a pre-release schema-25 test database to the 3.6.5 schema-27 state in one run. It preserves Raw Ledger evidence. Keep the returned `backupPath` until verification passes. `--dry-run` is read-only and does not create `_schema_migrations`.
+The second command upgrades 3.5.2 schema 24, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.0 schema/projection state in one run. It preserves Raw Ledger evidence. Keep the returned `backupPath` until verification passes. `--dry-run` is read-only and does not create `_schema_migrations`.
 
 After upgrading the package/database, refresh OpenClaw's generated plugin files. `doctor --plugin-only` avoids opening the Cogmem kernel, so it can repair stale `extensions/cogmem-auto-memory/index.js` and `bridge.mjs` even when an old drainer has SQLite busy. Use `connect --auto --force` when intentionally reinstalling the full integration and patching OpenClaw config:
 
@@ -98,9 +98,9 @@ Use `cogmem openclaw diagnose --workspace . --json` when automatic memory blocks
 - `plugin.current=false`: generated files are stale; run plugin-only fix and restart gateway.
 - no `audit.lastBeforePromptBuild`: plugin is not loaded or the hook did not fire.
 - `audit.lastBeforePromptBuild.action=error`: bridge or DB failure; inspect `reason`, `bridgeCommand`, and `dbLocked`.
-- `action=inject` but no visible block: inspect `returnedInjectionShape`. Plugin 0.6.3 returns `prependContext`, `context`, and `promptPrefix`; if OpenClaw still ignores all three, the host hook contract changed and the OpenClaw plugin API must be checked before blaming recall.
+- `action=inject` but no visible block: inspect `returnedInjectionShape`. Plugin 0.7.0 returns `prependContext`, `context`, and `promptPrefix`; if OpenClaw still ignores all three, the host hook contract changed and the OpenClaw plugin API must be checked before blaming recall.
 
-Plugin 0.6.3 queue behavior:
+Plugin 0.7.0 queue behavior:
 
 - `agent_end` only appends durable JSONL jobs, then starts at most one drainer through queue/spawn locks.
 - `drain-remember-queue` acquires the queue lock before opening Cogmem or SQLite. A second drainer exits without opening the DB.
@@ -152,7 +152,7 @@ cogmem memory review --project openclaw --id <candidate-id> --action approve --a
 cogmem memory recall --query "<verification question>" --project openclaw --agent openclaw --json
 ```
 
-`memory plan` is the first agent-safe health and next-action command. It reports queue state, blocking and non-blocking actions, Dream backlog hints, vector fallback state, and safe commands. Only run `dream_tick` when it appears in `nextActions`; if `nonBlocking` contains `raw_dream_ledger_lag` with `resolvableByDreamTick:false`, inspect raw sources or episode/import boundaries instead of retrying `dream tick`. Default `memory candidates --json` groups ordinary candidates, `needs_confirmation`, and deferred review entries; use `--status` only for one explicit queue. `needs_confirmation` is not a Dream backlog. `memory govern` does not approve it. Use `memory review` with explicit evidence. Cogmem 3.6.4 and later skip import batch sealing for empty episode boundaries and mark legacy empty Dream jobs as skipped so one bad imported episode cannot block the queue. If `episode status` reports `episode_empty_*`, inspect the episode and repair boundaries with the audited episode repair commands.
+`memory plan` is the first agent-safe health and next-action command. It reports queue state, blocking and non-blocking actions, Dream backlog hints, vector fallback state, and safe commands. Only run `dream_tick` when it appears in `nextActions`; if `nonBlocking` contains `raw_dream_ledger_lag` with `resolvableByDreamTick:false`, inspect raw sources or episode/import boundaries instead of retrying `dream tick`. Default `memory candidates --json` groups ordinary candidates, `needs_confirmation`, and deferred review entries; use `--status` only for one explicit queue. `needs_confirmation` is not a Dream backlog. `memory govern` does not approve it. Use `memory review` with explicit evidence. Cogmem skips import batch sealing for empty episode boundaries and marks legacy empty Dream jobs as skipped so one bad imported episode cannot block the queue. If `episode status` reports `episode_empty_*`, inspect the episode and repair boundaries with the audited episode repair commands.
 
 Pass explicit sources when discovery is not enough:
 
@@ -207,12 +207,14 @@ Use `historical_discussion` for “did we discuss this before?”, “几个月�
 
 ## Memory Atlas
 
-Atlas combines whichever facets the question supplies, like table filters. Supported constraints include project, time range, topic, entity/target, memory kind, action, and ordinary text cues. Do not require a fixed entity + time + action tuple.
+Atlas combines whichever facets the question supplies, like table filters. Supported constraints include project, day/month/year, topic, issue, entity/target, session/thread, memory kind, action kind, and ordinary text cues. Do not require a fixed entity + time + action tuple. A canonical episode appears once even if it is reached through several facets.
 
 ```bash
 cogmem memory graph --project openclaw --json
 cogmem memory graph-search --project openclaw --query "Hermes" --json
 cogmem memory graph-explore --project openclaw --query "2025 年 Hermes 的决策" --now 1782057600000 --evidence-limit 2 --json
+cogmem memory graph-explore --project openclaw --query "6月6号关于记忆黑盒聊过什么" --json
+cogmem memory graph-explore --project openclaw --query "记忆黑盒后来有没有继续讨论" --json
 cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --evidence-limit 4 --json
 cogmem memory graph-neighbors --project openclaw --id <node-id> --hops 2 --json
 cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
@@ -230,7 +232,7 @@ Use `--no-refresh` during lock incidents and `--refresh` when the operator wants
 
 Graph reads are pure: overview/search/explore do not brighten what they display. In MCP, call `cogmem_graph_touch` only after the agent actually selects or uses nodes. Activation changes visibility, never evidence or truth. Exact scoped facets may revive cold nodes.
 
-Every evidence result distinguishes `evidenceTotal` from `evidenceReturned` and includes an event ID plus `sourceLocator.command` and `sourceLocator.contextCommand` drill-down commands. Use those locators before treating an Atlas summary as evidence.
+Search/explore may return `cards[]` for canonical episodes. Use `cards[].displayTitle` for UI/readability, `oneLineSummary` as a hint, `matchedFacets` and `matchedPaths` to explain why it matched, and `canonicalId` to dedupe. `relatedButNotSelected` is context only; do not substitute it as the answer. If `relaxationTrace` exists, say the match was relaxed. Every evidence result distinguishes `evidenceTotal` from `evidenceReturned` and includes an event ID plus `sourceLocator.command` and `sourceLocator.contextCommand` drill-down commands. Use those locators before treating an Atlas summary as evidence.
 
 ## Candidate governance and review
 
