@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.7.0
+
+- Upgraded Memory Atlas into a multi-dimensional navigation graph: canonical episodes and raw events exist once, while time, topic, issue, entity, session/thread, memory-kind, and action-kind facets connect to them with typed edges.
+- Added deterministic episode title and one-line summary generation for Atlas cards, preserving the original long summary in metadata and marking low-confidence titles for review.
+- Added facet query planning for day/month/year, topic, issue, and entity cues, including strict facet intersection, canonicalId dedupe, matched facet/path explanations, and explicit relaxation traces.
+- Added agent-facing Atlas `cards[]` on graph search/explore with `displayTitle`, `oneLineSummary`, `canonicalId`, `matchedFacets`, `matchedPaths`, `relatedButNotSelected`, and source drill-down locators.
+- Integrated facet graph cards into `historical_discussion` recall so OpenClaw/Hermes agents can explain selected memories while still grounding answers in Raw Ledger source locators.
+- Updated the OpenClaw generated bridge to preserve strict facet matches through Context Cortex planning and to include selected cards, related-but-not-selected side context, and relaxation traces in volatile recall context.
+- Updated README, Memory Atlas docs, OpenClaw/Hermes skills, AGENTS runbooks, and operations references with npm-first install/update flow and the 3.7.0 multi-facet Atlas command playbook.
+
 ## 3.6.5
 
 - Added `cogmem memory plan` as a read-only agent operations summary with queue state, blocking/non-blocking next actions, Dream backlog hints, and vector fallback state.

@@ -5,18 +5,21 @@ export declare class MemoryAtlasIndexer {
     private db;
     private store;
     private readonly actions;
+    private readonly curator;
     constructor(db: Database, eventStore: EventStore, store: MemoryAtlasStore);
     rebuild(options?: {
         projectId?: string;
     }): {
         documents: number;
         actions: number;
+        curatedEpisodes: number;
     };
     ensureFresh(options: {
         projectId: string;
     }): {
         documents: number;
         actions: number;
+        curatedEpisodes?: number;
         refreshed: boolean;
     };
     ensureAllFresh(): {

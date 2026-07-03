@@ -1416,9 +1416,18 @@ async function recallPayload(input, config, kernel, memory, formatStrategyContex
     maxMemoryRatio: Number(config.contextMemoryMaxRatio || 0.25), strategy: strategyCapsule,
     candidates: result.items.map(contextCandidateFromRecallItem),
   });
-  const plannedResult = activationPlan
+  let plannedResult = activationPlan
     ? { ...result, items: activationPlan.selected.map((candidate) => candidate.recallItem) }
     : result;
+  let activationReceipt = activationPlan && activationPlan.receipt;
+  if (activationPlan && Array.isArray(result.items)) {
+    const selectedIds = new Set(plannedResult.items.map((item) => item && item.id).filter(Boolean));
+    const strictFacetItem = result.items.find((item) => item && item.canonicalId && item.whyMatched && String(item.whyMatched).includes('matched'));
+    if (strictFacetItem && !selectedIds.has(strictFacetItem.id)) {
+      plannedResult = { ...plannedResult, items: [strictFacetItem, ...plannedResult.items].slice(0, Number(config.limit || 3)) };
+      activationReceipt = { ...(activationReceipt || {}), facetGraphRetained: true, retainedCanonicalId: strictFacetItem.canonicalId, reason: 'strict_facet_match_must_not_be_silently_dropped' };
+    }
+  }
   const anchorItem = plannedResult.items.find((item) => item && item.sourceAnchor && item.sourceAnchor.eventId);
   const recallContext = formatRecallContext(plannedResult, config);
   return {
@@ -1427,7 +1436,9 @@ async function recallPayload(input, config, kernel, memory, formatStrategyContex
     recallMode: result.recallMode, fallbackUsed: result.fallbackUsed, intent: input.intent || 'memory_recall',
     anchorEventId: anchorItem && anchorItem.sourceAnchor && anchorItem.sourceAnchor.eventId,
     anchorText: anchorItem && anchorItem.text, queryPlan: result.queryPlan, decisionTrace: result.decisionTrace,
-    activationReceipt: activationPlan && activationPlan.receipt, strategyCapsule,
+    atlasCards: result.atlasCards, selectedEpisodeCards: plannedResult.atlasCards,
+    relatedButNotSelected: result.relatedButNotSelected, relaxationTrace: result.relaxationTrace,
+    activationReceipt, strategyCapsule,
     strategyReplanned: replan.replanned, strategyReplanReason: replan.reason,
     recallLatencyMs: Date.now() - recallStartedAt,
   };
@@ -1773,6 +1784,9 @@ function compactRecallItems(items, config) {
     projectId: item.projectId,
     sourceAnchor: item.sourceAnchor,
     whyMatched: item.whyMatched,
+    canonicalId: item.canonicalId,
+    displayTitle: item.displayTitle,
+    matchedFacets: item.matchedFacets,
   }));
 }
 
@@ -1809,6 +1823,15 @@ function formatRecallContext(result, config) {
   if (result.decisionTrace) {
     lines.push('recallDecision=' + formatRecallDecision(result.decisionTrace));
   }
+  if (Array.isArray(result.atlasCards) && result.atlasCards.length) {
+    lines.push('selectedMemoryCards=' + result.atlasCards.slice(0, Number(config.memoryContextMaxItems || config.limit || 3)).map(formatAtlasCard).join(' | '));
+  }
+  if (Array.isArray(result.relaxationTrace) && result.relaxationTrace.length) {
+    lines.push('relaxationTrace=' + result.relaxationTrace.map((step) => step.from + ' -> ' + step.to + ' (' + step.reason + ')').join(' | '));
+  }
+  if (Array.isArray(result.relatedButNotSelected) && result.relatedButNotSelected.length) {
+    lines.push('relatedButNotSelected=' + result.relatedButNotSelected.slice(0, 4).map((item) => item.displayTitle + ' [' + item.reason + ']').join(' | '));
+  }
   lines.push('');
   if (result.narrative && result.narrative.summary) {
     lines.push(result.narrative.summary);
@@ -1826,7 +1849,11 @@ function formatRecallContext(result, config) {
       + (item.sourceAnchor.sessionId ? '; session=' + item.sourceAnchor.sessionId : '')
       + (item.sourceAnchor.role ? '; role=' + item.sourceAnchor.role : '') : '';
     const why = item.whyMatched ? '; whyMatched=' + item.whyMatched : '';
-    lines.push('  sourceType=' + sourceType + '; confidence=' + confidence + '; canAnswerExactQuote=' + quote + anchor + why);
+    const canonical = item.canonicalId ? '; canonicalId=' + item.canonicalId : '';
+    const matchedFacets = Array.isArray(item.matchedFacets) && item.matchedFacets.length
+      ? '; matchedFacets=' + item.matchedFacets.map((facet) => facet.type + ':' + facet.value).join(',')
+      : '';
+    lines.push('  sourceType=' + sourceType + '; confidence=' + confidence + '; canAnswerExactQuote=' + quote + canonical + matchedFacets + anchor + why);
     if (item.sourceContext && item.sourceContext.event) {
       const anchorEvent = item.sourceContext.event;
       const anchorFormatted = formatContextEvent(anchorEvent, Math.min(220, sourceWindowMaxChars));
@@ -1877,6 +1904,18 @@ function formatRecallDecision(trace) {
     + ',scoped:' + Number(counts.scopedNavigation || 0)
     + ',brain:' + Number(counts.brainFallback || 0)
     + ',raw:' + Number(counts.rawLedger || 0);
+}
+
+function formatAtlasCard(card) {
+  const facets = Array.isArray(card && card.matchedFacets)
+    ? card.matchedFacets.map((facet) => facet.type + ':' + facet.value).join(',')
+    : '';
+  const locator = card && card.sourceLocator && card.sourceLocator.command ? '; sourceLocator=' + card.sourceLocator.command : '';
+  return (card && card.canonicalId || 'episode:unknown')
+    + '; title=' + truncateLineWithMeta(card && card.displayTitle, 120).text
+    + '; summary=' + truncateLineWithMeta(card && card.oneLineSummary, 180).text
+    + (facets ? '; matchedFacets=' + facets : '')
+    + locator;
 }
 
 function clampRecallContext(text, maxChars) {

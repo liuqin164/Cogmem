@@ -82,12 +82,65 @@ export class MemoryAtlasStore {
             return mapNode(row, matches + Number(row.activation || 0));
         }).sort((a, b) => b.score - a.score);
     }
+    searchCanonicalEpisodeCards(projectId, plan, limit) {
+        const plannedFacets = plan.facets;
+        if (!plannedFacets.length)
+            return [];
+        const facetMatches = plannedFacets.map((facet) => ({ facet, rows: this.episodeEdgesForFacet(projectId, facet) }));
+        if (plan.operator === 'intersection' && facetMatches.some((match) => match.rows.length === 0))
+            return [];
+        const candidateIds = plan.operator === 'intersection'
+            ? intersectSets(facetMatches.map((match) => new Set(match.rows.map((row) => row.source_id))))
+            : new Set(facetMatches.flatMap((match) => match.rows.map((row) => row.source_id)));
+        if (!candidateIds.size)
+            return [];
+        const rows = this.episodeRows(projectId, Array.from(candidateIds));
+        const cards = rows.map((row) => {
+            const candidateEdges = facetMatches.flatMap((match) => match.rows.filter((edge) => edge.source_id === row.source_id));
+            return this.cardFromEpisodeRow(row, candidateEdges, projectId);
+        });
+        const selectedIds = new Set(cards.map((card) => card.canonicalId));
+        for (const card of cards) {
+            card.relatedButNotSelected = this.relatedEpisodeCards(projectId, card.canonicalId, selectedIds, 4);
+        }
+        return cards.sort((left, right) => scoreCard(right) - scoreCard(left)).slice(0, Math.max(1, Math.min(limit, 100)));
+    }
+    relatedEpisodeCards(projectId, canonicalId, selectedIds, limit) {
+        const parsed = parseNodeId(canonicalId, projectId);
+        if (!parsed || parsed.type !== 'episode')
+            return [];
+        const rows = this.db.prepare(`
+      SELECT e.relation_type, e.confidence, d.node_id, d.label, d.metadata_json
+      FROM memory_edges e
+      JOIN memory_atlas_documents d ON d.project_id=e.project_id AND d.node_id=CASE
+        WHEN e.source_type='episode' AND e.source_id=? THEN 'episode:' || e.target_id
+        ELSE 'episode:' || e.source_id
+      END
+      WHERE e.project_id=? AND e.status IN ('active','weak') AND e.relation_type IN ('SAME_ISSUE','FOLLOWS_UP','REFINES','CORRECTS','CONTRADICTS','SUPERSEDES','RELATED_TO')
+        AND ((e.source_type='episode' AND e.source_id=?) OR (e.target_type='episode' AND e.target_id=?))
+      ORDER BY CASE e.relation_type WHEN 'SAME_ISSUE' THEN 1 WHEN 'FOLLOWS_UP' THEN 2 WHEN 'REFINES' THEN 3 ELSE 4 END, e.confidence DESC
+      LIMIT ?
+    `).all(parsed.id, projectId, parsed.id, parsed.id, Math.max(1, Math.min(limit * 3, 30)));
+        const result = [];
+        for (const row of rows) {
+            if (selectedIds.has(row.node_id))
+                continue;
+            result.push({
+                canonicalId: row.node_id,
+                displayTitle: row.label,
+                reason: row.relation_type === 'RELATED_TO' ? 'related topic but different issue/date' : row.relation_type.toLowerCase(),
+            });
+            if (result.length >= limit)
+                break;
+        }
+        return result;
+    }
     resolveTargetNodeIds(projectId, query) {
         const normalizedQuery = normalizeLookup(query);
         const candidates = this.db.prepare(`
       SELECT node_id,node_type,source_id,label,topic_path,metadata_json,evidence_event_ids_json
       FROM memory_atlas_documents
-      WHERE project_id=? AND node_type IN ('entity','topic','project') AND status NOT IN ('rejected','archived')
+      WHERE project_id=? AND node_type IN ('entity','topic','issue','project') AND status NOT IN ('rejected','archived')
     `).all(projectId);
         const seeds = [];
         const labels = [];
@@ -436,6 +489,60 @@ export class MemoryAtlasStore {
             target: nodeId('topic', row.target_path, projectId), confidence: Number(row.confidence),
             evidenceEventIds: parseStringArray(row.evidence_event_ids_json) }));
     }
+    episodeEdgesForFacet(projectId, facet) {
+        const relationFilter = facet.relation ? 'AND relation_type=?' : '';
+        const params = facet.relation
+            ? [projectId, facet.type, facet.value, facet.relation]
+            : [projectId, facet.type, facet.value];
+        return this.db.prepare(`
+      SELECT source_id, relation_type, target_type, target_id, confidence, evidence_event_ids_json
+      FROM memory_edges
+      WHERE project_id=? AND source_type='episode' AND target_type=? AND target_id=? ${relationFilter}
+        AND status IN ('active','weak')
+      ORDER BY confidence DESC
+      LIMIT 5000
+    `).all(...params);
+    }
+    episodeRows(projectId, episodeIds) {
+        const bounded = Array.from(new Set(episodeIds)).slice(0, 500);
+        if (!bounded.length)
+            return [];
+        return this.db.prepare(`
+      SELECT d.*, COALESCE(a.activation, 0) AS activation
+      FROM memory_atlas_documents d LEFT JOIN memory_atlas_activation a
+        ON a.project_id=d.project_id AND a.node_id=d.node_id
+      WHERE d.project_id=? AND d.node_id IN (${bounded.map(() => '?').join(',')})
+        AND d.node_type='episode' AND d.status NOT IN ('rejected','archived')
+    `).all(projectId, ...bounded.map((id) => `episode:${id}`));
+    }
+    cardFromEpisodeRow(row, edges, projectId) {
+        const metadata = parseMetadata(row.metadata_json);
+        const evidenceEventIds = parseStringArray(row.evidence_event_ids_json);
+        const matchedFacets = edges.map((edge) => facetFromEdge(edge, projectId));
+        const matchedPaths = edges.map((edge) => {
+            const facet = facetFromEdge(edge, projectId);
+            return { facet, via: [facet.nodeId, row.node_id], relation: edge.relation_type, confidence: Number(edge.confidence || 0) };
+        });
+        const issueHints = stringArray(metadata.issueHints);
+        const topicHints = stringArray(metadata.topicHints);
+        return {
+            canonicalId: row.node_id,
+            nodeType: 'episode',
+            displayTitle: row.label,
+            oneLineSummary: row.summary || undefined,
+            matchedFacets,
+            matchedPaths,
+            parentTopics: topicHints.length ? topicHints : row.topic_path ? [row.topic_path] : [],
+            issueType: issueHints[0],
+            eventKind: optionalMetadataString(metadata.eventKind),
+            localDate: optionalMetadataString(metadata.localDate) ?? (row.occurred_at ? new Date(row.occurred_at).toISOString().slice(0, 10) : undefined),
+            whyMatched: matchedFacets.length ? `matched ${matchedFacets.map((facet) => `${facet.type}:${facet.value}`).join(', ')}` : 'matched canonical episode',
+            relatedButNotSelected: [],
+            evidenceEventIds,
+            evidenceTotal: evidenceEventIds.length,
+            evidenceReturned: 0,
+        };
+    }
 }
 function mapNode(row, score) {
     return { id: row.node_id, projectId: row.project_id, nodeType: row.node_type, sourceId: row.source_id,
@@ -479,7 +586,7 @@ catch {
 } }
 function escapeLike(value) { return value.replace(/[\\%_]/g, '\\$&'); }
 function nodeId(type, id, projectId) {
-    if (type === 'topic' || type === 'time')
+    if (['topic', 'time', 'issue', 'session', 'thread', 'memoryKind', 'actionKind'].includes(type))
         return `${type}:${projectId}:${id}`;
     return `${type}:${id}`;
 }
@@ -487,14 +594,66 @@ function timeNodeId(projectId, occurredAt) {
     return `time:${projectId}:${new Date(occurredAt).getUTCFullYear()}`;
 }
 function parseNodeId(value, projectId) {
-    const topicPrefix = `topic:${projectId}:`;
-    if (value.startsWith(topicPrefix))
-        return { type: 'topic', id: value.slice(topicPrefix.length) };
-    const timePrefix = `time:${projectId}:`;
-    if (value.startsWith(timePrefix))
-        return { type: 'time', id: value.slice(timePrefix.length) };
+    for (const type of ['topic', 'time', 'issue', 'session', 'thread', 'memoryKind', 'actionKind']) {
+        const prefix = `${type}:${projectId}:`;
+        if (value.startsWith(prefix))
+            return { type, id: value.slice(prefix.length) };
+    }
     const separator = value.indexOf(':');
     if (separator <= 0 || separator === value.length - 1)
         return null;
     return { type: value.slice(0, separator), id: value.slice(separator + 1) };
+}
+function parseMetadata(value) {
+    try {
+        const parsed = JSON.parse(value || '{}');
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    }
+    catch {
+        return {};
+    }
+}
+function stringArray(value) {
+    return Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item.length > 0) : [];
+}
+function optionalMetadataString(value) {
+    return typeof value === 'string' && value ? value : undefined;
+}
+function facetFromEdge(edge, projectId) {
+    return {
+        type: edge.target_type,
+        value: edge.target_id,
+        label: facetLabel(edge.target_type, edge.target_id),
+        nodeId: nodeId(edge.target_type, edge.target_id, projectId),
+        relation: edge.relation_type,
+    };
+}
+function facetLabel(type, value) {
+    if (type === 'topic')
+        return value.split('/').pop() || value;
+    if (type === 'issue') {
+        if (value === 'memory-context-blackbox')
+            return 'Memory Context 黑盒';
+        if (value === 'graph-runtime-blackbox')
+            return 'Graph Runtime 黑盒';
+        if (value === 'atlas-readability')
+            return 'Atlas 可读性黑盒';
+        if (value === 'auto-injection-mismatch')
+            return '自动注入不一致';
+    }
+    return value;
+}
+function intersectSets(sets) {
+    if (!sets.length)
+        return new Set();
+    const [first, ...rest] = sets;
+    const result = new Set();
+    for (const value of first ?? []) {
+        if (rest.every((set) => set.has(value)))
+            result.add(value);
+    }
+    return result;
+}
+function scoreCard(card) {
+    return card.matchedFacets.length * 10 + card.matchedPaths.reduce((sum, path) => sum + path.confidence, 0) + (card.localDate ? 0.1 : 0);
 }

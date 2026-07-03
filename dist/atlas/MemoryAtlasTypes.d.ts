@@ -1,4 +1,4 @@
-export type MemoryAtlasNodeType = 'project' | 'topic' | 'entity' | 'cluster' | 'episode' | 'belief' | 'action' | 'time' | 'event';
+export type MemoryAtlasNodeType = 'project' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind' | 'cluster' | 'episode' | 'raw_event' | 'belief' | 'action' | 'time' | 'event' | 'decision' | 'correction';
 export interface MemoryAtlasEvidence {
     eventId: string;
     globalSeq?: number;
@@ -39,6 +39,48 @@ export interface MemoryAtlasNode {
     /** Bounded first-hop raw evidence locators for agent-facing graph search/explore responses. */
     evidence?: MemoryAtlasEvidence[];
 }
+export interface MemoryAtlasMatchedFacet {
+    type: 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind';
+    value: string;
+    label: string;
+    nodeId: string;
+    relation: string;
+}
+export interface MemoryAtlasMatchedPath {
+    facet: MemoryAtlasMatchedFacet;
+    via: string[];
+    relation: string;
+    confidence: number;
+}
+export interface MemoryAtlasRelatedCard {
+    canonicalId: string;
+    displayTitle: string;
+    reason: string;
+    matchedFacets?: MemoryAtlasMatchedFacet[];
+}
+export interface MemoryAtlasCard {
+    canonicalId: string;
+    nodeType: MemoryAtlasNodeType;
+    displayTitle: string;
+    oneLineSummary?: string;
+    matchedFacets: MemoryAtlasMatchedFacet[];
+    matchedPaths: MemoryAtlasMatchedPath[];
+    parentTopics: string[];
+    issueType?: string;
+    eventKind?: string;
+    localDate?: string;
+    whyMatched: string;
+    relatedButNotSelected: MemoryAtlasRelatedCard[];
+    sourceLocator?: MemoryAtlasEvidence['sourceLocator'];
+    evidenceEventIds: string[];
+    evidenceTotal: number;
+    evidenceReturned: number;
+}
+export interface MemoryAtlasRelaxationStep {
+    from: string;
+    to: string;
+    reason: string;
+}
 export interface MemoryAtlasEdge {
     source: string;
     relation: string;
@@ -69,6 +111,8 @@ export interface MemoryAtlasSlice {
         memoryKinds: string[];
         keywords: string[];
     };
+    cards?: MemoryAtlasCard[];
+    relaxationTrace?: MemoryAtlasRelaxationStep[];
     coldMemoryResurrected?: boolean;
 }
 export interface MemoryAtlasNodeDetail extends MemoryAtlasNode {

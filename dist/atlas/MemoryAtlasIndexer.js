@@ -1,25 +1,31 @@
 import { backfillAtlasDocuments, installAtlasProjectionDirtyTriggers } from '../migrations/0025_memory_atlas.js';
 import { ActionFrameExtractor } from './ActionFrameExtractor.js';
+import { GraphCurator } from './GraphCurator.js';
 export class MemoryAtlasIndexer {
     db;
     store;
     actions;
+    curator;
     constructor(db, eventStore, store) {
         this.db = db;
         this.store = store;
         installAtlasProjectionDirtyTriggers(db);
         this.actions = new ActionFrameExtractor(db, eventStore, store);
+        this.curator = new GraphCurator(db, eventStore, store);
     }
     rebuild(options = {}) {
         const projectId = options.projectId;
         let actions = 0;
+        let curatedEpisodes = 0;
+        let facetEdges = 0;
+        let reviewNeeded = 0;
         try {
             this.db.transaction(() => {
                 if (projectId) {
-                    this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('project','entity','topic','cluster','episode','belief')`).run(projectId);
+                    this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time')`).run(projectId);
                 }
                 else {
-                    this.db.exec(`DELETE FROM memory_atlas_documents WHERE node_type IN ('project','entity','topic','cluster','episode','belief');`);
+                    this.db.exec(`DELETE FROM memory_atlas_documents WHERE node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time');`);
                 }
                 backfillAtlasDocuments(this.db, projectId);
                 const projects = projectId
@@ -32,12 +38,18 @@ export class MemoryAtlasIndexer {
                         metadata: { projection: 'memory_atlas.v1' },
                     });
                 actions = this.actions.rebuild(projectId);
+                for (const id of projects) {
+                    const result = this.curator.rebuild(id);
+                    curatedEpisodes += result.episodeCount;
+                    facetEdges += result.facetEdgeCount;
+                    reviewNeeded += result.reviewNeeded;
+                }
                 if (projectId) {
-                    this.store.markProjectionClean(projectId, { actions });
+                    this.store.markProjectionClean(projectId, { actions, curatedEpisodes, facetEdges, reviewNeeded });
                 }
                 else {
                     for (const id of projects)
-                        this.store.markProjectionClean(id, { actions });
+                        this.store.markProjectionClean(id, { actions, curatedEpisodes, facetEdges, reviewNeeded });
                 }
             })();
         }
@@ -45,7 +57,7 @@ export class MemoryAtlasIndexer {
             this.store.markProjectionFailed(projectId || '__global__', error instanceof Error ? error.message : String(error));
             throw error;
         }
-        return { documents: this.store.countDocuments(projectId), actions };
+        return { documents: this.store.countDocuments(projectId), actions, curatedEpisodes };
     }
     ensureFresh(options) {
         if (!this.store.projectionNeedsRefresh(options.projectId)) {

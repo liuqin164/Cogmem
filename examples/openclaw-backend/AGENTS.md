@@ -97,7 +97,7 @@ cogmem import-openclaw --workspace . --project openclaw --json
 ```
 
 Real non-JSON imports print source-level and embedding+ingest progress to stderr. Use `--json --progress` to keep JSON on stdout while streaming progress to stderr, or `--no-progress` when a wrapper needs quiet stderr.
-Cogmem 3.6.4 and later skip import batch sealing for empty episode boundaries and skip legacy empty Dream jobs so one bad imported episode cannot block the queue.
+Cogmem skips import batch sealing for empty episode boundaries and skips legacy empty Dream jobs so one bad imported episode cannot block the queue.
 
 After import, use this order:
 
@@ -184,7 +184,8 @@ Recall behavior:
 - Use `cogmem memory map --project openclaw --json` to inspect Memory Binding and Graph Recall counters. Bindings attach high-value user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down only; they are not verified facts, user preferences, or instructions. Correction bindings expose review flags and `CORRECTS` / `CONTRADICTS` edges; inspect the raw ledger before relying on them.
 - If `cogmem memory tick --project openclaw --json` suggests `bind_raw_events`, run `cogmem memory bind --project openclaw --json` to backfill imported or adapter-written raw user events into the binding graph.
 - For “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, or missing injection cases, run `cogmem memory recall --query "<past discussion question>" --intent historical_discussion --project openclaw --agent openclaw --json` before claiming no memory.
-- For ledger audits or resumable checks, use `cogmem memory list --project openclaw --since <globalSeq> --order asc --json`; list rows and Atlas search/explore evidence include `sourceLocator` commands in 3.6.5.
+- For ledger audits or resumable checks, use `cogmem memory list --project openclaw --since <globalSeq> --order asc --json`; list rows and Atlas search/explore evidence include `sourceLocator` commands.
+- For old-discussion or "do you remember" questions, prefer `cogmem memory recall --intent historical_discussion ...` or `cogmem memory graph-explore ... --json`. In 3.7.0, cards carry `canonicalId`, `matchedFacets`, `matchedPaths`, `relatedButNotSelected`, and `sourceLocator`; answer from the selected canonical card, not from a related-but-not-selected side card.
 
 Installing the workspace skill makes the kernel procedure discoverable to OpenClaw agents. Installing the local auto wrapper makes future turns call the memory kernel automatically:
 

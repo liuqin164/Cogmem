@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.6.5`
+Current version: `3.7.0`
 
 Distribution: npm registry. GitHub remains the source mirror and hosts this installer, but package install and upgrade resolve `cogmem` from npm by default.
 
@@ -89,7 +89,7 @@ Memory Binding
   CPU-canonicalized raw-event bindings to stable entity/topic paths, claim-key clusters, and activation-aware graph edges for source-anchored organization before fact promotion.
 
 Memory Atlas
-  A bounded, project-scoped content map over topics, entities, clusters, episodes, beliefs, actions, time, and their source-anchored relations. Agents use it to inventory, filter, navigate, and then drill down to Raw Ledger evidence.
+  A bounded, project-scoped, multi-dimensional memory navigation graph. Canonical episodes and raw evidence exist once; time, topic, issue, entity, session, memory-kind, and action-kind facets connect to them with typed edges. Agents use it to intersect facets, dedupe by canonicalId, explain why a memory matched, and then drill down to Raw Ledger evidence.
 
 User-Shaped Topic Ontology
   A stable memory-class skeleton plus project-scoped topic names, aliases, parent paths, relations, and reversible audit operations learned from explicit user language.
@@ -229,7 +229,7 @@ cogmem migrate --dry-run --json
 
 For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
-Upgrade a 3.5.2 database, a 3.6.0 database, or a pre-release schema-25 test database into the 3.6.5 schema set with one command:
+Upgrade a 3.5.2 database, a 3.6.x database, or a pre-release schema-25 test database into the current 3.7.0 schema and projection set with one command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -278,7 +278,7 @@ cogmem dream tick --project my-agent --mode auto --max-episodes 10 --json
 
 Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.6.3 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
 
-Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands use stable content identities and the same episode schema. Low-confidence imported groups soft-seal for review unless an operator explicitly forces sealing. Cogmem 3.6.4 and later skip import batch sealing for empty episode boundaries and skip legacy empty Dream jobs so one bad imported episode cannot block the queue. Episode semantic summaries and closure receipts are control hints, never durable evidence; every Dream candidate must cite a non-empty subset of the episode's raw event IDs and still pass CPU governance.
+Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands use stable content identities and the same episode schema. Low-confidence imported groups soft-seal for review unless an operator explicitly forces sealing. Cogmem skips import batch sealing for empty episode boundaries and skips legacy empty Dream jobs so one bad imported episode cannot block the queue. Episode semantic summaries and closure receipts are control hints, never durable evidence; every Dream candidate must cite a non-empty subset of the episode's raw event IDs and still pass CPU governance.
 
 User-shaped topic state is project-scoped. Explicit user operations become active and auditable; model-proposed topics, aliases, and relations remain candidates. Use MCP `cogmem_topic_list` to inspect nodes, `cogmem_topic_operate` to create, rename, alias, move, merge, split, or relate topics, and `cogmem_topic_rollback` to reverse an audited operation. Alias collisions fail closed as `needs_review`; applications can also call `TopicGovernance.rollback()` through the public API.
 
@@ -304,21 +304,24 @@ cogmem memory review --project my-agent --id <candidate-id> --action approve --a
 
 `cogmem memory map` remains the system anatomy map. Memory Atlas is the content map. It does not replace recall or create a second fact store; it projects existing topics, entities, clusters, episodes, beliefs, action frames, time buckets, bindings, and evidence into a bounded navigation surface.
 
+In 3.7.0, Atlas is a multi-dimensional navigation graph rather than a folder tree. A remembered episode has one canonical node such as `episode:<id>`. Time, topic, issue, entity, session/thread, memory-kind, and action-kind nodes are facet entrances connected to that canonical episode with typed edges. Results dedupe by `canonicalId` and explain `matchedFacets` plus `matchedPaths`.
+
 ```bash
 cogmem memory graph --project my-agent --json
 cogmem memory graph-search --project my-agent --query "Hermes" --json
 cogmem memory graph-explore --project my-agent --query "去年我让你对 Hermes 做过什么" --json
+cogmem memory graph-explore --project openclaw --query "6月6号关于记忆黑盒聊过什么" --json
 cogmem memory graph-node --project my-agent --id "entity:<id>" --json
 cogmem memory graph-neighbors --project my-agent --id "entity:<id>" --hops 2 --json
 cogmem memory graph-path --project my-agent --from "entity:<id>" --to "action:<id>" --json
 cogmem memory graph-timeline --project my-agent --query "2025 Hermes 的决策和修复" --json
 ```
 
-Atlas filtering is not limited to entity + time + action. The query compiler combines whichever facets are actually present, such as project, time range, topic, person/object, event, decision, correction, goal, preference, plan, action, and ordinary keywords. Exact multi-facet matches may surface cold nodes even when their activation has decayed. Project scope and raw evidence validation are never bypassed.
+Atlas filtering is not limited to entity + time + action. The facet planner combines whichever facets are actually present, such as project, day/month/year, topic, issue, entity/person/project, session/thread, memory kind, action kind, and ordinary keywords. Strict multi-facet matches may surface cold nodes even when their activation has decayed. If strict intersection is empty, JSON includes `relaxationTrace` instead of silently pretending an exact match existed. Project scope and raw evidence validation are never bypassed.
 
 Defaults are 8 nodes, one hop, and two evidence IDs per node. Hard limits are 30 nodes, two hops, ten evidence IDs, six path hops, and 2,000 visited nodes. Raw excerpts are omitted unless `--include-evidence` or `includeEvidence: true` is explicit. `evidenceTotal` reports all known evidence while `evidenceReturned` reports the bounded payload. Every returned evidence item carries an `eventId` and a `cogmem memory show` drilldown command.
 
-In 3.6.5, Atlas search and explore evidence also carries `sourceLocator.command` and `sourceLocator.contextCommand`. Agents should run that locator before quoting exact wording, before claiming a historical topic is absent, or when a graph summary looks relevant but underspecified.
+Atlas search and explore return agent-facing `cards` for canonical episodes. Each card includes `canonicalId`, `displayTitle`, `oneLineSummary`, `matchedFacets`, `matchedPaths`, `relatedButNotSelected`, and `sourceLocator.command` / `sourceLocator.contextCommand` when evidence is available. Agents should run that locator before quoting exact wording, before claiming a historical topic is absent, or when a graph summary looks relevant but underspecified.
 
 Atlas reads do not brighten everything they display. MCP graph queries are read-only/idempotent; call `cogmem_graph_touch` only after the agent actually uses selected nodes. Maintenance decays activation, refreshes dirty projections only, and prunes old access telemetry.
 
@@ -357,7 +360,7 @@ Operational cost classes:
 
 Never overlap maintenance writers against one database. Wait for each command to exit, use returned `durationMs`, backlog, and failure details to set the next interval, and keep routine status/candidate inspection on the read-only path. A `vectors` count of zero is not by itself a failure: `memory status --json` includes `vectorState.recallAvailableWithoutVectors` and the active fallback status.
 
-`memory bind` backfills Memory Binding for raw user events written outside the agent turn path, including imported OpenClaw/Hermes history and adapter-written raw events. In 3.6.5 it scans by Raw Ledger cursor rather than only the latest page. Use `--since <globalSeq>` to resume from a known ledger sequence.
+`memory bind` backfills Memory Binding for raw user events written outside the agent turn path, including imported OpenClaw/Hermes history and adapter-written raw events. It scans by Raw Ledger cursor rather than only the latest page. Use `--since <globalSeq>` to resume from a known ledger sequence.
 
 `memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths before any fact promotion, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down. Correction events create explicit correction edges and review flags instead of poisoning the active cluster. Treat bindings, clusters, and graph edges as organization hints, not as verified long-term facts.
 
@@ -790,7 +793,7 @@ npm pack --dry-run --json
 npm publish --dry-run --access public
 ```
 
-Create a GitHub Release from the matching version tag, for example `v3.6.5`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
+Create a GitHub Release from the matching version tag, for example `v3.7.0`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
 
 Publish manually only for emergency fallback:
 

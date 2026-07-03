@@ -4,6 +4,7 @@ import type { MemoryAtlasNodeDetail, MemoryAtlasPathResult, MemoryAtlasQueryOpti
 export declare class MemoryAtlasService {
     private store;
     private eventStore;
+    private readonly facetPlanner;
     constructor(store: MemoryAtlasStore, eventStore: EventStore);
     overview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     search(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
@@ -17,6 +18,7 @@ export declare class MemoryAtlasService {
     }): MemoryAtlasPathResult;
     timeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult;
     private attachEvidence;
+    private attachCardEvidence;
     private evidence;
     private edgesFor;
     private safeEdges;

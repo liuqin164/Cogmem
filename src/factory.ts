@@ -143,7 +143,7 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '3.6.5';
+const CORE_VERSION = '3.7.0';
 const LATEST_SCHEMA_VERSION = 27;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';

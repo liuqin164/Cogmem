@@ -114,7 +114,7 @@ timeout_ms = 60000
 
 ## Migrate Existing Hermes Memory
 
-Upgrade a 3.5.2 database, an existing 3.6.0 database, or a pre-release schema-25 test database to schema 27 in one backed-up command:
+Upgrade a 3.5.2 database, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.0 schema/projection set in one backed-up command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -180,7 +180,7 @@ cogmem import-hermes --workspace . --project hermes --session ./hermes.normalize
 
 The importer is idempotent. Re-running it skips records already imported into the same memory database.
 
-Cogmem 3.6.4 and later skip import batch sealing for empty episode boundaries and Dream skips legacy empty episode jobs instead of blocking the whole queue. If `episode status` shows `dreamError` beginning with `episode_empty`, inspect the source events and use episode repair instead of editing SQLite rows.
+Cogmem skips import batch sealing for empty episode boundaries and Dream skips legacy empty episode jobs instead of blocking the whole queue. If `episode status` shows `dreamError` beginning with `episode_empty`, inspect the source events and use episode repair instead of editing SQLite rows.
 
 Run the maintenance loop under host supervision after import and during normal use. `needs_confirmation` is a human review queue, not the Dream backlog, and `memory govern` promotes only ordinary `candidate` rows:
 
@@ -214,7 +214,9 @@ Choose the graph tool from the question shape:
 - Direct factual question: `cogmem_recall`.
 - Exact wording: follow an event ID with `cogmem memory show`.
 
-Atlas combines whatever conditions the user supplies like table filters. Do not require entity + time + action. Project, time, topic, entity/target, memory kind, and ordinary cues may revive cold nodes together. Activation is visibility, not truth. Atlas summaries are hints and never replace raw evidence.
+Atlas combines whatever conditions the user supplies like table filters. Do not require entity + time + action. Project, day/month/year, topic, issue, entity/target, session/thread, memory kind, action kind, and ordinary cues may revive cold nodes together. Activation is visibility, not truth. Atlas summaries are hints and never replace raw evidence.
+
+In 3.7.0, `cogmem_graph_search`, `cogmem_graph_explore`, and historical recall can return canonical `cards[]`. Prefer cards over raw node labels for past-discussion questions. A card's `canonicalId` is the single episode identity; `matchedFacets` explains time/topic/issue/entity matches; `matchedPaths` explains how the card was reached; `relatedButNotSelected` is context only and must not replace the selected answer; `sourceLocator.command` is the command to inspect exact original text. If `relaxationTrace` exists, say the answer is a relaxed nearby match, not an exact hit.
 
 When the prompt does not contain enough injected Cogmem context, do not search legacy memory files first. Ask Cogmem directly:
 
@@ -250,7 +252,7 @@ cogmem memory show --event <eventId> --project hermes --before 2 --after 2 --jso
 cogmem memory list --project hermes --since <globalSeq> --order asc --json
 ```
 
-In 3.6.5, raw list rows and Atlas search/explore evidence include `sourceLocator.command` and a deeper `sourceLocator.contextCommand`. Use those commands before claiming an event ID is missing, before quoting exact words, or before treating an Atlas summary as the source.
+Raw list rows and Atlas search/explore evidence include `sourceLocator.command` and a deeper `sourceLocator.contextCommand`. Use those commands before claiming an event ID is missing, before quoting exact words, or before treating an Atlas summary as the source.
 
 `vectors: 0` does not mean memory is unavailable. It means dense vector search has no hot index yet; `memory recall` still has governed raw-ledger fallback. Broad inventory questions are expanded into structured cues such as `库存管理`, `在库`, `产品コード`, and `数量`; when compiled candidates miss those cues, prefer the raw ledger result and use its `sourceContext` for details. Check status with:
 
@@ -278,7 +280,7 @@ cogmem memory tick --project hermes --json
 cogmem memory bind --project hermes --json
 ```
 
-`memory tick` does not start a daemon. Use its `suggestedActions` to decide whether Hermes should run `dream tick`, `memory govern`, `episode repair`, entity review, re-embedding, or `memory bind` for unbound high-value raw events. `undreamedRawCount` by itself is Raw Ledger coverage lag, not a sealed-episode job; do not loop `dream tick` unless `memory plan.nextActions` contains `dream_tick`. In 3.6.5, `memory bind` scans the historical Raw Ledger by cursor instead of only the latest page; resume large repairs with `--since <globalSeq>`.
+`memory tick` does not start a daemon. Use its `suggestedActions` to decide whether Hermes should run `dream tick`, `memory govern`, `episode repair`, entity review, re-embedding, or `memory bind` for unbound high-value raw events. `undreamedRawCount` by itself is Raw Ledger coverage lag, not a sealed-episode job; do not loop `dream tick` unless `memory plan.nextActions` contains `dream_tick`. `memory bind` scans the historical Raw Ledger by cursor instead of only the latest page; resume large repairs with `--since <globalSeq>`.
 
 `memory map` also exposes Memory Binding and Graph Recall counters. Bindings connect high-value user raw events to stable topic/entity paths before promotion, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down. Correction bindings expose review flags and correction edges. Use graph recall hits for source drill-down and topic continuity only; do not treat bindings, clusters, or edges as verified facts, user preferences, or prompt instructions.
 
