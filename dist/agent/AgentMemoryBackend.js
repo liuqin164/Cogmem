@@ -502,18 +502,10 @@ export class KernelAgentMemoryBackend {
         const facetItems = allowsRawSource ? facetResult.items : [];
         const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, limit) : [];
         const rawItems = allowsRawSource ? this.rawLedgerFallbackItemsForQuery(queryPlan, query, Math.max(limit * 2, 10)) : [];
-        const retrievalLimit = Math.max(limit * 4, 24);
         const compiledItems = allowsCompiled
-            ? this.filterAgentEvidence(this.kernel.navigateMemory(queryPlan.primarySearchText, {
-                projectId: query.projectId,
-                limit: retrievalLimit,
-                startTime: query.startTime,
-                endTime: query.endTime,
-            }).rawEvidence, query.agentId, query.collection, query.excludeSessionId)
-                .slice(0, limit)
-                .map((neuron) => this.toAgentRecallItem(neuron))
+            ? this.compiledItemsForHistoricalQuery(queryPlan, query, limit)
             : [];
-        const items = this.mergeRecallItems(facetItems, this.mergeRecallItems(rawItems, this.mergeRecallItems(graphItems, compiledItems, limit), limit), limit);
+        const items = this.mergeHistoricalRecallItems(facetItems, rawItems, graphItems, compiledItems, limit);
         const selectedLane = facetItems.length > 0
             ? 'facet_graph_raw_ledger'
             : rawItems.length > 0
@@ -547,7 +539,7 @@ export class KernelAgentMemoryBackend {
                 limit,
                 includeEvidence: true,
                 evidenceLimit: 2,
-                refresh: false,
+                refresh: true,
                 staleOk: true,
             });
             const cards = (atlas.cards ?? []).slice(0, limit);
@@ -755,6 +747,44 @@ export class KernelAgentMemoryBackend {
             out.push(item);
             if (out.length >= limit)
                 break;
+        }
+        return out;
+    }
+    mergeHistoricalRecallItems(facetItems, rawItems, graphItems, compiledItems, limit) {
+        const merged = this.mergeRecallItems(facetItems, this.mergeRecallItems(rawItems, this.mergeRecallItems(graphItems, compiledItems, limit), limit), limit);
+        if (merged.some((item) => item.sourceType === 'imported_summary'))
+            return merged;
+        const importedSupport = compiledItems.find((item) => item.sourceType === 'imported_summary');
+        if (!importedSupport)
+            return merged;
+        const withoutDuplicate = merged.filter((item) => item.id !== importedSupport.id && item.sourceAnchor?.eventId !== importedSupport.sourceAnchor?.eventId);
+        if (withoutDuplicate.length < limit)
+            return [...withoutDuplicate, importedSupport];
+        return [...withoutDuplicate.slice(0, Math.max(0, limit - 1)), importedSupport];
+    }
+    compiledItemsForHistoricalQuery(queryPlan, query, limit) {
+        const retrievalLimit = Math.max(limit * 4, 24);
+        const out = [];
+        const seen = new Set();
+        for (const searchText of uniqueNonEmpty([queryPlan.primarySearchText, ...queryPlan.searchTexts, queryPlan.originalQuery])) {
+            const rawEvidence = this.kernel.navigateMemory(searchText, {
+                projectId: query.projectId,
+                limit: retrievalLimit,
+                startTime: query.startTime,
+                endTime: query.endTime,
+            }).rawEvidence;
+            const items = this.filterAgentEvidence(rawEvidence, query.agentId, query.collection, query.excludeSessionId)
+                .map((neuron) => this.toAgentRecallItem(neuron));
+            for (const item of items) {
+                const key = item.id || item.sourceAnchor?.eventId;
+                if (key && seen.has(key))
+                    continue;
+                if (key)
+                    seen.add(key);
+                out.push(item);
+                if (out.length >= limit)
+                    return out;
+            }
         }
         return out;
     }

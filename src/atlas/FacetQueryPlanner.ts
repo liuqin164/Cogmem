@@ -76,17 +76,24 @@ export class FacetQueryPlanner {
     const facets: PlannedFacet[] = [];
     const timeFacet = parseTimeFacet(normalized, options.now ?? Date.now());
     if (timeFacet) facets.push(withNodeId(timeFacet, options.projectId));
+    const timeline = /(后来|继续|timeline|演化|发展|之后)/i.test(normalized);
+    const matchedIssueValues = new Set<string>();
 
     for (const rule of TOPIC_RULES) {
       if (rule.test(normalized)) {
-        facets.push(withNodeId({ type: 'topic', value: `PROJECT/Cogmem/${rule.value}`, label: rule.label, relation: 'ABOUT_TOPIC' }, options.projectId));
+        facets.push(withNodeId({ type: 'topic', value: `PROJECT/${options.projectId}/${rule.value}`, label: rule.label, relation: 'ABOUT_TOPIC' }, options.projectId));
       }
     }
 
     for (const rule of ISSUE_RULES) {
       if (rule.test(normalized)) {
         facets.push(withNodeId({ type: 'issue', value: rule.value, label: rule.label, relation: 'PART_OF_ISSUE' }, options.projectId));
+        matchedIssueValues.add(rule.value);
       }
+    }
+
+    if (!timeline && isBroadMemoryBlackbox(normalized) && matchedIssueValues.size === 0) {
+      facets.push(withNodeId({ type: 'issue', value: 'memory-context-blackbox', label: 'Memory Context 黑盒', relation: 'PART_OF_ISSUE' }, options.projectId));
     }
 
     for (const entity of ['Cogmem', 'OpenClaw', 'Hermes']) {
@@ -95,7 +102,8 @@ export class FacetQueryPlanner {
       }
     }
 
-    const timeline = /(后来|继续|timeline|演化|发展|之后)/i.test(normalized);
+    for (const facet of parseKindFacets(normalized, options.projectId)) facets.push(facet);
+
     return {
       intent: /聊过|记得|还记得|讨论|原话|那次/i.test(normalized) ? 'historical_discussion' : 'graph_search',
       operator: 'intersection',
@@ -108,6 +116,32 @@ export class FacetQueryPlanner {
       query: normalized,
     };
   }
+}
+
+function isBroadMemoryBlackbox(query: string): boolean {
+  return /(记忆黑盒|memory.*blackbox)/i.test(query) &&
+    !/(memory graph|graph|database locked|sqlite|zombie|僵尸|卡死|atlas|图谱|节点|事件名称|自动注入|before_prompt_build|manual recall|手动.*recall)/i.test(query);
+}
+
+function parseKindFacets(query: string, projectId: string): PlannedFacet[] {
+  const facets: PlannedFacet[] = [];
+  const memoryKindRules: Array<[string, RegExp]> = [
+    ['bug', /(bug|问题|卡死|failure|故障|错误|报错)/i],
+    ['decision', /(decision|决定|方案|结论)/i],
+    ['plan', /(计划|下一步|策略|plan)/i],
+  ];
+  const actionKindRules: Array<[string, RegExp]> = [
+    ['implemented', /(修复|实现|implemented|合并|发布|升级)/i],
+    ['reviewed', /(检查|审查|review)/i],
+    ['debugged', /(debug|排查|卡死|locked|zombie)/i],
+  ];
+  for (const [value, test] of memoryKindRules) {
+    if (test.test(query)) facets.push(withNodeId({ type: 'memoryKind', value, label: value, relation: 'HAS_MEMORY_KIND' }, projectId));
+  }
+  for (const [value, test] of actionKindRules) {
+    if (test.test(query)) facets.push(withNodeId({ type: 'actionKind', value, label: value, relation: 'HAS_ACTION_KIND' }, projectId));
+  }
+  return facets;
 }
 
 function parseTimeFacet(query: string, now: number): PlannedFacet | undefined {

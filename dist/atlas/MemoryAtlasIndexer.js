@@ -1,3 +1,4 @@
+import { MEMORY_ATLAS_PROJECTION_NAME, MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION } from '../store/MemoryAtlasStore.js';
 import { backfillAtlasDocuments, installAtlasProjectionDirtyTriggers } from '../migrations/0025_memory_atlas.js';
 import { ActionFrameExtractor } from './ActionFrameExtractor.js';
 import { GraphCurator } from './GraphCurator.js';
@@ -35,7 +36,7 @@ export class MemoryAtlasIndexer {
                     this.store.upsertDocument({
                         id: `project:${id}`, projectId: id, nodeType: 'project', sourceId: id, label: id,
                         confidence: 1, supportCount: this.store.countDocuments(id), status: 'active', evidenceEventIds: [],
-                        metadata: { projection: 'memory_atlas.v1' },
+                        metadata: { projection: MEMORY_ATLAS_PROJECTION_NAME, projectionSchemaVersion: MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION },
                     });
                 actions = this.actions.rebuild(projectId);
                 for (const id of projects) {

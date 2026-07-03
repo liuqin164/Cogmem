@@ -48,7 +48,6 @@ export interface GraphCuratorResult {
   reviewNeeded: number;
 }
 
-const PROJECT_TOPIC_ROOT = 'PROJECT/Cogmem';
 const FACET_EDGE_RELATIONS = new Set([
   'OCCURRED_ON',
   'OCCURRED_IN',
@@ -192,7 +191,7 @@ export class GraphCurator {
       targets.push({ type: 'time', id: year, nodeId: `time:${projection.row.project_id}:${year}`, label: year, relation: 'OCCURRED_IN', confidence: 1 });
     }
     for (const topicHint of normalizedHints(projection.topicHints)) {
-      const topicPath = `${PROJECT_TOPIC_ROOT}/${topicHint}`;
+      const topicPath = `PROJECT/${projection.row.project_id}/${topicHint}`;
       targets.push({ type: 'topic', id: topicPath, nodeId: `topic:${projection.row.project_id}:${topicPath}`, label: topicLabel(topicHint), relation: 'ABOUT_TOPIC', confidence: 0.86 });
     }
     if (projection.row.topic_path) {
@@ -201,7 +200,7 @@ export class GraphCurator {
     for (const issueHint of normalizedHints(projection.issueHints)) {
       targets.push({ type: 'issue', id: issueHint, nodeId: `issue:${projection.row.project_id}:${issueHint}`, label: issueLabel(issueHint), relation: 'PART_OF_ISSUE', confidence: 0.9 });
     }
-    for (const entity of entityHints(projection.events)) {
+    for (const entity of this.entityHintsFor(projection)) {
       targets.push({ type: 'entity', id: `facet:${entity.toLowerCase()}`, nodeId: `entity:facet:${entity.toLowerCase()}`, label: entity, relation: 'INVOLVES_ENTITY', confidence: 0.78 });
     }
     if (projection.row.session_id) {
@@ -239,7 +238,6 @@ export class GraphCurator {
         projection: 'memory_atlas.facets.v1',
         facetType: target.type,
         facetValue: target.id,
-        canonicalTargets: [`episode:${projection.row.episode_id}`],
       },
       updatedAt: now,
     });
@@ -266,23 +264,37 @@ export class GraphCurator {
 
   private projectEpisodeRelations(projectId: string, projections: EpisodeProjection[], now: number): number {
     let count = 0;
-    for (let i = 0; i < projections.length; i += 1) {
-      for (let j = i + 1; j < projections.length; j += 1) {
-        const left = projections[i]!;
-        const right = projections[j]!;
-        const sameIssue = intersection(left.issueHints, right.issueHints);
-        const sameTopic = intersection(left.topicHints, right.topicHints);
-        if (sameIssue.length) {
-          this.upsertEpisodeRelation(projectId, left, right, 'SAME_ISSUE', 0.8, now);
-          count += 1;
-          const newer = left.row.started_at >= right.row.started_at ? left : right;
-          const older = newer === left ? right : left;
-          this.upsertEpisodeRelation(projectId, newer, older, 'FOLLOWS_UP', 0.76, now);
-          count += 1;
-        } else if (sameTopic.length) {
-          this.upsertEpisodeRelation(projectId, left, right, 'RELATED_TO', 0.45, now, 'weak');
+    const seen = new Set<string>();
+    for (const bucket of bucketByHint(projections, (projection) => projection.issueHints)) {
+      const sorted = bucket.slice().sort((left, right) => left.row.started_at - right.row.started_at);
+      for (let index = 1; index < sorted.length; index += 1) {
+        const older = sorted[index - 1]!;
+        const newer = sorted[index]!;
+        const sameIssueKey = relationKey(older, newer, 'SAME_ISSUE');
+        if (!seen.has(sameIssueKey)) {
+          this.upsertEpisodeRelation(projectId, older, newer, 'SAME_ISSUE', 0.8, now);
+          seen.add(sameIssueKey);
           count += 1;
         }
+        const followsKey = relationKey(newer, older, 'FOLLOWS_UP');
+        if (!seen.has(followsKey)) {
+          this.upsertEpisodeRelation(projectId, newer, older, 'FOLLOWS_UP', 0.76, now);
+          seen.add(followsKey);
+          count += 1;
+        }
+      }
+    }
+    for (const bucket of bucketByHint(projections, (projection) => projection.topicHints)) {
+      const sorted = bucket.slice().sort((left, right) => left.row.started_at - right.row.started_at);
+      for (let index = 1; index < sorted.length; index += 1) {
+        const older = sorted[index - 1]!;
+        const newer = sorted[index]!;
+        if (intersection(older.issueHints, newer.issueHints).length) continue;
+        const key = relationKey(older, newer, 'RELATED_TO');
+        if (seen.has(key)) continue;
+        this.upsertEpisodeRelation(projectId, older, newer, 'RELATED_TO', 0.45, now, 'weak');
+        seen.add(key);
+        count += 1;
       }
     }
     return count;
@@ -302,6 +314,20 @@ export class GraphCurator {
       sourceAuthority: 'atlas_curator',
       now,
     });
+  }
+
+  private entityHintsFor(projection: EpisodeProjection): string[] {
+    const hints = new Set(entityHints(projection.events));
+    if (projection.eventIds.length) {
+      const rows = this.db.prepare(`
+        SELECT entity_name FROM memory_bindings
+        WHERE project_id=? AND event_id IN (${projection.eventIds.map(() => '?').join(',')})
+          AND COALESCE(entity_name,'')<>''
+        ORDER BY confidence DESC, created_at DESC LIMIT 20
+      `).all(projection.row.project_id, ...projection.eventIds) as Array<{ entity_name?: string | null }>;
+      for (const row of rows) if (row.entity_name?.trim()) hints.add(row.entity_name.trim());
+    }
+    return Array.from(hints);
   }
 
   private deleteFacetEdges(projectId: string): void {
@@ -430,4 +456,23 @@ function dedupeTargets(targets: FacetTarget[]): FacetTarget[] {
 function intersection(left: string[], right: string[]): string[] {
   const rightSet = new Set(right);
   return left.filter((value) => rightSet.has(value));
+}
+
+function bucketByHint(projections: EpisodeProjection[], hintsFor: (projection: EpisodeProjection) => string[]): EpisodeProjection[][] {
+  const buckets = new Map<string, EpisodeProjection[]>();
+  for (const projection of projections) {
+    for (const hint of normalizedHints(hintsFor(projection))) {
+      const bucket = buckets.get(hint) ?? [];
+      bucket.push(projection);
+      buckets.set(hint, bucket);
+    }
+  }
+  return Array.from(buckets.values()).filter((bucket) => bucket.length > 1);
+}
+
+function relationKey(left: EpisodeProjection, right: EpisodeProjection, relationType: string): string {
+  const pair = relationType === 'SAME_ISSUE' || relationType === 'RELATED_TO'
+    ? [left.row.episode_id, right.row.episode_id].sort().join('\0')
+    : `${left.row.episode_id}\0${right.row.episode_id}`;
+  return `${relationType}\0${pair}`;
 }

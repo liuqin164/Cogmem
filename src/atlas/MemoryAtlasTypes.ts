@@ -121,7 +121,7 @@ export interface MemoryAtlasNextAction {
 }
 
 export interface MemoryAtlasSlice {
-  version: 'memory_atlas.v1';
+  version: 'memory_atlas.v2';
   projectId: string;
   query?: string;
   nodes: MemoryAtlasNode[];
@@ -129,11 +129,23 @@ export interface MemoryAtlasSlice {
   nextActions: MemoryAtlasNextAction[];
   warnings: string[];
   facets?: {
-    time?: { from: number; to: number; label: string };
-    target?: string;
-    memoryKinds: string[];
-    keywords: string[];
+    planner?: {
+      intent: string;
+      operator: string;
+      temporalIntent?: string;
+      groupBy?: string;
+      exactness: string;
+      facets: MemoryAtlasMatchedFacet[];
+      keywords: string[];
+    };
+    legacy?: {
+      time?: { from: number; to: number; label: string };
+      target?: string;
+      memoryKinds: string[];
+      keywords: string[];
+    };
   };
+  matchedFacets?: MemoryAtlasMatchedFacet[];
   cards?: MemoryAtlasCard[];
   relaxationTrace?: MemoryAtlasRelaxationStep[];
   coldMemoryResurrected?: boolean;
@@ -157,18 +169,23 @@ export interface MemoryAtlasAction {
 }
 
 export interface MemoryAtlasTimelineResult {
-  version: 'memory_atlas.v1';
+  version: 'memory_atlas.v2';
   projectId: string;
   query: string;
   range?: { from: number; to: number; label: string };
   temporalResurrection: boolean;
   nodes: MemoryAtlasNodeDetail[];
   actions: MemoryAtlasAction[];
+  cards?: MemoryAtlasCard[];
+  groupedByIssue?: Array<{ issueType: string; cards: MemoryAtlasCard[] }>;
+  relaxationTrace?: MemoryAtlasRelaxationStep[];
+  facets?: MemoryAtlasSlice['facets'];
+  matchedFacets?: MemoryAtlasMatchedFacet[];
   warnings: string[];
 }
 
 export interface MemoryAtlasPathResult {
-  version: 'memory_atlas.v1';
+  version: 'memory_atlas.v2';
   projectId: string;
   from: string;
   to: string;

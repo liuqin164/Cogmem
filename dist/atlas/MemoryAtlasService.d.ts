@@ -1,5 +1,5 @@
 import type { EventStore } from '../store/EventStore.js';
-import type { MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
+import { type MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
 import type { MemoryAtlasNodeDetail, MemoryAtlasPathResult, MemoryAtlasQueryOptions, MemoryAtlasSlice, MemoryAtlasTimelineResult } from './MemoryAtlasTypes.js';
 export declare class MemoryAtlasService {
     private store;
@@ -17,6 +17,7 @@ export declare class MemoryAtlasService {
         maxHops?: number;
     }): MemoryAtlasPathResult;
     timeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult;
+    private searchFacetCardsWithRelaxation;
     private attachEvidence;
     private attachCardEvidence;
     private evidence;

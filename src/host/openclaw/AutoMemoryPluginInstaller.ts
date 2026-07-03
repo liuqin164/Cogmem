@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 
 const PLUGIN_ID = 'cogmem-auto-memory';
-const PLUGIN_VERSION = '0.6.3';
+const PLUGIN_VERSION = '0.7.0';
 
 function defaultPublicEntrypoint(): string {
   return join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), 'public.js');
@@ -1069,7 +1069,7 @@ function audit(config, record) {
 const plugin = {
   id: PLUGIN_ID,
   name: 'CogMem Auto Memory',
-  version: '0.6.3',
+  version: '${PLUGIN_VERSION}',
   register(api) {
     if (!api || typeof api.on !== 'function') {
       throw new Error('OpenClaw plugin API missing api.on');
@@ -1422,13 +1422,26 @@ async function recallPayload(input, config, kernel, memory, formatStrategyContex
   let activationReceipt = activationPlan && activationPlan.receipt;
   if (activationPlan && Array.isArray(result.items)) {
     const selectedIds = new Set(plannedResult.items.map((item) => item && item.id).filter(Boolean));
-    const strictFacetItem = result.items.find((item) => item && item.canonicalId && item.whyMatched && String(item.whyMatched).includes('matched'));
+    const strictFacetItem = (result.decisionTrace && result.decisionTrace.selectedLane === 'facet_graph_raw_ledger')
+      ? result.items.find((item) => item && item.canonicalId && Array.isArray(item.matchedFacets) && item.matchedFacets.length > 0)
+      : undefined;
     if (strictFacetItem && !selectedIds.has(strictFacetItem.id)) {
       plannedResult = { ...plannedResult, items: [strictFacetItem, ...plannedResult.items].slice(0, Number(config.limit || 3)) };
-      activationReceipt = { ...(activationReceipt || {}), facetGraphRetained: true, retainedCanonicalId: strictFacetItem.canonicalId, reason: 'strict_facet_match_must_not_be_silently_dropped' };
+      activationReceipt = {
+        ...(activationReceipt || {}),
+        facetGraphRetained: true,
+        retainedCanonicalId: strictFacetItem.canonicalId,
+        matchedFacets: strictFacetItem.matchedFacets,
+        reason: 'strict_facet_match_must_not_be_silently_dropped',
+      };
     }
   }
   const anchorItem = plannedResult.items.find((item) => item && item.sourceAnchor && item.sourceAnchor.eventId);
+  const selectedCanonicalIds = new Set(plannedResult.items.map((item) => item && item.canonicalId).filter(Boolean));
+  const selectedEpisodeCards = Array.isArray(result.atlasCards)
+    ? result.atlasCards.filter((card) => card && selectedCanonicalIds.has(card.canonicalId))
+    : [];
+  plannedResult = { ...plannedResult, atlasCards: selectedEpisodeCards };
   const recallContext = formatRecallContext(plannedResult, config);
   return {
     context: recallContext ? (strategyCapsule ? formatStrategyContext(strategyCapsule) + '\n\n' : '') + recallContext : '',
@@ -1436,7 +1449,7 @@ async function recallPayload(input, config, kernel, memory, formatStrategyContex
     recallMode: result.recallMode, fallbackUsed: result.fallbackUsed, intent: input.intent || 'memory_recall',
     anchorEventId: anchorItem && anchorItem.sourceAnchor && anchorItem.sourceAnchor.eventId,
     anchorText: anchorItem && anchorItem.text, queryPlan: result.queryPlan, decisionTrace: result.decisionTrace,
-    atlasCards: result.atlasCards, selectedEpisodeCards: plannedResult.atlasCards,
+    atlasCards: result.atlasCards, selectedEpisodeCards,
     relatedButNotSelected: result.relatedButNotSelected, relaxationTrace: result.relaxationTrace,
     activationReceipt, strategyCapsule,
     strategyReplanned: replan.replanned, strategyReplanReason: replan.reason,
@@ -1483,16 +1496,27 @@ function stripCogmemRecallBlocks(text) {
 
 function formatAtlasContext(result, maxChars) {
   const nodes = Array.isArray(result && result.nodes) ? result.nodes : [];
-  if (!nodes.length) return '';
+  const cards = Array.isArray(result && result.cards) ? result.cards : [];
+  if (!nodes.length && !cards.length) return '';
   const edges = Array.isArray(result && result.edges) ? result.edges : [];
   const actions = Array.isArray(result && result.nextActions) ? result.nextActions : [];
   const nodeDetails = Array.isArray(result && result.nodeDetails) ? result.nodeDetails : [];
   const lines = [
-    '<COGMEM_MEMORY_ATLAS version="memory_atlas.v1" volatile="true" persistence="forbidden" evidence_authority="raw_event_ids_only">',
+    '<COGMEM_MEMORY_ATLAS version="memory_atlas.v2" volatile="true" persistence="forbidden" evidence_authority="raw_event_ids_only">',
     'Bounded navigation map; use it to choose nodes and paths, not as durable evidence.',
-    'Matched facets: ' + safeAtlasText(JSON.stringify(result.facets || {}), 1000),
+    'Matched facets: ' + safeAtlasText(JSON.stringify(result.facets && result.facets.planner || result.facets || {}), 1400),
     'Cold memory resurrected: ' + String(result.coldMemoryResurrected === true),
     '',
+    'Selected memory cards:',
+    ...cards.slice(0, 8).map((card) => '- ' + formatAtlasCard(card)),
+    ...(cards.length ? [
+      '',
+      'Related but not selected:',
+      ...cards.flatMap((card) => Array.isArray(card.relatedButNotSelected) ? card.relatedButNotSelected : [])
+        .slice(0, 8)
+        .map((card) => '- ' + safeAtlasText(card.displayTitle, 160) + ' [' + safeAtlasText(card.reason, 160) + ']'),
+      '',
+    ] : []),
     'Nodes:',
     ...nodes.slice(0, 30).map((node) => '- ' + JSON.stringify({
       id: safeAtlasText(node.id, 500), type: safeAtlasText(node.nodeType, 80),
@@ -1910,11 +1934,17 @@ function formatAtlasCard(card) {
   const facets = Array.isArray(card && card.matchedFacets)
     ? card.matchedFacets.map((facet) => facet.type + ':' + facet.value).join(',')
     : '';
+  const paths = Array.isArray(card && card.matchedPaths)
+    ? card.matchedPaths.map((path) => path.relation + '@' + (path.facet && path.facet.nodeId || 'facet')).slice(0, 6).join(',')
+    : '';
   const locator = card && card.sourceLocator && card.sourceLocator.command ? '; sourceLocator=' + card.sourceLocator.command : '';
+  const why = card && card.whyMatched ? '; whyMatched=' + truncateLineWithMeta(card.whyMatched, 180).text : '';
   return (card && card.canonicalId || 'episode:unknown')
     + '; title=' + truncateLineWithMeta(card && card.displayTitle, 120).text
     + '; summary=' + truncateLineWithMeta(card && card.oneLineSummary, 180).text
     + (facets ? '; matchedFacets=' + facets : '')
+    + (paths ? '; matchedPaths=' + paths : '')
+    + why
     + locator;
 }
 

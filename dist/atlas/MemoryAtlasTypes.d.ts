@@ -94,7 +94,7 @@ export interface MemoryAtlasNextAction {
     args: Record<string, unknown>;
 }
 export interface MemoryAtlasSlice {
-    version: 'memory_atlas.v1';
+    version: 'memory_atlas.v2';
     projectId: string;
     query?: string;
     nodes: MemoryAtlasNode[];
@@ -102,15 +102,27 @@ export interface MemoryAtlasSlice {
     nextActions: MemoryAtlasNextAction[];
     warnings: string[];
     facets?: {
-        time?: {
-            from: number;
-            to: number;
-            label: string;
+        planner?: {
+            intent: string;
+            operator: string;
+            temporalIntent?: string;
+            groupBy?: string;
+            exactness: string;
+            facets: MemoryAtlasMatchedFacet[];
+            keywords: string[];
         };
-        target?: string;
-        memoryKinds: string[];
-        keywords: string[];
+        legacy?: {
+            time?: {
+                from: number;
+                to: number;
+                label: string;
+            };
+            target?: string;
+            memoryKinds: string[];
+            keywords: string[];
+        };
     };
+    matchedFacets?: MemoryAtlasMatchedFacet[];
     cards?: MemoryAtlasCard[];
     relaxationTrace?: MemoryAtlasRelaxationStep[];
     coldMemoryResurrected?: boolean;
@@ -131,7 +143,7 @@ export interface MemoryAtlasAction {
     evidence: MemoryAtlasEvidence[];
 }
 export interface MemoryAtlasTimelineResult {
-    version: 'memory_atlas.v1';
+    version: 'memory_atlas.v2';
     projectId: string;
     query: string;
     range?: {
@@ -142,10 +154,18 @@ export interface MemoryAtlasTimelineResult {
     temporalResurrection: boolean;
     nodes: MemoryAtlasNodeDetail[];
     actions: MemoryAtlasAction[];
+    cards?: MemoryAtlasCard[];
+    groupedByIssue?: Array<{
+        issueType: string;
+        cards: MemoryAtlasCard[];
+    }>;
+    relaxationTrace?: MemoryAtlasRelaxationStep[];
+    facets?: MemoryAtlasSlice['facets'];
+    matchedFacets?: MemoryAtlasMatchedFacet[];
     warnings: string[];
 }
 export interface MemoryAtlasPathResult {
-    version: 'memory_atlas.v1';
+    version: 'memory_atlas.v2';
     projectId: string;
     from: string;
     to: string;

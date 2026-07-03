@@ -267,6 +267,8 @@ export declare class KernelAgentMemoryBackend {
     private recallCueTerms;
     private itemSearchableText;
     private mergeRecallItems;
+    private mergeHistoricalRecallItems;
+    private compiledItemsForHistoricalQuery;
     private dedupeRawEventsByTurnPreferUser;
     private expandRawSearchTexts;
     private findPreviousSessionId;

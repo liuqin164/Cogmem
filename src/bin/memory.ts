@@ -670,6 +670,9 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
     decisionTrace: result.decisionTrace,
     strategyCapsule,
     narrative: result.narrative,
+    atlasCards: result.atlasCards,
+    relatedButNotSelected: result.relatedButNotSelected,
+    relaxationTrace: result.relaxationTrace,
     items: result.items,
   };
 }
@@ -965,7 +968,7 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     return;
   }
   if (command === 'graph' || command.startsWith('graph-')) {
-    console.log(`memoryAtlas: ${payload.version || 'memory_atlas.v1'} project=${payload.projectId || 'unknown'}`);
+    console.log(`memoryAtlas: ${payload.version || 'memory_atlas.v2'} project=${payload.projectId || 'unknown'}`);
     const rows = Array.isArray(payload.nodes) ? payload.nodes
       : Array.isArray(payload.path) ? payload.path
         : Array.isArray(payload.actions) ? payload.actions

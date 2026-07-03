@@ -6,8 +6,10 @@
 - Added deterministic episode title and one-line summary generation for Atlas cards, preserving the original long summary in metadata and marking low-confidence titles for review.
 - Added facet query planning for day/month/year, topic, issue, and entity cues, including strict facet intersection, canonicalId dedupe, matched facet/path explanations, and explicit relaxation traces.
 - Added agent-facing Atlas `cards[]` on graph search/explore with `displayTitle`, `oneLineSummary`, `canonicalId`, `matchedFacets`, `matchedPaths`, `relatedButNotSelected`, and source drill-down locators.
+- Extended Atlas cards to timeline results and CLI recall JSON, shared relaxation behavior across graph search/explore/timeline, and made broad “记忆黑盒” recall select the initial Memory Context/sourceContext discussion while listing later graph/runtime and Atlas readability issues as related side context.
+- Renamed the live Atlas projection to `memory_atlas.v2` with 3.7 schema metadata while still consuming legacy `memory_atlas.v1` dirty triggers, so upgraded 3.6.5 databases rebuild the multi-facet projection instead of trusting stale clean state.
 - Integrated facet graph cards into `historical_discussion` recall so OpenClaw/Hermes agents can explain selected memories while still grounding answers in Raw Ledger source locators.
-- Updated the OpenClaw generated bridge to preserve strict facet matches through Context Cortex planning and to include selected cards, related-but-not-selected side context, and relaxation traces in volatile recall context.
+- Updated OpenClaw plugin 0.7.0 and its generated bridge to preserve strict facet matches through Context Cortex planning and to include selected cards, matched facets/paths, related-but-not-selected side context, and relaxation traces in both volatile recall and Atlas context blocks.
 - Updated README, Memory Atlas docs, OpenClaw/Hermes skills, AGENTS runbooks, and operations references with npm-first install/update flow and the 3.7.0 multi-facet Atlas command playbook.
 
 ## 3.6.5

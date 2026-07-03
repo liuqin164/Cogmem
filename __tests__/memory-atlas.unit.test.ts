@@ -50,7 +50,7 @@ test('overview and search expose bounded project-scoped memory nodes', () => {
   try {
     kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });
     const overview = kernel.graphOverview({ projectId: 'cogmem', limit: 100 });
-    expect(overview.version).toBe('memory_atlas.v1');
+    expect(overview.version).toBe('memory_atlas.v2');
     expect(overview.nodes.length).toBeLessThanOrEqual(30);
     expect(overview.nodes.some((node) => node.id === 'project:cogmem')).toBe(true);
     expect(overview.nodes.some((node) => node.label === 'Hermes')).toBe(true);
@@ -203,7 +203,7 @@ test('explore resurrects cold memory with generic table-like facets, not only ac
       projectId: 'cogmem', now: Date.UTC(2026, 5, 21),
     }) as unknown as Record<string, unknown>;
     expect(result.coldMemoryResurrected).toBe(true);
-    expect(result.facets).toEqual(expect.objectContaining({ memoryKinds: ['decision'] }));
+    expect((result.facets as any).legacy).toEqual(expect.objectContaining({ memoryKinds: ['decision'] }));
     expect((result.nodes as Array<Record<string, unknown>>).some((node) => node.nodeType === 'cluster')).toBe(true);
   } finally { kernel.close(); }
 });

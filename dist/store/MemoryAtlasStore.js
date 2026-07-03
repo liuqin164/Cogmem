@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+export const MEMORY_ATLAS_PROJECTION_NAME = 'memory_atlas.v2';
+export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.0';
 export class MemoryAtlasStore {
     db;
     constructor(db) {
@@ -101,7 +103,7 @@ export class MemoryAtlasStore {
         });
         const selectedIds = new Set(cards.map((card) => card.canonicalId));
         for (const card of cards) {
-            card.relatedButNotSelected = this.relatedEpisodeCards(projectId, card.canonicalId, selectedIds, 4);
+            card.relatedButNotSelected = mergeRelatedCards(this.relatedEpisodeCards(projectId, card.canonicalId, selectedIds, 4), this.topicRelatedCardsForPlan(projectId, plan, selectedIds, 4)).slice(0, 4);
         }
         return cards.sort((left, right) => scoreCard(right) - scoreCard(left)).slice(0, Math.max(1, Math.min(limit, 100)));
     }
@@ -134,6 +136,22 @@ export class MemoryAtlasStore {
                 break;
         }
         return result;
+    }
+    topicRelatedCardsForPlan(projectId, plan, selectedIds, limit) {
+        const topicFacets = plan.facets.filter((facet) => facet.type === 'topic');
+        if (!topicFacets.length)
+            return [];
+        const rows = topicFacets.flatMap((facet) => this.episodeEdgesForFacet(projectId, facet));
+        const candidateIds = Array.from(new Set(rows.map((row) => row.source_id))).filter((id) => !selectedIds.has(`episode:${id}`));
+        if (!candidateIds.length)
+            return [];
+        return this.episodeRows(projectId, candidateIds)
+            .map((row) => ({
+            canonicalId: row.node_id,
+            displayTitle: row.label,
+            reason: 'related topic but different issue/date',
+        }))
+            .slice(0, Math.max(1, Math.min(limit, 20)));
     }
     resolveTargetNodeIds(projectId, query) {
         const normalizedQuery = normalizeLookup(query);
@@ -428,12 +446,34 @@ export class MemoryAtlasStore {
     }
     projectionNeedsRefresh(projectId) {
         const row = this.db.prepare(`
+      SELECT status, metadata_json FROM memory_atlas_projection_state
+      WHERE project_id=? AND projection_name=?
+    `).get(projectId, MEMORY_ATLAS_PROJECTION_NAME);
+        if (!row || row.status !== 'clean')
+            return true;
+        const metadata = parseMetadata(row.metadata_json);
+        if (metadata.projectionSchemaVersion !== MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION)
+            return true;
+        const legacyDirty = this.db.prepare(`
       SELECT status FROM memory_atlas_projection_state
-      WHERE project_id=? AND projection_name='memory_atlas.v1'
+      WHERE project_id=? AND projection_name='memory_atlas.v1' AND status<>'clean'
     `).get(projectId);
-        return !row || row.status !== 'clean';
+        return Boolean(legacyDirty);
     }
     markProjectionClean(projectId, metadata = {}, now = Date.now()) {
+        const enrichedMetadata = {
+            ...metadata,
+            projectionName: MEMORY_ATLAS_PROJECTION_NAME,
+            projectionSchemaVersion: MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION,
+        };
+        this.db.prepare(`
+      INSERT INTO memory_atlas_projection_state(
+        project_id, projection_name, cursor_value, status, last_rebuild_at, last_error, metadata_json
+      ) VALUES(?, ?, ?, 'clean', ?, NULL, ?)
+      ON CONFLICT(project_id, projection_name) DO UPDATE SET
+        cursor_value=excluded.cursor_value, status='clean', last_rebuild_at=excluded.last_rebuild_at,
+        last_error=NULL, metadata_json=excluded.metadata_json
+    `).run(projectId, MEMORY_ATLAS_PROJECTION_NAME, String(now), now, JSON.stringify(enrichedMetadata));
         this.db.prepare(`
       INSERT INTO memory_atlas_projection_state(
         project_id, projection_name, cursor_value, status, last_rebuild_at, last_error, metadata_json
@@ -441,17 +481,20 @@ export class MemoryAtlasStore {
       ON CONFLICT(project_id, projection_name) DO UPDATE SET
         cursor_value=excluded.cursor_value, status='clean', last_rebuild_at=excluded.last_rebuild_at,
         last_error=NULL, metadata_json=excluded.metadata_json
-    `).run(projectId, String(now), now, JSON.stringify(metadata));
+    `).run(projectId, String(now), now, JSON.stringify({ compatibilityAliasFor: MEMORY_ATLAS_PROJECTION_NAME }));
     }
     markProjectionFailed(projectId, error, now = Date.now()) {
         this.db.prepare(`
       INSERT INTO memory_atlas_projection_state(project_id,projection_name,status,last_rebuild_at,last_error,metadata_json)
-      VALUES(?,'memory_atlas.v1','error',?,?,'{}')
+      VALUES(?,?,'error',?,?,?)
       ON CONFLICT(project_id,projection_name) DO UPDATE SET status='error',last_rebuild_at=excluded.last_rebuild_at,last_error=excluded.last_error
-    `).run(projectId, now, error.slice(0, 2000));
+    `).run(projectId, MEMORY_ATLAS_PROJECTION_NAME, now, error.slice(0, 2000), JSON.stringify({
+            projectionName: MEMORY_ATLAS_PROJECTION_NAME,
+            projectionSchemaVersion: MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION,
+        }));
     }
     getProjectionState(projectId) {
-        const row = this.db.prepare(`SELECT status,last_rebuild_at,last_error FROM memory_atlas_projection_state WHERE project_id=? AND projection_name='memory_atlas.v1'`).get(projectId);
+        const row = this.db.prepare(`SELECT status,last_rebuild_at,last_error FROM memory_atlas_projection_state WHERE project_id=? AND projection_name=?`).get(projectId, MEMORY_ATLAS_PROJECTION_NAME);
         return row ? { status: row.status, lastRebuildAt: row.last_rebuild_at ?? undefined, lastError: row.last_error || undefined } : null;
     }
     listKnownProjectIds() {
@@ -655,5 +698,17 @@ function intersectSets(sets) {
     return result;
 }
 function scoreCard(card) {
-    return card.matchedFacets.length * 10 + card.matchedPaths.reduce((sum, path) => sum + path.confidence, 0) + (card.localDate ? 0.1 : 0);
+    const issuePriority = card.issueType === 'memory-context-blackbox' ? 4
+        : card.issueType === 'graph-runtime-blackbox' ? 2
+            : card.issueType === 'atlas-readability' ? 1
+                : 0;
+    return card.matchedFacets.length * 10 + issuePriority + card.matchedPaths.reduce((sum, path) => sum + path.confidence, 0) + (card.localDate ? 0.1 : 0);
+}
+function mergeRelatedCards(...groups) {
+    const merged = new Map();
+    for (const group of groups)
+        for (const card of group)
+            if (!merged.has(card.canonicalId))
+                merged.set(card.canonicalId, card);
+    return Array.from(merged.values());
 }

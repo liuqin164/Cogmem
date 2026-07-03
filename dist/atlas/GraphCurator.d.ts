@@ -20,6 +20,7 @@ export declare class GraphCurator {
     private upsertRawEventNode;
     private projectEpisodeRelations;
     private upsertEpisodeRelation;
+    private entityHintsFor;
     private deleteFacetEdges;
     private upsertEdge;
 }

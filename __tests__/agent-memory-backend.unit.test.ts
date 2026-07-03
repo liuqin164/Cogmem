@@ -456,8 +456,9 @@ test('agent backend historical discussion recall prefers original memory-context
 
   expect(recalled.queryPlan?.intent).toBe('historical_discussion');
   expect(recalled.decisionTrace?.reason).toBe('historical_discussion');
+  expect(recalled.atlasCards?.[0]?.displayTitle).toBe('CogMem Memory Context 黑盒与原文下钻');
   expect(recalled.items[0].text).toContain('CogMem Memory Context');
-  expect(recalled.items[0].text).toContain('sourceContext');
+  expect(recalled.items[0].sourceContext?.event.text).toContain('sourceContext');
   expect(recalled.items[0].text).not.toContain('zombie');
   expect(recalled.items[0].sourceType).toBe('raw_ledger');
   expect(recalled.items[0].sourceContext?.locator.command).toContain('--project demo');

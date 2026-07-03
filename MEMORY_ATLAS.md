@@ -1,4 +1,4 @@
-# Memory Atlas v1
+# Memory Atlas v2
 
 Memory Atlas lets an agent inspect what Cogmem remembers before it chooses a precise recall or Raw Ledger drilldown. It is a rebuildable navigation projection, not a new source of truth.
 
@@ -10,7 +10,7 @@ Atlas projects existing project-scoped records into these node kinds:
 - Facet nodes: `time`, `topic`, `issue`, `entity`, `session`, `thread`, `memoryKind`, and `actionKind`.
 - Action frames are extracted deterministically from raw user evidence and link actor, target, action kind, time, topic, project, and evidence.
 
-Existing memory edges remain canonical. Atlas adds derived navigation edges such as `OCCURRED_ON`, `OCCURRED_IN`, `ABOUT_TOPIC`, `PART_OF_ISSUE`, `INVOLVES_ENTITY`, `IN_SESSION`, `IN_THREAD`, `HAS_EVIDENCE`, `SAME_ISSUE`, `FOLLOWS_UP`, `REFINES`, and weak `RELATED_TO` links without changing the underlying belief or binding graph.
+Existing memory edges remain canonical. Atlas adds derived navigation edges such as `OCCURRED_ON`, `OCCURRED_IN`, `ABOUT_TOPIC`, `PART_OF_ISSUE`, `INVOLVES_ENTITY`, `IN_SESSION`, `IN_THREAD`, and `HAS_EVIDENCE` without changing the underlying belief or binding graph. The 3.7.0 offline curator automatically proposes only bounded `SAME_ISSUE`, `FOLLOWS_UP`, and weak `RELATED_TO` episode relations; stronger relations such as `REFINES`, `CORRECTS`, `CONTRADICTS`, and `SUPERSEDES` remain reserved for explicit evidence-bearing governance/binding flows.
 
 This is not a copied tree. One episode exists once as `episode:<id>`. A day, topic, issue, entity, session, memory kind, or action kind is only a facet entrance:
 

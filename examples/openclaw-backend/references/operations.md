@@ -98,9 +98,9 @@ Use `cogmem openclaw diagnose --workspace . --json` when automatic memory blocks
 - `plugin.current=false`: generated files are stale; run plugin-only fix and restart gateway.
 - no `audit.lastBeforePromptBuild`: plugin is not loaded or the hook did not fire.
 - `audit.lastBeforePromptBuild.action=error`: bridge or DB failure; inspect `reason`, `bridgeCommand`, and `dbLocked`.
-- `action=inject` but no visible block: inspect `returnedInjectionShape`. Plugin 0.6.3 returns `prependContext`, `context`, and `promptPrefix`; if OpenClaw still ignores all three, the host hook contract changed and the OpenClaw plugin API must be checked before blaming recall.
+- `action=inject` but no visible block: inspect `returnedInjectionShape`. Plugin 0.7.0 returns `prependContext`, `context`, and `promptPrefix`; if OpenClaw still ignores all three, the host hook contract changed and the OpenClaw plugin API must be checked before blaming recall.
 
-Plugin 0.6.3 queue behavior:
+Plugin 0.7.0 queue behavior:
 
 - `agent_end` only appends durable JSONL jobs, then starts at most one drainer through queue/spawn locks.
 - `drain-remember-queue` acquires the queue lock before opening Cogmem or SQLite. A second drainer exits without opening the DB.

@@ -46,7 +46,7 @@ const TITLE_RULES: TitleRule[] = [
     id: 'memory_context_blackbox',
     test: (text) =>
       /(cogmem memory context|memory context|sourcecontext|source context|原文下钻|上下文.*黑盒|记忆上下文|摘要.*原话|记忆黑盒)/i.test(text) &&
-      !/(database locked|zombie|卡死|atlas|节点|事件名称|自动注入|manual recall|before_prompt_build)/i.test(text),
+      !/(database locked|zombie|卡死|atlas|节点|事件名称|manual recall.*before_prompt_build|手动.*recall.*自动注入)/i.test(text),
     displayTitle: 'CogMem Memory Context 黑盒与原文下钻',
     oneLineSummary: '用户指出注入的 CogMem Memory Context 像黑盒，需要能从摘要下钻到原始对话。',
     topicHints: ['memory-blackbox', 'source-drilldown', 'context-injection'],
@@ -79,7 +79,7 @@ const TITLE_RULES: TitleRule[] = [
   },
   {
     id: 'auto_injection_mismatch',
-    test: (text) => /(自动注入|before_prompt_build|manual recall|手动.*recall|注入.*不一致|没有自动.*记忆|COGMEM_RECALL_CONTEXT)/i.test(text),
+    test: (text) => /((manual recall|手动.*recall|CLI).*(自动注入|before_prompt_build|OpenClaw)|(自动注入|before_prompt_build|OpenClaw).*(manual recall|手动.*recall|CLI)|注入.*不一致|selected.*different|选择.*不同)/i.test(text),
     displayTitle: '自动注入与手动 recall 不一致',
     oneLineSummary: '用户发现 OpenClaw 自动注入与手动 recall 的记忆选择不一致，需要暴露选择依据和匹配 facet。',
     topicHints: ['context-injection', 'memory-blackbox', 'openclaw'],

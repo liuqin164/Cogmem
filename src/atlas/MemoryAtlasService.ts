@@ -1,5 +1,5 @@
 import type { EventStore } from '../store/EventStore.js';
-import type { MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
+import { MEMORY_ATLAS_PROJECTION_NAME, type MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { FacetQueryPlanner, type FacetQueryPlan } from './FacetQueryPlanner.js';
 import { compileAtlasQuery } from './MemoryAtlasQueryCompiler.js';
@@ -17,8 +17,8 @@ export class MemoryAtlasService {
 
   search(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
     const projectId = requiredProject(options.projectId); const limit = boundedLimit(options.limit);
-    const facetPlan = this.facetPlanner.plan(boundedQuery(query), { projectId, now: options.now });
-    const cards = facetPlan.facets.length ? this.store.searchCanonicalEpisodeCards(projectId, facetPlan, limit) : [];
+    const facetResult = this.searchFacetCardsWithRelaxation(query, projectId, limit, options);
+    const cards = facetResult.cards;
     let nodes = this.store.search(boundedQuery(query), projectId, limit);
     if (cards.length) {
       const cardNodes = cards.map((card) => this.store.getNode(card.canonicalId, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node));
@@ -26,22 +26,17 @@ export class MemoryAtlasService {
     }
     const withEvidence = this.attachEvidence(nodes, projectId, options);
     const result = slice(projectId, withEvidence, this.edgesFor(withEvidence, projectId), query);
+    result.facets = facetsForPlan(facetResult.plan);
+    result.matchedFacets = cards.flatMap((card) => card.matchedFacets);
     if (cards.length) result.cards = this.attachCardEvidence(cards, projectId, options);
+    if (facetResult.relaxationTrace.length) result.relaxationTrace = facetResult.relaxationTrace;
     return result;
   }
 
   explore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
     const projectId = requiredProject(options.projectId); const limit = boundedLimit(options.limit);
-    const facetPlan = this.facetPlanner.plan(boundedQuery(query), { projectId, now: options.now });
-    const relaxationTrace: MemoryAtlasRelaxationStep[] = [];
-    let cards = facetPlan.facets.length ? this.store.searchCanonicalEpisodeCards(projectId, facetPlan, limit) : [];
-    if (!cards.length && facetPlan.facets.length) {
-      const relaxed = relaxFacetPlan(facetPlan);
-      if (relaxed) {
-        cards = this.store.searchCanonicalEpisodeCards(projectId, relaxed.plan, limit);
-        relaxationTrace.push(...relaxed.trace);
-      }
-    }
+    const facetResult = this.searchFacetCardsWithRelaxation(query, projectId, limit, options);
+    const cards = facetResult.cards;
     const compiled = compileAtlasQuery(boundedQuery(query), options.now);
     const target = this.store.resolveTargetNodeIds(projectId, compiled.text);
     let nodes = this.store.searchFaceted(query, projectId, limit, {
@@ -61,9 +56,13 @@ export class MemoryAtlasService {
     const nodesWithEvidence = this.attachEvidence(nodes, projectId, options);
     const edges = this.edgesFor(nodesWithEvidence, projectId);
     const result = slice(projectId, nodesWithEvidence, edges, query);
-    result.facets = { time: compiled.range, target: target.labels.join(', ') || compiled.target, memoryKinds: compiled.memoryKinds, keywords: compiled.keywords };
+    result.facets = {
+      ...facetsForPlan(facetResult.plan),
+      legacy: { time: compiled.range, target: target.labels.join(', ') || compiled.target, memoryKinds: compiled.memoryKinds, keywords: compiled.keywords },
+    };
+    result.matchedFacets = cards.flatMap((card) => card.matchedFacets);
     if (cards.length) result.cards = this.attachCardEvidence(cards, projectId, options);
-    if (relaxationTrace.length) result.relaxationTrace = relaxationTrace;
+    if (facetResult.relaxationTrace.length) result.relaxationTrace = facetResult.relaxationTrace;
     const hasFacet = Boolean(compiled.range || compiled.target || compiled.memoryKinds.length || compiled.tokens.length);
     result.coldMemoryResurrected = hasFacet && nodes.some((node) => node.activation <= 0.1);
     return result;
@@ -135,19 +134,22 @@ export class MemoryAtlasService {
       pathIds.reverse(); pathEdges.reverse();
     }
     const path = found ? pathIds.map((id) => this.store.getNode(id, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node)) : [];
-    return { version: 'memory_atlas.v1', projectId, from: start, to: target, path,
+    return { version: MEMORY_ATLAS_PROJECTION_NAME, projectId, from: start, to: target, path,
       edges: found ? this.safeEdges(pathEdges, projectId) : [], truncated: expanded.size >= 2000 };
   }
 
   timeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult {
     const projectId = requiredProject(options.projectId); const compiled = compileAtlasQuery(boundedQuery(query), options.now);
     const limit = boundedLimit(options.limit);
+    const facetResult = this.searchFacetCardsWithRelaxation(query, projectId, limit, options);
+    const cards = this.attachCardEvidence(facetResult.cards, projectId, options)
+      .sort((left, right) => dateKey(left) - dateKey(right) || left.displayTitle.localeCompare(right.displayTitle));
     const target = this.store.resolveTargetNodeIds(projectId, compiled.text);
     const nodes = this.store.searchFaceted(query, projectId, limit, {
       from: compiled.range?.from, to: compiled.range?.to, memoryKinds: compiled.memoryKinds,
       keywords: target.nodeIds.length ? compiled.keywords : compiled.tokens,
       targetNodeIds: target.nodeIds.length ? target.nodeIds : undefined,
-    }).sort((left, right) => Number(right.occurredAt || 0) - Number(left.occurredAt || 0)).map((node) => {
+    }).sort((left, right) => Number(left.occurredAt || 0) - Number(right.occurredAt || 0)).map((node) => {
       const evidence = this.evidence(node.id, projectId, options.evidenceLimit, options.includeEvidence);
       const evidenceTotal = this.store.evidenceTotal(node.id, projectId);
       return { ...node, evidenceCount: evidenceTotal, evidenceTotal, evidenceReturned: evidence.length, evidence, neighbors: [] };
@@ -155,8 +157,33 @@ export class MemoryAtlasService {
     const actions = this.store.listActions(projectId, { target: compiled.target, targetEntityIds: target.entitySourceIds,
       from: compiled.range?.from, to: compiled.range?.to, limit: boundedLimit(options.limit) })
       .map((action) => ({ ...action, evidence: this.evidence(action.id, projectId, options.evidenceLimit, options.includeEvidence) }));
-    return { version: 'memory_atlas.v1', projectId, query, range: compiled.range,
-      temporalResurrection: Boolean(compiled.range && [...nodes, ...actions].length), nodes, actions, warnings: [] };
+    return { version: MEMORY_ATLAS_PROJECTION_NAME, projectId, query, range: compiled.range,
+      temporalResurrection: Boolean((compiled.range || facetResult.plan.temporalIntent) && [...nodes, ...actions, ...cards].length),
+      nodes, actions, cards,
+      groupedByIssue: groupCardsByIssue(cards),
+      relaxationTrace: facetResult.relaxationTrace.length ? facetResult.relaxationTrace : undefined,
+      facets: facetsForPlan(facetResult.plan),
+      matchedFacets: cards.flatMap((card) => card.matchedFacets),
+      warnings: [] };
+  }
+
+  private searchFacetCardsWithRelaxation(query: string, projectId: string, limit: number, options: MemoryAtlasQueryOptions): {
+    plan: FacetQueryPlan;
+    cards: MemoryAtlasCard[];
+    relaxationTrace: MemoryAtlasRelaxationStep[];
+  } {
+    let plan = this.facetPlanner.plan(boundedQuery(query), { projectId, now: options.now });
+    const relaxationTrace: MemoryAtlasRelaxationStep[] = [];
+    let cards = plan.facets.length ? this.store.searchCanonicalEpisodeCards(projectId, plan, limit) : [];
+    if (!cards.length && plan.facets.length) {
+      const relaxed = relaxFacetPlan(plan);
+      if (relaxed) {
+        plan = relaxed.plan;
+        cards = this.store.searchCanonicalEpisodeCards(projectId, relaxed.plan, limit);
+        relaxationTrace.push(...relaxed.trace);
+      }
+    }
+    return { plan, cards, relaxationTrace };
   }
 
   private attachEvidence(nodes: MemoryAtlasNode[], projectId: string, options: MemoryAtlasQueryOptions): MemoryAtlasNode[] {
@@ -238,7 +265,40 @@ function chunked<T>(values: T[], size: number): T[][] {
   for (let index = 0; index < values.length; index += size) chunks.push(values.slice(index, index + size));
   return chunks;
 }
-function slice(projectId: string, nodes: MemoryAtlasNode[], edges: MemoryAtlasEdge[], query?: string): MemoryAtlasSlice { return { version: 'memory_atlas.v1', projectId, query, nodes, edges, nextActions: nodes.slice(0, 5).map((node) => ({ label: `Inspect ${node.label}`, tool: 'cogmem_graph_node', args: { id: node.id, projectId } })), warnings: [] }; }
+function slice(projectId: string, nodes: MemoryAtlasNode[], edges: MemoryAtlasEdge[], query?: string): MemoryAtlasSlice { return { version: MEMORY_ATLAS_PROJECTION_NAME, projectId, query, nodes, edges, nextActions: nodes.slice(0, 5).map((node) => ({ label: `Inspect ${node.label}`, tool: 'cogmem_graph_node', args: { id: node.id, projectId } })), warnings: [] }; }
+function facetsForPlan(plan: FacetQueryPlan): NonNullable<MemoryAtlasSlice['facets']> {
+  return {
+    planner: {
+      intent: plan.intent,
+      operator: plan.operator,
+      temporalIntent: plan.temporalIntent,
+      groupBy: plan.groupBy,
+      exactness: plan.exactness,
+      keywords: plan.keywords,
+      facets: plan.facets.map((facet) => ({
+        type: facet.type,
+        value: facet.value,
+        label: facet.label,
+        nodeId: facet.nodeId || `${facet.type}:${facet.value}`,
+        relation: facet.relation || 'MATCHES',
+      })),
+    },
+  };
+}
+function dateKey(card: MemoryAtlasCard): number {
+  if (card.localDate && /^\d{4}-\d{2}-\d{2}$/u.test(card.localDate)) {
+    return Date.parse(`${card.localDate}T00:00:00.000Z`);
+  }
+  return Number.POSITIVE_INFINITY;
+}
+function groupCardsByIssue(cards: MemoryAtlasCard[]): Array<{ issueType: string; cards: MemoryAtlasCard[] }> {
+  const groups = new Map<string, MemoryAtlasCard[]>();
+  for (const card of cards) {
+    const key = card.issueType || 'unclassified';
+    groups.set(key, [...(groups.get(key) || []), card]);
+  }
+  return Array.from(groups.entries()).map(([issueType, group]) => ({ issueType, cards: group }));
+}
 function relaxFacetPlan(plan: FacetQueryPlan): { plan: FacetQueryPlan; trace: MemoryAtlasRelaxationStep[] } | null {
   const dayFacet = plan.facets.find((facet) => facet.type === 'time' && facet.granularity === 'day');
   if (!dayFacet) return null;

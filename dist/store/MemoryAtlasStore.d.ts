@@ -1,6 +1,8 @@
 import type Database from 'bun:sqlite';
 import type { FacetQueryPlan } from '../atlas/FacetQueryPlanner.js';
 import type { MemoryAtlasAction, MemoryAtlasCard, MemoryAtlasEdge, MemoryAtlasNode, MemoryAtlasRelatedCard } from '../atlas/MemoryAtlasTypes.js';
+export declare const MEMORY_ATLAS_PROJECTION_NAME = "memory_atlas.v2";
+export declare const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = "3.7.0";
 export declare class MemoryAtlasStore {
     readonly db: Database;
     constructor(db: Database);
@@ -21,6 +23,7 @@ export declare class MemoryAtlasStore {
     }): MemoryAtlasNode[];
     searchCanonicalEpisodeCards(projectId: string, plan: FacetQueryPlan, limit: number): MemoryAtlasCard[];
     relatedEpisodeCards(projectId: string, canonicalId: string, selectedIds: Set<string>, limit: number): MemoryAtlasRelatedCard[];
+    private topicRelatedCardsForPlan;
     resolveTargetNodeIds(projectId: string, query: string): {
         nodeIds: string[];
         entitySourceIds: string[];
