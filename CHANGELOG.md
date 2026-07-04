@@ -2,11 +2,11 @@
 
 ## 3.7.1
 
-- Hardened OpenClaw volatile recall/Atlas context serialization so historical text, card titles, summaries, source windows, and related cards cannot close or create `COGMEM_*` prompt blocks.
+- Hardened OpenClaw volatile recall, Atlas context, turn bridge, and session-state serialization so historical text, card titles, summaries, source windows, related cards, short-term conclusions, and source anchors cannot close or create `COGMEM_*` prompt blocks.
 - Scoped entity facet node IDs by project, bumped the Atlas projection schema metadata, and forced old multi-facet projections to rebuild instead of reusing cross-project-prone entity nodes.
 - Changed targeted `graph-reindex` to refresh the addressed episode/card but leave the project projection dirty until a full consistency rebuild restores relation/action-frame guarantees.
 - Tightened Raw Ledger forensic anchor scope checks so event anchors cannot bypass project/workspace/thread/session boundaries.
-- Fixed OpenClaw auto intent routing for `action_history`, exact-quote ranking for same-day raw events, issue-title precedence over generic operation titles, and shared action-kind inference.
+- Fixed OpenClaw auto intent routing for `action_history`, exact-quote ranking for same-day raw events, issue-title precedence over generic operation titles, shared action-kind inference, stricter entity-plus-action compiled relevance, local-date year inference, and evidence-level Atlas card dedupe.
 - Updated OpenClaw plugin 0.7.1, docs, skills, and tests for the security/isolation hotfix.
 
 ## 3.7.0

@@ -593,15 +593,29 @@ function createMemoryUsageReceipt(input) {
 
 function formatSourceAnchor(anchor) {
   return [
-    anchor.memoryId ? 'memory:' + anchor.memoryId : '',
-    anchor.eventId ? 'event:' + anchor.eventId : '',
-    anchor.sessionId ? 'session:' + anchor.sessionId : '',
-    anchor.role ? 'role:' + anchor.role : '',
+    anchor.memoryId ? 'memory:' + serializeUntrustedMemory(anchor.memoryId, 160) : '',
+    anchor.eventId ? 'event:' + serializeUntrustedMemory(anchor.eventId, 160) : '',
+    anchor.sessionId ? 'session:' + serializeUntrustedMemory(anchor.sessionId, 160) : '',
+    anchor.role ? 'role:' + serializeUntrustedMemory(anchor.role, 80) : '',
   ].filter(Boolean).join('; ');
 }
 
 function listLines(values) {
-  return values.length ? values.map((value) => '- ' + value) : ['- none'];
+  return values.length ? values.map((value) => '- ' + serializeUntrustedMemory(value, 260)) : ['- none'];
+}
+
+function serializeUntrustedMemory(input, limit) {
+  const clean = stripCogmemRecallBlocks(String(input || '')).text
+    .replace(new RegExp('</?COGMEM_[A-Z0-9_:-]+[^>]*>', 'gi'), '')
+    .replace(new RegExp('[\\\\u0000-\\\\u0008\\\\u000b\\\\u000c\\\\u000e-\\\\u001f\\\\u007f]', 'g'), ' ')
+    .replace(new RegExp('\\\\s+', 'g'), ' ')
+    .trim()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+  return clean.slice(0, Math.max(0, Number(limit || 500)));
 }
 
 function clampBlock(text, closingTag, maxChars) {
@@ -612,14 +626,14 @@ function clampBlock(text, closingTag, maxChars) {
 
 function formatMemoryUsageBridge(receipt, maxChars) {
   const lines = [
-    '<COGMEM_TURN_BRIDGE turn_id="' + String(receipt.turnId).replace(/"/g, '&quot;') + '" source="cogmem" compact="true" ttl_turns="' + receipt.ttlTurns + '" compile_allowed="false">',
+    '<COGMEM_TURN_BRIDGE turn_id="' + serializeUntrustedMemory(receipt.turnId, 180) + '" source="cogmem" compact="true" ttl_turns="' + receipt.ttlTurns + '" compile_allowed="false">',
     'Previous assistant answer used Cogmem memory.',
     '',
     'Used memory themes:',
     ...listLines(receipt.usedThemes || []),
     '',
     'Working conclusion produced in that turn:',
-    '- ' + (receipt.workingConclusion || 'No compact conclusion recorded.'),
+    '- ' + serializeUntrustedMemory(receipt.workingConclusion || 'No compact conclusion recorded.', 260),
     '',
     'Source anchors:',
     ...listLines((receipt.sourceAnchors || []).map(formatSourceAnchor)),
@@ -685,7 +699,7 @@ function formatSessionWorkingState(state, maxChars) {
   const lines = [
     '<COGMEM_SESSION_STATE scope="current_session" compact="true" persistence="session_only" compile_allowed="false">',
     'Current working topic:',
-    '- ' + (state.currentTopic || 'unspecified'),
+    '- ' + serializeUntrustedMemory(state.currentTopic || 'unspecified', 180),
     '',
     'Current design direction:',
     ...listLines(state.designDirection || []),

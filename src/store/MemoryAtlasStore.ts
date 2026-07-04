@@ -129,18 +129,20 @@ export class MemoryAtlasStore {
     if (!candidateIds.size) return [];
 
     const rows = this.episodeRows(projectId, Array.from(candidateIds));
-    const cards = rows.map((row) => {
+    const rankedCards = rows.map((row) => {
       const candidateEdges = facetMatches.flatMap((match) => match.rows.filter((edge) => edge.source_id === row.source_id));
       return this.cardFromEpisodeRow(row, candidateEdges, projectId);
-    });
+    }).sort((left, right) => cardRank(right) - cardRank(left) || left.canonicalId.localeCompare(right.canonicalId));
+    const cards = dedupeCardsByEvidence(rankedCards).slice(0, Math.max(1, Math.min(limit, 100)));
     const selectedIds = new Set(cards.map((card) => card.canonicalId));
     for (const card of cards) {
       card.relatedButNotSelected = mergeRelatedCards(
+        card.relatedButNotSelected ?? [],
         this.relatedEpisodeCards(projectId, card.canonicalId, selectedIds, 4),
         this.topicRelatedCardsForPlan(projectId, plan, selectedIds, 4),
       ).slice(0, 4);
     }
-    return cards.sort((left, right) => scoreCard(right) - scoreCard(left)).slice(0, Math.max(1, Math.min(limit, 100)));
+    return cards;
   }
 
   relatedEpisodeCards(projectId: string, canonicalId: string, selectedIds: Set<string>, limit: number): MemoryAtlasRelatedCard[] {
@@ -595,15 +597,21 @@ export class MemoryAtlasStore {
   }
 
   private episodeRows(projectId: string, episodeIds: string[]): AtlasDocumentRow[] {
-    const bounded = Array.from(new Set(episodeIds)).slice(0, 500);
-    if (!bounded.length) return [];
-    return this.db.prepare(`
-      SELECT d.*, COALESCE(a.activation, 0) AS activation
-      FROM memory_atlas_documents d LEFT JOIN memory_atlas_activation a
-        ON a.project_id=d.project_id AND a.node_id=d.node_id
-      WHERE d.project_id=? AND d.node_id IN (${bounded.map(() => '?').join(',')})
-        AND d.node_type='episode' AND d.status NOT IN ('rejected','archived')
-    `).all(projectId, ...bounded.map((id) => `episode:${id}`)) as AtlasDocumentRow[];
+    const ids = Array.from(new Set(episodeIds));
+    const rows: AtlasDocumentRow[] = [];
+    for (let index = 0; index < ids.length; index += 400) {
+      const chunk = ids.slice(index, index + 400);
+      if (!chunk.length) continue;
+      rows.push(...this.db.prepare(`
+        SELECT d.*, COALESCE(a.activation, 0) AS activation
+        FROM memory_atlas_documents d LEFT JOIN memory_atlas_activation a
+          ON a.project_id=d.project_id AND a.node_id=d.node_id
+        WHERE d.project_id=? AND d.node_id IN (${chunk.map(() => '?').join(',')})
+          AND d.node_type='episode' AND d.status NOT IN ('rejected','archived')
+        ORDER BY d.occurred_at DESC, d.support_count DESC, d.node_id ASC
+      `).all(projectId, ...chunk.map((id) => `episode:${id}`)) as AtlasDocumentRow[]);
+    }
+    return rows;
   }
 
   private cardFromEpisodeRow(row: AtlasDocumentRow, edges: FacetEdgeRow[], projectId: string): MemoryAtlasCard {
@@ -616,6 +624,7 @@ export class MemoryAtlasStore {
     });
     const issueHints = stringArray(metadata.issueHints);
     const topicHints = stringArray(metadata.topicHints);
+    const matchedTopicPaths = matchedFacets.filter((facet) => facet.type === 'topic').map((facet) => facet.value);
     return {
       canonicalId: row.node_id,
       nodeType: 'episode',
@@ -623,7 +632,7 @@ export class MemoryAtlasStore {
       oneLineSummary: row.summary || undefined,
       matchedFacets,
       matchedPaths,
-      parentTopics: topicHints.length ? topicHints : row.topic_path ? [row.topic_path] : [],
+      parentTopics: matchedTopicPaths.length ? matchedTopicPaths : topicHints.length ? topicHints : row.topic_path ? [row.topic_path] : [],
       issueType: issueHints[0],
       eventKind: optionalMetadataString(metadata.eventKind),
       localDate: optionalMetadataString(metadata.localDate) ?? (row.occurred_at ? new Date(row.occurred_at).toISOString().slice(0, 10) : undefined),
@@ -764,8 +773,52 @@ function intersectSets(sets: Array<Set<string>>): Set<string> {
   return result;
 }
 
+function cardRank(card: MemoryAtlasCard): number {
+  return scoreCard(card) + Math.min(card.evidenceTotal || 0, 10) * 0.01;
+}
+
 function scoreCard(card: MemoryAtlasCard): number {
   return card.matchedFacets.length * 10 + card.matchedPaths.reduce((sum, path) => sum + path.confidence, 0) + (card.localDate ? 0.1 : 0);
+}
+
+function dedupeCardsByEvidence(cards: MemoryAtlasCard[]): MemoryAtlasCard[] {
+  const bySignature = new Map<string, MemoryAtlasCard>();
+  const out: MemoryAtlasCard[] = [];
+  for (const card of cards) {
+    const signature = evidenceSignature(card);
+    if (!signature) {
+      out.push(card);
+      continue;
+    }
+    const kept = bySignature.get(signature);
+    if (!kept) {
+      bySignature.set(signature, card);
+      out.push(card);
+      continue;
+    }
+    kept.relatedButNotSelected = mergeRelatedCards(kept.relatedButNotSelected ?? [], [{
+      canonicalId: card.canonicalId,
+      displayTitle: card.displayTitle,
+      reason: 'same primary raw evidence',
+    }]);
+  }
+  return out;
+}
+
+function evidenceSignature(card: MemoryAtlasCard): string | undefined {
+  const primary = card.sourceLocator?.eventId || card.evidenceEventIds[0];
+  if (!primary) return undefined;
+  const facets = (type: string) => card.matchedFacets
+    .filter((facet) => facet.type === type)
+    .map((facet) => facet.value)
+    .sort()
+    .join(',');
+  return [
+    primary,
+    card.localDate || '',
+    facets('entity'),
+    facets('actionKind'),
+  ].join('|');
 }
 
 function mergeRelatedCards(...groups: MemoryAtlasRelatedCard[][]): MemoryAtlasRelatedCard[] {

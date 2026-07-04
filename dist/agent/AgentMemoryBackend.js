@@ -2,6 +2,7 @@ import { memoryEventCharRange, memoryEventLabel, memoryEventSourceRange, normali
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 import { compileAgentRecallQuery, } from './AgentRecallQueryCompiler.js';
 import { extractEntityCues } from '../utils/EntityCueExtractor.js';
+import { inferActionKinds } from '../utils/ActionKindRegistry.js';
 export class KernelAgentMemoryBackend {
     kernel;
     constructor(kernel) {
@@ -520,14 +521,16 @@ export class KernelAgentMemoryBackend {
                         ? 'compiled'
                         : 'none';
         return {
-            recallMode: facetItems.length > 0 || rawItems.length > 0 ? 'raw_ledger_fallback' : 'brain_recall_fallback',
+            recallMode: facetItems.length > 0
+                ? (rawItems.length > 0 ? 'atlas_raw_grounded_recall' : 'atlas_facet_recall')
+                : rawItems.length > 0 ? 'raw_ledger_fallback' : 'brain_recall_fallback',
             items,
-            fallbackUsed: true,
+            fallbackUsed: facetItems.length === 0,
             queryPlan,
             atlasCards: facetResult.cards,
             relatedButNotSelected: facetResult.relatedButNotSelected,
             relaxationTrace: facetResult.relaxationTrace,
-            decisionTrace: recallDecisionTrace(selectedLane, 'historical_discussion', {
+            decisionTrace: recallDecisionTrace(selectedLane, queryPlan.intent === 'action_history' ? 'action_history' : 'historical_discussion', {
                 graph: graphItems.length + facetItems.length,
                 navigation: relevantCompiledItems.length,
                 scopedNavigation: relevantCompiledItems.length,
@@ -660,7 +663,7 @@ export class KernelAgentMemoryBackend {
         return out;
     }
     rawEventsForLocalDateCue(query, limit) {
-        const localDate = localDateCue(query.query);
+        const localDate = localDateCue(query.query, query);
         if (!localDate)
             return [];
         const [year, month, day] = localDate.split('-').map(Number);
@@ -874,8 +877,12 @@ export class KernelAgentMemoryBackend {
             const haystack = this.itemSearchableText(item).toLowerCase();
             if (queryPlan.intent === 'action_history') {
                 const entityTerms = extractEntityCues(queryPlan.originalQuery).map((entity) => entity.label.toLowerCase());
-                if (entityTerms.length && !entityTerms.some((term) => haystack.includes(term)))
-                    return false;
+                const entityMatched = entityTerms.length === 0 || entityTerms.some((term) => haystack.includes(term));
+                const queryKinds = inferActionKinds(queryPlan.originalQuery);
+                const allowedKinds = queryKinds.length ? queryKinds : ['started', 'installed', 'configured', 'restarted', 'stopped', 'operated', 'implemented'];
+                const itemKinds = inferActionKinds(haystack);
+                const actionMatched = itemKinds.some((kind) => allowedKinds.includes(kind));
+                return entityMatched && actionMatched;
             }
             return cues.some((cue) => haystack.includes(cue.toLowerCase()));
         });
@@ -1508,8 +1515,8 @@ function uniqueNonEmpty(values) {
 function laneAllowed(policy, lane) {
     return !policy || policy.allowedLanes.includes(lane);
 }
-function localDateCue(query) {
-    const currentYear = new Date().getFullYear();
+function localDateCue(query, options = {}) {
+    const currentYear = localYear(options);
     const iso = query.match(/(20\d{2})[-年\/.](\d{1,2})[-月\/.](\d{1,2})日?/);
     if (iso)
         return `${iso[1]}-${padDatePart(Number(iso[2]))}-${padDatePart(Number(iso[3]))}`;
@@ -1517,6 +1524,25 @@ function localDateCue(query) {
     if (cn)
         return `${cn[1] || currentYear}-${padDatePart(Number(cn[2]))}-${padDatePart(Number(cn[3]))}`;
     return undefined;
+}
+function localYear(options) {
+    const explicit = options.localDateNow?.match(/^(20\d{2})-\d{2}-\d{2}$/u)?.[1];
+    if (explicit)
+        return Number(explicit);
+    const now = options.now ?? Date.now();
+    try {
+        const parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: options.timeZone || 'Asia/Tokyo',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+        }).formatToParts(new Date(now));
+        const year = parts.find((part) => part.type === 'year')?.value;
+        if (year)
+            return Number(year);
+    }
+    catch { /* fall back below */ }
+    return new Date(now).getUTCFullYear();
 }
 function padDatePart(value) {
     return String(value).padStart(2, '0');

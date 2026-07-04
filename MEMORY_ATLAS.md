@@ -32,7 +32,7 @@ Search and explore output dedupe by `canonicalId`. When a canonical episode is r
 5. Use returned `sourceLocator.command` or event IDs with `cogmem memory show` before quoting exact source text.
 6. Use normal `cogmem_recall` for a direct factual memory question.
 
-Atlas summaries are `hint_only_not_evidence` in effect. Project scope, raw evidence ownership, and governance still decide what may be claimed as durable memory.
+Atlas summaries are `hint_only_not_evidence` in effect. Project scope, raw evidence ownership, and governance still decide what may be claimed as durable memory. If two projected episodes share the same primary raw evidence with the same date/entity/action facets, Atlas returns one selected card and moves the duplicate episode identity into `relatedButNotSelected`.
 
 ## Faceted cold-memory resurrection
 

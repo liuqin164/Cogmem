@@ -30,6 +30,8 @@ export interface FacetQueryPlan {
 export interface FacetQueryPlannerOptions {
   projectId: string;
   now?: number;
+  localDateNow?: string;
+  timeZone?: string;
 }
 
 const ISSUE_RULES = [
@@ -78,7 +80,7 @@ export class FacetQueryPlanner {
     const normalized = query.trim();
     const facets: PlannedFacet[] = [];
     const actionHistory = isActionHistoryQuery(normalized);
-    const timeFacet = parseTimeFacet(normalized, options.now ?? Date.now());
+    const timeFacet = parseTimeFacet(normalized, options);
     if (timeFacet) facets.push(withNodeId(timeFacet, options.projectId));
     const timeline = /(后来|继续|timeline|演化|发展|之后)/i.test(normalized);
     const matchedIssueValues = new Set<string>();
@@ -158,8 +160,8 @@ function parseKindFacets(query: string, projectId: string): PlannedFacet[] {
   return facets;
 }
 
-function parseTimeFacet(query: string, now: number): PlannedFacet | undefined {
-  const currentYear = new Date(now).getUTCFullYear();
+function parseTimeFacet(query: string, options: FacetQueryPlannerOptions): PlannedFacet | undefined {
+  const currentYear = localYear(options);
   const isoDay = query.match(/(20\d{2})[-年\/.](\d{1,2})[-月\/.](\d{1,2})日?/);
   if (isoDay) return dayFacet(Number(isoDay[1]), Number(isoDay[2]), Number(isoDay[3]));
   const cnDay = query.match(/(?:(20\d{2})年)?(\d{1,2})月(\d{1,2})(?:号|日)?/);
@@ -170,6 +172,23 @@ function parseTimeFacet(query: string, now: number): PlannedFacet | undefined {
   if (year) return yearFacet(Number(year[1] ?? year[3]));
   if (/去年/.test(query)) return yearFacet(currentYear - 1);
   return undefined;
+}
+
+function localYear(options: FacetQueryPlannerOptions): number {
+  const explicit = options.localDateNow?.match(/^(20\d{2})-\d{2}-\d{2}$/u)?.[1];
+  if (explicit) return Number(explicit);
+  const now = options.now ?? Date.now();
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: options.timeZone || 'Asia/Tokyo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date(now));
+    const year = parts.find((part) => part.type === 'year')?.value;
+    if (year) return Number(year);
+  } catch { /* fall back below */ }
+  return new Date(now).getUTCFullYear();
 }
 
 function dayFacet(year: number, month: number, day: number): PlannedFacet {

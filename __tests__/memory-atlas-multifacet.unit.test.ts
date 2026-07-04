@@ -191,6 +191,25 @@ test('FacetQueryPlanner parses memoryKind and actionKind facets', () => {
   ]));
 });
 
+test('FacetQueryPlanner infers yearless dates from local date, not UTC year', () => {
+  const planner = new FacetQueryPlanner();
+  const plan = planner.plan('1月1日的原话', {
+    projectId: 'openclaw',
+    now: Date.UTC(2026, 11, 31, 15, 30),
+    timeZone: 'Asia/Tokyo',
+  });
+  expect(plan.facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'time', value: '2027-01-01' }),
+  ]));
+  expect(planner.plan('1月1日的原话', {
+    projectId: 'openclaw',
+    now: Date.UTC(2026, 0, 1),
+    localDateNow: '2028-01-01',
+  }).facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'time', value: '2028-01-01' }),
+  ]));
+});
+
 test('generic entity action-history facets do not depend on Hermes', () => {
   const kernel = createKernel();
   try {
@@ -273,6 +292,88 @@ test('action-history recall selects Hermes operation and suppresses unrelated co
     expect(result.atlasCards?.[0]?.displayTitle).toContain('Hermes');
     expect(result.items[0]?.sourceAnchor?.eventId).toBe(event.eventId);
     expect(result.items.map((item) => item.text).join('\n')).not.toContain('zombie process');
+  } finally {
+    kernel.close();
+  }
+});
+
+test('action-history compiled fallback requires entity and operational action match', async () => {
+  const kernel = createKernel();
+  try {
+    await kernel.ingest({
+      projectId: 'openclaw',
+      content: '检查 Hermes 数据库是否被锁，memory graph zombie process 和 Bun factory bug 导致 database locked。',
+      tags: ['agent:openclaw'],
+    });
+    await kernel.ingest({
+      projectId: 'openclaw',
+      content: '用户要求启动本机安装的 Hermes。',
+      tags: ['agent:openclaw'],
+    });
+    const result = new KernelAgentMemoryBackend(kernel).recall({
+      agentId: 'openclaw',
+      projectId: 'openclaw',
+      sessionId: 'current',
+      query: '查查还记不记得我之前让你对Hermes做过什么',
+      retrievalPolicy: { allowedLanes: ['compiled'], preferredLanes: ['compiled'] },
+      limit: 5,
+    });
+    const text = result.items.map((item) => item.text).join('\n');
+    expect(text).toContain('启动本机安装的 Hermes');
+    expect(text).not.toContain('database locked');
+    expect(result.decisionTrace?.reason).toBe('action_history');
+  } finally {
+    kernel.close();
+  }
+});
+
+test('Atlas cards dedupe overlapping episodes by primary raw evidence', () => {
+  const kernel = createKernel();
+  try {
+    const event = seedHermesOperation(kernel);
+    const episodeId = kernel.episodeStore.getEventLink(event.eventId)?.episodeId;
+    expect(episodeId).toBeTruthy();
+    kernel.memoryAtlasStore.upsertDocument({
+      id: 'episode:episode-duplicate-hermes',
+      projectId: 'openclaw',
+      nodeType: 'episode',
+      sourceId: 'episode-duplicate-hermes',
+      label: 'Hermes 启动重复 episode',
+      summary: '用户要求启动本机安装的 Hermes。',
+      topicPath: 'PROJECT/openclaw/hermes',
+      confidence: 0.9,
+      supportCount: 1,
+      status: 'active',
+      occurredAt: Date.UTC(2026, 5, 5, 12, 22),
+      evidenceEventIds: [event.eventId],
+      metadata: {
+        localDate: '2026-06-05',
+        topicHints: ['PROJECT/openclaw/hermes'],
+        eventKind: 'operation',
+      },
+    });
+    kernel.memoryAtlasStore.db.prepare(`
+      INSERT INTO memory_edges(
+        edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,confidence,base_weight,stability,activation,
+        evidence_event_ids_json,status,valid_from,valid_to,version,source_authority,created_at,updated_at
+      )
+      SELECT 'dup-' || edge_id,project_id,source_type,'episode-duplicate-hermes',relation_type,target_type,target_id,confidence,base_weight,stability,activation,
+        evidence_event_ids_json,status,valid_from,valid_to,version,source_authority,created_at,updated_at
+      FROM memory_edges
+      WHERE project_id='openclaw' AND source_type='episode' AND source_id=?
+    `).run(episodeId);
+
+    const result = kernel.graphExplore('启动 Hermes', {
+      projectId: 'openclaw',
+      now: Date.UTC(2026, 6, 3),
+      includeEvidence: true,
+      limit: 10,
+      refresh: false,
+    });
+    expect(result.cards?.filter((card) => card.evidenceEventIds.includes(event.eventId))).toHaveLength(1);
+    expect(result.cards?.[0]?.relatedButNotSelected).toEqual(expect.arrayContaining([
+      expect.objectContaining({ canonicalId: 'episode:episode-duplicate-hermes', reason: 'same primary raw evidence' }),
+    ]));
   } finally {
     kernel.close();
   }

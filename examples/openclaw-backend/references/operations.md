@@ -204,7 +204,7 @@ cogmem memory list --project openclaw --since <globalSeq> --order asc --json
 cogmem memory list --project openclaw --since <globalSeq> --until <globalSeq> --order asc --json
 ```
 
-Use `historical_discussion` for “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, and missing prompt-injection cases. Use `action_history` or the inferred action-history path for “what did I ask you to do to <entity>?”, “启动 <tool>”, or “对 <entity> 做过什么操作”. Raw list rows include `sourceLocator`; run the locator before quoting exact words or saying the event cannot be found.
+Use `historical_discussion` for “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, and missing prompt-injection cases. Use `action_history` or the inferred action-history path for “what did I ask you to do to <entity>?”, “启动 <tool>”, or “对 <entity> 做过什么操作”. Action-history fallback requires both the entity cue and an operational action cue; do not use a compiled memory only because it mentions the entity. Raw list rows include `sourceLocator`; run the locator before quoting exact words or saying the event cannot be found.
 
 Exact quote requests such as “我的原话”, “精确到6月5日的原文”, “exact quote”, or “verbatim” must use Raw Ledger/sourceLocator evidence:
 
@@ -248,7 +248,7 @@ Graph reads are pure: overview/search/explore do not brighten what they display.
 
 Search/explore may return `cards[]` for canonical episodes. Use `cards[].displayTitle` for UI/readability, `oneLineSummary` as a hint, `matchedFacets` and `matchedPaths` to explain why it matched, and `canonicalId` to dedupe. `relatedButNotSelected` is context only; do not substitute it as the answer. If `relaxationTrace` exists, say the match was relaxed. Every evidence result distinguishes `evidenceTotal` from `evidenceReturned` and includes an event ID plus `sourceLocator.command` and `sourceLocator.contextCommand` drill-down commands. Use those locators before treating an Atlas summary as evidence.
 
-If an audited episode repair changes boundaries or classification, the JSON repair result contains `repairId`, `applied`, `affectedEpisodeIds`, `changedFields`, `requeuedDream`, `graphRefreshNeeded`, and `nextCommands`. `repairId` is an audit id, not a candidate id. Do not run `memory dream --promote` just because a repair returned a `repairId`. When `graphRefreshNeeded=true`, run the returned `graph-reindex` command, then verify with `graph-explore` or `graph-timeline`. Targeted reindex intentionally leaves Atlas dirty; run `cogmem memory tick --project openclaw --json` when full relation/action-frame consistency matters.
+If an audited episode repair changes boundaries or classification, the JSON repair result contains `repairId`, `applied`, `affectedEpisodeIds`, `changedFields`, `requeuedDream`, `graphRefreshNeeded`, and `nextCommands`. `repairId` is an audit id, not a candidate id. Do not run `memory dream --promote` just because a repair returned a `repairId`. When `graphRefreshNeeded=true`, run the returned `graph-reindex` command, then verify with `graph-explore` or `graph-timeline`. Targeted reindex intentionally leaves Atlas dirty; run `cogmem memory tick --project openclaw --json` when full relation/action-frame consistency matters. Full Atlas rebuild still uses the normal SQLite writer path; schedule it outside latency-sensitive OpenClaw turns for large databases.
 
 ## Candidate governance and review
 
