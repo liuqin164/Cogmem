@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.7.0`
+Current version: `3.7.1`
 
 Distribution: npm registry. GitHub remains the source mirror and hosts this installer, but package install and upgrade resolve `cogmem` from npm by default.
 
@@ -229,7 +229,7 @@ cogmem migrate --dry-run --json
 
 For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
-Upgrade a 3.5.2 database, a 3.6.x database, or a pre-release schema-25 test database into the current 3.7.0 schema and projection set with one command:
+Upgrade a 3.5.2 database, a 3.6.x database, or a pre-release schema-25 test database into the current 3.7.1 schema and projection set with one command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -304,7 +304,7 @@ cogmem memory review --project my-agent --id <candidate-id> --action approve --a
 
 `cogmem memory map` remains the system anatomy map. Memory Atlas is the content map. It does not replace recall or create a second fact store; it projects existing topics, entities, clusters, episodes, beliefs, action frames, time buckets, bindings, and evidence into a bounded navigation surface.
 
-In 3.7.0, Atlas is a multi-dimensional navigation graph rather than a folder tree. A remembered episode has one canonical node such as `episode:<id>`. Time, topic, issue, entity, session/thread, memory-kind, and action-kind nodes are facet entrances connected to that canonical episode with typed edges. Results dedupe by `canonicalId` and explain `matchedFacets` plus `matchedPaths`.
+In 3.7.1, Atlas is a multi-dimensional navigation graph rather than a folder tree. A remembered episode has one canonical node such as `episode:<id>`. Time, topic, issue, entity, session/thread, memory-kind, and action-kind nodes are facet entrances connected to that canonical episode with typed edges. Results dedupe by `canonicalId` and explain `matchedFacets` plus `matchedPaths`.
 
 ```bash
 cogmem memory graph --project my-agent --json
@@ -798,7 +798,7 @@ npm pack --dry-run --json
 npm publish --dry-run --access public
 ```
 
-Create a GitHub Release from the matching version tag, for example `v3.7.0`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
+Create a GitHub Release from the matching version tag, for example `v3.7.1`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
 
 Publish manually only for emergency fallback:
 

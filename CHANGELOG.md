@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.7.0
+## 3.7.1
 
 - Upgraded Memory Atlas into a multi-dimensional navigation graph: canonical episodes and raw events exist once, while time, topic, issue, entity, session/thread, memory-kind, and action-kind facets connect to them with typed edges.
 - Added deterministic episode title and one-line summary generation for Atlas cards, preserving the original long summary in metadata and marking low-confidence titles for review.
@@ -12,7 +12,7 @@
 - Fixed action-history recall such as “what did I ask you to do to <entity>?” by adding operational action-kind facets (`started`, `installed`, `configured`, `restarted`, `stopped`, `operated`), inferred `action_history` routing, generic entity cue extraction, entity/action relevance gating for compiled memories, and raw-ledger-only exact quote fallback for “我的原话”.
 - Added targeted `cogmem memory graph-reindex --project <id> --event <eventId>|--episode <episodeId> --json` and clearer episode repair output so `repairId` is treated as an audit id, not a dream promotion candidate.
 - Updated OpenClaw plugin 0.7.0 and its generated bridge to preserve strict facet matches through Context Cortex planning and to include selected cards, matched facets/paths, related-but-not-selected side context, and relaxation traces in both volatile recall and Atlas context blocks.
-- Updated README, Memory Atlas docs, OpenClaw/Hermes skills, AGENTS runbooks, and operations references with npm-first install/update flow and the 3.7.0 multi-facet Atlas command playbook.
+- Updated README, Memory Atlas docs, OpenClaw/Hermes skills, AGENTS runbooks, and operations references with npm-first install/update flow and the 3.7.1 multi-facet Atlas command playbook.
 
 ## 3.6.5
 

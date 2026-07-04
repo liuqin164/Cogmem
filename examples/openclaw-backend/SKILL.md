@@ -114,7 +114,7 @@ timeout_ms = 60000
 
 ## Migrate Existing OpenClaw Memory
 
-Upgrade a 3.5.2 database, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.0 schema/projection set in one backed-up command:
+Upgrade a 3.5.2 database, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.1 schema/projection set in one backed-up command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -282,7 +282,7 @@ Graph reads default to stale-safe diagnostics. If a drainer or gateway has SQLit
 
 Atlas combines the conditions present in the user's message like table filters. Do not force every question into entity + time + action. Project, day/month/year, topic, issue, entity/target, session/thread, memory kind, action kind, and ordinary cues may independently or jointly revive cold nodes. Graph reads do not change activation; explicitly touch only nodes the agent actually uses. Activation changes visibility only.
 
-In 3.7.0, `graph-search`, `graph-explore`, and historical recall can return `cards[]`. Prefer cards over raw node labels for past-discussion questions. A card's `canonicalId` is the single episode identity; `matchedFacets` explains time/topic/issue/entity matches; `matchedPaths` explains how the card was reached; `relatedButNotSelected` is context only and must not replace the selected answer; `sourceLocator.command` is the command to inspect exact original text. If `relaxationTrace` exists, say the answer is a relaxed nearby match, not an exact hit.
+In 3.7.1, `graph-search`, `graph-explore`, and historical recall can return `cards[]`. Prefer cards over raw node labels for past-discussion questions. A card's `canonicalId` is the single episode identity; `matchedFacets` explains time/topic/issue/entity matches; `matchedPaths` explains how the card was reached; `relatedButNotSelected` is context only and must not replace the selected answer; `sourceLocator.command` is the command to inspect exact original text. If `relaxationTrace` exists, say the answer is a relaxed nearby match, not an exact hit.
 
 Follow returned `sourceLocator.command` or event IDs with `cogmem memory show`; never treat an Atlas summary or title as evidence.
 

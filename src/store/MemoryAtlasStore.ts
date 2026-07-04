@@ -13,7 +13,7 @@ import type {
 } from '../atlas/MemoryAtlasTypes.js';
 
 export const MEMORY_ATLAS_PROJECTION_NAME = 'memory_atlas.v2';
-export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.0';
+export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.1';
 
 interface AtlasDocumentRow {
   node_id: string; project_id: string; node_type: string; memory_kind: string | null; source_id: string; label: string;

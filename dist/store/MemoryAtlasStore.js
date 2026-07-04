@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 export const MEMORY_ATLAS_PROJECTION_NAME = 'memory_atlas.v2';
-export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.0';
+export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.1';
 export class MemoryAtlasStore {
     db;
     constructor(db) {

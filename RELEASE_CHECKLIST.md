@@ -1,11 +1,11 @@
-# cogmem 3.7.0 Release Checklist
+# cogmem 3.7.1 Release Checklist
 
 This release is distributed through the npm registry. GitHub remains the source and review mirror.
 
 ## Required Metadata
 
 - `package.json` name is `cogmem`.
-- `package.json` version is `3.7.0`.
+- `package.json` version is `3.7.1`.
 - `package.json` has `publishConfig.access = public`.
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
@@ -61,7 +61,7 @@ MCP `tools/list` includes strategy, episode append/import/status/seal/repair, to
 - README and skills explain Raw Ledger-first episode assembly, soft/hard sealing, explicit conditional Dream ticks, raw-event evidence grounding, repair/retry, and hookless Hermes MCP/import usage.
 - README and skills give the full post-import maintenance sequence: status, episode status, Dream status, bounded Dream tick, candidate listing, govern candidate, needs-confirmation listing, explicit review, and recall verification.
 - README and skills explain that 3.6.4+ skips empty imported episode boundaries and legacy empty Dream jobs instead of letting them abort `dream tick`.
-- README and skills explain the 3.7.0 agent operations protocol: `memory plan` for next actions, default grouped `memory candidates --json`, `memory list --since/--until/--order`, historical-discussion recall intent, Atlas canonical cards, `matchedFacets`, `relatedButNotSelected`, `relaxationTrace`, Atlas evidence `sourceLocator`, and cursor-based `memory bind`.
+- README and skills explain the 3.7.1 agent operations protocol: `memory plan` for next actions, default grouped `memory candidates --json`, `memory list --since/--until/--order`, historical-discussion recall intent, Atlas canonical cards, `matchedFacets`, `relatedButNotSelected`, `relaxationTrace`, Atlas evidence `sourceLocator`, and cursor-based `memory bind`.
 - README, `MEMORY_ATLAS.md`, and installed skills explain the multi-dimensional Atlas model: a canonical episode/raw event exists once, facet nodes connect through typed edges, query results intersect facets, and display/injection dedupes by `canonicalId`.
 - `connect openclaw|hermes --json` documents structured `nextSteps`; `nextCommands` must contain only agent-safe, non-interactive commands and must not include `cogmem init`, `cogmem-init`, gateway restart, or Hermes reload.
 - README and skills document `cogmem mcp` as the preferred MCP server command for new configs while preserving `cogmem-mcp` as a compatibility bin.
@@ -94,7 +94,7 @@ npm publish --dry-run --access public
 
 The pack dry-run must include built public API files, CLI files, examples, docs, and `install.sh`. It must not include local databases or machine-specific files.
 
-After verification, create a GitHub Release from the matching version tag, for example `v3.7.0`. The release workflow publishes through npm Trusted Publishing when the release is published. It must not publish on tag push alone.
+After verification, create a GitHub Release from the matching version tag, for example `v3.7.1`. The release workflow publishes through npm Trusted Publishing when the release is published. It must not publish on tag push alone.
 
 Emergency manual fallback:
 
