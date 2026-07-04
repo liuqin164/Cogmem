@@ -245,6 +245,13 @@ For “did we discuss this before?”, “几个月前是不是聊过…”, “
 cogmem memory recall --query "<past discussion question>" --intent historical_discussion --project hermes --agent hermes --json
 ```
 
+For action-history questions such as “what did I ask you to do to <entity>?”, “启动 <tool>”, or “对 <entity> 做过什么操作”, use `action_history` or Atlas timeline. The entity is whatever project/tool/person/service the user mentions in memory; it is not limited to Hermes itself:
+
+```bash
+cogmem memory recall --query "我之前让你对 <实体或工具名> 做过什么" --intent action_history --project hermes --agent hermes --json
+cogmem memory graph-timeline --project hermes --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
+```
+
 If the answer depends on exact wording or nearby context, run the returned `sourceLocator` or use a Raw Ledger cursor:
 
 ```bash

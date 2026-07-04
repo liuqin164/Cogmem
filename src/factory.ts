@@ -424,9 +424,15 @@ export type EpisodeRepairInput =
 
 export interface EpisodeRepairResult {
   repairId: string;
+  applied: boolean;
   operation: EpisodeRepairInput['operation'];
   affectedEpisodeIds: string[];
+  changedFields: string[];
   staleCandidateIds: string[];
+  requeuedDream: boolean;
+  graphRefreshNeeded: boolean;
+  nextCommands: string[];
+  note: string;
 }
 
 export interface ToolCallMemoryEventInput {
@@ -1629,6 +1635,7 @@ export class MemoryKernel {
     const affected = new Set<string>();
     const before: Record<string, unknown> = {};
     const previousStatuses = new Map<string, MemoryEpisode['status']>();
+    let requeuedDream = input.operation === 'requeue-dream' || input.operation === 'invalidate-dream-run';
     if (input.operation === 'move-event') {
       const link = this.episodeStore.getEventLink(input.eventId);
       const source = link ? this.episodeStore.getEpisode(link.episodeId) : undefined;
@@ -1729,11 +1736,30 @@ export class MemoryKernel {
       const episode = this.episodeStore.getEpisode(episodeId);
       if (episode?.eventCount && episode.status === 'sealed') {
         this.episodeStore.requeueDreamForRepair(episodeId, input.operation === 'invalidate-dream-run' ? input.mode || 'normal' : 'normal', now);
+        requeuedDream = true;
       }
     }
     const after = Object.fromEntries([...affected].map((episodeId) => [episodeId, this.episodeStore.getEpisode(episodeId)]));
     const repairId = this.episodeStore.recordRepairAudit({ projectId: input.projectId, operation: input.operation, payload: input, before, after, now });
-    return { repairId, operation: input.operation, affectedEpisodeIds: [...affected], staleCandidateIds };
+    const affectedEpisodeIds = [...affected];
+    const nextCommands = affectedEpisodeIds.length
+      ? affectedEpisodeIds.map((episodeId) => `cogmem memory graph-reindex --project ${input.projectId} --episode ${episodeId} --json`)
+      : [];
+    return {
+      repairId,
+      applied: true,
+      operation: input.operation,
+      affectedEpisodeIds,
+      changedFields: changedFieldsForRepair(input),
+      staleCandidateIds,
+      requeuedDream,
+      graphRefreshNeeded: affectedEpisodeIds.length > 0,
+      nextCommands: [
+        ...nextCommands,
+        `cogmem memory graph-explore --project ${input.projectId} --query "<query>" --json`,
+      ],
+      note: 'repairId is an audit id, not a dream candidate id; do not run memory dream --promote just because repairId exists.',
+    };
   }
 
   listDreamCandidates(options: DreamCandidateListOptions = {}): DreamCandidateRecord[] {
@@ -1837,6 +1863,10 @@ export class MemoryKernel {
 
   rebuildMemoryAtlas(options: { projectId?: string } = {}): { documents: number; actions: number } {
     return this.memoryAtlasIndexer.rebuild(options);
+  }
+
+  reindexMemoryAtlas(options: { projectId: string; eventId?: string; episodeId?: string }): { projectId: string; episodeIds: string[]; refreshed: boolean; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
+    return this.memoryAtlasIndexer.reindex(options);
   }
 
   ensureMemoryAtlas(options: { projectId: string }): { documents: number; actions: number; refreshed: boolean } {
@@ -2634,6 +2664,20 @@ export function createMemoryKernelFromConfig(input: string | MemoryKernelFromCon
     ...explicitOptions
   } = options;
   return createMemoryKernel({ ...loaded.options, ...explicitOptions });
+}
+
+function changedFieldsForRepair(input: EpisodeRepairInput): string[] {
+  if (input.operation === 'reclassify') {
+    return [
+      input.episodeType ? 'episodeType' : '',
+      input.topicPath ? 'topicPath' : '',
+      input.importance !== undefined ? 'importance' : '',
+    ].filter(Boolean);
+  }
+  if (input.operation === 'move-event') return ['episodeEvents'];
+  if (input.operation === 'split' || input.operation === 'merge') return ['episodeEvents', 'crossRefs'];
+  if (input.operation === 'requeue-dream' || input.operation === 'invalidate-dream-run') return ['dreamQueue'];
+  return [];
 }
 
 function requiredGovernancePayloadString(payload: Record<string, unknown>, field: string): string {

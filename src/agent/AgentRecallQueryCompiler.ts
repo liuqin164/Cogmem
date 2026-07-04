@@ -1,4 +1,6 @@
-export type AgentRecallIntent = 'memory_recall' | 'previous_session_summary' | 'forensic_quote' | 'historical_discussion';
+import { extractEntityCues, inferOperationalActionCue } from '../utils/EntityCueExtractor.js';
+
+export type AgentRecallIntent = 'memory_recall' | 'previous_session_summary' | 'forensic_quote' | 'historical_discussion' | 'action_history';
 
 export interface AgentRecallQueryCompileInput {
   query: string;
@@ -21,7 +23,7 @@ const PROTECTED_PHRASES = [
   'CogMem Memory Context',
   'Memory Context',
   'OpenClaw',
-  'Hermes',
+  '启动',
   'cogmem',
   'Obsidian',
   '记忆内核',
@@ -44,6 +46,7 @@ const PROTECTED_PHRASES = [
   '报错',
   '错误',
   '工具',
+  '操作',
 ];
 
 const QUERY_FILLERS = [
@@ -122,6 +125,11 @@ export function inferAgentRecallIntent(query: string): AgentRecallIntent {
   }
   if (/原话|怎么说的|完整对话|上一句|下一句|exact quote|verbatim/.test(text)) {
     return 'forensic_quote';
+  }
+  if (
+    /(让你.{0,20}(对|给|把)?.{0,20}(做过|做了|启动|安装|配置|修改|重启|停止|操作|处理|执行)|对.{0,30}(做过什么|做了什么|哪些操作)|what did (i ask you to do|you do) to|operations? on)/i.test(text)
+  ) {
+    return 'action_history';
   }
   if (
     /记得.{0,12}(聊过|讨论过|说过)|还记得|之前.{0,12}(聊过|讨论过|说过)|以前.{0,12}(聊过|讨论过|说过)|(过去|几个月前|半年前|上个月|前几天|昨天|上次|上个).{0,20}(聊过|讨论过|说过)|当时.{0,12}(聊|说|问)|那次.{0,12}(聊|说|问)|有没有.{0,12}(记录|聊过|讨论过)|have we discussed|did we talk about|previously discussed/.test(text)
@@ -228,6 +236,12 @@ function buildSemanticCuePhrases(keywords: string[], query: string, anchorText: 
     out.push('在库');
     out.push('产品コード');
     out.push('数量');
+  }
+  const action = inferOperationalActionCue(text);
+  for (const entity of extractEntityCues(text, 4)) {
+    out.push(entity.label);
+    out.push(`${entity.label} 操作`);
+    if (action) out.push(`${action.label} ${entity.label}`);
   }
 
   return uniqueNonEmpty(out);

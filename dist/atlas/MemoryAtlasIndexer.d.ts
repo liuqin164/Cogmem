@@ -22,6 +22,18 @@ export declare class MemoryAtlasIndexer {
         curatedEpisodes?: number;
         refreshed: boolean;
     };
+    reindex(options: {
+        projectId: string;
+        eventId?: string;
+        episodeId?: string;
+    }): {
+        projectId: string;
+        episodeIds: string[];
+        refreshed: boolean;
+        curatedEpisodes: number;
+        facetEdges: number;
+        reviewNeeded: number;
+    };
     ensureAllFresh(): {
         documents: number;
         actions: number;

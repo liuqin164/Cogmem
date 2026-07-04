@@ -63,6 +63,37 @@ export class MemoryAtlasIndexer {
     return { ...this.rebuild(options), refreshed: true };
   }
 
+  reindex(options: { projectId: string; eventId?: string; episodeId?: string }): { projectId: string; episodeIds: string[]; refreshed: boolean; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
+    const episodeIds = new Set<string>();
+    if (options.episodeId) episodeIds.add(options.episodeId);
+    if (options.eventId) {
+      const rows = this.db.prepare(`SELECT episode_id FROM memory_episode_events WHERE event_id=?`).all(options.eventId) as Array<{ episode_id: string }>;
+      for (const row of rows) if (row.episode_id) episodeIds.add(row.episode_id);
+    }
+    const ids = Array.from(episodeIds);
+    if (!ids.length) throw new Error('graph_reindex_target_not_found');
+    let result: ReturnType<GraphCurator['rebuildEpisodes']> = { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
+    this.db.transaction(() => {
+      result = this.curator.rebuildEpisodes(options.projectId, ids);
+      this.store.markProjectionClean(options.projectId, {
+        targetedReindex: true,
+        episodeIds: ids,
+        eventId: options.eventId,
+        curatedEpisodes: result.episodeCount,
+        facetEdges: result.facetEdgeCount,
+        reviewNeeded: result.reviewNeeded,
+      });
+    })();
+    return {
+      projectId: options.projectId,
+      episodeIds: ids,
+      refreshed: true,
+      curatedEpisodes: result.episodeCount,
+      facetEdges: result.facetEdgeCount,
+      reviewNeeded: result.reviewNeeded,
+    };
+  }
+
   ensureAllFresh(): { documents: number; actions: number; refreshed: boolean; errors: Array<{ projectId: string; error: string }> } {
     let documents = 0; let actions = 0; let refreshed = false;
     const errors: Array<{ projectId: string; error: string }> = [];

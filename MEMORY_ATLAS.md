@@ -46,7 +46,9 @@ For example, all of these can revive cold memory:
 - `6月6号关于记忆黑盒聊过什么`
 - `记忆黑盒后来有没有继续讨论`
 - `memory graph 卡死的问题修了吗`
-- `2025 Hermes 的决策`
+- `2025 某工具的决策`
+- `我之前让你对某工具做过什么`
+- `启动某工具`
 - `在留更新里被纠正过的计划`
 - `去年 OpenClaw 失败的配置事件`
 - `餐车 POS 项目中关于库存的偏好`
@@ -74,6 +76,8 @@ Exact constraints may bypass the visibility floor. They never bypass `projectId`
 
 Agents should prefer `cards` over raw node labels for historical discussion because cards preserve the canonical episode, match reason, and drilldown command.
 
+Action-history queries use the same card model. Entity cues such as a project, tool, person, or service name combine with operational action kinds including `started`, `installed`, `configured`, `restarted`, `stopped`, and `operated`. If the user asks for exact wording, follow the card's `sourceLocator.command` or call `cogmem memory recall --intent forensic_quote`; do not quote from a compiled summary or a daily memory file.
+
 ## Bounds
 
 - Default/hard node limit: 8/30.
@@ -95,15 +99,21 @@ cogmem memory graph --project <id> --json
 cogmem memory graph-search --project <id> --query <query> --json
 cogmem memory graph-explore --project <id> --query <query> --json
 cogmem memory graph-explore --project openclaw --query "6月6号关于记忆黑盒聊过什么" --json
+cogmem memory graph-explore --project openclaw --query "启动 <工具名>" --json
 cogmem memory graph-node --project <id> --id <node-id> --json
 cogmem memory graph-neighbors --project <id> --id <node-id> --hops 1 --json
 cogmem memory graph-path --project <id> --from <node-id> --to <node-id> --json
 cogmem memory graph-timeline --project <id> --query <query> --json
+cogmem memory graph-timeline --project openclaw --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
+cogmem memory graph-reindex --project <id> --event <event-id> --json
+cogmem memory graph-reindex --project <id> --episode <episode-id> --json
 ```
 
 `graph-explore` and `graph-timeline` accept `--now <epoch-ms>` for deterministic relative-time parsing and `--evidence-limit <1..10>` for bounded evidence. Node results distinguish `evidenceTotal` from `evidenceReturned`.
 
 Graph reads try to refresh dirty Atlas state, but they default to stale-safe operation for diagnostics. If refresh is blocked by SQLite busy, JSON includes `atlasFresh: false` and `refreshError` while returning the existing projection. Use `--refresh` to force a fresh rebuild or `--no-refresh` to inspect the current projection only.
+
+Use `graph-reindex` after an audited episode repair or binding repair when one event/episode needs fresh card/facet projection. It updates the targeted episode card, raw-event node, source locator, and episode facet edges without rebuilding the whole project graph.
 
 ## MCP
 

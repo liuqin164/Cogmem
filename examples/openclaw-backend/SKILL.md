@@ -269,11 +269,13 @@ If the user asks for "原话", "具体内容", "完整脉络", "为什么当时�
 For broad inventory, project history, or relationship questions, navigate Memory Atlas before direct recall:
 
 ```bash
-cogmem memory graph-explore --project openclaw --query "我们关于 Hermes 做过哪些工作" --json
+cogmem memory graph-explore --project openclaw --query "我们关于 <实体或工具名> 做过哪些工作" --json
+cogmem memory graph-explore --project openclaw --query "启动 <工具名>" --json
 cogmem memory graph-explore --project openclaw --query "6月6号关于记忆黑盒聊过什么" --json
 cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --json
 cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
-cogmem memory graph-timeline --project openclaw --query "去年与 Hermes 有关的决定和操作" --json
+cogmem memory graph-timeline --project openclaw --query "去年与 <实体或工具名> 有关的决定和操作" --json
+cogmem memory graph-timeline --project openclaw --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
 ```
 
 Graph reads default to stale-safe diagnostics. If a drainer or gateway has SQLite busy, JSON may include `atlasFresh=false` and `refreshError` while returning the existing projection. Use `--refresh` when the operator explicitly wants rebuild-or-fail, and `--no-refresh` when investigating locks.
@@ -283,6 +285,20 @@ Atlas combines the conditions present in the user's message like table filters. 
 In 3.7.0, `graph-search`, `graph-explore`, and historical recall can return `cards[]`. Prefer cards over raw node labels for past-discussion questions. A card's `canonicalId` is the single episode identity; `matchedFacets` explains time/topic/issue/entity matches; `matchedPaths` explains how the card was reached; `relatedButNotSelected` is context only and must not replace the selected answer; `sourceLocator.command` is the command to inspect exact original text. If `relaxationTrace` exists, say the answer is a relaxed nearby match, not an exact hit.
 
 Follow returned `sourceLocator.command` or event IDs with `cogmem memory show`; never treat an Atlas summary or title as evidence.
+
+For action-history questions like "我之前让你对某工具做过什么", "启动某工具", or "对某项目做过哪些操作", use Atlas cards or `memory recall` before reading any `memory/*.md` file:
+
+```bash
+cogmem memory recall --query "查查还记不记得我之前让你对 <实体或工具名> 做过什么" --project openclaw --agent openclaw --json
+cogmem memory graph-timeline --project openclaw --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
+```
+
+For exact wording like "我的原话", "精确到某天的原文", "exact quote", or "verbatim", use `forensic_quote` and then run the returned `sourceLocator.command`. Daily memory files, imported summaries, and compiled memory are not primary quote evidence:
+
+```bash
+cogmem memory recall --query "能精确到6月5日的原文吗？我的原话" --intent forensic_quote --project openclaw --agent openclaw --json
+cogmem memory show --event <event-id> --project openclaw --before 3 --after 5 --json
+```
 
 The OpenClaw auto plugin calls the Atlas core directly and injects bounded volatile `<COGMEM_RECALL_CONTEXT>` / `<COGMEM_MEMORY_ATLAS>` blocks. For `historical_discussion`, the recall context includes selected episode cards, `matchedFacets`, `selectedLane`, `strictFacetsMatched`-style decision metadata when available, `relatedButNotSelected`, and `relaxationTrace`. It does not require MCP. Use normal `memory recall` for a direct factual question and `memory show` for exact wording.
 
@@ -298,6 +314,7 @@ Useful intents:
 cogmem memory recall --query "上个会话我们聊了什么" --intent previous_session_summary --project openclaw --agent openclaw --session "$OPENCLAW_SESSION_ID" --exclude-session "$OPENCLAW_SESSION_ID" --json
 cogmem memory recall --query "我关于记忆黑盒问题的原话是什么" --intent forensic_quote --project openclaw --agent openclaw --json
 cogmem memory recall --query "几个月前我们是不是讨论过 Cogmem 的记忆黑盒" --intent historical_discussion --project openclaw --agent openclaw --json
+cogmem memory recall --query "我之前让你对 <实体或工具名> 做过什么" --intent action_history --project openclaw --agent openclaw --json
 ```
 
 Use `items[].sourceContext` to understand what the user asked, how the agent answered, and nearby context. If the item has `sourceContext.locator.command`, run that command for a fuller local replay:

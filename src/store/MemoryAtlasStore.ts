@@ -119,10 +119,11 @@ export class MemoryAtlasStore {
     const plannedFacets = plan.facets;
     if (!plannedFacets.length) return [];
     const facetMatches = plannedFacets.map((facet) => ({ facet, rows: this.episodeEdgesForFacet(projectId, facet) }));
-    if (plan.operator === 'intersection' && facetMatches.some((match) => match.rows.length === 0)) return [];
+    const facetGroups = groupFacetMatches(facetMatches);
+    if (plan.operator === 'intersection' && facetGroups.some((group) => group.every((match) => match.rows.length === 0))) return [];
 
     const candidateIds = plan.operator === 'intersection'
-      ? intersectSets(facetMatches.map((match) => new Set(match.rows.map((row) => row.source_id))))
+      ? intersectSets(facetGroups.map((group) => new Set(group.flatMap((match) => match.rows.map((row) => row.source_id)))))
       : new Set(facetMatches.flatMap((match) => match.rows.map((row) => row.source_id)));
     if (!candidateIds.size) return [];
 
@@ -676,6 +677,19 @@ function facetLabel(type: string, value: string): string {
     if (value === 'auto-injection-mismatch') return '自动注入不一致';
   }
   return value;
+}
+
+function groupFacetMatches<T extends { facet: PlannedFacet; rows: FacetEdgeRow[] }>(matches: T[]): T[][] {
+  const groups = new Map<string, T[]>();
+  for (const match of matches) {
+    const key = match.facet.type === 'actionKind' || match.facet.type === 'memoryKind'
+      ? `${match.facet.type}:${match.facet.relation || ''}`
+      : `${match.facet.type}:${match.facet.value}:${match.facet.relation || ''}`;
+    const group = groups.get(key) ?? [];
+    group.push(match);
+    groups.set(key, group);
+  }
+  return Array.from(groups.values());
 }
 
 function intersectSets(sets: Array<Set<string>>): Set<string> {

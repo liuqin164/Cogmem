@@ -308,13 +308,16 @@ In 3.7.0, Atlas is a multi-dimensional navigation graph rather than a folder tre
 
 ```bash
 cogmem memory graph --project my-agent --json
-cogmem memory graph-search --project my-agent --query "Hermes" --json
-cogmem memory graph-explore --project my-agent --query "去年我让你对 Hermes 做过什么" --json
+cogmem memory graph-search --project my-agent --query "<实体或工具名>" --json
+cogmem memory graph-explore --project my-agent --query "去年我让你对 <实体或工具名> 做过什么" --json
+cogmem memory graph-explore --project openclaw --query "启动 <工具名>" --json
 cogmem memory graph-explore --project openclaw --query "6月6号关于记忆黑盒聊过什么" --json
 cogmem memory graph-node --project my-agent --id "entity:<id>" --json
 cogmem memory graph-neighbors --project my-agent --id "entity:<id>" --hops 2 --json
 cogmem memory graph-path --project my-agent --from "entity:<id>" --to "action:<id>" --json
-cogmem memory graph-timeline --project my-agent --query "2025 Hermes 的决策和修复" --json
+cogmem memory graph-timeline --project my-agent --query "2025 <实体或工具名> 的决策和修复" --json
+cogmem memory graph-timeline --project openclaw --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
+cogmem memory graph-reindex --project openclaw --event <event-id> --json
 ```
 
 Atlas filtering is not limited to entity + time + action. The facet planner combines whichever facets are actually present, such as project, day/month/year, topic, issue, entity/person/project, session/thread, memory kind, action kind, and ordinary keywords. Strict multi-facet matches may surface cold nodes even when their activation has decayed. If strict intersection is empty, JSON includes `relaxationTrace` instead of silently pretending an exact match existed. Project scope and raw evidence validation are never bypassed.
@@ -322,6 +325,8 @@ Atlas filtering is not limited to entity + time + action. The facet planner comb
 Defaults are 8 nodes, one hop, and two evidence IDs per node. Hard limits are 30 nodes, two hops, ten evidence IDs, six path hops, and 2,000 visited nodes. Raw excerpts are omitted unless `--include-evidence` or `includeEvidence: true` is explicit. `evidenceTotal` reports all known evidence while `evidenceReturned` reports the bounded payload. Every returned evidence item carries an `eventId` and a `cogmem memory show` drilldown command.
 
 Atlas search and explore return agent-facing `cards` for canonical episodes. Each card includes `canonicalId`, `displayTitle`, `oneLineSummary`, `matchedFacets`, `matchedPaths`, `relatedButNotSelected`, and `sourceLocator.command` / `sourceLocator.contextCommand` when evidence is available. Agents should run that locator before quoting exact wording, before claiming a historical topic is absent, or when a graph summary looks relevant but underspecified.
+
+Action-history questions such as “what did I ask you to do to <entity>?” route through entity + actionKind facets before compiled memory. Operational action kinds include `started`, `installed`, `configured`, `restarted`, `stopped`, and `operated`. If graph/raw evidence is empty and compiled candidates do not share the query's entity, topic, or action cue, Cogmem suppresses the unrelated compiled memory rather than injecting noise. Exact quote cues such as “我的原话”, “精确”, “exact quote”, or “verbatim” must use Raw Ledger/sourceLocator evidence and must not quote from daily memory files, imported summaries, or compiled memories alone.
 
 Atlas reads do not brighten everything they display. MCP graph queries are read-only/idempotent; call `cogmem_graph_touch` only after the agent actually uses selected nodes. Maintenance decays activation, refreshes dirty projections only, and prunes old access telemetry.
 

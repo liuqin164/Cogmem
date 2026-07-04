@@ -1,3 +1,4 @@
+import { extractEntityCues } from '../utils/EntityCueExtractor.js';
 const ISSUE_RULES = [
     {
         value: 'memory-context-blackbox',
@@ -29,7 +30,7 @@ const TOPIC_RULES = [
     {
         value: 'source-drilldown',
         label: '原文下钻',
-        test: (text) => /(sourcecontext|source context|原文下钻|原话|摘要.*原文)/i.test(text),
+        test: (text) => /(sourcecontext|source context|原文下钻|摘要.*原文)/i.test(text),
     },
     {
         value: 'context-injection',
@@ -41,6 +42,7 @@ export class FacetQueryPlanner {
     plan(query, options) {
         const normalized = query.trim();
         const facets = [];
+        const actionHistory = isActionHistoryQuery(normalized);
         const timeFacet = parseTimeFacet(normalized, options.now ?? Date.now());
         if (timeFacet)
             facets.push(withNodeId(timeFacet, options.projectId));
@@ -60,15 +62,23 @@ export class FacetQueryPlanner {
         if (!timeline && isBroadMemoryBlackbox(normalized) && matchedIssueValues.size === 0) {
             facets.push(withNodeId({ type: 'issue', value: 'memory-context-blackbox', label: 'Memory Context 黑盒', relation: 'PART_OF_ISSUE' }, options.projectId));
         }
-        for (const entity of ['Cogmem', 'OpenClaw', 'Hermes']) {
-            if (new RegExp(entity, 'i').test(normalized)) {
-                facets.push({ type: 'entity', value: `facet:${entity.toLowerCase()}`, label: entity, nodeId: `entity:facet:${entity.toLowerCase()}`, relation: 'INVOLVES_ENTITY' });
+        for (const entity of extractEntityCues(normalized)) {
+            if (!actionHistory && !/[A-Za-z]/.test(entity.label))
+                continue;
+            facets.push({ type: 'entity', value: `facet:${entity.id}`, label: entity.label, nodeId: `entity:facet:${entity.id}`, relation: 'INVOLVES_ENTITY' });
+            if (actionHistory) {
+                facets.push(withNodeId({ type: 'topic', value: `PROJECT/${options.projectId}/${entity.id}`, label: entity.label, relation: 'ABOUT_TOPIC' }, options.projectId));
             }
         }
         for (const facet of parseKindFacets(normalized, options.projectId))
             facets.push(facet);
+        if (actionHistory && (!facets.some((facet) => facet.type === 'actionKind') || !hasSpecificActionCue(normalized))) {
+            for (const value of ['started', 'installed', 'configured', 'restarted', 'stopped', 'operated', 'implemented', 'debugged']) {
+                facets.push(withNodeId({ type: 'actionKind', value, label: value, relation: 'HAS_ACTION_KIND' }, options.projectId));
+            }
+        }
         return {
-            intent: /聊过|记得|还记得|讨论|原话|那次/i.test(normalized) ? 'historical_discussion' : 'graph_search',
+            intent: actionHistory ? 'action_history' : /聊过|记得|还记得|讨论|原话|那次/i.test(normalized) ? 'historical_discussion' : 'graph_search',
             operator: 'intersection',
             facets: dedupeFacets(facets),
             temporalIntent: timeline ? 'timeline' : undefined,
@@ -79,6 +89,12 @@ export class FacetQueryPlanner {
             query: normalized,
         };
     }
+}
+function isActionHistoryQuery(query) {
+    return /(让你.{0,20}(对|给|把)?.{0,20}(做过|做了|启动|安装|配置|修改|重启|停止|操作|处理|执行)|对.{0,30}(做过什么|做了什么|哪些操作)|what did (i ask you to do|you do) to|operations? on)/i.test(query);
+}
+function hasSpecificActionCue(query) {
+    return /(启动|start|started|launch|launched|boot|安装|install|installed|setup|配置|config|configured|设置|修改配置|重启|restart|停止|stop|修复|实现|implemented|review|审查|debug|排查|卡死|locked|zombie)/i.test(query);
 }
 function isBroadMemoryBlackbox(query) {
     return /(记忆黑盒|memory.*blackbox)/i.test(query) &&
@@ -92,6 +108,12 @@ function parseKindFacets(query, projectId) {
         ['plan', /(计划|下一步|策略|plan)/i],
     ];
     const actionKindRules = [
+        ['started', /(启动|start|started|launch|launched|boot)/i],
+        ['installed', /(安装|install|installed|setup)/i],
+        ['configured', /(配置|config|configured|设置|修改配置|修改)/i],
+        ['restarted', /(重启|restart|restarted)/i],
+        ['stopped', /(停止|stop|stopped)/i],
+        ['operated', /(操作|处理|执行|run|ran)/i],
         ['implemented', /(修复|实现|implemented|合并|发布|升级)/i],
         ['reviewed', /(检查|审查|review)/i],
         ['debugged', /(debug|排查|卡死|locked|zombie)/i],

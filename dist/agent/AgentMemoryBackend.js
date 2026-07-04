@@ -248,13 +248,13 @@ export class KernelAgentMemoryBackend {
             intent: query.intent,
             anchorText: query.anchorText,
         });
-        if (query.intent === 'previous_session_summary') {
+        if (queryPlan.intent === 'previous_session_summary') {
             return this.recallPreviousSession(query, queryPlan);
         }
-        if (query.intent === 'forensic_quote') {
+        if (queryPlan.intent === 'forensic_quote') {
             return this.recallForensicQuote(query, queryPlan);
         }
-        if (queryPlan.intent === 'historical_discussion') {
+        if (queryPlan.intent === 'historical_discussion' || queryPlan.intent === 'action_history') {
             return this.recallHistoricalDiscussion(query, queryPlan);
         }
         const limit = query.limit ?? 5;
@@ -460,14 +460,17 @@ export class KernelAgentMemoryBackend {
         const anchorItems = this.recallForensicAnchor(query, limit);
         const rawEvents = anchorItems.length > 0 && (queryPlan.anchorUsed || !!query.anchorEventId)
             ? []
-            : this.searchRawEventsByQueryPlan(queryPlan, query, Math.max(limit * 4, 20));
+            : [
+                ...this.rawEventsForLocalDateCue(query, Math.max(limit * 4, 20)),
+                ...this.searchRawEventsByQueryPlan(queryPlan, query, Math.max(limit * 4, 20)),
+            ];
+        const facetQuoteItems = anchorItems.length === 0 ? this.facetGraphQuoteItemsForQuery(query, queryPlan, limit) : [];
         const items = [
             ...anchorItems,
             ...rawEvents
                 .filter((event) => this.isAgentRawEvent(event, query.agentId))
                 .filter((event) => this.isAllowedSession(event, query))
                 .filter((event) => this.isAllowedRawEventCollection(event, query.collection))
-                .filter((event) => !this.isOperationalNoiseRawEvent(event))
                 .filter((event) => this.isQuoteSourceEvent(event))
                 .filter((event) => this.hasReadableEventText(event))
                 .sort((a, b) => this.quoteEventPriority(a) - this.quoteEventPriority(b))
@@ -477,6 +480,7 @@ export class KernelAgentMemoryBackend {
                 whyMatched: 'forensic_quote_raw_event',
                 canAnswerExactQuote: true,
             })),
+            ...facetQuoteItems,
         ].filter((item, index, array) => array.findIndex((candidate) => candidate.id === item.id) === index)
             .slice(0, limit);
         return {
@@ -505,14 +509,15 @@ export class KernelAgentMemoryBackend {
         const compiledItems = allowsCompiled
             ? this.compiledItemsForHistoricalQuery(queryPlan, query, limit)
             : [];
-        const items = this.mergeHistoricalRecallItems(facetItems, rawItems, graphItems, compiledItems, limit);
+        const relevantCompiledItems = this.filterCompiledItemsByQueryCues(compiledItems, queryPlan);
+        const items = this.mergeHistoricalRecallItems(facetItems, rawItems, graphItems, relevantCompiledItems, limit);
         const selectedLane = facetItems.length > 0
             ? 'facet_graph_raw_ledger'
             : rawItems.length > 0
                 ? 'raw_ledger'
                 : graphItems.length > 0
                     ? 'graph'
-                    : compiledItems.length > 0
+                    : relevantCompiledItems.length > 0
                         ? 'compiled'
                         : 'none';
         return {
@@ -525,12 +530,45 @@ export class KernelAgentMemoryBackend {
             relaxationTrace: facetResult.relaxationTrace,
             decisionTrace: recallDecisionTrace(selectedLane, 'historical_discussion', {
                 graph: graphItems.length + facetItems.length,
-                navigation: compiledItems.length,
-                scopedNavigation: compiledItems.length,
+                navigation: relevantCompiledItems.length,
+                scopedNavigation: relevantCompiledItems.length,
                 brainFallback: 0,
                 rawLedger: rawItems.length + facetItems.length,
             }, items.length),
         };
+    }
+    facetGraphQuoteItemsForQuery(query, queryPlan, limit) {
+        try {
+            const atlas = this.kernel.graphExplore(query.query, {
+                projectId: query.projectId,
+                limit: Math.max(limit * 2, 6),
+                includeEvidence: true,
+                evidenceLimit: 2,
+                refresh: true,
+                staleOk: true,
+            });
+            const cards = (atlas.cards ?? []).slice(0, Math.max(limit * 2, 6));
+            const events = cards
+                .map((card) => card.sourceLocator?.eventId ?? card.evidenceEventIds[0])
+                .filter((eventId) => Boolean(eventId))
+                .map((eventId) => this.kernel.getEventContext(eventId, { before: 0, after: 0 })?.event)
+                .filter((event) => Boolean(event))
+                .filter((event) => this.isAgentRawEvent(event, query.agentId))
+                .filter((event) => this.isAllowedSession(event, query))
+                .filter((event) => this.isAllowedRawEventCollection(event, query.collection))
+                .filter((event) => this.isQuoteSourceEvent(event))
+                .filter((event) => this.hasReadableEventText(event));
+            return this.dedupeRawEventsByTurnPreferUser(events)
+                .slice(0, limit)
+                .map((event) => this.toAgentRawRecallItem(event, {
+                sourceType: 'raw_ledger',
+                whyMatched: 'forensic_quote_atlas_source_locator',
+                canAnswerExactQuote: true,
+            }));
+        }
+        catch {
+            return [];
+        }
     }
     facetGraphItemsForQuery(query, limit) {
         try {
@@ -624,6 +662,26 @@ export class KernelAgentMemoryBackend {
             }
         }
         return out;
+    }
+    rawEventsForLocalDateCue(query, limit) {
+        const localDate = localDateCue(query.query);
+        if (!localDate)
+            return [];
+        const [year, month, day] = localDate.split('-').map(Number);
+        const startTime = Date.UTC(year, month - 1, day);
+        const endTime = Date.UTC(year, month - 1, day + 1);
+        const byTime = this.kernel.eventStore.queryEvents(1, Math.max(1, Math.min(limit, 200)), {
+            projectId: query.projectId ? [query.projectId] : undefined,
+            workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
+            startTime,
+            endTime,
+        }).records;
+        if (byTime.length)
+            return byTime;
+        return this.kernel.eventStore.queryEvents(1, 1000, {
+            projectId: query.projectId ? [query.projectId] : undefined,
+            workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
+        }).records.filter((event) => event.localDate === localDate).slice(0, limit);
     }
     rawLedgerFallbackItemsForQuery(queryPlan, query, limit) {
         const searchedEvents = this.searchRawEventsByQueryPlan(queryPlan, query, Math.max(limit * 2, 10));
@@ -728,6 +786,28 @@ export class KernelAgentMemoryBackend {
             .filter((term) => term.length >= 2 && !/^(hermes|openclaw|cogmem)$/i.test(term));
         return uniqueNonEmpty(terms);
     }
+    queryHasStructuredCue(queryPlan) {
+        return /hermes|openclaw|cogmem|启动|安装|配置|重启|停止|操作|处理|执行|start|launch|install|configure|restart|stop|run/i.test(queryPlan.originalQuery)
+            || queryPlan.intent === 'action_history';
+    }
+    structuredCueTerms(queryPlan) {
+        const terms = [
+            ...queryPlan.keywords,
+            ...queryPlan.semanticCuePhrases.flatMap((phrase) => phrase.split(/\s+/)),
+        ]
+            .map((term) => term.trim())
+            .filter((term) => term.length >= 2)
+            .filter((term) => !/^(之前|什么|做过|做了|让你|我的|原话|精确|完整|the|what|did|you|to)$/i.test(term));
+        if (/启动|start|launch/i.test(queryPlan.originalQuery))
+            terms.push('启动', 'start', 'launch');
+        if (/安装|install|setup/i.test(queryPlan.originalQuery))
+            terms.push('安装', 'install', 'setup');
+        if (/配置|修改|config/i.test(queryPlan.originalQuery))
+            terms.push('配置', '修改', 'config');
+        if (/操作|处理|执行|run|ran/i.test(queryPlan.originalQuery))
+            terms.push('操作', '执行', 'run');
+        return uniqueNonEmpty(terms);
+    }
     itemSearchableText(item) {
         return [
             item.text,
@@ -788,6 +868,17 @@ export class KernelAgentMemoryBackend {
         }
         return out;
     }
+    filterCompiledItemsByQueryCues(items, queryPlan) {
+        if (!this.queryHasStructuredCue(queryPlan))
+            return items;
+        const cues = this.structuredCueTerms(queryPlan);
+        if (!cues.length)
+            return items;
+        return items.filter((item) => {
+            const haystack = this.itemSearchableText(item).toLowerCase();
+            return cues.some((cue) => haystack.includes(cue.toLowerCase()));
+        });
+    }
     dedupeRawEventsByTurnPreferUser(events) {
         const byTurn = new Map();
         for (const event of events) {
@@ -808,6 +899,8 @@ export class KernelAgentMemoryBackend {
     expandRawSearchTexts(queryPlan) {
         const hostNeutralKeywords = queryPlan.keywords.filter((keyword) => !/^(hermes|openclaw|cogmem)$/i.test(keyword));
         return uniqueNonEmpty([
+            queryPlan.originalQuery,
+            queryPlan.keywords.join(' '),
             ...queryPlan.searchTexts,
             hostNeutralKeywords.join(' '),
             ...hostNeutralKeywords.filter((keyword) => keyword.length >= 2),
@@ -1397,6 +1490,19 @@ function uniqueNonEmpty(values) {
 }
 function laneAllowed(policy, lane) {
     return !policy || policy.allowedLanes.includes(lane);
+}
+function localDateCue(query) {
+    const currentYear = new Date().getUTCFullYear();
+    const iso = query.match(/(20\d{2})[-年\/.](\d{1,2})[-月\/.](\d{1,2})日?/);
+    if (iso)
+        return `${iso[1]}-${padDatePart(Number(iso[2]))}-${padDatePart(Number(iso[3]))}`;
+    const cn = query.match(/(?:(20\d{2})年)?(\d{1,2})月(\d{1,2})(?:号|日)?/);
+    if (cn)
+        return `${cn[1] || currentYear}-${padDatePart(Number(cn[2]))}-${padDatePart(Number(cn[3]))}`;
+    return undefined;
+}
+function padDatePart(value) {
+    return String(value).padStart(2, '0');
 }
 function cliArg(value) {
     return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;

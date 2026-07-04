@@ -5,6 +5,7 @@ import { MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import type { MemoryEvent } from '../types/index.js';
 import { EpisodeTitleGenerator } from './EpisodeTitleGenerator.js';
+import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
 
 interface EpisodeRow {
   episode_id: string;
@@ -176,6 +177,97 @@ export class GraphCurator {
     return { episodeCount: rows.length, facetNodeCount, facetEdgeCount, reviewNeeded };
   }
 
+  rebuildEpisodes(projectId: string, episodeIds: string[], now = Date.now()): GraphCuratorResult {
+    const bounded = Array.from(new Set(episodeIds.filter(Boolean))).slice(0, 100);
+    if (!bounded.length) return { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
+    this.deleteFacetEdgesForEpisodes(projectId, bounded);
+    const rows = this.db.prepare(`
+      SELECT episode_id,project_id,session_id,conversation_thread_id,topic_path,episode_type,status,
+        importance,summary,start_event_id,end_event_id,event_count,started_at,updated_at
+      FROM memory_episodes
+      WHERE project_id=? AND episode_id IN (${bounded.map(() => '?').join(',')})
+      ORDER BY started_at ASC, episode_id ASC
+    `).all(projectId, ...bounded) as EpisodeRow[];
+    let facetNodeCount = 0;
+    let facetEdgeCount = 0;
+    let reviewNeeded = 0;
+    for (const row of rows) {
+      const projection = this.projectEpisode(row, projectId, now);
+      facetNodeCount += projection.facetNodeCount;
+      facetEdgeCount += projection.facetEdgeCount;
+      reviewNeeded += projection.reviewNeeded;
+    }
+    return { episodeCount: rows.length, facetNodeCount, facetEdgeCount, reviewNeeded };
+  }
+
+  private projectEpisode(row: EpisodeRow, projectId: string, now: number): { projection: EpisodeProjection; facetNodeCount: number; facetEdgeCount: number; reviewNeeded: number } {
+    const eventIds = this.episodeEventIds(row.episode_id);
+    const events = eventIds.map((eventId) => this.eventStore.getEvent(eventId)).filter((event): event is MemoryEvent => Boolean(event));
+    const title = this.titleGenerator.generate({
+      episodeId: row.episode_id,
+      summary: row.summary,
+      topicPath: row.topic_path,
+      episodeType: row.episode_type,
+      startedAt: row.started_at,
+      events,
+    });
+    const evidenceEventIds = Array.from(new Set([...title.sourceEventIds, ...eventIds])).slice(0, 30);
+    this.atlasStore.upsertDocument({
+      id: `episode:${row.episode_id}`,
+      projectId,
+      nodeType: 'episode',
+      sourceId: row.episode_id,
+      label: title.displayTitle,
+      summary: title.oneLineSummary,
+      topicPath: row.topic_path || undefined,
+      confidence: Math.max(0.01, Math.min(1, Number(row.importance || 0.5))),
+      supportCount: Math.max(1, Number(row.event_count || evidenceEventIds.length || 1)),
+      status: row.status,
+      occurredAt: row.started_at,
+      evidenceEventIds,
+      metadata: {
+        originalSummary: row.summary || undefined,
+        displayTitle: title.displayTitle,
+        titleConfidence: title.confidence,
+        topicHints: title.topicHints,
+        issueHints: title.issueHints,
+        eventKind: title.eventKind,
+        userIntent: title.userIntent,
+        localDate: title.localDate,
+        reviewNeeded: title.reviewNeeded,
+        generatorTrace: title.generatorTrace,
+        episodeType: row.episode_type,
+        sessionId: row.session_id || undefined,
+        threadId: row.conversation_thread_id || undefined,
+        canonicalId: `episode:${row.episode_id}`,
+      },
+      updatedAt: now,
+    });
+    for (const event of events.slice(0, 30)) this.upsertRawEventNode(projectId, event, now);
+    const projection: EpisodeProjection = { row, eventIds, events, issueHints: title.issueHints, topicHints: title.topicHints, localDate: title.localDate };
+    let facetNodeCount = 0;
+    let facetEdgeCount = 0;
+    for (const target of this.facetTargetsFor(projection)) {
+      this.upsertFacetNode(projectId, target, projection, now);
+      facetNodeCount += 1;
+      this.upsertEdge({
+        projectId,
+        sourceType: 'episode',
+        sourceId: row.episode_id,
+        relationType: target.relation,
+        targetType: target.type,
+        targetId: target.id,
+        confidence: target.confidence,
+        evidenceEventIds,
+        status: 'active',
+        sourceAuthority: 'atlas_curator',
+        now,
+      });
+      facetEdgeCount += 1;
+    }
+    return { projection, facetNodeCount, facetEdgeCount, reviewNeeded: title.reviewNeeded ? 1 : 0 };
+  }
+
   private episodeEventIds(episodeId: string): string[] {
     const rows = this.db.prepare(`SELECT event_id FROM memory_episode_events WHERE episode_id=? ORDER BY position ASC`).all(episodeId) as Array<{ event_id: string }>;
     return rows.map((row) => row.event_id).filter(Boolean);
@@ -201,7 +293,9 @@ export class GraphCurator {
       targets.push({ type: 'issue', id: issueHint, nodeId: `issue:${projection.row.project_id}:${issueHint}`, label: issueLabel(issueHint), relation: 'PART_OF_ISSUE', confidence: 0.9 });
     }
     for (const entity of this.entityHintsFor(projection)) {
-      targets.push({ type: 'entity', id: `facet:${entity.toLowerCase()}`, nodeId: `entity:facet:${entity.toLowerCase()}`, label: entity, relation: 'INVOLVES_ENTITY', confidence: 0.78 });
+      const entityId = normalizeEntityCueId(entity);
+      if (!entityId) continue;
+      targets.push({ type: 'entity', id: `facet:${entityId}`, nodeId: `entity:facet:${entityId}`, label: entity, relation: 'INVOLVES_ENTITY', confidence: 0.78 });
     }
     if (projection.row.session_id) {
       targets.push({ type: 'session', id: projection.row.session_id, nodeId: `session:${projection.row.project_id}:${projection.row.session_id}`, label: `Session ${projection.row.session_id}`, relation: 'IN_SESSION', confidence: 1 });
@@ -335,6 +429,19 @@ export class GraphCurator {
     this.db.prepare(`DELETE FROM memory_edges WHERE project_id=? AND source_authority='atlas_curator' AND relation_type IN (${relations.map(() => '?').join(',')})`).run(projectId, ...relations);
   }
 
+  private deleteFacetEdgesForEpisodes(projectId: string, episodeIds: string[]): void {
+    const relations = Array.from(FACET_EDGE_RELATIONS);
+    this.db.prepare(`
+      DELETE FROM memory_edges
+      WHERE project_id=? AND source_authority='atlas_curator'
+        AND relation_type IN (${relations.map(() => '?').join(',')})
+        AND (
+          (source_type='episode' AND source_id IN (${episodeIds.map(() => '?').join(',')}))
+          OR (target_type='episode' AND target_id IN (${episodeIds.map(() => '?').join(',')}))
+        )
+    `).run(projectId, ...relations, ...episodeIds, ...episodeIds);
+  }
+
   private upsertEdge(input: {
     projectId: string;
     sourceType: string;
@@ -424,6 +531,12 @@ function issueKind(value: string): string {
 
 function actionKindFor(projection: EpisodeProjection): string | undefined {
   const text = projection.events.map(eventTextForMemory).join('\n');
+  if (/启动|start|started|launch|launched|boot/i.test(text)) return 'started';
+  if (/安装|install|installed|setup/i.test(text)) return 'installed';
+  if (/配置|config|configured|设置|修改配置|修改/i.test(text)) return 'configured';
+  if (/重启|restart|restarted/i.test(text)) return 'restarted';
+  if (/停止|stop|stopped/i.test(text)) return 'stopped';
+  if (/操作|处理|执行|run|ran/i.test(text)) return 'operated';
   if (/修复|fixed|implemented|实现|提交|升级|upgrade/i.test(text)) return 'implemented';
   if (/review|审查|检查/i.test(text)) return 'reviewed';
   if (/决定|decided|方案|策略/i.test(text)) return 'decided';
@@ -433,7 +546,7 @@ function actionKindFor(projection: EpisodeProjection): string | undefined {
 
 function entityHints(events: MemoryEvent[]): string[] {
   const text = events.map(eventTextForMemory).join('\n');
-  return ['Cogmem', 'OpenClaw', 'Hermes'].filter((entity) => new RegExp(entity, 'i').test(text));
+  return extractEntityCues(text).map((entity) => entity.label);
 }
 
 function facetSummary(target: FacetTarget): string {

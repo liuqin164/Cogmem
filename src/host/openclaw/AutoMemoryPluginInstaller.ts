@@ -1392,7 +1392,7 @@ async function recallPayload(input, config, kernel, memory, formatStrategyContex
   let result = await memory.recall({
     agentId: config.agentId || 'openclaw', projectId: config.projectId || 'openclaw',
     query: input.query || '', sessionId: input.sessionId, threadId: input.threadId,
-    excludeSessionId: input.excludeSessionId, intent: input.intent || 'memory_recall',
+    excludeSessionId: input.excludeSessionId, intent: input.intent || undefined,
     anchorEventId: input.anchorEventId, anchorText: input.anchorText,
     limit: Number(config.limit || 3), retrievalPolicy: strategyCapsule && strategyCapsule.retrievalPolicy,
   });
@@ -1405,7 +1405,7 @@ async function recallPayload(input, config, kernel, memory, formatStrategyContex
     result = await memory.recall({
       agentId: config.agentId || 'openclaw', projectId: config.projectId || 'openclaw',
       query: input.query || '', sessionId: input.sessionId, threadId: input.threadId,
-      excludeSessionId: input.excludeSessionId, intent: input.intent || 'memory_recall',
+      excludeSessionId: input.excludeSessionId, intent: input.intent || undefined,
       anchorEventId: input.anchorEventId, anchorText: input.anchorText,
       limit: Number(config.limit || 3), retrievalPolicy: strategyCapsule && strategyCapsule.retrievalPolicy,
     });
@@ -1446,7 +1446,7 @@ async function recallPayload(input, config, kernel, memory, formatStrategyContex
   return {
     context: recallContext ? (strategyCapsule ? formatStrategyContext(strategyCapsule) + '\n\n' : '') + recallContext : '',
     items: compactRecallItems(plannedResult.items, config), itemCount: plannedResult.items.length,
-    recallMode: result.recallMode, fallbackUsed: result.fallbackUsed, intent: input.intent || 'memory_recall',
+    recallMode: result.recallMode, fallbackUsed: result.fallbackUsed, intent: (result.queryPlan && result.queryPlan.intent) || input.intent || 'memory_recall',
     anchorEventId: anchorItem && anchorItem.sourceAnchor && anchorItem.sourceAnchor.eventId,
     anchorText: anchorItem && anchorItem.text, queryPlan: result.queryPlan, decisionTrace: result.decisionTrace,
     atlasCards: result.atlasCards, selectedEpisodeCards,

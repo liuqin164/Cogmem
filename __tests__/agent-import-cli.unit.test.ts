@@ -1087,7 +1087,7 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(bridgeBody).toContain('uniqueWindowEvents');
   expect(bridgeBody).toContain('cogmem memory show --event');
   expect(bridgeBody).toContain('Use it only as current-turn background memory.');
-  expect(bridgeBody).toContain("intent: input.intent || 'memory_recall'");
+  expect(bridgeBody).toContain('intent: input.intent || undefined');
 
   const indexCheck = await runCli(['node', '--check', join(pluginDir, 'index.js')]);
   expect(indexCheck.stderr).toBe('');

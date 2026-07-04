@@ -89,10 +89,11 @@ export class MemoryAtlasStore {
         if (!plannedFacets.length)
             return [];
         const facetMatches = plannedFacets.map((facet) => ({ facet, rows: this.episodeEdgesForFacet(projectId, facet) }));
-        if (plan.operator === 'intersection' && facetMatches.some((match) => match.rows.length === 0))
+        const facetGroups = groupFacetMatches(facetMatches);
+        if (plan.operator === 'intersection' && facetGroups.some((group) => group.every((match) => match.rows.length === 0)))
             return [];
         const candidateIds = plan.operator === 'intersection'
-            ? intersectSets(facetMatches.map((match) => new Set(match.rows.map((row) => row.source_id))))
+            ? intersectSets(facetGroups.map((group) => new Set(group.flatMap((match) => match.rows.map((row) => row.source_id)))))
             : new Set(facetMatches.flatMap((match) => match.rows.map((row) => row.source_id)));
         if (!candidateIds.size)
             return [];
@@ -685,6 +686,18 @@ function facetLabel(type, value) {
             return '自动注入不一致';
     }
     return value;
+}
+function groupFacetMatches(matches) {
+    const groups = new Map();
+    for (const match of matches) {
+        const key = match.facet.type === 'actionKind' || match.facet.type === 'memoryKind'
+            ? `${match.facet.type}:${match.facet.relation || ''}`
+            : `${match.facet.type}:${match.facet.value}:${match.facet.relation || ''}`;
+        const group = groups.get(key) ?? [];
+        group.push(match);
+        groups.set(key, group);
+    }
+    return Array.from(groups.values());
 }
 function intersectSets(sets) {
     if (!sets.length)

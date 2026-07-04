@@ -38,6 +38,7 @@ export class ActionFrameExtractor {
       for (const event of result.records) {
         if (!event.projectId || (event.role !== 'user' && event.role !== 'tool')) continue;
         const text = eventTextForMemory(event);
+        if (!text.trim()) continue;
         const markers = actionMarkers(text);
         if (!markers.length) continue;
         const target = this.resolveTarget(event, text, entityCache);
