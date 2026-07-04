@@ -1,4 +1,4 @@
-# Cogmem 3.7.0 Operations Reference for Hermes
+# Cogmem 3.7.1 Operations Reference for Hermes
 
 Read this file when installing, upgrading, importing, repairing, or operating Cogmem. `SKILL.md` contains the decision rules; this file records the operational commands.
 
@@ -76,7 +76,7 @@ cogmem doctor
 cogmem connect hermes --workspace . --auto --force --json
 ```
 
-The backed-up command upgrades 3.5.2 schema 24, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.0 schema/projection state in one run and preserves Raw Ledger evidence. `--dry-run` is read-only and does not create `_schema_migrations`. Reload MCP after reconnecting.
+The backed-up command upgrades 3.5.2 schema 24, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.1 schema/projection state in one run and preserves Raw Ledger evidence. `--dry-run` is read-only and does not create `_schema_migrations`. Reload MCP after reconnecting.
 
 ## Import Hermes memory
 
@@ -149,22 +149,23 @@ cogmem memory list --project hermes --since <globalSeq> --order asc --json
 
 JSON uses `cogmem.cli.v1`: object fields are top-level, arrays use `items`, and queue counters remain top-level. `vectors: 0` is not a recall failure; inspect `vectorState`.
 
-Use `historical_discussion` for “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, and missing MCP memory cases. Raw list rows include `sourceLocator`; run the locator before quoting exact words or saying the event cannot be found. Read-only plan/status/candidates use a lightweight SQLite path and should not require stopping the MCP server.
+Use `historical_discussion` for “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, and missing MCP memory cases. Use `action_history` for “what did I ask you to do to <entity>?”, “启动 <tool>”, or “对 <entity> 做过什么操作”; the entity is the project/tool/person/service named in memory, not necessarily Hermes. Raw list rows include `sourceLocator`; run the locator before quoting exact words or saying the event cannot be found. Read-only plan/status/candidates use a lightweight SQLite path and should not require stopping the MCP server.
 
 ## Memory Atlas as composable filters
 
-Atlas uses any available project, day/month/year, topic, issue, entity/target, session/thread, memory-kind, action-kind, and text facets together. It does not require an entity + time + operation tuple. A canonical episode appears once even if it is reached through several facets.
+Atlas uses any available project, day/month/year, topic, issue, entity/target, session/thread, memory-kind, action-kind, and text facets together. Unicode letter/number entity cues are supported, but Atlas does not automatically prove aliases or merge identities. It does not require an entity + time + operation tuple. A canonical episode appears once even if it is reached through several facets.
 
 ```bash
 cogmem memory graph --project hermes --json
-cogmem memory graph-search --project hermes --query "Hermes" --json
-cogmem memory graph-explore --project hermes --query "2025 年 Hermes 的决策" --now 1782057600000 --evidence-limit 2 --json
+cogmem memory graph-search --project hermes --query "<实体或工具名>" --json
+cogmem memory graph-explore --project hermes --query "2025 年 <实体或工具名> 的决策" --now 1782057600000 --evidence-limit 2 --json
 cogmem memory graph-explore --project hermes --query "6月6号关于记忆黑盒聊过什么" --json
 cogmem memory graph-explore --project hermes --query "记忆黑盒后来有没有继续讨论" --json
 cogmem memory graph-node --project hermes --id <node-id> --include-evidence --evidence-limit 4 --json
 cogmem memory graph-neighbors --project hermes --id <node-id> --hops 2 --json
 cogmem memory graph-path --project hermes --from <node-id> --to <node-id> --json
-cogmem memory graph-timeline --project hermes --query "去年与 Hermes 有关的修复" --now 1782057600000 --evidence-limit 4 --json
+cogmem memory graph-timeline --project hermes --query "去年与 <实体或工具名> 有关的修复" --now 1782057600000 --evidence-limit 4 --json
+cogmem memory graph-timeline --project hermes --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
 ```
 
 Use MCP by question shape:
@@ -176,7 +177,7 @@ Use MCP by question shape:
 - Direct fact: `cogmem_recall`.
 - Exact source: follow `evidenceEventIds` with `memory show`.
 
-Graph reads are pure and declared read-only/idempotent. Call `cogmem_graph_touch` only after using selected nodes. Overview display alone must not change future ranking. Search/explore may return `cards[]` for canonical episodes. Use `cards[].displayTitle` for UI/readability, `oneLineSummary` as a hint, `matchedFacets` and `matchedPaths` to explain why it matched, and `canonicalId` to dedupe. `relatedButNotSelected` is context only; do not substitute it as the answer. If `relaxationTrace` exists, say the match was relaxed. `evidenceTotal` is all known evidence; `evidenceReturned` is the bounded payload. Search/explore evidence includes `sourceLocator.command` and `sourceLocator.contextCommand`; use those locators before treating an Atlas summary as evidence.
+Graph reads are pure and declared read-only/idempotent. Call `cogmem_graph_touch` only after using selected nodes. Overview display alone must not change future ranking. Search/explore may return `cards[]` for canonical episodes. Use `cards[].displayTitle` for UI/readability, `oneLineSummary` as a hint, `matchedFacets` and `matchedPaths` to explain why it matched, and `canonicalId` to dedupe. `relatedButNotSelected` is context only; do not substitute it as the answer. If `relaxationTrace` exists, say the match was relaxed; supported relaxations are day → month → year and issue → parent topic. `evidenceTotal` is all known evidence; `evidenceReturned` is the bounded payload. Search/explore evidence includes `sourceLocator.command` and `sourceLocator.contextCommand`; use those locators before treating an Atlas summary as evidence.
 
 ## Candidate governance and review
 

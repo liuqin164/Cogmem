@@ -27,6 +27,8 @@ export class ActionFrameExtractor {
                 if (!event.projectId || (event.role !== 'user' && event.role !== 'tool'))
                     continue;
                 const text = eventTextForMemory(event);
+                if (!text.trim())
+                    continue;
                 const markers = actionMarkers(text);
                 if (!markers.length)
                     continue;

@@ -1,4 +1,4 @@
-export type AgentRecallIntent = 'memory_recall' | 'previous_session_summary' | 'forensic_quote' | 'historical_discussion';
+export type AgentRecallIntent = 'memory_recall' | 'previous_session_summary' | 'forensic_quote' | 'historical_discussion' | 'action_history';
 export interface AgentRecallQueryCompileInput {
     query: string;
     intent?: AgentRecallIntent;

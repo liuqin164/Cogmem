@@ -14,6 +14,8 @@ export declare class GraphCurator {
     private readonly titleGenerator;
     constructor(db: Database, eventStore: EventStore, atlasStore: MemoryAtlasStore);
     rebuild(projectId: string, now?: number): GraphCuratorResult;
+    rebuildEpisodes(projectId: string, episodeIds: string[], now?: number): GraphCuratorResult;
+    private projectEpisode;
     private episodeEventIds;
     private facetTargetsFor;
     private upsertFacetNode;
@@ -22,6 +24,7 @@ export declare class GraphCurator {
     private upsertEpisodeRelation;
     private entityHintsFor;
     private deleteFacetEdges;
+    private deleteFacetEdgesForEpisodes;
     private upsertEdge;
 }
 //# sourceMappingURL=GraphCurator.d.ts.map

@@ -1,4 +1,4 @@
-# Cogmem 3.7.0 Operations Reference for OpenClaw
+# Cogmem 3.7.1 Operations Reference for OpenClaw
 
 Read this file when installing, upgrading, importing, repairing, or operating Cogmem. `SKILL.md` contains the decision rules; this file is the command reference.
 
@@ -17,6 +17,7 @@ Read this file when installing, upgrading, importing, repairing, or operating Co
 | Decide the next safe agent operation | `cogmem memory plan` |
 | Answer one direct memory question | `cogmem memory recall` or `cogmem_recall` |
 | See what memory exists or reconstruct history | Atlas `graph-*` commands/tools |
+| Reproject one repaired/missing Atlas episode | `cogmem memory graph-reindex --event/--episode` |
 | Quote exact source | `cogmem memory show` |
 | Audit ledger sequence ranges | `cogmem memory list --since/--until/--order` |
 | Inspect or resolve uncertain candidates | `memory candidates` then `memory review` |
@@ -85,7 +86,7 @@ openclaw gateway restart
 cogmem openclaw diagnose --workspace . --json
 ```
 
-The second command upgrades 3.5.2 schema 24, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.0 schema/projection state in one run. It preserves Raw Ledger evidence. Keep the returned `backupPath` until verification passes. `--dry-run` is read-only and does not create `_schema_migrations`.
+The second command upgrades 3.5.2 schema 24, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.1 schema/projection state in one run. It preserves Raw Ledger evidence. Keep the returned `backupPath` until verification passes. `--dry-run` is read-only and does not create `_schema_migrations`.
 
 After upgrading the package/database, refresh OpenClaw's generated plugin files. `doctor --plugin-only` avoids opening the Cogmem kernel, so it can repair stale `extensions/cogmem-auto-memory/index.js` and `bridge.mjs` even when an old drainer has SQLite busy. Use `connect --auto --force` when intentionally reinstalling the full integration and patching OpenClaw config:
 
@@ -98,9 +99,9 @@ Use `cogmem openclaw diagnose --workspace . --json` when automatic memory blocks
 - `plugin.current=false`: generated files are stale; run plugin-only fix and restart gateway.
 - no `audit.lastBeforePromptBuild`: plugin is not loaded or the hook did not fire.
 - `audit.lastBeforePromptBuild.action=error`: bridge or DB failure; inspect `reason`, `bridgeCommand`, and `dbLocked`.
-- `action=inject` but no visible block: inspect `returnedInjectionShape`. Plugin 0.7.0 returns `prependContext`, `context`, and `promptPrefix`; if OpenClaw still ignores all three, the host hook contract changed and the OpenClaw plugin API must be checked before blaming recall.
+- `action=inject` but no visible block: inspect `returnedInjectionShape`. Plugin 0.7.1 returns `prependContext`, `context`, and `promptPrefix`; if OpenClaw still ignores all three, the host hook contract changed and the OpenClaw plugin API must be checked before blaming recall.
 
-Plugin 0.7.0 queue behavior:
+Plugin 0.7.1 queue behavior:
 
 - `agent_end` only appends durable JSONL jobs, then starts at most one drainer through queue/spawn locks.
 - `drain-remember-queue` acquires the queue lock before opening Cogmem or SQLite. A second drainer exits without opening the DB.
@@ -203,22 +204,35 @@ cogmem memory list --project openclaw --since <globalSeq> --order asc --json
 cogmem memory list --project openclaw --since <globalSeq> --until <globalSeq> --order asc --json
 ```
 
-Use `historical_discussion` for “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, and missing prompt-injection cases. Raw list rows include `sourceLocator`; run the locator before quoting exact words or saying the event cannot be found.
+Use `historical_discussion` for “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, and missing prompt-injection cases. Use `action_history` or the inferred action-history path for “what did I ask you to do to <entity>?”, “启动 <tool>”, or “对 <entity> 做过什么操作”. Action-history fallback requires both the entity cue and an operational action cue; do not use a compiled memory only because it mentions the entity. Raw list rows include `sourceLocator`; run the locator before quoting exact words or saying the event cannot be found.
+
+Exact quote requests such as “我的原话”, “精确到6月5日的原文”, “exact quote”, or “verbatim” must use Raw Ledger/sourceLocator evidence:
+
+```bash
+cogmem memory recall --query "能精确到6月5日的原文吗？我的原话" --intent forensic_quote --project openclaw --agent openclaw --json
+cogmem memory show --event <event-id> --project openclaw --before 3 --after 5 --json
+```
+
+Do not use `memory/*.md`, imported summaries, or compiled memories as the primary source for exact user wording.
 
 ## Memory Atlas
 
-Atlas combines whichever facets the question supplies, like table filters. Supported constraints include project, day/month/year, topic, issue, entity/target, session/thread, memory kind, action kind, and ordinary text cues. Do not require a fixed entity + time + action tuple. A canonical episode appears once even if it is reached through several facets.
+Atlas combines whichever facets the question supplies, like table filters. Supported constraints include project, day/month/year, topic, issue, entity/target, session/thread, memory kind, action kind, and ordinary text cues. Unicode letter/number entity cues are supported, but Atlas does not automatically prove aliases or merge identities. Do not require a fixed entity + time + action tuple. A canonical episode appears once even if it is reached through several facets.
 
 ```bash
 cogmem memory graph --project openclaw --json
-cogmem memory graph-search --project openclaw --query "Hermes" --json
-cogmem memory graph-explore --project openclaw --query "2025 年 Hermes 的决策" --now 1782057600000 --evidence-limit 2 --json
+cogmem memory graph-search --project openclaw --query "<实体或工具名>" --json
+cogmem memory graph-explore --project openclaw --query "启动 <工具名>" --json
+cogmem memory graph-explore --project openclaw --query "2025 年 <实体或工具名> 的决策" --now 1782057600000 --evidence-limit 2 --json
 cogmem memory graph-explore --project openclaw --query "6月6号关于记忆黑盒聊过什么" --json
 cogmem memory graph-explore --project openclaw --query "记忆黑盒后来有没有继续讨论" --json
 cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --evidence-limit 4 --json
 cogmem memory graph-neighbors --project openclaw --id <node-id> --hops 2 --json
 cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
-cogmem memory graph-timeline --project openclaw --query "去年与 Hermes 有关的修复" --now 1782057600000 --evidence-limit 4 --json
+cogmem memory graph-timeline --project openclaw --query "去年与 <实体或工具名> 有关的修复" --now 1782057600000 --evidence-limit 4 --json
+cogmem memory graph-timeline --project openclaw --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
+cogmem memory graph-reindex --project openclaw --event <event-id> --json
+cogmem memory graph-reindex --project openclaw --episode <episode-id> --json
 ```
 
 Graph commands default to stale-safe diagnostics. If refresh hits `SQLITE_BUSY`, JSON includes `atlasFresh: false` and `refreshError` while returning the existing projection. Use:
@@ -232,7 +246,9 @@ Use `--no-refresh` during lock incidents and `--refresh` when the operator wants
 
 Graph reads are pure: overview/search/explore do not brighten what they display. In MCP, call `cogmem_graph_touch` only after the agent actually selects or uses nodes. Activation changes visibility, never evidence or truth. Exact scoped facets may revive cold nodes.
 
-Search/explore may return `cards[]` for canonical episodes. Use `cards[].displayTitle` for UI/readability, `oneLineSummary` as a hint, `matchedFacets` and `matchedPaths` to explain why it matched, and `canonicalId` to dedupe. `relatedButNotSelected` is context only; do not substitute it as the answer. If `relaxationTrace` exists, say the match was relaxed. Every evidence result distinguishes `evidenceTotal` from `evidenceReturned` and includes an event ID plus `sourceLocator.command` and `sourceLocator.contextCommand` drill-down commands. Use those locators before treating an Atlas summary as evidence.
+Search/explore may return `cards[]` for canonical episodes. Use `cards[].displayTitle` for UI/readability, `oneLineSummary` as a hint, `matchedFacets` and `matchedPaths` to explain why it matched, and `canonicalId` to dedupe. `relatedButNotSelected` is context only; do not substitute it as the answer. If `relaxationTrace` exists, say the match was relaxed; supported relaxations are day → month → year and issue → parent topic. Every evidence result distinguishes `evidenceTotal` from `evidenceReturned` and includes an event ID plus `sourceLocator.command` and `sourceLocator.contextCommand` drill-down commands. Use those locators before treating an Atlas summary as evidence.
+
+If an audited episode repair changes boundaries or classification, the JSON repair result contains `repairId`, `applied`, `affectedEpisodeIds`, `changedFields`, `requeuedDream`, `graphRefreshNeeded`, and `nextCommands`. `repairId` is an audit id, not a candidate id. Do not run `memory dream --promote` just because a repair returned a `repairId`. When `graphRefreshNeeded=true`, run the returned `graph-reindex` command, then verify with `graph-explore` or `graph-timeline`. Targeted reindex intentionally leaves Atlas dirty; run `cogmem memory tick --project openclaw --json` when full relation/action-frame consistency matters. Full Atlas rebuild still uses the normal SQLite writer path; schedule it outside latency-sensitive OpenClaw turns for large databases.
 
 ## Candidate governance and review
 

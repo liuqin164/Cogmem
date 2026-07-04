@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.7.1
+
+- Hardened OpenClaw volatile recall, Atlas context, turn bridge, and session-state serialization so historical text, card titles, summaries, source windows, related cards, short-term conclusions, and source anchors cannot close or create `COGMEM_*` prompt blocks.
+- Scoped entity facet node IDs by project, bumped the Atlas projection schema metadata, and forced old multi-facet projections to rebuild instead of reusing cross-project-prone entity nodes.
+- Changed targeted `graph-reindex` to refresh the addressed episode/card but leave the project projection dirty until a full consistency rebuild restores relation/action-frame guarantees.
+- Tightened Raw Ledger forensic anchor scope checks so event anchors cannot bypass project/workspace/thread/session boundaries.
+- Fixed OpenClaw auto intent routing for `action_history`, exact-quote ranking for same-day raw events, issue-title precedence over generic operation titles, shared action-kind inference, stricter entity-plus-action compiled relevance, local-date year inference, and evidence-level Atlas card dedupe.
+- Extended generic Atlas entity cue extraction to Unicode letter/number names in ordinary historical queries, and expanded explicit relaxation traces from day → month to day → month → year plus issue → parent topic.
+- Updated OpenClaw plugin 0.7.1, docs, skills, and tests for the security/isolation hotfix.
+
 ## 3.7.0
 
 - Upgraded Memory Atlas into a multi-dimensional navigation graph: canonical episodes and raw events exist once, while time, topic, issue, entity, session/thread, memory-kind, and action-kind facets connect to them with typed edges.
@@ -9,6 +19,8 @@
 - Extended Atlas cards to timeline results and CLI recall JSON, shared relaxation behavior across graph search/explore/timeline, and made broad “记忆黑盒” recall select the initial Memory Context/sourceContext discussion while listing later graph/runtime and Atlas readability issues as related side context.
 - Renamed the live Atlas projection to `memory_atlas.v2` with 3.7 schema metadata while still consuming legacy `memory_atlas.v1` dirty triggers, so upgraded 3.6.5 databases rebuild the multi-facet projection instead of trusting stale clean state.
 - Integrated facet graph cards into `historical_discussion` recall so OpenClaw/Hermes agents can explain selected memories while still grounding answers in Raw Ledger source locators.
+- Fixed action-history recall such as “what did I ask you to do to <entity>?” by adding operational action-kind facets (`started`, `installed`, `configured`, `restarted`, `stopped`, `operated`), inferred `action_history` routing, generic entity cue extraction, entity/action relevance gating for compiled memories, and raw-ledger-only exact quote fallback for “我的原话”.
+- Added targeted `cogmem memory graph-reindex --project <id> --event <eventId>|--episode <episodeId> --json` and clearer episode repair output so `repairId` is treated as an audit id, not a dream promotion candidate.
 - Updated OpenClaw plugin 0.7.0 and its generated bridge to preserve strict facet matches through Context Cortex planning and to include selected cards, matched facets/paths, related-but-not-selected side context, and relaxation traces in both volatile recall and Atlas context blocks.
 - Updated README, Memory Atlas docs, OpenClaw/Hermes skills, AGENTS runbooks, and operations references with npm-first install/update flow and the 3.7.0 multi-facet Atlas command playbook.
 

@@ -83,7 +83,7 @@ import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
 import { config } from './utils/Config.js';
 import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snapshot/index.js';
-const CORE_VERSION = '3.7.0';
+const CORE_VERSION = '3.7.1';
 const LATEST_SCHEMA_VERSION = 27;
 export class MemoryKernel {
     options;
@@ -1056,6 +1056,7 @@ export class MemoryKernel {
         const affected = new Set();
         const before = {};
         const previousStatuses = new Map();
+        let requeuedDream = input.operation === 'requeue-dream' || input.operation === 'invalidate-dream-run';
         if (input.operation === 'move-event') {
             const link = this.episodeStore.getEventLink(input.eventId);
             const source = link ? this.episodeStore.getEpisode(link.episodeId) : undefined;
@@ -1169,11 +1170,30 @@ export class MemoryKernel {
             const episode = this.episodeStore.getEpisode(episodeId);
             if (episode?.eventCount && episode.status === 'sealed') {
                 this.episodeStore.requeueDreamForRepair(episodeId, input.operation === 'invalidate-dream-run' ? input.mode || 'normal' : 'normal', now);
+                requeuedDream = true;
             }
         }
         const after = Object.fromEntries([...affected].map((episodeId) => [episodeId, this.episodeStore.getEpisode(episodeId)]));
         const repairId = this.episodeStore.recordRepairAudit({ projectId: input.projectId, operation: input.operation, payload: input, before, after, now });
-        return { repairId, operation: input.operation, affectedEpisodeIds: [...affected], staleCandidateIds };
+        const affectedEpisodeIds = [...affected];
+        const nextCommands = affectedEpisodeIds.length
+            ? affectedEpisodeIds.map((episodeId) => `cogmem memory graph-reindex --project ${input.projectId} --episode ${episodeId} --json`)
+            : [];
+        return {
+            repairId,
+            applied: true,
+            operation: input.operation,
+            affectedEpisodeIds,
+            changedFields: changedFieldsForRepair(input),
+            staleCandidateIds,
+            requeuedDream,
+            graphRefreshNeeded: affectedEpisodeIds.length > 0,
+            nextCommands: [
+                ...nextCommands,
+                `cogmem memory graph-explore --project ${input.projectId} --query "<query>" --json`,
+            ],
+            note: 'repairId is an audit id, not a dream candidate id; do not run memory dream --promote just because repairId exists.',
+        };
     }
     listDreamCandidates(options = {}) {
         return this.deepWriteCandidateStore.listCandidates(options);
@@ -1264,6 +1284,9 @@ export class MemoryKernel {
     }
     rebuildMemoryAtlas(options = {}) {
         return this.memoryAtlasIndexer.rebuild(options);
+    }
+    reindexMemoryAtlas(options) {
+        return this.memoryAtlasIndexer.reindex(options);
     }
     ensureMemoryAtlas(options) {
         return this.memoryAtlasIndexer.ensureFresh(options);
@@ -2001,6 +2024,22 @@ export function createMemoryKernelFromConfig(input = {}) {
         throw new Error(`${error.code}: ${error.message}`);
     const { configPath: _configPath, cwd: _cwd, env: _env, ...explicitOptions } = options;
     return createMemoryKernel({ ...loaded.options, ...explicitOptions });
+}
+function changedFieldsForRepair(input) {
+    if (input.operation === 'reclassify') {
+        return [
+            input.episodeType ? 'episodeType' : '',
+            input.topicPath ? 'topicPath' : '',
+            input.importance !== undefined ? 'importance' : '',
+        ].filter(Boolean);
+    }
+    if (input.operation === 'move-event')
+        return ['episodeEvents'];
+    if (input.operation === 'split' || input.operation === 'merge')
+        return ['episodeEvents', 'crossRefs'];
+    if (input.operation === 'requeue-dream' || input.operation === 'invalidate-dream-run')
+        return ['dreamQueue'];
+    return [];
 }
 function requiredGovernancePayloadString(payload, field) {
     const value = payload[field];

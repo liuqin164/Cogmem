@@ -1,3 +1,4 @@
+import { serializeUntrustedMemory } from './UntrustedMemorySerializer.js';
 export function updateSessionWorkingState(previous, input) {
     const maxChars = Math.max(240, Math.min(4000, Math.floor(input.maxChars ?? previous?.maxChars ?? 1800)));
     const topic = inferTopic(input.userText) || previous?.currentTopic;
@@ -19,7 +20,7 @@ export function formatSessionWorkingState(state) {
     const lines = [
         `<COGMEM_SESSION_STATE scope="current_session" compact="true" persistence="session_only" compile_allowed="false">`,
         'Current working topic:',
-        `- ${state.currentTopic || 'unspecified'}`,
+        `- ${serializeUntrustedMemory(state.currentTopic || 'unspecified', 180)}`,
         '',
         'Current design direction:',
         ...listLines(state.designDirection),
@@ -72,7 +73,7 @@ function compactSentence(text, limit) {
     return sentence.length > limit ? `${sentence.slice(0, limit)}...` : sentence;
 }
 function listLines(values) {
-    return values.length > 0 ? values.map((value) => `- ${value}`) : ['- none'];
+    return values.length > 0 ? values.map((value) => `- ${serializeUntrustedMemory(value, 260)}`) : ['- none'];
 }
 function appendBounded(existing, additions, limit) {
     const out = [];

@@ -1,3 +1,5 @@
+import { serializeUntrustedMemory } from './UntrustedMemorySerializer.js';
+
 export interface SessionWorkingState {
   sessionId: string;
   updatedAt: number;
@@ -43,7 +45,7 @@ export function formatSessionWorkingState(state: SessionWorkingState): string {
   const lines = [
     `<COGMEM_SESSION_STATE scope="current_session" compact="true" persistence="session_only" compile_allowed="false">`,
     'Current working topic:',
-    `- ${state.currentTopic || 'unspecified'}`,
+    `- ${serializeUntrustedMemory(state.currentTopic || 'unspecified', 180)}`,
     '',
     'Current design direction:',
     ...listLines(state.designDirection),
@@ -96,7 +98,7 @@ function compactSentence(text: string, limit: number): string | undefined {
 }
 
 function listLines(values: string[]): string[] {
-  return values.length > 0 ? values.map((value) => `- ${value}`) : ['- none'];
+  return values.length > 0 ? values.map((value) => `- ${serializeUntrustedMemory(value, 260)}`) : ['- none'];
 }
 
 function appendBounded(existing: string[], additions: string[], limit: number): string[] {

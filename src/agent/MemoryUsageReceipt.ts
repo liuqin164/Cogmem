@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { AgentRecallItem, AgentRecallSourceAnchor } from './AgentMemoryBackend.js';
+import { serializeUntrustedMemory } from './UntrustedMemorySerializer.js';
 
 export interface MemoryUsageReceiptSourceAnchor {
   memoryId?: string;
@@ -67,14 +68,14 @@ export function createMemoryUsageReceipt(input: CreateMemoryUsageReceiptInput): 
 
 export function formatMemoryUsageBridge(receipt: MemoryUsageReceipt, maxChars = 1200): string {
   const lines = [
-    `<COGMEM_TURN_BRIDGE turn_id="${escapeAttribute(receipt.turnId)}" source="cogmem" compact="true" ttl_turns="${receipt.ttlTurns}" compile_allowed="false">`,
+    `<COGMEM_TURN_BRIDGE turn_id="${serializeUntrustedMemory(receipt.turnId, 180)}" source="cogmem" compact="true" ttl_turns="${receipt.ttlTurns}" compile_allowed="false">`,
     'Previous assistant answer used Cogmem memory.',
     '',
     'Used memory themes:',
     ...listLines(receipt.usedThemes),
     '',
     'Working conclusion produced in that turn:',
-    `- ${receipt.workingConclusion || 'No compact conclusion recorded.'}`,
+    `- ${serializeUntrustedMemory(receipt.workingConclusion || 'No compact conclusion recorded.', 260)}`,
     '',
     'Source anchors:',
     ...listLines(receipt.sourceAnchors.map(formatSourceAnchor)),
@@ -134,20 +135,16 @@ function firstSentence(text: string, limit: number): string | undefined {
 }
 
 function listLines(values: string[]): string[] {
-  return values.length > 0 ? values.map((value) => `- ${value}`) : ['- none'];
+  return values.length > 0 ? values.map((value) => `- ${serializeUntrustedMemory(value, 260)}`) : ['- none'];
 }
 
 function formatSourceAnchor(anchor: MemoryUsageReceiptSourceAnchor): string {
   return [
-    anchor.memoryId ? `memory:${anchor.memoryId}` : '',
-    anchor.eventId ? `event:${anchor.eventId}` : '',
-    anchor.sessionId ? `session:${anchor.sessionId}` : '',
-    anchor.role ? `role:${anchor.role}` : '',
+    anchor.memoryId ? `memory:${serializeUntrustedMemory(anchor.memoryId, 160)}` : '',
+    anchor.eventId ? `event:${serializeUntrustedMemory(anchor.eventId, 160)}` : '',
+    anchor.sessionId ? `session:${serializeUntrustedMemory(anchor.sessionId, 160)}` : '',
+    anchor.role ? `role:${serializeUntrustedMemory(anchor.role, 80)}` : '',
   ].filter(Boolean).join('; ');
-}
-
-function escapeAttribute(value: string): string {
-  return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
 function clampBlock(text: string, closingTag: string, maxChars: number): string {

@@ -17,9 +17,10 @@ import { printCliJson } from './CliJson.js';
 
 interface MemoryArgs {
   command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
-    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline';
+    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex';
   query?: string;
   eventId?: string;
+  episodeId?: string;
   nodeId?: string;
   fromId?: string;
   toId?: string;
@@ -85,6 +86,7 @@ function readArgs(argv: string[]): MemoryArgs {
     command,
     query: stringArg(values, 'query') || stringArg(values, 'q'),
     eventId: stringArg(values, 'event') || stringArg(values, 'event-id'),
+    episodeId: stringArg(values, 'episode') || stringArg(values, 'episode-id'),
     nodeId: stringArg(values, 'id') || stringArg(values, 'node-id'),
     fromId: stringArg(values, 'from'),
     toId: stringArg(values, 'to'),
@@ -154,6 +156,7 @@ function usage(): string {
     '  graph-neighbors      expand --id by --hops 1..2',
     '  graph-path           find a bounded path from --from to --to',
     '  graph-timeline       reconstruct entity/time/action history for --query',
+    '  graph-reindex        reproject one Atlas episode/card by --event or --episode without rebuilding the whole graph',
     '',
     'Common options:',
     '  --project <id>       scope to one project',
@@ -180,7 +183,7 @@ function usage(): string {
     '  --interval-ms <n>    watch sleep interval, default 300000',
     '  --max-runs <n>       stop watch after n iterations; omit for long-running worker',
     '  --agent <id>         agent id for governed recall, default openclaw',
-    '  --intent <intent>    memory_recall, previous_session_summary, forensic_quote, or historical_discussion',
+    '  --intent <intent>    memory_recall, previous_session_summary, forensic_quote, historical_discussion, or action_history',
     '  --db <memory.db>     open an explicit database path',
     '  --config <toml>      open a cogmem TOML config',
   '  --include-evidence   include bounded raw excerpts; event ids are always returned',
@@ -217,7 +220,8 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'graph-node'
     || value === 'graph-neighbors'
     || value === 'graph-path'
-    || value === 'graph-timeline';
+    || value === 'graph-timeline'
+    || value === 'graph-reindex';
 }
 
 function reviewActionArg(values: Record<string, string | boolean>, key: string): MemoryArgs['reviewAction'] {
@@ -233,8 +237,8 @@ function recallIntentArg(
 ): AgentRecallIntent | undefined {
   const raw = stringArg(values, key);
   if (!raw) return undefined;
-  if (raw === 'memory_recall' || raw === 'previous_session_summary' || raw === 'forensic_quote' || raw === 'historical_discussion') return raw;
-  throw new Error(`--${key} must be one of memory_recall, previous_session_summary, forensic_quote, historical_discussion`);
+  if (raw === 'memory_recall' || raw === 'previous_session_summary' || raw === 'forensic_quote' || raw === 'historical_discussion' || raw === 'action_history') return raw;
+  throw new Error(`--${key} must be one of memory_recall, previous_session_summary, forensic_quote, historical_discussion, action_history`);
 }
 
 function orderArg(values: Record<string, string | boolean>, key: string): MemoryArgs['order'] {
@@ -703,6 +707,11 @@ function runGraphCommand(kernel: MemoryKernel, args: MemoryArgs): Record<string,
     evidenceLimit: args.evidenceLimit, now: args.now,
     refresh: args.refresh ? true : (args.staleOk ? false : undefined),
     staleOk: args.staleOk || !args.refresh };
+  if (args.command === 'graph-reindex') {
+    if (!args.eventId && !args.episodeId) throw new Error(`graph-reindex requires --event or --episode.\n${usage()}`);
+    if (args.eventId && args.episodeId) throw new Error(`graph-reindex accepts exactly one of --event or --episode.\n${usage()}`);
+    return kernel.reindexMemoryAtlas({ projectId, eventId: args.eventId, episodeId: args.episodeId }) as unknown as Record<string, unknown>;
+  }
   if (args.command === 'graph') return kernel.graphOverview(options) as unknown as Record<string, unknown>;
   if (args.command === 'graph-search') {
     if (!args.query) throw new Error(`graph-search requires --query.\n${usage()}`);

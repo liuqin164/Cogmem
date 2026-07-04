@@ -1,4 +1,5 @@
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
+import { extractEntityCues, inferOperationalActionCue } from '../utils/EntityCueExtractor.js';
 const TITLE_RULES = [
     {
         id: 'memory_context_blackbox',
@@ -54,10 +55,12 @@ export class EpisodeTitleGenerator {
         const assistantText = normalizeText(assistantEvents.map(eventTextForMemory).join('\n'));
         const summaryText = normalizeText([input.summary, input.topicPath, input.episodeType].filter(Boolean).join('\n'));
         const preferredText = [userText, summaryText, assistantText].filter(Boolean).join('\n');
+        const operationTitle = inferOperationTitle(preferredText);
         const matchedRule = TITLE_RULES.find((rule) => rule.test(preferredText));
         const localDate = inferLocalDate(input.events, input.startedAt);
         const sourceEventIds = sourceIdsFor(userEvents.length > 0 ? userEvents : input.events);
         if (matchedRule) {
+            const matchedSourceEventIds = sourceIdsForMatching(userEvents.length > 0 ? userEvents : input.events, matchedRule.test) || sourceEventIds;
             return {
                 displayTitle: boundTitle(matchedRule.displayTitle),
                 oneLineSummary: matchedRule.oneLineSummary,
@@ -68,12 +71,33 @@ export class EpisodeTitleGenerator {
                 localDate,
                 confidence: matchedRule.confidence,
                 reviewNeeded: matchedRule.confidence < 0.65,
-                sourceEventIds,
+                sourceEventIds: matchedSourceEventIds,
                 generatorTrace: {
                     usedUserText: userText.length > 0,
                     usedAssistantText: userText.length === 0 && assistantText.length > 0,
                     fallback: false,
                     matchedRules: [matchedRule.id],
+                },
+            };
+        }
+        if (operationTitle) {
+            const matchedSourceEventIds = sourceIdsForMatching(userEvents.length > 0 ? userEvents : input.events, (text) => Boolean(inferOperationTitle(text))) || sourceEventIds;
+            return {
+                displayTitle: boundTitle(operationTitle.displayTitle),
+                oneLineSummary: operationTitle.oneLineSummary,
+                topicHints: operationTitle.topicHints,
+                issueHints: [],
+                eventKind: 'operation',
+                userIntent: 'action_history',
+                localDate,
+                confidence: 0.82,
+                reviewNeeded: false,
+                sourceEventIds: matchedSourceEventIds,
+                generatorTrace: {
+                    usedUserText: userText.length > 0,
+                    usedAssistantText: userText.length === 0 && assistantText.length > 0,
+                    fallback: false,
+                    matchedRules: ['generic_entity_operation'],
                 },
             };
         }
@@ -100,8 +124,23 @@ export class EpisodeTitleGenerator {
 function normalizeText(text) {
     return text.replace(/\s+/g, ' ').trim();
 }
+function inferOperationTitle(text) {
+    const action = inferOperationalActionCue(text);
+    const entity = extractEntityCues(text, 1)[0];
+    if (!action || !entity)
+        return undefined;
+    return {
+        displayTitle: `${entity.label} ${action.label}`,
+        oneLineSummary: `用户要求对 ${entity.label} 执行${action.verb}相关操作。`,
+        topicHints: [entity.id],
+    };
+}
 function sourceIdsFor(events) {
     return events.map((event) => event.eventId).filter(Boolean).slice(0, 20);
+}
+function sourceIdsForMatching(events, test) {
+    const matched = events.filter((event) => test(eventTextForMemory(event)));
+    return matched.length ? sourceIdsFor(matched) : undefined;
 }
 function inferLocalDate(events, startedAt) {
     for (const event of events) {
@@ -140,8 +179,8 @@ function inferTopicHints(text) {
         hints.add('memory');
     if (/openclaw/i.test(text))
         hints.add('openclaw');
-    if (/hermes/i.test(text))
-        hints.add('hermes');
+    for (const entity of extractEntityCues(text, 4))
+        hints.add(entity.id);
     return Array.from(hints);
 }
 function normalizeKind(kind) {

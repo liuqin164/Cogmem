@@ -1,3 +1,6 @@
+import { extractEntityCues } from '../utils/EntityCueExtractor.js';
+import { ACTION_KIND_RULES } from '../utils/ActionKindRegistry.js';
+
 export type FacetType = 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind';
 export type FacetOperator = 'intersection' | 'union';
 
@@ -27,6 +30,8 @@ export interface FacetQueryPlan {
 export interface FacetQueryPlannerOptions {
   projectId: string;
   now?: number;
+  localDateNow?: string;
+  timeZone?: string;
 }
 
 const ISSUE_RULES = [
@@ -61,7 +66,7 @@ const TOPIC_RULES = [
   {
     value: 'source-drilldown',
     label: '原文下钻',
-    test: (text: string) => /(sourcecontext|source context|原文下钻|原话|摘要.*原文)/i.test(text),
+    test: (text: string) => /(sourcecontext|source context|原文下钻|摘要.*原文)/i.test(text),
   },
   {
     value: 'context-injection',
@@ -74,7 +79,8 @@ export class FacetQueryPlanner {
   plan(query: string, options: FacetQueryPlannerOptions): FacetQueryPlan {
     const normalized = query.trim();
     const facets: PlannedFacet[] = [];
-    const timeFacet = parseTimeFacet(normalized, options.now ?? Date.now());
+    const actionHistory = isActionHistoryQuery(normalized);
+    const timeFacet = parseTimeFacet(normalized, options);
     if (timeFacet) facets.push(withNodeId(timeFacet, options.projectId));
     const timeline = /(后来|继续|timeline|演化|发展|之后)/i.test(normalized);
     const matchedIssueValues = new Set<string>();
@@ -96,16 +102,23 @@ export class FacetQueryPlanner {
       facets.push(withNodeId({ type: 'issue', value: 'memory-context-blackbox', label: 'Memory Context 黑盒', relation: 'PART_OF_ISSUE' }, options.projectId));
     }
 
-    for (const entity of ['Cogmem', 'OpenClaw', 'Hermes']) {
-      if (new RegExp(entity, 'i').test(normalized)) {
-        facets.push({ type: 'entity', value: `facet:${entity.toLowerCase()}`, label: entity, nodeId: `entity:facet:${entity.toLowerCase()}`, relation: 'INVOLVES_ENTITY' });
+    for (const entity of extractEntityCues(normalized)) {
+      if (!actionHistory && isConceptFacetEntity(entity, facets)) continue;
+      facets.push({ type: 'entity', value: `facet:${entity.id}`, label: entity.label, nodeId: `entity:${options.projectId}:facet:${entity.id}`, relation: 'INVOLVES_ENTITY' });
+      if (actionHistory) {
+        facets.push(withNodeId({ type: 'topic', value: `PROJECT/${options.projectId}/${entity.id}`, label: entity.label, relation: 'ABOUT_TOPIC' }, options.projectId));
       }
     }
 
     for (const facet of parseKindFacets(normalized, options.projectId)) facets.push(facet);
+    if (actionHistory && (!facets.some((facet) => facet.type === 'actionKind') || !hasSpecificActionCue(normalized))) {
+      for (const value of ['started', 'installed', 'configured', 'restarted', 'stopped', 'operated', 'implemented', 'debugged']) {
+        facets.push(withNodeId({ type: 'actionKind', value, label: value, relation: 'HAS_ACTION_KIND' }, options.projectId));
+      }
+    }
 
     return {
-      intent: /聊过|记得|还记得|讨论|原话|那次/i.test(normalized) ? 'historical_discussion' : 'graph_search',
+      intent: actionHistory ? 'action_history' : /聊过|记得|还记得|讨论|原话|那次/i.test(normalized) ? 'historical_discussion' : 'graph_search',
       operator: 'intersection',
       facets: dedupeFacets(facets),
       temporalIntent: timeline ? 'timeline' : undefined,
@@ -118,9 +131,27 @@ export class FacetQueryPlanner {
   }
 }
 
+function isActionHistoryQuery(query: string): boolean {
+  return /(让你.{0,20}(对|给|把)?.{0,20}(做过|做了|启动|安装|配置|修改|重启|停止|操作|处理|执行)|对.{0,30}(做过什么|做了什么|哪些操作)|what did (i ask you to do|you do) to|operations? on)/i.test(query);
+}
+
+function hasSpecificActionCue(query: string): boolean {
+  return /(启动|start|started|launch|launched|boot|安装|install|installed|setup|配置|config|configured|设置|修改配置|重启|restart|停止|stop|修复|实现|implemented|review|审查|debug|排查|卡死|locked|zombie)/i.test(query);
+}
+
 function isBroadMemoryBlackbox(query: string): boolean {
   return /(记忆黑盒|memory.*blackbox)/i.test(query) &&
     !/(memory graph|graph|database locked|sqlite|zombie|僵尸|卡死|atlas|图谱|节点|事件名称|自动注入|before_prompt_build|manual recall|手动.*recall)/i.test(query);
+}
+
+function isConceptFacetEntity(entity: { label: string; id: string }, facets: PlannedFacet[]): boolean {
+  const label = entity.label.toLocaleLowerCase();
+  return facets.some((facet) => {
+    if (facet.type !== 'topic' && facet.type !== 'issue') return false;
+    const facetLabel = facet.label.toLocaleLowerCase();
+    const facetSlug = facet.value.split('/').pop()?.toLocaleLowerCase();
+    return label === facetLabel || label.includes(facetLabel) || Boolean(facetSlug && entity.id === facetSlug);
+  });
 }
 
 function parseKindFacets(query: string, projectId: string): PlannedFacet[] {
@@ -130,22 +161,17 @@ function parseKindFacets(query: string, projectId: string): PlannedFacet[] {
     ['decision', /(decision|决定|方案|结论)/i],
     ['plan', /(计划|下一步|策略|plan)/i],
   ];
-  const actionKindRules: Array<[string, RegExp]> = [
-    ['implemented', /(修复|实现|implemented|合并|发布|升级)/i],
-    ['reviewed', /(检查|审查|review)/i],
-    ['debugged', /(debug|排查|卡死|locked|zombie)/i],
-  ];
   for (const [value, test] of memoryKindRules) {
     if (test.test(query)) facets.push(withNodeId({ type: 'memoryKind', value, label: value, relation: 'HAS_MEMORY_KIND' }, projectId));
   }
-  for (const [value, test] of actionKindRules) {
-    if (test.test(query)) facets.push(withNodeId({ type: 'actionKind', value, label: value, relation: 'HAS_ACTION_KIND' }, projectId));
+  for (const rule of ACTION_KIND_RULES) {
+    if (rule.pattern.test(query)) facets.push(withNodeId({ type: 'actionKind', value: rule.kind, label: rule.kind, relation: 'HAS_ACTION_KIND' }, projectId));
   }
   return facets;
 }
 
-function parseTimeFacet(query: string, now: number): PlannedFacet | undefined {
-  const currentYear = new Date(now).getUTCFullYear();
+function parseTimeFacet(query: string, options: FacetQueryPlannerOptions): PlannedFacet | undefined {
+  const currentYear = localYear(options);
   const isoDay = query.match(/(20\d{2})[-年\/.](\d{1,2})[-月\/.](\d{1,2})日?/);
   if (isoDay) return dayFacet(Number(isoDay[1]), Number(isoDay[2]), Number(isoDay[3]));
   const cnDay = query.match(/(?:(20\d{2})年)?(\d{1,2})月(\d{1,2})(?:号|日)?/);
@@ -156,6 +182,23 @@ function parseTimeFacet(query: string, now: number): PlannedFacet | undefined {
   if (year) return yearFacet(Number(year[1] ?? year[3]));
   if (/去年/.test(query)) return yearFacet(currentYear - 1);
   return undefined;
+}
+
+function localYear(options: FacetQueryPlannerOptions): number {
+  const explicit = options.localDateNow?.match(/^(20\d{2})-\d{2}-\d{2}$/u)?.[1];
+  if (explicit) return Number(explicit);
+  const now = options.now ?? Date.now();
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: options.timeZone || 'Asia/Tokyo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date(now));
+    const year = parts.find((part) => part.type === 'year')?.value;
+    if (year) return Number(year);
+  } catch { /* fall back below */ }
+  return new Date(now).getUTCFullYear();
 }
 
 function dayFacet(year: number, month: number, day: number): PlannedFacet {

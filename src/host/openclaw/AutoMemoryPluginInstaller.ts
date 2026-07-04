@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 
 const PLUGIN_ID = 'cogmem-auto-memory';
-const PLUGIN_VERSION = '0.7.0';
+const PLUGIN_VERSION = '0.7.1';
 
 function defaultPublicEntrypoint(): string {
   return join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), 'public.js');
@@ -593,15 +593,29 @@ function createMemoryUsageReceipt(input) {
 
 function formatSourceAnchor(anchor) {
   return [
-    anchor.memoryId ? 'memory:' + anchor.memoryId : '',
-    anchor.eventId ? 'event:' + anchor.eventId : '',
-    anchor.sessionId ? 'session:' + anchor.sessionId : '',
-    anchor.role ? 'role:' + anchor.role : '',
+    anchor.memoryId ? 'memory:' + serializeUntrustedMemory(anchor.memoryId, 160) : '',
+    anchor.eventId ? 'event:' + serializeUntrustedMemory(anchor.eventId, 160) : '',
+    anchor.sessionId ? 'session:' + serializeUntrustedMemory(anchor.sessionId, 160) : '',
+    anchor.role ? 'role:' + serializeUntrustedMemory(anchor.role, 80) : '',
   ].filter(Boolean).join('; ');
 }
 
 function listLines(values) {
-  return values.length ? values.map((value) => '- ' + value) : ['- none'];
+  return values.length ? values.map((value) => '- ' + serializeUntrustedMemory(value, 260)) : ['- none'];
+}
+
+function serializeUntrustedMemory(input, limit) {
+  const clean = stripCogmemRecallBlocks(String(input || '')).text
+    .replace(new RegExp('</?COGMEM_[A-Z0-9_:-]+[^>]*>', 'gi'), '')
+    .replace(new RegExp('[\\\\u0000-\\\\u0008\\\\u000b\\\\u000c\\\\u000e-\\\\u001f\\\\u007f]', 'g'), ' ')
+    .replace(new RegExp('\\\\s+', 'g'), ' ')
+    .trim()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+  return clean.slice(0, Math.max(0, Number(limit || 500)));
 }
 
 function clampBlock(text, closingTag, maxChars) {
@@ -612,14 +626,14 @@ function clampBlock(text, closingTag, maxChars) {
 
 function formatMemoryUsageBridge(receipt, maxChars) {
   const lines = [
-    '<COGMEM_TURN_BRIDGE turn_id="' + String(receipt.turnId).replace(/"/g, '&quot;') + '" source="cogmem" compact="true" ttl_turns="' + receipt.ttlTurns + '" compile_allowed="false">',
+    '<COGMEM_TURN_BRIDGE turn_id="' + serializeUntrustedMemory(receipt.turnId, 180) + '" source="cogmem" compact="true" ttl_turns="' + receipt.ttlTurns + '" compile_allowed="false">',
     'Previous assistant answer used Cogmem memory.',
     '',
     'Used memory themes:',
     ...listLines(receipt.usedThemes || []),
     '',
     'Working conclusion produced in that turn:',
-    '- ' + (receipt.workingConclusion || 'No compact conclusion recorded.'),
+    '- ' + serializeUntrustedMemory(receipt.workingConclusion || 'No compact conclusion recorded.', 260),
     '',
     'Source anchors:',
     ...listLines((receipt.sourceAnchors || []).map(formatSourceAnchor)),
@@ -685,7 +699,7 @@ function formatSessionWorkingState(state, maxChars) {
   const lines = [
     '<COGMEM_SESSION_STATE scope="current_session" compact="true" persistence="session_only" compile_allowed="false">',
     'Current working topic:',
-    '- ' + (state.currentTopic || 'unspecified'),
+    '- ' + serializeUntrustedMemory(state.currentTopic || 'unspecified', 180),
     '',
     'Current design direction:',
     ...listLines(state.designDirection || []),
@@ -739,6 +753,9 @@ function classifyRecallIntent(query) {
   }
   if (/原话|怎么说的|完整对话|上一句|下一句|exact quote|verbatim/.test(text)) {
     return 'forensic_quote';
+  }
+  if (/(让你.{0,20}(对|给|把)?.{0,20}(做过|做了|启动|安装|配置|修改|重启|停止|操作|处理|执行)|对.{0,30}(做过什么|做了什么|哪些操作)|what did (i ask you to do|you do) to|operations? on)/i.test(text)) {
+    return 'action_history';
   }
   if (/记得.{0,12}(聊过|讨论过|说过)|还记得|之前.{0,12}(聊过|讨论过|说过)|以前.{0,12}(聊过|讨论过|说过)|(过去|几个月前|半年前|上个月|前几天|昨天|上次|上个).{0,20}(聊过|讨论过|说过)|当时.{0,12}(聊|说|问)|那次.{0,12}(聊|说|问)|有没有.{0,12}(记录|聊过|讨论过)|have we discussed|did we talk about|previously discussed/.test(text)) {
     return 'historical_discussion';
@@ -1392,7 +1409,7 @@ async function recallPayload(input, config, kernel, memory, formatStrategyContex
   let result = await memory.recall({
     agentId: config.agentId || 'openclaw', projectId: config.projectId || 'openclaw',
     query: input.query || '', sessionId: input.sessionId, threadId: input.threadId,
-    excludeSessionId: input.excludeSessionId, intent: input.intent || 'memory_recall',
+    excludeSessionId: input.excludeSessionId, intent: input.intent || undefined,
     anchorEventId: input.anchorEventId, anchorText: input.anchorText,
     limit: Number(config.limit || 3), retrievalPolicy: strategyCapsule && strategyCapsule.retrievalPolicy,
   });
@@ -1405,7 +1422,7 @@ async function recallPayload(input, config, kernel, memory, formatStrategyContex
     result = await memory.recall({
       agentId: config.agentId || 'openclaw', projectId: config.projectId || 'openclaw',
       query: input.query || '', sessionId: input.sessionId, threadId: input.threadId,
-      excludeSessionId: input.excludeSessionId, intent: input.intent || 'memory_recall',
+      excludeSessionId: input.excludeSessionId, intent: input.intent || undefined,
       anchorEventId: input.anchorEventId, anchorText: input.anchorText,
       limit: Number(config.limit || 3), retrievalPolicy: strategyCapsule && strategyCapsule.retrievalPolicy,
     });
@@ -1446,7 +1463,7 @@ async function recallPayload(input, config, kernel, memory, formatStrategyContex
   return {
     context: recallContext ? (strategyCapsule ? formatStrategyContext(strategyCapsule) + '\n\n' : '') + recallContext : '',
     items: compactRecallItems(plannedResult.items, config), itemCount: plannedResult.items.length,
-    recallMode: result.recallMode, fallbackUsed: result.fallbackUsed, intent: input.intent || 'memory_recall',
+    recallMode: result.recallMode, fallbackUsed: result.fallbackUsed, intent: (result.queryPlan && result.queryPlan.intent) || input.intent || 'memory_recall',
     anchorEventId: anchorItem && anchorItem.sourceAnchor && anchorItem.sourceAnchor.eventId,
     anchorText: anchorItem && anchorItem.text, queryPlan: result.queryPlan, decisionTrace: result.decisionTrace,
     atlasCards: result.atlasCards, selectedEpisodeCards,
@@ -1548,10 +1565,20 @@ function formatAtlasContext(result, maxChars) {
 }
 
 function safeAtlasText(input, limit) {
+  return serializeUntrustedMemory(input, limit);
+}
+
+function serializeUntrustedMemory(input, limit) {
   const clean = stripCogmemRecallBlocks(String(input || '')).text
-    .replace(/[<>]/g, (value) => value === '<' ? '\\u003c' : '\\u003e')
+    .replace(/<\/?COGMEM_[A-Z0-9_:-]+[^>]*>/gi, '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
   return clean.slice(0, Math.max(0, Number(limit || 500)));
 }
 
@@ -1851,43 +1878,43 @@ function formatRecallContext(result, config) {
     lines.push('selectedMemoryCards=' + result.atlasCards.slice(0, Number(config.memoryContextMaxItems || config.limit || 3)).map(formatAtlasCard).join(' | '));
   }
   if (Array.isArray(result.relaxationTrace) && result.relaxationTrace.length) {
-    lines.push('relaxationTrace=' + result.relaxationTrace.map((step) => step.from + ' -> ' + step.to + ' (' + step.reason + ')').join(' | '));
+    lines.push('relaxationTrace=' + result.relaxationTrace.map((step) => serializeUntrustedMemory(step.from, 80) + ' -> ' + serializeUntrustedMemory(step.to, 80) + ' (' + serializeUntrustedMemory(step.reason, 160) + ')').join(' | '));
   }
   if (Array.isArray(result.relatedButNotSelected) && result.relatedButNotSelected.length) {
-    lines.push('relatedButNotSelected=' + result.relatedButNotSelected.slice(0, 4).map((item) => item.displayTitle + ' [' + item.reason + ']').join(' | '));
+    lines.push('relatedButNotSelected=' + result.relatedButNotSelected.slice(0, 4).map((item) => serializeUntrustedMemory(item.displayTitle, 160) + ' [' + serializeUntrustedMemory(item.reason, 160) + ']').join(' | '));
   }
   lines.push('');
   if (result.narrative && result.narrative.summary) {
-    lines.push(result.narrative.summary);
+    lines.push(serializeUntrustedMemory(result.narrative.summary, 800));
   }
   const maxItems = Number(config.memoryContextMaxItems || config.limit || 3);
   const sourceWindowMaxChars = Number(config.sourceWindowMaxChars || 1200);
   const includeSourceWindow = config.includeSourceWindowByDefault === true;
   for (const item of result.items.slice(0, maxItems)) {
-    const source = item.source ? ' [' + item.source + ']' : '';
-    lines.push('- ' + item.text + source);
+    const source = item.source ? ' [' + serializeUntrustedMemory(item.source, 220) + ']' : '';
+    lines.push('- ' + serializeUntrustedMemory(item.text, 500) + source);
     const sourceType = item.sourceType || 'compiled_memory';
     const quote = item.canAnswerExactQuote === true ? 'true' : 'false';
     const confidence = Number.isFinite(item.confidence) ? String(item.confidence) : 'unknown';
-    const anchor = item.sourceAnchor ? '; anchorEvent=' + (item.sourceAnchor.eventId || 'unknown')
-      + (item.sourceAnchor.sessionId ? '; session=' + item.sourceAnchor.sessionId : '')
-      + (item.sourceAnchor.role ? '; role=' + item.sourceAnchor.role : '') : '';
-    const why = item.whyMatched ? '; whyMatched=' + item.whyMatched : '';
-    const canonical = item.canonicalId ? '; canonicalId=' + item.canonicalId : '';
+    const anchor = item.sourceAnchor ? '; anchorEvent=' + serializeUntrustedMemory(item.sourceAnchor.eventId || 'unknown', 160)
+      + (item.sourceAnchor.sessionId ? '; session=' + serializeUntrustedMemory(item.sourceAnchor.sessionId, 160) : '')
+      + (item.sourceAnchor.role ? '; role=' + serializeUntrustedMemory(item.sourceAnchor.role, 80) : '') : '';
+    const why = item.whyMatched ? '; whyMatched=' + serializeUntrustedMemory(item.whyMatched, 180) : '';
+    const canonical = item.canonicalId ? '; canonicalId=' + serializeUntrustedMemory(item.canonicalId, 180) : '';
     const matchedFacets = Array.isArray(item.matchedFacets) && item.matchedFacets.length
-      ? '; matchedFacets=' + item.matchedFacets.map((facet) => facet.type + ':' + facet.value).join(',')
+      ? '; matchedFacets=' + item.matchedFacets.map((facet) => serializeUntrustedMemory(facet.type, 80) + ':' + serializeUntrustedMemory(facet.value, 160)).join(',')
       : '';
-    lines.push('  sourceType=' + sourceType + '; confidence=' + confidence + '; canAnswerExactQuote=' + quote + canonical + matchedFacets + anchor + why);
+    lines.push('  sourceType=' + serializeUntrustedMemory(sourceType, 120) + '; confidence=' + confidence + '; canAnswerExactQuote=' + quote + canonical + matchedFacets + anchor + why);
     if (item.sourceContext && item.sourceContext.event) {
       const anchorEvent = item.sourceContext.event;
       const anchorFormatted = formatContextEvent(anchorEvent, Math.min(220, sourceWindowMaxChars));
       lines.push('  sourceContext=' + anchorFormatted.line);
       lines.push('  sourceWindow=' + formatSourceWindow(item.sourceContext.window, item.sourceContext));
       if (item.sourceContext.locator && item.sourceContext.locator.command) {
-        lines.push('  sourceLocator=' + item.sourceContext.locator.command);
+        lines.push('  sourceLocator=' + serializeUntrustedMemory(item.sourceContext.locator.command, 500));
       } else if (item.sourceContext.event.eventId) {
         const project = item.sourceContext.event.projectId ? ' --project ' + item.sourceContext.event.projectId : '';
-        lines.push('  sourceLocator=cogmem memory show --event ' + item.sourceContext.event.eventId + project + ' --before 2 --after 2 --json');
+        lines.push('  sourceLocator=' + serializeUntrustedMemory('cogmem memory show --event ' + item.sourceContext.event.eventId + project + ' --before 2 --after 2 --json', 500));
       }
       const seenEventIds = new Set([anchorEvent.eventId].filter(Boolean));
       const before = uniqueWindowEvents(Array.isArray(item.sourceContext.before) ? item.sourceContext.before : [], seenEventIds).slice(-2);
@@ -1932,16 +1959,16 @@ function formatRecallDecision(trace) {
 
 function formatAtlasCard(card) {
   const facets = Array.isArray(card && card.matchedFacets)
-    ? card.matchedFacets.map((facet) => facet.type + ':' + facet.value).join(',')
+    ? card.matchedFacets.map((facet) => serializeUntrustedMemory(facet.type, 80) + ':' + serializeUntrustedMemory(facet.value, 160)).join(',')
     : '';
   const paths = Array.isArray(card && card.matchedPaths)
-    ? card.matchedPaths.map((path) => path.relation + '@' + (path.facet && path.facet.nodeId || 'facet')).slice(0, 6).join(',')
+    ? card.matchedPaths.map((path) => serializeUntrustedMemory(path.relation, 80) + '@' + serializeUntrustedMemory(path.facet && path.facet.nodeId || 'facet', 180)).slice(0, 6).join(',')
     : '';
-  const locator = card && card.sourceLocator && card.sourceLocator.command ? '; sourceLocator=' + card.sourceLocator.command : '';
-  const why = card && card.whyMatched ? '; whyMatched=' + truncateLineWithMeta(card.whyMatched, 180).text : '';
-  return (card && card.canonicalId || 'episode:unknown')
-    + '; title=' + truncateLineWithMeta(card && card.displayTitle, 120).text
-    + '; summary=' + truncateLineWithMeta(card && card.oneLineSummary, 180).text
+  const locator = card && card.sourceLocator && card.sourceLocator.command ? '; sourceLocator=' + serializeUntrustedMemory(card.sourceLocator.command, 500) : '';
+  const why = card && card.whyMatched ? '; whyMatched=' + serializeUntrustedMemory(card.whyMatched, 180) : '';
+  return serializeUntrustedMemory(card && card.canonicalId || 'episode:unknown', 180)
+    + '; title=' + serializeUntrustedMemory(card && card.displayTitle, 120)
+    + '; summary=' + serializeUntrustedMemory(card && card.oneLineSummary, 180)
     + (facets ? '; matchedFacets=' + facets : '')
     + (paths ? '; matchedPaths=' + paths : '')
     + why
@@ -1956,10 +1983,10 @@ function clampRecallContext(text, maxChars) {
 }
 
 function formatContextEvent(event, limit) {
-  const truncation = truncateLineWithMeta(event && event.text, limit);
-  const label = contextEventLabel(event);
-  const role = event && event.role ? event.role : 'unknown';
-  const eventId = event && event.eventId ? event.eventId : 'unknown';
+  const truncation = truncateLineWithMeta(serializeUntrustedMemory(event && event.text, limit), limit);
+  const label = serializeUntrustedMemory(contextEventLabel(event), 120);
+  const role = serializeUntrustedMemory(event && event.role ? event.role : 'unknown', 80);
+  const eventId = serializeUntrustedMemory(event && event.eventId ? event.eventId : 'unknown', 160);
   const charRange = event && event.charRange ? '; charRange=' + event.charRange.start + '-' + event.charRange.end : '';
   const sourceRange = formatSourceRange(event && event.sourceRange);
   const textLength = Number.isFinite(event && event.textLength) ? event.textLength : truncation.originalChars;
@@ -1981,17 +2008,17 @@ function formatSourceWindow(window, context) {
   const dropped = Array.isArray(window && window.droppedOverlapEventIds) ? window.droppedOverlapEventIds : [];
   return 'before=' + formatWindowSide(before)
     + '; after=' + formatWindowSide(after)
-    + '; overlap=' + (overlapEventIds.length ? overlapEventIds.join(',') : 'none')
-    + '; droppedOverlap=' + (dropped.length ? dropped.join(',') : 'none')
-    + '; overlapHandling=' + ((window && window.overlapHandling) || 'drop_from_after');
+    + '; overlap=' + (overlapEventIds.length ? overlapEventIds.map((id) => serializeUntrustedMemory(id, 120)).join(',') : 'none')
+    + '; droppedOverlap=' + (dropped.length ? dropped.map((id) => serializeUntrustedMemory(id, 120)).join(',') : 'none')
+    + '; overlapHandling=' + serializeUntrustedMemory((window && window.overlapHandling) || 'drop_from_after', 120);
 }
 
 function formatWindowSide(side) {
   return 'requestedCount=' + Number(side.requestedCount || 0)
     + ', count=' + Number(side.count || 0)
     + ', excludesAnchor=' + (side.excludesAnchor !== false)
-    + ', ordering=' + (side.ordering || 'chronological')
-    + ', roleFilter=' + (side.roleFilter || 'all');
+    + ', ordering=' + serializeUntrustedMemory(side.ordering || 'chronological', 80)
+    + ', roleFilter=' + serializeUntrustedMemory(side.roleFilter || 'all', 80);
 }
 
 function uniqueWindowEvents(events, seenEventIds) {

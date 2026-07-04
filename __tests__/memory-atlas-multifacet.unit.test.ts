@@ -65,6 +65,27 @@ function seedMemoryBlackboxTimeline(kernel: MemoryKernel) {
   return { context, graph, atlas };
 }
 
+function seedOperation(kernel: MemoryKernel, input: { entity: string; eventId: string; sessionId: string; text: string }) {
+  const event = addEpisode(kernel, {
+    eventId: input.eventId,
+    sessionId: input.sessionId,
+    localDate: '2026-06-05',
+    occurredAt: Date.UTC(2026, 5, 5, 12, 22),
+    text: input.text,
+  });
+  kernel.rebuildMemoryAtlas({ projectId: 'openclaw' });
+  return event;
+}
+
+function seedHermesOperation(kernel: MemoryKernel) {
+  return seedOperation(kernel, {
+    entity: 'Hermes',
+    eventId: 'evt-26d73f7c-ab5f-45be-b6d3-7ab5fa93d547',
+    sessionId: 'session-2026-06-05-hermes',
+    text: '启动本机安装的Hermes',
+  });
+}
+
 test('EpisodeTitleGenerator creates short issue-specific titles from user evidence', () => {
   const generator = new EpisodeTitleGenerator();
   const result = generator.generate({
@@ -142,6 +163,7 @@ test('FacetQueryPlanner prefers Memory Context issue for broad non-timeline memo
   const timeline = planner.plan('记忆黑盒后来有没有继续讨论？', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3) });
   expect(timeline.temporalIntent).toBe('timeline');
   expect(timeline.facets.some((facet) => facet.type === 'issue' && facet.value === 'memory-context-blackbox')).toBe(false);
+  expect(broad.facets.some((facet) => facet.type === 'entity' && facet.value === 'facet:记忆黑盒')).toBe(false);
 });
 
 test('FacetQueryPlanner parses memoryKind and actionKind facets', () => {
@@ -152,6 +174,271 @@ test('FacetQueryPlanner parses memoryKind and actionKind facets', () => {
   expect(planner.plan('之前实现过哪些修复？', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3) }).facets).toEqual(expect.arrayContaining([
     expect.objectContaining({ type: 'actionKind', value: 'implemented' }),
   ]));
+  const actionHistory = planner.plan('查查还记不记得我之前让你对Hermes做过什么', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3) });
+  expect(actionHistory.intent).toBe('action_history');
+  expect(actionHistory.facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'entity', value: 'facet:hermes', nodeId: 'entity:openclaw:facet:hermes' }),
+    expect.objectContaining({ type: 'topic', value: 'PROJECT/openclaw/hermes' }),
+    expect.objectContaining({ type: 'actionKind', value: 'started' }),
+    expect.objectContaining({ type: 'actionKind', value: 'installed' }),
+  ]));
+  const genericActionHistory = planner.plan('查查还记不记得我之前让你对Raycast做过什么', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3) });
+  expect(genericActionHistory.intent).toBe('action_history');
+  expect(genericActionHistory.facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'entity', value: 'facet:raycast' }),
+    expect.objectContaining({ type: 'topic', value: 'PROJECT/openclaw/raycast' }),
+    expect.objectContaining({ type: 'actionKind', value: 'operated' }),
+  ]));
+});
+
+test('FacetQueryPlanner infers yearless dates from local date, not UTC year', () => {
+  const planner = new FacetQueryPlanner();
+  const plan = planner.plan('1月1日的原话', {
+    projectId: 'openclaw',
+    now: Date.UTC(2026, 11, 31, 15, 30),
+    timeZone: 'Asia/Tokyo',
+  });
+  expect(plan.facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'time', value: '2027-01-01' }),
+  ]));
+  expect(planner.plan('1月1日的原话', {
+    projectId: 'openclaw',
+    now: Date.UTC(2026, 0, 1),
+    localDateNow: '2028-01-01',
+  }).facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'time', value: '2028-01-01' }),
+  ]));
+});
+
+test('FacetQueryPlanner extracts Unicode entity cues in ordinary historical queries', () => {
+  const planner = new FacetQueryPlanner();
+  const options = { projectId: 'openclaw', now: Date.UTC(2026, 6, 3) };
+  expect(planner.plan('之前聊过张三什么？', options).facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'entity', value: 'facet:张三', nodeId: 'entity:openclaw:facet:张三' }),
+  ]));
+  expect(planner.plan('之前聊过レイキャスト什么？', options).facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'entity', value: 'facet:レイキャスト', nodeId: 'entity:openclaw:facet:レイキャスト' }),
+  ]));
+  expect(planner.plan('之前聊过Гермес什么？', options).facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'entity', value: 'facet:гермес', nodeId: 'entity:openclaw:facet:гермес' }),
+  ]));
+  expect(planner.plan('之前聊过헤르메스什么？', options).facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'entity', value: 'facet:헤르메스', nodeId: 'entity:openclaw:facet:헤르메스' }),
+  ]));
+});
+
+test('generic entity action-history facets do not depend on Hermes', () => {
+  const kernel = createKernel();
+  try {
+    const event = seedOperation(kernel, {
+      entity: 'Raycast',
+      eventId: 'evt-generic-raycast-start',
+      sessionId: 'session-2026-06-05-raycast',
+      text: '启动本机安装的Raycast',
+    });
+    const result = kernel.graphTimeline('对 Raycast 做过什么操作', {
+      projectId: 'openclaw',
+      now: Date.UTC(2026, 6, 3),
+      includeEvidence: true,
+      limit: 10,
+    });
+    const card = result.cards?.[0];
+    expect(card?.displayTitle).toContain('Raycast');
+    expect(card?.matchedFacets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'entity', value: 'facet:raycast' }),
+      expect.objectContaining({ type: 'actionKind', value: 'started' }),
+    ]));
+    expect(card?.sourceLocator?.eventId).toBe(event.eventId);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('Hermes action-history queries surface the canonical 2026-06-05 operation card', () => {
+  const kernel = createKernel();
+  try {
+    const event = seedHermesOperation(kernel);
+    for (const query of ['Hermes', '启动 Hermes', '6月5日 Hermes']) {
+      const result = kernel.graphExplore(query, {
+        projectId: 'openclaw',
+        now: Date.UTC(2026, 6, 3),
+        includeEvidence: true,
+        limit: 10,
+      });
+      expect(result.cards?.[0]?.displayTitle).toContain('Hermes');
+      expect(result.cards?.[0]?.evidenceEventIds).toContain(event.eventId);
+      expect(result.cards?.[0]?.sourceLocator?.command).toContain(`memory show --event ${event.eventId}`);
+    }
+    const timeline = kernel.graphTimeline('对 Hermes 做过什么操作', {
+      projectId: 'openclaw',
+      now: Date.UTC(2026, 6, 3),
+      includeEvidence: true,
+      limit: 10,
+    });
+    const card = timeline.cards?.[0];
+    expect(card?.displayTitle).toContain('Hermes');
+    expect(card?.localDate).toBe('2026-06-05');
+    expect(card?.matchedFacets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'entity', value: 'facet:hermes' }),
+      expect.objectContaining({ type: 'actionKind', value: 'started' }),
+    ]));
+    expect(card?.sourceLocator?.command).toContain(`memory show --event ${event.eventId}`);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('action-history recall selects Hermes operation and suppresses unrelated compiled memories', async () => {
+  const kernel = createKernel();
+  try {
+    const event = seedHermesOperation(kernel);
+    await kernel.ingest({
+      projectId: 'openclaw',
+      content: '6月28日 memory graph zombie process 和 Bun factory bug 导致 database locked。',
+      tags: ['agent:openclaw'],
+    });
+    const result = new KernelAgentMemoryBackend(kernel).recall({
+      agentId: 'openclaw',
+      projectId: 'openclaw',
+      sessionId: 'current',
+      query: '查查还记不记得我之前让你对Hermes做过什么',
+      limit: 5,
+    });
+    expect(result.queryPlan?.intent).toBe('action_history');
+    expect(result.decisionTrace?.selectedLane).toBe('facet_graph_raw_ledger');
+    expect(result.atlasCards?.[0]?.displayTitle).toContain('Hermes');
+    expect(result.items[0]?.sourceAnchor?.eventId).toBe(event.eventId);
+    expect(result.items.map((item) => item.text).join('\n')).not.toContain('zombie process');
+  } finally {
+    kernel.close();
+  }
+});
+
+test('action-history compiled fallback requires entity and operational action match', async () => {
+  const kernel = createKernel();
+  try {
+    await kernel.ingest({
+      projectId: 'openclaw',
+      content: '检查 Hermes 数据库是否被锁，memory graph zombie process 和 Bun factory bug 导致 database locked。',
+      tags: ['agent:openclaw'],
+    });
+    await kernel.ingest({
+      projectId: 'openclaw',
+      content: '用户要求启动本机安装的 Hermes。',
+      tags: ['agent:openclaw'],
+    });
+    const result = new KernelAgentMemoryBackend(kernel).recall({
+      agentId: 'openclaw',
+      projectId: 'openclaw',
+      sessionId: 'current',
+      query: '查查还记不记得我之前让你对Hermes做过什么',
+      retrievalPolicy: { allowedLanes: ['compiled'], preferredLanes: ['compiled'] },
+      limit: 5,
+    });
+    const text = result.items.map((item) => item.text).join('\n');
+    expect(text).toContain('启动本机安装的 Hermes');
+    expect(text).not.toContain('database locked');
+    expect(result.decisionTrace?.reason).toBe('action_history');
+  } finally {
+    kernel.close();
+  }
+});
+
+test('Atlas cards dedupe overlapping episodes by primary raw evidence', () => {
+  const kernel = createKernel();
+  try {
+    const event = seedHermesOperation(kernel);
+    const episodeId = kernel.episodeStore.getEventLink(event.eventId)?.episodeId;
+    expect(episodeId).toBeTruthy();
+    kernel.memoryAtlasStore.upsertDocument({
+      id: 'episode:episode-duplicate-hermes',
+      projectId: 'openclaw',
+      nodeType: 'episode',
+      sourceId: 'episode-duplicate-hermes',
+      label: 'Hermes 启动重复 episode',
+      summary: '用户要求启动本机安装的 Hermes。',
+      topicPath: 'PROJECT/openclaw/hermes',
+      confidence: 0.9,
+      supportCount: 1,
+      status: 'active',
+      occurredAt: Date.UTC(2026, 5, 5, 12, 22),
+      evidenceEventIds: [event.eventId],
+      metadata: {
+        localDate: '2026-06-05',
+        topicHints: ['PROJECT/openclaw/hermes'],
+        eventKind: 'operation',
+      },
+    });
+    kernel.memoryAtlasStore.db.prepare(`
+      INSERT INTO memory_edges(
+        edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,confidence,base_weight,stability,activation,
+        evidence_event_ids_json,status,valid_from,valid_to,version,source_authority,created_at,updated_at
+      )
+      SELECT 'dup-' || edge_id,project_id,source_type,'episode-duplicate-hermes',relation_type,target_type,target_id,confidence,base_weight,stability,activation,
+        evidence_event_ids_json,status,valid_from,valid_to,version,source_authority,created_at,updated_at
+      FROM memory_edges
+      WHERE project_id='openclaw' AND source_type='episode' AND source_id=?
+    `).run(episodeId);
+
+    const result = kernel.graphExplore('启动 Hermes', {
+      projectId: 'openclaw',
+      now: Date.UTC(2026, 6, 3),
+      includeEvidence: true,
+      limit: 10,
+      refresh: false,
+    });
+    expect(result.cards?.filter((card) => card.evidenceEventIds.includes(event.eventId))).toHaveLength(1);
+    expect(result.cards?.[0]?.relatedButNotSelected?.some((card) => card.reason === 'same primary raw evidence')).toBe(true);
+    expect(result.cards?.[0]?.relatedButNotSelected).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'same primary raw evidence' }),
+    ]));
+  } finally {
+    kernel.close();
+  }
+});
+
+test('forensic quote recall uses raw sourceLocator for 6月5日 original wording', () => {
+  const kernel = createKernel();
+  try {
+    const event = seedHermesOperation(kernel);
+    const result = new KernelAgentMemoryBackend(kernel).recall({
+      agentId: 'openclaw',
+      projectId: 'openclaw',
+      sessionId: 'current',
+      query: '能精确到6月5日的原文吗？我的原话',
+      limit: 5,
+    });
+    expect(result.queryPlan?.intent).toBe('forensic_quote');
+    expect(result.items[0]?.sourceType).toBe('raw_ledger');
+    expect(result.items[0]?.sourceAnchor?.eventId).toBe(event.eventId);
+    expect(result.items[0]?.sourceContext?.locator.command).toContain(`memory show --event ${event.eventId}`);
+    expect(result.items[0]?.canAnswerExactQuote).toBe(true);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('targeted graph reindex restores one episode facets by raw event id', () => {
+  const kernel = createKernel();
+  try {
+    const event = seedHermesOperation(kernel);
+    const episodeId = kernel.episodeStore.getEventLink(event.eventId)?.episodeId;
+    expect(episodeId).toBeTruthy();
+    kernel.memoryAtlasStore.db.prepare(`
+      DELETE FROM memory_edges
+      WHERE project_id='openclaw' AND source_authority='atlas_curator'
+        AND source_type='episode' AND source_id=?
+    `).run(episodeId);
+    expect(kernel.graphExplore('启动 Hermes', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3), limit: 10, refresh: false }).cards ?? []).toHaveLength(0);
+    const reindexed = kernel.reindexMemoryAtlas({ projectId: 'openclaw', eventId: event.eventId });
+    expect(reindexed.episodeIds).toContain(episodeId);
+    expect(kernel.memoryAtlasStore.getProjectionState('openclaw')?.status).toBe('dirty');
+    const result = kernel.graphExplore('启动 Hermes', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3), limit: 10, refresh: false });
+    expect(result.cards?.[0]?.displayTitle).toContain('Hermes');
+    expect(result.cards?.[0]?.sourceLocator?.eventId).toBe(event.eventId);
+  } finally {
+    kernel.close();
+  }
 });
 
 test('broad memory-blackbox recall selects initial Memory Context episode and leaves later issues related', () => {
@@ -245,6 +532,58 @@ test('graph-search shares facet relaxation and returns nearby day with trace', (
   }
 });
 
+test('facet relaxation can roll month queries up to year', () => {
+  const kernel = createKernel();
+  try {
+    addEpisode(kernel, {
+      eventId: 'evt-2026-07-03-atlas-readability',
+      sessionId: 'session-0703',
+      localDate: '2026-07-03',
+      occurredAt: Date.UTC(2026, 6, 3, 12),
+      text: 'Atlas 节点没有事件名称，需要多维图谱、父主题和 canonical episode 来解决记忆黑盒。',
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'openclaw' });
+    const result = kernel.graphSearch('2026年6月关于记忆黑盒聊过什么？', {
+      projectId: 'openclaw',
+      now: Date.UTC(2026, 6, 3),
+      includeEvidence: true,
+      limit: 10,
+    });
+    expect(result.cards?.[0]?.displayTitle).toBe('Atlas 节点命名与多维导航');
+    expect(result.relaxationTrace).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: '2026-06', to: '2026' }),
+    ]));
+  } finally {
+    kernel.close();
+  }
+});
+
+test('facet relaxation can fall back from specific issue to parent topic', () => {
+  const kernel = createKernel();
+  try {
+    addEpisode(kernel, {
+      eventId: 'evt-2026-06-28-graph-lock',
+      sessionId: 'session-0628',
+      localDate: '2026-06-28',
+      occurredAt: Date.UTC(2026, 5, 28, 12),
+      text: 'memory graph 卡死，database locked，还有 zombie process，属于记忆黑盒相关问题。',
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'openclaw' });
+    const result = kernel.graphSearch('记忆上下文是不是黑盒？', {
+      projectId: 'openclaw',
+      now: Date.UTC(2026, 6, 3),
+      includeEvidence: true,
+      limit: 10,
+    });
+    expect(result.cards?.[0]?.displayTitle).toBe('memory graph 卡死与数据库锁');
+    expect(result.relaxationTrace).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'memory-context-blackbox', to: 'PROJECT/openclaw/memory-blackbox' }),
+    ]));
+  } finally {
+    kernel.close();
+  }
+});
+
 test('3.7 projection ignores stale clean memory_atlas.v1 and writes clean memory_atlas.v2', () => {
   const kernel = createKernel();
   try {
@@ -268,7 +607,62 @@ test('3.7 projection ignores stale clean memory_atlas.v1 and writes clean memory
       WHERE project_id='openclaw' AND projection_name='memory_atlas.v2'
     `).get() as { status: string; metadata_json: string } | null;
     expect(row?.status).toBe('clean');
-    expect(JSON.parse(row!.metadata_json).projectionSchemaVersion).toBe('3.7.0');
+    expect(JSON.parse(row!.metadata_json).projectionSchemaVersion).toBe('3.7.2');
+  } finally {
+    kernel.close();
+  }
+});
+
+test('entity facet nodes are project-scoped and do not overwrite same-name entities', () => {
+  const kernel = createKernel();
+  try {
+    addEpisode(kernel, {
+      eventId: 'evt-project-a-hermes',
+      sessionId: 'session-a',
+      projectId: 'project-a',
+      localDate: '2026-06-05',
+      occurredAt: Date.UTC(2026, 5, 5, 10),
+      text: '启动本机安装的Hermes',
+    });
+    addEpisode(kernel, {
+      eventId: 'evt-project-b-hermes',
+      sessionId: 'session-b',
+      projectId: 'project-b',
+      localDate: '2026-06-05',
+      occurredAt: Date.UTC(2026, 5, 5, 11),
+      text: '启动本机安装的Hermes',
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'project-a' });
+    kernel.rebuildMemoryAtlas({ projectId: 'project-b' });
+    expect(kernel.memoryAtlasStore.getNode('entity:project-a:facet:hermes', 'project-a')?.projectId).toBe('project-a');
+    expect(kernel.memoryAtlasStore.getNode('entity:project-b:facet:hermes', 'project-b')?.projectId).toBe('project-b');
+    expect(kernel.memoryAtlasStore.getNode('entity:project-b:facet:hermes', 'project-a')).toBeNull();
+  } finally {
+    kernel.close();
+  }
+});
+
+test('forensic anchor rejects raw events outside the requested project', () => {
+  const kernel = createKernel();
+  try {
+    const foreign = addEpisode(kernel, {
+      eventId: 'evt-foreign-anchor',
+      sessionId: 'foreign-session',
+      projectId: 'project-b',
+      localDate: '2026-06-05',
+      occurredAt: Date.UTC(2026, 5, 5, 10),
+      text: '用户在另一个项目里的原话。',
+    });
+    const result = new KernelAgentMemoryBackend(kernel).recall({
+      agentId: 'openclaw',
+      projectId: 'project-a',
+      sessionId: 'current',
+      query: '我的原话是什么',
+      intent: 'forensic_quote',
+      anchorEventId: foreign.eventId,
+      limit: 3,
+    });
+    expect(result.items.some((item) => item.sourceAnchor?.eventId === foreign.eventId)).toBe(false);
   } finally {
     kernel.close();
   }

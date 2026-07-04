@@ -24,6 +24,8 @@ export interface FacetQueryPlan {
 export interface FacetQueryPlannerOptions {
     projectId: string;
     now?: number;
+    localDateNow?: string;
+    timeZone?: string;
 }
 export declare class FacetQueryPlanner {
     plan(query: string, options: FacetQueryPlannerOptions): FacetQueryPlan;

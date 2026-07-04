@@ -44,6 +44,7 @@ export class MemoryAtlasIndexer {
                     curatedEpisodes += result.episodeCount;
                     facetEdges += result.facetEdgeCount;
                     reviewNeeded += result.reviewNeeded;
+                    this.store.aggregateFacetNodeSupport(id);
                 }
                 if (projectId) {
                     this.store.markProjectionClean(projectId, { actions, curatedEpisodes, facetEdges, reviewNeeded });
@@ -65,6 +66,41 @@ export class MemoryAtlasIndexer {
             return { documents: this.store.countDocuments(options.projectId), actions: 0, refreshed: false };
         }
         return { ...this.rebuild(options), refreshed: true };
+    }
+    reindex(options) {
+        const episodeIds = new Set();
+        if (options.episodeId)
+            episodeIds.add(options.episodeId);
+        if (options.eventId) {
+            const rows = this.db.prepare(`SELECT episode_id FROM memory_episode_events WHERE event_id=?`).all(options.eventId);
+            for (const row of rows)
+                if (row.episode_id)
+                    episodeIds.add(row.episode_id);
+        }
+        const ids = Array.from(episodeIds);
+        if (!ids.length)
+            throw new Error('graph_reindex_target_not_found');
+        let result = { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
+        this.db.transaction(() => {
+            result = this.curator.rebuildEpisodes(options.projectId, ids);
+            this.store.markProjectionDirty(options.projectId, {
+                targetedReindex: true,
+                episodeIds: ids,
+                eventId: options.eventId,
+                curatedEpisodes: result.episodeCount,
+                facetEdges: result.facetEdgeCount,
+                reviewNeeded: result.reviewNeeded,
+                reason: 'targeted_reindex_requires_full_consistency_rebuild',
+            });
+        })();
+        return {
+            projectId: options.projectId,
+            episodeIds: ids,
+            refreshed: true,
+            curatedEpisodes: result.episodeCount,
+            facetEdges: result.facetEdgeCount,
+            reviewNeeded: result.reviewNeeded,
+        };
     }
     ensureAllFresh() {
         let documents = 0;

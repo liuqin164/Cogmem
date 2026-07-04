@@ -326,9 +326,15 @@ export type EpisodeRepairInput = {
 };
 export interface EpisodeRepairResult {
     repairId: string;
+    applied: boolean;
     operation: EpisodeRepairInput['operation'];
     affectedEpisodeIds: string[];
+    changedFields: string[];
     staleCandidateIds: string[];
+    requeuedDream: boolean;
+    graphRefreshNeeded: boolean;
+    nextCommands: string[];
+    note: string;
 }
 export interface ToolCallMemoryEventInput {
     projectId?: string;
@@ -634,6 +640,18 @@ export declare class MemoryKernel {
     }): {
         documents: number;
         actions: number;
+    };
+    reindexMemoryAtlas(options: {
+        projectId: string;
+        eventId?: string;
+        episodeId?: string;
+    }): {
+        projectId: string;
+        episodeIds: string[];
+        refreshed: boolean;
+        curatedEpisodes: number;
+        facetEdges: number;
+        reviewNeeded: number;
     };
     ensureMemoryAtlas(options: {
         projectId: string;

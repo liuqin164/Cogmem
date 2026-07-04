@@ -114,7 +114,7 @@ timeout_ms = 60000
 
 ## Migrate Existing Hermes Memory
 
-Upgrade a 3.5.2 database, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.0 schema/projection set in one backed-up command:
+Upgrade a 3.5.2 database, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.1 schema/projection set in one backed-up command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -214,9 +214,9 @@ Choose the graph tool from the question shape:
 - Direct factual question: `cogmem_recall`.
 - Exact wording: follow an event ID with `cogmem memory show`.
 
-Atlas combines whatever conditions the user supplies like table filters. Do not require entity + time + action. Project, day/month/year, topic, issue, entity/target, session/thread, memory kind, action kind, and ordinary cues may revive cold nodes together. Activation is visibility, not truth. Atlas summaries are hints and never replace raw evidence.
+Atlas combines whatever conditions the user supplies like table filters. Do not require entity + time + action. Project, day/month/year, topic, issue, entity/target, session/thread, memory kind, action kind, and ordinary cues may revive cold nodes together. Entity cue extraction accepts Unicode letter/number names, but it is not full NER and must not be treated as proof that two aliases are the same person/tool. Activation is visibility, not truth. Atlas summaries are hints and never replace raw evidence.
 
-In 3.7.0, `cogmem_graph_search`, `cogmem_graph_explore`, and historical recall can return canonical `cards[]`. Prefer cards over raw node labels for past-discussion questions. A card's `canonicalId` is the single episode identity; `matchedFacets` explains time/topic/issue/entity matches; `matchedPaths` explains how the card was reached; `relatedButNotSelected` is context only and must not replace the selected answer; `sourceLocator.command` is the command to inspect exact original text. If `relaxationTrace` exists, say the answer is a relaxed nearby match, not an exact hit.
+In 3.7.1, `cogmem_graph_search`, `cogmem_graph_explore`, and historical recall can return canonical `cards[]`. Prefer cards over raw node labels for past-discussion questions. A card's `canonicalId` is the single episode identity; `matchedFacets` explains time/topic/issue/entity matches; `matchedPaths` explains how the card was reached; `relatedButNotSelected` is context only and must not replace the selected answer; `sourceLocator.command` is the command to inspect exact original text. If `relaxationTrace` exists, say the answer is a relaxed match, not an exact hit; supported relaxations include day → month → year and issue → parent topic.
 
 When the prompt does not contain enough injected Cogmem context, do not search legacy memory files first. Ask Cogmem directly:
 
@@ -243,6 +243,13 @@ For “did we discuss this before?”, “几个月前是不是聊过…”, “
 
 ```bash
 cogmem memory recall --query "<past discussion question>" --intent historical_discussion --project hermes --agent hermes --json
+```
+
+For action-history questions such as “what did I ask you to do to <entity>?”, “启动 <tool>”, or “对 <entity> 做过什么操作”, use `action_history` or Atlas timeline. The entity is whatever project/tool/person/service the user mentions in memory; it is not limited to Hermes itself:
+
+```bash
+cogmem memory recall --query "我之前让你对 <实体或工具名> 做过什么" --intent action_history --project hermes --agent hermes --json
+cogmem memory graph-timeline --project hermes --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
 ```
 
 If the answer depends on exact wording or nearby context, run the returned `sourceLocator` or use a Raw Ledger cursor:

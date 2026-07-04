@@ -25,7 +25,7 @@ test('OpenClaw direct plugin routes broad history questions through Atlas withou
   expect(index).toContain("runBridge(navigationIntent === 'atlas_explore' && config.autoAtlas !== false ? 'context' : 'recall'");
   expect(index).not.toContain("runBridge('graph-explore'");
   expect(index).toContain('COGMEM_MEMORY_ATLAS');
-  expect(index).toContain("version: '0.7.0'");
+  expect(index).toContain("version: '0.7.1'");
   expect(bridge).toContain('kernel.graphExplore');
   expect(bridge).toContain('kernel.graphPath');
   expect(bridge).toContain('kernel.graphTimeline');
@@ -41,7 +41,8 @@ test('OpenClaw direct plugin routes broad history questions through Atlas withou
   expect(bridge).toContain('evidenceEventIds');
   expect(bridge).toContain('nodeDetails');
   expect(bridge).toContain('function safeAtlasText');
-  expect(bridge).toContain(String.raw`value === '<' ? '\\u003c' : '\\u003e'`);
+  expect(bridge).toContain('function serializeUntrustedMemory');
+  expect(bridge).toContain("replace(/</g, '&lt;')");
   expect(index).not.toContain('cogmem_graph_explore');
 });
 

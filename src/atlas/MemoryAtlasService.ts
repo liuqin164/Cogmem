@@ -81,7 +81,8 @@ export class MemoryAtlasService {
     const projectId = requiredProject(options.projectId); const hops = options.hops ?? 1;
     if (!Number.isInteger(hops) || hops < 1 || hops > 2) throw new Error('hops must be between 1 and 2');
     const limit = boundedLimit(options.limit);
-    const seen = new Set([boundedId(nodeId)]); let frontier = [...seen]; const selectedEdges: MemoryAtlasEdge[] = [];
+    const start = canonicalInputNodeId(this.store, boundedId(nodeId), projectId);
+    const seen = new Set([start]); let frontier = [...seen]; const selectedEdges: MemoryAtlasEdge[] = [];
     for (let depth = 0; depth < hops; depth += 1) {
       const next: string[] = [];
       const adjacentEdges = this.store.listEdgesForNodes(projectId, frontier, Math.max(60, limit * 20));
@@ -97,7 +98,8 @@ export class MemoryAtlasService {
 
   path(from: string, to: string, options: MemoryAtlasQueryOptions & { maxHops?: number }): MemoryAtlasPathResult {
     const projectId = requiredProject(options.projectId); const maxHops = Math.max(1, Math.min(options.maxHops ?? 6, 6));
-    const start = boundedId(from); const target = boundedId(to);
+    const start = canonicalInputNodeId(this.store, boundedId(from), projectId);
+    const target = canonicalInputNodeId(this.store, boundedId(to), projectId);
     const parents = new Map<string, { previous: string; edge: MemoryAtlasEdge }>();
     const best = new Map<string, number>([[start, 0]]);
     const queue: Array<{ id: string; cost: number; hops: number }> = [{ id: start, cost: 0, hops: 0 }];
@@ -175,13 +177,12 @@ export class MemoryAtlasService {
     let plan = this.facetPlanner.plan(boundedQuery(query), { projectId, now: options.now });
     const relaxationTrace: MemoryAtlasRelaxationStep[] = [];
     let cards = plan.facets.length ? this.store.searchCanonicalEpisodeCards(projectId, plan, limit) : [];
-    if (!cards.length && plan.facets.length) {
+    for (let attempt = 0; !cards.length && plan.facets.length && attempt < 3; attempt += 1) {
       const relaxed = relaxFacetPlan(plan);
-      if (relaxed) {
-        plan = relaxed.plan;
-        cards = this.store.searchCanonicalEpisodeCards(projectId, relaxed.plan, limit);
-        relaxationTrace.push(...relaxed.trace);
-      }
+      if (!relaxed) break;
+      plan = relaxed.plan;
+      cards = this.store.searchCanonicalEpisodeCards(projectId, plan, limit);
+      relaxationTrace.push(...relaxed.trace);
     }
     return { plan, cards, relaxationTrace };
   }
@@ -245,6 +246,15 @@ export class MemoryAtlasService {
   }
 }
 
+function canonicalInputNodeId(store: MemoryAtlasStore, id: string, projectId: string): string {
+  if (id.startsWith(`entity:${projectId}:`)) return id;
+  if (!id.startsWith('entity:')) return id;
+  const entityId = id.slice('entity:'.length);
+  if (!entityId.startsWith('facet:')) return id;
+  const scoped = `entity:${projectId}:${entityId}`;
+  return store.getNode(scoped, projectId) ? scoped : id;
+}
+
 function requiredProject(value: string): string { if (!value?.trim()) throw new Error('projectId is required for Memory Atlas queries'); return value.trim(); }
 function boundedLimit(value?: number): number { if (value !== undefined && (!Number.isFinite(value) || value < 1)) throw new Error('limit must be a positive number'); return Math.min(Math.floor(value ?? 8), 30); }
 function boundedQuery(value: string): string { const query = String(value || '').trim(); if (!query) throw new Error('query is required'); if (query.length > 1000) throw new Error('query exceeds 1000 characters'); return query; }
@@ -301,22 +311,56 @@ function groupCardsByIssue(cards: MemoryAtlasCard[]): Array<{ issueType: string;
 }
 function relaxFacetPlan(plan: FacetQueryPlan): { plan: FacetQueryPlan; trace: MemoryAtlasRelaxationStep[] } | null {
   const dayFacet = plan.facets.find((facet) => facet.type === 'time' && facet.granularity === 'day');
-  if (!dayFacet) return null;
-  const monthValue = dayFacet.value.slice(0, 7);
-  return {
-    plan: {
-      ...plan,
-      exactness: 'relaxed',
-      facets: plan.facets.map((facet) => facet === dayFacet ? {
-        ...facet,
+  if (dayFacet) {
+    const monthValue = dayFacet.value.slice(0, 7);
+    return {
+      plan: replaceFacet(plan, dayFacet, {
+        ...dayFacet,
         value: monthValue,
         label: monthValue,
-        nodeId: facet.nodeId?.replace(dayFacet.value, monthValue),
+        nodeId: dayFacet.nodeId?.replace(dayFacet.value, monthValue),
         relation: 'OCCURRED_IN',
         granularity: 'month',
-      } : facet),
-    },
-    trace: [{ from: dayFacet.value, to: monthValue, reason: 'exact day facet had no canonical episode match; relaxed to parent month' }],
+      }),
+      trace: [{ from: dayFacet.value, to: monthValue, reason: 'exact day facet had no canonical episode match; relaxed to parent month' }],
+    };
+  }
+  const monthFacet = plan.facets.find((facet) => facet.type === 'time' && facet.granularity === 'month');
+  if (monthFacet) {
+    const yearValue = monthFacet.value.slice(0, 4);
+    return {
+      plan: replaceFacet(plan, monthFacet, {
+        ...monthFacet,
+        value: yearValue,
+        label: yearValue,
+        nodeId: monthFacet.nodeId?.replace(monthFacet.value, yearValue),
+        relation: 'OCCURRED_IN',
+        granularity: 'year',
+      }),
+      trace: [{ from: monthFacet.value, to: yearValue, reason: 'exact month facet had no canonical episode match; relaxed to parent year' }],
+    };
+  }
+  const issueFacet = plan.facets.find((facet) => facet.type === 'issue');
+  const topicFacet = plan.facets.find((facet) => facet.type === 'topic');
+  if (issueFacet && topicFacet) {
+    return {
+      plan: {
+        ...plan,
+        exactness: 'relaxed',
+        requiresIntersection: plan.facets.length - 1 > 1,
+        facets: plan.facets.filter((facet) => facet !== issueFacet),
+      },
+      trace: [{ from: issueFacet.value, to: topicFacet.value, reason: 'issue facet had no canonical episode match; relaxed to parent topic' }],
+    };
+  }
+  return null;
+}
+
+function replaceFacet(plan: FacetQueryPlan, from: FacetQueryPlan['facets'][number], to: FacetQueryPlan['facets'][number]): FacetQueryPlan {
+  return {
+    ...plan,
+    exactness: 'relaxed',
+    facets: plan.facets.map((facet) => facet === from ? to : facet),
   };
 }
 function atlasSourceLocator(event: { eventId: string; globalSeq?: number; projectId?: string; threadId?: string; sessionId?: string; localDate?: string }, projectId: string): NonNullable<MemoryAtlasEvidence['sourceLocator']> {

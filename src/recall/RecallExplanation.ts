@@ -58,7 +58,7 @@ export interface RecallExplanation {
   projectId?: string;
   agentId?: string;
   collection?: string;
-  recallMode: MemoryKernelNavigationResult['recallMode'] | 'raw_ledger_fallback';
+  recallMode: MemoryKernelNavigationResult['recallMode'] | 'raw_ledger_fallback' | 'atlas_facet_recall' | 'atlas_raw_grounded_recall';
   fallbackUsed: boolean;
   narrative?: NonNullable<MemoryKernelNavigationResult['navigation']>['narrative'];
   pulseTrace?: NonNullable<MemoryKernelNavigationResult['navigation']>['pulse']['trace'];

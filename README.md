@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.7.0`
+Current version: `3.7.1`
 
 Distribution: npm registry. GitHub remains the source mirror and hosts this installer, but package install and upgrade resolve `cogmem` from npm by default.
 
@@ -229,7 +229,7 @@ cogmem migrate --dry-run --json
 
 For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
-Upgrade a 3.5.2 database, a 3.6.x database, or a pre-release schema-25 test database into the current 3.7.0 schema and projection set with one command:
+Upgrade a 3.5.2 database, a 3.6.x database, or a pre-release schema-25 test database into the current 3.7.1 schema and projection set with one command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -276,7 +276,7 @@ For a host timer, call `dream tick`; the timer only wakes the sealed-episode sch
 cogmem dream tick --project my-agent --mode auto --max-episodes 10 --json
 ```
 
-Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.7.0 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
+Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.7.1 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
 
 Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands use stable content identities and the same episode schema. Low-confidence imported groups soft-seal for review unless an operator explicitly forces sealing. Cogmem skips import batch sealing for empty episode boundaries and skips legacy empty Dream jobs so one bad imported episode cannot block the queue. Episode semantic summaries and closure receipts are control hints, never durable evidence; every Dream candidate must cite a non-empty subset of the episode's raw event IDs and still pass CPU governance.
 
@@ -304,24 +304,29 @@ cogmem memory review --project my-agent --id <candidate-id> --action approve --a
 
 `cogmem memory map` remains the system anatomy map. Memory Atlas is the content map. It does not replace recall or create a second fact store; it projects existing topics, entities, clusters, episodes, beliefs, action frames, time buckets, bindings, and evidence into a bounded navigation surface.
 
-In 3.7.0, Atlas is a multi-dimensional navigation graph rather than a folder tree. A remembered episode has one canonical node such as `episode:<id>`. Time, topic, issue, entity, session/thread, memory-kind, and action-kind nodes are facet entrances connected to that canonical episode with typed edges. Results dedupe by `canonicalId` and explain `matchedFacets` plus `matchedPaths`.
+In 3.7.1, Atlas is a multi-dimensional navigation graph rather than a folder tree. A remembered episode has one canonical node such as `episode:<id>`. Time, topic, issue, entity, session/thread, memory-kind, and action-kind nodes are facet entrances connected to that canonical episode with typed edges. Results dedupe by `canonicalId` and explain `matchedFacets` plus `matchedPaths`.
 
 ```bash
 cogmem memory graph --project my-agent --json
-cogmem memory graph-search --project my-agent --query "Hermes" --json
-cogmem memory graph-explore --project my-agent --query "去年我让你对 Hermes 做过什么" --json
+cogmem memory graph-search --project my-agent --query "<实体或工具名>" --json
+cogmem memory graph-explore --project my-agent --query "去年我让你对 <实体或工具名> 做过什么" --json
+cogmem memory graph-explore --project openclaw --query "启动 <工具名>" --json
 cogmem memory graph-explore --project openclaw --query "6月6号关于记忆黑盒聊过什么" --json
 cogmem memory graph-node --project my-agent --id "entity:<id>" --json
 cogmem memory graph-neighbors --project my-agent --id "entity:<id>" --hops 2 --json
 cogmem memory graph-path --project my-agent --from "entity:<id>" --to "action:<id>" --json
-cogmem memory graph-timeline --project my-agent --query "2025 Hermes 的决策和修复" --json
+cogmem memory graph-timeline --project my-agent --query "2025 <实体或工具名> 的决策和修复" --json
+cogmem memory graph-timeline --project openclaw --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
+cogmem memory graph-reindex --project openclaw --event <event-id> --json
 ```
 
-Atlas filtering is not limited to entity + time + action. The facet planner combines whichever facets are actually present, such as project, day/month/year, topic, issue, entity/person/project, session/thread, memory kind, action kind, and ordinary keywords. Strict multi-facet matches may surface cold nodes even when their activation has decayed. If strict intersection is empty, JSON includes `relaxationTrace` instead of silently pretending an exact match existed. Project scope and raw evidence validation are never bypassed.
+Atlas filtering is not limited to entity + time + action. The facet planner combines whichever facets are actually present, such as project, day/month/year, topic, issue, entity/person/project, session/thread, memory kind, action kind, and ordinary keywords. Entity cue extraction supports Unicode letter/number names in ordinary historical and action-history questions, but it is still deterministic cue extraction, not full named-entity recognition or an automatic alias merge graph. Strict multi-facet matches may surface cold nodes even when their activation has decayed. If strict intersection is empty, JSON includes `relaxationTrace` for explicit fallbacks such as day → month → year or issue → parent topic instead of silently pretending an exact match existed. Project scope and raw evidence validation are never bypassed.
 
 Defaults are 8 nodes, one hop, and two evidence IDs per node. Hard limits are 30 nodes, two hops, ten evidence IDs, six path hops, and 2,000 visited nodes. Raw excerpts are omitted unless `--include-evidence` or `includeEvidence: true` is explicit. `evidenceTotal` reports all known evidence while `evidenceReturned` reports the bounded payload. Every returned evidence item carries an `eventId` and a `cogmem memory show` drilldown command.
 
-Atlas search and explore return agent-facing `cards` for canonical episodes. Each card includes `canonicalId`, `displayTitle`, `oneLineSummary`, `matchedFacets`, `matchedPaths`, `relatedButNotSelected`, and `sourceLocator.command` / `sourceLocator.contextCommand` when evidence is available. Agents should run that locator before quoting exact wording, before claiming a historical topic is absent, or when a graph summary looks relevant but underspecified.
+Atlas search and explore return agent-facing `cards` for canonical episodes. Each card includes `canonicalId`, `displayTitle`, `oneLineSummary`, `matchedFacets`, `matchedPaths`, `relatedButNotSelected`, and `sourceLocator.command` / `sourceLocator.contextCommand` when evidence is available. Cards dedupe overlapping episodes by primary raw evidence so the same event is not displayed twice through two episode IDs. Agents should run that locator before quoting exact wording, before claiming a historical topic is absent, or when a graph summary looks relevant but underspecified.
+
+Action-history questions such as “what did I ask you to do to <entity>?” route through entity + actionKind facets before compiled memory. Operational action kinds include `started`, `installed`, `configured`, `restarted`, `stopped`, and `operated`. If graph/raw evidence is empty and compiled candidates do not share both the query's entity and an operational action cue, Cogmem suppresses the unrelated compiled memory rather than injecting noise. Exact quote cues such as “我的原话”, “精确”, “exact quote”, or “verbatim” must use Raw Ledger/sourceLocator evidence and must not quote from daily memory files, imported summaries, or compiled memories alone.
 
 Atlas reads do not brighten everything they display. MCP graph queries are read-only/idempotent; call `cogmem_graph_touch` only after the agent actually uses selected nodes. Maintenance decays activation, refreshes dirty projections only, and prunes old access telemetry.
 
@@ -381,7 +386,7 @@ cogmem strategy plan --project hermes --query "我当时的原话是什么？" -
 cogmem strategy outcomes --project hermes --json
 ```
 
-OpenClaw plugin 0.7.0 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Navigation turns use one bridge/kernel lifecycle for Atlas exploration, evidence-bearing node/timeline drill-down, and recall. The bounded volatile `<COGMEM_MEMORY_ATLAS>` block includes selected memory cards, matched facets, matched paths, related-but-not-selected cards, evidence event IDs, and drill-down commands; OpenClaw does not need MCP for this path.
+OpenClaw plugin 0.7.1 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Navigation turns use one bridge/kernel lifecycle for Atlas exploration, evidence-bearing node/timeline drill-down, and recall. The bounded volatile `<COGMEM_MEMORY_ATLAS>` block includes selected memory cards, matched facets, matched paths, related-but-not-selected cards, evidence event IDs, and drill-down commands; OpenClaw does not need MCP for this path. Historical text, source windows, short-term bridge conclusions, and session-state strings are serialized as untrusted data before injection so stored memories cannot create or close `COGMEM_*` blocks.
 
 `cogmem connect openclaw --auto --force --json` and `cogmem connect hermes --auto --force --json` now return structured `nextSteps`. Only `nextSteps` with `actor: "agent"` and `safeForAutomation: true` are mirrored into `nextCommands`. Interactive setup, gateway restart, and Hermes reload remain visible as operator/host steps but are intentionally absent from `nextCommands`.
 
@@ -793,7 +798,7 @@ npm pack --dry-run --json
 npm publish --dry-run --access public
 ```
 
-Create a GitHub Release from the matching version tag, for example `v3.7.0`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
+Create a GitHub Release from the matching version tag, for example `v3.7.1`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
 
 Publish manually only for emergency fallback:
 

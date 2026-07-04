@@ -40,6 +40,9 @@ export interface AgentRecallQuery {
     intent?: AgentRecallIntent;
     anchorEventId?: string;
     anchorText?: string;
+    now?: number;
+    localDateNow?: string;
+    timeZone?: string;
     limit?: number;
     startTime?: number;
     endTime?: number;
@@ -167,7 +170,7 @@ export interface AgentRecallItem {
     canAnswerExactQuote?: boolean;
 }
 export interface AgentRecallResult {
-    recallMode: MemoryKernelNavigationResult['recallMode'] | 'raw_ledger_fallback';
+    recallMode: MemoryKernelNavigationResult['recallMode'] | 'raw_ledger_fallback' | 'atlas_facet_recall' | 'atlas_raw_grounded_recall';
     items: AgentRecallItem[];
     narrative?: NonNullable<MemoryKernelNavigationResult['navigation']>['narrative'];
     pulseTrace?: NonNullable<MemoryKernelNavigationResult['navigation']>['pulse']['trace'];
@@ -184,7 +187,7 @@ export interface AgentRecallResult {
 export interface AgentRecallDecisionTrace {
     version: 'agent_recall_decision.v1';
     selectedLane: 'facet_graph_raw_ledger' | 'graph' | 'compiled' | 'brain_fallback' | 'raw_ledger' | 'mixed' | 'none';
-    reason: 'previous_session' | 'forensic_quote' | 'historical_discussion' | 'graph_selected' | 'raw_cue_match_preferred' | 'compiled_cue_match' | 'brain_fallback_selected' | 'raw_ledger_only' | 'no_recall_evidence';
+    reason: 'previous_session' | 'forensic_quote' | 'historical_discussion' | 'action_history' | 'graph_selected' | 'raw_cue_match_preferred' | 'compiled_cue_match' | 'brain_fallback_selected' | 'raw_ledger_only' | 'no_recall_evidence';
     candidateCounts: {
         graph: number;
         navigation: number;
@@ -255,20 +258,25 @@ export declare class KernelAgentMemoryBackend {
     private recallPreviousSession;
     private recallForensicQuote;
     private recallHistoricalDiscussion;
+    private facetGraphQuoteItemsForQuery;
     private facetGraphItemsForQuery;
     private toAgentRecallItemFromAtlasCard;
     private recallForensicAnchor;
     private searchRawEventsByQueryPlan;
+    private rawEventsForLocalDateCue;
     private rawLedgerFallbackItemsForQuery;
     private memoryBindingGraphItemsForQuery;
     private graphRecallTextScore;
     private shouldPreferRawLedgerFallback;
     private itemsContainRecallCue;
     private recallCueTerms;
+    private queryHasStructuredCue;
+    private structuredCueTerms;
     private itemSearchableText;
     private mergeRecallItems;
     private mergeHistoricalRecallItems;
     private compiledItemsForHistoricalQuery;
+    private filterCompiledItemsByQueryCues;
     private dedupeRawEventsByTurnPreferUser;
     private expandRawSearchTexts;
     private findPreviousSessionId;
@@ -280,6 +288,7 @@ export declare class KernelAgentMemoryBackend {
     private filterAgentEvidence;
     private toAgentRecallItem;
     private isAgentRawEvent;
+    private isRawEventInRecallScope;
     private isOperationalNoiseRawEvent;
     private isAllowedSession;
     private hasReadableEventText;

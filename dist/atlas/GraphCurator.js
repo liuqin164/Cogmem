@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { EpisodeTitleGenerator } from './EpisodeTitleGenerator.js';
+import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
+import { inferActionKinds } from '../utils/ActionKindRegistry.js';
 const FACET_EDGE_RELATIONS = new Set([
     'OCCURRED_ON',
     'OCCURRED_IN',
@@ -37,6 +39,8 @@ export class GraphCurator {
         importance,summary,start_event_id,end_event_id,event_count,started_at,updated_at
       FROM memory_episodes
       WHERE project_id=?
+        AND COALESCE(event_count,0)>0
+        AND status NOT IN ('archived','rejected','merged','invalidated')
       ORDER BY started_at ASC, episode_id ASC
     `).all(projectId);
         const projections = [];
@@ -123,6 +127,99 @@ export class GraphCurator {
         facetEdgeCount += this.projectEpisodeRelations(projectId, projections, now);
         return { episodeCount: rows.length, facetNodeCount, facetEdgeCount, reviewNeeded };
     }
+    rebuildEpisodes(projectId, episodeIds, now = Date.now()) {
+        const bounded = Array.from(new Set(episodeIds.filter(Boolean))).slice(0, 100);
+        if (!bounded.length)
+            return { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
+        this.deleteFacetEdgesForEpisodes(projectId, bounded);
+        const rows = this.db.prepare(`
+      SELECT episode_id,project_id,session_id,conversation_thread_id,topic_path,episode_type,status,
+        importance,summary,start_event_id,end_event_id,event_count,started_at,updated_at
+      FROM memory_episodes
+      WHERE project_id=? AND episode_id IN (${bounded.map(() => '?').join(',')})
+        AND COALESCE(event_count,0)>0
+        AND status NOT IN ('archived','rejected','merged','invalidated')
+      ORDER BY started_at ASC, episode_id ASC
+    `).all(projectId, ...bounded);
+        let facetNodeCount = 0;
+        let facetEdgeCount = 0;
+        let reviewNeeded = 0;
+        for (const row of rows) {
+            const projection = this.projectEpisode(row, projectId, now);
+            facetNodeCount += projection.facetNodeCount;
+            facetEdgeCount += projection.facetEdgeCount;
+            reviewNeeded += projection.reviewNeeded;
+        }
+        return { episodeCount: rows.length, facetNodeCount, facetEdgeCount, reviewNeeded };
+    }
+    projectEpisode(row, projectId, now) {
+        const eventIds = this.episodeEventIds(row.episode_id);
+        const events = eventIds.map((eventId) => this.eventStore.getEvent(eventId)).filter((event) => Boolean(event));
+        const title = this.titleGenerator.generate({
+            episodeId: row.episode_id,
+            summary: row.summary,
+            topicPath: row.topic_path,
+            episodeType: row.episode_type,
+            startedAt: row.started_at,
+            events,
+        });
+        const evidenceEventIds = Array.from(new Set([...title.sourceEventIds, ...eventIds])).slice(0, 30);
+        this.atlasStore.upsertDocument({
+            id: `episode:${row.episode_id}`,
+            projectId,
+            nodeType: 'episode',
+            sourceId: row.episode_id,
+            label: title.displayTitle,
+            summary: title.oneLineSummary,
+            topicPath: row.topic_path || undefined,
+            confidence: Math.max(0.01, Math.min(1, Number(row.importance || 0.5))),
+            supportCount: Math.max(1, Number(row.event_count || evidenceEventIds.length || 1)),
+            status: row.status,
+            occurredAt: row.started_at,
+            evidenceEventIds,
+            metadata: {
+                originalSummary: row.summary || undefined,
+                displayTitle: title.displayTitle,
+                titleConfidence: title.confidence,
+                topicHints: title.topicHints,
+                issueHints: title.issueHints,
+                eventKind: title.eventKind,
+                userIntent: title.userIntent,
+                localDate: title.localDate,
+                reviewNeeded: title.reviewNeeded,
+                generatorTrace: title.generatorTrace,
+                episodeType: row.episode_type,
+                sessionId: row.session_id || undefined,
+                threadId: row.conversation_thread_id || undefined,
+                canonicalId: `episode:${row.episode_id}`,
+            },
+            updatedAt: now,
+        });
+        for (const event of events.slice(0, 30))
+            this.upsertRawEventNode(projectId, event, now);
+        const projection = { row, eventIds, events, issueHints: title.issueHints, topicHints: title.topicHints, localDate: title.localDate };
+        let facetNodeCount = 0;
+        let facetEdgeCount = 0;
+        for (const target of this.facetTargetsFor(projection)) {
+            this.upsertFacetNode(projectId, target, projection, now);
+            facetNodeCount += 1;
+            this.upsertEdge({
+                projectId,
+                sourceType: 'episode',
+                sourceId: row.episode_id,
+                relationType: target.relation,
+                targetType: target.type,
+                targetId: target.id,
+                confidence: target.confidence,
+                evidenceEventIds,
+                status: 'active',
+                sourceAuthority: 'atlas_curator',
+                now,
+            });
+            facetEdgeCount += 1;
+        }
+        return { projection, facetNodeCount, facetEdgeCount, reviewNeeded: title.reviewNeeded ? 1 : 0 };
+    }
     episodeEventIds(episodeId) {
         const rows = this.db.prepare(`SELECT event_id FROM memory_episode_events WHERE episode_id=? ORDER BY position ASC`).all(episodeId);
         return rows.map((row) => row.event_id).filter(Boolean);
@@ -147,7 +244,10 @@ export class GraphCurator {
             targets.push({ type: 'issue', id: issueHint, nodeId: `issue:${projection.row.project_id}:${issueHint}`, label: issueLabel(issueHint), relation: 'PART_OF_ISSUE', confidence: 0.9 });
         }
         for (const entity of this.entityHintsFor(projection)) {
-            targets.push({ type: 'entity', id: `facet:${entity.toLowerCase()}`, nodeId: `entity:facet:${entity.toLowerCase()}`, label: entity, relation: 'INVOLVES_ENTITY', confidence: 0.78 });
+            const entityId = normalizeEntityCueId(entity);
+            if (!entityId)
+                continue;
+            targets.push({ type: 'entity', id: `facet:${entityId}`, nodeId: `entity:${projection.row.project_id}:facet:${entityId}`, label: entity, relation: 'INVOLVES_ENTITY', confidence: 0.78 });
         }
         if (projection.row.session_id) {
             targets.push({ type: 'session', id: projection.row.session_id, nodeId: `session:${projection.row.project_id}:${projection.row.session_id}`, label: `Session ${projection.row.session_id}`, relation: 'IN_SESSION', confidence: 1 });
@@ -157,9 +257,9 @@ export class GraphCurator {
         }
         const memoryKind = normalizeKind(projection.issueHints[0] ? issueKind(projection.issueHints[0]) : projection.row.episode_type || 'discussion');
         targets.push({ type: 'memoryKind', id: memoryKind, nodeId: `memoryKind:${projection.row.project_id}:${memoryKind}`, label: memoryKind, relation: 'HAS_MEMORY_KIND', confidence: 0.75 });
-        const actionKind = actionKindFor(projection);
-        if (actionKind)
+        for (const actionKind of actionKindsFor(projection)) {
             targets.push({ type: 'actionKind', id: actionKind, nodeId: `actionKind:${projection.row.project_id}:${actionKind}`, label: actionKind, relation: 'HAS_ACTION_KIND', confidence: 0.7 });
+        }
         for (const eventId of projection.eventIds.slice(0, 30)) {
             targets.push({ type: 'raw_event', id: eventId, nodeId: `raw_event:${eventId}`, label: eventId, relation: 'HAS_EVIDENCE', confidence: 1 });
         }
@@ -280,6 +380,18 @@ export class GraphCurator {
         const relations = Array.from(FACET_EDGE_RELATIONS);
         this.db.prepare(`DELETE FROM memory_edges WHERE project_id=? AND source_authority='atlas_curator' AND relation_type IN (${relations.map(() => '?').join(',')})`).run(projectId, ...relations);
     }
+    deleteFacetEdgesForEpisodes(projectId, episodeIds) {
+        const relations = Array.from(FACET_EDGE_RELATIONS);
+        this.db.prepare(`
+      DELETE FROM memory_edges
+      WHERE project_id=? AND source_authority='atlas_curator'
+        AND relation_type IN (${relations.map(() => '?').join(',')})
+        AND (
+          (source_type='episode' AND source_id IN (${episodeIds.map(() => '?').join(',')}))
+          OR (target_type='episode' AND target_id IN (${episodeIds.map(() => '?').join(',')}))
+        )
+    `).run(projectId, ...relations, ...episodeIds, ...episodeIds);
+    }
     upsertEdge(input) {
         const edgeId = createHash('sha256')
             .update([input.projectId, input.sourceType, input.sourceId, input.relationType, input.targetType, input.targetId].join('\0'))
@@ -339,21 +451,13 @@ function issueKind(value) {
         return 'plan';
     return 'diagnostic';
 }
-function actionKindFor(projection) {
+function actionKindsFor(projection) {
     const text = projection.events.map(eventTextForMemory).join('\n');
-    if (/修复|fixed|implemented|实现|提交|升级|upgrade/i.test(text))
-        return 'implemented';
-    if (/review|审查|检查/i.test(text))
-        return 'reviewed';
-    if (/决定|decided|方案|策略/i.test(text))
-        return 'decided';
-    if (/debug|排查|卡死|locked|zombie/i.test(text))
-        return 'debugged';
-    return undefined;
+    return inferActionKinds(text);
 }
 function entityHints(events) {
     const text = events.map(eventTextForMemory).join('\n');
-    return ['Cogmem', 'OpenClaw', 'Hermes'].filter((entity) => new RegExp(entity, 'i').test(text));
+    return extractEntityCues(text).map((entity) => entity.label);
 }
 function facetSummary(target) {
     if (target.type === 'topic')
