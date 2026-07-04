@@ -217,7 +217,7 @@ Do not use `memory/*.md`, imported summaries, or compiled memories as the primar
 
 ## Memory Atlas
 
-Atlas combines whichever facets the question supplies, like table filters. Supported constraints include project, day/month/year, topic, issue, entity/target, session/thread, memory kind, action kind, and ordinary text cues. Do not require a fixed entity + time + action tuple. A canonical episode appears once even if it is reached through several facets.
+Atlas combines whichever facets the question supplies, like table filters. Supported constraints include project, day/month/year, topic, issue, entity/target, session/thread, memory kind, action kind, and ordinary text cues. Unicode letter/number entity cues are supported, but Atlas does not automatically prove aliases or merge identities. Do not require a fixed entity + time + action tuple. A canonical episode appears once even if it is reached through several facets.
 
 ```bash
 cogmem memory graph --project openclaw --json
@@ -246,7 +246,7 @@ Use `--no-refresh` during lock incidents and `--refresh` when the operator wants
 
 Graph reads are pure: overview/search/explore do not brighten what they display. In MCP, call `cogmem_graph_touch` only after the agent actually selects or uses nodes. Activation changes visibility, never evidence or truth. Exact scoped facets may revive cold nodes.
 
-Search/explore may return `cards[]` for canonical episodes. Use `cards[].displayTitle` for UI/readability, `oneLineSummary` as a hint, `matchedFacets` and `matchedPaths` to explain why it matched, and `canonicalId` to dedupe. `relatedButNotSelected` is context only; do not substitute it as the answer. If `relaxationTrace` exists, say the match was relaxed. Every evidence result distinguishes `evidenceTotal` from `evidenceReturned` and includes an event ID plus `sourceLocator.command` and `sourceLocator.contextCommand` drill-down commands. Use those locators before treating an Atlas summary as evidence.
+Search/explore may return `cards[]` for canonical episodes. Use `cards[].displayTitle` for UI/readability, `oneLineSummary` as a hint, `matchedFacets` and `matchedPaths` to explain why it matched, and `canonicalId` to dedupe. `relatedButNotSelected` is context only; do not substitute it as the answer. If `relaxationTrace` exists, say the match was relaxed; supported relaxations are day → month → year and issue → parent topic. Every evidence result distinguishes `evidenceTotal` from `evidenceReturned` and includes an event ID plus `sourceLocator.command` and `sourceLocator.contextCommand` drill-down commands. Use those locators before treating an Atlas summary as evidence.
 
 If an audited episode repair changes boundaries or classification, the JSON repair result contains `repairId`, `applied`, `affectedEpisodeIds`, `changedFields`, `requeuedDream`, `graphRefreshNeeded`, and `nextCommands`. `repairId` is an audit id, not a candidate id. Do not run `memory dream --promote` just because a repair returned a `repairId`. When `graphRefreshNeeded=true`, run the returned `graph-reindex` command, then verify with `graph-explore` or `graph-timeline`. Targeted reindex intentionally leaves Atlas dirty; run `cogmem memory tick --project openclaw --json` when full relation/action-frame consistency matters. Full Atlas rebuild still uses the normal SQLite writer path; schedule it outside latency-sensitive OpenClaw turns for large databases.
 

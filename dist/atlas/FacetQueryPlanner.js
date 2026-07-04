@@ -64,7 +64,7 @@ export class FacetQueryPlanner {
             facets.push(withNodeId({ type: 'issue', value: 'memory-context-blackbox', label: 'Memory Context 黑盒', relation: 'PART_OF_ISSUE' }, options.projectId));
         }
         for (const entity of extractEntityCues(normalized)) {
-            if (!actionHistory && !/[A-Za-z]/.test(entity.label))
+            if (!actionHistory && isConceptFacetEntity(entity, facets))
                 continue;
             facets.push({ type: 'entity', value: `facet:${entity.id}`, label: entity.label, nodeId: `entity:${options.projectId}:facet:${entity.id}`, relation: 'INVOLVES_ENTITY' });
             if (actionHistory) {
@@ -100,6 +100,16 @@ function hasSpecificActionCue(query) {
 function isBroadMemoryBlackbox(query) {
     return /(记忆黑盒|memory.*blackbox)/i.test(query) &&
         !/(memory graph|graph|database locked|sqlite|zombie|僵尸|卡死|atlas|图谱|节点|事件名称|自动注入|before_prompt_build|manual recall|手动.*recall)/i.test(query);
+}
+function isConceptFacetEntity(entity, facets) {
+    const label = entity.label.toLocaleLowerCase();
+    return facets.some((facet) => {
+        if (facet.type !== 'topic' && facet.type !== 'issue')
+            return false;
+        const facetLabel = facet.label.toLocaleLowerCase();
+        const facetSlug = facet.value.split('/').pop()?.toLocaleLowerCase();
+        return label === facetLabel || label.includes(facetLabel) || Boolean(facetSlug && entity.id === facetSlug);
+    });
 }
 function parseKindFacets(query, projectId) {
     const facets = [];

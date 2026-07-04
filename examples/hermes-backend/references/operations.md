@@ -153,7 +153,7 @@ Use `historical_discussion` for “did we discuss this before?”, “几个月�
 
 ## Memory Atlas as composable filters
 
-Atlas uses any available project, day/month/year, topic, issue, entity/target, session/thread, memory-kind, action-kind, and text facets together. It does not require an entity + time + operation tuple. A canonical episode appears once even if it is reached through several facets.
+Atlas uses any available project, day/month/year, topic, issue, entity/target, session/thread, memory-kind, action-kind, and text facets together. Unicode letter/number entity cues are supported, but Atlas does not automatically prove aliases or merge identities. It does not require an entity + time + operation tuple. A canonical episode appears once even if it is reached through several facets.
 
 ```bash
 cogmem memory graph --project hermes --json
@@ -177,7 +177,7 @@ Use MCP by question shape:
 - Direct fact: `cogmem_recall`.
 - Exact source: follow `evidenceEventIds` with `memory show`.
 
-Graph reads are pure and declared read-only/idempotent. Call `cogmem_graph_touch` only after using selected nodes. Overview display alone must not change future ranking. Search/explore may return `cards[]` for canonical episodes. Use `cards[].displayTitle` for UI/readability, `oneLineSummary` as a hint, `matchedFacets` and `matchedPaths` to explain why it matched, and `canonicalId` to dedupe. `relatedButNotSelected` is context only; do not substitute it as the answer. If `relaxationTrace` exists, say the match was relaxed. `evidenceTotal` is all known evidence; `evidenceReturned` is the bounded payload. Search/explore evidence includes `sourceLocator.command` and `sourceLocator.contextCommand`; use those locators before treating an Atlas summary as evidence.
+Graph reads are pure and declared read-only/idempotent. Call `cogmem_graph_touch` only after using selected nodes. Overview display alone must not change future ranking. Search/explore may return `cards[]` for canonical episodes. Use `cards[].displayTitle` for UI/readability, `oneLineSummary` as a hint, `matchedFacets` and `matchedPaths` to explain why it matched, and `canonicalId` to dedupe. `relatedButNotSelected` is context only; do not substitute it as the answer. If `relaxationTrace` exists, say the match was relaxed; supported relaxations are day → month → year and issue → parent topic. `evidenceTotal` is all known evidence; `evidenceReturned` is the bounded payload. Search/explore evidence includes `sourceLocator.command` and `sourceLocator.contextCommand`; use those locators before treating an Atlas summary as evidence.
 
 ## Candidate governance and review
 

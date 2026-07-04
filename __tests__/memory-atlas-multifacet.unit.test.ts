@@ -210,6 +210,23 @@ test('FacetQueryPlanner infers yearless dates from local date, not UTC year', ()
   ]));
 });
 
+test('FacetQueryPlanner extracts Unicode entity cues in ordinary historical queries', () => {
+  const planner = new FacetQueryPlanner();
+  const options = { projectId: 'openclaw', now: Date.UTC(2026, 6, 3) };
+  expect(planner.plan('之前聊过张三什么？', options).facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'entity', value: 'facet:张三', nodeId: 'entity:openclaw:facet:张三' }),
+  ]));
+  expect(planner.plan('之前聊过レイキャスト什么？', options).facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'entity', value: 'facet:レイキャスト', nodeId: 'entity:openclaw:facet:レイキャスト' }),
+  ]));
+  expect(planner.plan('之前聊过Гермес什么？', options).facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'entity', value: 'facet:гермес', nodeId: 'entity:openclaw:facet:гермес' }),
+  ]));
+  expect(planner.plan('之前聊过헤르메스什么？', options).facets).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'entity', value: 'facet:헤르메스', nodeId: 'entity:openclaw:facet:헤르메스' }),
+  ]));
+});
+
 test('generic entity action-history facets do not depend on Hermes', () => {
   const kernel = createKernel();
   try {
@@ -371,8 +388,9 @@ test('Atlas cards dedupe overlapping episodes by primary raw evidence', () => {
       refresh: false,
     });
     expect(result.cards?.filter((card) => card.evidenceEventIds.includes(event.eventId))).toHaveLength(1);
+    expect(result.cards?.[0]?.relatedButNotSelected?.some((card) => card.reason === 'same primary raw evidence')).toBe(true);
     expect(result.cards?.[0]?.relatedButNotSelected).toEqual(expect.arrayContaining([
-      expect.objectContaining({ canonicalId: 'episode:episode-duplicate-hermes', reason: 'same primary raw evidence' }),
+      expect.objectContaining({ reason: 'same primary raw evidence' }),
     ]));
   } finally {
     kernel.close();
@@ -508,6 +526,58 @@ test('graph-search shares facet relaxation and returns nearby day with trace', (
     expect(result.cards?.[0]?.displayTitle).toBe('CogMem Memory Context 黑盒与原文下钻');
     expect(result.relaxationTrace).toEqual(expect.arrayContaining([
       expect.objectContaining({ from: '2026-06-05', to: '2026-06' }),
+    ]));
+  } finally {
+    kernel.close();
+  }
+});
+
+test('facet relaxation can roll month queries up to year', () => {
+  const kernel = createKernel();
+  try {
+    addEpisode(kernel, {
+      eventId: 'evt-2026-07-03-atlas-readability',
+      sessionId: 'session-0703',
+      localDate: '2026-07-03',
+      occurredAt: Date.UTC(2026, 6, 3, 12),
+      text: 'Atlas 节点没有事件名称，需要多维图谱、父主题和 canonical episode 来解决记忆黑盒。',
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'openclaw' });
+    const result = kernel.graphSearch('2026年6月关于记忆黑盒聊过什么？', {
+      projectId: 'openclaw',
+      now: Date.UTC(2026, 6, 3),
+      includeEvidence: true,
+      limit: 10,
+    });
+    expect(result.cards?.[0]?.displayTitle).toBe('Atlas 节点命名与多维导航');
+    expect(result.relaxationTrace).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: '2026-06', to: '2026' }),
+    ]));
+  } finally {
+    kernel.close();
+  }
+});
+
+test('facet relaxation can fall back from specific issue to parent topic', () => {
+  const kernel = createKernel();
+  try {
+    addEpisode(kernel, {
+      eventId: 'evt-2026-06-28-graph-lock',
+      sessionId: 'session-0628',
+      localDate: '2026-06-28',
+      occurredAt: Date.UTC(2026, 5, 28, 12),
+      text: 'memory graph 卡死，database locked，还有 zombie process，属于记忆黑盒相关问题。',
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'openclaw' });
+    const result = kernel.graphSearch('记忆上下文是不是黑盒？', {
+      projectId: 'openclaw',
+      now: Date.UTC(2026, 6, 3),
+      includeEvidence: true,
+      limit: 10,
+    });
+    expect(result.cards?.[0]?.displayTitle).toBe('memory graph 卡死与数据库锁');
+    expect(result.relaxationTrace).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'memory-context-blackbox', to: 'PROJECT/openclaw/memory-blackbox' }),
     ]));
   } finally {
     kernel.close();

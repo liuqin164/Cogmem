@@ -7,6 +7,7 @@
 - Changed targeted `graph-reindex` to refresh the addressed episode/card but leave the project projection dirty until a full consistency rebuild restores relation/action-frame guarantees.
 - Tightened Raw Ledger forensic anchor scope checks so event anchors cannot bypass project/workspace/thread/session boundaries.
 - Fixed OpenClaw auto intent routing for `action_history`, exact-quote ranking for same-day raw events, issue-title precedence over generic operation titles, shared action-kind inference, stricter entity-plus-action compiled relevance, local-date year inference, and evidence-level Atlas card dedupe.
+- Extended generic Atlas entity cue extraction to Unicode letter/number names in ordinary historical queries, and expanded explicit relaxation traces from day → month to day → month → year plus issue → parent topic.
 - Updated OpenClaw plugin 0.7.1, docs, skills, and tests for the security/isolation hotfix.
 
 ## 3.7.0

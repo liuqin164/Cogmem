@@ -202,13 +202,13 @@ export class MemoryAtlasService {
         let plan = this.facetPlanner.plan(boundedQuery(query), { projectId, now: options.now });
         const relaxationTrace = [];
         let cards = plan.facets.length ? this.store.searchCanonicalEpisodeCards(projectId, plan, limit) : [];
-        if (!cards.length && plan.facets.length) {
+        for (let attempt = 0; !cards.length && plan.facets.length && attempt < 3; attempt += 1) {
             const relaxed = relaxFacetPlan(plan);
-            if (relaxed) {
-                plan = relaxed.plan;
-                cards = this.store.searchCanonicalEpisodeCards(projectId, relaxed.plan, limit);
-                relaxationTrace.push(...relaxed.trace);
-            }
+            if (!relaxed)
+                break;
+            plan = relaxed.plan;
+            cards = this.store.searchCanonicalEpisodeCards(projectId, plan, limit);
+            relaxationTrace.push(...relaxed.trace);
         }
         return { plan, cards, relaxationTrace };
     }
@@ -342,23 +342,55 @@ function groupCardsByIssue(cards) {
 }
 function relaxFacetPlan(plan) {
     const dayFacet = plan.facets.find((facet) => facet.type === 'time' && facet.granularity === 'day');
-    if (!dayFacet)
-        return null;
-    const monthValue = dayFacet.value.slice(0, 7);
-    return {
-        plan: {
-            ...plan,
-            exactness: 'relaxed',
-            facets: plan.facets.map((facet) => facet === dayFacet ? {
-                ...facet,
+    if (dayFacet) {
+        const monthValue = dayFacet.value.slice(0, 7);
+        return {
+            plan: replaceFacet(plan, dayFacet, {
+                ...dayFacet,
                 value: monthValue,
                 label: monthValue,
-                nodeId: facet.nodeId?.replace(dayFacet.value, monthValue),
+                nodeId: dayFacet.nodeId?.replace(dayFacet.value, monthValue),
                 relation: 'OCCURRED_IN',
                 granularity: 'month',
-            } : facet),
-        },
-        trace: [{ from: dayFacet.value, to: monthValue, reason: 'exact day facet had no canonical episode match; relaxed to parent month' }],
+            }),
+            trace: [{ from: dayFacet.value, to: monthValue, reason: 'exact day facet had no canonical episode match; relaxed to parent month' }],
+        };
+    }
+    const monthFacet = plan.facets.find((facet) => facet.type === 'time' && facet.granularity === 'month');
+    if (monthFacet) {
+        const yearValue = monthFacet.value.slice(0, 4);
+        return {
+            plan: replaceFacet(plan, monthFacet, {
+                ...monthFacet,
+                value: yearValue,
+                label: yearValue,
+                nodeId: monthFacet.nodeId?.replace(monthFacet.value, yearValue),
+                relation: 'OCCURRED_IN',
+                granularity: 'year',
+            }),
+            trace: [{ from: monthFacet.value, to: yearValue, reason: 'exact month facet had no canonical episode match; relaxed to parent year' }],
+        };
+    }
+    const issueFacet = plan.facets.find((facet) => facet.type === 'issue');
+    const topicFacet = plan.facets.find((facet) => facet.type === 'topic');
+    if (issueFacet && topicFacet) {
+        return {
+            plan: {
+                ...plan,
+                exactness: 'relaxed',
+                requiresIntersection: plan.facets.length - 1 > 1,
+                facets: plan.facets.filter((facet) => facet !== issueFacet),
+            },
+            trace: [{ from: issueFacet.value, to: topicFacet.value, reason: 'issue facet had no canonical episode match; relaxed to parent topic' }],
+        };
+    }
+    return null;
+}
+function replaceFacet(plan, from, to) {
+    return {
+        ...plan,
+        exactness: 'relaxed',
+        facets: plan.facets.map((facet) => facet === from ? to : facet),
     };
 }
 function atlasSourceLocator(event, projectId) {

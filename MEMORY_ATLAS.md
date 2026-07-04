@@ -38,7 +38,7 @@ Atlas summaries are `hint_only_not_evidence` in effect. Project scope, raw evide
 
 Activation controls default visibility, not existence. Maintenance decays Atlas activation deterministically; an explicit `cogmem_graph_touch` raises nodes that the agent actually used. Read-only overview/search/explore calls do not change ranking. A query can still surface a cold node when its available facets match.
 
-Facets include project, day/month/year, topic, issue, entity/person/project, session/thread, memory kind, action kind, and ordinary keywords. The engine combines the facets actually present in the message, similar to filtering multiple columns in a table. It does not require the fixed combination entity + time + action.
+Facets include project, day/month/year, topic, issue, entity/person/project, session/thread, memory kind, action kind, and ordinary keywords. The engine combines the facets actually present in the message, similar to filtering multiple columns in a table. It does not require the fixed combination entity + time + action. Entity cues are deterministic text cues and support Unicode letter/number names such as ordinary Chinese, Japanese, Korean, Cyrillic, and Latin labels; alias merging and person identity remain governed memory operations rather than automatic Atlas projection behavior.
 
 For example, all of these can revive cold memory:
 
@@ -53,7 +53,7 @@ For example, all of these can revive cold memory:
 - `去年 OpenClaw 失败的配置事件`
 - `餐车 POS 项目中关于库存的偏好`
 
-Exact constraints may bypass the visibility floor. They never bypass `projectId`, evidence validation, or traversal limits. If strict intersection is empty, Atlas may relax day to parent month or issue to parent topic, but JSON must include `relaxationTrace`; it must not silently substitute a nearby memory.
+Exact constraints may bypass the visibility floor. They never bypass `projectId`, evidence validation, or traversal limits. If strict intersection is empty, Atlas may relax day to parent month, month to parent year, or issue to parent topic, but JSON must include `relaxationTrace`; it must not silently substitute a nearby memory.
 
 `graph-search` and `graph-explore` include agent-facing `cards` when canonical episodes match:
 
