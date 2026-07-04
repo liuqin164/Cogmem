@@ -44,6 +44,7 @@ export class MemoryAtlasIndexer {
                     curatedEpisodes += result.episodeCount;
                     facetEdges += result.facetEdgeCount;
                     reviewNeeded += result.reviewNeeded;
+                    this.store.aggregateFacetNodeSupport(id);
                 }
                 if (projectId) {
                     this.store.markProjectionClean(projectId, { actions, curatedEpisodes, facetEdges, reviewNeeded });
@@ -82,13 +83,14 @@ export class MemoryAtlasIndexer {
         let result = { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
         this.db.transaction(() => {
             result = this.curator.rebuildEpisodes(options.projectId, ids);
-            this.store.markProjectionClean(options.projectId, {
+            this.store.markProjectionDirty(options.projectId, {
                 targetedReindex: true,
                 episodeIds: ids,
                 eventId: options.eventId,
                 curatedEpisodes: result.episodeCount,
                 facetEdges: result.facetEdgeCount,
                 reviewNeeded: result.reviewNeeded,
+                reason: 'targeted_reindex_requires_full_consistency_rebuild',
             });
         })();
         return {

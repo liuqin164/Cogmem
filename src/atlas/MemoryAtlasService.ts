@@ -81,7 +81,8 @@ export class MemoryAtlasService {
     const projectId = requiredProject(options.projectId); const hops = options.hops ?? 1;
     if (!Number.isInteger(hops) || hops < 1 || hops > 2) throw new Error('hops must be between 1 and 2');
     const limit = boundedLimit(options.limit);
-    const seen = new Set([boundedId(nodeId)]); let frontier = [...seen]; const selectedEdges: MemoryAtlasEdge[] = [];
+    const start = canonicalInputNodeId(this.store, boundedId(nodeId), projectId);
+    const seen = new Set([start]); let frontier = [...seen]; const selectedEdges: MemoryAtlasEdge[] = [];
     for (let depth = 0; depth < hops; depth += 1) {
       const next: string[] = [];
       const adjacentEdges = this.store.listEdgesForNodes(projectId, frontier, Math.max(60, limit * 20));
@@ -97,7 +98,8 @@ export class MemoryAtlasService {
 
   path(from: string, to: string, options: MemoryAtlasQueryOptions & { maxHops?: number }): MemoryAtlasPathResult {
     const projectId = requiredProject(options.projectId); const maxHops = Math.max(1, Math.min(options.maxHops ?? 6, 6));
-    const start = boundedId(from); const target = boundedId(to);
+    const start = canonicalInputNodeId(this.store, boundedId(from), projectId);
+    const target = canonicalInputNodeId(this.store, boundedId(to), projectId);
     const parents = new Map<string, { previous: string; edge: MemoryAtlasEdge }>();
     const best = new Map<string, number>([[start, 0]]);
     const queue: Array<{ id: string; cost: number; hops: number }> = [{ id: start, cost: 0, hops: 0 }];
@@ -243,6 +245,15 @@ export class MemoryAtlasService {
     return uniqueEdges(chunked(nodeIds, 30)
       .flatMap((chunk) => this.store.findEdgesFromNodesToTarget(projectId, chunk, target)));
   }
+}
+
+function canonicalInputNodeId(store: MemoryAtlasStore, id: string, projectId: string): string {
+  if (id.startsWith(`entity:${projectId}:`)) return id;
+  if (!id.startsWith('entity:')) return id;
+  const entityId = id.slice('entity:'.length);
+  if (!entityId.startsWith('facet:')) return id;
+  const scoped = `entity:${projectId}:${entityId}`;
+  return store.getNode(scoped, projectId) ? scoped : id;
 }
 
 function requiredProject(value: string): string { if (!value?.trim()) throw new Error('projectId is required for Memory Atlas queries'); return value.trim(); }

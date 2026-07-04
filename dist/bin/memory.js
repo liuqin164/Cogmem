@@ -609,6 +609,8 @@ function runGraphCommand(kernel, args) {
     if (args.command === 'graph-reindex') {
         if (!args.eventId && !args.episodeId)
             throw new Error(`graph-reindex requires --event or --episode.\n${usage()}`);
+        if (args.eventId && args.episodeId)
+            throw new Error(`graph-reindex accepts exactly one of --event or --episode.\n${usage()}`);
         return kernel.reindexMemoryAtlas({ projectId, eventId: args.eventId, episodeId: args.episodeId });
     }
     if (args.command === 'graph')

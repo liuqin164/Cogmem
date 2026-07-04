@@ -709,6 +709,7 @@ function runGraphCommand(kernel: MemoryKernel, args: MemoryArgs): Record<string,
     staleOk: args.staleOk || !args.refresh };
   if (args.command === 'graph-reindex') {
     if (!args.eventId && !args.episodeId) throw new Error(`graph-reindex requires --event or --episode.\n${usage()}`);
+    if (args.eventId && args.episodeId) throw new Error(`graph-reindex accepts exactly one of --event or --episode.\n${usage()}`);
     return kernel.reindexMemoryAtlas({ projectId, eventId: args.eventId, episodeId: args.episodeId }) as unknown as Record<string, unknown>;
   }
   if (args.command === 'graph') return kernel.graphOverview(options) as unknown as Record<string, unknown>;

@@ -177,7 +177,7 @@ test('FacetQueryPlanner parses memoryKind and actionKind facets', () => {
   const actionHistory = planner.plan('查查还记不记得我之前让你对Hermes做过什么', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3) });
   expect(actionHistory.intent).toBe('action_history');
   expect(actionHistory.facets).toEqual(expect.arrayContaining([
-    expect.objectContaining({ type: 'entity', value: 'facet:hermes' }),
+    expect.objectContaining({ type: 'entity', value: 'facet:hermes', nodeId: 'entity:openclaw:facet:hermes' }),
     expect.objectContaining({ type: 'topic', value: 'PROJECT/openclaw/hermes' }),
     expect.objectContaining({ type: 'actionKind', value: 'started' }),
     expect.objectContaining({ type: 'actionKind', value: 'installed' }),
@@ -243,7 +243,7 @@ test('Hermes action-history queries surface the canonical 2026-06-05 operation c
     expect(card?.displayTitle).toContain('Hermes');
     expect(card?.localDate).toBe('2026-06-05');
     expect(card?.matchedFacets).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'entity', value: 'facet:hermes' }),
+    expect.objectContaining({ type: 'entity', value: 'facet:hermes' }),
       expect.objectContaining({ type: 'actionKind', value: 'started' }),
     ]));
     expect(card?.sourceLocator?.command).toContain(`memory show --event ${event.eventId}`);
@@ -313,6 +313,7 @@ test('targeted graph reindex restores one episode facets by raw event id', () =>
     expect(kernel.graphExplore('启动 Hermes', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3), limit: 10, refresh: false }).cards ?? []).toHaveLength(0);
     const reindexed = kernel.reindexMemoryAtlas({ projectId: 'openclaw', eventId: event.eventId });
     expect(reindexed.episodeIds).toContain(episodeId);
+    expect(kernel.memoryAtlasStore.getProjectionState('openclaw')?.status).toBe('dirty');
     const result = kernel.graphExplore('启动 Hermes', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3), limit: 10, refresh: false });
     expect(result.cards?.[0]?.displayTitle).toContain('Hermes');
     expect(result.cards?.[0]?.sourceLocator?.eventId).toBe(event.eventId);
@@ -435,7 +436,62 @@ test('3.7 projection ignores stale clean memory_atlas.v1 and writes clean memory
       WHERE project_id='openclaw' AND projection_name='memory_atlas.v2'
     `).get() as { status: string; metadata_json: string } | null;
     expect(row?.status).toBe('clean');
-    expect(JSON.parse(row!.metadata_json).projectionSchemaVersion).toBe('3.7.1');
+    expect(JSON.parse(row!.metadata_json).projectionSchemaVersion).toBe('3.7.2');
+  } finally {
+    kernel.close();
+  }
+});
+
+test('entity facet nodes are project-scoped and do not overwrite same-name entities', () => {
+  const kernel = createKernel();
+  try {
+    addEpisode(kernel, {
+      eventId: 'evt-project-a-hermes',
+      sessionId: 'session-a',
+      projectId: 'project-a',
+      localDate: '2026-06-05',
+      occurredAt: Date.UTC(2026, 5, 5, 10),
+      text: '启动本机安装的Hermes',
+    });
+    addEpisode(kernel, {
+      eventId: 'evt-project-b-hermes',
+      sessionId: 'session-b',
+      projectId: 'project-b',
+      localDate: '2026-06-05',
+      occurredAt: Date.UTC(2026, 5, 5, 11),
+      text: '启动本机安装的Hermes',
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'project-a' });
+    kernel.rebuildMemoryAtlas({ projectId: 'project-b' });
+    expect(kernel.memoryAtlasStore.getNode('entity:project-a:facet:hermes', 'project-a')?.projectId).toBe('project-a');
+    expect(kernel.memoryAtlasStore.getNode('entity:project-b:facet:hermes', 'project-b')?.projectId).toBe('project-b');
+    expect(kernel.memoryAtlasStore.getNode('entity:project-b:facet:hermes', 'project-a')).toBeNull();
+  } finally {
+    kernel.close();
+  }
+});
+
+test('forensic anchor rejects raw events outside the requested project', () => {
+  const kernel = createKernel();
+  try {
+    const foreign = addEpisode(kernel, {
+      eventId: 'evt-foreign-anchor',
+      sessionId: 'foreign-session',
+      projectId: 'project-b',
+      localDate: '2026-06-05',
+      occurredAt: Date.UTC(2026, 5, 5, 10),
+      text: '用户在另一个项目里的原话。',
+    });
+    const result = new KernelAgentMemoryBackend(kernel).recall({
+      agentId: 'openclaw',
+      projectId: 'project-a',
+      sessionId: 'current',
+      query: '我的原话是什么',
+      intent: 'forensic_quote',
+      anchorEventId: foreign.eventId,
+      limit: 3,
+    });
+    expect(result.items.some((item) => item.sourceAnchor?.eventId === foreign.eventId)).toBe(false);
   } finally {
     kernel.close();
   }

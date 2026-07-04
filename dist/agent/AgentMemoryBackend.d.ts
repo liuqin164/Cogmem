@@ -285,6 +285,7 @@ export declare class KernelAgentMemoryBackend {
     private filterAgentEvidence;
     private toAgentRecallItem;
     private isAgentRawEvent;
+    private isRawEventInRecallScope;
     private isOperationalNoiseRawEvent;
     private isAllowedSession;
     private hasReadableEventText;

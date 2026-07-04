@@ -88,7 +88,8 @@ export class MemoryAtlasService {
         if (!Number.isInteger(hops) || hops < 1 || hops > 2)
             throw new Error('hops must be between 1 and 2');
         const limit = boundedLimit(options.limit);
-        const seen = new Set([boundedId(nodeId)]);
+        const start = canonicalInputNodeId(this.store, boundedId(nodeId), projectId);
+        const seen = new Set([start]);
         let frontier = [...seen];
         const selectedEdges = [];
         for (let depth = 0; depth < hops; depth += 1) {
@@ -111,8 +112,8 @@ export class MemoryAtlasService {
     path(from, to, options) {
         const projectId = requiredProject(options.projectId);
         const maxHops = Math.max(1, Math.min(options.maxHops ?? 6, 6));
-        const start = boundedId(from);
-        const target = boundedId(to);
+        const start = canonicalInputNodeId(this.store, boundedId(from), projectId);
+        const target = canonicalInputNodeId(this.store, boundedId(to), projectId);
         const parents = new Map();
         const best = new Map([[start, 0]]);
         const queue = [{ id: start, cost: 0, hops: 0 }];
@@ -267,6 +268,17 @@ export class MemoryAtlasService {
         return uniqueEdges(chunked(nodeIds, 30)
             .flatMap((chunk) => this.store.findEdgesFromNodesToTarget(projectId, chunk, target)));
     }
+}
+function canonicalInputNodeId(store, id, projectId) {
+    if (id.startsWith(`entity:${projectId}:`))
+        return id;
+    if (!id.startsWith('entity:'))
+        return id;
+    const entityId = id.slice('entity:'.length);
+    if (!entityId.startsWith('facet:'))
+        return id;
+    const scoped = `entity:${projectId}:${entityId}`;
+    return store.getNode(scoped, projectId) ? scoped : id;
 }
 function requiredProject(value) { if (!value?.trim())
     throw new Error('projectId is required for Memory Atlas queries'); return value.trim(); }

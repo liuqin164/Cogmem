@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 export const MEMORY_ATLAS_PROJECTION_NAME = 'memory_atlas.v2';
-export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.1';
+export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.2';
 export class MemoryAtlasStore {
     db;
     constructor(db) {
@@ -23,12 +23,13 @@ export class MemoryAtlasStore {
         this.refreshFtsNode(input.id);
     }
     getNode(nodeId, projectId) {
+        const scopedNodeId = scopedEntityNodeId(this.db, nodeId, projectId);
         const row = this.db.prepare(`
       SELECT d.*, COALESCE(a.activation, 0) AS activation
       FROM memory_atlas_documents d LEFT JOIN memory_atlas_activation a
         ON a.project_id=d.project_id AND a.node_id=d.node_id
       WHERE d.node_id=? AND d.project_id=?
-    `).get(nodeId, projectId);
+    `).get(scopedNodeId, projectId);
         return row ? mapNode(row, 0) : null;
     }
     listNodes(projectId, limit) {
@@ -484,6 +485,47 @@ export class MemoryAtlasStore {
         last_error=NULL, metadata_json=excluded.metadata_json
     `).run(projectId, String(now), now, JSON.stringify({ compatibilityAliasFor: MEMORY_ATLAS_PROJECTION_NAME }));
     }
+    markProjectionDirty(projectId, metadata = {}, now = Date.now()) {
+        this.db.prepare(`
+      INSERT INTO memory_atlas_projection_state(project_id,projection_name,cursor_value,status,last_rebuild_at,last_error,metadata_json)
+      VALUES(?, ?, NULL, 'dirty', ?, NULL, ?)
+      ON CONFLICT(project_id,projection_name) DO UPDATE SET
+        status='dirty', cursor_value=NULL, last_error=NULL, metadata_json=excluded.metadata_json
+    `).run(projectId, MEMORY_ATLAS_PROJECTION_NAME, now, JSON.stringify({
+            ...metadata,
+            projectionName: MEMORY_ATLAS_PROJECTION_NAME,
+            projectionSchemaVersion: MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION,
+        }));
+        this.db.prepare(`
+      INSERT INTO memory_atlas_projection_state(project_id,projection_name,cursor_value,status,last_rebuild_at,last_error,metadata_json)
+      VALUES(?, 'memory_atlas.v1', NULL, 'dirty', ?, NULL, ?)
+      ON CONFLICT(project_id,projection_name) DO UPDATE SET status='dirty', cursor_value=NULL, last_error=NULL, metadata_json=excluded.metadata_json
+    `).run(projectId, now, JSON.stringify({ compatibilityAliasFor: MEMORY_ATLAS_PROJECTION_NAME, dirtyBecause: 'atlas_v2_targeted_reindex' }));
+    }
+    aggregateFacetNodeSupport(projectId, now = Date.now()) {
+        const rows = this.db.prepare(`
+      SELECT target_type,target_id,evidence_event_ids_json
+      FROM memory_edges
+      WHERE project_id=? AND source_type='episode'
+        AND target_type IN ('topic','time','issue','entity','session','thread','memoryKind','actionKind')
+        AND status IN ('active','weak')
+      ORDER BY target_type,target_id
+    `).all(projectId);
+        const buckets = new Map();
+        for (const row of rows) {
+            const id = nodeId(row.target_type, row.target_id, projectId);
+            const bucket = buckets.get(id) ?? { count: 0, evidence: new Set() };
+            bucket.count += 1;
+            for (const eventId of parseStringArray(row.evidence_event_ids_json).slice(0, 5))
+                bucket.evidence.add(eventId);
+            buckets.set(id, bucket);
+        }
+        const update = this.db.prepare(`UPDATE memory_atlas_documents SET support_count=?, evidence_event_ids_json=?, updated_at=? WHERE project_id=? AND node_id=?`);
+        for (const [nodeIdValue, bucket] of buckets) {
+            update.run(bucket.count, JSON.stringify(Array.from(bucket.evidence).slice(0, 100)), now, projectId, nodeIdValue);
+            this.refreshFtsNode(nodeIdValue);
+        }
+    }
     markProjectionFailed(projectId, error, now = Date.now()) {
         this.db.prepare(`
       INSERT INTO memory_atlas_projection_state(project_id,projection_name,status,last_rebuild_at,last_error,metadata_json)
@@ -630,6 +672,8 @@ catch {
 } }
 function escapeLike(value) { return value.replace(/[\\%_]/g, '\\$&'); }
 function nodeId(type, id, projectId) {
+    if (type === 'entity')
+        return id.startsWith('facet:') ? `entity:${projectId}:${id}` : `entity:${id}`;
     if (['topic', 'time', 'issue', 'session', 'thread', 'memoryKind', 'actionKind'].includes(type))
         return `${type}:${projectId}:${id}`;
     return `${type}:${id}`;
@@ -637,8 +681,18 @@ function nodeId(type, id, projectId) {
 function timeNodeId(projectId, occurredAt) {
     return `time:${projectId}:${new Date(occurredAt).getUTCFullYear()}`;
 }
+function scopedEntityNodeId(db, value, projectId) {
+    if (!value.startsWith('entity:') || value.startsWith(`entity:${projectId}:`))
+        return value;
+    const id = value.slice('entity:'.length);
+    if (!id.startsWith('facet:'))
+        return value;
+    const scoped = `entity:${projectId}:${id}`;
+    const row = db.prepare(`SELECT 1 FROM memory_atlas_documents WHERE project_id=? AND node_id=?`).get(projectId, scoped);
+    return row ? scoped : value;
+}
 function parseNodeId(value, projectId) {
-    for (const type of ['topic', 'time', 'issue', 'session', 'thread', 'memoryKind', 'actionKind']) {
+    for (const type of ['topic', 'time', 'issue', 'entity', 'session', 'thread', 'memoryKind', 'actionKind']) {
         const prefix = `${type}:${projectId}:`;
         if (value.startsWith(prefix))
             return { type, id: value.slice(prefix.length) };
@@ -690,14 +744,25 @@ function facetLabel(type, value) {
 function groupFacetMatches(matches) {
     const groups = new Map();
     for (const match of matches) {
-        const key = match.facet.type === 'actionKind' || match.facet.type === 'memoryKind'
-            ? `${match.facet.type}:${match.facet.relation || ''}`
-            : `${match.facet.type}:${match.facet.value}:${match.facet.relation || ''}`;
+        const targetSlug = equivalentTargetSlug(match.facet);
+        const key = targetSlug
+            ? `target:${targetSlug}`
+            : match.facet.type === 'actionKind' || match.facet.type === 'memoryKind'
+                ? `${match.facet.type}:${match.facet.relation || ''}`
+                : `${match.facet.type}:${match.facet.value}:${match.facet.relation || ''}`;
         const group = groups.get(key) ?? [];
         group.push(match);
         groups.set(key, group);
     }
     return Array.from(groups.values());
+}
+function equivalentTargetSlug(facet) {
+    if (facet.type === 'entity' && facet.value.startsWith('facet:'))
+        return facet.value.slice('facet:'.length);
+    if (facet.type !== 'topic')
+        return undefined;
+    const match = facet.value.match(/^PROJECT\/[^/]+\/([^/]+)$/u);
+    return match?.[1];
 }
 function intersectSets(sets) {
     if (!sets.length)
@@ -711,11 +776,7 @@ function intersectSets(sets) {
     return result;
 }
 function scoreCard(card) {
-    const issuePriority = card.issueType === 'memory-context-blackbox' ? 4
-        : card.issueType === 'graph-runtime-blackbox' ? 2
-            : card.issueType === 'atlas-readability' ? 1
-                : 0;
-    return card.matchedFacets.length * 10 + issuePriority + card.matchedPaths.reduce((sum, path) => sum + path.confidence, 0) + (card.localDate ? 0.1 : 0);
+    return card.matchedFacets.length * 10 + card.matchedPaths.reduce((sum, path) => sum + path.confidence, 0) + (card.localDate ? 0.1 : 0);
 }
 function mergeRelatedCards(...groups) {
     const merged = new Map();

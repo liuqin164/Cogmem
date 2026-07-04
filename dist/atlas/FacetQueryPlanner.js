@@ -1,4 +1,5 @@
 import { extractEntityCues } from '../utils/EntityCueExtractor.js';
+import { ACTION_KIND_RULES } from '../utils/ActionKindRegistry.js';
 const ISSUE_RULES = [
     {
         value: 'memory-context-blackbox',
@@ -65,7 +66,7 @@ export class FacetQueryPlanner {
         for (const entity of extractEntityCues(normalized)) {
             if (!actionHistory && !/[A-Za-z]/.test(entity.label))
                 continue;
-            facets.push({ type: 'entity', value: `facet:${entity.id}`, label: entity.label, nodeId: `entity:facet:${entity.id}`, relation: 'INVOLVES_ENTITY' });
+            facets.push({ type: 'entity', value: `facet:${entity.id}`, label: entity.label, nodeId: `entity:${options.projectId}:facet:${entity.id}`, relation: 'INVOLVES_ENTITY' });
             if (actionHistory) {
                 facets.push(withNodeId({ type: 'topic', value: `PROJECT/${options.projectId}/${entity.id}`, label: entity.label, relation: 'ABOUT_TOPIC' }, options.projectId));
             }
@@ -107,24 +108,13 @@ function parseKindFacets(query, projectId) {
         ['decision', /(decision|决定|方案|结论)/i],
         ['plan', /(计划|下一步|策略|plan)/i],
     ];
-    const actionKindRules = [
-        ['started', /(启动|start|started|launch|launched|boot)/i],
-        ['installed', /(安装|install|installed|setup)/i],
-        ['configured', /(配置|config|configured|设置|修改配置|修改)/i],
-        ['restarted', /(重启|restart|restarted)/i],
-        ['stopped', /(停止|stop|stopped)/i],
-        ['operated', /(操作|处理|执行|run|ran)/i],
-        ['implemented', /(修复|实现|implemented|合并|发布|升级)/i],
-        ['reviewed', /(检查|审查|review)/i],
-        ['debugged', /(debug|排查|卡死|locked|zombie)/i],
-    ];
     for (const [value, test] of memoryKindRules) {
         if (test.test(query))
             facets.push(withNodeId({ type: 'memoryKind', value, label: value, relation: 'HAS_MEMORY_KIND' }, projectId));
     }
-    for (const [value, test] of actionKindRules) {
-        if (test.test(query))
-            facets.push(withNodeId({ type: 'actionKind', value, label: value, relation: 'HAS_ACTION_KIND' }, projectId));
+    for (const rule of ACTION_KIND_RULES) {
+        if (rule.pattern.test(query))
+            facets.push(withNodeId({ type: 'actionKind', value: rule.kind, label: rule.kind, relation: 'HAS_ACTION_KIND' }, projectId));
     }
     return facets;
 }

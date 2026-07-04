@@ -2,7 +2,7 @@ import type Database from 'bun:sqlite';
 import type { FacetQueryPlan } from '../atlas/FacetQueryPlanner.js';
 import type { MemoryAtlasAction, MemoryAtlasCard, MemoryAtlasEdge, MemoryAtlasNode, MemoryAtlasRelatedCard } from '../atlas/MemoryAtlasTypes.js';
 export declare const MEMORY_ATLAS_PROJECTION_NAME = "memory_atlas.v2";
-export declare const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = "3.7.1";
+export declare const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = "3.7.2";
 export declare class MemoryAtlasStore {
     readonly db: Database;
     constructor(db: Database);
@@ -52,6 +52,8 @@ export declare class MemoryAtlasStore {
     decay(projectId?: string, factor?: number, now?: number): number;
     projectionNeedsRefresh(projectId: string): boolean;
     markProjectionClean(projectId: string, metadata?: Record<string, unknown>, now?: number): void;
+    markProjectionDirty(projectId: string, metadata?: Record<string, unknown>, now?: number): void;
+    aggregateFacetNodeSupport(projectId: string, now?: number): void;
     markProjectionFailed(projectId: string, error: string, now?: number): void;
     getProjectionState(projectId: string): {
         status: string;

@@ -10,7 +10,7 @@ Atlas projects existing project-scoped records into these node kinds:
 - Facet nodes: `time`, `topic`, `issue`, `entity`, `session`, `thread`, `memoryKind`, and `actionKind`.
 - Action frames are extracted deterministically from raw user evidence and link actor, target, action kind, time, topic, project, and evidence.
 
-Existing memory edges remain canonical. Atlas adds derived navigation edges such as `OCCURRED_ON`, `OCCURRED_IN`, `ABOUT_TOPIC`, `PART_OF_ISSUE`, `INVOLVES_ENTITY`, `IN_SESSION`, `IN_THREAD`, and `HAS_EVIDENCE` without changing the underlying belief or binding graph. The 3.7.1 offline curator automatically proposes only bounded `SAME_ISSUE`, `FOLLOWS_UP`, and weak `RELATED_TO` episode relations; stronger relations such as `REFINES`, `CORRECTS`, `CONTRADICTS`, and `SUPERSEDES` remain reserved for explicit evidence-bearing governance/binding flows.
+Existing memory edges remain canonical. Atlas adds derived navigation edges such as `OCCURRED_ON`, `OCCURRED_IN`, `ABOUT_TOPIC`, `PART_OF_ISSUE`, `INVOLVES_ENTITY`, `IN_SESSION`, `IN_THREAD`, and `HAS_EVIDENCE` without changing the underlying belief or binding graph. The 3.7.1 offline curator automatically proposes only bounded `SAME_ISSUE`, `FOLLOWS_UP`, and weak `RELATED_TO` episode relations; stronger relations such as `REFINES`, `CORRECTS`, `CONTRADICTS`, and `SUPERSEDES` remain reserved for explicit evidence-bearing governance/binding flows. Entity facet node IDs are project-scoped; same-name tools or people in different projects do not share Atlas nodes.
 
 This is not a copied tree. One episode exists once as `episode:<id>`. A day, topic, issue, entity, session, memory kind, or action kind is only a facet entrance:
 
@@ -113,7 +113,7 @@ cogmem memory graph-reindex --project <id> --episode <episode-id> --json
 
 Graph reads try to refresh dirty Atlas state, but they default to stale-safe operation for diagnostics. If refresh is blocked by SQLite busy, JSON includes `atlasFresh: false` and `refreshError` while returning the existing projection. Use `--refresh` to force a fresh rebuild or `--no-refresh` to inspect the current projection only.
 
-Use `graph-reindex` after an audited episode repair or binding repair when one event/episode needs fresh card/facet projection. It updates the targeted episode card, raw-event node, source locator, and episode facet edges without rebuilding the whole project graph.
+Use `graph-reindex` after an audited episode repair or binding repair when one event/episode needs fresh card/facet projection. It updates the targeted episode card, raw-event node, source locator, and episode facet edges without rebuilding the whole project graph. Because episode-to-episode relations and action-frame consistency are global, targeted reindex marks the project projection dirty; run `cogmem memory tick --project <id> --json` or the next maintenance tick for the full consistency rebuild.
 
 ## MCP
 
@@ -145,4 +145,4 @@ Upgrade an existing 3.5.2 database with:
 cogmem migrate --yes --backup --json
 ```
 
-Migration 0025 creates and backfills the disposable projection. Migration 0026 adds exact memory-kind metadata, projection health, and candidate-review audit state. Migration 0027 corrects 3.6.0-upgraded databases by marking Atlas projections dirty until the real action/time rebuild runs. Cogmem 3.7.1 keeps the projection-first schema and adds facet nodes, canonical cards, issue hints, and episode relation edges during Atlas rebuild/maintenance. `cogmem memory tick` refreshes only dirty projects, records rebuild errors, prunes old access telemetry, and decays navigation activation without starting a daemon.
+Migration 0025 creates and backfills the disposable projection. Migration 0026 adds exact memory-kind metadata, projection health, and candidate-review audit state. Migration 0027 corrects 3.6.0-upgraded databases by marking Atlas projections dirty until the real action/time rebuild runs. Cogmem 3.7.1 keeps the projection-first schema and adds facet nodes, canonical cards, issue hints, and episode relation edges during Atlas rebuild/maintenance. Projection metadata schema `3.7.2` invalidates earlier 3.7.x Atlas v2 projections so project-scoped entity facets are rebuilt. `cogmem memory tick` refreshes only dirty projects, records rebuild errors, prunes old access telemetry, and decays navigation activation without starting a daemon.

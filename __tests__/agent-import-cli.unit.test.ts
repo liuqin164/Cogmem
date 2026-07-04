@@ -40,6 +40,20 @@ async function runCli(
   return { exitCode, stdout, stderr };
 }
 
+function serveWithRetry(options: Parameters<typeof Bun.serve>[0]): ReturnType<typeof Bun.serve> {
+  let lastError: unknown;
+  const startPort = 30_000 + Math.floor(Math.random() * 20_000);
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    try {
+      return Bun.serve({ ...options, port: startPort + attempt });
+    } catch (error) {
+      lastError = error;
+      if ((error as { code?: string }).code !== 'EADDRINUSE') throw error;
+    }
+  }
+  throw lastError;
+}
+
 test('OpenClaw import dry-run scans workspace sources without creating a memory database', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-dry-'));
   const dbPath = join(dir, 'memory.db');
@@ -596,8 +610,7 @@ test('agent import uses configured local OpenAI-compatible embedding endpoint du
   writeFileSync(join(workspace, 'memory', '2026-05-07.md'), 'User: local quantized embedding import remembered release notes.');
 
   let embedCalls = 0;
-  const server = Bun.serve({
-    port: 0,
+  const server = serveWithRetry({
     fetch: async (request) => {
       if (new URL(request.url).pathname !== '/v1/embeddings') {
         return new Response('not found', { status: 404 });
@@ -981,7 +994,7 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(cortexBridgeBody).toContain('kernel.contextOutcomeStore.record');
   expect(cortexBridgeBody).toContain('activationReceipt');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
-  expect(manifest.version).toBe('0.7.0');
+  expect(manifest.version).toBe('0.7.1');
   expect(manifest.configSchema.type).toBe('object');
   expect(manifest.configSchema.properties.configPath.type).toBe('string');
   expect(manifest.configSchema.properties.autoRecall.type).toBe('boolean');
@@ -1087,6 +1100,8 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(bridgeBody).toContain('uniqueWindowEvents');
   expect(bridgeBody).toContain('cogmem memory show --event');
   expect(bridgeBody).toContain('Use it only as current-turn background memory.');
+  expect(bridgeBody).toContain('function serializeUntrustedMemory');
+  expect(bridgeBody).toContain("replace(/&/g, '&amp;')");
   expect(bridgeBody).toContain('intent: input.intent || undefined');
 
   const indexCheck = await runCli(['node', '--check', join(pluginDir, 'index.js')]);

@@ -1,6 +1,7 @@
 import { memoryEventCharRange, memoryEventLabel, memoryEventSourceRange, normalizeSourceContextWindow, } from '../recall/SourceContextMetadata.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 import { compileAgentRecallQuery, } from './AgentRecallQueryCompiler.js';
+import { extractEntityCues } from '../utils/EntityCueExtractor.js';
 export class KernelAgentMemoryBackend {
     kernel;
     constructor(kernel) {
@@ -431,8 +432,7 @@ export class KernelAgentMemoryBackend {
             ? this.getSessionEvents(previousSessionId, query, Math.max(limit * 3, 24))
             : [];
         const items = events
-            .filter((event) => this.isAgentRawEvent(event, query.agentId))
-            .filter((event) => this.isAllowedRawEventCollection(event, query.collection))
+            .filter((event) => this.isRawEventInRecallScope(event, query, queryPlan.intent))
             .filter((event) => !this.isOperationalNoiseRawEvent(event))
             .filter((event) => this.hasReadableEventText(event))
             .slice(0, limit)
@@ -457,7 +457,7 @@ export class KernelAgentMemoryBackend {
     }
     recallForensicQuote(query, queryPlan) {
         const limit = query.limit ?? 5;
-        const anchorItems = this.recallForensicAnchor(query, limit);
+        const anchorItems = this.recallForensicAnchor(query, queryPlan, limit);
         const rawEvents = anchorItems.length > 0 && (queryPlan.anchorUsed || !!query.anchorEventId)
             ? []
             : [
@@ -469,11 +469,10 @@ export class KernelAgentMemoryBackend {
             ...anchorItems,
             ...rawEvents
                 .filter((event) => this.isAgentRawEvent(event, query.agentId))
-                .filter((event) => this.isAllowedSession(event, query))
-                .filter((event) => this.isAllowedRawEventCollection(event, query.collection))
+                .filter((event) => this.isRawEventInRecallScope(event, query, queryPlan.intent))
                 .filter((event) => this.isQuoteSourceEvent(event))
                 .filter((event) => this.hasReadableEventText(event))
-                .sort((a, b) => this.quoteEventPriority(a) - this.quoteEventPriority(b))
+                .sort((a, b) => this.quoteEventPriority(a, queryPlan) - this.quoteEventPriority(b, queryPlan))
                 .slice(0, limit)
                 .map((event) => this.toAgentRawRecallItem(event, {
                 sourceType: 'raw_ledger',
@@ -553,9 +552,7 @@ export class KernelAgentMemoryBackend {
                 .filter((eventId) => Boolean(eventId))
                 .map((eventId) => this.kernel.getEventContext(eventId, { before: 0, after: 0 })?.event)
                 .filter((event) => Boolean(event))
-                .filter((event) => this.isAgentRawEvent(event, query.agentId))
-                .filter((event) => this.isAllowedSession(event, query))
-                .filter((event) => this.isAllowedRawEventCollection(event, query.collection))
+                .filter((event) => this.isRawEventInRecallScope(event, query, queryPlan.intent))
                 .filter((event) => this.isQuoteSourceEvent(event))
                 .filter((event) => this.hasReadableEventText(event));
             return this.dedupeRawEventsByTurnPreferUser(events)
@@ -612,7 +609,7 @@ export class KernelAgentMemoryBackend {
             canAnswerExactQuote: Boolean(sourceContext),
         };
     }
-    recallForensicAnchor(query, limit) {
+    recallForensicAnchor(query, queryPlan, limit) {
         if (!query.anchorEventId)
             return [];
         const context = this.kernel.getEventContext(query.anchorEventId, { before: 4, after: 4 });
@@ -621,8 +618,7 @@ export class KernelAgentMemoryBackend {
         const candidates = [context.event, ...context.before.slice().reverse(), ...context.after];
         return candidates
             .filter((event) => this.isAgentRawEvent(event, query.agentId))
-            .filter((event) => this.isAllowedSession(event, query))
-            .filter((event) => this.isAllowedRawEventCollection(event, query.collection))
+            .filter((event) => this.isRawEventInRecallScope(event, query, queryPlan.intent))
             .filter((event) => !this.isOperationalNoiseRawEvent(event))
             .filter((event) => this.isQuoteSourceEvent(event))
             .filter((event) => this.hasReadableEventText(event))
@@ -630,7 +626,7 @@ export class KernelAgentMemoryBackend {
             const anchorDelta = (a.eventId === query.anchorEventId ? 0 : 1) - (b.eventId === query.anchorEventId ? 0 : 1);
             if (anchorDelta !== 0)
                 return anchorDelta;
-            return this.quoteEventPriority(a) - this.quoteEventPriority(b);
+            return this.quoteEventPriority(a, queryPlan) - this.quoteEventPriority(b, queryPlan);
         })
             .slice(0, limit)
             .map((event) => this.toAgentRawRecallItem(event, {
@@ -668,6 +664,12 @@ export class KernelAgentMemoryBackend {
         if (!localDate)
             return [];
         const [year, month, day] = localDate.split('-').map(Number);
+        const byLocalDate = this.kernel.eventStore.queryEvents(1, 1000, {
+            projectId: query.projectId ? [query.projectId] : undefined,
+            workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
+        }).records.filter((event) => event.localDate === localDate).slice(0, limit);
+        if (byLocalDate.length)
+            return byLocalDate;
         const startTime = Date.UTC(year, month - 1, day);
         const endTime = Date.UTC(year, month - 1, day + 1);
         const byTime = this.kernel.eventStore.queryEvents(1, Math.max(1, Math.min(limit, 200)), {
@@ -689,9 +691,7 @@ export class KernelAgentMemoryBackend {
             ? this.dedupeRawEventsByTurnPreferUser(searchedEvents)
             : this.dedupeRawEventsByTurnPreferCue(searchedEvents, queryPlan);
         return rawEvents
-            .filter((event) => this.isAgentRawEvent(event, query.agentId))
-            .filter((event) => this.isAllowedSession(event, query))
-            .filter((event) => this.isAllowedRawEventCollection(event, query.collection))
+            .filter((event) => this.isRawEventInRecallScope(event, query, queryPlan.intent))
             .filter((event) => !this.isOperationalNoiseRawEvent(event))
             .slice(0, limit)
             .map((event) => this.toAgentRawRecallItem(event, {
@@ -713,11 +713,7 @@ export class KernelAgentMemoryBackend {
             const event = this.kernel.getEventContext(anchor.eventId, { before: 0, after: 0 })?.event;
             if (!event)
                 continue;
-            if (!this.isAgentRawEvent(event, query.agentId))
-                continue;
-            if (!this.isAllowedSession(event, query))
-                continue;
-            if (!this.isAllowedRawEventCollection(event, query.collection))
+            if (!this.isRawEventInRecallScope(event, query, queryPlan.intent))
                 continue;
             if (this.isOperationalNoiseRawEvent(event))
                 continue;
@@ -876,6 +872,11 @@ export class KernelAgentMemoryBackend {
             return items;
         return items.filter((item) => {
             const haystack = this.itemSearchableText(item).toLowerCase();
+            if (queryPlan.intent === 'action_history') {
+                const entityTerms = extractEntityCues(queryPlan.originalQuery).map((entity) => entity.label.toLowerCase());
+                if (entityTerms.length && !entityTerms.some((term) => haystack.includes(term)))
+                    return false;
+            }
             return cues.some((cue) => haystack.includes(cue.toLowerCase()));
         });
     }
@@ -1047,6 +1048,21 @@ export class KernelAgentMemoryBackend {
             return true;
         return false;
     }
+    isRawEventInRecallScope(event, query, effectiveIntent) {
+        if (query.projectId && event.projectId !== query.projectId)
+            return false;
+        if (query.workspaceId && event.workspaceId !== query.workspaceId)
+            return false;
+        if (query.threadId && event.threadId !== query.threadId)
+            return false;
+        if (!this.isAgentRawEvent(event, query.agentId))
+            return false;
+        if (!this.isAllowedSession(event, query, effectiveIntent))
+            return false;
+        if (!this.isAllowedRawEventCollection(event, query.collection))
+            return false;
+        return true;
+    }
     isOperationalNoiseRawEvent(event) {
         const payload = event.payload;
         const tags = Array.isArray(payload.metadata?.tags) ? payload.metadata.tags : [];
@@ -1058,10 +1074,10 @@ export class KernelAgentMemoryBackend {
         }
         return isOperationalNoiseText(typeof payload.text === 'string' ? payload.text : JSON.stringify(event.payload));
     }
-    isAllowedSession(event, query) {
+    isAllowedSession(event, query, effectiveIntent = query.intent) {
         if (query.excludeSessionId && event.sessionId === query.excludeSessionId)
             return false;
-        if (query.sessionId && query.intent && query.intent !== 'memory_recall' && event.sessionId === query.sessionId)
+        if (query.sessionId && effectiveIntent && effectiveIntent !== 'memory_recall' && event.sessionId === query.sessionId)
             return false;
         return true;
     }
@@ -1071,12 +1087,13 @@ export class KernelAgentMemoryBackend {
             || typeof payload.output === 'string'
             || typeof payload.title === 'string';
     }
-    quoteEventPriority(event) {
+    quoteEventPriority(event, queryPlan) {
+        const cuePenalty = queryPlan && this.rawEventCueScore(event, queryPlan) > 0 ? 0 : queryPlan ? 10 : 0;
         if (event.role === 'user')
-            return 0;
+            return cuePenalty;
         if (event.role === 'assistant')
-            return 1;
-        return 2;
+            return cuePenalty + 1;
+        return cuePenalty + 2;
     }
     isQuoteSourceEvent(event) {
         return event.role === 'user' || (!event.role && event.rawEventType === 'message');
@@ -1492,7 +1509,7 @@ function laneAllowed(policy, lane) {
     return !policy || policy.allowedLanes.includes(lane);
 }
 function localDateCue(query) {
-    const currentYear = new Date().getUTCFullYear();
+    const currentYear = new Date().getFullYear();
     const iso = query.match(/(20\d{2})[-年\/.](\d{1,2})[-月\/.](\d{1,2})日?/);
     if (iso)
         return `${iso[1]}-${padDatePart(Number(iso[2]))}-${padDatePart(Number(iso[3]))}`;

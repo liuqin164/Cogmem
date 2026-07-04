@@ -1,3 +1,5 @@
+import { inferFirstActionKind } from './ActionKindRegistry.js';
+
 export interface EntityCue {
   label: string;
   id: string;
@@ -58,13 +60,8 @@ export function extractEntityCues(text: string, limit = 8): EntityCue[] {
 }
 
 export function inferOperationalActionCue(text: string): OperationalActionCue | undefined {
-  if (/启动|start|started|launch|launched|boot/i.test(text)) return { kind: 'started', label: '启动', verb: '启动' };
-  if (/安装|install|installed|setup/i.test(text)) return { kind: 'installed', label: '安装', verb: '安装' };
-  if (/配置|config|configured|设置|修改配置|修改/i.test(text)) return { kind: 'configured', label: '配置', verb: '配置' };
-  if (/重启|restart|restarted/i.test(text)) return { kind: 'restarted', label: '重启', verb: '重启' };
-  if (/停止|stop|stopped/i.test(text)) return { kind: 'stopped', label: '停止', verb: '停止' };
-  if (/操作|处理|执行|运行|run|ran/i.test(text)) return { kind: 'operated', label: '操作', verb: '操作' };
-  return undefined;
+  const rule = inferFirstActionKind(text);
+  return rule ? { kind: rule.kind, label: rule.label, verb: rule.verb } : undefined;
 }
 
 export function normalizeEntityCueId(label: string): string {

@@ -104,28 +104,8 @@ export class EpisodeTitleGenerator {
     const localDate = inferLocalDate(input.events, input.startedAt);
     const sourceEventIds = sourceIdsFor(userEvents.length > 0 ? userEvents : input.events);
 
-    if (operationTitle) {
-      return {
-        displayTitle: boundTitle(operationTitle.displayTitle),
-        oneLineSummary: operationTitle.oneLineSummary,
-        topicHints: operationTitle.topicHints,
-        issueHints: [],
-        eventKind: 'operation',
-        userIntent: 'action_history',
-        localDate,
-        confidence: 0.82,
-        reviewNeeded: false,
-        sourceEventIds,
-        generatorTrace: {
-          usedUserText: userText.length > 0,
-          usedAssistantText: userText.length === 0 && assistantText.length > 0,
-          fallback: false,
-          matchedRules: ['generic_entity_operation'],
-        },
-      };
-    }
-
     if (matchedRule) {
+      const matchedSourceEventIds = sourceIdsForMatching(userEvents.length > 0 ? userEvents : input.events, matchedRule.test) || sourceEventIds;
       return {
         displayTitle: boundTitle(matchedRule.displayTitle),
         oneLineSummary: matchedRule.oneLineSummary,
@@ -136,12 +116,34 @@ export class EpisodeTitleGenerator {
         localDate,
         confidence: matchedRule.confidence,
         reviewNeeded: matchedRule.confidence < 0.65,
-        sourceEventIds,
+        sourceEventIds: matchedSourceEventIds,
         generatorTrace: {
           usedUserText: userText.length > 0,
           usedAssistantText: userText.length === 0 && assistantText.length > 0,
           fallback: false,
           matchedRules: [matchedRule.id],
+        },
+      };
+    }
+
+    if (operationTitle) {
+      const matchedSourceEventIds = sourceIdsForMatching(userEvents.length > 0 ? userEvents : input.events, (text) => Boolean(inferOperationTitle(text))) || sourceEventIds;
+      return {
+        displayTitle: boundTitle(operationTitle.displayTitle),
+        oneLineSummary: operationTitle.oneLineSummary,
+        topicHints: operationTitle.topicHints,
+        issueHints: [],
+        eventKind: 'operation',
+        userIntent: 'action_history',
+        localDate,
+        confidence: 0.82,
+        reviewNeeded: false,
+        sourceEventIds: matchedSourceEventIds,
+        generatorTrace: {
+          usedUserText: userText.length > 0,
+          usedAssistantText: userText.length === 0 && assistantText.length > 0,
+          fallback: false,
+          matchedRules: ['generic_entity_operation'],
         },
       };
     }
@@ -184,6 +186,11 @@ function inferOperationTitle(text: string): { displayTitle: string; oneLineSumma
 
 function sourceIdsFor(events: MemoryEvent[]): string[] {
   return events.map((event) => event.eventId).filter(Boolean).slice(0, 20);
+}
+
+function sourceIdsForMatching(events: MemoryEvent[], test: (text: string) => boolean): string[] | undefined {
+  const matched = events.filter((event) => test(eventTextForMemory(event)));
+  return matched.length ? sourceIdsFor(matched) : undefined;
 }
 
 function inferLocalDate(events: MemoryEvent[], startedAt?: number | null): string | undefined {

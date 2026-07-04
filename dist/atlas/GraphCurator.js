@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { EpisodeTitleGenerator } from './EpisodeTitleGenerator.js';
 import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
+import { inferActionKinds } from '../utils/ActionKindRegistry.js';
 const FACET_EDGE_RELATIONS = new Set([
     'OCCURRED_ON',
     'OCCURRED_IN',
@@ -38,6 +39,8 @@ export class GraphCurator {
         importance,summary,start_event_id,end_event_id,event_count,started_at,updated_at
       FROM memory_episodes
       WHERE project_id=?
+        AND COALESCE(event_count,0)>0
+        AND status NOT IN ('archived','rejected','merged','invalidated')
       ORDER BY started_at ASC, episode_id ASC
     `).all(projectId);
         const projections = [];
@@ -134,6 +137,8 @@ export class GraphCurator {
         importance,summary,start_event_id,end_event_id,event_count,started_at,updated_at
       FROM memory_episodes
       WHERE project_id=? AND episode_id IN (${bounded.map(() => '?').join(',')})
+        AND COALESCE(event_count,0)>0
+        AND status NOT IN ('archived','rejected','merged','invalidated')
       ORDER BY started_at ASC, episode_id ASC
     `).all(projectId, ...bounded);
         let facetNodeCount = 0;
@@ -242,7 +247,7 @@ export class GraphCurator {
             const entityId = normalizeEntityCueId(entity);
             if (!entityId)
                 continue;
-            targets.push({ type: 'entity', id: `facet:${entityId}`, nodeId: `entity:facet:${entityId}`, label: entity, relation: 'INVOLVES_ENTITY', confidence: 0.78 });
+            targets.push({ type: 'entity', id: `facet:${entityId}`, nodeId: `entity:${projection.row.project_id}:facet:${entityId}`, label: entity, relation: 'INVOLVES_ENTITY', confidence: 0.78 });
         }
         if (projection.row.session_id) {
             targets.push({ type: 'session', id: projection.row.session_id, nodeId: `session:${projection.row.project_id}:${projection.row.session_id}`, label: `Session ${projection.row.session_id}`, relation: 'IN_SESSION', confidence: 1 });
@@ -252,9 +257,9 @@ export class GraphCurator {
         }
         const memoryKind = normalizeKind(projection.issueHints[0] ? issueKind(projection.issueHints[0]) : projection.row.episode_type || 'discussion');
         targets.push({ type: 'memoryKind', id: memoryKind, nodeId: `memoryKind:${projection.row.project_id}:${memoryKind}`, label: memoryKind, relation: 'HAS_MEMORY_KIND', confidence: 0.75 });
-        const actionKind = actionKindFor(projection);
-        if (actionKind)
+        for (const actionKind of actionKindsFor(projection)) {
             targets.push({ type: 'actionKind', id: actionKind, nodeId: `actionKind:${projection.row.project_id}:${actionKind}`, label: actionKind, relation: 'HAS_ACTION_KIND', confidence: 0.7 });
+        }
         for (const eventId of projection.eventIds.slice(0, 30)) {
             targets.push({ type: 'raw_event', id: eventId, nodeId: `raw_event:${eventId}`, label: eventId, relation: 'HAS_EVIDENCE', confidence: 1 });
         }
@@ -446,29 +451,9 @@ function issueKind(value) {
         return 'plan';
     return 'diagnostic';
 }
-function actionKindFor(projection) {
+function actionKindsFor(projection) {
     const text = projection.events.map(eventTextForMemory).join('\n');
-    if (/启动|start|started|launch|launched|boot/i.test(text))
-        return 'started';
-    if (/安装|install|installed|setup/i.test(text))
-        return 'installed';
-    if (/配置|config|configured|设置|修改配置|修改/i.test(text))
-        return 'configured';
-    if (/重启|restart|restarted/i.test(text))
-        return 'restarted';
-    if (/停止|stop|stopped/i.test(text))
-        return 'stopped';
-    if (/操作|处理|执行|run|ran/i.test(text))
-        return 'operated';
-    if (/修复|fixed|implemented|实现|提交|升级|upgrade/i.test(text))
-        return 'implemented';
-    if (/review|审查|检查/i.test(text))
-        return 'reviewed';
-    if (/决定|decided|方案|策略/i.test(text))
-        return 'decided';
-    if (/debug|排查|卡死|locked|zombie/i.test(text))
-        return 'debugged';
-    return undefined;
+    return inferActionKinds(text);
 }
 function entityHints(events) {
     const text = events.map(eventTextForMemory).join('\n');
