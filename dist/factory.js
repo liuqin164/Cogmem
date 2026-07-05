@@ -83,7 +83,7 @@ import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
 import { config } from './utils/Config.js';
 import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snapshot/index.js';
-const CORE_VERSION = '3.7.1';
+const CORE_VERSION = '3.7.2';
 const LATEST_SCHEMA_VERSION = 27;
 export class MemoryKernel {
     options;

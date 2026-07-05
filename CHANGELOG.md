@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.7.2
+
+- Fixed Memory Atlas `graph-explore` edge projection so selected action, topic, and ordinary memory edges are merged before the final stable edge limit.
+- Added direct internal-edge SQL for selected Atlas nodes, including chunked parameters, so bounded graph results are not silently limited to the first 30 node IDs.
+- Added edge truncation metadata and warnings when `graph-explore` omits candidate edges after prioritizing exact matched cards/facets.
+
 ## 3.7.1
 
 - Hardened OpenClaw volatile recall, Atlas context, turn bridge, and session-state serialization so historical text, card titles, summaries, source windows, related cards, short-term conclusions, and source anchors cannot close or create `COGMEM_*` prompt blocks.

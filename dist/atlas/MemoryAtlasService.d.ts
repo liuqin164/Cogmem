@@ -22,6 +22,7 @@ export declare class MemoryAtlasService {
     private attachCardEvidence;
     private evidence;
     private edgesFor;
+    private edgeProjection;
     private safeEdges;
     private adjacentEdges;
     private directEdgesToTarget;

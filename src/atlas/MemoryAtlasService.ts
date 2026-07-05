@@ -54,8 +54,8 @@ export class MemoryAtlasService {
       nodes = uniqueNodes([...actions.map((action) => this.store.getNode(action.id, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node)), ...nodes]).slice(0, limit);
     }
     const nodesWithEvidence = this.attachEvidence(nodes, projectId, options);
-    const edges = this.edgesFor(nodesWithEvidence, projectId);
-    const result = slice(projectId, nodesWithEvidence, edges, query);
+    const edgeProjection = this.edgeProjection(nodesWithEvidence, projectId, exactMatchedNodeIds(cards, facetResult.plan));
+    const result = slice(projectId, nodesWithEvidence, edgeProjection.edges, query);
     result.facets = {
       ...facetsForPlan(facetResult.plan),
       legacy: { time: compiled.range, target: target.labels.join(', ') || compiled.target, memoryKinds: compiled.memoryKinds, keywords: compiled.keywords },
@@ -63,6 +63,10 @@ export class MemoryAtlasService {
     result.matchedFacets = cards.flatMap((card) => card.matchedFacets);
     if (cards.length) result.cards = this.attachCardEvidence(cards, projectId, options);
     if (facetResult.relaxationTrace.length) result.relaxationTrace = facetResult.relaxationTrace;
+    if (edgeProjection.truncation) {
+      result.edgeTruncation = edgeProjection.truncation;
+      result.warnings.push(`edges_truncated:${edgeProjection.truncation.omitted}_omitted`);
+    }
     const hasFacet = Boolean(compiled.range || compiled.target || compiled.memoryKinds.length || compiled.tokens.length);
     result.coldMemoryResurrected = hasFacet && nodes.some((node) => node.activation <= 0.1);
     return result;
@@ -224,9 +228,27 @@ export class MemoryAtlasService {
     });
   }
   private edgesFor(nodes: MemoryAtlasNode[], projectId: string): MemoryAtlasEdge[] {
+    return this.edgeProjection(nodes, projectId).edges;
+  }
+  private edgeProjection(nodes: MemoryAtlasNode[], projectId: string, priorityIds = new Set<string>()): {
+    edges: MemoryAtlasEdge[];
+    truncation?: NonNullable<MemoryAtlasSlice['edgeTruncation']>;
+  } {
     const ids = new Set(nodes.map((node) => node.id));
-    return this.safeEdges(this.store.listEdgesForNodes(projectId, [...ids], 60)
-      .filter((edge) => ids.has(edge.source) && ids.has(edge.target)).slice(0, 60), projectId);
+    const limit = 60;
+    const candidates = this.safeEdges(this.store.listEdgesWithinNodes(projectId, [...ids], 4000)
+      .filter((edge) => ids.has(edge.source) && ids.has(edge.target)), projectId);
+    const sorted = uniqueEdges(candidates).sort((left, right) =>
+      edgePriority(right, priorityIds) - edgePriority(left, priorityIds)
+      || right.confidence - left.confidence
+      || edgeKey(left).localeCompare(edgeKey(right)));
+    const edges = sorted.slice(0, limit);
+    return {
+      edges,
+      truncation: sorted.length > edges.length
+        ? { limit, returned: edges.length, omitted: sorted.length - edges.length, candidateCount: sorted.length, prioritized: priorityIds.size > 0 }
+        : undefined,
+    };
   }
   private safeEdges(edges: MemoryAtlasEdge[], projectId: string): MemoryAtlasEdge[] {
     return edges.map((edge) => ({ ...edge, evidenceEventIds: edge.evidenceEventIds.filter((eventId) => {
@@ -263,6 +285,20 @@ function uniqueNodes(nodes: MemoryAtlasNode[]): MemoryAtlasNode[] { return Array
 function uniqueIds(ids: string[]): string[] { return Array.from(new Set(ids)); }
 function uniqueEdges(edges: MemoryAtlasEdge[]): MemoryAtlasEdge[] {
   return Array.from(new Map(edges.map((edge) => [`${edge.source}\0${edge.relation}\0${edge.target}`, edge])).values());
+}
+function edgeKey(edge: MemoryAtlasEdge): string { return `${edge.source}\0${edge.relation}\0${edge.target}`; }
+function edgePriority(edge: MemoryAtlasEdge, priorityIds: Set<string>): number {
+  return (priorityIds.has(edge.source) ? 1 : 0) + (priorityIds.has(edge.target) ? 1 : 0);
+}
+function exactMatchedNodeIds(cards: MemoryAtlasCard[], plan: FacetQueryPlan): Set<string> {
+  return new Set([
+    ...cards.flatMap((card) => [
+      card.canonicalId,
+      ...card.matchedFacets.map((facet) => facet.nodeId),
+      ...card.matchedPaths.flatMap((path) => path.via),
+    ]),
+    ...plan.facets.map((facet) => facet.nodeId).filter((id): id is string => Boolean(id)),
+  ]);
 }
 function edgeTraversalCost(edge: MemoryAtlasEdge): number {
   const confidence = Math.max(0.01, Math.min(1, edge.confidence));
