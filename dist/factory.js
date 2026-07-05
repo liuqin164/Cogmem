@@ -48,7 +48,7 @@ import { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
 import { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPathRegistry, TopicRelationGraph } from './topic/index.js';
 import { CorrectionResolver } from './episode/CorrectionResolver.js';
 import { CandidateReviewService, MemoryGovernanceExecutor, MemoryGovernanceValidator, PiiRedactor, } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, SchemaMigrationRunner } from './migrations/index.js';
+import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -56,6 +56,9 @@ import { ProspectiveMemoryService } from './prospective/index.js';
 import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
 import { EpisodeAssembler, EpisodeStore } from './episode/index.js';
+import { EpisodeBoundaryAuditService } from './episode/EpisodeBoundaryAuditService.js';
+import { EpisodeBoundaryPolicy } from './episode/EpisodeBoundaryPolicy.js';
+import { EpisodeSplitPlanner } from './episode/EpisodeSplitPlanner.js';
 import { DreamScheduler } from './dream/index.js';
 import { loadCogmemConfig, resolveCogmemConfigPath, } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
@@ -83,8 +86,8 @@ import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
 import { config } from './utils/Config.js';
 import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snapshot/index.js';
-const CORE_VERSION = '3.7.2';
-const LATEST_SCHEMA_VERSION = 27;
+const CORE_VERSION = '3.7.3';
+const LATEST_SCHEMA_VERSION = 28;
 export class MemoryKernel {
     options;
     memoryGraph;
@@ -117,6 +120,9 @@ export class MemoryKernel {
     pipelineMetrics;
     episodeStore;
     episodeAssembler;
+    episodeBoundaryPolicy;
+    episodeBoundaryAuditService;
+    episodeSplitPlanner;
     userTopicPathRegistry;
     topicAliasRegistry;
     topicRelationGraph;
@@ -168,7 +174,7 @@ export class MemoryKernel {
         this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
         const db = this.factStore.getDatabase();
         db.exec('PRAGMA busy_timeout = 5000;');
-        new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027]).run();
+        new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028]).run();
         this.ensureMetaTable(db);
         this.entityStore = new EntityStore(db);
         this.ensureGovernanceAuditTable(db);
@@ -207,6 +213,9 @@ export class MemoryKernel {
         this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
         this.dreamLedgerStore = new DreamLedgerStore(db);
         this.episodeStore = new EpisodeStore(db, (eventId) => this.eventStore.getEvent(eventId), { initializeSchemaForTests: false });
+        this.episodeBoundaryPolicy = new EpisodeBoundaryPolicy(options.episodeBoundary);
+        this.episodeBoundaryAuditService = new EpisodeBoundaryAuditService(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId));
+        this.episodeSplitPlanner = new EpisodeSplitPlanner(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId));
         this.userTopicPathRegistry = new UserTopicPathRegistry(db);
         this.topicAliasRegistry = new TopicAliasRegistry(db);
         this.topicRelationGraph = new TopicRelationGraph(db);
@@ -223,7 +232,7 @@ export class MemoryKernel {
                 topicPathMatch: Boolean(episode?.topicPath && matchedPaths.includes(episode.topicPath)),
                 currentTopicPath: matchedPaths.length === 1 ? matchedPaths[0] : undefined,
             };
-        });
+        }, this.episodeBoundaryPolicy);
         this.activationStore = new ActivationStore(db);
         this.memoryBindingStore = new MemoryBindingStore(db);
         this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
@@ -913,8 +922,9 @@ export class MemoryKernel {
     resumeEpisodeMessage(event, input, created) {
         let link = this.episodeStore.getEventLink(event.eventId);
         let ignored = this.episodeStore.hasEventDisposition(event.eventId);
+        let assembly;
         if (!link && !ignored) {
-            const assembly = this.assembleEpisodeTurn([event], {
+            assembly = this.assembleEpisodeTurn([event], {
                 projectId: input.projectId,
                 sessionId: event.sessionId || input.sessionId,
                 sourceAgent: input.sourceAgent,
@@ -937,13 +947,18 @@ export class MemoryKernel {
             sealed: episode?.status === 'sealed',
             dreamRecommended: Boolean(receipt?.dreamRecommended && !receipt.requiresReview && episode?.dreamStatus !== 'processed'),
             dreamRan: false,
+            boundaryTriggered: assembly?.boundaryTriggered,
+            boundaryGuardCodes: assembly?.boundaryGuardCodes,
+            boundaryAuditRecorded: assembly?.boundaryAuditRecorded,
+            warnings: assembly?.warnings,
         };
     }
     async resumeEpisodeMessageAsync(event, input, created) {
         let link = this.episodeStore.getEventLink(event.eventId);
         let ignored = this.episodeStore.hasEventDisposition(event.eventId);
+        let assembly;
         if (!link && !ignored) {
-            const assembly = await this.assembleEpisodeTurnAsync([event], {
+            assembly = await this.assembleEpisodeTurnAsync([event], {
                 projectId: input.projectId, sessionId: event.sessionId || input.sessionId, sourceAgent: input.sourceAgent,
                 conversationThreadId: input.threadId || event.threadId || input.sessionId, now: event.occurredAt,
             });
@@ -959,6 +974,10 @@ export class MemoryKernel {
             sealed: episode?.status === 'sealed',
             dreamRecommended: Boolean(receipt?.dreamRecommended && !receipt.requiresReview && episode?.dreamStatus !== 'processed'),
             dreamRan: false,
+            boundaryTriggered: assembly?.boundaryTriggered,
+            boundaryGuardCodes: assembly?.boundaryGuardCodes,
+            boundaryAuditRecorded: assembly?.boundaryAuditRecorded,
+            warnings: assembly?.warnings,
         };
     }
     assertEpisodeIngestIdentity(event, input) {
@@ -1005,6 +1024,12 @@ export class MemoryKernel {
     }
     listEpisodeEventLinks(episodeId) {
         return this.episodeStore.listEventLinks(episodeId);
+    }
+    auditEpisodeBoundaries(options = {}) {
+        return this.episodeBoundaryAuditService.audit(options);
+    }
+    planEpisodeSplit(options) {
+        return this.episodeSplitPlanner.plan(options);
     }
     getEpisodeDreamStatus(projectId) {
         return this.episodeStore.getDreamStatus(projectId);

@@ -24,6 +24,9 @@ import { ProspectiveMemoryService } from './prospective/index.js';
 import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
 import { EpisodeAssembler, EpisodeStore, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
+import { EpisodeBoundaryAuditService, type EpisodeBoundaryAuditResult } from './episode/EpisodeBoundaryAuditService.js';
+import { EpisodeBoundaryPolicy, type EpisodeBoundaryConfig } from './episode/EpisodeBoundaryPolicy.js';
+import { EpisodeSplitPlanner, type EpisodeSplitPlan } from './episode/EpisodeSplitPlanner.js';
 import { type DreamTickOptions, type DreamTickResult } from './dream/index.js';
 import { type EnvLike } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
@@ -59,6 +62,7 @@ export interface MemoryKernelOptions {
     encryptionProvider?: EncryptionProvider;
     redactionPolicy?: RedactionPolicy | false;
     turnRelationReviewer?: TurnRelationAdvisoryReviewer;
+    episodeBoundary?: Partial<EpisodeBoundaryConfig>;
 }
 export interface MemoryKernelFromConfigOptions extends MemoryKernelOptions {
     configPath?: string;
@@ -290,6 +294,10 @@ export interface EpisodeMessageResult {
     sealed: boolean;
     dreamRecommended: boolean;
     dreamRan: false;
+    boundaryTriggered?: boolean;
+    boundaryGuardCodes?: string[];
+    boundaryAuditRecorded?: boolean;
+    warnings?: string[];
 }
 export type EpisodeRepairInput = {
     operation: 'move-event';
@@ -458,6 +466,9 @@ export declare class MemoryKernel {
     readonly pipelineMetrics: PipelineMetrics;
     readonly episodeStore: EpisodeStore;
     readonly episodeAssembler: EpisodeAssembler;
+    readonly episodeBoundaryPolicy: EpisodeBoundaryPolicy;
+    readonly episodeBoundaryAuditService: EpisodeBoundaryAuditService;
+    readonly episodeSplitPlanner: EpisodeSplitPlanner;
     readonly userTopicPathRegistry: UserTopicPathRegistry;
     readonly topicAliasRegistry: TopicAliasRegistry;
     readonly topicRelationGraph: TopicRelationGraph;
@@ -603,6 +614,26 @@ export declare class MemoryKernel {
         limit?: number;
     }): EpisodeClosureReceipt[];
     listEpisodeEventLinks(episodeId: string): import("./episode/EpisodeTypes.js").EpisodeEventLink[];
+    auditEpisodeBoundaries(options?: {
+        projectId?: string;
+        episodeId?: string;
+        status?: MemoryEpisode['status'];
+        limit?: number;
+        cursor?: string;
+        maxEvents?: number;
+        maxDurationMs?: number;
+        maxIdleGapMs?: number;
+        timezone?: string;
+    }): EpisodeBoundaryAuditResult;
+    planEpisodeSplit(options: {
+        projectId: string;
+        episodeId: string;
+        maxEvents?: number;
+        maxDurationMs?: number;
+        maxIdleGapMs?: number;
+        timezone?: string;
+        includeEventIds?: boolean;
+    }): EpisodeSplitPlan;
     getEpisodeDreamStatus(projectId?: string): EpisodeDreamStatus;
     retryFailedEpisodeDreams(projectId?: string): number;
     repairEpisodes(options?: {

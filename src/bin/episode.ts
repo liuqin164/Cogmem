@@ -24,12 +24,14 @@ function parseArgs(argv: string[]): Args {
 
 function usage(): string {
   return [
-    'Usage: cogmem episode <append|import|list|get|seal|status|repair|split|merge|move-event|reclassify|requeue-dream> [args]',
+    'Usage: cogmem episode <append|import|list|get|seal|status|audit-boundaries|split-plan|repair|split|merge|move-event|reclassify|requeue-dream> [args]',
     '  append --project <id> --session <id> --source-agent <id> --role <role> --text <text>',
     '  import --project <id> --session <id> --source-agent <id> --format jsonl --file <path> [--seal-batch] [--force-seal] [--chunk-size <n>] [--checkpoint-file <path>] [--resume] [--start-line <n>] [--end-line <n>] [--max-lines <n>] [--skip-errors] [--max-errors <n>]',
     '  list|status [--project <id>] [--session <id>] [--json]',
     '  get --episode <id> [--json]',
     '  seal --episode <id> [--mode soft|hard|manual|batch] [--reason <reason>]',
+    '  audit-boundaries --project <id> [--episode <id>] [--status open|soft_sealed|sealed] [--limit <n>] [--cursor <cursor>]',
+    '  split-plan --project <id> --episode <id> [--include-event-ids]',
     '  repair [--project <id>] [--since <globalSeq>] [--limit <n>]',
     '  split --project <id> --episode <id> --events <eventId,eventId>',
     '  merge --project <id> --source-episode <id> --target-episode <id>',
@@ -74,6 +76,20 @@ async function main(): Promise<void> {
     } else if (args.command === 'seal') {
       result = kernel.sealEpisode(requiredArg(args, 'episode'), {
         mode: closureModeArg(stringArg(args, 'mode')), reason: stringArg(args, 'reason') || 'cli_manual_seal',
+      });
+    } else if (args.command === 'audit-boundaries') {
+      result = kernel.auditEpisodeBoundaries({
+        projectId: requiredArg(args, 'project'), episodeId: stringArg(args, 'episode'),
+        status: statusArg(stringArg(args, 'status')), limit: numberArg(args, 'limit'), cursor: stringArg(args, 'cursor'),
+        maxEvents: numberArg(args, 'max-events'), maxDurationMs: numberArg(args, 'max-duration-ms'),
+        maxIdleGapMs: numberArg(args, 'max-idle-gap-ms'), timezone: stringArg(args, 'timezone'),
+      });
+    } else if (args.command === 'split-plan') {
+      result = kernel.planEpisodeSplit({
+        projectId: requiredArg(args, 'project'), episodeId: requiredArg(args, 'episode'),
+        maxEvents: numberArg(args, 'max-events'), maxDurationMs: numberArg(args, 'max-duration-ms'),
+        maxIdleGapMs: numberArg(args, 'max-idle-gap-ms'), timezone: stringArg(args, 'timezone'),
+        includeEventIds: args['include-event-ids'] === true,
       });
     } else if (args.command === 'repair') {
       result = kernel.repairEpisodes({ projectId, sinceGlobalSeq: numberArg(args, 'since'), limit: numberArg(args, 'limit') });
@@ -214,6 +230,11 @@ function dreamModeArg(value?: string): 'micro' | 'normal' | 'deep' {
   if (!value) return 'normal';
   if (value === 'micro' || value === 'normal' || value === 'deep') return value;
   throw new Error('mode must be micro, normal, or deep');
+}
+function statusArg(value?: string): 'open' | 'soft_sealed' | 'sealed' | undefined {
+  if (!value) return undefined;
+  if (value === 'open' || value === 'soft_sealed' || value === 'sealed') return value;
+  throw new Error('status must be open, soft_sealed, or sealed');
 }
 function episodeTypeArg(value?: string): 'discussion' | 'decision' | 'correction' | 'preference' | 'goal' | 'debugging' | 'planning' | 'prospective' | 'general' | undefined {
   if (!value) return undefined;

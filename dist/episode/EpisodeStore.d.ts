@@ -1,6 +1,8 @@
 import type Database from 'bun:sqlite';
 import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeClosureMode, EpisodeClosureReasonCode, EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeEventLink, EpisodeListOptions, EpisodeType, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
+import type { EpisodeBoundaryGuardResult } from './EpisodeBoundaryPolicy.js';
+import type { TurnRelationDecision } from './TurnRelationClassifier.js';
 interface CreateEpisodeInput {
     projectId: string;
     sessionId: string;
@@ -24,6 +26,27 @@ export interface ClaimedEpisodeDreamJob {
     leaseId: string;
     modeHint: 'micro' | 'normal' | 'deep';
     attempts: number;
+    createdAt: number;
+}
+export interface EpisodeBoundaryDecisionRecord {
+    decisionId: string;
+    projectId: string;
+    sessionId: string;
+    sourceAgent?: string;
+    threadId?: string;
+    primaryEventId: string;
+    previousEpisodeId?: string;
+    resultingEpisodeId?: string;
+    policyVersion: string;
+    mode: string;
+    guardAction: string;
+    guardCodes: string[];
+    metrics: EpisodeBoundaryGuardResult['metrics'];
+    cpuDecision: Partial<TurnRelationDecision>;
+    reviewerInvoked: boolean;
+    reviewerDecision?: Partial<TurnRelationDecision>;
+    finalDecision: Partial<TurnRelationDecision>;
+    warnings: EpisodeBoundaryGuardResult['warnings'];
     createdAt: number;
 }
 export declare class EpisodeStore {
@@ -84,6 +107,14 @@ export declare class EpisodeStore {
         after: unknown;
         now?: number;
     }): string;
+    recordBoundaryDecision(input: Omit<EpisodeBoundaryDecisionRecord, 'decisionId' | 'createdAt'> & {
+        createdAt?: number;
+    }): boolean;
+    listBoundaryDecisions(options?: {
+        projectId?: string;
+        primaryEventId?: string;
+        limit?: number;
+    }): EpisodeBoundaryDecisionRecord[];
     private invalidateEpisodeDerivedState;
     private resequenceEpisode;
     reopenSoftEpisode(episodeId: string, now: number): MemoryEpisode;

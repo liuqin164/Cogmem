@@ -11,6 +11,7 @@ import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
 import { migration_0022 } from '../src/migrations/0022_episode_dream_engine.js';
 import { migration_0023 } from '../src/migrations/0023_episode_dream_hardening.js';
 import { migration_0024 } from '../src/migrations/0024_episode_ontology_reliability.js';
+import { migration_0028 } from '../src/migrations/0028_episode_boundary_guardrails.js';
 
 function createTestKernel(prefix: string) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -228,19 +229,21 @@ test('episode split recomputes closure receipts, invalidates candidates, requeue
   }
 });
 
-test('EpisodeStore test bootstrap stays column-compatible with migrations 22 through 24', () => {
+test('EpisodeStore test bootstrap stays column-compatible with migrations 22 through 28', () => {
   const migrated = new Database(':memory:');
   const bootstrapped = new Database(':memory:');
   try {
     migration_0022.up(migrated);
     migration_0023.up(migrated);
     migration_0024.up(migrated);
+    migration_0028.up(migrated);
     new EpisodeStore(bootstrapped);
     const columns = (db: Database, table: string) => (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
       .map((item) => item.name).sort();
     for (const table of [
       'memory_episodes', 'memory_episode_events', 'episode_closure_receipts', 'episode_dream_jobs',
       'episode_dream_runs', 'episode_ingest_keys', 'episode_event_dispositions', 'episode_cross_refs', 'episode_repair_audit',
+      'episode_boundary_decisions',
     ]) {
       expect(columns(bootstrapped, table), table).toEqual(columns(migrated, table));
     }

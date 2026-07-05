@@ -222,6 +222,35 @@ export class EpisodeStore {
     `).run(repairId, input.projectId, input.operation, JSON.stringify(input.payload), JSON.stringify(input.before), JSON.stringify(input.after), input.now ?? Date.now());
         return repairId;
     }
+    recordBoundaryDecision(input) {
+        const decisionId = `episode-boundary-${randomUUID()}`;
+        const result = this.db.prepare(`
+      INSERT OR IGNORE INTO episode_boundary_decisions (
+        decision_id, project_id, session_id, source_agent, thread_id, primary_event_id,
+        previous_episode_id, resulting_episode_id, policy_version, mode, guard_action,
+        guard_codes_json, metrics_json, cpu_decision_json, reviewer_invoked,
+        reviewer_decision_json, final_decision_json, warnings_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(decisionId, input.projectId, input.sessionId, input.sourceAgent || null, input.threadId || null, input.primaryEventId, input.previousEpisodeId || null, input.resultingEpisodeId || null, input.policyVersion, input.mode, input.guardAction, JSON.stringify(input.guardCodes), JSON.stringify(input.metrics), JSON.stringify(safeDecision(input.cpuDecision)), input.reviewerInvoked ? 1 : 0, input.reviewerDecision ? JSON.stringify(safeDecision(input.reviewerDecision)) : null, JSON.stringify(safeDecision(input.finalDecision)), JSON.stringify(input.warnings), input.createdAt ?? Date.now());
+        return Number(result.changes || 0) > 0;
+    }
+    listBoundaryDecisions(options = {}) {
+        const where = [];
+        const params = [];
+        if (options.projectId) {
+            where.push('project_id = ?');
+            params.push(options.projectId);
+        }
+        if (options.primaryEventId) {
+            where.push('primary_event_id = ?');
+            params.push(options.primaryEventId);
+        }
+        const rows = this.db.prepare(`
+      SELECT * FROM episode_boundary_decisions ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY created_at DESC LIMIT ?
+    `).all(...params, Math.max(1, Math.min(Math.trunc(options.limit ?? 100), 1000)));
+        return rows.map(mapBoundaryDecision);
+    }
     invalidateEpisodeDerivedState(episodeId, now) {
         this.db.prepare(`DELETE FROM episode_dream_jobs WHERE episode_id = ?`).run(episodeId);
         this.db.prepare(`
@@ -604,6 +633,7 @@ export class EpisodeStore {
         const run = (sql) => { count += Number(this.db.prepare(sql).run(projectId).changes || 0); };
         run(`DELETE FROM episode_dream_runs WHERE project_id = ?`);
         run(`DELETE FROM episode_dream_jobs WHERE project_id = ?`);
+        run(`DELETE FROM episode_boundary_decisions WHERE project_id = ?`);
         run(`DELETE FROM episode_closure_receipts WHERE project_id = ?`);
         run(`DELETE FROM episode_ingest_keys WHERE project_id = ?`);
         run(`DELETE FROM episode_event_dispositions WHERE project_id = ?`);
@@ -681,6 +711,15 @@ export class EpisodeStore {
         repair_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL,
         before_json TEXT NOT NULL, after_json TEXT NOT NULL, created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS episode_boundary_decisions (
+        decision_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, session_id TEXT NOT NULL,
+        source_agent TEXT, thread_id TEXT, primary_event_id TEXT NOT NULL,
+        previous_episode_id TEXT, resulting_episode_id TEXT, policy_version TEXT NOT NULL,
+        mode TEXT NOT NULL, guard_action TEXT NOT NULL, guard_codes_json TEXT NOT NULL,
+        metrics_json TEXT NOT NULL, cpu_decision_json TEXT NOT NULL, reviewer_invoked INTEGER NOT NULL,
+        reviewer_decision_json TEXT, final_decision_json TEXT NOT NULL, warnings_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL, UNIQUE(project_id, primary_event_id, policy_version)
+      );
     `);
     }
 }
@@ -719,6 +758,29 @@ function mapClosure(row) {
         createdAt: row.created_at,
     };
 }
+function mapBoundaryDecision(row) {
+    return {
+        decisionId: row.decision_id,
+        projectId: row.project_id,
+        sessionId: row.session_id,
+        sourceAgent: row.source_agent || undefined,
+        threadId: row.thread_id || undefined,
+        primaryEventId: row.primary_event_id,
+        previousEpisodeId: row.previous_episode_id || undefined,
+        resultingEpisodeId: row.resulting_episode_id || undefined,
+        policyVersion: row.policy_version,
+        mode: row.mode,
+        guardAction: row.guard_action,
+        guardCodes: parseJson(row.guard_codes_json, []),
+        metrics: parseJson(row.metrics_json, { activeEventCount: 0, trustedLocalDates: [] }),
+        cpuDecision: parseJson(row.cpu_decision_json, {}),
+        reviewerInvoked: row.reviewer_invoked === 1,
+        reviewerDecision: parseJson(row.reviewer_decision_json, undefined),
+        finalDecision: parseJson(row.final_decision_json, {}),
+        warnings: parseJson(row.warnings_json, []),
+        createdAt: row.created_at,
+    };
+}
 function normalizeClosureReasonCode(reason, mode) {
     if (reason.includes('topic_switch'))
         return 'topic_switch';
@@ -743,6 +805,22 @@ function parseJson(value, fallback) {
     catch {
         return fallback;
     }
+}
+function safeDecision(decision) {
+    return {
+        relation: decision.relation,
+        confidence: decision.confidence,
+        signals: decision.signals?.slice(0, 20),
+        needsLlmReview: decision.needsLlmReview,
+        candidateTypes: decision.candidateTypes?.slice(0, 20),
+        topicPath: decision.topicPath,
+        closureCandidate: decision.closureCandidate,
+        switchKind: decision.switchKind,
+        episodeType: decision.episodeType,
+        importance: decision.importance,
+        importanceSignals: decision.importanceSignals?.slice(0, 20),
+        rationale: decision.rationale?.slice(0, 240),
+    };
 }
 function retryDelayMs(attempts) {
     return Math.min(60 * 60_000, 30_000 * 2 ** Math.max(0, attempts - 1));

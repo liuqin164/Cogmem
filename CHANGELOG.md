@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.7.3
+
+- Added enforceable Episode Boundary guardrails with configurable max event, duration, idle-gap, and trusted local-date limits, including best-effort decision audit rows that never roll back successful raw event assignment.
+- Added read-only `cogmem episode audit-boundaries` / MCP `cogmem_episode_audit_boundaries` for bounded episode health diagnostics without Dream, repair, Atlas, binding, activation, or decision-audit writes.
+- Added deterministic read-only `cogmem episode split-plan` / MCP `cogmem_episode_split_plan` previews that preserve logical turns and return `applyableInCurrentVersion=false` with no apply command.
+
 ## 3.7.2
 
 - Fixed Memory Atlas `graph-explore` edge projection so selected action, topic, and ordinary memory edges are merged before the final stable edge limit.

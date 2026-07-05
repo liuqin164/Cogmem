@@ -180,6 +180,31 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
       annotations: { title: 'Episode Status', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
     {
+      name: 'cogmem_episode_audit_boundaries',
+      description: 'Read-only deterministic audit of episode boundary health. Does not write audit rows, repair, split, Dream, Atlas, or activation telemetry.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: STRING_SCHEMA, episodeId: STRING_SCHEMA, status: STRING_SCHEMA, limit: NUMBER_SCHEMA, cursor: STRING_SCHEMA,
+          maxEvents: NUMBER_SCHEMA, maxDurationMs: NUMBER_SCHEMA, maxIdleGapMs: NUMBER_SCHEMA, timezone: STRING_SCHEMA,
+        },
+      },
+      annotations: { title: 'Audit Episode Boundaries', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: 'cogmem_episode_split_plan',
+      description: 'Read-only deterministic split preview for a single episode. Never calls repair or returns an apply command.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: STRING_SCHEMA, episodeId: STRING_SCHEMA, maxEvents: NUMBER_SCHEMA, maxDurationMs: NUMBER_SCHEMA,
+          maxIdleGapMs: NUMBER_SCHEMA, timezone: STRING_SCHEMA, includeEventIds: { type: 'boolean' },
+        },
+        required: ['projectId', 'episodeId'],
+      },
+      annotations: { title: 'Plan Episode Split', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    {
       name: 'cogmem_topic_list',
       description: 'List project-scoped user-shaped topic nodes and audited relations. Read-only.',
       inputSchema: { type: 'object', properties: { projectId: STRING_SCHEMA }, required: ['projectId'] },
@@ -394,6 +419,20 @@ export async function callCogmemMcpTool(
         return await episodeImport(opened.kernel, input);
       case 'cogmem_episode_status':
         return episodeStatus(opened.kernel, input);
+      case 'cogmem_episode_audit_boundaries':
+        return jsonResult(opened.kernel.auditEpisodeBoundaries({
+          projectId: optionalString(input.projectId), episodeId: optionalString(input.episodeId),
+          status: optionalString(input.status) as never, limit: optionalNumber(input.limit), cursor: optionalString(input.cursor),
+          maxEvents: optionalNumber(input.maxEvents), maxDurationMs: optionalNumber(input.maxDurationMs),
+          maxIdleGapMs: optionalNumber(input.maxIdleGapMs), timezone: optionalString(input.timezone),
+        }));
+      case 'cogmem_episode_split_plan':
+        return jsonResult(opened.kernel.planEpisodeSplit({
+          projectId: requiredString(input.projectId, 'projectId'), episodeId: requiredString(input.episodeId, 'episodeId'),
+          maxEvents: optionalNumber(input.maxEvents), maxDurationMs: optionalNumber(input.maxDurationMs),
+          maxIdleGapMs: optionalNumber(input.maxIdleGapMs), timezone: optionalString(input.timezone),
+          includeEventIds: input.includeEventIds === true,
+        }));
       case 'cogmem_topic_list': {
         const projectId = requiredString(input.projectId, 'projectId');
         return jsonResult({ topics: opened.kernel.userTopicPathRegistry.list(projectId), relations: opened.kernel.topicRelationGraph.list(projectId) });

@@ -1,17 +1,20 @@
 import { eventTextForMemory } from './CogmemBlockStripper.js';
 import { classifyAssistantRelation, classifyTurnRelation, classifyTurnRelationHybrid } from './TurnRelationClassifier.js';
+import { EpisodeBoundaryPolicy } from './EpisodeBoundaryPolicy.js';
 export class EpisodeAssembler {
     store;
     resolveEvent;
     softReopenWindowMs;
     reviewer;
     resolveTopicContext;
-    constructor(store, resolveEvent, softReopenWindowMs = 30 * 60_000, reviewer, resolveTopicContext) {
+    boundaryPolicy;
+    constructor(store, resolveEvent, softReopenWindowMs = 30 * 60_000, reviewer, resolveTopicContext, boundaryPolicy = new EpisodeBoundaryPolicy()) {
         this.store = store;
         this.resolveEvent = resolveEvent;
         this.softReopenWindowMs = softReopenWindowMs;
         this.reviewer = reviewer;
         this.resolveTopicContext = resolveTopicContext;
+        this.boundaryPolicy = boundaryPolicy;
     }
     appendTurn(events, input) {
         return this.appendTurnClassified(events, input);
@@ -23,12 +26,20 @@ export class EpisodeAssembler {
         const primary = ordered.find((event) => event.role === 'user') || ordered[0];
         const threadId = input.conversationThreadId || primary.threadId || input.sessionId;
         const episode = this.store.findActiveEpisode(input.projectId, input.sessionId, input.sourceAgent, threadId);
-        const decision = primary.role === 'user'
-            ? await classifyTurnRelationHybrid(this.classificationContext(primary, episode, ordered), this.reviewer)
-            : this.classifyPrimary(primary, episode, ordered);
-        return this.appendTurnClassified(ordered, input, decision);
+        const cpuDecision = this.classifyPrimary(primary, episode, ordered);
+        const guardResult = this.evaluateBoundary(episode, primary, ordered);
+        const decision = guardResult.guardAction === 'enforce_new_episode'
+            ? hardBoundaryDecision(cpuDecision, guardResult)
+            : primary.role === 'user'
+                ? await classifyTurnRelationHybrid(this.classificationContext(primary, episode, ordered), this.reviewer)
+                : cpuDecision;
+        return this.appendTurnClassified(ordered, input, decision, {
+            cpuDecision,
+            guardResult,
+            reviewerInvoked: guardResult.guardAction !== 'enforce_new_episode' && primary.role === 'user' && cpuDecision.needsLlmReview && Boolean(this.reviewer),
+        });
     }
-    appendTurnClassified(events, input, decisionOverride) {
+    appendTurnClassified(events, input, decisionOverride, trace) {
         const ordered = [...events].sort((a, b) => (a.eventOrdinal || 0) - (b.eventOrdinal || 0));
         if (!ordered.length)
             return { assignedEventIds: [], unassignedEventIds: [], ignoredEventIds: [], reopened: false };
@@ -45,7 +56,11 @@ export class EpisodeAssembler {
             if (!episode)
                 legacyLinkedEpisodeId = legacyEpisodeId;
         }
-        const decision = decisionOverride ?? this.classifyPrimary(primary, episode, ordered);
+        const cpuDecision = trace?.cpuDecision ?? this.classifyPrimary(primary, episode, ordered);
+        const guardResult = trace?.guardResult ?? this.evaluateBoundary(episode, primary, ordered);
+        let decision = decisionOverride ?? cpuDecision;
+        if (guardResult.guardAction === 'enforce_new_episode')
+            decision = hardBoundaryDecision(cpuDecision, guardResult);
         let reopened = false;
         let closureReceipt;
         let linkedEpisodeId = legacyLinkedEpisodeId;
@@ -57,6 +72,15 @@ export class EpisodeAssembler {
                 });
             }
             return { assignedEventIds: [], unassignedEventIds: [], ignoredEventIds: ordered.map((event) => event.eventId), reopened: false };
+        }
+        const previousEpisodeId = episode?.episodeId;
+        if (episode?.status === 'open' && guardResult.guardAction === 'enforce_new_episode') {
+            linkedEpisodeId = episode.episodeId;
+            closureReceipt = this.store.sealEpisode(episode.episodeId, {
+                mode: 'hard', reason: 'episode_boundary_guardrail', reasonCode: 'topic_switch',
+                reasonDetail: guardResult.guardCodes.join(','), now,
+            });
+            episode = undefined;
         }
         if (episode?.status === 'open' && ['hard_topic_switch', 'starts_new_topic', 'switches_topic'].includes(decision.relation)) {
             closureReceipt = this.store.sealEpisode(episode.episodeId, {
@@ -136,7 +160,41 @@ export class EpisodeAssembler {
                 mode: 'hard', reason: 'explicit_user_closure', reasonCode: 'explicit_user_closure', now,
             });
         }
-        return { episode: this.store.getEpisode(episode.episodeId), assignedEventIds, unassignedEventIds: [], ignoredEventIds: [], closureReceipt, reopened };
+        let boundaryAuditRecorded = false;
+        if (this.boundaryPolicy.config.auditDecisions) {
+            try {
+                boundaryAuditRecorded = this.store.recordBoundaryDecision({
+                    projectId: input.projectId,
+                    sessionId: input.sessionId,
+                    sourceAgent: input.sourceAgent,
+                    threadId: conversationThreadId,
+                    primaryEventId: primary.eventId,
+                    previousEpisodeId,
+                    resultingEpisodeId: episode.episodeId,
+                    policyVersion: guardResult.policyVersion,
+                    mode: guardResult.mode,
+                    guardAction: guardResult.guardAction,
+                    guardCodes: guardResult.guardCodes,
+                    metrics: guardResult.metrics,
+                    cpuDecision,
+                    reviewerInvoked: trace?.reviewerInvoked || false,
+                    reviewerDecision: trace?.reviewerDecision,
+                    finalDecision: decision,
+                    warnings: guardResult.warnings,
+                    createdAt: now,
+                });
+            }
+            catch {
+                boundaryAuditRecorded = false;
+            }
+        }
+        return {
+            episode: this.store.getEpisode(episode.episodeId), assignedEventIds, unassignedEventIds: [], ignoredEventIds: [], closureReceipt, reopened,
+            boundaryTriggered: guardResult.guardCodes.length > 0,
+            boundaryGuardCodes: guardResult.guardCodes,
+            boundaryAuditRecorded,
+            warnings: guardResult.warnings.map((warning) => warning.code),
+        };
     }
     appendEvent(event, input) {
         const active = this.store.findActiveEpisode(input.projectId, input.sessionId, input.sourceAgent, event.threadId || input.sessionId);
@@ -190,6 +248,22 @@ export class EpisodeAssembler {
             rationale: 'non_user_event_requires_later_user_evidence',
         };
     }
+    evaluateBoundary(episode, primary, currentEvents) {
+        const imported = currentEvents.some((event) => {
+            const payload = event.payload;
+            return payload?.metadata?.imported === true || payload?.metadata?.sourceRef !== undefined;
+        });
+        const localDates = episode
+            ? this.store.listEventLinks(episode.episodeId)
+                .map((link) => this.resolveEvent?.(link.eventId)?.localDate)
+                .filter((date) => Boolean(date))
+            : [];
+        return this.boundaryPolicy.evaluate({
+            active: episode ? { eventCount: episode.eventCount, startedAt: episode.startedAt, updatedAt: episode.updatedAt, localDates } : undefined,
+            primaryEvent: primary,
+            imported,
+        });
+    }
 }
 function eventText(event) {
     return eventTextForMemory(event);
@@ -200,4 +274,15 @@ function summaryLine(event) {
 }
 function averageConfidence(links) {
     return links.length ? links.reduce((total, link) => total + link.confidence, 0) / links.length : 0;
+}
+function hardBoundaryDecision(cpuDecision, guard) {
+    return {
+        ...cpuDecision,
+        relation: 'starts_new_topic',
+        confidence: 1,
+        closureCandidate: true,
+        switchKind: 'hard',
+        signals: [...new Set([...cpuDecision.signals, ...guard.guardCodes, 'episode_boundary_guardrail'])],
+        rationale: `episode_boundary_guardrail:${guard.guardCodes.join(',')}`,
+    };
 }

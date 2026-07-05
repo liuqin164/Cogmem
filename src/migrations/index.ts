@@ -23,6 +23,7 @@ import { migration_0024 } from './0024_episode_ontology_reliability.js';
 import { migration_0025 } from './0025_memory_atlas.js';
 import { migration_0026 } from './0026_runtime_governance_atlas_reliability.js';
 import { migration_0027 } from './0027_openclaw_upgrade_hotfix.js';
+import { migration_0028 } from './0028_episode_boundary_guardrails.js';
 
 /**
  * Ordered list of all schema migrations.
@@ -54,9 +55,10 @@ export const ALL_MIGRATIONS: Migration[] = [
   migration_0025,
   migration_0026,
   migration_0027,
+  migration_0028,
 ];
 
-export { migration_0001, migration_0002, migration_0003, migration_0004, migration_0005, migration_0006, migration_0007, migration_0009, migration_0010, migration_0011, migration_0012, migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027 };
+export { migration_0001, migration_0002, migration_0003, migration_0004, migration_0005, migration_0006, migration_0007, migration_0009, migration_0010, migration_0011, migration_0012, migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028 };
 export { SchemaMigrationRunner } from './SchemaMigrationRunner.js';
 export type { SchemaMigrationResult, SchemaMigrationRunOptions } from './SchemaMigrationRunner.js';
 export type { Migration };

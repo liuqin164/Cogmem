@@ -2,6 +2,7 @@ import type { MemoryEvent } from '../types/index.js';
 import { type TurnClassificationContext, type TurnRelationAdvisoryReviewer } from './TurnRelationClassifier.js';
 import type { EpisodeClosureReceipt, MemoryEpisode } from './EpisodeTypes.js';
 import { EpisodeStore } from './EpisodeStore.js';
+import { EpisodeBoundaryPolicy } from './EpisodeBoundaryPolicy.js';
 export interface EpisodeAssemblyResult {
     episode?: MemoryEpisode;
     assignedEventIds: string[];
@@ -9,6 +10,10 @@ export interface EpisodeAssemblyResult {
     ignoredEventIds: string[];
     closureReceipt?: EpisodeClosureReceipt;
     reopened: boolean;
+    boundaryTriggered?: boolean;
+    boundaryGuardCodes?: string[];
+    boundaryAuditRecorded?: boolean;
+    warnings?: string[];
 }
 export declare class EpisodeAssembler {
     private readonly store;
@@ -16,7 +21,8 @@ export declare class EpisodeAssembler {
     private readonly softReopenWindowMs;
     private readonly reviewer?;
     private readonly resolveTopicContext?;
-    constructor(store: EpisodeStore, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, softReopenWindowMs?: number, reviewer?: TurnRelationAdvisoryReviewer | undefined, resolveTopicContext?: ((primary: MemoryEvent, episode?: MemoryEpisode) => Partial<TurnClassificationContext>) | undefined);
+    private readonly boundaryPolicy;
+    constructor(store: EpisodeStore, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, softReopenWindowMs?: number, reviewer?: TurnRelationAdvisoryReviewer | undefined, resolveTopicContext?: ((primary: MemoryEvent, episode?: MemoryEpisode) => Partial<TurnClassificationContext>) | undefined, boundaryPolicy?: EpisodeBoundaryPolicy);
     appendTurn(events: MemoryEvent[], input: {
         projectId: string;
         sessionId: string;
@@ -50,5 +56,6 @@ export declare class EpisodeAssembler {
     }): Promise<EpisodeAssemblyResult>;
     private classificationContext;
     private classifyPrimary;
+    private evaluateBoundary;
 }
 //# sourceMappingURL=EpisodeAssembler.d.ts.map

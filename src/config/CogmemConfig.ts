@@ -14,6 +14,7 @@ import {
   addVectorDimensionDiagnostics,
   parseVectorDimensionValue,
 } from './VectorDimension.js';
+import { normalizeEpisodeBoundaryConfig } from '../episode/EpisodeBoundaryPolicy.js';
 
 export type CogmemConfigKind = 'toml' | 'missing';
 export type EnvLike = Record<string, string | undefined>;
@@ -111,6 +112,7 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   const memoryModel = section(root, 'memory_model');
   const reasoningModel = section(root, 'reasoning_model');
   const governance = section(root, 'governance');
+  const episodeBoundary = section(root, 'episode_boundary');
   const integrations = section(root, 'integrations');
   const openclaw = section(integrations, 'openclaw');
   const hermes = section(integrations, 'hermes');
@@ -168,6 +170,25 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
     redactionPolicy.ssn = piiSsn;
   }
   if (Object.keys(redactionPolicy).length > 0) optionsOut.redactionPolicy = redactionPolicy;
+
+  const boundaryInput = {
+    enabled: booleanValue(episodeBoundary.enabled),
+    mode: stringValue(episodeBoundary.mode) as never,
+    maxEvents: numberValue(episodeBoundary.max_events),
+    maxDurationMs: numberValue(episodeBoundary.max_duration_ms),
+    maxIdleGapMs: numberValue(episodeBoundary.max_idle_gap_ms),
+    splitOnTrustedLocalDateChange: booleanValue(episodeBoundary.split_on_trusted_local_date_change),
+    auditDecisions: booleanValue(episodeBoundary.audit_decisions),
+    applyToLive: booleanValue(episodeBoundary.apply_to_live),
+    applyToImports: booleanValue(episodeBoundary.apply_to_imports),
+    timezone: stringValue(episodeBoundary.timezone),
+  };
+  const configuredBoundary = Object.values(boundaryInput).some((value) => value !== undefined);
+  if (configuredBoundary) {
+    const normalizedBoundary = normalizeEpisodeBoundaryConfig(boundaryInput);
+    optionsOut.episodeBoundary = normalizedBoundary.config;
+    diagnostics.push(...normalizedBoundary.diagnostics);
+  }
 
   const encryptionEnabled = booleanValue(governance.encryption) === true;
   const encryptionPassphrase = interpolate(

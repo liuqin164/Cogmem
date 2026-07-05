@@ -33,6 +33,8 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
     'cogmem_episode_append',
     'cogmem_episode_import',
     'cogmem_episode_status',
+    'cogmem_episode_audit_boundaries',
+    'cogmem_episode_split_plan',
     'cogmem_topic_list',
     'cogmem_topic_operate',
     'cogmem_topic_rollback',

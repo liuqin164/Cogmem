@@ -3,6 +3,7 @@ import { eventTextForMemory } from './CogmemBlockStripper.js';
 import { classifyAssistantRelation, classifyTurnRelation, classifyTurnRelationHybrid, type TurnClassificationContext, type TurnRelationAdvisoryReviewer, type TurnRelationDecision } from './TurnRelationClassifier.js';
 import type { EpisodeClosureReceipt, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
 import { EpisodeStore } from './EpisodeStore.js';
+import { EpisodeBoundaryPolicy, type EpisodeBoundaryGuardResult } from './EpisodeBoundaryPolicy.js';
 
 export interface EpisodeAssemblyResult {
   episode?: MemoryEpisode;
@@ -11,6 +12,10 @@ export interface EpisodeAssemblyResult {
   ignoredEventIds: string[];
   closureReceipt?: EpisodeClosureReceipt;
   reopened: boolean;
+  boundaryTriggered?: boolean;
+  boundaryGuardCodes?: string[];
+  boundaryAuditRecorded?: boolean;
+  warnings?: string[];
 }
 
 export class EpisodeAssembler {
@@ -20,6 +25,7 @@ export class EpisodeAssembler {
     private readonly softReopenWindowMs = 30 * 60_000,
     private readonly reviewer?: TurnRelationAdvisoryReviewer,
     private readonly resolveTopicContext?: (primary: MemoryEvent, episode?: MemoryEpisode) => Partial<TurnClassificationContext>,
+    private readonly boundaryPolicy = new EpisodeBoundaryPolicy(),
   ) {}
 
   appendTurn(events: MemoryEvent[], input: {
@@ -48,10 +54,18 @@ export class EpisodeAssembler {
     const primary = ordered.find((event) => event.role === 'user') || ordered[0];
     const threadId = input.conversationThreadId || primary.threadId || input.sessionId;
     const episode = this.store.findActiveEpisode(input.projectId, input.sessionId, input.sourceAgent, threadId);
-    const decision = primary.role === 'user'
-      ? await classifyTurnRelationHybrid(this.classificationContext(primary, episode, ordered), this.reviewer)
-      : this.classifyPrimary(primary, episode, ordered);
-    return this.appendTurnClassified(ordered, input, decision);
+    const cpuDecision = this.classifyPrimary(primary, episode, ordered);
+    const guardResult = this.evaluateBoundary(episode, primary, ordered);
+    const decision = guardResult.guardAction === 'enforce_new_episode'
+      ? hardBoundaryDecision(cpuDecision, guardResult)
+      : primary.role === 'user'
+        ? await classifyTurnRelationHybrid(this.classificationContext(primary, episode, ordered), this.reviewer)
+        : cpuDecision;
+    return this.appendTurnClassified(ordered, input, decision, {
+      cpuDecision,
+      guardResult,
+      reviewerInvoked: guardResult.guardAction !== 'enforce_new_episode' && primary.role === 'user' && cpuDecision.needsLlmReview && Boolean(this.reviewer),
+    });
   }
 
   private appendTurnClassified(events: MemoryEvent[], input: {
@@ -62,7 +76,12 @@ export class EpisodeAssembler {
     now?: number;
     batchSeal?: boolean;
     forceBatchSeal?: boolean;
-  }, decisionOverride?: TurnRelationDecision): EpisodeAssemblyResult {
+  }, decisionOverride?: TurnRelationDecision, trace?: {
+    cpuDecision: TurnRelationDecision;
+    guardResult: EpisodeBoundaryGuardResult;
+    reviewerInvoked: boolean;
+    reviewerDecision?: TurnRelationDecision;
+  }): EpisodeAssemblyResult {
     const ordered = [...events].sort((a, b) => (a.eventOrdinal || 0) - (b.eventOrdinal || 0));
     if (!ordered.length) return { assignedEventIds: [], unassignedEventIds: [], ignoredEventIds: [], reopened: false };
     const mismatched = ordered.find((event) => event.projectId && event.projectId !== input.projectId);
@@ -76,7 +95,10 @@ export class EpisodeAssembler {
       episode = this.store.claimLegacyEpisodeScope(legacyEpisodeId, input.sourceAgent, conversationThreadId);
       if (!episode) legacyLinkedEpisodeId = legacyEpisodeId;
     }
-    const decision = decisionOverride ?? this.classifyPrimary(primary, episode, ordered);
+    const cpuDecision = trace?.cpuDecision ?? this.classifyPrimary(primary, episode, ordered);
+    const guardResult = trace?.guardResult ?? this.evaluateBoundary(episode, primary, ordered);
+    let decision = decisionOverride ?? cpuDecision;
+    if (guardResult.guardAction === 'enforce_new_episode') decision = hardBoundaryDecision(cpuDecision, guardResult);
     let reopened = false;
     let closureReceipt: EpisodeClosureReceipt | undefined;
     let linkedEpisodeId: string | undefined = legacyLinkedEpisodeId;
@@ -89,6 +111,16 @@ export class EpisodeAssembler {
         });
       }
       return { assignedEventIds: [], unassignedEventIds: [], ignoredEventIds: ordered.map((event) => event.eventId), reopened: false };
+    }
+
+    const previousEpisodeId = episode?.episodeId;
+    if (episode?.status === 'open' && guardResult.guardAction === 'enforce_new_episode') {
+      linkedEpisodeId = episode.episodeId;
+      closureReceipt = this.store.sealEpisode(episode.episodeId, {
+        mode: 'hard', reason: 'episode_boundary_guardrail', reasonCode: 'topic_switch',
+        reasonDetail: guardResult.guardCodes.join(','), now,
+      });
+      episode = undefined;
     }
 
     if (episode?.status === 'open' && ['hard_topic_switch', 'starts_new_topic', 'switches_topic'].includes(decision.relation)) {
@@ -167,7 +199,40 @@ export class EpisodeAssembler {
         mode: 'hard', reason: 'explicit_user_closure', reasonCode: 'explicit_user_closure', now,
       });
     }
-    return { episode: this.store.getEpisode(episode.episodeId), assignedEventIds, unassignedEventIds: [], ignoredEventIds: [], closureReceipt, reopened };
+    let boundaryAuditRecorded = false;
+    if (this.boundaryPolicy.config.auditDecisions) {
+      try {
+        boundaryAuditRecorded = this.store.recordBoundaryDecision({
+          projectId: input.projectId,
+          sessionId: input.sessionId,
+          sourceAgent: input.sourceAgent,
+          threadId: conversationThreadId,
+          primaryEventId: primary.eventId,
+          previousEpisodeId,
+          resultingEpisodeId: episode.episodeId,
+          policyVersion: guardResult.policyVersion,
+          mode: guardResult.mode,
+          guardAction: guardResult.guardAction,
+          guardCodes: guardResult.guardCodes,
+          metrics: guardResult.metrics,
+          cpuDecision,
+          reviewerInvoked: trace?.reviewerInvoked || false,
+          reviewerDecision: trace?.reviewerDecision,
+          finalDecision: decision,
+          warnings: guardResult.warnings,
+          createdAt: now,
+        });
+      } catch {
+        boundaryAuditRecorded = false;
+      }
+    }
+    return {
+      episode: this.store.getEpisode(episode.episodeId), assignedEventIds, unassignedEventIds: [], ignoredEventIds: [], closureReceipt, reopened,
+      boundaryTriggered: guardResult.guardCodes.length > 0,
+      boundaryGuardCodes: guardResult.guardCodes,
+      boundaryAuditRecorded,
+      warnings: guardResult.warnings.map((warning) => warning.code),
+    };
   }
 
   appendEvent(event: MemoryEvent, input: { projectId: string; sessionId: string; sourceAgent?: string; now?: number }): EpisodeAssemblyResult {
@@ -223,6 +288,23 @@ export class EpisodeAssembler {
       rationale: 'non_user_event_requires_later_user_evidence',
     };
   }
+
+  private evaluateBoundary(episode: MemoryEpisode | undefined, primary: MemoryEvent, currentEvents: MemoryEvent[]): EpisodeBoundaryGuardResult {
+    const imported = currentEvents.some((event) => {
+      const payload = event.payload as { metadata?: Record<string, unknown> } | undefined;
+      return payload?.metadata?.imported === true || payload?.metadata?.sourceRef !== undefined;
+    });
+    const localDates = episode
+      ? this.store.listEventLinks(episode.episodeId)
+        .map((link) => this.resolveEvent?.(link.eventId)?.localDate)
+        .filter((date): date is string => Boolean(date))
+      : [];
+    return this.boundaryPolicy.evaluate({
+      active: episode ? { eventCount: episode.eventCount, startedAt: episode.startedAt, updatedAt: episode.updatedAt, localDates } : undefined,
+      primaryEvent: primary,
+      imported,
+    });
+  }
 }
 
 function eventText(event: MemoryEvent): string {
@@ -236,4 +318,16 @@ function summaryLine(event: MemoryEvent): string {
 
 function averageConfidence(links: Array<{ confidence: number }>): number {
   return links.length ? links.reduce((total, link) => total + link.confidence, 0) / links.length : 0;
+}
+
+function hardBoundaryDecision(cpuDecision: TurnRelationDecision, guard: EpisodeBoundaryGuardResult): TurnRelationDecision {
+  return {
+    ...cpuDecision,
+    relation: 'starts_new_topic',
+    confidence: 1,
+    closureCandidate: true,
+    switchKind: 'hard',
+    signals: [...new Set([...cpuDecision.signals, ...guard.guardCodes, 'episode_boundary_guardrail'])],
+    rationale: `episode_boundary_guardrail:${guard.guardCodes.join(',')}`,
+  };
 }
