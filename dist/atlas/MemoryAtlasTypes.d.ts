@@ -101,6 +101,13 @@ export interface MemoryAtlasSlice {
     edges: MemoryAtlasEdge[];
     nextActions: MemoryAtlasNextAction[];
     warnings: string[];
+    edgeTruncation?: {
+        limit: number;
+        returned: number;
+        omitted: number;
+        candidateCount: number;
+        prioritized: boolean;
+    };
     facets?: {
         planner?: {
             intent: string;

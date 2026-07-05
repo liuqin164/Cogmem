@@ -296,6 +296,42 @@ test('path and explore return a bounded source-anchored local graph without vect
   } finally { kernel.close(); }
 });
 
+test('graph explore projects internal action edges after noisy adjacent edges', () => {
+  const { kernel, hermesEntityId } = createFixture();
+  try {
+    kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });
+    const db = kernel.memoryAtlasStore.db;
+    const insert = db.prepare(`INSERT INTO memory_edges(
+      edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,confidence,stability,activation,status,evidence_event_ids_json,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    for (let index = 0; index < 70; index += 1) {
+      kernel.memoryAtlasStore.upsertDocument({ id: `cluster:explore-noise-${index}`, projectId: 'cogmem', nodeType: 'cluster', sourceId: `explore-noise-${index}`,
+        memoryKind: 'action', label: `Hermes 去年配置操作 noise ${index}`, confidence: 1, supportCount: 1, status: 'active', occurredAt: Date.UTC(2025, 5, 1) });
+      insert.run(`explore-noise-${index}`, 'cogmem', 'entity', hermesEntityId, 'ABOUT', 'cluster', `explore-noise-${index}`,
+        1, 1, 0, 'active', '[]', index, index);
+    }
+    db.prepare(`UPDATE memory_atlas_documents SET memory_kind='action', support_count=999 WHERE project_id='cogmem' AND node_id IN (?, ?)`)
+      .run(`entity:${hermesEntityId}`, 'time:cogmem:2025');
+    const explore = kernel.graphExplore('Hermes 去年配置操作', { projectId: 'cogmem', limit: 30 });
+    const action = explore.nodes.find((node) => node.nodeType === 'action');
+    expect(explore.nodes.length).toBe(30);
+    expect(action).toBeDefined();
+
+    const neighbors = kernel.graphNeighbors(action!.id, { projectId: 'cogmem', limit: 30 });
+    expect(neighbors.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: action!.id, relation: 'TARGETS', target: `entity:${hermesEntityId}` }),
+      expect.objectContaining({ source: action!.id, relation: 'OCCURRED_IN', target: 'time:cogmem:2025' }),
+    ]));
+    expect(explore.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: action!.id, relation: 'TARGETS', target: `entity:${hermesEntityId}` }),
+      expect.objectContaining({ source: action!.id, relation: 'OCCURRED_IN', target: 'time:cogmem:2025' }),
+    ]));
+    if (explore.edgeTruncation) {
+      expect(explore.warnings.some((warning) => warning.startsWith('edges_truncated:'))).toBe(true);
+    }
+  } finally { kernel.close(); }
+});
+
 test('precise path lookup is not hidden by thousands of newer higher-confidence edges', () => {
   const { kernel, hermesEntityId, hermesClusterId } = createFixture();
   try {

@@ -33,6 +33,7 @@ export declare class MemoryAtlasStore {
     evidenceTotal(nodeId: string, projectId: string): number;
     listEdges(projectId: string): MemoryAtlasEdge[];
     listEdgesForNodes(projectId: string, nodeIds: string[], limit?: number): MemoryAtlasEdge[];
+    listEdgesWithinNodes(projectId: string, nodeIds: string[], limit?: number): MemoryAtlasEdge[];
     findEdgesBetween(projectId: string, leftNodeId: string, rightNodeId: string): MemoryAtlasEdge[];
     findEdgesFromNodesToTarget(projectId: string, leftNodeIds: string[], rightNodeId: string): MemoryAtlasEdge[];
     listActions(projectId: string, options: {

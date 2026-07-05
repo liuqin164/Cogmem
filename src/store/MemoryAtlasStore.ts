@@ -308,6 +308,57 @@ export class MemoryAtlasStore {
     return Array.from(new Map(edges.map((edge) => [`${edge.source}\0${edge.relation}\0${edge.target}`, edge])).values()).slice(0, Math.max(1, Math.min(limit, 4000)));
   }
 
+  listEdgesWithinNodes(projectId: string, nodeIds: string[], limit = 4000): MemoryAtlasEdge[] {
+    const selectedIds = new Set(Array.from(new Set(nodeIds)));
+    const parsed = Array.from(selectedIds).map((id) => parseNodeId(id, projectId)).filter((item): item is { type: string; id: string } => Boolean(item));
+    if (!parsed.length) return [];
+    const edges: MemoryAtlasEdge[] = [];
+    const cap = Math.max(1, Math.min(limit, 4000));
+    for (const sourceChunk of chunked(parsed, 120)) {
+      for (const targetChunk of chunked(parsed, 120)) {
+        const sourceClause = sourceChunk.map(() => '(source_type=? AND source_id=?)').join(' OR ');
+        const targetClause = targetChunk.map(() => '(target_type=? AND target_id=?)').join(' OR ');
+        const rows = this.db.prepare(`
+          SELECT * FROM memory_edges
+          WHERE project_id=? AND status IN ('active','weak')
+            AND (${sourceClause}) AND (${targetClause})
+          ORDER BY confidence DESC LIMIT ?
+        `).all(
+          projectId,
+          ...sourceChunk.flatMap((item) => [item.type, item.id]),
+          ...targetChunk.flatMap((item) => [item.type, item.id]),
+          cap,
+        ) as Array<Record<string, unknown>>;
+        for (const row of rows) edges.push({
+          source: nodeId(String(row.source_type), String(row.source_id), projectId), relation: String(row.relation_type),
+          target: nodeId(String(row.target_type), String(row.target_id), projectId), confidence: Number(row.confidence),
+          evidenceEventIds: parseStringArray(String(row.evidence_event_ids_json || '[]')),
+        });
+      }
+    }
+    const actionIds = parsed.filter((item) => item.type === 'action').map((item) => item.id);
+    if (actionIds.length) {
+      for (const chunk of chunked(actionIds, 400)) {
+        const actions = this.db.prepare(`SELECT action_id,target_entity_id,occurred_at,confidence FROM memory_action_frames
+          WHERE project_id=? AND action_id IN (${chunk.map(() => '?').join(',')})`).all(projectId, ...chunk) as Array<{ action_id: string; target_entity_id?: string; occurred_at: number; confidence: number }>;
+        for (const action of actions) {
+          const evidenceEventIds = this.actionEvidenceIds(action.action_id, projectId);
+          if (action.target_entity_id && selectedIds.has(`entity:${action.target_entity_id}`)) {
+            edges.push({ source: `action:${action.action_id}`, relation: 'TARGETS', target: `entity:${action.target_entity_id}`, confidence: action.confidence, evidenceEventIds });
+          }
+          const timeId = timeNodeId(projectId, action.occurred_at);
+          if (selectedIds.has(timeId)) edges.push({ source: `action:${action.action_id}`, relation: 'OCCURRED_IN', target: timeId, confidence: 1, evidenceEventIds });
+        }
+      }
+    }
+    const topicPaths = parsed.filter((item) => item.type === 'topic').map((item) => item.id);
+    if (topicPaths.length) {
+      edges.push(...this.topicRelationEdges(projectId, topicPaths, cap)
+        .filter((edge) => selectedIds.has(edge.source) && selectedIds.has(edge.target)));
+    }
+    return Array.from(new Map(edges.map((edge) => [`${edge.source}\0${edge.relation}\0${edge.target}`, edge])).values());
+  }
+
   findEdgesBetween(projectId: string, leftNodeId: string, rightNodeId: string): MemoryAtlasEdge[] {
     const left = parseNodeId(leftNodeId, projectId); const right = parseNodeId(rightNodeId, projectId);
     if (!left || !right) return [];
@@ -717,6 +768,12 @@ function stringArray(value: unknown): string[] {
 
 function optionalMetadataString(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined;
+}
+
+function chunked<T>(values: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += size) chunks.push(values.slice(index, index + size));
+  return chunks;
 }
 
 function facetFromEdge(edge: FacetEdgeRow, projectId: string): MemoryAtlasMatchedFacet {

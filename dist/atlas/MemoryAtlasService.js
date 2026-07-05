@@ -57,8 +57,8 @@ export class MemoryAtlasService {
             nodes = uniqueNodes([...actions.map((action) => this.store.getNode(action.id, projectId)).filter((node) => Boolean(node)), ...nodes]).slice(0, limit);
         }
         const nodesWithEvidence = this.attachEvidence(nodes, projectId, options);
-        const edges = this.edgesFor(nodesWithEvidence, projectId);
-        const result = slice(projectId, nodesWithEvidence, edges, query);
+        const edgeProjection = this.edgeProjection(nodesWithEvidence, projectId, exactMatchedNodeIds(cards, facetResult.plan));
+        const result = slice(projectId, nodesWithEvidence, edgeProjection.edges, query);
         result.facets = {
             ...facetsForPlan(facetResult.plan),
             legacy: { time: compiled.range, target: target.labels.join(', ') || compiled.target, memoryKinds: compiled.memoryKinds, keywords: compiled.keywords },
@@ -68,6 +68,10 @@ export class MemoryAtlasService {
             result.cards = this.attachCardEvidence(cards, projectId, options);
         if (facetResult.relaxationTrace.length)
             result.relaxationTrace = facetResult.relaxationTrace;
+        if (edgeProjection.truncation) {
+            result.edgeTruncation = edgeProjection.truncation;
+            result.warnings.push(`edges_truncated:${edgeProjection.truncation.omitted}_omitted`);
+        }
         const hasFacet = Boolean(compiled.range || compiled.target || compiled.memoryKinds.length || compiled.tokens.length);
         result.coldMemoryResurrected = hasFacet && nodes.some((node) => node.activation <= 0.1);
         return result;
@@ -248,9 +252,23 @@ export class MemoryAtlasService {
         });
     }
     edgesFor(nodes, projectId) {
+        return this.edgeProjection(nodes, projectId).edges;
+    }
+    edgeProjection(nodes, projectId, priorityIds = new Set()) {
         const ids = new Set(nodes.map((node) => node.id));
-        return this.safeEdges(this.store.listEdgesForNodes(projectId, [...ids], 60)
-            .filter((edge) => ids.has(edge.source) && ids.has(edge.target)).slice(0, 60), projectId);
+        const limit = 60;
+        const candidates = this.safeEdges(this.store.listEdgesWithinNodes(projectId, [...ids], 4000)
+            .filter((edge) => ids.has(edge.source) && ids.has(edge.target)), projectId);
+        const sorted = uniqueEdges(candidates).sort((left, right) => edgePriority(right, priorityIds) - edgePriority(left, priorityIds)
+            || right.confidence - left.confidence
+            || edgeKey(left).localeCompare(edgeKey(right)));
+        const edges = sorted.slice(0, limit);
+        return {
+            edges,
+            truncation: sorted.length > edges.length
+                ? { limit, returned: edges.length, omitted: sorted.length - edges.length, candidateCount: sorted.length, prioritized: priorityIds.size > 0 }
+                : undefined,
+        };
     }
     safeEdges(edges, projectId) {
         return edges.map((edge) => ({ ...edge, evidenceEventIds: edge.evidenceEventIds.filter((eventId) => {
@@ -293,6 +311,20 @@ function uniqueNodes(nodes) { return Array.from(new Map(nodes.map((node) => [nod
 function uniqueIds(ids) { return Array.from(new Set(ids)); }
 function uniqueEdges(edges) {
     return Array.from(new Map(edges.map((edge) => [`${edge.source}\0${edge.relation}\0${edge.target}`, edge])).values());
+}
+function edgeKey(edge) { return `${edge.source}\0${edge.relation}\0${edge.target}`; }
+function edgePriority(edge, priorityIds) {
+    return (priorityIds.has(edge.source) ? 1 : 0) + (priorityIds.has(edge.target) ? 1 : 0);
+}
+function exactMatchedNodeIds(cards, plan) {
+    return new Set([
+        ...cards.flatMap((card) => [
+            card.canonicalId,
+            ...card.matchedFacets.map((facet) => facet.nodeId),
+            ...card.matchedPaths.flatMap((path) => path.via),
+        ]),
+        ...plan.facets.map((facet) => facet.nodeId).filter((id) => Boolean(id)),
+    ]);
 }
 function edgeTraversalCost(edge) {
     const confidence = Math.max(0.01, Math.min(1, edge.confidence));

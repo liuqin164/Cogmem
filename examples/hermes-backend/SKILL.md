@@ -114,7 +114,7 @@ timeout_ms = 60000
 
 ## Migrate Existing Hermes Memory
 
-Upgrade a 3.5.2 database, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.1 schema/projection set in one backed-up command:
+Upgrade a 3.5.2 database, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.2 schema/projection set in one backed-up command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -216,7 +216,7 @@ Choose the graph tool from the question shape:
 
 Atlas combines whatever conditions the user supplies like table filters. Do not require entity + time + action. Project, day/month/year, topic, issue, entity/target, session/thread, memory kind, action kind, and ordinary cues may revive cold nodes together. Entity cue extraction accepts Unicode letter/number names, but it is not full NER and must not be treated as proof that two aliases are the same person/tool. Activation is visibility, not truth. Atlas summaries are hints and never replace raw evidence.
 
-In 3.7.1, `cogmem_graph_search`, `cogmem_graph_explore`, and historical recall can return canonical `cards[]`. Prefer cards over raw node labels for past-discussion questions. A card's `canonicalId` is the single episode identity; `matchedFacets` explains time/topic/issue/entity matches; `matchedPaths` explains how the card was reached; `relatedButNotSelected` is context only and must not replace the selected answer; `sourceLocator.command` is the command to inspect exact original text. If `relaxationTrace` exists, say the answer is a relaxed match, not an exact hit; supported relaxations include day → month → year and issue → parent topic.
+In 3.7.2, `cogmem_graph_search`, `cogmem_graph_explore`, and historical recall can return canonical `cards[]`. Prefer cards over raw node labels for past-discussion questions. A card's `canonicalId` is the single episode identity; `matchedFacets` explains time/topic/issue/entity matches; `matchedPaths` explains how the card was reached; `relatedButNotSelected` is context only and must not replace the selected answer; `sourceLocator.command` is the command to inspect exact original text. If `relaxationTrace` exists, say the answer is a relaxed match, not an exact hit; supported relaxations include day → month → year and issue → parent topic.
 
 When the prompt does not contain enough injected Cogmem context, do not search legacy memory files first. Ask Cogmem directly:
 

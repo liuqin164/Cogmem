@@ -185,7 +185,7 @@ Recall behavior:
 - If `cogmem memory tick --project openclaw --json` suggests `bind_raw_events`, run `cogmem memory bind --project openclaw --json` to backfill imported or adapter-written raw user events into the binding graph.
 - For “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, or missing injection cases, run `cogmem memory recall --query "<past discussion question>" --intent historical_discussion --project openclaw --agent openclaw --json` before claiming no memory.
 - For ledger audits or resumable checks, use `cogmem memory list --project openclaw --since <globalSeq> --order asc --json`; list rows and Atlas search/explore evidence include `sourceLocator` commands.
-- For old-discussion or "do you remember" questions, prefer `cogmem memory recall --intent historical_discussion ...` or `cogmem memory graph-explore ... --json`. In 3.7.1, cards carry `canonicalId`, `matchedFacets`, `matchedPaths`, `relatedButNotSelected`, and `sourceLocator`; answer from the selected canonical card, not from a related-but-not-selected side card.
+- For old-discussion or "do you remember" questions, prefer `cogmem memory recall --intent historical_discussion ...` or `cogmem memory graph-explore ... --json`. In 3.7.2, cards carry `canonicalId`, `matchedFacets`, `matchedPaths`, `relatedButNotSelected`, and `sourceLocator`; answer from the selected canonical card, not from a related-but-not-selected side card.
 
 Installing the workspace skill makes the kernel procedure discoverable to OpenClaw agents. Installing the local auto wrapper makes future turns call the memory kernel automatically:
 
