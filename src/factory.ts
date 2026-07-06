@@ -681,8 +681,8 @@ export class MemoryKernel {
     this.dreamLedgerStore = new DreamLedgerStore(db);
     this.episodeStore = new EpisodeStore(db, (eventId) => this.eventStore.getEvent(eventId), { initializeSchemaForTests: false });
     this.episodeBoundaryPolicy = new EpisodeBoundaryPolicy(options.episodeBoundary);
-    this.episodeBoundaryAuditService = new EpisodeBoundaryAuditService(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId));
-    this.episodeSplitPlanner = new EpisodeSplitPlanner(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId));
+    this.episodeBoundaryAuditService = new EpisodeBoundaryAuditService(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config);
+    this.episodeSplitPlanner = new EpisodeSplitPlanner(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config);
     this.userTopicPathRegistry = new UserTopicPathRegistry(db);
     this.topicAliasRegistry = new TopicAliasRegistry(db);
     this.topicRelationGraph = new TopicRelationGraph(db);
@@ -1754,6 +1754,7 @@ export class MemoryKernel {
       affected.add(input.episodeId);
     } else if (input.operation === 'split') {
       const source = this.episodeStore.getEpisode(input.episodeId)!;
+      if (source.status !== 'sealed') throw new Error('episode_split_requires_sealed_source');
       const sourceLinks = this.episodeStore.listEventLinks(input.episodeId);
       const selected = sourceLinks.filter((link) => input.eventIds.includes(link.eventId));
       if (!selected.length || selected.length === sourceLinks.length) throw new Error('episode_split_requires_proper_subset');

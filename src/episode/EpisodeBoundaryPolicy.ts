@@ -122,7 +122,7 @@ export class EpisodeBoundaryPolicy {
       && (input.imported ? this.config.applyToImports : this.config.applyToLive),
     );
     const localDate = shouldEvaluate && this.config.splitOnTrustedLocalDateChange
-      ? trustedLocalDate(input.primaryEvent, this.config, warnings)
+      ? trustedLocalDate(input.primaryEvent, this.config.timezone, warnings)
       : undefined;
     const currentTime = input.primaryEvent.occurredAt;
     const outOfOrderTimestamp = shouldEvaluate && input.active?.updatedAt !== undefined
@@ -180,28 +180,48 @@ function boundedInt(
   return Math.trunc(value);
 }
 
-function trustedLocalDate(
-  event: Pick<MemoryEvent, 'occurredAt' | 'localDate'>,
-  config: EpisodeBoundaryConfig,
-  warnings: EpisodeBoundaryWarning[],
-): string | undefined {
-  if (event.localDate && isTrustedLocalDate(event.localDate)) return event.localDate;
-  if (event.localDate) {
-    warnings.push({ code: 'invalid_trusted_local_date', message: 'Trusted local date must use YYYY-MM-DD.' });
-    return undefined;
-  }
-  if (config.timezone && event.occurredAt) {
-    return new Intl.DateTimeFormat('en-CA', {
-      timeZone: config.timezone, year: 'numeric', month: '2-digit', day: '2-digit',
-    }).format(event.occurredAt);
-  }
-  warnings.push({ code: 'trusted_local_date_unavailable', message: 'No trusted local date source was available.' });
-  return undefined;
-}
-
 export function isTrustedLocalDate(value: string | undefined): value is string {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+export function resolveTrustedLocalDate(
+  event: { occurredAt?: number; localDate?: string } | undefined,
+  timezone?: string,
+): { date?: string; warning?: EpisodeBoundaryWarning } {
+  if (!event) return { warning: { code: 'trusted_local_date_unavailable', message: 'No trusted local date source was available.' } };
+  if (event.localDate && !isTrustedLocalDate(event.localDate)) {
+    return { warning: { code: 'invalid_trusted_local_date', message: 'Trusted local date must use YYYY-MM-DD.' } };
+  }
+  if (timezone && typeof event.occurredAt === 'number' && Number.isFinite(event.occurredAt)) {
+    const utcDate = new Date(event.occurredAt).toISOString().slice(0, 10);
+    if (!event.localDate || event.localDate === utcDate) return { date: localDateInTimezone(event.occurredAt, timezone) };
+  }
+  if (event.localDate && isTrustedLocalDate(event.localDate)) return { date: event.localDate };
+  return { warning: { code: 'trusted_local_date_unavailable', message: 'No trusted local date source was available.' } };
+}
+
+function localDateInTimezone(occurredAt: number, timezone: string): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(occurredAt);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  return year && month && day ? `${year}-${month}-${day}` : new Date(occurredAt).toISOString().slice(0, 10);
+}
+
+function trustedLocalDate(
+  event: Pick<MemoryEvent, 'occurredAt' | 'localDate'>,
+  timezone: string | undefined,
+  warnings: EpisodeBoundaryWarning[],
+): string | undefined {
+  const resolved = resolveTrustedLocalDate(event, timezone);
+  if (resolved.warning) warnings.push(resolved.warning);
+  return resolved.date;
 }

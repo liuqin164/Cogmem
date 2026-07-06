@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
-import { EpisodeBoundaryPolicy, isTrustedLocalDate, normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
+import { EpisodeBoundaryPolicy, normalizeEpisodeBoundaryConfig, resolveTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
 export class EpisodeBoundaryAuditService {
     store;
     resolveEvent;
-    constructor(store, resolveEvent) {
+    liveBoundaryConfig;
+    constructor(store, resolveEvent, liveBoundaryConfig = {}) {
         this.store = store;
         this.resolveEvent = resolveEvent;
+        this.liveBoundaryConfig = liveBoundaryConfig;
     }
     audit(options) {
         if (!options.projectId)
@@ -17,7 +19,7 @@ export class EpisodeBoundaryAuditService {
             limit,
             cursor: options.cursor,
         });
-        const normalized = normalizeEpisodeBoundaryConfig(options);
+        const normalized = normalizeEpisodeBoundaryConfig(configWithDefinedOverrides(this.liveBoundaryConfig, options));
         const items = page.episodes.map((episode) => this.auditEpisode(episode, normalized.config, normalized.diagnostics.map((item) => item.code)));
         return { items, nextCursor: page.nextCursor };
     }
@@ -137,6 +139,7 @@ function replayBoundaryReasons(startedAt, pairs, config) {
                 const result = policy.evaluate({
                     active: { eventCount, startedAt, updatedAt: lastEventAt, lastTrustedLocalDate: lastUserLocalDate, localDates: userDates },
                     primaryEvent: userPair.event,
+                    imported: isImportedTurn(group),
                 });
                 for (const code of result.guardCodes)
                     reasons.add(auditReasonForGuard(code));
@@ -236,11 +239,23 @@ function sourceFingerprint(items) {
     return hash.digest('hex');
 }
 function trustedLocalDate(event, timezone) {
-    if (isTrustedLocalDate(event.localDate))
-        return event.localDate;
-    if (!timezone || !event.occurredAt)
-        return undefined;
-    return new Intl.DateTimeFormat('en-CA', {
-        timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
-    }).format(event.occurredAt);
+    return resolveTrustedLocalDate(event, timezone).date;
+}
+function isImportedTurn(group) {
+    return group.some((item) => {
+        const payload = item.event?.payload;
+        return payload?.metadata?.imported === true || payload?.metadata?.sourceRef !== undefined;
+    });
+}
+function configWithDefinedOverrides(base, overrides) {
+    const config = { ...base };
+    if (overrides.maxEvents !== undefined)
+        config.maxEvents = overrides.maxEvents;
+    if (overrides.maxDurationMs !== undefined)
+        config.maxDurationMs = overrides.maxDurationMs;
+    if (overrides.maxIdleGapMs !== undefined)
+        config.maxIdleGapMs = overrides.maxIdleGapMs;
+    if (overrides.timezone !== undefined)
+        config.timezone = overrides.timezone;
+    return config;
 }

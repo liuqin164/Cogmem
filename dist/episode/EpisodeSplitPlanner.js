@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
-import { isTrustedLocalDate, normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
+import { normalizeEpisodeBoundaryConfig, resolveTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
 export const EPISODE_SPLIT_PLANNER_VERSION = 'episode_split_preview.v1';
 export class EpisodeSplitPlanner {
     store;
     resolveEvent;
-    constructor(store, resolveEvent) {
+    liveBoundaryConfig;
+    constructor(store, resolveEvent, liveBoundaryConfig = {}) {
         this.store = store;
         this.resolveEvent = resolveEvent;
+        this.liveBoundaryConfig = liveBoundaryConfig;
     }
     plan(options) {
         const episode = this.store.getEpisode(options.episodeId);
@@ -16,7 +18,7 @@ export class EpisodeSplitPlanner {
         const pairs = links.map((link) => ({ link, event: this.resolveEvent?.(link.eventId) || undefined }));
         const events = pairs.map((item) => item.event).filter((event) => Boolean(event));
         const missingRawEventIds = pairs.filter((item) => !item.event).map((item) => item.link.eventId);
-        const normalized = normalizeEpisodeBoundaryConfig(options);
+        const normalized = normalizeEpisodeBoundaryConfig(configWithDefinedOverrides(this.liveBoundaryConfig, options));
         const policy = {
             maxEvents: normalized.config.maxEvents,
             maxDurationMs: normalized.config.maxDurationMs,
@@ -203,15 +205,7 @@ function lastTrustedUserDate(pairs, timezone) {
     return undefined;
 }
 function trustedLocalDate(event, timezone) {
-    if (!event)
-        return undefined;
-    if (isTrustedLocalDate(event.localDate))
-        return event.localDate;
-    if (!timezone || !event.occurredAt)
-        return undefined;
-    return new Intl.DateTimeFormat('en-CA', {
-        timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
-    }).format(event.occurredAt);
+    return resolveTrustedLocalDate(event, timezone).date;
 }
 function turnKeyFor(event) {
     if (event.turnId)
@@ -237,4 +231,16 @@ function impactInventory(pairs, timezone) {
         hardShiftCount: pairs.filter((item) => ['hard_topic_switch', 'starts_new_topic', 'switches_topic'].includes(item.link.relation)).length,
         trustedLocalDates: [...new Set(dates)],
     };
+}
+function configWithDefinedOverrides(base, overrides) {
+    const config = { ...base };
+    if (overrides.maxEvents !== undefined)
+        config.maxEvents = overrides.maxEvents;
+    if (overrides.maxDurationMs !== undefined)
+        config.maxDurationMs = overrides.maxDurationMs;
+    if (overrides.maxIdleGapMs !== undefined)
+        config.maxIdleGapMs = overrides.maxIdleGapMs;
+    if (overrides.timezone !== undefined)
+        config.timezone = overrides.timezone;
+    return config;
 }

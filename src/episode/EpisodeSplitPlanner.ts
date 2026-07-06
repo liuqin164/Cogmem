@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeStore } from './EpisodeStore.js';
 import type { EpisodeEventLink, TurnRelation } from './EpisodeTypes.js';
-import { isTrustedLocalDate, normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
+import type { EpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
+import { normalizeEpisodeBoundaryConfig, resolveTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
 
 export const EPISODE_SPLIT_PLANNER_VERSION = 'episode_split_preview.v1';
 
@@ -70,6 +71,7 @@ export class EpisodeSplitPlanner {
   constructor(
     private readonly store: EpisodeStore,
     private readonly resolveEvent?: (eventId: string) => MemoryEvent | null | undefined,
+    private readonly liveBoundaryConfig: Partial<EpisodeBoundaryConfig> = {},
   ) {}
 
   plan(options: {
@@ -87,7 +89,7 @@ export class EpisodeSplitPlanner {
     const pairs = links.map((link) => ({ link, event: this.resolveEvent?.(link.eventId) || undefined }));
     const events = pairs.map((item) => item.event).filter((event): event is MemoryEvent => Boolean(event));
     const missingRawEventIds = pairs.filter((item) => !item.event).map((item) => item.link.eventId);
-    const normalized = normalizeEpisodeBoundaryConfig(options);
+    const normalized = normalizeEpisodeBoundaryConfig(configWithDefinedOverrides(this.liveBoundaryConfig, options));
     const policy = {
       maxEvents: normalized.config.maxEvents,
       maxDurationMs: normalized.config.maxDurationMs,
@@ -273,12 +275,7 @@ function lastTrustedUserDate(pairs: Pair[], timezone?: string): string | undefin
 }
 
 function trustedLocalDate(event: MemoryEvent | undefined, timezone?: string): string | undefined {
-  if (!event) return undefined;
-  if (isTrustedLocalDate(event.localDate)) return event.localDate;
-  if (!timezone || !event.occurredAt) return undefined;
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(event.occurredAt);
+  return resolveTrustedLocalDate(event, timezone).date;
 }
 
 function turnKeyFor(event: MemoryEvent): string | undefined {
@@ -305,4 +302,16 @@ function impactInventory(pairs: Pair[], timezone?: string): EpisodeSplitImpactIn
     hardShiftCount: pairs.filter((item) => ['hard_topic_switch', 'starts_new_topic', 'switches_topic'].includes(item.link.relation)).length,
     trustedLocalDates: [...new Set(dates)],
   };
+}
+
+function configWithDefinedOverrides(
+  base: Partial<EpisodeBoundaryConfig>,
+  overrides: { maxEvents?: number; maxDurationMs?: number; maxIdleGapMs?: number; timezone?: string },
+): Partial<EpisodeBoundaryConfig> {
+  const config: Partial<EpisodeBoundaryConfig> = { ...base };
+  if (overrides.maxEvents !== undefined) config.maxEvents = overrides.maxEvents;
+  if (overrides.maxDurationMs !== undefined) config.maxDurationMs = overrides.maxDurationMs;
+  if (overrides.maxIdleGapMs !== undefined) config.maxIdleGapMs = overrides.maxIdleGapMs;
+  if (overrides.timezone !== undefined) config.timezone = overrides.timezone;
+  return config;
 }

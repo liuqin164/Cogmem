@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
-import { EpisodeBoundaryPolicy, isTrustedLocalDate, normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
+import { EpisodeBoundaryPolicy, normalizeEpisodeBoundaryConfig, resolveTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
 import type { EpisodeStore } from './EpisodeStore.js';
 import type { EpisodeEventLink, EpisodeStatus, TurnRelation } from './EpisodeTypes.js';
 
@@ -52,6 +52,7 @@ export class EpisodeBoundaryAuditService {
   constructor(
     private readonly store: EpisodeStore,
     private readonly resolveEvent?: (eventId: string) => MemoryEvent | null | undefined,
+    private readonly liveBoundaryConfig: Partial<EpisodeBoundaryConfig> = {},
   ) {}
 
   audit(options: {
@@ -73,7 +74,7 @@ export class EpisodeBoundaryAuditService {
       limit,
       cursor: options.cursor,
     });
-    const normalized = normalizeEpisodeBoundaryConfig(options);
+    const normalized = normalizeEpisodeBoundaryConfig(configWithDefinedOverrides(this.liveBoundaryConfig, options));
     const items = page.episodes.map((episode) => this.auditEpisode(episode, normalized.config, normalized.diagnostics.map((item) => item.code)));
     return { items, nextCursor: page.nextCursor };
   }
@@ -188,6 +189,7 @@ function replayBoundaryReasons(startedAt: number, pairs: Pair[], config: Episode
         const result = policy.evaluate({
           active: { eventCount, startedAt, updatedAt: lastEventAt, lastTrustedLocalDate: lastUserLocalDate, localDates: userDates },
           primaryEvent: userPair.event,
+          imported: isImportedTurn(group),
         });
         for (const code of result.guardCodes) reasons.add(auditReasonForGuard(code));
       }
@@ -280,10 +282,25 @@ function sourceFingerprint(items: Array<{ eventId: string; relation: TurnRelatio
   return hash.digest('hex');
 }
 
-function trustedLocalDate(event: MemoryEvent, timezone?: string): string | undefined {
-  if (isTrustedLocalDate(event.localDate)) return event.localDate;
-  if (!timezone || !event.occurredAt) return undefined;
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(event.occurredAt);
+function trustedLocalDate(event: MemoryEvent | undefined, timezone?: string): string | undefined {
+  return resolveTrustedLocalDate(event, timezone).date;
+}
+
+function isImportedTurn(group: Pair[]): boolean {
+  return group.some((item) => {
+    const payload = item.event?.payload as { metadata?: Record<string, unknown> } | undefined;
+    return payload?.metadata?.imported === true || payload?.metadata?.sourceRef !== undefined;
+  });
+}
+
+function configWithDefinedOverrides(
+  base: Partial<EpisodeBoundaryConfig>,
+  overrides: { maxEvents?: number; maxDurationMs?: number; maxIdleGapMs?: number; timezone?: string },
+): Partial<EpisodeBoundaryConfig> {
+  const config: Partial<EpisodeBoundaryConfig> = { ...base };
+  if (overrides.maxEvents !== undefined) config.maxEvents = overrides.maxEvents;
+  if (overrides.maxDurationMs !== undefined) config.maxDurationMs = overrides.maxDurationMs;
+  if (overrides.maxIdleGapMs !== undefined) config.maxIdleGapMs = overrides.maxIdleGapMs;
+  if (overrides.timezone !== undefined) config.timezone = overrides.timezone;
+  return config;
 }

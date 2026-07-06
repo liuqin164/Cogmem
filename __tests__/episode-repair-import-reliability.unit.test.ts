@@ -254,6 +254,39 @@ test('episode split recomputes closure receipts, invalidates candidates, requeue
   }
 });
 
+test('episode split rejects open and soft-sealed source episodes', () => {
+  const { dir, kernel } = createTestKernel('cogmem-episode-active-split-repair-');
+  try {
+    const open = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'active-split-open', sourceAgent: 'hermes',
+      role: 'user', text: 'open source', externalMessageId: 'aso-1',
+    });
+    const openTail = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'active-split-open', sourceAgent: 'hermes',
+      role: 'assistant', text: 'open tail', externalMessageId: 'aso-2',
+    });
+    expect(() => kernel.repairEpisode({
+      operation: 'split', projectId: 'brain', episodeId: open.episodeId!, eventIds: [openTail.eventId],
+    })).toThrow('episode_split_requires_sealed_source');
+
+    const soft = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'active-split-soft', sourceAgent: 'hermes',
+      role: 'user', text: 'soft source', externalMessageId: 'ass-1',
+    });
+    const softTail = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'active-split-soft', sourceAgent: 'hermes',
+      role: 'assistant', text: 'soft tail', externalMessageId: 'ass-2',
+    });
+    kernel.sealEpisode(soft.episodeId!, { mode: 'soft', reason: 'test_soft', now: 10 });
+    expect(() => kernel.repairEpisode({
+      operation: 'split', projectId: 'brain', episodeId: soft.episodeId!, eventIds: [softTail.eventId],
+    })).toThrow('episode_split_requires_sealed_source');
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('EpisodeStore test bootstrap stays column-compatible with migrations 22 through 28', () => {
   const migrated = new Database(':memory:');
   const bootstrapped = new Database(':memory:');

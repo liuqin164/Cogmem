@@ -4,11 +4,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createMemoryKernel } from '../src/factory.js';
+import { createMemoryKernel, type MemoryKernelOptions } from '../src/factory.js';
 
-function createTestKernel(prefix: string) {
+function createTestKernel(prefix: string, options: MemoryKernelOptions = {}) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
-  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec', episodeBoundary: { maxEvents: 500 } });
+  const kernel = createMemoryKernel({
+    dbPath: join(dir, 'memory.db'),
+    vectorBackend: 'sqlite-vec',
+    episodeBoundary: { maxEvents: 500, ...options.episodeBoundary },
+    ...options,
+  });
   return { dir, kernel };
 }
 
@@ -82,8 +87,9 @@ test('auditEpisodeBoundaries reports oversized, duration, idle, date, mismatch, 
       unresolvedEventCount: 0,
       maxBoundaryIdleGapMs: 600_000,
     }));
-    expect(kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId: firstEpisodeId }).items[0].reasons)
-      .toEqual(expect.arrayContaining(['event_count_exceeds_max', 'duration_exceeds_max']));
+    const defaultAuditReasons = kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId: firstEpisodeId }).items[0].reasons;
+    expect(defaultAuditReasons).toContain('duration_exceeds_max');
+    expect(defaultAuditReasons).not.toContain('event_count_exceeds_max');
     expect(() => kernel.auditEpisodeBoundaries({ projectId: 'other', episodeId: firstEpisodeId })).toThrow('episode_project_mismatch');
     expect(audit.items.find((item) => item.episodeId === zero.episodeId)).toEqual(expect.objectContaining({
       reasons: expect.arrayContaining(['zero_user_event_episode']),
@@ -321,6 +327,67 @@ test('audit and split-plan preserve link/event pairing when raw events are missi
     expect(plan.evidenceIntegrityStatus).toBe('missing_raw_events');
     expect(plan.missingRawEventIds).toEqual([links[1].eventId]);
     expect(plan.segments.flatMap((segment) => segment.eventIds || [])).toEqual(links.map((link) => link.eventId));
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('audit and split-plan default to live runtime boundary config', () => {
+  const { dir, kernel } = createTestKernel('cogmem-boundary-runtime-config-', { episodeBoundary: { maxEvents: 20 } });
+  try {
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'brain', sessionId: 'runtime', sourceAgent: 'test', conversationThreadId: 'runtime',
+      episodeType: 'discussion', importance: 0.4, eventId: 'runtime-start', occurredAt: 1,
+    });
+    for (let index = 0; index < 21; index += 1) {
+      const role = index === 0 || index === 20 ? 'user' : 'assistant';
+      const event = kernel.recordRawEvent({
+        eventId: `runtime-${index}`, projectId: 'brain', workspaceId: 'brain', threadId: 'runtime', sessionId: 'runtime',
+        role, content: `runtime ${index}`, sourceId: 'test', occurredAt: index + 1, localDate: '2026-07-06',
+      });
+      kernel.episodeStore.appendEvent({
+        episodeId: episode.episodeId, eventId: event.eventId,
+        relation: role === 'user' ? 'continues_previous' : 'assistant_response',
+        confidence: 1, occurredAt: event.occurredAt,
+      });
+    }
+
+    const audit = kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId: episode.episodeId }).items[0];
+    expect(audit.reasons).toContain('event_count_exceeds_max');
+    const plan = kernel.planEpisodeSplit({ projectId: 'brain', episodeId: episode.episodeId });
+    expect(plan.normalizedPolicy.maxEvents).toBe(20);
+    expect(plan.segments).toHaveLength(2);
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('audit replay honors applyToImports=false from live config', () => {
+  const { dir, kernel } = createTestKernel('cogmem-boundary-import-config-', { episodeBoundary: { maxEvents: 20, applyToImports: false } });
+  try {
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'brain', sessionId: 'import-runtime', sourceAgent: 'test', conversationThreadId: 'import-runtime',
+      episodeType: 'discussion', importance: 0.4, eventId: 'import-runtime-start', occurredAt: 1,
+    });
+    for (let index = 0; index < 21; index += 1) {
+      const role = index === 0 || index === 20 ? 'user' : 'assistant';
+      const event = kernel.recordRawEvent({
+        eventId: `import-runtime-${index}`, projectId: 'brain', workspaceId: 'brain', threadId: 'import-runtime', sessionId: 'import-runtime',
+        role, content: `import runtime ${index}`, sourceId: 'test', occurredAt: index + 1, localDate: '2026-07-06',
+        metadata: { imported: true },
+      });
+      kernel.episodeStore.appendEvent({
+        episodeId: episode.episodeId, eventId: event.eventId,
+        relation: role === 'user' ? 'continues_previous' : 'assistant_response',
+        confidence: 1, occurredAt: event.occurredAt,
+      });
+    }
+
+    const audit = kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId: episode.episodeId }).items[0];
+    expect(audit.reasons).not.toContain('event_count_exceeds_max');
+    expect(audit.recommendedAction).toBe('none');
   } finally {
     kernel.close();
     rmSync(dir, { recursive: true, force: true });

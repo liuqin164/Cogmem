@@ -84,7 +84,7 @@ export class EpisodeAssembler {
         let reopened = false;
         let closureReceipt;
         let linkedEpisodeId = legacyLinkedEpisodeId;
-        const now = Math.max(input.now ?? 0, ...ordered.map((event) => event.occurredAt || Date.now()), episode?.updatedAt ?? 0);
+        let now = Math.max(input.now ?? 0, ...ordered.map((event) => event.occurredAt || Date.now()), episode?.updatedAt ?? 0);
         let previousEpisodeId = episode?.episodeId;
         const shouldAuditBoundary = primary.role === 'user' && this.boundaryPolicy.config.auditDecisions;
         let guardWarnings = guardResult.warnings.map((warning) => warning.code);
@@ -142,6 +142,8 @@ export class EpisodeAssembler {
                 if (!lockedEpisode)
                     lockedLegacyLinkedEpisodeId = legacyEpisodeId;
             }
+            const lockedSnapshot = lockedEpisode ? this.store.getBoundarySnapshot(lockedEpisode.episodeId, this.boundaryPolicy.config.timezone) : undefined;
+            now = Math.max(now, lockedEpisode?.updatedAt ?? 0, lockedSnapshot?.lastEventAt ?? 0);
             if (episodeBoundaryFingerprint(lockedEpisode) !== currentEpisodeFingerprint) {
                 episode = lockedEpisode;
                 linkedEpisodeId = lockedLegacyLinkedEpisodeId;
@@ -414,7 +416,7 @@ export class EpisodeAssembler {
             const payload = event.payload;
             return payload?.metadata?.imported === true || payload?.metadata?.sourceRef !== undefined;
         });
-        const snapshot = episode ? this.store.getBoundarySnapshot(episode.episodeId) : undefined;
+        const snapshot = episode ? this.store.getBoundarySnapshot(episode.episodeId, this.boundaryPolicy.config.timezone) : undefined;
         return this.boundaryPolicy.evaluate({
             active: snapshot ? {
                 eventCount: snapshot.eventCount,

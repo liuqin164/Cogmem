@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { summarizeEpisode } from './EpisodeSemanticSummarizer.js';
-import { isTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
+import { resolveTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
 export class EpisodeStore {
     db;
     resolveEvent;
@@ -169,7 +169,7 @@ export class EpisodeStore {
       SELECT * FROM memory_episode_events WHERE episode_id = ? ORDER BY position
     `).all(episodeId).map(mapEventLink);
     }
-    getBoundarySnapshot(episodeId) {
+    getBoundarySnapshot(episodeId, timezone) {
         const episode = this.getEpisode(episodeId);
         if (!episode)
             throw new Error(`episode_not_found:${episodeId}`);
@@ -183,15 +183,15 @@ export class EpisodeStore {
       WHERE ee.episode_id = ?
     `).get(episodeId)?.occurred_at ?? undefined;
         const userDateRows = this.db.prepare(`
-      SELECT e.local_date AS local_date
+      SELECT e.local_date AS local_date, e.occurred_at AS occurred_at
       FROM memory_episode_events ee
       JOIN memory_events e ON e.event_id = ee.event_id
       WHERE ee.episode_id = ? AND e.role = 'user'
       ORDER BY ee.position DESC
       LIMIT 8
     `).all(episodeId)
-            .map((row) => row.local_date)
-            .filter((date) => isTrustedLocalDate(date || undefined));
+            .map((row) => resolveTrustedLocalDate({ localDate: row.local_date || undefined, occurredAt: row.occurred_at ?? undefined }, timezone).date)
+            .filter((date) => Boolean(date));
         const lastTrustedUserLocalDate = userDateRows[0];
         return {
             eventCount: episode.eventCount,
@@ -781,7 +781,7 @@ export class EpisodeStore {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_episodes_one_active_scope
         ON memory_episodes(project_id, session_id, COALESCE(source_agent, ''), COALESCE(conversation_thread_id, ''))
-        WHERE status IN ('open', 'soft_sealed');
+        WHERE status = 'open';
       CREATE TABLE IF NOT EXISTS episode_boundary_decisions (
         decision_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, session_id TEXT NOT NULL,
         source_agent TEXT, thread_id TEXT, primary_event_id TEXT NOT NULL,

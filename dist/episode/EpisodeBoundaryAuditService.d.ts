@@ -1,4 +1,5 @@
 import type { MemoryEvent } from '../types/index.js';
+import type { EpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
 import type { EpisodeStore } from './EpisodeStore.js';
 import type { EpisodeStatus } from './EpisodeTypes.js';
 export interface EpisodeBoundaryAuditItem {
@@ -45,7 +46,8 @@ export interface EpisodeBoundaryAuditResult {
 export declare class EpisodeBoundaryAuditService {
     private readonly store;
     private readonly resolveEvent?;
-    constructor(store: EpisodeStore, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined);
+    private readonly liveBoundaryConfig;
+    constructor(store: EpisodeStore, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, liveBoundaryConfig?: Partial<EpisodeBoundaryConfig>);
     audit(options: {
         projectId: string;
         episodeId?: string;

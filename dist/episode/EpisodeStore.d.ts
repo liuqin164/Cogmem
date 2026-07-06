@@ -95,7 +95,7 @@ export declare class EpisodeStore {
     }): EpisodeEventLink;
     getEventLink(eventId: string): EpisodeEventLink | undefined;
     listEventLinks(episodeId: string): EpisodeEventLink[];
-    getBoundarySnapshot(episodeId: string): EpisodeBoundarySnapshot;
+    getBoundarySnapshot(episodeId: string, timezone?: string): EpisodeBoundarySnapshot;
     transaction<T>(fn: () => T): T;
     isEpisodeEmpty(episodeId: string): boolean;
     addCrossReference(input: {

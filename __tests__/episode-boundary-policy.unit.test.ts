@@ -377,6 +377,94 @@ test('assistant local date does not hide the next user date boundary', () => {
   }
 });
 
+test('live date boundary derives missing localDate from configured timezone', () => {
+  const { dir, kernel } = createTestKernel('cogmem-boundary-timezone-date-', {
+    episodeBoundary: { timezone: 'Asia/Tokyo', maxDurationMs: 86_400_000, maxIdleGapMs: 86_400_000 },
+  });
+  try {
+    const first = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'date-tz', sourceAgent: 'hermes',
+      role: 'user', text: '我们讨论只靠 timezone 的跨日边界。', externalMessageId: 'tz-u1',
+      timestamp: Date.UTC(2026, 6, 6, 14, 59),
+    });
+    kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'date-tz', sourceAgent: 'hermes',
+      role: 'assistant', text: '收到，我继续补充。', externalMessageId: 'tz-a1',
+      timestamp: Date.UTC(2026, 6, 6, 15, 1),
+    });
+    const next = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'date-tz', sourceAgent: 'hermes',
+      role: 'user', text: '继续讨论只靠 timezone 的跨日边界。', externalMessageId: 'tz-u2',
+      timestamp: Date.UTC(2026, 6, 6, 23, 0),
+    });
+    expect(next.episodeId).not.toBe(first.episodeId);
+    expect(next.boundaryApplied).toBe(true);
+    expect(next.boundaryGuardCodes).toContain('trusted_local_date_changed');
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ambiguous shift may leave soft-sealed episode beside one open episode', () => {
+  const { dir, kernel } = createTestKernel('cogmem-boundary-ambiguous-soft-open-');
+  try {
+    const first = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'ambiguous', sourceAgent: 'hermes',
+      role: 'user', text: '我们讨论旧问题。', externalMessageId: 'am-u1', timestamp: 1,
+    });
+    const shifted = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'ambiguous', sourceAgent: 'hermes',
+      role: 'user', text: '换个话题。', externalMessageId: 'am-u2', timestamp: 2,
+    });
+    expect(shifted.episodeId).not.toBe(first.episodeId);
+    const active = kernel.listEpisodes({ projectId: 'brain', sessionId: 'ambiguous', statuses: ['open', 'soft_sealed'] });
+    expect(active.map((episode) => episode.status).sort()).toEqual(['open', 'soft_sealed']);
+    expect(kernel.getEpisode(first.episodeId!)?.status).toBe('soft_sealed');
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('transaction re-read prevents older closure from moving episode time backwards', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-boundary-now-race-'));
+  const dbPath = join(dir, 'memory.db');
+  const first = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
+  const second = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
+  try {
+    const start = first.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'now-race', sourceAgent: 'hermes',
+      role: 'user', text: '我们讨论一个时间竞态。', externalMessageId: 'nr-u1', timestamp: 100,
+    });
+    const original = first.episodeStore.transaction.bind(first.episodeStore);
+    let injected = false;
+    (first.episodeStore as unknown as { transaction: typeof first.episodeStore.transaction }).transaction = ((fn) => {
+      if (!injected) {
+        injected = true;
+        second.appendEpisodeMessage({
+          projectId: 'brain', sessionId: 'now-race', sourceAgent: 'hermes',
+          role: 'assistant', text: '较新的 continuation 先提交。', externalMessageId: 'nr-a1', timestamp: 300,
+        });
+      }
+      return original(fn);
+    }) as typeof first.episodeStore.transaction;
+
+    first.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'now-race', sourceAgent: 'hermes',
+      role: 'user', text: '按这个方案做，就这样。', externalMessageId: 'nr-u2', timestamp: 200,
+    });
+    const episode = first.getEpisode(start.episodeId!)!;
+    expect(episode.status).toBe('sealed');
+    expect(episode.updatedAt).toBeGreaterThanOrEqual(300);
+    expect(episode.sealedAt).toBeGreaterThanOrEqual(300);
+  } finally {
+    first.close();
+    second.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('two kernel connections leave at most one active episode in a scope', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-boundary-active-scope-'));
   let releaseReview!: () => void;
