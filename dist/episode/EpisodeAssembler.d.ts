@@ -1,5 +1,5 @@
 import type { MemoryEvent } from '../types/index.js';
-import { type TurnClassificationContext, type TurnRelationAdvisoryReviewer } from './TurnRelationClassifier.js';
+import { type TurnClassificationContext, type TurnRelationAdvisoryReviewer, type TurnRelationReviewStatus } from './TurnRelationClassifier.js';
 import type { EpisodeClosureReceipt, MemoryEpisode } from './EpisodeTypes.js';
 import { EpisodeStore } from './EpisodeStore.js';
 import { EpisodeBoundaryPolicy } from './EpisodeBoundaryPolicy.js';
@@ -19,7 +19,7 @@ export interface EpisodeAssemblyResult {
     boundaryAuditRecorded?: boolean;
     boundaryAuditStatus?: 'disabled' | 'inserted' | 'duplicate' | 'failed' | 'not_applicable';
     previousEpisodeId?: string;
-    reviewerRawResultStatus?: 'not_invoked' | 'invoked';
+    reviewerRawResultStatus?: TurnRelationReviewStatus;
     warnings?: string[];
 }
 export declare class EpisodeAssembler {
@@ -38,6 +38,7 @@ export declare class EpisodeAssembler {
         now?: number;
         batchSeal?: boolean;
         forceBatchSeal?: boolean;
+        allowNonUserEpisodeStart?: boolean;
     }): EpisodeAssemblyResult;
     appendTurnAsync(events: MemoryEvent[], input: {
         projectId: string;
@@ -47,6 +48,7 @@ export declare class EpisodeAssembler {
         now?: number;
         batchSeal?: boolean;
         forceBatchSeal?: boolean;
+        allowNonUserEpisodeStart?: boolean;
     }): Promise<EpisodeAssemblyResult>;
     private appendTurnClassified;
     appendEvent(event: MemoryEvent, input: {
@@ -63,6 +65,7 @@ export declare class EpisodeAssembler {
     }): Promise<EpisodeAssemblyResult>;
     private classificationContext;
     private classifyPrimary;
+    private appendOrderedEvents;
     private evaluateBoundary;
     private recordBoundaryDecisionSafe;
 }

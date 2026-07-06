@@ -1,6 +1,6 @@
 import type Database from 'bun:sqlite';
 import type { MemoryEvent } from '../types/index.js';
-import type { EpisodeClosureMode, EpisodeClosureReasonCode, EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeEventLink, EpisodeListOptions, EpisodeType, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
+import type { EpisodeClosureMode, EpisodeClosureReasonCode, EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeEventLink, EpisodeListOptions, EpisodeStatus, EpisodeType, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
 import type { EpisodeBoundaryGuardResult } from './EpisodeBoundaryPolicy.js';
 import type { TurnRelationDecision } from './TurnRelationClassifier.js';
 interface CreateEpisodeInput {
@@ -68,6 +68,15 @@ export declare class EpisodeStore {
     claimLegacyEpisodeScope(episodeId: string, sourceAgent?: string, conversationThreadId?: string): MemoryEpisode | undefined;
     getEpisode(episodeId: string): MemoryEpisode | undefined;
     listEpisodes(options?: EpisodeListOptions): MemoryEpisode[];
+    listEpisodesForBoundaryAudit(options: {
+        projectId: string;
+        statuses?: EpisodeStatus[];
+        limit?: number;
+        cursor?: string;
+    }): {
+        episodes: MemoryEpisode[];
+        nextCursor?: string;
+    };
     appendEvent(input: {
         episodeId: string;
         eventId: string;

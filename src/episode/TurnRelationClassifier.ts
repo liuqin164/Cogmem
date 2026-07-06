@@ -34,6 +34,16 @@ export interface TurnRelationAdvisoryReviewer {
   review(input: { context: TurnClassificationContext; cpuDecision: TurnRelationDecision }): Promise<unknown>;
 }
 
+export type TurnRelationReviewStatus = 'not_invoked' | 'accepted' | 'failed' | 'invalid' | 'stale_ignored';
+
+export interface TurnRelationHybridTrace {
+  cpuDecision: TurnRelationDecision;
+  reviewerInvoked: boolean;
+  reviewerRawResultStatus: TurnRelationReviewStatus;
+  reviewerDecision?: TurnRelationDecision;
+  finalDecision: TurnRelationDecision;
+}
+
 const NOISE = /^\s*(hi|hello|hey|你好|在吗|谢谢|好的|好|ok|okay|嗯|收到|明白了)[。.!！?？\s]*$/iu;
 const CORRECTION = /^\s*(不对|不是|不，|不是这样|纠正|更正|我(?:的)?意思是|actually|correction|no,)/iu;
 const CONTINUATION = /^\s*(继续|接着|然后呢|上面那个|刚才说的|go on|continue|and then|続けて|そのまま)/iu;
@@ -130,16 +140,52 @@ export async function classifyTurnRelationHybrid(
   context: TurnClassificationContext,
   reviewer?: TurnRelationAdvisoryReviewer,
 ): Promise<TurnRelationDecision> {
+  return (await classifyTurnRelationHybridTrace(context, reviewer)).finalDecision;
+}
+
+export async function classifyTurnRelationHybridTrace(
+  context: TurnClassificationContext,
+  reviewer?: TurnRelationAdvisoryReviewer,
+): Promise<TurnRelationHybridTrace> {
   const cpuDecision = classifyTurnRelation(context);
-  if (!cpuDecision.needsLlmReview || !reviewer) return cpuDecision;
+  if (!cpuDecision.needsLlmReview || !reviewer) {
+    return {
+      cpuDecision,
+      reviewerInvoked: false,
+      reviewerRawResultStatus: 'not_invoked',
+      finalDecision: cpuDecision,
+    };
+  }
   let value: unknown;
   try {
     value = await reviewer.review({ context, cpuDecision });
   } catch {
-    return { ...cpuDecision, signals: [...cpuDecision.signals, 'advisory_review_failed'] };
+    return {
+      cpuDecision,
+      reviewerInvoked: true,
+      reviewerRawResultStatus: 'failed',
+      finalDecision: { ...cpuDecision, signals: [...cpuDecision.signals, 'advisory_review_failed'] },
+    };
   }
-  if (!value || typeof value !== 'object') return cpuDecision;
-  const record = value as Record<string, unknown>;
+  if (!value || typeof value !== 'object') {
+    return {
+      cpuDecision,
+      reviewerInvoked: true,
+      reviewerRawResultStatus: 'invalid',
+      finalDecision: cpuDecision,
+    };
+  }
+  const finalDecision = applyReviewerDecision(cpuDecision, value as Record<string, unknown>);
+  return {
+    cpuDecision,
+    reviewerInvoked: true,
+    reviewerRawResultStatus: 'accepted',
+    reviewerDecision: finalDecision,
+    finalDecision,
+  };
+}
+
+function applyReviewerDecision(cpuDecision: TurnRelationDecision, record: Record<string, unknown>): TurnRelationDecision {
   const relation = isTurnRelation(record.relation) ? record.relation : cpuDecision.relation;
   const confidence = typeof record.confidence === 'number' && Number.isFinite(record.confidence)
     ? Math.max(0, Math.min(record.confidence, 1))

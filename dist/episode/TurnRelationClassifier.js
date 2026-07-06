@@ -86,19 +86,48 @@ export function classifyAssistantRelation(text, role = 'assistant') {
 }
 /** Background-only semantic review. The reviewer can suggest classification fields but cannot mutate memory. */
 export async function classifyTurnRelationHybrid(context, reviewer) {
+    return (await classifyTurnRelationHybridTrace(context, reviewer)).finalDecision;
+}
+export async function classifyTurnRelationHybridTrace(context, reviewer) {
     const cpuDecision = classifyTurnRelation(context);
-    if (!cpuDecision.needsLlmReview || !reviewer)
-        return cpuDecision;
+    if (!cpuDecision.needsLlmReview || !reviewer) {
+        return {
+            cpuDecision,
+            reviewerInvoked: false,
+            reviewerRawResultStatus: 'not_invoked',
+            finalDecision: cpuDecision,
+        };
+    }
     let value;
     try {
         value = await reviewer.review({ context, cpuDecision });
     }
     catch {
-        return { ...cpuDecision, signals: [...cpuDecision.signals, 'advisory_review_failed'] };
+        return {
+            cpuDecision,
+            reviewerInvoked: true,
+            reviewerRawResultStatus: 'failed',
+            finalDecision: { ...cpuDecision, signals: [...cpuDecision.signals, 'advisory_review_failed'] },
+        };
     }
-    if (!value || typeof value !== 'object')
-        return cpuDecision;
-    const record = value;
+    if (!value || typeof value !== 'object') {
+        return {
+            cpuDecision,
+            reviewerInvoked: true,
+            reviewerRawResultStatus: 'invalid',
+            finalDecision: cpuDecision,
+        };
+    }
+    const finalDecision = applyReviewerDecision(cpuDecision, value);
+    return {
+        cpuDecision,
+        reviewerInvoked: true,
+        reviewerRawResultStatus: 'accepted',
+        reviewerDecision: finalDecision,
+        finalDecision,
+    };
+}
+function applyReviewerDecision(cpuDecision, record) {
     const relation = isTurnRelation(record.relation) ? record.relation : cpuDecision.relation;
     const confidence = typeof record.confidence === 'number' && Number.isFinite(record.confidence)
         ? Math.max(0, Math.min(record.confidence, 1))

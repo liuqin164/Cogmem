@@ -14,15 +14,27 @@ export class MemoryGraph {
     anchorIndex = new Map();
     topicReclassifiedListeners = new Set();
     constructor(dbPath = ':memory:') {
-        try {
-            this.db = new Database(dbPath);
-            this.initializeSchema();
-            this.rebuildIndexes();
+        let lastError;
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+            try {
+                this.db = new Database(dbPath);
+                this.initializeSchema();
+                this.rebuildIndexes();
+                return;
+            }
+            catch (error) {
+                lastError = error;
+                try {
+                    this.db?.close();
+                }
+                catch { }
+                if (!isSqliteBusy(error) || attempt === 5)
+                    break;
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (attempt + 1));
+            }
         }
-        catch (error) {
-            logger.error('Failed to initialize MemoryGraph:', error);
-            throw new Error(`MemoryGraph initialization failed: ${error}`);
-        }
+        logger.error('Failed to initialize MemoryGraph:', lastError);
+        throw new Error(`MemoryGraph initialization failed: ${lastError}`);
     }
     initializeSchema() {
         this.db.exec(`
@@ -857,4 +869,9 @@ export class MemoryGraph {
             await onPage(page);
         }
     }
+}
+function isSqliteBusy(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error?.code;
+    return code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED' || /database is locked|SQLITE_BUSY|SQLITE_LOCKED/i.test(message);
 }

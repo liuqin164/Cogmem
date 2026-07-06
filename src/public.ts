@@ -65,6 +65,7 @@ export {
   classifyAssistantRelation,
   classifyTurnRelation,
   classifyTurnRelationHybrid,
+  classifyTurnRelationHybridTrace,
   createStableImportIdentityFactory,
   summarizeEpisode,
   type EpisodeCandidateType,
@@ -81,6 +82,8 @@ export {
   type TurnRelation,
   type TurnRelationAdvisoryReviewer,
   type TurnRelationDecision,
+  type TurnRelationHybridTrace,
+  type TurnRelationReviewStatus,
 } from './episode/index.js';
 export { DreamScheduler, type DreamTickMode, type SelectedDreamMode } from './dream/index.js';
 export { MEMORY_ONTOLOGY_CLASSES, isMemoryOntologyClass, type MemoryOntologyClass } from './ontology/MemoryOntology.js';

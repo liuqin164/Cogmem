@@ -84,7 +84,7 @@ import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
-import { EpisodeAssembler, EpisodeStore, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
+import { EpisodeAssembler, EpisodeStore, type EpisodeBoundaryDecisionRecord, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
 import { EpisodeBoundaryAuditService, type EpisodeBoundaryAuditResult } from './episode/EpisodeBoundaryAuditService.js';
 import { EpisodeBoundaryPolicy, type EpisodeBoundaryConfig } from './episode/EpisodeBoundaryPolicy.js';
 import { EpisodeSplitPlanner, type EpisodeSplitPlan } from './episode/EpisodeSplitPlanner.js';
@@ -1371,7 +1371,7 @@ export class MemoryKernel {
     events: MemoryEvent[],
     input: {
       projectId: string; sessionId: string; sourceAgent?: string; conversationThreadId?: string;
-      now?: number; batchSeal?: boolean; forceBatchSeal?: boolean;
+      now?: number; batchSeal?: boolean; forceBatchSeal?: boolean; allowNonUserEpisodeStart?: boolean;
     },
   ) {
     return this.episodeAssembler.appendTurn(events, input);
@@ -1381,7 +1381,7 @@ export class MemoryKernel {
     events: MemoryEvent[],
     input: {
       projectId: string; sessionId: string; sourceAgent?: string; conversationThreadId?: string;
-      now?: number; batchSeal?: boolean; forceBatchSeal?: boolean;
+      now?: number; batchSeal?: boolean; forceBatchSeal?: boolean; allowNonUserEpisodeStart?: boolean;
     },
   ) {
     return this.episodeAssembler.appendTurnAsync(events, input);
@@ -1595,7 +1595,12 @@ export class MemoryKernel {
     if (
       event.projectId !== input.projectId
       || event.sessionId !== input.sessionId
+      || event.threadId !== (input.threadId || input.sessionId)
       || event.role !== input.role
+      || !sameProvided(event.turnId, input.turnId)
+      || !sameProvided(event.turnSeq, input.turnSeq)
+      || !sameProvided(event.localDate, input.localDate)
+      || !sameProvided(event.eventOrdinal, input.eventOrdinal)
       || payload?.text !== expectedText
       || payload?.metadata?.sourceAgent !== input.sourceAgent
     ) {
@@ -1644,10 +1649,15 @@ export class MemoryKernel {
   }
 
   auditEpisodeBoundaries(options: {
-    projectId?: string; episodeId?: string; status?: MemoryEpisode['status']; limit?: number; cursor?: string;
+    projectId: string; episodeId?: string; status?: MemoryEpisode['status']; limit?: number; cursor?: string;
     maxEvents?: number; maxDurationMs?: number; maxIdleGapMs?: number; timezone?: string;
-  } = {}): EpisodeBoundaryAuditResult {
+  }): EpisodeBoundaryAuditResult {
     return this.episodeBoundaryAuditService.audit(options);
+  }
+
+  listEpisodeBoundaryDecisions(options: { projectId: string; primaryEventId?: string; limit?: number }): EpisodeBoundaryDecisionRecord[] {
+    if (!options.projectId) throw new Error('projectId is required');
+    return this.episodeStore.listBoundaryDecisions(options);
   }
 
   planEpisodeSplit(options: {
@@ -2834,6 +2844,10 @@ function optionalGovernancePayloadNumber(payload: Record<string, unknown>, field
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+function sameProvided(left: unknown, right: unknown): boolean {
+  return right === undefined || (left ?? undefined) === right;
 }
 
 function extractNavigationTerms(query: string): string[] {

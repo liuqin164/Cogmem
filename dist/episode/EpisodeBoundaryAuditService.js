@@ -8,16 +8,24 @@ export class EpisodeBoundaryAuditService {
         this.resolveEvent = resolveEvent;
     }
     audit(options) {
+        if (!options.projectId)
+            throw new Error('projectId is required');
         const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 100), 1000));
-        const episodes = options.episodeId
-            ? [this.store.getEpisode(options.episodeId)].filter(Boolean)
-            : this.store.listEpisodes({ projectId: options.projectId, statuses: options.status ? [options.status] : undefined, limit: limit + 1 });
-        const bounded = options.cursor ? episodes.filter((episode) => episode.episodeId < options.cursor) : episodes;
-        const selected = bounded.slice(0, limit);
-        const config = { ...DEFAULT_EPISODE_BOUNDARY_CONFIG, ...options };
-        const items = selected.map((episode) => this.auditEpisode(episode, config));
-        const extra = bounded.length > limit ? bounded[limit] : undefined;
-        return { items, nextCursor: extra?.episodeId };
+        const page = options.episodeId ? { episodes: [this.requireProjectEpisode(options.projectId, options.episodeId)], nextCursor: undefined } : this.store.listEpisodesForBoundaryAudit({
+            projectId: options.projectId,
+            statuses: options.status ? [options.status] : undefined,
+            limit,
+            cursor: options.cursor,
+        });
+        const config = boundaryConfig(options);
+        const items = page.episodes.map((episode) => this.auditEpisode(episode, config));
+        return { items, nextCursor: page.nextCursor };
+    }
+    requireProjectEpisode(projectId, episodeId) {
+        const episode = this.store.getEpisode(episodeId);
+        if (!episode || episode.projectId !== projectId)
+            throw new Error(`episode_project_mismatch:${episodeId}`);
+        return episode;
     }
     auditEpisode(episode, config) {
         const links = this.store.listEventLinks(episode.episodeId);
@@ -25,7 +33,7 @@ export class EpisodeBoundaryAuditService {
         const events = pairs.map((item) => item.event).filter((event) => Boolean(event));
         const missingRawEventIds = pairs.filter((item) => !item.event).map((item) => item.link.eventId);
         const times = events.map((event) => event.occurredAt).filter((value) => typeof value === 'number');
-        const dates = [...new Set(events.map((event) => event.localDate).filter((value) => Boolean(value)))];
+        const dates = [...new Set(events.map((event) => trustedLocalDate(event, config.timezone)).filter((value) => Boolean(value)))];
         const relationCounts = {};
         for (const link of links)
             relationCounts[link.relation] = (relationCounts[link.relation] || 0) + 1;
@@ -112,7 +120,36 @@ function hardShiftCount(counts) {
 }
 function sourceFingerprint(items) {
     const hash = createHash('sha256');
-    for (const item of items)
-        hash.update(JSON.stringify([item.eventId, item.relation, item.event?.occurredAt, item.event?.localDate, item.event?.contentHash]));
+    for (const item of items) {
+        hash.update(JSON.stringify([
+            item.eventId,
+            item.relation,
+            item.event?.role,
+            item.event?.turnId,
+            item.event?.turnSeq,
+            item.event?.eventOrdinal,
+            item.event?.occurredAt,
+            item.event?.localDate,
+            item.event?.contentHash,
+        ]));
+    }
     return hash.digest('hex');
+}
+function boundaryConfig(options) {
+    return {
+        ...DEFAULT_EPISODE_BOUNDARY_CONFIG,
+        maxEvents: options.maxEvents ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.maxEvents,
+        maxDurationMs: options.maxDurationMs ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.maxDurationMs,
+        maxIdleGapMs: options.maxIdleGapMs ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.maxIdleGapMs,
+        timezone: options.timezone ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.timezone,
+    };
+}
+function trustedLocalDate(event, timezone) {
+    if (event.localDate && /^\d{4}-\d{2}-\d{2}$/.test(event.localDate))
+        return event.localDate;
+    if (!timezone || !event.occurredAt)
+        return undefined;
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(event.occurredAt);
 }

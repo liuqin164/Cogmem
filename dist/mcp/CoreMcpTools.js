@@ -159,8 +159,19 @@ export function listCogmemMcpTools() {
                     projectId: STRING_SCHEMA, episodeId: STRING_SCHEMA, status: STRING_SCHEMA, limit: NUMBER_SCHEMA, cursor: STRING_SCHEMA,
                     maxEvents: NUMBER_SCHEMA, maxDurationMs: NUMBER_SCHEMA, maxIdleGapMs: NUMBER_SCHEMA, timezone: STRING_SCHEMA,
                 },
+                required: ['projectId'],
             },
             annotations: { title: 'Audit Episode Boundaries', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+        },
+        {
+            name: 'cogmem_episode_boundary_decisions',
+            description: 'Read-only project-scoped trace of episode boundary decisions, including CPU decision, reviewer decision, final decision, guard codes, and warnings.',
+            inputSchema: {
+                type: 'object',
+                properties: { projectId: STRING_SCHEMA, primaryEventId: STRING_SCHEMA, limit: NUMBER_SCHEMA },
+                required: ['projectId'],
+            },
+            annotations: { title: 'Episode Boundary Decisions', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
         },
         {
             name: 'cogmem_episode_split_plan',
@@ -387,11 +398,17 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
                 return episodeStatus(opened.kernel, input);
             case 'cogmem_episode_audit_boundaries':
                 return jsonResult(opened.kernel.auditEpisodeBoundaries({
-                    projectId: optionalString(input.projectId), episodeId: optionalString(input.episodeId),
+                    projectId: requiredString(input.projectId, 'projectId'), episodeId: optionalString(input.episodeId),
                     status: optionalString(input.status), limit: optionalNumber(input.limit), cursor: optionalString(input.cursor),
                     maxEvents: optionalNumber(input.maxEvents), maxDurationMs: optionalNumber(input.maxDurationMs),
                     maxIdleGapMs: optionalNumber(input.maxIdleGapMs), timezone: optionalString(input.timezone),
                 }));
+            case 'cogmem_episode_boundary_decisions':
+                return jsonResult({ decisions: opened.kernel.listEpisodeBoundaryDecisions({
+                        projectId: requiredString(input.projectId, 'projectId'),
+                        primaryEventId: optionalString(input.primaryEventId),
+                        limit: optionalNumber(input.limit),
+                    }) });
             case 'cogmem_episode_split_plan':
                 return jsonResult(opened.kernel.planEpisodeSplit({
                     projectId: requiredString(input.projectId, 'projectId'), episodeId: requiredString(input.episodeId, 'episodeId'),

@@ -1,5 +1,5 @@
 import { eventTextForMemory } from './CogmemBlockStripper.js';
-import { classifyAssistantRelation, classifyTurnRelation, classifyTurnRelationHybrid } from './TurnRelationClassifier.js';
+import { classifyAssistantRelation, classifyTurnRelation, classifyTurnRelationHybridTrace } from './TurnRelationClassifier.js';
 import { EpisodeBoundaryPolicy } from './EpisodeBoundaryPolicy.js';
 export class EpisodeAssembler {
     store;
@@ -28,15 +28,23 @@ export class EpisodeAssembler {
         const episode = this.store.findActiveEpisode(input.projectId, input.sessionId, input.sourceAgent, threadId);
         const cpuDecision = this.classifyPrimary(primary, episode, ordered);
         const guardResult = this.evaluateBoundary(episode, primary, ordered);
-        const decision = guardResult.guardAction === 'enforce_new_episode'
-            ? cpuDecision
-            : primary.role === 'user'
-                ? await classifyTurnRelationHybrid(this.classificationContext(primary, episode, ordered), this.reviewer)
-                : cpuDecision;
-        return this.appendTurnClassified(ordered, input, decision, {
-            cpuDecision,
+        const reviewed = guardResult.guardAction === 'enforce_new_episode' || primary.role !== 'user'
+            ? {
+                cpuDecision,
+                reviewerInvoked: false,
+                reviewerRawResultStatus: 'not_invoked',
+                finalDecision: cpuDecision,
+            }
+            : await classifyTurnRelationHybridTrace(this.classificationContext(primary, episode, ordered), this.reviewer);
+        return this.appendTurnClassified(ordered, input, reviewed.finalDecision, {
+            cpuDecision: reviewed.cpuDecision,
             guardResult,
-            reviewerInvoked: guardResult.guardAction !== 'enforce_new_episode' && primary.role === 'user' && cpuDecision.needsLlmReview && Boolean(this.reviewer),
+            reviewerInvoked: reviewed.reviewerInvoked,
+            reviewerRawResultStatus: reviewed.reviewerRawResultStatus,
+            reviewerDecision: reviewed.reviewerDecision,
+            finalDecision: reviewed.finalDecision,
+            observedEpisodeId: episode?.episodeId,
+            observedEpisodeEventCount: episode?.eventCount,
         });
     }
     appendTurnClassified(events, input, decisionOverride, trace) {
@@ -56,15 +64,25 @@ export class EpisodeAssembler {
             if (!episode)
                 legacyLinkedEpisodeId = legacyEpisodeId;
         }
-        const cpuDecision = trace?.cpuDecision ?? this.classifyPrimary(primary, episode, ordered);
-        const guardResult = trace?.guardResult ?? this.evaluateBoundary(episode, primary, ordered);
-        let decision = decisionOverride ?? cpuDecision;
+        const freshGuardResult = this.evaluateBoundary(episode, primary, ordered);
+        const staleTrace = Boolean(trace && (trace.observedEpisodeId !== episode?.episodeId || trace.observedEpisodeEventCount !== episode?.eventCount));
+        const cpuDecision = staleTrace ? this.classifyPrimary(primary, episode, ordered) : trace?.cpuDecision ?? this.classifyPrimary(primary, episode, ordered);
+        const guardResult = freshGuardResult;
+        let decision = staleTrace ? cpuDecision : decisionOverride ?? trace?.finalDecision ?? cpuDecision;
+        let reviewerRawResultStatus = trace?.reviewerRawResultStatus || 'not_invoked';
+        let reviewerDecision = trace?.reviewerDecision;
+        if (staleTrace && trace?.reviewerInvoked) {
+            reviewerRawResultStatus = 'stale_ignored';
+            reviewerDecision = undefined;
+            decision = cpuDecision;
+        }
         let reopened = false;
         let closureReceipt;
         let linkedEpisodeId = legacyLinkedEpisodeId;
         const now = Math.max(input.now ?? 0, ...ordered.map((event) => event.occurredAt || Date.now()), episode?.updatedAt ?? 0);
         const previousEpisodeId = episode?.episodeId;
         const shouldAuditBoundary = primary.role === 'user' && this.boundaryPolicy.config.auditDecisions;
+        const guardWarnings = guardResult.warnings.map((warning) => warning.code);
         if (decision.relation === 'noise') {
             const audit = this.recordBoundaryDecisionSafe(shouldAuditBoundary, {
                 projectId: input.projectId,
@@ -80,7 +98,7 @@ export class EpisodeAssembler {
                 metrics: guardResult.metrics,
                 cpuDecision,
                 reviewerInvoked: trace?.reviewerInvoked || false,
-                reviewerDecision: trace?.reviewerDecision,
+                reviewerDecision,
                 finalDecision: decision,
                 warnings: guardResult.warnings,
                 createdAt: now,
@@ -92,24 +110,97 @@ export class EpisodeAssembler {
                     });
                 }
             });
-            return { assignedEventIds: [], unassignedEventIds: [], ignoredEventIds: ordered.map((event) => event.eventId), reopened: false };
+            return {
+                assignedEventIds: [],
+                unassignedEventIds: [],
+                ignoredEventIds: ordered.map((event) => event.eventId),
+                reopened: false,
+                boundaryTriggered: false,
+                boundaryDetected: guardResult.guardCodes.length > 0,
+                boundaryApplied: false,
+                boundaryMode: guardResult.mode,
+                boundaryDecisionId: audit.decisionId,
+                boundaryGuardCodes: guardResult.guardCodes,
+                boundaryAuditRecorded: audit.status === 'inserted',
+                boundaryAuditStatus: audit.status,
+                previousEpisodeId,
+                reviewerRawResultStatus,
+                warnings: [...guardWarnings, ...audit.warnings],
+            };
         }
         return this.store.transaction(() => {
-            if (episode?.status === 'open' && guardResult.guardAction === 'enforce_new_episode') {
-                linkedEpisodeId = episode.episodeId;
-                closureReceipt = this.store.sealEpisode(episode.episodeId, {
-                    mode: 'hard', reason: 'episode_boundary_guardrail', reasonCode: 'topic_switch',
-                    reasonDetail: guardResult.guardCodes.join(','), now,
+            let boundaryApplied = false;
+            let resultingEpisodeId;
+            const closureEpisode = primary.role === 'user' && decision.relation === 'closes_episode' ? episode : undefined;
+            const switchEpisode = primary.role === 'user' && isHardTopicSwitch(decision.relation) ? episode : undefined;
+            if (closureEpisode) {
+                let targetEpisode = closureEpisode;
+                if (targetEpisode.status === 'soft_sealed') {
+                    targetEpisode = this.store.reopenSoftEpisode(targetEpisode.episodeId, now);
+                    episode = targetEpisode;
+                    reopened = true;
+                }
+                const assignedEventIds = this.appendOrderedEvents(targetEpisode, ordered, primary, decision, now);
+                closureReceipt = this.store.sealEpisode(targetEpisode.episodeId, {
+                    mode: 'hard', reason: 'explicit_user_closure', reasonCode: 'explicit_user_closure', now,
                 });
-                episode = undefined;
+                resultingEpisodeId = targetEpisode.episodeId;
+                const audit = this.recordBoundaryDecisionSafe(shouldAuditBoundary, {
+                    projectId: input.projectId,
+                    sessionId: input.sessionId,
+                    sourceAgent: input.sourceAgent,
+                    threadId: conversationThreadId,
+                    primaryEventId: primary.eventId,
+                    previousEpisodeId,
+                    resultingEpisodeId,
+                    policyVersion: guardResult.policyVersion,
+                    mode: guardResult.mode,
+                    guardAction: guardResult.guardAction === 'shadow_new_episode' ? 'shadow_new_episode' : 'none',
+                    guardCodes: guardResult.guardCodes,
+                    metrics: guardResult.metrics,
+                    cpuDecision,
+                    reviewerInvoked: trace?.reviewerInvoked || false,
+                    reviewerDecision,
+                    finalDecision: decision,
+                    warnings: guardResult.warnings,
+                    createdAt: now,
+                });
+                return {
+                    episode: this.store.getEpisode(targetEpisode.episodeId), assignedEventIds, unassignedEventIds: [], ignoredEventIds: [], closureReceipt, reopened,
+                    boundaryTriggered: false,
+                    boundaryDetected: guardResult.guardCodes.length > 0,
+                    boundaryApplied: false,
+                    boundaryMode: guardResult.mode,
+                    boundaryDecisionId: audit.decisionId,
+                    boundaryGuardCodes: guardResult.guardCodes,
+                    boundaryAuditRecorded: audit.status === 'inserted',
+                    boundaryAuditStatus: audit.status,
+                    previousEpisodeId,
+                    reviewerRawResultStatus,
+                    warnings: [...guardWarnings, ...audit.warnings],
+                };
             }
-            if (episode?.status === 'open' && ['hard_topic_switch', 'starts_new_topic', 'switches_topic'].includes(decision.relation)) {
-                closureReceipt = this.store.sealEpisode(episode.episodeId, {
+            if (switchEpisode) {
+                const previous = switchEpisode;
+                linkedEpisodeId = previous.episodeId;
+                closureReceipt = this.store.sealEpisode(previous.episodeId, {
                     mode: 'hard', reason: 'explicit_topic_switch', reasonCode: 'topic_switch', now,
                 });
                 episode = undefined;
             }
-            if (episode?.status === 'open' && decision.relation === 'ambiguous_shift') {
+            else if (episode && guardResult.guardAction === 'enforce_new_episode') {
+                linkedEpisodeId = episode.episodeId;
+                closureReceipt = this.store.sealEpisode(episode.episodeId, {
+                    mode: 'hard',
+                    reason: 'episode_boundary_guardrail',
+                    reasonCode: boundaryReasonCode(guardResult),
+                    reasonDetail: guardResult.guardCodes.join(','),
+                    now,
+                });
+                episode = undefined;
+                boundaryApplied = true;
+            }
+            else if (episode?.status === 'open' && decision.relation === 'ambiguous_shift') {
                 linkedEpisodeId = episode.episodeId;
                 closureReceipt = this.store.sealEpisode(episode.episodeId, {
                     mode: 'soft', reason: 'ambiguous_topic_shift', reasonCode: 'topic_switch', requiresReview: true, now,
@@ -117,10 +208,11 @@ export class EpisodeAssembler {
                 episode = undefined;
             }
             if (episode?.status === 'soft_sealed') {
-                const mayReopen = new Set([
-                    'continues_previous', 'clarifies_previous', 'corrects_previous', 'returns_to_old_topic',
-                    'answers_assistant_question', 'accepts_assistant_proposal', 'rejects_assistant_proposal', 'confirms_assistant_fact',
-                ]).has(decision.relation)
+                const mayReopen = primary.role === 'user'
+                    && new Set([
+                        'continues_previous', 'clarifies_previous', 'corrects_previous', 'returns_to_old_topic',
+                        'answers_assistant_question', 'accepts_assistant_proposal', 'rejects_assistant_proposal', 'confirms_assistant_fact',
+                    ]).has(decision.relation)
                     && now - (episode.sealedAt || episode.updatedAt) <= this.softReopenWindowMs;
                 if (mayReopen) {
                     episode = this.store.reopenSoftEpisode(episode.episodeId, now);
@@ -131,6 +223,21 @@ export class EpisodeAssembler {
                 }
             }
             if (!episode) {
+                if (primary.role !== 'user' && input.allowNonUserEpisodeStart !== true) {
+                    return {
+                        assignedEventIds: [], unassignedEventIds: ordered.map((event) => event.eventId), ignoredEventIds: [], closureReceipt, reopened,
+                        boundaryTriggered: boundaryApplied,
+                        boundaryDetected: guardResult.guardCodes.length > 0,
+                        boundaryApplied,
+                        boundaryMode: guardResult.mode,
+                        boundaryGuardCodes: guardResult.guardCodes,
+                        boundaryAuditRecorded: false,
+                        boundaryAuditStatus: 'not_applicable',
+                        previousEpisodeId,
+                        reviewerRawResultStatus,
+                        warnings: guardWarnings,
+                    };
+                }
                 episode = this.store.createEpisode({
                     projectId: input.projectId, sessionId: input.sessionId, sourceAgent: input.sourceAgent,
                     conversationThreadId,
@@ -144,30 +251,8 @@ export class EpisodeAssembler {
                     linkedEpisodeId,
                 });
             }
-            const assignedEventIds = [];
-            for (const event of ordered) {
-                const existing = this.store.getEventLink(event.eventId);
-                if (existing) {
-                    assignedEventIds.push(event.eventId);
-                    continue;
-                }
-                const relation = event.role === 'assistant' || event.role === 'agent'
-                    ? classifyAssistantRelation(eventText(event), 'assistant')
-                    : event.role === 'tool'
-                        ? 'tool_result_context'
-                        : decision.relation;
-                this.store.appendEvent({
-                    episodeId: episode.episodeId, eventId: event.eventId, relation,
-                    confidence: event.eventId === primary.eventId ? decision.confidence : 0.9,
-                    globalSeq: event.globalSeq, occurredAt: event.occurredAt || now,
-                    episodeType: decision.episodeType, importance: decision.importance,
-                    summaryText: summaryLine(event),
-                    candidateTypes: decision.candidateTypes,
-                    importanceSignals: decision.importanceSignals,
-                    importanceReason: decision.rationale,
-                });
-                assignedEventIds.push(event.eventId);
-            }
+            const assignedEventIds = this.appendOrderedEvents(episode, ordered, primary, decision, now);
+            resultingEpisodeId = episode.episodeId;
             if (input.batchSeal) {
                 const confidence = averageConfidence(this.store.listEventLinks(episode.episodeId));
                 const requiresReview = !input.forceBatchSeal && confidence < 0.6;
@@ -176,11 +261,11 @@ export class EpisodeAssembler {
                     reasonCode: 'batch_boundary', requiresReview, now,
                 });
             }
-            else if (decision.relation === 'closes_episode') {
-                closureReceipt = this.store.sealEpisode(episode.episodeId, {
-                    mode: 'hard', reason: 'explicit_user_closure', reasonCode: 'explicit_user_closure', now,
-                });
-            }
+            const auditGuardAction = boundaryApplied
+                ? guardResult.guardAction
+                : guardResult.guardAction === 'shadow_new_episode'
+                    ? 'shadow_new_episode'
+                    : 'none';
             const audit = this.recordBoundaryDecisionSafe(shouldAuditBoundary, {
                 projectId: input.projectId,
                 sessionId: input.sessionId,
@@ -188,32 +273,32 @@ export class EpisodeAssembler {
                 threadId: conversationThreadId,
                 primaryEventId: primary.eventId,
                 previousEpisodeId,
-                resultingEpisodeId: episode.episodeId,
+                resultingEpisodeId,
                 policyVersion: guardResult.policyVersion,
                 mode: guardResult.mode,
-                guardAction: guardResult.guardAction,
+                guardAction: auditGuardAction,
                 guardCodes: guardResult.guardCodes,
                 metrics: guardResult.metrics,
                 cpuDecision,
                 reviewerInvoked: trace?.reviewerInvoked || false,
-                reviewerDecision: trace?.reviewerDecision,
+                reviewerDecision,
                 finalDecision: decision,
                 warnings: guardResult.warnings,
                 createdAt: now,
             });
             return {
                 episode: this.store.getEpisode(episode.episodeId), assignedEventIds, unassignedEventIds: [], ignoredEventIds: [], closureReceipt, reopened,
-                boundaryTriggered: guardResult.guardAction === 'enforce_new_episode',
+                boundaryTriggered: boundaryApplied,
                 boundaryDetected: guardResult.guardCodes.length > 0,
-                boundaryApplied: guardResult.guardAction === 'enforce_new_episode',
+                boundaryApplied,
                 boundaryMode: guardResult.mode,
                 boundaryDecisionId: audit.decisionId,
                 boundaryGuardCodes: guardResult.guardCodes,
                 boundaryAuditRecorded: audit.status === 'inserted',
                 boundaryAuditStatus: audit.status,
                 previousEpisodeId,
-                reviewerRawResultStatus: trace?.reviewerInvoked ? 'invoked' : 'not_invoked',
-                warnings: guardResult.warnings.map((warning) => warning.code),
+                reviewerRawResultStatus,
+                warnings: [...guardWarnings, ...audit.warnings],
             };
         });
     }
@@ -269,6 +354,29 @@ export class EpisodeAssembler {
             rationale: 'non_user_event_requires_later_user_evidence',
         };
     }
+    appendOrderedEvents(episode, ordered, primary, decision, now) {
+        const assignedEventIds = [];
+        for (const event of ordered) {
+            const existing = this.store.getEventLink(event.eventId);
+            if (existing) {
+                assignedEventIds.push(event.eventId);
+                continue;
+            }
+            const relation = eventRelation(event, primary, decision);
+            this.store.appendEvent({
+                episodeId: episode.episodeId, eventId: event.eventId, relation,
+                confidence: event.eventId === primary.eventId ? decision.confidence : 0.9,
+                globalSeq: event.globalSeq, occurredAt: event.occurredAt || now,
+                episodeType: decision.episodeType, importance: decision.importance,
+                summaryText: summaryLine(event),
+                candidateTypes: decision.candidateTypes,
+                importanceSignals: decision.importanceSignals,
+                importanceReason: decision.rationale,
+            });
+            assignedEventIds.push(event.eventId);
+        }
+        return assignedEventIds;
+    }
     evaluateBoundary(episode, primary, currentEvents) {
         const imported = currentEvents.some((event) => {
             const payload = event.payload;
@@ -289,15 +397,36 @@ export class EpisodeAssembler {
     }
     recordBoundaryDecisionSafe(enabled, input) {
         if (!enabled)
-            return { status: this.boundaryPolicy.config.auditDecisions ? 'not_applicable' : 'disabled' };
+            return { status: this.boundaryPolicy.config.auditDecisions ? 'not_applicable' : 'disabled', warnings: [] };
         try {
             const result = this.store.recordBoundaryDecision(input);
-            return { status: result.status, decisionId: result.decisionId };
+            return { status: result.status, decisionId: result.decisionId, warnings: [] };
         }
         catch {
-            return { status: 'failed' };
+            return { status: 'failed', warnings: ['boundary_audit_write_failed'] };
         }
     }
+}
+function isHardTopicSwitch(relation) {
+    return relation === 'hard_topic_switch' || relation === 'starts_new_topic' || relation === 'switches_topic';
+}
+function boundaryReasonCode(result) {
+    if (result.guardCodes.includes('max_events_exceeded'))
+        return 'event_limit';
+    if (result.guardCodes.includes('max_duration_exceeded'))
+        return 'duration_limit';
+    if (result.guardCodes.includes('max_idle_gap_exceeded'))
+        return 'idle_gap';
+    if (result.guardCodes.includes('trusted_local_date_changed'))
+        return 'local_date_boundary';
+    return 'manual';
+}
+function eventRelation(event, primary, decision) {
+    if (event.role === 'assistant' || event.role === 'agent')
+        return classifyAssistantRelation(eventText(event), 'assistant');
+    if (event.role === 'tool')
+        return 'tool_result_context';
+    return event.eventId === primary.eventId ? decision.relation : decision.relation;
 }
 function eventText(event) {
     return eventTextForMemory(event);

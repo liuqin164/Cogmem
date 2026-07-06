@@ -447,6 +447,7 @@ async function recordRawImportedEvidence(
   const threadId = sourceRef?.threadId || stringRecordField(metadata.threadId) || record.provenance.sourceId;
   const sessionId = sourceRef?.sessionId || stringRecordField(metadata.sessionId) || record.provenance.sourceId;
   const eventOrdinal = sourceRef?.eventOrdinal ?? sourceRef?.sourceOffset;
+  const allowNonUserEpisodeStart = metadata.importedSummarySupport === true || record.provenance.reliabilityClass === 'imported_summary';
   const importAnchor = [
     record.provenance.sourceId,
     record.recordId,
@@ -470,6 +471,7 @@ async function recordRawImportedEvidence(
         sessionId,
         sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
         now: record.timestamp,
+        allowNonUserEpisodeStart,
       });
       link = kernel.episodeStore.getEventLink(existing.eventId);
     }
@@ -483,6 +485,7 @@ async function recordRawImportedEvidence(
     sessionId,
     turnId: sourceRef?.turnId || record.turnId || record.recordId,
     turnSeq: sourceRef?.turnSeq,
+    localDate: localDateFromTimestamp(record.timestamp),
     role,
     rawEventType: 'message',
     content: record.text,
@@ -512,6 +515,7 @@ async function recordRawImportedEvidence(
     sessionId,
     sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
     now: record.timestamp,
+    allowNonUserEpisodeStart,
   });
   return { event, created: true, episodeId: assembly.episode?.episodeId };
 }
@@ -535,6 +539,12 @@ function findImportedRawAnchor(
 
 function stringRecordField(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function localDateFromTimestamp(timestamp: number | undefined): string | undefined {
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) return undefined;
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString().slice(0, 10);
 }
 
 function openKernel(args: ParsedArgs, workspaceRoot: string): { kernel: MemoryKernel; dbPath: string } {

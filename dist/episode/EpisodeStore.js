@@ -107,6 +107,32 @@ export class EpisodeStore {
     `).all(...params, Math.max(1, Math.min(Math.trunc(options.limit ?? 100), 1000)));
         return rows.map(mapEpisode);
     }
+    listEpisodesForBoundaryAudit(options) {
+        const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 100), 1000));
+        const where = [`project_id = ?`];
+        const params = [options.projectId];
+        if (options.statuses?.length) {
+            where.push(`status IN (${options.statuses.map(() => '?').join(', ')})`);
+            params.push(...options.statuses);
+        }
+        const cursor = parseAuditCursor(options.cursor);
+        if (cursor) {
+            where.push(`(updated_at < ? OR (updated_at = ? AND episode_id < ?))`);
+            params.push(cursor.updatedAt, cursor.updatedAt, cursor.episodeId);
+        }
+        const rows = this.db.prepare(`
+      SELECT * FROM memory_episodes
+      WHERE ${where.join(' AND ')}
+      ORDER BY updated_at DESC, episode_id DESC
+      LIMIT ?
+    `).all(...params, limit + 1);
+        const selected = rows.slice(0, limit);
+        const last = selected.at(-1);
+        return {
+            episodes: selected.map(mapEpisode),
+            nextCursor: rows.length > limit && last ? formatAuditCursor(last.updated_at, last.episode_id) : undefined,
+        };
+    }
     appendEvent(input) {
         const existing = this.getEventLink(input.eventId);
         if (existing)
@@ -149,8 +175,16 @@ export class EpisodeStore {
         if (!this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_events'`).get()) {
             return { eventCount: episode.eventCount, startedAt: episode.startedAt, updatedAt: episode.updatedAt, trustedLocalDates: [] };
         }
+        const lastTrustedLocalDate = this.db.prepare(`
+      SELECT e.local_date AS local_date
+      FROM memory_episode_events ee
+      JOIN memory_events e ON e.event_id = ee.event_id
+      WHERE ee.episode_id = ? AND e.local_date GLOB '????-??-??'
+      ORDER BY ee.position DESC
+      LIMIT 1
+    `).get(episodeId)?.local_date || undefined;
         const dates = this.db.prepare(`
-      SELECT DISTINCT e.local_date AS local_date
+      SELECT e.local_date AS local_date
       FROM memory_episode_events ee
       JOIN memory_events e ON e.event_id = ee.event_id
       WHERE ee.episode_id = ? AND e.local_date GLOB '????-??-??'
@@ -163,7 +197,7 @@ export class EpisodeStore {
             eventCount: episode.eventCount,
             startedAt: episode.startedAt,
             updatedAt: episode.updatedAt,
-            lastTrustedLocalDate: dates[0],
+            lastTrustedLocalDate,
             trustedLocalDates: [...new Set(dates)].reverse(),
         };
     }
@@ -813,6 +847,14 @@ function mapBoundaryDecision(row) {
     };
 }
 function normalizeClosureReasonCode(reason, mode) {
+    if (/event_limit|max_events/u.test(reason))
+        return 'event_limit';
+    if (/duration_limit|max_duration/u.test(reason))
+        return 'duration_limit';
+    if (/idle_gap|max_idle/u.test(reason))
+        return 'idle_gap';
+    if (/local_date|trusted_local_date/u.test(reason))
+        return 'local_date_boundary';
     if (reason.includes('topic_switch'))
         return 'topic_switch';
     if (reason.includes('batch'))
@@ -826,6 +868,19 @@ function normalizeClosureReasonCode(reason, mode) {
     if (reason.includes('explicit_user_closure'))
         return 'explicit_user_closure';
     return mode === 'manual' ? 'manual' : 'manual';
+}
+function formatAuditCursor(updatedAt, episodeId) {
+    return `${updatedAt}:${episodeId}`;
+}
+function parseAuditCursor(cursor) {
+    if (!cursor)
+        return undefined;
+    const separator = cursor.indexOf(':');
+    if (separator <= 0)
+        return undefined;
+    const updatedAt = Number(cursor.slice(0, separator));
+    const episodeId = cursor.slice(separator + 1);
+    return Number.isFinite(updatedAt) && episodeId ? { updatedAt, episodeId } : undefined;
 }
 function parseJson(value, fallback) {
     if (!value)

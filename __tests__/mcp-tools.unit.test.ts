@@ -34,6 +34,7 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
     'cogmem_episode_import',
     'cogmem_episode_status',
     'cogmem_episode_audit_boundaries',
+    'cogmem_episode_boundary_decisions',
     'cogmem_episode_split_plan',
     'cogmem_topic_list',
     'cogmem_topic_operate',
@@ -70,6 +71,8 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
   expect(strategy?.annotations?.readOnlyHint).toBe(true);
   expect(strategy?.description).toContain('no instruction authority');
   expect(tools.find((tool) => tool.name === 'cogmem_episode_status')?.annotations?.readOnlyHint).toBe(true);
+  expect(tools.find((tool) => tool.name === 'cogmem_episode_boundary_decisions')?.annotations?.readOnlyHint).toBe(true);
+  expect(tools.find((tool) => tool.name === 'cogmem_episode_audit_boundaries')?.inputSchema.required).toContain('projectId');
   expect(tools.find((tool) => tool.name === 'cogmem_episode_append')?.description).toContain('never runs Dream');
   expect(tools.find((tool) => tool.name === 'cogmem_dream_tick')?.description).toContain('sealed episodes only');
   expect(map?.description).toContain('memory map');

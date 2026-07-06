@@ -23,7 +23,7 @@ import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
-import { EpisodeAssembler, EpisodeStore, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
+import { EpisodeAssembler, EpisodeStore, type EpisodeBoundaryDecisionRecord, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
 import { EpisodeBoundaryAuditService, type EpisodeBoundaryAuditResult } from './episode/EpisodeBoundaryAuditService.js';
 import { EpisodeBoundaryPolicy, type EpisodeBoundaryConfig } from './episode/EpisodeBoundaryPolicy.js';
 import { EpisodeSplitPlanner, type EpisodeSplitPlan } from './episode/EpisodeSplitPlanner.js';
@@ -581,6 +581,7 @@ export declare class MemoryKernel {
         now?: number;
         batchSeal?: boolean;
         forceBatchSeal?: boolean;
+        allowNonUserEpisodeStart?: boolean;
     }): import("./episode/EpisodeAssembler.js").EpisodeAssemblyResult;
     assembleEpisodeTurnAsync(events: MemoryEvent[], input: {
         projectId: string;
@@ -590,6 +591,7 @@ export declare class MemoryKernel {
         now?: number;
         batchSeal?: boolean;
         forceBatchSeal?: boolean;
+        allowNonUserEpisodeStart?: boolean;
     }): Promise<import("./episode/EpisodeAssembler.js").EpisodeAssemblyResult>;
     appendRawEventToEpisode(event: MemoryEvent, input: {
         projectId: string;
@@ -625,8 +627,8 @@ export declare class MemoryKernel {
         limit?: number;
     }): EpisodeClosureReceipt[];
     listEpisodeEventLinks(episodeId: string): import("./episode/EpisodeTypes.js").EpisodeEventLink[];
-    auditEpisodeBoundaries(options?: {
-        projectId?: string;
+    auditEpisodeBoundaries(options: {
+        projectId: string;
         episodeId?: string;
         status?: MemoryEpisode['status'];
         limit?: number;
@@ -636,6 +638,11 @@ export declare class MemoryKernel {
         maxIdleGapMs?: number;
         timezone?: string;
     }): EpisodeBoundaryAuditResult;
+    listEpisodeBoundaryDecisions(options: {
+        projectId: string;
+        primaryEventId?: string;
+        limit?: number;
+    }): EpisodeBoundaryDecisionRecord[];
     planEpisodeSplit(options: {
         projectId: string;
         episodeId: string;

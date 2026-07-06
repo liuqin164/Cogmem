@@ -17,7 +17,7 @@ function businessHash(kernel: ReturnType<typeof createMemoryKernel>): string {
   const tables = [
     'memory_events', 'memory_episodes', 'memory_episode_events', 'episode_closure_receipts',
     'episode_dream_jobs', 'episode_dream_runs', 'episode_boundary_decisions',
-    'deep_write_candidates', 'memory_atlas_nodes', 'memory_atlas_edges',
+    'deep_write_candidates', 'memory_atlas_documents', 'memory_atlas_projection_state', 'memory_edges',
   ].filter((table) => db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table));
   const hash = createHash('sha256');
   for (const table of tables) {
@@ -81,10 +81,20 @@ test('auditEpisodeBoundaries reports oversized, duration, idle, date, mismatch, 
       evidenceIntegrityStatus: 'ok',
       unresolvedEventCount: 0,
     }));
+    expect(kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId: firstEpisodeId }).items[0].reasons)
+      .toEqual(expect.arrayContaining(['event_count_exceeds_max', 'duration_exceeds_max']));
+    expect(() => kernel.auditEpisodeBoundaries({ projectId: 'other', episodeId: firstEpisodeId })).toThrow('episode_project_mismatch');
     expect(audit.items.find((item) => item.episodeId === zero.episodeId)).toEqual(expect.objectContaining({
       reasons: expect.arrayContaining(['zero_user_event_episode']),
     }));
-    expect(kernel.auditEpisodeBoundaries({ projectId: 'brain', limit: 1 }).nextCursor).toBeDefined();
+    const seen = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const page = kernel.auditEpisodeBoundaries({ projectId: 'brain', limit: 1, cursor });
+      for (const item of page.items) seen.add(item.episodeId);
+      cursor = page.nextCursor;
+    } while (cursor);
+    expect(seen).toEqual(new Set([firstEpisodeId, zero.episodeId]));
   } finally {
     kernel.close();
     rmSync(dir, { recursive: true, force: true });
@@ -110,6 +120,8 @@ test('planEpisodeSplit is deterministic, turn-safe, complete, non-applyable, and
     expect(first.segments.every((segment, index) => segment.segmentIndex === index)).toBe(true);
     expect(first.segments.every((segment) => segment.eventIds === undefined && segment.eventIdsHash)).toBe(true);
     const withIds = kernel.planEpisodeSplit({ projectId: 'brain', episodeId, maxEvents: 40, includeEventIds: true });
+    expect(withIds.planId).toBe(first.planId);
+    expect(withIds.sourceFingerprint).toBe(first.sourceFingerprint);
     const planned = withIds.segments.flatMap((segment) => segment.eventIds || []);
     expect(new Set(planned).size).toBe(planned.length);
     expect(planned).toEqual(kernel.listEpisodeEventLinks(episodeId).map((link) => link.eventId));
@@ -122,6 +134,51 @@ test('planEpisodeSplit is deterministic, turn-safe, complete, non-applyable, and
     kernel.episodeStore.appendEvent({ episodeId, eventId: event.eventId, relation: 'continues_previous', confidence: 1, occurredAt: event.occurredAt });
     const changed = kernel.planEpisodeSplit({ projectId: 'brain', episodeId, maxEvents: 40 });
     expect(changed.planId).not.toBe(first.planId);
+    expect(first.plannerVersion).toBe('episode_split_preview.v1');
+    expect(first.normalizedPolicy).toEqual(expect.objectContaining({ maxEvents: 40 }));
+    expect(first.proposedBoundaries.length).toBe(first.segments.length - 1);
+    expect(first.impactInventory.eventCount).toBe(150);
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('split-plan uses turn metadata, boundary policies, and leading non-user tail safely', () => {
+  const { dir, kernel } = createTestKernel('cogmem-split-policy-boundaries-');
+  try {
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'brain', sessionId: 'turns', sourceAgent: 'test', conversationThreadId: 'turns',
+      episodeType: 'discussion', importance: 0.5, eventId: 'planned-start', occurredAt: 1,
+    });
+    const rows = [
+      ['a0', 'assistant', 'leading assistant', 1, 'turn-0', 0, 0, '2026-07-04', 'assistant_response'],
+      ['t0', 'tool', 'leading tool', 2, 'turn-0', 0, 1, '2026-07-04', 'tool_result_context'],
+      ['u1', 'user', 'first user', 3, 'turn-0', 0, 2, '2026-07-04', 'continues_previous'],
+      ['a1', 'assistant', 'answer', 4, 'turn-0', 0, 3, '2026-07-04', 'assistant_response'],
+      ['u2', 'user', 'next day user', 90_000_000, 'turn-1', 1, 0, '2026-07-05', 'continues_previous'],
+      ['u3', 'user', '换个话题，我们讨论 Atlas 结构。', 90_000_100, 'turn-2', 2, 0, '2026-07-05', 'hard_topic_switch'],
+    ] as const;
+    for (const [id, role, content, occurredAt, turnId, turnSeq, eventOrdinal, localDate, relation] of rows) {
+      const event = kernel.recordRawEvent({
+        eventId: id, projectId: 'brain', workspaceId: 'brain', threadId: 'turns', sessionId: 'turns',
+        role, content, sourceId: 'test', occurredAt, turnId, turnSeq, eventOrdinal, localDate,
+      });
+      kernel.episodeStore.appendEvent({ episodeId: episode.episodeId, eventId: event.eventId, relation, confidence: 1, occurredAt });
+    }
+    const plan = kernel.planEpisodeSplit({
+      projectId: 'brain', episodeId: episode.episodeId, maxEvents: 10, maxDurationMs: 86_400_000,
+      maxIdleGapMs: 1_000, includeEventIds: true,
+    });
+    expect(plan.warnings).toContain('leading_non_user_event');
+    expect(plan.segments[0].eventIds).toEqual(['a0', 't0', 'u1', 'a1']);
+    expect(plan.proposedBoundaries.map((item) => item.reason)).toEqual(expect.arrayContaining([
+      'trusted_local_date_boundary',
+      'hard_topic_switch_boundary',
+    ]));
+    const beforeFingerprint = plan.sourceFingerprint;
+    kernel.factStore.getDatabase().prepare(`UPDATE memory_events SET turn_id = ? WHERE event_id = ?`).run('turn-edited', 'u2');
+    expect(kernel.planEpisodeSplit({ projectId: 'brain', episodeId: episode.episodeId }).sourceFingerprint).not.toBe(beforeFingerprint);
   } finally {
     kernel.close();
     rmSync(dir, { recursive: true, force: true });
@@ -160,7 +217,10 @@ test('split-plan bounds event id output even when includeEventIds is true', () =
   const { dir, kernel } = createTestKernel('cogmem-split-bounded-ids-');
   try {
     const episodeId = seedEpisode(kernel, { projectId: 'brain', sessionId: 'big', eventCount: 520, prefix: 'big' });
-    const plan = kernel.planEpisodeSplit({ projectId: 'brain', episodeId, maxEvents: 1000, includeEventIds: true });
+    kernel.factStore.getDatabase().prepare(`UPDATE memory_events SET local_date = ? WHERE session_id = ?`).run('2026-07-04', 'big');
+    const plan = kernel.planEpisodeSplit({
+      projectId: 'brain', episodeId, maxEvents: 1000, maxDurationMs: 86_400_000, maxIdleGapMs: 86_400_000, includeEventIds: true,
+    });
     expect(plan.segments).toHaveLength(1);
     expect(plan.segments[0].eventIds).toBeUndefined();
     expect(plan.segments[0].eventIdsOmitted).toBe(520);

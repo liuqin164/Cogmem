@@ -24,13 +24,14 @@ function parseArgs(argv: string[]): Args {
 
 function usage(): string {
   return [
-    'Usage: cogmem episode <append|import|list|get|seal|status|audit-boundaries|split-plan|repair|split|merge|move-event|reclassify|requeue-dream> [args]',
+    'Usage: cogmem episode <append|import|list|get|seal|status|audit-boundaries|boundary-decisions|split-plan|repair|split|merge|move-event|reclassify|requeue-dream> [args]',
     '  append --project <id> --session <id> --source-agent <id> --role <role> --text <text>',
     '  import --project <id> --session <id> --source-agent <id> --format jsonl --file <path> [--seal-batch] [--force-seal] [--chunk-size <n>] [--checkpoint-file <path>] [--resume] [--start-line <n>] [--end-line <n>] [--max-lines <n>] [--skip-errors] [--max-errors <n>]',
     '  list|status [--project <id>] [--session <id>] [--json]',
     '  get --episode <id> [--json]',
     '  seal --episode <id> [--mode soft|hard|manual|batch] [--reason <reason>]',
     '  audit-boundaries --project <id> [--episode <id>] [--status open|soft_sealed|sealed] [--limit <n>] [--cursor <cursor>]',
+    '  boundary-decisions --project <id> [--event <eventId>] [--limit <n>]',
     '  split-plan --project <id> --episode <id> [--include-event-ids]',
     '  repair [--project <id>] [--since <globalSeq>] [--limit <n>]',
     '  split --project <id> --episode <id> --events <eventId,eventId>',
@@ -86,6 +87,10 @@ async function main(): Promise<void> {
         maxEvents: numberArg(args, 'max-events'), maxDurationMs: numberArg(args, 'max-duration-ms'),
         maxIdleGapMs: numberArg(args, 'max-idle-gap-ms'), timezone: stringArg(args, 'timezone'),
       });
+    } else if (args.command === 'boundary-decisions') {
+      result = { decisions: kernel.listEpisodeBoundaryDecisions({
+        projectId: requiredArg(args, 'project'), primaryEventId: stringArg(args, 'event'), limit: numberArg(args, 'limit'),
+      }) };
     } else if (args.command === 'split-plan') {
       result = kernel.planEpisodeSplit({
         projectId: requiredArg(args, 'project'), episodeId: requiredArg(args, 'episode'),

@@ -12,6 +12,10 @@ export type EpisodeClosureMode = 'soft' | 'hard' | 'manual' | 'batch';
 export type EpisodeClosureReasonCode =
   | 'explicit_user_closure'
   | 'topic_switch'
+  | 'event_limit'
+  | 'duration_limit'
+  | 'idle_gap'
+  | 'local_date_boundary'
   | 'batch_boundary'
   | 'idle_timeout'
   | 'manual'

@@ -1004,7 +1004,12 @@ export class MemoryKernel {
         const expectedText = this.piiRedactor ? this.piiRedactor.redact(input.text).text : input.text;
         if (event.projectId !== input.projectId
             || event.sessionId !== input.sessionId
+            || event.threadId !== (input.threadId || input.sessionId)
             || event.role !== input.role
+            || !sameProvided(event.turnId, input.turnId)
+            || !sameProvided(event.turnSeq, input.turnSeq)
+            || !sameProvided(event.localDate, input.localDate)
+            || !sameProvided(event.eventOrdinal, input.eventOrdinal)
             || payload?.text !== expectedText
             || payload?.metadata?.sourceAgent !== input.sourceAgent) {
             throw new Error(`episode_ingest_identity_conflict:${input.externalMessageId || event.eventId}`);
@@ -1044,8 +1049,13 @@ export class MemoryKernel {
     listEpisodeEventLinks(episodeId) {
         return this.episodeStore.listEventLinks(episodeId);
     }
-    auditEpisodeBoundaries(options = {}) {
+    auditEpisodeBoundaries(options) {
         return this.episodeBoundaryAuditService.audit(options);
+    }
+    listEpisodeBoundaryDecisions(options) {
+        if (!options.projectId)
+            throw new Error('projectId is required');
+        return this.episodeStore.listBoundaryDecisions(options);
     }
     planEpisodeSplit(options) {
         return this.episodeSplitPlanner.plan(options);
@@ -2168,6 +2178,9 @@ function optionalGovernancePayloadNumber(payload, field) {
 }
 function uniqueStrings(values) {
     return Array.from(new Set(values.filter(Boolean)));
+}
+function sameProvided(left, right) {
+    return right === undefined || (left ?? undefined) === right;
 }
 function extractNavigationTerms(query) {
     return uniqueStrings(query

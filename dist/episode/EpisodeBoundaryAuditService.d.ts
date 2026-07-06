@@ -46,7 +46,7 @@ export declare class EpisodeBoundaryAuditService {
     private readonly resolveEvent?;
     constructor(store: EpisodeStore, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined);
     audit(options: {
-        projectId?: string;
+        projectId: string;
         episodeId?: string;
         status?: EpisodeStatus;
         limit?: number;
@@ -56,6 +56,7 @@ export declare class EpisodeBoundaryAuditService {
         maxIdleGapMs?: number;
         timezone?: string;
     }): EpisodeBoundaryAuditResult;
+    private requireProjectEpisode;
     private auditEpisode;
 }
 //# sourceMappingURL=EpisodeBoundaryAuditService.d.ts.map

@@ -336,6 +336,7 @@ async function recordRawImportedEvidence(kernel, projectId, envelope) {
     const threadId = sourceRef?.threadId || stringRecordField(metadata.threadId) || record.provenance.sourceId;
     const sessionId = sourceRef?.sessionId || stringRecordField(metadata.sessionId) || record.provenance.sourceId;
     const eventOrdinal = sourceRef?.eventOrdinal ?? sourceRef?.sourceOffset;
+    const allowNonUserEpisodeStart = metadata.importedSummarySupport === true || record.provenance.reliabilityClass === 'imported_summary';
     const importAnchor = [
         record.provenance.sourceId,
         record.recordId,
@@ -359,6 +360,7 @@ async function recordRawImportedEvidence(kernel, projectId, envelope) {
                 sessionId,
                 sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
                 now: record.timestamp,
+                allowNonUserEpisodeStart,
             });
             link = kernel.episodeStore.getEventLink(existing.eventId);
         }
@@ -371,6 +373,7 @@ async function recordRawImportedEvidence(kernel, projectId, envelope) {
         sessionId,
         turnId: sourceRef?.turnId || record.turnId || record.recordId,
         turnSeq: sourceRef?.turnSeq,
+        localDate: localDateFromTimestamp(record.timestamp),
         role,
         rawEventType: 'message',
         content: record.text,
@@ -400,6 +403,7 @@ async function recordRawImportedEvidence(kernel, projectId, envelope) {
         sessionId,
         sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
         now: record.timestamp,
+        allowNonUserEpisodeStart,
     });
     return { event, created: true, episodeId: assembly.episode?.episodeId };
 }
@@ -412,6 +416,12 @@ function findImportedRawAnchor(kernel, input) {
 }
 function stringRecordField(value) {
     return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+function localDateFromTimestamp(timestamp) {
+    if (typeof timestamp !== 'number' || !Number.isFinite(timestamp))
+        return undefined;
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString().slice(0, 10);
 }
 function openKernel(args, workspaceRoot) {
     const explicitDb = stringArg(args, 'db');
