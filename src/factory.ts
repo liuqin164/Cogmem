@@ -405,6 +405,10 @@ export interface EpisodeMessageInput {
   externalMessageId?: string;
   timestamp?: number;
   threadId?: string;
+  turnId?: string;
+  turnSeq?: number;
+  localDate?: string;
+  eventOrdinal?: number;
   metadata?: Record<string, unknown>;
 }
 
@@ -418,8 +422,15 @@ export interface EpisodeMessageResult {
   dreamRecommended: boolean;
   dreamRan: false;
   boundaryTriggered?: boolean;
+  boundaryDetected?: boolean;
+  boundaryApplied?: boolean;
+  boundaryMode?: string;
+  boundaryDecisionId?: string;
   boundaryGuardCodes?: string[];
   boundaryAuditRecorded?: boolean;
+  boundaryAuditStatus?: string;
+  previousEpisodeId?: string;
+  reviewerRawResultStatus?: string;
   warnings?: string[];
 }
 
@@ -1417,6 +1428,10 @@ export class MemoryKernel {
         workspaceId: input.projectId,
         threadId: input.threadId || input.sessionId,
         sessionId: input.sessionId,
+        turnId: input.turnId,
+        turnSeq: input.turnSeq,
+        localDate: input.localDate,
+        eventOrdinal: input.eventOrdinal,
         role: input.role,
         content: input.text,
         occurredAt: input.timestamp,
@@ -1470,6 +1485,7 @@ export class MemoryKernel {
       event = this.recordRawEvent({
         eventId: reservedEventId, projectId: input.projectId, workspaceId: input.projectId,
         threadId: input.threadId || input.sessionId, sessionId: input.sessionId, role: input.role,
+        turnId: input.turnId, turnSeq: input.turnSeq, localDate: input.localDate, eventOrdinal: input.eventOrdinal,
         content: input.text, occurredAt: input.timestamp, sourceId: `${input.sourceAgent}:${input.sessionId}`,
         metadata: { ...input.metadata, externalMessageId: input.externalMessageId, sourceAgent: input.sourceAgent },
       });
@@ -1525,8 +1541,15 @@ export class MemoryKernel {
       dreamRecommended: Boolean(receipt?.dreamRecommended && !receipt.requiresReview && episode?.dreamStatus !== 'processed'),
       dreamRan: false,
       boundaryTriggered: assembly?.boundaryTriggered,
+      boundaryDetected: assembly?.boundaryDetected,
+      boundaryApplied: assembly?.boundaryApplied,
+      boundaryMode: assembly?.boundaryMode,
+      boundaryDecisionId: assembly?.boundaryDecisionId,
       boundaryGuardCodes: assembly?.boundaryGuardCodes,
       boundaryAuditRecorded: assembly?.boundaryAuditRecorded,
+      boundaryAuditStatus: assembly?.boundaryAuditStatus,
+      previousEpisodeId: assembly?.previousEpisodeId,
+      reviewerRawResultStatus: assembly?.reviewerRawResultStatus,
       warnings: assembly?.warnings,
     };
   }
@@ -1553,8 +1576,15 @@ export class MemoryKernel {
       dreamRecommended: Boolean(receipt?.dreamRecommended && !receipt.requiresReview && episode?.dreamStatus !== 'processed'),
       dreamRan: false,
       boundaryTriggered: assembly?.boundaryTriggered,
+      boundaryDetected: assembly?.boundaryDetected,
+      boundaryApplied: assembly?.boundaryApplied,
+      boundaryMode: assembly?.boundaryMode,
+      boundaryDecisionId: assembly?.boundaryDecisionId,
       boundaryGuardCodes: assembly?.boundaryGuardCodes,
       boundaryAuditRecorded: assembly?.boundaryAuditRecorded,
+      boundaryAuditStatus: assembly?.boundaryAuditStatus,
+      previousEpisodeId: assembly?.previousEpisodeId,
+      reviewerRawResultStatus: assembly?.reviewerRawResultStatus,
       warnings: assembly?.warnings,
     };
   }

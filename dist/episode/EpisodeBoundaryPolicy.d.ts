@@ -25,7 +25,9 @@ export interface EpisodeBoundaryMetrics {
     elapsedMs?: number;
     idleGapMs?: number;
     trustedLocalDates: string[];
+    lastTrustedLocalDate?: string;
     currentTrustedLocalDate?: string;
+    outOfOrderTimestamp?: boolean;
 }
 export interface EpisodeBoundaryGuardResult {
     mode: EpisodeBoundaryMode;
@@ -54,6 +56,7 @@ export declare class EpisodeBoundaryPolicy {
             startedAt?: number;
             updatedAt?: number;
             localDates?: string[];
+            lastTrustedLocalDate?: string;
         };
         primaryEvent: Pick<MemoryEvent, 'role' | 'occurredAt' | 'localDate' | 'payload'>;
         imported?: boolean;

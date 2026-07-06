@@ -11,8 +11,15 @@ export interface EpisodeAssemblyResult {
     closureReceipt?: EpisodeClosureReceipt;
     reopened: boolean;
     boundaryTriggered?: boolean;
+    boundaryDetected?: boolean;
+    boundaryApplied?: boolean;
+    boundaryMode?: string;
+    boundaryDecisionId?: string;
     boundaryGuardCodes?: string[];
     boundaryAuditRecorded?: boolean;
+    boundaryAuditStatus?: 'disabled' | 'inserted' | 'duplicate' | 'failed' | 'not_applicable';
+    previousEpisodeId?: string;
+    reviewerRawResultStatus?: 'not_invoked' | 'invoked';
     warnings?: string[];
 }
 export declare class EpisodeAssembler {
@@ -57,5 +64,6 @@ export declare class EpisodeAssembler {
     private classificationContext;
     private classifyPrimary;
     private evaluateBoundary;
+    private recordBoundaryDecisionSafe;
 }
 //# sourceMappingURL=EpisodeAssembler.d.ts.map

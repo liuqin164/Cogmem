@@ -63,6 +63,8 @@ async function main(): Promise<void> {
         projectId: requiredArg(args, 'project'), sessionId: requiredArg(args, 'session'),
         sourceAgent: requiredArg(args, 'source-agent'), role: roleArg(args.role), text: requiredArg(args, 'text'),
         externalMessageId: stringArg(args, 'external-id'), timestamp: numberArg(args, 'timestamp'),
+        threadId: stringArg(args, 'thread-id'), turnId: stringArg(args, 'turn-id'), turnSeq: numberArg(args, 'turn-seq'),
+        localDate: stringArg(args, 'local-date'), eventOrdinal: numberArg(args, 'event-ordinal'),
       });
     } else if (args.command === 'import') {
       result = await importJsonl(kernel, args);
@@ -166,6 +168,11 @@ async function importJsonl(kernel: MemoryKernel, args: Args) {
       const resolvedSessionId = typeof message.sessionId === 'string' ? message.sessionId : sessionId;
       const role = roleValue(message.role);
       const timestamp = timeValue(message.timestamp);
+      const threadId = typeof message.threadId === 'string' ? message.threadId : undefined;
+      const turnId = typeof message.turnId === 'string' ? message.turnId : undefined;
+      const turnSeq = typeof message.turnSeq === 'number' && Number.isFinite(message.turnSeq) ? message.turnSeq : undefined;
+      const localDate = typeof message.localDate === 'string' ? message.localDate : undefined;
+      const eventOrdinal = typeof message.eventOrdinal === 'number' && Number.isFinite(message.eventOrdinal) ? message.eventOrdinal : undefined;
       const externalMessageId = typeof message.externalMessageId === 'string'
         ? message.externalMessageId
         : typeof message.id === 'string'
@@ -175,7 +182,7 @@ async function importJsonl(kernel: MemoryKernel, args: Args) {
       if (lineNumber <= resumeAfter || lineNumber < startLine) continue;
       selectedLines += 1;
       const result = await kernel.appendEpisodeMessageAsync({
-        projectId, sourceAgent, sessionId: resolvedSessionId, role, text, timestamp,
+        projectId, sourceAgent, sessionId: resolvedSessionId, role, text, timestamp, threadId, turnId, turnSeq, localDate, eventOrdinal,
         externalMessageId,
         metadata: { imported: true, importFormat: format },
       });

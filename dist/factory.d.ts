@@ -283,6 +283,10 @@ export interface EpisodeMessageInput {
     externalMessageId?: string;
     timestamp?: number;
     threadId?: string;
+    turnId?: string;
+    turnSeq?: number;
+    localDate?: string;
+    eventOrdinal?: number;
     metadata?: Record<string, unknown>;
 }
 export interface EpisodeMessageResult {
@@ -295,8 +299,15 @@ export interface EpisodeMessageResult {
     dreamRecommended: boolean;
     dreamRan: false;
     boundaryTriggered?: boolean;
+    boundaryDetected?: boolean;
+    boundaryApplied?: boolean;
+    boundaryMode?: string;
+    boundaryDecisionId?: string;
     boundaryGuardCodes?: string[];
     boundaryAuditRecorded?: boolean;
+    boundaryAuditStatus?: string;
+    previousEpisodeId?: string;
+    reviewerRawResultStatus?: string;
     warnings?: string[];
 }
 export type EpisodeRepairInput = {

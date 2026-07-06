@@ -78,6 +78,8 @@ test('auditEpisodeBoundaries reports oversized, duration, idle, date, mismatch, 
       severity: 'critical',
       reasons: expect.arrayContaining(['stored_actual_event_count_mismatch', 'event_count_exceeds_max', 'duration_exceeds_max', 'user_turn_idle_gap_exceeds_max']),
       recommendedAction: 'split-plan',
+      evidenceIntegrityStatus: 'ok',
+      unresolvedEventCount: 0,
     }));
     expect(audit.items.find((item) => item.episodeId === zero.episodeId)).toEqual(expect.objectContaining({
       reasons: expect.arrayContaining(['zero_user_event_episode']),
@@ -106,11 +108,12 @@ test('planEpisodeSplit is deterministic, turn-safe, complete, non-applyable, and
     expect(first.requiresManualReview).toBe(false);
     expect(first.segments.length).toBeGreaterThan(1);
     expect(first.segments.every((segment, index) => segment.segmentIndex === index)).toBe(true);
-    const planned = first.segments.flatMap((segment) => segment.eventIds);
+    expect(first.segments.every((segment) => segment.eventIds === undefined && segment.eventIdsHash)).toBe(true);
+    const withIds = kernel.planEpisodeSplit({ projectId: 'brain', episodeId, maxEvents: 40, includeEventIds: true });
+    const planned = withIds.segments.flatMap((segment) => segment.eventIds || []);
     expect(new Set(planned).size).toBe(planned.length);
     expect(planned).toEqual(kernel.listEpisodeEventLinks(episodeId).map((link) => link.eventId));
 
-    const withIds = kernel.planEpisodeSplit({ projectId: 'brain', episodeId, maxEvents: 40, includeEventIds: true });
     expect(withIds.segments[0].eventIds.length).toBeGreaterThan(0);
     const event = kernel.recordRawEvent({
       projectId: 'brain', workspaceId: 'brain', threadId: 'split', sessionId: 'split',
@@ -119,6 +122,50 @@ test('planEpisodeSplit is deterministic, turn-safe, complete, non-applyable, and
     kernel.episodeStore.appendEvent({ episodeId, eventId: event.eventId, relation: 'continues_previous', confidence: 1, occurredAt: event.occurredAt });
     const changed = kernel.planEpisodeSplit({ projectId: 'brain', episodeId, maxEvents: 40 });
     expect(changed.planId).not.toBe(first.planId);
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('audit and split-plan preserve link/event pairing when raw events are missing', () => {
+  const { dir, kernel } = createTestKernel('cogmem-split-missing-raw-');
+  try {
+    const episodeId = seedEpisode(kernel, { projectId: 'brain', sessionId: 'missing', eventCount: 9, prefix: 'missing' });
+    const links = kernel.listEpisodeEventLinks(episodeId);
+    kernel.factStore.getDatabase().prepare(`DELETE FROM memory_events WHERE event_id = ?`).run(links[1].eventId);
+
+    const audit = kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId });
+    expect(audit.items[0]).toEqual(expect.objectContaining({
+      severity: 'critical',
+      requiresManualReview: true,
+      evidenceIntegrityStatus: 'missing_raw_events',
+      unresolvedEventCount: 1,
+      missingRawEventIds: [links[1].eventId],
+      reasons: expect.arrayContaining(['unresolved_raw_events']),
+    }));
+
+    const plan = kernel.planEpisodeSplit({ projectId: 'brain', episodeId, maxEvents: 4, includeEventIds: true });
+    expect(plan.requiresManualReview).toBe(true);
+    expect(plan.evidenceIntegrityStatus).toBe('missing_raw_events');
+    expect(plan.missingRawEventIds).toEqual([links[1].eventId]);
+    expect(plan.segments.flatMap((segment) => segment.eventIds || [])).toEqual(links.map((link) => link.eventId));
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('split-plan bounds event id output even when includeEventIds is true', () => {
+  const { dir, kernel } = createTestKernel('cogmem-split-bounded-ids-');
+  try {
+    const episodeId = seedEpisode(kernel, { projectId: 'brain', sessionId: 'big', eventCount: 520, prefix: 'big' });
+    const plan = kernel.planEpisodeSplit({ projectId: 'brain', episodeId, maxEvents: 1000, includeEventIds: true });
+    expect(plan.segments).toHaveLength(1);
+    expect(plan.segments[0].eventIds).toBeUndefined();
+    expect(plan.segments[0].eventIdsOmitted).toBe(520);
+    expect(plan.segments[0].eventIdsCursor).toBe('segment:0:eventIds');
+    expect(plan.segments[0].eventIdsHash).toMatch(/^[a-f0-9]{64}$/);
   } finally {
     kernel.close();
     rmSync(dir, { recursive: true, force: true });

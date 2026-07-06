@@ -49,6 +49,13 @@ export interface EpisodeBoundaryDecisionRecord {
     warnings: EpisodeBoundaryGuardResult['warnings'];
     createdAt: number;
 }
+export interface EpisodeBoundarySnapshot {
+    eventCount: number;
+    startedAt?: number;
+    updatedAt?: number;
+    lastTrustedLocalDate?: string;
+    trustedLocalDates: string[];
+}
 export declare class EpisodeStore {
     private readonly db;
     private readonly resolveEvent?;
@@ -77,6 +84,8 @@ export declare class EpisodeStore {
     }): EpisodeEventLink;
     getEventLink(eventId: string): EpisodeEventLink | undefined;
     listEventLinks(episodeId: string): EpisodeEventLink[];
+    getBoundarySnapshot(episodeId: string): EpisodeBoundarySnapshot;
+    transaction<T>(fn: () => T): T;
     isEpisodeEmpty(episodeId: string): boolean;
     addCrossReference(input: {
         projectId: string;
@@ -109,7 +118,11 @@ export declare class EpisodeStore {
     }): string;
     recordBoundaryDecision(input: Omit<EpisodeBoundaryDecisionRecord, 'decisionId' | 'createdAt'> & {
         createdAt?: number;
-    }): boolean;
+    }): {
+        recorded: boolean;
+        decisionId?: string;
+        status: 'inserted' | 'duplicate';
+    };
     listBoundaryDecisions(options?: {
         projectId?: string;
         primaryEventId?: string;

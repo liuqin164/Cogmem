@@ -13,8 +13,15 @@ export interface EpisodeAssemblyResult {
   closureReceipt?: EpisodeClosureReceipt;
   reopened: boolean;
   boundaryTriggered?: boolean;
+  boundaryDetected?: boolean;
+  boundaryApplied?: boolean;
+  boundaryMode?: string;
+  boundaryDecisionId?: string;
   boundaryGuardCodes?: string[];
   boundaryAuditRecorded?: boolean;
+  boundaryAuditStatus?: 'disabled' | 'inserted' | 'duplicate' | 'failed' | 'not_applicable';
+  previousEpisodeId?: string;
+  reviewerRawResultStatus?: 'not_invoked' | 'invoked';
   warnings?: string[];
 }
 
@@ -57,7 +64,7 @@ export class EpisodeAssembler {
     const cpuDecision = this.classifyPrimary(primary, episode, ordered);
     const guardResult = this.evaluateBoundary(episode, primary, ordered);
     const decision = guardResult.guardAction === 'enforce_new_episode'
-      ? hardBoundaryDecision(cpuDecision, guardResult)
+      ? cpuDecision
       : primary.role === 'user'
         ? await classifyTurnRelationHybrid(this.classificationContext(primary, episode, ordered), this.reviewer)
         : cpuDecision;
@@ -98,22 +105,44 @@ export class EpisodeAssembler {
     const cpuDecision = trace?.cpuDecision ?? this.classifyPrimary(primary, episode, ordered);
     const guardResult = trace?.guardResult ?? this.evaluateBoundary(episode, primary, ordered);
     let decision = decisionOverride ?? cpuDecision;
-    if (guardResult.guardAction === 'enforce_new_episode') decision = hardBoundaryDecision(cpuDecision, guardResult);
     let reopened = false;
     let closureReceipt: EpisodeClosureReceipt | undefined;
     let linkedEpisodeId: string | undefined = legacyLinkedEpisodeId;
-    const now = input.now ?? Math.max(...ordered.map((event) => event.occurredAt || Date.now()));
+    const now = Math.max(input.now ?? 0, ...ordered.map((event) => event.occurredAt || Date.now()), episode?.updatedAt ?? 0);
+    const previousEpisodeId = episode?.episodeId;
+    const shouldAuditBoundary = primary.role === 'user' && this.boundaryPolicy.config.auditDecisions;
 
     if (decision.relation === 'noise') {
-      for (const event of ordered) {
-        this.store.markEventDisposition({
-          eventId: event.eventId, projectId: input.projectId, disposition: 'ignored', reason: 'deterministic_noise', now,
-        });
-      }
+      const audit = this.recordBoundaryDecisionSafe(shouldAuditBoundary, {
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+        sourceAgent: input.sourceAgent,
+        threadId: conversationThreadId,
+        primaryEventId: primary.eventId,
+        previousEpisodeId,
+        policyVersion: guardResult.policyVersion,
+        mode: guardResult.mode,
+        guardAction: guardResult.guardAction,
+        guardCodes: guardResult.guardCodes,
+        metrics: guardResult.metrics,
+        cpuDecision,
+        reviewerInvoked: trace?.reviewerInvoked || false,
+        reviewerDecision: trace?.reviewerDecision,
+        finalDecision: decision,
+        warnings: guardResult.warnings,
+        createdAt: now,
+      });
+      this.store.transaction(() => {
+        for (const event of ordered) {
+          this.store.markEventDisposition({
+            eventId: event.eventId, projectId: input.projectId, disposition: 'ignored', reason: 'deterministic_noise', now,
+          });
+        }
+      });
       return { assignedEventIds: [], unassignedEventIds: [], ignoredEventIds: ordered.map((event) => event.eventId), reopened: false };
     }
 
-    const previousEpisodeId = episode?.episodeId;
+    return this.store.transaction(() => {
     if (episode?.status === 'open' && guardResult.guardAction === 'enforce_new_episode') {
       linkedEpisodeId = episode.episodeId;
       closureReceipt = this.store.sealEpisode(episode.episodeId, {
@@ -199,40 +228,41 @@ export class EpisodeAssembler {
         mode: 'hard', reason: 'explicit_user_closure', reasonCode: 'explicit_user_closure', now,
       });
     }
-    let boundaryAuditRecorded = false;
-    if (this.boundaryPolicy.config.auditDecisions) {
-      try {
-        boundaryAuditRecorded = this.store.recordBoundaryDecision({
-          projectId: input.projectId,
-          sessionId: input.sessionId,
-          sourceAgent: input.sourceAgent,
-          threadId: conversationThreadId,
-          primaryEventId: primary.eventId,
-          previousEpisodeId,
-          resultingEpisodeId: episode.episodeId,
-          policyVersion: guardResult.policyVersion,
-          mode: guardResult.mode,
-          guardAction: guardResult.guardAction,
-          guardCodes: guardResult.guardCodes,
-          metrics: guardResult.metrics,
-          cpuDecision,
-          reviewerInvoked: trace?.reviewerInvoked || false,
-          reviewerDecision: trace?.reviewerDecision,
-          finalDecision: decision,
-          warnings: guardResult.warnings,
-          createdAt: now,
-        });
-      } catch {
-        boundaryAuditRecorded = false;
-      }
-    }
+    const audit = this.recordBoundaryDecisionSafe(shouldAuditBoundary, {
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      sourceAgent: input.sourceAgent,
+      threadId: conversationThreadId,
+      primaryEventId: primary.eventId,
+      previousEpisodeId,
+      resultingEpisodeId: episode.episodeId,
+      policyVersion: guardResult.policyVersion,
+      mode: guardResult.mode,
+      guardAction: guardResult.guardAction,
+      guardCodes: guardResult.guardCodes,
+      metrics: guardResult.metrics,
+      cpuDecision,
+      reviewerInvoked: trace?.reviewerInvoked || false,
+      reviewerDecision: trace?.reviewerDecision,
+      finalDecision: decision,
+      warnings: guardResult.warnings,
+      createdAt: now,
+    });
     return {
       episode: this.store.getEpisode(episode.episodeId), assignedEventIds, unassignedEventIds: [], ignoredEventIds: [], closureReceipt, reopened,
-      boundaryTriggered: guardResult.guardCodes.length > 0,
+      boundaryTriggered: guardResult.guardAction === 'enforce_new_episode',
+      boundaryDetected: guardResult.guardCodes.length > 0,
+      boundaryApplied: guardResult.guardAction === 'enforce_new_episode',
+      boundaryMode: guardResult.mode,
+      boundaryDecisionId: audit.decisionId,
       boundaryGuardCodes: guardResult.guardCodes,
-      boundaryAuditRecorded,
+      boundaryAuditRecorded: audit.status === 'inserted',
+      boundaryAuditStatus: audit.status,
+      previousEpisodeId,
+      reviewerRawResultStatus: trace?.reviewerInvoked ? 'invoked' : 'not_invoked',
       warnings: guardResult.warnings.map((warning) => warning.code),
     };
+    });
   }
 
   appendEvent(event: MemoryEvent, input: { projectId: string; sessionId: string; sourceAgent?: string; now?: number }): EpisodeAssemblyResult {
@@ -294,16 +324,31 @@ export class EpisodeAssembler {
       const payload = event.payload as { metadata?: Record<string, unknown> } | undefined;
       return payload?.metadata?.imported === true || payload?.metadata?.sourceRef !== undefined;
     });
-    const localDates = episode
-      ? this.store.listEventLinks(episode.episodeId)
-        .map((link) => this.resolveEvent?.(link.eventId)?.localDate)
-        .filter((date): date is string => Boolean(date))
-      : [];
+    const snapshot = episode ? this.store.getBoundarySnapshot(episode.episodeId) : undefined;
     return this.boundaryPolicy.evaluate({
-      active: episode ? { eventCount: episode.eventCount, startedAt: episode.startedAt, updatedAt: episode.updatedAt, localDates } : undefined,
+      active: snapshot ? {
+        eventCount: snapshot.eventCount,
+        startedAt: snapshot.startedAt,
+        updatedAt: snapshot.updatedAt,
+        localDates: snapshot.trustedLocalDates,
+        lastTrustedLocalDate: snapshot.lastTrustedLocalDate,
+      } : undefined,
       primaryEvent: primary,
       imported,
     });
+  }
+
+  private recordBoundaryDecisionSafe(
+    enabled: boolean,
+    input: Parameters<EpisodeStore['recordBoundaryDecision']>[0],
+  ): { status: 'disabled' | 'inserted' | 'duplicate' | 'failed' | 'not_applicable'; decisionId?: string } {
+    if (!enabled) return { status: this.boundaryPolicy.config.auditDecisions ? 'not_applicable' : 'disabled' };
+    try {
+      const result = this.store.recordBoundaryDecision(input);
+      return { status: result.status, decisionId: result.decisionId };
+    } catch {
+      return { status: 'failed' };
+    }
   }
 }
 
@@ -318,16 +363,4 @@ function summaryLine(event: MemoryEvent): string {
 
 function averageConfidence(links: Array<{ confidence: number }>): number {
   return links.length ? links.reduce((total, link) => total + link.confidence, 0) / links.length : 0;
-}
-
-function hardBoundaryDecision(cpuDecision: TurnRelationDecision, guard: EpisodeBoundaryGuardResult): TurnRelationDecision {
-  return {
-    ...cpuDecision,
-    relation: 'starts_new_topic',
-    confidence: 1,
-    closureCandidate: true,
-    switchKind: 'hard',
-    signals: [...new Set([...cpuDecision.signals, ...guard.guardCodes, 'episode_boundary_guardrail'])],
-    rationale: `episode_boundary_guardrail:${guard.guardCodes.join(',')}`,
-  };
 }

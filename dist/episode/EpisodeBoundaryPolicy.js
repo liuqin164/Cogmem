@@ -18,9 +18,17 @@ export function normalizeEpisodeBoundaryConfig(input = {}) {
     config.applyToLive = input.applyToLive ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.applyToLive;
     config.applyToImports = input.applyToImports ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.applyToImports;
     config.splitOnTrustedLocalDateChange = input.splitOnTrustedLocalDateChange ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.splitOnTrustedLocalDateChange;
-    config.mode = input.mode === 'off' || input.mode === 'shadow' || input.mode === 'enforce'
-        ? input.mode
-        : DEFAULT_EPISODE_BOUNDARY_CONFIG.mode;
+    if (input.mode === 'off' || input.mode === 'shadow' || input.mode === 'enforce' || input.mode === undefined) {
+        config.mode = input.mode ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.mode;
+    }
+    else {
+        diagnostics.push({
+            severity: 'warning',
+            code: 'invalid_episode_boundary_mode',
+            message: 'episode_boundary.mode must be off, shadow, or enforce. Falling back to shadow.',
+        });
+        config.mode = 'shadow';
+    }
     config.maxEvents = boundedInt(input.maxEvents, 20, 500, DEFAULT_EPISODE_BOUNDARY_CONFIG.maxEvents, 'max_events', diagnostics);
     config.maxDurationMs = boundedInt(input.maxDurationMs, 300_000, 86_400_000, DEFAULT_EPISODE_BOUNDARY_CONFIG.maxDurationMs, 'max_duration_ms', diagnostics);
     config.maxIdleGapMs = boundedInt(input.maxIdleGapMs, 300_000, 86_400_000, DEFAULT_EPISODE_BOUNDARY_CONFIG.maxIdleGapMs, 'max_idle_gap_ms', diagnostics);
@@ -43,8 +51,20 @@ export class EpisodeBoundaryPolicy {
     }
     evaluate(input) {
         const warnings = [];
-        const localDate = trustedLocalDate(input.primaryEvent, this.config, warnings);
         const localDates = [...new Set(input.active?.localDates || [])];
+        const shouldEvaluate = Boolean(input.active
+            && input.primaryEvent.role === 'user'
+            && this.config.enabled
+            && this.config.mode !== 'off'
+            && (input.imported ? this.config.applyToImports : this.config.applyToLive));
+        const localDate = shouldEvaluate && this.config.splitOnTrustedLocalDateChange
+            ? trustedLocalDate(input.primaryEvent, this.config, warnings)
+            : undefined;
+        const currentTime = input.primaryEvent.occurredAt;
+        const outOfOrderTimestamp = shouldEvaluate && input.active?.updatedAt !== undefined
+            && currentTime !== undefined && currentTime < input.active.updatedAt;
+        if (outOfOrderTimestamp)
+            warnings.push({ code: 'out_of_order_timestamp', message: 'Event timestamp is earlier than the active episode update time.' });
         const metrics = {
             activeEventCount: input.active?.eventCount || 0,
             activeStartedAt: input.active?.startedAt,
@@ -54,19 +74,19 @@ export class EpisodeBoundaryPolicy {
             idleGapMs: input.active?.updatedAt !== undefined && input.primaryEvent.occurredAt
                 ? input.primaryEvent.occurredAt - input.active.updatedAt : undefined,
             trustedLocalDates: localDates,
+            lastTrustedLocalDate: input.active?.lastTrustedLocalDate,
             currentTrustedLocalDate: localDate,
+            outOfOrderTimestamp,
         };
-        const disabled = !this.config.enabled || this.config.mode === 'off'
-            || (input.imported ? !this.config.applyToImports : !this.config.applyToLive);
         const guardCodes = [];
-        if (!disabled && input.active && input.primaryEvent.role === 'user') {
+        if (shouldEvaluate && input.active) {
             if (input.active.eventCount >= this.config.maxEvents)
                 guardCodes.push('max_events_exceeded');
             if ((metrics.elapsedMs ?? 0) > this.config.maxDurationMs)
                 guardCodes.push('max_duration_exceeded');
             if ((metrics.idleGapMs ?? 0) > this.config.maxIdleGapMs)
                 guardCodes.push('max_idle_gap_exceeded');
-            if (this.config.splitOnTrustedLocalDateChange && localDate && localDates.length > 0 && !localDates.includes(localDate)) {
+            if (this.config.splitOnTrustedLocalDateChange && localDate && input.active.lastTrustedLocalDate && input.active.lastTrustedLocalDate !== localDate) {
                 guardCodes.push('trusted_local_date_changed');
             }
         }
@@ -93,8 +113,12 @@ function boundedInt(value, min, max, fallback, name, diagnostics) {
     return Math.trunc(value);
 }
 function trustedLocalDate(event, config, warnings) {
-    if (event.localDate)
+    if (event.localDate && /^\d{4}-\d{2}-\d{2}$/.test(event.localDate))
         return event.localDate;
+    if (event.localDate) {
+        warnings.push({ code: 'invalid_trusted_local_date', message: 'Trusted local date must use YYYY-MM-DD.' });
+        return undefined;
+    }
     if (config.timezone && event.occurredAt) {
         return new Intl.DateTimeFormat('en-CA', {
             timeZone: config.timezone, year: 'numeric', month: '2-digit', day: '2-digit',

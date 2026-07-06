@@ -145,6 +145,31 @@ test('MCP import reports per-message checkpoints and warns for generated split-b
   }
 });
 
+test('MCP generic import preserves turn and local date metadata', async () => {
+  const { dir, kernel } = createTestKernel('cogmem-mcp-import-turn-metadata-');
+  try {
+    const result = await callCogmemMcpTool('cogmem_episode_import', {
+      projectId: 'brain', sessionId: 's1', sourceAgent: 'hermes',
+      messages: [{
+        role: 'user', text: 'turn metadata survives import', externalMessageId: 'meta-1',
+        threadId: 'thread-7', turnId: 'turn-7', turnSeq: 7, localDate: '2026-07-06', eventOrdinal: 2,
+      }],
+    }, { kernel });
+    const content = result.structuredContent as { messageResults: Array<{ eventId: string }> };
+    const event = kernel.eventStore.getEvent(content.messageResults[0].eventId);
+    expect(event).toEqual(expect.objectContaining({
+      threadId: 'thread-7',
+      turnId: 'turn-7',
+      turnSeq: 7,
+      localDate: '2026-07-06',
+      eventOrdinal: 2,
+    }));
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('MCP append/import use the background hybrid classifier while foreground append stays CPU-only', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-mcp-hybrid-'));
   let reviews = 0;

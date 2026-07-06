@@ -124,7 +124,7 @@ export class EpisodeStore {
             const importanceSignals = [...new Set([...episode.importanceSignals, ...(input.importanceSignals || [])])];
             this.db.prepare(`
         UPDATE memory_episodes SET
-          end_event_id = ?, end_seq = COALESCE(?, end_seq), event_count = ?, updated_at = ?,
+          end_event_id = ?, end_seq = COALESCE(?, end_seq), event_count = ?, updated_at = MAX(updated_at, ?),
           episode_type = COALESCE(?, episode_type), importance = MAX(importance, ?),
           summary = CASE WHEN ? IS NULL OR ? = '' THEN summary ELSE SUBSTR(COALESCE(summary || '\n', '') || ?, 1, 1600) END,
           candidate_types_json = ?, importance_signals_json = ?, importance_reason = COALESCE(?, importance_reason)
@@ -141,6 +141,34 @@ export class EpisodeStore {
         return this.db.prepare(`
       SELECT * FROM memory_episode_events WHERE episode_id = ? ORDER BY position
     `).all(episodeId).map(mapEventLink);
+    }
+    getBoundarySnapshot(episodeId) {
+        const episode = this.getEpisode(episodeId);
+        if (!episode)
+            throw new Error(`episode_not_found:${episodeId}`);
+        if (!this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_events'`).get()) {
+            return { eventCount: episode.eventCount, startedAt: episode.startedAt, updatedAt: episode.updatedAt, trustedLocalDates: [] };
+        }
+        const dates = this.db.prepare(`
+      SELECT DISTINCT e.local_date AS local_date
+      FROM memory_episode_events ee
+      JOIN memory_events e ON e.event_id = ee.event_id
+      WHERE ee.episode_id = ? AND e.local_date GLOB '????-??-??'
+      ORDER BY ee.position DESC
+      LIMIT 8
+    `).all(episodeId)
+            .map((row) => row.local_date)
+            .filter((date) => Boolean(date));
+        return {
+            eventCount: episode.eventCount,
+            startedAt: episode.startedAt,
+            updatedAt: episode.updatedAt,
+            lastTrustedLocalDate: dates[0],
+            trustedLocalDates: [...new Set(dates)].reverse(),
+        };
+    }
+    transaction(fn) {
+        return this.db.transaction(fn)();
     }
     isEpisodeEmpty(episodeId) {
         const episode = this.getEpisode(episodeId);
@@ -232,7 +260,10 @@ export class EpisodeStore {
         reviewer_decision_json, final_decision_json, warnings_json, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(decisionId, input.projectId, input.sessionId, input.sourceAgent || null, input.threadId || null, input.primaryEventId, input.previousEpisodeId || null, input.resultingEpisodeId || null, input.policyVersion, input.mode, input.guardAction, JSON.stringify(input.guardCodes), JSON.stringify(input.metrics), JSON.stringify(safeDecision(input.cpuDecision)), input.reviewerInvoked ? 1 : 0, input.reviewerDecision ? JSON.stringify(safeDecision(input.reviewerDecision)) : null, JSON.stringify(safeDecision(input.finalDecision)), JSON.stringify(input.warnings), input.createdAt ?? Date.now());
-        return Number(result.changes || 0) > 0;
+        if (Number(result.changes || 0) > 0)
+            return { recorded: true, decisionId, status: 'inserted' };
+        const existing = this.listBoundaryDecisions({ projectId: input.projectId, primaryEventId: input.primaryEventId, limit: 1 })[0];
+        return { recorded: false, decisionId: existing?.decisionId, status: 'duplicate' };
     }
     listBoundaryDecisions(options = {}) {
         const where = [];

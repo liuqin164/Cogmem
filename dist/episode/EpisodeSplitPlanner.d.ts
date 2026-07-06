@@ -2,7 +2,10 @@ import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeStore } from './EpisodeStore.js';
 export interface EpisodeSplitPlanSegment {
     segmentIndex: number;
-    eventIds: string[];
+    eventIds?: string[];
+    eventIdsHash: string;
+    eventIdsOmitted: number;
+    eventIdsCursor?: string;
     startEventId?: string;
     endEventId?: string;
     eventCount: number;
@@ -15,6 +18,9 @@ export interface EpisodeSplitPlan {
     sourceFingerprint: string;
     segments: EpisodeSplitPlanSegment[];
     warnings: string[];
+    unresolvedEventCount: number;
+    missingRawEventIds: string[];
+    evidenceIntegrityStatus: 'ok' | 'missing_raw_events';
     requiresManualReview: boolean;
     applyableInCurrentVersion: false;
     applyCommand: null;

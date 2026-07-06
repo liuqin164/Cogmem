@@ -28,6 +28,10 @@ export interface EpisodeBoundaryAuditItem {
     systemEventCount: number;
     outOfOrderEventCount: number;
     sourceFingerprint: string;
+    unresolvedEventCount: number;
+    missingRawEventIds: string[];
+    evidenceIntegrityStatus: 'ok' | 'missing_raw_events';
+    requiresManualReview: boolean;
     severity: 'info' | 'warning' | 'critical';
     reasons: string[];
     warnings: string[];

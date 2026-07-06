@@ -16,6 +16,11 @@ const EPISODE_MESSAGE_SCHEMA = {
         text: STRING_SCHEMA,
         externalMessageId: STRING_SCHEMA,
         timestamp: NUMBER_SCHEMA,
+        threadId: STRING_SCHEMA,
+        turnId: STRING_SCHEMA,
+        turnSeq: NUMBER_SCHEMA,
+        localDate: STRING_SCHEMA,
+        eventOrdinal: NUMBER_SCHEMA,
     },
     required: ['role', 'text'],
 };
@@ -118,6 +123,7 @@ export function listCogmemMcpTools() {
                     projectId: STRING_SCHEMA, sessionId: STRING_SCHEMA, sourceAgent: STRING_SCHEMA,
                     role: { type: 'string', enum: ['user', 'assistant', 'agent', 'tool', 'system', 'narrator'] },
                     text: STRING_SCHEMA, externalMessageId: STRING_SCHEMA, timestamp: NUMBER_SCHEMA,
+                    threadId: STRING_SCHEMA, turnId: STRING_SCHEMA, turnSeq: NUMBER_SCHEMA, localDate: STRING_SCHEMA, eventOrdinal: NUMBER_SCHEMA,
                 },
                 required: ['projectId', 'sessionId', 'sourceAgent', 'role', 'text', 'externalMessageId'],
             },
@@ -510,6 +516,8 @@ async function episodeAppend(kernel, input) {
         sourceAgent: requiredString(input.sourceAgent, 'sourceAgent'),
         role: requiredEpisodeRole(input.role), text,
         externalMessageId: requiredString(input.externalMessageId, 'externalMessageId'), timestamp: optionalNumber(input.timestamp),
+        threadId: optionalString(input.threadId), turnId: optionalString(input.turnId), turnSeq: optionalNumber(input.turnSeq),
+        localDate: optionalString(input.localDate), eventOrdinal: optionalNumber(input.eventOrdinal),
     }));
 }
 async function episodeImport(kernel, input) {
@@ -538,6 +546,11 @@ async function episodeImport(kernel, input) {
             autoIdentityUsed = true;
         return {
             role, text, timestamp,
+            threadId: optionalString(message.threadId),
+            turnId: optionalString(message.turnId),
+            turnSeq: optionalNumber(message.turnSeq),
+            localDate: optionalString(message.localDate),
+            eventOrdinal: optionalNumber(message.eventOrdinal),
             externalMessageId: suppliedIdentity
                 || stableIdentity({ role, text, timestamp }),
         };

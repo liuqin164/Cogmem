@@ -21,7 +21,9 @@ export class EpisodeBoundaryAuditService {
     }
     auditEpisode(episode, config) {
         const links = this.store.listEventLinks(episode.episodeId);
-        const events = links.map((link) => this.resolveEvent?.(link.eventId)).filter((event) => Boolean(event));
+        const pairs = links.map((link) => ({ link, event: this.resolveEvent?.(link.eventId) || undefined }));
+        const events = pairs.map((item) => item.event).filter((event) => Boolean(event));
+        const missingRawEventIds = pairs.filter((item) => !item.event).map((item) => item.link.eventId);
         const times = events.map((event) => event.occurredAt).filter((value) => typeof value === 'number');
         const dates = [...new Set(events.map((event) => event.localDate).filter((value) => Boolean(value)))];
         const relationCounts = {};
@@ -36,6 +38,8 @@ export class EpisodeBoundaryAuditService {
         const outOfOrderEventCount = events.filter((event, index) => index > 0 && (event.occurredAt || 0) < (events[index - 1].occurredAt || 0)).length;
         if (episode.eventCount !== links.length)
             reasons.push('stored_actual_event_count_mismatch');
+        if (missingRawEventIds.length > 0)
+            reasons.push('unresolved_raw_events');
         if (links.length > config.maxEvents)
             reasons.push('event_count_exceeds_max');
         if (durationMs > config.maxDurationMs)
@@ -56,7 +60,7 @@ export class EpisodeBoundaryAuditService {
             warnings.push('trusted_local_date_unavailable');
         const critical = reasons.some((reason) => [
             'stored_actual_event_count_mismatch', 'event_count_exceeds_max', 'duration_exceeds_max',
-            'user_turn_idle_gap_exceeds_max', 'multiple_trusted_local_dates',
+            'user_turn_idle_gap_exceeds_max', 'multiple_trusted_local_dates', 'unresolved_raw_events',
         ].includes(reason));
         return {
             episodeId: episode.episodeId,
@@ -84,7 +88,11 @@ export class EpisodeBoundaryAuditService {
             toolEventCount: events.filter((event) => event.role === 'tool').length,
             systemEventCount: events.filter((event) => event.role === 'system').length,
             outOfOrderEventCount,
-            sourceFingerprint: sourceFingerprint(links.map((link, index) => ({ ...link, event: events[index] }))),
+            sourceFingerprint: sourceFingerprint(pairs.map((item) => ({ ...item.link, event: item.event }))),
+            unresolvedEventCount: missingRawEventIds.length,
+            missingRawEventIds: missingRawEventIds.slice(0, 50),
+            evidenceIntegrityStatus: missingRawEventIds.length ? 'missing_raw_events' : 'ok',
+            requiresManualReview: missingRawEventIds.length > 0,
             severity: critical ? 'critical' : reasons.length ? 'warning' : 'info',
             reasons,
             warnings,
