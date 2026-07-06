@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeStore } from './EpisodeStore.js';
 import type { EpisodeEventLink, TurnRelation } from './EpisodeTypes.js';
-import { DEFAULT_EPISODE_BOUNDARY_CONFIG } from './EpisodeBoundaryPolicy.js';
+import { normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
 
 export const EPISODE_SPLIT_PLANNER_VERSION = 'episode_split_preview.v1';
 
@@ -87,13 +87,14 @@ export class EpisodeSplitPlanner {
     const pairs = links.map((link) => ({ link, event: this.resolveEvent?.(link.eventId) || undefined }));
     const events = pairs.map((item) => item.event).filter((event): event is MemoryEvent => Boolean(event));
     const missingRawEventIds = pairs.filter((item) => !item.event).map((item) => item.link.eventId);
+    const normalized = normalizeEpisodeBoundaryConfig(options);
     const policy = {
-      maxEvents: Math.max(1, Math.trunc(options.maxEvents ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.maxEvents)),
-      maxDurationMs: Math.max(1, Math.trunc(options.maxDurationMs ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.maxDurationMs)),
-      maxIdleGapMs: Math.max(1, Math.trunc(options.maxIdleGapMs ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.maxIdleGapMs)),
-      timezone: options.timezone,
+      maxEvents: normalized.config.maxEvents,
+      maxDurationMs: normalized.config.maxDurationMs,
+      maxIdleGapMs: normalized.config.maxIdleGapMs,
+      timezone: normalized.config.timezone,
     };
-    const warnings: string[] = [];
+    const warnings: string[] = normalized.diagnostics.map((item) => item.code);
     if (missingRawEventIds.length) warnings.push('unresolved_raw_events');
     if (events[0] && events[0].role !== 'user') warnings.push('leading_non_user_event');
     const userCount = events.filter((event) => event.role === 'user').length;
@@ -143,7 +144,7 @@ export class EpisodeSplitPlanner {
       sourceFingerprint: fingerprint,
       normalizedPolicy: policy,
       proposedBoundaries,
-      impactInventory: impactInventory(pairs),
+      impactInventory: impactInventory(pairs, policy.timezone),
       segments,
       warnings,
       unresolvedEventCount: missingRawEventIds.length,
@@ -292,9 +293,9 @@ function roleCounts(pairs: Pair[]) {
   };
 }
 
-function impactInventory(pairs: Pair[]): EpisodeSplitImpactInventory {
+function impactInventory(pairs: Pair[], timezone?: string): EpisodeSplitImpactInventory {
   const counts = roleCounts(pairs);
-  const dates = pairs.map((item) => trustedLocalDate(item.event)).filter((value): value is string => Boolean(value));
+  const dates = pairs.map((item) => trustedLocalDate(item.event, timezone)).filter((value): value is string => Boolean(value));
   return {
     eventCount: pairs.length,
     ...counts,

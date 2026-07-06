@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
-import { DEFAULT_EPISODE_BOUNDARY_CONFIG } from './EpisodeBoundaryPolicy.js';
+import { normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
 import type { EpisodeStore } from './EpisodeStore.js';
 import type { EpisodeStatus, TurnRelation } from './EpisodeTypes.js';
 
@@ -20,6 +20,7 @@ export interface EpisodeBoundaryAuditItem {
   durationMs: number;
   maxEventGapMs: number;
   maxUserTurnGapMs: number;
+  maxBoundaryIdleGapMs: number;
   trustedLocalDates: string[];
   localDateConfidence: 'trusted' | 'unknown';
   crossesTrustedLocalDate: boolean;
@@ -72,7 +73,7 @@ export class EpisodeBoundaryAuditService {
       limit,
       cursor: options.cursor,
     });
-    const config = boundaryConfig(options);
+    const config = normalizeEpisodeBoundaryConfig(options).config;
     const items = page.episodes.map((episode) => this.auditEpisode(episode, config));
     return { items, nextCursor: page.nextCursor };
   }
@@ -98,12 +99,13 @@ export class EpisodeBoundaryAuditService {
     const durationMs = times.length ? Math.max(...times) - Math.min(...times) : 0;
     const maxEventGapMs = maxGap(times);
     const maxUserTurnGapMs = maxGap(userTimes);
+    const maxBoundaryIdleGapMs = maxBoundaryIdleGap(pairs);
     const outOfOrderEventCount = events.filter((event, index) => index > 0 && (event.occurredAt || 0) < (events[index - 1].occurredAt || 0)).length;
     if (episode.eventCount !== links.length) reasons.push('stored_actual_event_count_mismatch');
     if (missingRawEventIds.length > 0) reasons.push('unresolved_raw_events');
     if (links.length > config.maxEvents) reasons.push('event_count_exceeds_max');
     if (durationMs > config.maxDurationMs) reasons.push('duration_exceeds_max');
-    if (maxUserTurnGapMs > config.maxIdleGapMs) reasons.push('user_turn_idle_gap_exceeds_max');
+    if (maxBoundaryIdleGapMs > config.maxIdleGapMs) reasons.push('boundary_idle_gap_exceeds_max');
     if (dates.length > 1) reasons.push('multiple_trusted_local_dates');
     if (outOfOrderEventCount > 0) reasons.push('out_of_order_events');
     if ((relationCounts.ambiguous_shift || 0) > 1) reasons.push('repeated_ambiguous_shifts');
@@ -112,7 +114,7 @@ export class EpisodeBoundaryAuditService {
     if (!dates.length) warnings.push('trusted_local_date_unavailable');
     const critical = reasons.some((reason) => [
       'stored_actual_event_count_mismatch', 'event_count_exceeds_max', 'duration_exceeds_max',
-      'user_turn_idle_gap_exceeds_max', 'multiple_trusted_local_dates', 'unresolved_raw_events',
+      'boundary_idle_gap_exceeds_max', 'multiple_trusted_local_dates', 'unresolved_raw_events',
     ].includes(reason));
     return {
       episodeId: episode.episodeId,
@@ -129,6 +131,7 @@ export class EpisodeBoundaryAuditService {
       durationMs,
       maxEventGapMs,
       maxUserTurnGapMs,
+      maxBoundaryIdleGapMs,
       trustedLocalDates: dates,
       localDateConfidence: dates.length ? 'trusted' : 'unknown',
       crossesTrustedLocalDate: dates.length > 1,
@@ -160,6 +163,18 @@ function maxGap(values: number[]): number {
   return max;
 }
 
+function maxBoundaryIdleGap(pairs: Array<{ event?: MemoryEvent }>): number {
+  let max = 0;
+  for (let index = 1; index < pairs.length; index += 1) {
+    const event = pairs[index].event;
+    const previous = pairs[index - 1].event;
+    if (event?.role !== 'user') continue;
+    if (typeof event.occurredAt !== 'number' || typeof previous?.occurredAt !== 'number') continue;
+    max = Math.max(max, event.occurredAt - previous.occurredAt);
+  }
+  return max;
+}
+
 function hardShiftCount(counts: Record<string, number>): number {
   return (counts.hard_topic_switch || 0) + (counts.starts_new_topic || 0) + (counts.switches_topic || 0);
 }
@@ -180,21 +195,6 @@ function sourceFingerprint(items: Array<{ eventId: string; relation: TurnRelatio
     ]));
   }
   return hash.digest('hex');
-}
-
-function boundaryConfig(options: {
-  maxEvents?: number;
-  maxDurationMs?: number;
-  maxIdleGapMs?: number;
-  timezone?: string;
-}): EpisodeBoundaryConfig {
-  return {
-    ...DEFAULT_EPISODE_BOUNDARY_CONFIG,
-    maxEvents: options.maxEvents ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.maxEvents,
-    maxDurationMs: options.maxDurationMs ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.maxDurationMs,
-    maxIdleGapMs: options.maxIdleGapMs ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.maxIdleGapMs,
-    timezone: options.timezone ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.timezone,
-  };
 }
 
 function trustedLocalDate(event: MemoryEvent, timezone?: string): string | undefined {

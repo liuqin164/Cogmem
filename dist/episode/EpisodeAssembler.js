@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { eventTextForMemory } from './CogmemBlockStripper.js';
 import { classifyAssistantRelation, classifyTurnRelation, classifyTurnRelationHybridTrace } from './TurnRelationClassifier.js';
 import { EpisodeBoundaryPolicy } from './EpisodeBoundaryPolicy.js';
@@ -45,6 +46,7 @@ export class EpisodeAssembler {
             finalDecision: reviewed.finalDecision,
             observedEpisodeId: episode?.episodeId,
             observedEpisodeEventCount: episode?.eventCount,
+            observedEpisodeFingerprint: episodeBoundaryFingerprint(episode),
         });
     }
     appendTurnClassified(events, input, decisionOverride, trace) {
@@ -65,7 +67,10 @@ export class EpisodeAssembler {
                 legacyLinkedEpisodeId = legacyEpisodeId;
         }
         const freshGuardResult = this.evaluateBoundary(episode, primary, ordered);
-        const staleTrace = Boolean(trace && (trace.observedEpisodeId !== episode?.episodeId || trace.observedEpisodeEventCount !== episode?.eventCount));
+        const currentEpisodeFingerprint = episodeBoundaryFingerprint(episode);
+        const staleTrace = Boolean(trace && (trace.observedEpisodeFingerprint !== undefined
+            ? trace.observedEpisodeFingerprint !== currentEpisodeFingerprint
+            : trace.observedEpisodeId !== episode?.episodeId || trace.observedEpisodeEventCount !== episode?.eventCount));
         const cpuDecision = staleTrace ? this.classifyPrimary(primary, episode, ordered) : trace?.cpuDecision ?? this.classifyPrimary(primary, episode, ordered);
         const guardResult = freshGuardResult;
         let decision = staleTrace ? cpuDecision : decisionOverride ?? trace?.finalDecision ?? cpuDecision;
@@ -420,6 +425,18 @@ function boundaryReasonCode(result) {
     if (result.guardCodes.includes('trusted_local_date_changed'))
         return 'local_date_boundary';
     return 'manual';
+}
+function episodeBoundaryFingerprint(episode) {
+    if (!episode)
+        return undefined;
+    return createHash('sha256').update(JSON.stringify([
+        episode.episodeId,
+        episode.status,
+        episode.eventCount,
+        episode.endEventId,
+        episode.updatedAt,
+        episode.sealedAt,
+    ])).digest('hex');
 }
 function eventRelation(event, primary, decision) {
     if (event.role === 'assistant' || event.role === 'agent')

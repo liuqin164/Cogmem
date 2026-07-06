@@ -16,6 +16,7 @@ export interface EpisodeBoundaryAuditItem {
     durationMs: number;
     maxEventGapMs: number;
     maxUserTurnGapMs: number;
+    maxBoundaryIdleGapMs: number;
     trustedLocalDates: string[];
     localDateConfidence: 'trusted' | 'unknown';
     crossesTrustedLocalDate: boolean;

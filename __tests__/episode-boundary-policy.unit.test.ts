@@ -250,6 +250,37 @@ test('reviewer trace is persisted and stale async reviewer decisions are ignored
   }
 });
 
+test('async reviewer stale check ignores status-only episode changes', async () => {
+  let firstEpisodeId = '';
+  const { dir, kernel } = createTestKernel('cogmem-boundary-reviewer-status-stale-', {
+    turnRelationReviewer: {
+      review: async () => {
+        kernel.sealEpisode(firstEpisodeId, { mode: 'soft', reason: 'manual_soft_seal', now: 10 });
+        return { relation: 'starts_new_topic', confidence: 0.99, rationale: 'stale reviewer split' };
+      },
+    },
+  });
+  try {
+    const first = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'status-race', sourceAgent: 'hermes',
+      role: 'user', text: '我们讨论一个主题。', externalMessageId: 'sr-u1', timestamp: 1,
+    });
+    firstEpisodeId = first.episodeId!;
+    const raced = await kernel.appendEpisodeMessageAsync({
+      projectId: 'brain', sessionId: 'status-race', sourceAgent: 'hermes',
+      role: 'user', text: '一个隐含的新话题需要 reviewer。', externalMessageId: 'sr-u2', timestamp: 20,
+    });
+    expect(raced.reviewerRawResultStatus).toBe('stale_ignored');
+    const decision = kernel.listEpisodeBoundaryDecisions({ projectId: 'brain', primaryEventId: raced.eventId })[0];
+    expect(decision.reviewerInvoked).toBe(true);
+    expect(decision.reviewerDecision).toBeUndefined();
+    expect(decision.finalDecision.relation).not.toBe('starts_new_topic');
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('boundary audit write failures surface non-fatal warning', () => {
   const { dir, kernel } = createTestKernel('cogmem-boundary-audit-failure-');
   try {

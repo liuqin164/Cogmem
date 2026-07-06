@@ -57,7 +57,7 @@ function seedEpisode(kernel: ReturnType<typeof createMemoryKernel>, input: {
 test('auditEpisodeBoundaries reports oversized, duration, idle, date, mismatch, zero-user, and remains read-only', () => {
   const { dir, kernel } = createTestKernel('cogmem-boundary-audit-');
   try {
-    const firstEpisodeId = seedEpisode(kernel, { projectId: 'brain', sessionId: 'audit', eventCount: 150, prefix: 'audit' });
+    const firstEpisodeId = seedEpisode(kernel, { projectId: 'brain', sessionId: 'audit', eventCount: 150, prefix: 'audit', gapMs: 600_000 });
     const event = kernel.recordRawEvent({
       projectId: 'brain', workspaceId: 'brain', threadId: 'zero', sessionId: 'zero',
       role: 'assistant', content: 'assistant-only legacy tail', sourceId: 'test', occurredAt: 20_000_000,
@@ -70,16 +70,17 @@ test('auditEpisodeBoundaries reports oversized, duration, idle, date, mismatch, 
     kernel.factStore.getDatabase().prepare(`UPDATE memory_episodes SET event_count = event_count + 1 WHERE episode_id = ?`).run(firstEpisodeId);
 
     const before = businessHash(kernel);
-    const audit = kernel.auditEpisodeBoundaries({ projectId: 'brain', maxEvents: 100, maxDurationMs: 1_000, maxIdleGapMs: 500, limit: 10 });
+    const audit = kernel.auditEpisodeBoundaries({ projectId: 'brain', maxEvents: 100, maxDurationMs: 300_000, maxIdleGapMs: 300_000, limit: 10 });
     const after = businessHash(kernel);
 
     expect(after).toBe(before);
     expect(audit.items.find((item) => item.episodeId === firstEpisodeId)).toEqual(expect.objectContaining({
       severity: 'critical',
-      reasons: expect.arrayContaining(['stored_actual_event_count_mismatch', 'event_count_exceeds_max', 'duration_exceeds_max', 'user_turn_idle_gap_exceeds_max']),
+      reasons: expect.arrayContaining(['stored_actual_event_count_mismatch', 'event_count_exceeds_max', 'duration_exceeds_max', 'boundary_idle_gap_exceeds_max']),
       recommendedAction: 'split-plan',
       evidenceIntegrityStatus: 'ok',
       unresolvedEventCount: 0,
+      maxBoundaryIdleGapMs: 600_000,
     }));
     expect(kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId: firstEpisodeId }).items[0].reasons)
       .toEqual(expect.arrayContaining(['event_count_exceeds_max', 'duration_exceeds_max']));
@@ -95,6 +96,50 @@ test('auditEpisodeBoundaries reports oversized, duration, idle, date, mismatch, 
       cursor = page.nextCursor;
     } while (cursor);
     expect(seen).toEqual(new Set([firstEpisodeId, zero.episodeId]));
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('audit idle gap uses online boundary semantics instead of user-to-user gap', () => {
+  const { dir, kernel } = createTestKernel('cogmem-boundary-audit-idle-semantics-');
+  try {
+    const base = 1_000_000;
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'brain', sessionId: 'idle', sourceAgent: 'test', conversationThreadId: 'idle',
+      episodeType: 'discussion', importance: 0.4, eventId: 'idle-start', occurredAt: base,
+    });
+    const rows = [
+      ['u0', 'user', base],
+      ['a40', 'assistant', base + 40 * 60_000],
+      ['u50', 'user', base + 50 * 60_000],
+    ] as const;
+    for (const [id, role, occurredAt] of rows) {
+      const event = kernel.recordRawEvent({
+        eventId: id, projectId: 'brain', workspaceId: 'brain', threadId: 'idle', sessionId: 'idle',
+        role, content: id, sourceId: 'test', occurredAt, localDate: '2026-07-06',
+      });
+      kernel.episodeStore.appendEvent({
+        episodeId: episode.episodeId, eventId: event.eventId,
+        relation: role === 'assistant' ? 'assistant_response' : 'continues_previous',
+        confidence: 1, occurredAt,
+      });
+    }
+
+    const audit = kernel.auditEpisodeBoundaries({
+      projectId: 'brain', episodeId: episode.episodeId,
+      maxEvents: 20, maxDurationMs: 7_200_000, maxIdleGapMs: 30 * 60_000,
+    }).items[0];
+    expect(audit.maxUserTurnGapMs).toBe(50 * 60_000);
+    expect(audit.maxBoundaryIdleGapMs).toBe(10 * 60_000);
+    expect(audit.reasons).not.toContain('user_turn_idle_gap_exceeds_max');
+    expect(audit.reasons).not.toContain('boundary_idle_gap_exceeds_max');
+    expect(audit.recommendedAction).toBe('none');
+    expect(kernel.planEpisodeSplit({
+      projectId: 'brain', episodeId: episode.episodeId,
+      maxEvents: 20, maxDurationMs: 7_200_000, maxIdleGapMs: 30 * 60_000, includeEventIds: true,
+    }).segments).toHaveLength(1);
   } finally {
     kernel.close();
     rmSync(dir, { recursive: true, force: true });
@@ -216,10 +261,23 @@ test('audit and split-plan preserve link/event pairing when raw events are missi
 test('split-plan bounds event id output even when includeEventIds is true', () => {
   const { dir, kernel } = createTestKernel('cogmem-split-bounded-ids-');
   try {
-    const episodeId = seedEpisode(kernel, { projectId: 'brain', sessionId: 'big', eventCount: 520, prefix: 'big' });
-    kernel.factStore.getDatabase().prepare(`UPDATE memory_events SET local_date = ? WHERE session_id = ?`).run('2026-07-04', 'big');
+    let episodeId = '';
+    for (let index = 0; index < 520; index += 1) {
+      const event = kernel.recordRawEvent({
+        projectId: 'brain', workspaceId: 'brain', threadId: 'big', sessionId: 'big',
+        role: 'assistant', content: `big event ${index}`, sourceId: 'test',
+        occurredAt: 1_000 + index, eventOrdinal: index, localDate: '2026-07-04',
+      });
+      if (!episodeId) {
+        episodeId = kernel.episodeStore.createEpisode({
+          projectId: 'brain', sessionId: 'big', sourceAgent: 'test', conversationThreadId: 'big',
+          episodeType: 'discussion', importance: 0.2, eventId: event.eventId, occurredAt: event.occurredAt,
+        }).episodeId;
+      }
+      kernel.episodeStore.appendEvent({ episodeId, eventId: event.eventId, relation: 'assistant_response', confidence: 1, occurredAt: event.occurredAt });
+    }
     const plan = kernel.planEpisodeSplit({
-      projectId: 'brain', episodeId, maxEvents: 1000, maxDurationMs: 86_400_000, maxIdleGapMs: 86_400_000, includeEventIds: true,
+      projectId: 'brain', episodeId, maxEvents: 500, maxDurationMs: 86_400_000, maxIdleGapMs: 86_400_000, includeEventIds: true,
     });
     expect(plan.segments).toHaveLength(1);
     expect(plan.segments[0].eventIds).toBeUndefined();
