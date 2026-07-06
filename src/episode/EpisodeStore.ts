@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
 import type { MemoryEvent } from '../types/index.js';
+import { sealDuplicateOpenEpisodes } from './EpisodeActiveScopeGuard.js';
 import { summarizeEpisode } from './EpisodeSemanticSummarizer.js';
 
 import type {
@@ -278,14 +279,17 @@ export class EpisodeStore {
       WHERE ee.episode_id = ?
     `).get(episodeId) as { occurred_at?: number | null } | null)?.occurred_at ?? undefined;
     const userDateRows = (this.db.prepare(`
-      SELECT e.local_date AS local_date, e.occurred_at AS occurred_at
+      SELECT e.event_id AS event_id, e.local_date AS local_date, e.occurred_at AS occurred_at
       FROM memory_episode_events ee
       JOIN memory_events e ON e.event_id = ee.event_id
       WHERE ee.episode_id = ? AND e.role = 'user'
       ORDER BY ee.position DESC
       LIMIT 8
-    `).all(episodeId) as Array<{ local_date?: string | null; occurred_at?: number | null }>)
-      .map((row) => resolveTrustedLocalDate({ localDate: row.local_date || undefined, occurredAt: row.occurred_at ?? undefined }, timezone).date)
+    `).all(episodeId) as Array<{ event_id: string; local_date?: string | null; occurred_at?: number | null }>)
+      .map((row) => resolveTrustedLocalDate(
+        this.resolveEvent?.(row.event_id) || { localDate: row.local_date || undefined, occurredAt: row.occurred_at ?? undefined },
+        timezone,
+      ).date)
       .filter((date): date is string => Boolean(date));
     const lastTrustedUserLocalDate = userDateRows[0];
     return {
@@ -929,9 +933,6 @@ export class EpisodeStore {
         repair_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL,
         before_json TEXT NOT NULL, after_json TEXT NOT NULL, created_at INTEGER NOT NULL
       );
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_episodes_one_active_scope
-        ON memory_episodes(project_id, session_id, COALESCE(source_agent, ''), COALESCE(conversation_thread_id, ''))
-        WHERE status = 'open';
       CREATE TABLE IF NOT EXISTS episode_boundary_decisions (
         decision_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, session_id TEXT NOT NULL,
         source_agent TEXT, thread_id TEXT, primary_event_id TEXT NOT NULL,
@@ -941,6 +942,12 @@ export class EpisodeStore {
         reviewer_decision_json TEXT, final_decision_json TEXT NOT NULL, warnings_json TEXT NOT NULL,
         created_at INTEGER NOT NULL, UNIQUE(project_id, primary_event_id, policy_version)
       );
+    `);
+    sealDuplicateOpenEpisodes(this.db);
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_episodes_one_active_scope
+        ON memory_episodes(project_id, session_id, COALESCE(source_agent, ''), COALESCE(conversation_thread_id, ''))
+        WHERE status = 'open';
     `);
   }
 }

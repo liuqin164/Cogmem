@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
 
+import { EpisodeStore } from '../src/episode/EpisodeStore.js';
 import { migration_0022, migration_0023, migration_0029 } from '../src/migrations/index.js';
 
 function setupDb(): Database {
@@ -51,13 +52,43 @@ test('migration 0029 seals duplicate open episodes before creating open-only act
     expect(db.prepare(`SELECT status FROM memory_episodes WHERE episode_id = 'legacy-null-newer'`).get()).toEqual({ status: 'open' });
     expect(db.prepare(`SELECT status FROM memory_episodes WHERE episode_id = 'legacy-null-older'`).get()).toEqual({ status: 'sealed' });
     expect(db.prepare(`
-      SELECT requires_review AS requiresReview, closure_reason_code AS reasonCode
+      SELECT closure_mode AS closureMode, dream_mode AS dreamMode, requires_review AS requiresReview,
+        closure_reason_code AS reasonCode, closure_reason_detail AS reasonDetail
       FROM episode_closure_receipts WHERE episode_id = 'older-open'
-    `).get()).toEqual({ requiresReview: 1, reasonCode: 'migration_duplicate_open_scope' });
+    `).get()).toEqual({
+      closureMode: 'manual',
+      dreamMode: 'normal',
+      requiresReview: 1,
+      reasonCode: 'repair',
+      reasonDetail: JSON.stringify({
+        reason: 'migration_duplicate_open_scope',
+        keptOpenEpisodeId: 'newer-open',
+        duplicateScope: { project_id: 'brain', session_id: 's1', source_agent_key: 'test', thread_key: 's1' },
+      }),
+    });
     const indexSql = db.prepare(`
       SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episodes_one_active_scope'
     `).get() as { sql: string };
     expect(indexSql.sql).toContain(`WHERE status = 'open'`);
+  } finally {
+    db.close();
+  }
+});
+
+test('EpisodeStore direct construction seals duplicate open episodes before creating active scope index', () => {
+  const db = setupDb();
+  try {
+    insertEpisode(db, { episodeId: 'store-older-open', status: 'open', updatedAt: 100 });
+    insertEpisode(db, { episodeId: 'store-newer-open', status: 'open', updatedAt: 200 });
+
+    new EpisodeStore(db);
+
+    expect(db.prepare(`SELECT status FROM memory_episodes WHERE episode_id = 'store-newer-open'`).get()).toEqual({ status: 'open' });
+    expect(db.prepare(`SELECT status FROM memory_episodes WHERE episode_id = 'store-older-open'`).get()).toEqual({ status: 'sealed' });
+    expect(db.prepare(`
+      SELECT closure_mode AS closureMode, dream_mode AS dreamMode, closure_reason_code AS reasonCode
+      FROM episode_closure_receipts WHERE episode_id = 'store-older-open'
+    `).get()).toEqual({ closureMode: 'manual', dreamMode: 'normal', reasonCode: 'repair' });
   } finally {
     db.close();
   }

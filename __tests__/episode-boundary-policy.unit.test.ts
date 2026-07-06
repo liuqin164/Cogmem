@@ -406,6 +406,29 @@ test('live date boundary derives missing localDate from configured timezone', ()
   }
 });
 
+test('explicit localDate is not overwritten by configured timezone', () => {
+  const { dir, kernel } = createTestKernel('cogmem-boundary-explicit-date-source-', {
+    episodeBoundary: { timezone: 'Asia/Tokyo', maxDurationMs: 86_400_000, maxIdleGapMs: 86_400_000 },
+  });
+  try {
+    const first = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'explicit-date', sourceAgent: 'hermes',
+      role: 'user', text: '我们讨论显式日期。', externalMessageId: 'ed-u1',
+      timestamp: Date.UTC(2026, 6, 6, 14, 59), localDate: '2026-07-06',
+    });
+    const next = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'explicit-date', sourceAgent: 'hermes',
+      role: 'user', text: '继续讨论显式日期。', externalMessageId: 'ed-u2',
+      timestamp: Date.UTC(2026, 6, 6, 15, 30), localDate: '2026-07-06',
+    });
+    expect(next.episodeId).toBe(first.episodeId);
+    expect(next.boundaryGuardCodes).not.toContain('trusted_local_date_changed');
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ambiguous shift may leave soft-sealed episode beside one open episode', () => {
   const { dir, kernel } = createTestKernel('cogmem-boundary-ambiguous-soft-open-');
   try {

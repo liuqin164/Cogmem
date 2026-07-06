@@ -42,6 +42,7 @@ export class EpisodeBoundaryAuditService {
         const userTimes = events.filter((event) => event.role === 'user').map((event) => event.occurredAt || 0);
         const reasons = [];
         const warnings = [...configWarnings];
+        warnings.push(...dateWarningCodes(pairs, config.timezone));
         const durationMs = times.length ? Math.max(...times) - Math.min(...times) : 0;
         const maxEventGapMs = maxGap(times);
         const maxUserTurnGapMs = maxGap(userTimes);
@@ -240,6 +241,11 @@ function sourceFingerprint(items) {
 }
 function trustedLocalDate(event, timezone) {
     return resolveTrustedLocalDate(event, timezone).date;
+}
+function dateWarningCodes(pairs, timezone) {
+    return [...new Set(pairs
+            .map((item) => resolveTrustedLocalDate(item.event, timezone).warning?.code)
+            .filter((code) => code === 'invalid_trusted_local_date'))];
 }
 function isImportedTurn(group) {
     return group.some((item) => {

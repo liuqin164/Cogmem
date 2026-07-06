@@ -604,7 +604,7 @@ export class MemoryKernel {
             orderingConfidence: 'high',
             payload: {
                 text,
-                metadata: input.metadata,
+                metadata: { ...input.metadata, localDateSource: input.localDate ? 'explicit' : 'event_store_utc_default' },
             },
         });
     }

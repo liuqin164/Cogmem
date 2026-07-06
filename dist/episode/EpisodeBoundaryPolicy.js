@@ -125,6 +125,10 @@ export function resolveTrustedLocalDate(event, timezone) {
     if (event.localDate && !isTrustedLocalDate(event.localDate)) {
         return { warning: { code: 'invalid_trusted_local_date', message: 'Trusted local date must use YYYY-MM-DD.' } };
     }
+    const metadata = event.payload?.metadata;
+    const localDateSource = metadata?.localDateSource;
+    if (event.localDate && localDateSource !== 'event_store_utc_default')
+        return { date: event.localDate };
     if (timezone && typeof event.occurredAt === 'number' && Number.isFinite(event.occurredAt)) {
         const utcDate = new Date(event.occurredAt).toISOString().slice(0, 10);
         if (!event.localDate || event.localDate === utcDate)

@@ -305,6 +305,47 @@ test('split-plan uses turn metadata, boundary policies, and leading non-user tai
   }
 });
 
+test('split-plan reads explicit boundary relation from the user event inside a logical turn', () => {
+  const { dir, kernel } = createTestKernel('cogmem-split-user-boundary-relation-', {
+    episodeBoundary: { maxEvents: 20, maxDurationMs: 300_000, maxIdleGapMs: 300_000 },
+  });
+  try {
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'brain', sessionId: 'user-boundary', sourceAgent: 'test', conversationThreadId: 'user-boundary',
+      episodeType: 'discussion', importance: 0.5, eventId: 'ub-start', occurredAt: 1,
+    });
+    const rows = [
+      ['ub-u0', 'user', 1, 'turn-0', '2026-07-04', 'continues_previous'],
+      ['ub-a1', 'assistant', 90_000_000, 'turn-1', '2026-07-05', 'assistant_response'],
+      ['ub-t1', 'tool', 90_000_001, 'turn-1', '2026-07-05', 'tool_result_context'],
+      ['ub-u1', 'user', 90_000_002, 'turn-1', '2026-07-05', 'closes_episode'],
+      ['ub-a2', 'assistant', 180_000_000, 'turn-2', '2026-07-06', 'assistant_response'],
+      ['ub-t2', 'tool', 180_000_001, 'turn-2', '2026-07-06', 'tool_result_context'],
+      ['ub-u2', 'user', 180_000_002, 'turn-2', '2026-07-06', 'hard_topic_switch'],
+    ] as const;
+    for (const [eventId, role, occurredAt, turnId, localDate, relation] of rows) {
+      const event = kernel.recordRawEvent({
+        eventId, projectId: 'brain', workspaceId: 'brain', threadId: 'user-boundary', sessionId: 'user-boundary',
+        role, content: eventId, sourceId: 'test', occurredAt, turnId, localDate,
+      });
+      kernel.episodeStore.appendEvent({ episodeId: episode.episodeId, eventId: event.eventId, relation, confidence: 1, occurredAt });
+    }
+
+    const plan = kernel.planEpisodeSplit({ projectId: 'brain', episodeId: episode.episodeId, includeEventIds: true });
+    expect(plan.segments[0].eventIds).toEqual(['ub-u0', 'ub-a1', 'ub-t1', 'ub-u1']);
+    expect(plan.proposedBoundaries).toEqual([
+      expect.objectContaining({
+        afterEventId: 'ub-u2',
+        relation: 'hard_topic_switch',
+        reason: 'hard_topic_switch_boundary',
+      }),
+    ]);
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('audit and split-plan preserve link/event pairing when raw events are missing', () => {
   const { dir, kernel } = createTestKernel('cogmem-split-missing-raw-');
   try {
@@ -388,6 +429,46 @@ test('audit replay honors applyToImports=false from live config', () => {
     const audit = kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId: episode.episodeId }).items[0];
     expect(audit.reasons).not.toContain('event_count_exceeds_max');
     expect(audit.recommendedAction).toBe('none');
+    const plan = kernel.planEpisodeSplit({ projectId: 'brain', episodeId: episode.episodeId, includeEventIds: true });
+    expect(plan.normalizedPolicy.applyToImports).toBe(false);
+    expect(plan.segments).toHaveLength(1);
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('audit and split-plan honor date boundary policy and surface invalid localDate warnings', () => {
+  const { dir, kernel } = createTestKernel('cogmem-split-date-policy-', {
+    episodeBoundary: { splitOnTrustedLocalDateChange: false, maxDurationMs: 86_400_000, maxIdleGapMs: 86_400_000 },
+  });
+  try {
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'brain', sessionId: 'date-policy', sourceAgent: 'test', conversationThreadId: 'date-policy',
+      episodeType: 'discussion', importance: 0.5, eventId: 'dp-start', occurredAt: 1,
+    });
+    const rows = [
+      ['dp-u0', 'user', 1, 'turn-0', '2026-07-04'],
+      ['dp-u1', 'user', 2, 'turn-1', '2026-07-05'],
+      ['dp-u2', 'user', 3, 'turn-2', '2026-99-99'],
+    ] as const;
+    for (const [eventId, role, occurredAt, turnId, localDate] of rows) {
+      const event = kernel.recordRawEvent({
+        eventId, projectId: 'brain', workspaceId: 'brain', threadId: 'date-policy', sessionId: 'date-policy',
+        role, content: eventId, sourceId: 'test', occurredAt, turnId, localDate,
+      });
+      kernel.episodeStore.appendEvent({ episodeId: episode.episodeId, eventId: event.eventId, relation: 'continues_previous', confidence: 1, occurredAt });
+    }
+
+    const plan = kernel.planEpisodeSplit({ projectId: 'brain', episodeId: episode.episodeId, includeEventIds: true });
+    expect(plan.normalizedPolicy.splitOnTrustedLocalDateChange).toBe(false);
+    expect(plan.proposedBoundaries.map((item) => item.reason)).not.toContain('trusted_local_date_boundary');
+    expect(plan.warnings).toContain('invalid_trusted_local_date');
+    expect(plan.impactInventory.trustedLocalDates).toEqual(['2026-07-04', '2026-07-05']);
+
+    const audit = kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId: episode.episodeId }).items[0];
+    expect(audit.warnings).toContain('invalid_trusted_local_date');
+    expect(audit.reasons).not.toContain('multiple_trusted_local_dates');
   } finally {
     kernel.close();
     rmSync(dir, { recursive: true, force: true });

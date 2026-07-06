@@ -43,9 +43,12 @@ export interface EpisodeSplitPlan {
     episodeId: string;
     sourceFingerprint: string;
     normalizedPolicy: {
+        enabled: boolean;
         maxEvents: number;
         maxDurationMs: number;
         maxIdleGapMs: number;
+        splitOnTrustedLocalDateChange: boolean;
+        applyToImports: boolean;
         timezone?: string;
     };
     proposedBoundaries: EpisodeSplitProposedBoundary[];

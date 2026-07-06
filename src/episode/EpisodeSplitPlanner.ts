@@ -50,9 +50,12 @@ export interface EpisodeSplitPlan {
   episodeId: string;
   sourceFingerprint: string;
   normalizedPolicy: {
+    enabled: boolean;
     maxEvents: number;
     maxDurationMs: number;
     maxIdleGapMs: number;
+    splitOnTrustedLocalDateChange: boolean;
+    applyToImports: boolean;
     timezone?: string;
   };
   proposedBoundaries: EpisodeSplitProposedBoundary[];
@@ -91,12 +94,16 @@ export class EpisodeSplitPlanner {
     const missingRawEventIds = pairs.filter((item) => !item.event).map((item) => item.link.eventId);
     const normalized = normalizeEpisodeBoundaryConfig(configWithDefinedOverrides(this.liveBoundaryConfig, options));
     const policy = {
+      enabled: normalized.config.enabled,
       maxEvents: normalized.config.maxEvents,
       maxDurationMs: normalized.config.maxDurationMs,
       maxIdleGapMs: normalized.config.maxIdleGapMs,
+      splitOnTrustedLocalDateChange: normalized.config.splitOnTrustedLocalDateChange,
+      applyToImports: normalized.config.applyToImports,
       timezone: normalized.config.timezone,
     };
     const warnings: string[] = normalized.diagnostics.map((item) => item.code);
+    warnings.push(...dateWarningCodes(pairs, policy.timezone));
     if (missingRawEventIds.length) warnings.push('unresolved_raw_events');
     if (events[0] && events[0].role !== 'user') warnings.push('leading_non_user_event');
     const userCount = events.filter((event) => event.role === 'user').length;
@@ -108,12 +115,13 @@ export class EpisodeSplitPlanner {
     for (const group of groups) {
       const boundary = current.length ? boundaryReason(current, group, policy) : undefined;
       if (boundary) {
+        const boundaryPair = userPair(group) || group[0];
         proposedBoundaries.push({
           boundaryIndex: proposedBoundaries.length,
           beforeEventId: current.at(-1)?.link.eventId,
-          afterEventId: group[0]?.link.eventId,
+          afterEventId: boundaryPair?.link.eventId,
           reason: boundary,
-          relation: group[0]?.link.relation,
+          relation: boundaryPair?.link.relation,
         });
         segments.push(segment(segments.length, current, boundary, options.includeEventIds === true));
         current = [];
@@ -230,14 +238,16 @@ function sourceFingerprint(pairs: Pair[]): string {
 function boundaryReason(
   current: Pair[],
   next: Pair[],
-  policy: { maxEvents: number; maxDurationMs: number; maxIdleGapMs: number; timezone?: string },
+  policy: { enabled: boolean; maxEvents: number; maxDurationMs: number; maxIdleGapMs: number; splitOnTrustedLocalDateChange: boolean; applyToImports: boolean; timezone?: string },
 ): string | undefined {
-  const nextRelation = next[0]?.link.relation;
+  const nextUserPair = userPair(next);
+  const nextRelation = nextUserPair?.link.relation;
   if (nextRelation === 'closes_episode') return undefined;
   if (nextRelation === 'hard_topic_switch' || nextRelation === 'starts_new_topic' || nextRelation === 'switches_topic') return 'hard_topic_switch_boundary';
+  if (!policy.enabled || (!policy.applyToImports && isImportedTurn(next))) return undefined;
   const currentLastDate = lastTrustedUserDate(current, policy.timezone);
   const nextFirstDate = firstTrustedUserDate(next, policy.timezone);
-  if (currentLastDate && nextFirstDate && currentLastDate !== nextFirstDate) return 'trusted_local_date_boundary';
+  if (policy.splitOnTrustedLocalDateChange && currentLastDate && nextFirstDate && currentLastDate !== nextFirstDate) return 'trusted_local_date_boundary';
   const currentStart = firstTime(current);
   const nextEnd = lastTime(next);
   if (currentStart !== undefined && nextEnd !== undefined && nextEnd - currentStart > policy.maxDurationMs) return 'max_duration_boundary';
@@ -278,6 +288,23 @@ function trustedLocalDate(event: MemoryEvent | undefined, timezone?: string): st
   return resolveTrustedLocalDate(event, timezone).date;
 }
 
+function userPair(pairs: Pair[]): Pair | undefined {
+  return pairs.find((item) => item.event?.role === 'user');
+}
+
+function isImportedTurn(pairs: Pair[]): boolean {
+  return pairs.some((item) => {
+    const payload = item.event?.payload as { metadata?: Record<string, unknown> } | undefined;
+    return payload?.metadata?.imported === true || payload?.metadata?.sourceRef !== undefined;
+  });
+}
+
+function dateWarningCodes(pairs: Pair[], timezone?: string): string[] {
+  return [...new Set(pairs
+    .map((item) => resolveTrustedLocalDate(item.event, timezone).warning?.code)
+    .filter((code): code is string => code === 'invalid_trusted_local_date'))];
+}
+
 function turnKeyFor(event: MemoryEvent): string | undefined {
   if (event.turnId) return `id:${event.turnId}`;
   if (typeof event.turnSeq === 'number') return `seq:${event.turnSeq}`;
@@ -295,7 +322,10 @@ function roleCounts(pairs: Pair[]) {
 
 function impactInventory(pairs: Pair[], timezone?: string): EpisodeSplitImpactInventory {
   const counts = roleCounts(pairs);
-  const dates = pairs.map((item) => trustedLocalDate(item.event, timezone)).filter((value): value is string => Boolean(value));
+  const dates = pairs
+    .filter((item) => item.event?.role === 'user')
+    .map((item) => trustedLocalDate(item.event, timezone))
+    .filter((value): value is string => Boolean(value));
   return {
     eventCount: pairs.length,
     ...counts,

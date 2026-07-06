@@ -20,12 +20,16 @@ export class EpisodeSplitPlanner {
         const missingRawEventIds = pairs.filter((item) => !item.event).map((item) => item.link.eventId);
         const normalized = normalizeEpisodeBoundaryConfig(configWithDefinedOverrides(this.liveBoundaryConfig, options));
         const policy = {
+            enabled: normalized.config.enabled,
             maxEvents: normalized.config.maxEvents,
             maxDurationMs: normalized.config.maxDurationMs,
             maxIdleGapMs: normalized.config.maxIdleGapMs,
+            splitOnTrustedLocalDateChange: normalized.config.splitOnTrustedLocalDateChange,
+            applyToImports: normalized.config.applyToImports,
             timezone: normalized.config.timezone,
         };
         const warnings = normalized.diagnostics.map((item) => item.code);
+        warnings.push(...dateWarningCodes(pairs, policy.timezone));
         if (missingRawEventIds.length)
             warnings.push('unresolved_raw_events');
         if (events[0] && events[0].role !== 'user')
@@ -40,12 +44,13 @@ export class EpisodeSplitPlanner {
         for (const group of groups) {
             const boundary = current.length ? boundaryReason(current, group, policy) : undefined;
             if (boundary) {
+                const boundaryPair = userPair(group) || group[0];
                 proposedBoundaries.push({
                     boundaryIndex: proposedBoundaries.length,
                     beforeEventId: current.at(-1)?.link.eventId,
-                    afterEventId: group[0]?.link.eventId,
+                    afterEventId: boundaryPair?.link.eventId,
                     reason: boundary,
-                    relation: group[0]?.link.relation,
+                    relation: boundaryPair?.link.relation,
                 });
                 segments.push(segment(segments.length, current, boundary, options.includeEventIds === true));
                 current = [];
@@ -157,14 +162,17 @@ function sourceFingerprint(pairs) {
     return hash.digest('hex');
 }
 function boundaryReason(current, next, policy) {
-    const nextRelation = next[0]?.link.relation;
+    const nextUserPair = userPair(next);
+    const nextRelation = nextUserPair?.link.relation;
     if (nextRelation === 'closes_episode')
         return undefined;
     if (nextRelation === 'hard_topic_switch' || nextRelation === 'starts_new_topic' || nextRelation === 'switches_topic')
         return 'hard_topic_switch_boundary';
+    if (!policy.enabled || (!policy.applyToImports && isImportedTurn(next)))
+        return undefined;
     const currentLastDate = lastTrustedUserDate(current, policy.timezone);
     const nextFirstDate = firstTrustedUserDate(next, policy.timezone);
-    if (currentLastDate && nextFirstDate && currentLastDate !== nextFirstDate)
+    if (policy.splitOnTrustedLocalDateChange && currentLastDate && nextFirstDate && currentLastDate !== nextFirstDate)
         return 'trusted_local_date_boundary';
     const currentStart = firstTime(current);
     const nextEnd = lastTime(next);
@@ -207,6 +215,20 @@ function lastTrustedUserDate(pairs, timezone) {
 function trustedLocalDate(event, timezone) {
     return resolveTrustedLocalDate(event, timezone).date;
 }
+function userPair(pairs) {
+    return pairs.find((item) => item.event?.role === 'user');
+}
+function isImportedTurn(pairs) {
+    return pairs.some((item) => {
+        const payload = item.event?.payload;
+        return payload?.metadata?.imported === true || payload?.metadata?.sourceRef !== undefined;
+    });
+}
+function dateWarningCodes(pairs, timezone) {
+    return [...new Set(pairs
+            .map((item) => resolveTrustedLocalDate(item.event, timezone).warning?.code)
+            .filter((code) => code === 'invalid_trusted_local_date'))];
+}
 function turnKeyFor(event) {
     if (event.turnId)
         return `id:${event.turnId}`;
@@ -224,7 +246,10 @@ function roleCounts(pairs) {
 }
 function impactInventory(pairs, timezone) {
     const counts = roleCounts(pairs);
-    const dates = pairs.map((item) => trustedLocalDate(item.event, timezone)).filter((value) => Boolean(value));
+    const dates = pairs
+        .filter((item) => item.event?.role === 'user')
+        .map((item) => trustedLocalDate(item.event, timezone))
+        .filter((value) => Boolean(value));
     return {
         eventCount: pairs.length,
         ...counts,
