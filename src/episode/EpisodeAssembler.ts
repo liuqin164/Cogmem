@@ -129,8 +129,8 @@ export class EpisodeAssembler {
         ? trace.observedEpisodeFingerprint !== currentEpisodeFingerprint
         : trace.observedEpisodeId !== episode?.episodeId || trace.observedEpisodeEventCount !== episode?.eventCount
     ));
-    const cpuDecision = staleTrace ? this.classifyPrimary(primary, episode, ordered) : trace?.cpuDecision ?? this.classifyPrimary(primary, episode, ordered);
-    const guardResult = freshGuardResult;
+    let cpuDecision = staleTrace ? this.classifyPrimary(primary, episode, ordered) : trace?.cpuDecision ?? this.classifyPrimary(primary, episode, ordered);
+    let guardResult = freshGuardResult;
     let decision = staleTrace ? cpuDecision : decisionOverride ?? trace?.finalDecision ?? cpuDecision;
     let reviewerRawResultStatus: TurnRelationReviewStatus = trace?.reviewerRawResultStatus || 'not_invoked';
     let reviewerDecision = trace?.reviewerDecision;
@@ -143,9 +143,9 @@ export class EpisodeAssembler {
     let closureReceipt: EpisodeClosureReceipt | undefined;
     let linkedEpisodeId: string | undefined = legacyLinkedEpisodeId;
     const now = Math.max(input.now ?? 0, ...ordered.map((event) => event.occurredAt || Date.now()), episode?.updatedAt ?? 0);
-    const previousEpisodeId = episode?.episodeId;
+    let previousEpisodeId = episode?.episodeId;
     const shouldAuditBoundary = primary.role === 'user' && this.boundaryPolicy.config.auditDecisions;
-    const guardWarnings = guardResult.warnings.map((warning) => warning.code);
+    let guardWarnings = guardResult.warnings.map((warning) => warning.code);
 
     if (decision.relation === 'noise') {
       const audit = this.recordBoundaryDecisionSafe(shouldAuditBoundary, {
@@ -194,6 +194,26 @@ export class EpisodeAssembler {
     }
 
     return this.store.transaction(() => {
+    let lockedEpisode = this.store.findActiveEpisode(input.projectId, input.sessionId, input.sourceAgent, conversationThreadId);
+    let lockedLegacyLinkedEpisodeId: string | undefined;
+    if (lockedEpisode && !lockedEpisode.sourceAgent && !lockedEpisode.conversationThreadId) {
+      const legacyEpisodeId = lockedEpisode.episodeId;
+      lockedEpisode = this.store.claimLegacyEpisodeScope(legacyEpisodeId, input.sourceAgent, conversationThreadId);
+      if (!lockedEpisode) lockedLegacyLinkedEpisodeId = legacyEpisodeId;
+    }
+    if (episodeBoundaryFingerprint(lockedEpisode) !== currentEpisodeFingerprint) {
+      episode = lockedEpisode;
+      linkedEpisodeId = lockedLegacyLinkedEpisodeId;
+      previousEpisodeId = episode?.episodeId;
+      guardResult = this.evaluateBoundary(episode, primary, ordered);
+      guardWarnings = guardResult.warnings.map((warning) => warning.code);
+      cpuDecision = this.classifyPrimary(primary, episode, ordered);
+      decision = cpuDecision;
+      if (trace?.reviewerInvoked) {
+        reviewerRawResultStatus = 'stale_ignored';
+        reviewerDecision = undefined;
+      }
+    }
     let boundaryApplied = false;
     let resultingEpisodeId: string | undefined;
     const closureEpisode = primary.role === 'user' && decision.relation === 'closes_episode' ? episode : undefined;
@@ -284,6 +304,12 @@ export class EpisodeAssembler {
         episode = this.store.reopenSoftEpisode(episode.episodeId, now);
         reopened = true;
       } else {
+        if (primary.role === 'user') {
+          linkedEpisodeId = episode.episodeId;
+          closureReceipt = this.store.sealEpisode(episode.episodeId, {
+            mode: 'hard', reason: 'soft_seal_stabilized', reasonCode: 'soft_seal_stabilized', now,
+          });
+        }
         episode = undefined;
       }
     }

@@ -42,6 +42,8 @@ test('EpisodeBoundaryPolicy validates config and detects max events, duration, i
   expect(policy.evaluate({ active, primaryEvent: { role: 'assistant', occurredAt: 900 } }).warnings).toHaveLength(0);
   expect(policy.evaluate({ active, primaryEvent: { role: 'user', occurredAt: 900 } }).warnings.map((item) => item.code))
     .toEqual(expect.arrayContaining(['trusted_local_date_unavailable', 'out_of_order_timestamp']));
+  expect(policy.evaluate({ active, primaryEvent: { role: 'user', occurredAt: 400_000, localDate: '2026-99-99' } }).warnings.map((item) => item.code))
+    .toContain('invalid_trusted_local_date');
   expect(policy.evaluate({ active: { ...active, localDates: ['2026-07-04', '2026-07-05'], lastTrustedLocalDate: '2026-07-05' }, primaryEvent: { role: 'user', occurredAt: 400_000, localDate: '2026-07-04' } }).guardCodes)
     .toContain('trusted_local_date_changed');
 });
@@ -322,6 +324,87 @@ test('hard boundary applies to soft-sealed episodes and non-user tails do not cr
     expect(kernel.listEpisodes({ projectId: 'brain', sessionId: 'tail' })).toHaveLength(1);
   } finally {
     kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('soft seal time does not reset hard idle boundary', () => {
+  const { dir, kernel } = createTestKernel('cogmem-boundary-soft-idle-', { episodeBoundary: { maxIdleGapMs: 30 * 60_000 } });
+  try {
+    const first = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'idle-soft', sourceAgent: 'hermes',
+      role: 'user', text: '我们讨论同一个主题。', externalMessageId: 'si-u1', timestamp: 0,
+    });
+    kernel.sealEpisode(first.episodeId!, { mode: 'soft', reason: 'idle_timeout', now: 40 * 60_000 });
+    const resumed = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'idle-soft', sourceAgent: 'hermes',
+      role: 'user', text: '继续刚才同一个主题。', externalMessageId: 'si-u2', timestamp: 50 * 60_000,
+    });
+    expect(resumed.episodeId).not.toBe(first.episodeId);
+    expect(resumed.boundaryApplied).toBe(true);
+    expect(resumed.boundaryGuardCodes).toContain('max_idle_gap_exceeded');
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('assistant local date does not hide the next user date boundary', () => {
+  const { dir, kernel } = createTestKernel('cogmem-boundary-user-date-', { episodeBoundary: { maxDurationMs: 86_400_000, maxIdleGapMs: 86_400_000 } });
+  try {
+    const first = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'date-user', sourceAgent: 'hermes',
+      role: 'user', text: '我们讨论跨午夜边界。', externalMessageId: 'du-u1',
+      timestamp: Date.UTC(2026, 6, 6, 23, 59), localDate: '2026-07-06',
+    });
+    const assistant = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'date-user', sourceAgent: 'hermes',
+      role: 'assistant', text: '收到，我继续补充。', externalMessageId: 'du-a1',
+      timestamp: Date.UTC(2026, 6, 7, 0, 1), localDate: '2026-07-07',
+    });
+    expect(assistant.episodeId).toBe(first.episodeId);
+    const next = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'date-user', sourceAgent: 'hermes',
+      role: 'user', text: '继续讨论跨午夜边界。', externalMessageId: 'du-u2',
+      timestamp: Date.UTC(2026, 6, 7, 8, 0), localDate: '2026-07-07',
+    });
+    expect(next.episodeId).not.toBe(first.episodeId);
+    expect(next.boundaryApplied).toBe(true);
+    expect(next.boundaryGuardCodes).toContain('trusted_local_date_changed');
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('two kernel connections leave at most one active episode in a scope', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-boundary-active-scope-'));
+  let releaseReview!: () => void;
+  const reviewerGate = new Promise<void>((resolve) => { releaseReview = resolve; });
+  const reviewer = { review: async () => { await reviewerGate; return { relation: 'starts_new_topic', confidence: 0.99 }; } };
+  const dbPath = join(dir, 'memory.db');
+  const first = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec', turnRelationReviewer: reviewer });
+  const second = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec', turnRelationReviewer: reviewer });
+  try {
+    first.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'race-scope', sourceAgent: 'hermes',
+      role: 'user', text: '我们讨论一个主题。', externalMessageId: 'as-u1', timestamp: 1,
+    });
+    const one = first.appendEpisodeMessageAsync({
+      projectId: 'brain', sessionId: 'race-scope', sourceAgent: 'hermes',
+      role: 'user', text: '一个隐含的新话题需要 reviewer。', externalMessageId: 'as-u2', timestamp: 2,
+    });
+    const two = second.appendEpisodeMessageAsync({
+      projectId: 'brain', sessionId: 'race-scope', sourceAgent: 'hermes',
+      role: 'user', text: '另一个隐含的新话题需要 reviewer。', externalMessageId: 'as-u3', timestamp: 3,
+    });
+    releaseReview();
+    await Promise.all([one, two]);
+    const active = first.listEpisodes({ projectId: 'brain', sessionId: 'race-scope', statuses: ['open', 'soft_sealed'] });
+    expect(active).toHaveLength(1);
+  } finally {
+    first.close();
+    second.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

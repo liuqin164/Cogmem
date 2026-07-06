@@ -185,7 +185,7 @@ function trustedLocalDate(
   config: EpisodeBoundaryConfig,
   warnings: EpisodeBoundaryWarning[],
 ): string | undefined {
-  if (event.localDate && /^\d{4}-\d{2}-\d{2}$/.test(event.localDate)) return event.localDate;
+  if (event.localDate && isTrustedLocalDate(event.localDate)) return event.localDate;
   if (event.localDate) {
     warnings.push({ code: 'invalid_trusted_local_date', message: 'Trusted local date must use YYYY-MM-DD.' });
     return undefined;
@@ -197,4 +197,11 @@ function trustedLocalDate(
   }
   warnings.push({ code: 'trusted_local_date_unavailable', message: 'No trusted local date source was available.' });
   return undefined;
+}
+
+export function isTrustedLocalDate(value: string | undefined): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }

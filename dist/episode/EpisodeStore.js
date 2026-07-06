@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { summarizeEpisode } from './EpisodeSemanticSummarizer.js';
+import { isTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
 export class EpisodeStore {
     db;
     resolveEvent;
@@ -175,34 +176,36 @@ export class EpisodeStore {
         if (!this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_events'`).get()) {
             return { eventCount: episode.eventCount, startedAt: episode.startedAt, updatedAt: episode.updatedAt, trustedLocalDates: [] };
         }
-        const lastTrustedLocalDate = this.db.prepare(`
+        const lastEventAt = this.db.prepare(`
+      SELECT MAX(e.occurred_at) AS occurred_at
+      FROM memory_episode_events ee
+      JOIN memory_events e ON e.event_id = ee.event_id
+      WHERE ee.episode_id = ?
+    `).get(episodeId)?.occurred_at ?? undefined;
+        const userDateRows = this.db.prepare(`
       SELECT e.local_date AS local_date
       FROM memory_episode_events ee
       JOIN memory_events e ON e.event_id = ee.event_id
-      WHERE ee.episode_id = ? AND e.local_date GLOB '????-??-??'
-      ORDER BY ee.position DESC
-      LIMIT 1
-    `).get(episodeId)?.local_date || undefined;
-        const dates = this.db.prepare(`
-      SELECT e.local_date AS local_date
-      FROM memory_episode_events ee
-      JOIN memory_events e ON e.event_id = ee.event_id
-      WHERE ee.episode_id = ? AND e.local_date GLOB '????-??-??'
+      WHERE ee.episode_id = ? AND e.role = 'user'
       ORDER BY ee.position DESC
       LIMIT 8
     `).all(episodeId)
             .map((row) => row.local_date)
-            .filter((date) => Boolean(date));
+            .filter((date) => isTrustedLocalDate(date || undefined));
+        const lastTrustedUserLocalDate = userDateRows[0];
         return {
             eventCount: episode.eventCount,
             startedAt: episode.startedAt,
-            updatedAt: episode.updatedAt,
-            lastTrustedLocalDate,
-            trustedLocalDates: [...new Set(dates)].reverse(),
+            updatedAt: lastEventAt ?? episode.updatedAt,
+            lastEventAt,
+            lastTrustedUserLocalDate,
+            lastTrustedLocalDate: lastTrustedUserLocalDate,
+            trustedLocalDates: [...new Set(userDateRows)].reverse(),
         };
     }
     transaction(fn) {
-        return this.db.transaction(fn)();
+        const tx = this.db.transaction(fn);
+        return typeof tx.immediate === 'function' ? tx.immediate() : tx();
     }
     isEpisodeEmpty(episodeId) {
         const episode = this.getEpisode(episodeId);
@@ -776,6 +779,9 @@ export class EpisodeStore {
         repair_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL,
         before_json TEXT NOT NULL, after_json TEXT NOT NULL, created_at INTEGER NOT NULL
       );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_episodes_one_active_scope
+        ON memory_episodes(project_id, session_id, COALESCE(source_agent, ''), COALESCE(conversation_thread_id, ''))
+        WHERE status IN ('open', 'soft_sealed');
       CREATE TABLE IF NOT EXISTS episode_boundary_decisions (
         decision_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, session_id TEXT NOT NULL,
         source_agent TEXT, thread_id TEXT, primary_event_id TEXT NOT NULL,

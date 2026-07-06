@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeStore } from './EpisodeStore.js';
 import type { EpisodeEventLink, TurnRelation } from './EpisodeTypes.js';
-import { normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
+import { isTrustedLocalDate, normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
 
 export const EPISODE_SPLIT_PLANNER_VERSION = 'episode_split_preview.v1';
 
@@ -231,9 +231,10 @@ function boundaryReason(
   policy: { maxEvents: number; maxDurationMs: number; maxIdleGapMs: number; timezone?: string },
 ): string | undefined {
   const nextRelation = next[0]?.link.relation;
+  if (nextRelation === 'closes_episode') return undefined;
   if (nextRelation === 'hard_topic_switch' || nextRelation === 'starts_new_topic' || nextRelation === 'switches_topic') return 'hard_topic_switch_boundary';
-  const currentLastDate = lastTrustedDate(current, policy.timezone);
-  const nextFirstDate = firstTrustedDate(next, policy.timezone);
+  const currentLastDate = lastTrustedUserDate(current, policy.timezone);
+  const nextFirstDate = firstTrustedUserDate(next, policy.timezone);
   if (currentLastDate && nextFirstDate && currentLastDate !== nextFirstDate) return 'trusted_local_date_boundary';
   const currentStart = firstTime(current);
   const nextEnd = lastTime(next);
@@ -253,16 +254,18 @@ function lastTime(pairs: Pair[]): number | undefined {
   return [...pairs].reverse().find((item) => typeof item.event?.occurredAt === 'number')?.event?.occurredAt;
 }
 
-function firstTrustedDate(pairs: Pair[], timezone?: string): string | undefined {
+function firstTrustedUserDate(pairs: Pair[], timezone?: string): string | undefined {
   for (const pair of pairs) {
+    if (pair.event?.role !== 'user') continue;
     const date = trustedLocalDate(pair.event, timezone);
     if (date) return date;
   }
   return undefined;
 }
 
-function lastTrustedDate(pairs: Pair[], timezone?: string): string | undefined {
+function lastTrustedUserDate(pairs: Pair[], timezone?: string): string | undefined {
   for (const pair of [...pairs].reverse()) {
+    if (pair.event?.role !== 'user') continue;
     const date = trustedLocalDate(pair.event, timezone);
     if (date) return date;
   }
@@ -271,7 +274,7 @@ function lastTrustedDate(pairs: Pair[], timezone?: string): string | undefined {
 
 function trustedLocalDate(event: MemoryEvent | undefined, timezone?: string): string | undefined {
   if (!event) return undefined;
-  if (event.localDate && /^\d{4}-\d{2}-\d{2}$/.test(event.localDate)) return event.localDate;
+  if (isTrustedLocalDate(event.localDate)) return event.localDate;
   if (!timezone || !event.occurredAt) return undefined;
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',

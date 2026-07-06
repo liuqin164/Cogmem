@@ -48,7 +48,7 @@ import { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
 import { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPathRegistry, TopicRelationGraph } from './topic/index.js';
 import { CorrectionResolver } from './episode/CorrectionResolver.js';
 import { CandidateReviewService, MemoryGovernanceExecutor, MemoryGovernanceValidator, PiiRedactor, } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028, SchemaMigrationRunner } from './migrations/index.js';
+import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028, migration_0029, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -87,7 +87,7 @@ import { VectorStore } from './store/VectorStore.js';
 import { config } from './utils/Config.js';
 import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snapshot/index.js';
 const CORE_VERSION = '3.7.3';
-const LATEST_SCHEMA_VERSION = 28;
+const LATEST_SCHEMA_VERSION = 29;
 export class MemoryKernel {
     options;
     memoryGraph;
@@ -174,7 +174,7 @@ export class MemoryKernel {
         this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
         const db = this.factStore.getDatabase();
         db.exec('PRAGMA busy_timeout = 5000;');
-        new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028]).run();
+        new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028, migration_0029]).run();
         this.ensureMetaTable(db);
         this.entityStore = new EntityStore(db);
         this.ensureGovernanceAuditTable(db);

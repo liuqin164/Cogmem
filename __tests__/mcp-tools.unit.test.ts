@@ -95,6 +95,16 @@ test('core MCP strategy plan is deterministic metadata and does not perform reca
   expect(kernel.eventStore.getEventCount()).toBe(0);
 });
 
+test('core MCP episode audit rejects invalid status', async () => {
+  const kernel = makeKernel();
+  const result = await callCogmemMcpTool('cogmem_episode_audit_boundaries', {
+    projectId: 'brain',
+    status: 'closed',
+  }, { kernel });
+  expect(result.isError).toBe(true);
+  expect(JSON.stringify(result.structuredContent)).toContain('status must be open, soft_sealed, or sealed');
+});
+
 test('core MCP prospective tool requires distinct user confirmation and never executes tasks', async () => {
   const kernel = makeKernel();
   const request = kernel.recordRawEvent({

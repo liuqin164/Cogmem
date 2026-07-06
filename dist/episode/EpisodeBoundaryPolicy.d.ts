@@ -62,4 +62,5 @@ export declare class EpisodeBoundaryPolicy {
         imported?: boolean;
     }): EpisodeBoundaryGuardResult;
 }
+export declare function isTrustedLocalDate(value: string | undefined): value is string;
 //# sourceMappingURL=EpisodeBoundaryPolicy.d.ts.map

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
+import { isTrustedLocalDate, normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
 export const EPISODE_SPLIT_PLANNER_VERSION = 'episode_split_preview.v1';
 export class EpisodeSplitPlanner {
     store;
@@ -156,10 +156,12 @@ function sourceFingerprint(pairs) {
 }
 function boundaryReason(current, next, policy) {
     const nextRelation = next[0]?.link.relation;
+    if (nextRelation === 'closes_episode')
+        return undefined;
     if (nextRelation === 'hard_topic_switch' || nextRelation === 'starts_new_topic' || nextRelation === 'switches_topic')
         return 'hard_topic_switch_boundary';
-    const currentLastDate = lastTrustedDate(current, policy.timezone);
-    const nextFirstDate = firstTrustedDate(next, policy.timezone);
+    const currentLastDate = lastTrustedUserDate(current, policy.timezone);
+    const nextFirstDate = firstTrustedUserDate(next, policy.timezone);
     if (currentLastDate && nextFirstDate && currentLastDate !== nextFirstDate)
         return 'trusted_local_date_boundary';
     const currentStart = firstTime(current);
@@ -180,16 +182,20 @@ function firstTime(pairs) {
 function lastTime(pairs) {
     return [...pairs].reverse().find((item) => typeof item.event?.occurredAt === 'number')?.event?.occurredAt;
 }
-function firstTrustedDate(pairs, timezone) {
+function firstTrustedUserDate(pairs, timezone) {
     for (const pair of pairs) {
+        if (pair.event?.role !== 'user')
+            continue;
         const date = trustedLocalDate(pair.event, timezone);
         if (date)
             return date;
     }
     return undefined;
 }
-function lastTrustedDate(pairs, timezone) {
+function lastTrustedUserDate(pairs, timezone) {
     for (const pair of [...pairs].reverse()) {
+        if (pair.event?.role !== 'user')
+            continue;
         const date = trustedLocalDate(pair.event, timezone);
         if (date)
             return date;
@@ -199,7 +205,7 @@ function lastTrustedDate(pairs, timezone) {
 function trustedLocalDate(event, timezone) {
     if (!event)
         return undefined;
-    if (event.localDate && /^\d{4}-\d{2}-\d{2}$/.test(event.localDate))
+    if (isTrustedLocalDate(event.localDate))
         return event.localDate;
     if (!timezone || !event.occurredAt)
         return undefined;

@@ -439,7 +439,7 @@ export async function callCogmemMcpTool(
       case 'cogmem_episode_audit_boundaries':
         return jsonResult(opened.kernel.auditEpisodeBoundaries({
           projectId: requiredString(input.projectId, 'projectId'), episodeId: optionalString(input.episodeId),
-          status: optionalString(input.status) as never, limit: optionalNumber(input.limit), cursor: optionalString(input.cursor),
+          status: optionalEpisodeStatus(input.status), limit: optionalNumber(input.limit), cursor: optionalString(input.cursor),
           maxEvents: optionalNumber(input.maxEvents), maxDurationMs: optionalNumber(input.maxDurationMs),
           maxIdleGapMs: optionalNumber(input.maxIdleGapMs), timezone: optionalString(input.timezone),
         }));
@@ -909,6 +909,12 @@ function optionalProspectiveStatuses(value: unknown): Array<'pending' | 'confirm
 
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function optionalEpisodeStatus(value: unknown): 'open' | 'soft_sealed' | 'sealed' | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === 'open' || value === 'soft_sealed' || value === 'sealed') return value;
+  throw new Error('status must be open, soft_sealed, or sealed');
 }
 
 function optionalTurnIngestMode(value: unknown): 'immediate_compile' | 'selective_compile' | 'raw_archive_only' | 'raw_then_dream' | undefined {

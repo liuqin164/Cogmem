@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
+import { EpisodeBoundaryPolicy, isTrustedLocalDate, normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
 export class EpisodeBoundaryAuditService {
     store;
     resolveEvent;
@@ -17,8 +17,8 @@ export class EpisodeBoundaryAuditService {
             limit,
             cursor: options.cursor,
         });
-        const config = normalizeEpisodeBoundaryConfig(options).config;
-        const items = page.episodes.map((episode) => this.auditEpisode(episode, config));
+        const normalized = normalizeEpisodeBoundaryConfig(options);
+        const items = page.episodes.map((episode) => this.auditEpisode(episode, normalized.config, normalized.diagnostics.map((item) => item.code)));
         return { items, nextCursor: page.nextCursor };
     }
     requireProjectEpisode(projectId, episodeId) {
@@ -27,36 +27,29 @@ export class EpisodeBoundaryAuditService {
             throw new Error(`episode_project_mismatch:${episodeId}`);
         return episode;
     }
-    auditEpisode(episode, config) {
+    auditEpisode(episode, config, configWarnings = []) {
         const links = this.store.listEventLinks(episode.episodeId);
         const pairs = links.map((link) => ({ link, event: this.resolveEvent?.(link.eventId) || undefined }));
         const events = pairs.map((item) => item.event).filter((event) => Boolean(event));
         const missingRawEventIds = pairs.filter((item) => !item.event).map((item) => item.link.eventId);
         const times = events.map((event) => event.occurredAt).filter((value) => typeof value === 'number');
-        const dates = [...new Set(events.map((event) => trustedLocalDate(event, config.timezone)).filter((value) => Boolean(value)))];
+        const dates = [...new Set(events.filter((event) => event.role === 'user').map((event) => trustedLocalDate(event, config.timezone)).filter((value) => Boolean(value)))];
         const relationCounts = {};
         for (const link of links)
             relationCounts[link.relation] = (relationCounts[link.relation] || 0) + 1;
         const userTimes = events.filter((event) => event.role === 'user').map((event) => event.occurredAt || 0);
         const reasons = [];
-        const warnings = [];
+        const warnings = [...configWarnings];
         const durationMs = times.length ? Math.max(...times) - Math.min(...times) : 0;
         const maxEventGapMs = maxGap(times);
         const maxUserTurnGapMs = maxGap(userTimes);
         const maxBoundaryIdleGapMs = maxBoundaryIdleGap(pairs);
-        const outOfOrderEventCount = events.filter((event, index) => index > 0 && (event.occurredAt || 0) < (events[index - 1].occurredAt || 0)).length;
+        const outOfOrderEventCount = outOfOrderCount(events);
+        reasons.push(...replayBoundaryReasons(episode.startedAt, pairs, config));
         if (episode.eventCount !== links.length)
             reasons.push('stored_actual_event_count_mismatch');
         if (missingRawEventIds.length > 0)
             reasons.push('unresolved_raw_events');
-        if (links.length > config.maxEvents)
-            reasons.push('event_count_exceeds_max');
-        if (durationMs > config.maxDurationMs)
-            reasons.push('duration_exceeds_max');
-        if (maxBoundaryIdleGapMs > config.maxIdleGapMs)
-            reasons.push('boundary_idle_gap_exceeds_max');
-        if (dates.length > 1)
-            reasons.push('multiple_trusted_local_dates');
         if (outOfOrderEventCount > 0)
             reasons.push('out_of_order_events');
         if ((relationCounts.ambiguous_shift || 0) > 1)
@@ -130,6 +123,98 @@ function maxBoundaryIdleGap(pairs) {
     }
     return max;
 }
+function replayBoundaryReasons(startedAt, pairs, config) {
+    const policy = new EpisodeBoundaryPolicy(config);
+    const reasons = new Set();
+    let eventCount = 0;
+    let lastEventAt;
+    let lastUserLocalDate;
+    const userDates = [];
+    for (const group of logicalTurns(pairs)) {
+        const userPair = group.find((item) => item.event?.role === 'user');
+        if (userPair?.event) {
+            if (!isExplicitBoundary(userPair.link.relation)) {
+                const result = policy.evaluate({
+                    active: { eventCount, startedAt, updatedAt: lastEventAt, lastTrustedLocalDate: lastUserLocalDate, localDates: userDates },
+                    primaryEvent: userPair.event,
+                });
+                for (const code of result.guardCodes)
+                    reasons.add(auditReasonForGuard(code));
+            }
+            const date = trustedLocalDate(userPair.event, config.timezone);
+            if (date) {
+                lastUserLocalDate = date;
+                if (!userDates.includes(date))
+                    userDates.push(date);
+            }
+        }
+        for (const pair of group) {
+            eventCount += 1;
+            if (typeof pair.event?.occurredAt === 'number')
+                lastEventAt = Math.max(lastEventAt ?? pair.event.occurredAt, pair.event.occurredAt);
+        }
+    }
+    return [...reasons];
+}
+function logicalTurns(pairs) {
+    const groups = [];
+    let current = [];
+    let currentTurnKey;
+    let currentHasUser = false;
+    for (const pair of pairs) {
+        const event = pair.event;
+        const turnKey = event ? turnKeyFor(event) : undefined;
+        const explicitTurnChange = Boolean(currentTurnKey && turnKey && currentTurnKey !== turnKey);
+        const roleBoundary = event?.role === 'user' && currentHasUser && !explicitTurnChange;
+        if (current.length > 0 && (explicitTurnChange || roleBoundary)) {
+            groups.push(current);
+            current = [];
+            currentTurnKey = undefined;
+            currentHasUser = false;
+        }
+        current.push(pair);
+        if (turnKey && !currentTurnKey)
+            currentTurnKey = turnKey;
+        if (event?.role === 'user')
+            currentHasUser = true;
+    }
+    if (current.length > 0)
+        groups.push(current);
+    return groups;
+}
+function turnKeyFor(event) {
+    if (event.turnId)
+        return `id:${event.turnId}`;
+    if (typeof event.turnSeq === 'number')
+        return `seq:${event.turnSeq}`;
+    return undefined;
+}
+function isExplicitBoundary(relation) {
+    return relation === 'closes_episode' || relation === 'hard_topic_switch' || relation === 'starts_new_topic' || relation === 'switches_topic';
+}
+function auditReasonForGuard(code) {
+    if (code === 'max_events_exceeded')
+        return 'event_count_exceeds_max';
+    if (code === 'max_duration_exceeded')
+        return 'duration_exceeds_max';
+    if (code === 'max_idle_gap_exceeded')
+        return 'boundary_idle_gap_exceeds_max';
+    if (code === 'trusted_local_date_changed')
+        return 'multiple_trusted_local_dates';
+    return code;
+}
+function outOfOrderCount(events) {
+    let runningMax;
+    let count = 0;
+    for (const event of events) {
+        if (typeof event.occurredAt !== 'number')
+            continue;
+        if (runningMax !== undefined && event.occurredAt < runningMax)
+            count += 1;
+        runningMax = Math.max(runningMax ?? event.occurredAt, event.occurredAt);
+    }
+    return count;
+}
 function hardShiftCount(counts) {
     return (counts.hard_topic_switch || 0) + (counts.starts_new_topic || 0) + (counts.switches_topic || 0);
 }
@@ -151,7 +236,7 @@ function sourceFingerprint(items) {
     return hash.digest('hex');
 }
 function trustedLocalDate(event, timezone) {
-    if (event.localDate && /^\d{4}-\d{2}-\d{2}$/.test(event.localDate))
+    if (isTrustedLocalDate(event.localDate))
         return event.localDate;
     if (!timezone || !event.occurredAt)
         return undefined;

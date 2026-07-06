@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
-import { normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
+import { EpisodeBoundaryPolicy, isTrustedLocalDate, normalizeEpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
 import type { EpisodeStore } from './EpisodeStore.js';
-import type { EpisodeStatus, TurnRelation } from './EpisodeTypes.js';
+import type { EpisodeEventLink, EpisodeStatus, TurnRelation } from './EpisodeTypes.js';
 
 export interface EpisodeBoundaryAuditItem {
   episodeId: string;
@@ -73,8 +73,8 @@ export class EpisodeBoundaryAuditService {
       limit,
       cursor: options.cursor,
     });
-    const config = normalizeEpisodeBoundaryConfig(options).config;
-    const items = page.episodes.map((episode) => this.auditEpisode(episode, config));
+    const normalized = normalizeEpisodeBoundaryConfig(options);
+    const items = page.episodes.map((episode) => this.auditEpisode(episode, normalized.config, normalized.diagnostics.map((item) => item.code)));
     return { items, nextCursor: page.nextCursor };
   }
 
@@ -84,29 +84,26 @@ export class EpisodeBoundaryAuditService {
     return episode;
   }
 
-  private auditEpisode(episode: NonNullable<ReturnType<EpisodeStore['getEpisode']>>, config: EpisodeBoundaryConfig): EpisodeBoundaryAuditItem {
+  private auditEpisode(episode: NonNullable<ReturnType<EpisodeStore['getEpisode']>>, config: EpisodeBoundaryConfig, configWarnings: string[] = []): EpisodeBoundaryAuditItem {
     const links = this.store.listEventLinks(episode.episodeId);
     const pairs = links.map((link) => ({ link, event: this.resolveEvent?.(link.eventId) || undefined }));
     const events = pairs.map((item) => item.event).filter((event): event is MemoryEvent => Boolean(event));
     const missingRawEventIds = pairs.filter((item) => !item.event).map((item) => item.link.eventId);
     const times = events.map((event) => event.occurredAt).filter((value): value is number => typeof value === 'number');
-    const dates = [...new Set(events.map((event) => trustedLocalDate(event, config.timezone)).filter((value): value is string => Boolean(value)))];
+    const dates = [...new Set(events.filter((event) => event.role === 'user').map((event) => trustedLocalDate(event, config.timezone)).filter((value): value is string => Boolean(value)))];
     const relationCounts: Record<string, number> = {};
     for (const link of links) relationCounts[link.relation] = (relationCounts[link.relation] || 0) + 1;
     const userTimes = events.filter((event) => event.role === 'user').map((event) => event.occurredAt || 0);
     const reasons: string[] = [];
-    const warnings: string[] = [];
+    const warnings: string[] = [...configWarnings];
     const durationMs = times.length ? Math.max(...times) - Math.min(...times) : 0;
     const maxEventGapMs = maxGap(times);
     const maxUserTurnGapMs = maxGap(userTimes);
     const maxBoundaryIdleGapMs = maxBoundaryIdleGap(pairs);
-    const outOfOrderEventCount = events.filter((event, index) => index > 0 && (event.occurredAt || 0) < (events[index - 1].occurredAt || 0)).length;
+    const outOfOrderEventCount = outOfOrderCount(events);
+    reasons.push(...replayBoundaryReasons(episode.startedAt, pairs, config));
     if (episode.eventCount !== links.length) reasons.push('stored_actual_event_count_mismatch');
     if (missingRawEventIds.length > 0) reasons.push('unresolved_raw_events');
-    if (links.length > config.maxEvents) reasons.push('event_count_exceeds_max');
-    if (durationMs > config.maxDurationMs) reasons.push('duration_exceeds_max');
-    if (maxBoundaryIdleGapMs > config.maxIdleGapMs) reasons.push('boundary_idle_gap_exceeds_max');
-    if (dates.length > 1) reasons.push('multiple_trusted_local_dates');
     if (outOfOrderEventCount > 0) reasons.push('out_of_order_events');
     if ((relationCounts.ambiguous_shift || 0) > 1) reasons.push('repeated_ambiguous_shifts');
     if (hardShiftCount(relationCounts) > 1) reasons.push('multiple_hard_topic_switch_relations');
@@ -175,6 +172,92 @@ function maxBoundaryIdleGap(pairs: Array<{ event?: MemoryEvent }>): number {
   return max;
 }
 
+type Pair = { link: EpisodeEventLink; event?: MemoryEvent };
+
+function replayBoundaryReasons(startedAt: number, pairs: Pair[], config: EpisodeBoundaryConfig): string[] {
+  const policy = new EpisodeBoundaryPolicy(config);
+  const reasons = new Set<string>();
+  let eventCount = 0;
+  let lastEventAt: number | undefined;
+  let lastUserLocalDate: string | undefined;
+  const userDates: string[] = [];
+  for (const group of logicalTurns(pairs)) {
+    const userPair = group.find((item) => item.event?.role === 'user');
+    if (userPair?.event) {
+      if (!isExplicitBoundary(userPair.link.relation)) {
+        const result = policy.evaluate({
+          active: { eventCount, startedAt, updatedAt: lastEventAt, lastTrustedLocalDate: lastUserLocalDate, localDates: userDates },
+          primaryEvent: userPair.event,
+        });
+        for (const code of result.guardCodes) reasons.add(auditReasonForGuard(code));
+      }
+      const date = trustedLocalDate(userPair.event, config.timezone);
+      if (date) {
+        lastUserLocalDate = date;
+        if (!userDates.includes(date)) userDates.push(date);
+      }
+    }
+    for (const pair of group) {
+      eventCount += 1;
+      if (typeof pair.event?.occurredAt === 'number') lastEventAt = Math.max(lastEventAt ?? pair.event.occurredAt, pair.event.occurredAt);
+    }
+  }
+  return [...reasons];
+}
+
+function logicalTurns(pairs: Pair[]): Pair[][] {
+  const groups: Pair[][] = [];
+  let current: Pair[] = [];
+  let currentTurnKey: string | undefined;
+  let currentHasUser = false;
+  for (const pair of pairs) {
+    const event = pair.event;
+    const turnKey = event ? turnKeyFor(event) : undefined;
+    const explicitTurnChange = Boolean(currentTurnKey && turnKey && currentTurnKey !== turnKey);
+    const roleBoundary = event?.role === 'user' && currentHasUser && !explicitTurnChange;
+    if (current.length > 0 && (explicitTurnChange || roleBoundary)) {
+      groups.push(current);
+      current = [];
+      currentTurnKey = undefined;
+      currentHasUser = false;
+    }
+    current.push(pair);
+    if (turnKey && !currentTurnKey) currentTurnKey = turnKey;
+    if (event?.role === 'user') currentHasUser = true;
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
+function turnKeyFor(event: MemoryEvent): string | undefined {
+  if (event.turnId) return `id:${event.turnId}`;
+  if (typeof event.turnSeq === 'number') return `seq:${event.turnSeq}`;
+  return undefined;
+}
+
+function isExplicitBoundary(relation: TurnRelation): boolean {
+  return relation === 'closes_episode' || relation === 'hard_topic_switch' || relation === 'starts_new_topic' || relation === 'switches_topic';
+}
+
+function auditReasonForGuard(code: string): string {
+  if (code === 'max_events_exceeded') return 'event_count_exceeds_max';
+  if (code === 'max_duration_exceeded') return 'duration_exceeds_max';
+  if (code === 'max_idle_gap_exceeded') return 'boundary_idle_gap_exceeds_max';
+  if (code === 'trusted_local_date_changed') return 'multiple_trusted_local_dates';
+  return code;
+}
+
+function outOfOrderCount(events: MemoryEvent[]): number {
+  let runningMax: number | undefined;
+  let count = 0;
+  for (const event of events) {
+    if (typeof event.occurredAt !== 'number') continue;
+    if (runningMax !== undefined && event.occurredAt < runningMax) count += 1;
+    runningMax = Math.max(runningMax ?? event.occurredAt, event.occurredAt);
+  }
+  return count;
+}
+
 function hardShiftCount(counts: Record<string, number>): number {
   return (counts.hard_topic_switch || 0) + (counts.starts_new_topic || 0) + (counts.switches_topic || 0);
 }
@@ -198,7 +281,7 @@ function sourceFingerprint(items: Array<{ eventId: string; relation: TurnRelatio
 }
 
 function trustedLocalDate(event: MemoryEvent, timezone?: string): string | undefined {
-  if (event.localDate && /^\d{4}-\d{2}-\d{2}$/.test(event.localDate)) return event.localDate;
+  if (isTrustedLocalDate(event.localDate)) return event.localDate;
   if (!timezone || !event.occurredAt) return undefined;
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',

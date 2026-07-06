@@ -146,6 +146,74 @@ test('audit idle gap uses online boundary semantics instead of user-to-user gap'
   }
 });
 
+test('audit replays live boundary semantics for explicit closure overflow and diagnostics', () => {
+  const { dir, kernel } = createTestKernel('cogmem-boundary-audit-closure-');
+  try {
+    const first = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'closure-overflow', sourceAgent: 'hermes',
+      role: 'user', text: '我们讨论一个明确方案。', externalMessageId: 'co-u1', timestamp: 1,
+    });
+    for (let index = 2; index <= 20; index += 1) {
+      kernel.appendEpisodeMessage({
+        projectId: 'brain', sessionId: 'closure-overflow', sourceAgent: 'hermes',
+        role: 'assistant', text: `继续补充 ${index}。`, externalMessageId: `co-a${index}`, timestamp: index,
+      });
+    }
+    kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'closure-overflow', sourceAgent: 'hermes',
+      role: 'user', text: '按这个方案做，就这样。', externalMessageId: 'co-u21', timestamp: 21,
+    });
+
+    const audit = kernel.auditEpisodeBoundaries({
+      projectId: 'brain', episodeId: first.episodeId!, maxEvents: 20,
+      maxDurationMs: Number.NaN, maxIdleGapMs: 1,
+    }).items[0];
+    expect(audit.actualLinkedEventCount).toBe(21);
+    expect(audit.reasons).not.toContain('event_count_exceeds_max');
+    expect(audit.recommendedAction).toBe('none');
+    expect(audit.warnings).toEqual(expect.arrayContaining([
+      'invalid_episode_boundary_max_duration_ms',
+      'invalid_episode_boundary_max_idle_gap_ms',
+    ]));
+
+    const plan = kernel.planEpisodeSplit({ projectId: 'brain', episodeId: first.episodeId!, maxEvents: 20, includeEventIds: true });
+    expect(plan.segments).toHaveLength(1);
+    expect(plan.segments[0].eventIds?.at(-1)).toBe(kernel.listEpisodeEventLinks(first.episodeId!).at(-1)?.eventId);
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('audit out-of-order detection uses running max rather than adjacent pair only', () => {
+  const { dir, kernel } = createTestKernel('cogmem-boundary-audit-running-max-');
+  try {
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'brain', sessionId: 'ooo', sourceAgent: 'test', conversationThreadId: 'ooo',
+      episodeType: 'discussion', importance: 0.4, eventId: 'ooo-start', occurredAt: 1_000,
+    });
+    const rows = [
+      ['u0', 'user', 1_000],
+      ['a100', 'assistant', 101_000],
+      ['a50', 'assistant', 51_000],
+      ['u75', 'user', 76_000],
+    ] as const;
+    for (const [id, role, occurredAt] of rows) {
+      const event = kernel.recordRawEvent({
+        eventId: id, projectId: 'brain', workspaceId: 'brain', threadId: 'ooo', sessionId: 'ooo',
+        role, content: id, sourceId: 'test', occurredAt, localDate: '2026-07-06',
+      });
+      kernel.episodeStore.appendEvent({ episodeId: episode.episodeId, eventId: event.eventId, relation: role === 'user' ? 'continues_previous' : 'assistant_response', confidence: 1, occurredAt });
+    }
+    const audit = kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId: episode.episodeId }).items[0];
+    expect(audit.outOfOrderEventCount).toBe(2);
+    expect(audit.reasons).toContain('out_of_order_events');
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('planEpisodeSplit is deterministic, turn-safe, complete, non-applyable, and read-only', () => {
   const { dir, kernel } = createTestKernel('cogmem-split-plan-');
   try {
@@ -201,6 +269,7 @@ test('split-plan uses turn metadata, boundary policies, and leading non-user tai
       ['t0', 'tool', 'leading tool', 2, 'turn-0', 0, 1, '2026-07-04', 'tool_result_context'],
       ['u1', 'user', 'first user', 3, 'turn-0', 0, 2, '2026-07-04', 'continues_previous'],
       ['a1', 'assistant', 'answer', 4, 'turn-0', 0, 3, '2026-07-04', 'assistant_response'],
+      ['a-midnight', 'assistant', 'assistant after midnight', 5, 'turn-0', 0, 4, '2026-07-05', 'assistant_response'],
       ['u2', 'user', 'next day user', 90_000_000, 'turn-1', 1, 0, '2026-07-05', 'continues_previous'],
       ['u3', 'user', '换个话题，我们讨论 Atlas 结构。', 90_000_100, 'turn-2', 2, 0, '2026-07-05', 'hard_topic_switch'],
     ] as const;
@@ -216,7 +285,7 @@ test('split-plan uses turn metadata, boundary policies, and leading non-user tai
       maxIdleGapMs: 1_000, includeEventIds: true,
     });
     expect(plan.warnings).toContain('leading_non_user_event');
-    expect(plan.segments[0].eventIds).toEqual(['a0', 't0', 'u1', 'a1']);
+    expect(plan.segments[0].eventIds).toEqual(['a0', 't0', 'u1', 'a1', 'a-midnight']);
     expect(plan.proposedBoundaries.map((item) => item.reason)).toEqual(expect.arrayContaining([
       'trusted_local_date_boundary',
       'hard_topic_switch_boundary',
