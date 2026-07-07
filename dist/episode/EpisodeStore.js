@@ -41,26 +41,19 @@ export class EpisodeStore {
         return legacy ? mapEpisode(legacy) : undefined;
     }
     findActiveEpisodeRow(projectId, sessionId, sourceAgent, conversationThreadId) {
-        const where = [`project_id = ?`, `session_id = ?`, `status IN ('open', 'soft_sealed')`];
-        const params = [projectId, sessionId];
-        if (sourceAgent) {
-            where.push('source_agent = ?');
-            params.push(sourceAgent);
-        }
-        if (conversationThreadId) {
-            where.push('conversation_thread_id = ?');
-            params.push(conversationThreadId);
-        }
         return this.db.prepare(`
-      SELECT * FROM memory_episodes WHERE ${where.join(' AND ')}
+      SELECT * FROM memory_episodes
+      WHERE project_id = ? AND session_id = ? AND status IN ('open', 'soft_sealed')
+        AND COALESCE(source_agent, '') = ?
+        AND COALESCE(conversation_thread_id, '') = ?
       ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, updated_at DESC LIMIT 1
-    `).get(...params);
+    `).get(projectId, sessionId, sourceAgent ?? '', conversationThreadId ?? '');
     }
     claimLegacyEpisodeScope(episodeId, sourceAgent, conversationThreadId) {
         if (!sourceAgent && !conversationThreadId)
             return this.getEpisode(episodeId);
         if (this.resolveEvent) {
-            const events = this.listEventLinks(episodeId).slice(-10)
+            const events = this.listEventLinks(episodeId)
                 .map((link) => this.resolveEvent(link.eventId)).filter((event) => Boolean(event));
             const mismatch = events.some((event) => {
                 const metadata = event.payload?.metadata;
@@ -137,13 +130,22 @@ export class EpisodeStore {
     }
     appendEvent(input) {
         const existing = this.getEventLink(input.eventId);
-        if (existing)
-            return existing;
+        if (existing) {
+            if (existing.episodeId === input.episodeId)
+                return existing;
+            throw new Error(`episode_event_link_conflict:${input.eventId}`);
+        }
         const episode = this.getEpisode(input.episodeId);
         if (!episode || episode.status !== 'open')
             throw new Error(`episode_not_open:${input.episodeId}`);
-        const position = episode.eventCount + 1;
+        let created;
         this.db.transaction(() => {
+            const locked = this.db.prepare(`SELECT status FROM memory_episodes WHERE episode_id = ?`).get(input.episodeId);
+            if (locked?.status !== 'open')
+                throw new Error(`episode_not_open:${input.episodeId}`);
+            const position = Number(this.db.prepare(`
+        SELECT COUNT(*) AS count FROM memory_episode_events WHERE episode_id = ?
+      `).get(input.episodeId)?.count ?? 0) + 1;
             this.db.prepare(`
         INSERT INTO memory_episode_events (episode_id, event_id, position, relation, confidence, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -156,10 +158,11 @@ export class EpisodeStore {
           episode_type = COALESCE(?, episode_type), importance = MAX(importance, ?),
           summary = CASE WHEN ? IS NULL OR ? = '' THEN summary ELSE SUBSTR(COALESCE(summary || '\n', '') || ?, 1, 1600) END,
           candidate_types_json = ?, importance_signals_json = ?, importance_reason = COALESCE(?, importance_reason)
-        WHERE episode_id = ?
+        WHERE episode_id = ? AND status = 'open'
       `).run(input.eventId, input.globalSeq ?? null, position, input.occurredAt, input.episodeType || null, input.importance ?? episode.importance, input.summaryText || null, input.summaryText || '', input.summaryText || '', JSON.stringify(candidateTypes), JSON.stringify(importanceSignals), input.importanceReason || null, input.episodeId);
+            created = { episodeId: input.episodeId, eventId: input.eventId, position, relation: input.relation, confidence: input.confidence, createdAt: input.occurredAt };
         })();
-        return { episodeId: input.episodeId, eventId: input.eventId, position, relation: input.relation, confidence: input.confidence, createdAt: input.occurredAt };
+        return created;
     }
     getEventLink(eventId) {
         const row = this.db.prepare(`SELECT * FROM memory_episode_events WHERE event_id = ?`).get(eventId);
@@ -167,7 +170,7 @@ export class EpisodeStore {
     }
     listEventLinks(episodeId) {
         return this.db.prepare(`
-      SELECT * FROM memory_episode_events WHERE episode_id = ? ORDER BY position
+      SELECT * FROM memory_episode_events WHERE episode_id = ? ORDER BY position, event_id
     `).all(episodeId).map(mapEventLink);
     }
     getBoundarySnapshot(episodeId, timezone) {
@@ -183,15 +186,18 @@ export class EpisodeStore {
       JOIN memory_events e ON e.event_id = ee.event_id
       WHERE ee.episode_id = ?
     `).get(episodeId)?.occurred_at ?? undefined;
+        const hasLocalDateSource = this.db.prepare(`PRAGMA table_info(memory_events)`).all()
+            .some((row) => row.name === 'local_date_source');
         const userDateRows = this.db.prepare(`
-      SELECT e.event_id AS event_id, e.local_date AS local_date, e.occurred_at AS occurred_at
+      SELECT e.event_id AS event_id, e.local_date AS local_date,
+        ${hasLocalDateSource ? 'e.local_date_source' : "'legacy_unknown'"} AS local_date_source,
+        e.occurred_at AS occurred_at
       FROM memory_episode_events ee
       JOIN memory_events e ON e.event_id = ee.event_id
       WHERE ee.episode_id = ? AND e.role = 'user'
       ORDER BY ee.position DESC
-      LIMIT 8
     `).all(episodeId)
-            .map((row) => resolveTrustedLocalDate(this.resolveEvent?.(row.event_id) || { localDate: row.local_date || undefined, occurredAt: row.occurred_at ?? undefined }, timezone).date)
+            .map((row) => resolveTrustedLocalDate(this.resolveEvent?.(row.event_id) || { localDate: row.local_date || undefined, localDateSource: row.local_date_source || 'legacy_unknown', occurredAt: row.occurred_at ?? undefined }, timezone).date)
             .filter((date) => Boolean(date));
         const lastTrustedUserLocalDate = userDateRows[0];
         return {
@@ -291,16 +297,24 @@ export class EpisodeStore {
     recordBoundaryDecision(input) {
         const decisionId = `episode-boundary-${randomUUID()}`;
         const result = this.db.prepare(`
-      INSERT OR IGNORE INTO episode_boundary_decisions (
+      INSERT INTO episode_boundary_decisions (
         decision_id, project_id, session_id, source_agent, thread_id, primary_event_id,
         previous_episode_id, resulting_episode_id, policy_version, mode, guard_action,
         guard_codes_json, metrics_json, cpu_decision_json, reviewer_invoked,
         reviewer_decision_json, final_decision_json, warnings_json, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, primary_event_id, policy_version) DO NOTHING
     `).run(decisionId, input.projectId, input.sessionId, input.sourceAgent || null, input.threadId || null, input.primaryEventId, input.previousEpisodeId || null, input.resultingEpisodeId || null, input.policyVersion, input.mode, input.guardAction, JSON.stringify(input.guardCodes), JSON.stringify(input.metrics), JSON.stringify(safeDecision(input.cpuDecision)), input.reviewerInvoked ? 1 : 0, input.reviewerDecision ? JSON.stringify(safeDecision(input.reviewerDecision)) : null, JSON.stringify(safeDecision(input.finalDecision)), JSON.stringify(input.warnings), input.createdAt ?? Date.now());
         if (Number(result.changes || 0) > 0)
             return { recorded: true, decisionId, status: 'inserted' };
-        const existing = this.listBoundaryDecisions({ projectId: input.projectId, primaryEventId: input.primaryEventId, limit: 1 })[0];
+        const existingRow = this.db.prepare(`
+      SELECT * FROM episode_boundary_decisions
+      WHERE project_id = ? AND primary_event_id = ? AND policy_version = ?
+      LIMIT 1
+    `).get(input.projectId, input.primaryEventId, input.policyVersion);
+        const existing = existingRow ? mapBoundaryDecision(existingRow) : undefined;
+        if (existing && !sameBoundaryDecision(existing, input))
+            throw new Error(`episode_boundary_decision_conflict:${input.primaryEventId}`);
         return { recorded: false, decisionId: existing?.decisionId, status: 'duplicate' };
     }
     listBoundaryDecisions(options = {}) {
@@ -740,7 +754,9 @@ export class EpisodeStore {
       CREATE TABLE IF NOT EXISTS memory_episode_events (
         episode_id TEXT NOT NULL, event_id TEXT NOT NULL UNIQUE, position INTEGER NOT NULL,
         relation TEXT NOT NULL, confidence REAL NOT NULL, created_at INTEGER NOT NULL,
-        PRIMARY KEY (episode_id, event_id)
+        PRIMARY KEY (episode_id, event_id),
+        UNIQUE(episode_id, position),
+        FOREIGN KEY (episode_id) REFERENCES memory_episodes(episode_id) ON DELETE CASCADE
       );
       CREATE TABLE IF NOT EXISTS episode_closure_receipts (
         receipt_id TEXT PRIMARY KEY, episode_id TEXT NOT NULL, project_id TEXT NOT NULL, closure_mode TEXT NOT NULL,
@@ -795,6 +811,8 @@ export class EpisodeStore {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_episodes_one_active_scope
         ON memory_episodes(project_id, session_id, COALESCE(source_agent, ''), COALESCE(conversation_thread_id, ''))
         WHERE status = 'open';
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_episode_events_episode_position_unique
+        ON memory_episode_events(episode_id, position);
     `);
     }
 }
@@ -917,6 +935,45 @@ function safeDecision(decision) {
         importanceSignals: decision.importanceSignals?.slice(0, 20),
         rationale: decision.rationale?.slice(0, 240),
     };
+}
+function sameBoundaryDecision(existing, input) {
+    return JSON.stringify({
+        projectId: existing.projectId,
+        sessionId: existing.sessionId,
+        sourceAgent: existing.sourceAgent,
+        threadId: existing.threadId,
+        primaryEventId: existing.primaryEventId,
+        previousEpisodeId: existing.previousEpisodeId,
+        resultingEpisodeId: existing.resultingEpisodeId,
+        policyVersion: existing.policyVersion,
+        mode: existing.mode,
+        guardAction: existing.guardAction,
+        guardCodes: existing.guardCodes,
+        metrics: existing.metrics,
+        cpuDecision: safeDecision(existing.cpuDecision),
+        reviewerInvoked: existing.reviewerInvoked,
+        reviewerDecision: existing.reviewerDecision ? safeDecision(existing.reviewerDecision) : undefined,
+        finalDecision: safeDecision(existing.finalDecision),
+        warnings: existing.warnings,
+    }) === JSON.stringify({
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+        sourceAgent: input.sourceAgent,
+        threadId: input.threadId,
+        primaryEventId: input.primaryEventId,
+        previousEpisodeId: input.previousEpisodeId,
+        resultingEpisodeId: input.resultingEpisodeId,
+        policyVersion: input.policyVersion,
+        mode: input.mode,
+        guardAction: input.guardAction,
+        guardCodes: input.guardCodes,
+        metrics: input.metrics,
+        cpuDecision: safeDecision(input.cpuDecision),
+        reviewerInvoked: input.reviewerInvoked,
+        reviewerDecision: input.reviewerDecision ? safeDecision(input.reviewerDecision) : undefined,
+        finalDecision: safeDecision(input.finalDecision),
+        warnings: input.warnings,
+    });
 }
 function retryDelayMs(attempts) {
     return Math.min(60 * 60_000, 30_000 * 2 ** Math.max(0, attempts - 1));

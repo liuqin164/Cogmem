@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
-import { EpisodeBoundaryPolicy, normalizeEpisodeBoundaryConfig, resolveTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
+import { normalizeEpisodeBoundaryConfig, resolveTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
+import { replayEpisodeBoundaries, type EpisodeReplayPair } from './EpisodeBoundaryReplayEngine.js';
+import { validateEpisodeInvariants } from './EpisodeInvariantValidator.js';
 import type { EpisodeStore } from './EpisodeStore.js';
 import type { EpisodeEventLink, EpisodeStatus, TurnRelation } from './EpisodeTypes.js';
 
@@ -94,7 +96,7 @@ export class EpisodeBoundaryAuditService {
     const dates = [...new Set(events.filter((event) => event.role === 'user').map((event) => trustedLocalDate(event, config.timezone)).filter((value): value is string => Boolean(value)))];
     const relationCounts: Record<string, number> = {};
     for (const link of links) relationCounts[link.relation] = (relationCounts[link.relation] || 0) + 1;
-    const userTimes = events.filter((event) => event.role === 'user').map((event) => event.occurredAt || 0);
+    const userTimes = events.filter((event) => event.role === 'user' && Number.isFinite(event.occurredAt)).map((event) => event.occurredAt);
     const reasons: string[] = [];
     const warnings: string[] = [...configWarnings];
     warnings.push(...dateWarningCodes(pairs, config.timezone));
@@ -103,7 +105,11 @@ export class EpisodeBoundaryAuditService {
     const maxUserTurnGapMs = maxGap(userTimes);
     const maxBoundaryIdleGapMs = maxBoundaryIdleGap(pairs);
     const outOfOrderEventCount = outOfOrderCount(events);
-    reasons.push(...replayBoundaryReasons(episode.startedAt, pairs, config));
+    const replay = replayEpisodeBoundaries({ episode, pairs, config });
+    const violations = validateEpisodeInvariants({ episode, pairs, timezone: config.timezone });
+    warnings.push(...replay.warnings, ...replay.structuralAnomalies);
+    for (const boundary of replay.effectiveBoundaries) reasons.push(...auditReasonsForBoundary(boundary));
+    reasons.push(...violations.map((violation) => violation.reason));
     if (episode.eventCount !== links.length) reasons.push('stored_actual_event_count_mismatch');
     if (missingRawEventIds.length > 0) reasons.push('unresolved_raw_events');
     if (outOfOrderEventCount > 0) reasons.push('out_of_order_events');
@@ -111,10 +117,12 @@ export class EpisodeBoundaryAuditService {
     if (hardShiftCount(relationCounts) > 1) reasons.push('multiple_hard_topic_switch_relations');
     if (!events.some((event) => event.role === 'user')) reasons.push('zero_user_event_episode');
     if (!dates.length) warnings.push('trusted_local_date_unavailable');
-    const critical = reasons.some((reason) => [
+    const stableReasons = [...new Set(reasons)].sort();
+    const stableWarnings = [...new Set(warnings)].sort();
+    const critical = stableReasons.some((reason) => [
       'stored_actual_event_count_mismatch', 'event_count_exceeds_max', 'duration_exceeds_max',
       'boundary_idle_gap_exceeds_max', 'multiple_trusted_local_dates', 'unresolved_raw_events',
-    ].includes(reason));
+    ].includes(reason)) || violations.some((violation) => violation.severity === 'critical');
     return {
       episodeId: episode.episodeId,
       projectId: episode.projectId,
@@ -146,11 +154,11 @@ export class EpisodeBoundaryAuditService {
       unresolvedEventCount: missingRawEventIds.length,
       missingRawEventIds: missingRawEventIds.slice(0, 50),
       evidenceIntegrityStatus: missingRawEventIds.length ? 'missing_raw_events' : 'ok',
-      requiresManualReview: missingRawEventIds.length > 0,
+      requiresManualReview: missingRawEventIds.length > 0 || replay.structuralAnomalies.length > 0 || violations.some((violation) => violation.requiresManualReview),
       severity: critical ? 'critical' : reasons.length ? 'warning' : 'info',
-      reasons,
-      warnings,
-      recommendedAction: critical ? 'split-plan' : reasons.length ? 'inspect' : 'none',
+      reasons: stableReasons,
+      warnings: stableWarnings,
+      recommendedAction: critical ? 'split-plan' : stableReasons.length ? 'inspect' : 'none',
     };
   }
 }
@@ -174,72 +182,11 @@ function maxBoundaryIdleGap(pairs: Array<{ event?: MemoryEvent }>): number {
   return max;
 }
 
-type Pair = { link: EpisodeEventLink; event?: MemoryEvent };
+type Pair = EpisodeReplayPair;
 
-function replayBoundaryReasons(startedAt: number, pairs: Pair[], config: EpisodeBoundaryConfig): string[] {
-  const policy = new EpisodeBoundaryPolicy(config);
-  const reasons = new Set<string>();
-  let eventCount = 0;
-  let lastEventAt: number | undefined;
-  let lastUserLocalDate: string | undefined;
-  const userDates: string[] = [];
-  for (const group of logicalTurns(pairs)) {
-    const userPair = group.find((item) => item.event?.role === 'user');
-    if (userPair?.event) {
-      if (!isExplicitBoundary(userPair.link.relation)) {
-        const result = policy.evaluate({
-          active: { eventCount, startedAt, updatedAt: lastEventAt, lastTrustedLocalDate: lastUserLocalDate, localDates: userDates },
-          primaryEvent: userPair.event,
-          imported: isImportedTurn(group),
-        });
-        for (const code of result.guardCodes) reasons.add(auditReasonForGuard(code));
-      }
-      const date = trustedLocalDate(userPair.event, config.timezone);
-      if (date) {
-        lastUserLocalDate = date;
-        if (!userDates.includes(date)) userDates.push(date);
-      }
-    }
-    for (const pair of group) {
-      eventCount += 1;
-      if (typeof pair.event?.occurredAt === 'number') lastEventAt = Math.max(lastEventAt ?? pair.event.occurredAt, pair.event.occurredAt);
-    }
-  }
-  return [...reasons];
-}
-
-function logicalTurns(pairs: Pair[]): Pair[][] {
-  const groups: Pair[][] = [];
-  let current: Pair[] = [];
-  let currentTurnKey: string | undefined;
-  let currentHasUser = false;
-  for (const pair of pairs) {
-    const event = pair.event;
-    const turnKey = event ? turnKeyFor(event) : undefined;
-    const explicitTurnChange = Boolean(currentTurnKey && turnKey && currentTurnKey !== turnKey);
-    const roleBoundary = event?.role === 'user' && currentHasUser && !explicitTurnChange;
-    if (current.length > 0 && (explicitTurnChange || roleBoundary)) {
-      groups.push(current);
-      current = [];
-      currentTurnKey = undefined;
-      currentHasUser = false;
-    }
-    current.push(pair);
-    if (turnKey && !currentTurnKey) currentTurnKey = turnKey;
-    if (event?.role === 'user') currentHasUser = true;
-  }
-  if (current.length > 0) groups.push(current);
-  return groups;
-}
-
-function turnKeyFor(event: MemoryEvent): string | undefined {
-  if (event.turnId) return `id:${event.turnId}`;
-  if (typeof event.turnSeq === 'number') return `seq:${event.turnSeq}`;
-  return undefined;
-}
-
-function isExplicitBoundary(relation: TurnRelation): boolean {
-  return relation === 'closes_episode' || relation === 'hard_topic_switch' || relation === 'starts_new_topic' || relation === 'switches_topic';
+function auditReasonsForBoundary(boundary: { reason: string; guardCodes: string[] }): string[] {
+  if (boundary.guardCodes.length) return boundary.guardCodes.map(auditReasonForGuard);
+  return [auditReasonForBoundary(boundary.reason)];
 }
 
 function auditReasonForGuard(code: string): string {
@@ -248,6 +195,14 @@ function auditReasonForGuard(code: string): string {
   if (code === 'max_idle_gap_exceeded') return 'boundary_idle_gap_exceeds_max';
   if (code === 'trusted_local_date_changed') return 'multiple_trusted_local_dates';
   return code;
+}
+
+function auditReasonForBoundary(reason: string): string {
+  if (reason === 'max_events_boundary') return 'event_count_exceeds_max';
+  if (reason === 'max_duration_boundary') return 'duration_exceeds_max';
+  if (reason === 'max_idle_gap_boundary') return 'boundary_idle_gap_exceeds_max';
+  if (reason === 'trusted_local_date_boundary') return 'multiple_trusted_local_dates';
+  return reason;
 }
 
 function outOfOrderCount(events: MemoryEvent[]): number {

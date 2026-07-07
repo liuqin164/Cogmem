@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { eventTextForMemory } from './CogmemBlockStripper.js';
 import { classifyAssistantRelation, classifyTurnRelation, classifyTurnRelationHybridTrace } from './TurnRelationClassifier.js';
 import { EpisodeBoundaryPolicy } from './EpisodeBoundaryPolicy.js';
+import { replayPendingTurnBoundary } from './EpisodeBoundaryReplayEngine.js';
 export class EpisodeAssembler {
     store;
     resolveEvent;
@@ -22,8 +23,7 @@ export class EpisodeAssembler {
     }
     async appendTurnAsync(events, input) {
         const ordered = [...events].sort((a, b) => (a.eventOrdinal || 0) - (b.eventOrdinal || 0));
-        if (!ordered.length)
-            return { assignedEventIds: [], unassignedEventIds: [], ignoredEventIds: [], reopened: false };
+        validateTurnBatch(ordered, input);
         const primary = ordered.find((event) => event.role === 'user') || ordered[0];
         const threadId = input.conversationThreadId || primary.threadId || input.sessionId;
         const episode = this.store.findActiveEpisode(input.projectId, input.sessionId, input.sourceAgent, threadId);
@@ -51,20 +51,13 @@ export class EpisodeAssembler {
     }
     appendTurnClassified(events, input, decisionOverride, trace) {
         const ordered = [...events].sort((a, b) => (a.eventOrdinal || 0) - (b.eventOrdinal || 0));
-        if (!ordered.length)
-            return { assignedEventIds: [], unassignedEventIds: [], ignoredEventIds: [], reopened: false };
-        const mismatched = ordered.find((event) => event.projectId && event.projectId !== input.projectId);
-        if (mismatched)
-            throw new Error(`episode_project_mismatch:${mismatched.eventId}`);
+        validateTurnBatch(ordered, input);
         const primary = ordered.find((event) => event.role === 'user') || ordered[0];
         const conversationThreadId = input.conversationThreadId || primary.threadId || input.sessionId;
         let episode = this.store.findActiveEpisode(input.projectId, input.sessionId, input.sourceAgent, conversationThreadId);
         let legacyLinkedEpisodeId;
         if (episode && !episode.sourceAgent && !episode.conversationThreadId) {
-            const legacyEpisodeId = episode.episodeId;
-            episode = this.store.claimLegacyEpisodeScope(legacyEpisodeId, input.sourceAgent, conversationThreadId);
-            if (!episode)
-                legacyLinkedEpisodeId = legacyEpisodeId;
+            legacyLinkedEpisodeId = episode.episodeId;
         }
         const freshGuardResult = this.evaluateBoundary(episode, primary, ordered);
         const currentEpisodeFingerprint = episodeBoundaryFingerprint(episode);
@@ -84,41 +77,50 @@ export class EpisodeAssembler {
         let reopened = false;
         let closureReceipt;
         let linkedEpisodeId = legacyLinkedEpisodeId;
-        let now = Math.max(input.now ?? 0, ...ordered.map((event) => event.occurredAt || Date.now()), episode?.updatedAt ?? 0);
+        let now = Math.max(input.now ?? 0, ...ordered.map((event) => Number.isFinite(event.occurredAt) ? event.occurredAt : Date.now()), episode?.updatedAt ?? 0);
         let previousEpisodeId = episode?.episodeId;
         const shouldAuditBoundary = primary.role === 'user' && this.boundaryPolicy.config.auditDecisions;
         let guardWarnings = guardResult.warnings.map((warning) => warning.code);
         if (decision.relation === 'noise') {
-            const audit = this.recordBoundaryDecisionSafe(shouldAuditBoundary, {
-                projectId: input.projectId,
-                sessionId: input.sessionId,
-                sourceAgent: input.sourceAgent,
-                threadId: conversationThreadId,
-                primaryEventId: primary.eventId,
-                previousEpisodeId,
-                policyVersion: guardResult.policyVersion,
-                mode: guardResult.mode,
-                guardAction: guardResult.guardAction,
-                guardCodes: guardResult.guardCodes,
-                metrics: guardResult.metrics,
-                cpuDecision,
-                reviewerInvoked: trace?.reviewerInvoked || false,
-                reviewerDecision,
-                finalDecision: decision,
-                warnings: guardResult.warnings,
-                createdAt: now,
-            });
-            this.store.transaction(() => {
-                for (const event of ordered) {
-                    this.store.markEventDisposition({
-                        eventId: event.eventId, projectId: input.projectId, disposition: 'ignored', reason: 'deterministic_noise', now,
+            let audit = { status: 'not_applicable', warnings: [] };
+            try {
+                this.store.transaction(() => {
+                    audit = this.recordBoundaryDecisionSafe(shouldAuditBoundary, {
+                        projectId: input.projectId,
+                        sessionId: input.sessionId,
+                        sourceAgent: input.sourceAgent,
+                        threadId: conversationThreadId,
+                        primaryEventId: primary.eventId,
+                        previousEpisodeId,
+                        policyVersion: guardResult.policyVersion,
+                        mode: guardResult.mode,
+                        guardAction: guardResult.guardAction,
+                        guardCodes: guardResult.guardCodes,
+                        metrics: guardResult.metrics,
+                        cpuDecision,
+                        reviewerInvoked: trace?.reviewerInvoked || false,
+                        reviewerDecision,
+                        finalDecision: decision,
+                        warnings: guardResult.warnings,
+                        createdAt: now,
                     });
-                }
-            });
+                    if (audit.status === 'failed')
+                        throw new Error(audit.warnings[0] || 'boundary_audit_write_failed');
+                    for (const event of ordered) {
+                        this.store.markEventDisposition({
+                            eventId: event.eventId, projectId: input.projectId, disposition: 'ignored', reason: 'deterministic_noise', now,
+                        });
+                    }
+                });
+            }
+            catch (error) {
+                const warning = error instanceof Error ? error.message : 'boundary_audit_write_failed';
+                audit = { status: 'failed', warnings: [warning] };
+            }
             return {
                 assignedEventIds: [],
-                unassignedEventIds: [],
-                ignoredEventIds: ordered.map((event) => event.eventId),
+                unassignedEventIds: audit.status === 'failed' ? ordered.map((event) => event.eventId) : [],
+                ignoredEventIds: audit.status === 'failed' ? [] : ordered.map((event) => event.eventId),
                 reopened: false,
                 boundaryTriggered: false,
                 boundaryDetected: guardResult.guardCodes.length > 0,
@@ -241,7 +243,7 @@ export class EpisodeAssembler {
                         'continues_previous', 'clarifies_previous', 'corrects_previous', 'returns_to_old_topic',
                         'answers_assistant_question', 'accepts_assistant_proposal', 'rejects_assistant_proposal', 'confirms_assistant_fact',
                     ]).has(decision.relation)
-                    && now - (episode.sealedAt || episode.updatedAt) <= this.softReopenWindowMs;
+                    && now - (episode.sealedAt ?? episode.updatedAt) <= this.softReopenWindowMs;
                 if (mayReopen) {
                     episode = this.store.reopenSoftEpisode(episode.episodeId, now);
                     reopened = true;
@@ -277,7 +279,7 @@ export class EpisodeAssembler {
                     conversationThreadId,
                     topicPath: decision.topicPath,
                     episodeType: decision.episodeType, importance: decision.importance,
-                    eventId: primary.eventId, globalSeq: primary.globalSeq, occurredAt: primary.occurredAt || now,
+                    eventId: primary.eventId, globalSeq: primary.globalSeq, occurredAt: Number.isFinite(primary.occurredAt) ? primary.occurredAt : now,
                     episodeTags: [decision.episodeType, ...decision.candidateTypes],
                     candidateTypes: decision.candidateTypes,
                     importanceSignals: decision.importanceSignals,
@@ -393,6 +395,8 @@ export class EpisodeAssembler {
         for (const event of ordered) {
             const existing = this.store.getEventLink(event.eventId);
             if (existing) {
+                if (existing.episodeId !== episode.episodeId)
+                    throw new Error(`episode_event_link_conflict:${event.eventId}`);
                 assignedEventIds.push(event.eventId);
                 continue;
             }
@@ -400,7 +404,7 @@ export class EpisodeAssembler {
             this.store.appendEvent({
                 episodeId: episode.episodeId, eventId: event.eventId, relation,
                 confidence: event.eventId === primary.eventId ? decision.confidence : 0.9,
-                globalSeq: event.globalSeq, occurredAt: event.occurredAt || now,
+                globalSeq: event.globalSeq, occurredAt: Number.isFinite(event.occurredAt) ? event.occurredAt : now,
                 episodeType: decision.episodeType, importance: decision.importance,
                 summaryText: summaryLine(event),
                 candidateTypes: decision.candidateTypes,
@@ -417,14 +421,27 @@ export class EpisodeAssembler {
             return payload?.metadata?.imported === true || payload?.metadata?.sourceRef !== undefined;
         });
         const snapshot = episode ? this.store.getBoundarySnapshot(episode.episodeId, this.boundaryPolicy.config.timezone) : undefined;
-        return this.boundaryPolicy.evaluate({
-            active: snapshot ? {
-                eventCount: snapshot.eventCount,
-                startedAt: snapshot.startedAt,
-                updatedAt: snapshot.updatedAt,
-                localDates: snapshot.trustedLocalDates,
-                lastTrustedLocalDate: snapshot.lastTrustedLocalDate,
-            } : undefined,
+        const active = snapshot ? {
+            eventCount: snapshot.eventCount,
+            startedAt: snapshot.startedAt,
+            lastEventAt: snapshot.lastEventAt ?? snapshot.updatedAt,
+            trustedLocalDates: snapshot.trustedLocalDates,
+            lastTrustedUserLocalDate: snapshot.lastTrustedLocalDate,
+        } : undefined;
+        return replayPendingTurnBoundary({
+            config: this.boundaryPolicy.config,
+            active,
+            pendingPairs: currentEvents.map((event, index) => ({
+                link: {
+                    episodeId: episode?.episodeId ?? 'pending',
+                    eventId: event.eventId,
+                    position: snapshot ? snapshot.eventCount + index + 1 : index + 1,
+                    relation: event.eventId === primary.eventId ? 'continues_previous' : eventRelation(event, primary, fallbackDecision()),
+                    confidence: 1,
+                    createdAt: Number.isFinite(event.occurredAt) ? event.occurredAt : Date.now(),
+                },
+                event,
+            })),
             primaryEvent: primary,
             imported,
         });
@@ -436,8 +453,9 @@ export class EpisodeAssembler {
             const result = this.store.recordBoundaryDecision(input);
             return { status: result.status, decisionId: result.decisionId, warnings: [] };
         }
-        catch {
-            return { status: 'failed', warnings: ['boundary_audit_write_failed'] };
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return { status: 'failed', warnings: [message.startsWith('episode_boundary_decision_conflict:') ? 'boundary_audit_conflict' : 'boundary_audit_write_failed'] };
         }
     }
 }
@@ -483,4 +501,51 @@ function summaryLine(event) {
 }
 function averageConfidence(links) {
     return links.length ? links.reduce((total, link) => total + link.confidence, 0) / links.length : 0;
+}
+function validateTurnBatch(events, input) {
+    if (!events.length)
+        throw new Error('episode_turn_empty');
+    const ids = new Set();
+    const userTurnKeys = new Set();
+    const expectedThread = input.conversationThreadId || events.find((event) => event.threadId)?.threadId || input.sessionId;
+    for (const event of events) {
+        if (ids.has(event.eventId))
+            throw new Error(`episode_duplicate_event_id:${event.eventId}`);
+        ids.add(event.eventId);
+        if (event.projectId && event.projectId !== input.projectId)
+            throw new Error(`episode_project_mismatch:${event.eventId}`);
+        if (event.sessionId && event.sessionId !== input.sessionId)
+            throw new Error(`episode_session_mismatch:${event.eventId}`);
+        if (event.threadId && event.threadId !== expectedThread)
+            throw new Error(`episode_thread_mismatch:${event.eventId}`);
+        const metadata = event.payload?.metadata;
+        if (input.sourceAgent && typeof metadata?.sourceAgent === 'string' && metadata.sourceAgent !== input.sourceAgent) {
+            throw new Error(`episode_source_scope_mismatch:${event.eventId}`);
+        }
+        if (event.role === 'user')
+            userTurnKeys.add(turnBatchKey(event));
+    }
+    if (userTurnKeys.size > 1)
+        throw new Error('episode_multiple_user_turns_in_batch');
+}
+function turnBatchKey(event) {
+    if (event.turnId)
+        return `id:${event.turnId}`;
+    if (typeof event.turnSeq === 'number')
+        return `seq:${event.turnSeq}`;
+    return `event:${event.eventId}`;
+}
+function fallbackDecision() {
+    return {
+        relation: 'continues_previous',
+        confidence: 1,
+        signals: [],
+        needsLlmReview: false,
+        candidateTypes: [],
+        closureCandidate: false,
+        episodeType: 'discussion',
+        importance: 0,
+        importanceSignals: [],
+        rationale: '',
+    };
 }

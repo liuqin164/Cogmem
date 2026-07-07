@@ -272,6 +272,7 @@ export interface RawMemoryEventInput {
     charStart?: number;
     charEnd?: number;
     localDate?: string;
+    localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
     metadata?: Record<string, unknown>;
 }
 export interface EpisodeMessageInput {

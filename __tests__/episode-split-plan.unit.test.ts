@@ -132,6 +132,8 @@ test('audit idle gap uses online boundary semantics instead of user-to-user gap'
         confidence: 1, occurredAt,
       });
     }
+    kernel.factStore.getDatabase().prepare(`UPDATE memory_episodes SET start_event_id = ?, end_event_id = ? WHERE episode_id = ?`)
+      .run('u0', 'u50', episode.episodeId);
 
     const audit = kernel.auditEpisodeBoundaries({
       projectId: 'brain', episodeId: episode.episodeId,
@@ -335,9 +337,10 @@ test('split-plan reads explicit boundary relation from the user event inside a l
     expect(plan.segments[0].eventIds).toEqual(['ub-u0', 'ub-a1', 'ub-t1', 'ub-u1']);
     expect(plan.proposedBoundaries).toEqual([
       expect.objectContaining({
-        afterEventId: 'ub-u2',
+        afterEventId: 'ub-a2',
+        primaryUserEventId: 'ub-u2',
         relation: 'hard_topic_switch',
-        reason: 'hard_topic_switch_boundary',
+        reason: 'explicit_closure_boundary',
       }),
     ]);
   } finally {
@@ -393,6 +396,8 @@ test('audit and split-plan default to live runtime boundary config', () => {
         confidence: 1, occurredAt: event.occurredAt,
       });
     }
+    kernel.factStore.getDatabase().prepare(`UPDATE memory_episodes SET start_event_id = ?, end_event_id = ? WHERE episode_id = ?`)
+      .run('runtime-0', 'runtime-20', episode.episodeId);
 
     const audit = kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId: episode.episodeId }).items[0];
     expect(audit.reasons).toContain('event_count_exceeds_max');
@@ -425,6 +430,8 @@ test('audit replay honors applyToImports=false from live config', () => {
         confidence: 1, occurredAt: event.occurredAt,
       });
     }
+    kernel.factStore.getDatabase().prepare(`UPDATE memory_episodes SET start_event_id = ?, end_event_id = ? WHERE episode_id = ?`)
+      .run('import-runtime-0', 'import-runtime-20', episode.episodeId);
 
     const audit = kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId: episode.episodeId }).items[0];
     expect(audit.reasons).not.toContain('event_count_exceeds_max');
@@ -499,7 +506,7 @@ test('split-plan bounds event id output even when includeEventIds is true', () =
     expect(plan.segments).toHaveLength(1);
     expect(plan.segments[0].eventIds).toBeUndefined();
     expect(plan.segments[0].eventIdsOmitted).toBe(520);
-    expect(plan.segments[0].eventIdsCursor).toBe('segment:0:eventIds');
+    expect(plan.segments[0].eventIdsCursor).toBeUndefined();
     expect(plan.segments[0].eventIdsHash).toMatch(/^[a-f0-9]{64}$/);
   } finally {
     kernel.close();

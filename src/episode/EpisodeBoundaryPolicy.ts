@@ -72,11 +72,16 @@ export function normalizeEpisodeBoundaryConfig(input: Partial<EpisodeBoundaryCon
 } {
   const diagnostics: EpisodeBoundaryConfigDiagnostic[] = [];
   const config: EpisodeBoundaryConfig = { ...DEFAULT_EPISODE_BOUNDARY_CONFIG, ...input };
-  config.enabled = input.enabled ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.enabled;
-  config.auditDecisions = input.auditDecisions ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.auditDecisions;
-  config.applyToLive = input.applyToLive ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.applyToLive;
-  config.applyToImports = input.applyToImports ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.applyToImports;
-  config.splitOnTrustedLocalDateChange = input.splitOnTrustedLocalDateChange ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.splitOnTrustedLocalDateChange;
+  config.enabled = boundedBoolean(input.enabled, DEFAULT_EPISODE_BOUNDARY_CONFIG.enabled, 'enabled', diagnostics);
+  config.auditDecisions = boundedBoolean(input.auditDecisions, DEFAULT_EPISODE_BOUNDARY_CONFIG.auditDecisions, 'audit_decisions', diagnostics);
+  config.applyToLive = boundedBoolean(input.applyToLive, DEFAULT_EPISODE_BOUNDARY_CONFIG.applyToLive, 'apply_to_live', diagnostics);
+  config.applyToImports = boundedBoolean(input.applyToImports, DEFAULT_EPISODE_BOUNDARY_CONFIG.applyToImports, 'apply_to_imports', diagnostics);
+  config.splitOnTrustedLocalDateChange = boundedBoolean(
+    input.splitOnTrustedLocalDateChange,
+    DEFAULT_EPISODE_BOUNDARY_CONFIG.splitOnTrustedLocalDateChange,
+    'split_on_trusted_local_date_change',
+    diagnostics,
+  );
   if (input.mode === 'off' || input.mode === 'shadow' || input.mode === 'enforce' || input.mode === undefined) {
     config.mode = input.mode ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.mode;
   } else {
@@ -90,7 +95,13 @@ export function normalizeEpisodeBoundaryConfig(input: Partial<EpisodeBoundaryCon
   config.maxEvents = boundedInt(input.maxEvents, 20, 500, DEFAULT_EPISODE_BOUNDARY_CONFIG.maxEvents, 'max_events', diagnostics);
   config.maxDurationMs = boundedInt(input.maxDurationMs, 300_000, 86_400_000, DEFAULT_EPISODE_BOUNDARY_CONFIG.maxDurationMs, 'max_duration_ms', diagnostics);
   config.maxIdleGapMs = boundedInt(input.maxIdleGapMs, 300_000, 86_400_000, DEFAULT_EPISODE_BOUNDARY_CONFIG.maxIdleGapMs, 'max_idle_gap_ms', diagnostics);
-  if (input.timezone) {
+  if (input.policyVersion !== undefined && (typeof input.policyVersion !== 'string' || input.policyVersion.trim() === '')) {
+    diagnostics.push({ severity: 'warning', code: 'invalid_episode_boundary_policy_version', message: 'episode_boundary.policy_version must be a non-empty string.' });
+    config.policyVersion = DEFAULT_EPISODE_BOUNDARY_CONFIG.policyVersion;
+  } else {
+    config.policyVersion = input.policyVersion ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.policyVersion;
+  }
+  if (input.timezone !== undefined && input.timezone !== '') {
     try { new Intl.DateTimeFormat('en-US', { timeZone: input.timezone }).format(0); config.timezone = input.timezone; }
     catch {
       diagnostics.push({ severity: 'warning', code: 'invalid_episode_boundary_timezone', message: 'episode_boundary.timezone must be a valid IANA timezone.' });
@@ -129,12 +140,12 @@ export class EpisodeBoundaryPolicy {
       && currentTime !== undefined && currentTime < input.active.updatedAt;
     if (outOfOrderTimestamp) warnings.push({ code: 'out_of_order_timestamp', message: 'Event timestamp is earlier than the active episode update time.' });
     const metrics: EpisodeBoundaryMetrics = {
-      activeEventCount: input.active?.eventCount || 0,
+      activeEventCount: input.active?.eventCount ?? 0,
       activeStartedAt: input.active?.startedAt,
       activeUpdatedAt: input.active?.updatedAt,
-      elapsedMs: input.active?.startedAt !== undefined && input.primaryEvent.occurredAt
+      elapsedMs: input.active?.startedAt !== undefined && input.primaryEvent.occurredAt !== undefined
         ? input.primaryEvent.occurredAt - input.active.startedAt : undefined,
-      idleGapMs: input.active?.updatedAt !== undefined && input.primaryEvent.occurredAt
+      idleGapMs: input.active?.updatedAt !== undefined && input.primaryEvent.occurredAt !== undefined
         ? input.primaryEvent.occurredAt - input.active.updatedAt : undefined,
       trustedLocalDates: localDates,
       lastTrustedLocalDate: input.active?.lastTrustedLocalDate,
@@ -180,6 +191,22 @@ function boundedInt(
   return Math.trunc(value);
 }
 
+function boundedBoolean(
+  value: unknown,
+  fallback: boolean,
+  name: string,
+  diagnostics: EpisodeBoundaryConfigDiagnostic[],
+): boolean {
+  if (value === undefined) return fallback;
+  if (typeof value === 'boolean') return value;
+  diagnostics.push({
+    severity: 'warning',
+    code: `invalid_episode_boundary_${name}`,
+    message: `episode_boundary.${name} must be a boolean.`,
+  });
+  return fallback;
+}
+
 export function isTrustedLocalDate(value: string | undefined): value is string {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const [year, month, day] = value.split('-').map(Number);
@@ -188,7 +215,7 @@ export function isTrustedLocalDate(value: string | undefined): value is string {
 }
 
 export function resolveTrustedLocalDate(
-  event: { occurredAt?: number; localDate?: string; payload?: unknown } | undefined,
+  event: { occurredAt?: number; localDate?: string; localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown'; payload?: unknown } | undefined,
   timezone?: string,
 ): { date?: string; warning?: EpisodeBoundaryWarning } {
   if (!event) return { warning: { code: 'trusted_local_date_unavailable', message: 'No trusted local date source was available.' } };
@@ -196,13 +223,17 @@ export function resolveTrustedLocalDate(
     return { warning: { code: 'invalid_trusted_local_date', message: 'Trusted local date must use YYYY-MM-DD.' } };
   }
   const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
-  const localDateSource = metadata?.localDateSource;
-  if (event.localDate && localDateSource !== 'event_store_utc_default') return { date: event.localDate };
+  const legacyMetadataSource = metadata?.localDateSource === 'event_store_utc_default' ? 'generated_utc' : metadata?.localDateSource;
+  const localDateSource = event.localDateSource ?? legacyMetadataSource ?? (event.localDate ? 'explicit' : undefined);
+  if (event.localDate && localDateSource === 'explicit') return { date: event.localDate };
+  if (event.localDate && localDateSource === 'legacy_unknown') {
+    return { warning: { code: 'legacy_unknown_local_date_source', message: 'Legacy local date source is not trusted for boundary decisions.' } };
+  }
   if (timezone && typeof event.occurredAt === 'number' && Number.isFinite(event.occurredAt)) {
     const utcDate = new Date(event.occurredAt).toISOString().slice(0, 10);
-    if (!event.localDate || event.localDate === utcDate) return { date: localDateInTimezone(event.occurredAt, timezone) };
+    if (!event.localDate || (localDateSource === 'generated_utc' && event.localDate === utcDate)) return { date: localDateInTimezone(event.occurredAt, timezone) };
   }
-  if (event.localDate && isTrustedLocalDate(event.localDate)) return { date: event.localDate };
+  if (event.localDate && localDateSource === 'generated_utc' && isTrustedLocalDate(event.localDate)) return { date: event.localDate };
   return { warning: { code: 'trusted_local_date_unavailable', message: 'No trusted local date source was available.' } };
 }
 

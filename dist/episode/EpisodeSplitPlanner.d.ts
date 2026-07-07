@@ -24,8 +24,11 @@ export interface EpisodeSplitProposedBoundary {
     boundaryIndex: number;
     beforeEventId?: string;
     afterEventId?: string;
+    primaryUserEventId?: string;
     reason: string;
     relation?: TurnRelation;
+    effective?: boolean;
+    disposition?: 'explicit' | 'soft_review' | 'shadow' | 'enforced';
 }
 export interface EpisodeSplitImpactInventory {
     eventCount: number;
@@ -48,7 +51,10 @@ export interface EpisodeSplitPlan {
         maxDurationMs: number;
         maxIdleGapMs: number;
         splitOnTrustedLocalDateChange: boolean;
+        mode: string;
+        applyToLive: boolean;
         applyToImports: boolean;
+        policyVersion: string;
         timezone?: string;
     };
     proposedBoundaries: EpisodeSplitProposedBoundary[];

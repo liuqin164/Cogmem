@@ -42,6 +42,7 @@ export interface AppendEventInput<TPayload = Record<string, unknown>> {
   threadId?: string;
   sessionId?: string;
   localDate?: string;
+  localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
   threadSeq?: number;
   turnId?: string;
   turnSeq?: number;
@@ -64,7 +65,7 @@ export interface AppendEventInput<TPayload = Record<string, unknown>> {
 const MEMORY_EVENT_COLUMNS = `
   event_id, global_seq, stream_id, stream_type, event_type, raw_event_type, event_version, project_id,
   workspace_id, actor_id, causation_id, correlation_id, source_neuron_id, source_id,
-  content_hash, thread_id, session_id, local_date, thread_seq, turn_id, turn_seq,
+  content_hash, thread_id, session_id, local_date, local_date_source, thread_seq, turn_id, turn_seq,
   event_ordinal, role, parent_event_id, prev_event_id, next_event_id, causality_type,
   source_offset, line_start, line_end, char_start, char_end, ordering_confidence,
   occurred_at, payload_json, payload_hash, created_at
@@ -99,6 +100,7 @@ export class EventStore {
         thread_id TEXT,
         session_id TEXT,
         local_date TEXT,
+        local_date_source TEXT NOT NULL DEFAULT 'legacy_unknown',
         thread_seq INTEGER,
         turn_id TEXT,
         turn_seq INTEGER,
@@ -178,6 +180,7 @@ export class EventStore {
     addColumn('thread_id', 'thread_id TEXT');
     addColumn('session_id', 'session_id TEXT');
     addColumn('local_date', 'local_date TEXT');
+    addColumn('local_date_source', "local_date_source TEXT NOT NULL DEFAULT 'legacy_unknown'");
     addColumn('thread_seq', 'thread_seq INTEGER');
     addColumn('turn_id', 'turn_id TEXT');
     addColumn('turn_seq', 'turn_seq INTEGER');
@@ -224,6 +227,7 @@ export class EventStore {
     const threadSeq = input.threadSeq ?? (threadId ? this.getNextThreadSeq(threadId) : undefined);
     const globalSeq = this.getNextGlobalSeq();
     const createdAt = Date.now();
+    const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : 'generated_utc');
     const event: MemoryEvent<TPayload> = {
       eventId: input.eventId || `evt-${randomUUID()}`,
       globalSeq,
@@ -243,6 +247,7 @@ export class EventStore {
       threadId,
       sessionId: input.sessionId,
       localDate: input.localDate ?? new Date(occurredAt).toISOString().slice(0, 10),
+      localDateSource,
       threadSeq,
       turnId: input.turnId,
       turnSeq: input.turnSeq,
@@ -269,11 +274,11 @@ export class EventStore {
       INSERT INTO memory_events (
         event_id, global_seq, stream_id, stream_type, event_type, raw_event_type, event_version, project_id,
         workspace_id, actor_id, causation_id, correlation_id, source_neuron_id, source_id,
-        content_hash, thread_id, session_id, local_date, thread_seq, turn_id, turn_seq,
+        content_hash, thread_id, session_id, local_date, local_date_source, thread_seq, turn_id, turn_seq,
         event_ordinal, role, parent_event_id, prev_event_id, next_event_id, causality_type,
         source_offset, line_start, line_end, char_start, char_end, ordering_confidence,
         occurred_at, payload_json, payload_hash, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       event.eventId,
       event.globalSeq ?? null,
@@ -293,20 +298,21 @@ export class EventStore {
       event.threadId || null,
       event.sessionId || null,
       event.localDate || null,
-      event.threadSeq || null,
+      event.localDateSource || 'legacy_unknown',
+      event.threadSeq ?? null,
       event.turnId || null,
-      event.turnSeq || null,
-      event.eventOrdinal || null,
+      event.turnSeq ?? null,
+      event.eventOrdinal ?? null,
       event.role || null,
       event.parentEventId || null,
       event.prevEventId || null,
       event.nextEventId || null,
       event.causalityType || null,
-      event.sourceOffset || null,
-      event.lineStart || null,
-      event.lineEnd || null,
-      event.charStart || null,
-      event.charEnd || null,
+      event.sourceOffset ?? null,
+      event.lineStart ?? null,
+      event.lineEnd ?? null,
+      event.charStart ?? null,
+      event.charEnd ?? null,
       event.orderingConfidence || null,
       event.occurredAt,
       storedPayloadJson,
@@ -772,20 +778,21 @@ export class EventStore {
       threadId: row.thread_id || (row.stream_type === 'thread' ? row.stream_id : undefined),
       sessionId: row.session_id || undefined,
       localDate: row.local_date || undefined,
-      threadSeq: row.thread_seq || undefined,
+      localDateSource: (row.local_date_source as MemoryEvent['localDateSource'] | undefined) || legacyLocalDateSource(row.payload_json),
+      threadSeq: row.thread_seq ?? undefined,
       turnId: row.turn_id || undefined,
-      turnSeq: row.turn_seq || undefined,
-      eventOrdinal: row.event_ordinal || undefined,
+      turnSeq: row.turn_seq ?? undefined,
+      eventOrdinal: row.event_ordinal ?? undefined,
       role: row.role || undefined,
       parentEventId: row.parent_event_id || undefined,
       prevEventId: row.prev_event_id || undefined,
       nextEventId: row.next_event_id || undefined,
       causalityType: row.causality_type || undefined,
-      sourceOffset: row.source_offset || undefined,
-      lineStart: row.line_start || undefined,
-      lineEnd: row.line_end || undefined,
-      charStart: row.char_start || undefined,
-      charEnd: row.char_end || undefined,
+      sourceOffset: row.source_offset ?? undefined,
+      lineStart: row.line_start ?? undefined,
+      lineEnd: row.line_end ?? undefined,
+      charStart: row.char_start ?? undefined,
+      charEnd: row.char_end ?? undefined,
       orderingConfidence: row.ordering_confidence || undefined,
       occurredAt: row.occurred_at,
       payload: JSON.parse(this.decodePayload(row.payload_json)),
@@ -932,4 +939,15 @@ export class EventStore {
 
 function escapeSqlLike(value: string): string {
   return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+function legacyLocalDateSource(payloadJson: string): MemoryEvent['localDateSource'] {
+  try {
+    const payload = JSON.parse(payloadJson) as { metadata?: Record<string, unknown> };
+    if (payload.metadata?.localDateSource === 'event_store_utc_default') return 'generated_utc';
+    if (payload.metadata?.localDateSource === 'explicit') return 'explicit';
+  } catch {
+    return 'legacy_unknown';
+  }
+  return 'legacy_unknown';
 }

@@ -394,6 +394,7 @@ export interface MemoryEvent<TPayload = Record<string, unknown>> {
   threadId?: string;
   sessionId?: string;
   localDate?: string;
+  localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
   threadSeq?: number;
   turnId?: string;
   turnSeq?: number;

@@ -24,7 +24,7 @@ async function migrate(dbPath: string, args: string[]): Promise<Record<string, u
   return JSON.parse(stdout) as Record<string, unknown>;
 }
 
-test('one command upgrades a 3.5.2 database to schema 29 without changing source memory', async () => {
+test('one command upgrades a 3.5.2 database to schema 30 without changing source memory', async () => {
   const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-atlas-migrate-')), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   const event = kernel.eventStore.append({
@@ -80,7 +80,7 @@ test('one command upgrades a 3.5.2 database to schema 29 without changing source
     DROP TABLE IF EXISTS memory_atlas_fts;
     DROP TABLE IF EXISTS memory_atlas_documents;
     DROP TABLE IF EXISTS deep_write_candidate_reviews;
-    DELETE FROM _schema_migrations WHERE version IN ('0025','0026','0027','0028','0029');
+    DELETE FROM _schema_migrations WHERE version IN ('0025','0026','0027','0028','0029','0030');
     UPDATE _meta SET value = '24' WHERE key = 'schema_version';
   `);
   fixture.close();
@@ -91,14 +91,14 @@ test('one command upgrades a 3.5.2 database to schema 29 without changing source
   before.close();
 
   const dryRun = await migrate(dbPath, ['--dry-run']);
-  expect(dryRun.pending).toEqual(['0025', '0026', '0027', '0028', '0029']);
+  expect(dryRun.pending).toEqual(['0025', '0026', '0027', '0028', '0029', '0030']);
 
   const result = await migrate(dbPath, ['--yes', '--backup']);
-  expect(result.applied).toEqual(['0025', '0026', '0027', '0028', '0029']);
+  expect(result.applied).toEqual(['0025', '0026', '0027', '0028', '0029', '0030']);
   expect(existsSync(result.backupPath as string)).toBe(true);
 
   const upgraded = new Database(dbPath, { readonly: true });
-  expect(upgraded.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '29' });
+  expect(upgraded.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '30' });
   expect((upgraded.prepare('SELECT COUNT(*) AS count FROM memory_events').get() as { count: number }).count).toBe(beforeEvents);
   expect((upgraded.prepare('SELECT COUNT(*) AS count FROM memory_bindings').get() as { count: number }).count).toBe(beforeBindings);
   expect(upgraded.prepare(`SELECT node_id, project_id, node_type FROM memory_atlas_documents WHERE node_id = ?`).get(`entity:${entity.entityId}`)).toEqual({
@@ -109,6 +109,8 @@ test('one command upgrades a 3.5.2 database to schema 29 without changing source
   expect(upgraded.prepare(`SELECT status FROM memory_atlas_projection_state WHERE project_id='cogmem' AND projection_name='memory_atlas.v1'`).get()).toEqual({
     status: 'dirty',
   });
+  const eventColumns = upgraded.prepare('PRAGMA table_info(memory_events)').all() as Array<{ name: string }>;
+  expect(eventColumns.map((column) => column.name)).toContain('local_date_source');
   upgraded.close();
 
   const repeated = await migrate(dbPath, ['--yes']);

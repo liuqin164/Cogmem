@@ -36,13 +36,13 @@ test('cogmem migrate plans and upgrades a 2.7.1 database with a backup', async (
 
   const dryRun = await run(['--db', dbPath, '--dry-run', '--json']);
   expect(dryRun.exitCode).toBe(0);
-  expect(JSON.parse(dryRun.stdout).pending).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027', '0028', '0029']);
+  expect(JSON.parse(dryRun.stdout).pending).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027', '0028', '0029', '0030']);
   expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='_schema_migrations'`).get()).toBeNull();
 
   const applied = await run(['--db', dbPath, '--yes', '--backup', '--json']);
   expect(applied.exitCode).toBe(0);
   const result = JSON.parse(applied.stdout);
-  expect(result.applied).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027', '0028', '0029']);
+  expect(result.applied).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027', '0028', '0029', '0030']);
   expect(existsSync(result.backupPath)).toBe(true);
   const backup = new Database(result.backupPath, { readonly: true });
   expect(backup.prepare('SELECT value FROM legacy_wal_evidence').get()).toEqual({
@@ -60,13 +60,20 @@ test('cogmem migrate plans and upgrades a 2.7.1 database with a backup', async (
   expect(transitionIndexes.map((index) => index.name)).toContain('idx_prospective_transitions_candidate');
   const strategyIndexes = migrated.prepare(`PRAGMA index_list(context_strategy_outcomes)`).all() as Array<{ name: string }>;
   expect(strategyIndexes.map((index) => index.name)).toContain('idx_context_strategy_project_time');
-  expect(migrated.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '29' });
+  expect(migrated.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '30' });
   expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'topic_nodes'`).get()).toEqual({ name: 'topic_nodes' });
   expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_episodes'`).get()).toEqual({ name: 'memory_episodes' });
   expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episodes_one_active_scope'`).get()).toEqual({ name: 'idx_memory_episodes_one_active_scope' });
   const episodeColumns = migrated.prepare('PRAGMA table_info(memory_episodes)').all() as Array<{ name: string }>;
   expect(episodeColumns.map((column) => column.name)).toContain('dream_status');
   expect(episodeColumns.map((column) => column.name)).toContain('semantic_summary_json');
+  const eventTable = migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_events'`).get();
+  if (eventTable) {
+    const eventColumns = migrated.prepare('PRAGMA table_info(memory_events)').all() as Array<{ name: string }>;
+    expect(eventColumns.map((column) => column.name)).toContain('local_date_source');
+  }
+  const episodeEventIndexes = migrated.prepare(`PRAGMA index_list(memory_episode_events)`).all() as Array<{ name: string }>;
+  expect(episodeEventIndexes.map((index) => index.name)).toContain('idx_memory_episode_events_episode_position_unique');
   expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_atlas_documents'`).get()).toEqual({ name: 'memory_atlas_documents' });
   migrated.close();
 

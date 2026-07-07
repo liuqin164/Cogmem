@@ -4,6 +4,7 @@ import type { EpisodeStore } from './EpisodeStore.js';
 import type { EpisodeEventLink, TurnRelation } from './EpisodeTypes.js';
 import type { EpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
 import { normalizeEpisodeBoundaryConfig, resolveTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
+import { replayEpisodeBoundaries, type EpisodeReplayPair } from './EpisodeBoundaryReplayEngine.js';
 
 export const EPISODE_SPLIT_PLANNER_VERSION = 'episode_split_preview.v1';
 
@@ -29,8 +30,11 @@ export interface EpisodeSplitProposedBoundary {
   boundaryIndex: number;
   beforeEventId?: string;
   afterEventId?: string;
+  primaryUserEventId?: string;
   reason: string;
   relation?: TurnRelation;
+  effective?: boolean;
+  disposition?: 'explicit' | 'soft_review' | 'shadow' | 'enforced';
 }
 
 export interface EpisodeSplitImpactInventory {
@@ -55,7 +59,10 @@ export interface EpisodeSplitPlan {
     maxDurationMs: number;
     maxIdleGapMs: number;
     splitOnTrustedLocalDateChange: boolean;
+    mode: string;
+    applyToLive: boolean;
     applyToImports: boolean;
+    policyVersion: string;
     timezone?: string;
   };
   proposedBoundaries: EpisodeSplitProposedBoundary[];
@@ -99,37 +106,31 @@ export class EpisodeSplitPlanner {
       maxDurationMs: normalized.config.maxDurationMs,
       maxIdleGapMs: normalized.config.maxIdleGapMs,
       splitOnTrustedLocalDateChange: normalized.config.splitOnTrustedLocalDateChange,
+      mode: normalized.config.mode,
+      applyToLive: normalized.config.applyToLive,
       applyToImports: normalized.config.applyToImports,
+      policyVersion: normalized.config.policyVersion,
       timezone: normalized.config.timezone,
     };
     const warnings: string[] = normalized.diagnostics.map((item) => item.code);
-    warnings.push(...dateWarningCodes(pairs, policy.timezone));
     if (missingRawEventIds.length) warnings.push('unresolved_raw_events');
     if (events[0] && events[0].role !== 'user') warnings.push('leading_non_user_event');
     const userCount = events.filter((event) => event.role === 'user').length;
     if (userCount === 0) warnings.push('no_user_event_episode');
-    const groups = logicalTurns(pairs);
-    const segments: EpisodeSplitPlanSegment[] = [];
-    const proposedBoundaries: EpisodeSplitProposedBoundary[] = [];
-    let current: Pair[] = [];
-    for (const group of groups) {
-      const boundary = current.length ? boundaryReason(current, group, policy) : undefined;
-      if (boundary) {
-        const boundaryPair = userPair(group) || group[0];
-        proposedBoundaries.push({
-          boundaryIndex: proposedBoundaries.length,
-          beforeEventId: current.at(-1)?.link.eventId,
-          afterEventId: boundaryPair?.link.eventId,
-          reason: boundary,
-          relation: boundaryPair?.link.relation,
-        });
-        segments.push(segment(segments.length, current, boundary, options.includeEventIds === true));
-        current = [];
-      }
-      current.push(...group);
-    }
-    if (current.length > 0) segments.push(segment(segments.length, current, segments.length ? 'tail' : 'single_segment', options.includeEventIds === true));
-    const fingerprint = sourceFingerprint(pairs);
+    const replay = replayEpisodeBoundaries({ episode, pairs, config: normalized.config });
+    warnings.push(...replay.warnings, ...replay.structuralAnomalies);
+    const proposedBoundaries: EpisodeSplitProposedBoundary[] = replay.detectedBoundaries.map((boundary) => ({
+      boundaryIndex: boundary.boundaryIndex,
+      beforeEventId: boundary.beforeEventId,
+      afterEventId: boundary.afterEventId,
+      primaryUserEventId: boundary.primaryUserEventId,
+      reason: boundary.reason,
+      relation: boundary.relation,
+      effective: boundary.effective,
+      disposition: boundary.disposition,
+    }));
+    const segments = segmentsFromBoundaries(pairs, replay.effectiveBoundaries, options.includeEventIds === true);
+    const fingerprint = sourceFingerprint(pairs, episode.startedAt, episode.status, policy);
     const canonicalSegments = segments.map((item) => ({
       segmentIndex: item.segmentIndex,
       eventIdsHash: item.eventIdsHash,
@@ -156,42 +157,18 @@ export class EpisodeSplitPlanner {
       proposedBoundaries,
       impactInventory: impactInventory(pairs, policy.timezone),
       segments,
-      warnings,
+      warnings: [...new Set(warnings)].sort(),
       unresolvedEventCount: missingRawEventIds.length,
       missingRawEventIds: missingRawEventIds.slice(0, 50),
       evidenceIntegrityStatus: missingRawEventIds.length ? 'missing_raw_events' : 'ok',
-      requiresManualReview: userCount === 0 || missingRawEventIds.length > 0,
+      requiresManualReview: userCount === 0 || missingRawEventIds.length > 0 || replay.structuralAnomalies.length > 0 || replay.warnings.includes('invalid_trusted_local_date'),
       applyableInCurrentVersion: false,
       applyCommand: null,
     };
   }
 }
 
-type Pair = { link: EpisodeEventLink; event?: MemoryEvent };
-
-function logicalTurns(pairs: Pair[]): Pair[][] {
-  const groups: Pair[][] = [];
-  let current: Pair[] = [];
-  let currentTurnKey: string | undefined;
-  let currentHasUser = false;
-  for (const pair of pairs) {
-    const event = pair.event;
-    const turnKey = event ? turnKeyFor(event) : undefined;
-    const explicitTurnChange = Boolean(currentTurnKey && turnKey && currentTurnKey !== turnKey);
-    const roleBoundary = event?.role === 'user' && currentHasUser && !explicitTurnChange;
-    if (current.length > 0 && (explicitTurnChange || roleBoundary)) {
-      groups.push(current);
-      current = [];
-      currentTurnKey = undefined;
-      currentHasUser = false;
-    }
-    current.push(pair);
-    if (turnKey && !currentTurnKey) currentTurnKey = turnKey;
-    if (event?.role === 'user') currentHasUser = true;
-  }
-  if (current.length > 0) groups.push(current);
-  return groups;
-}
+type Pair = EpisodeReplayPair;
 
 const MAX_RETURNED_EVENT_IDS = 500;
 
@@ -205,7 +182,6 @@ function segment(index: number, pairs: Pair[], reason: string, includeEventIds: 
     eventIds: returned,
     eventIdsHash: createHash('sha256').update(JSON.stringify(eventIds)).digest('hex'),
     eventIdsOmitted: returned ? 0 : eventIds.length,
-    eventIdsCursor: returned ? undefined : `segment:${index}:eventIds`,
     startEventId: eventIds[0],
     endEventId: eventIds.at(-1),
     eventCount: eventIds.length,
@@ -216,8 +192,9 @@ function segment(index: number, pairs: Pair[], reason: string, includeEventIds: 
   };
 }
 
-function sourceFingerprint(pairs: Pair[]): string {
+function sourceFingerprint(pairs: Pair[], startedAt: number, status: string, policy: unknown): string {
   const hash = createHash('sha256');
+  hash.update(JSON.stringify([startedAt, status, policy]));
   for (const { link, event } of pairs) {
     hash.update(JSON.stringify([
       link.eventId,
@@ -229,86 +206,16 @@ function sourceFingerprint(pairs: Pair[]): string {
       event?.eventOrdinal,
       event?.occurredAt,
       event?.localDate,
+      event?.localDateSource,
+      isImportedEvent(event),
       event?.contentHash,
     ]));
   }
   return hash.digest('hex');
 }
 
-function boundaryReason(
-  current: Pair[],
-  next: Pair[],
-  policy: { enabled: boolean; maxEvents: number; maxDurationMs: number; maxIdleGapMs: number; splitOnTrustedLocalDateChange: boolean; applyToImports: boolean; timezone?: string },
-): string | undefined {
-  const nextUserPair = userPair(next);
-  const nextRelation = nextUserPair?.link.relation;
-  if (nextRelation === 'closes_episode') return undefined;
-  if (nextRelation === 'hard_topic_switch' || nextRelation === 'starts_new_topic' || nextRelation === 'switches_topic') return 'hard_topic_switch_boundary';
-  if (!policy.enabled || (!policy.applyToImports && isImportedTurn(next))) return undefined;
-  const currentLastDate = lastTrustedUserDate(current, policy.timezone);
-  const nextFirstDate = firstTrustedUserDate(next, policy.timezone);
-  if (policy.splitOnTrustedLocalDateChange && currentLastDate && nextFirstDate && currentLastDate !== nextFirstDate) return 'trusted_local_date_boundary';
-  const currentStart = firstTime(current);
-  const nextEnd = lastTime(next);
-  if (currentStart !== undefined && nextEnd !== undefined && nextEnd - currentStart > policy.maxDurationMs) return 'max_duration_boundary';
-  const currentLast = lastTime(current);
-  const nextFirst = firstTime(next);
-  if (currentLast !== undefined && nextFirst !== undefined && nextFirst - currentLast > policy.maxIdleGapMs) return 'max_idle_gap_boundary';
-  if (current.length + next.length > policy.maxEvents) return 'max_events_boundary';
-  return undefined;
-}
-
-function firstTime(pairs: Pair[]): number | undefined {
-  return pairs.find((item) => typeof item.event?.occurredAt === 'number')?.event?.occurredAt;
-}
-
-function lastTime(pairs: Pair[]): number | undefined {
-  return [...pairs].reverse().find((item) => typeof item.event?.occurredAt === 'number')?.event?.occurredAt;
-}
-
-function firstTrustedUserDate(pairs: Pair[], timezone?: string): string | undefined {
-  for (const pair of pairs) {
-    if (pair.event?.role !== 'user') continue;
-    const date = trustedLocalDate(pair.event, timezone);
-    if (date) return date;
-  }
-  return undefined;
-}
-
-function lastTrustedUserDate(pairs: Pair[], timezone?: string): string | undefined {
-  for (const pair of [...pairs].reverse()) {
-    if (pair.event?.role !== 'user') continue;
-    const date = trustedLocalDate(pair.event, timezone);
-    if (date) return date;
-  }
-  return undefined;
-}
-
 function trustedLocalDate(event: MemoryEvent | undefined, timezone?: string): string | undefined {
   return resolveTrustedLocalDate(event, timezone).date;
-}
-
-function userPair(pairs: Pair[]): Pair | undefined {
-  return pairs.find((item) => item.event?.role === 'user');
-}
-
-function isImportedTurn(pairs: Pair[]): boolean {
-  return pairs.some((item) => {
-    const payload = item.event?.payload as { metadata?: Record<string, unknown> } | undefined;
-    return payload?.metadata?.imported === true || payload?.metadata?.sourceRef !== undefined;
-  });
-}
-
-function dateWarningCodes(pairs: Pair[], timezone?: string): string[] {
-  return [...new Set(pairs
-    .map((item) => resolveTrustedLocalDate(item.event, timezone).warning?.code)
-    .filter((code): code is string => code === 'invalid_trusted_local_date'))];
-}
-
-function turnKeyFor(event: MemoryEvent): string | undefined {
-  if (event.turnId) return `id:${event.turnId}`;
-  if (typeof event.turnSeq === 'number') return `seq:${event.turnSeq}`;
-  return undefined;
 }
 
 function roleCounts(pairs: Pair[]) {
@@ -318,6 +225,28 @@ function roleCounts(pairs: Pair[]) {
     toolEventCount: pairs.filter((item) => item.event?.role === 'tool').length,
     systemEventCount: pairs.filter((item) => item.event?.role === 'system').length,
   };
+}
+
+function segmentsFromBoundaries(
+  pairs: Pair[],
+  boundaries: Array<{ afterEventId?: string; reason: string }>,
+  includeEventIds: boolean,
+): EpisodeSplitPlanSegment[] {
+  const segments: EpisodeSplitPlanSegment[] = [];
+  let start = 0;
+  for (const boundary of boundaries) {
+    const nextIndex = boundary.afterEventId ? pairs.findIndex((pair) => pair.link.eventId === boundary.afterEventId) : -1;
+    if (nextIndex <= start) continue;
+    segments.push(segment(segments.length, pairs.slice(start, nextIndex), boundary.reason, includeEventIds));
+    start = nextIndex;
+  }
+  if (start < pairs.length) segments.push(segment(segments.length, pairs.slice(start), segments.length ? 'tail' : 'single_segment', includeEventIds));
+  return segments;
+}
+
+function isImportedEvent(event: MemoryEvent | undefined): boolean {
+  const payload = event?.payload as { metadata?: Record<string, unknown> } | undefined;
+  return payload?.metadata?.imported === true || payload?.metadata?.sourceRef !== undefined;
 }
 
 function impactInventory(pairs: Pair[], timezone?: string): EpisodeSplitImpactInventory {
