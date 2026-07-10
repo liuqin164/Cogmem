@@ -109,6 +109,7 @@ export interface GraphEdgeStoreLike {
     list?(options?: unknown): GraphEdgeRecordLike[];
     listActiveNeighborEdges?(entityIds: string[], edgeTypes?: string[], limit?: number): GraphEdgeRecordLike[];
     appendEdge?(input: unknown): GraphEdgeRecordLike;
+    invalidateEdge?(edgeRecordId: string, metadata?: Record<string, unknown>): void;
 }
 export interface ProposalLedgerLike {
     append?(items: unknown[]): void;

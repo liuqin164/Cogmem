@@ -184,7 +184,7 @@ export declare class EpisodeStore {
         projectId?: string;
         now?: number;
     }): number;
-    completeDreamJob(episodeId: string, leaseId: string, candidateIds: string[], now: number): void;
+    completeDreamJob(episodeId: string, leaseId: string, candidateIds: string[], now: number, commitCandidates?: () => void): void;
     failDreamJob(episodeId: string, leaseId: string, error: string, input: {
         now: number;
         failureCategory: string;

@@ -308,7 +308,7 @@ export class EntityStore {
         existing.entityId
       );
       this.upsertAliases(existing.entityId, input.type, mergedAliases, now);
-      return this.findByEntityId(existing.entityId)!;
+      return this.getByEntityId(existing.entityId)!;
     }
 
     const record: EntityRecord = {
@@ -391,9 +391,14 @@ export class EntityStore {
     return row ? this.mapRow(row) : null;
   }
 
+  getByEntityId(entityId: string): EntityRecord | null {
+    const row = this.db.prepare(`SELECT * FROM entity_instances WHERE instance_id = ?`).get(entityId) as any;
+    return row ? this.mapRow(row) : null;
+  }
+
   findLatestByType(type: string): EntityRecord | null {
     const row = this.db.prepare(`
-      SELECT * FROM entity_instances WHERE type = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1
+      SELECT * FROM entity_instances WHERE type = ? AND status = 'active' ORDER BY updated_at DESC, created_at DESC LIMIT 1
     `).get(type) as any;
     return row ? this.mapRow(row) : null;
   }
@@ -401,7 +406,7 @@ export class EntityStore {
   listRecentByType(type: string, limit: number = 8): EntityRecord[] {
     const rows = this.db.prepare(`
       SELECT * FROM entity_instances
-      WHERE type = ?
+      WHERE type = ? AND status = 'active'
       ORDER BY updated_at DESC, created_at DESC
       LIMIT ?
     `).all(type, limit) as any[];
@@ -411,7 +416,7 @@ export class EntityStore {
   private listByCreationOrder(type: string, limit: number = 8): EntityRecord[] {
     const rows = this.db.prepare(`
       SELECT * FROM entity_instances
-      WHERE type = ?
+      WHERE type = ? AND status = 'active'
       ORDER BY created_at DESC, updated_at DESC
       LIMIT ?
     `).all(type, limit) as any[];

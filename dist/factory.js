@@ -1268,7 +1268,7 @@ export class MemoryKernel {
                 if (candidate.status !== 'superseded' && ((runSourceEpisode && affected.has(runSourceEpisode))
                     || evidenceIds.some((eventId) => affected.has(this.episodeStore.getEventLink(eventId)?.episodeId || '')))) {
                     this.deepWriteCandidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
-                        type: candidate.candidateType, id: candidate.candidateId, reason: 'episode_repair_invalidated_source',
+                        reason: 'episode_repair_invalidated_source',
                     });
                     this.invalidatePromotedCandidate(candidate, now);
                     staleCandidateIds.push(candidate.candidateId);
@@ -1326,6 +1326,10 @@ export class MemoryKernel {
         }
         else if (candidate.promotionTargetType === 'entity') {
             this.entityStore.archiveEntity(targetId, now);
+        }
+        else if (candidate.promotionTargetType === 'graph_edge') {
+            const relationStore = this.extensions.get('relationStore');
+            relationStore?.invalidateEdge?.(targetId, { repairInvalidatedAt: now, sourceCandidateId: candidate.candidateId });
         }
     }
     listDreamCandidates(options = {}) {

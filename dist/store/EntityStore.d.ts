@@ -106,6 +106,7 @@ export declare class EntityStore {
     listByAlias(aliasText: string, type?: string): EntityRecord[];
     findByCanonicalName(canonicalName: string, type?: string): EntityRecord | null;
     findByEntityId(entityId: string): EntityRecord | null;
+    getByEntityId(entityId: string): EntityRecord | null;
     findLatestByType(type: string): EntityRecord | null;
     listRecentByType(type: string, limit?: number): EntityRecord[];
     private listByCreationOrder;

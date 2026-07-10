@@ -739,8 +739,9 @@ export class EpisodeStore {
     return episodeIds.length;
   }
 
-  completeDreamJob(episodeId: string, leaseId: string, candidateIds: string[], now: number): void {
+  completeDreamJob(episodeId: string, leaseId: string, candidateIds: string[], now: number, commitCandidates?: () => void): void {
     this.transaction(() => {
+      commitCandidates?.();
       const result = this.db.prepare(`
         UPDATE episode_dream_jobs SET state = 'processed', candidate_ids_json = ?, lease_id = NULL,
           lease_until = NULL, retry_after = NULL, failure_category = NULL, last_error = NULL, updated_at = ?

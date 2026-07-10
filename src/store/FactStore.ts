@@ -256,7 +256,7 @@ export class FactStore {
     const rows = this.db.prepare(`
       SELECT DISTINCT neuron_id
       FROM facts
-      WHERE entity_id IN (${placeholders})
+      WHERE entity_id IN (${placeholders}) AND status IN ('provisional', 'provisional_enriched', 'verified')
       ORDER BY valid_from DESC
       LIMIT ?
     `).all(...entityIds, limit) as Array<{ neuron_id: string }>;

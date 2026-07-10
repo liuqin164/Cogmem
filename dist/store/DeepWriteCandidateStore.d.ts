@@ -1,6 +1,6 @@
 import type Database from 'bun:sqlite';
 export type DeepWriteRunStatus = 'succeeded' | 'failed' | 'skipped';
-export type DeepWriteCandidateStatus = 'shadow' | 'candidate' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
+export type DeepWriteCandidateStatus = 'staged' | 'shadow' | 'candidate' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
 export interface DeepWriteRunInput {
     runId?: string;
     projectId?: string;

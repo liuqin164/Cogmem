@@ -73,7 +73,10 @@ export class DreamScheduler {
                 });
                 const ids = run.candidates.map((candidate) => candidate.candidateId);
                 try {
-                    this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt);
+                    this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt, () => {
+                        for (const candidateId of ids)
+                            this.candidateStore.updateCandidateStatus(candidateId, 'candidate', { updatedAt: startedAt });
+                    });
                 }
                 catch (completionError) {
                     for (const candidateId of ids) {

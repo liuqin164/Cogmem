@@ -167,7 +167,12 @@ export class DreamCuratorWorker {
       createdAt: now,
     });
     const inserted = this.deps.candidateStore.insertCandidates(
-      candidateInputs.map((candidate) => ({ ...candidate, runId: run.runId, createdAt: now }))
+      candidateInputs.map((candidate) => ({
+        ...candidate,
+        status: options.sourceEpisodeId && candidate.status === 'candidate' ? 'staged' : candidate.status,
+        runId: run.runId,
+        createdAt: now,
+      }))
     );
     const status = explicitEpisodeRun
       ? before

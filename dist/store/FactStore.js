@@ -122,7 +122,7 @@ export class FactStore {
         const rows = this.db.prepare(`
       SELECT *
       FROM facts
-      WHERE neuron_id IN (${placeholders})
+      WHERE neuron_id IN (${placeholders}) AND status IN ('provisional', 'provisional_enriched', 'verified')
       ORDER BY valid_from DESC, fact_id DESC
       LIMIT ?
     `).all(...neuronIds, limit);
@@ -139,14 +139,15 @@ export class FactStore {
           SELECT *
           FROM facts
           WHERE entity_id IN (${entityPlaceholders})
+            AND status IN ('provisional', 'provisional_enriched', 'verified')
             AND predicate_family IN (${predicateFamilies.map(() => '?').join(', ')})
           ORDER BY valid_from DESC, fact_id DESC
           LIMIT ?
         `).all(...entityIds, ...predicateFamilies, limit)
             : this.db.prepare(`
-          SELECT *
-          FROM facts
-          WHERE entity_id IN (${entityPlaceholders})
+      SELECT *
+      FROM facts
+      WHERE entity_id IN (${entityPlaceholders}) AND status IN ('provisional', 'provisional_enriched', 'verified')
           ORDER BY valid_from DESC, fact_id DESC
           LIMIT ?
         `).all(...entityIds, limit);
@@ -159,7 +160,7 @@ export class FactStore {
         const rows = this.db.prepare(`
       SELECT DISTINCT neuron_id
       FROM facts
-      WHERE entity_id IN (${placeholders})
+      WHERE entity_id IN (${placeholders}) AND status IN ('provisional', 'provisional_enriched', 'verified')
       ORDER BY valid_from DESC
       LIMIT ?
     `).all(...entityIds, limit);

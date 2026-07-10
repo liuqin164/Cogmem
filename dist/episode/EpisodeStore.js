@@ -610,8 +610,9 @@ export class EpisodeStore {
         this.markEmptyEpisodeDreamSkippedMany(episodeIds, now, 'episode_empty_skipped_no_raw_evidence');
         return episodeIds.length;
     }
-    completeDreamJob(episodeId, leaseId, candidateIds, now) {
+    completeDreamJob(episodeId, leaseId, candidateIds, now, commitCandidates) {
         this.transaction(() => {
+            commitCandidates?.();
             const result = this.db.prepare(`
         UPDATE episode_dream_jobs SET state = 'processed', candidate_ids_json = ?, lease_id = NULL,
           lease_until = NULL, retry_after = NULL, failure_category = NULL, last_error = NULL, updated_at = ?
