@@ -6,7 +6,8 @@ import { join } from 'node:path';
 
 import { EpisodeStore } from '../src/episode/EpisodeStore.js';
 import { EpisodeBoundaryPolicy, normalizeEpisodeBoundaryConfig } from '../src/episode/EpisodeBoundaryPolicy.js';
-import { SchemaMigrationRunner, migration_0031 } from '../src/migrations/index.js';
+import { SchemaMigrationRunner, migration_0022, migration_0028, migration_0031 } from '../src/migrations/index.js';
+import { EventStore } from '../src/store/EventStore.js';
 import { classifyTurnRelation } from '../src/episode/TurnRelationClassifier.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { migration_0022, migration_0023, migration_0028, migration_0029, migration_0030 } from '../src/migrations/index.js';
@@ -337,5 +338,41 @@ test('Dream enqueue cannot relabel a processed job as queued and Store enables f
     expect(store.getEpisode(episode.episodeId)?.dreamStatus).toBe('processed');
   } finally {
     db.close();
+  }
+});
+
+test('0031 removes an empty episode and each dependent table without invalid cross-ref SQL', () => {
+  const db = new Database(':memory:');
+  try {
+    migration_0022.up(db);
+    migration_0023.up(db);
+    migration_0028.up(db);
+    db.exec(`CREATE TABLE episode_cross_refs (cross_ref_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, episode_id TEXT NOT NULL, referenced_episode_id TEXT, relation TEXT NOT NULL, created_by TEXT NOT NULL, confidence REAL NOT NULL, created_at INTEGER NOT NULL);`);
+    db.prepare(`INSERT INTO memory_episodes (episode_id, project_id, session_id, episode_type, status, importance, start_event_id, end_event_id, event_count, started_at, updated_at) VALUES ('empty', 'brain', 's', 'discussion', 'open', 0.2, 'x', 'x', 0, 1, 1)`).run();
+    db.prepare(`INSERT INTO episode_closure_receipts (receipt_id, episode_id, project_id, closure_mode, closure_reason, source_event_ids_json, episode_type, importance, dream_recommended, dream_mode, created_at) VALUES ('receipt', 'empty', 'brain', 'manual', 'test', '[]', 'discussion', 0.2, 0, 'normal', 1)`).run();
+    db.prepare(`INSERT INTO episode_dream_jobs (episode_id, project_id, state, priority, mode_hint, created_at, updated_at) VALUES ('empty', 'brain', 'pending', 1, 'normal', 1, 1)`).run();
+    db.prepare(`INSERT INTO episode_cross_refs (cross_ref_id, project_id, episode_id, referenced_episode_id, relation, created_by, confidence, created_at) VALUES ('out', 'brain', 'empty', 'other', 'x', 'test', 1, 1), ('in', 'brain', 'other', 'empty', 'x', 'test', 1, 1)`).run();
+    migration_0031.up(db);
+    expect(db.prepare(`SELECT 1 FROM memory_episodes WHERE episode_id = 'empty'`).get()).toBeNull();
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM episode_closure_receipts WHERE episode_id = 'empty'`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM episode_dream_jobs WHERE episode_id = 'empty'`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM episode_cross_refs WHERE episode_id = 'empty' OR referenced_episode_id = 'empty'`).get()).toEqual({ count: 0 });
+  } finally { db.close(); }
+});
+
+test('import anchors return the existing event and reject changed content without duplicate raw evidence', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-anchor-'));
+  const store = new EventStore(join(dir, 'memory.db'));
+  try {
+    const input = { streamId: 't', streamType: 'thread' as const, eventType: 'MESSAGE' as const, projectId: 'brain', sourceId: 'importer', threadId: 't', sessionId: 't', role: 'user' as const, occurredAt: 1, payload: { text: 'same', metadata: { importAnchor: 'anchor-1' } } };
+    const first = store.append(input);
+    const retry = store.append({ ...input, eventId: 'retry' });
+    expect(retry.eventId).toBe(first.eventId);
+    expect(store.findImportedEventAnchor('brain', 'importer', 'anchor-1')?.eventId).toBe(first.eventId);
+    expect(() => store.append({ ...input, eventId: 'changed', payload: { text: 'changed', metadata: { importAnchor: 'anchor-1' } } })).toThrow('import_anchor_content_conflict:anchor-1');
+    expect(store.getEventCount()).toBe(1);
+  } finally {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

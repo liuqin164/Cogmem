@@ -233,12 +233,28 @@ export class EventStore {
         occurred_at, payload_json, payload_hash, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(event.eventId, event.globalSeq ?? null, event.streamId, event.streamType, event.eventType, event.rawEventType || null, event.eventVersion, event.projectId || null, event.workspaceId || null, event.actorId || null, event.causationId || null, event.correlationId || null, event.sourceNeuronId || null, event.sourceId || null, event.contentHash || null, event.threadId || null, event.sessionId || null, event.localDate || null, event.localDateSource || 'legacy_unknown', event.threadSeq ?? null, event.turnId || null, event.turnSeq ?? null, event.eventOrdinal ?? null, event.role || null, event.parentEventId || null, event.prevEventId || null, event.nextEventId || null, event.causalityType || null, event.sourceOffset ?? null, event.lineStart ?? null, event.lineEnd ?? null, event.charStart ?? null, event.charEnd ?? null, event.orderingConfidence || null, event.occurredAt, storedPayloadJson, event.payloadHash, event.createdAt);
-        this.db.transaction(() => {
-            insert();
-            this.upsertImportAnchor(event);
-            this.upsertRawEventFts(event);
-        })();
-        return event;
+        try {
+            this.db.transaction(() => {
+                insert();
+                this.upsertImportAnchor(event);
+                this.upsertRawEventFts(event);
+            })();
+            return event;
+        }
+        catch (error) {
+            if (!(error instanceof Error) || error.message !== 'import_anchor_already_exists')
+                throw error;
+            const metadata = event.payload?.metadata;
+            const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;
+            const existing = anchor && event.projectId && event.sourceId
+                ? this.findImportedEventAnchor(event.projectId, event.sourceId, anchor)
+                : null;
+            if (!existing)
+                throw error;
+            if (existing.contentHash !== event.contentHash)
+                throw new Error(`import_anchor_content_conflict:${anchor}`);
+            return existing;
+        }
     }
     upsertImportAnchor(event) {
         const metadata = event.payload?.metadata;
@@ -250,6 +266,10 @@ export class EventStore {
       VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(project_id, source_id, import_anchor) DO NOTHING
     `).run(event.projectId, event.sourceId, anchor, event.eventId, event.contentHash, event.createdAt);
+        const inserted = this.db.prepare(`SELECT event_id FROM import_source_anchors WHERE project_id = ? AND source_id = ? AND import_anchor = ?`)
+            .get(event.projectId, event.sourceId, anchor);
+        if (inserted?.event_id !== event.eventId)
+            throw new Error('import_anchor_already_exists');
     }
     getNextGlobalSeq() {
         const row = this.db.prepare(`
@@ -293,7 +313,7 @@ export class EventStore {
     }
     findImportedEventAnchor(projectId, sourceId, importAnchor) {
         const row = this.db.prepare(`
-      SELECT e.${MEMORY_EVENT_COLUMNS.replace(/\n/g, ' e.').replace(/^\s*/, '')}
+      SELECT ${qualifiedMemoryEventColumns('e')}
       FROM import_source_anchors a
       JOIN memory_events e ON e.event_id = a.event_id
       WHERE a.project_id = ? AND a.source_id = ? AND a.import_anchor = ?
@@ -769,6 +789,9 @@ export class EventStore {
     decodePayload(payloadJson) {
         return this.encryptionProvider?.decrypt(payloadJson) ?? payloadJson;
     }
+}
+function qualifiedMemoryEventColumns(alias) {
+    return MEMORY_EVENT_COLUMNS.split(',').map((column) => `${alias}.${column.trim()}`).join(', ');
 }
 function escapeSqlLike(value) {
     return value.replace(/[\\%_]/g, (character) => `\\${character}`);

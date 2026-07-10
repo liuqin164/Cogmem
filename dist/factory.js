@@ -1270,6 +1270,7 @@ export class MemoryKernel {
                     this.deepWriteCandidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
                         type: candidate.candidateType, id: candidate.candidateId, reason: 'episode_repair_invalidated_source',
                     });
+                    this.invalidatePromotedCandidate(candidate, now);
                     staleCandidateIds.push(candidate.candidateId);
                 }
             }
@@ -1308,6 +1309,24 @@ export class MemoryKernel {
             ],
             note: 'repairId is an audit id, not a dream candidate id; do not run memory dream --promote just because repairId exists.',
         };
+    }
+    invalidatePromotedCandidate(candidate, now) {
+        if (candidate.status !== 'promoted' || !candidate.promotionTargetId)
+            return;
+        const db = this.factStore.getDatabase();
+        const targetId = candidate.promotionTargetId;
+        if (candidate.promotionTargetType === 'fact') {
+            this.factStore.updateFactStatus(targetId, 'superseded', undefined, { repairInvalidatedAt: now, sourceCandidateId: candidate.candidateId });
+        }
+        else if (candidate.promotionTargetType === 'belief') {
+            db.prepare(`UPDATE beliefs SET status = 'suspect', updated_at = ? WHERE id = ?`).run(now, targetId);
+        }
+        else if (candidate.promotionTargetType === 'summary') {
+            this.summaryStore.markSuperseded(targetId);
+        }
+        else if (candidate.promotionTargetType === 'entity') {
+            this.entityStore.archiveEntity(targetId, now);
+        }
     }
     listDreamCandidates(options = {}) {
         return this.deepWriteCandidateStore.listCandidates(options);

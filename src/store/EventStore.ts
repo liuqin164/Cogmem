@@ -335,12 +335,24 @@ export class EventStore {
       event.payloadHash,
       event.createdAt
     );
-    this.db.transaction(() => {
-      insert();
-      this.upsertImportAnchor(event);
-      this.upsertRawEventFts(event);
-    })();
-    return event;
+    try {
+      this.db.transaction(() => {
+        insert();
+        this.upsertImportAnchor(event);
+        this.upsertRawEventFts(event);
+      })();
+      return event;
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== 'import_anchor_already_exists') throw error;
+      const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
+      const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;
+      const existing = anchor && event.projectId && event.sourceId
+        ? this.findImportedEventAnchor(event.projectId, event.sourceId, anchor)
+        : null;
+      if (!existing) throw error;
+      if (existing.contentHash !== event.contentHash) throw new Error(`import_anchor_content_conflict:${anchor}`);
+      return existing as MemoryEvent<TPayload>;
+    }
   }
 
   private upsertImportAnchor(event: MemoryEvent<unknown>): void {
@@ -352,6 +364,9 @@ export class EventStore {
       VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(project_id, source_id, import_anchor) DO NOTHING
     `).run(event.projectId, event.sourceId, anchor, event.eventId, event.contentHash, event.createdAt);
+    const inserted = this.db.prepare(`SELECT event_id FROM import_source_anchors WHERE project_id = ? AND source_id = ? AND import_anchor = ?`)
+      .get(event.projectId, event.sourceId, anchor) as { event_id?: string } | null;
+    if (inserted?.event_id !== event.eventId) throw new Error('import_anchor_already_exists');
   }
 
   getNextGlobalSeq(): number {
@@ -402,7 +417,7 @@ export class EventStore {
 
   findImportedEventAnchor(projectId: string, sourceId: string, importAnchor: string): MemoryEvent | null {
     const row = this.db.prepare(`
-      SELECT e.${MEMORY_EVENT_COLUMNS.replace(/\n/g, ' e.').replace(/^\s*/, '')}
+      SELECT ${qualifiedMemoryEventColumns('e')}
       FROM import_source_anchors a
       JOIN memory_events e ON e.event_id = a.event_id
       WHERE a.project_id = ? AND a.source_id = ? AND a.import_anchor = ?
@@ -976,6 +991,10 @@ export class EventStore {
   private decodePayload(payloadJson: string): string {
     return this.encryptionProvider?.decrypt(payloadJson) ?? payloadJson;
   }
+}
+
+function qualifiedMemoryEventColumns(alias: string): string {
+  return MEMORY_EVENT_COLUMNS.split(',').map((column) => `${alias}.${column.trim()}`).join(', ');
 }
 
 function escapeSqlLike(value: string): string {

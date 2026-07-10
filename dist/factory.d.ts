@@ -674,6 +674,7 @@ export declare class MemoryKernel {
     };
     repairEpisode(input: EpisodeRepairInput): EpisodeRepairResult;
     private repairEpisodeInTransaction;
+    private invalidatePromotedCandidate;
     listDreamCandidates(options?: DreamCandidateListOptions): DreamCandidateRecord[];
     countDreamCandidates(options?: Omit<DreamCandidateListOptions, 'limit'>): number;
     reviewDreamCandidate(input: CandidateReviewInput): CandidateReviewResult;

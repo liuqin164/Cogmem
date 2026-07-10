@@ -76,9 +76,14 @@ export const migration_0031 = {
           UPDATE memory_episodes SET event_count = ?, start_event_id = ?, end_event_id = ? WHERE episode_id = ?
         `);
                 const deleteDependents = (episodeId) => {
-                    for (const table of ['episode_closure_receipts', 'episode_dream_jobs', 'episode_cross_refs']) {
-                        if (tableExists(db, table))
-                            db.prepare(`DELETE FROM ${table} WHERE episode_id = ? OR referenced_episode_id = ?`).run(episodeId, episodeId);
+                    if (tableExists(db, 'episode_closure_receipts'))
+                        db.prepare(`DELETE FROM episode_closure_receipts WHERE episode_id = ?`).run(episodeId);
+                    if (tableExists(db, 'episode_dream_jobs'))
+                        db.prepare(`DELETE FROM episode_dream_jobs WHERE episode_id = ?`).run(episodeId);
+                    if (tableExists(db, 'episode_cross_refs'))
+                        db.prepare(`DELETE FROM episode_cross_refs WHERE episode_id = ? OR referenced_episode_id = ?`).run(episodeId, episodeId);
+                    if (tableExists(db, 'episode_boundary_decisions')) {
+                        db.prepare(`DELETE FROM episode_boundary_decisions WHERE previous_episode_id = ? OR resulting_episode_id = ?`).run(episodeId, episodeId);
                     }
                     db.prepare(`DELETE FROM memory_episodes WHERE episode_id = ?`).run(episodeId);
                 };
