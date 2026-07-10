@@ -337,22 +337,25 @@ async function recordRawImportedEvidence(kernel, projectId, envelope) {
     const sessionId = sourceRef?.sessionId || stringRecordField(metadata.sessionId) || record.provenance.sourceId;
     const eventOrdinal = sourceRef?.eventOrdinal ?? sourceRef?.sourceOffset;
     const allowNonUserEpisodeStart = metadata.importedSummarySupport === true || record.provenance.reliabilityClass === 'imported_summary';
-    const importAnchor = [
-        record.provenance.sourceId,
-        record.recordId,
-        sourceRef?.sourcePath,
-        sourceRef?.lineStart,
-        sourceRef?.lineEnd,
-        eventOrdinal,
-    ].filter((item) => item !== undefined && item !== null && String(item).length > 0).join(':');
+    const importAnchor = createHash('sha256').update(JSON.stringify({
+        sourceId: record.provenance.sourceId,
+        recordId: record.recordId ?? null,
+        sourcePath: sourceRef?.sourcePath ?? null,
+        lineStart: sourceRef?.lineStart ?? null,
+        lineEnd: sourceRef?.lineEnd ?? null,
+        eventOrdinal: eventOrdinal ?? null,
+    })).digest('hex');
+    const contentHash = createHash('sha256').update(record.text).digest('hex');
     const existing = findImportedRawAnchor(kernel, {
         projectId,
         threadId,
         sourceId: record.provenance.sourceId,
         importAnchor,
-        contentHash: createHash('sha256').update(record.text).digest('hex'),
+        contentHash,
     });
     if (existing) {
+        if (existing.contentHash !== contentHash)
+            throw new Error(`import_anchor_content_conflict:${importAnchor}`);
         let link = kernel.episodeStore.getEventLink(existing.eventId);
         if (!link && !kernel.episodeStore.hasEventDisposition(existing.eventId)) {
             await kernel.assembleEpisodeTurnAsync([existing], {
@@ -409,7 +412,10 @@ async function recordRawImportedEvidence(kernel, projectId, envelope) {
     return { event, created: true, episodeId: assembly.episode?.episodeId };
 }
 function findImportedRawAnchor(kernel, input) {
-    return kernel.getThreadEvents(input.threadId, { projectId: input.projectId }).find((event) => {
+    const indexed = kernel.eventStore.findImportedEventAnchor(input.projectId, input.sourceId, input.importAnchor);
+    if (indexed)
+        return indexed;
+    return kernel.getThreadEvents(input.threadId, { projectId: input.projectId, limit: 10_000 }).find((event) => {
         const payload = event.payload;
         return event.sourceId === input.sourceId
             && payload.metadata?.importAnchor === input.importAnchor;

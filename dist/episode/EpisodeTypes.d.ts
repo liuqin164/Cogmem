@@ -1,6 +1,6 @@
 export type EpisodeStatus = 'open' | 'soft_sealed' | 'sealed';
 export type EpisodeDreamState = 'pending' | 'processing' | 'processed' | 'failed_retryable' | 'failed_terminal' | 'retry_scheduled' | 'skipped';
-export type EpisodeDreamStatusValue = 'none' | 'queued' | 'processing' | 'processed' | 'failed';
+export type EpisodeDreamStatusValue = 'none' | 'queued' | 'processing' | 'processed' | 'failed' | 'skipped';
 export type EpisodeClosureMode = 'soft' | 'hard' | 'manual' | 'batch';
 export type EpisodeClosureReasonCode = 'explicit_user_closure' | 'topic_switch' | 'event_limit' | 'duration_limit' | 'idle_gap' | 'local_date_boundary' | 'batch_boundary' | 'idle_timeout' | 'manual' | 'soft_seal_stabilized' | 'repair';
 export type EpisodeType = 'discussion' | 'decision' | 'correction' | 'preference' | 'goal' | 'debugging' | 'planning' | 'prospective' | 'general';

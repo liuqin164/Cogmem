@@ -144,6 +144,7 @@ export declare class EpisodeStore {
     }): EpisodeBoundaryDecisionRecord[];
     private invalidateEpisodeDerivedState;
     private resequenceEpisode;
+    private deleteEmptyEpisode;
     reopenSoftEpisode(episodeId: string, now: number): MemoryEpisode;
     sealEpisode(episodeId: string, input: {
         mode: EpisodeClosureMode;
@@ -250,6 +251,7 @@ export declare class EpisodeStore {
     deleteByProject(projectId: string): number;
     private enqueueDreamJob;
     private initializeSchema;
+    private initializeSchemaUnsafe;
     private ensureEpisodeCompatibilityColumns;
 }
 export {};

@@ -170,6 +170,22 @@ export function replayEpisodeBoundaries(input: {
   };
 }
 
+/** Reduces accepted evidence without evaluating a new boundary. */
+export function replayEpisodeBoundaryState(input: {
+  episode: { startedAt?: number };
+  pairs: EpisodeReplayPair[];
+  timezone?: string;
+}): EpisodeBoundaryReplayState {
+  const state: EpisodeBoundaryReplayState = {
+    eventCount: 0,
+    startedAt: input.episode.startedAt,
+    trustedLocalDates: [],
+  };
+  const warnings = new Set<string>();
+  for (const turn of logicalTurnsFromPairs(input.pairs)) acceptTurn(state, turn, input.timezone, warnings);
+  return state;
+}
+
 export function replayPendingTurnBoundary(input: {
   config: EpisodeBoundaryConfig;
   active?: EpisodeBoundaryReplayState;

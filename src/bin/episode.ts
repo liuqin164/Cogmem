@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { createReadStream, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
 
 import { createStableImportIdentityFactory } from '../episode/EpisodeImportIdentity.js';
@@ -143,9 +144,20 @@ async function importJsonl(kernel: MemoryKernel, args: Args) {
   const file = requiredArg(args, 'file');
   const checkpointFile = stringArg(args, 'checkpoint-file') || `${file}.cogmem-checkpoint.json`;
   const chunkSize = Math.max(1, Math.min(Math.trunc(numberArg(args, 'chunk-size') ?? 500), 5000));
+  const fileHash = createHash('sha256').update(readFileSync(file)).digest('hex');
   const checkpoint = args.resume === true && existsSync(checkpointFile)
-    ? JSON.parse(readFileSync(checkpointFile, 'utf8')) as { processedLine?: number }
+    ? JSON.parse(readFileSync(checkpointFile, 'utf8')) as {
+      processedLine?: number; fileHash?: string; processedPrefixHash?: string; projectId?: string; sourceAgent?: string; sessionId?: string; format?: string;
+    }
     : {};
+  const checkpointPrefixHash = checkpoint.processedLine ? sourcePrefixHash(file, checkpoint.processedLine) : undefined;
+  if (args.resume === true && checkpoint.fileHash && (
+    (checkpoint.processedPrefixHash ? checkpoint.processedPrefixHash !== checkpointPrefixHash : checkpoint.fileHash !== fileHash)
+    || checkpoint.projectId !== projectId
+    || checkpoint.sourceAgent !== sourceAgent
+    || checkpoint.sessionId !== sessionId
+    || checkpoint.format !== format
+  )) throw new Error('episode_import_checkpoint_source_mismatch');
   const resumeAfter = Math.max(0, checkpoint.processedLine || 0);
   const startLine = Math.max(1, Math.trunc(numberArg(args, 'start-line') ?? 1));
   const endLine = Math.max(startLine, Math.trunc(numberArg(args, 'end-line') ?? Number.MAX_SAFE_INTEGER));
@@ -167,19 +179,24 @@ async function importJsonl(kernel: MemoryKernel, args: Args) {
   let lineNumber = 0;
   let lastProcessedLine = resumeAfter;
   let selectedLines = 0;
+  let windowStopped = false;
   const errors: Array<{ line: number; error: string }> = [];
   const reader = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
   for await (const rawLine of reader) {
     lineNumber += 1;
     if (!rawLine.trim()) continue;
-    if (lineNumber > endLine || selectedLines >= maxLines) break;
+    if (lineNumber > endLine || selectedLines >= maxLines) {
+      windowStopped = true;
+      break;
+    }
     if (lineNumber <= resumeAfter || lineNumber < startLine) {
       // Rebuild only the deterministic fallback identity state. A malformed
       // skipped line must remain skipped during resume.
       try {
         const prior = JSON.parse(rawLine) as Record<string, unknown>;
         const priorText = typeof prior.text === 'string' ? prior.text : typeof prior.content === 'string' ? prior.content : undefined;
-        if (priorText) {
+        const hasExplicitIdentity = typeof prior.externalMessageId === 'string' || typeof prior.id === 'string';
+        if (priorText && !hasExplicitIdentity) {
           const priorSession = typeof prior.sessionId === 'string' ? prior.sessionId : sessionId;
           const priorRole = roleValue(prior.role);
           const priorTimestamp = prior.timestamp === undefined ? undefined : timeValue(prior.timestamp);
@@ -220,20 +237,27 @@ async function importJsonl(kernel: MemoryKernel, args: Args) {
       if (result.episodeId) episodeIds.add(result.episodeId);
       if (!result.assigned && !result.ignored) unassignedEventIds.push(result.eventId);
       if (result.ignored) ignoredEventIds.push(result.eventId);
-      if (processed % chunkSize === 0) writeCheckpoint(checkpointFile, { processedLine: lineNumber, lastProcessedLine: lineNumber, processed, projectId, sourceAgent, sessionId });
+      if (processed % chunkSize === 0) writeCheckpoint(checkpointFile, {
+        processedLine: lineNumber, lastProcessedLine: lineNumber, processed, projectId, sourceAgent, sessionId, format, fileHash,
+        processedPrefixHash: sourcePrefixHash(file, lineNumber), fileCompleted: false, windowCompleted: false,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       errors.push({ line: lineNumber, error: message });
       writeCheckpoint(checkpointFile, {
         failedAtLine: lineNumber, error: message, resumeFrom: lineNumber,
         lastProcessedLine, processedLine: lastProcessedLine,
-        processed, projectId, sourceAgent, sessionId,
+        processed, projectId, sourceAgent, sessionId, format, fileHash, processedPrefixHash: sourcePrefixHash(file, lastProcessedLine), fileCompleted: false, windowCompleted: false,
       });
       if (!skipErrors || errors.length > maxErrors) throw error;
       lastProcessedLine = lineNumber;
     }
   }
-  writeCheckpoint(checkpointFile, { processedLine: lastProcessedLine, processed, projectId, sourceAgent, sessionId, completed: true });
+  writeCheckpoint(checkpointFile, {
+    processedLine: lastProcessedLine, processed, projectId, sourceAgent, sessionId, format, fileHash, processedPrefixHash: sourcePrefixHash(file, lastProcessedLine),
+    completed: !windowStopped, fileCompleted: !windowStopped, windowCompleted: true,
+    hasMore: windowStopped, nextLine: windowStopped ? lineNumber : undefined,
+  });
   const closureReceipts = args['seal-batch'] === true
     ? [...episodeIds].map((episodeId) => kernel.sealImportedEpisode(episodeId, { reason: 'cli_batch_boundary', force: args['force-seal'] === true }))
     : [];
@@ -248,6 +272,11 @@ function writeCheckpoint(path: string, value: Record<string, unknown>): void {
   const temporary = `${path}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
   renameSync(temporary, path);
+}
+
+function sourcePrefixHash(file: string, lines: number): string {
+  const text = readFileSync(file, 'utf8');
+  return createHash('sha256').update(text.split(/\r?\n/u).slice(0, Math.max(0, lines)).join('\n')).digest('hex');
 }
 
 function stringArg(args: Args, key: string): string | undefined { return typeof args[key] === 'string' && args[key] ? args[key] as string : undefined; }

@@ -12,13 +12,13 @@ export class DreamScheduler {
         const startedAt = options.now ?? Date.now();
         const requestedMode = options.mode ?? 'auto';
         const runId = `episode-dream-run-${randomUUID()}`;
-        const backlogBefore = this.episodeStore.getDreamStatus(options.projectId);
         const graceMs = Math.max(0, options.softSealGraceMs ?? 5 * 60_000);
         this.episodeStore.finalizeMatureSoftSeals({
             projectId: options.projectId,
             sealedBefore: startedAt - graceMs,
             now: startedAt,
         });
+        const backlogBefore = this.episodeStore.getDreamStatus(options.projectId);
         const maxEpisodes = Math.max(1, Math.min(Math.trunc(options.maxEpisodes ?? modeLimit(requestedMode)), 50));
         const jobs = this.episodeStore.claimDreamJobs({
             projectId: options.projectId,
@@ -73,11 +73,11 @@ export class DreamScheduler {
                 });
                 const ids = run.candidates.map((candidate) => candidate.candidateId);
                 try {
-                    this.episodeStore.transaction(() => this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt));
+                    this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt);
                 }
                 catch (completionError) {
                     for (const candidateId of ids) {
-                        this.candidateStore?.updateCandidateStatus(candidateId, 'superseded', {
+                        this.candidateStore.updateCandidateStatus(candidateId, 'superseded', {
                             reason: 'dream_job_completion_failed', type: 'dream_candidate', id: candidateId, updatedAt: startedAt,
                         });
                     }

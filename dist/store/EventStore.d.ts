@@ -54,11 +54,13 @@ export declare class EventStore {
     private initializeSchema;
     private ensureCompatibilityColumns;
     append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>): MemoryEvent<TPayload>;
+    private upsertImportAnchor;
     getNextGlobalSeq(): number;
     getNextEventVersion(streamId: string): number;
     getNextThreadSeq(threadId: string): number;
     getNextTurnSeq(threadId: string): number;
     getEventsAfter(lastEventTime?: number): MemoryEvent[];
+    findImportedEventAnchor(projectId: string, sourceId: string, importAnchor: string): MemoryEvent | null;
     getLatestEvent(): MemoryEvent | null;
     listRawEventsAfterGlobalSeq(options?: {
         projectId?: string;

@@ -36,7 +36,7 @@ export class EpisodeSplitPlanner {
             policyVersion: normalized.config.policyVersion,
             timezone: normalized.config.timezone,
         };
-        const warnings = [...this.liveConfigDiagnostics.map((item) => item.code), ...overrideWarnings, ...normalized.diagnostics.map((item) => item.code)];
+        const warnings = [...this.liveConfigDiagnostics.map((item) => item.code).filter((code) => code.startsWith('invalid_episode_boundary_')), ...overrideWarnings, ...normalized.diagnostics.map((item) => item.code)];
         if (missingRawEventIds.length)
             warnings.push('unresolved_raw_events');
         if (events[0] && events[0].role !== 'user')
@@ -63,7 +63,7 @@ export class EpisodeSplitPlanner {
             disposition: boundary.disposition,
         }));
         const segments = segmentsFromBoundaries(pairs, replay.effectiveBoundaries, options.includeEventIds === true);
-        const fingerprint = sourceFingerprint(pairs, episode.startedAt, episode.status, policy);
+        const fingerprint = sourceFingerprint(pairs, episode.startedAt, episode.status);
         const canonicalSegments = segments.map((item) => ({
             segmentIndex: item.segmentIndex,
             eventIdsHash: item.eventIdsHash,
@@ -72,10 +72,12 @@ export class EpisodeSplitPlanner {
             eventCount: item.eventCount,
             reason: item.reason,
         }));
+        const policyFingerprint = createHash('sha256').update(JSON.stringify(policy)).digest('hex');
         const hash = createHash('sha256').update(JSON.stringify([
             options.projectId,
             options.episodeId,
             fingerprint,
+            policyFingerprint,
             policy,
             canonicalSegments,
             proposedBoundaries,
@@ -86,6 +88,7 @@ export class EpisodeSplitPlanner {
             projectId: options.projectId,
             episodeId: options.episodeId,
             sourceFingerprint: fingerprint,
+            policyFingerprint,
             normalizedPolicy: policy,
             proposedBoundaries,
             impactInventory: impactInventory(pairs, policy.timezone),
@@ -105,6 +108,7 @@ function segment(index, pairs, reason, includeEventIds) {
     const eventIds = pairs.map((item) => item.link.eventId);
     const returned = includeEventIds && eventIds.length <= MAX_RETURNED_EVENT_IDS ? eventIds : undefined;
     const times = pairs.map((item) => item.event?.occurredAt).filter((value) => typeof value === 'number' && Number.isFinite(value));
+    const range = timeRange(times);
     const counts = roleCounts(pairs);
     return {
         segmentIndex: index,
@@ -115,14 +119,14 @@ function segment(index, pairs, reason, includeEventIds) {
         endEventId: eventIds.at(-1),
         eventCount: eventIds.length,
         reason,
-        startedAt: times.length ? Math.min(...times) : undefined,
-        endedAt: times.length ? Math.max(...times) : undefined,
+        startedAt: range?.min,
+        endedAt: range?.max,
         ...counts,
     };
 }
-function sourceFingerprint(pairs, startedAt, status, policy) {
+function sourceFingerprint(pairs, startedAt, status) {
     const hash = createHash('sha256');
-    hash.update(JSON.stringify([startedAt, status, policy]));
+    hash.update(JSON.stringify([startedAt, status]));
     for (const { link, event } of pairs) {
         hash.update(JSON.stringify([
             link.eventId,
@@ -140,6 +144,15 @@ function sourceFingerprint(pairs, startedAt, status, policy) {
         ]));
     }
     return hash.digest('hex');
+}
+function timeRange(values) {
+    let min;
+    let max;
+    for (const value of values) {
+        min = min === undefined ? value : Math.min(min, value);
+        max = max === undefined ? value : Math.max(max, value);
+    }
+    return min === undefined || max === undefined ? undefined : { min, max };
 }
 function trustedLocalDate(event, timezone) {
     return resolveTrustedLocalDate(event, timezone).date;
@@ -200,11 +213,11 @@ function validThreshold(value, min, max) {
 }
 function boundaryOverrideWarnings(overrides) {
     const warnings = [];
-    if (!validThreshold(overrides.maxEvents, 20, 500))
+    if (overrides.maxEvents !== undefined && !validThreshold(overrides.maxEvents, 20, 500))
         warnings.push('invalid_episode_boundary_max_events');
-    if (!validThreshold(overrides.maxDurationMs, 300_000, 86_400_000))
+    if (overrides.maxDurationMs !== undefined && !validThreshold(overrides.maxDurationMs, 300_000, 86_400_000))
         warnings.push('invalid_episode_boundary_max_duration_ms');
-    if (!validThreshold(overrides.maxIdleGapMs, 300_000, 86_400_000))
+    if (overrides.maxIdleGapMs !== undefined && !validThreshold(overrides.maxIdleGapMs, 300_000, 86_400_000))
         warnings.push('invalid_episode_boundary_max_idle_gap_ms');
     if (overrides.timezone !== undefined && !overrides.timezone.trim())
         warnings.push('invalid_episode_boundary_timezone');

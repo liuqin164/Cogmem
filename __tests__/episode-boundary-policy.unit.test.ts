@@ -31,7 +31,7 @@ test('EpisodeBoundaryPolicy validates config and detects max events, duration, i
   expect(config.mode).toBe('shadow');
 
   const policy = new EpisodeBoundaryPolicy({ maxEvents: 20, maxDurationMs: 300_000, maxIdleGapMs: 300_000 });
-  const active = { eventCount: 20, startedAt: 1_000, updatedAt: 301_000, localDates: ['2026-07-04'], lastTrustedLocalDate: '2026-07-04' };
+  const active = { eventCount: 20, startedAt: 1_000, updatedAt: 1_000, localDates: ['2026-07-04'], lastTrustedLocalDate: '2026-07-04' };
   expect(policy.evaluate({ active, primaryEvent: { role: 'user', occurredAt: 1_700, localDate: '2026-07-04' } }).guardCodes)
     .toContain('max_events_exceeded');
   expect(policy.evaluate({ active, primaryEvent: { role: 'user', occurredAt: 700_000, localDate: '2026-07-04' } }).guardCodes)
@@ -143,6 +143,7 @@ test('assistant/tool assignments do not write boundary audit, noise does, and tu
       projectId: 'brain', workspaceId: 'brain', threadId: 's1', sessionId: 's1',
       role: index === 0 ? 'user' : index === 1 ? 'assistant' : 'tool',
       content: `atomic ${id}`, sourceId: 'test', occurredAt: 10_000 + index, eventOrdinal: index,
+      metadata: { sourceAgent: 'hermes' },
     }));
     const original = kernel.episodeStore.appendEvent.bind(kernel.episodeStore);
     let calls = 0;

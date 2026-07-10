@@ -158,10 +158,14 @@ export class EpisodeBoundaryPolicy {
     const guardCodes: EpisodeBoundaryGuardCode[] = [];
     if (shouldEvaluate && input.active) {
       if (input.active.eventCount >= this.config.maxEvents) guardCodes.push('max_events_exceeded');
-      if ((metrics.elapsedMs ?? 0) > this.config.maxDurationMs) guardCodes.push('max_duration_exceeded');
-      if ((metrics.idleGapMs ?? 0) > this.config.maxIdleGapMs) guardCodes.push('max_idle_gap_exceeded');
-      if (this.config.splitOnTrustedLocalDateChange && localDate && input.active.lastTrustedLocalDate && input.active.lastTrustedLocalDate !== localDate) {
-        guardCodes.push('trusted_local_date_changed');
+      // A late arrival belongs to historical/review handling. It must not
+      // retroactively seal the current segment through clock/date guards.
+      if (!outOfOrderTimestamp) {
+        if ((metrics.elapsedMs ?? 0) > this.config.maxDurationMs) guardCodes.push('max_duration_exceeded');
+        if ((metrics.idleGapMs ?? 0) > this.config.maxIdleGapMs) guardCodes.push('max_idle_gap_exceeded');
+        if (this.config.splitOnTrustedLocalDateChange && localDate && input.active.lastTrustedLocalDate && input.active.lastTrustedLocalDate !== localDate) {
+          guardCodes.push('trusted_local_date_changed');
+        }
       }
     }
     return {

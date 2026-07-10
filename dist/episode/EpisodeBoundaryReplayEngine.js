@@ -126,6 +126,18 @@ export function replayEpisodeBoundaries(input) {
         policyDisposition: !input.config.enabled || input.config.mode === 'off' ? 'disabled' : input.config.mode,
     };
 }
+/** Reduces accepted evidence without evaluating a new boundary. */
+export function replayEpisodeBoundaryState(input) {
+    const state = {
+        eventCount: 0,
+        startedAt: input.episode.startedAt,
+        trustedLocalDates: [],
+    };
+    const warnings = new Set();
+    for (const turn of logicalTurnsFromPairs(input.pairs))
+        acceptTurn(state, turn, input.timezone, warnings);
+    return state;
+}
 export function replayPendingTurnBoundary(input) {
     const active = input.active;
     const replay = replayEpisodeBoundaries({

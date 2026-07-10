@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { EpisodeStore } from '../src/episode/EpisodeStore.js';
-import { normalizeEpisodeBoundaryConfig } from '../src/episode/EpisodeBoundaryPolicy.js';
+import { EpisodeBoundaryPolicy, normalizeEpisodeBoundaryConfig } from '../src/episode/EpisodeBoundaryPolicy.js';
+import { SchemaMigrationRunner, migration_0031 } from '../src/migrations/index.js';
 import { classifyTurnRelation } from '../src/episode/TurnRelationClassifier.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { migration_0022, migration_0023, migration_0028, migration_0029, migration_0030 } from '../src/migrations/index.js';
@@ -37,11 +38,11 @@ test('boundary config rejects boolean strings and empty policy version', () => {
   expect(normalized.config.policyVersion).toBe('episode_boundary.v1');
 });
 
-test('createMemoryKernel upgrades the runtime schema through migration 0030', () => {
+test('createMemoryKernel upgrades the runtime schema through migration 0031', () => {
   const { dir, kernel } = createKernel('cogmem-final-schema-');
   try {
     const db = kernel.factStore.getDatabase();
-    expect((db.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get() as { value: string }).value).toBe('30');
+    expect((db.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get() as { value: string }).value).toBe('31');
     expect((db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episode_events_episode_position_unique'`).get())).toBeTruthy();
     expect((db.prepare(`PRAGMA table_info(memory_events)`).all() as Array<{ name: string }>).some((row) => row.name === 'local_date_source')).toBe(true);
   } finally {
@@ -270,6 +271,70 @@ test('migration 0030 adds localDateSource and resequences duplicate positions be
       .toContain('local_date_source');
     expect(db.prepare(`SELECT position FROM memory_episode_events WHERE event_id = 'evt-2'`).get()).toEqual({ position: 2 });
     expect(db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episode_events_episode_position_unique'`).get()).toBeTruthy();
+  } finally {
+    db.close();
+  }
+});
+
+test('legacy metadata cannot suppress the 0031 integrity repair', () => {
+  const db = new Database(':memory:');
+  try {
+    db.exec(`CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO _meta VALUES ('schema_version', '31');`);
+    const runner = new SchemaMigrationRunner(db, [migration_0031]);
+    expect(runner.plan().map((migration) => migration.version)).toEqual(['0031']);
+    runner.run();
+    expect(db.prepare(`SELECT marker FROM _episode_integrity_markers WHERE marker = 'episode_boundary_integrity_0031'`).get()).toBeTruthy();
+  } finally {
+    db.close();
+  }
+});
+
+test('late user events do not trigger clock or trusted-date boundaries or poison snapshot date state', () => {
+  const { dir, kernel } = createKernel('cogmem-final-late-event-', {
+    episodeBoundary: { timezone: 'UTC', maxDurationMs: 300_000, maxIdleGapMs: 300_000 },
+  });
+  try {
+    const first = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'late', sourceAgent: 'test', role: 'user', text: 'current day',
+      externalMessageId: 'late-1', timestamp: Date.UTC(2026, 6, 10, 10), localDate: '2026-07-10',
+    });
+    const late = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'late', sourceAgent: 'test', role: 'user', text: 'late arrival',
+      externalMessageId: 'late-2', timestamp: Date.UTC(2026, 6, 9, 10), localDate: '2026-07-09',
+    });
+    expect(late.boundaryGuardCodes).not.toContain('max_duration_exceeded');
+    expect(late.boundaryGuardCodes).not.toContain('max_idle_gap_exceeded');
+    expect(late.boundaryGuardCodes).not.toContain('trusted_local_date_changed');
+    expect(kernel.episodeStore.getBoundarySnapshot(first.episodeId!, 'UTC').lastTrustedUserLocalDate).toBe('2026-07-10');
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('out-of-order policy retains max-event enforcement but suppresses temporal guards', () => {
+  const policy = new EpisodeBoundaryPolicy({ maxEvents: 20, maxDurationMs: 300_000, maxIdleGapMs: 300_000 });
+  const result = policy.evaluate({
+    active: { eventCount: 20, startedAt: 1_000_000, updatedAt: 2_000_000, lastTrustedLocalDate: '2026-07-10' },
+    primaryEvent: { role: 'user', occurredAt: 1, localDate: '2026-07-09', payload: {} },
+  });
+  expect(result.guardCodes).toEqual(['max_events_exceeded']);
+  expect(result.warnings.map((warning) => warning.code)).toContain('out_of_order_timestamp');
+});
+
+test('Dream enqueue cannot relabel a processed job as queued and Store enables foreign keys', () => {
+  const db = new Database(':memory:');
+  try {
+    const store = new EpisodeStore(db);
+    expect((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number }).foreign_keys).toBe(1);
+    const episode = store.createEpisode({ projectId: 'brain', sessionId: 'dream', episodeType: 'discussion', importance: 0.4, eventId: 'dream-1', occurredAt: 1 });
+    store.appendEvent({ episodeId: episode.episodeId, eventId: 'dream-1', relation: 'continues_previous', confidence: 1, occurredAt: 1 });
+    store.sealEpisode(episode.episodeId, { mode: 'hard', reason: 'test', now: 2 });
+    const job = store.claimDreamJobs({ projectId: 'brain', limit: 1, now: 3, leaseMs: 1000, maxAttempts: 3 })[0]!;
+    store.completeDreamJob(job.episodeId, job.leaseId, [], 4);
+    (store as unknown as { enqueueDreamJob(value: unknown, mode: 'normal', now: number): void }).enqueueDreamJob(store.getEpisode(episode.episodeId)!, 'normal', 5);
+    expect(store.getDreamJobState(episode.episodeId)).toBe('processed');
+    expect(store.getEpisode(episode.episodeId)?.dreamStatus).toBe('processed');
   } finally {
     db.close();
   }

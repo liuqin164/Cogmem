@@ -27,7 +27,10 @@ export class EpisodeBoundaryAuditService {
         const overrideWarnings = boundaryOverrideWarnings(options);
         const normalized = normalizeEpisodeBoundaryConfig(configWithDefinedOverrides(this.liveBoundaryConfig, options));
         const aggregateCountCheck = options.maxEvents !== undefined || this.liveBoundaryConfig.maxEvents !== undefined || normalized.config.maxEvents !== DEFAULT_EPISODE_BOUNDARY_CONFIG.maxEvents;
-        const items = page.episodes.map((episode) => this.auditEpisode(episode, normalized.config, [...this.liveConfigDiagnostics.map((item) => item.code), ...overrideWarnings, ...normalized.diagnostics.map((item) => item.code)], aggregateCountCheck));
+        const boundaryDiagnostics = this.liveConfigDiagnostics
+            .map((item) => item.code)
+            .filter((code) => code.startsWith('invalid_episode_boundary_'));
+        const items = page.episodes.map((episode) => this.auditEpisode(episode, normalized.config, [...boundaryDiagnostics, ...overrideWarnings, ...normalized.diagnostics.map((item) => item.code)], aggregateCountCheck));
         return { items, nextCursor: page.nextCursor };
     }
     requireProjectEpisode(projectId, episodeId) {
@@ -50,7 +53,8 @@ export class EpisodeBoundaryAuditService {
         const reasons = [];
         const warnings = [...configWarnings];
         warnings.push(...dateWarningCodes(pairs, config.timezone));
-        const durationMs = times.length ? Math.max(...times) - Math.min(...times) : 0;
+        const range = timeRange(times);
+        const durationMs = range ? range.max - range.min : 0;
         const maxEventGapMs = maxGap(times);
         const maxUserTurnGapMs = maxGap(userTimes);
         const maxBoundaryIdleGapMs = maxBoundaryIdleGap(pairs);
@@ -103,8 +107,8 @@ export class EpisodeBoundaryAuditService {
             storedEventCount: episode.eventCount,
             actualLinkedEventCount: links.length,
             startedAt: episode.startedAt,
-            firstEventAt: times.length ? Math.min(...times) : undefined,
-            lastEventAt: times.length ? Math.max(...times) : undefined,
+            firstEventAt: range?.min,
+            lastEventAt: range?.max,
             durationMs,
             maxEventGapMs,
             maxUserTurnGapMs,
@@ -126,11 +130,12 @@ export class EpisodeBoundaryAuditService {
             unresolvedEventCount: missingRawEventIds.length,
             missingRawEventIds: missingRawEventIds.slice(0, 50),
             evidenceIntegrityStatus: missingRawEventIds.length ? 'missing_raw_events' : 'ok',
-            requiresManualReview: missingRawEventIds.length > 0 || replay.structuralAnomalies.length > 0 || violations.some((violation) => violation.requiresManualReview),
+            requiresManualReview: critical || missingRawEventIds.length > 0 || replay.structuralAnomalies.length > 0 || violations.some((violation) => violation.requiresManualReview),
             severity: critical ? 'critical' : reasons.length ? 'warning' : 'info',
             reasons: stableReasons,
             warnings: stableWarnings,
-            recommendedAction: critical ? 'split-plan' : stableReasons.length ? 'inspect' : 'none',
+            recommendedAction: critical && !stableReasons.some((reason) => /raw_event|scope_mismatch|pointer_mismatch|dream.*mismatch|receipt.*mismatch|duplicate_or_gapped_positions|duplicate_active|empty_episode/u.test(reason))
+                ? 'split-plan' : stableReasons.length ? 'inspect' : 'none',
         };
     }
 }
@@ -140,6 +145,17 @@ function maxGap(values) {
     for (let index = 1; index < ordered.length; index += 1)
         max = Math.max(max, ordered[index] - ordered[index - 1]);
     return max;
+}
+function timeRange(values) {
+    let min;
+    let max;
+    for (const value of values) {
+        if (!Number.isFinite(value))
+            continue;
+        min = min === undefined ? value : Math.min(min, value);
+        max = max === undefined ? value : Math.max(max, value);
+    }
+    return min === undefined || max === undefined ? undefined : { min, max };
 }
 function maxBoundaryIdleGap(pairs) {
     let max = 0;
@@ -202,6 +218,7 @@ function sourceFingerprint(items) {
     for (const item of items) {
         hash.update(JSON.stringify([
             item.eventId,
+            item.position,
             item.relation,
             item.event?.role,
             item.event?.turnId,
@@ -209,6 +226,7 @@ function sourceFingerprint(items) {
             item.event?.eventOrdinal,
             item.event?.occurredAt,
             item.event?.localDate,
+            item.event?.localDateSource,
             item.event?.contentHash,
         ]));
     }
@@ -246,11 +264,11 @@ function validThreshold(value, min, max) {
 }
 function boundaryOverrideWarnings(overrides) {
     const warnings = [];
-    if (!validThreshold(overrides.maxEvents, 20, 500))
+    if (overrides.maxEvents !== undefined && !validThreshold(overrides.maxEvents, 20, 500))
         warnings.push('invalid_episode_boundary_max_events');
-    if (!validThreshold(overrides.maxDurationMs, 300_000, 86_400_000))
+    if (overrides.maxDurationMs !== undefined && !validThreshold(overrides.maxDurationMs, 300_000, 86_400_000))
         warnings.push('invalid_episode_boundary_max_duration_ms');
-    if (!validThreshold(overrides.maxIdleGapMs, 300_000, 86_400_000))
+    if (overrides.maxIdleGapMs !== undefined && !validThreshold(overrides.maxIdleGapMs, 300_000, 86_400_000))
         warnings.push('invalid_episode_boundary_max_idle_gap_ms');
     if (overrides.timezone !== undefined && !overrides.timezone.trim())
         warnings.push('invalid_episode_boundary_timezone');

@@ -46,6 +46,14 @@ export declare function replayEpisodeBoundaries(input: {
     live?: boolean;
     initialState?: EpisodeBoundaryReplayState;
 }): EpisodeBoundaryReplayResult;
+/** Reduces accepted evidence without evaluating a new boundary. */
+export declare function replayEpisodeBoundaryState(input: {
+    episode: {
+        startedAt?: number;
+    };
+    pairs: EpisodeReplayPair[];
+    timezone?: string;
+}): EpisodeBoundaryReplayState;
 export declare function replayPendingTurnBoundary(input: {
     config: EpisodeBoundaryConfig;
     active?: EpisodeBoundaryReplayState;

@@ -596,12 +596,17 @@ function validateTurnBatch(events: MemoryEvent[], input: {
   for (const event of events) {
     if (ids.has(event.eventId)) throw new Error(`episode_duplicate_event_id:${event.eventId}`);
     ids.add(event.eventId);
-    if (event.projectId && event.projectId !== input.projectId) throw new Error(`episode_project_mismatch:${event.eventId}`);
-    if (event.sessionId && event.sessionId !== input.sessionId) throw new Error(`episode_session_mismatch:${event.eventId}`);
-    if (event.threadId && event.threadId !== expectedThread) throw new Error(`episode_thread_mismatch:${event.eventId}`);
+    if (event.projectId !== input.projectId) throw new Error(`episode_project_mismatch:${event.eventId}`);
+    if (event.sessionId !== input.sessionId) throw new Error(`episode_session_mismatch:${event.eventId}`);
+    if (event.threadId !== expectedThread) throw new Error(`episode_thread_mismatch:${event.eventId}`);
     const metadata = (event.payload as { metadata?: { sourceAgent?: unknown } } | undefined)?.metadata;
-    if (input.sourceAgent && typeof metadata?.sourceAgent === 'string' && metadata.sourceAgent !== input.sourceAgent) {
-      throw new Error(`episode_source_scope_mismatch:${event.eventId}`);
+    if (input.sourceAgent) {
+      const eventSourceAgent = typeof metadata?.sourceAgent === 'string' ? metadata.sourceAgent : undefined;
+      // Old raw ledgers without a source id are an explicit legacy-unscoped
+      // compatibility lane. Modern scoped evidence must carry exact source
+      // metadata and cannot silently join another agent's episode.
+      if (!eventSourceAgent && event.sourceId) throw new Error(`episode_source_scope_missing:${event.eventId}`);
+      if (eventSourceAgent && eventSourceAgent !== input.sourceAgent) throw new Error(`episode_source_scope_mismatch:${event.eventId}`);
     }
   }
   const logicalTurns = logicalTurnsFromPairs(events.map((event, index) => ({

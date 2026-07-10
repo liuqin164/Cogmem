@@ -136,6 +136,17 @@ export class EventStore {
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_events_thread_order ON memory_events(thread_id, thread_seq, event_ordinal, global_seq);`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_events_parent ON memory_events(parent_event_id);`);
         this.db.exec(`
+      CREATE TABLE IF NOT EXISTS import_source_anchors (
+        project_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        import_anchor TEXT NOT NULL,
+        event_id TEXT NOT NULL UNIQUE,
+        content_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (project_id, source_id, import_anchor)
+      );
+    `);
+        this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_events_fts USING fts5(
         event_id UNINDEXED,
         text,
@@ -224,9 +235,21 @@ export class EventStore {
     `).run(event.eventId, event.globalSeq ?? null, event.streamId, event.streamType, event.eventType, event.rawEventType || null, event.eventVersion, event.projectId || null, event.workspaceId || null, event.actorId || null, event.causationId || null, event.correlationId || null, event.sourceNeuronId || null, event.sourceId || null, event.contentHash || null, event.threadId || null, event.sessionId || null, event.localDate || null, event.localDateSource || 'legacy_unknown', event.threadSeq ?? null, event.turnId || null, event.turnSeq ?? null, event.eventOrdinal ?? null, event.role || null, event.parentEventId || null, event.prevEventId || null, event.nextEventId || null, event.causalityType || null, event.sourceOffset ?? null, event.lineStart ?? null, event.lineEnd ?? null, event.charStart ?? null, event.charEnd ?? null, event.orderingConfidence || null, event.occurredAt, storedPayloadJson, event.payloadHash, event.createdAt);
         this.db.transaction(() => {
             insert();
+            this.upsertImportAnchor(event);
             this.upsertRawEventFts(event);
         })();
         return event;
+    }
+    upsertImportAnchor(event) {
+        const metadata = event.payload?.metadata;
+        const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;
+        if (!anchor || !event.projectId || !event.sourceId || !event.contentHash)
+            return;
+        this.db.prepare(`
+      INSERT INTO import_source_anchors (project_id, source_id, import_anchor, event_id, content_hash, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, source_id, import_anchor) DO NOTHING
+    `).run(event.projectId, event.sourceId, anchor, event.eventId, event.contentHash, event.createdAt);
     }
     getNextGlobalSeq() {
         const row = this.db.prepare(`
@@ -265,8 +288,17 @@ export class EventStore {
       FROM memory_events
       WHERE (? IS NULL OR occurred_at > ?)
       ORDER BY COALESCE(global_seq, 0) ASC, occurred_at ASC, event_id ASC
-    `).all(lastEventTime || null, lastEventTime || null);
+    `).all(lastEventTime ?? null, lastEventTime ?? null);
         return rows.map((row) => this.mapRow(row));
+    }
+    findImportedEventAnchor(projectId, sourceId, importAnchor) {
+        const row = this.db.prepare(`
+      SELECT e.${MEMORY_EVENT_COLUMNS.replace(/\n/g, ' e.').replace(/^\s*/, '')}
+      FROM import_source_anchors a
+      JOIN memory_events e ON e.event_id = a.event_id
+      WHERE a.project_id = ? AND a.source_id = ? AND a.import_anchor = ?
+    `).get(projectId, sourceId, importAnchor);
+        return row ? this.mapRow(row) : null;
     }
     getLatestEvent() {
         const row = this.db.prepare(`
@@ -446,9 +478,10 @@ export class EventStore {
             conditions.push('local_date = ?');
             params.push(options.localDate);
         }
-        const limitSql = options.limit ? 'LIMIT ?' : '';
-        if (options.limit)
-            params.push(options.limit);
+        const boundedLimit = options.limit === undefined ? undefined : Math.max(1, Math.min(Math.trunc(options.limit), 10_000));
+        const limitSql = boundedLimit === undefined ? '' : 'LIMIT ?';
+        if (boundedLimit !== undefined)
+            params.push(boundedLimit);
         const rows = this.db.prepare(`
       SELECT ${MEMORY_EVENT_COLUMNS}
       FROM memory_events

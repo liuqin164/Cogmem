@@ -41,8 +41,8 @@ export interface DreamTickResult {
 export declare class DreamScheduler {
     private readonly episodeStore;
     private readonly curator;
-    private readonly candidateStore?;
-    constructor(episodeStore: EpisodeStore, curator: DreamCuratorWorker, candidateStore?: DeepWriteCandidateStore | undefined);
+    private readonly candidateStore;
+    constructor(episodeStore: EpisodeStore, curator: DreamCuratorWorker, candidateStore: DeepWriteCandidateStore);
     tick(options?: DreamTickOptions): Promise<DreamTickResult>;
     private recordRun;
 }

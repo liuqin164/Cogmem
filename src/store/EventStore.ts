@@ -201,6 +201,17 @@ export class EventStore {
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_events_thread_order ON memory_events(thread_id, thread_seq, event_ordinal, global_seq);`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_events_parent ON memory_events(parent_event_id);`);
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS import_source_anchors (
+        project_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        import_anchor TEXT NOT NULL,
+        event_id TEXT NOT NULL UNIQUE,
+        content_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (project_id, source_id, import_anchor)
+      );
+    `);
+    this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_events_fts USING fts5(
         event_id UNINDEXED,
         text,
@@ -326,9 +337,21 @@ export class EventStore {
     );
     this.db.transaction(() => {
       insert();
+      this.upsertImportAnchor(event);
       this.upsertRawEventFts(event);
     })();
     return event;
+  }
+
+  private upsertImportAnchor(event: MemoryEvent<unknown>): void {
+    const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
+    const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;
+    if (!anchor || !event.projectId || !event.sourceId || !event.contentHash) return;
+    this.db.prepare(`
+      INSERT INTO import_source_anchors (project_id, source_id, import_anchor, event_id, content_hash, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, source_id, import_anchor) DO NOTHING
+    `).run(event.projectId, event.sourceId, anchor, event.eventId, event.contentHash, event.createdAt);
   }
 
   getNextGlobalSeq(): number {
@@ -372,9 +395,19 @@ export class EventStore {
       FROM memory_events
       WHERE (? IS NULL OR occurred_at > ?)
       ORDER BY COALESCE(global_seq, 0) ASC, occurred_at ASC, event_id ASC
-    `).all(lastEventTime || null, lastEventTime || null) as any[];
+    `).all(lastEventTime ?? null, lastEventTime ?? null) as any[];
 
     return rows.map((row) => this.mapRow(row));
+  }
+
+  findImportedEventAnchor(projectId: string, sourceId: string, importAnchor: string): MemoryEvent | null {
+    const row = this.db.prepare(`
+      SELECT e.${MEMORY_EVENT_COLUMNS.replace(/\n/g, ' e.').replace(/^\s*/, '')}
+      FROM import_source_anchors a
+      JOIN memory_events e ON e.event_id = a.event_id
+      WHERE a.project_id = ? AND a.source_id = ? AND a.import_anchor = ?
+    `).get(projectId, sourceId, importAnchor) as any;
+    return row ? this.mapRow(row) : null;
   }
 
   getLatestEvent(): MemoryEvent | null {
@@ -600,8 +633,9 @@ export class EventStore {
       params.push(options.localDate);
     }
 
-    const limitSql = options.limit ? 'LIMIT ?' : '';
-    if (options.limit) params.push(options.limit);
+    const boundedLimit = options.limit === undefined ? undefined : Math.max(1, Math.min(Math.trunc(options.limit), 10_000));
+    const limitSql = boundedLimit === undefined ? '' : 'LIMIT ?';
+    if (boundedLimit !== undefined) params.push(boundedLimit);
     const rows = this.db.prepare(`
       SELECT ${MEMORY_EVENT_COLUMNS}
       FROM memory_events

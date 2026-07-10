@@ -57,7 +57,8 @@ import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
 import { EpisodeAssembler, EpisodeStore } from './episode/index.js';
 import { EpisodeBoundaryAuditService } from './episode/EpisodeBoundaryAuditService.js';
-import { EpisodeBoundaryPolicy } from './episode/EpisodeBoundaryPolicy.js';
+import { EpisodeBoundaryPolicy, normalizeEpisodeBoundaryConfig } from './episode/EpisodeBoundaryPolicy.js';
+import { logicalTurnsFromPairs } from './episode/EpisodeBoundaryReplayEngine.js';
 import { EpisodeSplitPlanner } from './episode/EpisodeSplitPlanner.js';
 import { DreamScheduler } from './dream/index.js';
 import { loadCogmemConfig, resolveCogmemConfigPath, } from './config/CogmemConfig.js';
@@ -168,6 +169,8 @@ export class MemoryKernel {
     constructor(options = {}) {
         this.options = options;
         this.configDiagnostics = [...(options.configDiagnostics || [])];
+        const normalizedBoundary = normalizeEpisodeBoundaryConfig(options.episodeBoundary);
+        this.configDiagnostics.push(...normalizedBoundary.diagnostics);
         this.dbPath = options.dbPath ?? ':memory:';
         this.encryptionProvider = options.encryptionProvider;
         this.piiRedactor = options.redactionPolicy === false ? undefined : new PiiRedactor(options.redactionPolicy);
@@ -175,7 +178,10 @@ export class MemoryKernel {
         this.eventStore = new EventStore(this.dbPath, this.encryptionProvider);
         this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
         const db = this.factStore.getDatabase();
-        db.exec('PRAGMA busy_timeout = 5000;');
+        db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+        if (db.prepare('PRAGMA foreign_keys').get()?.foreign_keys !== 1) {
+            throw new Error('memory_kernel_foreign_keys_disabled');
+        }
         new SchemaMigrationRunner(db, KERNEL_MIGRATIONS).run();
         this.ensureMetaTable(db);
         this.entityStore = new EntityStore(db);
@@ -215,7 +221,7 @@ export class MemoryKernel {
         this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
         this.dreamLedgerStore = new DreamLedgerStore(db);
         this.episodeStore = new EpisodeStore(db, (eventId) => this.eventStore.getEvent(eventId), { initializeSchemaForTests: false });
-        this.episodeBoundaryPolicy = new EpisodeBoundaryPolicy(options.episodeBoundary);
+        this.episodeBoundaryPolicy = new EpisodeBoundaryPolicy(normalizedBoundary.config);
         this.episodeBoundaryAuditService = new EpisodeBoundaryAuditService(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config, this.configDiagnostics);
         this.episodeSplitPlanner = new EpisodeSplitPlanner(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config, this.configDiagnostics);
         this.userTopicPathRegistry = new UserTopicPathRegistry(db);
@@ -1137,7 +1143,7 @@ export class MemoryKernel {
         return { scanned: eligibleEvents.length, assigned, unassigned: unassignedEventIds.length, unassignedEventIds, nextGlobalSeq: afterGlobalSeq, hasMore: events.length >= limit };
     }
     repairEpisode(input) {
-        validateEpisodeRepairInput(input, this.episodeStore);
+        validateEpisodeRepairInput(input, this.episodeStore, (eventId) => this.eventStore.getEvent(eventId) ?? undefined);
         return this.episodeStore.transaction(() => this.repairEpisodeInTransaction(input));
     }
     repairEpisodeInTransaction(input) {
@@ -1274,8 +1280,10 @@ export class MemoryKernel {
         }
         for (const episodeId of affected) {
             const episode = this.episodeStore.getEpisode(episodeId);
-            if (episode?.eventCount && episode.status === 'sealed') {
-                this.episodeStore.requeueDreamForRepair(episodeId, input.operation === 'invalidate-dream-run' ? input.mode || 'normal' : 'normal', now);
+            if (episode?.eventCount && episode.status === 'sealed'
+                && input.operation !== 'requeue-dream'
+                && input.operation !== 'invalidate-dream-run') {
+                this.episodeStore.requeueDreamForRepair(episodeId, 'normal', now);
                 requeuedDream = true;
             }
         }
@@ -2129,7 +2137,12 @@ export function createMemoryKernelFromConfig(input = {}) {
     if (error)
         throw new Error(`${error.code}: ${error.message}`);
     const { configPath: _configPath, cwd: _cwd, env: _env, ...explicitOptions } = options;
-    return createMemoryKernel({ ...loaded.options, configDiagnostics: loaded.diagnostics, ...explicitOptions });
+    return createMemoryKernel({
+        ...loaded.options,
+        ...explicitOptions,
+        episodeBoundary: { ...loaded.options.episodeBoundary, ...explicitOptions.episodeBoundary },
+        configDiagnostics: [...loaded.diagnostics, ...(explicitOptions.configDiagnostics || [])],
+    });
 }
 function changedFieldsForRepair(input) {
     if (input.operation === 'reclassify') {
@@ -2147,7 +2160,7 @@ function changedFieldsForRepair(input) {
         return ['dreamQueue'];
     return [];
 }
-function validateEpisodeRepairInput(input, store) {
+function validateEpisodeRepairInput(input, store, resolveEvent) {
     if (!input.projectId?.trim())
         throw new Error('episode_project_required');
     if (input.operation === 'reclassify' && input.importance !== undefined
@@ -2162,16 +2175,53 @@ function validateEpisodeRepairInput(input, store) {
         const source = store.getEpisode(input.episodeId);
         if (!source || source.projectId !== input.projectId)
             throw new Error(`episode_project_mismatch:${input.episodeId}`);
+        if (source.status !== 'sealed')
+            throw new Error('episode_split_requires_sealed_source');
         const sourceIds = new Set(store.listEventLinks(input.episodeId).map((link) => link.eventId));
         if (input.eventIds.some((eventId) => !sourceIds.has(eventId)))
             throw new Error('episode_split_event_not_in_source');
         if (input.eventIds.length >= sourceIds.size)
             throw new Error('episode_split_requires_proper_subset');
+        const links = store.listEventLinks(input.episodeId);
+        const selected = new Set(input.eventIds);
+        const indices = links.map((link, index) => selected.has(link.eventId) ? index : -1).filter((index) => index >= 0);
+        const first = indices[0];
+        const last = indices.at(-1);
+        if (first === undefined || last === undefined || last - first + 1 !== indices.length) {
+            throw new Error('episode_split_requires_contiguous_range');
+        }
+        const pairs = links.map((link) => ({ link, event: resolveEvent(link.eventId) }));
+        const turns = logicalTurnsFromPairs(pairs);
+        if (turns.some((turn) => {
+            const included = turn.filter((pair) => selected.has(pair.link.eventId)).length;
+            return included > 0 && included !== turn.length;
+        }))
+            throw new Error('episode_split_requires_complete_logical_turns');
+        for (const eventId of selected) {
+            const event = resolveEvent(eventId);
+            if (event?.parentEventId && sourceIds.has(event.parentEventId) && !selected.has(event.parentEventId)) {
+                throw new Error('episode_split_requires_complete_tool_chain');
+            }
+            const childInSource = links.some((link) => resolveEvent(link.eventId)?.parentEventId === eventId);
+            if (childInSource && !links.filter((link) => resolveEvent(link.eventId)?.parentEventId === eventId).every((link) => selected.has(link.eventId))) {
+                throw new Error('episode_split_requires_complete_tool_chain');
+            }
+        }
+        if (!turns.some((turn) => turn.every((pair) => selected.has(pair.link.eventId)) && turn.some((pair) => pair.event?.role === 'user'))) {
+            throw new Error('episode_split_requires_primary_user_turn');
+        }
     }
     if (input.operation === 'move-event') {
         const link = store.getEventLink(input.eventId);
         if (link?.episodeId === input.targetEpisodeId)
             throw new Error('episode_move_source_equals_target');
+        const source = link ? store.getEpisode(link.episodeId) : undefined;
+        const target = store.getEpisode(input.targetEpisodeId);
+        if (!source || !target || source.projectId !== input.projectId || target.projectId !== input.projectId)
+            throw new Error('episode_project_mismatch');
+        if (source.sessionId !== target.sessionId || source.sourceAgent !== target.sourceAgent || source.conversationThreadId !== target.conversationThreadId) {
+            throw new Error('episode_move_scope_mismatch');
+        }
     }
     if (input.operation === 'merge') {
         if (input.sourceEpisodeId === input.targetEpisodeId)

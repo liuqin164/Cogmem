@@ -3,6 +3,7 @@ import type Database from 'bun:sqlite';
 import type { MemoryEvent } from '../types/index.js';
 import { sealDuplicateOpenEpisodes } from './EpisodeActiveScopeGuard.js';
 import { summarizeEpisode } from './EpisodeSemanticSummarizer.js';
+import { replayEpisodeBoundaryState } from './EpisodeBoundaryReplayEngine.js';
 
 import type {
   EpisodeClosureMode,
@@ -17,7 +18,7 @@ import type {
   MemoryEpisode,
   TurnRelation,
 } from './EpisodeTypes.js';
-import { resolveTrustedLocalDate, type EpisodeBoundaryGuardResult } from './EpisodeBoundaryPolicy.js';
+import { type EpisodeBoundaryGuardResult } from './EpisodeBoundaryPolicy.js';
 import type { TurnRelationDecision } from './TurnRelationClassifier.js';
 
 interface CreateEpisodeInput {
@@ -88,6 +89,9 @@ export class EpisodeStore {
     private readonly resolveEvent?: (eventId: string) => MemoryEvent | null | undefined,
     options: { initializeSchemaForTests?: boolean } = {},
   ) {
+    this.db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+    const foreignKeys = this.db.prepare('PRAGMA foreign_keys').get() as { foreign_keys?: number } | undefined;
+    if (foreignKeys?.foreign_keys !== 1) throw new Error('episode_store_foreign_keys_disabled');
     if (options.initializeSchemaForTests !== false) this.initializeSchema();
   }
 
@@ -291,40 +295,48 @@ export class EpisodeStore {
       return { eventCount: actualLinkCount, actualLinkCount, storedEventCount: episode.eventCount, eventCountMismatch: actualLinkCount !== episode.eventCount, startedAt: episode.startedAt, updatedAt: episode.updatedAt, trustedLocalDates: [] };
     }
     const actualLinkCount = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM memory_episode_events WHERE episode_id = ?`).get(episodeId) as { count?: number } | null)?.count ?? 0);
-    const lastEventAt = (this.db.prepare(`
-      SELECT MAX(e.occurred_at) AS occurred_at
-      FROM memory_episode_events ee
-      JOIN memory_events e ON e.event_id = ee.event_id
-      WHERE ee.episode_id = ?
-    `).get(episodeId) as { occurred_at?: number | null } | null)?.occurred_at ?? undefined;
     const hasLocalDateSource = (this.db.prepare(`PRAGMA table_info(memory_events)`).all() as Array<{ name: string }>)
       .some((row) => row.name === 'local_date_source');
-    const userDateRows = (this.db.prepare(`
-      SELECT e.event_id AS event_id, e.local_date AS local_date,
+    const rows = this.db.prepare(`
+      SELECT ee.event_id AS event_id, ee.position AS position, ee.relation AS relation,
+        ee.confidence AS confidence, ee.created_at AS created_at, e.role AS role,
+        e.local_date AS local_date,
         ${hasLocalDateSource ? 'e.local_date_source' : "'legacy_unknown'"} AS local_date_source,
         e.occurred_at AS occurred_at
       FROM memory_episode_events ee
       JOIN memory_events e ON e.event_id = ee.event_id
-      WHERE ee.episode_id = ? AND e.role = 'user'
-      ORDER BY ee.position DESC
-    `).all(episodeId) as Array<{ event_id: string; local_date?: string | null; local_date_source?: MemoryEvent['localDateSource'] | null; occurred_at?: number | null }>)
-      .map((row) => resolveTrustedLocalDate(
-        this.resolveEvent?.(row.event_id) || { localDate: row.local_date || undefined, localDateSource: row.local_date_source || 'legacy_unknown', occurredAt: row.occurred_at ?? undefined },
-        timezone,
-      ).date)
-      .filter((date): date is string => Boolean(date));
-    const lastTrustedUserLocalDate = userDateRows[0];
+      WHERE ee.episode_id = ?
+      ORDER BY ee.position, ee.event_id
+    `).all(episodeId) as Array<{
+      event_id: string; position: number; relation: TurnRelation; confidence: number; created_at: number;
+      role: MemoryEvent['role']; local_date?: string | null; local_date_source?: MemoryEvent['localDateSource'] | null; occurred_at?: number | null;
+    }>;
+    const state = replayEpisodeBoundaryState({
+      episode: { startedAt: episode.startedAt },
+      timezone,
+      pairs: rows.map((row) => ({
+        link: { episodeId, eventId: row.event_id, position: row.position, relation: row.relation, confidence: row.confidence, createdAt: row.created_at },
+        event: this.resolveEvent?.(row.event_id) || {
+          eventId: row.event_id,
+          role: row.role,
+          localDate: row.local_date ?? undefined,
+          localDateSource: row.local_date_source || 'legacy_unknown',
+          occurredAt: row.occurred_at ?? undefined,
+          payload: {},
+        } as MemoryEvent,
+      })),
+    });
     return {
       eventCount: actualLinkCount,
       actualLinkCount,
       storedEventCount: episode.eventCount,
       eventCountMismatch: actualLinkCount !== episode.eventCount,
       startedAt: episode.startedAt,
-      updatedAt: lastEventAt ?? episode.updatedAt,
-      lastEventAt,
-      lastTrustedUserLocalDate,
-      lastTrustedLocalDate: lastTrustedUserLocalDate,
-      trustedLocalDates: [...new Set(userDateRows)].reverse(),
+      updatedAt: state.lastEventAt ?? episode.updatedAt,
+      lastEventAt: state.lastEventAt,
+      lastTrustedUserLocalDate: state.lastTrustedUserLocalDate,
+      lastTrustedLocalDate: state.lastTrustedUserLocalDate,
+      trustedLocalDates: state.trustedLocalDates,
     };
   }
 
@@ -366,6 +378,11 @@ export class EpisodeStore {
     const target = this.getEpisode(targetEpisodeId);
     if (!source || !target) throw new Error('episode_not_found');
     if (source.projectId !== target.projectId) throw new Error('episode_project_mismatch');
+    if (source.sessionId !== target.sessionId
+      || (source.sourceAgent || '') !== (target.sourceAgent || '')
+      || (source.conversationThreadId || '') !== (target.conversationThreadId || '')) {
+      throw new Error('episode_repair_scope_mismatch');
+    }
     this.db.transaction(() => {
       const nextPosition = this.listEventLinks(targetEpisodeId).length + 1;
       this.db.prepare(`UPDATE memory_episode_events SET episode_id = ?, position = ?, created_at = ? WHERE event_id = ?`)
@@ -469,16 +486,29 @@ export class EpisodeStore {
 
   private resequenceEpisode(episodeId: string, now: number): void {
     const links = this.listEventLinks(episodeId);
+    if (links.length === 0) {
+      this.deleteEmptyEpisode(episodeId);
+      return;
+    }
+    const eventById = new Map(links.map((link) => [link.eventId, this.resolveEvent?.(link.eventId)]));
+    links.sort((left, right) => canonicalRepairOrder(eventById.get(left.eventId), eventById.get(right.eventId), left, right));
     const updatePosition = this.db.prepare(`UPDATE memory_episode_events SET position = ? WHERE event_id = ? AND episode_id = ?`);
     for (const [index, link] of links.entries()) updatePosition.run(-1_000_000_000 - index, link.eventId, episodeId);
     for (const [index, link] of links.entries()) updatePosition.run(index + 1, link.eventId, episodeId);
-    const events = links.map((link) => this.resolveEvent?.(link.eventId)).filter((event): event is MemoryEvent => Boolean(event));
+    const events = links.map((link) => eventById.get(link.eventId)).filter((event): event is MemoryEvent => Boolean(event));
     const first = events[0];
     const last = events.at(-1);
     this.db.prepare(`
-      UPDATE memory_episodes SET event_count = ?, start_event_id = COALESCE(?, start_event_id),
-        end_event_id = COALESCE(?, end_event_id), start_seq = ?, end_seq = ?, updated_at = ? WHERE episode_id = ?
-    `).run(links.length, first?.eventId || null, last?.eventId || null, first?.globalSeq ?? null, last?.globalSeq ?? null, now, episodeId);
+      UPDATE memory_episodes SET event_count = ?, start_event_id = ?, end_event_id = ?,
+        start_seq = ?, end_seq = ?, updated_at = ? WHERE episode_id = ?
+    `).run(links.length, first?.eventId ?? links[0]!.eventId, last?.eventId ?? links.at(-1)!.eventId, first?.globalSeq ?? null, last?.globalSeq ?? null, now, episodeId);
+  }
+
+  private deleteEmptyEpisode(episodeId: string): void {
+    this.db.prepare(`DELETE FROM episode_closure_receipts WHERE episode_id = ?`).run(episodeId);
+    this.db.prepare(`DELETE FROM episode_dream_jobs WHERE episode_id = ?`).run(episodeId);
+    this.db.prepare(`DELETE FROM episode_cross_refs WHERE episode_id = ? OR referenced_episode_id = ?`).run(episodeId, episodeId);
+    this.db.prepare(`DELETE FROM memory_episodes WHERE episode_id = ?`).run(episodeId);
   }
 
   reopenSoftEpisode(episodeId: string, now: number): MemoryEpisode {
@@ -710,16 +740,19 @@ export class EpisodeStore {
   }
 
   completeDreamJob(episodeId: string, leaseId: string, candidateIds: string[], now: number): void {
-    const result = this.db.prepare(`
-      UPDATE episode_dream_jobs SET state = 'processed', candidate_ids_json = ?, lease_id = NULL,
-        lease_until = NULL, retry_after = NULL, failure_category = NULL, last_error = NULL, updated_at = ?
-      WHERE episode_id = ? AND state = 'processing' AND lease_id = ?
-    `).run(JSON.stringify(candidateIds), now, episodeId, leaseId);
-    if (!result.changes) throw new Error(`episode_dream_lease_lost:${episodeId}`);
-    this.db.prepare(`
-      UPDATE memory_episodes SET dream_status = 'processed', last_dreamed_at = ?,
-        dream_candidate_count = ?, dream_error = NULL WHERE episode_id = ?
-    `).run(now, candidateIds.length, episodeId);
+    this.transaction(() => {
+      const result = this.db.prepare(`
+        UPDATE episode_dream_jobs SET state = 'processed', candidate_ids_json = ?, lease_id = NULL,
+          lease_until = NULL, retry_after = NULL, failure_category = NULL, last_error = NULL, updated_at = ?
+        WHERE episode_id = ? AND state = 'processing' AND lease_id = ?
+      `).run(JSON.stringify(candidateIds), now, episodeId, leaseId);
+      if (!result.changes) throw new Error(`episode_dream_lease_lost:${episodeId}`);
+      const episode = this.db.prepare(`
+        UPDATE memory_episodes SET dream_status = 'processed', last_dreamed_at = ?,
+          dream_candidate_count = ?, dream_error = NULL WHERE episode_id = ? AND status = 'sealed'
+      `).run(now, candidateIds.length, episodeId);
+      if (!episode.changes) throw new Error(`episode_dream_episode_not_sealed:${episodeId}`);
+    });
   }
 
   failDreamJob(episodeId: string, leaseId: string, error: string, input: {
@@ -728,15 +761,17 @@ export class EpisodeStore {
     terminal: boolean;
     retryAfter?: number;
   }): void {
-    const state: EpisodeDreamState = input.terminal ? 'failed_terminal' : 'failed_retryable';
-    const result = this.db.prepare(`
-      UPDATE episode_dream_jobs SET state = ?, last_error = ?, failure_category = ?, retry_after = ?,
-        lease_id = NULL, lease_until = NULL, updated_at = ?
-      WHERE episode_id = ? AND state = 'processing' AND lease_id = ?
-    `).run(state, error.slice(0, 2000), input.failureCategory, input.retryAfter ?? null, input.now, episodeId, leaseId);
-    if (!result.changes) return;
-    this.db.prepare(`UPDATE memory_episodes SET dream_status = 'failed', dream_error = ? WHERE episode_id = ?`)
-      .run(error.slice(0, 2000), episodeId);
+    this.transaction(() => {
+      const state: EpisodeDreamState = input.terminal ? 'failed_terminal' : 'failed_retryable';
+      const result = this.db.prepare(`
+        UPDATE episode_dream_jobs SET state = ?, last_error = ?, failure_category = ?, retry_after = ?,
+          lease_id = NULL, lease_until = NULL, updated_at = ?
+        WHERE episode_id = ? AND state = 'processing' AND lease_id = ?
+      `).run(state, error.slice(0, 2000), input.failureCategory, input.retryAfter ?? null, input.now, episodeId, leaseId);
+      if (!result.changes) return;
+      this.db.prepare(`UPDATE memory_episodes SET dream_status = 'failed', dream_error = ? WHERE episode_id = ?`)
+        .run(error.slice(0, 2000), episodeId);
+    });
   }
 
   retryFailed(projectId?: string): number {
@@ -769,7 +804,7 @@ export class EpisodeStore {
           AND state IN ('pending', 'processing', 'failed_retryable', 'retry_scheduled')
       `).run(reason, now, ...episodeIds);
       this.db.prepare(`
-        UPDATE memory_episodes SET dream_status = 'failed', dream_error = ?, last_dream_run_id = NULL,
+      UPDATE memory_episodes SET dream_status = 'skipped', dream_error = ?, last_dream_run_id = NULL,
           dream_candidate_count = 0, updated_at = ?
         WHERE episode_id IN (${placeholders})
       `).run(reason, now, ...episodeIds);
@@ -917,13 +952,23 @@ export class EpisodeStore {
     this.db.prepare(`
       INSERT INTO episode_dream_jobs (episode_id, project_id, state, priority, mode_hint, created_at, updated_at)
       VALUES (?, ?, 'pending', ?, ?, ?, ?)
-      ON CONFLICT(episode_id) DO NOTHING
+      ON CONFLICT(episode_id) DO UPDATE SET
+        state = 'pending', mode_hint = excluded.mode_hint, retry_after = NULL, lease_id = NULL, lease_until = NULL,
+        failure_category = NULL, last_error = NULL, updated_at = excluded.updated_at
+      WHERE episode_dream_jobs.state IN ('pending', 'failed_retryable', 'retry_scheduled')
     `).run(episode.episodeId, episode.projectId, priority, modeHint, now, now);
-    this.db.prepare(`UPDATE memory_episodes SET dream_status = 'queued', dream_error = NULL WHERE episode_id = ?`)
-      .run(episode.episodeId);
+    const job = this.db.prepare(`SELECT state FROM episode_dream_jobs WHERE episode_id = ?`).get(episode.episodeId) as { state?: EpisodeDreamState } | null;
+    if (job?.state === 'pending') {
+      this.db.prepare(`UPDATE memory_episodes SET dream_status = 'queued', dream_error = NULL WHERE episode_id = ?`)
+        .run(episode.episodeId);
+    }
   }
 
   private initializeSchema(): void {
+    this.transaction(() => this.initializeSchemaUnsafe());
+  }
+
+  private initializeSchemaUnsafe(): void {
     // Migration 22 is authoritative. This keeps direct store construction compatible in tests and embeddings.
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_episodes (
@@ -1041,7 +1086,10 @@ export class EpisodeStore {
       nextPositions.set(link.episode_id, next);
       movePosition.run(next, link.rowid);
     }
-    const hasGlobalSeq = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_events'`).get());
+    const eventColumns = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_events'`).get())
+      ? new Set((this.db.prepare(`PRAGMA table_info(memory_events)`).all() as Array<{ name: string }>).map((row) => row.name))
+      : new Set<string>();
+    const hasGlobalSeq = eventColumns.has('global_seq');
     const rebuild = hasGlobalSeq ? this.db.prepare(`
       UPDATE memory_episodes SET event_count = (SELECT COUNT(*) FROM memory_episode_events WHERE episode_id = ?),
         start_event_id = COALESCE((SELECT event_id FROM memory_episode_events WHERE episode_id = ? ORDER BY position, event_id LIMIT 1), start_event_id),
@@ -1176,6 +1224,24 @@ function parseAuditCursor(cursor?: string): { updatedAt: number; episodeId: stri
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback;
   try { return JSON.parse(value) as T; } catch { return fallback; }
+}
+
+function canonicalRepairOrder(
+  left: MemoryEvent | null | undefined,
+  right: MemoryEvent | null | undefined,
+  leftLink: EpisodeEventLink,
+  rightLink: EpisodeEventLink,
+): number {
+  const numeric = (value: number | undefined): number => typeof value === 'number' && Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+  const keys: Array<[number, number]> = [
+    [numeric(left?.turnSeq), numeric(right?.turnSeq)],
+    [numeric(left?.eventOrdinal), numeric(right?.eventOrdinal)],
+    [numeric(left?.globalSeq), numeric(right?.globalSeq)],
+    [numeric(left?.occurredAt), numeric(right?.occurredAt)],
+    [leftLink.position, rightLink.position],
+  ];
+  for (const [a, b] of keys) if (a !== b) return a - b;
+  return leftLink.eventId.localeCompare(rightLink.eventId);
 }
 
 function safeDecision(decision: Partial<TurnRelationDecision>): Partial<TurnRelationDecision> {

@@ -8,7 +8,6 @@ export interface EpisodeSplitPlanSegment {
     eventIds?: string[];
     eventIdsHash: string;
     eventIdsOmitted: number;
-    eventIdsCursor?: string;
     startEventId?: string;
     endEventId?: string;
     eventCount: number;
@@ -45,6 +44,7 @@ export interface EpisodeSplitPlan {
     projectId: string;
     episodeId: string;
     sourceFingerprint: string;
+    policyFingerprint: string;
     normalizedPolicy: {
         enabled: boolean;
         maxEvents: number;

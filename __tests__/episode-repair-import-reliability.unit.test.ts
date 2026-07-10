@@ -71,10 +71,11 @@ test('auto Dream mode is selected per job and failure details are returned and p
   const db = new Database(':memory:');
   const store = new EpisodeStore(db);
   const modes: string[] = [];
+  let failingEpisodeId: string | undefined;
   const scheduler = new DreamScheduler(store, {
     run: async (options: { dreamMode: string; sourceEpisodeId: string }) => {
       modes.push(options.dreamMode);
-      if (options.sourceEpisodeId.endsWith('fail')) throw new Error('provider_timeout');
+      if (options.sourceEpisodeId === failingEpisodeId) throw new Error('provider_timeout');
       return { candidates: [] };
     },
   } as never);
@@ -87,10 +88,7 @@ test('auto Dream mode is selected per job and failure details are returned and p
     };
     create('micro', 0.9, 'decision');
     const fail = create('normal', 0.5, 'discussion');
-    db.prepare(`UPDATE memory_episodes SET episode_id = ? WHERE episode_id = ?`).run(`${fail.episodeId}-fail`, fail.episodeId);
-    db.prepare(`UPDATE memory_episode_events SET episode_id = ? WHERE episode_id = ?`).run(`${fail.episodeId}-fail`, fail.episodeId);
-    db.prepare(`UPDATE episode_dream_jobs SET episode_id = ? WHERE episode_id = ?`).run(`${fail.episodeId}-fail`, fail.episodeId);
-    db.prepare(`UPDATE episode_closure_receipts SET episode_id = ? WHERE episode_id = ?`).run(`${fail.episodeId}-fail`, fail.episodeId);
+    failingEpisodeId = fail.episodeId;
 
     const result = await scheduler.tick({ projectId: 'brain', mode: 'auto', now: 100 });
     expect(modes.sort()).toEqual(['micro', 'normal']);
@@ -220,6 +218,14 @@ test('episode split recomputes closure receipts, invalidates candidates, requeue
       projectId: 'brain', sessionId: 'repair-session', sourceAgent: 'hermes', role: 'assistant',
       text: '已记录这个偏好。', externalMessageId: 'repair-2',
     });
+    const third = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'repair-session', sourceAgent: 'hermes', role: 'user',
+      text: '继续这个偏好。', externalMessageId: 'repair-3',
+    });
+    const fourth = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'repair-session', sourceAgent: 'hermes', role: 'assistant',
+      text: '已记录第二个 turn。', externalMessageId: 'repair-4',
+    });
     expect(second.episodeId).toBe(first.episodeId);
     kernel.sealEpisode(first.episodeId!, { mode: 'manual', reason: 'test_before_repair', now: 10 });
     const run = kernel.deepWriteCandidateStore.insertRun({
@@ -231,15 +237,15 @@ test('episode split recomputes closure receipts, invalidates candidates, requeue
     }])[0];
 
     const repaired = kernel.repairEpisode({
-      operation: 'split', projectId: 'brain', episodeId: first.episodeId!, eventIds: [second.eventId], now: 20,
+      operation: 'split', projectId: 'brain', episodeId: first.episodeId!, eventIds: [third.eventId, fourth.eventId], now: 20,
     });
 
     expect(repaired.staleCandidateIds).toEqual([candidate.candidateId]);
     expect(repaired.affectedEpisodeIds).toHaveLength(2);
     for (const episodeId of repaired.affectedEpisodeIds) {
-      expect(kernel.getEpisode(episodeId)).toEqual(expect.objectContaining({ eventCount: 1, status: 'sealed', dreamStatus: 'queued' }));
+      expect(kernel.getEpisode(episodeId)).toEqual(expect.objectContaining({ eventCount: 2, status: 'sealed', dreamStatus: 'queued' }));
       expect(kernel.listEpisodeClosureReceipts({ episodeId, limit: 1 })[0]).toEqual(expect.objectContaining({
-        closureReasonCode: 'repair', sourceEventIds: [expect.any(String)], dreamRecommended: true,
+        closureReasonCode: 'repair', sourceEventIds: [expect.any(String), expect.any(String)], dreamRecommended: true,
       }));
     }
     expect(kernel.listDreamCandidates({ projectId: 'brain', statuses: ['superseded'] })).toEqual([

@@ -82,7 +82,12 @@ export class SchemaMigrationRunner {
     const applied = new Set<string>();
     const legacyVersion = this.legacySchemaVersion();
     for (const migration of this.migrations) {
-      if (legacyVersion !== undefined && Number.parseInt(migration.version, 10) <= legacyVersion) {
+      // `_meta.schema_version` was written by older kernels without a durable
+      // migration receipt. It is a hint only: adopting a high legacy version
+      // must not hide a partially applied integrity migration.
+      if (legacyVersion !== undefined
+        && Number.parseInt(migration.version, 10) <= legacyVersion
+        && this.migrationSchemaSatisfied(migration.version)) {
         applied.add(migration.version);
       }
     }
@@ -144,6 +149,13 @@ export class SchemaMigrationRunner {
         : new Set<string>();
       const positionIndex = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episode_events_episode_position_unique'`).get());
       return (!eventTable || eventColumns.has('local_date_source')) && positionIndex;
+    }
+    if (version === '0031') {
+      return Boolean(this.db.prepare(`
+        SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_episode_integrity_markers'
+      `).get()) && Boolean(this.db.prepare(`
+        SELECT 1 FROM _episode_integrity_markers WHERE marker = 'episode_boundary_integrity_0031'
+      `).get());
     }
     return true;
   }

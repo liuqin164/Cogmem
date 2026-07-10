@@ -7,7 +7,7 @@ export type EpisodeDreamState =
   | 'failed_terminal'
   | 'retry_scheduled'
   | 'skipped';
-export type EpisodeDreamStatusValue = 'none' | 'queued' | 'processing' | 'processed' | 'failed';
+export type EpisodeDreamStatusValue = 'none' | 'queued' | 'processing' | 'processed' | 'failed' | 'skipped';
 export type EpisodeClosureMode = 'soft' | 'hard' | 'manual' | 'batch';
 export type EpisodeClosureReasonCode =
   | 'explicit_user_closure'

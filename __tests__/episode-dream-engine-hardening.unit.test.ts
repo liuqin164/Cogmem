@@ -227,7 +227,7 @@ test('Dream tick skips empty mature soft seals and still processes valid sealed 
     expect(processed).toEqual([valid.episodeId]);
     expect(store.getEpisode(empty.episodeId)).toEqual(expect.objectContaining({
       status: 'soft_sealed',
-      dreamStatus: 'failed',
+      dreamStatus: 'skipped',
       dreamError: 'episode_empty_soft_seal_not_promoted',
     }));
   } finally {
@@ -263,7 +263,7 @@ test('Dream claim skips legacy empty jobs without consuming the batch slot', () 
     expect(claimed).toEqual([expect.objectContaining({ episodeId: valid.episodeId })]);
     expect(store.getDreamStatus('brain')).toEqual(expect.objectContaining({ skipped: 1, processing: 1 }));
     expect(store.getEpisode(empty.episodeId)).toEqual(expect.objectContaining({
-      dreamStatus: 'failed',
+      dreamStatus: 'skipped',
       dreamError: 'episode_empty_skipped_no_raw_evidence',
     }));
   } finally {
