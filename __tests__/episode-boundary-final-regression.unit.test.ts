@@ -6,11 +6,10 @@ import { join } from 'node:path';
 
 import { EpisodeStore } from '../src/episode/EpisodeStore.js';
 import { EpisodeBoundaryPolicy, normalizeEpisodeBoundaryConfig } from '../src/episode/EpisodeBoundaryPolicy.js';
-import { SchemaMigrationRunner, migration_0022, migration_0028, migration_0031 } from '../src/migrations/index.js';
+import { SchemaMigrationRunner, migration_0022, migration_0023, migration_0028, migration_0029, migration_0030, migration_0031 } from '../src/migrations/index.js';
 import { EventStore } from '../src/store/EventStore.js';
 import { classifyTurnRelation } from '../src/episode/TurnRelationClassifier.js';
 import { createMemoryKernel } from '../src/factory.js';
-import { migration_0022, migration_0023, migration_0028, migration_0029, migration_0030 } from '../src/migrations/index.js';
 
 function createKernel(prefix: string, options: Parameters<typeof createMemoryKernel>[0] = {}) {
   const dir = mkdtempSync(join(tmpdir(), prefix));

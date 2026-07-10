@@ -358,7 +358,7 @@ export class EntityStore {
           SELECT e.*
           FROM entity_aliases ea
           JOIN entity_instances e ON e.instance_id = ea.entity_id
-          WHERE ea.normalized_alias = ? AND e.type = ?
+          WHERE ea.normalized_alias = ? AND e.type = ? AND e.status = 'active'
           ORDER BY ea.updated_at DESC
           LIMIT 12
         `).all(normalizedAlias, type)
@@ -366,7 +366,7 @@ export class EntityStore {
           SELECT e.*
           FROM entity_aliases ea
           JOIN entity_instances e ON e.instance_id = ea.entity_id
-          WHERE ea.normalized_alias = ?
+          WHERE ea.normalized_alias = ? AND e.status = 'active'
           ORDER BY ea.updated_at DESC
           LIMIT 12
         `).all(normalizedAlias);
@@ -376,17 +376,17 @@ export class EntityStore {
   findByCanonicalName(canonicalName: string, type?: string): EntityRecord | null {
     const row = type
       ? this.db.prepare(`
-          SELECT * FROM entity_instances WHERE canonical_name = ? AND type = ? ORDER BY updated_at DESC LIMIT 1
+          SELECT * FROM entity_instances WHERE canonical_name = ? AND type = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1
         `).get(canonicalName, type)
       : this.db.prepare(`
-          SELECT * FROM entity_instances WHERE canonical_name = ? ORDER BY updated_at DESC LIMIT 1
+          SELECT * FROM entity_instances WHERE canonical_name = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1
         `).get(canonicalName);
     return row ? this.mapRow(row as any) : null;
   }
 
   findByEntityId(entityId: string): EntityRecord | null {
     const row = this.db.prepare(`
-      SELECT * FROM entity_instances WHERE instance_id = ?
+      SELECT * FROM entity_instances WHERE instance_id = ? AND status = 'active'
     `).get(entityId) as any;
     return row ? this.mapRow(row) : null;
   }
