@@ -1,15 +1,18 @@
 import { createHash } from 'node:crypto';
 import { normalizeEpisodeBoundaryConfig, resolveTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
 import { replayEpisodeBoundaries } from './EpisodeBoundaryReplayEngine.js';
+import { validateEpisodeInvariants } from './EpisodeInvariantValidator.js';
 export const EPISODE_SPLIT_PLANNER_VERSION = 'episode_split_preview.v1';
 export class EpisodeSplitPlanner {
     store;
     resolveEvent;
     liveBoundaryConfig;
-    constructor(store, resolveEvent, liveBoundaryConfig = {}) {
+    liveConfigDiagnostics;
+    constructor(store, resolveEvent, liveBoundaryConfig = {}, liveConfigDiagnostics = []) {
         this.store = store;
         this.resolveEvent = resolveEvent;
         this.liveBoundaryConfig = liveBoundaryConfig;
+        this.liveConfigDiagnostics = liveConfigDiagnostics;
     }
     plan(options) {
         const episode = this.store.getEpisode(options.episodeId);
@@ -19,6 +22,7 @@ export class EpisodeSplitPlanner {
         const pairs = links.map((link) => ({ link, event: this.resolveEvent?.(link.eventId) || undefined }));
         const events = pairs.map((item) => item.event).filter((event) => Boolean(event));
         const missingRawEventIds = pairs.filter((item) => !item.event).map((item) => item.link.eventId);
+        const overrideWarnings = boundaryOverrideWarnings(options);
         const normalized = normalizeEpisodeBoundaryConfig(configWithDefinedOverrides(this.liveBoundaryConfig, options));
         const policy = {
             enabled: normalized.config.enabled,
@@ -32,7 +36,7 @@ export class EpisodeSplitPlanner {
             policyVersion: normalized.config.policyVersion,
             timezone: normalized.config.timezone,
         };
-        const warnings = normalized.diagnostics.map((item) => item.code);
+        const warnings = [...this.liveConfigDiagnostics.map((item) => item.code), ...overrideWarnings, ...normalized.diagnostics.map((item) => item.code)];
         if (missingRawEventIds.length)
             warnings.push('unresolved_raw_events');
         if (events[0] && events[0].role !== 'user')
@@ -42,6 +46,12 @@ export class EpisodeSplitPlanner {
             warnings.push('no_user_event_episode');
         const replay = replayEpisodeBoundaries({ episode, pairs, config: normalized.config });
         warnings.push(...replay.warnings, ...replay.structuralAnomalies);
+        const invariantViolations = validateEpisodeInvariants({
+            episode, pairs, timezone: normalized.config.timezone,
+            closureReceipts: this.store.listClosureReceipts({ episodeId: episode.episodeId, limit: 1 }),
+            dreamJobState: this.store.getDreamJobState(episode.episodeId),
+        });
+        warnings.push(...invariantViolations.map((violation) => violation.reason));
         const proposedBoundaries = replay.detectedBoundaries.map((boundary) => ({
             boundaryIndex: boundary.boundaryIndex,
             beforeEventId: boundary.beforeEventId,
@@ -84,7 +94,7 @@ export class EpisodeSplitPlanner {
             unresolvedEventCount: missingRawEventIds.length,
             missingRawEventIds: missingRawEventIds.slice(0, 50),
             evidenceIntegrityStatus: missingRawEventIds.length ? 'missing_raw_events' : 'ok',
-            requiresManualReview: userCount === 0 || missingRawEventIds.length > 0 || replay.structuralAnomalies.length > 0 || replay.warnings.includes('invalid_trusted_local_date'),
+            requiresManualReview: userCount === 0 || missingRawEventIds.length > 0 || replay.structuralAnomalies.length > 0 || replay.warnings.includes('invalid_trusted_local_date') || invariantViolations.some((violation) => violation.requiresManualReview),
             applyableInCurrentVersion: false,
             applyCommand: null,
         };
@@ -175,13 +185,28 @@ function impactInventory(pairs, timezone) {
 }
 function configWithDefinedOverrides(base, overrides) {
     const config = { ...base };
-    if (overrides.maxEvents !== undefined)
+    if (overrides.maxEvents !== undefined && validThreshold(overrides.maxEvents, 20, 500))
         config.maxEvents = overrides.maxEvents;
-    if (overrides.maxDurationMs !== undefined)
+    if (overrides.maxDurationMs !== undefined && validThreshold(overrides.maxDurationMs, 300_000, 86_400_000))
         config.maxDurationMs = overrides.maxDurationMs;
-    if (overrides.maxIdleGapMs !== undefined)
+    if (overrides.maxIdleGapMs !== undefined && validThreshold(overrides.maxIdleGapMs, 300_000, 86_400_000))
         config.maxIdleGapMs = overrides.maxIdleGapMs;
-    if (overrides.timezone !== undefined)
+    if (typeof overrides.timezone === 'string' && overrides.timezone.trim())
         config.timezone = overrides.timezone;
     return config;
+}
+function validThreshold(value, min, max) {
+    return value !== undefined && Number.isFinite(value) && value >= min && value <= max;
+}
+function boundaryOverrideWarnings(overrides) {
+    const warnings = [];
+    if (!validThreshold(overrides.maxEvents, 20, 500))
+        warnings.push('invalid_episode_boundary_max_events');
+    if (!validThreshold(overrides.maxDurationMs, 300_000, 86_400_000))
+        warnings.push('invalid_episode_boundary_max_duration_ms');
+    if (!validThreshold(overrides.maxIdleGapMs, 300_000, 86_400_000))
+        warnings.push('invalid_episode_boundary_max_idle_gap_ms');
+    if (overrides.timezone !== undefined && !overrides.timezone.trim())
+        warnings.push('invalid_episode_boundary_timezone');
+    return warnings;
 }

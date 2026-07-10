@@ -72,7 +72,10 @@ export declare class EpisodeSplitPlanner {
     private readonly store;
     private readonly resolveEvent?;
     private readonly liveBoundaryConfig;
-    constructor(store: EpisodeStore, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, liveBoundaryConfig?: Partial<EpisodeBoundaryConfig>);
+    private readonly liveConfigDiagnostics;
+    constructor(store: EpisodeStore, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, liveBoundaryConfig?: Partial<EpisodeBoundaryConfig>, liveConfigDiagnostics?: Array<{
+        code: string;
+    }>);
     plan(options: {
         projectId: string;
         episodeId: string;

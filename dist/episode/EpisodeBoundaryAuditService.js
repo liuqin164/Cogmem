@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { DEFAULT_EPISODE_BOUNDARY_CONFIG } from './EpisodeBoundaryPolicy.js';
 import { normalizeEpisodeBoundaryConfig, resolveTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
 import { replayEpisodeBoundaries } from './EpisodeBoundaryReplayEngine.js';
 import { validateEpisodeInvariants } from './EpisodeInvariantValidator.js';
@@ -6,10 +7,12 @@ export class EpisodeBoundaryAuditService {
     store;
     resolveEvent;
     liveBoundaryConfig;
-    constructor(store, resolveEvent, liveBoundaryConfig = {}) {
+    liveConfigDiagnostics;
+    constructor(store, resolveEvent, liveBoundaryConfig = {}, liveConfigDiagnostics = []) {
         this.store = store;
         this.resolveEvent = resolveEvent;
         this.liveBoundaryConfig = liveBoundaryConfig;
+        this.liveConfigDiagnostics = liveConfigDiagnostics;
     }
     audit(options) {
         if (!options.projectId)
@@ -21,8 +24,10 @@ export class EpisodeBoundaryAuditService {
             limit,
             cursor: options.cursor,
         });
+        const overrideWarnings = boundaryOverrideWarnings(options);
         const normalized = normalizeEpisodeBoundaryConfig(configWithDefinedOverrides(this.liveBoundaryConfig, options));
-        const items = page.episodes.map((episode) => this.auditEpisode(episode, normalized.config, normalized.diagnostics.map((item) => item.code)));
+        const aggregateCountCheck = options.maxEvents !== undefined || this.liveBoundaryConfig.maxEvents !== undefined || normalized.config.maxEvents !== DEFAULT_EPISODE_BOUNDARY_CONFIG.maxEvents;
+        const items = page.episodes.map((episode) => this.auditEpisode(episode, normalized.config, [...this.liveConfigDiagnostics.map((item) => item.code), ...overrideWarnings, ...normalized.diagnostics.map((item) => item.code)], aggregateCountCheck));
         return { items, nextCursor: page.nextCursor };
     }
     requireProjectEpisode(projectId, episodeId) {
@@ -31,7 +36,7 @@ export class EpisodeBoundaryAuditService {
             throw new Error(`episode_project_mismatch:${episodeId}`);
         return episode;
     }
-    auditEpisode(episode, config, configWarnings = []) {
+    auditEpisode(episode, config, configWarnings = [], aggregateCountCheck = true) {
         const links = this.store.listEventLinks(episode.episodeId);
         const pairs = links.map((link) => ({ link, event: this.resolveEvent?.(link.eventId) || undefined }));
         const events = pairs.map((item) => item.event).filter((event) => Boolean(event));
@@ -51,8 +56,13 @@ export class EpisodeBoundaryAuditService {
         const maxBoundaryIdleGapMs = maxBoundaryIdleGap(pairs);
         const outOfOrderEventCount = outOfOrderCount(events);
         const replay = replayEpisodeBoundaries({ episode, pairs, config });
-        const violations = validateEpisodeInvariants({ episode, pairs, timezone: config.timezone });
+        const violations = validateEpisodeInvariants({
+            episode, pairs, timezone: config.timezone,
+            closureReceipts: this.store.listClosureReceipts({ episodeId: episode.episodeId, limit: 1 }),
+            dreamJobState: this.store.getDreamJobState(episode.episodeId),
+        });
         warnings.push(...replay.warnings, ...replay.structuralAnomalies);
+        warnings.push(...replay.detectedBoundaries.filter((boundary) => !boundary.effective).map((boundary) => `detected_boundary:${boundary.reason}`));
         for (const boundary of replay.effectiveBoundaries)
             reasons.push(...auditReasonsForBoundary(boundary));
         reasons.push(...violations.map((violation) => violation.reason));
@@ -66,6 +76,13 @@ export class EpisodeBoundaryAuditService {
             reasons.push('repeated_ambiguous_shifts');
         if (hardShiftCount(relationCounts) > 1)
             reasons.push('multiple_hard_topic_switch_relations');
+        const hasClosureTurn = replay.logicalTurns.some((turn) => turn.some((pair) => pair.event?.role === 'user' && pair.link.relation === 'closes_episode'));
+        const importedEpisode = replay.logicalTurns.some(isImportedTurn);
+        if (aggregateCountCheck && config.maxEvents !== undefined && links.length > config.maxEvents && !hasClosureTurn && !(importedEpisode && config.applyToImports === false)) {
+            reasons.push('event_count_exceeds_max');
+        }
+        if (config.splitOnTrustedLocalDateChange && dates.length > 1)
+            reasons.push('multiple_trusted_local_dates');
         if (!events.some((event) => event.role === 'user'))
             reasons.push('zero_user_event_episode');
         if (!dates.length)
@@ -104,6 +121,8 @@ export class EpisodeBoundaryAuditService {
             systemEventCount: events.filter((event) => event.role === 'system').length,
             outOfOrderEventCount,
             sourceFingerprint: sourceFingerprint(pairs.map((item) => ({ ...item.link, event: item.event }))),
+            detectedBoundaryCount: replay.detectedBoundaries.length,
+            effectiveBoundaryCount: replay.effectiveBoundaries.length,
             unresolvedEventCount: missingRawEventIds.length,
             missingRawEventIds: missingRawEventIds.slice(0, 50),
             evidenceIntegrityStatus: missingRawEventIds.length ? 'missing_raw_events' : 'ok',
@@ -124,14 +143,15 @@ function maxGap(values) {
 }
 function maxBoundaryIdleGap(pairs) {
     let max = 0;
-    for (let index = 1; index < pairs.length; index += 1) {
-        const event = pairs[index].event;
-        const previous = pairs[index - 1].event;
-        if (event?.role !== 'user')
-            continue;
-        if (typeof event.occurredAt !== 'number' || typeof previous?.occurredAt !== 'number')
-            continue;
-        max = Math.max(max, event.occurredAt - previous.occurredAt);
+    let runningMax;
+    for (const pair of pairs) {
+        const event = pair.event;
+        if (event?.role === 'user' && typeof event.occurredAt === 'number' && Number.isFinite(event.occurredAt) && runningMax !== undefined) {
+            max = Math.max(max, Math.max(0, event.occurredAt - runningMax));
+        }
+        if (typeof event?.occurredAt === 'number' && Number.isFinite(event.occurredAt)) {
+            runningMax = Math.max(runningMax ?? event.occurredAt, event.occurredAt);
+        }
     }
     return max;
 }
@@ -199,6 +219,7 @@ function trustedLocalDate(event, timezone) {
 }
 function dateWarningCodes(pairs, timezone) {
     return [...new Set(pairs
+            .filter((item) => item.event?.role === 'user')
             .map((item) => resolveTrustedLocalDate(item.event, timezone).warning?.code)
             .filter((code) => code === 'invalid_trusted_local_date'))];
 }
@@ -210,13 +231,28 @@ function isImportedTurn(group) {
 }
 function configWithDefinedOverrides(base, overrides) {
     const config = { ...base };
-    if (overrides.maxEvents !== undefined)
+    if (overrides.maxEvents !== undefined && validThreshold(overrides.maxEvents, 20, 500))
         config.maxEvents = overrides.maxEvents;
-    if (overrides.maxDurationMs !== undefined)
+    if (overrides.maxDurationMs !== undefined && validThreshold(overrides.maxDurationMs, 300_000, 86_400_000))
         config.maxDurationMs = overrides.maxDurationMs;
-    if (overrides.maxIdleGapMs !== undefined)
+    if (overrides.maxIdleGapMs !== undefined && validThreshold(overrides.maxIdleGapMs, 300_000, 86_400_000))
         config.maxIdleGapMs = overrides.maxIdleGapMs;
-    if (overrides.timezone !== undefined)
+    if (typeof overrides.timezone === 'string' && overrides.timezone.trim())
         config.timezone = overrides.timezone;
     return config;
+}
+function validThreshold(value, min, max) {
+    return value !== undefined && Number.isFinite(value) && value >= min && value <= max;
+}
+function boundaryOverrideWarnings(overrides) {
+    const warnings = [];
+    if (!validThreshold(overrides.maxEvents, 20, 500))
+        warnings.push('invalid_episode_boundary_max_events');
+    if (!validThreshold(overrides.maxDurationMs, 300_000, 86_400_000))
+        warnings.push('invalid_episode_boundary_max_duration_ms');
+    if (!validThreshold(overrides.maxIdleGapMs, 300_000, 86_400_000))
+        warnings.push('invalid_episode_boundary_max_idle_gap_ms');
+    if (overrides.timezone !== undefined && !overrides.timezone.trim())
+        warnings.push('invalid_episode_boundary_timezone');
+    return warnings;
 }

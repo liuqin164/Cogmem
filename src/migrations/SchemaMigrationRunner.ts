@@ -23,15 +23,8 @@ export class SchemaMigrationRunner {
     private readonly migrations: Migration[],
     private readonly options: SchemaMigrationRunnerOptions = {},
   ) {
-    if (this.options.readonly) return;
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS _schema_migrations (
-        version TEXT PRIMARY KEY,
-        description TEXT NOT NULL,
-        applied_at TEXT NOT NULL
-      );
-    `);
-    this.adoptLegacyVersion();
+    // Construction is read-only. Schema bookkeeping is created only when a
+    // non-dry run is explicitly requested.
   }
 
   plan(): Migration[] {
@@ -42,10 +35,13 @@ export class SchemaMigrationRunner {
   }
 
   run(options: SchemaMigrationRunOptions = {}): SchemaMigrationResult {
-    const pending = this.plan();
-    if (options.dryRun) {
+    if (options.dryRun || this.options.readonly) {
+      const pending = this.plan();
       return { pending: pending.map((item) => item.version), applied: [], currentVersion: this.currentVersion(), dryRun: true };
     }
+    this.ensureMigrationTable();
+    this.adoptLegacyVersion();
+    const pending = this.plan();
     const applied: string[] = [];
     const transaction = this.db.transaction(() => {
       for (const migration of pending) {
@@ -59,6 +55,16 @@ export class SchemaMigrationRunner {
     });
     transaction();
     return { pending: pending.map((item) => item.version), applied, currentVersion: this.currentVersion(), dryRun: false };
+  }
+
+  private ensureMigrationTable(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS _schema_migrations (
+        version TEXT PRIMARY KEY,
+        description TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+    `);
   }
 
   currentVersion(): string | undefined {
@@ -84,7 +90,7 @@ export class SchemaMigrationRunner {
       return applied;
     }
     for (const row of this.db.prepare(`SELECT version FROM _schema_migrations`).all() as Array<{ version: string }>) {
-      applied.add(row.version);
+      if (this.migrationSchemaSatisfied(row.version)) applied.add(row.version);
     }
     return applied;
   }
@@ -121,9 +127,24 @@ export class SchemaMigrationRunner {
       VALUES (?, ?, ?)
     `);
     for (const migration of this.migrations) {
-      if (Number.parseInt(migration.version, 10) <= legacyVersion) {
+      if (Number.parseInt(migration.version, 10) <= legacyVersion && this.migrationSchemaSatisfied(migration.version)) {
         insert.run(migration.version, `adopted: ${migration.description}`, new Date(0).toISOString());
       }
     }
+  }
+
+  private migrationSchemaSatisfied(version: string): boolean {
+    if (version === '0029') {
+      return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episodes_one_active_scope'`).get());
+    }
+    if (version === '0030') {
+      const eventTable = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_events'`).get());
+      const eventColumns = eventTable
+        ? new Set((this.db.prepare(`PRAGMA table_info(memory_events)`).all() as Array<{ name: string }>).map((row) => row.name))
+        : new Set<string>();
+      const positionIndex = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episode_events_episode_position_unique'`).get());
+      return (!eventTable || eventColumns.has('local_date_source')) && positionIndex;
+    }
+    return true;
   }
 }

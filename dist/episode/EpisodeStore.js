@@ -58,8 +58,8 @@ export class EpisodeStore {
             const mismatch = events.some((event) => {
                 const metadata = event.payload?.metadata;
                 const eventSourceAgent = typeof metadata?.sourceAgent === 'string' ? metadata.sourceAgent : undefined;
-                return (sourceAgent && eventSourceAgent && eventSourceAgent !== sourceAgent)
-                    || (conversationThreadId && event.threadId && event.threadId !== conversationThreadId);
+                return (sourceAgent !== undefined && eventSourceAgent !== sourceAgent)
+                    || (conversationThreadId !== undefined && (event.threadId || '') !== conversationThreadId);
             });
             if (mismatch)
                 return undefined;
@@ -143,9 +143,15 @@ export class EpisodeStore {
             const locked = this.db.prepare(`SELECT status FROM memory_episodes WHERE episode_id = ?`).get(input.episodeId);
             if (locked?.status !== 'open')
                 throw new Error(`episode_not_open:${input.episodeId}`);
-            const position = Number(this.db.prepare(`
-        SELECT COUNT(*) AS count FROM memory_episode_events WHERE episode_id = ?
-      `).get(input.episodeId)?.count ?? 0) + 1;
+            const positionState = this.db.prepare(`
+        SELECT COUNT(*) AS count, MIN(position) AS min_position, MAX(position) AS max_position
+        FROM memory_episode_events WHERE episode_id = ?
+      `).get(input.episodeId);
+            const count = Number(positionState?.count ?? 0);
+            if (count > 0 && (positionState?.min_position !== 1 || positionState?.max_position !== count)) {
+                throw new Error(`episode_positions_corrupt:${input.episodeId}`);
+            }
+            const position = count + 1;
             this.db.prepare(`
         INSERT INTO memory_episode_events (episode_id, event_id, position, relation, confidence, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -178,8 +184,10 @@ export class EpisodeStore {
         if (!episode)
             throw new Error(`episode_not_found:${episodeId}`);
         if (!this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_events'`).get()) {
-            return { eventCount: episode.eventCount, startedAt: episode.startedAt, updatedAt: episode.updatedAt, trustedLocalDates: [] };
+            const actualLinkCount = this.listEventLinks(episodeId).length;
+            return { eventCount: actualLinkCount, actualLinkCount, storedEventCount: episode.eventCount, eventCountMismatch: actualLinkCount !== episode.eventCount, startedAt: episode.startedAt, updatedAt: episode.updatedAt, trustedLocalDates: [] };
         }
+        const actualLinkCount = Number(this.db.prepare(`SELECT COUNT(*) AS count FROM memory_episode_events WHERE episode_id = ?`).get(episodeId)?.count ?? 0);
         const lastEventAt = this.db.prepare(`
       SELECT MAX(e.occurred_at) AS occurred_at
       FROM memory_episode_events ee
@@ -201,7 +209,10 @@ export class EpisodeStore {
             .filter((date) => Boolean(date));
         const lastTrustedUserLocalDate = userDateRows[0];
         return {
-            eventCount: episode.eventCount,
+            eventCount: actualLinkCount,
+            actualLinkCount,
+            storedEventCount: episode.eventCount,
+            eventCountMismatch: actualLinkCount !== episode.eventCount,
             startedAt: episode.startedAt,
             updatedAt: lastEventAt ?? episode.updatedAt,
             lastEventAt,
@@ -343,10 +354,11 @@ export class EpisodeStore {
     }
     resequenceEpisode(episodeId, now) {
         const links = this.listEventLinks(episodeId);
-        for (const [index, link] of links.entries()) {
-            if (link.position !== index + 1)
-                this.db.prepare(`UPDATE memory_episode_events SET position = ? WHERE event_id = ?`).run(index + 1, link.eventId);
-        }
+        const updatePosition = this.db.prepare(`UPDATE memory_episode_events SET position = ? WHERE event_id = ? AND episode_id = ?`);
+        for (const [index, link] of links.entries())
+            updatePosition.run(-1_000_000_000 - index, link.eventId, episodeId);
+        for (const [index, link] of links.entries())
+            updatePosition.run(index + 1, link.eventId, episodeId);
         const events = links.map((link) => this.resolveEvent?.(link.eventId)).filter((event) => Boolean(event));
         const first = events[0];
         const last = events.at(-1);
@@ -380,9 +392,11 @@ export class EpisodeStore {
         const links = this.listEventLinks(episodeId);
         if (links.length === 0 && input.mode !== 'soft')
             throw new Error(`episode_empty:${episodeId}`);
-        const requiresReview = input.requiresReview === true || links.length === 0;
-        const semanticSummary = input.semanticSummary || summarizeEpisode(episode, links.map((link) => this.resolveEvent?.(link.eventId)).filter((event) => Boolean(event)), links.map((link) => link.eventId));
-        const dreamMode = episode.eventCount >= 100
+        const resolvedEvents = links.map((link) => this.resolveEvent?.(link.eventId));
+        const missingRawEvidence = Boolean(this.resolveEvent) && resolvedEvents.some((event) => !event);
+        const requiresReview = input.requiresReview === true || links.length === 0 || missingRawEvidence;
+        const semanticSummary = input.semanticSummary || summarizeEpisode(episode, resolvedEvents.filter((event) => Boolean(event)), links.map((link) => link.eventId));
+        const dreamMode = links.length >= 100
             ? 'deep'
             : episode.importance >= 0.8 || ['decision', 'correction', 'preference', 'goal', 'prospective'].includes(episode.episodeType)
                 ? 'micro' : 'normal';
@@ -423,6 +437,10 @@ export class EpisodeStore {
       `).run(receipt.receiptId, episodeId, episode.projectId, input.mode, input.reason, JSON.stringify(receipt.sourceEventIds), receipt.startSeq ?? null, receipt.endSeq ?? null, receipt.topicPath || null, receipt.episodeType, receipt.importance, receipt.dreamRecommended ? 1 : 0, receipt.dreamMode, now, receipt.closureReasonCode, receipt.closureReasonDetail || null, receipt.requiresReview ? 1 : 0, JSON.stringify(receipt.ignoredNearbyEventIds), JSON.stringify(receipt.unassignedNearbyEventIds));
             if (status === 'sealed' && receipt.dreamRecommended && !receipt.requiresReview)
                 this.enqueueDreamJob(episode, dreamMode, now);
+            if (status !== 'sealed') {
+                this.db.prepare(`DELETE FROM episode_dream_jobs WHERE episode_id = ?`).run(episodeId);
+                this.db.prepare(`UPDATE memory_episodes SET dream_status = 'none', dream_error = NULL, last_dream_run_id = NULL WHERE episode_id = ?`).run(episodeId);
+            }
         })();
         return receipt;
     }
@@ -512,6 +530,7 @@ export class EpisodeStore {
       JOIN memory_episodes e ON e.episode_id = j.episode_id
       WHERE ${where.join(' AND ')}
         AND e.event_count > 0
+        AND e.status = 'sealed'
         AND EXISTS (SELECT 1 FROM memory_episode_events ee WHERE ee.episode_id = j.episode_id)
       ORDER BY j.priority DESC, j.created_at LIMIT ?
     `).all(...params, Math.max(1, Math.min(Math.trunc(input.limit), 100)));
@@ -649,6 +668,10 @@ export class EpisodeStore {
         status.failed = status.failedRetryable + status.failedTerminal;
         return status;
     }
+    getDreamJobState(episodeId) {
+        const row = this.db.prepare(`SELECT state FROM episode_dream_jobs WHERE episode_id = ?`).get(episodeId);
+        return row?.state;
+    }
     countUnassignedRawEvents(projectId) {
         const row = projectId
             ? this.db.prepare(`
@@ -717,6 +740,8 @@ export class EpisodeStore {
         run(`DELETE FROM episode_dream_runs WHERE project_id = ?`);
         run(`DELETE FROM episode_dream_jobs WHERE project_id = ?`);
         run(`DELETE FROM episode_boundary_decisions WHERE project_id = ?`);
+        run(`DELETE FROM episode_cross_refs WHERE project_id = ?`);
+        run(`DELETE FROM episode_repair_audit WHERE project_id = ?`);
         run(`DELETE FROM episode_closure_receipts WHERE project_id = ?`);
         run(`DELETE FROM episode_ingest_keys WHERE project_id = ?`);
         run(`DELETE FROM episode_event_dispositions WHERE project_id = ?`);
@@ -806,6 +831,7 @@ export class EpisodeStore {
         created_at INTEGER NOT NULL, UNIQUE(project_id, primary_event_id, policy_version)
       );
     `);
+        this.ensureEpisodeCompatibilityColumns();
         sealDuplicateOpenEpisodes(this.db);
         this.db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_episodes_one_active_scope
@@ -814,6 +840,66 @@ export class EpisodeStore {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_episode_events_episode_position_unique
         ON memory_episode_events(episode_id, position);
     `);
+    }
+    ensureEpisodeCompatibilityColumns() {
+        const addColumns = (table, definitions) => {
+            const exists = this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
+            if (!exists)
+                return;
+            const columns = new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
+            for (const [name, definition] of Object.entries(definitions)) {
+                if (!columns.has(name))
+                    this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+            }
+        };
+        addColumns('memory_episodes', {
+            conversation_thread_id: 'TEXT', semantic_summary_json: 'TEXT', episode_tags_json: "TEXT NOT NULL DEFAULT '[]'",
+            candidate_types_json: "TEXT NOT NULL DEFAULT '[]'", importance_signals_json: "TEXT NOT NULL DEFAULT '[]'",
+            importance_reason: 'TEXT', linked_episode_id: 'TEXT', dream_status: "TEXT NOT NULL DEFAULT 'none'",
+            last_dream_run_id: 'TEXT', last_dreamed_at: 'INTEGER', dream_candidate_count: "INTEGER NOT NULL DEFAULT 0", dream_error: 'TEXT',
+        });
+        addColumns('episode_closure_receipts', {
+            closure_reason_code: "TEXT NOT NULL DEFAULT 'manual'", closure_reason_detail: 'TEXT', requires_review: 'INTEGER NOT NULL DEFAULT 0',
+            ignored_nearby_event_ids_json: "TEXT NOT NULL DEFAULT '[]'", unassigned_nearby_event_ids_json: "TEXT NOT NULL DEFAULT '[]'",
+        });
+        addColumns('episode_dream_jobs', {
+            retry_after: 'INTEGER', failure_category: 'TEXT', candidate_ids_json: "TEXT NOT NULL DEFAULT '[]'",
+        });
+        addColumns('episode_dream_runs', {
+            failed_episode_ids_json: "TEXT NOT NULL DEFAULT '[]'", failure_details_json: "TEXT NOT NULL DEFAULT '[]'",
+        });
+        addColumns('episode_ingest_keys', {
+            state: "TEXT NOT NULL DEFAULT 'committed'", updated_at: 'INTEGER', last_error: 'TEXT',
+        });
+        const episodeLinks = this.db.prepare(`
+      SELECT rowid, episode_id, event_id FROM memory_episode_events ORDER BY episode_id, position, event_id
+    `).all();
+        const movePosition = this.db.prepare(`UPDATE memory_episode_events SET position = ? WHERE rowid = ?`);
+        const nextPositions = new Map();
+        for (const link of episodeLinks) {
+            movePosition.run(-1_000_000_000 - link.rowid, link.rowid);
+            const next = (nextPositions.get(link.episode_id) || 0) + 1;
+            nextPositions.set(link.episode_id, next);
+            movePosition.run(next, link.rowid);
+        }
+        const hasGlobalSeq = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_events'`).get());
+        const rebuild = hasGlobalSeq ? this.db.prepare(`
+      UPDATE memory_episodes SET event_count = (SELECT COUNT(*) FROM memory_episode_events WHERE episode_id = ?),
+        start_event_id = COALESCE((SELECT event_id FROM memory_episode_events WHERE episode_id = ? ORDER BY position, event_id LIMIT 1), start_event_id),
+        end_event_id = COALESCE((SELECT event_id FROM memory_episode_events WHERE episode_id = ? ORDER BY position DESC, event_id DESC LIMIT 1), end_event_id),
+        start_seq = COALESCE((SELECT e.global_seq FROM memory_episode_events ee JOIN memory_events e ON e.event_id = ee.event_id WHERE ee.episode_id = ? ORDER BY ee.position LIMIT 1), start_seq),
+        end_seq = COALESCE((SELECT e.global_seq FROM memory_episode_events ee JOIN memory_events e ON e.event_id = ee.event_id WHERE ee.episode_id = ? ORDER BY ee.position DESC LIMIT 1), end_seq)
+      WHERE episode_id = ?
+    `) : undefined;
+        const episodeRows = this.db.prepare(`SELECT episode_id FROM memory_episodes`).all();
+        for (const row of episodeRows) {
+            if (rebuild)
+                rebuild.run(row.episode_id, row.episode_id, row.episode_id, row.episode_id, row.episode_id, row.episode_id);
+            else
+                this.db.prepare(`UPDATE memory_episodes SET event_count = (SELECT COUNT(*) FROM memory_episode_events WHERE episode_id = ?) WHERE episode_id = ?`).run(row.episode_id, row.episode_id);
+        }
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_episode_events_episode ON memory_episode_events(episode_id, position);`);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_episode_dream_retry ON episode_dream_jobs(state, retry_after, priority DESC, created_at);`);
     }
 }
 function mapEpisode(row) {

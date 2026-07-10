@@ -77,7 +77,7 @@ import {
   type CandidateReviewInput,
   type CandidateReviewResult,
 } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028, migration_0029, SchemaMigrationRunner } from './migrations/index.js';
+import { ALL_MIGRATIONS, KERNEL_MIGRATIONS, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -93,6 +93,7 @@ import {
   loadCogmemConfig,
   resolveCogmemConfigPath,
   type EnvLike,
+  type ConfigDiagnosticLike,
 } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
 import { IterativeLLMClarifier, type BrainToolDispatcherLike } from './routing/IterativeLLMClarifier.js';
@@ -135,6 +136,7 @@ import type {
   MemoryRawEventType,
   MemoryEventRole,
   Neuron,
+  OrderingConfidence,
 } from './types/index.js';
 import { config } from './utils/Config.js';
 import {
@@ -147,7 +149,7 @@ import {
 } from './snapshot/index.js';
 
 const CORE_VERSION = '3.7.3';
-const LATEST_SCHEMA_VERSION = 29;
+const LATEST_SCHEMA_VERSION = Math.max(...ALL_MIGRATIONS.map((migration) => Number.parseInt(migration.version, 10)));
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
@@ -165,6 +167,7 @@ export interface MemoryKernelOptions {
   redactionPolicy?: RedactionPolicy | false;
   turnRelationReviewer?: TurnRelationAdvisoryReviewer;
   episodeBoundary?: Partial<EpisodeBoundaryConfig>;
+  configDiagnostics?: ConfigDiagnosticLike[];
 }
 
 export interface MemoryKernelFromConfigOptions extends MemoryKernelOptions {
@@ -392,6 +395,7 @@ export interface RawMemoryEventInput {
   lineEnd?: number;
   charStart?: number;
   charEnd?: number;
+  orderingConfidence?: OrderingConfidence;
   localDate?: string;
   localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
   metadata?: Record<string, unknown>;
@@ -594,6 +598,7 @@ export class MemoryKernel {
   readonly topicAliasRegistry: TopicAliasRegistry;
   readonly topicRelationGraph: TopicRelationGraph;
   readonly topicGovernance: TopicGovernance;
+  readonly configDiagnostics: ConfigDiagnosticLike[];
 
   private readonly dbPath: string;
   private readonly embedder: Embedder;
@@ -634,6 +639,7 @@ export class MemoryKernel {
   private closed = false;
 
   constructor(private readonly options: MemoryKernelOptions = {}) {
+    this.configDiagnostics = [...(options.configDiagnostics || [])];
     this.dbPath = options.dbPath ?? ':memory:';
     this.encryptionProvider = options.encryptionProvider;
     this.piiRedactor = options.redactionPolicy === false ? undefined : new PiiRedactor(options.redactionPolicy);
@@ -642,7 +648,7 @@ export class MemoryKernel {
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
     db.exec('PRAGMA busy_timeout = 5000;');
-    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028, migration_0029]).run();
+    new SchemaMigrationRunner(db, KERNEL_MIGRATIONS).run();
     this.ensureMetaTable(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
@@ -682,8 +688,8 @@ export class MemoryKernel {
     this.dreamLedgerStore = new DreamLedgerStore(db);
     this.episodeStore = new EpisodeStore(db, (eventId) => this.eventStore.getEvent(eventId), { initializeSchemaForTests: false });
     this.episodeBoundaryPolicy = new EpisodeBoundaryPolicy(options.episodeBoundary);
-    this.episodeBoundaryAuditService = new EpisodeBoundaryAuditService(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config);
-    this.episodeSplitPlanner = new EpisodeSplitPlanner(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config);
+    this.episodeBoundaryAuditService = new EpisodeBoundaryAuditService(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config, this.configDiagnostics);
+    this.episodeSplitPlanner = new EpisodeSplitPlanner(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config, this.configDiagnostics);
     this.userTopicPathRegistry = new UserTopicPathRegistry(db);
     this.topicAliasRegistry = new TopicAliasRegistry(db);
     this.topicRelationGraph = new TopicRelationGraph(db);
@@ -793,7 +799,7 @@ export class MemoryKernel {
         }))
       )),
     });
-    this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker);
+    this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker, this.deepWriteCandidateStore);
     this.topicSummaryBoard = new TopicSummaryBoard(this.memoryGraph, this.summaryStore);
     this.topicDecayPolicy = new TopicDecayPolicy(this.memoryGraph);
     this.localSemanticCompiler = new LocalSemanticCompiler();
@@ -1144,7 +1150,8 @@ export class MemoryKernel {
       charStart: input.charStart,
       charEnd: input.charEnd,
       occurredAt,
-      orderingConfidence: 'high',
+      orderingConfidence: input.orderingConfidence
+        ?? (input.turnSeq !== undefined || input.eventOrdinal !== undefined || input.sourceOffset !== undefined || input.lineStart !== undefined ? 'high' : 'low'),
       payload: {
         text,
         metadata: input.metadata,
@@ -1419,7 +1426,7 @@ export class MemoryKernel {
       const existingEvent = reservedEventId ? this.eventStore.getEvent(reservedEventId) : null;
       if (existingEvent) {
         this.assertEpisodeIngestIdentity(existingEvent, input);
-        return this.resumeEpisodeMessage(existingEvent, input, false);
+        return this.finishIngestMessage(existingEvent, input, false, () => this.resumeEpisodeMessage(existingEvent, input, false));
       }
     }
     let event: MemoryEvent<{ text: string; metadata?: Record<string, unknown> }>;
@@ -1450,17 +1457,9 @@ export class MemoryKernel {
         throw error;
       }
       this.assertEpisodeIngestIdentity(concurrent, input);
-      if (input.externalMessageId) this.episodeStore.markIngestState({
-        projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
-        externalMessageId: input.externalMessageId, state: 'committed',
-      });
-      return this.resumeEpisodeMessage(concurrent, input, false);
+      return this.finishIngestMessage(concurrent, input, false, () => this.resumeEpisodeMessage(concurrent, input, false));
     }
-    if (input.externalMessageId) this.episodeStore.markIngestState({
-      projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
-      externalMessageId: input.externalMessageId, state: 'committed', now: event.occurredAt,
-    });
-    return this.resumeEpisodeMessage(event, input, true);
+    return this.finishIngestMessage(event, input, true, () => this.resumeEpisodeMessage(event, input, true));
   }
 
   async appendEpisodeMessageAsync(input: EpisodeMessageInput): Promise<EpisodeMessageResult> {
@@ -1479,7 +1478,7 @@ export class MemoryKernel {
       const existingEvent = reservedEventId ? this.eventStore.getEvent(reservedEventId) : null;
       if (existingEvent) {
         this.assertEpisodeIngestIdentity(existingEvent, input);
-        return this.resumeEpisodeMessageAsync(existingEvent, input, false);
+        return this.finishIngestMessageAsync(existingEvent, input, false, () => this.resumeEpisodeMessageAsync(existingEvent, input, false));
       }
     }
     let event: MemoryEvent<{ text: string; metadata?: Record<string, unknown> }>;
@@ -1501,17 +1500,43 @@ export class MemoryKernel {
         throw error;
       }
       this.assertEpisodeIngestIdentity(concurrent, input);
+      return this.finishIngestMessageAsync(concurrent, input, false, () => this.resumeEpisodeMessageAsync(concurrent, input, false));
+    }
+    return this.finishIngestMessageAsync(event, input, true, () => this.resumeEpisodeMessageAsync(event, input, true));
+  }
+
+  private finishIngestMessage(event: MemoryEvent, input: EpisodeMessageInput, created: boolean, operation: () => EpisodeMessageResult): EpisodeMessageResult {
+    try {
+      const result = operation();
       if (input.externalMessageId) this.episodeStore.markIngestState({
         projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
-        externalMessageId: input.externalMessageId, state: 'committed',
+        externalMessageId: input.externalMessageId, state: 'committed', now: event.occurredAt,
       });
-      return this.resumeEpisodeMessageAsync(concurrent, input, false);
+      return result;
+    } catch (error) {
+      if (input.externalMessageId) this.episodeStore.markIngestState({
+        projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
+        externalMessageId: input.externalMessageId, state: 'failed', error: error instanceof Error ? error.message : String(error), now: event.occurredAt,
+      });
+      throw error;
     }
-    if (input.externalMessageId) this.episodeStore.markIngestState({
-      projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
-      externalMessageId: input.externalMessageId, state: 'committed', now: event.occurredAt,
-    });
-    return this.resumeEpisodeMessageAsync(event, input, true);
+  }
+
+  private async finishIngestMessageAsync(event: MemoryEvent, input: EpisodeMessageInput, created: boolean, operation: () => Promise<EpisodeMessageResult>): Promise<EpisodeMessageResult> {
+    try {
+      const result = await operation();
+      if (input.externalMessageId) this.episodeStore.markIngestState({
+        projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
+        externalMessageId: input.externalMessageId, state: 'committed', now: event.occurredAt,
+      });
+      return result;
+    } catch (error) {
+      if (input.externalMessageId) this.episodeStore.markIngestState({
+        projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
+        externalMessageId: input.externalMessageId, state: 'failed', error: error instanceof Error ? error.message : String(error), now: event.occurredAt,
+      });
+      throw error;
+    }
   }
 
   private resumeEpisodeMessage(event: MemoryEvent, input: EpisodeMessageInput, created: boolean): EpisodeMessageResult {
@@ -1592,7 +1617,7 @@ export class MemoryKernel {
   }
 
   private assertEpisodeIngestIdentity(event: MemoryEvent, input: EpisodeMessageInput): void {
-    const payload = event.payload as { text?: unknown; metadata?: { sourceAgent?: unknown } } | undefined;
+    const payload = event.payload as { text?: unknown; metadata?: { sourceAgent?: unknown; imported?: unknown; sourceRef?: unknown } } | undefined;
     const expectedText = this.piiRedactor ? this.piiRedactor.redact(input.text).text : input.text;
     if (
       event.projectId !== input.projectId
@@ -1603,6 +1628,9 @@ export class MemoryKernel {
       || !sameProvided(event.turnSeq, input.turnSeq)
       || !sameProvided(event.localDate, input.localDate)
       || !sameProvided(event.eventOrdinal, input.eventOrdinal)
+      || (input.timestamp !== undefined && event.occurredAt !== input.timestamp)
+      || (input.metadata?.imported !== undefined && payload?.metadata?.imported !== input.metadata.imported)
+      || (input.metadata?.sourceRef !== undefined && JSON.stringify(payload?.metadata?.sourceRef) !== JSON.stringify(input.metadata.sourceRef))
       || payload?.text !== expectedText
       || payload?.metadata?.sourceAgent !== input.sourceAgent
     ) {
@@ -1678,18 +1706,22 @@ export class MemoryKernel {
   }
 
   repairEpisodes(options: { projectId?: string; sinceGlobalSeq?: number; limit?: number } = {}) {
-    const page = this.eventStore.queryEvents(1, Math.max(1, Math.min(options.limit ?? 500, 5000)), {
-      projectId: options.projectId ? [options.projectId] : undefined,
-    });
-    const events = page.records
-      .filter((event) => event.eventType === 'RAW_EVENT_RECORDED')
-      .filter((event) => options.sinceGlobalSeq === undefined || (event.globalSeq || 0) >= options.sinceGlobalSeq)
+    const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 500), 5000));
+    let afterGlobalSeq = options.sinceGlobalSeq === undefined ? undefined : options.sinceGlobalSeq - 1;
+    const events: MemoryEvent[] = [];
+    while (events.length < limit) {
+      const page = this.eventStore.listRawEventsAfterGlobalSeq({ projectId: options.projectId, afterGlobalSeq, limit: Math.min(500, limit - events.length) });
+      if (!page.length) break;
+      events.push(...page);
+      afterGlobalSeq = page.at(-1)?.globalSeq ?? afterGlobalSeq;
+      if (page.length < Math.min(500, limit - events.length + page.length)) break;
+    }
+    const eligibleEvents = events
       .filter((event) => !this.episodeStore.getEventLink(event.eventId))
-      .filter((event) => !this.episodeStore.hasEventDisposition(event.eventId))
-      .sort((a, b) => (a.globalSeq || 0) - (b.globalSeq || 0));
+      .filter((event) => !this.episodeStore.hasEventDisposition(event.eventId));
     let assigned = 0;
     const unassignedEventIds: string[] = [];
-    for (const event of events) {
+    for (const event of eligibleEvents) {
       const projectId = event.projectId || options.projectId;
       const sessionId = event.sessionId || event.threadId;
       if (!projectId || !sessionId) { unassignedEventIds.push(event.eventId); continue; }
@@ -1708,10 +1740,15 @@ export class MemoryKernel {
         });
       }
     }
-    return { scanned: events.length, assigned, unassigned: unassignedEventIds.length, unassignedEventIds };
+    return { scanned: eligibleEvents.length, assigned, unassigned: unassignedEventIds.length, unassignedEventIds, nextGlobalSeq: afterGlobalSeq, hasMore: events.length >= limit };
   }
 
   repairEpisode(input: EpisodeRepairInput): EpisodeRepairResult {
+    validateEpisodeRepairInput(input, this.episodeStore);
+    return this.episodeStore.transaction(() => this.repairEpisodeInTransaction(input));
+  }
+
+  private repairEpisodeInTransaction(input: EpisodeRepairInput): EpisodeRepairResult {
     const now = input.now ?? Date.now();
     const affected = new Set<string>();
     const before: Record<string, unknown> = {};
@@ -1806,13 +1843,29 @@ export class MemoryKernel {
     }
 
     const staleCandidateIds: string[] = [];
-    for (const candidate of this.deepWriteCandidateStore.listCandidates({ projectId: input.projectId, limit: 5000 })) {
-      const content = candidate.content && typeof candidate.content === 'object' ? candidate.content as Record<string, unknown> : {};
-      if (!affected.has(String(content.sourceEpisodeId || '')) || candidate.status === 'superseded') continue;
-      this.deepWriteCandidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
-        type: candidate.candidateType, id: candidate.candidateId, reason: 'episode_repair_invalidated_source',
-      });
-      staleCandidateIds.push(candidate.candidateId);
+    let candidateCursor: { createdAt: number; candidateId: string } | undefined;
+    while (true) {
+      const page = this.deepWriteCandidateStore.listCandidates({ projectId: input.projectId, limit: 500, after: candidateCursor });
+      if (!page.length) break;
+      for (const candidate of page) {
+        const content = candidate.content && typeof candidate.content === 'object' ? candidate.content as Record<string, unknown> : {};
+        const evidence = Array.isArray(candidate.evidence) ? candidate.evidence : [];
+        const evidenceIds = evidence.flatMap((item) => item && typeof item === 'object' && typeof (item as Record<string, unknown>).eventId === 'string'
+          ? [String((item as Record<string, unknown>).eventId)] : typeof item === 'string' ? [item] : []);
+        const runSourceEpisode = typeof content.sourceEpisodeId === 'string' ? content.sourceEpisodeId : undefined;
+        if (candidate.status !== 'superseded' && (
+          (runSourceEpisode && affected.has(runSourceEpisode))
+          || evidenceIds.some((eventId) => affected.has(this.episodeStore.getEventLink(eventId)?.episodeId || ''))
+        )) {
+          this.deepWriteCandidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
+            type: candidate.candidateType, id: candidate.candidateId, reason: 'episode_repair_invalidated_source',
+          });
+          staleCandidateIds.push(candidate.candidateId);
+        }
+      }
+      const last = page.at(-1)!;
+      candidateCursor = { createdAt: last.createdAt, candidateId: last.candidateId };
+      if (page.length < 500) break;
     }
     for (const episodeId of affected) {
       const episode = this.episodeStore.getEpisode(episodeId);
@@ -1825,7 +1878,7 @@ export class MemoryKernel {
     const repairId = this.episodeStore.recordRepairAudit({ projectId: input.projectId, operation: input.operation, payload: input, before, after, now });
     const affectedEpisodeIds = [...affected];
     const nextCommands = affectedEpisodeIds.length
-      ? affectedEpisodeIds.map((episodeId) => `cogmem memory graph-reindex --project ${input.projectId} --episode ${episodeId} --json`)
+      ? affectedEpisodeIds.map((episodeId) => `cogmem memory graph-reindex --project ${shellQuote(input.projectId)} --episode ${shellQuote(episodeId)} --json`)
       : [];
     return {
       repairId,
@@ -1838,7 +1891,7 @@ export class MemoryKernel {
       graphRefreshNeeded: affectedEpisodeIds.length > 0,
       nextCommands: [
         ...nextCommands,
-        `cogmem memory graph-explore --project ${input.projectId} --query "<query>" --json`,
+        `cogmem memory graph-explore --project ${shellQuote(input.projectId)} --query '<query>' --json`,
       ],
       note: 'repairId is an audit id, not a dream candidate id; do not run memory dream --promote just because repairId exists.',
     };
@@ -2745,7 +2798,7 @@ export function createMemoryKernelFromConfig(input: string | MemoryKernelFromCon
     env: _env,
     ...explicitOptions
   } = options;
-  return createMemoryKernel({ ...loaded.options, ...explicitOptions });
+  return createMemoryKernel({ ...loaded.options, configDiagnostics: loaded.diagnostics, ...explicitOptions });
 }
 
 function changedFieldsForRepair(input: EpisodeRepairInput): string[] {
@@ -2760,6 +2813,40 @@ function changedFieldsForRepair(input: EpisodeRepairInput): string[] {
   if (input.operation === 'split' || input.operation === 'merge') return ['episodeEvents', 'crossRefs'];
   if (input.operation === 'requeue-dream' || input.operation === 'invalidate-dream-run') return ['dreamQueue'];
   return [];
+}
+
+function validateEpisodeRepairInput(input: EpisodeRepairInput, store: EpisodeStore): void {
+  if (!input.projectId?.trim()) throw new Error('episode_project_required');
+  if (input.operation === 'reclassify' && input.importance !== undefined
+    && (!Number.isFinite(input.importance) || input.importance < 0 || input.importance > 1)) {
+    throw new Error('episode_importance_out_of_range');
+  }
+  if (input.operation === 'split') {
+    if (!input.eventIds.length) throw new Error('episode_split_requires_event_ids');
+    if (new Set(input.eventIds).size !== input.eventIds.length) throw new Error('episode_split_duplicate_event_ids');
+    const source = store.getEpisode(input.episodeId);
+    if (!source || source.projectId !== input.projectId) throw new Error(`episode_project_mismatch:${input.episodeId}`);
+    const sourceIds = new Set(store.listEventLinks(input.episodeId).map((link) => link.eventId));
+    if (input.eventIds.some((eventId) => !sourceIds.has(eventId))) throw new Error('episode_split_event_not_in_source');
+    if (input.eventIds.length >= sourceIds.size) throw new Error('episode_split_requires_proper_subset');
+  }
+  if (input.operation === 'move-event') {
+    const link = store.getEventLink(input.eventId);
+    if (link?.episodeId === input.targetEpisodeId) throw new Error('episode_move_source_equals_target');
+  }
+  if (input.operation === 'merge') {
+    if (input.sourceEpisodeId === input.targetEpisodeId) throw new Error('episode_merge_source_equals_target');
+    const source = store.getEpisode(input.sourceEpisodeId);
+    const target = store.getEpisode(input.targetEpisodeId);
+    if (!source || !target || source.projectId !== input.projectId || target.projectId !== input.projectId) throw new Error('episode_project_mismatch');
+    if (source.sessionId !== target.sessionId || source.sourceAgent !== target.sourceAgent || source.conversationThreadId !== target.conversationThreadId) {
+      throw new Error('episode_merge_scope_mismatch');
+    }
+  }
+}
+
+function shellQuote(value: string): string {
+  return `'${String(value).replace(/'/gu, `'\\''`)}'`;
 }
 
 function requiredGovernancePayloadString(payload: Record<string, unknown>, field: string): string {

@@ -1,7 +1,7 @@
 import type { MemoryEvent } from '../types/index.js';
 import { resolveTrustedLocalDate } from './EpisodeBoundaryPolicy.js';
 import { logicalTurnsFromPairs, type EpisodeReplayPair } from './EpisodeBoundaryReplayEngine.js';
-import type { MemoryEpisode } from './EpisodeTypes.js';
+import type { EpisodeClosureReceipt, MemoryEpisode } from './EpisodeTypes.js';
 
 export interface EpisodeInvariantViolation {
   reason: string;
@@ -14,13 +14,15 @@ export function validateEpisodeInvariants(input: {
   episode: MemoryEpisode;
   pairs: EpisodeReplayPair[];
   timezone?: string;
+  closureReceipts?: EpisodeClosureReceipt[];
+  dreamJobState?: string;
 }): EpisodeInvariantViolation[] {
   const violations: EpisodeInvariantViolation[] = [];
   const add = (reason: string, severity: EpisodeInvariantViolation['severity'] = 'warning') => {
     violations.push({
       reason,
       severity,
-      recommendedAction: severity === 'critical' ? 'split-plan' : 'inspect',
+      recommendedAction: ['closure_receipt_status_mismatch', 'dream_job_status_mismatch'].includes(reason) ? 'inspect' : severity === 'critical' ? 'split-plan' : 'inspect',
       requiresManualReview: severity !== 'info',
     });
   };
@@ -31,6 +33,12 @@ export function validateEpisodeInvariants(input: {
     if (episode.startEventId !== pairs[0].link.eventId || episode.endEventId !== pairs.at(-1)?.link.eventId) {
       add('start_end_pointer_mismatch', 'critical');
     }
+    const firstEvent = pairs[0].event;
+    const lastEvent = pairs.at(-1)?.event;
+    if (firstEvent?.globalSeq !== undefined && episode.startSeq !== undefined && firstEvent.globalSeq !== episode.startSeq) add('start_end_seq_mismatch', 'critical');
+    if (lastEvent?.globalSeq !== undefined && episode.endSeq !== undefined && lastEvent.globalSeq !== episode.endSeq) add('start_end_seq_mismatch', 'critical');
+  } else if (episode.startEventId || episode.endEventId) {
+    add('empty_episode_pointer_mismatch', 'critical');
   }
   if (pairs.some((pair) => !pair.event)) add('raw_event_missing', 'critical');
   if (pairs.some((pair) => scopeMismatch(episode, pair.event))) add('event_scope_mismatch', 'critical');
@@ -51,7 +59,11 @@ export function validateEpisodeInvariants(input: {
     if (relation === 'ambiguous_shift' && index !== 0) add('invalid_ambiguous_shift_position', 'critical');
     if (relation === 'closes_episode' && index !== userTurns.length - 1) add('continuation_after_closure', 'critical');
   });
-  if (episode.status === 'sealed' && pairs.length === 0) add('closure_receipt_status_mismatch', 'critical');
+  const receipts = input.closureReceipts || [];
+  if ((episode.status === 'sealed' || episode.status === 'soft_sealed') && receipts.length === 0) add('closure_receipt_status_mismatch', 'critical');
+  if (episode.status === 'open' && receipts.length > 0 && userTurns.some((turn) => turn.some((pair) => pair.link.relation === 'closes_episode'))) add('closure_receipt_status_mismatch', 'critical');
+  if (input.dreamJobState && episode.status !== 'sealed' && ['pending', 'processing', 'retry_scheduled', 'failed_retryable'].includes(input.dreamJobState)) add('dream_job_status_mismatch', 'critical');
+  if (input.dreamJobState === 'processed' && episode.dreamStatus !== 'processed') add('dream_job_status_mismatch', 'critical');
   return stableViolations(violations);
 }
 
@@ -67,9 +79,11 @@ function positionsAreContiguous(pairs: EpisodeReplayPair[]): boolean {
 
 function scopeMismatch(episode: MemoryEpisode, event: MemoryEvent | undefined): boolean {
   if (!event) return false;
-  if (event.projectId && event.projectId !== episode.projectId) return true;
-  if (event.sessionId && event.sessionId !== episode.sessionId) return true;
-  if (episode.conversationThreadId && event.threadId && event.threadId !== episode.conversationThreadId) return true;
+  if (event.projectId !== episode.projectId) return true;
+  if (event.sessionId !== episode.sessionId) return true;
+  if ((episode.conversationThreadId || '') !== (event.threadId || '')) return true;
+  const metadata = (event.payload as { metadata?: { sourceAgent?: unknown } } | undefined)?.metadata;
+  if (episode.sourceAgent && metadata?.sourceAgent !== undefined && metadata.sourceAgent !== episode.sourceAgent) return true;
   return false;
 }
 

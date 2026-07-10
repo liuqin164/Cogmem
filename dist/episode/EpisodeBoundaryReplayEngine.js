@@ -24,6 +24,7 @@ export function replayEpisodeBoundaries(input) {
         const user = primaryUser(turn);
         const imported = input.imported ?? isImportedTurn(turn);
         let startedAfterClosure = false;
+        let effectiveBoundaryBeforeTurn = false;
         if (pendingClosureAfter) {
             pushBoundary({
                 beforeEventId: lastPair(pendingClosureAfter)?.link.eventId,
@@ -38,6 +39,7 @@ export function replayEpisodeBoundaries(input) {
             });
             pendingClosureAfter = undefined;
             startedAfterClosure = true;
+            effectiveBoundaryBeforeTurn = true;
         }
         if (!user?.event) {
             if (turn.some((pair) => !pair.event))
@@ -61,6 +63,7 @@ export function replayEpisodeBoundaries(input) {
                 effective: true,
                 disposition: 'explicit',
             });
+            effectiveBoundaryBeforeTurn = true;
         }
         else if (state.eventCount > 0 && relation === 'ambiguous_shift') {
             pushBoundary({
@@ -74,6 +77,7 @@ export function replayEpisodeBoundaries(input) {
                 effective: true,
                 disposition: 'soft_review',
             });
+            effectiveBoundaryBeforeTurn = true;
         }
         else if (relation !== 'closes_episode') {
             const result = policy.evaluate({
@@ -103,8 +107,11 @@ export function replayEpisodeBoundaries(input) {
                     disposition: effective ? 'enforced' : 'shadow',
                     guardResult: result,
                 });
+                effectiveBoundaryBeforeTurn = effective;
             }
         }
+        if (effectiveBoundaryBeforeTurn)
+            resetSegmentState(state, turn);
         acceptTurn(state, turn, input.config.timezone, warnings);
         if (relation === 'closes_episode')
             pendingClosureAfter = turn;
@@ -171,9 +178,12 @@ export function logicalTurnsFromPairs(pairs) {
 function acceptTurn(state, turn, timezone, warnings) {
     for (const pair of turn) {
         const event = pair.event;
+        const occurredAt = event?.occurredAt;
+        const hasOccurredAt = typeof occurredAt === 'number' && Number.isFinite(occurredAt);
+        const outOfOrder = hasOccurredAt && state.lastEventAt !== undefined && occurredAt < state.lastEventAt;
         if (event?.role === 'user') {
             const resolved = resolveTrustedLocalDate(event, timezone);
-            if (resolved.date) {
+            if (resolved.date && !outOfOrder) {
                 state.lastTrustedUserLocalDate = resolved.date;
                 if (!state.trustedLocalDates.includes(resolved.date))
                     state.trustedLocalDates.push(resolved.date);
@@ -182,16 +192,28 @@ function acceptTurn(state, turn, timezone, warnings) {
                 warnings.add(resolved.warning.code);
             }
         }
-        if (typeof event?.occurredAt === 'number' && Number.isFinite(event.occurredAt)) {
-            if (state.lastEventAt !== undefined && event.occurredAt < state.lastEventAt) {
+        if (hasOccurredAt) {
+            if (outOfOrder) {
                 warnings.add('out_of_order_timestamp');
             }
             else {
-                state.lastEventAt = Math.max(state.lastEventAt ?? event.occurredAt, event.occurredAt);
+                state.lastEventAt = Math.max(state.lastEventAt ?? occurredAt, occurredAt);
             }
         }
+        if (state.startedAt === undefined && hasOccurredAt)
+            state.startedAt = occurredAt;
         state.eventCount += 1;
     }
+}
+function resetSegmentState(state, turn) {
+    const firstTimestamp = turn
+        .map((pair) => pair.event?.occurredAt)
+        .find((value) => typeof value === 'number' && Number.isFinite(value));
+    state.eventCount = 0;
+    state.startedAt = firstTimestamp;
+    state.lastEventAt = undefined;
+    state.lastTrustedUserLocalDate = undefined;
+    state.trustedLocalDates = [];
 }
 function primaryUser(turn) {
     return turn.find((pair) => pair.event?.role === 'user');

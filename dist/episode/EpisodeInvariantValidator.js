@@ -6,7 +6,7 @@ export function validateEpisodeInvariants(input) {
         violations.push({
             reason,
             severity,
-            recommendedAction: severity === 'critical' ? 'split-plan' : 'inspect',
+            recommendedAction: ['closure_receipt_status_mismatch', 'dream_job_status_mismatch'].includes(reason) ? 'inspect' : severity === 'critical' ? 'split-plan' : 'inspect',
             requiresManualReview: severity !== 'info',
         });
     };
@@ -19,6 +19,15 @@ export function validateEpisodeInvariants(input) {
         if (episode.startEventId !== pairs[0].link.eventId || episode.endEventId !== pairs.at(-1)?.link.eventId) {
             add('start_end_pointer_mismatch', 'critical');
         }
+        const firstEvent = pairs[0].event;
+        const lastEvent = pairs.at(-1)?.event;
+        if (firstEvent?.globalSeq !== undefined && episode.startSeq !== undefined && firstEvent.globalSeq !== episode.startSeq)
+            add('start_end_seq_mismatch', 'critical');
+        if (lastEvent?.globalSeq !== undefined && episode.endSeq !== undefined && lastEvent.globalSeq !== episode.endSeq)
+            add('start_end_seq_mismatch', 'critical');
+    }
+    else if (episode.startEventId || episode.endEventId) {
+        add('empty_episode_pointer_mismatch', 'critical');
     }
     if (pairs.some((pair) => !pair.event))
         add('raw_event_missing', 'critical');
@@ -47,8 +56,15 @@ export function validateEpisodeInvariants(input) {
         if (relation === 'closes_episode' && index !== userTurns.length - 1)
             add('continuation_after_closure', 'critical');
     });
-    if (episode.status === 'sealed' && pairs.length === 0)
+    const receipts = input.closureReceipts || [];
+    if ((episode.status === 'sealed' || episode.status === 'soft_sealed') && receipts.length === 0)
         add('closure_receipt_status_mismatch', 'critical');
+    if (episode.status === 'open' && receipts.length > 0 && userTurns.some((turn) => turn.some((pair) => pair.link.relation === 'closes_episode')))
+        add('closure_receipt_status_mismatch', 'critical');
+    if (input.dreamJobState && episode.status !== 'sealed' && ['pending', 'processing', 'retry_scheduled', 'failed_retryable'].includes(input.dreamJobState))
+        add('dream_job_status_mismatch', 'critical');
+    if (input.dreamJobState === 'processed' && episode.dreamStatus !== 'processed')
+        add('dream_job_status_mismatch', 'critical');
     return stableViolations(violations);
 }
 function positionsAreContiguous(pairs) {
@@ -64,11 +80,14 @@ function positionsAreContiguous(pairs) {
 function scopeMismatch(episode, event) {
     if (!event)
         return false;
-    if (event.projectId && event.projectId !== episode.projectId)
+    if (event.projectId !== episode.projectId)
         return true;
-    if (event.sessionId && event.sessionId !== episode.sessionId)
+    if (event.sessionId !== episode.sessionId)
         return true;
-    if (episode.conversationThreadId && event.threadId && event.threadId !== episode.conversationThreadId)
+    if ((episode.conversationThreadId || '') !== (event.threadId || ''))
+        return true;
+    const metadata = event.payload?.metadata;
+    if (episode.sourceAgent && metadata?.sourceAgent !== undefined && metadata.sourceAgent !== episode.sourceAgent)
         return true;
     return false;
 }

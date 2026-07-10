@@ -236,7 +236,7 @@ test('planEpisodeSplit is deterministic, turn-safe, complete, non-applyable, and
     expect(second.planId).toBe(first.planId);
     expect(first.applyableInCurrentVersion).toBe(false);
     expect(first.applyCommand).toBeNull();
-    expect(first.requiresManualReview).toBe(false);
+    expect(first.requiresManualReview).toBe(true);
     expect(first.segments.length).toBeGreaterThan(1);
     expect(first.segments.every((segment, index) => segment.segmentIndex === index)).toBe(true);
     expect(first.segments.every((segment) => segment.eventIds === undefined && segment.eventIdsHash)).toBe(true);

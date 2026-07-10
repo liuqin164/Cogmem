@@ -104,16 +104,17 @@ export function loadCogmemConfig(options = {}) {
     if (Object.keys(redactionPolicy).length > 0)
         optionsOut.redactionPolicy = redactionPolicy;
     const boundaryInput = {
-        enabled: booleanValue(episodeBoundary.enabled),
-        mode: stringValue(episodeBoundary.mode),
-        maxEvents: numberValue(episodeBoundary.max_events),
-        maxDurationMs: numberValue(episodeBoundary.max_duration_ms),
-        maxIdleGapMs: numberValue(episodeBoundary.max_idle_gap_ms),
-        splitOnTrustedLocalDateChange: booleanValue(episodeBoundary.split_on_trusted_local_date_change),
-        auditDecisions: booleanValue(episodeBoundary.audit_decisions),
-        applyToLive: booleanValue(episodeBoundary.apply_to_live),
-        applyToImports: booleanValue(episodeBoundary.apply_to_imports),
-        timezone: stringValue(episodeBoundary.timezone),
+        enabled: boundaryBoolean(episodeBoundary.enabled, 'enabled', diagnostics),
+        mode: boundaryString(episodeBoundary.mode, 'mode', diagnostics),
+        maxEvents: boundaryNumber(episodeBoundary.max_events, 'max_events', diagnostics),
+        maxDurationMs: boundaryNumber(episodeBoundary.max_duration_ms, 'max_duration_ms', diagnostics),
+        maxIdleGapMs: boundaryNumber(episodeBoundary.max_idle_gap_ms, 'max_idle_gap_ms', diagnostics),
+        splitOnTrustedLocalDateChange: boundaryBoolean(episodeBoundary.split_on_trusted_local_date_change, 'split_on_trusted_local_date_change', diagnostics),
+        auditDecisions: boundaryBoolean(episodeBoundary.audit_decisions, 'audit_decisions', diagnostics),
+        applyToLive: boundaryBoolean(episodeBoundary.apply_to_live, 'apply_to_live', diagnostics),
+        applyToImports: boundaryBoolean(episodeBoundary.apply_to_imports, 'apply_to_imports', diagnostics),
+        policyVersion: boundaryString(episodeBoundary.policy_version, 'policy_version', diagnostics),
+        timezone: boundaryString(episodeBoundary.timezone, 'timezone', diagnostics),
     };
     const configuredBoundary = Object.values(boundaryInput).some((value) => value !== undefined);
     if (configuredBoundary) {
@@ -264,4 +265,28 @@ function booleanValue(value) {
 }
 function numberValue(value) {
     return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+function boundaryBoolean(value, name, diagnostics) {
+    if (value === undefined)
+        return undefined;
+    if (typeof value === 'boolean')
+        return value;
+    diagnostics.push({ severity: 'warning', code: `invalid_episode_boundary_${name}_type`, message: `episode_boundary.${name} must be a boolean.` });
+    return undefined;
+}
+function boundaryNumber(value, name, diagnostics) {
+    if (value === undefined)
+        return undefined;
+    if (typeof value === 'number' && Number.isFinite(value))
+        return value;
+    diagnostics.push({ severity: 'warning', code: `invalid_episode_boundary_${name}_type`, message: `episode_boundary.${name} must be a finite number.` });
+    return undefined;
+}
+function boundaryString(value, name, diagnostics) {
+    if (value === undefined)
+        return undefined;
+    if (typeof value === 'string')
+        return value;
+    diagnostics.push({ severity: 'warning', code: `invalid_episode_boundary_${name}_type`, message: `episode_boundary.${name} must be a string.` });
+    return undefined;
 }

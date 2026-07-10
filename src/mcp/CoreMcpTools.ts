@@ -1,5 +1,6 @@
 import { KernelAgentMemoryBackend } from '../agent/index.js';
 import { createStableImportIdentityFactory } from '../episode/EpisodeImportIdentity.js';
+import type { EpisodeType } from '../episode/EpisodeTypes.js';
 import {
   createMemoryKernel,
   createMemoryKernelFromConfig,
@@ -263,8 +264,8 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
       name: 'cogmem_episode_seal',
       description: 'Explicitly seal one episode and enqueue it for conditional Dream processing.',
       inputSchema: {
-        type: 'object', properties: { episodeId: STRING_SCHEMA, mode: { type: 'string', enum: ['soft', 'hard', 'manual', 'batch'] }, reason: STRING_SCHEMA },
-        required: ['episodeId'],
+        type: 'object', properties: { projectId: STRING_SCHEMA, episodeId: STRING_SCHEMA, mode: { type: 'string', enum: ['soft', 'hard', 'manual', 'batch'] }, reason: STRING_SCHEMA },
+        required: ['projectId', 'episodeId'],
       },
       annotations: { title: 'Seal Episode', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
@@ -412,8 +413,9 @@ export async function callCogmemMcpTool(
   runtime: CogmemMcpRuntime = {},
 ): Promise<CogmemMcpCallResult> {
   const input = args || {};
-  const opened = openRuntimeKernel(runtime);
+  let opened: { kernel: MemoryKernel; shouldClose: boolean } | undefined;
   try {
+    opened = openRuntimeKernel(runtime);
     switch (name) {
       case 'cogmem_remember_turn':
         return await rememberTurn(opened.kernel, input);
@@ -476,7 +478,7 @@ export async function callCogmemMcpTool(
       case 'cogmem_episode_repair':
         return jsonResult(episodeRepair(opened.kernel, input));
       case 'cogmem_episode_seal':
-        return jsonResult(opened.kernel.sealEpisode(requiredString(input.episodeId, 'episodeId'), {
+        return jsonResult(sealProjectEpisode(opened.kernel, requiredString(input.projectId, 'projectId'), requiredString(input.episodeId, 'episodeId'), {
           mode: optionalEpisodeClosureMode(input.mode),
           reason: optionalString(input.reason) || 'mcp_manual_seal',
         }));
@@ -550,7 +552,7 @@ export async function callCogmemMcpTool(
   } catch (error) {
     return jsonResult({ error: error instanceof Error ? error.message : String(error) }, true);
   } finally {
-    if (opened.shouldClose) opened.kernel.close();
+    if (opened?.shouldClose) opened.kernel.close();
   }
 }
 
@@ -610,7 +612,7 @@ async function episodeImport(kernel: MemoryKernel, input: Record<string, unknown
         localDate: optionalString(message.localDate),
         eventOrdinal: optionalNumber(message.eventOrdinal),
         externalMessageId: suppliedIdentity
-        || stableIdentity({ role, text, timestamp }),
+        || stableIdentity({ role, text, timestamp, sourcePosition: optionalString(message.sourceRange) || optionalString(message.recordId) || index }),
     };
   });
   const results: Awaited<ReturnType<MemoryKernel['appendEpisodeMessageAsync']>>[] = [];
@@ -693,12 +695,18 @@ function episodeRepair(kernel: MemoryKernel, input: Record<string, unknown>) {
   });
   if (operation === 'reclassify') return kernel.repairEpisode({
     operation, projectId, episodeId: requiredString(input.episodeId, 'episodeId'),
-    episodeType: optionalString(input.episodeType) as never, topicPath: optionalString(input.topicPath), importance: optionalNumber(input.importance),
+    episodeType: optionalEpisodeType(input.episodeType), topicPath: optionalString(input.topicPath), importance: optionalNumber(input.importance),
   });
   if (operation === 'requeue-dream' || operation === 'invalidate-dream-run') return kernel.repairEpisode({
     operation, projectId, episodeId: requiredString(input.episodeId, 'episodeId'), mode: optionalDreamMode(input.mode) === 'auto' ? 'normal' : optionalDreamMode(input.mode) as never,
   });
   throw new Error(`invalid episode repair operation: ${operation}`);
+}
+
+function sealProjectEpisode(kernel: MemoryKernel, projectId: string, episodeId: string, input: { mode: 'soft' | 'hard' | 'manual' | 'batch'; reason: string }) {
+  const episode = kernel.getEpisode(episodeId);
+  if (!episode || episode.projectId !== projectId) throw new Error(`episode_project_mismatch:${episodeId}`);
+  return kernel.sealEpisode(episodeId, input);
 }
 
 function dreamRecommendation(kernel: MemoryKernel, projectId: string | undefined, requestedMode: string | undefined) {
@@ -908,7 +916,16 @@ function optionalProspectiveStatuses(value: unknown): Array<'pending' | 'confirm
 }
 
 function optionalNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  throw new Error('value must be a finite number');
+}
+
+function optionalEpisodeType(value: unknown): EpisodeType | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const allowed = new Set<EpisodeType>(['discussion', 'decision', 'correction', 'preference', 'goal', 'debugging', 'planning', 'prospective', 'general']);
+  if (typeof value !== 'string' || !allowed.has(value as EpisodeType)) throw new Error('episodeType must be a valid episode type');
+  return value as EpisodeType;
 }
 
 function optionalEpisodeStatus(value: unknown): 'open' | 'soft_sealed' | 'sealed' | undefined {

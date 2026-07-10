@@ -1,6 +1,7 @@
 import type { MemoryKernelOptions } from '../factory.js';
 import { ModelRegistry } from '../models/ModelRegistry.js';
 import { type ConfigDiagnosticLike } from './VectorDimension.js';
+export type { ConfigDiagnosticLike } from './VectorDimension.js';
 export type CogmemConfigKind = 'toml' | 'missing';
 export type EnvLike = Record<string, string | undefined>;
 export interface CogmemConfigResolution {

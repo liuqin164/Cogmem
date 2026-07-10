@@ -486,6 +486,7 @@ async function recordRawImportedEvidence(
     turnId: sourceRef?.turnId || record.turnId || record.recordId,
     turnSeq: sourceRef?.turnSeq,
     localDate: localDateFromTimestamp(record.timestamp),
+    localDateSource: 'generated_utc',
     role,
     rawEventType: 'message',
     content: record.text,
@@ -527,13 +528,13 @@ function findImportedRawAnchor(
     threadId: string;
     sourceId: string;
     importAnchor: string;
-    contentHash: string;
+    contentHash?: string;
   },
 ): ReturnType<MemoryKernel['recordRawEvent']> | undefined {
   return kernel.getThreadEvents(input.threadId, { projectId: input.projectId }).find((event) => {
     const payload = event.payload as { metadata?: Record<string, unknown> };
     return event.sourceId === input.sourceId
-      && (payload.metadata?.importAnchor === input.importAnchor || event.contentHash === input.contentHash);
+      && payload.metadata?.importAnchor === input.importAnchor;
   }) as ReturnType<MemoryKernel['recordRawEvent']> | undefined;
 }
 

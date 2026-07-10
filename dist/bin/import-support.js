@@ -374,6 +374,7 @@ async function recordRawImportedEvidence(kernel, projectId, envelope) {
         turnId: sourceRef?.turnId || record.turnId || record.recordId,
         turnSeq: sourceRef?.turnSeq,
         localDate: localDateFromTimestamp(record.timestamp),
+        localDateSource: 'generated_utc',
         role,
         rawEventType: 'message',
         content: record.text,
@@ -411,7 +412,7 @@ function findImportedRawAnchor(kernel, input) {
     return kernel.getThreadEvents(input.threadId, { projectId: input.projectId }).find((event) => {
         const payload = event.payload;
         return event.sourceId === input.sourceId
-            && (payload.metadata?.importAnchor === input.importAnchor || event.contentHash === input.contentHash);
+            && payload.metadata?.importAnchor === input.importAnchor;
     });
 }
 function stringRecordField(value) {

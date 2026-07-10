@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 export class DreamScheduler {
     episodeStore;
     curator;
-    constructor(episodeStore, curator) {
+    candidateStore;
+    constructor(episodeStore, curator, candidateStore) {
         this.episodeStore = episodeStore;
         this.curator = curator;
+        this.candidateStore = candidateStore;
     }
     async tick(options = {}) {
         const startedAt = options.now ?? Date.now();
@@ -70,7 +72,17 @@ export class DreamScheduler {
                     now: startedAt,
                 });
                 const ids = run.candidates.map((candidate) => candidate.candidateId);
-                this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt);
+                try {
+                    this.episodeStore.transaction(() => this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt));
+                }
+                catch (completionError) {
+                    for (const candidateId of ids) {
+                        this.candidateStore?.updateCandidateStatus(candidateId, 'superseded', {
+                            reason: 'dream_job_completion_failed', type: 'dream_candidate', id: candidateId, updatedAt: startedAt,
+                        });
+                    }
+                    throw completionError;
+                }
                 episodeIds.push(job.episodeId);
                 candidateIds.push(...ids);
             }

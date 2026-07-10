@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { eventTextForMemory } from './CogmemBlockStripper.js';
 import { classifyAssistantRelation, classifyTurnRelation, classifyTurnRelationHybridTrace } from './TurnRelationClassifier.js';
 import { EpisodeBoundaryPolicy } from './EpisodeBoundaryPolicy.js';
-import { replayPendingTurnBoundary } from './EpisodeBoundaryReplayEngine.js';
+import { logicalTurnsFromPairs, replayPendingTurnBoundary } from './EpisodeBoundaryReplayEngine.js';
 export class EpisodeAssembler {
     store;
     resolveEvent;
@@ -274,12 +274,13 @@ export class EpisodeAssembler {
                         warnings: guardWarnings,
                     };
                 }
+                const episodeStart = ordered[0];
                 episode = this.store.createEpisode({
                     projectId: input.projectId, sessionId: input.sessionId, sourceAgent: input.sourceAgent,
                     conversationThreadId,
                     topicPath: decision.topicPath,
                     episodeType: decision.episodeType, importance: decision.importance,
-                    eventId: primary.eventId, globalSeq: primary.globalSeq, occurredAt: Number.isFinite(primary.occurredAt) ? primary.occurredAt : now,
+                    eventId: episodeStart.eventId, globalSeq: episodeStart.globalSeq, occurredAt: Number.isFinite(episodeStart.occurredAt) ? episodeStart.occurredAt : now,
                     episodeTags: [decision.episodeType, ...decision.candidateTypes],
                     candidateTypes: decision.candidateTypes,
                     importanceSignals: decision.importanceSignals,
@@ -289,7 +290,12 @@ export class EpisodeAssembler {
             }
             const assignedEventIds = this.appendOrderedEvents(episode, ordered, primary, decision, now);
             resultingEpisodeId = episode.episodeId;
-            if (input.batchSeal) {
+            if (primary.role === 'user' && decision.relation === 'closes_episode') {
+                closureReceipt = this.store.sealEpisode(episode.episodeId, {
+                    mode: 'hard', reason: 'explicit_user_closure', reasonCode: 'explicit_user_closure', now,
+                });
+            }
+            if (input.batchSeal && !closureReceipt) {
                 const confidence = averageConfidence(this.store.listEventLinks(episode.episodeId));
                 const requiresReview = !input.forceBatchSeal && confidence < 0.6;
                 closureReceipt = this.store.sealEpisode(episode.episodeId, {
@@ -506,7 +512,6 @@ function validateTurnBatch(events, input) {
     if (!events.length)
         throw new Error('episode_turn_empty');
     const ids = new Set();
-    const userTurnKeys = new Set();
     const expectedThread = input.conversationThreadId || events.find((event) => event.threadId)?.threadId || input.sessionId;
     for (const event of events) {
         if (ids.has(event.eventId))
@@ -522,18 +527,18 @@ function validateTurnBatch(events, input) {
         if (input.sourceAgent && typeof metadata?.sourceAgent === 'string' && metadata.sourceAgent !== input.sourceAgent) {
             throw new Error(`episode_source_scope_mismatch:${event.eventId}`);
         }
-        if (event.role === 'user')
-            userTurnKeys.add(turnBatchKey(event));
     }
-    if (userTurnKeys.size > 1)
-        throw new Error('episode_multiple_user_turns_in_batch');
-}
-function turnBatchKey(event) {
-    if (event.turnId)
-        return `id:${event.turnId}`;
-    if (typeof event.turnSeq === 'number')
-        return `seq:${event.turnSeq}`;
-    return `event:${event.eventId}`;
+    const logicalTurns = logicalTurnsFromPairs(events.map((event, index) => ({
+        link: {
+            episodeId: 'pending', eventId: event.eventId, position: index + 1,
+            relation: 'continues_previous', confidence: 1, createdAt: event.occurredAt,
+        },
+        event,
+    })));
+    if (logicalTurns.length > 1)
+        throw new Error('episode_multiple_logical_turns_in_batch');
+    if (events.filter((event) => event.role === 'user').length > 1)
+        throw new Error('episode_multiple_primary_users_in_batch');
 }
 function fallbackDecision() {
     return {

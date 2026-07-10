@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { DreamCuratorWorker } from '../engine/DreamCuratorWorker.js';
 import type { EpisodeStore } from '../episode/EpisodeStore.js';
+import type { DeepWriteCandidateStore } from '../store/DeepWriteCandidateStore.js';
 
 export type DreamTickMode = 'auto' | 'micro' | 'normal' | 'deep';
 export type SelectedDreamMode = 'none' | 'micro' | 'normal' | 'deep';
@@ -38,6 +39,7 @@ export class DreamScheduler {
   constructor(
     private readonly episodeStore: EpisodeStore,
     private readonly curator: DreamCuratorWorker,
+    private readonly candidateStore?: DeepWriteCandidateStore,
   ) {}
 
   async tick(options: DreamTickOptions = {}): Promise<DreamTickResult> {
@@ -105,7 +107,16 @@ export class DreamScheduler {
           now: startedAt,
         });
         const ids = run.candidates.map((candidate) => candidate.candidateId);
-        this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt);
+        try {
+          this.episodeStore.transaction(() => this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt));
+        } catch (completionError) {
+          for (const candidateId of ids) {
+            this.candidateStore?.updateCandidateStatus(candidateId, 'superseded', {
+              reason: 'dream_job_completion_failed', type: 'dream_candidate', id: candidateId, updatedAt: startedAt,
+            });
+          }
+          throw completionError;
+        }
         episodeIds.push(job.episodeId);
         candidateIds.push(...ids);
       } catch (error) {

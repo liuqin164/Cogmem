@@ -220,6 +220,7 @@ export class EventStore {
   append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>): MemoryEvent<TPayload> {
     const eventVersion = input.eventVersion ?? this.getNextEventVersion(input.streamId);
     const occurredAt = input.occurredAt ?? Date.now();
+    if (!Number.isFinite(occurredAt) || Math.abs(occurredAt) > 8_640_000_000_000_000) throw new Error('invalid_event_timestamp');
     const payloadJson = JSON.stringify(input.payload);
     const storedPayloadJson = this.encodePayload(payloadJson);
     const payloadHash = createHash('sha256').update(payloadJson).digest('hex');
@@ -228,6 +229,10 @@ export class EventStore {
     const globalSeq = this.getNextGlobalSeq();
     const createdAt = Date.now();
     const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : 'generated_utc');
+    if (localDateSource !== 'explicit' && localDateSource !== 'generated_utc' && localDateSource !== 'legacy_unknown') throw new Error('invalid_local_date_source');
+    if (localDateSource === 'explicit' && !input.localDate) throw new Error('explicit_local_date_required');
+    const generatedUtcDate = new Date(occurredAt).toISOString().slice(0, 10);
+    if (localDateSource === 'generated_utc' && input.localDate && input.localDate !== generatedUtcDate) throw new Error('generated_utc_local_date_mismatch');
     const event: MemoryEvent<TPayload> = {
       eventId: input.eventId || `evt-${randomUUID()}`,
       globalSeq,
@@ -262,7 +267,7 @@ export class EventStore {
       lineEnd: input.lineEnd,
       charStart: input.charStart,
       charEnd: input.charEnd,
-      orderingConfidence: input.orderingConfidence ?? (threadSeq || input.eventOrdinal ? 'high' : 'low'),
+      orderingConfidence: input.orderingConfidence ?? (threadSeq !== undefined || input.eventOrdinal !== undefined || input.sourceOffset !== undefined || input.lineStart !== undefined ? 'high' : 'low'),
       occurredAt,
       payload: input.payload,
       payloadHash,
@@ -270,7 +275,7 @@ export class EventStore {
       ingestedAt: createdAt
     };
 
-    this.db.prepare(`
+    const insert = () => this.db.prepare(`
       INSERT INTO memory_events (
         event_id, global_seq, stream_id, stream_type, event_type, raw_event_type, event_version, project_id,
         workspace_id, actor_id, causation_id, correlation_id, source_neuron_id, source_id,
@@ -319,8 +324,10 @@ export class EventStore {
       event.payloadHash,
       event.createdAt
     );
-
-    this.upsertRawEventFts(event);
+    this.db.transaction(() => {
+      insert();
+      this.upsertRawEventFts(event);
+    })();
     return event;
   }
 
@@ -939,6 +946,13 @@ export class EventStore {
 
 function escapeSqlLike(value: string): string {
   return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+function validCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function legacyLocalDateSource(payloadJson: string): MemoryEvent['localDateSource'] {

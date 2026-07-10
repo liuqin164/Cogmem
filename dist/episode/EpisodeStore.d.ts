@@ -1,6 +1,6 @@
 import type Database from 'bun:sqlite';
 import type { MemoryEvent } from '../types/index.js';
-import type { EpisodeClosureMode, EpisodeClosureReasonCode, EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeEventLink, EpisodeListOptions, EpisodeStatus, EpisodeType, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
+import type { EpisodeClosureMode, EpisodeClosureReasonCode, EpisodeClosureReceipt, EpisodeDreamState, EpisodeDreamStatus, EpisodeEventLink, EpisodeListOptions, EpisodeStatus, EpisodeType, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
 import { type EpisodeBoundaryGuardResult } from './EpisodeBoundaryPolicy.js';
 import type { TurnRelationDecision } from './TurnRelationClassifier.js';
 interface CreateEpisodeInput {
@@ -51,6 +51,9 @@ export interface EpisodeBoundaryDecisionRecord {
 }
 export interface EpisodeBoundarySnapshot {
     eventCount: number;
+    actualLinkCount: number;
+    storedEventCount: number;
+    eventCountMismatch: boolean;
     startedAt?: number;
     updatedAt?: number;
     lastEventAt?: number;
@@ -191,6 +194,7 @@ export declare class EpisodeStore {
     private markEmptyEpisodeDreamSkipped;
     private markEmptyEpisodeDreamSkippedMany;
     getDreamStatus(projectId?: string): EpisodeDreamStatus;
+    getDreamJobState(episodeId: string): EpisodeDreamState | undefined;
     countUnassignedRawEvents(projectId?: string): number;
     markEventDisposition(input: {
         eventId: string;
@@ -246,6 +250,7 @@ export declare class EpisodeStore {
     deleteByProject(projectId: string): number;
     private enqueueDreamJob;
     private initializeSchema;
+    private ensureEpisodeCompatibilityColumns;
 }
 export {};
 //# sourceMappingURL=EpisodeStore.d.ts.map

@@ -59,5 +59,11 @@ export const ALL_MIGRATIONS = [
     migration_0029,
     migration_0030,
 ];
+// Core stores bootstrap the pre-0015 tables themselves. Running the early
+// historical migrations against a fresh kernel would try to ALTER optional
+// legacy tables that do not exist yet. The kernel still runs every migration
+// from the first schema that owns the runtime tables through the latest one;
+// the CLI remains able to replay the complete historical chain.
+export const KERNEL_MIGRATIONS = ALL_MIGRATIONS.filter((migration) => Number.parseInt(migration.version, 10) >= 15);
 export { migration_0001, migration_0002, migration_0003, migration_0004, migration_0005, migration_0006, migration_0007, migration_0009, migration_0010, migration_0011, migration_0012, migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028, migration_0029, migration_0030 };
 export { SchemaMigrationRunner } from './SchemaMigrationRunner.js';

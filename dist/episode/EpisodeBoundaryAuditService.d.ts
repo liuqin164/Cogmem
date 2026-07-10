@@ -1,5 +1,5 @@
 import type { MemoryEvent } from '../types/index.js';
-import type { EpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
+import { type EpisodeBoundaryConfig } from './EpisodeBoundaryPolicy.js';
 import type { EpisodeStore } from './EpisodeStore.js';
 import type { EpisodeStatus } from './EpisodeTypes.js';
 export interface EpisodeBoundaryAuditItem {
@@ -30,6 +30,8 @@ export interface EpisodeBoundaryAuditItem {
     systemEventCount: number;
     outOfOrderEventCount: number;
     sourceFingerprint: string;
+    detectedBoundaryCount: number;
+    effectiveBoundaryCount: number;
     unresolvedEventCount: number;
     missingRawEventIds: string[];
     evidenceIntegrityStatus: 'ok' | 'missing_raw_events';
@@ -47,7 +49,10 @@ export declare class EpisodeBoundaryAuditService {
     private readonly store;
     private readonly resolveEvent?;
     private readonly liveBoundaryConfig;
-    constructor(store: EpisodeStore, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, liveBoundaryConfig?: Partial<EpisodeBoundaryConfig>);
+    private readonly liveConfigDiagnostics;
+    constructor(store: EpisodeStore, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, liveBoundaryConfig?: Partial<EpisodeBoundaryConfig>, liveConfigDiagnostics?: Array<{
+        code: string;
+    }>);
     audit(options: {
         projectId: string;
         episodeId?: string;

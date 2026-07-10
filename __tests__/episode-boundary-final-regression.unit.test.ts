@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { EpisodeStore } from '../src/episode/EpisodeStore.js';
 import { normalizeEpisodeBoundaryConfig } from '../src/episode/EpisodeBoundaryPolicy.js';
+import { classifyTurnRelation } from '../src/episode/TurnRelationClassifier.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { migration_0022, migration_0023, migration_0028, migration_0029, migration_0030 } from '../src/migrations/index.js';
 
@@ -34,6 +35,78 @@ test('boundary config rejects boolean strings and empty policy version', () => {
   ]);
   expect(normalized.config.enabled).toBe(true);
   expect(normalized.config.policyVersion).toBe('episode_boundary.v1');
+});
+
+test('createMemoryKernel upgrades the runtime schema through migration 0030', () => {
+  const { dir, kernel } = createKernel('cogmem-final-schema-');
+  try {
+    const db = kernel.factStore.getDatabase();
+    expect((db.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get() as { value: string }).value).toBe('30');
+    expect((db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episode_events_episode_position_unique'`).get())).toBeTruthy();
+    expect((db.prepare(`PRAGMA table_info(memory_events)`).all() as Array<{ name: string }>).some((row) => row.name === 'local_date_source')).toBe(true);
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('effective replay boundaries reset segment state instead of cascading every turn', () => {
+  const { dir, kernel } = createKernel('cogmem-final-replay-reset-', { episodeBoundary: { maxEvents: 20 } });
+  try {
+    const episodeIds = new Set<string>();
+    for (let index = 0; index < 45; index += 1) {
+      const result = kernel.appendEpisodeMessage({
+        projectId: 'brain', sessionId: 'reset', sourceAgent: 'test', role: 'user',
+        text: '继续讨论同一个方案', externalMessageId: `reset-${index}`, timestamp: index + 1,
+      });
+      if (result.episodeId) episodeIds.add(result.episodeId);
+    }
+    expect(episodeIds.size).toBe(3);
+    expect([...episodeIds].map((id) => kernel.getEpisode(id)?.eventCount)).toEqual([20, 20, 5]);
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('contextual short accept and negated closure are classified before noise/closure', () => {
+  expect(classifyTurnRelation({ currentUserText: '好的', previousAssistantText: '建议采用这个方案吗？' }).relation)
+    .toBe('accepts_assistant_proposal');
+  expect(classifyTurnRelation('不要按这个方案做').relation).toBe('corrects_previous');
+  expect(classifyTurnRelation('not done').relation).toBe('corrects_previous');
+});
+
+test('no-active closure is sealed and direct old EpisodeStore schema construction adds compatibility columns', () => {
+  const db = new Database(':memory:');
+  db.exec(`
+    CREATE TABLE memory_episodes (
+      episode_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, session_id TEXT NOT NULL, source_agent TEXT,
+      topic_path TEXT, episode_type TEXT NOT NULL, status TEXT NOT NULL, importance REAL NOT NULL,
+      summary TEXT, start_event_id TEXT NOT NULL, end_event_id TEXT NOT NULL, start_seq INTEGER, end_seq INTEGER,
+      event_count INTEGER NOT NULL, started_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sealed_at INTEGER
+    );
+    CREATE TABLE memory_episode_events (
+      episode_id TEXT NOT NULL, event_id TEXT NOT NULL UNIQUE, position INTEGER NOT NULL,
+      relation TEXT NOT NULL, confidence REAL NOT NULL, created_at INTEGER NOT NULL,
+      PRIMARY KEY (episode_id, event_id)
+    );
+  `);
+  const store = new EpisodeStore(db);
+  expect(store.getEpisode('missing')).toBeUndefined();
+  expect((db.prepare(`PRAGMA table_info(memory_episodes)`).all() as Array<{ name: string }>).some((row) => row.name === 'dream_status')).toBe(true);
+  db.close();
+
+  const { dir, kernel } = createKernel('cogmem-final-closure-');
+  try {
+    const result = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'closure-only', sourceAgent: 'test', role: 'user',
+      text: '按这个方案做，就这样', externalMessageId: 'closure-only-1', timestamp: 0,
+    });
+    expect(kernel.getEpisode(result.episodeId!)?.status).toBe('sealed');
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('timestamp 0 participates in live, audit, and split planner boundary replay', () => {

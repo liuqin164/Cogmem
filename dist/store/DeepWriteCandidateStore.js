@@ -159,6 +159,10 @@ export class DeepWriteCandidateStore {
             conditions.push('c.run_id = ?');
             params.push(options.runId);
         }
+        if (options.after) {
+            conditions.push('(c.created_at > ? OR (c.created_at = ? AND c.candidate_id > ?))');
+            params.push(options.after.createdAt, options.after.createdAt, options.after.candidateId);
+        }
         if (conditions.length)
             sql += ` WHERE ${conditions.join(' AND ')}`;
         sql += ` ORDER BY c.created_at ASC, c.candidate_id ASC LIMIT ?`;

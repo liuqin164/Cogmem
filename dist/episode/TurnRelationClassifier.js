@@ -3,13 +3,14 @@ const CORRECTION = /^\s*(不对|不是|不，|不是这样|纠正|更正|我(?:�
 const CONTINUATION = /^\s*(继续|接着|然后呢|上面那个|刚才说的|go on|continue|and then|続けて|そのまま)/iu;
 const EXPLICIT_SWITCH = /^\s*(换个话题|换一个话题|另一个问题|另外一个问题|说点别的|题外话|new topic|switch topics?|on another topic|unrelated question)/iu;
 const SUBTOPIC = /^\s*(另外|同时|还有|以及|顺便|also|additionally|and for|それと|また)/iu;
-const CLOSURE = /(就这样|按这个(?:方案)?做|方案确认|到这里|先这样|结论就是|done|that settles it|proceed with this)/iu;
+const CLOSURE = /(?:^|[\s，。,.!?！？])(?:就这样|按这个(?:方案)?做|方案确认|到这里|先这样|结论就是|done|that settles it|proceed with this)(?:$|[\s，。,.!?！？])/iu;
+const NEGATED_CLOSURE = /(?:不要|别|还不能|不能|not|don't|do not).{0,16}(?:就这样|按这个(?:方案)?做|到这里|结束|done|proceed)/iu;
 const PREFERENCE = /(请以后|以后请|始终|总是|偏好|喜欢|希望|不要|别|必须|一定要|边界|local-first|prefer|always|never|must|do not)/iu;
 const GOAL = /(长期目标|目标是|计划要|希望最终|goal|objective)/iu;
 const DECISION = /(决定|确定采用|选用|按.+方案|decision|decide|chosen|确认采用)/iu;
 const PROSPECTIVE = /(提醒我|记得在|明天|下周|到时候|remind me|tomorrow|next week)/iu;
 const DEBUGGING = /(bug|错误|失败|报错|根因|修复|debug|exception)/iu;
-const SHORT_ACCEPT = /^\s*(对|是|可以|确认|就这个|第二个|第[一二三四五六七八九十\d]+个|yes|yep|correct|sounds good|そう|はい)[。.!！\s]*$/iu;
+const SHORT_ACCEPT = /^\s*(对|是|可以|确认|好的|好|收到|明白了|就这个|第二个|第[一二三四五六七八九十\d]+个|yes|yep|correct|sounds good|ok|okay|そう|はい)[。.!！\s]*$/iu;
 const SHORT_REJECT = /^\s*(不对|不是|不行|不要|否|no|nope|違う|いいえ)[。.!！\s]*$/iu;
 const ASSISTANT_PROPOSAL = /(建议|可以选|选项|should we|recommend|option|propose|どうですか)|^\s*(下一版|应该|推荐|可以考虑)|(?:方案|采用|下一版).{0,80}(?:吗|[?？])/iu;
 const ASSISTANT_QUESTION = /[?？]\s*$|(?:是否|要不要|可以吗|确认吗|which|what|when|do you|should we)/iu;
@@ -20,8 +21,6 @@ function classifyTurnRelationBase(input) {
     const text = String(context.currentUserText || '').trim();
     const previousAssistant = String(context.previousAssistantText || '').trim();
     const signals = [];
-    if (!text || NOISE.test(text))
-        return decision('noise', 0.98, 'general', 0.05, 'deterministic_noise', ['noise'], false, []);
     if (SHORT_ACCEPT.test(text) && previousAssistant) {
         if (ASSISTANT_PROPOSAL.test(previousAssistant)) {
             return decision('accepts_assistant_proposal', 0.91, inferEpisodeType(previousAssistant), 0.88, 'assistant_context_acceptance', ['short_accept', 'assistant_proposal'], false, inferCandidateTypes(previousAssistant));
@@ -37,9 +36,11 @@ function classifyTurnRelationBase(input) {
         }
         return decision('corrects_previous', 0.9, 'correction', 0.9, 'assistant_fact_or_question_correction', ['short_reject', ASSISTANT_QUESTION.test(previousAssistant) ? 'assistant_question' : 'assistant_fact'], false, ['correction']);
     }
-    if (CORRECTION.test(text)) {
+    if (CORRECTION.test(text) || NEGATED_CLOSURE.test(text)) {
         return decision('corrects_previous', 0.94, 'correction', 0.9, 'explicit_correction', ['correction_marker'], false, ['correction']);
     }
+    if (!text || NOISE.test(text))
+        return decision('noise', 0.98, 'general', 0.05, 'deterministic_noise', ['noise'], false, []);
     if (EXPLICIT_SWITCH.test(text)) {
         const active = `${context.activeEpisodeSummary || ''} ${context.activeEpisodeTopicPath || ''}`.trim();
         const shift = active && hasSpecificTopicPayload(text) ? 'hard' : 'ambiguous';
@@ -153,7 +154,7 @@ function applyReviewerDecision(cpuDecision, record) {
     };
 }
 function hasConfirmedOverlap(context, text) {
-    if (context.topicPathMatch === true || context.projectMatch === true)
+    if (context.topicPathMatch === true)
         return true;
     if ((context.entityOverlap ?? 0) >= 0.5 || (context.semanticSimilarity ?? 0) >= 0.72)
         return true;

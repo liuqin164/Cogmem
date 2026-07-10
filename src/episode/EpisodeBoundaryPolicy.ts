@@ -101,7 +101,10 @@ export function normalizeEpisodeBoundaryConfig(input: Partial<EpisodeBoundaryCon
   } else {
     config.policyVersion = input.policyVersion ?? DEFAULT_EPISODE_BOUNDARY_CONFIG.policyVersion;
   }
-  if (input.timezone !== undefined && input.timezone !== '') {
+  if (input.timezone !== undefined && (typeof input.timezone !== 'string' || input.timezone.trim() === '')) {
+    diagnostics.push({ severity: 'warning', code: 'invalid_episode_boundary_timezone', message: 'episode_boundary.timezone must be a non-empty valid IANA timezone.' });
+    config.timezone = undefined;
+  } else if (input.timezone !== undefined) {
     try { new Intl.DateTimeFormat('en-US', { timeZone: input.timezone }).format(0); config.timezone = input.timezone; }
     catch {
       diagnostics.push({ severity: 'warning', code: 'invalid_episode_boundary_timezone', message: 'episode_boundary.timezone must be a valid IANA timezone.' });

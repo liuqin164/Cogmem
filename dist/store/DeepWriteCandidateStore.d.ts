@@ -44,6 +44,10 @@ export interface DeepWriteCandidateListOptions {
     projectId?: string;
     runId?: string;
     limit?: number;
+    after?: {
+        createdAt: number;
+        candidateId: string;
+    };
 }
 export declare class DeepWriteCandidateStore {
     private readonly db;

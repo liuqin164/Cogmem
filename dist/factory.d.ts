@@ -28,7 +28,7 @@ import { EpisodeBoundaryAuditService, type EpisodeBoundaryAuditResult } from './
 import { EpisodeBoundaryPolicy, type EpisodeBoundaryConfig } from './episode/EpisodeBoundaryPolicy.js';
 import { EpisodeSplitPlanner, type EpisodeSplitPlan } from './episode/EpisodeSplitPlanner.js';
 import { type DreamTickOptions, type DreamTickResult } from './dream/index.js';
-import { type EnvLike } from './config/CogmemConfig.js';
+import { type EnvLike, type ConfigDiagnosticLike } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
 import type { Embedder } from './store/Embedder.js';
 import { CognitiveGraphStore } from './store/CognitiveGraphStore.js';
@@ -46,7 +46,7 @@ import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
 import { TopologyStore } from './store/TopologyStore.js';
 import type { IVectorStore, VectorBackend } from './store/IVectorStore.js';
-import type { IngestInput, MemoryEvent, MemoryEventCausalityType, MemoryEventContext, MemoryRawEventType, MemoryEventRole, Neuron } from './types/index.js';
+import type { IngestInput, MemoryEvent, MemoryEventCausalityType, MemoryEventContext, MemoryRawEventType, MemoryEventRole, Neuron, OrderingConfidence } from './types/index.js';
 import { type ImportOptions, type ImportResult, type SnapshotMeta } from './snapshot/index.js';
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
@@ -63,6 +63,7 @@ export interface MemoryKernelOptions {
     redactionPolicy?: RedactionPolicy | false;
     turnRelationReviewer?: TurnRelationAdvisoryReviewer;
     episodeBoundary?: Partial<EpisodeBoundaryConfig>;
+    configDiagnostics?: ConfigDiagnosticLike[];
 }
 export interface MemoryKernelFromConfigOptions extends MemoryKernelOptions {
     configPath?: string;
@@ -271,6 +272,7 @@ export interface RawMemoryEventInput {
     lineEnd?: number;
     charStart?: number;
     charEnd?: number;
+    orderingConfidence?: OrderingConfidence;
     localDate?: string;
     localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
     metadata?: Record<string, unknown>;
@@ -485,6 +487,7 @@ export declare class MemoryKernel {
     readonly topicAliasRegistry: TopicAliasRegistry;
     readonly topicRelationGraph: TopicRelationGraph;
     readonly topicGovernance: TopicGovernance;
+    readonly configDiagnostics: ConfigDiagnosticLike[];
     private readonly dbPath;
     private readonly embedder;
     private readonly embeddingProvider?;
@@ -602,6 +605,8 @@ export declare class MemoryKernel {
     }): import("./episode/EpisodeAssembler.js").EpisodeAssemblyResult;
     appendEpisodeMessage(input: EpisodeMessageInput): EpisodeMessageResult;
     appendEpisodeMessageAsync(input: EpisodeMessageInput): Promise<EpisodeMessageResult>;
+    private finishIngestMessage;
+    private finishIngestMessageAsync;
     private resumeEpisodeMessage;
     private resumeEpisodeMessageAsync;
     private assertEpisodeIngestIdentity;
@@ -664,8 +669,11 @@ export declare class MemoryKernel {
         assigned: number;
         unassigned: number;
         unassignedEventIds: string[];
+        nextGlobalSeq: number | undefined;
+        hasMore: boolean;
     };
     repairEpisode(input: EpisodeRepairInput): EpisodeRepairResult;
+    private repairEpisodeInTransaction;
     listDreamCandidates(options?: DreamCandidateListOptions): DreamCandidateRecord[];
     countDreamCandidates(options?: Omit<DreamCandidateListOptions, 'limit'>): number;
     reviewDreamCandidate(input: CandidateReviewInput): CandidateReviewResult;

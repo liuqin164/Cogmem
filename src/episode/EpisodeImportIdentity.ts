@@ -4,6 +4,7 @@ export interface StableImportIdentityInput {
   role: string;
   text: string;
   timestamp?: number;
+  sourcePosition?: string | number;
 }
 
 export function createStableImportIdentityFactory(sourceAgent: string, sourceSessionId: string) {
@@ -15,6 +16,7 @@ export function createStableImportIdentityFactory(sourceAgent: string, sourceSes
       sourceSessionId,
       input.role,
       input.timestamp ?? null,
+      input.sourcePosition ?? null,
       createHash('sha256').update(normalizedText).digest('hex'),
     ])).digest('hex');
     const occurrence = (occurrences.get(base) || 0) + 1;

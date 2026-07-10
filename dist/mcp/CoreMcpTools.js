@@ -228,8 +228,8 @@ export function listCogmemMcpTools() {
             name: 'cogmem_episode_seal',
             description: 'Explicitly seal one episode and enqueue it for conditional Dream processing.',
             inputSchema: {
-                type: 'object', properties: { episodeId: STRING_SCHEMA, mode: { type: 'string', enum: ['soft', 'hard', 'manual', 'batch'] }, reason: STRING_SCHEMA },
-                required: ['episodeId'],
+                type: 'object', properties: { projectId: STRING_SCHEMA, episodeId: STRING_SCHEMA, mode: { type: 'string', enum: ['soft', 'hard', 'manual', 'batch'] }, reason: STRING_SCHEMA },
+                required: ['projectId', 'episodeId'],
             },
             annotations: { title: 'Seal Episode', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
         },
@@ -372,8 +372,9 @@ export function listCogmemMcpTools() {
 }
 export async function callCogmemMcpTool(name, args, runtime = {}) {
     const input = args || {};
-    const opened = openRuntimeKernel(runtime);
+    let opened;
     try {
+        opened = openRuntimeKernel(runtime);
         switch (name) {
             case 'cogmem_remember_turn':
                 return await rememberTurn(opened.kernel, input);
@@ -434,7 +435,7 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
             case 'cogmem_episode_repair':
                 return jsonResult(episodeRepair(opened.kernel, input));
             case 'cogmem_episode_seal':
-                return jsonResult(opened.kernel.sealEpisode(requiredString(input.episodeId, 'episodeId'), {
+                return jsonResult(sealProjectEpisode(opened.kernel, requiredString(input.projectId, 'projectId'), requiredString(input.episodeId, 'episodeId'), {
                     mode: optionalEpisodeClosureMode(input.mode),
                     reason: optionalString(input.reason) || 'mcp_manual_seal',
                 }));
@@ -511,7 +512,7 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
         return jsonResult({ error: error instanceof Error ? error.message : String(error) }, true);
     }
     finally {
-        if (opened.shouldClose)
+        if (opened?.shouldClose)
             opened.kernel.close();
     }
 }
@@ -569,7 +570,7 @@ async function episodeImport(kernel, input) {
             localDate: optionalString(message.localDate),
             eventOrdinal: optionalNumber(message.eventOrdinal),
             externalMessageId: suppliedIdentity
-                || stableIdentity({ role, text, timestamp }),
+                || stableIdentity({ role, text, timestamp, sourcePosition: optionalString(message.sourceRange) || optionalString(message.recordId) || index }),
         };
     });
     const results = [];
@@ -659,13 +660,19 @@ function episodeRepair(kernel, input) {
     if (operation === 'reclassify')
         return kernel.repairEpisode({
             operation, projectId, episodeId: requiredString(input.episodeId, 'episodeId'),
-            episodeType: optionalString(input.episodeType), topicPath: optionalString(input.topicPath), importance: optionalNumber(input.importance),
+            episodeType: optionalEpisodeType(input.episodeType), topicPath: optionalString(input.topicPath), importance: optionalNumber(input.importance),
         });
     if (operation === 'requeue-dream' || operation === 'invalidate-dream-run')
         return kernel.repairEpisode({
             operation, projectId, episodeId: requiredString(input.episodeId, 'episodeId'), mode: optionalDreamMode(input.mode) === 'auto' ? 'normal' : optionalDreamMode(input.mode),
         });
     throw new Error(`invalid episode repair operation: ${operation}`);
+}
+function sealProjectEpisode(kernel, projectId, episodeId, input) {
+    const episode = kernel.getEpisode(episodeId);
+    if (!episode || episode.projectId !== projectId)
+        throw new Error(`episode_project_mismatch:${episodeId}`);
+    return kernel.sealEpisode(episodeId, input);
 }
 function dreamRecommendation(kernel, projectId, requestedMode) {
     const status = kernel.getEpisodeDreamStatus(projectId);
@@ -858,7 +865,19 @@ function optionalProspectiveStatuses(value) {
     return statuses;
 }
 function optionalNumber(value) {
-    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+    if (value === undefined || value === null)
+        return undefined;
+    if (typeof value === 'number' && Number.isFinite(value))
+        return value;
+    throw new Error('value must be a finite number');
+}
+function optionalEpisodeType(value) {
+    if (value === undefined || value === null || value === '')
+        return undefined;
+    const allowed = new Set(['discussion', 'decision', 'correction', 'preference', 'goal', 'debugging', 'planning', 'prospective', 'general']);
+    if (typeof value !== 'string' || !allowed.has(value))
+        throw new Error('episodeType must be a valid episode type');
+    return value;
 }
 function optionalEpisodeStatus(value) {
     if (value === undefined || value === null || value === '')
