@@ -5,6 +5,20 @@ export class DeepWriteCandidateStore {
         this.db = db;
         this.initSchema();
     }
+    getDatabase() {
+        return this.db;
+    }
+    countActivePromotions(targetType, targetId, excludingCandidateId) {
+        const row = this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM deep_write_candidates
+      WHERE promotion_target_type = ?
+        AND promotion_target_id = ?
+        AND status IN ('staged', 'candidate', 'promoted', 'needs_confirmation')
+        AND (? IS NULL OR candidate_id <> ?)
+    `).get(targetType, targetId, excludingCandidateId || null, excludingCandidateId || null);
+        return Number(row?.count || 0);
+    }
     initSchema() {
         this.db.exec(`
       CREATE TABLE IF NOT EXISTS deep_write_runs (
@@ -137,7 +151,7 @@ export class DeepWriteCandidateStore {
     }
     listCandidates(options = {}) {
         const params = [];
-        const conditions = [];
+        const conditions = options.statuses?.includes('staged') ? [] : ["c.status <> 'staged'"];
         let sql = `
       SELECT c.*
       FROM deep_write_candidates c
@@ -172,7 +186,7 @@ export class DeepWriteCandidateStore {
     }
     countCandidates(options = {}) {
         const params = [];
-        const conditions = [];
+        const conditions = options.statuses?.includes('staged') ? [] : ["c.status <> 'staged'"];
         let sql = `
       SELECT COUNT(*) AS count
       FROM deep_write_candidates c
@@ -210,6 +224,41 @@ export class DeepWriteCandidateStore {
           updated_at = ?
       WHERE candidate_id = ?
     `).run(status, promotionTarget?.type || null, promotionTarget?.id || null, promotionTarget?.reason || null, promotionTarget?.reviewAfter ?? null, promotionTarget?.updatedAt ?? Date.now(), candidateId);
+    }
+    publishStagedCandidates(runId, candidateIds, updatedAt) {
+        const statement = this.db.prepare(`UPDATE deep_write_candidates SET status = 'candidate', updated_at = ? WHERE candidate_id = ? AND run_id = ? AND status = 'staged'`);
+        for (const candidateId of candidateIds) {
+            if (Number(statement.run(updatedAt, candidateId, runId).changes || 0) !== 1)
+                throw new Error(`staged_candidate_publish_conflict:${candidateId}`);
+        }
+    }
+    updateRunStatus(runId, expected, next) {
+        const result = this.db.prepare(`UPDATE deep_write_runs SET status = ? WHERE run_id = ? AND status = ?`).run(next, runId, expected);
+        if (Number(result.changes || 0) !== 1)
+            throw new Error(`dream_run_status_conflict:${runId}`);
+    }
+    abandonStaleStagedRuns(before, updatedAt) {
+        const transaction = this.db.transaction(() => {
+            const candidates = this.db.prepare(`
+        SELECT DISTINCT run_id FROM deep_write_candidates
+        WHERE status = 'staged' AND created_at < ?
+      `).all(before);
+            let abandoned = 0;
+            for (const row of candidates) {
+                this.db.prepare(`
+          UPDATE deep_write_candidates
+          SET status = 'superseded', status_reason = 'staged_run_abandoned', updated_at = ?
+          WHERE run_id = ? AND status = 'staged'
+        `).run(updatedAt, row.run_id);
+                const result = this.db.prepare(`
+          UPDATE deep_write_runs SET status = 'abandoned', error = COALESCE(error, 'staged_run_abandoned')
+          WHERE run_id = ? AND status = 'staged'
+        `).run(row.run_id);
+                abandoned += Number(result.changes || 0);
+            }
+            return abandoned;
+        });
+        return transaction();
     }
     updateCandidateReviewData(candidateId, input) {
         this.db.prepare(`

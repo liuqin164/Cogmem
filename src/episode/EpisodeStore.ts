@@ -95,6 +95,10 @@ export class EpisodeStore {
     if (options.initializeSchemaForTests !== false) this.initializeSchema();
   }
 
+  getDatabase(): Database {
+    return this.db;
+  }
+
   createEpisode(input: CreateEpisodeInput): MemoryEpisode {
     const episodeId = `episode-${randomUUID()}`;
     this.db.prepare(`

@@ -67,6 +67,7 @@ export declare class EpisodeStore {
     constructor(db: Database, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, options?: {
         initializeSchemaForTests?: boolean;
     });
+    getDatabase(): Database;
     createEpisode(input: CreateEpisodeInput): MemoryEpisode;
     findActiveEpisode(projectId: string, sessionId: string, sourceAgent?: string, conversationThreadId?: string): MemoryEpisode | undefined;
     private findActiveEpisodeRow;

@@ -1325,11 +1325,20 @@ export class MemoryKernel {
             this.summaryStore.markSuperseded(targetId);
         }
         else if (candidate.promotionTargetType === 'entity') {
-            this.entityStore.archiveEntity(targetId, now);
+            if (this.deepWriteCandidateStore.countActivePromotions('entity', targetId, candidate.candidateId) === 0) {
+                this.entityStore.archiveEntity(targetId, now);
+            }
         }
         else if (candidate.promotionTargetType === 'graph_edge') {
             const relationStore = this.extensions.get('relationStore');
-            relationStore?.invalidateEdge?.(targetId, { repairInvalidatedAt: now, sourceCandidateId: candidate.candidateId });
+            if (!relationStore?.invalidateEdge)
+                throw new Error(`graph_edge_invalidation_failed:${targetId}`);
+            const invalidated = relationStore.invalidateEdge(targetId, {
+                repairInvalidatedAt: now,
+                sourceCandidateId: candidate.candidateId,
+            });
+            if (invalidated === false)
+                throw new Error(`graph_edge_invalidation_failed:${targetId}`);
         }
     }
     listDreamCandidates(options = {}) {
@@ -1740,7 +1749,7 @@ export class MemoryKernel {
             if (!projectId)
                 return true;
             return conflict.entityIds.some((entityId) => {
-                const entity = this.entityStore.findByEntityId(entityId);
+                const entity = this.entityStore.getByEntityId(entityId);
                 return entity?.metadata?.projectId === projectId
                     || this.entityStore.listTimeline({ entityId, projectId, limit: 1 }).length > 0;
             });

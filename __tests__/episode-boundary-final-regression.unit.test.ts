@@ -8,6 +8,7 @@ import { EpisodeStore } from '../src/episode/EpisodeStore.js';
 import { EpisodeBoundaryPolicy, normalizeEpisodeBoundaryConfig } from '../src/episode/EpisodeBoundaryPolicy.js';
 import { SchemaMigrationRunner, migration_0022, migration_0023, migration_0028, migration_0029, migration_0030, migration_0031 } from '../src/migrations/index.js';
 import { EventStore } from '../src/store/EventStore.js';
+import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
 import { classifyTurnRelation } from '../src/episode/TurnRelationClassifier.js';
 import { createMemoryKernel } from '../src/factory.js';
 
@@ -373,5 +374,25 @@ test('import anchors return the existing event and reject changed content withou
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('staged candidate publication is compare-and-set and public listings hide staged rows', () => {
+  const db = new Database(':memory:');
+  try {
+    const store = new DeepWriteCandidateStore(db);
+    const run = store.insertRun({ sourceNeuronIds: [], mode: 'deep', promptHash: 'p', outputHash: 'o', status: 'staged' });
+    const candidate = store.insertCandidates([{
+      runId: run.runId, candidateType: 'fact', status: 'staged', confidence: 0.9,
+      content: { text: 'pending' }, evidence: [],
+    }])[0]!;
+    expect(store.listCandidates()).toHaveLength(0);
+    store.updateCandidateStatus(candidate.candidateId, 'superseded', { reason: 'repair' });
+    expect(() => store.publishStagedCandidates(run.runId, [candidate.candidateId], 2))
+      .toThrow(`staged_candidate_publish_conflict:${candidate.candidateId}`);
+    expect(store.getCandidate(candidate.candidateId)?.status).toBe('superseded');
+    expect(() => store.updateRunStatus(run.runId, 'staged', 'succeeded')).not.toThrow();
+  } finally {
+    db.close();
   }
 });

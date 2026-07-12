@@ -385,6 +385,11 @@ export class EntityStore {
   }
 
   findByEntityId(entityId: string): EntityRecord | null {
+    const row = this.db.prepare(`SELECT * FROM entity_instances WHERE instance_id = ?`).get(entityId) as any;
+    return row ? this.mapRow(row) : null;
+  }
+
+  findActiveByEntityId(entityId: string): EntityRecord | null {
     const row = this.db.prepare(`
       SELECT * FROM entity_instances WHERE instance_id = ? AND status = 'active'
     `).get(entityId) as any;
@@ -594,7 +599,7 @@ export class EntityStore {
     );
 
     this.touchEntity(record.entityId, record.createdAt);
-    const entity = this.findByEntityId(record.entityId);
+    const entity = this.getByEntityId(record.entityId);
     if (entity) {
       for (const alias of [entity.canonicalName, ...(entity.aliases || [])]) {
         this.refreshAliasConflict(this.normalizeAlias(alias), entity.type, record.createdAt);
@@ -934,7 +939,7 @@ export class EntityStore {
   }
 
   addAlias(entityId: string, alias: string, updatedAt: number = Date.now()): void {
-    const entity = this.findByEntityId(entityId);
+    const entity = this.getByEntityId(entityId);
     if (!entity || !alias.trim()) return;
     const aliases = Array.from(new Set([...entity.aliases, alias.trim()]));
     this.db.prepare(`UPDATE entity_instances SET aliases_json = ?, updated_at = ? WHERE instance_id = ?`)
@@ -943,7 +948,7 @@ export class EntityStore {
   }
 
   removeAlias(entityId: string, alias: string, updatedAt: number = Date.now()): void {
-    const entity = this.findByEntityId(entityId);
+    const entity = this.getByEntityId(entityId);
     if (!entity || entity.canonicalName === alias) return;
     const normalized = this.normalizeAlias(alias);
     const aliases = entity.aliases.filter((item) => this.normalizeAlias(item) !== normalized);

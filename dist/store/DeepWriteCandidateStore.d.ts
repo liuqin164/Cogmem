@@ -1,5 +1,5 @@
 import type Database from 'bun:sqlite';
-export type DeepWriteRunStatus = 'succeeded' | 'failed' | 'skipped';
+export type DeepWriteRunStatus = 'running' | 'staged' | 'succeeded' | 'failed' | 'skipped' | 'abandoned';
 export type DeepWriteCandidateStatus = 'staged' | 'shadow' | 'candidate' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
 export interface DeepWriteRunInput {
     runId?: string;
@@ -52,6 +52,8 @@ export interface DeepWriteCandidateListOptions {
 export declare class DeepWriteCandidateStore {
     private readonly db;
     constructor(db: Database);
+    getDatabase(): Database;
+    countActivePromotions(targetType: string, targetId: string, excludingCandidateId?: string): number;
     initSchema(): void;
     insertRun(input: DeepWriteRunInput): DeepWriteRunRecord;
     insertCandidates(inputs: DeepWriteCandidateInput[]): DeepWriteCandidateRecord[];
@@ -71,6 +73,9 @@ export declare class DeepWriteCandidateStore {
         reviewAfter?: number | null;
         updatedAt?: number;
     }): void;
+    publishStagedCandidates(runId: string, candidateIds: string[], updatedAt: number): void;
+    updateRunStatus(runId: string, expected: DeepWriteRunStatus, next: DeepWriteRunStatus): void;
+    abandonStaleStagedRuns(before: number, updatedAt: number): number;
     updateCandidateReviewData(candidateId: string, input: {
         content: unknown;
         evidence: unknown;

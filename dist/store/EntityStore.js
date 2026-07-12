@@ -241,6 +241,10 @@ export class EntityStore {
         return row ? this.mapRow(row) : null;
     }
     findByEntityId(entityId) {
+        const row = this.db.prepare(`SELECT * FROM entity_instances WHERE instance_id = ?`).get(entityId);
+        return row ? this.mapRow(row) : null;
+    }
+    findActiveByEntityId(entityId) {
         const row = this.db.prepare(`
       SELECT * FROM entity_instances WHERE instance_id = ? AND status = 'active'
     `).get(entityId);
@@ -415,7 +419,7 @@ export class EntityStore {
       ) VALUES (?, ?, ?, ?, ?, ?)
     `).run(record.mentionId, record.entityId, record.neuronId || null, record.projectId || null, record.mentionType, record.createdAt);
         this.touchEntity(record.entityId, record.createdAt);
-        const entity = this.findByEntityId(record.entityId);
+        const entity = this.getByEntityId(record.entityId);
         if (entity) {
             for (const alias of [entity.canonicalName, ...(entity.aliases || [])]) {
                 this.refreshAliasConflict(this.normalizeAlias(alias), entity.type, record.createdAt);
@@ -666,7 +670,7 @@ export class EntityStore {
             this.db.close();
     }
     addAlias(entityId, alias, updatedAt = Date.now()) {
-        const entity = this.findByEntityId(entityId);
+        const entity = this.getByEntityId(entityId);
         if (!entity || !alias.trim())
             return;
         const aliases = Array.from(new Set([...entity.aliases, alias.trim()]));
@@ -675,7 +679,7 @@ export class EntityStore {
         this.upsertAliases(entityId, entity.type, [alias], updatedAt);
     }
     removeAlias(entityId, alias, updatedAt = Date.now()) {
-        const entity = this.findByEntityId(entityId);
+        const entity = this.getByEntityId(entityId);
         if (!entity || entity.canonicalName === alias)
             return;
         const normalized = this.normalizeAlias(alias);

@@ -410,7 +410,7 @@ export class BrainRecall {
       if (!edge.fromNodeId || !edge.toNodeId || edge.fromNodeId === edge.toNodeId) {
         return 'ambiguous_edge_payload';
       }
-      if (!this.deps.entityStore.findByEntityId(edge.fromNodeId) || !this.deps.entityStore.findByEntityId(edge.toNodeId)) {
+      if (!this.deps.entityStore.findActiveByEntityId(edge.fromNodeId) || !this.deps.entityStore.findActiveByEntityId(edge.toNodeId)) {
         return 'ambiguous_unknown_target_entity';
       }
 

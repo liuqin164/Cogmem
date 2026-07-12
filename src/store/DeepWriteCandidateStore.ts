@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import type Database from 'bun:sqlite';
 
-export type DeepWriteRunStatus = 'succeeded' | 'failed' | 'skipped';
+export type DeepWriteRunStatus = 'running' | 'staged' | 'succeeded' | 'failed' | 'skipped' | 'abandoned';
 export type DeepWriteCandidateStatus = 'staged' | 'shadow' | 'candidate' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
 
 export interface DeepWriteRunInput {
@@ -88,6 +88,22 @@ type CandidateRow = {
 export class DeepWriteCandidateStore {
   constructor(private readonly db: Database) {
     this.initSchema();
+  }
+
+  getDatabase(): Database {
+    return this.db;
+  }
+
+  countActivePromotions(targetType: string, targetId: string, excludingCandidateId?: string): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM deep_write_candidates
+      WHERE promotion_target_type = ?
+        AND promotion_target_id = ?
+        AND status IN ('staged', 'candidate', 'promoted', 'needs_confirmation')
+        AND (? IS NULL OR candidate_id <> ?)
+    `).get(targetType, targetId, excludingCandidateId || null, excludingCandidateId || null) as { count?: number } | null;
+    return Number(row?.count || 0);
   }
 
   initSchema(): void {
@@ -265,7 +281,7 @@ export class DeepWriteCandidateStore {
 
   listCandidates(options: DeepWriteCandidateListOptions = {}): DeepWriteCandidateRecord[] {
     const params: Array<string | number> = [];
-    const conditions: string[] = [];
+    const conditions: string[] = options.statuses?.includes('staged') ? [] : ["c.status <> 'staged'"];
     let sql = `
       SELECT c.*
       FROM deep_write_candidates c
@@ -302,7 +318,7 @@ export class DeepWriteCandidateStore {
 
   countCandidates(options: Omit<DeepWriteCandidateListOptions, 'limit'> = {}): number {
     const params: Array<string | number> = [];
-    const conditions: string[] = [];
+    const conditions: string[] = options.statuses?.includes('staged') ? [] : ["c.status <> 'staged'"];
     let sql = `
       SELECT COUNT(*) AS count
       FROM deep_write_candidates c
@@ -354,6 +370,42 @@ export class DeepWriteCandidateStore {
       promotionTarget?.updatedAt ?? Date.now(),
       candidateId
     );
+  }
+
+  publishStagedCandidates(runId: string, candidateIds: string[], updatedAt: number): void {
+    const statement = this.db.prepare(`UPDATE deep_write_candidates SET status = 'candidate', updated_at = ? WHERE candidate_id = ? AND run_id = ? AND status = 'staged'`);
+    for (const candidateId of candidateIds) {
+      if (Number(statement.run(updatedAt, candidateId, runId).changes || 0) !== 1) throw new Error(`staged_candidate_publish_conflict:${candidateId}`);
+    }
+  }
+
+  updateRunStatus(runId: string, expected: DeepWriteRunStatus, next: DeepWriteRunStatus): void {
+    const result = this.db.prepare(`UPDATE deep_write_runs SET status = ? WHERE run_id = ? AND status = ?`).run(next, runId, expected);
+    if (Number(result.changes || 0) !== 1) throw new Error(`dream_run_status_conflict:${runId}`);
+  }
+
+  abandonStaleStagedRuns(before: number, updatedAt: number): number {
+    const transaction = this.db.transaction(() => {
+      const candidates = this.db.prepare(`
+        SELECT DISTINCT run_id FROM deep_write_candidates
+        WHERE status = 'staged' AND created_at < ?
+      `).all(before) as Array<{ run_id: string }>;
+      let abandoned = 0;
+      for (const row of candidates) {
+        this.db.prepare(`
+          UPDATE deep_write_candidates
+          SET status = 'superseded', status_reason = 'staged_run_abandoned', updated_at = ?
+          WHERE run_id = ? AND status = 'staged'
+        `).run(updatedAt, row.run_id);
+        const result = this.db.prepare(`
+          UPDATE deep_write_runs SET status = 'abandoned', error = COALESCE(error, 'staged_run_abandoned')
+          WHERE run_id = ? AND status = 'staged'
+        `).run(row.run_id);
+        abandoned += Number(result.changes || 0);
+      }
+      return abandoned;
+    });
+    return transaction();
   }
 
   updateCandidateReviewData(candidateId: string, input: {

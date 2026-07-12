@@ -13,6 +13,8 @@ export class DreamScheduler {
         const requestedMode = options.mode ?? 'auto';
         const runId = `episode-dream-run-${randomUUID()}`;
         const graceMs = Math.max(0, options.softSealGraceMs ?? 5 * 60_000);
+        const leaseMs = Math.max(5_000, options.leaseMs ?? 5 * 60_000);
+        this.candidateStore?.abandonStaleStagedRuns(startedAt - leaseMs, startedAt);
         this.episodeStore.finalizeMatureSoftSeals({
             projectId: options.projectId,
             sealedBefore: startedAt - graceMs,
@@ -24,7 +26,7 @@ export class DreamScheduler {
             projectId: options.projectId,
             limit: maxEpisodes,
             now: startedAt,
-            leaseMs: Math.max(5_000, options.leaseMs ?? 5 * 60_000),
+            leaseMs,
             maxAttempts: Math.max(1, options.maxAttempts ?? 3),
             runId,
         });
@@ -73,10 +75,16 @@ export class DreamScheduler {
                 });
                 const ids = run.candidates.map((candidate) => candidate.candidateId);
                 try {
-                    this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt, () => {
-                        for (const candidateId of ids)
-                            this.candidateStore.updateCandidateStatus(candidateId, 'candidate', { updatedAt: startedAt });
-                    });
+                    const commitCandidates = run.runId
+                        ? () => {
+                            if (this.candidateStore.getDatabase() !== this.episodeStore.getDatabase()) {
+                                throw new Error('dream_stores_must_share_database');
+                            }
+                            this.candidateStore.publishStagedCandidates(run.runId, ids, startedAt);
+                            this.candidateStore.updateRunStatus(run.runId, 'staged', 'succeeded');
+                        }
+                        : undefined;
+                    this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt, commitCandidates);
                 }
                 catch (completionError) {
                     for (const candidateId of ids) {

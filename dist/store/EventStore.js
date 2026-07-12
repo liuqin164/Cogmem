@@ -268,8 +268,20 @@ export class EventStore {
     `).run(event.projectId, event.sourceId, anchor, event.eventId, event.contentHash, event.createdAt);
         const inserted = this.db.prepare(`SELECT event_id FROM import_source_anchors WHERE project_id = ? AND source_id = ? AND import_anchor = ?`)
             .get(event.projectId, event.sourceId, anchor);
-        if (inserted?.event_id !== event.eventId)
+        if (inserted?.event_id !== event.eventId) {
+            const existingEvent = inserted?.event_id
+                ? this.db.prepare(`SELECT 1 FROM memory_events WHERE event_id = ?`).get(inserted.event_id)
+                : null;
+            if (!existingEvent) {
+                this.db.prepare(`
+          UPDATE import_source_anchors
+          SET event_id = ?, content_hash = ?, created_at = ?
+          WHERE project_id = ? AND source_id = ? AND import_anchor = ?
+        `).run(event.eventId, event.contentHash, event.createdAt, event.projectId, event.sourceId, anchor);
+                return;
+            }
             throw new Error('import_anchor_already_exists');
+        }
     }
     getNextGlobalSeq() {
         const row = this.db.prepare(`
