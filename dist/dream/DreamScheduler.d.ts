@@ -12,6 +12,9 @@ export interface DreamTickOptions {
     leaseMs?: number;
     maxAttempts?: number;
     maintenanceReason?: 'daily' | 'upgrade_repair';
+    clock?: {
+        now(): number;
+    };
 }
 export interface DreamTickResult {
     runId: string;

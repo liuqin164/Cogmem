@@ -29,6 +29,9 @@ export interface DreamCuratorRunOptions {
   closureReason?: string;
   semanticSummary?: EpisodeSemanticSummary;
   episodeRelations?: Array<{ eventId: string; relation: string }>;
+  dreamJobLeaseId?: string;
+  leaseUntil?: number;
+  attemptGeneration?: number;
 }
 
 export interface DreamCuratorRunResult {
@@ -165,6 +168,10 @@ export class DreamCuratorWorker {
       })))),
       status: options.sourceEpisodeId ? 'staged' : 'succeeded',
       createdAt: now,
+      sourceEpisodeId: options.sourceEpisodeId,
+      dreamJobLeaseId: options.dreamJobLeaseId,
+      leaseUntil: options.leaseUntil,
+      attemptGeneration: options.attemptGeneration,
     });
     const inserted = this.deps.candidateStore.insertCandidates(
       candidateInputs.map((candidate) => ({

@@ -134,6 +134,9 @@ export class DeepWritePromotionPolicy {
     constructor(deps) {
         this.deps = deps;
     }
+    setRelationStore(store) {
+        this.deps.relationStore = store;
+    }
     promoteRun(runId) {
         const candidates = this.deps.candidateStore.listCandidatesByRun(runId);
         return candidates.map((candidate) => this.evaluateAndApply(candidate));

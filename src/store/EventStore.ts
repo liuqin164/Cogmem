@@ -343,7 +343,10 @@ export class EventStore {
       })();
       return event;
     } catch (error) {
-      if (!(error instanceof Error) || error.message !== 'import_anchor_already_exists') throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      const anchorConflict = message === 'import_anchor_already_exists'
+        || message.includes('UNIQUE constraint failed: memory_events.stream_id');
+      if (!anchorConflict) throw error;
       const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
       const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;
       const existing = anchor && event.projectId && event.sourceId

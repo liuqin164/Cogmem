@@ -16,6 +16,7 @@ export interface DreamTickOptions {
   leaseMs?: number;
   maxAttempts?: number;
   maintenanceReason?: 'daily' | 'upgrade_repair';
+  clock?: { now(): number };
 }
 
 export interface DreamTickResult {
@@ -43,7 +44,8 @@ export class DreamScheduler {
   ) {}
 
   async tick(options: DreamTickOptions = {}): Promise<DreamTickResult> {
-    const startedAt = options.now ?? Date.now();
+    const clock = options.clock ?? { now: () => Date.now() };
+    const startedAt = options.now ?? clock.now();
     const requestedMode = options.mode ?? 'auto';
     const runId = `episode-dream-run-${randomUUID()}`;
     const graceMs = Math.max(0, options.softSealGraceMs ?? 5 * 60_000);
@@ -107,6 +109,9 @@ export class DreamScheduler {
           episodeRelations: links.map((link) => ({ eventId: link.eventId, relation: link.relation })),
           limit: limits.eventLimit,
           now: startedAt,
+          dreamJobLeaseId: job.leaseId,
+          leaseUntil: job.leaseUntil,
+          attemptGeneration: job.attemptGeneration,
         });
         const ids = run.candidates.map((candidate) => candidate.candidateId);
         try {
@@ -119,9 +124,11 @@ export class DreamScheduler {
               this.candidateStore.updateRunStatus(run.runId!, 'staged', 'succeeded');
             }
             : undefined;
-          this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt, commitCandidates);
+          const completedAt = options.now === undefined ? clock.now() : options.now;
+          this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, completedAt, commitCandidates);
         } catch (completionError) {
-          if (run.runId) this.candidateStore.failStagedRun(run.runId, startedAt, 'dream_job_completion_failed');
+          const failedAt = options.now === undefined ? clock.now() : options.now;
+          if (run.runId) this.candidateStore.failStagedRun(run.runId, failedAt, 'dream_job_completion_failed');
           throw completionError;
         }
         episodeIds.push(job.episodeId);
@@ -129,7 +136,8 @@ export class DreamScheduler {
       } catch (error) {
         failures += 1;
         const message = error instanceof Error ? error.message : String(error);
-        const failure = classifyFailure(message, job.attempts, startedAt);
+        const failureNow = options.now === undefined ? clock.now() : options.now;
+        const failure = classifyFailure(message, job.attempts, failureNow);
         this.episodeStore.failDreamJob(job.episodeId, job.leaseId, message, failure);
         failedEpisodes.push({ episodeId: job.episodeId, error: message, failureCategory: failure.failureCategory, retryAfter: failure.retryAfter });
       }

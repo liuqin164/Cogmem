@@ -26,6 +26,9 @@ export interface DreamCuratorRunOptions {
         eventId: string;
         relation: string;
     }>;
+    dreamJobLeaseId?: string;
+    leaseUntil?: number;
+    attemptGeneration?: number;
 }
 export interface DreamCuratorRunResult {
     runId?: string;

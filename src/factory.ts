@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
+import type { GraphEdgeStoreLike } from './types/ExtensionPoints.js';
 
 import { BeliefStore } from './belief/BeliefStore.js';
 import { BeliefGovernanceService } from './belief/BeliefGovernanceService.js';
@@ -1932,15 +1933,15 @@ export class MemoryKernel {
         this.entityStore.archiveEntity(targetId, now);
       }
     } else if (candidate.promotionTargetType === 'graph_edge') {
-      const relationStore = this.extensions.get('relationStore') as {
-        invalidateEdge?: (id: string, metadata?: Record<string, unknown>) => boolean | void;
-      } | undefined;
-      if (!relationStore?.invalidateEdge) throw new Error(`graph_edge_invalidation_failed:${targetId}`);
+      const relationStore = this.extensions.get('relationStore') as GraphEdgeStoreLike | undefined;
+      if (!relationStore || relationStore.getDatabase() !== this.episodeStore.getDatabase()) {
+        throw new Error(`graph_edge_invalidation_failed:${targetId}`);
+      }
       const invalidated = relationStore.invalidateEdge(targetId, {
         repairInvalidatedAt: now,
         sourceCandidateId: candidate.candidateId,
       });
-      if (invalidated === false) throw new Error(`graph_edge_invalidation_failed:${targetId}`);
+      if (invalidated !== true) throw new Error(`graph_edge_invalidation_failed:${targetId}`);
     }
   }
 
@@ -2726,6 +2727,11 @@ export class MemoryKernel {
 
   registerExtension(name: string, implementation: unknown): void {
     this.extensions.set(name, implementation);
+    if (name === 'relationStore') {
+      const store = implementation as GraphEdgeStoreLike;
+      if (store.getDatabase() !== this.episodeStore.getDatabase()) throw new Error('relation_store_database_mismatch');
+      this.deepWritePromotionPolicy.setRelationStore(store);
+    }
   }
 
   hasExtension(name: string): boolean {

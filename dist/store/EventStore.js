@@ -242,7 +242,10 @@ export class EventStore {
             return event;
         }
         catch (error) {
-            if (!(error instanceof Error) || error.message !== 'import_anchor_already_exists')
+            const message = error instanceof Error ? error.message : String(error);
+            const anchorConflict = message === 'import_anchor_already_exists'
+                || message.includes('UNIQUE constraint failed: memory_events.stream_id');
+            if (!anchorConflict)
                 throw error;
             const metadata = event.payload?.metadata;
             const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;

@@ -188,6 +188,10 @@ function sourceNeuronIds(candidate: DeepWriteCandidateRecord): string[] {
 export class DeepWritePromotionPolicy {
   constructor(private readonly deps: DeepWritePromotionPolicyDeps) {}
 
+  setRelationStore(store: GraphEdgeStoreLike): void {
+    this.deps.relationStore = store;
+  }
+
   promoteRun(runId: string): DeepWritePromotionDecision[] {
     const candidates = this.deps.candidateStore.listCandidatesByRun(runId);
     return candidates.map((candidate) => this.evaluateAndApply(candidate));

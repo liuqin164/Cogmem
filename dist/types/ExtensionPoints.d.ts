@@ -106,9 +106,10 @@ export interface GraphEdgeRecordLike {
     status?: string;
 }
 export interface GraphEdgeStoreLike {
+    getDatabase(): import('bun:sqlite').default;
     list?(options?: unknown): GraphEdgeRecordLike[];
     listActiveNeighborEdges?(entityIds: string[], edgeTypes?: string[], limit?: number): GraphEdgeRecordLike[];
-    appendEdge?(input: unknown): GraphEdgeRecordLike;
+    appendEdge(input: unknown): GraphEdgeRecordLike;
     invalidateEdge(edgeRecordId: string, metadata?: Record<string, unknown>): boolean;
 }
 export interface ProposalLedgerLike {

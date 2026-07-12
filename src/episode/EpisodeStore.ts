@@ -46,6 +46,8 @@ export interface ClaimedEpisodeDreamJob {
   modeHint: 'micro' | 'normal' | 'deep';
   attempts: number;
   createdAt: number;
+  leaseUntil: number;
+  attemptGeneration: number;
 }
 
 export interface EpisodeBoundaryDecisionRecord {
@@ -711,6 +713,7 @@ export class EpisodeStore {
         claimed.push({
           episodeId: row.episode_id, projectId: row.project_id, leaseId, modeHint: row.mode_hint,
           attempts: row.attempts + 1, createdAt: row.created_at,
+          leaseUntil: input.now + input.leaseMs, attemptGeneration: row.attempts + 1,
         });
       }
     }

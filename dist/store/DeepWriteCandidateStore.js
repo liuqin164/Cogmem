@@ -33,7 +33,12 @@ export class DeepWriteCandidateStore {
         output_hash TEXT NOT NULL,
         status TEXT NOT NULL,
         error TEXT,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        source_episode_id TEXT,
+        dream_job_lease_id TEXT,
+        lease_until INTEGER,
+        attempt_generation INTEGER,
+        updated_at INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS deep_write_candidates (
@@ -66,6 +71,11 @@ export class DeepWriteCandidateStore {
         this.ensureColumn('deep_write_candidates', 'publish_status', 'TEXT');
         this.ensureColumn('deep_write_candidates', 'review_after', 'INTEGER');
         this.ensureColumn('deep_write_candidates', 'updated_at', 'INTEGER');
+        this.ensureColumn('deep_write_runs', 'source_episode_id', 'TEXT');
+        this.ensureColumn('deep_write_runs', 'dream_job_lease_id', 'TEXT');
+        this.ensureColumn('deep_write_runs', 'lease_until', 'INTEGER');
+        this.ensureColumn('deep_write_runs', 'attempt_generation', 'INTEGER');
+        this.ensureColumn('deep_write_runs', 'updated_at', 'INTEGER');
         this.db.exec(`
       UPDATE deep_write_candidates
       SET updated_at = created_at
@@ -82,8 +92,9 @@ export class DeepWriteCandidateStore {
       INSERT INTO deep_write_runs (
         run_id, project_id, session_id, source_neuron_ids_json, model_provider,
         model_name, mode, prompt_hash, output_hash, status, error, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(record.runId, record.projectId || null, record.sessionId || null, JSON.stringify(record.sourceNeuronIds), record.modelProvider || null, record.modelName || null, record.mode, record.promptHash, record.outputHash, record.status, record.error || null, record.createdAt);
+        , source_episode_id, dream_job_lease_id, lease_until, attempt_generation, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(record.runId, record.projectId || null, record.sessionId || null, JSON.stringify(record.sourceNeuronIds), record.modelProvider || null, record.modelName || null, record.mode, record.promptHash, record.outputHash, record.status, record.error || null, record.createdAt, record.sourceEpisodeId || null, record.dreamJobLeaseId || null, record.leaseUntil ?? null, record.attemptGeneration ?? null, record.updatedAt ?? record.createdAt);
         return record;
     }
     insertCandidates(inputs) {
@@ -239,7 +250,7 @@ export class DeepWriteCandidateStore {
     }
     failStagedRun(runId, now, reason) {
         this.db.transaction(() => {
-            this.db.prepare(`UPDATE deep_write_candidates SET status = 'superseded', status_reason = ?, updated_at = ? WHERE run_id = ? AND status = 'staged'`).run(reason, now, runId);
+            this.db.prepare(`UPDATE deep_write_candidates SET status = 'superseded', status_reason = ?, updated_at = ? WHERE run_id = ? AND status IN ('staged', 'shadow')`).run(reason, now, runId);
             this.db.prepare(`UPDATE deep_write_runs SET status = 'failed', error = ? WHERE run_id = ? AND status = 'staged'`).run(reason, runId);
         })();
     }
@@ -251,16 +262,25 @@ export class DeepWriteCandidateStore {
     abandonStaleStagedRuns(before, updatedAt, projectId) {
         const transaction = this.db.transaction(() => {
             const candidates = this.db.prepare(`
-        SELECT run_id FROM deep_write_runs
-        WHERE status = 'staged' AND created_at < ?
-          AND (? IS NULL OR project_id = ?)
-      `).all(before, projectId || null, projectId || null);
+        SELECT r.run_id
+        FROM deep_write_runs r
+        LEFT JOIN episode_dream_jobs j ON j.episode_id = r.source_episode_id
+        WHERE r.status = 'staged' AND r.created_at < ?
+          AND (? IS NULL OR r.project_id = ?)
+          AND (
+            j.episode_id IS NULL
+            OR j.state <> 'processing'
+            OR j.lease_id <> r.dream_job_lease_id
+            OR j.lease_until IS NULL
+            OR j.lease_until < ?
+          )
+      `).all(before, projectId || null, projectId || null, updatedAt);
             let abandoned = 0;
             for (const row of candidates) {
                 this.db.prepare(`
           UPDATE deep_write_candidates
           SET status = 'superseded', status_reason = 'staged_run_abandoned', updated_at = ?
-          WHERE run_id = ? AND status = 'staged'
+          WHERE run_id = ? AND status IN ('staged', 'shadow')
         `).run(updatedAt, row.run_id);
                 const result = this.db.prepare(`
           UPDATE deep_write_runs SET status = 'abandoned', error = COALESCE(error, 'staged_run_abandoned')
@@ -326,6 +346,11 @@ export class DeepWriteCandidateStore {
             outputHash: row.output_hash,
             status: row.status,
             error: row.error || undefined,
+            sourceEpisodeId: row.source_episode_id || undefined,
+            dreamJobLeaseId: row.dream_job_lease_id || undefined,
+            leaseUntil: row.lease_until ?? undefined,
+            attemptGeneration: row.attempt_generation ?? undefined,
+            updatedAt: row.updated_at ?? row.created_at,
             createdAt: row.created_at
         };
     }

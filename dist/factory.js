@@ -1341,13 +1341,14 @@ export class MemoryKernel {
         }
         else if (candidate.promotionTargetType === 'graph_edge') {
             const relationStore = this.extensions.get('relationStore');
-            if (!relationStore?.invalidateEdge)
+            if (!relationStore || relationStore.getDatabase() !== this.episodeStore.getDatabase()) {
                 throw new Error(`graph_edge_invalidation_failed:${targetId}`);
+            }
             const invalidated = relationStore.invalidateEdge(targetId, {
                 repairInvalidatedAt: now,
                 sourceCandidateId: candidate.candidateId,
             });
-            if (invalidated === false)
+            if (invalidated !== true)
                 throw new Error(`graph_edge_invalidation_failed:${targetId}`);
         }
     }
@@ -2085,6 +2086,12 @@ export class MemoryKernel {
     }
     registerExtension(name, implementation) {
         this.extensions.set(name, implementation);
+        if (name === 'relationStore') {
+            const store = implementation;
+            if (store.getDatabase() !== this.episodeStore.getDatabase())
+                throw new Error('relation_store_database_mismatch');
+            this.deepWritePromotionPolicy.setRelationStore(store);
+        }
     }
     hasExtension(name) {
         return this.extensions.has(name);

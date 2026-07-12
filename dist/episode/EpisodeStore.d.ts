@@ -27,6 +27,8 @@ export interface ClaimedEpisodeDreamJob {
     modeHint: 'micro' | 'normal' | 'deep';
     attempts: number;
     createdAt: number;
+    leaseUntil: number;
+    attemptGeneration: number;
 }
 export interface EpisodeBoundaryDecisionRecord {
     decisionId: string;

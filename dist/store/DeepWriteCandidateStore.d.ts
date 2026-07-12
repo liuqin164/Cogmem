@@ -14,6 +14,11 @@ export interface DeepWriteRunInput {
     status: DeepWriteRunStatus;
     error?: string;
     createdAt?: number;
+    sourceEpisodeId?: string;
+    dreamJobLeaseId?: string;
+    leaseUntil?: number;
+    attemptGeneration?: number;
+    updatedAt?: number;
 }
 export interface DeepWriteCandidateInput {
     candidateId?: string;
