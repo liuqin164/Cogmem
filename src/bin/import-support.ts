@@ -447,22 +447,25 @@ async function recordRawImportedEvidence(
   const threadId = sourceRef?.threadId || stringRecordField(metadata.threadId) || record.provenance.sourceId;
   const sessionId = sourceRef?.sessionId || stringRecordField(metadata.sessionId) || record.provenance.sourceId;
   const eventOrdinal = sourceRef?.eventOrdinal ?? sourceRef?.sourceOffset;
-  const importAnchor = [
-    record.provenance.sourceId,
-    record.recordId,
-    sourceRef?.sourcePath,
-    sourceRef?.lineStart,
-    sourceRef?.lineEnd,
-    eventOrdinal,
-  ].filter((item) => item !== undefined && item !== null && String(item).length > 0).join(':');
+  const allowNonUserEpisodeStart = metadata.importedSummarySupport === true || record.provenance.reliabilityClass === 'imported_summary';
+  const importAnchor = createHash('sha256').update(JSON.stringify({
+    sourceId: record.provenance.sourceId,
+    recordId: record.recordId ?? null,
+    sourcePath: sourceRef?.sourcePath ?? null,
+    lineStart: sourceRef?.lineStart ?? null,
+    lineEnd: sourceRef?.lineEnd ?? null,
+    eventOrdinal: eventOrdinal ?? null,
+  })).digest('hex');
+  const contentHash = createHash('sha256').update(record.text).digest('hex');
   const existing = findImportedRawAnchor(kernel, {
     projectId,
     threadId,
     sourceId: record.provenance.sourceId,
     importAnchor,
-    contentHash: createHash('sha256').update(record.text).digest('hex'),
+    contentHash,
   });
   if (existing) {
+    if (existing.contentHash !== contentHash) throw new Error(`import_anchor_content_conflict:${importAnchor}`);
     let link = kernel.episodeStore.getEventLink(existing.eventId);
     if (!link && !kernel.episodeStore.hasEventDisposition(existing.eventId)) {
       await kernel.assembleEpisodeTurnAsync([existing], {
@@ -470,6 +473,7 @@ async function recordRawImportedEvidence(
         sessionId,
         sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
         now: record.timestamp,
+        allowNonUserEpisodeStart,
       });
       link = kernel.episodeStore.getEventLink(existing.eventId);
     }
@@ -483,6 +487,8 @@ async function recordRawImportedEvidence(
     sessionId,
     turnId: sourceRef?.turnId || record.turnId || record.recordId,
     turnSeq: sourceRef?.turnSeq,
+    localDate: localDateFromTimestamp(record.timestamp),
+    localDateSource: 'generated_utc',
     role,
     rawEventType: 'message',
     content: record.text,
@@ -512,6 +518,7 @@ async function recordRawImportedEvidence(
     sessionId,
     sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
     now: record.timestamp,
+    allowNonUserEpisodeStart,
   });
   return { event, created: true, episodeId: assembly.episode?.episodeId };
 }
@@ -523,18 +530,26 @@ function findImportedRawAnchor(
     threadId: string;
     sourceId: string;
     importAnchor: string;
-    contentHash: string;
+    contentHash?: string;
   },
 ): ReturnType<MemoryKernel['recordRawEvent']> | undefined {
-  return kernel.getThreadEvents(input.threadId, { projectId: input.projectId }).find((event) => {
+  const indexed = kernel.eventStore.findImportedEventAnchor(input.projectId, input.sourceId, input.importAnchor);
+  if (indexed) return indexed as ReturnType<MemoryKernel['recordRawEvent']>;
+  return kernel.getThreadEvents(input.threadId, { projectId: input.projectId, limit: 10_000 }).find((event) => {
     const payload = event.payload as { metadata?: Record<string, unknown> };
     return event.sourceId === input.sourceId
-      && (payload.metadata?.importAnchor === input.importAnchor || event.contentHash === input.contentHash);
+      && payload.metadata?.importAnchor === input.importAnchor;
   }) as ReturnType<MemoryKernel['recordRawEvent']> | undefined;
 }
 
 function stringRecordField(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function localDateFromTimestamp(timestamp: number | undefined): string | undefined {
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) return undefined;
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString().slice(0, 10);
 }
 
 function openKernel(args: ParsedArgs, workspaceRoot: string): { kernel: MemoryKernel; dbPath: string } {

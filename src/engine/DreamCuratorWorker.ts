@@ -29,6 +29,9 @@ export interface DreamCuratorRunOptions {
   closureReason?: string;
   semanticSummary?: EpisodeSemanticSummary;
   episodeRelations?: Array<{ eventId: string; relation: string }>;
+  dreamJobLeaseId?: string;
+  leaseUntil?: number;
+  attemptGeneration?: number;
 }
 
 export interface DreamCuratorRunResult {
@@ -163,11 +166,23 @@ export class DreamCuratorWorker {
         content: candidate.content,
         evidence: candidate.evidence,
       })))),
-      status: 'succeeded',
+      status: options.sourceEpisodeId ? 'staged' : 'succeeded',
       createdAt: now,
+      sourceEpisodeId: options.sourceEpisodeId,
+      dreamJobLeaseId: options.dreamJobLeaseId,
+      leaseUntil: options.leaseUntil,
+      attemptGeneration: options.attemptGeneration,
     });
     const inserted = this.deps.candidateStore.insertCandidates(
-      candidateInputs.map((candidate) => ({ ...candidate, runId: run.runId, createdAt: now }))
+      candidateInputs.map((candidate) => ({
+        ...candidate,
+        status: options.sourceEpisodeId && candidate.status !== 'shadow' ? 'staged' : candidate.status,
+        publishStatus: options.sourceEpisodeId && candidate.status !== 'shadow'
+          ? candidate.status as Exclude<typeof candidate.status, 'staged'>
+          : undefined,
+        runId: run.runId,
+        createdAt: now,
+      }))
     );
     const status = explicitEpisodeRun
       ? before
@@ -182,7 +197,10 @@ export class DreamCuratorWorker {
       candidateCount: inserted.length,
       maxGlobalSeq,
       status,
-      candidates: inserted,
+      candidates: inserted.map((candidate, index) => ({
+        ...candidate,
+        status: candidateInputs[index]?.status ?? candidate.status,
+      })),
     };
   }
 

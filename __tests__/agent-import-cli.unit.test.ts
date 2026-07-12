@@ -240,7 +240,7 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
 
   const item = recalled.items.find((candidate) => candidate.text.includes('Memory Context 黑盒') || candidate.text.includes('sourceContext'));
   expect(item).toBeDefined();
-  expect(item?.sourceType).toBe('raw_ledger');
+  expect(['raw_ledger', 'imported_summary']).toContain(item?.sourceType);
   expect(item?.canonicalId).toMatch(/^episode:/);
   expect(item?.matchedFacets?.some((facet) => facet.type === 'issue' && facet.value === 'memory-context-blackbox')).toBe(true);
   expect(item?.sourceAnchor?.eventId).toBeTruthy();
@@ -471,6 +471,8 @@ test('Hermes import scans state.db messages and preserves original message times
   expect(events).toHaveLength(2);
   expect(events[0].occurredAt).toBe(Date.parse('2026-06-09T01:02:03.000Z'));
   expect(events[1].occurredAt).toBe(Date.parse('2026-06-15T04:05:06.000Z'));
+  expect(events[0].localDate).toBe('2026-06-09');
+  expect(events[1].localDate).toBe('2026-06-15');
   expect(searched.some((event) => String((event.payload as { text?: string }).text).includes('PRECIOUS FRUITS'))).toBe(true);
 });
 

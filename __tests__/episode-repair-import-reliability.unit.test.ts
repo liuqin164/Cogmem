@@ -11,6 +11,7 @@ import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
 import { migration_0022 } from '../src/migrations/0022_episode_dream_engine.js';
 import { migration_0023 } from '../src/migrations/0023_episode_dream_hardening.js';
 import { migration_0024 } from '../src/migrations/0024_episode_ontology_reliability.js';
+import { migration_0028 } from '../src/migrations/0028_episode_boundary_guardrails.js';
 
 function createTestKernel(prefix: string) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -70,10 +71,11 @@ test('auto Dream mode is selected per job and failure details are returned and p
   const db = new Database(':memory:');
   const store = new EpisodeStore(db);
   const modes: string[] = [];
+  let failingEpisodeId: string | undefined;
   const scheduler = new DreamScheduler(store, {
     run: async (options: { dreamMode: string; sourceEpisodeId: string }) => {
       modes.push(options.dreamMode);
-      if (options.sourceEpisodeId.endsWith('fail')) throw new Error('provider_timeout');
+      if (options.sourceEpisodeId === failingEpisodeId) throw new Error('provider_timeout');
       return { candidates: [] };
     },
   } as never);
@@ -86,10 +88,7 @@ test('auto Dream mode is selected per job and failure details are returned and p
     };
     create('micro', 0.9, 'decision');
     const fail = create('normal', 0.5, 'discussion');
-    db.prepare(`UPDATE memory_episodes SET episode_id = ? WHERE episode_id = ?`).run(`${fail.episodeId}-fail`, fail.episodeId);
-    db.prepare(`UPDATE memory_episode_events SET episode_id = ? WHERE episode_id = ?`).run(`${fail.episodeId}-fail`, fail.episodeId);
-    db.prepare(`UPDATE episode_dream_jobs SET episode_id = ? WHERE episode_id = ?`).run(`${fail.episodeId}-fail`, fail.episodeId);
-    db.prepare(`UPDATE episode_closure_receipts SET episode_id = ? WHERE episode_id = ?`).run(`${fail.episodeId}-fail`, fail.episodeId);
+    failingEpisodeId = fail.episodeId;
 
     const result = await scheduler.tick({ projectId: 'brain', mode: 'auto', now: 100 });
     expect(modes.sort()).toEqual(['micro', 'normal']);
@@ -137,6 +136,31 @@ test('MCP import reports per-message checkpoints and warns for generated split-b
       processedCount: 2,
       messageResults: [expect.objectContaining({ index: 0, processed: true }), expect.objectContaining({ index: 1, processed: true })],
       warnings: ['auto_identity_not_safe_across_split_batches'],
+    }));
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('MCP generic import preserves turn and local date metadata', async () => {
+  const { dir, kernel } = createTestKernel('cogmem-mcp-import-turn-metadata-');
+  try {
+    const result = await callCogmemMcpTool('cogmem_episode_import', {
+      projectId: 'brain', sessionId: 's1', sourceAgent: 'hermes',
+      messages: [{
+        role: 'user', text: 'turn metadata survives import', externalMessageId: 'meta-1',
+        threadId: 'thread-7', turnId: 'turn-7', turnSeq: 7, localDate: '2026-07-06', eventOrdinal: 2,
+      }],
+    }, { kernel });
+    const content = result.structuredContent as { messageResults: Array<{ eventId: string }> };
+    const event = kernel.eventStore.getEvent(content.messageResults[0].eventId);
+    expect(event).toEqual(expect.objectContaining({
+      threadId: 'thread-7',
+      turnId: 'turn-7',
+      turnSeq: 7,
+      localDate: '2026-07-06',
+      eventOrdinal: 2,
     }));
   } finally {
     kernel.close();
@@ -194,6 +218,14 @@ test('episode split recomputes closure receipts, invalidates candidates, requeue
       projectId: 'brain', sessionId: 'repair-session', sourceAgent: 'hermes', role: 'assistant',
       text: '已记录这个偏好。', externalMessageId: 'repair-2',
     });
+    const third = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'repair-session', sourceAgent: 'hermes', role: 'user',
+      text: '继续这个偏好。', externalMessageId: 'repair-3',
+    });
+    const fourth = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'repair-session', sourceAgent: 'hermes', role: 'assistant',
+      text: '已记录第二个 turn。', externalMessageId: 'repair-4',
+    });
     expect(second.episodeId).toBe(first.episodeId);
     kernel.sealEpisode(first.episodeId!, { mode: 'manual', reason: 'test_before_repair', now: 10 });
     const run = kernel.deepWriteCandidateStore.insertRun({
@@ -205,15 +237,15 @@ test('episode split recomputes closure receipts, invalidates candidates, requeue
     }])[0];
 
     const repaired = kernel.repairEpisode({
-      operation: 'split', projectId: 'brain', episodeId: first.episodeId!, eventIds: [second.eventId], now: 20,
+      operation: 'split', projectId: 'brain', episodeId: first.episodeId!, eventIds: [third.eventId, fourth.eventId], now: 20,
     });
 
     expect(repaired.staleCandidateIds).toEqual([candidate.candidateId]);
     expect(repaired.affectedEpisodeIds).toHaveLength(2);
     for (const episodeId of repaired.affectedEpisodeIds) {
-      expect(kernel.getEpisode(episodeId)).toEqual(expect.objectContaining({ eventCount: 1, status: 'sealed', dreamStatus: 'queued' }));
+      expect(kernel.getEpisode(episodeId)).toEqual(expect.objectContaining({ eventCount: 2, status: 'sealed', dreamStatus: 'queued' }));
       expect(kernel.listEpisodeClosureReceipts({ episodeId, limit: 1 })[0]).toEqual(expect.objectContaining({
-        closureReasonCode: 'repair', sourceEventIds: [expect.any(String)], dreamRecommended: true,
+        closureReasonCode: 'repair', sourceEventIds: [expect.any(String), expect.any(String)], dreamRecommended: true,
       }));
     }
     expect(kernel.listDreamCandidates({ projectId: 'brain', statuses: ['superseded'] })).toEqual([
@@ -228,19 +260,54 @@ test('episode split recomputes closure receipts, invalidates candidates, requeue
   }
 });
 
-test('EpisodeStore test bootstrap stays column-compatible with migrations 22 through 24', () => {
+test('episode split rejects open and soft-sealed source episodes', () => {
+  const { dir, kernel } = createTestKernel('cogmem-episode-active-split-repair-');
+  try {
+    const open = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'active-split-open', sourceAgent: 'hermes',
+      role: 'user', text: 'open source', externalMessageId: 'aso-1',
+    });
+    const openTail = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'active-split-open', sourceAgent: 'hermes',
+      role: 'assistant', text: 'open tail', externalMessageId: 'aso-2',
+    });
+    expect(() => kernel.repairEpisode({
+      operation: 'split', projectId: 'brain', episodeId: open.episodeId!, eventIds: [openTail.eventId],
+    })).toThrow('episode_split_requires_sealed_source');
+
+    const soft = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'active-split-soft', sourceAgent: 'hermes',
+      role: 'user', text: 'soft source', externalMessageId: 'ass-1',
+    });
+    const softTail = kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'active-split-soft', sourceAgent: 'hermes',
+      role: 'assistant', text: 'soft tail', externalMessageId: 'ass-2',
+    });
+    kernel.sealEpisode(soft.episodeId!, { mode: 'soft', reason: 'test_soft', now: 10 });
+    expect(() => kernel.repairEpisode({
+      operation: 'split', projectId: 'brain', episodeId: soft.episodeId!, eventIds: [softTail.eventId],
+    })).toThrow('episode_split_requires_sealed_source');
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('EpisodeStore test bootstrap stays column-compatible with migrations 22 through 28', () => {
   const migrated = new Database(':memory:');
   const bootstrapped = new Database(':memory:');
   try {
     migration_0022.up(migrated);
     migration_0023.up(migrated);
     migration_0024.up(migrated);
+    migration_0028.up(migrated);
     new EpisodeStore(bootstrapped);
     const columns = (db: Database, table: string) => (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
       .map((item) => item.name).sort();
     for (const table of [
       'memory_episodes', 'memory_episode_events', 'episode_closure_receipts', 'episode_dream_jobs',
       'episode_dream_runs', 'episode_ingest_keys', 'episode_event_dispositions', 'episode_cross_refs', 'episode_repair_audit',
+      'episode_boundary_decisions',
     ]) {
       expect(columns(bootstrapped, table), table).toEqual(columns(migrated, table));
     }

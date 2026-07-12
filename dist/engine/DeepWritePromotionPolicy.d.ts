@@ -30,8 +30,10 @@ export interface DeepWriteEvaluationOptions {
 export declare class DeepWritePromotionPolicy {
     private readonly deps;
     constructor(deps: DeepWritePromotionPolicyDeps);
+    setRelationStore(store: GraphEdgeStoreLike): void;
     promoteRun(runId: string): DeepWritePromotionDecision[];
     promotePending(limit?: number, options?: DeepWritePromotionOptions): DeepWritePromotionDecision[];
+    private atomicEvaluate;
     evaluateAndApply(candidate: DeepWriteCandidateRecord, options?: DeepWriteEvaluationOptions): DeepWritePromotionDecision;
     private promoteOrganizationCandidate;
     private promoteFact;

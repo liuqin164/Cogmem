@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'crypto';
 const MEMORY_EVENT_COLUMNS = `
   event_id, global_seq, stream_id, stream_type, event_type, raw_event_type, event_version, project_id,
   workspace_id, actor_id, causation_id, correlation_id, source_neuron_id, source_id,
-  content_hash, thread_id, session_id, local_date, thread_seq, turn_id, turn_seq,
+  content_hash, thread_id, session_id, local_date, local_date_source, thread_seq, turn_id, turn_seq,
   event_ordinal, role, parent_event_id, prev_event_id, next_event_id, causality_type,
   source_offset, line_start, line_end, char_start, char_end, ordering_confidence,
   occurred_at, payload_json, payload_hash, created_at
@@ -11,9 +11,16 @@ const MEMORY_EVENT_COLUMNS = `
 export class EventStore {
     encryptionProvider;
     db;
+    ownsDb = true;
     constructor(dbPath = ':memory:', encryptionProvider) {
         this.encryptionProvider = encryptionProvider;
-        this.db = new Database(dbPath);
+        if (dbPath instanceof Database) {
+            this.db = dbPath;
+            this.ownsDb = false;
+        }
+        else {
+            this.db = new Database(dbPath);
+        }
         this.initializeSchema();
     }
     initializeSchema() {
@@ -37,6 +44,7 @@ export class EventStore {
         thread_id TEXT,
         session_id TEXT,
         local_date TEXT,
+        local_date_source TEXT NOT NULL DEFAULT 'legacy_unknown',
         thread_seq INTEGER,
         turn_id TEXT,
         turn_seq INTEGER,
@@ -115,6 +123,7 @@ export class EventStore {
         addColumn('thread_id', 'thread_id TEXT');
         addColumn('session_id', 'session_id TEXT');
         addColumn('local_date', 'local_date TEXT');
+        addColumn('local_date_source', "local_date_source TEXT NOT NULL DEFAULT 'legacy_unknown'");
         addColumn('thread_seq', 'thread_seq INTEGER');
         addColumn('turn_id', 'turn_id TEXT');
         addColumn('turn_seq', 'turn_seq INTEGER');
@@ -134,6 +143,17 @@ export class EventStore {
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_events_thread_order ON memory_events(thread_id, thread_seq, event_ordinal, global_seq);`);
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_events_parent ON memory_events(parent_event_id);`);
         this.db.exec(`
+      CREATE TABLE IF NOT EXISTS import_source_anchors (
+        project_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        import_anchor TEXT NOT NULL,
+        event_id TEXT NOT NULL UNIQUE,
+        content_hash TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (project_id, source_id, import_anchor)
+      );
+    `);
+        this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_events_fts USING fts5(
         event_id UNINDEXED,
         text,
@@ -149,9 +169,11 @@ export class EventStore {
     `);
         this.rebuildRawEventFtsIfNeeded();
     }
-    append(input) {
+    append(input, retry = 0) {
         const eventVersion = input.eventVersion ?? this.getNextEventVersion(input.streamId);
         const occurredAt = input.occurredAt ?? Date.now();
+        if (!Number.isFinite(occurredAt) || Math.abs(occurredAt) > 8_640_000_000_000_000)
+            throw new Error('invalid_event_timestamp');
         const payloadJson = JSON.stringify(input.payload);
         const storedPayloadJson = this.encodePayload(payloadJson);
         const payloadHash = createHash('sha256').update(payloadJson).digest('hex');
@@ -159,6 +181,14 @@ export class EventStore {
         const threadSeq = input.threadSeq ?? (threadId ? this.getNextThreadSeq(threadId) : undefined);
         const globalSeq = this.getNextGlobalSeq();
         const createdAt = Date.now();
+        const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : 'generated_utc');
+        if (localDateSource !== 'explicit' && localDateSource !== 'generated_utc' && localDateSource !== 'legacy_unknown')
+            throw new Error('invalid_local_date_source');
+        if (localDateSource === 'explicit' && !input.localDate)
+            throw new Error('explicit_local_date_required');
+        const generatedUtcDate = new Date(occurredAt).toISOString().slice(0, 10);
+        if (localDateSource === 'generated_utc' && input.localDate && input.localDate !== generatedUtcDate)
+            throw new Error('generated_utc_local_date_mismatch');
         const event = {
             eventId: input.eventId || `evt-${randomUUID()}`,
             globalSeq,
@@ -178,6 +208,7 @@ export class EventStore {
             threadId,
             sessionId: input.sessionId,
             localDate: input.localDate ?? new Date(occurredAt).toISOString().slice(0, 10),
+            localDateSource,
             threadSeq,
             turnId: input.turnId,
             turnSeq: input.turnSeq,
@@ -192,25 +223,80 @@ export class EventStore {
             lineEnd: input.lineEnd,
             charStart: input.charStart,
             charEnd: input.charEnd,
-            orderingConfidence: input.orderingConfidence ?? (threadSeq || input.eventOrdinal ? 'high' : 'low'),
+            orderingConfidence: input.orderingConfidence ?? (threadSeq !== undefined || input.eventOrdinal !== undefined || input.sourceOffset !== undefined || input.lineStart !== undefined ? 'high' : 'low'),
             occurredAt,
             payload: input.payload,
             payloadHash,
             createdAt,
             ingestedAt: createdAt
         };
-        this.db.prepare(`
+        const insert = () => this.db.prepare(`
       INSERT INTO memory_events (
         event_id, global_seq, stream_id, stream_type, event_type, raw_event_type, event_version, project_id,
         workspace_id, actor_id, causation_id, correlation_id, source_neuron_id, source_id,
-        content_hash, thread_id, session_id, local_date, thread_seq, turn_id, turn_seq,
+        content_hash, thread_id, session_id, local_date, local_date_source, thread_seq, turn_id, turn_seq,
         event_ordinal, role, parent_event_id, prev_event_id, next_event_id, causality_type,
         source_offset, line_start, line_end, char_start, char_end, ordering_confidence,
         occurred_at, payload_json, payload_hash, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(event.eventId, event.globalSeq ?? null, event.streamId, event.streamType, event.eventType, event.rawEventType || null, event.eventVersion, event.projectId || null, event.workspaceId || null, event.actorId || null, event.causationId || null, event.correlationId || null, event.sourceNeuronId || null, event.sourceId || null, event.contentHash || null, event.threadId || null, event.sessionId || null, event.localDate || null, event.threadSeq || null, event.turnId || null, event.turnSeq || null, event.eventOrdinal || null, event.role || null, event.parentEventId || null, event.prevEventId || null, event.nextEventId || null, event.causalityType || null, event.sourceOffset || null, event.lineStart || null, event.lineEnd || null, event.charStart || null, event.charEnd || null, event.orderingConfidence || null, event.occurredAt, storedPayloadJson, event.payloadHash, event.createdAt);
-        this.upsertRawEventFts(event);
-        return event;
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(event.eventId, event.globalSeq ?? null, event.streamId, event.streamType, event.eventType, event.rawEventType || null, event.eventVersion, event.projectId || null, event.workspaceId || null, event.actorId || null, event.causationId || null, event.correlationId || null, event.sourceNeuronId || null, event.sourceId || null, event.contentHash || null, event.threadId || null, event.sessionId || null, event.localDate || null, event.localDateSource || 'legacy_unknown', event.threadSeq ?? null, event.turnId || null, event.turnSeq ?? null, event.eventOrdinal ?? null, event.role || null, event.parentEventId || null, event.prevEventId || null, event.nextEventId || null, event.causalityType || null, event.sourceOffset ?? null, event.lineStart ?? null, event.lineEnd ?? null, event.charStart ?? null, event.charEnd ?? null, event.orderingConfidence || null, event.occurredAt, storedPayloadJson, event.payloadHash, event.createdAt);
+        try {
+            this.db.transaction(() => {
+                insert();
+                this.upsertImportAnchor(event);
+                this.upsertRawEventFts(event);
+            })();
+            return event;
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const streamConflict = /UNIQUE constraint failed: memory_events\.(stream_id|global_seq)/.test(message);
+            const anchorConflict = message === 'import_anchor_already_exists';
+            const autoEventVersion = input.eventVersion === undefined;
+            const autoThreadSeq = input.threadSeq === undefined;
+            if ((streamConflict || message.includes('database is locked')) && autoEventVersion && retry < 5) {
+                return this.append({ ...input, eventVersion: undefined, threadSeq: autoThreadSeq ? undefined : input.threadSeq }, retry + 1);
+            }
+            if (!anchorConflict)
+                throw error;
+            const metadata = event.payload?.metadata;
+            const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;
+            const existing = anchor && event.projectId && event.sourceId
+                ? this.findImportedEventAnchor(event.projectId, event.sourceId, anchor)
+                : null;
+            if (!existing)
+                throw error;
+            if (existing.contentHash !== event.contentHash)
+                throw new Error(`import_anchor_content_conflict:${anchor}`);
+            return existing;
+        }
+    }
+    upsertImportAnchor(event) {
+        const metadata = event.payload?.metadata;
+        const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;
+        if (!anchor || !event.projectId || !event.sourceId || !event.contentHash)
+            return;
+        this.db.prepare(`
+      INSERT INTO import_source_anchors (project_id, source_id, import_anchor, event_id, content_hash, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, source_id, import_anchor) DO NOTHING
+    `).run(event.projectId, event.sourceId, anchor, event.eventId, event.contentHash, event.createdAt);
+        const inserted = this.db.prepare(`SELECT event_id FROM import_source_anchors WHERE project_id = ? AND source_id = ? AND import_anchor = ?`)
+            .get(event.projectId, event.sourceId, anchor);
+        if (inserted?.event_id !== event.eventId) {
+            const existingEvent = inserted?.event_id
+                ? this.db.prepare(`SELECT 1 FROM memory_events WHERE event_id = ?`).get(inserted.event_id)
+                : null;
+            if (!existingEvent) {
+                this.db.prepare(`
+          UPDATE import_source_anchors
+          SET event_id = ?, content_hash = ?, created_at = ?
+          WHERE project_id = ? AND source_id = ? AND import_anchor = ?
+        `).run(event.eventId, event.contentHash, event.createdAt, event.projectId, event.sourceId, anchor);
+                return;
+            }
+            throw new Error('import_anchor_already_exists');
+        }
     }
     getNextGlobalSeq() {
         const row = this.db.prepare(`
@@ -249,8 +335,17 @@ export class EventStore {
       FROM memory_events
       WHERE (? IS NULL OR occurred_at > ?)
       ORDER BY COALESCE(global_seq, 0) ASC, occurred_at ASC, event_id ASC
-    `).all(lastEventTime || null, lastEventTime || null);
+    `).all(lastEventTime ?? null, lastEventTime ?? null);
         return rows.map((row) => this.mapRow(row));
+    }
+    findImportedEventAnchor(projectId, sourceId, importAnchor) {
+        const row = this.db.prepare(`
+      SELECT ${qualifiedMemoryEventColumns('e')}
+      FROM import_source_anchors a
+      JOIN memory_events e ON e.event_id = a.event_id
+      WHERE a.project_id = ? AND a.source_id = ? AND a.import_anchor = ?
+    `).get(projectId, sourceId, importAnchor);
+        return row ? this.mapRow(row) : null;
     }
     getLatestEvent() {
         const row = this.db.prepare(`
@@ -430,9 +525,10 @@ export class EventStore {
             conditions.push('local_date = ?');
             params.push(options.localDate);
         }
-        const limitSql = options.limit ? 'LIMIT ?' : '';
-        if (options.limit)
-            params.push(options.limit);
+        const boundedLimit = options.limit === undefined ? undefined : Math.max(1, Math.min(Math.trunc(options.limit), 10_000));
+        const limitSql = boundedLimit === undefined ? '' : 'LIMIT ?';
+        if (boundedLimit !== undefined)
+            params.push(boundedLimit);
         const rows = this.db.prepare(`
       SELECT ${MEMORY_EVENT_COLUMNS}
       FROM memory_events
@@ -564,7 +660,8 @@ export class EventStore {
     `).run(checkpoint.projectionName, checkpoint.lastEventId || null, checkpoint.lastEventTime || null, checkpoint.lastRebuildAt || null, checkpoint.lastFullCount, checkpoint.lastChecksum || null, checkpoint.status, checkpoint.metadata ? JSON.stringify(checkpoint.metadata) : null);
     }
     close() {
-        this.db.close();
+        if (this.ownsDb)
+            this.db.close();
     }
     mapRow(row) {
         return {
@@ -586,20 +683,21 @@ export class EventStore {
             threadId: row.thread_id || (row.stream_type === 'thread' ? row.stream_id : undefined),
             sessionId: row.session_id || undefined,
             localDate: row.local_date || undefined,
-            threadSeq: row.thread_seq || undefined,
+            localDateSource: row.local_date_source || legacyLocalDateSource(row.payload_json),
+            threadSeq: row.thread_seq ?? undefined,
             turnId: row.turn_id || undefined,
-            turnSeq: row.turn_seq || undefined,
-            eventOrdinal: row.event_ordinal || undefined,
+            turnSeq: row.turn_seq ?? undefined,
+            eventOrdinal: row.event_ordinal ?? undefined,
             role: row.role || undefined,
             parentEventId: row.parent_event_id || undefined,
             prevEventId: row.prev_event_id || undefined,
             nextEventId: row.next_event_id || undefined,
             causalityType: row.causality_type || undefined,
-            sourceOffset: row.source_offset || undefined,
-            lineStart: row.line_start || undefined,
-            lineEnd: row.line_end || undefined,
-            charStart: row.char_start || undefined,
-            charEnd: row.char_end || undefined,
+            sourceOffset: row.source_offset ?? undefined,
+            lineStart: row.line_start ?? undefined,
+            lineEnd: row.line_end ?? undefined,
+            charStart: row.char_start ?? undefined,
+            charEnd: row.char_end ?? undefined,
             orderingConfidence: row.ordering_confidence || undefined,
             occurredAt: row.occurred_at,
             payload: JSON.parse(this.decodePayload(row.payload_json)),
@@ -720,6 +818,29 @@ export class EventStore {
         return this.encryptionProvider?.decrypt(payloadJson) ?? payloadJson;
     }
 }
+function qualifiedMemoryEventColumns(alias) {
+    return MEMORY_EVENT_COLUMNS.split(',').map((column) => `${alias}.${column.trim()}`).join(', ');
+}
 function escapeSqlLike(value) {
     return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+function validCalendarDate(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(value))
+        return false;
+    const [year, month, day] = value.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+function legacyLocalDateSource(payloadJson) {
+    try {
+        const payload = JSON.parse(payloadJson);
+        if (payload.metadata?.localDateSource === 'event_store_utc_default')
+            return 'generated_utc';
+        if (payload.metadata?.localDateSource === 'explicit')
+            return 'explicit';
+    }
+    catch {
+        return 'legacy_unknown';
+    }
+    return 'legacy_unknown';
 }

@@ -184,7 +184,7 @@ export class EntityGovernanceService {
   }
 
   private requireEntity(entityId: string): EntityRecord {
-    const entity = this.entities.findByEntityId(entityId);
+    const entity = this.entities.getByEntityId(entityId);
     if (!entity) throw new Error(`Unknown entity: ${entityId}`);
     return entity;
   }

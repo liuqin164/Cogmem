@@ -14,6 +14,8 @@ import {
   addVectorDimensionDiagnostics,
   parseVectorDimensionValue,
 } from './VectorDimension.js';
+export type { ConfigDiagnosticLike } from './VectorDimension.js';
+import { normalizeEpisodeBoundaryConfig } from '../episode/EpisodeBoundaryPolicy.js';
 
 export type CogmemConfigKind = 'toml' | 'missing';
 export type EnvLike = Record<string, string | undefined>;
@@ -111,6 +113,7 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   const memoryModel = section(root, 'memory_model');
   const reasoningModel = section(root, 'reasoning_model');
   const governance = section(root, 'governance');
+  const episodeBoundary = section(root, 'episode_boundary');
   const integrations = section(root, 'integrations');
   const openclaw = section(integrations, 'openclaw');
   const hermes = section(integrations, 'hermes');
@@ -168,6 +171,26 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
     redactionPolicy.ssn = piiSsn;
   }
   if (Object.keys(redactionPolicy).length > 0) optionsOut.redactionPolicy = redactionPolicy;
+
+  const boundaryInput = {
+    enabled: boundaryBoolean(episodeBoundary.enabled, 'enabled', diagnostics),
+    mode: boundaryString(episodeBoundary.mode, 'mode', diagnostics) as never,
+    maxEvents: boundaryNumber(episodeBoundary.max_events, 'max_events', diagnostics),
+    maxDurationMs: boundaryNumber(episodeBoundary.max_duration_ms, 'max_duration_ms', diagnostics),
+    maxIdleGapMs: boundaryNumber(episodeBoundary.max_idle_gap_ms, 'max_idle_gap_ms', diagnostics),
+    splitOnTrustedLocalDateChange: boundaryBoolean(episodeBoundary.split_on_trusted_local_date_change, 'split_on_trusted_local_date_change', diagnostics),
+    auditDecisions: boundaryBoolean(episodeBoundary.audit_decisions, 'audit_decisions', diagnostics),
+    applyToLive: boundaryBoolean(episodeBoundary.apply_to_live, 'apply_to_live', diagnostics),
+    applyToImports: boundaryBoolean(episodeBoundary.apply_to_imports, 'apply_to_imports', diagnostics),
+    policyVersion: boundaryString(episodeBoundary.policy_version, 'policy_version', diagnostics),
+    timezone: boundaryString(episodeBoundary.timezone, 'timezone', diagnostics),
+  };
+  const configuredBoundary = Object.values(boundaryInput).some((value) => value !== undefined);
+  if (configuredBoundary) {
+    const normalizedBoundary = normalizeEpisodeBoundaryConfig(boundaryInput);
+    optionsOut.episodeBoundary = normalizedBoundary.config;
+    diagnostics.push(...normalizedBoundary.diagnostics);
+  }
 
   const encryptionEnabled = booleanValue(governance.encryption) === true;
   const encryptionPassphrase = interpolate(
@@ -357,4 +380,25 @@ function booleanValue(value: unknown): boolean | undefined {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function boundaryBoolean(value: unknown, name: string, diagnostics: ConfigDiagnosticLike[]): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'boolean') return value;
+  diagnostics.push({ severity: 'warning', code: `invalid_episode_boundary_${name}_type`, message: `episode_boundary.${name} must be a boolean.` });
+  return undefined;
+}
+
+function boundaryNumber(value: unknown, name: string, diagnostics: ConfigDiagnosticLike[]): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  diagnostics.push({ severity: 'warning', code: `invalid_episode_boundary_${name}_type`, message: `episode_boundary.${name} must be a finite number.` });
+  return undefined;
+}
+
+function boundaryString(value: unknown, name: string, diagnostics: ConfigDiagnosticLike[]): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string') return value;
+  diagnostics.push({ severity: 'warning', code: `invalid_episode_boundary_${name}_type`, message: `episode_boundary.${name} must be a string.` });
+  return undefined;
 }

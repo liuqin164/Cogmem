@@ -106,6 +106,8 @@ export declare class EntityStore {
     listByAlias(aliasText: string, type?: string): EntityRecord[];
     findByCanonicalName(canonicalName: string, type?: string): EntityRecord | null;
     findByEntityId(entityId: string): EntityRecord | null;
+    findActiveByEntityId(entityId: string): EntityRecord | null;
+    getByEntityId(entityId: string): EntityRecord | null;
     findLatestByType(type: string): EntityRecord | null;
     listRecentByType(type: string, limit?: number): EntityRecord[];
     private listByCreationOrder;
@@ -125,12 +127,14 @@ export declare class EntityStore {
         type?: string;
         projectId?: string;
         limit?: number;
+        includeInactive?: boolean;
     }): EntityMentionRecord[];
     getEntityTimeline(input: {
         type?: string;
         projectId?: string;
         entityIds?: string[];
         limit?: number;
+        includeInactive?: boolean;
     }): EntityTimelineItem[];
     listEntitiesUpdatedInRange(startTime: number, endTime: number, type?: string): EntityRecord[];
     archiveEntity(entityId: string, updatedAt?: number): void;

@@ -1,3 +1,4 @@
+import Database from 'bun:sqlite';
 import type { BeliefCandidate, BeliefConflictCandidate, BeliefEvidenceRecord, BeliefRecord, BeliefRevisionDecision } from '../types/index.js';
 import { EventStore } from '../store/EventStore.js';
 import type { PolicyExecutionRecord } from '../store/PolicyExecutionStore.js';
@@ -6,8 +7,9 @@ export declare class BeliefStore {
     private static readonly SOURCE_TRUST;
     private static readonly SCOPE_PRIORITY;
     private db;
+    private ownsDb;
     private closed;
-    constructor(dbPath?: string, eventStore?: EventStore | undefined);
+    constructor(dbPath?: string | Database, eventStore?: EventStore | undefined);
     private initializeSchema;
     findByCanonicalKey(canonicalKey: string): BeliefRecord[];
     countActive(projectId?: string): number;

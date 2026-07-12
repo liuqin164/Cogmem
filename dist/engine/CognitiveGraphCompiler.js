@@ -96,7 +96,7 @@ export class CognitiveGraphCompiler {
             seedNodeIds.push(factNode.nodeId);
             edgeCount += 1;
             if (fact.entityId) {
-                const entity = this.entityStore.findByEntityId(fact.entityId);
+                const entity = this.entityStore.getByEntityId(fact.entityId);
                 if (entity) {
                     const entityNode = this.store.upsertNode({
                         nodeId: `cgnode-${randomUUID()}`,

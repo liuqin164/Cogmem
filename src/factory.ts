@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
+import type { GraphEdgeStoreLike } from './types/ExtensionPoints.js';
 
 import { BeliefStore } from './belief/BeliefStore.js';
 import { BeliefGovernanceService } from './belief/BeliefGovernanceService.js';
@@ -77,19 +78,24 @@ import {
   type CandidateReviewInput,
   type CandidateReviewResult,
 } from './governance/index.js';
-import { migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, SchemaMigrationRunner } from './migrations/index.js';
+import { ALL_MIGRATIONS, KERNEL_MIGRATIONS, SchemaMigrationRunner } from './migrations/index.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
-import { EpisodeAssembler, EpisodeStore, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
+import { EpisodeAssembler, EpisodeStore, type EpisodeBoundaryDecisionRecord, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
+import { EpisodeBoundaryAuditService, type EpisodeBoundaryAuditResult } from './episode/EpisodeBoundaryAuditService.js';
+import { EpisodeBoundaryPolicy, normalizeEpisodeBoundaryConfig, type EpisodeBoundaryConfig } from './episode/EpisodeBoundaryPolicy.js';
+import { logicalTurnsFromPairs } from './episode/EpisodeBoundaryReplayEngine.js';
+import { EpisodeSplitPlanner, type EpisodeSplitPlan } from './episode/EpisodeSplitPlanner.js';
 import { DreamScheduler, type DreamTickOptions, type DreamTickResult } from './dream/index.js';
 import {
   loadCogmemConfig,
   resolveCogmemConfigPath,
   type EnvLike,
+  type ConfigDiagnosticLike,
 } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
 import { IterativeLLMClarifier, type BrainToolDispatcherLike } from './routing/IterativeLLMClarifier.js';
@@ -132,6 +138,7 @@ import type {
   MemoryRawEventType,
   MemoryEventRole,
   Neuron,
+  OrderingConfidence,
 } from './types/index.js';
 import { config } from './utils/Config.js';
 import {
@@ -143,8 +150,8 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 
-const CORE_VERSION = '3.7.2';
-const LATEST_SCHEMA_VERSION = 27;
+const CORE_VERSION = '3.7.3';
+const LATEST_SCHEMA_VERSION = Math.max(...ALL_MIGRATIONS.map((migration) => Number.parseInt(migration.version, 10)));
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
@@ -161,6 +168,8 @@ export interface MemoryKernelOptions {
   encryptionProvider?: EncryptionProvider;
   redactionPolicy?: RedactionPolicy | false;
   turnRelationReviewer?: TurnRelationAdvisoryReviewer;
+  episodeBoundary?: Partial<EpisodeBoundaryConfig>;
+  configDiagnostics?: ConfigDiagnosticLike[];
 }
 
 export interface MemoryKernelFromConfigOptions extends MemoryKernelOptions {
@@ -388,7 +397,9 @@ export interface RawMemoryEventInput {
   lineEnd?: number;
   charStart?: number;
   charEnd?: number;
+  orderingConfidence?: OrderingConfidence;
   localDate?: string;
+  localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
   metadata?: Record<string, unknown>;
 }
 
@@ -401,6 +412,10 @@ export interface EpisodeMessageInput {
   externalMessageId?: string;
   timestamp?: number;
   threadId?: string;
+  turnId?: string;
+  turnSeq?: number;
+  localDate?: string;
+  eventOrdinal?: number;
   metadata?: Record<string, unknown>;
 }
 
@@ -413,6 +428,17 @@ export interface EpisodeMessageResult {
   sealed: boolean;
   dreamRecommended: boolean;
   dreamRan: false;
+  boundaryTriggered?: boolean;
+  boundaryDetected?: boolean;
+  boundaryApplied?: boolean;
+  boundaryMode?: string;
+  boundaryDecisionId?: string;
+  boundaryGuardCodes?: string[];
+  boundaryAuditRecorded?: boolean;
+  boundaryAuditStatus?: string;
+  previousEpisodeId?: string;
+  reviewerRawResultStatus?: string;
+  warnings?: string[];
 }
 
 export type EpisodeRepairInput =
@@ -567,10 +593,14 @@ export class MemoryKernel {
   readonly pipelineMetrics: PipelineMetrics;
   readonly episodeStore: EpisodeStore;
   readonly episodeAssembler: EpisodeAssembler;
+  readonly episodeBoundaryPolicy: EpisodeBoundaryPolicy;
+  readonly episodeBoundaryAuditService: EpisodeBoundaryAuditService;
+  readonly episodeSplitPlanner: EpisodeSplitPlanner;
   readonly userTopicPathRegistry: UserTopicPathRegistry;
   readonly topicAliasRegistry: TopicAliasRegistry;
   readonly topicRelationGraph: TopicRelationGraph;
   readonly topicGovernance: TopicGovernance;
+  readonly configDiagnostics: ConfigDiagnosticLike[];
 
   private readonly dbPath: string;
   private readonly embedder: Embedder;
@@ -611,21 +641,27 @@ export class MemoryKernel {
   private closed = false;
 
   constructor(private readonly options: MemoryKernelOptions = {}) {
+    this.configDiagnostics = [...(options.configDiagnostics || [])];
+    const normalizedBoundary = normalizeEpisodeBoundaryConfig(options.episodeBoundary);
+    this.configDiagnostics.push(...normalizedBoundary.diagnostics);
     this.dbPath = options.dbPath ?? ':memory:';
     this.encryptionProvider = options.encryptionProvider;
     this.piiRedactor = options.redactionPolicy === false ? undefined : new PiiRedactor(options.redactionPolicy);
     this.memoryGraph = new MemoryGraph(this.dbPath);
-    this.eventStore = new EventStore(this.dbPath, this.encryptionProvider);
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
-    db.exec('PRAGMA busy_timeout = 5000;');
-    new SchemaMigrationRunner(db, [migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027]).run();
+    this.eventStore = new EventStore(db, this.encryptionProvider);
+    db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+    if ((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys?: number } | undefined)?.foreign_keys !== 1) {
+      throw new Error('memory_kernel_foreign_keys_disabled');
+    }
+    new SchemaMigrationRunner(db, KERNEL_MIGRATIONS).run();
     this.ensureMetaTable(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
     const vectorDimension = options.vectorDimension ?? config.vector.dimension;
     this.modelRegistry = options.modelRegistry ?? ModelRegistry.defaults();
-    this.beliefStore = new BeliefStore(this.dbPath, this.eventStore);
+    this.beliefStore = new BeliefStore(db, this.eventStore);
     this.beliefGovernanceService = new BeliefGovernanceService(db, (eventId) => {
       const event = this.eventStore.getEvent(eventId);
       return event ? { eventId, projectId: event.projectId, role: event.role } : undefined;
@@ -658,6 +694,9 @@ export class MemoryKernel {
     this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
     this.dreamLedgerStore = new DreamLedgerStore(db);
     this.episodeStore = new EpisodeStore(db, (eventId) => this.eventStore.getEvent(eventId), { initializeSchemaForTests: false });
+    this.episodeBoundaryPolicy = new EpisodeBoundaryPolicy(normalizedBoundary.config);
+    this.episodeBoundaryAuditService = new EpisodeBoundaryAuditService(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config, this.configDiagnostics);
+    this.episodeSplitPlanner = new EpisodeSplitPlanner(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config, this.configDiagnostics);
     this.userTopicPathRegistry = new UserTopicPathRegistry(db);
     this.topicAliasRegistry = new TopicAliasRegistry(db);
     this.topicRelationGraph = new TopicRelationGraph(db);
@@ -679,6 +718,7 @@ export class MemoryKernel {
           currentTopicPath: matchedPaths.length === 1 ? matchedPaths[0] : undefined,
         };
       },
+      this.episodeBoundaryPolicy,
     );
     this.activationStore = new ActivationStore(db);
     this.memoryBindingStore = new MemoryBindingStore(db);
@@ -766,7 +806,7 @@ export class MemoryKernel {
         }))
       )),
     });
-    this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker);
+    this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker, this.deepWriteCandidateStore);
     this.topicSummaryBoard = new TopicSummaryBoard(this.memoryGraph, this.summaryStore);
     this.topicDecayPolicy = new TopicDecayPolicy(this.memoryGraph);
     this.localSemanticCompiler = new LocalSemanticCompiler();
@@ -1103,6 +1143,7 @@ export class MemoryKernel {
       threadId: input.threadId,
       sessionId: input.sessionId,
       localDate: input.localDate,
+      localDateSource: input.localDateSource ?? (input.localDate ? 'explicit' : 'generated_utc'),
       turnId: input.turnId,
       turnSeq: input.turnSeq,
       eventOrdinal: input.eventOrdinal,
@@ -1116,7 +1157,8 @@ export class MemoryKernel {
       charStart: input.charStart,
       charEnd: input.charEnd,
       occurredAt,
-      orderingConfidence: 'high',
+      orderingConfidence: input.orderingConfidence
+        ?? (input.turnSeq !== undefined || input.eventOrdinal !== undefined || input.sourceOffset !== undefined || input.lineStart !== undefined ? 'high' : 'low'),
       payload: {
         text,
         metadata: input.metadata,
@@ -1345,7 +1387,7 @@ export class MemoryKernel {
     events: MemoryEvent[],
     input: {
       projectId: string; sessionId: string; sourceAgent?: string; conversationThreadId?: string;
-      now?: number; batchSeal?: boolean; forceBatchSeal?: boolean;
+      now?: number; batchSeal?: boolean; forceBatchSeal?: boolean; allowNonUserEpisodeStart?: boolean;
     },
   ) {
     return this.episodeAssembler.appendTurn(events, input);
@@ -1355,7 +1397,7 @@ export class MemoryKernel {
     events: MemoryEvent[],
     input: {
       projectId: string; sessionId: string; sourceAgent?: string; conversationThreadId?: string;
-      now?: number; batchSeal?: boolean; forceBatchSeal?: boolean;
+      now?: number; batchSeal?: boolean; forceBatchSeal?: boolean; allowNonUserEpisodeStart?: boolean;
     },
   ) {
     return this.episodeAssembler.appendTurnAsync(events, input);
@@ -1391,7 +1433,7 @@ export class MemoryKernel {
       const existingEvent = reservedEventId ? this.eventStore.getEvent(reservedEventId) : null;
       if (existingEvent) {
         this.assertEpisodeIngestIdentity(existingEvent, input);
-        return this.resumeEpisodeMessage(existingEvent, input, false);
+        return this.finishIngestMessage(existingEvent, input, false, () => this.resumeEpisodeMessage(existingEvent, input, false));
       }
     }
     let event: MemoryEvent<{ text: string; metadata?: Record<string, unknown> }>;
@@ -1402,6 +1444,10 @@ export class MemoryKernel {
         workspaceId: input.projectId,
         threadId: input.threadId || input.sessionId,
         sessionId: input.sessionId,
+        turnId: input.turnId,
+        turnSeq: input.turnSeq,
+        localDate: input.localDate,
+        eventOrdinal: input.eventOrdinal,
         role: input.role,
         content: input.text,
         occurredAt: input.timestamp,
@@ -1418,17 +1464,9 @@ export class MemoryKernel {
         throw error;
       }
       this.assertEpisodeIngestIdentity(concurrent, input);
-      if (input.externalMessageId) this.episodeStore.markIngestState({
-        projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
-        externalMessageId: input.externalMessageId, state: 'committed',
-      });
-      return this.resumeEpisodeMessage(concurrent, input, false);
+      return this.finishIngestMessage(concurrent, input, false, () => this.resumeEpisodeMessage(concurrent, input, false));
     }
-    if (input.externalMessageId) this.episodeStore.markIngestState({
-      projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
-      externalMessageId: input.externalMessageId, state: 'committed', now: event.occurredAt,
-    });
-    return this.resumeEpisodeMessage(event, input, true);
+    return this.finishIngestMessage(event, input, true, () => this.resumeEpisodeMessage(event, input, true));
   }
 
   async appendEpisodeMessageAsync(input: EpisodeMessageInput): Promise<EpisodeMessageResult> {
@@ -1447,7 +1485,7 @@ export class MemoryKernel {
       const existingEvent = reservedEventId ? this.eventStore.getEvent(reservedEventId) : null;
       if (existingEvent) {
         this.assertEpisodeIngestIdentity(existingEvent, input);
-        return this.resumeEpisodeMessageAsync(existingEvent, input, false);
+        return this.finishIngestMessageAsync(existingEvent, input, false, () => this.resumeEpisodeMessageAsync(existingEvent, input, false));
       }
     }
     let event: MemoryEvent<{ text: string; metadata?: Record<string, unknown> }>;
@@ -1455,6 +1493,7 @@ export class MemoryKernel {
       event = this.recordRawEvent({
         eventId: reservedEventId, projectId: input.projectId, workspaceId: input.projectId,
         threadId: input.threadId || input.sessionId, sessionId: input.sessionId, role: input.role,
+        turnId: input.turnId, turnSeq: input.turnSeq, localDate: input.localDate, eventOrdinal: input.eventOrdinal,
         content: input.text, occurredAt: input.timestamp, sourceId: `${input.sourceAgent}:${input.sessionId}`,
         metadata: { ...input.metadata, externalMessageId: input.externalMessageId, sourceAgent: input.sourceAgent },
       });
@@ -1468,24 +1507,51 @@ export class MemoryKernel {
         throw error;
       }
       this.assertEpisodeIngestIdentity(concurrent, input);
+      return this.finishIngestMessageAsync(concurrent, input, false, () => this.resumeEpisodeMessageAsync(concurrent, input, false));
+    }
+    return this.finishIngestMessageAsync(event, input, true, () => this.resumeEpisodeMessageAsync(event, input, true));
+  }
+
+  private finishIngestMessage(event: MemoryEvent, input: EpisodeMessageInput, created: boolean, operation: () => EpisodeMessageResult): EpisodeMessageResult {
+    try {
+      const result = operation();
       if (input.externalMessageId) this.episodeStore.markIngestState({
         projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
-        externalMessageId: input.externalMessageId, state: 'committed',
+        externalMessageId: input.externalMessageId, state: 'committed', now: event.occurredAt,
       });
-      return this.resumeEpisodeMessageAsync(concurrent, input, false);
+      return result;
+    } catch (error) {
+      if (input.externalMessageId) this.episodeStore.markIngestState({
+        projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
+        externalMessageId: input.externalMessageId, state: 'failed', error: error instanceof Error ? error.message : String(error), now: event.occurredAt,
+      });
+      throw error;
     }
-    if (input.externalMessageId) this.episodeStore.markIngestState({
-      projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
-      externalMessageId: input.externalMessageId, state: 'committed', now: event.occurredAt,
-    });
-    return this.resumeEpisodeMessageAsync(event, input, true);
+  }
+
+  private async finishIngestMessageAsync(event: MemoryEvent, input: EpisodeMessageInput, created: boolean, operation: () => Promise<EpisodeMessageResult>): Promise<EpisodeMessageResult> {
+    try {
+      const result = await operation();
+      if (input.externalMessageId) this.episodeStore.markIngestState({
+        projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
+        externalMessageId: input.externalMessageId, state: 'committed', now: event.occurredAt,
+      });
+      return result;
+    } catch (error) {
+      if (input.externalMessageId) this.episodeStore.markIngestState({
+        projectId: input.projectId, sourceAgent: input.sourceAgent, sourceSessionId: input.sessionId,
+        externalMessageId: input.externalMessageId, state: 'failed', error: error instanceof Error ? error.message : String(error), now: event.occurredAt,
+      });
+      throw error;
+    }
   }
 
   private resumeEpisodeMessage(event: MemoryEvent, input: EpisodeMessageInput, created: boolean): EpisodeMessageResult {
     let link = this.episodeStore.getEventLink(event.eventId);
     let ignored = this.episodeStore.hasEventDisposition(event.eventId);
+    let assembly: ReturnType<MemoryKernel['assembleEpisodeTurn']> | undefined;
     if (!link && !ignored) {
-      const assembly = this.assembleEpisodeTurn([event], {
+      assembly = this.assembleEpisodeTurn([event], {
         projectId: input.projectId,
         sessionId: event.sessionId || input.sessionId,
         sourceAgent: input.sourceAgent,
@@ -1508,14 +1574,26 @@ export class MemoryKernel {
       sealed: episode?.status === 'sealed',
       dreamRecommended: Boolean(receipt?.dreamRecommended && !receipt.requiresReview && episode?.dreamStatus !== 'processed'),
       dreamRan: false,
+      boundaryTriggered: assembly?.boundaryTriggered,
+      boundaryDetected: assembly?.boundaryDetected,
+      boundaryApplied: assembly?.boundaryApplied,
+      boundaryMode: assembly?.boundaryMode,
+      boundaryDecisionId: assembly?.boundaryDecisionId,
+      boundaryGuardCodes: assembly?.boundaryGuardCodes,
+      boundaryAuditRecorded: assembly?.boundaryAuditRecorded,
+      boundaryAuditStatus: assembly?.boundaryAuditStatus,
+      previousEpisodeId: assembly?.previousEpisodeId,
+      reviewerRawResultStatus: assembly?.reviewerRawResultStatus,
+      warnings: assembly?.warnings,
     };
   }
 
   private async resumeEpisodeMessageAsync(event: MemoryEvent, input: EpisodeMessageInput, created: boolean): Promise<EpisodeMessageResult> {
     let link = this.episodeStore.getEventLink(event.eventId);
     let ignored = this.episodeStore.hasEventDisposition(event.eventId);
+    let assembly: Awaited<ReturnType<MemoryKernel['assembleEpisodeTurnAsync']>> | undefined;
     if (!link && !ignored) {
-      const assembly = await this.assembleEpisodeTurnAsync([event], {
+      assembly = await this.assembleEpisodeTurnAsync([event], {
         projectId: input.projectId, sessionId: event.sessionId || input.sessionId, sourceAgent: input.sourceAgent,
         conversationThreadId: input.threadId || event.threadId || input.sessionId, now: event.occurredAt,
       });
@@ -1531,16 +1609,35 @@ export class MemoryKernel {
       sealed: episode?.status === 'sealed',
       dreamRecommended: Boolean(receipt?.dreamRecommended && !receipt.requiresReview && episode?.dreamStatus !== 'processed'),
       dreamRan: false,
+      boundaryTriggered: assembly?.boundaryTriggered,
+      boundaryDetected: assembly?.boundaryDetected,
+      boundaryApplied: assembly?.boundaryApplied,
+      boundaryMode: assembly?.boundaryMode,
+      boundaryDecisionId: assembly?.boundaryDecisionId,
+      boundaryGuardCodes: assembly?.boundaryGuardCodes,
+      boundaryAuditRecorded: assembly?.boundaryAuditRecorded,
+      boundaryAuditStatus: assembly?.boundaryAuditStatus,
+      previousEpisodeId: assembly?.previousEpisodeId,
+      reviewerRawResultStatus: assembly?.reviewerRawResultStatus,
+      warnings: assembly?.warnings,
     };
   }
 
   private assertEpisodeIngestIdentity(event: MemoryEvent, input: EpisodeMessageInput): void {
-    const payload = event.payload as { text?: unknown; metadata?: { sourceAgent?: unknown } } | undefined;
+    const payload = event.payload as { text?: unknown; metadata?: { sourceAgent?: unknown; imported?: unknown; sourceRef?: unknown } } | undefined;
     const expectedText = this.piiRedactor ? this.piiRedactor.redact(input.text).text : input.text;
     if (
       event.projectId !== input.projectId
       || event.sessionId !== input.sessionId
+      || event.threadId !== (input.threadId || input.sessionId)
       || event.role !== input.role
+      || !sameProvided(event.turnId, input.turnId)
+      || !sameProvided(event.turnSeq, input.turnSeq)
+      || !sameProvided(event.localDate, input.localDate)
+      || !sameProvided(event.eventOrdinal, input.eventOrdinal)
+      || (input.timestamp !== undefined && event.occurredAt !== input.timestamp)
+      || (input.metadata?.imported !== undefined && payload?.metadata?.imported !== input.metadata.imported)
+      || (input.metadata?.sourceRef !== undefined && JSON.stringify(payload?.metadata?.sourceRef) !== JSON.stringify(input.metadata.sourceRef))
       || payload?.text !== expectedText
       || payload?.metadata?.sourceAgent !== input.sourceAgent
     ) {
@@ -1588,6 +1685,25 @@ export class MemoryKernel {
     return this.episodeStore.listEventLinks(episodeId);
   }
 
+  auditEpisodeBoundaries(options: {
+    projectId: string; episodeId?: string; status?: MemoryEpisode['status']; limit?: number; cursor?: string;
+    maxEvents?: number; maxDurationMs?: number; maxIdleGapMs?: number; timezone?: string;
+  }): EpisodeBoundaryAuditResult {
+    return this.episodeBoundaryAuditService.audit(options);
+  }
+
+  listEpisodeBoundaryDecisions(options: { projectId: string; primaryEventId?: string; limit?: number }): EpisodeBoundaryDecisionRecord[] {
+    if (!options.projectId) throw new Error('projectId is required');
+    return this.episodeStore.listBoundaryDecisions(options);
+  }
+
+  planEpisodeSplit(options: {
+    projectId: string; episodeId: string; maxEvents?: number; maxDurationMs?: number; maxIdleGapMs?: number;
+    timezone?: string; includeEventIds?: boolean;
+  }): EpisodeSplitPlan {
+    return this.episodeSplitPlanner.plan(options);
+  }
+
   getEpisodeDreamStatus(projectId?: string): EpisodeDreamStatus {
     return this.episodeStore.getDreamStatus(projectId);
   }
@@ -1597,18 +1713,22 @@ export class MemoryKernel {
   }
 
   repairEpisodes(options: { projectId?: string; sinceGlobalSeq?: number; limit?: number } = {}) {
-    const page = this.eventStore.queryEvents(1, Math.max(1, Math.min(options.limit ?? 500, 5000)), {
-      projectId: options.projectId ? [options.projectId] : undefined,
-    });
-    const events = page.records
-      .filter((event) => event.eventType === 'RAW_EVENT_RECORDED')
-      .filter((event) => options.sinceGlobalSeq === undefined || (event.globalSeq || 0) >= options.sinceGlobalSeq)
+    const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 500), 5000));
+    let afterGlobalSeq = options.sinceGlobalSeq === undefined ? undefined : options.sinceGlobalSeq - 1;
+    const events: MemoryEvent[] = [];
+    while (events.length < limit) {
+      const page = this.eventStore.listRawEventsAfterGlobalSeq({ projectId: options.projectId, afterGlobalSeq, limit: Math.min(500, limit - events.length) });
+      if (!page.length) break;
+      events.push(...page);
+      afterGlobalSeq = page.at(-1)?.globalSeq ?? afterGlobalSeq;
+      if (page.length < Math.min(500, limit - events.length + page.length)) break;
+    }
+    const eligibleEvents = events
       .filter((event) => !this.episodeStore.getEventLink(event.eventId))
-      .filter((event) => !this.episodeStore.hasEventDisposition(event.eventId))
-      .sort((a, b) => (a.globalSeq || 0) - (b.globalSeq || 0));
+      .filter((event) => !this.episodeStore.hasEventDisposition(event.eventId));
     let assigned = 0;
     const unassignedEventIds: string[] = [];
-    for (const event of events) {
+    for (const event of eligibleEvents) {
       const projectId = event.projectId || options.projectId;
       const sessionId = event.sessionId || event.threadId;
       if (!projectId || !sessionId) { unassignedEventIds.push(event.eventId); continue; }
@@ -1627,10 +1747,15 @@ export class MemoryKernel {
         });
       }
     }
-    return { scanned: events.length, assigned, unassigned: unassignedEventIds.length, unassignedEventIds };
+    return { scanned: eligibleEvents.length, assigned, unassigned: unassignedEventIds.length, unassignedEventIds, nextGlobalSeq: afterGlobalSeq, hasMore: events.length >= limit };
   }
 
   repairEpisode(input: EpisodeRepairInput): EpisodeRepairResult {
+    validateEpisodeRepairInput(input, this.episodeStore, (eventId) => this.eventStore.getEvent(eventId) ?? undefined);
+    return this.episodeStore.transaction(() => this.repairEpisodeInTransaction(input));
+  }
+
+  private repairEpisodeInTransaction(input: EpisodeRepairInput): EpisodeRepairResult {
     const now = input.now ?? Date.now();
     const affected = new Set<string>();
     const before: Record<string, unknown> = {};
@@ -1675,6 +1800,7 @@ export class MemoryKernel {
       affected.add(input.episodeId);
     } else if (input.operation === 'split') {
       const source = this.episodeStore.getEpisode(input.episodeId)!;
+      if (source.status !== 'sealed') throw new Error('episode_split_requires_sealed_source');
       const sourceLinks = this.episodeStore.listEventLinks(input.episodeId);
       const selected = sourceLinks.filter((link) => input.eventIds.includes(link.eventId));
       if (!selected.length || selected.length === sourceLinks.length) throw new Error('episode_split_requires_proper_subset');
@@ -1724,18 +1850,37 @@ export class MemoryKernel {
     }
 
     const staleCandidateIds: string[] = [];
-    for (const candidate of this.deepWriteCandidateStore.listCandidates({ projectId: input.projectId, limit: 5000 })) {
-      const content = candidate.content && typeof candidate.content === 'object' ? candidate.content as Record<string, unknown> : {};
-      if (!affected.has(String(content.sourceEpisodeId || '')) || candidate.status === 'superseded') continue;
-      this.deepWriteCandidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
-        type: candidate.candidateType, id: candidate.candidateId, reason: 'episode_repair_invalidated_source',
-      });
-      staleCandidateIds.push(candidate.candidateId);
+    let candidateCursor: { createdAt: number; candidateId: string } | undefined;
+    while (true) {
+      const page = this.deepWriteCandidateStore.listCandidates({ projectId: input.projectId, limit: 500, after: candidateCursor });
+      if (!page.length) break;
+      for (const candidate of page) {
+        const content = candidate.content && typeof candidate.content === 'object' ? candidate.content as Record<string, unknown> : {};
+        const evidence = Array.isArray(candidate.evidence) ? candidate.evidence : [];
+        const evidenceIds = evidence.flatMap((item) => item && typeof item === 'object' && typeof (item as Record<string, unknown>).eventId === 'string'
+          ? [String((item as Record<string, unknown>).eventId)] : typeof item === 'string' ? [item] : []);
+        const runSourceEpisode = typeof content.sourceEpisodeId === 'string' ? content.sourceEpisodeId : undefined;
+        if (candidate.status !== 'superseded' && (
+          (runSourceEpisode && affected.has(runSourceEpisode))
+          || evidenceIds.some((eventId) => affected.has(this.episodeStore.getEventLink(eventId)?.episodeId || ''))
+        )) {
+          this.deepWriteCandidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
+            reason: 'episode_repair_invalidated_source',
+          });
+          this.invalidatePromotedCandidate(candidate, now);
+          staleCandidateIds.push(candidate.candidateId);
+        }
+      }
+      const last = page.at(-1)!;
+      candidateCursor = { createdAt: last.createdAt, candidateId: last.candidateId };
+      if (page.length < 500) break;
     }
     for (const episodeId of affected) {
       const episode = this.episodeStore.getEpisode(episodeId);
-      if (episode?.eventCount && episode.status === 'sealed') {
-        this.episodeStore.requeueDreamForRepair(episodeId, input.operation === 'invalidate-dream-run' ? input.mode || 'normal' : 'normal', now);
+      if (episode?.eventCount && episode.status === 'sealed'
+        && input.operation !== 'requeue-dream'
+        && input.operation !== 'invalidate-dream-run') {
+        this.episodeStore.requeueDreamForRepair(episodeId, 'normal', now);
         requeuedDream = true;
       }
     }
@@ -1743,7 +1888,7 @@ export class MemoryKernel {
     const repairId = this.episodeStore.recordRepairAudit({ projectId: input.projectId, operation: input.operation, payload: input, before, after, now });
     const affectedEpisodeIds = [...affected];
     const nextCommands = affectedEpisodeIds.length
-      ? affectedEpisodeIds.map((episodeId) => `cogmem memory graph-reindex --project ${input.projectId} --episode ${episodeId} --json`)
+      ? affectedEpisodeIds.map((episodeId) => `cogmem memory graph-reindex --project ${shellQuote(input.projectId)} --episode ${shellQuote(episodeId)} --json`)
       : [];
     return {
       repairId,
@@ -1756,10 +1901,48 @@ export class MemoryKernel {
       graphRefreshNeeded: affectedEpisodeIds.length > 0,
       nextCommands: [
         ...nextCommands,
-        `cogmem memory graph-explore --project ${input.projectId} --query "<query>" --json`,
+        `cogmem memory graph-explore --project ${shellQuote(input.projectId)} --query '<query>' --json`,
       ],
       note: 'repairId is an audit id, not a dream candidate id; do not run memory dream --promote just because repairId exists.',
     };
+  }
+
+  private invalidatePromotedCandidate(candidate: DreamCandidateRecord, now: number): void {
+    if (candidate.status !== 'promoted' || !candidate.promotionTargetId) return;
+    const db = this.factStore.getDatabase();
+    const targetId = candidate.promotionTargetId;
+    if (candidate.promotionTargetType === 'fact') {
+      this.factStore.updateFactStatus(targetId, 'superseded', undefined, { repairInvalidatedAt: now, sourceCandidateId: candidate.candidateId });
+    } else if (candidate.promotionTargetType === 'belief') {
+      db.prepare(`UPDATE beliefs SET status = 'suspect', updated_at = ? WHERE id = ?`).run(now, targetId);
+    } else if (candidate.promotionTargetType === 'summary') {
+      this.summaryStore.markSuperseded(targetId);
+    } else if (candidate.promotionTargetType === 'entity') {
+      const support = db.prepare(`
+        SELECT (
+          (SELECT COUNT(*) FROM facts WHERE entity_id = ? AND status IN ('provisional', 'provisional_enriched', 'verified', 'active'))
+          + (SELECT COUNT(*) FROM beliefs WHERE subject = ? AND status IN ('active', 'verified'))
+          + (SELECT COUNT(*) FROM entity_mentions WHERE entity_id = ?)
+          + (SELECT COUNT(*) FROM entity_attributes WHERE entity_id = ?)
+          + (SELECT COUNT(*) FROM entity_relations WHERE source_entity_id = ? OR target_entity_id = ?)
+          + ?
+        ) AS count
+      `).get(targetId, targetId, targetId, targetId, targetId, targetId,
+        this.deepWriteCandidateStore.countActivePromotions('entity', targetId, candidate.candidateId)) as { count?: number } | null;
+      if (Number(support?.count || 0) === 0) {
+        this.entityStore.archiveEntity(targetId, now);
+      }
+    } else if (candidate.promotionTargetType === 'graph_edge') {
+      const relationStore = this.extensions.get('relationStore') as GraphEdgeStoreLike | undefined;
+      if (!relationStore || relationStore.getDatabase() !== this.episodeStore.getDatabase()) {
+        throw new Error(`graph_edge_invalidation_failed:${targetId}`);
+      }
+      const invalidated = relationStore.invalidateEdge(targetId, {
+        repairInvalidatedAt: now,
+        sourceCandidateId: candidate.candidateId,
+      });
+      if (invalidated !== true) throw new Error(`graph_edge_invalidation_failed:${targetId}`);
+    }
   }
 
   listDreamCandidates(options: DreamCandidateListOptions = {}): DreamCandidateRecord[] {
@@ -1965,6 +2148,7 @@ export class MemoryKernel {
   }
 
   promoteDreamCandidates(options: DreamGovernanceRunOptions = {}): DreamGovernanceRunResult {
+    this.deepWriteCandidateStore.recoverStalePromoting(Date.now() - 5 * 60_000, Date.now());
     const decisions = this.deepWritePromotionPolicy.promotePending(options.limit ?? 100, {
       projectId: options.projectId,
     });
@@ -2190,7 +2374,7 @@ export class MemoryKernel {
     const entityConflicts = this.entityStore.listAliasConflicts().filter((conflict) => {
       if (!projectId) return true;
       return conflict.entityIds.some((entityId) => {
-        const entity = this.entityStore.findByEntityId(entityId);
+        const entity = this.entityStore.getByEntityId(entityId);
         return entity?.metadata?.projectId === projectId
           || this.entityStore.listTimeline({ entityId, projectId, limit: 1 }).length > 0;
       });
@@ -2544,6 +2728,11 @@ export class MemoryKernel {
 
   registerExtension(name: string, implementation: unknown): void {
     this.extensions.set(name, implementation);
+    if (name === 'relationStore') {
+      const store = implementation as GraphEdgeStoreLike;
+      if (store.getDatabase() !== this.episodeStore.getDatabase()) throw new Error('relation_store_database_mismatch');
+      this.deepWritePromotionPolicy.setRelationStore(store);
+    }
   }
 
   hasExtension(name: string): boolean {
@@ -2663,7 +2852,12 @@ export function createMemoryKernelFromConfig(input: string | MemoryKernelFromCon
     env: _env,
     ...explicitOptions
   } = options;
-  return createMemoryKernel({ ...loaded.options, ...explicitOptions });
+  return createMemoryKernel({
+    ...loaded.options,
+    ...explicitOptions,
+    episodeBoundary: { ...loaded.options.episodeBoundary, ...explicitOptions.episodeBoundary },
+    configDiagnostics: [...loaded.diagnostics, ...(explicitOptions.configDiagnostics || [])],
+  });
 }
 
 function changedFieldsForRepair(input: EpisodeRepairInput): string[] {
@@ -2678,6 +2872,78 @@ function changedFieldsForRepair(input: EpisodeRepairInput): string[] {
   if (input.operation === 'split' || input.operation === 'merge') return ['episodeEvents', 'crossRefs'];
   if (input.operation === 'requeue-dream' || input.operation === 'invalidate-dream-run') return ['dreamQueue'];
   return [];
+}
+
+function validateEpisodeRepairInput(
+  input: EpisodeRepairInput,
+  store: EpisodeStore,
+  resolveEvent: (eventId: string) => MemoryEvent | undefined,
+): void {
+  if (!input.projectId?.trim()) throw new Error('episode_project_required');
+  if (input.operation === 'reclassify' && input.importance !== undefined
+    && (!Number.isFinite(input.importance) || input.importance < 0 || input.importance > 1)) {
+    throw new Error('episode_importance_out_of_range');
+  }
+  if (input.operation === 'split') {
+    if (!input.eventIds.length) throw new Error('episode_split_requires_event_ids');
+    if (new Set(input.eventIds).size !== input.eventIds.length) throw new Error('episode_split_duplicate_event_ids');
+    const source = store.getEpisode(input.episodeId);
+    if (!source || source.projectId !== input.projectId) throw new Error(`episode_project_mismatch:${input.episodeId}`);
+    if (source.status !== 'sealed') throw new Error('episode_split_requires_sealed_source');
+    const sourceIds = new Set(store.listEventLinks(input.episodeId).map((link) => link.eventId));
+    if (input.eventIds.some((eventId) => !sourceIds.has(eventId))) throw new Error('episode_split_event_not_in_source');
+    if (input.eventIds.length >= sourceIds.size) throw new Error('episode_split_requires_proper_subset');
+    const links = store.listEventLinks(input.episodeId);
+    const selected = new Set(input.eventIds);
+    const indices = links.map((link, index) => selected.has(link.eventId) ? index : -1).filter((index) => index >= 0);
+    const first = indices[0];
+    const last = indices.at(-1);
+    if (first === undefined || last === undefined || last - first + 1 !== indices.length) {
+      throw new Error('episode_split_requires_contiguous_range');
+    }
+    const pairs = links.map((link) => ({ link, event: resolveEvent(link.eventId) }));
+    const turns = logicalTurnsFromPairs(pairs);
+    if (turns.some((turn) => {
+      const included = turn.filter((pair) => selected.has(pair.link.eventId)).length;
+      return included > 0 && included !== turn.length;
+    })) throw new Error('episode_split_requires_complete_logical_turns');
+    for (const eventId of selected) {
+      const event = resolveEvent(eventId);
+      if (event?.parentEventId && sourceIds.has(event.parentEventId) && !selected.has(event.parentEventId)) {
+        throw new Error('episode_split_requires_complete_tool_chain');
+      }
+      const childInSource = links.some((link) => resolveEvent(link.eventId)?.parentEventId === eventId);
+      if (childInSource && !links.filter((link) => resolveEvent(link.eventId)?.parentEventId === eventId).every((link) => selected.has(link.eventId))) {
+        throw new Error('episode_split_requires_complete_tool_chain');
+      }
+    }
+    if (!turns.some((turn) => turn.every((pair) => selected.has(pair.link.eventId)) && turn.some((pair) => pair.event?.role === 'user'))) {
+      throw new Error('episode_split_requires_primary_user_turn');
+    }
+  }
+  if (input.operation === 'move-event') {
+    const link = store.getEventLink(input.eventId);
+    if (link?.episodeId === input.targetEpisodeId) throw new Error('episode_move_source_equals_target');
+    const source = link ? store.getEpisode(link.episodeId) : undefined;
+    const target = store.getEpisode(input.targetEpisodeId);
+    if (!source || !target || source.projectId !== input.projectId || target.projectId !== input.projectId) throw new Error('episode_project_mismatch');
+    if (source.sessionId !== target.sessionId || source.sourceAgent !== target.sourceAgent || source.conversationThreadId !== target.conversationThreadId) {
+      throw new Error('episode_move_scope_mismatch');
+    }
+  }
+  if (input.operation === 'merge') {
+    if (input.sourceEpisodeId === input.targetEpisodeId) throw new Error('episode_merge_source_equals_target');
+    const source = store.getEpisode(input.sourceEpisodeId);
+    const target = store.getEpisode(input.targetEpisodeId);
+    if (!source || !target || source.projectId !== input.projectId || target.projectId !== input.projectId) throw new Error('episode_project_mismatch');
+    if (source.sessionId !== target.sessionId || source.sourceAgent !== target.sourceAgent || source.conversationThreadId !== target.conversationThreadId) {
+      throw new Error('episode_merge_scope_mismatch');
+    }
+  }
+}
+
+function shellQuote(value: string): string {
+  return `'${String(value).replace(/'/gu, `'\\''`)}'`;
 }
 
 function requiredGovernancePayloadString(payload: Record<string, unknown>, field: string): string {
@@ -2765,6 +3031,10 @@ function optionalGovernancePayloadNumber(payload: Record<string, unknown>, field
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+function sameProvided(left: unknown, right: unknown): boolean {
+  return right === undefined || (left ?? undefined) === right;
 }
 
 function extractNavigationTerms(query: string): string[] {

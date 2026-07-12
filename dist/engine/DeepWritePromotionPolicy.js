@@ -134,18 +134,39 @@ export class DeepWritePromotionPolicy {
     constructor(deps) {
         this.deps = deps;
     }
+    setRelationStore(store) {
+        this.deps.relationStore = store;
+    }
     promoteRun(runId) {
         const candidates = this.deps.candidateStore.listCandidatesByRun(runId);
-        return candidates.map((candidate) => this.evaluateAndApply(candidate));
+        return candidates.map((candidate) => this.atomicEvaluate(candidate));
     }
     promotePending(limit = 100, options = {}) {
         const candidates = options.projectId
             ? this.deps.candidateStore.listCandidates({ statuses: ['candidate'], projectId: options.projectId, limit })
             : this.deps.candidateStore.listCandidatesByStatus(['candidate'], { limit });
-        return candidates.map((candidate) => this.evaluateAndApply(candidate));
+        return candidates.map((candidate) => this.atomicEvaluate(candidate));
+    }
+    atomicEvaluate(candidate) {
+        return this.deps.candidateStore.getDatabase().transaction(() => {
+            if (!this.deps.candidateStore.claimCandidate(candidate.candidateId)) {
+                return this.keep(candidate, 'candidate_claim_lost');
+            }
+            const current = this.deps.candidateStore.getCandidate(candidate.candidateId);
+            if (!current || current.status !== 'promoting')
+                return this.keep(candidate, 'candidate_claim_lost');
+            const decision = this.evaluateAndApply(current);
+            if (decision.outcome === 'keep_candidate') {
+                this.deps.candidateStore.updateCandidateStatus(current.candidateId, 'candidate', {
+                    reason: decision.reason,
+                    updatedAt: Date.now(),
+                }, 'promoting');
+            }
+            return decision;
+        })();
     }
     evaluateAndApply(candidate, options = {}) {
-        if (candidate.status !== 'candidate') {
+        if (candidate.status !== 'candidate' && candidate.status !== 'promoting') {
             return this.keep(candidate, `status_${candidate.status}_not_promotable`);
         }
         const content = asRecord(candidate.content);
@@ -508,7 +529,7 @@ export class DeepWritePromotionPolicy {
             type: decision.targetType,
             id: decision.targetId,
             reason: decision.reason,
-        });
+        }, candidate.status);
         return decision;
     }
 }

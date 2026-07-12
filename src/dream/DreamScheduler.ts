@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { DreamCuratorWorker } from '../engine/DreamCuratorWorker.js';
 import type { EpisodeStore } from '../episode/EpisodeStore.js';
+import type { DeepWriteCandidateStore } from '../store/DeepWriteCandidateStore.js';
 
 export type DreamTickMode = 'auto' | 'micro' | 'normal' | 'deep';
 export type SelectedDreamMode = 'none' | 'micro' | 'normal' | 'deep';
@@ -15,6 +16,7 @@ export interface DreamTickOptions {
   leaseMs?: number;
   maxAttempts?: number;
   maintenanceReason?: 'daily' | 'upgrade_repair';
+  clock?: { now(): number };
 }
 
 export interface DreamTickResult {
@@ -38,25 +40,32 @@ export class DreamScheduler {
   constructor(
     private readonly episodeStore: EpisodeStore,
     private readonly curator: DreamCuratorWorker,
+    private readonly candidateStore: DeepWriteCandidateStore,
   ) {}
 
   async tick(options: DreamTickOptions = {}): Promise<DreamTickResult> {
-    const startedAt = options.now ?? Date.now();
+    const wallStartedAt = Date.now();
+    const clock = options.clock ?? {
+      now: () => options.now === undefined ? Date.now() : options.now + (Date.now() - wallStartedAt),
+    };
+    const startedAt = options.now ?? clock.now();
     const requestedMode = options.mode ?? 'auto';
     const runId = `episode-dream-run-${randomUUID()}`;
-    const backlogBefore = this.episodeStore.getDreamStatus(options.projectId);
     const graceMs = Math.max(0, options.softSealGraceMs ?? 5 * 60_000);
+    const leaseMs = Math.max(5_000, options.leaseMs ?? 5 * 60_000);
+    this.candidateStore?.abandonStaleStagedRuns(startedAt - leaseMs, startedAt, options.projectId);
     this.episodeStore.finalizeMatureSoftSeals({
       projectId: options.projectId,
       sealedBefore: startedAt - graceMs,
       now: startedAt,
     });
+    const backlogBefore = this.episodeStore.getDreamStatus(options.projectId);
     const maxEpisodes = Math.max(1, Math.min(Math.trunc(options.maxEpisodes ?? modeLimit(requestedMode)), 50));
     const jobs = this.episodeStore.claimDreamJobs({
       projectId: options.projectId,
       limit: maxEpisodes,
       now: startedAt,
-      leaseMs: Math.max(5_000, options.leaseMs ?? 5 * 60_000),
+      leaseMs,
       maxAttempts: Math.max(1, options.maxAttempts ?? 3),
       runId,
     });
@@ -103,15 +112,35 @@ export class DreamScheduler {
           episodeRelations: links.map((link) => ({ eventId: link.eventId, relation: link.relation })),
           limit: limits.eventLimit,
           now: startedAt,
+          dreamJobLeaseId: job.leaseId,
+          leaseUntil: job.leaseUntil,
+          attemptGeneration: job.attemptGeneration,
         });
         const ids = run.candidates.map((candidate) => candidate.candidateId);
-        this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt);
+        try {
+          const commitCandidates = run.runId
+            ? () => {
+              if (this.candidateStore.getDatabase() !== this.episodeStore.getDatabase()) {
+                throw new Error('dream_stores_must_share_database');
+              }
+              this.candidateStore.publishStagedCandidates(run.runId!, ids, startedAt);
+              this.candidateStore.updateRunStatus(run.runId!, 'staged', 'succeeded');
+            }
+            : undefined;
+          const completedAt = clock.now();
+          this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, completedAt, commitCandidates);
+        } catch (completionError) {
+          const failedAt = clock.now();
+          if (run.runId) this.candidateStore.failStagedRun(run.runId, failedAt, 'dream_job_completion_failed');
+          throw completionError;
+        }
         episodeIds.push(job.episodeId);
         candidateIds.push(...ids);
       } catch (error) {
         failures += 1;
         const message = error instanceof Error ? error.message : String(error);
-        const failure = classifyFailure(message, job.attempts, startedAt);
+        const failureNow = clock.now();
+        const failure = classifyFailure(message, job.attempts, failureNow);
         this.episodeStore.failDreamJob(job.episodeId, job.leaseId, message, failure);
         failedEpisodes.push({ episodeId: job.episodeId, error: message, failureCategory: failure.failureCategory, retryAfter: failure.retryAfter });
       }

@@ -448,7 +448,7 @@ test('episode import CLI is idempotent and dream CLI processes its batch-sealed 
     ].join('\n'));
     expect(await run('src/bin/episode.ts', common)).toEqual(expect.objectContaining({ imported: 1, duplicates: 2, dreamRan: false }));
     const dreamed = await run('src/bin/dream.ts', ['tick', '--db', dbPath, '--project', 'hermes', '--json']);
-    expect(dreamed).toEqual(expect.objectContaining({ processedEpisodeCount: 2, skipped: false }));
+    expect(dreamed).toEqual(expect.objectContaining({ processedEpisodeCount: 1, skipped: false }));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

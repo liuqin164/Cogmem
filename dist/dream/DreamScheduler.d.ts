@@ -1,5 +1,6 @@
 import type { DreamCuratorWorker } from '../engine/DreamCuratorWorker.js';
 import type { EpisodeStore } from '../episode/EpisodeStore.js';
+import type { DeepWriteCandidateStore } from '../store/DeepWriteCandidateStore.js';
 export type DreamTickMode = 'auto' | 'micro' | 'normal' | 'deep';
 export type SelectedDreamMode = 'none' | 'micro' | 'normal' | 'deep';
 export interface DreamTickOptions {
@@ -11,6 +12,9 @@ export interface DreamTickOptions {
     leaseMs?: number;
     maxAttempts?: number;
     maintenanceReason?: 'daily' | 'upgrade_repair';
+    clock?: {
+        now(): number;
+    };
 }
 export interface DreamTickResult {
     runId: string;
@@ -40,7 +44,8 @@ export interface DreamTickResult {
 export declare class DreamScheduler {
     private readonly episodeStore;
     private readonly curator;
-    constructor(episodeStore: EpisodeStore, curator: DreamCuratorWorker);
+    private readonly candidateStore;
+    constructor(episodeStore: EpisodeStore, curator: DreamCuratorWorker, candidateStore: DeepWriteCandidateStore);
     tick(options?: DreamTickOptions): Promise<DreamTickResult>;
     private recordRun;
 }

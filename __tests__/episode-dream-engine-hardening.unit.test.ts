@@ -227,7 +227,7 @@ test('Dream tick skips empty mature soft seals and still processes valid sealed 
     expect(processed).toEqual([valid.episodeId]);
     expect(store.getEpisode(empty.episodeId)).toEqual(expect.objectContaining({
       status: 'soft_sealed',
-      dreamStatus: 'failed',
+      dreamStatus: 'skipped',
       dreamError: 'episode_empty_soft_seal_not_promoted',
     }));
   } finally {
@@ -263,7 +263,7 @@ test('Dream claim skips legacy empty jobs without consuming the batch slot', () 
     expect(claimed).toEqual([expect.objectContaining({ episodeId: valid.episodeId })]);
     expect(store.getDreamStatus('brain')).toEqual(expect.objectContaining({ skipped: 1, processing: 1 }));
     expect(store.getEpisode(empty.episodeId)).toEqual(expect.objectContaining({
-      dreamStatus: 'failed',
+      dreamStatus: 'skipped',
       dreamError: 'episode_empty_skipped_no_raw_evidence',
     }));
   } finally {
@@ -328,19 +328,20 @@ test('assembled episodes use previous assistant context and seal with a non-evid
   const { dir, kernel } = createTestKernel('cogmem-episode-context-');
   try {
     kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 's1', sourceAgent: 'openclaw', role: 'user',
+      text: '我们讨论方案选择。', externalMessageId: 'u0',
+    });
+    kernel.appendEpisodeMessage({
       projectId: 'brain', sessionId: 's1', sourceAgent: 'openclaw', role: 'assistant',
       text: '建议采用第二个方案，可以吗？', externalMessageId: 'a1',
     });
-    expect(kernel.listEpisodes({ projectId: 'brain' })[0]).toEqual(expect.objectContaining({
-      candidateTypes: [], importanceSignals: ['non_user_context_only'],
-    }));
     kernel.appendEpisodeMessage({
       projectId: 'brain', sessionId: 's1', sourceAgent: 'openclaw', role: 'user',
       text: '对', externalMessageId: 'u1',
     });
     const episode = kernel.listEpisodes({ projectId: 'brain' })[0];
     const links = kernel.listEpisodeEventLinks(episode.episodeId);
-    expect(links.map((link) => link.relation)).toEqual(['assistant_proposal', 'accepts_assistant_proposal']);
+    expect(links.map((link) => link.relation)).toEqual(['ambiguous_shift', 'assistant_proposal', 'accepts_assistant_proposal']);
 
     kernel.sealEpisode(episode.episodeId, { mode: 'manual', reason: 'manual' });
     const sealed = kernel.getEpisode(episode.episodeId)!;
@@ -447,6 +448,10 @@ test('decision episodes emit temporal candidates and confirmed assistant proposa
     const decisionEpisode = kernel.listEpisodes({ projectId: 'brain', sessionId: 'decision' })[0];
     kernel.sealEpisode(decisionEpisode.episodeId, { mode: 'manual', reason: 'manual' });
 
+    kernel.appendEpisodeMessage({
+      projectId: 'brain', sessionId: 'proposal', sourceAgent: 'openclaw', role: 'user',
+      text: '我们讨论下一版范围。', externalMessageId: 'p0',
+    });
     kernel.appendEpisodeMessage({
       projectId: 'brain', sessionId: 'proposal', sourceAgent: 'openclaw', role: 'assistant',
       text: '建议下一版只做 Episode Dream 加固，可以吗？', externalMessageId: 'p1',

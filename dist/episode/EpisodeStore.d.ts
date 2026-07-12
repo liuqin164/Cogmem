@@ -1,6 +1,8 @@
 import type Database from 'bun:sqlite';
 import type { MemoryEvent } from '../types/index.js';
-import type { EpisodeClosureMode, EpisodeClosureReasonCode, EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeEventLink, EpisodeListOptions, EpisodeType, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
+import type { EpisodeClosureMode, EpisodeClosureReasonCode, EpisodeClosureReceipt, EpisodeDreamState, EpisodeDreamStatus, EpisodeEventLink, EpisodeListOptions, EpisodeStatus, EpisodeType, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
+import { type EpisodeBoundaryGuardResult } from './EpisodeBoundaryPolicy.js';
+import type { TurnRelationDecision } from './TurnRelationClassifier.js';
 interface CreateEpisodeInput {
     projectId: string;
     sessionId: string;
@@ -25,6 +27,41 @@ export interface ClaimedEpisodeDreamJob {
     modeHint: 'micro' | 'normal' | 'deep';
     attempts: number;
     createdAt: number;
+    leaseUntil: number;
+    attemptGeneration: number;
+}
+export interface EpisodeBoundaryDecisionRecord {
+    decisionId: string;
+    projectId: string;
+    sessionId: string;
+    sourceAgent?: string;
+    threadId?: string;
+    primaryEventId: string;
+    previousEpisodeId?: string;
+    resultingEpisodeId?: string;
+    policyVersion: string;
+    mode: string;
+    guardAction: string;
+    guardCodes: string[];
+    metrics: EpisodeBoundaryGuardResult['metrics'];
+    cpuDecision: Partial<TurnRelationDecision>;
+    reviewerInvoked: boolean;
+    reviewerDecision?: Partial<TurnRelationDecision>;
+    finalDecision: Partial<TurnRelationDecision>;
+    warnings: EpisodeBoundaryGuardResult['warnings'];
+    createdAt: number;
+}
+export interface EpisodeBoundarySnapshot {
+    eventCount: number;
+    actualLinkCount: number;
+    storedEventCount: number;
+    eventCountMismatch: boolean;
+    startedAt?: number;
+    updatedAt?: number;
+    lastEventAt?: number;
+    lastTrustedUserLocalDate?: string;
+    lastTrustedLocalDate?: string;
+    trustedLocalDates: string[];
 }
 export declare class EpisodeStore {
     private readonly db;
@@ -32,12 +69,22 @@ export declare class EpisodeStore {
     constructor(db: Database, resolveEvent?: ((eventId: string) => MemoryEvent | null | undefined) | undefined, options?: {
         initializeSchemaForTests?: boolean;
     });
+    getDatabase(): Database;
     createEpisode(input: CreateEpisodeInput): MemoryEpisode;
     findActiveEpisode(projectId: string, sessionId: string, sourceAgent?: string, conversationThreadId?: string): MemoryEpisode | undefined;
     private findActiveEpisodeRow;
     claimLegacyEpisodeScope(episodeId: string, sourceAgent?: string, conversationThreadId?: string): MemoryEpisode | undefined;
     getEpisode(episodeId: string): MemoryEpisode | undefined;
     listEpisodes(options?: EpisodeListOptions): MemoryEpisode[];
+    listEpisodesForBoundaryAudit(options: {
+        projectId: string;
+        statuses?: EpisodeStatus[];
+        limit?: number;
+        cursor?: string;
+    }): {
+        episodes: MemoryEpisode[];
+        nextCursor?: string;
+    };
     appendEvent(input: {
         episodeId: string;
         eventId: string;
@@ -54,6 +101,8 @@ export declare class EpisodeStore {
     }): EpisodeEventLink;
     getEventLink(eventId: string): EpisodeEventLink | undefined;
     listEventLinks(episodeId: string): EpisodeEventLink[];
+    getBoundarySnapshot(episodeId: string, timezone?: string): EpisodeBoundarySnapshot;
+    transaction<T>(fn: () => T): T;
     isEpisodeEmpty(episodeId: string): boolean;
     addCrossReference(input: {
         projectId: string;
@@ -84,8 +133,21 @@ export declare class EpisodeStore {
         after: unknown;
         now?: number;
     }): string;
+    recordBoundaryDecision(input: Omit<EpisodeBoundaryDecisionRecord, 'decisionId' | 'createdAt'> & {
+        createdAt?: number;
+    }): {
+        recorded: boolean;
+        decisionId?: string;
+        status: 'inserted' | 'duplicate';
+    };
+    listBoundaryDecisions(options?: {
+        projectId?: string;
+        primaryEventId?: string;
+        limit?: number;
+    }): EpisodeBoundaryDecisionRecord[];
     private invalidateEpisodeDerivedState;
     private resequenceEpisode;
+    private deleteEmptyEpisode;
     reopenSoftEpisode(episodeId: string, now: number): MemoryEpisode;
     sealEpisode(episodeId: string, input: {
         mode: EpisodeClosureMode;
@@ -125,7 +187,7 @@ export declare class EpisodeStore {
         projectId?: string;
         now?: number;
     }): number;
-    completeDreamJob(episodeId: string, leaseId: string, candidateIds: string[], now: number): void;
+    completeDreamJob(episodeId: string, leaseId: string, candidateIds: string[], now: number, commitCandidates?: () => void): void;
     failDreamJob(episodeId: string, leaseId: string, error: string, input: {
         now: number;
         failureCategory: string;
@@ -136,6 +198,7 @@ export declare class EpisodeStore {
     private markEmptyEpisodeDreamSkipped;
     private markEmptyEpisodeDreamSkippedMany;
     getDreamStatus(projectId?: string): EpisodeDreamStatus;
+    getDreamJobState(episodeId: string): EpisodeDreamState | undefined;
     countUnassignedRawEvents(projectId?: string): number;
     markEventDisposition(input: {
         eventId: string;
@@ -191,6 +254,8 @@ export declare class EpisodeStore {
     deleteByProject(projectId: string): number;
     private enqueueDreamJob;
     private initializeSchema;
+    private initializeSchemaUnsafe;
+    private ensureEpisodeCompatibilityColumns;
 }
 export {};
 //# sourceMappingURL=EpisodeStore.d.ts.map

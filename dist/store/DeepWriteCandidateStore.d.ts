@@ -1,6 +1,6 @@
 import type Database from 'bun:sqlite';
-export type DeepWriteRunStatus = 'succeeded' | 'failed' | 'skipped';
-export type DeepWriteCandidateStatus = 'shadow' | 'candidate' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
+export type DeepWriteRunStatus = 'running' | 'staged' | 'succeeded' | 'failed' | 'skipped' | 'abandoned';
+export type DeepWriteCandidateStatus = 'staged' | 'shadow' | 'candidate' | 'promoting' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
 export interface DeepWriteRunInput {
     runId?: string;
     projectId?: string;
@@ -14,12 +14,18 @@ export interface DeepWriteRunInput {
     status: DeepWriteRunStatus;
     error?: string;
     createdAt?: number;
+    sourceEpisodeId?: string;
+    dreamJobLeaseId?: string;
+    leaseUntil?: number;
+    attemptGeneration?: number;
+    updatedAt?: number;
 }
 export interface DeepWriteCandidateInput {
     candidateId?: string;
     runId: string;
     candidateType: string;
     status: DeepWriteCandidateStatus;
+    publishStatus?: Exclude<DeepWriteCandidateStatus, 'staged'>;
     confidence: number;
     content: unknown;
     evidence: unknown;
@@ -44,16 +50,24 @@ export interface DeepWriteCandidateListOptions {
     projectId?: string;
     runId?: string;
     limit?: number;
+    after?: {
+        createdAt: number;
+        candidateId: string;
+    };
 }
 export declare class DeepWriteCandidateStore {
     private readonly db;
     constructor(db: Database);
+    getDatabase(): Database;
+    countActivePromotions(targetType: string, targetId: string, excludingCandidateId?: string): number;
+    recoverStalePromoting(before: number, updatedAt: number): number;
     initSchema(): void;
     insertRun(input: DeepWriteRunInput): DeepWriteRunRecord;
     insertCandidates(inputs: DeepWriteCandidateInput[]): DeepWriteCandidateRecord[];
     getRun(runId: string): DeepWriteRunRecord | null;
     listCandidatesByRun(runId: string): DeepWriteCandidateRecord[];
     getCandidate(candidateId: string): DeepWriteCandidateRecord | null;
+    claimCandidate(candidateId: string, updatedAt?: number): boolean;
     listCandidatesByStatus(statuses: DeepWriteCandidateStatus[], options?: {
         candidateTypes?: string[];
         limit?: number;
@@ -66,7 +80,11 @@ export declare class DeepWriteCandidateStore {
         reason?: string;
         reviewAfter?: number | null;
         updatedAt?: number;
-    }): void;
+    }, expectedStatus?: DeepWriteCandidateStatus): void;
+    publishStagedCandidates(runId: string, candidateIds: string[], updatedAt: number): void;
+    failStagedRun(runId: string, now: number, reason: string): void;
+    updateRunStatus(runId: string, expected: DeepWriteRunStatus, next: DeepWriteRunStatus): void;
+    abandonStaleStagedRuns(before: number, updatedAt: number, projectId?: string): number;
     updateCandidateReviewData(candidateId: string, input: {
         content: unknown;
         evidence: unknown;

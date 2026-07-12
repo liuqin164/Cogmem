@@ -23,9 +23,12 @@ import { ContextCortex } from './context/index.js';
 import { ProspectiveMemoryService } from './prospective/index.js';
 import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
-import { EpisodeAssembler, EpisodeStore, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
+import { EpisodeAssembler, EpisodeStore, type EpisodeBoundaryDecisionRecord, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
+import { EpisodeBoundaryAuditService, type EpisodeBoundaryAuditResult } from './episode/EpisodeBoundaryAuditService.js';
+import { EpisodeBoundaryPolicy, type EpisodeBoundaryConfig } from './episode/EpisodeBoundaryPolicy.js';
+import { EpisodeSplitPlanner, type EpisodeSplitPlan } from './episode/EpisodeSplitPlanner.js';
 import { type DreamTickOptions, type DreamTickResult } from './dream/index.js';
-import { type EnvLike } from './config/CogmemConfig.js';
+import { type EnvLike, type ConfigDiagnosticLike } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
 import type { Embedder } from './store/Embedder.js';
 import { CognitiveGraphStore } from './store/CognitiveGraphStore.js';
@@ -43,7 +46,7 @@ import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
 import { TopologyStore } from './store/TopologyStore.js';
 import type { IVectorStore, VectorBackend } from './store/IVectorStore.js';
-import type { IngestInput, MemoryEvent, MemoryEventCausalityType, MemoryEventContext, MemoryRawEventType, MemoryEventRole, Neuron } from './types/index.js';
+import type { IngestInput, MemoryEvent, MemoryEventCausalityType, MemoryEventContext, MemoryRawEventType, MemoryEventRole, Neuron, OrderingConfidence } from './types/index.js';
 import { type ImportOptions, type ImportResult, type SnapshotMeta } from './snapshot/index.js';
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
@@ -59,6 +62,8 @@ export interface MemoryKernelOptions {
     encryptionProvider?: EncryptionProvider;
     redactionPolicy?: RedactionPolicy | false;
     turnRelationReviewer?: TurnRelationAdvisoryReviewer;
+    episodeBoundary?: Partial<EpisodeBoundaryConfig>;
+    configDiagnostics?: ConfigDiagnosticLike[];
 }
 export interface MemoryKernelFromConfigOptions extends MemoryKernelOptions {
     configPath?: string;
@@ -267,7 +272,9 @@ export interface RawMemoryEventInput {
     lineEnd?: number;
     charStart?: number;
     charEnd?: number;
+    orderingConfidence?: OrderingConfidence;
     localDate?: string;
+    localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
     metadata?: Record<string, unknown>;
 }
 export interface EpisodeMessageInput {
@@ -279,6 +286,10 @@ export interface EpisodeMessageInput {
     externalMessageId?: string;
     timestamp?: number;
     threadId?: string;
+    turnId?: string;
+    turnSeq?: number;
+    localDate?: string;
+    eventOrdinal?: number;
     metadata?: Record<string, unknown>;
 }
 export interface EpisodeMessageResult {
@@ -290,6 +301,17 @@ export interface EpisodeMessageResult {
     sealed: boolean;
     dreamRecommended: boolean;
     dreamRan: false;
+    boundaryTriggered?: boolean;
+    boundaryDetected?: boolean;
+    boundaryApplied?: boolean;
+    boundaryMode?: string;
+    boundaryDecisionId?: string;
+    boundaryGuardCodes?: string[];
+    boundaryAuditRecorded?: boolean;
+    boundaryAuditStatus?: string;
+    previousEpisodeId?: string;
+    reviewerRawResultStatus?: string;
+    warnings?: string[];
 }
 export type EpisodeRepairInput = {
     operation: 'move-event';
@@ -458,10 +480,14 @@ export declare class MemoryKernel {
     readonly pipelineMetrics: PipelineMetrics;
     readonly episodeStore: EpisodeStore;
     readonly episodeAssembler: EpisodeAssembler;
+    readonly episodeBoundaryPolicy: EpisodeBoundaryPolicy;
+    readonly episodeBoundaryAuditService: EpisodeBoundaryAuditService;
+    readonly episodeSplitPlanner: EpisodeSplitPlanner;
     readonly userTopicPathRegistry: UserTopicPathRegistry;
     readonly topicAliasRegistry: TopicAliasRegistry;
     readonly topicRelationGraph: TopicRelationGraph;
     readonly topicGovernance: TopicGovernance;
+    readonly configDiagnostics: ConfigDiagnosticLike[];
     private readonly dbPath;
     private readonly embedder;
     private readonly embeddingProvider?;
@@ -559,6 +585,7 @@ export declare class MemoryKernel {
         now?: number;
         batchSeal?: boolean;
         forceBatchSeal?: boolean;
+        allowNonUserEpisodeStart?: boolean;
     }): import("./episode/EpisodeAssembler.js").EpisodeAssemblyResult;
     assembleEpisodeTurnAsync(events: MemoryEvent[], input: {
         projectId: string;
@@ -568,6 +595,7 @@ export declare class MemoryKernel {
         now?: number;
         batchSeal?: boolean;
         forceBatchSeal?: boolean;
+        allowNonUserEpisodeStart?: boolean;
     }): Promise<import("./episode/EpisodeAssembler.js").EpisodeAssemblyResult>;
     appendRawEventToEpisode(event: MemoryEvent, input: {
         projectId: string;
@@ -577,6 +605,8 @@ export declare class MemoryKernel {
     }): import("./episode/EpisodeAssembler.js").EpisodeAssemblyResult;
     appendEpisodeMessage(input: EpisodeMessageInput): EpisodeMessageResult;
     appendEpisodeMessageAsync(input: EpisodeMessageInput): Promise<EpisodeMessageResult>;
+    private finishIngestMessage;
+    private finishIngestMessageAsync;
     private resumeEpisodeMessage;
     private resumeEpisodeMessageAsync;
     private assertEpisodeIngestIdentity;
@@ -603,6 +633,31 @@ export declare class MemoryKernel {
         limit?: number;
     }): EpisodeClosureReceipt[];
     listEpisodeEventLinks(episodeId: string): import("./episode/EpisodeTypes.js").EpisodeEventLink[];
+    auditEpisodeBoundaries(options: {
+        projectId: string;
+        episodeId?: string;
+        status?: MemoryEpisode['status'];
+        limit?: number;
+        cursor?: string;
+        maxEvents?: number;
+        maxDurationMs?: number;
+        maxIdleGapMs?: number;
+        timezone?: string;
+    }): EpisodeBoundaryAuditResult;
+    listEpisodeBoundaryDecisions(options: {
+        projectId: string;
+        primaryEventId?: string;
+        limit?: number;
+    }): EpisodeBoundaryDecisionRecord[];
+    planEpisodeSplit(options: {
+        projectId: string;
+        episodeId: string;
+        maxEvents?: number;
+        maxDurationMs?: number;
+        maxIdleGapMs?: number;
+        timezone?: string;
+        includeEventIds?: boolean;
+    }): EpisodeSplitPlan;
     getEpisodeDreamStatus(projectId?: string): EpisodeDreamStatus;
     retryFailedEpisodeDreams(projectId?: string): number;
     repairEpisodes(options?: {
@@ -614,8 +669,12 @@ export declare class MemoryKernel {
         assigned: number;
         unassigned: number;
         unassignedEventIds: string[];
+        nextGlobalSeq: number | undefined;
+        hasMore: boolean;
     };
     repairEpisode(input: EpisodeRepairInput): EpisodeRepairResult;
+    private repairEpisodeInTransaction;
+    private invalidatePromotedCandidate;
     listDreamCandidates(options?: DreamCandidateListOptions): DreamCandidateRecord[];
     countDreamCandidates(options?: Omit<DreamCandidateListOptions, 'limit'>): number;
     reviewDreamCandidate(input: CandidateReviewInput): CandidateReviewResult;

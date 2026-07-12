@@ -33,6 +33,9 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
     'cogmem_episode_append',
     'cogmem_episode_import',
     'cogmem_episode_status',
+    'cogmem_episode_audit_boundaries',
+    'cogmem_episode_boundary_decisions',
+    'cogmem_episode_split_plan',
     'cogmem_topic_list',
     'cogmem_topic_operate',
     'cogmem_topic_rollback',
@@ -68,6 +71,8 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
   expect(strategy?.annotations?.readOnlyHint).toBe(true);
   expect(strategy?.description).toContain('no instruction authority');
   expect(tools.find((tool) => tool.name === 'cogmem_episode_status')?.annotations?.readOnlyHint).toBe(true);
+  expect(tools.find((tool) => tool.name === 'cogmem_episode_boundary_decisions')?.annotations?.readOnlyHint).toBe(true);
+  expect(tools.find((tool) => tool.name === 'cogmem_episode_audit_boundaries')?.inputSchema.required).toContain('projectId');
   expect(tools.find((tool) => tool.name === 'cogmem_episode_append')?.description).toContain('never runs Dream');
   expect(tools.find((tool) => tool.name === 'cogmem_dream_tick')?.description).toContain('sealed episodes only');
   expect(map?.description).toContain('memory map');
@@ -88,6 +93,16 @@ test('core MCP strategy plan is deterministic metadata and does not perform reca
     templateId: 'source-first', instructionAuthority: 'none', persistAllowed: false,
   });
   expect(kernel.eventStore.getEventCount()).toBe(0);
+});
+
+test('core MCP episode audit rejects invalid status', async () => {
+  const kernel = makeKernel();
+  const result = await callCogmemMcpTool('cogmem_episode_audit_boundaries', {
+    projectId: 'brain',
+    status: 'closed',
+  }, { kernel });
+  expect(result.isError).toBe(true);
+  expect(JSON.stringify(result.structuredContent)).toContain('status must be open, soft_sealed, or sealed');
 });
 
 test('core MCP prospective tool requires distinct user confirmation and never executes tasks', async () => {

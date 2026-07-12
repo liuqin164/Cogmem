@@ -183,7 +183,7 @@ export class EntityStore {
         WHERE instance_id = ?
       `).run(JSON.stringify(mergedAliases), input.status || existing.status, JSON.stringify(mergedMetadata), now, existing.entityId);
             this.upsertAliases(existing.entityId, input.type, mergedAliases, now);
-            return this.findByEntityId(existing.entityId);
+            return this.getByEntityId(existing.entityId);
         }
         const record = {
             entityId: `entity-${randomUUID()}`,
@@ -216,7 +216,7 @@ export class EntityStore {
           SELECT e.*
           FROM entity_aliases ea
           JOIN entity_instances e ON e.instance_id = ea.entity_id
-          WHERE ea.normalized_alias = ? AND e.type = ?
+          WHERE ea.normalized_alias = ? AND e.type = ? AND e.status = 'active'
           ORDER BY ea.updated_at DESC
           LIMIT 12
         `).all(normalizedAlias, type)
@@ -224,7 +224,7 @@ export class EntityStore {
           SELECT e.*
           FROM entity_aliases ea
           JOIN entity_instances e ON e.instance_id = ea.entity_id
-          WHERE ea.normalized_alias = ?
+          WHERE ea.normalized_alias = ? AND e.status = 'active'
           ORDER BY ea.updated_at DESC
           LIMIT 12
         `).all(normalizedAlias);
@@ -233,29 +233,37 @@ export class EntityStore {
     findByCanonicalName(canonicalName, type) {
         const row = type
             ? this.db.prepare(`
-          SELECT * FROM entity_instances WHERE canonical_name = ? AND type = ? ORDER BY updated_at DESC LIMIT 1
+          SELECT * FROM entity_instances WHERE canonical_name = ? AND type = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1
         `).get(canonicalName, type)
             : this.db.prepare(`
-          SELECT * FROM entity_instances WHERE canonical_name = ? ORDER BY updated_at DESC LIMIT 1
+          SELECT * FROM entity_instances WHERE canonical_name = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1
         `).get(canonicalName);
         return row ? this.mapRow(row) : null;
     }
     findByEntityId(entityId) {
+        const row = this.db.prepare(`SELECT * FROM entity_instances WHERE instance_id = ?`).get(entityId);
+        return row ? this.mapRow(row) : null;
+    }
+    findActiveByEntityId(entityId) {
         const row = this.db.prepare(`
-      SELECT * FROM entity_instances WHERE instance_id = ?
+      SELECT * FROM entity_instances WHERE instance_id = ? AND status = 'active'
     `).get(entityId);
+        return row ? this.mapRow(row) : null;
+    }
+    getByEntityId(entityId) {
+        const row = this.db.prepare(`SELECT * FROM entity_instances WHERE instance_id = ?`).get(entityId);
         return row ? this.mapRow(row) : null;
     }
     findLatestByType(type) {
         const row = this.db.prepare(`
-      SELECT * FROM entity_instances WHERE type = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1
+      SELECT * FROM entity_instances WHERE type = ? AND status = 'active' ORDER BY updated_at DESC, created_at DESC LIMIT 1
     `).get(type);
         return row ? this.mapRow(row) : null;
     }
     listRecentByType(type, limit = 8) {
         const rows = this.db.prepare(`
       SELECT * FROM entity_instances
-      WHERE type = ?
+      WHERE type = ? AND status = 'active'
       ORDER BY updated_at DESC, created_at DESC
       LIMIT ?
     `).all(type, limit);
@@ -264,7 +272,7 @@ export class EntityStore {
     listByCreationOrder(type, limit = 8) {
         const rows = this.db.prepare(`
       SELECT * FROM entity_instances
-      WHERE type = ?
+      WHERE type = ? AND status = 'active'
       ORDER BY created_at DESC, updated_at DESC
       LIMIT ?
     `).all(type, limit);
@@ -411,7 +419,7 @@ export class EntityStore {
       ) VALUES (?, ?, ?, ?, ?, ?)
     `).run(record.mentionId, record.entityId, record.neuronId || null, record.projectId || null, record.mentionType, record.createdAt);
         this.touchEntity(record.entityId, record.createdAt);
-        const entity = this.findByEntityId(record.entityId);
+        const entity = this.getByEntityId(record.entityId);
         if (entity) {
             for (const alias of [entity.canonicalName, ...(entity.aliases || [])]) {
                 this.refreshAliasConflict(this.normalizeAlias(alias), entity.type, record.createdAt);
@@ -440,6 +448,8 @@ export class EntityStore {
             sql += ` AND em.project_id = ?`;
             params.push(input.projectId);
         }
+        if (!input.includeInactive)
+            sql += ` AND e.status = 'active'`;
         sql += ` ORDER BY em.created_at DESC LIMIT ?`;
         params.push(limit);
         const rows = this.db.prepare(sql).all(...params);
@@ -469,6 +479,8 @@ export class EntityStore {
             sql += ` AND em.project_id = ?`;
             params.push(input.projectId);
         }
+        if (!input.includeInactive)
+            sql += ` AND e.status = 'active'`;
         if (input.entityIds?.length) {
             sql += ` AND em.entity_id IN (${input.entityIds.map(() => '?').join(', ')})`;
             params.push(...input.entityIds);
@@ -662,7 +674,7 @@ export class EntityStore {
             this.db.close();
     }
     addAlias(entityId, alias, updatedAt = Date.now()) {
-        const entity = this.findByEntityId(entityId);
+        const entity = this.getByEntityId(entityId);
         if (!entity || !alias.trim())
             return;
         const aliases = Array.from(new Set([...entity.aliases, alias.trim()]));
@@ -671,7 +683,7 @@ export class EntityStore {
         this.upsertAliases(entityId, entity.type, [alias], updatedAt);
     }
     removeAlias(entityId, alias, updatedAt = Date.now()) {
-        const entity = this.findByEntityId(entityId);
+        const entity = this.getByEntityId(entityId);
         if (!entity || entity.canonicalName === alias)
             return;
         const normalized = this.normalizeAlias(alias);

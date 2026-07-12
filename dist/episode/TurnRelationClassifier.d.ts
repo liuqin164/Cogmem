@@ -33,8 +33,17 @@ export interface TurnRelationAdvisoryReviewer {
         cpuDecision: TurnRelationDecision;
     }): Promise<unknown>;
 }
+export type TurnRelationReviewStatus = 'not_invoked' | 'accepted' | 'failed' | 'invalid' | 'stale_ignored';
+export interface TurnRelationHybridTrace {
+    cpuDecision: TurnRelationDecision;
+    reviewerInvoked: boolean;
+    reviewerRawResultStatus: TurnRelationReviewStatus;
+    reviewerDecision?: TurnRelationDecision;
+    finalDecision: TurnRelationDecision;
+}
 export declare function classifyTurnRelation(input: string | TurnClassificationContext): TurnRelationDecision;
 export declare function classifyAssistantRelation(text: string, role?: string): TurnRelation;
 /** Background-only semantic review. The reviewer can suggest classification fields but cannot mutate memory. */
 export declare function classifyTurnRelationHybrid(context: TurnClassificationContext, reviewer?: TurnRelationAdvisoryReviewer): Promise<TurnRelationDecision>;
+export declare function classifyTurnRelationHybridTrace(context: TurnClassificationContext, reviewer?: TurnRelationAdvisoryReviewer): Promise<TurnRelationHybridTrace>;
 //# sourceMappingURL=TurnRelationClassifier.d.ts.map

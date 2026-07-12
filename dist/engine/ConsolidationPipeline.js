@@ -263,7 +263,7 @@ export class ConsolidationPipeline {
     }
     buildAsyncEnrichmentEntityBinding(neuron, consolidation) {
         const compiledEntities = consolidation.compiledEntityIds
-            .map((entityId) => this.entityStore.findByEntityId(entityId))
+            .map((entityId) => this.entityStore.getByEntityId(entityId))
             .filter((entity) => Boolean(entity));
         const suspiciousReasons = [];
         if (compiledEntities.length > 0) {
@@ -286,11 +286,11 @@ export class ConsolidationPipeline {
     }
     buildAsyncEnrichmentContext(neuron, consolidation) {
         const recentEntities = Array.from(new Map([
-            ...consolidation.compiledEntityIds.map((entityId) => this.entityStore.findByEntityId(entityId)),
+            ...consolidation.compiledEntityIds.map((entityId) => this.entityStore.getByEntityId(entityId)),
             ...this.entityStore.getEntityTimeline({
                 projectId: neuron.metadata.projectId,
                 limit: 8
-            }).map((item) => this.entityStore.findByEntityId(item.entityId))
+            }).map((item) => this.entityStore.getByEntityId(item.entityId))
         ]
             .filter((entity) => Boolean(entity))
             .map((entity) => [entity.entityId, entity])).values()).slice(0, 6);
@@ -309,7 +309,7 @@ export class ConsolidationPipeline {
     hasSuspiciousUnseenEntityBinding(consolidation) {
         const semanticEntityHints = consolidation.semanticCompilation?.entities.map((entity) => entity.text) || [];
         const compiledEntityNames = consolidation.compiledEntityIds
-            .map((entityId) => this.entityStore.findByEntityId(entityId)?.canonicalName || '')
+            .map((entityId) => this.entityStore.getByEntityId(entityId)?.canonicalName || '')
             .filter(Boolean);
         const sourceText = consolidation.interactionUnit?.semanticText || '';
         const explicitNamedDevice = sourceText.match(/([A-Za-z][A-Za-z0-9._-]*(?:\s+[A-Za-z0-9._-]+){1,3})/);

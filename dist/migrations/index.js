@@ -22,6 +22,10 @@ import { migration_0024 } from './0024_episode_ontology_reliability.js';
 import { migration_0025 } from './0025_memory_atlas.js';
 import { migration_0026 } from './0026_runtime_governance_atlas_reliability.js';
 import { migration_0027 } from './0027_openclaw_upgrade_hotfix.js';
+import { migration_0028 } from './0028_episode_boundary_guardrails.js';
+import { migration_0029 } from './0029_episode_active_scope_guard.js';
+import { migration_0030 } from './0030_memory_event_local_date_source.js';
+import { migration_0031 } from './0031_episode_boundary_integrity_repair.js';
 /**
  * Ordered list of all schema migrations.
  * Add new migrations here in ascending version order.
@@ -52,6 +56,16 @@ export const ALL_MIGRATIONS = [
     migration_0025,
     migration_0026,
     migration_0027,
+    migration_0028,
+    migration_0029,
+    migration_0030,
+    migration_0031,
 ];
-export { migration_0001, migration_0002, migration_0003, migration_0004, migration_0005, migration_0006, migration_0007, migration_0009, migration_0010, migration_0011, migration_0012, migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027 };
+// Core stores bootstrap the pre-0015 tables themselves. Running the early
+// historical migrations against a fresh kernel would try to ALTER optional
+// legacy tables that do not exist yet. The kernel still runs every migration
+// from the first schema that owns the runtime tables through the latest one;
+// the CLI remains able to replay the complete historical chain.
+export const KERNEL_MIGRATIONS = ALL_MIGRATIONS.filter((migration) => Number.parseInt(migration.version, 10) >= 15);
+export { migration_0001, migration_0002, migration_0003, migration_0004, migration_0005, migration_0006, migration_0007, migration_0009, migration_0010, migration_0011, migration_0012, migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028, migration_0029, migration_0030, migration_0031 };
 export { SchemaMigrationRunner } from './SchemaMigrationRunner.js';

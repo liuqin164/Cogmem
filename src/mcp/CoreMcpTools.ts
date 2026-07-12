@@ -1,5 +1,6 @@
 import { KernelAgentMemoryBackend } from '../agent/index.js';
 import { createStableImportIdentityFactory } from '../episode/EpisodeImportIdentity.js';
+import type { EpisodeType } from '../episode/EpisodeTypes.js';
 import {
   createMemoryKernel,
   createMemoryKernelFromConfig,
@@ -50,6 +51,11 @@ const EPISODE_MESSAGE_SCHEMA = {
     text: STRING_SCHEMA,
     externalMessageId: STRING_SCHEMA,
     timestamp: NUMBER_SCHEMA,
+    threadId: STRING_SCHEMA,
+    turnId: STRING_SCHEMA,
+    turnSeq: NUMBER_SCHEMA,
+    localDate: STRING_SCHEMA,
+    eventOrdinal: NUMBER_SCHEMA,
   },
   required: ['role', 'text'],
 };
@@ -153,6 +159,7 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
           projectId: STRING_SCHEMA, sessionId: STRING_SCHEMA, sourceAgent: STRING_SCHEMA,
           role: { type: 'string', enum: ['user', 'assistant', 'agent', 'tool', 'system', 'narrator'] },
           text: STRING_SCHEMA, externalMessageId: STRING_SCHEMA, timestamp: NUMBER_SCHEMA,
+          threadId: STRING_SCHEMA, turnId: STRING_SCHEMA, turnSeq: NUMBER_SCHEMA, localDate: STRING_SCHEMA, eventOrdinal: NUMBER_SCHEMA,
         },
         required: ['projectId', 'sessionId', 'sourceAgent', 'role', 'text', 'externalMessageId'],
       },
@@ -178,6 +185,42 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
       description: 'Inspect open and sealed episodes plus Dream backlog. Read-only.',
       inputSchema: { type: 'object', properties: { projectId: STRING_SCHEMA, sessionId: STRING_SCHEMA, limit: NUMBER_SCHEMA } },
       annotations: { title: 'Episode Status', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: 'cogmem_episode_audit_boundaries',
+      description: 'Read-only deterministic audit of episode boundary health. Does not write audit rows, repair, split, Dream, Atlas, or activation telemetry.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: STRING_SCHEMA, episodeId: STRING_SCHEMA, status: STRING_SCHEMA, limit: NUMBER_SCHEMA, cursor: STRING_SCHEMA,
+          maxEvents: NUMBER_SCHEMA, maxDurationMs: NUMBER_SCHEMA, maxIdleGapMs: NUMBER_SCHEMA, timezone: STRING_SCHEMA,
+        },
+        required: ['projectId'],
+      },
+      annotations: { title: 'Audit Episode Boundaries', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: 'cogmem_episode_boundary_decisions',
+      description: 'Read-only project-scoped trace of episode boundary decisions, including CPU decision, reviewer decision, final decision, guard codes, and warnings.',
+      inputSchema: {
+        type: 'object',
+        properties: { projectId: STRING_SCHEMA, primaryEventId: STRING_SCHEMA, limit: NUMBER_SCHEMA },
+        required: ['projectId'],
+      },
+      annotations: { title: 'Episode Boundary Decisions', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: 'cogmem_episode_split_plan',
+      description: 'Read-only deterministic split preview for a single episode. Never calls repair or returns an apply command.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: STRING_SCHEMA, episodeId: STRING_SCHEMA, maxEvents: NUMBER_SCHEMA, maxDurationMs: NUMBER_SCHEMA,
+          maxIdleGapMs: NUMBER_SCHEMA, timezone: STRING_SCHEMA, includeEventIds: { type: 'boolean' },
+        },
+        required: ['projectId', 'episodeId'],
+      },
+      annotations: { title: 'Plan Episode Split', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     },
     {
       name: 'cogmem_topic_list',
@@ -221,8 +264,8 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
       name: 'cogmem_episode_seal',
       description: 'Explicitly seal one episode and enqueue it for conditional Dream processing.',
       inputSchema: {
-        type: 'object', properties: { episodeId: STRING_SCHEMA, mode: { type: 'string', enum: ['soft', 'hard', 'manual', 'batch'] }, reason: STRING_SCHEMA },
-        required: ['episodeId'],
+        type: 'object', properties: { projectId: STRING_SCHEMA, episodeId: STRING_SCHEMA, mode: { type: 'string', enum: ['soft', 'hard', 'manual', 'batch'] }, reason: STRING_SCHEMA },
+        required: ['projectId', 'episodeId'],
       },
       annotations: { title: 'Seal Episode', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
@@ -370,8 +413,9 @@ export async function callCogmemMcpTool(
   runtime: CogmemMcpRuntime = {},
 ): Promise<CogmemMcpCallResult> {
   const input = args || {};
-  const opened = openRuntimeKernel(runtime);
+  let opened: { kernel: MemoryKernel; shouldClose: boolean } | undefined;
   try {
+    opened = openRuntimeKernel(runtime);
     switch (name) {
       case 'cogmem_remember_turn':
         return await rememberTurn(opened.kernel, input);
@@ -394,6 +438,26 @@ export async function callCogmemMcpTool(
         return await episodeImport(opened.kernel, input);
       case 'cogmem_episode_status':
         return episodeStatus(opened.kernel, input);
+      case 'cogmem_episode_audit_boundaries':
+        return jsonResult(opened.kernel.auditEpisodeBoundaries({
+          projectId: requiredString(input.projectId, 'projectId'), episodeId: optionalString(input.episodeId),
+          status: optionalEpisodeStatus(input.status), limit: optionalNumber(input.limit), cursor: optionalString(input.cursor),
+          maxEvents: optionalNumber(input.maxEvents), maxDurationMs: optionalNumber(input.maxDurationMs),
+          maxIdleGapMs: optionalNumber(input.maxIdleGapMs), timezone: optionalString(input.timezone),
+        }));
+      case 'cogmem_episode_boundary_decisions':
+        return jsonResult({ decisions: opened.kernel.listEpisodeBoundaryDecisions({
+          projectId: requiredString(input.projectId, 'projectId'),
+          primaryEventId: optionalString(input.primaryEventId),
+          limit: optionalNumber(input.limit),
+        }) });
+      case 'cogmem_episode_split_plan':
+        return jsonResult(opened.kernel.planEpisodeSplit({
+          projectId: requiredString(input.projectId, 'projectId'), episodeId: requiredString(input.episodeId, 'episodeId'),
+          maxEvents: optionalNumber(input.maxEvents), maxDurationMs: optionalNumber(input.maxDurationMs),
+          maxIdleGapMs: optionalNumber(input.maxIdleGapMs), timezone: optionalString(input.timezone),
+          includeEventIds: input.includeEventIds === true,
+        }));
       case 'cogmem_topic_list': {
         const projectId = requiredString(input.projectId, 'projectId');
         return jsonResult({ topics: opened.kernel.userTopicPathRegistry.list(projectId), relations: opened.kernel.topicRelationGraph.list(projectId) });
@@ -414,7 +478,7 @@ export async function callCogmemMcpTool(
       case 'cogmem_episode_repair':
         return jsonResult(episodeRepair(opened.kernel, input));
       case 'cogmem_episode_seal':
-        return jsonResult(opened.kernel.sealEpisode(requiredString(input.episodeId, 'episodeId'), {
+        return jsonResult(sealProjectEpisode(opened.kernel, requiredString(input.projectId, 'projectId'), requiredString(input.episodeId, 'episodeId'), {
           mode: optionalEpisodeClosureMode(input.mode),
           reason: optionalString(input.reason) || 'mcp_manual_seal',
         }));
@@ -488,7 +552,7 @@ export async function callCogmemMcpTool(
   } catch (error) {
     return jsonResult({ error: error instanceof Error ? error.message : String(error) }, true);
   } finally {
-    if (opened.shouldClose) opened.kernel.close();
+    if (opened?.shouldClose) opened.kernel.close();
   }
 }
 
@@ -516,6 +580,8 @@ async function episodeAppend(kernel: MemoryKernel, input: Record<string, unknown
     sourceAgent: requiredString(input.sourceAgent, 'sourceAgent'),
     role: requiredEpisodeRole(input.role), text,
     externalMessageId: requiredString(input.externalMessageId, 'externalMessageId'), timestamp: optionalNumber(input.timestamp),
+    threadId: optionalString(input.threadId), turnId: optionalString(input.turnId), turnSeq: optionalNumber(input.turnSeq),
+    localDate: optionalString(input.localDate), eventOrdinal: optionalNumber(input.eventOrdinal),
   }));
 }
 
@@ -535,13 +601,18 @@ async function episodeImport(kernel: MemoryKernel, input: Record<string, unknown
     totalChars += text.length;
     if (text.length > 16_000 || totalChars > 1_000_000) throw new Error('episode import exceeds bounded text limits');
     const role = requiredEpisodeRole(message.role);
-    const timestamp = optionalNumber(message.timestamp);
-    const suppliedIdentity = optionalString(message.externalMessageId);
-    if (!suppliedIdentity) autoIdentityUsed = true;
-    return {
-      role, text, timestamp,
-      externalMessageId: suppliedIdentity
-        || stableIdentity({ role, text, timestamp }),
+      const timestamp = optionalNumber(message.timestamp);
+      const suppliedIdentity = optionalString(message.externalMessageId);
+      if (!suppliedIdentity) autoIdentityUsed = true;
+      return {
+        role, text, timestamp,
+        threadId: optionalString(message.threadId),
+        turnId: optionalString(message.turnId),
+        turnSeq: optionalNumber(message.turnSeq),
+        localDate: optionalString(message.localDate),
+        eventOrdinal: optionalNumber(message.eventOrdinal),
+        externalMessageId: suppliedIdentity
+        || stableIdentity({ role, text, timestamp, sourcePosition: optionalString(message.sourceRange) || optionalString(message.recordId) || index }),
     };
   });
   const results: Awaited<ReturnType<MemoryKernel['appendEpisodeMessageAsync']>>[] = [];
@@ -624,12 +695,18 @@ function episodeRepair(kernel: MemoryKernel, input: Record<string, unknown>) {
   });
   if (operation === 'reclassify') return kernel.repairEpisode({
     operation, projectId, episodeId: requiredString(input.episodeId, 'episodeId'),
-    episodeType: optionalString(input.episodeType) as never, topicPath: optionalString(input.topicPath), importance: optionalNumber(input.importance),
+    episodeType: optionalEpisodeType(input.episodeType), topicPath: optionalString(input.topicPath), importance: optionalNumber(input.importance),
   });
   if (operation === 'requeue-dream' || operation === 'invalidate-dream-run') return kernel.repairEpisode({
     operation, projectId, episodeId: requiredString(input.episodeId, 'episodeId'), mode: optionalDreamMode(input.mode) === 'auto' ? 'normal' : optionalDreamMode(input.mode) as never,
   });
   throw new Error(`invalid episode repair operation: ${operation}`);
+}
+
+function sealProjectEpisode(kernel: MemoryKernel, projectId: string, episodeId: string, input: { mode: 'soft' | 'hard' | 'manual' | 'batch'; reason: string }) {
+  const episode = kernel.getEpisode(episodeId);
+  if (!episode || episode.projectId !== projectId) throw new Error(`episode_project_mismatch:${episodeId}`);
+  return kernel.sealEpisode(episodeId, input);
 }
 
 function dreamRecommendation(kernel: MemoryKernel, projectId: string | undefined, requestedMode: string | undefined) {
@@ -839,7 +916,22 @@ function optionalProspectiveStatuses(value: unknown): Array<'pending' | 'confirm
 }
 
 function optionalNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  throw new Error('value must be a finite number');
+}
+
+function optionalEpisodeType(value: unknown): EpisodeType | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const allowed = new Set<EpisodeType>(['discussion', 'decision', 'correction', 'preference', 'goal', 'debugging', 'planning', 'prospective', 'general']);
+  if (typeof value !== 'string' || !allowed.has(value as EpisodeType)) throw new Error('episodeType must be a valid episode type');
+  return value as EpisodeType;
+}
+
+function optionalEpisodeStatus(value: unknown): 'open' | 'soft_sealed' | 'sealed' | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === 'open' || value === 'soft_sealed' || value === 'sealed') return value;
+  throw new Error('status must be open, soft_sealed, or sealed');
 }
 
 function optionalTurnIngestMode(value: unknown): 'immediate_compile' | 'selective_compile' | 'raw_archive_only' | 'raw_then_dream' | undefined {

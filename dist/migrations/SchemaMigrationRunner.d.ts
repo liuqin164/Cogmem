@@ -19,11 +19,13 @@ export declare class SchemaMigrationRunner {
     constructor(db: Database, migrations: Migration[], options?: SchemaMigrationRunnerOptions);
     plan(): Migration[];
     run(options?: SchemaMigrationRunOptions): SchemaMigrationResult;
+    private ensureMigrationTable;
     currentVersion(): string | undefined;
     private appliedVersions;
     private schemaMigrationsTableExists;
     private legacySchemaVersion;
     private legacyCurrentVersion;
     private adoptLegacyVersion;
+    private migrationSchemaSatisfied;
 }
 //# sourceMappingURL=SchemaMigrationRunner.d.ts.map

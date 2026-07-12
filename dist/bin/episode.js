@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { createReadStream, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { createStableImportIdentityFactory } from '../episode/EpisodeImportIdentity.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
@@ -24,12 +25,15 @@ function parseArgs(argv) {
 }
 function usage() {
     return [
-        'Usage: cogmem episode <append|import|list|get|seal|status|repair|split|merge|move-event|reclassify|requeue-dream> [args]',
+        'Usage: cogmem episode <append|import|list|get|seal|status|audit-boundaries|boundary-decisions|split-plan|repair|split|merge|move-event|reclassify|requeue-dream> [args]',
         '  append --project <id> --session <id> --source-agent <id> --role <role> --text <text>',
         '  import --project <id> --session <id> --source-agent <id> --format jsonl --file <path> [--seal-batch] [--force-seal] [--chunk-size <n>] [--checkpoint-file <path>] [--resume] [--start-line <n>] [--end-line <n>] [--max-lines <n>] [--skip-errors] [--max-errors <n>]',
         '  list|status [--project <id>] [--session <id>] [--json]',
-        '  get --episode <id> [--json]',
-        '  seal --episode <id> [--mode soft|hard|manual|batch] [--reason <reason>]',
+        '  get --project <id> --episode <id> [--json]',
+        '  seal --project <id> --episode <id> [--mode soft|hard|manual|batch] [--reason <reason>]',
+        '  audit-boundaries --project <id> [--episode <id>] [--status open|soft_sealed|sealed] [--limit <n>] [--cursor <cursor>]',
+        '  boundary-decisions --project <id> [--event <eventId>] [--limit <n>]',
+        '  split-plan --project <id> --episode <id> [--include-event-ids]',
         '  repair [--project <id>] [--since <globalSeq>] [--limit <n>]',
         '  split --project <id> --episode <id> --events <eventId,eventId>',
         '  merge --project <id> --source-episode <id> --target-episode <id>',
@@ -62,6 +66,8 @@ async function main() {
                 projectId: requiredArg(args, 'project'), sessionId: requiredArg(args, 'session'),
                 sourceAgent: requiredArg(args, 'source-agent'), role: roleArg(args.role), text: requiredArg(args, 'text'),
                 externalMessageId: stringArg(args, 'external-id'), timestamp: numberArg(args, 'timestamp'),
+                threadId: stringArg(args, 'thread-id'), turnId: stringArg(args, 'turn-id'), turnSeq: numberArg(args, 'turn-seq'),
+                localDate: stringArg(args, 'local-date'), eventOrdinal: numberArg(args, 'event-ordinal'),
             });
         }
         else if (args.command === 'import') {
@@ -74,12 +80,42 @@ async function main() {
             result = { episodes: kernel.listEpisodes({ projectId, sessionId, limit: numberArg(args, 'limit') }), dream: kernel.getEpisodeDreamStatus(projectId) };
         }
         else if (args.command === 'get') {
+            const requestedProject = requiredArg(args, 'project');
             const episodeId = requiredArg(args, 'episode');
-            result = { episode: kernel.getEpisode(episodeId), events: kernel.listEpisodeEventLinks(episodeId), closureReceipts: kernel.listEpisodeClosureReceipts({ episodeId }) };
+            const episode = kernel.getEpisode(episodeId);
+            if (!episode || episode.projectId !== requestedProject)
+                throw new Error(`episode_project_mismatch:${episodeId}`);
+            result = { episode, events: kernel.listEpisodeEventLinks(episodeId), closureReceipts: kernel.listEpisodeClosureReceipts({ episodeId, projectId: requestedProject }) };
         }
         else if (args.command === 'seal') {
-            result = kernel.sealEpisode(requiredArg(args, 'episode'), {
+            const episodeId = requiredArg(args, 'episode');
+            const requestedProject = requiredArg(args, 'project');
+            const episode = kernel.getEpisode(episodeId);
+            if (!episode || episode.projectId !== requestedProject)
+                throw new Error(`episode_project_mismatch:${episodeId}`);
+            result = kernel.sealEpisode(episodeId, {
                 mode: closureModeArg(stringArg(args, 'mode')), reason: stringArg(args, 'reason') || 'cli_manual_seal',
+            });
+        }
+        else if (args.command === 'audit-boundaries') {
+            result = kernel.auditEpisodeBoundaries({
+                projectId: requiredArg(args, 'project'), episodeId: stringArg(args, 'episode'),
+                status: statusArg(stringArg(args, 'status')), limit: numberArg(args, 'limit'), cursor: stringArg(args, 'cursor'),
+                maxEvents: numberArg(args, 'max-events'), maxDurationMs: numberArg(args, 'max-duration-ms'),
+                maxIdleGapMs: numberArg(args, 'max-idle-gap-ms'), timezone: stringArg(args, 'timezone'),
+            });
+        }
+        else if (args.command === 'boundary-decisions') {
+            result = { decisions: kernel.listEpisodeBoundaryDecisions({
+                    projectId: requiredArg(args, 'project'), primaryEventId: stringArg(args, 'event'), limit: numberArg(args, 'limit'),
+                }) };
+        }
+        else if (args.command === 'split-plan') {
+            result = kernel.planEpisodeSplit({
+                projectId: requiredArg(args, 'project'), episodeId: requiredArg(args, 'episode'),
+                maxEvents: numberArg(args, 'max-events'), maxDurationMs: numberArg(args, 'max-duration-ms'),
+                maxIdleGapMs: numberArg(args, 'max-idle-gap-ms'), timezone: stringArg(args, 'timezone'),
+                includeEventIds: args['include-event-ids'] === true,
             });
         }
         else if (args.command === 'repair') {
@@ -126,9 +162,17 @@ async function importJsonl(kernel, args) {
     const file = requiredArg(args, 'file');
     const checkpointFile = stringArg(args, 'checkpoint-file') || `${file}.cogmem-checkpoint.json`;
     const chunkSize = Math.max(1, Math.min(Math.trunc(numberArg(args, 'chunk-size') ?? 500), 5000));
+    const fileHash = createHash('sha256').update(readFileSync(file)).digest('hex');
     const checkpoint = args.resume === true && existsSync(checkpointFile)
         ? JSON.parse(readFileSync(checkpointFile, 'utf8'))
         : {};
+    const checkpointPrefixHash = checkpoint.processedLine ? sourcePrefixHash(file, checkpoint.processedLine) : undefined;
+    if (args.resume === true && checkpoint.fileHash && ((checkpoint.processedPrefixHash ? checkpoint.processedPrefixHash !== checkpointPrefixHash : checkpoint.fileHash !== fileHash)
+        || checkpoint.projectId !== projectId
+        || checkpoint.sourceAgent !== sourceAgent
+        || checkpoint.sessionId !== sessionId
+        || checkpoint.format !== format))
+        throw new Error('episode_import_checkpoint_source_mismatch');
     const resumeAfter = Math.max(0, checkpoint.processedLine || 0);
     const startLine = Math.max(1, Math.trunc(numberArg(args, 'start-line') ?? 1));
     const endLine = Math.max(startLine, Math.trunc(numberArg(args, 'end-line') ?? Number.MAX_SAFE_INTEGER));
@@ -151,15 +195,38 @@ async function importJsonl(kernel, args) {
     let duplicates = 0;
     let processed = 0;
     let lineNumber = 0;
+    let lastProcessedLine = resumeAfter;
     let selectedLines = 0;
+    let windowStopped = false;
     const errors = [];
     const reader = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
     for await (const rawLine of reader) {
         lineNumber += 1;
         if (!rawLine.trim())
             continue;
-        if (lineNumber > endLine || selectedLines >= maxLines)
+        if (lineNumber > endLine || selectedLines >= maxLines) {
+            windowStopped = true;
             break;
+        }
+        if (lineNumber <= resumeAfter || lineNumber < startLine) {
+            // Rebuild only the deterministic fallback identity state. A malformed
+            // skipped line must remain skipped during resume.
+            try {
+                const prior = JSON.parse(rawLine);
+                const priorText = typeof prior.text === 'string' ? prior.text : typeof prior.content === 'string' ? prior.content : undefined;
+                const hasExplicitIdentity = typeof prior.externalMessageId === 'string' || typeof prior.id === 'string';
+                if (priorText && !hasExplicitIdentity) {
+                    const priorSession = typeof prior.sessionId === 'string' ? prior.sessionId : sessionId;
+                    const priorRole = roleValue(prior.role);
+                    const priorTimestamp = prior.timestamp === undefined ? undefined : timeValue(prior.timestamp);
+                    getIdentity(priorSession)({ role: priorRole, text: priorText, timestamp: priorTimestamp });
+                }
+            }
+            catch {
+                // The checkpoint already records this line as skipped/failed.
+            }
+            continue;
+        }
         try {
             const message = JSON.parse(rawLine);
             const text = typeof message.text === 'string' ? message.text : typeof message.content === 'string' ? message.content : undefined;
@@ -170,21 +237,24 @@ async function importJsonl(kernel, args) {
             const resolvedSessionId = typeof message.sessionId === 'string' ? message.sessionId : sessionId;
             const role = roleValue(message.role);
             const timestamp = timeValue(message.timestamp);
+            const threadId = typeof message.threadId === 'string' ? message.threadId : undefined;
+            const turnId = typeof message.turnId === 'string' ? message.turnId : undefined;
+            const turnSeq = typeof message.turnSeq === 'number' && Number.isFinite(message.turnSeq) ? message.turnSeq : undefined;
+            const localDate = typeof message.localDate === 'string' ? message.localDate : undefined;
+            const eventOrdinal = typeof message.eventOrdinal === 'number' && Number.isFinite(message.eventOrdinal) ? message.eventOrdinal : undefined;
             const externalMessageId = typeof message.externalMessageId === 'string'
                 ? message.externalMessageId
                 : typeof message.id === 'string'
                     ? message.id
                     : getIdentity(resolvedSessionId)({ role, text, timestamp });
-            // Rebuild occurrence counters while streaming past the checkpoint/start line.
-            if (lineNumber <= resumeAfter || lineNumber < startLine)
-                continue;
             selectedLines += 1;
             const result = await kernel.appendEpisodeMessageAsync({
-                projectId, sourceAgent, sessionId: resolvedSessionId, role, text, timestamp,
+                projectId, sourceAgent, sessionId: resolvedSessionId, role, text, timestamp, threadId, turnId, turnSeq, localDate, eventOrdinal,
                 externalMessageId,
                 metadata: { imported: true, importFormat: format },
             });
             processed += 1;
+            lastProcessedLine = lineNumber;
             result.created ? imported += 1 : duplicates += 1;
             if (result.episodeId)
                 episodeIds.add(result.episodeId);
@@ -193,27 +263,35 @@ async function importJsonl(kernel, args) {
             if (result.ignored)
                 ignoredEventIds.push(result.eventId);
             if (processed % chunkSize === 0)
-                writeCheckpoint(checkpointFile, { processedLine: lineNumber, lastProcessedLine: lineNumber, processed, projectId, sourceAgent, sessionId });
+                writeCheckpoint(checkpointFile, {
+                    processedLine: lineNumber, lastProcessedLine: lineNumber, processed, projectId, sourceAgent, sessionId, format, fileHash,
+                    processedPrefixHash: sourcePrefixHash(file, lineNumber), fileCompleted: false, windowCompleted: false,
+                });
         }
         catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             errors.push({ line: lineNumber, error: message });
             writeCheckpoint(checkpointFile, {
                 failedAtLine: lineNumber, error: message, resumeFrom: lineNumber,
-                lastProcessedLine: Math.max(resumeAfter, lineNumber - 1), processedLine: Math.max(resumeAfter, lineNumber - 1),
-                processed, projectId, sourceAgent, sessionId,
+                lastProcessedLine, processedLine: lastProcessedLine,
+                processed, projectId, sourceAgent, sessionId, format, fileHash, processedPrefixHash: sourcePrefixHash(file, lastProcessedLine), fileCompleted: false, windowCompleted: false,
             });
             if (!skipErrors || errors.length > maxErrors)
                 throw error;
+            lastProcessedLine = lineNumber;
         }
     }
-    writeCheckpoint(checkpointFile, { processedLine: lineNumber, processed, projectId, sourceAgent, sessionId, completed: true });
+    writeCheckpoint(checkpointFile, {
+        processedLine: lastProcessedLine, processed, projectId, sourceAgent, sessionId, format, fileHash, processedPrefixHash: sourcePrefixHash(file, lastProcessedLine),
+        completed: !windowStopped, fileCompleted: !windowStopped, windowCompleted: true,
+        hasMore: windowStopped, nextLine: windowStopped ? lineNumber : undefined,
+    });
     const closureReceipts = args['seal-batch'] === true
         ? [...episodeIds].map((episodeId) => kernel.sealImportedEpisode(episodeId, { reason: 'cli_batch_boundary', force: args['force-seal'] === true }))
         : [];
     return {
         importId: `episode-import:${sourceAgent}:${sessionId}`,
-        imported, duplicates, processed, errors, resumeFrom: lineNumber + 1, checkpointFile,
+        imported, duplicates, processed, errors, resumeFrom: lastProcessedLine + 1, checkpointFile,
         episodeIds: [...episodeIds], unassignedEventIds, ignoredEventIds, closureReceipts, dreamRan: false,
     };
 }
@@ -221,6 +299,10 @@ function writeCheckpoint(path, value) {
     const temporary = `${path}.tmp`;
     writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
     renameSync(temporary, path);
+}
+function sourcePrefixHash(file, lines) {
+    const text = readFileSync(file, 'utf8');
+    return createHash('sha256').update(text.split(/\r?\n/u).slice(0, Math.max(0, lines)).join('\n')).digest('hex');
 }
 function stringArg(args, key) { return typeof args[key] === 'string' && args[key] ? args[key] : undefined; }
 function requiredArg(args, key) { const value = stringArg(args, key); if (!value)
@@ -248,6 +330,13 @@ function dreamModeArg(value) {
         return value;
     throw new Error('mode must be micro, normal, or deep');
 }
+function statusArg(value) {
+    if (!value)
+        return undefined;
+    if (value === 'open' || value === 'soft_sealed' || value === 'sealed')
+        return value;
+    throw new Error('status must be open, soft_sealed, or sealed');
+}
 function episodeTypeArg(value) {
     if (!value)
         return undefined;
@@ -256,6 +345,8 @@ function episodeTypeArg(value) {
     throw new Error('invalid episode type');
 }
 function timeValue(value) {
+    if (value === undefined || value === null || value === '')
+        return undefined;
     if (typeof value === 'number' && Number.isFinite(value))
         return value;
     if (typeof value === 'string') {
@@ -263,6 +354,6 @@ function timeValue(value) {
         if (!Number.isNaN(parsed))
             return parsed;
     }
-    return undefined;
+    throw new Error('timestamp must be a finite number or parseable date');
 }
 main().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });

@@ -220,7 +220,7 @@ export class FactCompiler {
       : null;
     if (issueMatches.length > 0) {
       const resolvedDevice = primaryDeviceEntityId
-        ? this.entityStore.findByEntityId(primaryDeviceEntityId)
+        ? this.entityStore.getByEntityId(primaryDeviceEntityId)
         : this.resolveImplicitEntity(workingText, 'device', projectId);
       for (const issueMatch of issueMatches) {
         const issueMetadata = this.buildIssueMetadata(issueMatch.issue, issueMatch.issue, sourceText, {
@@ -310,7 +310,7 @@ export class FactCompiler {
       }
     }
     else if (input.semanticCompilation?.issueHints.length && primaryDeviceEntityId) {
-      const resolvedDevice = this.entityStore.findByEntityId(primaryDeviceEntityId);
+      const resolvedDevice = this.entityStore.getByEntityId(primaryDeviceEntityId);
       for (const issueHint of input.semanticCompilation.issueHints.slice(0, 2)) {
         const issueMetadata = this.buildIssueMetadata(issueHint, issueHint, sourceText);
         factInputs.push({
