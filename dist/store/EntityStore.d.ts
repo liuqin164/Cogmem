@@ -127,12 +127,14 @@ export declare class EntityStore {
         type?: string;
         projectId?: string;
         limit?: number;
+        includeInactive?: boolean;
     }): EntityMentionRecord[];
     getEntityTimeline(input: {
         type?: string;
         projectId?: string;
         entityIds?: string[];
         limit?: number;
+        includeInactive?: boolean;
     }): EntityTimelineItem[];
     listEntitiesUpdatedInRange(startTime: number, endTime: number, type?: string): EntityRecord[];
     archiveEntity(entityId: string, updatedAt?: number): void;

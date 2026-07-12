@@ -170,6 +170,9 @@ export class DreamCuratorWorker {
       candidateInputs.map((candidate) => ({
         ...candidate,
         status: options.sourceEpisodeId && candidate.status !== 'shadow' ? 'staged' : candidate.status,
+        publishStatus: options.sourceEpisodeId && candidate.status !== 'shadow'
+          ? candidate.status as Exclude<typeof candidate.status, 'staged'>
+          : undefined,
         runId: run.runId,
         createdAt: now,
       }))

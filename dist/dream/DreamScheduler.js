@@ -14,7 +14,7 @@ export class DreamScheduler {
         const runId = `episode-dream-run-${randomUUID()}`;
         const graceMs = Math.max(0, options.softSealGraceMs ?? 5 * 60_000);
         const leaseMs = Math.max(5_000, options.leaseMs ?? 5 * 60_000);
-        this.candidateStore?.abandonStaleStagedRuns(startedAt - leaseMs, startedAt);
+        this.candidateStore?.abandonStaleStagedRuns(startedAt - leaseMs, startedAt, options.projectId);
         this.episodeStore.finalizeMatureSoftSeals({
             projectId: options.projectId,
             sealedBefore: startedAt - graceMs,
@@ -87,11 +87,8 @@ export class DreamScheduler {
                     this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, startedAt, commitCandidates);
                 }
                 catch (completionError) {
-                    for (const candidateId of ids) {
-                        this.candidateStore.updateCandidateStatus(candidateId, 'superseded', {
-                            reason: 'dream_job_completion_failed', type: 'dream_candidate', id: candidateId, updatedAt: startedAt,
-                        });
-                    }
+                    if (run.runId)
+                        this.candidateStore.failStagedRun(run.runId, startedAt, 'dream_job_completion_failed');
                     throw completionError;
                 }
                 episodeIds.push(job.episodeId);

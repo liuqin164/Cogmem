@@ -392,6 +392,24 @@ test('staged candidate publication is compare-and-set and public listings hide s
       .toThrow(`staged_candidate_publish_conflict:${candidate.candidateId}`);
     expect(store.getCandidate(candidate.candidateId)?.status).toBe('superseded');
     expect(() => store.updateRunStatus(run.runId, 'staged', 'succeeded')).not.toThrow();
+
+    const mixedRun = store.insertRun({ sourceNeuronIds: [], mode: 'deep', promptHash: 'mixed-p', outputHash: 'mixed-o', status: 'staged' });
+    const mixed = store.insertCandidates([
+      { runId: mixedRun.runId, candidateType: 'fact', status: 'candidate', confidence: 0.9, content: {}, evidence: [] },
+      { runId: mixedRun.runId, candidateType: 'correction', status: 'needs_confirmation', confidence: 0.7, content: {}, evidence: [] },
+      { runId: mixedRun.runId, candidateType: 'diagnostic', status: 'rejected', confidence: 0.1, content: {}, evidence: [] },
+      { runId: mixedRun.runId, candidateType: 'shadow', status: 'shadow', confidence: 0.5, content: {}, evidence: [] },
+    ]);
+    const mixedIds = mixed.map((item) => item.candidateId);
+    for (const item of mixed.slice(0, 3)) {
+      store.updateCandidateStatus(item.candidateId, 'staged', {
+        updatedAt: 3,
+      });
+      db.prepare(`UPDATE deep_write_candidates SET publish_status = ? WHERE candidate_id = ?`).run(item.status, item.candidateId);
+    }
+    db.prepare(`UPDATE deep_write_candidates SET publish_status = 'shadow' WHERE candidate_id = ?`).run(mixed[3]!.candidateId);
+    store.publishStagedCandidates(mixedRun.runId, mixedIds, 4);
+    expect(mixedIds.map((id) => store.getCandidate(id)?.status)).toEqual(['candidate', 'needs_confirmation', 'rejected', 'shadow']);
   } finally {
     db.close();
   }

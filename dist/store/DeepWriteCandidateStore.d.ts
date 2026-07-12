@@ -20,6 +20,7 @@ export interface DeepWriteCandidateInput {
     runId: string;
     candidateType: string;
     status: DeepWriteCandidateStatus;
+    publishStatus?: Exclude<DeepWriteCandidateStatus, 'staged'>;
     confidence: number;
     content: unknown;
     evidence: unknown;
@@ -74,8 +75,9 @@ export declare class DeepWriteCandidateStore {
         updatedAt?: number;
     }): void;
     publishStagedCandidates(runId: string, candidateIds: string[], updatedAt: number): void;
+    failStagedRun(runId: string, now: number, reason: string): void;
     updateRunStatus(runId: string, expected: DeepWriteRunStatus, next: DeepWriteRunStatus): void;
-    abandonStaleStagedRuns(before: number, updatedAt: number): number;
+    abandonStaleStagedRuns(before: number, updatedAt: number, projectId?: string): number;
     updateCandidateReviewData(candidateId: string, input: {
         content: unknown;
         evidence: unknown;

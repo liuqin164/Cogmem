@@ -750,7 +750,8 @@ export class EpisodeStore {
         UPDATE episode_dream_jobs SET state = 'processed', candidate_ids_json = ?, lease_id = NULL,
           lease_until = NULL, retry_after = NULL, failure_category = NULL, last_error = NULL, updated_at = ?
         WHERE episode_id = ? AND state = 'processing' AND lease_id = ?
-      `).run(JSON.stringify(candidateIds), now, episodeId, leaseId);
+          AND lease_until IS NOT NULL AND lease_until >= ?
+      `).run(JSON.stringify(candidateIds), now, episodeId, leaseId, now);
       if (!result.changes) throw new Error(`episode_dream_lease_lost:${episodeId}`);
       const episode = this.db.prepare(`
         UPDATE memory_episodes SET dream_status = 'processed', last_dreamed_at = ?,

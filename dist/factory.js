@@ -1325,7 +1325,17 @@ export class MemoryKernel {
             this.summaryStore.markSuperseded(targetId);
         }
         else if (candidate.promotionTargetType === 'entity') {
-            if (this.deepWriteCandidateStore.countActivePromotions('entity', targetId, candidate.candidateId) === 0) {
+            const support = db.prepare(`
+        SELECT (
+          (SELECT COUNT(*) FROM facts WHERE entity_id = ? AND status IN ('provisional', 'provisional_enriched', 'verified', 'active'))
+          + (SELECT COUNT(*) FROM beliefs WHERE subject = ? AND status IN ('active', 'verified'))
+          + (SELECT COUNT(*) FROM entity_mentions WHERE entity_id = ?)
+          + (SELECT COUNT(*) FROM entity_attributes WHERE entity_id = ?)
+          + (SELECT COUNT(*) FROM entity_relations WHERE source_entity_id = ? OR target_entity_id = ?)
+          + ?
+        ) AS count
+      `).get(targetId, targetId, targetId, targetId, targetId, targetId, this.deepWriteCandidateStore.countActivePromotions('entity', targetId, candidate.candidateId));
+            if (Number(support?.count || 0) === 0) {
                 this.entityStore.archiveEntity(targetId, now);
             }
         }

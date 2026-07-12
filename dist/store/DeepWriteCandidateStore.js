@@ -63,6 +63,7 @@ export class DeepWriteCandidateStore {
         ON deep_write_candidates(status, candidate_type);
     `);
         this.ensureColumn('deep_write_candidates', 'status_reason', 'TEXT');
+        this.ensureColumn('deep_write_candidates', 'publish_status', 'TEXT');
         this.ensureColumn('deep_write_candidates', 'review_after', 'INTEGER');
         this.ensureColumn('deep_write_candidates', 'updated_at', 'INTEGER');
         this.db.exec(`
@@ -96,12 +97,12 @@ export class DeepWriteCandidateStore {
       INSERT INTO deep_write_candidates (
         candidate_id, run_id, candidate_type, status, confidence, content_json,
         evidence_json, promotion_target_type, promotion_target_id, status_reason,
-        review_after, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        publish_status, review_after, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
         this.db.transaction(() => {
             for (const record of records) {
-                stmt.run(record.candidateId, record.runId, record.candidateType, record.status, record.confidence, JSON.stringify(record.content), JSON.stringify(record.evidence), record.promotionTargetType || null, record.promotionTargetId || null, record.statusReason || null, record.reviewAfter ?? null, record.createdAt, record.updatedAt);
+                stmt.run(record.candidateId, record.runId, record.candidateType, record.status, record.confidence, JSON.stringify(record.content), JSON.stringify(record.evidence), record.promotionTargetType || null, record.promotionTargetId || null, record.statusReason || null, record.publishStatus || null, record.reviewAfter ?? null, record.createdAt, record.updatedAt);
             }
         })();
         return records;
@@ -226,23 +227,34 @@ export class DeepWriteCandidateStore {
     `).run(status, promotionTarget?.type || null, promotionTarget?.id || null, promotionTarget?.reason || null, promotionTarget?.reviewAfter ?? null, promotionTarget?.updatedAt ?? Date.now(), candidateId);
     }
     publishStagedCandidates(runId, candidateIds, updatedAt) {
-        const statement = this.db.prepare(`UPDATE deep_write_candidates SET status = 'candidate', updated_at = ? WHERE candidate_id = ? AND run_id = ? AND status = 'staged'`);
+        const statement = this.db.prepare(`UPDATE deep_write_candidates SET status = COALESCE(publish_status, 'candidate'), updated_at = ? WHERE candidate_id = ? AND run_id = ? AND status = 'staged'`);
         for (const candidateId of candidateIds) {
-            if (Number(statement.run(updatedAt, candidateId, runId).changes || 0) !== 1)
+            const staged = Number(statement.run(updatedAt, candidateId, runId).changes || 0);
+            if (staged === 1)
+                continue;
+            const visible = this.db.prepare(`SELECT status, run_id FROM deep_write_candidates WHERE candidate_id = ?`).get(candidateId);
+            if (visible?.run_id !== runId || visible.status !== 'shadow')
                 throw new Error(`staged_candidate_publish_conflict:${candidateId}`);
         }
+    }
+    failStagedRun(runId, now, reason) {
+        this.db.transaction(() => {
+            this.db.prepare(`UPDATE deep_write_candidates SET status = 'superseded', status_reason = ?, updated_at = ? WHERE run_id = ? AND status = 'staged'`).run(reason, now, runId);
+            this.db.prepare(`UPDATE deep_write_runs SET status = 'failed', error = ? WHERE run_id = ? AND status = 'staged'`).run(reason, runId);
+        })();
     }
     updateRunStatus(runId, expected, next) {
         const result = this.db.prepare(`UPDATE deep_write_runs SET status = ? WHERE run_id = ? AND status = ?`).run(next, runId, expected);
         if (Number(result.changes || 0) !== 1)
             throw new Error(`dream_run_status_conflict:${runId}`);
     }
-    abandonStaleStagedRuns(before, updatedAt) {
+    abandonStaleStagedRuns(before, updatedAt, projectId) {
         const transaction = this.db.transaction(() => {
             const candidates = this.db.prepare(`
-        SELECT DISTINCT run_id FROM deep_write_candidates
+        SELECT run_id FROM deep_write_runs
         WHERE status = 'staged' AND created_at < ?
-      `).all(before);
+          AND (? IS NULL OR project_id = ?)
+      `).all(before, projectId || null, projectId || null);
             let abandoned = 0;
             for (const row of candidates) {
                 this.db.prepare(`
@@ -323,6 +335,7 @@ export class DeepWriteCandidateStore {
             runId: row.run_id,
             candidateType: row.candidate_type,
             status: row.status,
+            publishStatus: row.publish_status || undefined,
             confidence: row.confidence,
             content: JSON.parse(row.content_json || '{}'),
             evidence: JSON.parse(row.evidence_json || '[]'),

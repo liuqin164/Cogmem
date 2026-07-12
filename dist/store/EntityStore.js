@@ -448,6 +448,8 @@ export class EntityStore {
             sql += ` AND em.project_id = ?`;
             params.push(input.projectId);
         }
+        if (!input.includeInactive)
+            sql += ` AND e.status = 'active'`;
         sql += ` ORDER BY em.created_at DESC LIMIT ?`;
         params.push(limit);
         const rows = this.db.prepare(sql).all(...params);
@@ -477,6 +479,8 @@ export class EntityStore {
             sql += ` AND em.project_id = ?`;
             params.push(input.projectId);
         }
+        if (!input.includeInactive)
+            sql += ` AND e.status = 'active'`;
         if (input.entityIds?.length) {
             sql += ` AND em.entity_id IN (${input.entityIds.map(() => '?').join(', ')})`;
             params.push(...input.entityIds);

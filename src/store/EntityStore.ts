@@ -613,6 +613,7 @@ export class EntityStore {
     type?: string;
     projectId?: string;
     limit?: number;
+    includeInactive?: boolean;
   }): EntityMentionRecord[] {
     const limit = input.limit ?? 50;
     let sql = `
@@ -635,6 +636,7 @@ export class EntityStore {
       sql += ` AND em.project_id = ?`;
       params.push(input.projectId);
     }
+    if (!input.includeInactive) sql += ` AND e.status = 'active'`;
 
     sql += ` ORDER BY em.created_at DESC LIMIT ?`;
     params.push(limit);
@@ -655,6 +657,7 @@ export class EntityStore {
     projectId?: string;
     entityIds?: string[];
     limit?: number;
+    includeInactive?: boolean;
   }): EntityTimelineItem[] {
     const limit = input.limit ?? 50;
     let sql = `
@@ -673,6 +676,7 @@ export class EntityStore {
       sql += ` AND em.project_id = ?`;
       params.push(input.projectId);
     }
+    if (!input.includeInactive) sql += ` AND e.status = 'active'`;
     if (input.entityIds?.length) {
       sql += ` AND em.entity_id IN (${input.entityIds.map(() => '?').join(', ')})`;
       params.push(...input.entityIds);

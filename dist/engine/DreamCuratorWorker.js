@@ -90,6 +90,9 @@ export class DreamCuratorWorker {
         const inserted = this.deps.candidateStore.insertCandidates(candidateInputs.map((candidate) => ({
             ...candidate,
             status: options.sourceEpisodeId && candidate.status !== 'shadow' ? 'staged' : candidate.status,
+            publishStatus: options.sourceEpisodeId && candidate.status !== 'shadow'
+                ? candidate.status
+                : undefined,
             runId: run.runId,
             createdAt: now,
         })));
