@@ -34,10 +34,16 @@ export class BeliefStore {
   };
 
   private db: Database;
+  private ownsDb = true;
   private closed = false;
 
-  constructor(dbPath: string = ':memory:', private eventStore?: EventStore) {
-    this.db = new Database(dbPath);
+  constructor(dbPath: string | Database = ':memory:', private eventStore?: EventStore) {
+    if (dbPath instanceof Database) {
+      this.db = dbPath;
+      this.ownsDb = false;
+    } else {
+      this.db = new Database(dbPath);
+    }
     this.initializeSchema();
   }
 
@@ -1151,7 +1157,7 @@ export class BeliefStore {
 
   close(): void {
     if (this.closed) return;
-    this.db.close();
+    if (this.ownsDb) this.db.close();
     this.closed = true;
   }
 }

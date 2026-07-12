@@ -175,9 +175,9 @@ export class MemoryKernel {
         this.encryptionProvider = options.encryptionProvider;
         this.piiRedactor = options.redactionPolicy === false ? undefined : new PiiRedactor(options.redactionPolicy);
         this.memoryGraph = new MemoryGraph(this.dbPath);
-        this.eventStore = new EventStore(this.dbPath, this.encryptionProvider);
         this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
         const db = this.factStore.getDatabase();
+        this.eventStore = new EventStore(db, this.encryptionProvider);
         db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
         if (db.prepare('PRAGMA foreign_keys').get()?.foreign_keys !== 1) {
             throw new Error('memory_kernel_foreign_keys_disabled');
@@ -188,7 +188,7 @@ export class MemoryKernel {
         this.ensureGovernanceAuditTable(db);
         const vectorDimension = options.vectorDimension ?? config.vector.dimension;
         this.modelRegistry = options.modelRegistry ?? ModelRegistry.defaults();
-        this.beliefStore = new BeliefStore(this.dbPath, this.eventStore);
+        this.beliefStore = new BeliefStore(db, this.eventStore);
         this.beliefGovernanceService = new BeliefGovernanceService(db, (eventId) => {
             const event = this.eventStore.getEvent(eventId);
             return event ? { eventId, projectId: event.projectId, role: event.role } : undefined;

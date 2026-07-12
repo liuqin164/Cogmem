@@ -1,3 +1,4 @@
+import Database from 'bun:sqlite';
 import type { EncryptionProvider } from '../encryption/index.js';
 import type { EventAuditPage, MemoryEvent, MemoryEventCausalityType, MemoryEventContext, MemoryRawEventType, MemoryEventRole, MemoryEventType, OrderingConfidence, StreamType } from '../types/index.js';
 export interface ProjectionCheckpoint {
@@ -50,10 +51,11 @@ export interface AppendEventInput<TPayload = Record<string, unknown>> {
 export declare class EventStore {
     private readonly encryptionProvider?;
     private db;
-    constructor(dbPath?: string, encryptionProvider?: EncryptionProvider | undefined);
+    private ownsDb;
+    constructor(dbPath?: string | Database, encryptionProvider?: EncryptionProvider | undefined);
     private initializeSchema;
     private ensureCompatibilityColumns;
-    append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>): MemoryEvent<TPayload>;
+    append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>, retry?: number): MemoryEvent<TPayload>;
     private upsertImportAnchor;
     getNextGlobalSeq(): number;
     getNextEventVersion(streamId: string): number;

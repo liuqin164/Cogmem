@@ -194,14 +194,18 @@ export class DeepWritePromotionPolicy {
 
   promoteRun(runId: string): DeepWritePromotionDecision[] {
     const candidates = this.deps.candidateStore.listCandidatesByRun(runId);
-    return candidates.map((candidate) => this.evaluateAndApply(candidate));
+    return candidates.map((candidate) => this.atomicEvaluate(candidate));
   }
 
   promotePending(limit: number = 100, options: DeepWritePromotionOptions = {}): DeepWritePromotionDecision[] {
     const candidates = options.projectId
       ? this.deps.candidateStore.listCandidates({ statuses: ['candidate'], projectId: options.projectId, limit })
       : this.deps.candidateStore.listCandidatesByStatus(['candidate'], { limit });
-    return candidates.map((candidate) => this.evaluateAndApply(candidate));
+    return candidates.map((candidate) => this.atomicEvaluate(candidate));
+  }
+
+  private atomicEvaluate(candidate: DeepWriteCandidateRecord): DeepWritePromotionDecision {
+    return this.deps.candidateStore.getDatabase().transaction(() => this.evaluateAndApply(candidate))();
   }
 
   evaluateAndApply(candidate: DeepWriteCandidateRecord, options: DeepWriteEvaluationOptions = {}): DeepWritePromotionDecision {

@@ -44,7 +44,10 @@ export class DreamScheduler {
   ) {}
 
   async tick(options: DreamTickOptions = {}): Promise<DreamTickResult> {
-    const clock = options.clock ?? { now: () => Date.now() };
+    const wallStartedAt = Date.now();
+    const clock = options.clock ?? {
+      now: () => options.now === undefined ? Date.now() : options.now + (Date.now() - wallStartedAt),
+    };
     const startedAt = options.now ?? clock.now();
     const requestedMode = options.mode ?? 'auto';
     const runId = `episode-dream-run-${randomUUID()}`;
@@ -124,10 +127,10 @@ export class DreamScheduler {
               this.candidateStore.updateRunStatus(run.runId!, 'staged', 'succeeded');
             }
             : undefined;
-          const completedAt = options.now === undefined ? clock.now() : options.now;
+          const completedAt = clock.now();
           this.episodeStore.completeDreamJob(job.episodeId, job.leaseId, ids, completedAt, commitCandidates);
         } catch (completionError) {
-          const failedAt = options.now === undefined ? clock.now() : options.now;
+          const failedAt = clock.now();
           if (run.runId) this.candidateStore.failStagedRun(run.runId, failedAt, 'dream_job_completion_failed');
           throw completionError;
         }
@@ -136,7 +139,7 @@ export class DreamScheduler {
       } catch (error) {
         failures += 1;
         const message = error instanceof Error ? error.message : String(error);
-        const failureNow = options.now === undefined ? clock.now() : options.now;
+        const failureNow = clock.now();
         const failure = classifyFailure(message, job.attempts, failureNow);
         this.episodeStore.failDreamJob(job.episodeId, job.leaseId, message, failure);
         failedEpisodes.push({ episodeId: job.episodeId, error: message, failureCategory: failure.failureCategory, retryAfter: failure.retryAfter });

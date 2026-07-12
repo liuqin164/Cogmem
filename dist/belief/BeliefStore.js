@@ -20,10 +20,17 @@ export class BeliefStore {
         global: 1
     };
     db;
+    ownsDb = true;
     closed = false;
     constructor(dbPath = ':memory:', eventStore) {
         this.eventStore = eventStore;
-        this.db = new Database(dbPath);
+        if (dbPath instanceof Database) {
+            this.db = dbPath;
+            this.ownsDb = false;
+        }
+        else {
+            this.db = new Database(dbPath);
+        }
         this.initializeSchema();
     }
     initializeSchema() {
@@ -892,7 +899,8 @@ export class BeliefStore {
     close() {
         if (this.closed)
             return;
-        this.db.close();
+        if (this.ownsDb)
+            this.db.close();
         this.closed = true;
     }
 }

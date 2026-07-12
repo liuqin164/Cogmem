@@ -73,9 +73,15 @@ const MEMORY_EVENT_COLUMNS = `
 
 export class EventStore {
   private db: Database;
+  private ownsDb = true;
 
-  constructor(dbPath: string = ':memory:', private readonly encryptionProvider?: EncryptionProvider) {
-    this.db = new Database(dbPath);
+  constructor(dbPath: string | Database = ':memory:', private readonly encryptionProvider?: EncryptionProvider) {
+    if (dbPath instanceof Database) {
+      this.db = dbPath;
+      this.ownsDb = false;
+    } else {
+      this.db = new Database(dbPath);
+    }
     this.initializeSchema();
   }
 
@@ -228,7 +234,7 @@ export class EventStore {
     this.rebuildRawEventFtsIfNeeded();
   }
 
-  append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>): MemoryEvent<TPayload> {
+  append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>, retry = 0): MemoryEvent<TPayload> {
     const eventVersion = input.eventVersion ?? this.getNextEventVersion(input.streamId);
     const occurredAt = input.occurredAt ?? Date.now();
     if (!Number.isFinite(occurredAt) || Math.abs(occurredAt) > 8_640_000_000_000_000) throw new Error('invalid_event_timestamp');
@@ -344,8 +350,11 @@ export class EventStore {
       return event;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const anchorConflict = message === 'import_anchor_already_exists'
-        || message.includes('UNIQUE constraint failed: memory_events.stream_id');
+      const streamConflict = /UNIQUE constraint failed: memory_events\.(stream_id|global_seq)/.test(message);
+      const anchorConflict = message === 'import_anchor_already_exists';
+      if (streamConflict && retry < 2) {
+        return this.append({ ...input, eventVersion: undefined, threadSeq: undefined }, retry + 1);
+      }
       if (!anchorConflict) throw error;
       const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
       const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;
@@ -827,7 +836,7 @@ export class EventStore {
   }
 
   close(): void {
-    this.db.close();
+    if (this.ownsDb) this.db.close();
   }
 
   private mapRow(row: any): MemoryEvent {
