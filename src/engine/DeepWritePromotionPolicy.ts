@@ -211,7 +211,14 @@ export class DeepWritePromotionPolicy {
       }
       const current = this.deps.candidateStore.getCandidate(candidate.candidateId);
       if (!current || current.status !== 'promoting') return this.keep(candidate, 'candidate_claim_lost');
-      return this.evaluateAndApply(current);
+      const decision = this.evaluateAndApply(current);
+      if (decision.outcome === 'keep_candidate') {
+        this.deps.candidateStore.updateCandidateStatus(current.candidateId, 'candidate', {
+          reason: decision.reason,
+          updatedAt: Date.now(),
+        }, 'promoting');
+      }
+      return decision;
     })();
   }
 

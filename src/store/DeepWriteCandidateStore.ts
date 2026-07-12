@@ -118,6 +118,15 @@ export class DeepWriteCandidateStore {
     return Number(row?.count || 0);
   }
 
+  recoverStalePromoting(before: number, updatedAt: number): number {
+    const result = this.db.prepare(`
+      UPDATE deep_write_candidates
+      SET status = 'candidate', status_reason = 'promotion_timeout_recovered', updated_at = ?
+      WHERE status = 'promoting' AND updated_at < ?
+    `).run(updatedAt, before);
+    return Number(result.changes || 0);
+  }
+
   initSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS deep_write_runs (
@@ -320,7 +329,7 @@ export class DeepWriteCandidateStore {
 
   listCandidates(options: DeepWriteCandidateListOptions = {}): DeepWriteCandidateRecord[] {
     const params: Array<string | number> = [];
-    const conditions: string[] = options.statuses?.includes('staged') ? [] : ["c.status <> 'staged'"];
+    const conditions: string[] = options.statuses?.some((status) => status === 'staged' || status === 'promoting') ? [] : ["c.status NOT IN ('staged', 'promoting')"];
     let sql = `
       SELECT c.*
       FROM deep_write_candidates c
@@ -357,7 +366,7 @@ export class DeepWriteCandidateStore {
 
   countCandidates(options: Omit<DeepWriteCandidateListOptions, 'limit'> = {}): number {
     const params: Array<string | number> = [];
-    const conditions: string[] = options.statuses?.includes('staged') ? [] : ["c.status <> 'staged'"];
+    const conditions: string[] = options.statuses?.some((status) => status === 'staged' || status === 'promoting') ? [] : ["c.status NOT IN ('staged', 'promoting')"];
     let sql = `
       SELECT COUNT(*) AS count
       FROM deep_write_candidates c

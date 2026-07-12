@@ -60,6 +60,7 @@ export declare class DeepWriteCandidateStore {
     constructor(db: Database);
     getDatabase(): Database;
     countActivePromotions(targetType: string, targetId: string, excludingCandidateId?: string): number;
+    recoverStalePromoting(before: number, updatedAt: number): number;
     initSchema(): void;
     insertRun(input: DeepWriteRunInput): DeepWriteRunRecord;
     insertCandidates(inputs: DeepWriteCandidateInput[]): DeepWriteCandidateRecord[];

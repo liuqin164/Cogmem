@@ -425,6 +425,9 @@ test('promotion claim is single-owner and explicit event ordering never auto-ren
     }])[0]!;
     expect(candidates.claimCandidate(candidate.candidateId, 1)).toBe(true);
     expect(candidates.claimCandidate(candidate.candidateId, 2)).toBe(false);
+    expect(candidates.listCandidates()).toHaveLength(0);
+    expect(candidates.recoverStalePromoting(2, 3)).toBe(1);
+    expect(candidates.getCandidate(candidate.candidateId)?.status).toBe('candidate');
   } finally {
     db.close();
   }
