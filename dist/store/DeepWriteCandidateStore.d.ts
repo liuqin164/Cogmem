@@ -1,6 +1,6 @@
 import type Database from 'bun:sqlite';
 export type DeepWriteRunStatus = 'running' | 'staged' | 'succeeded' | 'failed' | 'skipped' | 'abandoned';
-export type DeepWriteCandidateStatus = 'staged' | 'shadow' | 'candidate' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
+export type DeepWriteCandidateStatus = 'staged' | 'shadow' | 'candidate' | 'promoting' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
 export interface DeepWriteRunInput {
     runId?: string;
     projectId?: string;
@@ -66,6 +66,7 @@ export declare class DeepWriteCandidateStore {
     getRun(runId: string): DeepWriteRunRecord | null;
     listCandidatesByRun(runId: string): DeepWriteCandidateRecord[];
     getCandidate(candidateId: string): DeepWriteCandidateRecord | null;
+    claimCandidate(candidateId: string, updatedAt?: number): boolean;
     listCandidatesByStatus(statuses: DeepWriteCandidateStatus[], options?: {
         candidateTypes?: string[];
         limit?: number;
@@ -78,7 +79,7 @@ export declare class DeepWriteCandidateStore {
         reason?: string;
         reviewAfter?: number | null;
         updatedAt?: number;
-    }): void;
+    }, expectedStatus?: DeepWriteCandidateStatus): void;
     publishStagedCandidates(runId: string, candidateIds: string[], updatedAt: number): void;
     failStagedRun(runId: string, now: number, reason: string): void;
     updateRunStatus(runId: string, expected: DeepWriteRunStatus, next: DeepWriteRunStatus): void;

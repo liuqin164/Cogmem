@@ -414,3 +414,28 @@ test('staged candidate publication is compare-and-set and public listings hide s
     db.close();
   }
 });
+
+test('promotion claim is single-owner and explicit event ordering never auto-renumbers', () => {
+  const db = new Database(':memory:');
+  try {
+    const candidates = new DeepWriteCandidateStore(db);
+    const run = candidates.insertRun({ sourceNeuronIds: [], mode: 'deep', promptHash: 'claim-p', outputHash: 'claim-o', status: 'succeeded' });
+    const candidate = candidates.insertCandidates([{
+      runId: run.runId, candidateType: 'fact', status: 'candidate', confidence: 0.9, content: {}, evidence: [],
+    }])[0]!;
+    expect(candidates.claimCandidate(candidate.candidateId, 1)).toBe(true);
+    expect(candidates.claimCandidate(candidate.candidateId, 2)).toBe(false);
+  } finally {
+    db.close();
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-explicit-order-'));
+  const events = new EventStore(join(dir, 'memory.db'));
+  try {
+    events.append({ streamId: 'stream', streamType: 'thread', eventType: 'MESSAGE', eventVersion: 5, threadSeq: 10, occurredAt: 1, payload: { text: 'first' } });
+    expect(() => events.append({ streamId: 'stream', streamType: 'thread', eventType: 'MESSAGE', eventVersion: 5, threadSeq: 11, occurredAt: 2, payload: { text: 'conflict' } })).toThrow();
+  } finally {
+    events.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

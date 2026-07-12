@@ -143,6 +143,14 @@ export class DeepWriteCandidateStore {
     `).get(candidateId);
         return row ? this.mapCandidate(row) : null;
     }
+    claimCandidate(candidateId, updatedAt = Date.now()) {
+        const result = this.db.prepare(`
+      UPDATE deep_write_candidates
+      SET status = 'promoting', updated_at = ?
+      WHERE candidate_id = ? AND status = 'candidate'
+    `).run(updatedAt, candidateId);
+        return Number(result.changes || 0) === 1;
+    }
     listCandidatesByStatus(statuses, options) {
         if (statuses.length === 0)
             return [];
@@ -225,7 +233,7 @@ export class DeepWriteCandidateStore {
         const row = this.db.prepare(sql).get(...params);
         return row?.count || 0;
     }
-    updateCandidateStatus(candidateId, status, promotionTarget) {
+    updateCandidateStatus(candidateId, status, promotionTarget, expectedStatus) {
         this.db.prepare(`
       UPDATE deep_write_candidates
       SET status = ?,
@@ -234,8 +242,8 @@ export class DeepWriteCandidateStore {
           status_reason = COALESCE(?, status_reason),
           review_after = COALESCE(?, review_after),
           updated_at = ?
-      WHERE candidate_id = ?
-    `).run(status, promotionTarget?.type || null, promotionTarget?.id || null, promotionTarget?.reason || null, promotionTarget?.reviewAfter ?? null, promotionTarget?.updatedAt ?? Date.now(), candidateId);
+      WHERE candidate_id = ? AND (? IS NULL OR status = ?)
+    `).run(status, promotionTarget?.type || null, promotionTarget?.id || null, promotionTarget?.reason || null, promotionTarget?.reviewAfter ?? null, promotionTarget?.updatedAt ?? Date.now(), candidateId, expectedStatus || null, expectedStatus || null);
     }
     publishStagedCandidates(runId, candidateIds, updatedAt) {
         const statement = this.db.prepare(`UPDATE deep_write_candidates SET status = COALESCE(publish_status, 'candidate'), updated_at = ? WHERE candidate_id = ? AND run_id = ? AND status = 'staged'`);

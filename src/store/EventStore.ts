@@ -352,8 +352,10 @@ export class EventStore {
       const message = error instanceof Error ? error.message : String(error);
       const streamConflict = /UNIQUE constraint failed: memory_events\.(stream_id|global_seq)/.test(message);
       const anchorConflict = message === 'import_anchor_already_exists';
-      if (streamConflict && retry < 2) {
-        return this.append({ ...input, eventVersion: undefined, threadSeq: undefined }, retry + 1);
+      const autoEventVersion = input.eventVersion === undefined;
+      const autoThreadSeq = input.threadSeq === undefined;
+      if ((streamConflict || message.includes('database is locked')) && autoEventVersion && retry < 5) {
+        return this.append({ ...input, eventVersion: undefined, threadSeq: autoThreadSeq ? undefined : input.threadSeq }, retry + 1);
       }
       if (!anchorConflict) throw error;
       const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;

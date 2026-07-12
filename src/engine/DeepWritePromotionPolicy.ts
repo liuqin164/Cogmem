@@ -205,11 +205,18 @@ export class DeepWritePromotionPolicy {
   }
 
   private atomicEvaluate(candidate: DeepWriteCandidateRecord): DeepWritePromotionDecision {
-    return this.deps.candidateStore.getDatabase().transaction(() => this.evaluateAndApply(candidate))();
+    return this.deps.candidateStore.getDatabase().transaction(() => {
+      if (!this.deps.candidateStore.claimCandidate(candidate.candidateId)) {
+        return this.keep(candidate, 'candidate_claim_lost');
+      }
+      const current = this.deps.candidateStore.getCandidate(candidate.candidateId);
+      if (!current || current.status !== 'promoting') return this.keep(candidate, 'candidate_claim_lost');
+      return this.evaluateAndApply(current);
+    })();
   }
 
   evaluateAndApply(candidate: DeepWriteCandidateRecord, options: DeepWriteEvaluationOptions = {}): DeepWritePromotionDecision {
-    if (candidate.status !== 'candidate') {
+    if (candidate.status !== 'candidate' && candidate.status !== 'promoting') {
       return this.keep(candidate, `status_${candidate.status}_not_promotable`);
     }
 
@@ -600,7 +607,7 @@ export class DeepWritePromotionPolicy {
       type: decision.targetType,
       id: decision.targetId,
       reason: decision.reason,
-    });
+    }, candidate.status);
     return decision;
   }
 }

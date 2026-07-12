@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import type Database from 'bun:sqlite';
 
 export type DeepWriteRunStatus = 'running' | 'staged' | 'succeeded' | 'failed' | 'skipped' | 'abandoned';
-export type DeepWriteCandidateStatus = 'staged' | 'shadow' | 'candidate' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
+export type DeepWriteCandidateStatus = 'staged' | 'shadow' | 'candidate' | 'promoting' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
 
 export interface DeepWriteRunInput {
   runId?: string;
@@ -286,6 +286,15 @@ export class DeepWriteCandidateStore {
     return row ? this.mapCandidate(row) : null;
   }
 
+  claimCandidate(candidateId: string, updatedAt: number = Date.now()): boolean {
+    const result = this.db.prepare(`
+      UPDATE deep_write_candidates
+      SET status = 'promoting', updated_at = ?
+      WHERE candidate_id = ? AND status = 'candidate'
+    `).run(updatedAt, candidateId);
+    return Number(result.changes || 0) === 1;
+  }
+
   listCandidatesByStatus(
     statuses: DeepWriteCandidateStatus[],
     options?: { candidateTypes?: string[]; limit?: number }
@@ -380,7 +389,8 @@ export class DeepWriteCandidateStore {
   updateCandidateStatus(
     candidateId: string,
     status: DeepWriteCandidateStatus,
-    promotionTarget?: { type?: string; id?: string; reason?: string; reviewAfter?: number | null; updatedAt?: number }
+    promotionTarget?: { type?: string; id?: string; reason?: string; reviewAfter?: number | null; updatedAt?: number },
+    expectedStatus?: DeepWriteCandidateStatus
   ): void {
     this.db.prepare(`
       UPDATE deep_write_candidates
@@ -390,7 +400,7 @@ export class DeepWriteCandidateStore {
           status_reason = COALESCE(?, status_reason),
           review_after = COALESCE(?, review_after),
           updated_at = ?
-      WHERE candidate_id = ?
+      WHERE candidate_id = ? AND (? IS NULL OR status = ?)
     `).run(
       status,
       promotionTarget?.type || null,
@@ -398,7 +408,9 @@ export class DeepWriteCandidateStore {
       promotionTarget?.reason || null,
       promotionTarget?.reviewAfter ?? null,
       promotionTarget?.updatedAt ?? Date.now(),
-      candidateId
+      candidateId,
+      expectedStatus || null,
+      expectedStatus || null
     );
   }
 
