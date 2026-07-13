@@ -48,6 +48,15 @@ export class AtlasPathRetriever {
     result.nodes = this.ranker.rank(result.nodes.filter((node) => selected.has(node.id)), queryFrame).slice(0, Math.min(options.limit ?? 30, 100));
     const visible = new Set(result.nodes.map((node) => node.id));
     result.edges = result.edges.filter((edge) => visible.has(edge.source) && visible.has(edge.target));
+    if (result.cards) result.cards = result.cards.filter((card) => visible.has(card.canonicalId));
+    if (result.matchedFacets) result.matchedFacets = result.matchedFacets.filter((facet) => visible.has(facet.nodeId));
+    if (result.cards) {
+      result.cards = result.cards.map((card) => ({
+        ...card,
+        matchedFacets: card.matchedFacets.filter((facet) => visible.has(facet.nodeId)),
+        relatedButNotSelected: card.relatedButNotSelected.filter((related) => visible.has(related.canonicalId)),
+      }));
+    }
     return { queryFrame, result };
   }
 }

@@ -109,10 +109,15 @@ export class MemoryFrameStore {
     if (!row || row.project_id !== projectId || !['needs_confirmation','staged'].includes(String(row.status))) return false;
     return Boolean(this.db.transaction(() => {
       if (action === 'approve') {
+        const frame = this.get(frameId);
+        const validation = validateMemoryFrame(frame);
+        if (!validation.valid || !this.hasPublishableEvidence(frameId, projectId, String(frame?.episodeId ?? ''))) {
+          throw new Error(`memory_frame_review_evidence_invalid:${frameId}`);
+        }
         const changed = Number(this.db.prepare(`UPDATE memory_frames SET status='active',publish_status='active',needs_review=0,updated_at=? WHERE frame_id=? AND status IN ('staged','needs_confirmation')`).run(now, frameId).changes ?? 0) === 1;
         if (!changed) throw new Error(`memory_frame_review_conflict:${frameId}`);
         this.db.prepare(`INSERT INTO memory_frame_reviews(review_id,frame_id,project_id,action,actor,reason,created_at) VALUES(?,?,?,?,?,?,?)`).run(randomUUID(), frameId, projectId, action, actor, reason, now);
-        this.db.prepare(`UPDATE memory_frames SET status='superseded',updated_at=? WHERE project_id=? AND episode_id=(SELECT episode_id FROM memory_frames WHERE frame_id=?) AND frame_id<>? AND status IN ('active','needs_confirmation')`).run(now, projectId, frameId, frameId);
+        this.db.prepare(`UPDATE memory_frames SET status='superseded',updated_at=? WHERE project_id=? AND episode_id=(SELECT episode_id FROM memory_frames WHERE frame_id=?) AND frame_id<>? AND status='active'`).run(now, projectId, frameId, frameId);
         this.markDirty(projectId, now);
         return true;
       }
@@ -134,7 +139,12 @@ export class MemoryFrameStore {
   supersedeEpisodes(episodeIds: string[], now = Date.now()): number {
     let changed = 0; for (const id of episodeIds) {
       changed += Number(this.db.prepare(`UPDATE memory_frames SET status='superseded', updated_at=? WHERE episode_id=? AND status IN ('active','needs_confirmation','staged')`).run(now, id).changes ?? 0);
-      try { this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE source_type='frame' AND source_episode_id=? AND status='active'`).run(now, id); } catch { /* pre-0033 compatibility */ }
+      try {
+        this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE source_type IN ('frame','frame_edge') AND source_episode_id=? AND status='active'`).run(now, id);
+        this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE source_frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id=?) AND status='active'`).run(now, id);
+        this.db.prepare(`UPDATE memory_edges SET status='archived', updated_at=? WHERE edge_id IN (SELECT node_id FROM memory_atlas_supports WHERE source_episode_id=? AND source_type='frame_edge') AND status IN ('active','weak')`).run(now, id);
+        this.db.prepare(`UPDATE memory_atlas_documents SET status='archived', updated_at=? WHERE project_id IN (SELECT project_id FROM memory_frames WHERE episode_id=?) AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2' AND json_extract(metadata_json,'$.frameId') IN (SELECT frame_id FROM memory_frames WHERE episode_id=?)`).run(id, id);
+      } catch { /* pre-0033 compatibility */ }
     }
     if (changed) for (const id of episodeIds) { const row = this.db.prepare(`SELECT project_id FROM memory_frames WHERE episode_id=? LIMIT 1`).get(id) as { project_id?: string } | null; if (row?.project_id) this.markDirty(row.project_id, now); }
     return changed;
@@ -151,7 +161,11 @@ export class MemoryFrameStore {
     if (!row) return false;
     const next = to ?? row.publish_status ?? 'active';
     if (next === 'active' && row.needs_review) return false;
-    if (next === 'active' && !this.hasPublishableEvidence(frameId, row.project_id, row.episode_id)) return false;
+    if (next === 'active') {
+      const frame = this.get(frameId);
+      const validation = validateMemoryFrame(frame);
+      if (!validation.valid || !this.hasPublishableEvidence(frameId, row.project_id, row.episode_id)) return false;
+    }
     const changed = Number(this.db.prepare(`UPDATE memory_frames SET status=?, updated_at=? WHERE frame_id=? AND status=?`).run(next, now, frameId, from).changes ?? 0) === 1;
     if (!changed) return false;
     if (next === 'active') this.db.prepare(`UPDATE memory_frames SET status='superseded', updated_at=? WHERE project_id=? AND episode_id=? AND frame_id<>? AND status IN ('active','needs_confirmation')`).run(now, row.project_id, row.episode_id, frameId);

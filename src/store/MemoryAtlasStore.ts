@@ -161,17 +161,42 @@ export class MemoryAtlasStore {
     return rows.length === 1 ? rows[0]!.node_id : undefined;
   }
 
+  findAliasNodes(projectId: string, dimension: string, normalizedAlias: string): string[] {
+    const rows = this.db.prepare(`
+      SELECT DISTINCT a.node_id
+      FROM memory_atlas_aliases a
+      JOIN memory_atlas_documents d ON d.project_id=a.project_id AND d.node_id=a.node_id
+      WHERE a.project_id=? AND a.dimension=? AND a.normalized_alias=?
+        AND a.status='active' AND d.status NOT IN ('rejected','archived','needs_confirmation')
+      ORDER BY a.node_id
+    `).all(projectId, dimension, normalizedAlias) as Array<{ node_id: string }>;
+    return rows.map((row) => row.node_id);
+  }
+
   resolveQueryAliases(projectId: string, query: string): Array<{ label: string; dimension: string; nodeId: string }> {
     const normalizedQuery = query.normalize('NFKC').toLocaleLowerCase('und').replace(/\s+/gu, ' ').trim();
     if (!normalizedQuery) return [];
     const rows = this.db.prepare(`
-      SELECT normalized_alias AS label, dimension, node_id
-      FROM memory_atlas_aliases
-      WHERE project_id=? AND status='active' AND instr(?, normalized_alias)>0
-      ORDER BY length(normalized_alias) DESC, node_id ASC
-      LIMIT 64
+      SELECT a.normalized_alias AS label, a.dimension, a.node_id
+      FROM memory_atlas_aliases a
+      JOIN memory_atlas_documents d ON d.project_id=a.project_id AND d.node_id=a.node_id
+      WHERE a.project_id=? AND a.status='active'
+        AND d.status NOT IN ('rejected','archived','needs_confirmation')
+        AND length(a.normalized_alias) >= 2
+        AND instr(?, a.normalized_alias)>0
+      ORDER BY length(a.normalized_alias) DESC, a.node_id ASC
+      LIMIT 128
     `).all(projectId, normalizedQuery) as Array<{ label: string; dimension: string; node_id: string }>;
-    return rows.map((row) => ({ label: row.label, dimension: row.dimension, nodeId: row.node_id }));
+    const grouped = new Map<string, Array<{ label: string; dimension: string; nodeId: string }>>();
+    for (const row of rows) {
+      const item = { label: row.label, dimension: row.dimension, nodeId: row.node_id };
+      if (!containsAlias(normalizedQuery, row.label)) continue;
+      const key = `${row.dimension}\0${row.label}`;
+      const group = grouped.get(key) ?? [];
+      if (!group.some((candidate) => candidate.nodeId === item.nodeId)) group.push(item);
+      grouped.set(key, group);
+    }
+    return [...grouped.values()].filter((group) => group.length === 1).map((group) => group[0]!);
   }
 
   relatedEpisodeCards(projectId: string, canonicalId: string, selectedIds: Set<string>, limit: number): MemoryAtlasRelatedCard[] {
@@ -739,6 +764,19 @@ export class MemoryAtlasStore {
       evidenceReturned: 0,
     };
   }
+}
+
+function containsAlias(query: string, alias: string): boolean {
+  if (alias.length < 2) return false;
+  if (query.includes(alias)) {
+    // CJK phrases do not have whitespace word boundaries; contiguous matching
+    // is intentional there. Latin and numeric aliases require token edges.
+    const cjk = /[\u3400-\u9fff\u3040-\u30ff]/u.test(alias);
+    if (cjk) return query.includes(alias);
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}(?:$|[^\\p{L}\\p{N}])`, 'u').test(query);
+  }
+  return false;
 }
 
 function mapNode(row: AtlasDocumentRow, score: number): MemoryAtlasNode {

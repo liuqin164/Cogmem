@@ -25,6 +25,7 @@ export declare class MemoryAtlasStore {
     }): MemoryAtlasNode[];
     searchCanonicalEpisodeCards(projectId: string, plan: FacetQueryPlan, limit: number): MemoryAtlasCard[];
     findActiveAliasNode(projectId: string, dimension: string, normalizedAlias: string): string | undefined;
+    findAliasNodes(projectId: string, dimension: string, normalizedAlias: string): string[];
     resolveQueryAliases(projectId: string, query: string): Array<{
         label: string;
         dimension: string;

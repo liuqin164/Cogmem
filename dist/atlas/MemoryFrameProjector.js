@@ -108,7 +108,7 @@ export class MemoryFrameProjector {
     nodeId(projectId, node, frame) {
         if (node.canonicalHint?.nodeId) {
             const candidate = node.canonicalHint.nodeId;
-            const existing = this.atlasStore.getNode(candidate, projectId);
+            const existing = this.atlasStore.getNodeIncludingInactive(candidate, projectId);
             if (existing && existing.projectId === projectId && existing.nodeType === node.dimension)
                 return candidate;
         }
@@ -121,9 +121,11 @@ export class MemoryFrameProjector {
                 throw new Error(`raw_event_identity_requires_one_evidence:${node.frameNodeId}`);
             return `raw_event:${node.evidenceEventIds[0]}`;
         }
-        const aliasNode = this.atlasStore.findActiveAliasNode(projectId, node.dimension, normalizeAlias(node.label));
-        if (aliasNode)
-            return aliasNode;
+        const aliasNodes = this.atlasStore.findAliasNodes(projectId, node.dimension, normalizeAlias(node.label));
+        if (aliasNodes.length > 1)
+            throw new Error(`memory_frame_alias_ambiguous:${node.dimension}:${normalizeAlias(node.label)}`);
+        if (aliasNodes.length === 1)
+            return aliasNodes[0];
         const key = `${projectId}\0${node.dimension}\0${normalizeAlias(node.label)}`;
         return `${node.dimension}:${createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
     }
