@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.7.3`
+Current version: `3.7.4`
 
 Distribution: npm registry. GitHub remains the source mirror and hosts this installer, but package install and upgrade resolve `cogmem` from npm by default.
 
@@ -229,7 +229,7 @@ cogmem migrate --dry-run --json
 
 For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
-Upgrade a 3.5.2 database, a 3.6.x database, or a pre-release schema-25 test database into the current 3.7.3 schema and projection set with one command:
+Upgrade a 3.5.2 database, a 3.6.x database, or a pre-release schema-25 test database into the current 3.7.4 schema and projection set with one command:
 
 ```bash
 cogmem migrate --yes --backup --json
@@ -283,7 +283,7 @@ Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_
 User-shaped topic state is project-scoped. Explicit user operations become active and auditable; model-proposed topics, aliases, and relations remain candidates. Use MCP `cogmem_topic_list` to inspect nodes, `cogmem_topic_operate` to create, rename, alias, move, merge, split, or relate topics, and `cogmem_topic_rollback` to reverse an audited operation. Alias collisions fail closed as `needs_review`; applications can also call `TopicGovernance.rollback()` through the public API.
 
 Episode surgery is available through `cogmem episode split|merge|move-event|reclassify|requeue-dream` or MCP `cogmem_episode_repair`. Structural repair recomputes closure receipts, invalidates candidates derived from the old episode boundary, preserves cross-references, requeues eligible sealed episodes, and writes an audit record.
-Use `cogmem episode audit-boundaries` for read-only boundary diagnostics and `cogmem episode split-plan` for deterministic read-only split previews. The split preview does not call repair, does not move events, and returns no executable apply command in 3.7.3.
+Use `cogmem episode audit-boundaries` for read-only boundary diagnostics and `cogmem episode split-plan` for deterministic read-only split previews. The split preview does not call repair, does not move events, and returns no executable apply command in 3.7.4.
 
 Inspect queue state:
 
@@ -799,7 +799,7 @@ npm pack --dry-run --json
 npm publish --dry-run --access public
 ```
 
-Create a GitHub Release from the matching version tag, for example `v3.7.3`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
+Create a GitHub Release from the matching version tag, for example `v3.7.4`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
 
 Publish manually only for emergency fallback:
 

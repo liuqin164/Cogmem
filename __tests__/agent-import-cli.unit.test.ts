@@ -42,13 +42,12 @@ async function runCli(
 
 function serveWithRetry(options: Parameters<typeof Bun.serve>[0]): ReturnType<typeof Bun.serve> {
   let lastError: unknown;
-  const startPort = 30_000 + Math.floor(Math.random() * 20_000);
-  for (let attempt = 0; attempt < 25; attempt += 1) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
-      return Bun.serve({ ...options, port: startPort + attempt });
+      return Bun.serve({ ...options, port: 30_000 + Math.floor(Math.random() * 20_000) });
     } catch (error) {
       lastError = error;
-      if ((error as { code?: string }).code !== 'EADDRINUSE') throw error;
+      if ((error as { code?: string }).code !== 'EADDRINUSE' && !String(error).includes('EADDRINUSE')) throw error;
     }
   }
   throw lastError;

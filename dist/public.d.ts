@@ -151,6 +151,9 @@ export { callCogmemMcpTool, listCogmemMcpTools } from './mcp/CoreMcpTools.js';
 export type { CogmemMcpCallResult, CogmemMcpRuntime, CogmemMcpTool } from './mcp/CoreMcpTools.js';
 export type { DreamBacklogStatus } from './store/DreamLedgerStore.js';
 export * from './atlas/index.js';
+export * from './semantic/index.js';
+export { createMemoryQueryFrame, queryFacet } from './recall/MemoryQueryFrame.js';
+export type { MemoryQueryFacet, MemoryQueryFrameV1, MemoryQueryIntent } from './recall/MemoryQueryFrame.js';
 /**
  * Chinese-language lexicons for entity hints, stopwords, and topic classification.
  * @experimental @since 1.13.0

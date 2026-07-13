@@ -15,7 +15,12 @@ export type MemoryAtlasNodeType =
   | 'time'
   | 'event'
   | 'decision'
-  | 'correction';
+  | 'correction'
+  | 'actor'
+  | 'task'
+  | 'object'
+  | 'location'
+  | 'state';
 
 export interface MemoryAtlasEvidence {
   eventId: string;

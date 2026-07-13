@@ -1,4 +1,4 @@
-export type MemoryAtlasNodeType = 'project' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind' | 'cluster' | 'episode' | 'raw_event' | 'belief' | 'action' | 'time' | 'event' | 'decision' | 'correction';
+export type MemoryAtlasNodeType = 'project' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind' | 'cluster' | 'episode' | 'raw_event' | 'belief' | 'action' | 'time' | 'event' | 'decision' | 'correction' | 'actor' | 'task' | 'object' | 'location' | 'state';
 export interface MemoryAtlasEvidence {
     eventId: string;
     globalSeq?: number;

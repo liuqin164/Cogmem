@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.7.4
+
+- Added evidence-backed MemoryFrame V1 contracts, controlled relation validation, canonical alias normalization, and bounded MemoryQueryFrame helpers.
+- Added schema migrations 0032-0034 for staged frames, Atlas aliases/supports, and V2 projection provenance.
+
 ## 3.7.3
 
 - Added enforceable Episode Boundary guardrails with configurable max event, duration, idle-gap, and trusted local-date limits, including best-effort decision audit rows that never roll back successful raw event assignment.

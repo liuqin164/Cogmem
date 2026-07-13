@@ -1,0 +1,2 @@
+export const MEMORY_FRAME_PROMPT_VERSION = '3.7.4-v1';
+export const MEMORY_FRAME_SYSTEM_PROMPT = `Return only JSON matching memory_frame.v1. Use only supplied evidence event IDs. Do not invent people, projects, events, tasks, or relations. Preserve labels in their source language. Use only registered relation types and omit uncertain claims.`;
