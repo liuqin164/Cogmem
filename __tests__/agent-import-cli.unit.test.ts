@@ -41,13 +41,14 @@ async function runCli(
 }
 
 function serveWithRetry(options: Parameters<typeof Bun.serve>[0]): ReturnType<typeof Bun.serve> {
+  // ponytail: deterministic per-worker ports avoid sandbox EPERM and parallel collisions.
   let lastError: unknown;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      return Bun.serve({ ...options, port: 30_000 + Math.floor(Math.random() * 20_000) });
-    } catch (error) {
+  for (let attempt = 0; attempt < 64; attempt += 1) {
+    const port = 30_000 + ((process.pid + attempt) % 20_000);
+    try { return Bun.serve({ ...options, hostname: '127.0.0.1', port }); }
+    catch (error) {
       lastError = error;
-      if ((error as { code?: string }).code !== 'EADDRINUSE' && !String(error).includes('EADDRINUSE')) throw error;
+      if (!String(error).includes('EADDRINUSE')) throw error;
     }
   }
   throw lastError;
