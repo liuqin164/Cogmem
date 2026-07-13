@@ -13,6 +13,9 @@ test('MCP exposes pure read-only Atlas queries and an explicit activation touch'
     expect(names).toContain('cogmem_graph_overview');
     expect(names).toContain('cogmem_graph_explore');
     expect(names).toContain('cogmem_graph_path');
+    expect(names).toContain('cogmem_memory_frame_show');
+    expect(names).toContain('cogmem_memory_dimensions');
+    expect(names).toContain('cogmem_memory_query_plan');
     expect(listCogmemMcpTools().filter((tool) => tool.name.startsWith('cogmem_graph_') && tool.name !== 'cogmem_graph_touch').every((tool) =>
       tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint === false && tool.annotations.idempotentHint === true)).toBe(true);
     expect(names).toContain('cogmem_graph_touch');

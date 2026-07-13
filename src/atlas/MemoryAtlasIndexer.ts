@@ -5,14 +5,18 @@ import { MEMORY_ATLAS_PROJECTION_NAME, MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION } 
 import { backfillAtlasDocuments, installAtlasProjectionDirtyTriggers } from '../migrations/0025_memory_atlas.js';
 import { ActionFrameExtractor } from './ActionFrameExtractor.js';
 import { GraphCurator } from './GraphCurator.js';
+import type { MemoryFrameStore } from '../store/MemoryFrameStore.js';
+import { MemoryFrameProjector } from './MemoryFrameProjector.js';
 
 export class MemoryAtlasIndexer {
   private readonly actions: ActionFrameExtractor;
   private readonly curator: GraphCurator;
-  constructor(private db: Database, eventStore: EventStore, private store: MemoryAtlasStore) {
+  private readonly frameProjector?: MemoryFrameProjector;
+  constructor(private db: Database, eventStore: EventStore, private store: MemoryAtlasStore, frameStore?: MemoryFrameStore) {
     installAtlasProjectionDirtyTriggers(db);
     this.actions = new ActionFrameExtractor(db, eventStore, store);
     this.curator = new GraphCurator(db, eventStore, store);
+    if (frameStore) this.frameProjector = new MemoryFrameProjector(db, frameStore, store);
   }
   rebuild(options: { projectId?: string } = {}): { documents: number; actions: number; curatedEpisodes: number } {
     const projectId = options.projectId;
@@ -44,6 +48,8 @@ export class MemoryAtlasIndexer {
         reviewNeeded += result.reviewNeeded;
         this.store.aggregateFacetNodeSupport(id);
       }
+      if (projectId && this.frameProjector) this.frameProjector.rebuild(projectId);
+      else if (!projectId && this.frameProjector) for (const id of projects) this.frameProjector.rebuild(id);
       if (projectId) {
         this.store.markProjectionClean(projectId, { actions, curatedEpisodes, facetEdges, reviewNeeded });
       } else {

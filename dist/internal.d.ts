@@ -90,6 +90,7 @@ export * from './observability/TraceWriter.js';
 export * from './recall/BrainRecall.js';
 export * from './recall/HierarchicalRecallRouter.js';
 export * from './recall/VectorCandidateFilter.js';
+export * from './recall/index.js';
 export * from './retrieval/ConditionDslEvaluator.js';
 export * from './retrieval/EvidenceFusionPolicy.js';
 export * from './retrieval/NativeQueryParser.js';

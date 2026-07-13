@@ -7,7 +7,7 @@ export function deterministicFrameFallback(input: { projectId: string; episodeId
   const evidenceEventIds = events.map((event) => event.eventId);
   const frameId = `frame:${createHash('sha256').update(`${input.episodeId}:${evidenceEventIds.join(',')}`).digest('hex').slice(0, 32)}`;
   const nodes: MemoryFrameV1['nodes'] = [
-    { frameNodeId: 'episode', dimension: 'event', label: input.episodeId, confidence: 1, evidenceEventIds },
+    { frameNodeId: 'episode', dimension: 'episode', label: input.episodeId, confidence: 1, evidenceEventIds },
     { frameNodeId: 'project', dimension: 'project', label: input.projectId, confidence: 1, evidenceEventIds },
   ];
   return { schemaVersion: 'memory_frame.v1', frameId, projectId: input.projectId, episodeId: input.episodeId,

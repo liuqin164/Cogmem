@@ -110,6 +110,7 @@ export { MemoryFrameStore, frameSourceFingerprint } from './store/MemoryFrameSto
 export * from './atlas/index.js';
 export * from './semantic/index.js';
 export { createMemoryQueryFrame, queryFacet } from './recall/MemoryQueryFrame.js';
+export { AtlasPathRetriever, DimensionAwareRanker, MultidimensionalQueryPlanner } from './recall/index.js';
 // ─── @experimental ───────────────────────────────────────────────────────────
 /**
  * Chinese-language lexicons for entity hints, stopwords, and topic classification.

@@ -8,6 +8,7 @@ import { Metabolism } from './core/Metabolism.js';
 import { Reflection } from './core/Reflection.js';
 import { TwoStagePulseRanker } from './core/TwoStagePulseRanker.js';
 import { BrainRecall } from './recall/BrainRecall.js';
+import { AtlasPathRetriever, MultidimensionalQueryPlanner } from './recall/index.js';
 import { HierarchicalRecallRouter } from './recall/HierarchicalRecallRouter.js';
 import { isRecallableMemoryEvidence, recallSuppressionReasonFor, } from './recall/RecallGovernance.js';
 import { TopicClassifier } from './recall/TopicClassifier.js';
@@ -78,7 +79,9 @@ import { FactStore } from './store/FactStore.js';
 import { InteractionUnitStore } from './store/InteractionUnitStore.js';
 import { MemoryBindingStore } from './store/MemoryBindingStore.js';
 import { MemoryAtlasStore } from './store/MemoryAtlasStore.js';
-import { MemoryFrameStore } from './store/MemoryFrameStore.js';
+import { MemoryFrameStore, frameSourceFingerprint } from './store/MemoryFrameStore.js';
+import { deterministicFrameFallback } from './semantic/DeterministicFrameFallback.js';
+import { StructuredSemanticProcessor } from './semantic/StructuredSemanticProcessor.js';
 import { MemoryAtlasIndexer, MemoryAtlasService, } from './atlas/index.js';
 import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { SummaryStore } from './store/SummaryStore.js';
@@ -118,6 +121,7 @@ export class MemoryKernel {
     memoryAtlasStore;
     memoryFrameStore;
     memoryAtlasService;
+    multidimensionalQueryPlanner;
     memoryGovernanceStore;
     memoryGovernanceExecutor;
     pipelineMetrics;
@@ -148,6 +152,7 @@ export class MemoryKernel {
     dreamScheduler;
     memoryBindingService;
     memoryAtlasIndexer;
+    atlasPathRetriever;
     topicSummaryBoard;
     topicDecayPolicy;
     localSemanticCompiler;
@@ -248,8 +253,10 @@ export class MemoryKernel {
         this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
         this.memoryAtlasStore = new MemoryAtlasStore(db);
         this.memoryFrameStore = new MemoryFrameStore(db);
-        this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore);
+        this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore, this.memoryFrameStore);
         this.memoryAtlasService = new MemoryAtlasService(this.memoryAtlasStore, this.eventStore);
+        this.multidimensionalQueryPlanner = new MultidimensionalQueryPlanner();
+        this.atlasPathRetriever = new AtlasPathRetriever(this.memoryAtlasService, this.multidimensionalQueryPlanner);
         this.entityGovernanceService = new EntityGovernanceService(db, this.entityStore, (eventId) => {
             const event = this.eventStore.getEvent(eventId);
             return event ? { eventId, projectId: event.projectId, role: event.role } : undefined;
@@ -325,6 +332,8 @@ export class MemoryKernel {
                 beliefId: belief.id, canonicalKey: belief.canonicalKey,
                 statement: `${belief.subject} ${belief.predicate} ${String(belief.objectValue)}`, projectId: belief.projectId,
             })))),
+            memoryFrameStore: this.memoryFrameStore,
+            semanticProcessor: new StructuredSemanticProcessor(async (input) => deterministicFrameFallback({ ...input, now: Date.now() })),
         });
         this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker, this.deepWriteCandidateStore);
         this.topicSummaryBoard = new TopicSummaryBoard(this.memoryGraph, this.summaryStore);
@@ -1451,6 +1460,43 @@ export class MemoryKernel {
     ensureMemoryAtlas(options) {
         return this.memoryAtlasIndexer.ensureFresh(options);
     }
+    getMemoryFrame(episodeId, projectId) {
+        const episode = this.episodeStore.getEpisode(episodeId);
+        if (!episode || (projectId !== undefined && episode.projectId !== projectId))
+            return null;
+        return this.memoryFrameStore.list(episode.projectId, { statuses: ['active', 'needs_confirmation'], limit: 1000 })
+            .find((frame) => frame.episodeId === episodeId) ?? null;
+    }
+    listMemoryDimensions(projectId, nodeType, limit = 100) {
+        const allowed = new Set(['actor', 'entity', 'project', 'topic', 'issue', 'event', 'task', 'object', 'location', 'state', 'episode', 'time']);
+        if (nodeType && !allowed.has(nodeType))
+            throw new Error(`invalid_memory_dimension:${nodeType}`);
+        const rows = this.factStore.getDatabase().prepare(`
+      SELECT node_id,node_type,label,confidence,evidence_event_ids_json
+      FROM memory_atlas_documents
+      WHERE project_id=? AND status NOT IN ('archived','rejected') ${nodeType ? 'AND node_type=?' : ''}
+      ORDER BY confidence DESC, updated_at DESC, node_id ASC LIMIT ?
+    `).all(projectId, ...(nodeType ? [nodeType] : []), Math.max(1, Math.min(limit, 500)));
+        return rows.map((row) => ({ id: row.node_id, nodeType: row.node_type, label: row.label, confidence: Number(row.confidence), evidenceEventIds: JSON.parse(row.evidence_event_ids_json || '[]') }));
+    }
+    backfillMemoryFrames(options) {
+        const episodes = this.episodeStore.listEpisodes({ projectId: options.projectId, statuses: ['sealed', 'soft_sealed', 'open'], limit: Math.max(1, Math.min(options.limit ?? 100, 500)) + 1 })
+            .filter((episode) => !options.cursor || episode.episodeId > options.cursor);
+        const selected = episodes.slice(0, Math.max(1, Math.min(options.limit ?? 100, 500)));
+        let created = 0;
+        let needsReview = 0;
+        for (const episode of selected) {
+            const events = this.episodeStore.listEventLinks(episode.episodeId).map((link) => this.eventStore.getEvent(link.eventId)).filter((event) => Boolean(event));
+            if (!events.length)
+                continue;
+            const frame = deterministicFrameFallback({ projectId: options.projectId, episodeId: episode.episodeId, episodeType: episode.episodeType, events });
+            this.memoryFrameStore.save({ frame, sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), episode.episodeId), status: options.mode === 'shadow' ? 'staged' : 'active' });
+            created += 1;
+            needsReview += frame.needsReview ? 1 : 0;
+        }
+        const hasMore = episodes.length > selected.length;
+        return { projectId: options.projectId, processed: selected.length, created, needsReview, ...(selected.at(-1) ? { nextCursor: selected.at(-1).episodeId } : {}), hasMore };
+    }
     prepareMemoryAtlasRead(options) {
         if (options.refresh === false) {
             const state = this.memoryAtlasStore.getProjectionState(options.projectId);
@@ -1485,6 +1531,11 @@ export class MemoryKernel {
     graphExplore(query, options) {
         const freshness = this.prepareMemoryAtlasRead(options);
         return this.withAtlasFreshness(this.memoryAtlasService.explore(query, options), freshness);
+    }
+    planMemoryQuery(query, options) {
+        const freshness = this.prepareMemoryAtlasRead(options);
+        const planned = this.atlasPathRetriever.retrieve(query, options);
+        return { queryFrame: planned.queryFrame, result: this.withAtlasFreshness(planned.result, freshness) };
     }
     graphNode(nodeId, options) {
         const freshness = this.prepareMemoryAtlasRead(options);

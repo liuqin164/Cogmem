@@ -481,6 +481,7 @@ export * from './atlas/index.js';
 export * from './semantic/index.js';
 export { createMemoryQueryFrame, queryFacet } from './recall/MemoryQueryFrame.js';
 export type { MemoryQueryFacet, MemoryQueryFrameV1, MemoryQueryIntent } from './recall/MemoryQueryFrame.js';
+export { AtlasPathRetriever, DimensionAwareRanker, MultidimensionalQueryPlanner } from './recall/index.js';
 
 // ─── @experimental ───────────────────────────────────────────────────────────
 

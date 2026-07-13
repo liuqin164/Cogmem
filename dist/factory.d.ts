@@ -4,6 +4,7 @@ import { type MemoryBindingListOptions, type MemoryBindingRecord, type MemoryBin
 import { IngestionCursorStore } from './batch/IngestionCursorStore.js';
 import { MemoryGraph } from './core/MemoryGraph.js';
 import { type BrainRecallOptions } from './recall/BrainRecall.js';
+import { MultidimensionalQueryPlanner } from './recall/index.js';
 import { type RecallGovernanceSuppressionReason } from './recall/RecallGovernance.js';
 import { TopicRegistry } from './recall/TopicRegistry.js';
 import { type DeepWritePromotionDecision } from './engine/DeepWritePromotionPolicy.js';
@@ -42,6 +43,7 @@ import { FactStore } from './store/FactStore.js';
 import { MemoryBindingStore } from './store/MemoryBindingStore.js';
 import { MemoryAtlasStore } from './store/MemoryAtlasStore.js';
 import { MemoryFrameStore } from './store/MemoryFrameStore.js';
+import type { MemoryFrameV1 } from './semantic/MemoryFrameTypes.js';
 import { MemoryAtlasService, type MemoryAtlasNodeDetail, type MemoryAtlasPathResult, type MemoryAtlasQueryOptions, type MemoryAtlasSlice, type MemoryAtlasTimelineResult } from './atlas/index.js';
 import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
@@ -477,6 +479,7 @@ export declare class MemoryKernel {
     readonly memoryAtlasStore: MemoryAtlasStore;
     readonly memoryFrameStore: MemoryFrameStore;
     readonly memoryAtlasService: MemoryAtlasService;
+    readonly multidimensionalQueryPlanner: MultidimensionalQueryPlanner;
     readonly memoryGovernanceStore: MemoryGovernanceStore;
     readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;
     readonly pipelineMetrics: PipelineMetrics;
@@ -507,6 +510,7 @@ export declare class MemoryKernel {
     private readonly dreamScheduler;
     private readonly memoryBindingService;
     private readonly memoryAtlasIndexer;
+    private readonly atlasPathRetriever;
     private readonly topicSummaryBoard;
     private readonly topicDecayPolicy;
     private readonly localSemanticCompiler;
@@ -721,11 +725,36 @@ export declare class MemoryKernel {
         actions: number;
         refreshed: boolean;
     };
+    getMemoryFrame(episodeId: string, projectId?: string): MemoryFrameV1 | null;
+    listMemoryDimensions(projectId: string, nodeType?: string, limit?: number): Array<{
+        id: string;
+        nodeType: string;
+        label: string;
+        confidence: number;
+        evidenceEventIds: string[];
+    }>;
+    backfillMemoryFrames(options: {
+        projectId: string;
+        limit?: number;
+        cursor?: string;
+        mode?: 'shadow' | 'active';
+    }): {
+        projectId: string;
+        processed: number;
+        created: number;
+        needsReview: number;
+        nextCursor?: string;
+        hasMore: boolean;
+    };
     private prepareMemoryAtlasRead;
     private withAtlasFreshness;
     graphOverview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     graphSearch(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     graphExplore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
+    planMemoryQuery(query: string, options: MemoryAtlasQueryOptions): {
+        queryFrame: ReturnType<MultidimensionalQueryPlanner['plan']>;
+        result: MemoryAtlasSlice;
+    };
     graphNode(nodeId: string, options: MemoryAtlasQueryOptions): MemoryAtlasNodeDetail | null;
     graphNeighbors(nodeId: string, options: MemoryAtlasQueryOptions & {
         hops?: number;

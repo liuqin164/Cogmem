@@ -63,6 +63,7 @@ function readArgs(argv) {
         promoteLimit: numberArg(values, 'promote-limit'),
         dbPath: stringArg(values, 'db'),
         configPath: stringArg(values, 'config'),
+        mode: modeArg(values, 'mode'),
         watch: values.watch === true,
         promote: values.promote === true,
         json: values.json === true,
@@ -74,7 +75,7 @@ function readArgs(argv) {
 }
 function usage() {
     return [
-        'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|graph...> [args]',
+        'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|graph...> [args]',
         '',
         'Commands:',
         '  status               summarize raw ledger, vector, and dream backlog state',
@@ -90,9 +91,12 @@ function usage() {
         '  map                  print the self-describing memory map for agent/host inspection',
         '  tick                 run one explicit host-owned maintenance tick',
         '  bind                 backfill memory bindings for high-value raw user events',
+        '  frame --episode <id> show one structured MemoryFrame',
+        '  frame-backfill       create deterministic evidence-backed frames for existing episodes',
         '  graph                show a bounded overview of remembered topics, entities, clusters, actions, and time',
         '  graph-search         locate Atlas nodes by --query without expanding the graph',
         '  graph-explore        return a bounded local graph for a broad --query',
+        '  graph-plan           build a multidimensional query frame and bounded graph result',
         '  graph-node           inspect --id with neighbors and evidence drilldown commands',
         '  graph-neighbors      expand --id by --hops 1..2',
         '  graph-path           find a bounded path from --from to --to',
@@ -127,6 +131,7 @@ function usage() {
         '  --intent <intent>    memory_recall, previous_session_summary, forensic_quote, historical_discussion, or action_history',
         '  --db <memory.db>     open an explicit database path',
         '  --config <toml>      open a cogmem TOML config',
+        '  --mode <shadow|active> frame backfill publication mode, default active',
         '  --include-evidence   include bounded raw excerpts; event ids are always returned',
         '  --evidence-limit <n> bound evidence locators per Atlas node, default 2, maximum 10',
         '  --now <epoch-ms>     deterministic reference time for relative Atlas time facets',
@@ -157,11 +162,22 @@ function isMemoryCommand(value) {
         || value === 'graph'
         || value === 'graph-search'
         || value === 'graph-explore'
+        || value === 'graph-plan'
         || value === 'graph-node'
         || value === 'graph-neighbors'
         || value === 'graph-path'
         || value === 'graph-timeline'
-        || value === 'graph-reindex';
+        || value === 'graph-reindex'
+        || value === 'frame'
+        || value === 'frame-backfill';
+}
+function modeArg(values, key) {
+    const raw = stringArg(values, key);
+    if (!raw)
+        return undefined;
+    if (raw === 'shadow' || raw === 'active')
+        return raw;
+    throw new Error(`--${key} must be shadow or active`);
 }
 function reviewActionArg(values, key) {
     const raw = stringArg(values, key);
@@ -598,6 +614,19 @@ function runBind(kernel, args) {
         limit: args.limit || 500,
     });
 }
+function runFrame(kernel, args) {
+    if (args.command === 'frame-backfill') {
+        if (!args.projectId)
+            throw new Error(`frame-backfill requires --project.\n${usage()}`);
+        return kernel.backfillMemoryFrames({ projectId: args.projectId, limit: args.limit, mode: args.mode });
+    }
+    if (!args.episodeId)
+        throw new Error(`frame requires --episode.\n${usage()}`);
+    const frame = kernel.getMemoryFrame(args.episodeId, args.projectId);
+    if (!frame)
+        throw new Error('memory_frame_not_found');
+    return frame;
+}
 function runGraphCommand(kernel, args) {
     const projectId = args.projectId;
     if (!projectId)
@@ -624,6 +653,11 @@ function runGraphCommand(kernel, args) {
         if (!args.query)
             throw new Error(`graph-explore requires --query.\n${usage()}`);
         return kernel.graphExplore(args.query, options);
+    }
+    if (args.command === 'graph-plan') {
+        if (!args.query)
+            throw new Error(`graph-plan requires --query.\n${usage()}`);
+        return kernel.planMemoryQuery(args.query, options);
     }
     if (args.command === 'graph-node') {
         if (!args.nodeId)
@@ -982,7 +1016,9 @@ async function main() {
                                                     ? runTick(kernel, kernelArgs)
                                                     : kernelArgs.command === 'bind'
                                                         ? runBind(kernel, kernelArgs)
-                                                        : runGraphCommand(kernel, kernelArgs);
+                                                        : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill'
+                                                            ? runFrame(kernel, kernelArgs)
+                                                            : runGraphCommand(kernel, kernelArgs);
         if (kernelArgs.json) {
             const queue = kernelArgs.command === 'status'
                 ? payload.dreamCandidateQueue

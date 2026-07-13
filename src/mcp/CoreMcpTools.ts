@@ -329,6 +329,12 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
         idempotentHint: false,
       },
     },
+    graphTool('cogmem_memory_frame_show', 'Show Memory Frame', 'Show an evidence-backed structured MemoryFrame for one episode.', {
+      projectId: STRING_SCHEMA, episodeId: STRING_SCHEMA,
+    }, ['projectId', 'episodeId']),
+    graphTool('cogmem_memory_dimensions', 'List Memory Dimensions', 'List bounded Atlas V2 dimension nodes for one project.', {
+      projectId: STRING_SCHEMA, type: STRING_SCHEMA, limit: NUMBER_SCHEMA,
+    }, ['projectId']),
     graphTool('cogmem_graph_overview', 'Overview Memory Atlas', 'List a bounded content map of remembered topics, entities, clusters, episodes, actions, and time nodes.', {
       projectId: STRING_SCHEMA, limit: NUMBER_SCHEMA,
     }, ['projectId']),
@@ -337,6 +343,9 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
     }, ['projectId', 'query']),
     graphTool('cogmem_graph_explore', 'Explore Memory Atlas', 'Use for broad memory inventory, project-state, or historical questions; returns a bounded local graph and drilldown actions.', {
       projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, evidenceLimit: NUMBER_SCHEMA, now: NUMBER_SCHEMA,
+    }, ['projectId', 'query']),
+    graphTool('cogmem_memory_query_plan', 'Plan Multidimensional Memory Query', 'Build a bounded structured query frame and evidence-backed Atlas result across dimensions.', {
+      projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, now: NUMBER_SCHEMA,
     }, ['projectId', 'query']),
     graphTool('cogmem_graph_node', 'Inspect Memory Node', 'Inspect one source-anchored node, its neighbors, evidence event ids, and exact raw drilldown commands.', {
       projectId: STRING_SCHEMA, id: STRING_SCHEMA, includeEvidence: { type: 'boolean' }, evidenceLimit: NUMBER_SCHEMA,
@@ -509,6 +518,12 @@ export async function callCogmemMcpTool(
         const projectId = requiredString(input.projectId, 'projectId');
         return jsonResult(opened.kernel.graphOverview({ projectId, limit: optionalNumber(input.limit) }));
       }
+      case 'cogmem_memory_frame_show': {
+        return jsonResult(opened.kernel.getMemoryFrame(requiredString(input.episodeId, 'episodeId'), requiredString(input.projectId, 'projectId')) ?? { error: 'memory_frame_not_found' });
+      }
+      case 'cogmem_memory_dimensions': {
+        return jsonResult(opened.kernel.listMemoryDimensions(requiredString(input.projectId, 'projectId'), optionalString(input.type), optionalNumber(input.limit)));
+      }
       case 'cogmem_graph_search': {
         const projectId = requiredString(input.projectId, 'projectId');
         return jsonResult(opened.kernel.graphSearch(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit) }));
@@ -517,6 +532,12 @@ export async function callCogmemMcpTool(
         const projectId = requiredString(input.projectId, 'projectId');
         return jsonResult(opened.kernel.graphExplore(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit),
           evidenceLimit: optionalNumber(input.evidenceLimit), now: optionalNumber(input.now) }));
+      }
+      case 'cogmem_memory_query_plan': {
+        const projectId = requiredString(input.projectId, 'projectId');
+        return jsonResult(opened.kernel.planMemoryQuery(requiredString(input.query, 'query'), {
+          projectId, limit: optionalNumber(input.limit), now: optionalNumber(input.now),
+        }));
       }
       case 'cogmem_graph_node': {
         const projectId = requiredString(input.projectId, 'projectId');

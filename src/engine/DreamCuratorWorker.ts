@@ -12,6 +12,12 @@ import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeSemanticSummary, EpisodeType } from '../episode/EpisodeTypes.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import type { CorrectionResolver } from '../episode/CorrectionResolver.js';
+import type { MemoryFrameStore } from '../store/MemoryFrameStore.js';
+import { frameSourceFingerprint } from '../store/MemoryFrameStore.js';
+import { deterministicFrameFallback } from '../semantic/DeterministicFrameFallback.js';
+import type { StructuredSemanticProcessor } from '../semantic/StructuredSemanticProcessor.js';
+import { StructuredSemanticProcessor as StructuredSemanticProcessorImpl } from '../semantic/StructuredSemanticProcessor.js';
+import { MEMORY_FRAME_PROMPT_VERSION, MEMORY_FRAME_SYSTEM_PROMPT } from '../semantic/SemanticProcessorPrompt.js';
 
 export interface DreamCuratorRunOptions {
   projectId?: string;
@@ -54,6 +60,8 @@ export interface DreamCuratorWorkerDeps {
   modelRegistry?: ModelRegistry;
   pipelineMetrics?: PipelineMetrics;
   correctionResolver?: CorrectionResolver;
+  memoryFrameStore?: MemoryFrameStore;
+  semanticProcessor?: StructuredSemanticProcessor;
 }
 
 interface DreamEvidence {
@@ -118,6 +126,31 @@ export class DreamCuratorWorker {
     }
 
     const now = options.now ?? Date.now();
+    if (options.sourceEpisodeId && this.deps.memoryFrameStore) {
+      const frameInput = {
+        projectId: options.projectId || events[0]?.projectId || '', episodeId: options.sourceEpisodeId,
+        episodeType: frameEpisodeKind(options.episodeType), events,
+      };
+      let frame;
+      try {
+        const processor = options.generateText
+          ? new StructuredSemanticProcessorImpl(async (input) => JSON.parse(await options.generateText!(MEMORY_FRAME_SYSTEM_PROMPT, JSON.stringify({
+            schemaVersion: 'memory_frame.v1', promptVersion: MEMORY_FRAME_PROMPT_VERSION,
+            projectId: input.projectId, episodeId: input.episodeId, episodeType: input.episodeType,
+            events: input.events.map((event) => ({ eventId: event.eventId, role: event.role, occurredAt: event.occurredAt, text: eventTextForMemory(event) })),
+          }))))
+          : this.deps.semanticProcessor;
+        frame = processor ? await processor.process(frameInput) : deterministicFrameFallback({ ...frameInput, now });
+      } catch {
+        frame = deterministicFrameFallback({ ...frameInput, now });
+      }
+      this.deps.memoryFrameStore.save({
+        frame,
+        sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), options.sourceEpisodeId),
+        status: options.mode === 'shadow' ? 'staged' : 'active',
+        now,
+      });
+    }
     const maxGlobalSeq = Math.max(...events.map((event) => event.globalSeq || 0));
     const dreamableEvents = events.filter((event) => this.isDreamableEvent(event));
     const allowedEvidence = new Set(options.sourceEpisodeEventIds || events.map((event) => event.eventId));
@@ -867,6 +900,11 @@ export class DreamCuratorWorker {
     const sessionIds = new Set(events.map((event) => event.sessionId).filter((id): id is string => Boolean(id)));
     return sessionIds.size === 1 ? [...sessionIds][0] : undefined;
   }
+}
+
+function frameEpisodeKind(value: string | undefined): 'discussion' | 'operation' | 'decision' | 'correction' | 'diagnostic' | 'planning' | 'status_update' | 'preference' | 'other' {
+  const allowed = new Set(['discussion', 'operation', 'decision', 'correction', 'diagnostic', 'planning', 'status_update', 'preference', 'other']);
+  return value && allowed.has(value) ? value as ReturnType<typeof frameEpisodeKind> : 'other';
 }
 
 function hasPairedConflictClaims(record: Record<string, unknown>): boolean {

@@ -1,6 +1,10 @@
 import { createHash } from 'crypto';
 import { isOperationalNoiseText } from '../recall/RecallGovernance.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
+import { frameSourceFingerprint } from '../store/MemoryFrameStore.js';
+import { deterministicFrameFallback } from '../semantic/DeterministicFrameFallback.js';
+import { StructuredSemanticProcessor as StructuredSemanticProcessorImpl } from '../semantic/StructuredSemanticProcessor.js';
+import { MEMORY_FRAME_PROMPT_VERSION, MEMORY_FRAME_SYSTEM_PROMPT } from '../semantic/SemanticProcessorPrompt.js';
 const PREFERENCE_PATTERN = /(请以后|以后请|始终|总是|偏好|喜欢|希望|不要|别|必须|一定要|长期目标|目标是|约束|边界|本地优先|local-first|prefer|preference|always|never|must|do not|don't|goal|constraint|boundary)/iu;
 const CORRECTION_PATTERN = /((?:^|[。！？.!?\s])不[，,]|(?<!对)不对|(?<!是)不是|纠正|更正|应该是|推翻|修正|actually|correction|instead)/iu;
 const LEADING_CORRECTION_PATTERN = /^\s*不[，,]/u;
@@ -36,6 +40,32 @@ export class DreamCuratorWorker {
             };
         }
         const now = options.now ?? Date.now();
+        if (options.sourceEpisodeId && this.deps.memoryFrameStore) {
+            const frameInput = {
+                projectId: options.projectId || events[0]?.projectId || '', episodeId: options.sourceEpisodeId,
+                episodeType: frameEpisodeKind(options.episodeType), events,
+            };
+            let frame;
+            try {
+                const processor = options.generateText
+                    ? new StructuredSemanticProcessorImpl(async (input) => JSON.parse(await options.generateText(MEMORY_FRAME_SYSTEM_PROMPT, JSON.stringify({
+                        schemaVersion: 'memory_frame.v1', promptVersion: MEMORY_FRAME_PROMPT_VERSION,
+                        projectId: input.projectId, episodeId: input.episodeId, episodeType: input.episodeType,
+                        events: input.events.map((event) => ({ eventId: event.eventId, role: event.role, occurredAt: event.occurredAt, text: eventTextForMemory(event) })),
+                    }))))
+                    : this.deps.semanticProcessor;
+                frame = processor ? await processor.process(frameInput) : deterministicFrameFallback({ ...frameInput, now });
+            }
+            catch {
+                frame = deterministicFrameFallback({ ...frameInput, now });
+            }
+            this.deps.memoryFrameStore.save({
+                frame,
+                sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), options.sourceEpisodeId),
+                status: options.mode === 'shadow' ? 'staged' : 'active',
+                now,
+            });
+        }
         const maxGlobalSeq = Math.max(...events.map((event) => event.globalSeq || 0));
         const dreamableEvents = events.filter((event) => this.isDreamableEvent(event));
         const allowedEvidence = new Set(options.sourceEpisodeEventIds || events.map((event) => event.eventId));
@@ -734,6 +764,10 @@ export class DreamCuratorWorker {
         const sessionIds = new Set(events.map((event) => event.sessionId).filter((id) => Boolean(id)));
         return sessionIds.size === 1 ? [...sessionIds][0] : undefined;
     }
+}
+function frameEpisodeKind(value) {
+    const allowed = new Set(['discussion', 'operation', 'decision', 'correction', 'diagnostic', 'planning', 'status_update', 'preference', 'other']);
+    return value && allowed.has(value) ? value : 'other';
 }
 function hasPairedConflictClaims(record) {
     const incoming = String(record.newStatement || record.claim || '').trim();

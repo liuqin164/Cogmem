@@ -17,7 +17,7 @@ import { printCliJson } from './CliJson.js';
 
 interface MemoryArgs {
   command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
-    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex';
+    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-plan' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex' | 'frame' | 'frame-backfill';
   query?: string;
   eventId?: string;
   episodeId?: string;
@@ -55,6 +55,7 @@ interface MemoryArgs {
   promoteLimit?: number;
   dbPath?: string;
   configPath?: string;
+  mode?: 'shadow' | 'active';
   watch: boolean;
   promote: boolean;
   json: boolean;
@@ -121,6 +122,7 @@ function readArgs(argv: string[]): MemoryArgs {
     promoteLimit: numberArg(values, 'promote-limit'),
     dbPath: stringArg(values, 'db'),
     configPath: stringArg(values, 'config'),
+    mode: modeArg(values, 'mode'),
     watch: values.watch === true,
     promote: values.promote === true,
     json: values.json === true,
@@ -133,7 +135,7 @@ function readArgs(argv: string[]): MemoryArgs {
 
 function usage(): string {
   return [
-    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|graph...> [args]',
+    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|graph...> [args]',
     '',
     'Commands:',
     '  status               summarize raw ledger, vector, and dream backlog state',
@@ -149,9 +151,12 @@ function usage(): string {
     '  map                  print the self-describing memory map for agent/host inspection',
     '  tick                 run one explicit host-owned maintenance tick',
     '  bind                 backfill memory bindings for high-value raw user events',
+    '  frame --episode <id> show one structured MemoryFrame',
+    '  frame-backfill       create deterministic evidence-backed frames for existing episodes',
     '  graph                show a bounded overview of remembered topics, entities, clusters, actions, and time',
     '  graph-search         locate Atlas nodes by --query without expanding the graph',
     '  graph-explore        return a bounded local graph for a broad --query',
+    '  graph-plan           build a multidimensional query frame and bounded graph result',
     '  graph-node           inspect --id with neighbors and evidence drilldown commands',
     '  graph-neighbors      expand --id by --hops 1..2',
     '  graph-path           find a bounded path from --from to --to',
@@ -186,6 +191,7 @@ function usage(): string {
     '  --intent <intent>    memory_recall, previous_session_summary, forensic_quote, historical_discussion, or action_history',
     '  --db <memory.db>     open an explicit database path',
     '  --config <toml>      open a cogmem TOML config',
+    '  --mode <shadow|active> frame backfill publication mode, default active',
   '  --include-evidence   include bounded raw excerpts; event ids are always returned',
   '  --evidence-limit <n> bound evidence locators per Atlas node, default 2, maximum 10',
   '  --now <epoch-ms>     deterministic reference time for relative Atlas time facets',
@@ -217,11 +223,21 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'graph'
     || value === 'graph-search'
     || value === 'graph-explore'
+    || value === 'graph-plan'
     || value === 'graph-node'
     || value === 'graph-neighbors'
     || value === 'graph-path'
     || value === 'graph-timeline'
-    || value === 'graph-reindex';
+    || value === 'graph-reindex'
+    || value === 'frame'
+    || value === 'frame-backfill';
+}
+
+function modeArg(values: Record<string, string | boolean>, key: string): MemoryArgs['mode'] {
+  const raw = stringArg(values, key);
+  if (!raw) return undefined;
+  if (raw === 'shadow' || raw === 'active') return raw;
+  throw new Error(`--${key} must be shadow or active`);
 }
 
 function reviewActionArg(values: Record<string, string | boolean>, key: string): MemoryArgs['reviewAction'] {
@@ -700,6 +716,17 @@ function runBind(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown
   }) as unknown as Record<string, unknown>;
 }
 
+function runFrame(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  if (args.command === 'frame-backfill') {
+    if (!args.projectId) throw new Error(`frame-backfill requires --project.\n${usage()}`);
+    return kernel.backfillMemoryFrames({ projectId: args.projectId, limit: args.limit, mode: args.mode });
+  }
+  if (!args.episodeId) throw new Error(`frame requires --episode.\n${usage()}`);
+  const frame = kernel.getMemoryFrame(args.episodeId, args.projectId);
+  if (!frame) throw new Error('memory_frame_not_found');
+  return frame as unknown as Record<string, unknown>;
+}
+
 function runGraphCommand(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
   const projectId = args.projectId;
   if (!projectId) throw new Error(`Memory Atlas commands require --project.\n${usage()}`);
@@ -720,6 +747,10 @@ function runGraphCommand(kernel: MemoryKernel, args: MemoryArgs): Record<string,
   if (args.command === 'graph-explore') {
     if (!args.query) throw new Error(`graph-explore requires --query.\n${usage()}`);
     return kernel.graphExplore(args.query, options) as unknown as Record<string, unknown>;
+  }
+  if (args.command === 'graph-plan') {
+    if (!args.query) throw new Error(`graph-plan requires --query.\n${usage()}`);
+    return kernel.planMemoryQuery(args.query, options) as unknown as Record<string, unknown>;
   }
   if (args.command === 'graph-node') {
     if (!args.nodeId) throw new Error(`graph-node requires --id.\n${usage()}`);
@@ -1058,6 +1089,8 @@ async function main(): Promise<void> {
                         ? runTick(kernel, kernelArgs)
                       : kernelArgs.command === 'bind'
                         ? runBind(kernel, kernelArgs)
+                        : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill'
+                          ? runFrame(kernel, kernelArgs)
                         : runGraphCommand(kernel, kernelArgs);
     if (kernelArgs.json) {
       const queue = kernelArgs.command === 'status'

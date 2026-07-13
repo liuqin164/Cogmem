@@ -7,6 +7,8 @@ import type { TextGenerateFn } from '../models/ModelRole.js';
 import type { PipelineMetrics } from './PipelineMetrics.js';
 import type { EpisodeSemanticSummary, EpisodeType } from '../episode/EpisodeTypes.js';
 import type { CorrectionResolver } from '../episode/CorrectionResolver.js';
+import type { MemoryFrameStore } from '../store/MemoryFrameStore.js';
+import type { StructuredSemanticProcessor } from '../semantic/StructuredSemanticProcessor.js';
 export interface DreamCuratorRunOptions {
     projectId?: string;
     limit?: number;
@@ -49,6 +51,8 @@ export interface DreamCuratorWorkerDeps {
     modelRegistry?: ModelRegistry;
     pipelineMetrics?: PipelineMetrics;
     correctionResolver?: CorrectionResolver;
+    memoryFrameStore?: MemoryFrameStore;
+    semanticProcessor?: StructuredSemanticProcessor;
 }
 export declare class DreamCuratorWorker {
     private readonly deps;

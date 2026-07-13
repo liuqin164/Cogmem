@@ -3,6 +3,8 @@ import { deterministicFrameFallback, normalizeAlias, validateMemoryFrame } from 
 import { MemoryFrameStore } from '../src/store/MemoryFrameStore.js';
 import Database from 'bun:sqlite';
 import { migration_0032 } from '../src/migrations/index.js';
+import { createMemoryKernel } from '../src/factory.js';
+import { MultidimensionalQueryPlanner } from '../src/recall/index.js';
 
 describe('MemoryFrame V1 contract', () => {
   test('normalizes Unicode aliases without changing display labels', () => {
@@ -41,5 +43,24 @@ describe('MemoryFrame V1 contract', () => {
     expect(store.publish(frame.frameId, 'needs_confirmation', 'active', 3)).toBe(false);
     expect(store.get(frame.frameId)?.relations).toHaveLength(1);
     db.close();
+  });
+
+  test('projects active frames into the existing Atlas graph', () => {
+    const kernel = createMemoryKernel();
+    const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
+    kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'projection-source', status: 'active', now: 0 });
+    const result = kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    expect(result.documents).toBeGreaterThanOrEqual(2);
+    expect(kernel.memoryAtlasStore.getNode('episode:e', 'p')?.nodeType).toBe('episode');
+    expect(kernel.memoryAtlasStore.getNode('project:p', 'p')?.nodeType).toBe('project');
+    kernel.close();
+  });
+
+  test('builds a bounded multilingual query frame', () => {
+    const frame = new MultidimensionalQueryPlanner().plan('谁参与了 2026 年的 database issue？', Date.UTC(2026, 6, 13));
+    expect(frame.schemaVersion).toBe('memory_query_frame.v1');
+    expect(frame.intent).toBe('historical_summary');
+    expect(frame.time?.from).toBe(Date.UTC(2026, 0, 1));
+    expect(frame.issues?.[0]?.label).toBe('issue');
   });
 });
