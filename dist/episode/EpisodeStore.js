@@ -109,6 +109,20 @@ export class EpisodeStore {
     `).all(...params, Math.max(1, Math.min(Math.trunc(options.limit ?? 100), 1000)));
         return rows.map(mapEpisode);
     }
+    listEpisodesForFrameBackfill(options) {
+        const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 100), 500));
+        const params = [options.projectId];
+        const cursorClause = options.cursor ? 'AND episode_id > ?' : '';
+        if (options.cursor)
+            params.push(options.cursor);
+        const rows = this.db.prepare(`
+      SELECT * FROM memory_episodes
+      WHERE project_id=? AND status IN ('sealed','soft_sealed','open') ${cursorClause}
+      ORDER BY episode_id ASC LIMIT ?
+    `).all(...params, limit + 1);
+        const episodes = rows.slice(0, limit).map(mapEpisode);
+        return { episodes, ...(episodes.at(-1) ? { nextCursor: episodes.at(-1).episodeId } : {}), hasMore: rows.length > limit };
+    }
     listEpisodesForBoundaryAudit(options) {
         const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 100), 1000));
         const where = [`project_id = ?`];

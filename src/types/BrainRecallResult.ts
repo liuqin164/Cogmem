@@ -3,9 +3,13 @@ import type { EntityTimelineItem } from '../store/EntityStore.js';
 import type { EventRecord, FactRecord } from '../store/FactStore.js';
 import type { FileEvidence } from '../assets/index.js';
 import type { SkillCandidateLike } from './ExtensionPoints.js';
+import type { MemoryAtlasSlice } from '../atlas/MemoryAtlasTypes.js';
+import type { MemoryQueryFrameV1 } from '../semantic/MemoryFrameTypes.js';
 
 export interface BrainRecallResult {
   query: string;
+  atlas?: MemoryAtlasSlice;
+  queryFrame?: MemoryQueryFrameV1;
   strategy: {
     primaryLevel: 'compiled_memory' | 'raw_evidence' | 'recent_unprocessed_sources';
     fallbackUsed: boolean;

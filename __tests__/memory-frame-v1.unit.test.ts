@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { deterministicFrameFallback, normalizeAlias, validateMemoryFrame } from '../src/semantic/index.js';
 import { MemoryFrameStore } from '../src/store/MemoryFrameStore.js';
 import Database from 'bun:sqlite';
-import { migration_0032 } from '../src/migrations/index.js';
+import { migration_0032, migration_0035 } from '../src/migrations/index.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { MultidimensionalQueryPlanner } from '../src/recall/index.js';
 
@@ -34,6 +34,7 @@ describe('MemoryFrame V1 contract', () => {
   test('stores frames idempotently and publishes with CAS', () => {
     const db = new Database(':memory:');
     migration_0032.up(db);
+    migration_0035.up(db);
     const store = new MemoryFrameStore(db);
     const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
     store.save({ frame, sourceFingerprint: 'source-1', now: 0 });

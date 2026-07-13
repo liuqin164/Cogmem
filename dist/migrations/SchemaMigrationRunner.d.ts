@@ -27,5 +27,7 @@ export declare class SchemaMigrationRunner {
     private legacyCurrentVersion;
     private adoptLegacyVersion;
     private migrationSchemaSatisfied;
+    private tableExists;
+    private hasColumns;
 }
 //# sourceMappingURL=SchemaMigrationRunner.d.ts.map

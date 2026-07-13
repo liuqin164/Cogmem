@@ -43,6 +43,7 @@ export interface DreamCuratorRunResult {
     maxGlobalSeq?: number;
     status: DreamBacklogStatus;
     candidates: DeepWriteCandidateRecord[];
+    frameIds?: string[];
 }
 export interface DreamCuratorWorkerDeps {
     eventStore: EventStore;

@@ -40,6 +40,7 @@ export class DreamCuratorWorker {
             };
         }
         const now = options.now ?? Date.now();
+        const frameIds = [];
         if (options.sourceEpisodeId && this.deps.memoryFrameStore) {
             const frameInput = {
                 projectId: options.projectId || events[0]?.projectId || '', episodeId: options.sourceEpisodeId,
@@ -47,8 +48,10 @@ export class DreamCuratorWorker {
             };
             let frame;
             try {
-                const processor = options.generateText
-                    ? new StructuredSemanticProcessorImpl(async (input) => JSON.parse(await options.generateText(MEMORY_FRAME_SYSTEM_PROMPT, JSON.stringify({
+                const frameGenerator = options.generateText
+                    ?? this.deps.modelRegistry?.getTextGenerator('memory');
+                const processor = frameGenerator
+                    ? new StructuredSemanticProcessorImpl(async (input) => JSON.parse(await frameGenerator(MEMORY_FRAME_SYSTEM_PROMPT, JSON.stringify({
                         schemaVersion: 'memory_frame.v1', promptVersion: MEMORY_FRAME_PROMPT_VERSION,
                         projectId: input.projectId, episodeId: input.episodeId, episodeType: input.episodeType,
                         events: input.events.map((event) => ({ eventId: event.eventId, role: event.role, occurredAt: event.occurredAt, text: eventTextForMemory(event) })),
@@ -59,12 +62,24 @@ export class DreamCuratorWorker {
             catch {
                 frame = deterministicFrameFallback({ ...frameInput, now });
             }
-            this.deps.memoryFrameStore.save({
+            frame = {
+                ...frame,
+                frameId: `frame:${createHash('sha256').update(`${options.sourceEpisodeId}\0${events.map((event) => event.eventId).join('\0')}`).digest('hex').slice(0, 32)}`,
+                processor: { ...frame.processor, promptVersion: MEMORY_FRAME_PROMPT_VERSION, generatedAt: now },
+            };
+            if ((options.sourceEpisodeEventIds?.length ?? events.length) > events.length) {
+                frame = { ...frame, semanticCompleteness: 'minimal', needsReview: true, publishStatus: 'needs_confirmation' };
+            }
+            const savedFrame = this.deps.memoryFrameStore.save({
                 frame,
                 sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), options.sourceEpisodeId),
-                status: options.mode === 'shadow' ? 'staged' : 'active',
+                status: 'staged',
+                publishStatus: options.mode === 'shadow' || frame.needsReview
+                    ? 'needs_confirmation'
+                    : (frame.publishStatus ?? 'active'),
                 now,
             });
+            frameIds.push(savedFrame.frameId);
         }
         const maxGlobalSeq = Math.max(...events.map((event) => event.globalSeq || 0));
         const dreamableEvents = events.filter((event) => this.isDreamableEvent(event));
@@ -146,6 +161,7 @@ export class DreamCuratorWorker {
                 ...candidate,
                 status: candidateInputs[index]?.status ?? candidate.status,
             })),
+            frameIds,
         };
     }
     async buildCandidates(events, options, now) {

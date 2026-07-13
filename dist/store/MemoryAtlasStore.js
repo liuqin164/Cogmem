@@ -28,7 +28,7 @@ export class MemoryAtlasStore {
       SELECT d.*, COALESCE(a.activation, 0) AS activation
       FROM memory_atlas_documents d LEFT JOIN memory_atlas_activation a
         ON a.project_id=d.project_id AND a.node_id=d.node_id
-      WHERE d.node_id=? AND d.project_id=?
+      WHERE d.node_id=? AND d.project_id=? AND d.status NOT IN ('rejected','archived','needs_confirmation')
     `).get(scopedNodeId, projectId);
         return row ? mapNode(row, 0) : null;
     }
@@ -37,7 +37,7 @@ export class MemoryAtlasStore {
       SELECT d.*, COALESCE(a.activation, 0) AS activation
       FROM memory_atlas_documents d LEFT JOIN memory_atlas_activation a
         ON a.project_id=d.project_id AND a.node_id=d.node_id
-      WHERE d.project_id=? AND d.status NOT IN ('rejected','archived')
+      WHERE d.project_id=? AND d.status NOT IN ('rejected','archived','needs_confirmation')
       ORDER BY COALESCE(a.activation,0) DESC, d.support_count DESC, d.updated_at DESC LIMIT ?
     `).all(projectId, limit);
         return rows.map((row) => mapNode(row, Number(row.activation || 0)));
@@ -76,7 +76,7 @@ export class MemoryAtlasStore {
       SELECT d.*, COALESCE(a.activation, 0) AS activation
       FROM memory_atlas_documents d LEFT JOIN memory_atlas_activation a
         ON a.project_id=d.project_id AND a.node_id=d.node_id
-      WHERE d.project_id=? ${filterSql} AND d.status NOT IN ('rejected','archived')
+      WHERE d.project_id=? ${filterSql} AND d.status NOT IN ('rejected','archived','needs_confirmation')
       ORDER BY COALESCE(a.activation,0) DESC, d.support_count DESC, d.updated_at DESC LIMIT ?
     `).all(projectId, ...facetParams, ...keywordParams, limit);
         return rows.map((row) => {
@@ -161,7 +161,7 @@ export class MemoryAtlasStore {
         const candidates = this.db.prepare(`
       SELECT node_id,node_type,source_id,label,topic_path,metadata_json,evidence_event_ids_json
       FROM memory_atlas_documents
-      WHERE project_id=? AND node_type IN ('entity','topic','issue','project') AND status NOT IN ('rejected','archived')
+      WHERE project_id=? AND node_type IN ('entity','topic','issue','project','actor','event','task','object','location','state','time','episode') AND status NOT IN ('rejected','archived','needs_confirmation')
     `).all(projectId);
         const seeds = [];
         const labels = [];
@@ -173,6 +173,21 @@ export class MemoryAtlasStore {
             seeds.push(row);
             labels.push(String(row.label));
         }
+        try {
+            const aliasRows = this.db.prepare(`
+        SELECT d.node_id,d.node_type,d.source_id,d.label,d.topic_path,d.metadata_json,d.evidence_event_ids_json
+        FROM memory_atlas_aliases a
+        JOIN memory_atlas_documents d ON d.project_id=a.project_id AND d.node_id=a.node_id
+        WHERE a.project_id=? AND a.normalized_alias LIKE '%' || ? || '%' AND a.status='active'
+          AND d.status NOT IN ('rejected','archived','needs_confirmation')
+      `).all(projectId, normalizedQuery);
+            for (const row of aliasRows)
+                if (!seeds.some((seed) => seed.node_id === row.node_id)) {
+                    seeds.push(row);
+                    labels.push(String(row.label));
+                }
+        }
+        catch { /* pre-0033 databases use document aliases only */ }
         if (!seeds.length)
             return { nodeIds: [], entitySourceIds: [], labels: [] };
         const ids = new Set(seeds.map((row) => String(row.node_id)));
@@ -650,7 +665,7 @@ export class MemoryAtlasStore {
         FROM memory_atlas_documents d LEFT JOIN memory_atlas_activation a
           ON a.project_id=d.project_id AND a.node_id=d.node_id
         WHERE d.project_id=? AND d.node_id IN (${chunk.map(() => '?').join(',')})
-          AND d.node_type='episode' AND d.status NOT IN ('rejected','archived')
+          AND d.node_type='episode' AND d.status NOT IN ('rejected','archived','needs_confirmation')
         ORDER BY d.occurred_at DESC, d.support_count DESC, d.node_id ASC
       `).all(projectId, ...chunk.map((id) => `episode:${id}`)));
         }

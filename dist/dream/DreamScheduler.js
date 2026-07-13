@@ -3,10 +3,12 @@ export class DreamScheduler {
     episodeStore;
     curator;
     candidateStore;
-    constructor(episodeStore, curator, candidateStore) {
+    frameStore;
+    constructor(episodeStore, curator, candidateStore, frameStore) {
         this.episodeStore = episodeStore;
         this.curator = curator;
         this.candidateStore = candidateStore;
+        this.frameStore = frameStore;
     }
     async tick(options = {}) {
         const wallStartedAt = Date.now();
@@ -89,6 +91,8 @@ export class DreamScheduler {
                             }
                             this.candidateStore.publishStagedCandidates(run.runId, ids, startedAt);
                             this.candidateStore.updateRunStatus(run.runId, 'staged', 'succeeded');
+                            if (this.frameStore && run.frameIds?.length)
+                                this.frameStore.publishStaged(run.frameIds, startedAt);
                         }
                         : undefined;
                     const completedAt = clock.now();
@@ -98,6 +102,8 @@ export class DreamScheduler {
                     const failedAt = clock.now();
                     if (run.runId)
                         this.candidateStore.failStagedRun(run.runId, failedAt, 'dream_job_completion_failed');
+                    if (this.frameStore && run.frameIds?.length)
+                        this.frameStore.failStaged(run.frameIds, failedAt);
                     throw completionError;
                 }
                 episodeIds.push(job.episodeId);
@@ -107,6 +113,8 @@ export class DreamScheduler {
                 failures += 1;
                 const message = error instanceof Error ? error.message : String(error);
                 const failureNow = clock.now();
+                if (this.frameStore)
+                    this.frameStore.failStagedForEpisode(job.episodeId, failureNow);
                 const failure = classifyFailure(message, job.attempts, failureNow);
                 this.episodeStore.failDreamJob(job.episodeId, job.leaseId, message, failure);
                 failedEpisodes.push({ episodeId: job.episodeId, error: message, failureCategory: failure.failureCategory, retryAfter: failure.retryAfter });

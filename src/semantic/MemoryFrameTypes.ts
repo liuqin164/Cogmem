@@ -1,5 +1,5 @@
 export type MemoryDimension =
-  | 'actor' | 'entity' | 'project' | 'topic' | 'issue' | 'event' | 'episode'
+  | 'actor' | 'entity' | 'project' | 'topic' | 'issue' | 'event' | 'raw_event' | 'episode'
   | 'task' | 'object' | 'location' | 'time' | 'state';
 
 export type MemoryRelationType =
@@ -69,6 +69,7 @@ export interface MemoryFrameV1 {
   sourceAuthority?: 'processor' | 'deterministic_fallback';
   semanticCompleteness?: 'full' | 'minimal';
   needsReview?: boolean;
+  publishStatus?: 'active' | 'needs_confirmation';
 }
 
 export type MemoryQueryIntent = 'exact_lookup' | 'historical_summary' | 'continuity' | 'causal_explanation' | 'status_check' | 'preference_recall' | 'source_drilldown';

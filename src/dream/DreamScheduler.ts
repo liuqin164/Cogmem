@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { DreamCuratorWorker } from '../engine/DreamCuratorWorker.js';
 import type { EpisodeStore } from '../episode/EpisodeStore.js';
 import type { DeepWriteCandidateStore } from '../store/DeepWriteCandidateStore.js';
+import type { MemoryFrameStore } from '../store/MemoryFrameStore.js';
 
 export type DreamTickMode = 'auto' | 'micro' | 'normal' | 'deep';
 export type SelectedDreamMode = 'none' | 'micro' | 'normal' | 'deep';
@@ -41,6 +42,7 @@ export class DreamScheduler {
     private readonly episodeStore: EpisodeStore,
     private readonly curator: DreamCuratorWorker,
     private readonly candidateStore: DeepWriteCandidateStore,
+    private readonly frameStore?: MemoryFrameStore,
   ) {}
 
   async tick(options: DreamTickOptions = {}): Promise<DreamTickResult> {
@@ -125,6 +127,7 @@ export class DreamScheduler {
               }
               this.candidateStore.publishStagedCandidates(run.runId!, ids, startedAt);
               this.candidateStore.updateRunStatus(run.runId!, 'staged', 'succeeded');
+              if (this.frameStore && run.frameIds?.length) this.frameStore.publishStaged(run.frameIds, startedAt);
             }
             : undefined;
           const completedAt = clock.now();
@@ -132,6 +135,7 @@ export class DreamScheduler {
         } catch (completionError) {
           const failedAt = clock.now();
           if (run.runId) this.candidateStore.failStagedRun(run.runId, failedAt, 'dream_job_completion_failed');
+          if (this.frameStore && run.frameIds?.length) this.frameStore.failStaged(run.frameIds, failedAt);
           throw completionError;
         }
         episodeIds.push(job.episodeId);
@@ -140,6 +144,7 @@ export class DreamScheduler {
         failures += 1;
         const message = error instanceof Error ? error.message : String(error);
         const failureNow = clock.now();
+        if (this.frameStore) this.frameStore.failStagedForEpisode(job.episodeId, failureNow);
         const failure = classifyFailure(message, job.attempts, failureNow);
         this.episodeStore.failDreamJob(job.episodeId, job.leaseId, message, failure);
         failedEpisodes.push({ episodeId: job.episodeId, error: message, failureCategory: failure.failureCategory, retryAfter: failure.retryAfter });

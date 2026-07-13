@@ -819,7 +819,7 @@ export class MemoryKernel {
       memoryFrameStore: this.memoryFrameStore,
       semanticProcessor: new StructuredSemanticProcessor(async (input) => deterministicFrameFallback({ ...input, now: Date.now() })),
     });
-    this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker, this.deepWriteCandidateStore);
+    this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker, this.deepWriteCandidateStore, this.memoryFrameStore);
     this.topicSummaryBoard = new TopicSummaryBoard(this.memoryGraph, this.summaryStore);
     this.topicDecayPolicy = new TopicDecayPolicy(this.memoryGraph);
     this.localSemanticCompiler = new LocalSemanticCompiler();
@@ -1062,7 +1062,14 @@ export class MemoryKernel {
   }
 
   recall(query: string, options: BrainRecallOptions = {}) {
-    return this.brainRecall.recall(query, options);
+    const result = this.brainRecall.recall(query, options);
+    if (!options.projectId) return result;
+    try {
+      const planned = this.atlasPathRetriever.retrieve(query, { projectId: options.projectId, limit: options.limit, includeEvidence: true, evidenceLimit: 2, staleOk: true });
+      return { ...result, queryFrame: planned.queryFrame, atlas: planned.result };
+    } catch {
+      return result;
+    }
   }
 
   navigateMemory(query: string, options: MemoryKernelNavigationOptions = {}): MemoryKernelNavigationResult {
@@ -1842,6 +1849,7 @@ export class MemoryKernel {
     }
 
     if (['move-event', 'split', 'merge', 'reclassify'].includes(input.operation)) {
+      this.memoryFrameStore.supersedeEpisodes([...affected], now);
       for (const episodeId of affected) {
         const episode = this.episodeStore.getEpisode(episodeId);
         if (!episode) continue;
@@ -2072,8 +2080,7 @@ export class MemoryKernel {
   getMemoryFrame(episodeId: string, projectId?: string): MemoryFrameV1 | null {
     const episode = this.episodeStore.getEpisode(episodeId);
     if (!episode || (projectId !== undefined && episode.projectId !== projectId)) return null;
-    return this.memoryFrameStore.list(episode.projectId, { statuses: ['active', 'needs_confirmation'], limit: 1000 })
-      .find((frame) => frame.episodeId === episodeId) ?? null;
+    return this.memoryFrameStore.getByEpisode(episode.projectId, episodeId);
   }
 
   listMemoryDimensions(projectId: string, nodeType?: string, limit = 100): Array<{ id: string; nodeType: string; label: string; confidence: number; evidenceEventIds: string[] }> {
@@ -2082,26 +2089,24 @@ export class MemoryKernel {
     const rows = this.factStore.getDatabase().prepare(`
       SELECT node_id,node_type,label,confidence,evidence_event_ids_json
       FROM memory_atlas_documents
-      WHERE project_id=? AND status NOT IN ('archived','rejected') ${nodeType ? 'AND node_type=?' : ''}
+      WHERE project_id=? AND status NOT IN ('archived','rejected','needs_confirmation') ${nodeType ? 'AND node_type=?' : ''}
       ORDER BY confidence DESC, updated_at DESC, node_id ASC LIMIT ?
     `).all(projectId, ...(nodeType ? [nodeType] : []), Math.max(1, Math.min(limit, 500))) as Array<{ node_id: string; node_type: string; label: string; confidence: number; evidence_event_ids_json: string }>;
     return rows.map((row) => ({ id: row.node_id, nodeType: row.node_type, label: row.label, confidence: Number(row.confidence), evidenceEventIds: JSON.parse(row.evidence_event_ids_json || '[]') as string[] }));
   }
 
   backfillMemoryFrames(options: { projectId: string; limit?: number; cursor?: string; mode?: 'shadow' | 'active' }): { projectId: string; processed: number; created: number; needsReview: number; nextCursor?: string; hasMore: boolean } {
-    const episodes = this.episodeStore.listEpisodes({ projectId: options.projectId, statuses: ['sealed', 'soft_sealed', 'open'], limit: Math.max(1, Math.min(options.limit ?? 100, 500)) + 1 })
-      .filter((episode) => !options.cursor || episode.episodeId > options.cursor);
-    const selected = episodes.slice(0, Math.max(1, Math.min(options.limit ?? 100, 500)));
+    const page = this.episodeStore.listEpisodesForFrameBackfill({ projectId: options.projectId, cursor: options.cursor, limit: options.limit });
+    const selected = page.episodes;
     let created = 0; let needsReview = 0;
     for (const episode of selected) {
       const events = this.episodeStore.listEventLinks(episode.episodeId).map((link) => this.eventStore.getEvent(link.eventId)).filter((event): event is MemoryEvent => Boolean(event));
       if (!events.length) continue;
       const frame = deterministicFrameFallback({ projectId: options.projectId, episodeId: episode.episodeId, episodeType: episode.episodeType as MemoryFrameV1['episodeKind'], events });
-      this.memoryFrameStore.save({ frame, sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), episode.episodeId), status: options.mode === 'shadow' ? 'staged' : 'active' });
+      this.memoryFrameStore.save({ frame, sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), episode.episodeId), status: options.mode === 'active' ? 'staged' : 'staged', publishStatus: 'needs_confirmation' });
       created += 1; needsReview += frame.needsReview ? 1 : 0;
     }
-    const hasMore = episodes.length > selected.length;
-    return { projectId: options.projectId, processed: selected.length, created, needsReview, ...(selected.at(-1) ? { nextCursor: selected.at(-1)!.episodeId } : {}), hasMore };
+    return { projectId: options.projectId, processed: selected.length, created, needsReview, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}), hasMore: page.hasMore };
   }
 
   private prepareMemoryAtlasRead(options: MemoryAtlasQueryOptions): { atlasFresh: boolean; refreshError?: string } {
@@ -2679,6 +2684,11 @@ export class MemoryKernel {
         runDelete(`UPDATE neurons SET is_deleted = 1, status = 'archived', updated_at = ? WHERE id IN (${placeholders})`, [Date.now(), ...neuronIds]);
       }
       deleted.episodes += this.episodeStore.deleteByProject(projectId);
+      runDelete(`DELETE FROM memory_atlas_supports WHERE project_id = ?`, [projectId]);
+      runDelete(`DELETE FROM memory_atlas_aliases WHERE project_id = ?`, [projectId]);
+      runDelete(`DELETE FROM memory_edges WHERE project_id = ?`, [projectId]);
+      runDelete(`DELETE FROM memory_atlas_documents WHERE project_id = ?`, [projectId]);
+      runDelete(`DELETE FROM memory_frames WHERE project_id = ?`, [projectId]);
       deleted.events += runDelete(`DELETE FROM memory_events WHERE project_id = ?`, [projectId]);
       deleted.activations += this.activationStore.deleteByProject(projectId);
       deleted.memoryBindings += this.memoryBindingStore.deleteByProject(projectId);

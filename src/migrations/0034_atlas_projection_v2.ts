@@ -6,7 +6,7 @@ export const migration_0034: Migration = {
   description: 'Atlas V2 projection provenance metadata',
   up(db: Database) {
     const exists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_atlas_projection_state'`).get();
-    if (!exists) return;
+    if (!exists) throw new Error('migration_0034_requires_memory_atlas_projection_state');
     addColumn(db, 'memory_atlas_projection_state', 'projection_version', `TEXT NOT NULL DEFAULT 'v1'`);
     addColumn(db, 'memory_atlas_projection_state', 'processor_prompt_version', `TEXT`);
     addColumn(db, 'memory_atlas_projection_state', 'frame_schema_version', `TEXT`);

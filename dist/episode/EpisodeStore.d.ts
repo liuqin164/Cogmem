@@ -76,6 +76,15 @@ export declare class EpisodeStore {
     claimLegacyEpisodeScope(episodeId: string, sourceAgent?: string, conversationThreadId?: string): MemoryEpisode | undefined;
     getEpisode(episodeId: string): MemoryEpisode | undefined;
     listEpisodes(options?: EpisodeListOptions): MemoryEpisode[];
+    listEpisodesForFrameBackfill(options: {
+        projectId: string;
+        cursor?: string;
+        limit?: number;
+    }): {
+        episodes: MemoryEpisode[];
+        nextCursor?: string;
+        hasMore: boolean;
+    };
     listEpisodesForBoundaryAudit(options: {
         projectId: string;
         statuses?: EpisodeStatus[];

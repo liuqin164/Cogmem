@@ -157,6 +157,20 @@ export class SchemaMigrationRunner {
         SELECT 1 FROM _episode_integrity_markers WHERE marker = 'episode_boundary_integrity_0031'
       `).get());
     }
+    if (version === '0032') return this.tableExists('memory_frames') && this.tableExists('memory_frame_nodes') && this.tableExists('memory_frame_relations');
+    if (version === '0033') return this.tableExists('memory_atlas_aliases') && this.tableExists('memory_atlas_supports');
+    if (version === '0034') return this.hasColumns('memory_atlas_projection_state', ['projection_version', 'processor_prompt_version', 'frame_schema_version', 'source_fingerprint', 'last_backfill_cursor']);
+    if (version === '0035') return this.hasColumns('memory_frames', ['primary_language', 'temporal_references_json', 'state_transitions_json', 'publish_status']);
     return true;
+  }
+
+  private tableExists(name: string): boolean {
+    return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name));
+  }
+
+  private hasColumns(table: string, names: string[]): boolean {
+    if (!this.tableExists(table)) return false;
+    const columns = new Set((this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((row) => row.name));
+    return names.every((name) => columns.has(name));
   }
 }

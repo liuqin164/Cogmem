@@ -92,6 +92,7 @@ export class MemoryAtlasIndexer {
         let result = { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
         this.db.transaction(() => {
             result = this.curator.rebuildEpisodes(options.projectId, ids);
+            this.frameProjector?.rebuild(options.projectId);
             this.store.markProjectionDirty(options.projectId, {
                 targetedReindex: true,
                 episodeIds: ids,

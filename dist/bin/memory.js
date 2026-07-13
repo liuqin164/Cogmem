@@ -64,6 +64,7 @@ function readArgs(argv) {
         dbPath: stringArg(values, 'db'),
         configPath: stringArg(values, 'config'),
         mode: modeArg(values, 'mode'),
+        cursor: stringArg(values, 'cursor'),
         watch: values.watch === true,
         promote: values.promote === true,
         json: values.json === true,
@@ -131,7 +132,7 @@ function usage() {
         '  --intent <intent>    memory_recall, previous_session_summary, forensic_quote, historical_discussion, or action_history',
         '  --db <memory.db>     open an explicit database path',
         '  --config <toml>      open a cogmem TOML config',
-        '  --mode <shadow|active> frame backfill publication mode, default active',
+        '  --mode <shadow|active> frame backfill mode, default shadow',
         '  --include-evidence   include bounded raw excerpts; event ids are always returned',
         '  --evidence-limit <n> bound evidence locators per Atlas node, default 2, maximum 10',
         '  --now <epoch-ms>     deterministic reference time for relative Atlas time facets',
@@ -618,7 +619,7 @@ function runFrame(kernel, args) {
     if (args.command === 'frame-backfill') {
         if (!args.projectId)
             throw new Error(`frame-backfill requires --project.\n${usage()}`);
-        return kernel.backfillMemoryFrames({ projectId: args.projectId, limit: args.limit, mode: args.mode });
+        return kernel.backfillMemoryFrames({ projectId: args.projectId, limit: args.limit, cursor: args.cursor, mode: args.mode });
     }
     if (!args.episodeId)
         throw new Error(`frame requires --episode.\n${usage()}`);

@@ -4,6 +4,7 @@ export interface MemoryFrameSaveInput {
     frame: MemoryFrameV1;
     sourceFingerprint: string;
     status?: MemoryFrameStatus;
+    publishStatus?: 'active' | 'needs_confirmation';
     now?: number;
 }
 export declare class MemoryFrameStore {
@@ -11,11 +12,19 @@ export declare class MemoryFrameStore {
     constructor(db: Database);
     save(input: MemoryFrameSaveInput): MemoryFrameV1;
     get(frameId: string): MemoryFrameV1 | null;
+    getByEpisode(projectId: string, episodeId: string, statuses?: MemoryFrameStatus[]): MemoryFrameV1 | null;
     list(projectId: string, options?: {
         statuses?: MemoryFrameStatus[];
         limit?: number;
+        offset?: number;
     }): MemoryFrameV1[];
-    publish(frameId: string, from: MemoryFrameStatus, to: MemoryFrameStatus, now?: number): boolean;
+    publish(frameId: string, from: MemoryFrameStatus, to?: MemoryFrameStatus, now?: number): boolean;
+    publishStaged(frameIds: string[], now?: number): void;
+    failStaged(frameIds: string[], now?: number): void;
+    failStagedForEpisode(episodeId: string, now?: number): void;
+    supersedeEpisodes(episodeIds: string[], now?: number): number;
+    deleteByProject(projectId: string): number;
+    private markDirty;
     private read;
 }
 export declare function frameSourceFingerprint(eventIds: string[], episodeId: string): string;

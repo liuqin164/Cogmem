@@ -15,6 +15,7 @@ export declare class MemoryFrameProjector {
     rebuild(projectId: string, now?: number): MemoryFrameProjectionResult;
     private nodeId;
     private upsertSupport;
+    private upsertAlias;
     private upsertEdge;
 }
 //# sourceMappingURL=MemoryFrameProjector.d.ts.map

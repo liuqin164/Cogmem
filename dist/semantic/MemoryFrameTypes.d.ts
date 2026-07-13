@@ -1,4 +1,4 @@
-export type MemoryDimension = 'actor' | 'entity' | 'project' | 'topic' | 'issue' | 'event' | 'episode' | 'task' | 'object' | 'location' | 'time' | 'state';
+export type MemoryDimension = 'actor' | 'entity' | 'project' | 'topic' | 'issue' | 'event' | 'raw_event' | 'episode' | 'task' | 'object' | 'location' | 'time' | 'state';
 export type MemoryRelationType = 'PARTICIPATED_IN' | 'PERFORMED' | 'INVOLVES' | 'PART_OF_PROJECT' | 'PART_OF_EVENT' | 'ABOUT_TOPIC' | 'ADDRESSES_ISSUE' | 'ADVANCES_TASK' | 'DEPENDS_ON' | 'BLOCKED_BY' | 'OCCURRED_ON' | 'OCCURRED_IN' | 'LOCATED_AT' | 'HAS_STATE' | 'CHANGED_FROM' | 'CHANGED_TO' | 'BROADER_THAN' | 'NARROWER_THAN' | 'SAME_EVENT' | 'SAME_ISSUE' | 'FOLLOWS_UP' | 'RELATED_TO' | 'CORRECTS' | 'CONTRADICTS' | 'SUPERSEDES' | 'SUPPORTED_BY' | 'DERIVED_FROM';
 export type MemoryFrameStatus = 'staged' | 'active' | 'needs_confirmation' | 'superseded' | 'failed';
 export interface MemoryFrameNode {
@@ -62,6 +62,7 @@ export interface MemoryFrameV1 {
     sourceAuthority?: 'processor' | 'deterministic_fallback';
     semanticCompleteness?: 'full' | 'minimal';
     needsReview?: boolean;
+    publishStatus?: 'active' | 'needs_confirmation';
 }
 export type MemoryQueryIntent = 'exact_lookup' | 'historical_summary' | 'continuity' | 'causal_explanation' | 'status_check' | 'preference_recall' | 'source_drilldown';
 export interface MemoryQueryFacet {

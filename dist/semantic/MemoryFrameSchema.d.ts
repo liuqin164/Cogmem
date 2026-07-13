@@ -38,20 +38,147 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                 readonly minLength: 1;
             };
         };
+        readonly episodeKind: {
+            readonly type: "string";
+            readonly enum: readonly ["discussion", "operation", "decision", "correction", "diagnostic", "planning", "status_update", "preference", "other"];
+        };
         readonly nodes: {
             readonly type: "array";
+            readonly items: {
+                readonly type: "object";
+                readonly required: readonly ["frameNodeId", "dimension", "label", "confidence", "evidenceEventIds"];
+                readonly properties: {
+                    readonly frameNodeId: {
+                        readonly type: "string";
+                    };
+                    readonly dimension: {
+                        readonly type: "string";
+                    };
+                    readonly label: {
+                        readonly type: "string";
+                    };
+                    readonly confidence: {
+                        readonly type: "number";
+                        readonly minimum: 0;
+                        readonly maximum: 1;
+                    };
+                    readonly evidenceEventIds: {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    };
+                };
+            };
         };
         readonly relations: {
             readonly type: "array";
+            readonly items: {
+                readonly type: "object";
+                readonly required: readonly ["sourceFrameNodeId", "relationType", "targetFrameNodeId", "confidence", "evidenceEventIds"];
+                readonly properties: {
+                    readonly sourceFrameNodeId: {
+                        readonly type: "string";
+                    };
+                    readonly relationType: {
+                        readonly type: "string";
+                    };
+                    readonly targetFrameNodeId: {
+                        readonly type: "string";
+                    };
+                    readonly confidence: {
+                        readonly type: "number";
+                        readonly minimum: 0;
+                        readonly maximum: 1;
+                    };
+                    readonly evidenceEventIds: {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    };
+                    readonly validFrom: {
+                        readonly type: "number";
+                    };
+                    readonly validTo: {
+                        readonly type: "number";
+                    };
+                };
+            };
         };
         readonly temporalReferences: {
             readonly type: "array";
+            readonly items: {
+                readonly type: "object";
+                readonly required: readonly ["label", "confidence", "evidenceEventIds"];
+                readonly properties: {
+                    readonly label: {
+                        readonly type: "string";
+                    };
+                    readonly occurredAt: {
+                        readonly type: "number";
+                    };
+                    readonly confidence: {
+                        readonly type: "number";
+                        readonly minimum: 0;
+                        readonly maximum: 1;
+                    };
+                    readonly evidenceEventIds: {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    };
+                };
+            };
         };
         readonly stateTransitions: {
             readonly type: "array";
+            readonly items: {
+                readonly type: "object";
+                readonly required: readonly ["subjectFrameNodeId", "to", "confidence", "evidenceEventIds"];
+                readonly properties: {
+                    readonly subjectFrameNodeId: {
+                        readonly type: "string";
+                    };
+                    readonly from: {
+                        readonly type: "string";
+                    };
+                    readonly to: {
+                        readonly type: "string";
+                    };
+                    readonly confidence: {
+                        readonly type: "number";
+                        readonly minimum: 0;
+                        readonly maximum: 1;
+                    };
+                    readonly evidenceEventIds: {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    };
+                };
+            };
         };
         readonly processor: {
             readonly type: "object";
+            readonly required: readonly ["promptVersion", "generatedAt"];
+            readonly properties: {
+                readonly provider: {
+                    readonly type: "string";
+                };
+                readonly model: {
+                    readonly type: "string";
+                };
+                readonly promptVersion: {
+                    readonly type: "string";
+                    readonly minLength: 1;
+                };
+                readonly generatedAt: {
+                    readonly type: "number";
+                };
+            };
         };
     };
 };
