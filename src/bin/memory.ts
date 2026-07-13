@@ -61,6 +61,7 @@ interface MemoryArgs {
   promote: boolean;
   json: boolean;
   includeEvidence: boolean;
+  includeStaged: boolean;
   refresh: boolean;
   staleOk: boolean;
   help: boolean;
@@ -129,6 +130,7 @@ function readArgs(argv: string[]): MemoryArgs {
     promote: values.promote === true,
     json: values.json === true,
     includeEvidence: values['include-evidence'] === true,
+    includeStaged: values['include-staged'] === true,
     refresh: values.refresh === true,
     staleOk: values['stale-ok'] === true || values['no-refresh'] === true,
     help: values.help === true || values.h === true,
@@ -724,7 +726,7 @@ function runFrame(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknow
     return kernel.backfillMemoryFrames({ projectId: args.projectId, limit: args.limit, cursor: args.cursor, mode: args.mode });
   }
   if (!args.episodeId) throw new Error(`frame requires --episode.\n${usage()}`);
-  const frame = kernel.getMemoryFrame(args.episodeId, args.projectId);
+  const frame = kernel.getMemoryFrame(args.episodeId, args.projectId, { includeStaged: args.includeStaged });
   if (!frame) throw new Error('memory_frame_not_found');
   return frame as unknown as Record<string, unknown>;
 }

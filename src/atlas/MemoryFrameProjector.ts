@@ -19,16 +19,17 @@ export class MemoryFrameProjector {
     }
     let nodes = 0; let edges = 0; let needsReview = 0;
     this.db.prepare(`DELETE FROM memory_edges WHERE project_id=? AND source_authority='memory_frame_projector'`).run(projectId);
+    this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2')`).run(projectId, projectId);
     this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2'`).run(projectId);
     this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type IN ('frame','frame_edge') AND status='active'`).run(now, projectId);
-    this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
+    this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE project_id=? AND source_frame_id IS NOT NULL AND status='active'`).run(now, projectId);
     for (const frame of frames) {
         if (frame.needsReview) needsReview += 1;
-        const nodeIds = new Map(frame.nodes.map((node) => [node.frameNodeId, this.nodeId(projectId, node)]));
+        const nodeIds = new Map(frame.nodes.map((node) => [node.frameNodeId, this.nodeId(projectId, node, frame)]));
         for (const node of frame.nodes) {
           const id = nodeIds.get(node.frameNodeId)!;
           const existing = this.atlasStore.getNode(id, projectId);
-          if (!(existing && (node.dimension === 'episode' || node.dimension === 'project'))) {
+          if (!existing) {
             this.atlasStore.upsertDocument({
               id, projectId, nodeType: node.dimension === 'episode' ? 'episode' : node.dimension,
               sourceId: id.slice(id.indexOf(':') + 1), label: node.label, summary: node.description,
@@ -46,19 +47,39 @@ export class MemoryFrameProjector {
           this.upsertEdge(projectId, source, target, relation, frame, now);
           edges += 1;
         }
+        for (const reference of frame.temporalReferences) {
+          const timeId = `time:${createHash('sha256').update(`${projectId}\0${reference.label}`).digest('hex').slice(0, 32)}`;
+          this.atlasStore.upsertDocument({ id: timeId, projectId, nodeType: 'time', sourceId: timeId.slice(5), label: reference.label,
+            confidence: reference.confidence, supportCount: 1, status: 'active', occurredAt: reference.occurredAt,
+            evidenceEventIds: reference.evidenceEventIds, metadata: { projection: 'memory_atlas.frame.v2', frameId: frame.frameId }, updatedAt: now });
+          this.upsertSupport(projectId, timeId, frame, reference.evidenceEventIds, now);
+          nodes += 1;
+        }
+        for (const transition of frame.stateTransitions) {
+          const subject = nodeIds.get(transition.subjectFrameNodeId);
+          if (!subject) continue;
+          const stateId = `state:${createHash('sha256').update(`${projectId}\0${transition.to}`).digest('hex').slice(0, 32)}`;
+          this.atlasStore.upsertDocument({ id: stateId, projectId, nodeType: 'state', sourceId: stateId.slice(6), label: transition.to,
+            confidence: transition.confidence, supportCount: 1, status: 'active', evidenceEventIds: transition.evidenceEventIds,
+            metadata: { projection: 'memory_atlas.frame.v2', frameId: frame.frameId }, updatedAt: now });
+          this.upsertSupport(projectId, stateId, frame, transition.evidenceEventIds, now);
+          this.upsertEdge(projectId, subject, stateId, { sourceFrameNodeId: transition.subjectFrameNodeId, relationType: 'HAS_STATE', targetFrameNodeId: stateId,
+            confidence: transition.confidence, evidenceEventIds: transition.evidenceEventIds }, frame, now);
+          edges += 1;
+        }
     }
-    this.db.prepare(`UPDATE memory_atlas_documents SET support_count=(SELECT COUNT(*) FROM memory_atlas_supports s WHERE s.project_id=memory_atlas_documents.project_id AND s.node_id=memory_atlas_documents.node_id AND s.status='active') WHERE project_id=? AND metadata_json LIKE '%memory_atlas.frame.v2%'`).run(projectId);
+    this.db.prepare(`UPDATE memory_atlas_documents SET support_count=(SELECT COUNT(*) FROM memory_atlas_supports s WHERE s.project_id=memory_atlas_documents.project_id AND s.node_id=memory_atlas_documents.node_id AND s.source_type='frame' AND s.status='active') WHERE project_id=? AND EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.project_id=memory_atlas_documents.project_id AND s.node_id=memory_atlas_documents.node_id AND s.source_type='frame')`).run(projectId);
     return { frames: frames.length, nodes, edges, needsReview };
   }
 
-  private nodeId(projectId: string, node: MemoryFrameNode): string {
+  private nodeId(projectId: string, node: MemoryFrameNode, frame: MemoryFrameV1): string {
     if (node.canonicalHint?.nodeId) {
       const candidate = node.canonicalHint.nodeId;
       const existing = this.atlasStore.getNode(candidate, projectId);
       if (existing && existing.projectId === projectId && existing.nodeType === node.dimension) return candidate;
     }
-    if (node.dimension === 'episode') return `episode:${node.label}`;
-    if (node.dimension === 'project') return `project:${node.label}`;
+    if (node.dimension === 'episode') return `episode:${frame.episodeId}`;
+    if (node.dimension === 'project') return `project:${frame.projectId}`;
     const key = `${projectId}\0${node.dimension}\0${node.label.normalize('NFKC').toLocaleLowerCase('und').trim()}`;
     return `${node.dimension}:${createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
   }

@@ -69,6 +69,7 @@ function readArgs(argv) {
         promote: values.promote === true,
         json: values.json === true,
         includeEvidence: values['include-evidence'] === true,
+        includeStaged: values['include-staged'] === true,
         refresh: values.refresh === true,
         staleOk: values['stale-ok'] === true || values['no-refresh'] === true,
         help: values.help === true || values.h === true,
@@ -623,7 +624,7 @@ function runFrame(kernel, args) {
     }
     if (!args.episodeId)
         throw new Error(`frame requires --episode.\n${usage()}`);
-    const frame = kernel.getMemoryFrame(args.episodeId, args.projectId);
+    const frame = kernel.getMemoryFrame(args.episodeId, args.projectId, { includeStaged: args.includeStaged });
     if (!frame)
         throw new Error('memory_frame_not_found');
     return frame;

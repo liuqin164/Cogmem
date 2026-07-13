@@ -265,6 +265,9 @@ export class KernelAgentMemoryBackend {
         const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
         const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, limit) : [];
         const retrievalLimit = Math.max(limit * 4, 24);
+        const multidimensionalRecall = query.projectId
+            ? this.kernel.recall(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true })
+            : undefined;
         const result = allowsCompiled
             ? this.kernel.navigateMemory(queryPlan.primarySearchText, {
                 projectId: query.projectId,
@@ -279,7 +282,7 @@ export class KernelAgentMemoryBackend {
                 fallbackUsed: true,
                 rawEvidence: [],
             };
-        const scopedItems = this.filterAgentEvidence(result.rawEvidence, query.agentId, query.collection, query.excludeSessionId)
+        const scopedItems = this.filterAgentEvidence([...result.rawEvidence, ...(multidimensionalRecall?.rawEvidence ?? [])], query.agentId, query.collection, query.excludeSessionId)
             .slice(0, limit)
             .map((neuron) => this.toAgentRecallItem(neuron));
         const rawFallbackItems = allowsRawSource ? this.rawLedgerFallbackItemsForQuery(queryPlan, query, limit) : [];
@@ -319,10 +322,10 @@ export class KernelAgentMemoryBackend {
             };
         }
         const fallbackItems = allowsCompiled
-            ? this.filterAgentEvidence(this.kernel.recall(queryPlan.primarySearchText, {
+            ? this.filterAgentEvidence((multidimensionalRecall ?? this.kernel.recall(queryPlan.primarySearchText, {
                 projectId: query.projectId,
                 limit: retrievalLimit,
-            }).rawEvidence, query.agentId, query.collection, query.excludeSessionId)
+            })).rawEvidence, query.agentId, query.collection, query.excludeSessionId)
                 .slice(0, limit)
                 .map((neuron) => this.toAgentRecallItem(neuron))
             : [];

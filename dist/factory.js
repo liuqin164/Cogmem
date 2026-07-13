@@ -1470,11 +1470,11 @@ export class MemoryKernel {
     ensureMemoryAtlas(options) {
         return this.memoryAtlasIndexer.ensureFresh(options);
     }
-    getMemoryFrame(episodeId, projectId) {
+    getMemoryFrame(episodeId, projectId, options = {}) {
         const episode = this.episodeStore.getEpisode(episodeId);
         if (!episode || (projectId !== undefined && episode.projectId !== projectId))
             return null;
-        return this.memoryFrameStore.getByEpisode(episode.projectId, episodeId);
+        return this.memoryFrameStore.getByEpisode(episode.projectId, episodeId, options.includeStaged ? ['active', 'needs_confirmation', 'staged'] : undefined);
     }
     listMemoryDimensions(projectId, nodeType, limit = 100) {
         const allowed = new Set(['actor', 'entity', 'project', 'topic', 'issue', 'event', 'task', 'object', 'location', 'state', 'episode', 'time']);
@@ -1498,7 +1498,19 @@ export class MemoryKernel {
             if (!events.length)
                 continue;
             const frame = deterministicFrameFallback({ projectId: options.projectId, episodeId: episode.episodeId, episodeType: episode.episodeType, events });
-            this.memoryFrameStore.save({ frame, sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), episode.episodeId), status: options.mode === 'active' ? 'staged' : 'staged', publishStatus: 'needs_confirmation' });
+            const saved = this.memoryFrameStore.save({
+                frame,
+                sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), episode.episodeId),
+                status: 'staged',
+                publishStatus: 'needs_confirmation',
+            });
+            // Backfill active is an explicit publication request, but deterministic
+            // fallback frames remain review-only and can never become active here.
+            if (options.mode === 'active') {
+                const published = this.memoryFrameStore.publish(saved.frameId, 'staged', frame.needsReview ? 'needs_confirmation' : 'active');
+                if (!published)
+                    throw new Error(`memory_frame_backfill_publish_conflict:${saved.frameId}`);
+            }
             created += 1;
             needsReview += frame.needsReview ? 1 : 0;
         }
@@ -2061,7 +2073,13 @@ export class MemoryKernel {
             runDelete(`DELETE FROM memory_atlas_supports WHERE project_id = ?`, [projectId]);
             runDelete(`DELETE FROM memory_atlas_aliases WHERE project_id = ?`, [projectId]);
             runDelete(`DELETE FROM memory_edges WHERE project_id = ?`, [projectId]);
+            runDelete(`DELETE FROM memory_atlas_fts WHERE project_id = ?`, [projectId]);
             runDelete(`DELETE FROM memory_atlas_documents WHERE project_id = ?`, [projectId]);
+            runDelete(`DELETE FROM memory_action_frame_evidence WHERE project_id = ?`, [projectId]);
+            runDelete(`DELETE FROM memory_action_frames WHERE project_id = ?`, [projectId]);
+            runDelete(`DELETE FROM memory_atlas_access WHERE project_id = ?`, [projectId]);
+            runDelete(`DELETE FROM memory_atlas_activation WHERE project_id = ?`, [projectId]);
+            runDelete(`DELETE FROM memory_atlas_projection_state WHERE project_id = ?`, [projectId]);
             runDelete(`DELETE FROM memory_frames WHERE project_id = ?`, [projectId]);
             deleted.events += runDelete(`DELETE FROM memory_events WHERE project_id = ?`, [projectId]);
             deleted.activations += this.activationStore.deleteByProject(projectId);

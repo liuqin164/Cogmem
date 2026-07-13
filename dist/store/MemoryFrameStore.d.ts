@@ -22,6 +22,7 @@ export declare class MemoryFrameStore {
     publishStaged(frameIds: string[], now?: number): void;
     failStaged(frameIds: string[], now?: number): void;
     failStagedForEpisode(episodeId: string, now?: number): void;
+    failStagedOlderThan(cutoff: number, now?: number): number;
     supersedeEpisodes(episodeIds: string[], now?: number): number;
     deleteByProject(projectId: string): number;
     private markDirty;

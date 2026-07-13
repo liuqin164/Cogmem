@@ -9,14 +9,16 @@ export class MemoryFrameStore {
   constructor(readonly db: Database) {}
 
   save(input: MemoryFrameSaveInput): MemoryFrameV1 {
-    const validation = validateMemoryFrame(input.frame);
+    const requestedStatus = input.status ?? input.frame.status ?? 'staged';
+    const validation = validateMemoryFrame(input.frame, { allowEmptyEvidence: requestedStatus !== 'active' && input.frame.sourceAuthority === 'deterministic_fallback' });
     if (!validation.valid) throw new Error(`invalid_memory_frame:${validation.errors.join(',')}`);
     const frame = input.frame;
     const now = input.now ?? Date.now();
-    const status = input.status ?? frame.status ?? 'staged';
+    const status: MemoryFrameStatus = 'staged';
     const publishStatus = input.publishStatus ?? frame.publishStatus ?? (frame.needsReview ? 'needs_confirmation' : 'active');
-    const existing = this.db.prepare(`SELECT frame_id FROM memory_frames WHERE episode_id=? AND source_fingerprint=? AND processor_prompt_version=?`).get(frame.episodeId, input.sourceFingerprint, frame.processor.promptVersion) as { frame_id?: string } | null;
-    const storedFrameId = existing?.frame_id ?? frame.frameId;
+    const existing = this.db.prepare(`SELECT frame_id,status FROM memory_frames WHERE episode_id=? AND source_fingerprint=? AND processor_prompt_version=?`).get(frame.episodeId, input.sourceFingerprint, frame.processor.promptVersion) as { frame_id?: string; status?: MemoryFrameStatus } | null;
+    const storedFrameId = existing && existing.status === 'staged' ? existing.frame_id! : (existing ? `${frame.frameId}:${randomUUID()}` : frame.frameId);
+    const storedFingerprint = existing && existing.status === 'staged' ? input.sourceFingerprint : (storedFrameId === frame.frameId ? input.sourceFingerprint : `${input.sourceFingerprint}:${storedFrameId}`);
     this.db.transaction(() => {
       this.db.prepare(`
         INSERT INTO memory_frames (
@@ -33,12 +35,11 @@ export class MemoryFrameStore {
           semantic_completeness=excluded.semantic_completeness, needs_review=excluded.needs_review, updated_at=excluded.updated_at,
           primary_language=excluded.primary_language, temporal_references_json=excluded.temporal_references_json,
           state_transitions_json=excluded.state_transitions_json, publish_status=excluded.publish_status
-      `).run(storedFrameId, frame.projectId, frame.episodeId, frame.schemaVersion, input.sourceFingerprint,
+      `).run(storedFrameId, frame.projectId, frame.episodeId, frame.schemaVersion, storedFingerprint,
         frame.processor.promptVersion, frame.title, frame.summary, frame.episodeKind, frame.confidence,
         JSON.stringify(frame.evidenceEventIds), JSON.stringify(frame.processor), status,
         frame.sourceAuthority ?? 'processor', frame.semanticCompleteness ?? 'full', frame.needsReview ? 1 : 0, now, now,
         frame.primaryLanguage ?? null, JSON.stringify(frame.temporalReferences), JSON.stringify(frame.stateTransitions), publishStatus);
-      this.db.prepare(`UPDATE memory_frames SET status='superseded', updated_at=? WHERE project_id=? AND episode_id=? AND frame_id<>? AND status IN ('active','needs_confirmation')`).run(now, frame.projectId, frame.episodeId, storedFrameId);
       this.db.prepare(`DELETE FROM memory_frame_nodes WHERE frame_id=?`).run(storedFrameId);
       this.db.prepare(`DELETE FROM memory_frame_relations WHERE frame_id=?`).run(storedFrameId);
       const node = this.db.prepare(`INSERT INTO memory_frame_nodes (frame_node_id,frame_id,dimension,label,aliases_json,description,confidence,evidence_event_ids_json,canonical_hint_json) VALUES (?,?,?,?,?,?,?,?,?)`);
@@ -78,6 +79,10 @@ export class MemoryFrameStore {
     const row = this.db.prepare(`SELECT project_id, episode_id, publish_status FROM memory_frames WHERE frame_id=?`).get(frameId) as { project_id: string; episode_id: string; publish_status?: MemoryFrameStatus } | null;
     if (!row) return false;
     const next = to ?? row.publish_status ?? 'active';
+    if (next === 'active') {
+      const review = this.db.prepare(`SELECT needs_review FROM memory_frames WHERE frame_id=?`).get(frameId) as { needs_review?: number } | null;
+      if (review?.needs_review) return false;
+    }
     const changed = Number(this.db.prepare(`UPDATE memory_frames SET status=?, updated_at=? WHERE frame_id=? AND status=?`).run(next, now, frameId, from).changes ?? 0) === 1;
     if (changed) { this.db.prepare(`UPDATE memory_frames SET status='superseded', updated_at=? WHERE project_id=? AND episode_id=? AND frame_id<>? AND status IN ('active','needs_confirmation')`).run(now, row.project_id, row.episode_id, frameId); this.markDirty(row.project_id!, now); }
     return changed;
@@ -86,6 +91,7 @@ export class MemoryFrameStore {
   publishStaged(frameIds: string[], now = Date.now()): void { for (const id of frameIds) if (!this.publish(id, 'staged', undefined, now)) throw new Error(`memory_frame_publish_conflict:${id}`); }
   failStaged(frameIds: string[], now = Date.now()): void { for (const id of frameIds) this.db.prepare(`UPDATE memory_frames SET status='failed', updated_at=? WHERE frame_id=? AND status='staged'`).run(now, id); }
   failStagedForEpisode(episodeId: string, now = Date.now()): void { this.db.prepare(`UPDATE memory_frames SET status='failed', updated_at=? WHERE episode_id=? AND status='staged'`).run(now, episodeId); }
+  failStagedOlderThan(cutoff: number, now = Date.now()): number { return Number(this.db.prepare(`UPDATE memory_frames SET status='failed', updated_at=? WHERE status='staged' AND updated_at<?`).run(now, cutoff).changes ?? 0); }
   supersedeEpisodes(episodeIds: string[], now = Date.now()): number {
     let changed = 0; for (const id of episodeIds) {
       changed += Number(this.db.prepare(`UPDATE memory_frames SET status='superseded', updated_at=? WHERE episode_id=? AND status IN ('active','needs_confirmation','staged')`).run(now, id).changes ?? 0);

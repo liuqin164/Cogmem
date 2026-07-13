@@ -14,6 +14,7 @@ export const migration_0035: Migration = {
       const columns = db.prepare('PRAGMA table_info(memory_frames)').all() as Array<{ name: string }>;
       if (!columns.some((column) => column.name === name)) db.exec(`ALTER TABLE memory_frames ADD COLUMN ${name} ${declaration}`);
     }
+    db.exec(`UPDATE memory_frames SET publish_status='needs_confirmation' WHERE needs_review=1 OR status='needs_confirmation' OR source_authority='deterministic_fallback'`);
   },
   down() {},
 };

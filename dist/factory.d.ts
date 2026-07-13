@@ -725,7 +725,9 @@ export declare class MemoryKernel {
         actions: number;
         refreshed: boolean;
     };
-    getMemoryFrame(episodeId: string, projectId?: string): MemoryFrameV1 | null;
+    getMemoryFrame(episodeId: string, projectId?: string, options?: {
+        includeStaged?: boolean;
+    }): MemoryFrameV1 | null;
     listMemoryDimensions(projectId: string, nodeType?: string, limit?: number): Array<{
         id: string;
         nodeType: string;

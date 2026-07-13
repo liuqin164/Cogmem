@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 export const MEMORY_ATLAS_PROJECTION_NAME = 'memory_atlas.v2';
-export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.2';
+export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.4';
 export class MemoryAtlasStore {
     db;
     constructor(db) {
@@ -178,14 +178,18 @@ export class MemoryAtlasStore {
         SELECT d.node_id,d.node_type,d.source_id,d.label,d.topic_path,d.metadata_json,d.evidence_event_ids_json
         FROM memory_atlas_aliases a
         JOIN memory_atlas_documents d ON d.project_id=a.project_id AND d.node_id=a.node_id
-        WHERE a.project_id=? AND a.normalized_alias LIKE '%' || ? || '%' AND a.status='active'
+        WHERE a.project_id=? AND a.status='active'
           AND d.status NOT IN ('rejected','archived','needs_confirmation')
-      `).all(projectId, normalizedQuery);
-            for (const row of aliasRows)
+      `).all(projectId);
+            for (const row of aliasRows) {
+                const alias = normalizeLookup(String(row.normalized_alias ?? ''));
+                if (alias.length <= 1 || !normalizedQuery.includes(alias))
+                    continue;
                 if (!seeds.some((seed) => seed.node_id === row.node_id)) {
                     seeds.push(row);
                     labels.push(String(row.label));
                 }
+            }
         }
         catch { /* pre-0033 databases use document aliases only */ }
         if (!seeds.length)
@@ -540,6 +544,8 @@ export class MemoryAtlasStore {
         cursor_value=excluded.cursor_value, status='clean', last_rebuild_at=excluded.last_rebuild_at,
         last_error=NULL, metadata_json=excluded.metadata_json
     `).run(projectId, MEMORY_ATLAS_PROJECTION_NAME, String(now), now, JSON.stringify(enrichedMetadata));
+        this.db.prepare(`UPDATE memory_atlas_projection_state SET projection_version=?, frame_schema_version=?, source_fingerprint=?, last_backfill_cursor=? WHERE project_id=? AND projection_name=?`)
+            .run('v2', 'memory_frame.v1', typeof metadata.sourceFingerprint === 'string' ? metadata.sourceFingerprint : null, typeof metadata.lastBackfillCursor === 'string' ? metadata.lastBackfillCursor : null, projectId, MEMORY_ATLAS_PROJECTION_NAME);
         this.db.prepare(`
       INSERT INTO memory_atlas_projection_state(
         project_id, projection_name, cursor_value, status, last_rebuild_at, last_error, metadata_json

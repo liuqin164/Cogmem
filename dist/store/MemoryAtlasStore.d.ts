@@ -2,7 +2,7 @@ import type Database from 'bun:sqlite';
 import type { FacetQueryPlan } from '../atlas/FacetQueryPlanner.js';
 import type { MemoryAtlasAction, MemoryAtlasCard, MemoryAtlasEdge, MemoryAtlasNode, MemoryAtlasRelatedCard } from '../atlas/MemoryAtlasTypes.js';
 export declare const MEMORY_ATLAS_PROJECTION_NAME = "memory_atlas.v2";
-export declare const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = "3.7.2";
+export declare const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = "3.7.4";
 export declare class MemoryAtlasStore {
     readonly db: Database;
     constructor(db: Database);

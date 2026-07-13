@@ -27,6 +27,7 @@ export class MultidimensionalQueryPlanner {
     }
     const intent = this.intent(text);
     const time = this.timeRange(text, now);
+    const states = this.states(text);
     const frame: MemoryQueryFrameV1 = {
       schemaVersion: 'memory_query_frame.v1',
       intent,
@@ -34,7 +35,20 @@ export class MultidimensionalQueryPlanner {
       ...facets,
     };
     if (time) frame.time = time;
+    if (states.length) frame.states = states;
     return frame;
+  }
+
+  private states(query: string): string[] {
+    const values = new Set<string>();
+    const patterns: Array<[string, RegExp]> = [
+      ['completed', /完成|已解决|done|completed|resolved|完了/iu],
+      ['in_progress', /进行中|处理中|进展|in[ -]?progress|working/iu],
+      ['blocked', /阻塞|卡住|blocked|stuck/iu],
+      ['planned', /计划|规划|planned|planning/iu],
+    ];
+    for (const [state, pattern] of patterns) if (pattern.test(query)) values.add(state);
+    return [...values];
   }
 
   private intent(query: string): MemoryQueryIntent {
@@ -51,6 +65,16 @@ export class MultidimensionalQueryPlanner {
     const year = query.match(/\b(20\d{2})\b/u)?.[1];
     if (year) {
       const from = Date.UTC(Number(year), 0, 1); return { from, to: Date.UTC(Number(year) + 1, 0, 1), expressions: [year] };
+    }
+    const month = query.match(/(?:20\d{2}[年/-]?)?(\d{1,2})月|\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/iu);
+    if (month) {
+      const monthNames = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+      const raw = month[1] ?? month[0].slice(0, 3).toLocaleLowerCase('en');
+      const monthIndex = month[1] ? Number(raw) - 1 : monthNames.indexOf(raw);
+      if (monthIndex >= 0 && monthIndex < 12) {
+        const yearValue = Number(query.match(/\b(20\d{2})\b/u)?.[1] ?? new Date(now).getUTCFullYear());
+        return { from: Date.UTC(yearValue, monthIndex, 1), to: Date.UTC(yearValue, monthIndex + 1, 1), expressions: [month[0]] };
+      }
     }
     if (/今天|today/iu.test(query)) {
       const start = new Date(now); start.setUTCHours(0, 0, 0, 0); return { from: start.getTime(), to: start.getTime() + 86400000, expressions: ['today'] };

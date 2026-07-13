@@ -4,5 +4,7 @@ export interface MemoryFrameValidationResult {
     errors: string[];
     frame?: MemoryFrameV1;
 }
-export declare function validateMemoryFrame(value: unknown): MemoryFrameValidationResult;
+export declare function validateMemoryFrame(value: unknown, options?: {
+    allowEmptyEvidence?: boolean;
+}): MemoryFrameValidationResult;
 //# sourceMappingURL=MemoryFrameValidator.d.ts.map

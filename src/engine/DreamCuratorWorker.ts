@@ -146,7 +146,12 @@ export class DreamCuratorWorker {
           }))))
           : this.deps.semanticProcessor;
         frame = processor ? await processor.process(frameInput) : deterministicFrameFallback({ ...frameInput, now });
-      } catch {
+      } catch (error) {
+        this.deps.pipelineMetrics?.recordNonFatal('memory_frame_processor_fallback', {
+          projectId: options.projectId,
+          message: error instanceof Error ? error.message : String(error),
+          details: { episodeId: options.sourceEpisodeId, source: 'structured_semantic_processor' },
+        });
         frame = deterministicFrameFallback({ ...frameInput, now });
       }
       frame = {

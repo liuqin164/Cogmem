@@ -135,9 +135,12 @@ export class SchemaMigrationRunner {
       `).get());
         }
         if (version === '0032')
-            return this.tableExists('memory_frames') && this.tableExists('memory_frame_nodes') && this.tableExists('memory_frame_relations');
+            return this.hasColumns('memory_frames', ['frame_id', 'project_id', 'episode_id', 'source_fingerprint', 'status'])
+                && this.hasColumns('memory_frame_nodes', ['frame_node_id', 'frame_id', 'dimension', 'label'])
+                && this.hasColumns('memory_frame_relations', ['frame_relation_id', 'frame_id', 'source_frame_node_id', 'target_frame_node_id']);
         if (version === '0033')
-            return this.tableExists('memory_atlas_aliases') && this.tableExists('memory_atlas_supports');
+            return this.hasColumns('memory_atlas_aliases', ['alias_id', 'project_id', 'node_id', 'normalized_alias', 'source_frame_id'])
+                && this.hasColumns('memory_atlas_supports', ['support_id', 'project_id', 'node_id', 'source_type', 'source_frame_id']);
         if (version === '0034')
             return this.hasColumns('memory_atlas_projection_state', ['projection_version', 'processor_prompt_version', 'frame_schema_version', 'source_fingerprint', 'last_backfill_cursor']);
         if (version === '0035')
