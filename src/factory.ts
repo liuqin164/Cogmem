@@ -114,6 +114,7 @@ import { FactStore } from './store/FactStore.js';
 import { InteractionUnitStore } from './store/InteractionUnitStore.js';
 import { MemoryBindingStore } from './store/MemoryBindingStore.js';
 import { MemoryAtlasStore } from './store/MemoryAtlasStore.js';
+import { MemoryFrameStore } from './store/MemoryFrameStore.js';
 import {
   MemoryAtlasIndexer,
   MemoryAtlasService,
@@ -587,6 +588,7 @@ export class MemoryKernel {
   readonly activationStore: ActivationStore;
   readonly memoryBindingStore: MemoryBindingStore;
   readonly memoryAtlasStore: MemoryAtlasStore;
+  readonly memoryFrameStore: MemoryFrameStore;
   readonly memoryAtlasService: MemoryAtlasService;
   readonly memoryGovernanceStore: MemoryGovernanceStore;
   readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;
@@ -724,6 +726,7 @@ export class MemoryKernel {
     this.memoryBindingStore = new MemoryBindingStore(db);
     this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
     this.memoryAtlasStore = new MemoryAtlasStore(db);
+    this.memoryFrameStore = new MemoryFrameStore(db);
     this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore);
     this.memoryAtlasService = new MemoryAtlasService(this.memoryAtlasStore, this.eventStore);
     this.entityGovernanceService = new EntityGovernanceService(

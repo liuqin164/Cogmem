@@ -78,6 +78,7 @@ import { FactStore } from './store/FactStore.js';
 import { InteractionUnitStore } from './store/InteractionUnitStore.js';
 import { MemoryBindingStore } from './store/MemoryBindingStore.js';
 import { MemoryAtlasStore } from './store/MemoryAtlasStore.js';
+import { MemoryFrameStore } from './store/MemoryFrameStore.js';
 import { MemoryAtlasIndexer, MemoryAtlasService, } from './atlas/index.js';
 import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { SummaryStore } from './store/SummaryStore.js';
@@ -115,6 +116,7 @@ export class MemoryKernel {
     activationStore;
     memoryBindingStore;
     memoryAtlasStore;
+    memoryFrameStore;
     memoryAtlasService;
     memoryGovernanceStore;
     memoryGovernanceExecutor;
@@ -245,6 +247,7 @@ export class MemoryKernel {
         this.memoryBindingStore = new MemoryBindingStore(db);
         this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
         this.memoryAtlasStore = new MemoryAtlasStore(db);
+        this.memoryFrameStore = new MemoryFrameStore(db);
         this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore);
         this.memoryAtlasService = new MemoryAtlasService(this.memoryAtlasStore, this.eventStore);
         this.entityGovernanceService = new EntityGovernanceService(db, this.entityStore, (eventId) => {

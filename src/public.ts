@@ -475,6 +475,8 @@ export type {
 export { callCogmemMcpTool, listCogmemMcpTools } from './mcp/CoreMcpTools.js';
 export type { CogmemMcpCallResult, CogmemMcpRuntime, CogmemMcpTool } from './mcp/CoreMcpTools.js';
 export type { DreamBacklogStatus } from './store/DreamLedgerStore.js';
+export { MemoryFrameStore, frameSourceFingerprint } from './store/MemoryFrameStore.js';
+export type { MemoryFrameSaveInput } from './store/MemoryFrameStore.js';
 export * from './atlas/index.js';
 export * from './semantic/index.js';
 export { createMemoryQueryFrame, queryFacet } from './recall/MemoryQueryFrame.js';

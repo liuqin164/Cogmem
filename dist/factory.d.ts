@@ -41,6 +41,7 @@ import { EventStore } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
 import { MemoryBindingStore } from './store/MemoryBindingStore.js';
 import { MemoryAtlasStore } from './store/MemoryAtlasStore.js';
+import { MemoryFrameStore } from './store/MemoryFrameStore.js';
 import { MemoryAtlasService, type MemoryAtlasNodeDetail, type MemoryAtlasPathResult, type MemoryAtlasQueryOptions, type MemoryAtlasSlice, type MemoryAtlasTimelineResult } from './atlas/index.js';
 import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
@@ -474,6 +475,7 @@ export declare class MemoryKernel {
     readonly activationStore: ActivationStore;
     readonly memoryBindingStore: MemoryBindingStore;
     readonly memoryAtlasStore: MemoryAtlasStore;
+    readonly memoryFrameStore: MemoryFrameStore;
     readonly memoryAtlasService: MemoryAtlasService;
     readonly memoryGovernanceStore: MemoryGovernanceStore;
     readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;

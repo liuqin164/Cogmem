@@ -106,6 +106,7 @@ export { UniverseTraversalExecutor } from './retrieval/UniverseTraversalExecutor
  */
 export { explainRecallWithKernel } from './recall/RecallExplanation.js';
 export { callCogmemMcpTool, listCogmemMcpTools } from './mcp/CoreMcpTools.js';
+export { MemoryFrameStore, frameSourceFingerprint } from './store/MemoryFrameStore.js';
 export * from './atlas/index.js';
 export * from './semantic/index.js';
 export { createMemoryQueryFrame, queryFacet } from './recall/MemoryQueryFrame.js';
