@@ -152,6 +152,15 @@ export class MemoryAtlasStore {
     return cards;
   }
 
+  findActiveAliasNode(projectId: string, dimension: string, normalizedAlias: string): string | undefined {
+    const rows = this.db.prepare(`
+      SELECT DISTINCT node_id FROM memory_atlas_aliases
+      WHERE project_id=? AND dimension=? AND normalized_alias=? AND status='active'
+      ORDER BY node_id
+    `).all(projectId, dimension, normalizedAlias) as Array<{ node_id: string }>;
+    return rows.length === 1 ? rows[0]!.node_id : undefined;
+  }
+
   relatedEpisodeCards(projectId: string, canonicalId: string, selectedIds: Set<string>, limit: number): MemoryAtlasRelatedCard[] {
     const parsed = parseNodeId(canonicalId, projectId);
     if (!parsed || parsed.type !== 'episode') return [];

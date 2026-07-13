@@ -105,7 +105,10 @@ export class MemoryFrameProjector {
                 throw new Error(`raw_event_identity_requires_one_evidence:${node.frameNodeId}`);
             return `raw_event:${node.evidenceEventIds[0]}`;
         }
-        const key = `${projectId}\0${node.dimension}\0${node.label.normalize('NFKC').toLocaleLowerCase('und').trim()}`;
+        const aliasNode = this.atlasStore.findActiveAliasNode(projectId, node.dimension, normalizeAlias(node.label));
+        if (aliasNode)
+            return aliasNode;
+        const key = `${projectId}\0${node.dimension}\0${normalizeAlias(node.label)}`;
         return `${node.dimension}:${createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
     }
     upsertSupport(projectId, nodeId, frame, evidenceEventIds, now) {

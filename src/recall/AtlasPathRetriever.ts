@@ -15,19 +15,24 @@ export class AtlasPathRetriever {
       ...(queryFrame.events ?? []).map(() => 'event'), ...(queryFrame.tasks ?? []).map(() => 'task'),
       ...(queryFrame.entities ?? []).map(() => 'entity'), ...(queryFrame.locations ?? []).map(() => 'location'),
     ]);
-    result.nodes = result.nodes.filter((node) => {
-      // Keep connector nodes (issues, topics, actors) even when their own
-      // document has no timestamp; their evidence-bearing event/episode path
-      // carries the temporal constraint.
-      if (requestedTypes.size && !requestedTypes.has(node.nodeType) && !['episode','event','raw_event','time','state'].includes(node.nodeType)) return false;
-      if (queryFrame.time?.from !== undefined && node.occurredAt !== undefined && node.occurredAt < queryFrame.time.from) return false;
-      if (queryFrame.time?.to !== undefined && node.occurredAt !== undefined && node.occurredAt >= queryFrame.time.to) return false;
-      if (queryFrame.states?.length && node.nodeType === 'state' && !queryFrame.states.some((state) => node.label.toLocaleLowerCase('und').includes(state.replace('_', ' ')))) return false;
-      return true;
-    });
-    result.nodes = this.ranker.rank(result.nodes, queryFrame).slice(0, Math.min(options.limit ?? 30, 100));
-    const selected = new Set(result.nodes.map((node) => node.id));
-    result.edges = result.edges.filter((edge) => selected.has(edge.source) && selected.has(edge.target));
+    const byId = new Map(result.nodes.map((node) => [node.id, node]));
+    const matches = (node: (typeof result.nodes)[number]) => {
+      const requested = !requestedTypes.size || requestedTypes.has(node.nodeType);
+      const labelMatch = Object.values(queryFrame).flatMap((value) => Array.isArray(value) ? value.map((item) => String(item?.label ?? '').toLocaleLowerCase('und')) : []).some((label) => label && node.label.toLocaleLowerCase('und').includes(label));
+      const timeMatch = node.occurredAt === undefined || ((queryFrame.time?.from === undefined || node.occurredAt >= queryFrame.time.from) && (queryFrame.time?.to === undefined || node.occurredAt < queryFrame.time.to));
+      const stateMatch = !queryFrame.states?.length || node.nodeType !== 'state' || queryFrame.states.some((state) => node.label.toLocaleLowerCase('und').includes(state.replace('_', ' ')));
+      return requested && timeMatch && stateMatch && (labelMatch || !requestedTypes.size || requestedTypes.has(node.nodeType));
+    };
+    const seeds = result.nodes.filter(matches);
+    const selected = new Set(seeds.map((node) => node.id));
+    // QueryFrame chooses seeds; the bounded edge closure preserves the path
+    // needed to explain an Actor/Project/Issue intersection.
+    for (const edge of result.edges) if (selected.has(edge.source) || selected.has(edge.target)) {
+      selected.add(edge.source); selected.add(edge.target);
+    }
+    result.nodes = this.ranker.rank(result.nodes.filter((node) => selected.has(node.id)), queryFrame).slice(0, Math.min(options.limit ?? 30, 100));
+    const visible = new Set(result.nodes.map((node) => node.id));
+    result.edges = result.edges.filter((edge) => visible.has(edge.source) && visible.has(edge.target));
     return { queryFrame, result };
   }
 }
