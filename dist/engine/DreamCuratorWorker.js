@@ -48,8 +48,9 @@ export class DreamCuratorWorker {
             };
             let frame;
             try {
-                const frameGenerator = options.generateText
-                    ?? this.deps.modelRegistry?.getTextGenerator('memory');
+                // A rule-only registry has no semantic model. Use the injected local
+                // processor instead of parsing its guaranteed-empty text response.
+                const frameGenerator = this.resolveGenerateText(options);
                 const processor = frameGenerator
                     ? new StructuredSemanticProcessorImpl(async (input) => JSON.parse(await frameGenerator(MEMORY_FRAME_SYSTEM_PROMPT, JSON.stringify({
                         schemaVersion: 'memory_frame.v1', promptVersion: MEMORY_FRAME_PROMPT_VERSION,

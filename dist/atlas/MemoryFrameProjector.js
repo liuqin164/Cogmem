@@ -42,7 +42,7 @@ export class MemoryFrameProjector {
                 }
                 nodes += 1;
                 this.upsertSupport(projectId, id, frame, node.evidenceEventIds, now);
-                for (const alias of [node.label, ...(node.aliases ?? [])])
+                for (const alias of [node.label, ...(node.aliases ?? []), ...(node.canonicalHint?.canonicalLabel ? [node.canonicalHint.canonicalLabel] : [])])
                     this.upsertAlias(projectId, id, node, alias, frame, now);
             }
             for (const relation of frame.relations) {
