@@ -8,6 +8,12 @@ export class AtlasPathRetriever {
 
   retrieve(query: string, options: MemoryAtlasQueryOptions): { queryFrame: ReturnType<MultidimensionalQueryPlanner['plan']>; result: MemoryAtlasSlice } {
     const queryFrame = this.planner.plan(query, options.now);
+    for (const alias of this.atlas.resolveQueryAliases(query, options.projectId)) {
+      const key = `${alias.dimension}s` as 'actors' | 'projects' | 'topics' | 'issues' | 'events' | 'tasks' | 'entities' | 'locations';
+      if (!(key in queryFrame)) continue;
+      const facets = (queryFrame[key] ??= []);
+      if (!facets.some((facet) => facet.canonicalNodeId === alias.nodeId)) facets.push({ label: alias.label, dimension: alias.dimension as never, canonicalNodeId: alias.nodeId, confidence: 1 });
+    }
     const result = this.atlas.explore(query, { ...options, limit: Math.min(options.limit ?? 30, 100) });
     const requestedTypes = new Set([
       ...(queryFrame.actors ?? []).map(() => 'actor'), ...(queryFrame.projects ?? []).map(() => 'project'),
@@ -18,10 +24,12 @@ export class AtlasPathRetriever {
     const byId = new Map(result.nodes.map((node) => [node.id, node]));
     const matches = (node: (typeof result.nodes)[number]) => {
       const requested = !requestedTypes.size || requestedTypes.has(node.nodeType);
-      const labelMatch = Object.values(queryFrame).flatMap((value) => Array.isArray(value) ? value.map((item) => String(item?.label ?? '').toLocaleLowerCase('und')) : []).some((label) => label && node.label.toLocaleLowerCase('und').includes(label));
+      const facets = Object.values(queryFrame).flatMap((value) => Array.isArray(value) ? value : []).filter((item): item is { label?: string; canonicalNodeId?: string } => Boolean(item && typeof item === 'object'));
+      const canonicalMatch = facets.some((facet) => facet.canonicalNodeId === node.id);
+      const labelMatch = facets.map((facet) => String(facet.label ?? '').toLocaleLowerCase('und')).some((label) => label && node.label.toLocaleLowerCase('und').includes(label));
       const timeMatch = node.occurredAt === undefined || ((queryFrame.time?.from === undefined || node.occurredAt >= queryFrame.time.from) && (queryFrame.time?.to === undefined || node.occurredAt < queryFrame.time.to));
       const stateMatch = !queryFrame.states?.length || node.nodeType !== 'state' || queryFrame.states.some((state) => node.label.toLocaleLowerCase('und').includes(state.replace('_', ' ')));
-      return requested && timeMatch && stateMatch && (labelMatch || !requestedTypes.size || requestedTypes.has(node.nodeType));
+      return requested && timeMatch && stateMatch && (canonicalMatch || labelMatch || !requestedTypes.size || requestedTypes.has(node.nodeType));
     };
     const seeds = result.nodes.filter(matches);
     const selected = new Set(seeds.map((node) => node.id));

@@ -9,6 +9,10 @@ export class MemoryAtlasService {
   private readonly facetPlanner = new FacetQueryPlanner();
   constructor(private store: MemoryAtlasStore, private eventStore: EventStore) {}
 
+  resolveQueryAliases(query: string, projectId: string): Array<{ label: string; dimension: string; nodeId: string }> {
+    return this.store.resolveQueryAliases(projectId, query);
+  }
+
   overview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
     const limit = boundedLimit(options.limit);
     const nodes = this.store.listNodes(requiredProject(options.projectId), limit);

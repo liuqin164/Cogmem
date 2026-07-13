@@ -161,6 +161,19 @@ export class MemoryAtlasStore {
     return rows.length === 1 ? rows[0]!.node_id : undefined;
   }
 
+  resolveQueryAliases(projectId: string, query: string): Array<{ label: string; dimension: string; nodeId: string }> {
+    const normalizedQuery = query.normalize('NFKC').toLocaleLowerCase('und').replace(/\s+/gu, ' ').trim();
+    if (!normalizedQuery) return [];
+    const rows = this.db.prepare(`
+      SELECT normalized_alias AS label, dimension, node_id
+      FROM memory_atlas_aliases
+      WHERE project_id=? AND status='active' AND instr(?, normalized_alias)>0
+      ORDER BY length(normalized_alias) DESC, node_id ASC
+      LIMIT 64
+    `).all(projectId, normalizedQuery) as Array<{ label: string; dimension: string; node_id: string }>;
+    return rows.map((row) => ({ label: row.label, dimension: row.dimension, nodeId: row.node_id }));
+  }
+
   relatedEpisodeCards(projectId: string, canonicalId: string, selectedIds: Set<string>, limit: number): MemoryAtlasRelatedCard[] {
     const parsed = parseNodeId(canonicalId, projectId);
     if (!parsed || parsed.type !== 'episode') return [];

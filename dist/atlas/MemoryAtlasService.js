@@ -10,6 +10,9 @@ export class MemoryAtlasService {
         this.store = store;
         this.eventStore = eventStore;
     }
+    resolveQueryAliases(query, projectId) {
+        return this.store.resolveQueryAliases(projectId, query);
+    }
     overview(options) {
         const limit = boundedLimit(options.limit);
         const nodes = this.store.listNodes(requiredProject(options.projectId), limit);

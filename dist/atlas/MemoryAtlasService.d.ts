@@ -6,6 +6,11 @@ export declare class MemoryAtlasService {
     private eventStore;
     private readonly facetPlanner;
     constructor(store: MemoryAtlasStore, eventStore: EventStore);
+    resolveQueryAliases(query: string, projectId: string): Array<{
+        label: string;
+        dimension: string;
+        nodeId: string;
+    }>;
     overview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     search(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     explore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
