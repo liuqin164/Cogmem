@@ -12,6 +12,8 @@ export declare class MemoryAtlasStore {
         updatedAt?: number;
     }): void;
     getNode(nodeId: string, projectId: string): MemoryAtlasNode | null;
+    /** Internal projector/governance read; ordinary recall must use getNode(). */
+    getNodeIncludingInactive(nodeId: string, projectId: string): MemoryAtlasNode | null;
     listNodes(projectId: string, limit: number): MemoryAtlasNode[];
     search(query: string, projectId: string, limit: number): MemoryAtlasNode[];
     searchFaceted(query: string, projectId: string, limit: number, facets: {

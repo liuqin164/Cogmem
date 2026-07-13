@@ -169,6 +169,9 @@ export class DreamCuratorWorker {
         publishStatus: options.mode === 'shadow' || frame.needsReview
           ? 'needs_confirmation'
           : (frame.publishStatus ?? 'active'),
+        dreamJobLeaseId: options.dreamJobLeaseId,
+        leaseUntil: options.leaseUntil,
+        attemptGeneration: options.attemptGeneration,
         now,
       });
       frameIds.push(savedFrame.frameId);

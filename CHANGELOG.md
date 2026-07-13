@@ -5,6 +5,7 @@
 - Added evidence-backed MemoryFrame V1 contracts, controlled relation validation, canonical alias normalization, and bounded MemoryQueryFrame helpers.
 - Added schema migrations 0032-0034 for staged frames, Atlas aliases/supports, and V2 projection provenance.
 - Added migration 0035 for complete Frame fields and publication intent, with legacy fallback rows backfilled to `needs_confirmation`.
+- Added immutable migration 0036 for Dream-owned Frame revisions, review receipts, lease recovery, and publication repair.
 - Wired structured processor output through staged Dream publication, paginated Atlas V2 projection, temporal/state projection, alias resolution, Repair invalidation, and forget-user cleanup.
 - Connected bounded multidimensional Atlas results to kernel and agent recall while keeping unverified Frames and graph edges out of ordinary recall.
 

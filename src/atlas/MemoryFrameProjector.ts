@@ -28,7 +28,7 @@ export class MemoryFrameProjector {
         const nodeIds = new Map(frame.nodes.map((node) => [node.frameNodeId, this.nodeId(projectId, node, frame)]));
         for (const node of frame.nodes) {
           const id = nodeIds.get(node.frameNodeId)!;
-          const existing = this.atlasStore.getNode(id, projectId);
+          const existing = this.atlasStore.getNodeIncludingInactive(id, projectId);
           if (!existing) {
             this.atlasStore.upsertDocument({
               id, projectId, nodeType: node.dimension === 'episode' ? 'episode' : node.dimension,
@@ -48,23 +48,31 @@ export class MemoryFrameProjector {
           edges += 1;
         }
         for (const reference of frame.temporalReferences) {
-          const timeId = `time:${createHash('sha256').update(`${projectId}\0${reference.label}`).digest('hex').slice(0, 32)}`;
-          this.atlasStore.upsertDocument({ id: timeId, projectId, nodeType: 'time', sourceId: timeId.slice(5), label: reference.label,
+          const timeId = `time:${createHash('sha256').update(`${projectId}\0${reference.label}\0${reference.occurredAt ?? 'unknown'}\0${reference.evidenceEventIds[0] ?? ''}`).digest('hex').slice(0, 32)}`;
+          if (!this.atlasStore.getNodeIncludingInactive(timeId, projectId)) this.atlasStore.upsertDocument({ id: timeId, projectId, nodeType: 'time', sourceId: timeId.slice(5), label: reference.label,
             confidence: reference.confidence, supportCount: 1, status: 'active', occurredAt: reference.occurredAt,
             evidenceEventIds: reference.evidenceEventIds, metadata: { projection: 'memory_atlas.frame.v2', frameId: frame.frameId }, updatedAt: now });
           this.upsertSupport(projectId, timeId, frame, reference.evidenceEventIds, now);
+          const timeSource = reference.evidenceEventIds[0] ? `raw_event:${reference.evidenceEventIds[0]}` : `episode:${frame.episodeId}`;
+          this.upsertEdge(projectId, timeSource, timeId, { sourceFrameNodeId: timeSource, relationType: 'OCCURRED_ON', targetFrameNodeId: timeId, confidence: reference.confidence, evidenceEventIds: reference.evidenceEventIds }, frame, now);
           nodes += 1;
         }
         for (const transition of frame.stateTransitions) {
           const subject = nodeIds.get(transition.subjectFrameNodeId);
           if (!subject) continue;
           const stateId = `state:${createHash('sha256').update(`${projectId}\0${transition.to}`).digest('hex').slice(0, 32)}`;
-          this.atlasStore.upsertDocument({ id: stateId, projectId, nodeType: 'state', sourceId: stateId.slice(6), label: transition.to,
+          if (!this.atlasStore.getNodeIncludingInactive(stateId, projectId)) this.atlasStore.upsertDocument({ id: stateId, projectId, nodeType: 'state', sourceId: stateId.slice(6), label: transition.to,
             confidence: transition.confidence, supportCount: 1, status: 'active', evidenceEventIds: transition.evidenceEventIds,
             metadata: { projection: 'memory_atlas.frame.v2', frameId: frame.frameId }, updatedAt: now });
           this.upsertSupport(projectId, stateId, frame, transition.evidenceEventIds, now);
           this.upsertEdge(projectId, subject, stateId, { sourceFrameNodeId: transition.subjectFrameNodeId, relationType: 'HAS_STATE', targetFrameNodeId: stateId,
             confidence: transition.confidence, evidenceEventIds: transition.evidenceEventIds }, frame, now);
+          if (transition.from) {
+            const fromId = `state:${createHash('sha256').update(`${projectId}\0${transition.from}`).digest('hex').slice(0, 32)}`;
+            if (!this.atlasStore.getNodeIncludingInactive(fromId, projectId)) this.atlasStore.upsertDocument({ id: fromId, projectId, nodeType: 'state', sourceId: fromId.slice(6), label: transition.from, confidence: transition.confidence, supportCount: 1, status: 'active', evidenceEventIds: transition.evidenceEventIds, metadata: { projection: 'memory_atlas.frame.v2', frameId: frame.frameId }, updatedAt: now });
+            this.upsertEdge(projectId, subject, fromId, { sourceFrameNodeId: transition.subjectFrameNodeId, relationType: 'CHANGED_FROM', targetFrameNodeId: fromId, confidence: transition.confidence, evidenceEventIds: transition.evidenceEventIds }, frame, now);
+          }
+          this.upsertEdge(projectId, subject, stateId, { sourceFrameNodeId: transition.subjectFrameNodeId, relationType: 'CHANGED_TO', targetFrameNodeId: stateId, confidence: transition.confidence, evidenceEventIds: transition.evidenceEventIds }, frame, now);
           edges += 1;
         }
     }
@@ -80,6 +88,7 @@ export class MemoryFrameProjector {
     }
     if (node.dimension === 'episode') return `episode:${frame.episodeId}`;
     if (node.dimension === 'project') return `project:${frame.projectId}`;
+    if (node.dimension === 'raw_event') return `raw_event:${node.evidenceEventIds[0] ?? node.label}`;
     const key = `${projectId}\0${node.dimension}\0${node.label.normalize('NFKC').toLocaleLowerCase('und').trim()}`;
     return `${node.dimension}:${createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
   }

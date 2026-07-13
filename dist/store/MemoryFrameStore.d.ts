@@ -6,6 +6,9 @@ export interface MemoryFrameSaveInput {
     status?: MemoryFrameStatus;
     publishStatus?: 'active' | 'needs_confirmation';
     now?: number;
+    dreamJobLeaseId?: string;
+    leaseUntil?: number;
+    attemptGeneration?: number;
 }
 export declare class MemoryFrameStore {
     readonly db: Database;
@@ -20,9 +23,10 @@ export declare class MemoryFrameStore {
     }): MemoryFrameV1[];
     publish(frameId: string, from: MemoryFrameStatus, to?: MemoryFrameStatus, now?: number): boolean;
     publishStaged(frameIds: string[], now?: number): void;
+    review(frameId: string, projectId: string, action: 'approve' | 'reject', actor: string, reason: string, now?: number): boolean;
     failStaged(frameIds: string[], now?: number): void;
-    failStagedForEpisode(episodeId: string, now?: number): void;
-    failStagedOlderThan(cutoff: number, now?: number): number;
+    failStagedForEpisode(episodeId: string, leaseId?: string, now?: number): void;
+    failStagedOlderThan(_cutoff: number, now?: number): number;
     supersedeEpisodes(episodeIds: string[], now?: number): number;
     deleteByProject(projectId: string): number;
     private markDirty;

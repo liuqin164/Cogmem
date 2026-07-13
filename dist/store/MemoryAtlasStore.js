@@ -32,6 +32,12 @@ export class MemoryAtlasStore {
     `).get(scopedNodeId, projectId);
         return row ? mapNode(row, 0) : null;
     }
+    /** Internal projector/governance read; ordinary recall must use getNode(). */
+    getNodeIncludingInactive(nodeId, projectId) {
+        const scopedNodeId = scopedEntityNodeId(this.db, nodeId, projectId);
+        const row = this.db.prepare(`SELECT d.*, COALESCE(a.activation, 0) AS activation FROM memory_atlas_documents d LEFT JOIN memory_atlas_activation a ON a.project_id=d.project_id AND a.node_id=d.node_id WHERE d.node_id=? AND d.project_id=?`).get(scopedNodeId, projectId);
+        return row ? mapNode(row, Number(row.activation || 0)) : null;
+    }
     listNodes(projectId, limit) {
         const rows = this.db.prepare(`
       SELECT d.*, COALESCE(a.activation, 0) AS activation
@@ -175,7 +181,7 @@ export class MemoryAtlasStore {
         }
         try {
             const aliasRows = this.db.prepare(`
-        SELECT d.node_id,d.node_type,d.source_id,d.label,d.topic_path,d.metadata_json,d.evidence_event_ids_json
+        SELECT d.node_id,d.node_type,d.source_id,d.label,d.topic_path,d.metadata_json,d.evidence_event_ids_json,a.normalized_alias
         FROM memory_atlas_aliases a
         JOIN memory_atlas_documents d ON d.project_id=a.project_id AND d.node_id=a.node_id
         WHERE a.project_id=? AND a.status='active'

@@ -728,6 +728,13 @@ export declare class MemoryKernel {
     getMemoryFrame(episodeId: string, projectId?: string, options?: {
         includeStaged?: boolean;
     }): MemoryFrameV1 | null;
+    reviewMemoryFrame(input: {
+        frameId: string;
+        projectId: string;
+        action: 'approve' | 'reject';
+        actor: string;
+        reason: string;
+    }): boolean;
     listMemoryDimensions(projectId: string, nodeType?: string, limit?: number): Array<{
         id: string;
         nodeType: string;

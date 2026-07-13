@@ -2083,6 +2083,10 @@ export class MemoryKernel {
     return this.memoryFrameStore.getByEpisode(episode.projectId, episodeId, options.includeStaged ? ['active', 'needs_confirmation', 'staged'] : undefined);
   }
 
+  reviewMemoryFrame(input: { frameId: string; projectId: string; action: 'approve' | 'reject'; actor: string; reason: string }): boolean {
+    return this.memoryFrameStore.review(input.frameId, input.projectId, input.action, input.actor, input.reason);
+  }
+
   listMemoryDimensions(projectId: string, nodeType?: string, limit = 100): Array<{ id: string; nodeType: string; label: string; confidence: number; evidenceEventIds: string[] }> {
     const allowed = new Set(['actor', 'entity', 'project', 'topic', 'issue', 'event', 'task', 'object', 'location', 'state', 'episode', 'time']);
     if (nodeType && !allowed.has(nodeType)) throw new Error(`invalid_memory_dimension:${nodeType}`);

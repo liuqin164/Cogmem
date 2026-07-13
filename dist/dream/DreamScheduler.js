@@ -115,7 +115,7 @@ export class DreamScheduler {
                 const message = error instanceof Error ? error.message : String(error);
                 const failureNow = clock.now();
                 if (this.frameStore)
-                    this.frameStore.failStagedForEpisode(job.episodeId, failureNow);
+                    this.frameStore.failStagedForEpisode(job.episodeId, job.leaseId, failureNow);
                 const failure = classifyFailure(message, job.attempts, failureNow);
                 this.episodeStore.failDreamJob(job.episodeId, job.leaseId, message, failure);
                 failedEpisodes.push({ episodeId: job.episodeId, error: message, failureCategory: failure.failureCategory, retryAfter: failure.retryAfter });

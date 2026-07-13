@@ -4,7 +4,7 @@ type Endpoint = readonly [MemoryDimension, MemoryRelationType, MemoryDimension];
 
 const CONSTRAINTS: Endpoint[] = [
   ['actor', 'PARTICIPATED_IN', 'event'], ['actor', 'PARTICIPATED_IN', 'raw_event'], ['actor', 'PERFORMED', 'task'], ['event', 'PART_OF_PROJECT', 'project'],
-  ['event', 'PART_OF_EVENT', 'event'], ['event', 'ADDRESSES_ISSUE', 'issue'], ['event', 'OCCURRED_ON', 'time'],
+  ['event', 'PART_OF_EVENT', 'event'], ['event', 'ADDRESSES_ISSUE', 'issue'], ['event', 'OCCURRED_ON', 'time'], ['raw_event', 'OCCURRED_ON', 'time'], ['episode', 'OCCURRED_ON', 'time'],
   ['event', 'OCCURRED_IN', 'location'], ['task', 'ADVANCES_TASK', 'event'], ['task', 'HAS_STATE', 'state'],
   ['issue', 'ABOUT_TOPIC', 'topic'], ['topic', 'NARROWER_THAN', 'topic'], ['topic', 'BROADER_THAN', 'topic'], ['episode', 'SUPPORTED_BY', 'event'], ['episode', 'SUPPORTED_BY', 'raw_event'],
   ['event', 'INVOLVES', 'entity'], ['task', 'DEPENDS_ON', 'task'], ['task', 'BLOCKED_BY', 'issue'],

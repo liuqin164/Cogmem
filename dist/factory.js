@@ -1476,6 +1476,9 @@ export class MemoryKernel {
             return null;
         return this.memoryFrameStore.getByEpisode(episode.projectId, episodeId, options.includeStaged ? ['active', 'needs_confirmation', 'staged'] : undefined);
     }
+    reviewMemoryFrame(input) {
+        return this.memoryFrameStore.review(input.frameId, input.projectId, input.action, input.actor, input.reason);
+    }
     listMemoryDimensions(projectId, nodeType, limit = 100) {
         const allowed = new Set(['actor', 'entity', 'project', 'topic', 'issue', 'event', 'task', 'object', 'location', 'state', 'episode', 'time']);
         if (nodeType && !allowed.has(nodeType))
