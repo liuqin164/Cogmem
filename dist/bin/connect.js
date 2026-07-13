@@ -25,6 +25,7 @@ const HERMES_COGMEM_TOOLS = [
     'cogmem_graph_search',
     'cogmem_graph_explore',
     'cogmem_memory_frame_show',
+    'cogmem_memory_frame_review',
     'cogmem_memory_dimensions',
     'cogmem_memory_query_plan',
     'cogmem_graph_node',

@@ -30,6 +30,7 @@ export declare class MemoryFrameStore {
     supersedeEpisodes(episodeIds: string[], now?: number): number;
     deleteByProject(projectId: string): number;
     private markDirty;
+    private publishUnsafe;
     private read;
 }
 export declare function frameSourceFingerprint(eventIds: string[], episodeId: string): string;

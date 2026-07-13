@@ -103,4 +103,26 @@ describe('MemoryFrame V1 contract', () => {
     expect(frame.time?.from).toBe(Date.UTC(2026, 0, 1));
     expect(frame.issues?.[0]?.label).toBe('issue');
   });
+
+  test('lease retry creates an independent staged revision without changing the source row', () => {
+    const db = new Database(':memory:');
+    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db);
+    const store = new MemoryFrameStore(db);
+    const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }),
+      evidenceEventIds: ['evt-1'], nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['evt-1'] })),
+      relations: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).relations.map((relation) => ({ ...relation, evidenceEventIds: ['evt-1'] })) };
+    const first = store.save({ frame, sourceFingerprint: 'stable-source', dreamJobLeaseId: 'lease-a', attemptGeneration: 1, now: 1 });
+    const retry = store.save({ frame: { ...frame, frameId: 'retry-frame' }, sourceFingerprint: 'stable-source', dreamJobLeaseId: 'lease-b', attemptGeneration: 2, now: 2 });
+    expect(retry.frameId).not.toBe(first.frameId);
+    expect(store.get(first.frameId)?.status).toBe('staged');
+    expect(store.get(retry.frameId)?.status).toBe('staged');
+    expect(db.prepare('SELECT COUNT(*) AS count FROM memory_frame_nodes').get()).toEqual({ count: 4 });
+    db.close();
+  });
+
+  test('planner resolves a month before the containing year and accepts Chinese inflection', () => {
+    const frame = new MultidimensionalQueryPlanner().plan('谁参与了 2026年6月的升级？', Date.UTC(2026, 6, 13));
+    expect(frame.actors?.[0]?.label).toBe('谁参与了');
+    expect(frame.time).toEqual({ from: Date.UTC(2026, 5, 1), to: Date.UTC(2026, 6, 1), expressions: ['2026年6月'] });
+  });
 });

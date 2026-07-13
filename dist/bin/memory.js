@@ -77,7 +77,7 @@ function readArgs(argv) {
 }
 function usage() {
     return [
-        'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|graph...> [args]',
+        'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|frame-review|graph...> [args]',
         '',
         'Commands:',
         '  status               summarize raw ledger, vector, and dream backlog state',
@@ -95,6 +95,7 @@ function usage() {
         '  bind                 backfill memory bindings for high-value raw user events',
         '  frame --episode <id> show one structured MemoryFrame',
         '  frame-backfill       create deterministic evidence-backed frames for existing episodes',
+        '  frame-review         approve or reject a staged/needs-confirmation MemoryFrame',
         '  graph                show a bounded overview of remembered topics, entities, clusters, actions, and time',
         '  graph-search         locate Atlas nodes by --query without expanding the graph',
         '  graph-explore        return a bounded local graph for a broad --query',
@@ -171,7 +172,8 @@ function isMemoryCommand(value) {
         || value === 'graph-timeline'
         || value === 'graph-reindex'
         || value === 'frame'
-        || value === 'frame-backfill';
+        || value === 'frame-backfill'
+        || value === 'frame-review';
 }
 function modeArg(values, key) {
     const raw = stringArg(values, key);
@@ -622,6 +624,12 @@ function runFrame(kernel, args) {
             throw new Error(`frame-backfill requires --project.\n${usage()}`);
         return kernel.backfillMemoryFrames({ projectId: args.projectId, limit: args.limit, cursor: args.cursor, mode: args.mode });
     }
+    if (args.command === 'frame-review') {
+        if (!args.nodeId || !args.projectId || !args.actor || !args.reason || !['approve', 'reject'].includes(args.reviewAction ?? '')) {
+            throw new Error(`frame-review requires --id, --project, --action approve|reject, --actor, and --reason.\n${usage()}`);
+        }
+        return { frameId: args.nodeId, action: args.reviewAction, applied: kernel.reviewMemoryFrame({ frameId: args.nodeId, projectId: args.projectId, action: args.reviewAction, actor: args.actor, reason: args.reason }) };
+    }
     if (!args.episodeId)
         throw new Error(`frame requires --episode.\n${usage()}`);
     const frame = kernel.getMemoryFrame(args.episodeId, args.projectId, { includeStaged: args.includeStaged });
@@ -1018,7 +1026,7 @@ async function main() {
                                                     ? runTick(kernel, kernelArgs)
                                                     : kernelArgs.command === 'bind'
                                                         ? runBind(kernel, kernelArgs)
-                                                        : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill'
+                                                        : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill' || kernelArgs.command === 'frame-review'
                                                             ? runFrame(kernel, kernelArgs)
                                                             : runGraphCommand(kernel, kernelArgs);
         if (kernelArgs.json) {

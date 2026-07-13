@@ -100,8 +100,11 @@ export class MemoryFrameProjector {
             return `episode:${frame.episodeId}`;
         if (node.dimension === 'project')
             return `project:${frame.projectId}`;
-        if (node.dimension === 'raw_event')
-            return `raw_event:${node.evidenceEventIds[0] ?? node.label}`;
+        if (node.dimension === 'raw_event') {
+            if (node.evidenceEventIds.length !== 1)
+                throw new Error(`raw_event_identity_requires_one_evidence:${node.frameNodeId}`);
+            return `raw_event:${node.evidenceEventIds[0]}`;
+        }
         const key = `${projectId}\0${node.dimension}\0${node.label.normalize('NFKC').toLocaleLowerCase('und').trim()}`;
         return `${node.dimension}:${createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
     }
@@ -128,13 +131,19 @@ export class MemoryFrameProjector {
       INSERT INTO memory_edges (edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,confidence,base_weight,stability,activation,evidence_event_ids_json,status,valid_from,valid_to,version,source_authority,created_at,updated_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(edge_id) DO UPDATE SET confidence=excluded.confidence,evidence_event_ids_json=excluded.evidence_event_ids_json,status='active',updated_at=excluded.updated_at
-    `).run(edgeId, projectId, parsedSource.type, parsedSource.id, relation.relationType, parsedTarget.type, parsedTarget.id, relation.confidence, 1, 0.85, 1, JSON.stringify(relation.evidenceEventIds), 'active', relation.validFrom ?? frame.processor.generatedAt, relation.validTo ?? null, 1, 'memory_frame_projector', now, now);
+    `).run(edgeId, projectId, parsedSource.type, parsedSource.id, relation.relationType, parsedTarget.type, parsedTarget.id, relation.confidence, 1, 0.85, 1, JSON.stringify(relation.evidenceEventIds), 'active', relation.validFrom ?? this.evidenceTime(relation.evidenceEventIds, frame.processor.generatedAt), relation.validTo ?? null, 1, 'memory_frame_projector', now, now);
         const supportId = createHash('sha256').update(`${edgeId}\0frame_edge\0${frame.frameId}`).digest('hex');
         this.db.prepare(`
       INSERT INTO memory_atlas_supports (support_id,project_id,node_id,source_type,source_id,source_episode_id,source_frame_id,evidence_event_ids_json,status,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(node_id,source_type,source_id) DO UPDATE SET status='active', invalidated_at=NULL, evidence_event_ids_json=excluded.evidence_event_ids_json
     `).run(supportId, projectId, edgeId, 'frame_edge', frame.frameId, frame.episodeId, frame.frameId, JSON.stringify(relation.evidenceEventIds), 'active', now);
+    }
+    evidenceTime(eventIds, fallback) {
+        if (!eventIds.length)
+            return fallback;
+        const row = this.db.prepare(`SELECT MIN(occurred_at) AS occurred_at FROM memory_events WHERE event_id IN (${eventIds.map(() => '?').join(',')})`).get(...eventIds);
+        return row?.occurred_at == null ? fallback : Number(row.occurred_at);
     }
 }
 function splitNodeId(value) {

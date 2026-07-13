@@ -19,11 +19,14 @@ export class AtlasPathRetriever {
             ...(queryFrame.entities ?? []).map(() => 'entity'), ...(queryFrame.locations ?? []).map(() => 'location'),
         ]);
         result.nodes = result.nodes.filter((node) => {
-            if (requestedTypes.size && !requestedTypes.has(node.nodeType))
+            // Keep connector nodes (issues, topics, actors) even when their own
+            // document has no timestamp; their evidence-bearing event/episode path
+            // carries the temporal constraint.
+            if (requestedTypes.size && !requestedTypes.has(node.nodeType) && !['episode', 'event', 'raw_event', 'time', 'state'].includes(node.nodeType))
                 return false;
-            if (queryFrame.time?.from !== undefined && (node.occurredAt === undefined || node.occurredAt < queryFrame.time.from))
+            if (queryFrame.time?.from !== undefined && node.occurredAt !== undefined && node.occurredAt < queryFrame.time.from)
                 return false;
-            if (queryFrame.time?.to !== undefined && (node.occurredAt === undefined || node.occurredAt >= queryFrame.time.to))
+            if (queryFrame.time?.to !== undefined && node.occurredAt !== undefined && node.occurredAt >= queryFrame.time.to)
                 return false;
             if (queryFrame.states?.length && node.nodeType === 'state' && !queryFrame.states.some((state) => node.label.toLocaleLowerCase('und').includes(state.replace('_', ' '))))
                 return false;

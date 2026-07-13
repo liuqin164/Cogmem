@@ -1,7 +1,7 @@
 import type { MemoryDimension, MemoryQueryFacet, MemoryQueryFrameV1, MemoryQueryIntent } from '../semantic/MemoryFrameTypes.js';
 
 const DIMENSION_WORDS: Array<[MemoryDimension, RegExp]> = [
-  ['actor', /^(who|谁|谁参与|actor|作者)$/iu],
+  ['actor', /^(who|谁|谁参与(?:了)?|actor|作者)$/iu],
   ['project', /^(project|项目|仓库|repo)$/iu],
   ['topic', /^(topic|主题|话题)$/iu],
   ['issue', /^(issue|问题|故障|bug)$/iu],
@@ -62,10 +62,6 @@ export class MultidimensionalQueryPlanner {
   }
 
   private timeRange(query: string, now: number): MemoryQueryFrameV1['time'] | undefined {
-    const year = query.match(/\b(20\d{2})\b/u)?.[1];
-    if (year) {
-      const from = Date.UTC(Number(year), 0, 1); return { from, to: Date.UTC(Number(year) + 1, 0, 1), expressions: [year] };
-    }
     const month = query.match(/(?:20\d{2}[年/-]?)?(\d{1,2})月|\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/iu);
     if (month) {
       const monthNames = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
@@ -75,6 +71,10 @@ export class MultidimensionalQueryPlanner {
         const yearValue = Number(query.match(/\b(20\d{2})\b/u)?.[1] ?? new Date(now).getUTCFullYear());
         return { from: Date.UTC(yearValue, monthIndex, 1), to: Date.UTC(yearValue, monthIndex + 1, 1), expressions: [month[0]] };
       }
+    }
+    const year = query.match(/\b(20\d{2})\b/u)?.[1];
+    if (year) {
+      const from = Date.UTC(Number(year), 0, 1); return { from, to: Date.UTC(Number(year) + 1, 0, 1), expressions: [year] };
     }
     if (/今天|today/iu.test(query)) {
       const start = new Date(now); start.setUTCHours(0, 0, 0, 0); return { from: start.getTime(), to: start.getTime() + 86400000, expressions: ['today'] };

@@ -26,7 +26,12 @@ export class MemoryFrameStore {
       && (existing.dream_job_lease_id ?? undefined) === input.dreamJobLeaseId
       && (existing.attempt_generation ?? undefined) === input.attemptGeneration;
     const storedFrameId = sameOwner ? existing!.frame_id! : (existing ? `${frame.frameId}:${randomUUID()}` : frame.frameId);
-    const storedFingerprint = existing && existing.status === 'staged' ? input.sourceFingerprint : (storedFrameId === frame.frameId ? input.sourceFingerprint : `${input.sourceFingerprint}:${storedFrameId}`);
+    // A different lease must never reuse the old row's primary key. Keep the
+    // old staged revision intact and give the retry its own deterministic row
+    // identity; same-owner retries remain idempotent.
+    const storedFingerprint = sameOwner || !existing
+      ? input.sourceFingerprint
+      : `${input.sourceFingerprint}:${storedFrameId}`;
     this.db.transaction(() => {
       this.db.prepare(`
         INSERT INTO memory_frames (
@@ -88,32 +93,32 @@ export class MemoryFrameStore {
   }
 
   publish(frameId: string, from: MemoryFrameStatus, to?: MemoryFrameStatus, now = Date.now()): boolean {
-    const row = this.db.prepare(`SELECT project_id, episode_id, publish_status FROM memory_frames WHERE frame_id=?`).get(frameId) as { project_id: string; episode_id: string; publish_status?: MemoryFrameStatus } | null;
-    if (!row) return false;
-    const next = to ?? row.publish_status ?? 'active';
-    if (next === 'active') {
-      const review = this.db.prepare(`SELECT needs_review FROM memory_frames WHERE frame_id=?`).get(frameId) as { needs_review?: number } | null;
-      if (review?.needs_review) return false;
-    }
-    const changed = Number(this.db.prepare(`UPDATE memory_frames SET status=?, updated_at=? WHERE frame_id=? AND status=?`).run(next, now, frameId, from).changes ?? 0) === 1;
-    if (changed && next === 'active') { this.db.prepare(`UPDATE memory_frames SET status='superseded', updated_at=? WHERE project_id=? AND episode_id=? AND frame_id<>? AND status IN ('active','needs_confirmation')`).run(now, row.project_id, row.episode_id, frameId); this.markDirty(row.project_id!, now); }
-    else if (changed) this.markDirty(row.project_id, now);
-    return changed;
+    return Boolean(this.db.transaction(() => this.publishUnsafe(frameId, from, to, now))());
   }
 
-  publishStaged(frameIds: string[], now = Date.now()): void { for (const id of frameIds) if (!this.publish(id, 'staged', undefined, now)) throw new Error(`memory_frame_publish_conflict:${id}`); }
+  publishStaged(frameIds: string[], now = Date.now()): void {
+    this.db.transaction(() => {
+      for (const id of frameIds) if (!this.publishUnsafe(id, 'staged', undefined, now)) throw new Error(`memory_frame_publish_conflict:${id}`);
+    })();
+  }
   review(frameId: string, projectId: string, action: 'approve' | 'reject', actor: string, reason: string, now = Date.now()): boolean {
     if (!actor.trim() || !reason.trim()) throw new Error('memory_frame_review_actor_reason_required');
     const row = this.db.prepare(`SELECT project_id,status FROM memory_frames WHERE frame_id=?`).get(frameId) as { project_id?: string; status?: MemoryFrameStatus } | null;
     if (!row || row.project_id !== projectId || !['needs_confirmation','staged'].includes(String(row.status))) return false;
     return Boolean(this.db.transaction(() => {
-      this.db.prepare(`INSERT INTO memory_frame_reviews(review_id,frame_id,project_id,action,actor,reason,created_at) VALUES(?,?,?,?,?,?,?)`).run(randomUUID(), frameId, projectId, action, actor, reason, now);
       if (action === 'approve') {
         const changed = Number(this.db.prepare(`UPDATE memory_frames SET status='active',publish_status='active',needs_review=0,updated_at=? WHERE frame_id=? AND status IN ('staged','needs_confirmation')`).run(now, frameId).changes ?? 0) === 1;
-        if (changed) this.db.prepare(`UPDATE memory_frames SET status='superseded',updated_at=? WHERE project_id=? AND episode_id=(SELECT episode_id FROM memory_frames WHERE frame_id=?) AND frame_id<>? AND status IN ('active','needs_confirmation')`).run(now, projectId, frameId, frameId);
-        return changed;
+        if (!changed) throw new Error(`memory_frame_review_conflict:${frameId}`);
+        this.db.prepare(`INSERT INTO memory_frame_reviews(review_id,frame_id,project_id,action,actor,reason,created_at) VALUES(?,?,?,?,?,?,?)`).run(randomUUID(), frameId, projectId, action, actor, reason, now);
+        this.db.prepare(`UPDATE memory_frames SET status='superseded',updated_at=? WHERE project_id=? AND episode_id=(SELECT episode_id FROM memory_frames WHERE frame_id=?) AND frame_id<>? AND status IN ('active','needs_confirmation')`).run(now, projectId, frameId, frameId);
+        this.markDirty(projectId, now);
+        return true;
       }
-      return Number(this.db.prepare(`UPDATE memory_frames SET status='superseded',publish_status='needs_confirmation',updated_at=? WHERE frame_id=? AND status IN ('staged','needs_confirmation')`).run(now, frameId).changes ?? 0) === 1;
+      const changed = Number(this.db.prepare(`UPDATE memory_frames SET status='superseded',publish_status='needs_confirmation',updated_at=? WHERE frame_id=? AND status IN ('staged','needs_confirmation')`).run(now, frameId).changes ?? 0) === 1;
+      if (!changed) throw new Error(`memory_frame_review_conflict:${frameId}`);
+      this.db.prepare(`INSERT INTO memory_frame_reviews(review_id,frame_id,project_id,action,actor,reason,created_at) VALUES(?,?,?,?,?,?,?)`).run(randomUUID(), frameId, projectId, action, actor, reason, now);
+      this.markDirty(projectId, now);
+      return true;
     })());
   }
   failStaged(frameIds: string[], now = Date.now()): void { for (const id of frameIds) this.db.prepare(`UPDATE memory_frames SET status='failed', updated_at=? WHERE frame_id=? AND status='staged'`).run(now, id); }
@@ -137,6 +142,18 @@ export class MemoryFrameStore {
 
   private markDirty(projectId: string, now: number): void {
     try { this.db.prepare(`INSERT INTO memory_atlas_projection_state(project_id,projection_name,cursor_value,status,last_rebuild_at,last_error,metadata_json) VALUES(?, 'memory_atlas.v2', NULL, 'dirty', ?, NULL, ?) ON CONFLICT(project_id,projection_name) DO UPDATE SET status='dirty', cursor_value=NULL, last_error=NULL, metadata_json=excluded.metadata_json`).run(projectId, now, JSON.stringify({ dirtyBecause: 'memory_frame_changed' })); } catch { /* bootstrap may precede Atlas state */ }
+  }
+
+  private publishUnsafe(frameId: string, from: MemoryFrameStatus, to: MemoryFrameStatus | undefined, now: number): boolean {
+    const row = this.db.prepare(`SELECT project_id, episode_id, publish_status, needs_review FROM memory_frames WHERE frame_id=?`).get(frameId) as { project_id: string; episode_id: string; publish_status?: MemoryFrameStatus; needs_review?: number } | null;
+    if (!row) return false;
+    const next = to ?? row.publish_status ?? 'active';
+    if (next === 'active' && row.needs_review) return false;
+    const changed = Number(this.db.prepare(`UPDATE memory_frames SET status=?, updated_at=? WHERE frame_id=? AND status=?`).run(next, now, frameId, from).changes ?? 0) === 1;
+    if (!changed) return false;
+    if (next === 'active') this.db.prepare(`UPDATE memory_frames SET status='superseded', updated_at=? WHERE project_id=? AND episode_id=? AND frame_id<>? AND status IN ('active','needs_confirmation')`).run(now, row.project_id, row.episode_id, frameId);
+    this.markDirty(row.project_id, now);
+    return true;
   }
 
   private read(row: Record<string, unknown>): MemoryFrameV1 {

@@ -46,6 +46,7 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
     'cogmem_memory_map',
     'cogmem_candidate_review',
     'cogmem_memory_frame_show',
+    'cogmem_memory_frame_review',
     'cogmem_memory_dimensions',
     'cogmem_graph_overview',
     'cogmem_graph_search',

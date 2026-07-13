@@ -296,6 +296,9 @@ export function listCogmemMcpTools() {
         graphTool('cogmem_memory_frame_show', 'Show Memory Frame', 'Show an evidence-backed structured MemoryFrame for one episode.', {
             projectId: STRING_SCHEMA, episodeId: STRING_SCHEMA,
         }, ['projectId', 'episodeId']),
+        graphTool('cogmem_memory_frame_review', 'Review Memory Frame', 'Approve or reject a staged or needs-confirmation MemoryFrame with an auditable reason.', {
+            projectId: STRING_SCHEMA, frameId: STRING_SCHEMA, action: { type: 'string', enum: ['approve', 'reject'] }, actor: STRING_SCHEMA, reason: STRING_SCHEMA,
+        }, ['projectId', 'frameId', 'action', 'actor', 'reason']),
         graphTool('cogmem_memory_dimensions', 'List Memory Dimensions', 'List bounded Atlas V2 dimension nodes for one project.', {
             projectId: STRING_SCHEMA, type: STRING_SCHEMA, limit: NUMBER_SCHEMA,
         }, ['projectId']),
@@ -477,6 +480,15 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
             }
             case 'cogmem_memory_frame_show': {
                 return jsonResult(opened.kernel.getMemoryFrame(requiredString(input.episodeId, 'episodeId'), requiredString(input.projectId, 'projectId')) ?? { error: 'memory_frame_not_found' });
+            }
+            case 'cogmem_memory_frame_review': {
+                return jsonResult({ applied: opened.kernel.reviewMemoryFrame({
+                        frameId: requiredString(input.frameId, 'frameId'),
+                        projectId: requiredString(input.projectId, 'projectId'),
+                        action: requiredString(input.action, 'action'),
+                        actor: requiredString(input.actor, 'actor'),
+                        reason: requiredString(input.reason, 'reason'),
+                    }) });
             }
             case 'cogmem_memory_dimensions': {
                 return jsonResult(opened.kernel.listMemoryDimensions(requiredString(input.projectId, 'projectId'), optionalString(input.type), optionalNumber(input.limit)));

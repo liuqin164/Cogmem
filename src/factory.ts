@@ -1065,6 +1065,9 @@ export class MemoryKernel {
     const result = this.brainRecall.recall(query, options);
     if (!options.projectId) return result;
     try {
+      // Agent and embedding callers use this entry point directly, so keep it
+      // on the same freshness contract as graph CLI reads.
+      this.ensureMemoryAtlas({ projectId: options.projectId });
       const planned = this.atlasPathRetriever.retrieve(query, { projectId: options.projectId, limit: options.limit, includeEvidence: true, evidenceLimit: 2, staleOk: true });
       return { ...result, queryFrame: planned.queryFrame, atlas: planned.result };
     } catch {

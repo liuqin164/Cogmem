@@ -17,7 +17,7 @@ import { printCliJson } from './CliJson.js';
 
 interface MemoryArgs {
   command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
-    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-plan' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex' | 'frame' | 'frame-backfill';
+    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-plan' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex' | 'frame' | 'frame-backfill' | 'frame-review';
   query?: string;
   eventId?: string;
   episodeId?: string;
@@ -139,7 +139,7 @@ function readArgs(argv: string[]): MemoryArgs {
 
 function usage(): string {
   return [
-    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|graph...> [args]',
+    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|frame-review|graph...> [args]',
     '',
     'Commands:',
     '  status               summarize raw ledger, vector, and dream backlog state',
@@ -157,6 +157,7 @@ function usage(): string {
     '  bind                 backfill memory bindings for high-value raw user events',
     '  frame --episode <id> show one structured MemoryFrame',
     '  frame-backfill       create deterministic evidence-backed frames for existing episodes',
+    '  frame-review         approve or reject a staged/needs-confirmation MemoryFrame',
     '  graph                show a bounded overview of remembered topics, entities, clusters, actions, and time',
     '  graph-search         locate Atlas nodes by --query without expanding the graph',
     '  graph-explore        return a bounded local graph for a broad --query',
@@ -234,7 +235,8 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'graph-timeline'
     || value === 'graph-reindex'
     || value === 'frame'
-    || value === 'frame-backfill';
+    || value === 'frame-backfill'
+    || value === 'frame-review';
 }
 
 function modeArg(values: Record<string, string | boolean>, key: string): MemoryArgs['mode'] {
@@ -725,6 +727,12 @@ function runFrame(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknow
     if (!args.projectId) throw new Error(`frame-backfill requires --project.\n${usage()}`);
     return kernel.backfillMemoryFrames({ projectId: args.projectId, limit: args.limit, cursor: args.cursor, mode: args.mode });
   }
+  if (args.command === 'frame-review') {
+    if (!args.nodeId || !args.projectId || !args.actor || !args.reason || !['approve', 'reject'].includes(args.reviewAction ?? '')) {
+      throw new Error(`frame-review requires --id, --project, --action approve|reject, --actor, and --reason.\n${usage()}`);
+    }
+    return { frameId: args.nodeId, action: args.reviewAction, applied: kernel.reviewMemoryFrame({ frameId: args.nodeId, projectId: args.projectId, action: args.reviewAction as 'approve' | 'reject', actor: args.actor, reason: args.reason }) };
+  }
   if (!args.episodeId) throw new Error(`frame requires --episode.\n${usage()}`);
   const frame = kernel.getMemoryFrame(args.episodeId, args.projectId, { includeStaged: args.includeStaged });
   if (!frame) throw new Error('memory_frame_not_found');
@@ -1093,7 +1101,7 @@ async function main(): Promise<void> {
                         ? runTick(kernel, kernelArgs)
                       : kernelArgs.command === 'bind'
                         ? runBind(kernel, kernelArgs)
-                        : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill'
+                        : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill' || kernelArgs.command === 'frame-review'
                           ? runFrame(kernel, kernelArgs)
                         : runGraphCommand(kernel, kernelArgs);
     if (kernelArgs.json) {
