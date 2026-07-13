@@ -158,7 +158,9 @@ export class DreamCuratorWorker {
       frame = {
         ...frame,
         frameId: `frame:${createHash('sha256').update(`${options.sourceEpisodeId}\0${events.map((event) => event.eventId).join('\0')}`).digest('hex').slice(0, 32)}`,
-        processor: { ...frame.processor, promptVersion: MEMORY_FRAME_PROMPT_VERSION, generatedAt: now },
+        processor: { ...frame.processor, ...this.resolveProviderConfig(options), promptVersion: MEMORY_FRAME_PROMPT_VERSION, generatedAt: now },
+        sourceAuthority: frame.sourceAuthority === 'deterministic_fallback' ? 'deterministic_fallback' : 'processor',
+        needsReview: frame.needsReview || frame.sourceAuthority === 'deterministic_fallback',
       };
       if ((options.sourceEpisodeEventIds?.length ?? events.length) > events.length) {
         frame = { ...frame, semanticCompleteness: 'minimal', needsReview: true, publishStatus: 'needs_confirmation' };

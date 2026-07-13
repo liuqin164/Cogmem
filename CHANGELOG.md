@@ -6,8 +6,9 @@
 - Added schema migrations 0032-0034 for staged frames, Atlas aliases/supports, and V2 projection provenance.
 - Added migration 0035 for complete Frame fields and publication intent, with legacy fallback rows backfilled to `needs_confirmation`.
 - Added immutable migration 0036 for Dream-owned Frame revisions, review receipts, lease recovery, and publication repair.
+- Added immutable migration 0037 so source fingerprints remain stable while lease retries use independent Frame revisions.
 - Wired structured processor output through staged Dream publication, paginated Atlas V2 projection, temporal/state projection, alias resolution, Repair invalidation, and forget-user cleanup.
-- Connected bounded multidimensional Atlas results to kernel and agent recall while keeping unverified Frames and graph edges out of ordinary recall.
+- Connected bounded multidimensional Atlas seed/path results to kernel and agent recall while preserving collection and retrieval-lane governance.
 
 ## 3.7.3
 

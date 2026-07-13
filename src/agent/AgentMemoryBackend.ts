@@ -567,11 +567,17 @@ export class KernelAgentMemoryBackend {
     const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
     const allowsCompiled = laneAllowed(query.retrievalPolicy, 'compiled');
     const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
-    const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, limit) : [];
     const retrievalLimit = Math.max(limit * 4, 24);
     const multidimensionalRecall = query.projectId && allowsGraph
       ? this.kernel.recall(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true })
       : undefined;
+    const atlasItems = allowsGraph && allowsRawSource
+      ? (multidimensionalRecall?.atlas?.cards ?? [])
+        .map((card) => this.toAgentRecallItemFromAtlasCard(card, query))
+        .filter((item): item is AgentRecallItem => Boolean(item))
+        .filter((item) => this.isAllowedAtlasCollection(item, query.collection))
+      : [];
+    const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, limit) : [];
     const result: MemoryKernelNavigationResult = allowsCompiled
       ? this.kernel.navigateMemory(queryPlan.primarySearchText, {
         projectId: query.projectId,
@@ -599,7 +605,7 @@ export class KernelAgentMemoryBackend {
     };
     if (scopedItems.length > 0) {
       if (this.shouldPreferRawLedgerFallback(scopedItems, rawFallbackItems, queryPlan)) {
-        const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, scopedItems, limit), limit);
+        const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, this.mergeRecallItems(scopedItems, atlasItems, limit), limit), limit);
         return {
           recallMode: 'raw_ledger_fallback',
           items,
@@ -618,7 +624,7 @@ export class KernelAgentMemoryBackend {
           ),
         };
       }
-      const items = this.mergeRecallItems(graphItems, scopedItems, limit);
+      const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(scopedItems, atlasItems, limit), limit);
       return {
         recallMode: result.recallMode,
         items,
@@ -652,7 +658,7 @@ export class KernelAgentMemoryBackend {
     };
     if (fallbackItems.length > 0) {
       if (this.shouldPreferRawLedgerFallback(fallbackItems, rawFallbackItems, queryPlan)) {
-        const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, fallbackItems, limit), limit);
+        const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, this.mergeRecallItems(fallbackItems, atlasItems, limit), limit), limit);
         return {
           recallMode: 'raw_ledger_fallback',
           items,
@@ -671,7 +677,7 @@ export class KernelAgentMemoryBackend {
           ),
         };
       }
-      const items = this.mergeRecallItems(graphItems, fallbackItems, limit);
+      const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(fallbackItems, atlasItems, limit), limit);
       return {
         recallMode: 'brain_recall_fallback',
         items,
@@ -691,7 +697,7 @@ export class KernelAgentMemoryBackend {
       };
     }
 
-    const items = this.mergeRecallItems(graphItems, rawFallbackItems, limit);
+    const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, atlasItems, limit), limit);
 
     return {
       recallMode: 'raw_ledger_fallback',
@@ -941,7 +947,10 @@ export class KernelAgentMemoryBackend {
     relaxationTrace: MemoryAtlasRelaxationStep[];
   } {
     try {
-      const atlas = this.kernel.graphExplore(query.query, {
+      const recall = this.kernel.recall(query.query, { projectId: query.projectId, limit, includeRawEvidence: true });
+      const atlas = recall.atlas;
+      const plannedCards = atlas?.cards ?? [];
+      const legacyAtlas = this.kernel.graphExplore(query.query, {
         projectId: query.projectId,
         limit,
         includeEvidence: true,
@@ -949,10 +958,13 @@ export class KernelAgentMemoryBackend {
         refresh: true,
         staleOk: true,
       } as any);
-      const cards = (atlas.cards ?? []).slice(0, limit);
+      const cards = [...plannedCards, ...(legacyAtlas.cards ?? [])]
+        .filter((card, index, all) => all.findIndex((candidate) => candidate.canonicalId === card.canonicalId) === index)
+        .slice(0, limit);
+      if (cards.length === 0) return { items: [], cards: [], relatedButNotSelected: [], relaxationTrace: [] };
       const items = cards.map((card) => this.toAgentRecallItemFromAtlasCard(card, query)).filter((item): item is AgentRecallItem => Boolean(item));
       const relatedButNotSelected = cards.flatMap((card) => card.relatedButNotSelected ?? []).slice(0, 8);
-      return { items, cards, relatedButNotSelected, relaxationTrace: atlas.relaxationTrace ?? [] };
+      return { items, cards, relatedButNotSelected, relaxationTrace: [...(atlas?.relaxationTrace ?? []), ...(legacyAtlas.relaxationTrace ?? [])] };
     } catch {
       return { items: [], cards: [], relatedButNotSelected: [], relaxationTrace: [] };
     }
@@ -980,6 +992,13 @@ export class KernelAgentMemoryBackend {
       whyMatched: card.whyMatched,
       canAnswerExactQuote: Boolean(sourceContext),
     };
+  }
+
+  private isAllowedAtlasCollection(item: AgentRecallItem, collection?: string): boolean {
+    const eventId = item.sourceAnchor?.eventId;
+    if (!eventId) return !collection;
+    const event = this.kernel.eventStore.getEvent(eventId);
+    return event ? this.isAllowedRawEventCollection(event, collection) : !collection;
   }
 
   private recallForensicAnchor(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan, limit: number): AgentRecallItem[] {
@@ -1816,7 +1835,9 @@ export class KernelAgentMemoryBackend {
   }
 
   private isAllowedRawEventCollection(event: MemoryEvent, collection: string | undefined): boolean {
-    const payload = event.payload as { metadata?: Record<string, unknown> };
+    const payload = event.payload && typeof event.payload === 'object'
+      ? event.payload as { metadata?: Record<string, unknown> }
+      : {};
     const tags = Array.isArray(payload.metadata?.tags)
       ? payload.metadata.tags.filter((tag): tag is string => typeof tag === 'string')
       : [];

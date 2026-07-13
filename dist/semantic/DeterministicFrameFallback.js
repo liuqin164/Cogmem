@@ -19,6 +19,9 @@ export function deterministicFrameFallback(input) {
     for (const event of events) {
         relations.push({ sourceFrameNodeId: 'episode', relationType: 'PART_OF_EVENT', targetFrameNodeId: `event:${event.eventId}`, confidence: 0.7, evidenceEventIds: [event.eventId] });
         relations.push({ sourceFrameNodeId: 'episode', relationType: 'SUPPORTED_BY', targetFrameNodeId: `raw:${event.eventId}`, confidence: 1, evidenceEventIds: [event.eventId] });
+        const actor = event.actorId ?? event.role;
+        if (actor)
+            relations.push({ sourceFrameNodeId: `actor:${actor}`, relationType: 'PARTICIPATED_IN', targetFrameNodeId: `event:${event.eventId}`, confidence: 0.7, evidenceEventIds: [event.eventId] });
     }
     return { schemaVersion: 'memory_frame.v1', frameId, projectId: input.projectId, episodeId: input.episodeId,
         title: input.episodeId, summary: '', episodeKind: input.episodeType ?? 'other', nodes,

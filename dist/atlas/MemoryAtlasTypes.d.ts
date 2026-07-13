@@ -182,6 +182,7 @@ export interface MemoryAtlasPathResult {
 }
 export interface MemoryAtlasQueryOptions {
     projectId: string;
+    seedNodeIds?: string[];
     limit?: number;
     includeEvidence?: boolean;
     evidenceLimit?: number;

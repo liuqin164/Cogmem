@@ -17,7 +17,7 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
   if (frame.needsReview !== undefined && typeof frame.needsReview !== 'boolean') errors.push('invalid_needs_review');
   if (frame.primaryLanguage !== undefined && typeof frame.primaryLanguage !== 'string') errors.push('invalid_primary_language');
   if (frame.nodes.length === 0) errors.push('frame_nodes_required');
-  if (!frame.frameId.trim()) errors.push('empty_frame_id');
+  if (!frame.frameId.trim() || !frame.projectId.trim() || !frame.episodeId.trim()) errors.push('empty_frame_identity');
   if (!frame.processor || typeof frame.processor.promptVersion !== 'string' || !frame.processor.promptVersion.trim() || !Number.isFinite(frame.processor.generatedAt)) errors.push('invalid_processor_metadata');
   const evidence = new Set(frame.evidenceEventIds);
   const dimensions = new Set(['actor','entity','project','topic','issue','event','raw_event','episode','task','object','location','time','state']);
@@ -30,6 +30,8 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
   if (!Number.isFinite(frame.confidence) || frame.confidence < 0 || frame.confidence > 1) errors.push('invalid_frame_confidence');
   const nodes = new Map(frame.nodes.map((node) => [node.frameNodeId, node]));
   if (nodes.size !== frame.nodes.length) errors.push('duplicate_frame_node_id');
+  if (!frame.nodes.some((node) => node.dimension === 'episode' && node.label.trim())) errors.push('episode_node_required');
+  if (!frame.nodes.some((node) => node.dimension === 'project' && node.label.trim())) errors.push('project_node_required');
   for (const node of frame.nodes) {
     if (!node.label.trim()) errors.push(`empty_frame_node_label:${node.frameNodeId}`);
     if (!Number.isFinite(node.confidence) || node.confidence < 0 || node.confidence > 1) errors.push(`invalid_node_confidence:${node.frameNodeId}`);

@@ -31,6 +31,7 @@ export declare class MemoryFrameStore {
     deleteByProject(projectId: string): number;
     private markDirty;
     private publishUnsafe;
+    private hasPublishableEvidence;
     private read;
 }
 export declare function frameSourceFingerprint(eventIds: string[], episodeId: string): string;

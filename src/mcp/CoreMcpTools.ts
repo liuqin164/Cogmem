@@ -334,7 +334,7 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
     }, ['projectId', 'episodeId']),
     graphTool('cogmem_memory_frame_review', 'Review Memory Frame', 'Approve or reject a staged or needs-confirmation MemoryFrame with an auditable reason.', {
       projectId: STRING_SCHEMA, frameId: STRING_SCHEMA, action: { type: 'string', enum: ['approve', 'reject'] }, actor: STRING_SCHEMA, reason: STRING_SCHEMA,
-    }, ['projectId', 'frameId', 'action', 'actor', 'reason']),
+    }, ['projectId', 'frameId', 'action', 'actor', 'reason'], { readOnlyHint: false, destructiveHint: true, idempotentHint: false }),
     graphTool('cogmem_memory_dimensions', 'List Memory Dimensions', 'List bounded Atlas V2 dimension nodes for one project.', {
       projectId: STRING_SCHEMA, type: STRING_SCHEMA, limit: NUMBER_SCHEMA,
     }, ['projectId']),
@@ -528,7 +528,7 @@ export async function callCogmemMcpTool(
         return jsonResult({ applied: opened.kernel.reviewMemoryFrame({
           frameId: requiredString(input.frameId, 'frameId'),
           projectId: requiredString(input.projectId, 'projectId'),
-          action: requiredString(input.action, 'action') as 'approve' | 'reject',
+          action: (() => { const action = requiredString(input.action, 'action'); if (action !== 'approve' && action !== 'reject') throw new Error('action must be approve or reject'); return action; })(),
           actor: requiredString(input.actor, 'actor'),
           reason: requiredString(input.reason, 'reason'),
         }) });
@@ -595,12 +595,13 @@ function graphTool(
   description: string,
   properties: Record<string, object>,
   required: string[],
+  annotationOverrides: Partial<CogmemMcpTool['annotations']> = {},
 ): CogmemMcpTool {
   return {
     name,
     description: `${description} Canonical memory and activation telemetry remain unchanged until cogmem_graph_touch explicitly records selected nodes.`,
     inputSchema: { type: 'object', properties, required },
-    annotations: { title, readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    annotations: { title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, ...annotationOverrides },
   };
 }
 

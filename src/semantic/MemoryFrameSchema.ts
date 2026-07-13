@@ -21,10 +21,13 @@ export const MEMORY_FRAME_JSON_SCHEMA = {
 } as const;
 
 export function isMemoryFrame(value: unknown): value is MemoryFrameV1 {
-  const frame = value as Partial<MemoryFrameV1> | null;
-  return Boolean(frame && frame.schemaVersion === MEMORY_FRAME_SCHEMA_VERSION && typeof frame.frameId === 'string'
+  if (!value || typeof value !== 'object') return false;
+  const frame = value as Partial<MemoryFrameV1>;
+  const objectArray = (items: unknown): boolean => Array.isArray(items) && items.every((item) => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+  return Boolean(frame.schemaVersion === MEMORY_FRAME_SCHEMA_VERSION && typeof frame.frameId === 'string'
     && typeof frame.projectId === 'string' && typeof frame.episodeId === 'string'
     && typeof frame.title === 'string' && typeof frame.summary === 'string'
-    && Array.isArray(frame.nodes) && Array.isArray(frame.relations) && Array.isArray(frame.temporalReferences) && Array.isArray(frame.stateTransitions)
-    && Array.isArray(frame.evidenceEventIds) && typeof frame.processor?.promptVersion === 'string' && Number.isFinite(frame.processor.generatedAt));
+    && objectArray(frame.nodes) && objectArray(frame.relations) && objectArray(frame.temporalReferences) && objectArray(frame.stateTransitions)
+    && Array.isArray(frame.evidenceEventIds) && frame.evidenceEventIds.every((id) => typeof id === 'string')
+    && Boolean(frame.processor) && typeof frame.processor?.promptVersion === 'string' && Number.isFinite(frame.processor.generatedAt));
 }

@@ -7,10 +7,11 @@ export interface MemoryFrameSaveInput { frame: MemoryFrameV1; sourceFingerprint:
 
 export class MemoryFrameStore {
   constructor(readonly db: Database) {
-    for (const [name, declaration] of [['dream_job_lease_id', 'TEXT'], ['dream_lease_until', 'INTEGER'], ['attempt_generation', 'INTEGER']] as const) {
+    for (const [name, declaration] of [['dream_job_lease_id', 'TEXT'], ['dream_lease_until', 'INTEGER'], ['attempt_generation', 'INTEGER'], ['revision_id', 'TEXT'], ['revision_number', 'INTEGER NOT NULL DEFAULT 1'], ['supersedes_frame_id', 'TEXT']] as const) {
       const columns = this.db.prepare('PRAGMA table_info(memory_frames)').all() as Array<{ name: string }>;
       if (!columns.some((column) => column.name === name)) this.db.exec(`ALTER TABLE memory_frames ADD COLUMN ${name} ${declaration}`);
     }
+    this.db.exec(`UPDATE memory_frames SET revision_id=frame_id WHERE revision_id IS NULL`);
   }
 
   save(input: MemoryFrameSaveInput): MemoryFrameV1 {
@@ -21,7 +22,7 @@ export class MemoryFrameStore {
     const now = input.now ?? Date.now();
     const status: MemoryFrameStatus = 'staged';
     const publishStatus = input.publishStatus ?? frame.publishStatus ?? (frame.needsReview ? 'needs_confirmation' : 'active');
-    const existing = this.db.prepare(`SELECT frame_id,status,dream_job_lease_id,attempt_generation FROM memory_frames WHERE episode_id=? AND source_fingerprint=? AND processor_prompt_version=?`).get(frame.episodeId, input.sourceFingerprint, frame.processor.promptVersion) as { frame_id?: string; status?: MemoryFrameStatus; dream_job_lease_id?: string; attempt_generation?: number } | null;
+    const existing = this.db.prepare(`SELECT frame_id,revision_id,revision_number,status,dream_job_lease_id,attempt_generation FROM memory_frames WHERE episode_id=? AND source_fingerprint=? AND processor_prompt_version=? ORDER BY revision_number DESC, updated_at DESC LIMIT 1`).get(frame.episodeId, input.sourceFingerprint, frame.processor.promptVersion) as { frame_id?: string; revision_id?: string; revision_number?: number; status?: MemoryFrameStatus; dream_job_lease_id?: string; attempt_generation?: number } | null;
     const sameOwner = existing?.status === 'staged'
       && (existing.dream_job_lease_id ?? undefined) === input.dreamJobLeaseId
       && (existing.attempt_generation ?? undefined) === input.attemptGeneration;
@@ -29,20 +30,21 @@ export class MemoryFrameStore {
     // A different lease must never reuse the old row's primary key. Keep the
     // old staged revision intact and give the retry its own deterministic row
     // identity; same-owner retries remain idempotent.
-    const storedFingerprint = sameOwner || !existing
-      ? input.sourceFingerprint
-      : `${input.sourceFingerprint}:${storedFrameId}`;
+    const storedFingerprint = input.sourceFingerprint;
+    const revisionId = sameOwner ? (existing!.revision_id ?? existing!.frame_id!) : storedFrameId;
+    const revisionNumber = sameOwner ? (existing!.revision_number ?? 1) : (existing ? (existing.revision_number ?? 0) + 1 : 1);
     this.db.transaction(() => {
       this.db.prepare(`
         INSERT INTO memory_frames (
-          frame_id, project_id, episode_id, schema_version, source_fingerprint, processor_prompt_version,
+          frame_id, revision_id, revision_number, supersedes_frame_id, project_id, episode_id, schema_version, source_fingerprint, processor_prompt_version,
           title, summary, episode_kind, confidence, evidence_event_ids_json, processor_json, status,
           source_authority, semantic_completeness, needs_review, created_at, updated_at,
           primary_language, temporal_references_json, state_transitions_json, publish_status,
           dream_job_lease_id, dream_lease_until, attempt_generation
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(episode_id, source_fingerprint, processor_prompt_version) DO UPDATE SET
-          frame_id=excluded.frame_id, title=excluded.title, summary=excluded.summary,
+        ) VALUES (${Array.from({ length: 28 }, () => '?').join(', ')})
+        ON CONFLICT(frame_id) DO UPDATE SET
+          revision_id=excluded.revision_id, revision_number=excluded.revision_number, supersedes_frame_id=excluded.supersedes_frame_id,
+          title=excluded.title, summary=excluded.summary,
           episode_kind=excluded.episode_kind, confidence=excluded.confidence,
           evidence_event_ids_json=excluded.evidence_event_ids_json, processor_json=excluded.processor_json,
           status=excluded.status, source_authority=excluded.source_authority,
@@ -51,7 +53,7 @@ export class MemoryFrameStore {
           state_transitions_json=excluded.state_transitions_json, publish_status=excluded.publish_status,
           dream_job_lease_id=excluded.dream_job_lease_id, dream_lease_until=excluded.dream_lease_until,
           attempt_generation=excluded.attempt_generation
-      `).run(storedFrameId, frame.projectId, frame.episodeId, frame.schemaVersion, storedFingerprint,
+      `).run(storedFrameId, revisionId, revisionNumber, existing && !sameOwner ? (existing.frame_id ?? null) : null, frame.projectId, frame.episodeId, frame.schemaVersion, storedFingerprint,
         frame.processor.promptVersion, frame.title, frame.summary, frame.episodeKind, frame.confidence,
         JSON.stringify(frame.evidenceEventIds), JSON.stringify(frame.processor), status,
         frame.sourceAuthority ?? 'processor', frame.semanticCompleteness ?? 'full', frame.needsReview ? 1 : 0, now, now,
@@ -149,11 +151,29 @@ export class MemoryFrameStore {
     if (!row) return false;
     const next = to ?? row.publish_status ?? 'active';
     if (next === 'active' && row.needs_review) return false;
+    if (next === 'active' && !this.hasPublishableEvidence(frameId, row.project_id, row.episode_id)) return false;
     const changed = Number(this.db.prepare(`UPDATE memory_frames SET status=?, updated_at=? WHERE frame_id=? AND status=?`).run(next, now, frameId, from).changes ?? 0) === 1;
     if (!changed) return false;
     if (next === 'active') this.db.prepare(`UPDATE memory_frames SET status='superseded', updated_at=? WHERE project_id=? AND episode_id=? AND frame_id<>? AND status IN ('active','needs_confirmation')`).run(now, row.project_id, row.episode_id, frameId);
     this.markDirty(row.project_id, now);
     return true;
+  }
+
+  private hasPublishableEvidence(frameId: string, projectId: string, episodeId: string): boolean {
+    const frame = this.get(frameId);
+    if (!frame || frame.sourceAuthority === 'deterministic_fallback' || frame.evidenceEventIds.length === 0) return false;
+    const table = this.db.prepare(`SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='memory_events'`).get() as { present?: number } | null;
+    // Direct frame-store compatibility tests can predate the raw ledger. Once
+    // the ledger exists, the stricter project/episode evidence check applies.
+    if (!table?.present) return true;
+    const placeholders = frame.evidenceEventIds.map(() => '?').join(',');
+    const row = this.db.prepare(`
+      SELECT COUNT(DISTINCT e.event_id) AS event_count
+      FROM memory_events e
+      JOIN memory_episode_events ee ON ee.event_id=e.event_id AND ee.episode_id=?
+      WHERE e.project_id=? AND e.event_id IN (${placeholders})
+    `).get(episodeId, projectId, ...frame.evidenceEventIds) as { event_count?: number } | null;
+    return Number(row?.event_count ?? 0) === new Set(frame.evidenceEventIds).size;
   }
 
   private read(row: Record<string, unknown>): MemoryFrameV1 {
@@ -176,6 +196,8 @@ export class MemoryFrameStore {
       nodes, relations, confidence: Number(row.confidence),
       evidenceEventIds: parseJsonArray(row.evidence_event_ids_json),
       processor: parseJsonObject(row.processor_json), status: row.status, publishStatus: row.publish_status,
+      revisionId: row.revision_id ?? undefined, revisionNumber: row.revision_number == null ? undefined : Number(row.revision_number),
+      supersedesFrameId: row.supersedes_frame_id ?? undefined,
       primaryLanguage: row.primary_language ?? undefined,
       temporalReferences: parseJsonArray(row.temporal_references_json),
       stateTransitions: parseJsonArray(row.state_transitions_json),

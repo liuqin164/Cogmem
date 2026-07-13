@@ -8,13 +8,20 @@ export class AtlasPathRetriever {
 
   retrieve(query: string, options: MemoryAtlasQueryOptions): { queryFrame: ReturnType<MultidimensionalQueryPlanner['plan']>; result: MemoryAtlasSlice } {
     const queryFrame = this.planner.plan(query, options.now);
+    const facetKeys: Record<string, 'actors' | 'projects' | 'topics' | 'issues' | 'events' | 'tasks' | 'entities' | 'locations'> = {
+      actor: 'actors', project: 'projects', topic: 'topics', issue: 'issues', event: 'events', task: 'tasks', entity: 'entities', location: 'locations',
+    };
     for (const alias of this.atlas.resolveQueryAliases(query, options.projectId)) {
-      const key = `${alias.dimension}s` as 'actors' | 'projects' | 'topics' | 'issues' | 'events' | 'tasks' | 'entities' | 'locations';
-      if (!(key in queryFrame)) continue;
+      const key = facetKeys[alias.dimension];
+      if (!key) continue;
       const facets = (queryFrame[key] ??= []);
       if (!facets.some((facet) => facet.canonicalNodeId === alias.nodeId)) facets.push({ label: alias.label, dimension: alias.dimension as never, canonicalNodeId: alias.nodeId, confidence: 1 });
     }
-    const result = this.atlas.explore(query, { ...options, limit: Math.min(options.limit ?? 30, 100) });
+    const result = this.atlas.explore(query, {
+      ...options,
+      seedNodeIds: [...new Set(this.atlas.resolveQueryAliases(query, options.projectId).map((alias) => alias.nodeId))],
+      limit: Math.min(options.limit ?? 30, 100),
+    });
     const requestedTypes = new Set([
       ...(queryFrame.actors ?? []).map(() => 'actor'), ...(queryFrame.projects ?? []).map(() => 'project'),
       ...(queryFrame.topics ?? []).map(() => 'topic'), ...(queryFrame.issues ?? []).map(() => 'issue'),

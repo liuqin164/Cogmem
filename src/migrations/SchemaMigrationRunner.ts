@@ -167,6 +167,15 @@ export class SchemaMigrationRunner {
     if (version === '0036') return this.hasColumns('memory_frames', ['dream_job_lease_id', 'dream_lease_until', 'attempt_generation'])
       && this.hasColumns('memory_frame_reviews', ['review_id', 'frame_id', 'project_id', 'action', 'actor', 'reason'])
       && Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_memory_frames_dream_lease'`).get());
+    if (version === '0037') {
+      if (!this.hasColumns('memory_frames', ['revision_id', 'revision_number', 'supersedes_frame_id'])) return false;
+      const indexes = this.db.prepare(`PRAGMA index_list(memory_frames)`).all() as Array<{ name?: string; unique?: number }>;
+      return indexes.some((index) => {
+        if (Number(index.unique) !== 1 || !index.name) return false;
+        const columns = this.db.prepare(`PRAGMA index_info(${index.name})`).all() as Array<{ name?: string }>;
+        return columns.map((column) => column.name).join('|') === 'episode_id|source_fingerprint|processor_prompt_version|revision_id';
+      });
+    }
     return true;
   }
 

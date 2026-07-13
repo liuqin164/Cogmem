@@ -40,6 +40,9 @@ export interface StateTransition {
 export interface MemoryFrameV1 {
     schemaVersion: 'memory_frame.v1';
     frameId: string;
+    revisionId?: string;
+    revisionNumber?: number;
+    supersedesFrameId?: string;
     projectId: string;
     episodeId: string;
     title: string;

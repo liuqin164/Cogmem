@@ -43,10 +43,11 @@ export class MemoryAtlasService {
     const cards = facetResult.cards;
     const compiled = compileAtlasQuery(boundedQuery(query), options.now);
     const target = this.store.resolveTargetNodeIds(projectId, compiled.text);
+    const seedNodeIds = [...new Set([...(target.nodeIds ?? []), ...(options.seedNodeIds ?? [])])];
     let nodes = this.store.searchFaceted(query, projectId, limit, {
       from: compiled.range?.from, to: compiled.range?.to, memoryKinds: compiled.memoryKinds,
-      keywords: target.nodeIds.length ? compiled.keywords : compiled.tokens,
-      targetNodeIds: target.nodeIds.length ? target.nodeIds : undefined,
+      keywords: seedNodeIds.length ? [] : compiled.tokens,
+      targetNodeIds: seedNodeIds.length ? seedNodeIds : undefined,
     });
     if (cards.length) {
       const cardNodes = cards.map((card) => this.store.getNode(card.canonicalId, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node));

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { deterministicFrameFallback, normalizeAlias, validateMemoryFrame } from '../src/semantic/index.js';
 import { MemoryFrameStore } from '../src/store/MemoryFrameStore.js';
 import Database from 'bun:sqlite';
-import { migration_0032, migration_0035, migration_0036 } from '../src/migrations/index.js';
+import { migration_0032, migration_0035, migration_0036, migration_0037 } from '../src/migrations/index.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { MultidimensionalQueryPlanner } from '../src/recall/index.js';
 
@@ -33,7 +33,7 @@ describe('MemoryFrame V1 contract', () => {
 
   test('stores frames idempotently and publishes with CAS', () => {
     const db = new Database(':memory:');
-    migration_0032.up(db);
+    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
     migration_0035.up(db);
     const store = new MemoryFrameStore(db);
     const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
@@ -48,7 +48,7 @@ describe('MemoryFrame V1 contract', () => {
 
   test('staged revisions preserve the previous active frame until publish', () => {
     const db = new Database(':memory:');
-    migration_0032.up(db); migration_0035.up(db);
+    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
     const store = new MemoryFrameStore(db);
     const base = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
     const frame = { ...base, evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
@@ -67,7 +67,7 @@ describe('MemoryFrame V1 contract', () => {
 
   test('review publication preserves the previous active frame', () => {
     const db = new Database(':memory:');
-    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db);
+    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
     const store = new MemoryFrameStore(db);
     const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }), evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
       nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['event-1'] })),
@@ -83,15 +83,31 @@ describe('MemoryFrame V1 contract', () => {
 
   test('projects active frames into the existing Atlas graph', () => {
     const kernel = createMemoryKernel();
+    const event = kernel.eventStore.append({
+      eventId: 'event-1', streamId: 'thread-1', streamType: 'thread',
+      eventType: 'MESSAGE', rawEventType: 'message', projectId: 'p',
+      sessionId: 'session-1', threadId: 'thread-1', role: 'user',
+      occurredAt: 0, payload: { text: 'atlas projection evidence' },
+    });
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'p', sessionId: 'session-1', conversationThreadId: 'thread-1',
+      episodeType: 'discussion', importance: 0.5, eventId: event.eventId,
+      globalSeq: event.globalSeq, occurredAt: event.occurredAt,
+    });
+    kernel.episodeStore.appendEvent({
+      episodeId: episode.episodeId, eventId: event.eventId, relation: 'primary',
+      confidence: 1, globalSeq: event.globalSeq, occurredAt: event.occurredAt,
+    });
     const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }),
       evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
       nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['event-1'] })),
       relations: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).relations.map((relation) => ({ ...relation, evidenceEventIds: ['event-1'] })) };
-    kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'projection-source', status: 'active', now: 0 });
-    kernel.memoryFrameStore.publish(frame.frameId, 'staged', 'active', 1);
+    const storedFrame = { ...frame, episodeId: episode.episodeId };
+    kernel.memoryFrameStore.save({ frame: storedFrame, sourceFingerprint: 'projection-source', status: 'active', now: 0 });
+    kernel.memoryFrameStore.publish(storedFrame.frameId, 'staged', 'active', 1);
     const result = kernel.rebuildMemoryAtlas({ projectId: 'p' });
     expect(result.documents).toBeGreaterThanOrEqual(2);
-    expect(kernel.memoryAtlasStore.getNode('episode:e', 'p')?.nodeType).toBe('episode');
+    expect(kernel.memoryAtlasStore.getNode(`episode:${episode.episodeId}`, 'p')?.nodeType).toBe('episode');
     expect(kernel.memoryAtlasStore.getNode('project:p', 'p')?.nodeType).toBe('project');
     kernel.close();
   });
@@ -106,7 +122,7 @@ describe('MemoryFrame V1 contract', () => {
 
   test('lease retry creates an independent staged revision without changing the source row', () => {
     const db = new Database(':memory:');
-    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db);
+    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
     const store = new MemoryFrameStore(db);
     const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }),
       evidenceEventIds: ['evt-1'], nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['evt-1'] })),

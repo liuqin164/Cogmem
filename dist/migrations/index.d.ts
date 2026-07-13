@@ -32,6 +32,7 @@ import { migration_0033 } from './0033_atlas_aliases_and_supports.js';
 import { migration_0034 } from './0034_atlas_projection_v2.js';
 import { migration_0035 } from './0035_memory_frame_integrity.js';
 import { migration_0036 } from './0036_memory_frame_publication_repair.js';
+import { migration_0037 } from './0037_memory_frame_revisions.js';
 /**
  * Ordered list of all schema migrations.
  * Add new migrations here in ascending version order.
@@ -39,7 +40,7 @@ import { migration_0036 } from './0036_memory_frame_publication_repair.js';
  */
 export declare const ALL_MIGRATIONS: Migration[];
 export declare const KERNEL_MIGRATIONS: Migration[];
-export { migration_0001, migration_0002, migration_0003, migration_0004, migration_0005, migration_0006, migration_0007, migration_0009, migration_0010, migration_0011, migration_0012, migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028, migration_0029, migration_0030, migration_0031, migration_0032, migration_0033, migration_0034, migration_0035, migration_0036 };
+export { migration_0001, migration_0002, migration_0003, migration_0004, migration_0005, migration_0006, migration_0007, migration_0009, migration_0010, migration_0011, migration_0012, migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028, migration_0029, migration_0030, migration_0031, migration_0032, migration_0033, migration_0034, migration_0035, migration_0036, migration_0037 };
 export { SchemaMigrationRunner } from './SchemaMigrationRunner.js';
 export type { SchemaMigrationResult, SchemaMigrationRunOptions } from './SchemaMigrationRunner.js';
 export type { Migration };
