@@ -42,7 +42,7 @@ describe('MemoryFrame V1 contract', () => {
     store.save({ frame: { ...frame, frameId: 'different-id' }, sourceFingerprint: 'source-1', now: 1 });
     expect(store.list('p', { statuses: ['staged'] })).toHaveLength(1);
     expect(store.publish(frame.frameId, 'staged', 'needs_confirmation', 2)).toBe(true);
-    expect(store.publish(frame.frameId, 'staged', 'active', 3)).toBe(false);
+    expect(() => store.publish(frame.frameId, 'staged', 'active', 3)).toThrow('memory_frame_publish_conflict');
     expect(store.get(frame.frameId)?.relations).toHaveLength(1);
     db.close();
   });

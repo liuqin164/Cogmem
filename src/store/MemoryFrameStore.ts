@@ -36,6 +36,8 @@ export class MemoryFrameStore {
     const storedFingerprint = input.sourceFingerprint;
     const revisionId = sameOwner ? (existing!.revision_id ?? existing!.frame_id!) : storedFrameId;
     const revisionNumber = sameOwner ? (existing!.revision_number ?? 1) : (existing ? (existing.revision_number ?? 0) + 1 : 1);
+    const idOwner = this.db.prepare(`SELECT project_id,episode_id,source_fingerprint,processor_prompt_version,status,dream_job_lease_id,attempt_generation FROM memory_frames WHERE frame_id=?`).get(storedFrameId) as { project_id?: string; episode_id?: string; source_fingerprint?: string; processor_prompt_version?: string; status?: MemoryFrameStatus; dream_job_lease_id?: string; attempt_generation?: number } | null;
+    if (idOwner && !sameOwner) throw new Error(`memory_frame_id_conflict:${storedFrameId}`);
     try { this.db.transaction(() => {
       this.db.prepare(`
         INSERT INTO memory_frames (
@@ -91,6 +93,7 @@ export class MemoryFrameStore {
   }
 
   getByEpisode(projectId: string, episodeId: string, statuses: MemoryFrameStatus[] = ['active', 'needs_confirmation']): MemoryFrameV1 | null {
+    if (statuses.length === 0) return null;
     const placeholders = statuses.map(() => '?').join(',');
     const row = this.db.prepare(`SELECT frame_id FROM memory_frames WHERE project_id=? AND episode_id=? AND status IN (${placeholders}) ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'needs_confirmation' THEN 1 ELSE 2 END, updated_at DESC, frame_id DESC LIMIT 1`).get(projectId, episodeId, ...statuses) as { frame_id?: string } | null;
     return row?.frame_id ? this.get(row.frame_id) : null;
@@ -194,9 +197,10 @@ export class MemoryFrameStore {
   }
 
   private publishUnsafe(frameId: string, from: MemoryFrameStatus, to: MemoryFrameStatus | undefined, now: number): boolean {
-    const row = this.db.prepare(`SELECT project_id, episode_id, publish_status, needs_review FROM memory_frames WHERE frame_id=?`).get(frameId) as { project_id: string; episode_id: string; publish_status?: MemoryFrameStatus; needs_review?: number } | null;
+    const row = this.db.prepare(`SELECT project_id, episode_id, status, publish_status, needs_review FROM memory_frames WHERE frame_id=?`).get(frameId) as { project_id: string; episode_id: string; status?: MemoryFrameStatus; publish_status?: MemoryFrameStatus; needs_review?: number } | null;
     if (!row) return false;
     if (from !== 'staged' || !['active', 'needs_confirmation'].includes(to ?? row.publish_status ?? 'active')) return false;
+    if (row.status !== from) throw new Error(`memory_frame_publish_conflict:${frameId}`);
     const next = to ?? row.publish_status ?? 'active';
     if (next === 'active' && row.needs_review) return false;
     if (next === 'active') {
@@ -207,7 +211,7 @@ export class MemoryFrameStore {
     const publication = next === 'active' ? 'active' : next === 'needs_confirmation' ? 'needs_confirmation' : row.publish_status;
     if (next === 'active') this.db.prepare(`UPDATE memory_frames SET status='superseded', publish_status='needs_confirmation', updated_at=? WHERE project_id=? AND episode_id=? AND frame_id<>? AND status='active'`).run(now, row.project_id, row.episode_id, frameId);
     const changed = Number(this.db.prepare(`UPDATE memory_frames SET status=?, publish_status=?, updated_at=? WHERE frame_id=? AND status=?`).run(next, publication ?? 'active', now, frameId, from).changes ?? 0) === 1;
-    if (!changed) return false;
+    if (!changed) throw new Error(`memory_frame_publish_conflict:${frameId}`);
     this.markDirty(row.project_id, now);
     return true;
   }

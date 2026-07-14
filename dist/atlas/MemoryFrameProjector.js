@@ -174,10 +174,18 @@ export class MemoryFrameProjector {
         }
         const aliasNodes = this.atlasStore.findAliasNodes(projectId, node.dimension, normalizeAlias(node.label));
         if (aliasNodes.length > 1) {
-            // Keep the existing canonical identity stable while the ambiguity is
-            // governed separately; dropping the node would silently erase its
-            // evidence and relations from a rebuild.
-            return [...aliasNodes].sort()[0];
+            const normalizedAlias = normalizeAlias(node.label);
+            const candidateId = createHash('sha256').update(`${projectId}\0${node.dimension}\0${normalizedAlias}\0${frame.frameId}`).digest('hex');
+            if (this.tableExists('memory_atlas_alias_ambiguities'))
+                this.db.prepare(`
+        INSERT INTO memory_atlas_alias_ambiguities(candidate_id,project_id,dimension,normalized_alias,node_ids_json,source_frame_id,status,created_at)
+        VALUES(?,?,?,?,?,?,'pending',?)
+        ON CONFLICT(candidate_id) DO UPDATE SET node_ids_json=excluded.node_ids_json,status='pending'
+      `).run(candidateId, projectId, node.dimension, normalizedAlias, JSON.stringify([...aliasNodes].sort()), frame.frameId, Date.now());
+            // A disputed alias must not silently bind evidence to an arbitrary
+            // canonical node. Keep this frame's evidence visible under a provisional
+            // identity until governance resolves the ambiguity.
+            return encodeAtlasNodeId(node.dimension, `provisional:${candidateId}`, projectId);
         }
         if (aliasNodes.length === 1)
             return aliasNodes[0];
