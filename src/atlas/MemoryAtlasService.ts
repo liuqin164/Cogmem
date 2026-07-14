@@ -49,6 +49,13 @@ export class MemoryAtlasService {
       keywords: seedNodeIds.length ? [] : compiled.tokens,
       targetNodeIds: seedNodeIds.length ? seedNodeIds : undefined,
     });
+    if (seedNodeIds.length) {
+      const bridgeEdges = this.store.listEdgesForNodes(projectId, seedNodeIds, Math.max(60, limit * 12));
+      const bridgeIds = [...new Set(bridgeEdges.flatMap((edge) => [edge.source, edge.target]))]
+        .filter((id) => !seedNodeIds.includes(id));
+      const bridgeNodes = bridgeIds.map((id) => this.store.getNode(id, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node));
+      nodes = uniqueNodes([...nodes, ...bridgeNodes]).slice(0, limit);
+    }
     if (cards.length) {
       const cardNodes = cards.map((card) => this.store.getNode(card.canonicalId, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node));
       nodes = uniqueNodes([...cardNodes, ...nodes]).slice(0, limit);

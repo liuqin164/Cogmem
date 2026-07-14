@@ -46,7 +46,7 @@ export const migration_0037: Migration = {
         primary_language TEXT,
         temporal_references_json TEXT NOT NULL DEFAULT '[]',
         state_transitions_json TEXT NOT NULL DEFAULT '[]',
-        publish_status TEXT NOT NULL DEFAULT 'active',
+        publish_status TEXT NOT NULL DEFAULT 'active' CHECK(publish_status IN ('active','needs_confirmation')),
         dream_job_lease_id TEXT,
         dream_lease_until INTEGER,
         attempt_generation INTEGER,

@@ -33,6 +33,7 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
   if (!frame.nodes.some((node) => node.dimension === 'episode' && node.label.trim())) errors.push('episode_node_required');
   if (!frame.nodes.some((node) => node.dimension === 'project' && node.label.trim())) errors.push('project_node_required');
   for (const node of frame.nodes) {
+    if (typeof node.frameNodeId !== 'string' || typeof node.label !== 'string' || !Array.isArray(node.evidenceEventIds)) { errors.push('invalid_frame_node_shape'); continue; }
     if (!node.label.trim()) errors.push(`empty_frame_node_label:${node.frameNodeId}`);
     if (!Number.isFinite(node.confidence) || node.confidence < 0 || node.confidence > 1) errors.push(`invalid_node_confidence:${node.frameNodeId}`);
     if (!node.evidenceEventIds.length && !options.allowEmptyEvidence) errors.push(`node_evidence_required:${node.frameNodeId}`);
@@ -45,19 +46,19 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
     if (!source || !target) { errors.push('relation_node_missing'); continue; }
     try { relationConstraintRegistry.validate(source.dimension, relation.relationType, target.dimension); } catch (error) { errors.push(error instanceof Error ? error.message : 'invalid_memory_frame_relation'); }
     if (!Number.isFinite(relation.confidence) || relation.confidence < 0 || relation.confidence > 1) errors.push('invalid_relation_confidence');
-    if (!relation.evidenceEventIds.length && !options.allowEmptyEvidence) errors.push('relation_evidence_required');
-    if (!relation.evidenceEventIds.every((id) => evidence.has(id))) errors.push('relation_evidence_not_in_frame');
+    if (!Array.isArray(relation.evidenceEventIds) || (!relation.evidenceEventIds.length && !options.allowEmptyEvidence)) errors.push('relation_evidence_required');
+    if (Array.isArray(relation.evidenceEventIds) && !relation.evidenceEventIds.every((id) => evidence.has(id))) errors.push('relation_evidence_not_in_frame');
     if (relation.validFrom !== undefined && relation.validTo !== undefined && relation.validFrom > relation.validTo) errors.push('relation_invalid_valid_range');
   }
   for (const node of frame.nodes) if (node.dimension === 'raw_event' && node.evidenceEventIds.length !== 1) errors.push(`raw_event_identity_requires_one_evidence:${node.frameNodeId}`);
   for (const reference of frame.temporalReferences) {
-    if (!reference.label.trim() || !Number.isFinite(reference.confidence) || reference.confidence < 0 || reference.confidence > 1 || !reference.evidenceEventIds.length) errors.push('invalid_temporal_reference');
+    if (typeof reference.label !== 'string' || !Array.isArray(reference.evidenceEventIds) || !reference.label.trim() || !Number.isFinite(reference.confidence) || reference.confidence < 0 || reference.confidence > 1 || !reference.evidenceEventIds.length) errors.push('invalid_temporal_reference');
     if (reference.occurredAt !== undefined && !Number.isFinite(reference.occurredAt)) errors.push('invalid_temporal_reference_time');
     if (!reference.evidenceEventIds.every((id) => evidence.has(id))) errors.push('temporal_reference_evidence_not_in_frame');
   }
   for (const transition of frame.stateTransitions) {
-    if (!nodes.has(transition.subjectFrameNodeId)) errors.push('state_transition_node_missing');
-    if (!transition.to.trim() || !Number.isFinite(transition.confidence) || transition.confidence < 0 || transition.confidence > 1 || !transition.evidenceEventIds.length) errors.push('invalid_state_transition');
+    if (typeof transition.subjectFrameNodeId !== 'string' || !nodes.has(transition.subjectFrameNodeId)) errors.push('state_transition_node_missing');
+    if (typeof transition.to !== 'string' || !Array.isArray(transition.evidenceEventIds) || !transition.to.trim() || !Number.isFinite(transition.confidence) || transition.confidence < 0 || transition.confidence > 1 || !transition.evidenceEventIds.length) errors.push('invalid_state_transition');
     if (!transition.evidenceEventIds.every((id) => evidence.has(id))) errors.push('state_transition_evidence_not_in_frame');
   }
   return { valid: errors.length === 0, errors, frame: errors.length === 0 ? frame : undefined };

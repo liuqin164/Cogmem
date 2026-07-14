@@ -609,6 +609,9 @@ export class KernelAgentMemoryBackend {
         const eventId = card.sourceLocator?.eventId ?? card.evidenceEventIds[0];
         const sourceContext = eventId ? this.toAgentSourceContext(eventId) : undefined;
         const anchorEvent = sourceContext?.event;
+        const scopedAnchor = eventId ? this.kernel.eventStore.getEvent(eventId) : undefined;
+        if (scopedAnchor && (!this.isAgentRawEvent(scopedAnchor, query.agentId) || !this.isRawEventInRecallScope(scopedAnchor, query, query.intent)))
+            return null;
         return {
             id: `facet:${card.canonicalId}`,
             text: [card.displayTitle, card.oneLineSummary].filter(Boolean).join(': '),
