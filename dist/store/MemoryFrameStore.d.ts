@@ -29,6 +29,7 @@ export declare class MemoryFrameStore {
     failStagedOlderThan(_cutoff: number, now?: number): number;
     supersedeEpisodes(episodeIds: string[], now?: number): number;
     deleteByProject(projectId: string): number;
+    private tableExists;
     private markDirty;
     private publishUnsafe;
     private hasPublishableEvidence;

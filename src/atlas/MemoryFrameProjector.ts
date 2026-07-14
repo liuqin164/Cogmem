@@ -54,7 +54,7 @@ export class MemoryFrameProjector {
         for (const reference of frame.temporalReferences) {
           const localDate = this.evidenceLocalDate(reference.evidenceEventIds);
           const dayKey = localDate ?? (reference.occurredAt == null ? normalizeAlias(reference.label) : new Date(reference.occurredAt).toISOString().slice(0, 10));
-          const timeId = `time:${createHash('sha256').update(`${projectId}\0${dayKey}`).digest('hex').slice(0, 32)}`;
+          const timeId = `time:${projectId}:${dayKey}`;
           const existingTime = this.atlasStore.getNodeIncludingInactive(timeId, projectId);
           if (existingTime && !['active', 'weak'].includes(existingTime.status)) continue;
           if (!existingTime) this.atlasStore.upsertDocument({ id: timeId, projectId, nodeType: 'time', sourceId: timeId.slice(5), label: reference.label,
@@ -63,6 +63,19 @@ export class MemoryFrameProjector {
           this.upsertSupport(projectId, timeId, frame, reference.evidenceEventIds, now);
           const timeSource = reference.evidenceEventIds[0] ? `raw_event:${reference.evidenceEventIds[0]}` : `episode:${frame.episodeId}`;
           if (!blocked.has(timeId)) this.upsertEdge(projectId, timeSource, timeId, { sourceFrameNodeId: timeSource, relationType: 'OCCURRED_ON', targetFrameNodeId: timeId, confidence: reference.confidence, evidenceEventIds: reference.evidenceEventIds }, frame, now);
+          const dayMatch = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/u.exec(dayKey);
+          if (dayMatch) {
+            const yearId = `time:${projectId}:${dayMatch[1]}`;
+            const monthId = `time:${projectId}:${dayMatch[1]}-${dayMatch[2]}`;
+            for (const [id, label] of [[yearId, dayMatch[1]], [monthId, `${dayMatch[1]}-${dayMatch[2]}`]] as const) {
+              const existingPeriod = this.atlasStore.getNodeIncludingInactive(id, projectId);
+              if (!existingPeriod && !blocked.has(id)) this.atlasStore.upsertDocument({ id, projectId, nodeType: 'time', sourceId: id.slice(5), label, confidence: reference.confidence, supportCount: 1, status: 'active', evidenceEventIds: reference.evidenceEventIds, metadata: { projection: 'memory_atlas.frame.v2', frameId: frame.frameId }, updatedAt: now });
+              if (existingPeriod && !['active', 'weak'].includes(existingPeriod.status)) continue;
+              this.upsertSupport(projectId, id, frame, reference.evidenceEventIds, now);
+            }
+            if (!blocked.has(monthId) && !blocked.has(yearId)) this.upsertEdge(projectId, monthId, yearId, { sourceFrameNodeId: monthId, relationType: 'OCCURRED_IN', targetFrameNodeId: yearId, confidence: reference.confidence, evidenceEventIds: reference.evidenceEventIds }, frame, now);
+            if (!blocked.has(timeId) && !blocked.has(monthId)) this.upsertEdge(projectId, timeId, monthId, { sourceFrameNodeId: timeId, relationType: 'OCCURRED_IN', targetFrameNodeId: monthId, confidence: reference.confidence, evidenceEventIds: reference.evidenceEventIds }, frame, now);
+          }
           nodes += 1;
         }
         for (const transition of frame.stateTransitions) {
@@ -70,12 +83,12 @@ export class MemoryFrameProjector {
           const subjectNode = frame.nodes.find((node) => node.frameNodeId === transition.subjectFrameNodeId);
           if (!subject || !subjectNode || !['task', 'entity', 'event'].includes(subjectNode.dimension)) continue;
           const stateId = `state:${createHash('sha256').update(`${projectId}\0${transition.to}`).digest('hex').slice(0, 32)}`;
-          const parsedSubject = splitNodeId(subject);
-          this.db.prepare(`UPDATE memory_edges SET status='archived', updated_at=? WHERE project_id=? AND source_type=? AND source_id=? AND relation_type='HAS_STATE' AND target_id<>? AND status IN ('active','weak')`).run(now, projectId, parsedSubject.type, parsedSubject.id, stateId.slice(stateId.indexOf(':') + 1));
           const existingState = this.atlasStore.getNodeIncludingInactive(stateId, projectId);
           if (existingState && !['active', 'weak'].includes(existingState.status)) continue;
           if (currentStateSubjects.has(subject)) continue;
           currentStateSubjects.add(subject);
+          const parsedSubject = splitNodeId(subject);
+          this.db.prepare(`UPDATE memory_edges SET status='archived', updated_at=? WHERE project_id=? AND source_type=? AND source_id=? AND relation_type='HAS_STATE' AND target_id<>? AND status IN ('active','weak')`).run(now, projectId, parsedSubject.type, parsedSubject.id, stateId.slice(stateId.indexOf(':') + 1));
           if (!existingState) this.atlasStore.upsertDocument({ id: stateId, projectId, nodeType: 'state', sourceId: stateId.slice(6), label: transition.to,
             confidence: transition.confidence, supportCount: 1, status: 'active', evidenceEventIds: transition.evidenceEventIds,
             metadata: { projection: 'memory_atlas.frame.v2', frameId: frame.frameId }, updatedAt: now });
@@ -136,7 +149,8 @@ export class MemoryFrameProjector {
   private upsertEdge(projectId: string, source: string, target: string, relation: MemoryFrameRelation, frame: MemoryFrameV1, now: number): void {
     const parsedSource = splitNodeId(source); const parsedTarget = splitNodeId(target);
     const edgeId = createHash('sha256').update(`${projectId}\0${source}\0${relation.relationType}\0${target}`).digest('hex');
-    this.db.prepare(`
+    const existing = this.db.prepare(`SELECT source_authority FROM memory_edges WHERE edge_id=?`).get(edgeId) as { source_authority?: string } | null;
+    if (!existing) this.db.prepare(`
       INSERT INTO memory_edges (edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,confidence,base_weight,stability,activation,evidence_event_ids_json,status,valid_from,valid_to,version,source_authority,created_at,updated_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(edge_id) DO UPDATE SET confidence=excluded.confidence,evidence_event_ids_json=excluded.evidence_event_ids_json,status='active',valid_from=excluded.valid_from,valid_to=excluded.valid_to,updated_at=excluded.updated_at

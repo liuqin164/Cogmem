@@ -652,7 +652,7 @@ export class KernelAgentMemoryBackend {
             displayTitle: node.label,
             tags: ['atlas_node', node.nodeType],
             source: 'memory_atlas',
-            sourceType: 'raw_ledger',
+            sourceType: 'compiled_memory',
             sourceAnchor: this.toAgentSourceAnchor(event),
             sourceContext: this.toAgentSourceContext(eventId, query),
             confidence: node.confidence,
