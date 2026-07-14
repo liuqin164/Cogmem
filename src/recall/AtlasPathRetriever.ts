@@ -8,11 +8,15 @@ export class AtlasPathRetriever {
 
   retrieve(query: string, options: MemoryAtlasQueryOptions): { queryFrame: ReturnType<MultidimensionalQueryPlanner['plan']>; result: MemoryAtlasSlice } {
     const queryFrame = this.planner.plan(query, options.now);
-    const facetKeys: Record<string, 'actors' | 'projects' | 'topics' | 'issues' | 'events' | 'tasks' | 'entities' | 'locations'> = {
-      actor: 'actors', project: 'projects', topic: 'topics', issue: 'issues', event: 'events', task: 'tasks', entity: 'entities', location: 'locations',
+    const facetKeys: Record<string, 'actors' | 'projects' | 'topics' | 'issues' | 'events' | 'tasks' | 'entities' | 'objects' | 'locations'> = {
+      actor: 'actors', project: 'projects', topic: 'topics', issue: 'issues', event: 'events', task: 'tasks', entity: 'entities', object: 'objects', location: 'locations',
     };
     for (const alias of this.atlas.resolveQueryAliases(query, options.projectId)) {
       const key = facetKeys[alias.dimension];
+      if (alias.dimension === 'state') {
+        queryFrame.states = [...new Set([...(queryFrame.states ?? []), alias.label])];
+        continue;
+      }
       if (!key) continue;
       const facets = (queryFrame[key] ??= []);
       if (!facets.some((facet) => facet.canonicalNodeId === alias.nodeId)) facets.push({ label: alias.label, dimension: alias.dimension as never, canonicalNodeId: alias.nodeId, confidence: 1 });
@@ -26,7 +30,7 @@ export class AtlasPathRetriever {
       ...(queryFrame.actors ?? []).map(() => 'actor'), ...(queryFrame.projects ?? []).map(() => 'project'),
       ...(queryFrame.topics ?? []).map(() => 'topic'), ...(queryFrame.issues ?? []).map(() => 'issue'),
       ...(queryFrame.events ?? []).map(() => 'event'), ...(queryFrame.tasks ?? []).map(() => 'task'),
-      ...(queryFrame.entities ?? []).map(() => 'entity'), ...(queryFrame.locations ?? []).map(() => 'location'),
+      ...(queryFrame.entities ?? []).map(() => 'entity'), ...(queryFrame.objects ?? []).map(() => 'object'), ...(queryFrame.locations ?? []).map(() => 'location'),
     ]);
     const byId = new Map(result.nodes.map((node) => [node.id, node]));
     const matches = (node: (typeof result.nodes)[number]) => {

@@ -12,10 +12,14 @@ export class AtlasPathRetriever {
     retrieve(query, options) {
         const queryFrame = this.planner.plan(query, options.now);
         const facetKeys = {
-            actor: 'actors', project: 'projects', topic: 'topics', issue: 'issues', event: 'events', task: 'tasks', entity: 'entities', location: 'locations',
+            actor: 'actors', project: 'projects', topic: 'topics', issue: 'issues', event: 'events', task: 'tasks', entity: 'entities', object: 'objects', location: 'locations',
         };
         for (const alias of this.atlas.resolveQueryAliases(query, options.projectId)) {
             const key = facetKeys[alias.dimension];
+            if (alias.dimension === 'state') {
+                queryFrame.states = [...new Set([...(queryFrame.states ?? []), alias.label])];
+                continue;
+            }
             if (!key)
                 continue;
             const facets = (queryFrame[key] ??= []);
@@ -31,7 +35,7 @@ export class AtlasPathRetriever {
             ...(queryFrame.actors ?? []).map(() => 'actor'), ...(queryFrame.projects ?? []).map(() => 'project'),
             ...(queryFrame.topics ?? []).map(() => 'topic'), ...(queryFrame.issues ?? []).map(() => 'issue'),
             ...(queryFrame.events ?? []).map(() => 'event'), ...(queryFrame.tasks ?? []).map(() => 'task'),
-            ...(queryFrame.entities ?? []).map(() => 'entity'), ...(queryFrame.locations ?? []).map(() => 'location'),
+            ...(queryFrame.entities ?? []).map(() => 'entity'), ...(queryFrame.objects ?? []).map(() => 'object'), ...(queryFrame.locations ?? []).map(() => 'location'),
         ]);
         const byId = new Map(result.nodes.map((node) => [node.id, node]));
         const matches = (node) => {

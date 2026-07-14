@@ -9,7 +9,7 @@ const DIMENSION_WORDS = [
     ['location', /^(where|地点|位置)$/iu],
 ];
 const FRAME_KEYS = {
-    actor: 'actors', project: 'projects', topic: 'topics', issue: 'issues', event: 'events', task: 'tasks', entity: 'entities', location: 'locations',
+    actor: 'actors', project: 'projects', topic: 'topics', issue: 'issues', event: 'events', task: 'tasks', entity: 'entities', object: 'objects', location: 'locations',
 };
 export class MultidimensionalQueryPlanner {
     plan(query, now = Date.now()) {

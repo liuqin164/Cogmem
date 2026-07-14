@@ -83,6 +83,7 @@ export interface MemoryQueryFrameV1 {
     events?: MemoryQueryFacet[];
     tasks?: MemoryQueryFacet[];
     entities?: MemoryQueryFacet[];
+    objects?: MemoryQueryFacet[];
     locations?: MemoryQueryFacet[];
     time?: {
         from?: number;

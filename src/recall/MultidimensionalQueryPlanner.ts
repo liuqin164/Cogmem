@@ -11,15 +11,15 @@ const DIMENSION_WORDS: Array<[MemoryDimension, RegExp]> = [
   ['location', /^(where|地点|位置)$/iu],
 ];
 
-const FRAME_KEYS: Partial<Record<MemoryDimension, 'actors' | 'projects' | 'topics' | 'issues' | 'events' | 'tasks' | 'entities' | 'locations'>> = {
-  actor: 'actors', project: 'projects', topic: 'topics', issue: 'issues', event: 'events', task: 'tasks', entity: 'entities', location: 'locations',
+const FRAME_KEYS: Partial<Record<MemoryDimension, 'actors' | 'projects' | 'topics' | 'issues' | 'events' | 'tasks' | 'entities' | 'objects' | 'locations'>> = {
+  actor: 'actors', project: 'projects', topic: 'topics', issue: 'issues', event: 'events', task: 'tasks', entity: 'entities', object: 'objects', location: 'locations',
 };
 
 export class MultidimensionalQueryPlanner {
   plan(query: string, now = Date.now()): MemoryQueryFrameV1 {
     const text = query.trim();
     const tokens = text.match(/[\p{L}\p{N}_-]+/gu)?.filter((token) => token.length > 1).slice(0, 24) ?? [];
-    const facets: Partial<Record<'actors' | 'projects' | 'topics' | 'issues' | 'events' | 'tasks' | 'entities' | 'locations', MemoryQueryFacet[]>> = {};
+    const facets: Partial<Record<'actors' | 'projects' | 'topics' | 'issues' | 'events' | 'tasks' | 'entities' | 'objects' | 'locations', MemoryQueryFacet[]>> = {};
     for (const token of tokens) {
       const dimension = DIMENSION_WORDS.find(([, pattern]) => pattern.test(token))?.[0] as Exclude<MemoryDimension, 'time' | 'state'> | undefined;
       const key = dimension ? FRAME_KEYS[dimension] : undefined;
