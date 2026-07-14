@@ -574,7 +574,9 @@ export class KernelAgentMemoryBackend {
     const atlasItems = allowsGraph && allowsRawSource
       ? [
         ...(multidimensionalRecall?.atlas?.cards ?? []).map((card) => this.toAgentRecallItemFromAtlasCard(card, query)),
-        ...(multidimensionalRecall?.atlas?.nodes ?? []).map((node) => this.toAgentRecallItemFromAtlasNode(node, query)),
+        ...(multidimensionalRecall?.atlas?.nodes ?? [])
+          .filter((node) => ['actor', 'event', 'task', 'object', 'location', 'state'].includes(node.nodeType))
+          .map((node) => this.toAgentRecallItemFromAtlasNode(node, query)),
       ]
         .filter((item): item is AgentRecallItem => Boolean(item))
         .filter((item) => this.isAllowedAtlasCollection(item, query.collection))

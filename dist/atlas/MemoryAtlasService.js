@@ -51,9 +51,10 @@ export class MemoryAtlasService {
             keywords: seedNodeIds.length ? [] : compiled.tokens,
             targetNodeIds: seedNodeIds.length ? seedNodeIds : undefined,
         });
-        if (seedNodeIds.length) {
-            const selected = new Set(seedNodeIds);
-            let frontier = [...seedNodeIds];
+        const explicitSeedNodeIds = options.seedNodeIds ?? [];
+        if (explicitSeedNodeIds.length) {
+            const selected = new Set(explicitSeedNodeIds);
+            let frontier = [...explicitSeedNodeIds];
             for (let depth = 0; depth < 3 && frontier.length; depth += 1) {
                 const edges = this.store.listEdgesForNodes(projectId, frontier, Math.max(60, limit * 12));
                 const next = [];
