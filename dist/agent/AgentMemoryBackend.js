@@ -607,7 +607,9 @@ export class KernelAgentMemoryBackend {
     }
     toAgentRecallItemFromAtlasCard(card, query) {
         const eventId = card.sourceLocator?.eventId ?? card.evidenceEventIds[0];
-        const sourceContext = eventId ? this.toAgentSourceContext(eventId) : undefined;
+        if (!eventId)
+            return null;
+        const sourceContext = eventId ? this.toAgentSourceContext(eventId, query) : undefined;
         const anchorEvent = sourceContext?.event;
         const scopedAnchor = eventId ? this.kernel.eventStore.getEvent(eventId) : undefined;
         if (scopedAnchor && (!this.isAgentRawEvent(scopedAnchor, query.agentId) || !this.isRawEventInRecallScope(scopedAnchor, query, query.intent)))
@@ -1175,7 +1177,7 @@ export class KernelAgentMemoryBackend {
         const userRef = refs.find((ref) => ref.eventId && ref.role === 'user');
         return userRef?.eventId || refs.find((ref) => ref.eventId)?.eventId;
     }
-    toAgentSourceContext(eventId) {
+    toAgentSourceContext(eventId, scope) {
         const beforeCount = 2;
         const afterCount = 2;
         const context = this.kernel.getEventContext(eventId, { before: beforeCount, after: afterCount });
@@ -1186,12 +1188,13 @@ export class KernelAgentMemoryBackend {
             after: afterCount,
         });
         const event = this.toAgentSourceContextEvent(context.event);
+        const inScope = (event) => !scope || (this.isAgentRawEvent(event, scope.agentId) && this.isRawEventInRecallScope(event, scope, scope.intent));
         return {
             event,
-            before: normalized.before.map((item) => this.toAgentSourceContextEvent(item)),
-            after: normalized.after.map((item) => this.toAgentSourceContextEvent(item)),
-            parent: context.parent ? this.toAgentSourceContextEvent(context.parent) : undefined,
-            children: context.children.map((item) => this.toAgentSourceContextEvent(item)),
+            before: normalized.before.filter(inScope).map((item) => this.toAgentSourceContextEvent(item)),
+            after: normalized.after.filter(inScope).map((item) => this.toAgentSourceContextEvent(item)),
+            parent: context.parent && inScope(context.parent) ? this.toAgentSourceContextEvent(context.parent) : undefined,
+            children: context.children.filter(inScope).map((item) => this.toAgentSourceContextEvent(item)),
             window: normalized.window,
             locator: {
                 eventId: event.eventId,

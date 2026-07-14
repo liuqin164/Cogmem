@@ -297,6 +297,8 @@ export class MemoryAtlasStore {
     const node = this.db.prepare(`SELECT node_type, source_id, topic_path, evidence_event_ids_json FROM memory_atlas_documents WHERE node_id=? AND project_id=?`).get(nodeId, projectId) as { node_type: string; source_id: string; topic_path?: string; evidence_event_ids_json: string } | null;
     if (!node) return [];
     const ids = parseStringArray(node.evidence_event_ids_json);
+    const supportRows = this.db.prepare(`SELECT evidence_event_ids_json FROM memory_atlas_supports WHERE project_id=? AND node_id=? AND status='active' ORDER BY created_at DESC LIMIT ?`).all(projectId, nodeId, limit) as Array<{ evidence_event_ids_json: string }>;
+    for (const row of supportRows) ids.push(...parseStringArray(row.evidence_event_ids_json));
     if (node.node_type === 'entity') {
       const rows = this.db.prepare(`SELECT event_id FROM memory_bindings WHERE project_id=? AND entity_id=? ORDER BY created_at DESC LIMIT ?`).all(projectId, node.source_id, limit) as Array<{ event_id: string }>;
       ids.push(...rows.map((row) => row.event_id));

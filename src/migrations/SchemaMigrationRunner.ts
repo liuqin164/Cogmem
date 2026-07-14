@@ -176,6 +176,7 @@ export class SchemaMigrationRunner {
         return columns.map((column) => column.name).join('|') === 'episode_id|source_fingerprint|processor_prompt_version|revision_id';
       });
     }
+    if (version === '0038') return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_memory_frames_revision_number'`).get());
     return true;
   }
 

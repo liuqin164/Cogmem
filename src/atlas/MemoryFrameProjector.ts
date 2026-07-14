@@ -18,6 +18,7 @@ export class MemoryFrameProjector {
       if (page.length < 500) break;
     }
     let nodes = 0; let edges = 0; let needsReview = 0;
+    const currentStateSubjects = new Set<string>();
     this.db.prepare(`DELETE FROM memory_edges WHERE project_id=? AND source_authority='memory_frame_projector'`).run(projectId);
     this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2')`).run(projectId, projectId);
     this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2'`).run(projectId);
@@ -51,7 +52,8 @@ export class MemoryFrameProjector {
           edges += 1;
         }
         for (const reference of frame.temporalReferences) {
-          const dayKey = reference.occurredAt == null ? normalizeAlias(reference.label) : new Date(reference.occurredAt).toISOString().slice(0, 10);
+          const localDate = this.evidenceLocalDate(reference.evidenceEventIds);
+          const dayKey = localDate ?? (reference.occurredAt == null ? normalizeAlias(reference.label) : new Date(reference.occurredAt).toISOString().slice(0, 10));
           const timeId = `time:${createHash('sha256').update(`${projectId}\0${dayKey}`).digest('hex').slice(0, 32)}`;
           const existingTime = this.atlasStore.getNodeIncludingInactive(timeId, projectId);
           if (existingTime && !['active', 'weak'].includes(existingTime.status)) continue;
@@ -72,13 +74,15 @@ export class MemoryFrameProjector {
           this.db.prepare(`UPDATE memory_edges SET status='archived', updated_at=? WHERE project_id=? AND source_type=? AND source_id=? AND relation_type='HAS_STATE' AND target_id<>? AND status IN ('active','weak')`).run(now, projectId, parsedSubject.type, parsedSubject.id, stateId.slice(stateId.indexOf(':') + 1));
           const existingState = this.atlasStore.getNodeIncludingInactive(stateId, projectId);
           if (existingState && !['active', 'weak'].includes(existingState.status)) continue;
+          if (currentStateSubjects.has(subject)) continue;
+          currentStateSubjects.add(subject);
           if (!existingState) this.atlasStore.upsertDocument({ id: stateId, projectId, nodeType: 'state', sourceId: stateId.slice(6), label: transition.to,
             confidence: transition.confidence, supportCount: 1, status: 'active', evidenceEventIds: transition.evidenceEventIds,
             metadata: { projection: 'memory_atlas.frame.v2', frameId: frame.frameId }, updatedAt: now });
           this.upsertSupport(projectId, stateId, frame, transition.evidenceEventIds, now);
           this.upsertEdge(projectId, subject, stateId, { sourceFrameNodeId: transition.subjectFrameNodeId, relationType: 'HAS_STATE', targetFrameNodeId: stateId,
             confidence: transition.confidence, evidenceEventIds: transition.evidenceEventIds }, frame, now);
-          if (transition.from) {
+          if (transition.from && subjectNode.dimension === 'event') {
             const fromId = `state:${createHash('sha256').update(`${projectId}\0${transition.from}`).digest('hex').slice(0, 32)}`;
             const existingFrom = this.atlasStore.getNodeIncludingInactive(fromId, projectId);
             if (existingFrom && !['active', 'weak'].includes(existingFrom.status)) continue;
@@ -86,7 +90,7 @@ export class MemoryFrameProjector {
             this.upsertSupport(projectId, fromId, frame, transition.evidenceEventIds, now);
             this.upsertEdge(projectId, subject, fromId, { sourceFrameNodeId: transition.subjectFrameNodeId, relationType: 'CHANGED_FROM', targetFrameNodeId: fromId, confidence: transition.confidence, evidenceEventIds: transition.evidenceEventIds }, frame, now);
           }
-          this.upsertEdge(projectId, subject, stateId, { sourceFrameNodeId: transition.subjectFrameNodeId, relationType: 'CHANGED_TO', targetFrameNodeId: stateId, confidence: transition.confidence, evidenceEventIds: transition.evidenceEventIds }, frame, now);
+          if (subjectNode.dimension === 'event') this.upsertEdge(projectId, subject, stateId, { sourceFrameNodeId: transition.subjectFrameNodeId, relationType: 'CHANGED_TO', targetFrameNodeId: stateId, confidence: transition.confidence, evidenceEventIds: transition.evidenceEventIds }, frame, now);
           edges += 1;
         }
     }
@@ -150,6 +154,12 @@ export class MemoryFrameProjector {
     if (!eventIds.length) return fallback;
     const row = this.db.prepare(`SELECT MIN(occurred_at) AS occurred_at FROM memory_events WHERE event_id IN (${eventIds.map(() => '?').join(',')})`).get(...eventIds) as { occurred_at?: number } | null;
     return row?.occurred_at == null ? fallback : Number(row.occurred_at);
+  }
+
+  private evidenceLocalDate(eventIds: string[]): string | undefined {
+    if (!eventIds.length) return undefined;
+    const row = this.db.prepare(`SELECT local_date FROM memory_events WHERE event_id IN (${eventIds.map(() => '?').join(',')}) AND local_date IS NOT NULL ORDER BY occurred_at LIMIT 1`).get(...eventIds) as { local_date?: string } | null;
+    return row?.local_date || undefined;
   }
 }
 

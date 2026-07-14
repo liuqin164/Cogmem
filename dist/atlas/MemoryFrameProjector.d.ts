@@ -18,5 +18,6 @@ export declare class MemoryFrameProjector {
     private upsertAlias;
     private upsertEdge;
     private evidenceTime;
+    private evidenceLocalDate;
 }
 //# sourceMappingURL=MemoryFrameProjector.d.ts.map

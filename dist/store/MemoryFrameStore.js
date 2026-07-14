@@ -101,7 +101,7 @@ export class MemoryFrameStore {
         if (!actor.trim() || !reason.trim())
             throw new Error('memory_frame_review_actor_reason_required');
         const row = this.db.prepare(`SELECT project_id,status FROM memory_frames WHERE frame_id=?`).get(frameId);
-        if (!row || row.project_id !== projectId || !['needs_confirmation', 'staged'].includes(String(row.status)))
+        if (!row || row.project_id !== projectId || row.status !== 'needs_confirmation')
             return false;
         return Boolean(this.db.transaction(() => {
             if (action === 'approve') {
@@ -142,9 +142,9 @@ export class MemoryFrameStore {
             changed += Number(this.db.prepare(`UPDATE memory_frames SET status='superseded', updated_at=? WHERE episode_id=? AND status IN ('active','needs_confirmation','staged')`).run(now, id).changes ?? 0);
             try {
                 this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE source_type IN ('frame','frame_edge') AND source_episode_id=? AND status='active'`).run(now, id);
-                this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE source_frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id=?) AND status='active'`).run(now, id);
-                this.db.prepare(`UPDATE memory_edges SET status='archived', updated_at=? WHERE edge_id IN (SELECT node_id FROM memory_atlas_supports WHERE source_episode_id=? AND source_type='frame_edge') AND status IN ('active','weak')`).run(now, id);
-                this.db.prepare(`UPDATE memory_atlas_documents SET status='archived', updated_at=? WHERE project_id IN (SELECT project_id FROM memory_frames WHERE episode_id=?) AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2' AND json_extract(metadata_json,'$.frameId') IN (SELECT frame_id FROM memory_frames WHERE episode_id=?)`).run(now, id, id);
+                this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE source_frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id=?) AND status='active' AND NOT EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.node_id=memory_atlas_aliases.node_id AND s.source_type='frame' AND s.status='active')`).run(now, id);
+                this.db.prepare(`UPDATE memory_edges SET status='archived', updated_at=? WHERE edge_id IN (SELECT node_id FROM memory_atlas_supports WHERE source_episode_id=? AND source_type='frame_edge') AND status IN ('active','weak') AND NOT EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.node_id=memory_edges.edge_id AND s.source_type='frame_edge' AND s.status='active')`).run(now, id);
+                this.db.prepare(`UPDATE memory_atlas_documents SET status='archived', updated_at=? WHERE project_id IN (SELECT project_id FROM memory_frames WHERE episode_id=?) AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2' AND NOT EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.node_id=memory_atlas_documents.node_id AND s.status='active')`).run(now, id);
             }
             catch { /* pre-0033 compatibility */ }
         }
