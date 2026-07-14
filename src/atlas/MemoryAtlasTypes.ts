@@ -65,7 +65,7 @@ export interface MemoryAtlasNode {
 }
 
 export interface MemoryAtlasMatchedFacet {
-  type: 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind';
+  type: 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind' | 'actor' | 'project' | 'event' | 'task' | 'state' | 'object' | 'location';
   value: string;
   label: string;
   nodeId: string;

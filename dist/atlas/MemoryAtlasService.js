@@ -52,11 +52,22 @@ export class MemoryAtlasService {
             targetNodeIds: seedNodeIds.length ? seedNodeIds : undefined,
         });
         if (seedNodeIds.length) {
-            const bridgeEdges = this.store.listEdgesForNodes(projectId, seedNodeIds, Math.max(60, limit * 12));
-            const bridgeIds = [...new Set(bridgeEdges.flatMap((edge) => [edge.source, edge.target]))]
-                .filter((id) => !seedNodeIds.includes(id));
-            const bridgeNodes = bridgeIds.map((id) => this.store.getNode(id, projectId)).filter((node) => Boolean(node));
-            nodes = uniqueNodes([...nodes, ...bridgeNodes]).slice(0, limit);
+            const selected = new Set(seedNodeIds);
+            let frontier = [...seedNodeIds];
+            for (let depth = 0; depth < 3 && frontier.length; depth += 1) {
+                const edges = this.store.listEdgesForNodes(projectId, frontier, Math.max(60, limit * 12));
+                const next = [];
+                for (const edge of edges) {
+                    for (const id of [edge.source, edge.target])
+                        if (!selected.has(id)) {
+                            selected.add(id);
+                            next.push(id);
+                        }
+                }
+                frontier = next.slice(0, Math.max(1, limit * 2));
+            }
+            const pathNodes = [...selected].map((id) => this.store.getNode(id, projectId)).filter((node) => Boolean(node));
+            nodes = uniqueNodes([...nodes, ...pathNodes]).slice(0, limit);
         }
         if (cards.length) {
             const cardNodes = cards.map((card) => this.store.getNode(card.canonicalId, projectId)).filter((node) => Boolean(node));

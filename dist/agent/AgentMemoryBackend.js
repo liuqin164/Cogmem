@@ -268,8 +268,10 @@ export class KernelAgentMemoryBackend {
             ? this.kernel.recall(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true })
             : undefined;
         const atlasItems = allowsGraph && allowsRawSource
-            ? (multidimensionalRecall?.atlas?.cards ?? [])
-                .map((card) => this.toAgentRecallItemFromAtlasCard(card, query))
+            ? [
+                ...(multidimensionalRecall?.atlas?.cards ?? []).map((card) => this.toAgentRecallItemFromAtlasCard(card, query)),
+                ...(multidimensionalRecall?.atlas?.nodes ?? []).map((node) => this.toAgentRecallItemFromAtlasNode(node, query)),
+            ]
                 .filter((item) => Boolean(item))
                 .filter((item) => this.isAllowedAtlasCollection(item, query.collection))
             : [];
@@ -631,6 +633,29 @@ export class KernelAgentMemoryBackend {
             confidence: Math.min(1, 0.7 + card.matchedFacets.length * 0.08),
             whyMatched: card.whyMatched,
             canAnswerExactQuote: Boolean(sourceContext),
+        };
+    }
+    toAgentRecallItemFromAtlasNode(node, query) {
+        const eventId = node.evidence?.[0]?.eventId;
+        if (!eventId)
+            return null;
+        const event = this.kernel.eventStore.getEvent(eventId);
+        if (!event || !this.isAgentRawEvent(event, query.agentId) || !this.isRawEventInRecallScope(event, query, query.intent))
+            return null;
+        return {
+            id: `atlas-node:${node.id}`,
+            text: [node.label, node.summary].filter(Boolean).join(': '),
+            projectId: query.projectId,
+            canonicalId: node.id,
+            displayTitle: node.label,
+            tags: ['atlas_node', node.nodeType],
+            source: 'memory_atlas',
+            sourceType: 'raw_ledger',
+            sourceAnchor: this.toAgentSourceAnchor(event),
+            sourceContext: this.toAgentSourceContext(eventId, query),
+            confidence: node.confidence,
+            whyMatched: `atlas_${node.nodeType}`,
+            canAnswerExactQuote: false,
         };
     }
     isAllowedAtlasCollection(item, collection) {

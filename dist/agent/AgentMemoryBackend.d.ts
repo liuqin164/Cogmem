@@ -261,6 +261,7 @@ export declare class KernelAgentMemoryBackend {
     private facetGraphQuoteItemsForQuery;
     private facetGraphItemsForQuery;
     private toAgentRecallItemFromAtlasCard;
+    private toAgentRecallItemFromAtlasNode;
     private isAllowedAtlasCollection;
     private recallForensicAnchor;
     private searchRawEventsByQueryPlan;
