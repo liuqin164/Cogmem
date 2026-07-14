@@ -250,19 +250,22 @@ export class KernelAgentMemoryBackend {
             intent: query.intent,
             anchorText: query.anchorText,
         });
-        if (queryPlan.intent === 'previous_session_summary') {
-            return this.recallPreviousSession(query, queryPlan);
-        }
-        if (queryPlan.intent === 'forensic_quote') {
-            return this.recallForensicQuote(query, queryPlan);
-        }
-        if (queryPlan.intent === 'historical_discussion' || queryPlan.intent === 'action_history') {
-            return this.recallHistoricalDiscussion(query, queryPlan);
-        }
         const limit = query.limit ?? 5;
         const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
         const allowsCompiled = laneAllowed(query.retrievalPolicy, 'compiled');
         const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
+        const earlyAtlasItems = query.projectId && allowsGraph
+            ? this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource)
+            : [];
+        if (queryPlan.intent === 'previous_session_summary') {
+            return this.withAtlasItems(this.recallPreviousSession(query, queryPlan), earlyAtlasItems, limit);
+        }
+        if (queryPlan.intent === 'forensic_quote') {
+            return this.withAtlasItems(this.recallForensicQuote(query, queryPlan), earlyAtlasItems, limit);
+        }
+        if (queryPlan.intent === 'historical_discussion' || queryPlan.intent === 'action_history') {
+            return this.withAtlasItems(this.recallHistoricalDiscussion(query, queryPlan), earlyAtlasItems, limit);
+        }
         const retrievalLimit = Math.max(limit * 4, 24);
         const multidimensionalRecall = query.projectId && allowsGraph
             ? this.kernel.recall(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true })
@@ -893,6 +896,22 @@ export class KernelAgentMemoryBackend {
                 break;
         }
         return out;
+    }
+    withAtlasItems(result, atlasItems, limit) {
+        if (!atlasItems.length)
+            return result;
+        return { ...result, items: this.mergeRecallItems(result.items, atlasItems, limit) };
+    }
+    atlasItemsForAgentQuery(searchText, query, allowsRawSource) {
+        const recall = this.kernel.recall(searchText, { projectId: query.projectId, limit: Math.max((query.limit ?? 5) * 4, 24), includeRawEvidence: true });
+        const cards = (recall.atlas?.cards ?? []).map((card) => this.toAgentRecallItemFromAtlasCard(card, query));
+        const nodes = (recall.atlas?.nodes ?? [])
+            .filter((node) => ['actor', 'event', 'task', 'object', 'location', 'state', 'project'].includes(node.nodeType))
+            .map((node) => this.toAgentRecallItemFromAtlasNode(node, query));
+        return [...cards, ...nodes]
+            .filter((item) => Boolean(item))
+            .filter((item) => item.sourceType !== 'raw_ledger' || allowsRawSource)
+            .filter((item) => this.isAllowedAtlasCollection(item, query.collection));
     }
     mergeHistoricalRecallItems(facetItems, rawItems, graphItems, compiledItems, limit) {
         const merged = this.mergeRecallItems(facetItems, this.mergeRecallItems(rawItems, this.mergeRecallItems(graphItems, compiledItems, limit), limit), limit);

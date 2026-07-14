@@ -35,22 +35,17 @@ export class AtlasPathRetriever {
         });
         const seedIds = [...new Set(this.atlas.resolveQueryAliases(query, options.projectId).map((alias) => alias.nodeId))];
         const intersection = seedIds.length > 1 ? nodesReachableFromAll(seedIds, result.edges, 3) : undefined;
-        const requestedTypes = new Set([
-            ...(queryFrame.actors ?? []).map(() => 'actor'), ...(queryFrame.projects ?? []).map(() => 'project'),
-            ...(queryFrame.topics ?? []).map(() => 'topic'), ...(queryFrame.issues ?? []).map(() => 'issue'),
-            ...(queryFrame.events ?? []).map(() => 'event'), ...(queryFrame.tasks ?? []).map(() => 'task'),
-            ...(queryFrame.entities ?? []).map(() => 'entity'), ...(queryFrame.objects ?? []).map(() => 'object'), ...(queryFrame.locations ?? []).map(() => 'location'),
-        ]);
+        const reachable = seedIds.length === 1 ? nodesReachableFromAll(seedIds, result.edges, 3) : undefined;
         const byId = new Map(result.nodes.map((node) => [node.id, node]));
         const matches = (node) => {
-            const requested = !requestedTypes.size || requestedTypes.has(node.nodeType);
             const facets = Object.values(queryFrame).flatMap((value) => Array.isArray(value) ? value : []).filter((item) => Boolean(item && typeof item === 'object'));
             const canonicalMatch = facets.some((facet) => facet.canonicalNodeId === node.id);
             const labelMatch = facets.map((facet) => String(facet.label ?? '').toLocaleLowerCase('und')).some((label) => label && node.label.toLocaleLowerCase('und').includes(label));
             const timeMatch = !queryFrame.time || nodeTimeMatches(node, queryFrame.time, canonicalMatch);
-            const stateMatch = !queryFrame.states?.length || node.nodeType !== 'state' || queryFrame.states.some((state) => node.label.toLocaleLowerCase('und').includes(state.replace('_', ' ')));
-            const intersectionMatch = !intersection || intersection.has(node.id) || canonicalMatch;
-            return requested && timeMatch && stateMatch && intersectionMatch && (canonicalMatch || labelMatch || !requestedTypes.size || requestedTypes.has(node.nodeType));
+            const stateMatch = !queryFrame.states?.length || node.nodeType !== 'state' || queryFrame.states.some((state) => node.label.toLocaleLowerCase('und').includes(state.replaceAll('_', ' ')));
+            const pathMatch = !seedIds.length || Boolean(intersection?.has(node.id) || reachable?.has(node.id) || canonicalMatch);
+            const semanticMatch = !facets.length || canonicalMatch || labelMatch || Boolean(intersection?.has(node.id));
+            return timeMatch && stateMatch && pathMatch && semanticMatch;
         };
         const seeds = result.nodes.filter(matches);
         const selected = new Set(seeds.map((node) => node.id));
@@ -61,6 +56,13 @@ export class AtlasPathRetriever {
                 selected.add(edge.source);
                 selected.add(edge.target);
             }
+        if (queryFrame.time) {
+            for (const id of [...selected]) {
+                const node = byId.get(id);
+                if (node && !seedIds.includes(id) && !nodeTimeMatches(node, queryFrame.time, false))
+                    selected.delete(id);
+            }
+        }
         result.nodes = this.ranker.rank(result.nodes.filter((node) => selected.has(node.id)), queryFrame).slice(0, Math.min(options.limit ?? 30, 100));
         const visible = new Set(result.nodes.map((node) => node.id));
         result.edges = result.edges.filter((edge) => visible.has(edge.source) && visible.has(edge.target));

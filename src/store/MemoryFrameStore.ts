@@ -92,7 +92,7 @@ export class MemoryFrameStore {
 
   getByEpisode(projectId: string, episodeId: string, statuses: MemoryFrameStatus[] = ['active', 'needs_confirmation']): MemoryFrameV1 | null {
     const placeholders = statuses.map(() => '?').join(',');
-    const row = this.db.prepare(`SELECT frame_id FROM memory_frames WHERE project_id=? AND episode_id=? AND status IN (${placeholders}) ORDER BY updated_at DESC, frame_id DESC LIMIT 1`).get(projectId, episodeId, ...statuses) as { frame_id?: string } | null;
+    const row = this.db.prepare(`SELECT frame_id FROM memory_frames WHERE project_id=? AND episode_id=? AND status IN (${placeholders}) ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'needs_confirmation' THEN 1 ELSE 2 END, updated_at DESC, frame_id DESC LIMIT 1`).get(projectId, episodeId, ...statuses) as { frame_id?: string } | null;
     return row?.frame_id ? this.get(row.frame_id) : null;
   }
 
@@ -124,10 +124,10 @@ export class MemoryFrameStore {
         if (!validation.valid || !this.hasPublishableEvidence(frameId, projectId, String(frame?.episodeId ?? ''))) {
           throw new Error(`memory_frame_review_evidence_invalid:${frameId}`);
         }
+        this.db.prepare(`UPDATE memory_frames SET status='superseded',publish_status='needs_confirmation',updated_at=? WHERE project_id=? AND episode_id=(SELECT episode_id FROM memory_frames WHERE frame_id=?) AND frame_id<>? AND status='active'`).run(now, projectId, frameId, frameId);
         const changed = Number(this.db.prepare(`UPDATE memory_frames SET status='active',publish_status='active',needs_review=0,updated_at=? WHERE frame_id=? AND status='needs_confirmation'`).run(now, frameId).changes ?? 0) === 1;
         if (!changed) throw new Error(`memory_frame_review_conflict:${frameId}`);
         this.db.prepare(`INSERT INTO memory_frame_reviews(review_id,frame_id,project_id,action,actor,reason,created_at) VALUES(?,?,?,?,?,?,?)`).run(randomUUID(), frameId, projectId, action, actor, reason, now);
-        this.db.prepare(`UPDATE memory_frames SET status='superseded',updated_at=? WHERE project_id=? AND episode_id=(SELECT episode_id FROM memory_frames WHERE frame_id=?) AND frame_id<>? AND status='active'`).run(now, projectId, frameId, frameId);
         this.markDirty(projectId, now);
         return true;
       }
@@ -155,7 +155,6 @@ export class MemoryFrameStore {
         if (this.tableExists('memory_atlas_aliases')) this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE source_frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id=?) AND status='active' AND NOT EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.node_id=memory_atlas_aliases.node_id AND s.source_type='frame' AND s.status='active')`).run(now, id);
         if (this.tableExists('memory_atlas_alias_supports')) {
           this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE source_episode_id=? AND status='active'`).run(now, id);
-          this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE status='active' AND NOT EXISTS (SELECT 1 FROM memory_atlas_alias_supports s WHERE s.alias_id=memory_atlas_aliases.alias_id AND s.status='active') AND project_id IN (SELECT project_id FROM memory_frames WHERE episode_id=?)`).run(now, id);
         }
         if (this.tableExists('memory_edges')) this.db.prepare(`UPDATE memory_edges SET status='archived', updated_at=? WHERE edge_id IN (SELECT node_id FROM memory_atlas_supports WHERE source_episode_id=? AND source_type='frame_edge') AND status IN ('active','weak') AND NOT EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.node_id=memory_edges.edge_id AND s.source_type='frame_edge' AND s.status='active')`).run(now, id);
         if (this.tableExists('memory_atlas_documents')) this.db.prepare(`UPDATE memory_atlas_documents SET status='archived', updated_at=? WHERE project_id IN (SELECT project_id FROM memory_frames WHERE episode_id=?) AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2' AND NOT EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.node_id=memory_atlas_documents.node_id AND s.status='active')`).run(now, id);
@@ -170,11 +169,13 @@ export class MemoryFrameStore {
     return this.db.transaction(() => {
       const countRow = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_frames WHERE project_id=?`).get(projectId) as { count?: number } | null;
       const count = Number(countRow?.count ?? 0);
-      if (this.tableExists('memory_atlas_supports')) this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
+      if (this.tableExists('memory_atlas_supports')) this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type IN ('frame','frame_edge') AND status='active'`).run(now, projectId);
       if (this.tableExists('memory_atlas_alias_supports')) this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
-      if (this.tableExists('memory_atlas_aliases')) this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
-      if (this.tableExists('memory_atlas_fts')) this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=?`).run(projectId);
-      if (this.tableExists('memory_atlas_documents')) this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=?`).run(projectId);
+      if (this.tableExists('memory_atlas_aliases')) this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE project_id=? AND source_frame_id IS NOT NULL AND status='active'`).run(now, projectId);
+      if (this.tableExists('memory_atlas_documents')) {
+        if (this.tableExists('memory_atlas_fts')) this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2')`).run(projectId, projectId);
+        this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2'`).run(projectId);
+      }
       if (this.tableExists('memory_edges')) this.db.prepare(`UPDATE memory_edges SET status='archived', updated_at=? WHERE project_id=? AND source_authority='memory_frame_projector' AND status IN ('active','weak')`).run(now, projectId);
       const deleted = Number(this.db.prepare(`DELETE FROM memory_frames WHERE project_id=?`).run(projectId).changes ?? 0);
       if (deleted || count) this.markDirty(projectId, now);
@@ -185,12 +186,17 @@ export class MemoryFrameStore {
   private tableExists(name: string): boolean { return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name)); }
 
   private markDirty(projectId: string, now: number): void {
-    try { this.db.prepare(`INSERT INTO memory_atlas_projection_state(project_id,projection_name,cursor_value,status,last_rebuild_at,last_error,metadata_json) VALUES(?, 'memory_atlas.v2', NULL, 'dirty', ?, NULL, ?) ON CONFLICT(project_id,projection_name) DO UPDATE SET status='dirty', cursor_value=NULL, last_error=NULL, metadata_json=excluded.metadata_json`).run(projectId, now, JSON.stringify({ dirtyBecause: 'memory_frame_changed' })); } catch { /* bootstrap may precede Atlas state */ }
+    try {
+      this.db.prepare(`INSERT INTO memory_atlas_projection_state(project_id,projection_name,cursor_value,status,last_rebuild_at,last_error,metadata_json) VALUES(?, 'memory_atlas.v2', NULL, 'dirty', ?, NULL, ?) ON CONFLICT(project_id,projection_name) DO UPDATE SET status='dirty', cursor_value=NULL, last_error=NULL, metadata_json=excluded.metadata_json`).run(projectId, now, JSON.stringify({ dirtyBecause: 'memory_frame_changed' }));
+    } catch (error) {
+      if (this.tableExists('memory_atlas_projection_state')) throw error;
+    }
   }
 
   private publishUnsafe(frameId: string, from: MemoryFrameStatus, to: MemoryFrameStatus | undefined, now: number): boolean {
     const row = this.db.prepare(`SELECT project_id, episode_id, publish_status, needs_review FROM memory_frames WHERE frame_id=?`).get(frameId) as { project_id: string; episode_id: string; publish_status?: MemoryFrameStatus; needs_review?: number } | null;
     if (!row) return false;
+    if (from !== 'staged' || !['active', 'needs_confirmation'].includes(to ?? row.publish_status ?? 'active')) return false;
     const next = to ?? row.publish_status ?? 'active';
     if (next === 'active' && row.needs_review) return false;
     if (next === 'active') {
@@ -199,9 +205,9 @@ export class MemoryFrameStore {
       if (!validation.valid || !this.hasPublishableEvidence(frameId, row.project_id, row.episode_id)) return false;
     }
     const publication = next === 'active' ? 'active' : next === 'needs_confirmation' ? 'needs_confirmation' : row.publish_status;
+    if (next === 'active') this.db.prepare(`UPDATE memory_frames SET status='superseded', publish_status='needs_confirmation', updated_at=? WHERE project_id=? AND episode_id=? AND frame_id<>? AND status='active'`).run(now, row.project_id, row.episode_id, frameId);
     const changed = Number(this.db.prepare(`UPDATE memory_frames SET status=?, publish_status=?, updated_at=? WHERE frame_id=? AND status=?`).run(next, publication ?? 'active', now, frameId, from).changes ?? 0) === 1;
     if (!changed) return false;
-    if (next === 'active') this.db.prepare(`UPDATE memory_frames SET status='superseded', updated_at=? WHERE project_id=? AND episode_id=? AND frame_id<>? AND status IN ('active','needs_confirmation')`).run(now, row.project_id, row.episode_id, frameId);
     this.markDirty(row.project_id, now);
     return true;
   }

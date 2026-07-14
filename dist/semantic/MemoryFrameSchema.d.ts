@@ -20,6 +20,18 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
             readonly type: "string";
             readonly minLength: 1;
         };
+        readonly revisionId: {
+            readonly type: "string";
+            readonly minLength: 1;
+        };
+        readonly revisionNumber: {
+            readonly type: "integer";
+            readonly minimum: 1;
+        };
+        readonly supersedesFrameId: {
+            readonly type: "string";
+            readonly minLength: 1;
+        };
         readonly title: {
             readonly type: "string";
         };
@@ -179,6 +191,28 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     readonly type: "number";
                 };
             };
+        };
+        readonly primaryLanguage: {
+            readonly type: "string";
+        };
+        readonly sourceAuthority: {
+            readonly type: "string";
+            readonly enum: readonly ["processor", "deterministic_fallback"];
+        };
+        readonly semanticCompleteness: {
+            readonly type: "string";
+            readonly enum: readonly ["full", "minimal"];
+        };
+        readonly needsReview: {
+            readonly type: "boolean";
+        };
+        readonly publishStatus: {
+            readonly type: "string";
+            readonly enum: readonly ["active", "needs_confirmation"];
+        };
+        readonly status: {
+            readonly type: "string";
+            readonly enum: readonly ["staged", "active", "needs_confirmation", "superseded", "failed"];
         };
     };
 };

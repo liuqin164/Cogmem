@@ -81,7 +81,6 @@ import { MemoryBindingStore } from './store/MemoryBindingStore.js';
 import { MemoryAtlasStore } from './store/MemoryAtlasStore.js';
 import { MemoryFrameStore, frameSourceFingerprint } from './store/MemoryFrameStore.js';
 import { deterministicFrameFallback } from './semantic/DeterministicFrameFallback.js';
-import { StructuredSemanticProcessor } from './semantic/StructuredSemanticProcessor.js';
 import { MemoryAtlasIndexer, MemoryAtlasService, } from './atlas/index.js';
 import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { SummaryStore } from './store/SummaryStore.js';
@@ -333,7 +332,6 @@ export class MemoryKernel {
                 statement: `${belief.subject} ${belief.predicate} ${String(belief.objectValue)}`, projectId: belief.projectId,
             })))),
             memoryFrameStore: this.memoryFrameStore,
-            semanticProcessor: new StructuredSemanticProcessor(async (input) => deterministicFrameFallback({ ...input, now: Date.now() })),
         });
         this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker, this.deepWriteCandidateStore, this.memoryFrameStore);
         this.topicSummaryBoard = new TopicSummaryBoard(this.memoryGraph, this.summaryStore);

@@ -6,6 +6,7 @@ export const MEMORY_FRAME_JSON_SCHEMA = {
     properties: {
         schemaVersion: { const: MEMORY_FRAME_SCHEMA_VERSION },
         frameId: { type: 'string', minLength: 1 }, projectId: { type: 'string', minLength: 1 }, episodeId: { type: 'string', minLength: 1 },
+        revisionId: { type: 'string', minLength: 1 }, revisionNumber: { type: 'integer', minimum: 1 }, supersedesFrameId: { type: 'string', minLength: 1 },
         title: { type: 'string' }, summary: { type: 'string' }, confidence: { type: 'number', minimum: 0, maximum: 1 },
         evidenceEventIds: { type: 'array', items: { type: 'string', minLength: 1 } },
         episodeKind: { type: 'string', enum: ['discussion', 'operation', 'decision', 'correction', 'diagnostic', 'planning', 'status_update', 'preference', 'other'] },
@@ -14,6 +15,9 @@ export const MEMORY_FRAME_JSON_SCHEMA = {
         temporalReferences: { type: 'array', items: { type: 'object', required: ['label', 'confidence', 'evidenceEventIds'], properties: { label: { type: 'string' }, occurredAt: { type: 'number' }, confidence: { type: 'number', minimum: 0, maximum: 1 }, evidenceEventIds: { type: 'array', items: { type: 'string' } } } } },
         stateTransitions: { type: 'array', items: { type: 'object', required: ['subjectFrameNodeId', 'to', 'confidence', 'evidenceEventIds'], properties: { subjectFrameNodeId: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' }, confidence: { type: 'number', minimum: 0, maximum: 1 }, evidenceEventIds: { type: 'array', items: { type: 'string' } } } } },
         processor: { type: 'object', required: ['promptVersion', 'generatedAt'], properties: { provider: { type: 'string' }, model: { type: 'string' }, promptVersion: { type: 'string', minLength: 1 }, generatedAt: { type: 'number' } } },
+        primaryLanguage: { type: 'string' }, sourceAuthority: { type: 'string', enum: ['processor', 'deterministic_fallback'] },
+        semanticCompleteness: { type: 'string', enum: ['full', 'minimal'] }, needsReview: { type: 'boolean' },
+        publishStatus: { type: 'string', enum: ['active', 'needs_confirmation'] }, status: { type: 'string', enum: ['staged', 'active', 'needs_confirmation', 'superseded', 'failed'] },
     },
 };
 export function isMemoryFrame(value) {
@@ -26,7 +30,10 @@ export function isMemoryFrame(value) {
     return Boolean(frame.schemaVersion === MEMORY_FRAME_SCHEMA_VERSION && typeof frame.frameId === 'string'
         && typeof frame.projectId === 'string' && typeof frame.episodeId === 'string'
         && typeof frame.title === 'string' && typeof frame.summary === 'string'
-        && objectArray(frame.nodes) && objectArray(frame.relations) && objectArray(frame.temporalReferences) && objectArray(frame.stateTransitions)
+        && objectArray(frame.nodes) && Array.isArray(frame.nodes) && frame.nodes.length <= 256
+        && objectArray(frame.relations) && Array.isArray(frame.relations) && frame.relations.length <= 512
+        && objectArray(frame.temporalReferences) && Array.isArray(frame.temporalReferences) && frame.temporalReferences.length <= 128
+        && objectArray(frame.stateTransitions) && Array.isArray(frame.stateTransitions) && frame.stateTransitions.length <= 128
         && stringArray(frame.evidenceEventIds)
         && Boolean(processor) && typeof processor?.promptVersion === 'string' && processor.promptVersion.trim().length > 0 && Number.isFinite(processor.generatedAt));
 }

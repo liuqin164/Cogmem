@@ -8,10 +8,23 @@ export const migration_0039: Migration = {
     const table = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_frames'`).get();
     if (!table) return;
     db.exec(`
+      CREATE TEMP TABLE IF NOT EXISTS _memory_frame_revision_lineages AS
+      SELECT episode_id, source_fingerprint, processor_prompt_version
+      FROM memory_frames
+      WHERE revision_number IS NULL
+      GROUP BY episode_id, source_fingerprint, processor_prompt_version
+      UNION
+      SELECT episode_id, source_fingerprint, processor_prompt_version
+      FROM memory_frames
+      GROUP BY episode_id, source_fingerprint, processor_prompt_version, revision_number
+      HAVING COUNT(*) > 1;
       UPDATE memory_frames
       SET revision_number=-rowid
-      WHERE revision_number IS NULL OR revision_number IN (
-        SELECT revision_number FROM memory_frames GROUP BY episode_id, source_fingerprint, processor_prompt_version, revision_number HAVING COUNT(*) > 1
+      WHERE revision_number IS NULL OR EXISTS (
+        SELECT 1 FROM _memory_frame_revision_lineages l
+        WHERE l.episode_id=memory_frames.episode_id
+          AND l.source_fingerprint=memory_frames.source_fingerprint
+          AND l.processor_prompt_version=memory_frames.processor_prompt_version
       );
     `);
     db.exec(`
@@ -30,10 +43,10 @@ export const migration_0039: Migration = {
     `);
     db.exec(`
       UPDATE memory_frames
-      SET status='superseded', updated_at=CAST(strftime('%s','now') AS INTEGER)*1000
+      SET status='superseded', publish_status='needs_confirmation', updated_at=CAST(strftime('%s','now') AS INTEGER)*1000
       WHERE status='active' AND frame_id NOT IN (
         SELECT frame_id FROM (
-          SELECT frame_id, ROW_NUMBER() OVER (PARTITION BY episode_id ORDER BY revision_number DESC, created_at DESC, frame_id DESC) AS rank
+          SELECT frame_id, ROW_NUMBER() OVER (PARTITION BY episode_id ORDER BY created_at DESC, revision_number DESC, frame_id DESC) AS rank
           FROM memory_frames WHERE status='active'
         ) WHERE rank=1
       );
@@ -41,6 +54,7 @@ export const migration_0039: Migration = {
         ON memory_frames(episode_id) WHERE status='active';
       CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_frames_revision_number
         ON memory_frames(episode_id, source_fingerprint, processor_prompt_version, revision_number);
+      DROP TABLE IF EXISTS _memory_frame_revision_lineages;
     `);
   },
   down() {},

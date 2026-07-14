@@ -5,6 +5,7 @@ export function validateMemoryFrame(value, options = {}) {
         return { valid: false, errors: ['invalid_memory_frame_shape'] };
     const frame = value;
     const errors = [];
+    const limits = { nodes: 256, relations: 512, temporalReferences: 128, stateTransitions: 128, aliases: 64, evidence: 1000, text: 20000 };
     const episodeKinds = new Set(['discussion', 'operation', 'decision', 'correction', 'diagnostic', 'planning', 'status_update', 'preference', 'other']);
     const statuses = new Set(['staged', 'active', 'needs_confirmation', 'superseded', 'failed']);
     const publishStatuses = new Set(['active', 'needs_confirmation']);
@@ -20,6 +21,14 @@ export function validateMemoryFrame(value, options = {}) {
         errors.push('invalid_primary_language');
     if (frame.nodes.length === 0)
         errors.push('frame_nodes_required');
+    if (frame.nodes.length > limits.nodes)
+        errors.push('frame_nodes_limit_exceeded');
+    if (frame.relations.length > limits.relations)
+        errors.push('frame_relations_limit_exceeded');
+    if (frame.temporalReferences.length > limits.temporalReferences)
+        errors.push('frame_temporal_references_limit_exceeded');
+    if (frame.stateTransitions.length > limits.stateTransitions)
+        errors.push('frame_state_transitions_limit_exceeded');
     if (!frame.frameId.trim() || !frame.projectId.trim() || !frame.episodeId.trim())
         errors.push('empty_frame_identity');
     if (!frame.processor || typeof frame.processor.promptVersion !== 'string' || !frame.processor.promptVersion.trim() || !Number.isFinite(frame.processor.generatedAt))
@@ -37,6 +46,10 @@ export function validateMemoryFrame(value, options = {}) {
             errors.push(`invalid_memory_dimension:${node.frameNodeId}`);
     if (frame.evidenceEventIds.length === 0 && !options.allowEmptyEvidence)
         errors.push('frame_evidence_required');
+    if (frame.evidenceEventIds.length > limits.evidence)
+        errors.push('frame_evidence_limit_exceeded');
+    if (frame.title.length > limits.text || frame.summary.length > limits.text)
+        errors.push('frame_text_limit_exceeded');
     if (!Number.isFinite(frame.confidence) || frame.confidence < 0 || frame.confidence > 1)
         errors.push('invalid_frame_confidence');
     const nodes = new Map(frame.nodes.map((node) => [node.frameNodeId, node]));
@@ -59,9 +72,9 @@ export function validateMemoryFrame(value, options = {}) {
             errors.push(`node_evidence_required:${node.frameNodeId}`);
         if (!node.evidenceEventIds.every((id) => evidence.has(id)))
             errors.push(`node_evidence_not_in_frame:${node.frameNodeId}`);
-        if (node.aliases !== undefined && (!Array.isArray(node.aliases) || node.aliases.some((alias) => typeof alias !== 'string')))
+        if (node.aliases !== undefined && (!Array.isArray(node.aliases) || node.aliases.length > limits.aliases || node.aliases.some((alias) => typeof alias !== 'string')))
             errors.push(`invalid_node_aliases:${node.frameNodeId}`);
-        if (node.aliases?.some((alias) => !alias.trim()))
+        if (Array.isArray(node.aliases) && node.aliases.some((alias) => !alias.trim()))
             errors.push(`empty_node_alias:${node.frameNodeId}`);
     }
     for (const relation of frame.relations) {
@@ -94,7 +107,7 @@ export function validateMemoryFrame(value, options = {}) {
             errors.push('invalid_temporal_reference');
         if (reference.occurredAt !== undefined && !Number.isFinite(reference.occurredAt))
             errors.push('invalid_temporal_reference_time');
-        if (!reference.evidenceEventIds.every((id) => evidence.has(id)))
+        if (Array.isArray(reference.evidenceEventIds) && !reference.evidenceEventIds.every((id) => evidence.has(id)))
             errors.push('temporal_reference_evidence_not_in_frame');
     }
     for (const transition of frame.stateTransitions) {
@@ -102,7 +115,7 @@ export function validateMemoryFrame(value, options = {}) {
             errors.push('state_transition_node_missing');
         if (typeof transition.to !== 'string' || !Array.isArray(transition.evidenceEventIds) || !transition.to.trim() || !Number.isFinite(transition.confidence) || transition.confidence < 0 || transition.confidence > 1 || !transition.evidenceEventIds.length)
             errors.push('invalid_state_transition');
-        if (!transition.evidenceEventIds.every((id) => evidence.has(id)))
+        if (Array.isArray(transition.evidenceEventIds) && !transition.evidenceEventIds.every((id) => evidence.has(id)))
             errors.push('state_transition_evidence_not_in_frame');
     }
     return { valid: errors.length === 0, errors, frame: errors.length === 0 ? frame : undefined };

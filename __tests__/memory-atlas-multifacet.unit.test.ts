@@ -432,7 +432,7 @@ test('targeted graph reindex restores one episode facets by raw event id', () =>
     expect(kernel.graphExplore('启动 Hermes', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3), limit: 10, refresh: false }).cards ?? []).toHaveLength(0);
     const reindexed = kernel.reindexMemoryAtlas({ projectId: 'openclaw', eventId: event.eventId });
     expect(reindexed.episodeIds).toContain(episodeId);
-    expect(kernel.memoryAtlasStore.getProjectionState('openclaw')?.status).toBe('dirty');
+    expect(kernel.memoryAtlasStore.getProjectionState('openclaw')?.status).toBe('clean');
     const result = kernel.graphExplore('启动 Hermes', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3), limit: 10, refresh: false });
     expect(result.cards?.[0]?.displayTitle).toContain('Hermes');
     expect(result.cards?.[0]?.sourceLocator?.eventId).toBe(event.eventId);

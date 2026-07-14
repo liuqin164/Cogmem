@@ -26,6 +26,13 @@ export class MemoryAtlasIndexer {
         let reviewNeeded = 0;
         try {
             this.db.transaction(() => {
+                const ftsExists = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_atlas_fts'`).get());
+                if (ftsExists) {
+                    if (projectId)
+                        this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=?)`).run(projectId, projectId);
+                    else
+                        this.db.exec(`DELETE FROM memory_atlas_fts WHERE node_id IN (SELECT node_id FROM memory_atlas_documents);`);
+                }
                 if (projectId) {
                     this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time')`).run(projectId);
                 }
@@ -35,7 +42,7 @@ export class MemoryAtlasIndexer {
                 backfillAtlasDocuments(this.db, projectId);
                 const projects = projectId
                     ? [projectId]
-                    : this.db.prepare(`SELECT DISTINCT project_id FROM memory_atlas_documents WHERE project_id<>''`).all().map((row) => row.project_id);
+                    : this.db.prepare(`SELECT project_id FROM memory_atlas_documents WHERE project_id<>'' UNION SELECT project_id FROM memory_frames WHERE status='active' AND project_id<>''`).all().map((row) => row.project_id);
                 for (const id of projects)
                     this.store.upsertDocument({
                         id: `project:${id}`, projectId: id, nodeType: 'project', sourceId: id, label: id,
@@ -89,27 +96,17 @@ export class MemoryAtlasIndexer {
         const ids = Array.from(episodeIds);
         if (!ids.length)
             throw new Error('graph_reindex_target_not_found');
-        let result = { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
-        this.db.transaction(() => {
-            result = this.curator.rebuildEpisodes(options.projectId, ids);
-            this.frameProjector?.rebuild(options.projectId);
-            this.store.markProjectionDirty(options.projectId, {
-                targetedReindex: true,
-                episodeIds: ids,
-                eventId: options.eventId,
-                curatedEpisodes: result.episodeCount,
-                facetEdges: result.facetEdgeCount,
-                reviewNeeded: result.reviewNeeded,
-                reason: 'targeted_reindex_requires_full_consistency_rebuild',
-            });
-        })();
+        // A Frame revision can change shared canonical nodes and edges. A partial
+        // rebuild would leave the project dirty while reporting it as refreshed,
+        // so reindex uses the same clean, transactional path as a full rebuild.
+        const rebuilt = this.rebuild({ projectId: options.projectId });
         return {
             projectId: options.projectId,
             episodeIds: ids,
             refreshed: true,
-            curatedEpisodes: result.episodeCount,
-            facetEdges: result.facetEdgeCount,
-            reviewNeeded: result.reviewNeeded,
+            curatedEpisodes: rebuilt.curatedEpisodes,
+            facetEdges: 0,
+            reviewNeeded: 0,
         };
     }
     ensureAllFresh() {

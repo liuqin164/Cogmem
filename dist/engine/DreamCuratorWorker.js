@@ -41,6 +41,7 @@ export class DreamCuratorWorker {
         }
         const now = options.now ?? Date.now();
         const frameIds = [];
+        let semanticProcessorUnavailable = false;
         if (options.sourceEpisodeId && this.deps.memoryFrameStore) {
             const frameInput = {
                 projectId: options.projectId || events[0]?.projectId || '', episodeId: options.sourceEpisodeId,
@@ -58,7 +59,12 @@ export class DreamCuratorWorker {
                         events: input.events.map((event) => ({ eventId: event.eventId, role: event.role, occurredAt: event.occurredAt, text: eventTextForMemory(event) })),
                     }))))
                     : this.deps.semanticProcessor;
-                frame = processor ? await processor.process(frameInput) : deterministicFrameFallback({ ...frameInput, now });
+                if (!processor) {
+                    semanticProcessorUnavailable = true;
+                }
+                else {
+                    frame = await processor.process(frameInput);
+                }
             }
             catch (error) {
                 this.deps.pipelineMetrics?.recordNonFatal('memory_frame_processor_fallback', {
@@ -68,29 +74,36 @@ export class DreamCuratorWorker {
                 });
                 frame = deterministicFrameFallback({ ...frameInput, now });
             }
-            frame = {
-                ...frame,
-                frameId: `frame:${createHash('sha256').update(`${options.sourceEpisodeId}\0${events.map((event) => event.eventId).join('\0')}`).digest('hex').slice(0, 32)}`,
-                processor: { ...frame.processor, ...this.resolveProviderConfig(options), promptVersion: MEMORY_FRAME_PROMPT_VERSION, generatedAt: now },
-                sourceAuthority: frame.sourceAuthority === 'deterministic_fallback' ? 'deterministic_fallback' : 'processor',
-                needsReview: frame.needsReview || frame.sourceAuthority === 'deterministic_fallback',
-            };
-            if ((options.sourceEpisodeEventIds?.length ?? events.length) > events.length) {
-                frame = { ...frame, semanticCompleteness: 'minimal', needsReview: true, publishStatus: 'needs_confirmation' };
+            if (semanticProcessorUnavailable) {
+                this.deps.pipelineMetrics?.recordNonFatal('semantic_processor_unavailable', { projectId: options.projectId, details: { episodeId: options.sourceEpisodeId } });
             }
-            const savedFrame = this.deps.memoryFrameStore.save({
-                frame,
-                sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), options.sourceEpisodeId),
-                status: 'staged',
-                publishStatus: options.mode === 'shadow' || frame.needsReview
-                    ? 'needs_confirmation'
-                    : (frame.publishStatus ?? 'active'),
-                dreamJobLeaseId: options.dreamJobLeaseId,
-                leaseUntil: options.leaseUntil,
-                attemptGeneration: options.attemptGeneration,
-                now,
-            });
-            frameIds.push(savedFrame.frameId);
+            else {
+                if (!frame)
+                    throw new Error('memory_frame_processor_no_output');
+                frame = {
+                    ...frame,
+                    frameId: `frame:${createHash('sha256').update(`${options.sourceEpisodeId}\0${events.map((event) => event.eventId).join('\0')}`).digest('hex').slice(0, 32)}`,
+                    processor: { ...frame.processor, ...this.resolveProviderConfig(options), promptVersion: MEMORY_FRAME_PROMPT_VERSION, generatedAt: now },
+                    sourceAuthority: frame.sourceAuthority === 'deterministic_fallback' ? 'deterministic_fallback' : 'processor',
+                    needsReview: frame.needsReview || frame.sourceAuthority === 'deterministic_fallback',
+                };
+                if ((options.sourceEpisodeEventIds?.length ?? events.length) > events.length) {
+                    frame = { ...frame, semanticCompleteness: 'minimal', needsReview: true, publishStatus: 'needs_confirmation' };
+                }
+                const savedFrame = this.deps.memoryFrameStore.save({
+                    frame,
+                    sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), options.sourceEpisodeId),
+                    status: 'staged',
+                    publishStatus: options.mode === 'shadow' || frame.needsReview
+                        ? 'needs_confirmation'
+                        : (frame.publishStatus ?? 'active'),
+                    dreamJobLeaseId: options.dreamJobLeaseId,
+                    leaseUntil: options.leaseUntil,
+                    attemptGeneration: options.attemptGeneration,
+                    now,
+                });
+                frameIds.push(savedFrame.frameId);
+            }
         }
         const maxGlobalSeq = Math.max(...events.map((event) => event.globalSeq || 0));
         const dreamableEvents = events.filter((event) => this.isDreamableEvent(event));
@@ -173,8 +186,8 @@ export class DreamCuratorWorker {
                 status: candidateInputs[index]?.status ?? candidate.status,
             })),
             frameIds,
-            semanticProcessorAvailable: providerConfig.provider !== 'rule_only',
-            semanticProcessorReason: providerConfig.provider === 'rule_only' ? 'semantic_processor_unavailable' : undefined,
+            semanticProcessorAvailable: !semanticProcessorUnavailable && providerConfig.provider !== 'rule_only',
+            semanticProcessorReason: semanticProcessorUnavailable || providerConfig.provider === 'rule_only' ? 'semantic_processor_unavailable' : undefined,
         };
     }
     async buildCandidates(events, options, now) {

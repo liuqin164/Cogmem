@@ -276,6 +276,8 @@ export declare class KernelAgentMemoryBackend {
     private structuredCueTerms;
     private itemSearchableText;
     private mergeRecallItems;
+    private withAtlasItems;
+    private atlasItemsForAgentQuery;
     private mergeHistoricalRecallItems;
     private compiledItemsForHistoricalQuery;
     private filterCompiledItemsByQueryCues;

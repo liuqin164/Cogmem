@@ -131,12 +131,13 @@ export class DreamCuratorWorker {
 
     const now = options.now ?? Date.now();
     const frameIds: string[] = [];
+    let semanticProcessorUnavailable = false;
     if (options.sourceEpisodeId && this.deps.memoryFrameStore) {
       const frameInput = {
         projectId: options.projectId || events[0]?.projectId || '', episodeId: options.sourceEpisodeId,
         episodeType: frameEpisodeKind(options.episodeType), events,
       };
-      let frame: MemoryFrameV1;
+      let frame: MemoryFrameV1 | undefined;
       try {
         // A rule-only registry has no semantic model. Use the injected local
         // processor instead of parsing its guaranteed-empty text response.
@@ -148,7 +149,11 @@ export class DreamCuratorWorker {
             events: input.events.map((event) => ({ eventId: event.eventId, role: event.role, occurredAt: event.occurredAt, text: eventTextForMemory(event) })),
           }))))
           : this.deps.semanticProcessor;
-        frame = processor ? await processor.process(frameInput) : deterministicFrameFallback({ ...frameInput, now });
+        if (!processor) {
+          semanticProcessorUnavailable = true;
+        } else {
+          frame = await processor.process(frameInput);
+        }
       } catch (error) {
         this.deps.pipelineMetrics?.recordNonFatal('memory_frame_processor_fallback', {
           projectId: options.projectId,
@@ -157,6 +162,10 @@ export class DreamCuratorWorker {
         });
         frame = deterministicFrameFallback({ ...frameInput, now });
       }
+      if (semanticProcessorUnavailable) {
+        this.deps.pipelineMetrics?.recordNonFatal('semantic_processor_unavailable', { projectId: options.projectId, details: { episodeId: options.sourceEpisodeId } });
+      } else {
+      if (!frame) throw new Error('memory_frame_processor_no_output');
       frame = {
         ...frame,
         frameId: `frame:${createHash('sha256').update(`${options.sourceEpisodeId}\0${events.map((event) => event.eventId).join('\0')}`).digest('hex').slice(0, 32)}`,
@@ -180,6 +189,7 @@ export class DreamCuratorWorker {
         now,
       });
       frameIds.push(savedFrame.frameId);
+      }
     }
     const maxGlobalSeq = Math.max(...events.map((event) => event.globalSeq || 0));
     const dreamableEvents = events.filter((event) => this.isDreamableEvent(event));
@@ -265,8 +275,8 @@ export class DreamCuratorWorker {
         status: candidateInputs[index]?.status ?? candidate.status,
       })),
       frameIds,
-      semanticProcessorAvailable: providerConfig.provider !== 'rule_only',
-      semanticProcessorReason: providerConfig.provider === 'rule_only' ? 'semantic_processor_unavailable' : undefined,
+      semanticProcessorAvailable: !semanticProcessorUnavailable && providerConfig.provider !== 'rule_only',
+      semanticProcessorReason: semanticProcessorUnavailable || providerConfig.provider === 'rule_only' ? 'semantic_processor_unavailable' : undefined,
     };
   }
 

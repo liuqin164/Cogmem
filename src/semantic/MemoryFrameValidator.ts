@@ -8,6 +8,7 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
   if (!isMemoryFrame(value)) return { valid: false, errors: ['invalid_memory_frame_shape'] };
   const frame = value as MemoryFrameV1;
   const errors: string[] = [];
+  const limits = { nodes: 256, relations: 512, temporalReferences: 128, stateTransitions: 128, aliases: 64, evidence: 1000, text: 20000 };
   const episodeKinds = new Set(['discussion','operation','decision','correction','diagnostic','planning','status_update','preference','other']);
   const statuses = new Set(['staged','active','needs_confirmation','superseded','failed']);
   const publishStatuses = new Set(['active','needs_confirmation']);
@@ -17,6 +18,10 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
   if (frame.needsReview !== undefined && typeof frame.needsReview !== 'boolean') errors.push('invalid_needs_review');
   if (frame.primaryLanguage !== undefined && typeof frame.primaryLanguage !== 'string') errors.push('invalid_primary_language');
   if (frame.nodes.length === 0) errors.push('frame_nodes_required');
+  if (frame.nodes.length > limits.nodes) errors.push('frame_nodes_limit_exceeded');
+  if (frame.relations.length > limits.relations) errors.push('frame_relations_limit_exceeded');
+  if (frame.temporalReferences.length > limits.temporalReferences) errors.push('frame_temporal_references_limit_exceeded');
+  if (frame.stateTransitions.length > limits.stateTransitions) errors.push('frame_state_transitions_limit_exceeded');
   if (!frame.frameId.trim() || !frame.projectId.trim() || !frame.episodeId.trim()) errors.push('empty_frame_identity');
   if (!frame.processor || typeof frame.processor.promptVersion !== 'string' || !frame.processor.promptVersion.trim() || !Number.isFinite(frame.processor.generatedAt)) errors.push('invalid_processor_metadata');
   const evidence = new Set(frame.evidenceEventIds);
@@ -27,6 +32,8 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
   if (frame.semanticCompleteness !== undefined && !allowedCompleteness.has(frame.semanticCompleteness)) errors.push('invalid_semantic_completeness');
   for (const node of frame.nodes) if (!dimensions.has(String(node.dimension))) errors.push(`invalid_memory_dimension:${node.frameNodeId}`);
   if (frame.evidenceEventIds.length === 0 && !options.allowEmptyEvidence) errors.push('frame_evidence_required');
+  if (frame.evidenceEventIds.length > limits.evidence) errors.push('frame_evidence_limit_exceeded');
+  if (frame.title.length > limits.text || frame.summary.length > limits.text) errors.push('frame_text_limit_exceeded');
   if (!Number.isFinite(frame.confidence) || frame.confidence < 0 || frame.confidence > 1) errors.push('invalid_frame_confidence');
   const nodes = new Map(frame.nodes.map((node) => [node.frameNodeId, node]));
   if (nodes.size !== frame.nodes.length) errors.push('duplicate_frame_node_id');
@@ -38,8 +45,8 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
     if (!Number.isFinite(node.confidence) || node.confidence < 0 || node.confidence > 1) errors.push(`invalid_node_confidence:${node.frameNodeId}`);
     if (!node.evidenceEventIds.length && !options.allowEmptyEvidence) errors.push(`node_evidence_required:${node.frameNodeId}`);
     if (!node.evidenceEventIds.every((id) => evidence.has(id))) errors.push(`node_evidence_not_in_frame:${node.frameNodeId}`);
-    if (node.aliases !== undefined && (!Array.isArray(node.aliases) || node.aliases.some((alias) => typeof alias !== 'string'))) errors.push(`invalid_node_aliases:${node.frameNodeId}`);
-    if (node.aliases?.some((alias) => !alias.trim())) errors.push(`empty_node_alias:${node.frameNodeId}`);
+    if (node.aliases !== undefined && (!Array.isArray(node.aliases) || node.aliases.length > limits.aliases || node.aliases.some((alias) => typeof alias !== 'string'))) errors.push(`invalid_node_aliases:${node.frameNodeId}`);
+    if (Array.isArray(node.aliases) && node.aliases.some((alias) => !alias.trim())) errors.push(`empty_node_alias:${node.frameNodeId}`);
   }
   for (const relation of frame.relations) {
     const source = nodes.get(relation.sourceFrameNodeId); const target = nodes.get(relation.targetFrameNodeId);
@@ -54,12 +61,12 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
   for (const reference of frame.temporalReferences) {
     if (typeof reference.label !== 'string' || !Array.isArray(reference.evidenceEventIds) || !reference.label.trim() || !Number.isFinite(reference.confidence) || reference.confidence < 0 || reference.confidence > 1 || !reference.evidenceEventIds.length) errors.push('invalid_temporal_reference');
     if (reference.occurredAt !== undefined && !Number.isFinite(reference.occurredAt)) errors.push('invalid_temporal_reference_time');
-    if (!reference.evidenceEventIds.every((id) => evidence.has(id))) errors.push('temporal_reference_evidence_not_in_frame');
+    if (Array.isArray(reference.evidenceEventIds) && !reference.evidenceEventIds.every((id) => evidence.has(id))) errors.push('temporal_reference_evidence_not_in_frame');
   }
   for (const transition of frame.stateTransitions) {
     if (typeof transition.subjectFrameNodeId !== 'string' || !nodes.has(transition.subjectFrameNodeId)) errors.push('state_transition_node_missing');
     if (typeof transition.to !== 'string' || !Array.isArray(transition.evidenceEventIds) || !transition.to.trim() || !Number.isFinite(transition.confidence) || transition.confidence < 0 || transition.confidence > 1 || !transition.evidenceEventIds.length) errors.push('invalid_state_transition');
-    if (!transition.evidenceEventIds.every((id) => evidence.has(id))) errors.push('state_transition_evidence_not_in_frame');
+    if (Array.isArray(transition.evidenceEventIds) && !transition.evidenceEventIds.every((id) => evidence.has(id))) errors.push('state_transition_evidence_not_in_frame');
   }
   return { valid: errors.length === 0, errors, frame: errors.length === 0 ? frame : undefined };
 }

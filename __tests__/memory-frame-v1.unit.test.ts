@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { deterministicFrameFallback, normalizeAlias, validateMemoryFrame } from '../src/semantic/index.js';
 import { MemoryFrameStore } from '../src/store/MemoryFrameStore.js';
 import Database from 'bun:sqlite';
-import { migration_0032, migration_0035, migration_0036, migration_0037 } from '../src/migrations/index.js';
+import { migration_0032, migration_0035, migration_0036, migration_0037, migration_0039 } from '../src/migrations/index.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { MultidimensionalQueryPlanner } from '../src/recall/index.js';
 
@@ -81,6 +81,26 @@ describe('MemoryFrame V1 contract', () => {
     expect(store.publish(second.frameId, 'staged', 'needs_confirmation', 4)).toBe(true);
     expect(store.get(first.frameId)?.status).toBe('active');
     expect(store.get(second.frameId)?.status).toBe('needs_confirmation');
+    db.close();
+  });
+
+  test('active revision replacement satisfies the one-active partial index', () => {
+    const db = new Database(':memory:');
+    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
+    db.exec(`CREATE TABLE memory_events (event_id TEXT PRIMARY KEY, project_id TEXT, occurred_at INTEGER, local_date TEXT); CREATE TABLE memory_episode_events (episode_id TEXT, event_id TEXT); INSERT INTO memory_events VALUES ('event-1','p',1,'1970-01-01'); INSERT INTO memory_episode_events VALUES ('e','event-1');`);
+    migration_0039.up(db);
+    const store = new MemoryFrameStore(db);
+    const base = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
+    const frame = { ...base, evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
+      nodes: base.nodes.map((node) => ({ ...node, evidenceEventIds: ['event-1'] })),
+      relations: base.relations.map((relation) => ({ ...relation, evidenceEventIds: ['event-1'] })) };
+    const first = store.save({ frame, sourceFingerprint: 'first', now: 1 });
+    expect(store.publish(first.frameId, 'staged', 'active', 2)).toBe(true);
+    const second = store.save({ frame: { ...frame, frameId: 'second-frame', title: 'newer' }, sourceFingerprint: 'second', now: 3 });
+    expect(store.publish(second.frameId, 'staged', 'active', 4)).toBe(true);
+    expect(store.get(first.frameId)?.status).toBe('superseded');
+    expect(store.get(second.frameId)?.status).toBe('active');
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM memory_frames WHERE episode_id='e' AND status='active'`).get()).toEqual({ count: 1 });
     db.close();
   });
 

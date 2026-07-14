@@ -117,7 +117,6 @@ import { MemoryBindingStore } from './store/MemoryBindingStore.js';
 import { MemoryAtlasStore } from './store/MemoryAtlasStore.js';
 import { MemoryFrameStore, frameSourceFingerprint } from './store/MemoryFrameStore.js';
 import { deterministicFrameFallback } from './semantic/DeterministicFrameFallback.js';
-import { StructuredSemanticProcessor } from './semantic/StructuredSemanticProcessor.js';
 import type { MemoryFrameV1 } from './semantic/MemoryFrameTypes.js';
 import {
   MemoryAtlasIndexer,
@@ -817,7 +816,6 @@ export class MemoryKernel {
         }))
       )),
       memoryFrameStore: this.memoryFrameStore,
-      semanticProcessor: new StructuredSemanticProcessor(async (input) => deterministicFrameFallback({ ...input, now: Date.now() })),
     });
     this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker, this.deepWriteCandidateStore, this.memoryFrameStore);
     this.topicSummaryBoard = new TopicSummaryBoard(this.memoryGraph, this.summaryStore);
