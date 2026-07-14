@@ -50,7 +50,8 @@ export const migration_0037: Migration = {
         dream_job_lease_id TEXT,
         dream_lease_until INTEGER,
         attempt_generation INTEGER,
-        UNIQUE(episode_id, source_fingerprint, processor_prompt_version, revision_id)
+        UNIQUE(episode_id, source_fingerprint, processor_prompt_version, revision_id),
+        UNIQUE(episode_id, source_fingerprint, processor_prompt_version, revision_number)
       );
       INSERT INTO memory_frames (
         frame_id, revision_id, revision_number, supersedes_frame_id, project_id, episode_id,
