@@ -17,6 +17,10 @@ export interface RecallExplanationOptions {
   query: string;
   projectId?: string;
   agentId?: string;
+  workspaceId?: string;
+  sessionId?: string;
+  threadId?: string;
+  excludeSessionId?: string;
   collection?: string;
   limit?: number;
   startTime?: number;
@@ -84,6 +88,10 @@ export function explainRecallWithKernel(
       collection: options.collection,
       query: options.query,
       limit,
+      workspaceId: options.workspaceId,
+      sessionId: options.sessionId,
+      threadId: options.threadId,
+      excludeSessionId: options.excludeSessionId,
       startTime: options.startTime,
       endTime: options.endTime,
     });

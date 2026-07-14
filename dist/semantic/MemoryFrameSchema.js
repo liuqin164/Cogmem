@@ -21,10 +21,12 @@ export function isMemoryFrame(value) {
         return false;
     const frame = value;
     const objectArray = (items) => Array.isArray(items) && items.every((item) => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+    const stringArray = (items) => Array.isArray(items) && items.every((item) => typeof item === 'string' && item.trim().length > 0);
+    const processor = frame.processor && typeof frame.processor === 'object' ? frame.processor : undefined;
     return Boolean(frame.schemaVersion === MEMORY_FRAME_SCHEMA_VERSION && typeof frame.frameId === 'string'
         && typeof frame.projectId === 'string' && typeof frame.episodeId === 'string'
         && typeof frame.title === 'string' && typeof frame.summary === 'string'
         && objectArray(frame.nodes) && objectArray(frame.relations) && objectArray(frame.temporalReferences) && objectArray(frame.stateTransitions)
-        && Array.isArray(frame.evidenceEventIds) && frame.evidenceEventIds.every((id) => typeof id === 'string')
-        && Boolean(frame.processor) && typeof frame.processor?.promptVersion === 'string' && Number.isFinite(frame.processor.generatedAt));
+        && stringArray(frame.evidenceEventIds)
+        && Boolean(processor) && typeof processor?.promptVersion === 'string' && processor.promptVersion.trim().length > 0 && Number.isFinite(processor.generatedAt));
 }

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { decodeAtlasNodeId, encodeAtlasNodeId, fromAtlasEdgeEndpoint } from '../atlas/AtlasNodeIdCodec.js';
 export const MEMORY_ATLAS_PROJECTION_NAME = 'memory_atlas.v2';
 export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.4';
 export class MemoryAtlasStore {
@@ -56,11 +57,13 @@ export class MemoryAtlasStore {
             .filter((item) => item.length > 1).slice(0, 12);
         const filters = [];
         const facetParams = [];
-        if (facets.from !== undefined) {
+        // Seed identities are scope anchors, not temporal facts. Temporal
+        // filtering is applied after bounded evidence-backed traversal.
+        if (!facets.targetNodeIds && facets.from !== undefined) {
             filters.push('d.occurred_at>=?');
             facetParams.push(facets.from);
         }
-        if (facets.to !== undefined) {
+        if (!facets.targetNodeIds && facets.to !== undefined) {
             filters.push('d.occurred_at<?');
             facetParams.push(facets.to);
         }
@@ -311,8 +314,8 @@ export class MemoryAtlasStore {
         const rows = this.db.prepare(`SELECT * FROM memory_edges WHERE project_id=? AND status IN ('active','weak') ORDER BY confidence DESC LIMIT 2000`).all(projectId);
         for (const row of rows)
             edges.push({
-                source: nodeId(String(row.source_type), String(row.source_id), projectId), relation: String(row.relation_type),
-                target: nodeId(String(row.target_type), String(row.target_id), projectId), confidence: Number(row.confidence),
+                source: fromAtlasEdgeEndpoint(String(row.source_type), String(row.source_id), projectId), relation: String(row.relation_type),
+                target: fromAtlasEdgeEndpoint(String(row.target_type), String(row.target_id), projectId), confidence: Number(row.confidence),
                 evidenceEventIds: parseStringArray(String(row.evidence_event_ids_json || '[]')),
             });
         const actions = this.db.prepare(`SELECT action_id,target_entity_id,occurred_at,confidence FROM memory_action_frames WHERE project_id=?`).all(projectId);
@@ -325,7 +328,7 @@ export class MemoryAtlasStore {
         return edges;
     }
     listEdgesForNodes(projectId, nodeIds, limit = 2000) {
-        const boundedIds = Array.from(new Set(nodeIds)).slice(0, 30);
+        const boundedIds = Array.from(new Set(nodeIds)).slice(0, 200);
         if (!boundedIds.length)
             return [];
         const parsed = boundedIds.map((id) => parseNodeId(id, projectId)).filter((item) => Boolean(item));
@@ -340,8 +343,8 @@ export class MemoryAtlasStore {
       `).all(projectId, ...params, Math.max(1, Math.min(limit, 4000)));
             for (const row of rows)
                 edges.push({
-                    source: nodeId(String(row.source_type), String(row.source_id), projectId), relation: String(row.relation_type),
-                    target: nodeId(String(row.target_type), String(row.target_id), projectId), confidence: Number(row.confidence),
+                    source: fromAtlasEdgeEndpoint(String(row.source_type), String(row.source_id), projectId), relation: String(row.relation_type),
+                    target: fromAtlasEdgeEndpoint(String(row.target_type), String(row.target_id), projectId), confidence: Number(row.confidence),
                     evidenceEventIds: parseStringArray(String(row.evidence_event_ids_json || '[]')),
                 });
         }
@@ -818,13 +821,7 @@ catch {
     return [];
 } }
 function escapeLike(value) { return value.replace(/[\\%_]/g, '\\$&'); }
-function nodeId(type, id, projectId) {
-    if (type === 'entity')
-        return id.startsWith('facet:') ? `entity:${projectId}:${id}` : `entity:${id}`;
-    if (['topic', 'time', 'issue', 'session', 'thread', 'memoryKind', 'actionKind'].includes(type))
-        return `${type}:${projectId}:${id}`;
-    return `${type}:${id}`;
-}
+function nodeId(type, id, projectId) { return encodeAtlasNodeId(type, id, projectId); }
 function timeNodeId(projectId, occurredAt) {
     return `time:${projectId}:${new Date(occurredAt).getUTCFullYear()}`;
 }
@@ -839,15 +836,7 @@ function scopedEntityNodeId(db, value, projectId) {
     return row ? scoped : value;
 }
 function parseNodeId(value, projectId) {
-    for (const type of ['topic', 'time', 'issue', 'entity', 'session', 'thread', 'memoryKind', 'actionKind']) {
-        const prefix = `${type}:${projectId}:`;
-        if (value.startsWith(prefix))
-            return { type, id: value.slice(prefix.length) };
-    }
-    const separator = value.indexOf(':');
-    if (separator <= 0 || separator === value.length - 1)
-        return null;
-    return { type: value.slice(0, separator), id: value.slice(separator + 1) };
+    return decodeAtlasNodeId(value, projectId);
 }
 function parseMetadata(value) {
     try {

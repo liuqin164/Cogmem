@@ -173,6 +173,8 @@ export class DreamCuratorWorker {
                 status: candidateInputs[index]?.status ?? candidate.status,
             })),
             frameIds,
+            semanticProcessorAvailable: providerConfig.provider !== 'rule_only',
+            semanticProcessorReason: providerConfig.provider === 'rule_only' ? 'semantic_processor_unavailable' : undefined,
         };
     }
     async buildCandidates(events, options, now) {

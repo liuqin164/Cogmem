@@ -7,6 +7,10 @@ export interface RecallExplanationOptions {
     query: string;
     projectId?: string;
     agentId?: string;
+    workspaceId?: string;
+    sessionId?: string;
+    threadId?: string;
+    excludeSessionId?: string;
     collection?: string;
     limit?: number;
     startTime?: number;

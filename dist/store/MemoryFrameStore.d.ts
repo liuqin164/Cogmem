@@ -13,6 +13,7 @@ export interface MemoryFrameSaveInput {
 export declare class MemoryFrameStore {
     readonly db: Database;
     constructor(db: Database);
+    getDatabase(): Database;
     save(input: MemoryFrameSaveInput): MemoryFrameV1;
     get(frameId: string): MemoryFrameV1 | null;
     getByEpisode(projectId: string, episodeId: string, statuses?: MemoryFrameStatus[]): MemoryFrameV1 | null;
@@ -28,7 +29,7 @@ export declare class MemoryFrameStore {
     failStagedForEpisode(episodeId: string, leaseId?: string, now?: number): void;
     failStagedOlderThan(_cutoff: number, now?: number): number;
     supersedeEpisodes(episodeIds: string[], now?: number): number;
-    deleteByProject(projectId: string): number;
+    deleteByProject(projectId: string, now?: number): number;
     private tableExists;
     private markDirty;
     private publishUnsafe;

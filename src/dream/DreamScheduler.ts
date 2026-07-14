@@ -46,6 +46,7 @@ export class DreamScheduler {
   ) {}
 
   async tick(options: DreamTickOptions = {}): Promise<DreamTickResult> {
+    if (this.frameStore && this.frameStore.getDatabase() !== this.episodeStore.getDatabase()) throw new Error('frame_store_database_mismatch');
     const wallStartedAt = Date.now();
     const clock = options.clock ?? {
       now: () => options.now === undefined ? Date.now() : options.now + (Date.now() - wallStartedAt),

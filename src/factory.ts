@@ -1068,10 +1068,12 @@ export class MemoryKernel {
       // Agent and embedding callers use this entry point directly, so keep it
       // on the same freshness contract as graph CLI reads.
       this.ensureMemoryAtlas({ projectId: options.projectId });
-      const planned = this.atlasPathRetriever.retrieve(query, { projectId: options.projectId, limit: options.limit, includeEvidence: true, evidenceLimit: 2, staleOk: true });
+      const planned = this.atlasPathRetriever.retrieve(query, { projectId: options.projectId, limit: options.limit, includeEvidence: true, evidenceLimit: 1000, staleOk: true });
       return { ...result, queryFrame: planned.queryFrame, atlas: planned.result };
-    } catch {
-      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.pipelineMetrics.recordNonFatal('memory_atlas_recall_degraded', { projectId: options.projectId, message, details: { component: 'atlas_path_retriever' } });
+      return { ...result, atlasStatus: 'unavailable', atlasErrorCode: 'atlas_recall_failed' };
     }
   }
 

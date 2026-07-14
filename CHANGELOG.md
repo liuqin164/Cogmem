@@ -7,8 +7,9 @@
 - Added migration 0035 for complete Frame fields and publication intent, with legacy fallback rows backfilled to `needs_confirmation`.
 - Added immutable migration 0036 for Dream-owned Frame revisions, review receipts, lease recovery, and publication repair.
 - Added immutable migration 0037 so source fingerprints remain stable while lease retries use independent Frame revisions.
+- Added immutable migrations 0038-0040 to repair legacy publication state, enforce one active Frame per episode, repair revision numbering, and track alias provenance per Frame support.
 - Wired structured processor output through staged Dream publication, paginated Atlas V2 projection, temporal/state projection, alias resolution, Repair invalidation, and forget-user cleanup.
-- Connected bounded multidimensional Atlas seed/path results to kernel and agent recall while preserving collection and retrieval-lane governance.
+- Connected bounded multidimensional Atlas seed/path results to kernel and agent recall while preserving collection, workspace/session/thread scope, and retrieval-lane governance. Rule-only installations now report `semantic_processor_unavailable` instead of silently presenting fallback semantics as complete.
 
 ## 3.7.3
 

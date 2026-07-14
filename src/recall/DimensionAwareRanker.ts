@@ -7,7 +7,9 @@ export const DEFAULT_DIMENSION_QUOTAS: Record<string, number> = {
 
 export class DimensionAwareRanker {
   rank(nodes: MemoryAtlasNode[], frame: MemoryQueryFrameV1, quotas = DEFAULT_DIMENSION_QUOTAS): MemoryAtlasNode[] {
-    const labels = Object.values(frame).flatMap((value) => Array.isArray(value) ? value.map((item) => String(item?.label ?? '')) : []);
+    const labels = Object.values(frame).flatMap((value) => Array.isArray(value)
+      ? value.flatMap((item) => typeof item === 'string' ? [item] : [String(item?.label ?? '')])
+      : []);
     const scored = nodes.map((node) => {
       const haystack = `${node.label} ${node.summary ?? ''}`.toLocaleLowerCase('und');
       const match = labels.filter((label) => haystack.includes(label.toLocaleLowerCase('und'))).length;

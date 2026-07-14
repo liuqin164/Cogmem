@@ -13,11 +13,14 @@ export declare class MemoryFrameProjector {
     private readonly atlasStore;
     constructor(db: Database, frameStore: MemoryFrameStore, atlasStore: MemoryAtlasStore);
     rebuild(projectId: string, now?: number): MemoryFrameProjectionResult;
+    private rebuildUnsafe;
     private nodeId;
     private upsertSupport;
     private upsertAlias;
+    private tableExists;
     private upsertEdge;
     private evidenceTime;
     private evidenceLocalDate;
+    private frameEvidenceTime;
 }
 //# sourceMappingURL=MemoryFrameProjector.d.ts.map

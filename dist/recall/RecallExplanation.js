@@ -11,6 +11,10 @@ export function explainRecallWithKernel(kernel, options) {
             collection: options.collection,
             query: options.query,
             limit,
+            workspaceId: options.workspaceId,
+            sessionId: options.sessionId,
+            threadId: options.threadId,
+            excludeSessionId: options.excludeSessionId,
             startTime: options.startTime,
             endTime: options.endTime,
         });

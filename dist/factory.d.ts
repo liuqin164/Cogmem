@@ -541,7 +541,70 @@ export declare class MemoryKernel {
         projectId?: string;
         tags?: string[];
     }): Promise<Neuron>;
-    recall(query: string, options?: BrainRecallOptions): import("./types/BrainRecallResult.js").BrainRecallResult;
+    recall(query: string, options?: BrainRecallOptions): import("./types/BrainRecallResult.js").BrainRecallResult | {
+        atlasStatus: string;
+        atlasErrorCode: string;
+        query: string;
+        atlas?: MemoryAtlasSlice;
+        queryFrame?: import("./semantic/MemoryFrameTypes.js").MemoryQueryFrameV1;
+        strategy: {
+            primaryLevel: "compiled_memory" | "raw_evidence" | "recent_unprocessed_sources";
+            fallbackUsed: boolean;
+            vectorSearchUsed?: boolean;
+        };
+        compiledMemory: {
+            beliefs: import("./types/index.js").BeliefRecord[];
+            facts: import("./store/FactStore.js").FactRecord[];
+            events: import("./store/FactStore.js").EventRecord[];
+            entityTimeline: import("./store/EntityStore.js").EntityTimelineItem[];
+        };
+        rawEvidence: Neuron[];
+        fallbackSnippets: Array<{
+            sourceId: string;
+            sourcePath: string;
+            text: string;
+            timestamp: number;
+            sourceType: "conversation_markdown" | "soul_markdown" | "hermes_state_db" | "openclaw_daily_memory" | "openclaw_session" | "openclaw_memory_index" | "openclaw_user_profile" | "openclaw_persona";
+        }>;
+        profileSignals: Array<{
+            neuronId: string;
+            sourcePath?: string;
+            text: string;
+            tags: string[];
+            namespace: "user_profile" | "agent_persona";
+        }>;
+        profileSurface: {
+            userProfile: Array<{
+                neuronId: string;
+                sourcePath?: string;
+                label: string;
+                value: string;
+                section?: string;
+            }>;
+            agentPersona: Array<{
+                neuronId: string;
+                sourcePath?: string;
+                label: string;
+                value: string;
+                section?: string;
+            }>;
+        };
+        summaries?: Array<{
+            summaryId: string;
+            text: string;
+            scope: string;
+            windowStart?: number;
+            windowEnd?: number;
+            confidence: number;
+        }>;
+        fileEvidence?: import("./assets/types.js").FileEvidence[];
+        skillCandidates?: import("./types/ExtensionPoints.js").SkillCandidateLike[];
+        topicRouteInfo?: {
+            matchedTopicPath: string | null;
+            confidence: number;
+            fallbackToGlobal: boolean;
+        };
+    };
     navigateMemory(query: string, options?: MemoryKernelNavigationOptions): MemoryKernelNavigationResult;
     recordRawEvent(input: RawMemoryEventInput): MemoryEvent<{
         text: string;

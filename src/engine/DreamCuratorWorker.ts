@@ -53,6 +53,8 @@ export interface DreamCuratorRunResult {
   status: DreamBacklogStatus;
   candidates: DeepWriteCandidateRecord[];
   frameIds?: string[];
+  semanticProcessorAvailable?: boolean;
+  semanticProcessorReason?: string;
 }
 
 export interface DreamCuratorWorkerDeps {
@@ -263,6 +265,8 @@ export class DreamCuratorWorker {
         status: candidateInputs[index]?.status ?? candidate.status,
       })),
       frameIds,
+      semanticProcessorAvailable: providerConfig.provider !== 'rule_only',
+      semanticProcessorReason: providerConfig.provider === 'rule_only' ? 'semantic_processor_unavailable' : undefined,
     };
   }
 

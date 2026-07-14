@@ -267,7 +267,7 @@ export class KernelAgentMemoryBackend {
         const multidimensionalRecall = query.projectId && allowsGraph
             ? this.kernel.recall(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true })
             : undefined;
-        const atlasItems = allowsGraph && allowsRawSource
+        const atlasItems = allowsGraph
             ? [
                 ...(multidimensionalRecall?.atlas?.cards ?? []).map((card) => this.toAgentRecallItemFromAtlasCard(card, query)),
                 ...(multidimensionalRecall?.atlas?.nodes ?? [])
@@ -275,6 +275,7 @@ export class KernelAgentMemoryBackend {
                     .map((node) => this.toAgentRecallItemFromAtlasNode(node, query)),
             ]
                 .filter((item) => Boolean(item))
+                .filter((item) => item.sourceType !== 'raw_ledger' || allowsRawSource)
                 .filter((item) => this.isAllowedAtlasCollection(item, query.collection))
             : [];
         const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, limit) : [];
@@ -610,14 +611,17 @@ export class KernelAgentMemoryBackend {
         }
     }
     toAgentRecallItemFromAtlasCard(card, query) {
-        const eventId = card.sourceLocator?.eventId ?? card.evidenceEventIds[0];
-        if (!eventId)
+        const eventIds = [...new Set([card.sourceLocator?.eventId, ...card.evidenceEventIds].filter((id) => Boolean(id)))];
+        const scopedAnchor = eventIds.map((id) => this.kernel.eventStore.getEvent(id)).find((event) => Boolean(event && this.isAgentRawEvent(event, query.agentId) && this.isRawEventInRecallScope(event, query, query.intent)));
+        const eventId = scopedAnchor?.eventId;
+        if (!eventId || !scopedAnchor)
             return null;
-        const sourceContext = eventId ? this.toAgentSourceContext(eventId, query) : undefined;
+        const sourceContext = this.toAgentSourceContext(eventId, query);
         const anchorEvent = sourceContext?.event;
-        const scopedAnchor = eventId ? this.kernel.eventStore.getEvent(eventId) : undefined;
-        if (scopedAnchor && (!this.isAgentRawEvent(scopedAnchor, query.agentId) || !this.isRawEventInRecallScope(scopedAnchor, query, query.intent)))
+        if (!scopedAnchor || !this.isAgentRawEvent(scopedAnchor, query.agentId) || !this.isRawEventInRecallScope(scopedAnchor, query, query.intent))
             return null;
+        const allowRaw = laneAllowed(query.retrievalPolicy, 'raw_source');
+        const semanticCard = card.matchedFacets.some((facet) => ['actor', 'project', 'event', 'task', 'state', 'object', 'location'].includes(facet.type));
         return {
             id: `facet:${card.canonicalId}`,
             text: [card.displayTitle, card.oneLineSummary].filter(Boolean).join(': '),
@@ -629,9 +633,9 @@ export class KernelAgentMemoryBackend {
             matchedPaths: card.matchedPaths,
             tags: ['facet_graph', card.eventKind, card.issueType].filter((tag) => Boolean(tag)),
             source: 'memory_atlas',
-            sourceType: 'raw_ledger',
-            sourceAnchor: anchorEvent ? this.toAgentSourceAnchorFromContextEvent(anchorEvent) : eventId ? { eventId } : undefined,
-            sourceContext,
+            sourceType: semanticCard ? 'compiled_memory' : 'raw_ledger',
+            sourceAnchor: allowRaw ? (anchorEvent ? this.toAgentSourceAnchorFromContextEvent(anchorEvent) : eventId ? { eventId } : undefined) : undefined,
+            sourceContext: allowRaw ? sourceContext : undefined,
             confidence: Math.min(1, 0.7 + card.matchedFacets.length * 0.08),
             whyMatched: card.whyMatched,
             canAnswerExactQuote: Boolean(sourceContext),
@@ -644,6 +648,7 @@ export class KernelAgentMemoryBackend {
         const event = this.kernel.eventStore.getEvent(eventId);
         if (!event || !this.isAgentRawEvent(event, query.agentId) || !this.isRawEventInRecallScope(event, query, query.intent))
             return null;
+        const allowRaw = laneAllowed(query.retrievalPolicy, 'raw_source');
         return {
             id: `atlas-node:${node.id}`,
             text: [node.label, node.summary].filter(Boolean).join(': '),
@@ -653,8 +658,8 @@ export class KernelAgentMemoryBackend {
             tags: ['atlas_node', node.nodeType],
             source: 'memory_atlas',
             sourceType: 'compiled_memory',
-            sourceAnchor: this.toAgentSourceAnchor(event),
-            sourceContext: this.toAgentSourceContext(eventId, query),
+            sourceAnchor: allowRaw ? this.toAgentSourceAnchor(event) : undefined,
+            sourceContext: allowRaw ? this.toAgentSourceContext(eventId, query) : undefined,
             confidence: node.confidence,
             whyMatched: `atlas_${node.nodeType}`,
             canAnswerExactQuote: false,
@@ -870,9 +875,14 @@ export class KernelAgentMemoryBackend {
         ].join('\n');
     }
     mergeRecallItems(primary, secondary, limit) {
+        const semanticAtlas = secondary.find((item) => item.source === 'memory_atlas' && item.tags.includes('atlas_node'));
+        const hasSemanticAtlas = primary.some((item) => item.source === 'memory_atlas' && item.tags.includes('atlas_node'));
+        const prioritizedPrimary = semanticAtlas && !hasSemanticAtlas && primary.length >= limit
+            ? [...primary.slice(0, Math.max(0, limit - 1)), semanticAtlas]
+            : primary;
         const out = [];
         const seen = new Set();
-        for (const item of [...primary, ...secondary]) {
+        for (const item of [...prioritizedPrimary, ...secondary.filter((candidate) => candidate !== semanticAtlas)]) {
             const keys = [item.canonicalId, item.sourceAnchor?.eventId, item.id].filter((value) => Boolean(value));
             if (keys.some((key) => seen.has(key)))
                 continue;

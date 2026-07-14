@@ -44,6 +44,8 @@ export interface DreamCuratorRunResult {
     status: DreamBacklogStatus;
     candidates: DeepWriteCandidateRecord[];
     frameIds?: string[];
+    semanticProcessorAvailable?: boolean;
+    semanticProcessorReason?: string;
 }
 export interface DreamCuratorWorkerDeps {
     eventStore: EventStore;

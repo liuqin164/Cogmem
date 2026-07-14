@@ -35,6 +35,7 @@ describe('MemoryFrame V1 contract', () => {
     const db = new Database(':memory:');
     migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
     migration_0035.up(db);
+    db.exec(`CREATE TABLE memory_events (event_id TEXT PRIMARY KEY, project_id TEXT, occurred_at INTEGER, local_date TEXT); CREATE TABLE memory_episode_events (episode_id TEXT, event_id TEXT); INSERT INTO memory_events VALUES ('event-1','p',1,'1970-01-01'); INSERT INTO memory_episode_events VALUES ('e','event-1');`);
     const store = new MemoryFrameStore(db);
     const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
     store.save({ frame, sourceFingerprint: 'source-1', now: 0 });
@@ -49,6 +50,7 @@ describe('MemoryFrame V1 contract', () => {
   test('staged revisions preserve the previous active frame until publish', () => {
     const db = new Database(':memory:');
     migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
+    db.exec(`CREATE TABLE memory_events (event_id TEXT PRIMARY KEY, project_id TEXT, occurred_at INTEGER, local_date TEXT); CREATE TABLE memory_episode_events (episode_id TEXT, event_id TEXT); INSERT INTO memory_events VALUES ('event-1','p',1,'1970-01-01'); INSERT INTO memory_episode_events VALUES ('e','event-1');`);
     const store = new MemoryFrameStore(db);
     const base = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
     const frame = { ...base, evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
@@ -68,6 +70,7 @@ describe('MemoryFrame V1 contract', () => {
   test('review publication preserves the previous active frame', () => {
     const db = new Database(':memory:');
     migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
+    db.exec(`CREATE TABLE memory_events (event_id TEXT PRIMARY KEY, project_id TEXT, occurred_at INTEGER, local_date TEXT); CREATE TABLE memory_episode_events (episode_id TEXT, event_id TEXT); INSERT INTO memory_events VALUES ('event-1','p',1,'1970-01-01'); INSERT INTO memory_episode_events VALUES ('e','event-1');`);
     const store = new MemoryFrameStore(db);
     const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }), evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
       nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['event-1'] })),

@@ -25,6 +25,7 @@ export class AtlasPathRetriever {
       ...options,
       seedNodeIds: [...new Set(this.atlas.resolveQueryAliases(query, options.projectId).map((alias) => alias.nodeId))],
       includeEvidence: Boolean(queryFrame.time),
+      evidenceLimit: queryFrame.time ? Math.max(options.evidenceLimit ?? 0, 1000) : options.evidenceLimit,
       limit: Math.min(options.limit ?? 30, 100),
     });
     const seedIds = [...new Set(this.atlas.resolveQueryAliases(query, options.projectId).map((alias) => alias.nodeId))];

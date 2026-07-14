@@ -3,7 +3,9 @@ export const DEFAULT_DIMENSION_QUOTAS = {
 };
 export class DimensionAwareRanker {
     rank(nodes, frame, quotas = DEFAULT_DIMENSION_QUOTAS) {
-        const labels = Object.values(frame).flatMap((value) => Array.isArray(value) ? value.map((item) => String(item?.label ?? '')) : []);
+        const labels = Object.values(frame).flatMap((value) => Array.isArray(value)
+            ? value.flatMap((item) => typeof item === 'string' ? [item] : [String(item?.label ?? '')])
+            : []);
         const scored = nodes.map((node) => {
             const haystack = `${node.label} ${node.summary ?? ''}`.toLocaleLowerCase('und');
             const match = labels.filter((label) => haystack.includes(label.toLocaleLowerCase('und'))).length;

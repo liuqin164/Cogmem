@@ -44,8 +44,11 @@ export class MemoryAtlasService {
     const compiled = compileAtlasQuery(boundedQuery(query), options.now);
     const target = this.store.resolveTargetNodeIds(projectId, compiled.text);
     const seedNodeIds = [...new Set([...(target.nodeIds ?? []), ...(options.seedNodeIds ?? [])])];
+    const hasExplicitSeeds = seedNodeIds.length > 0;
     let nodes = this.store.searchFaceted(query, projectId, limit, {
-      from: compiled.range?.from, to: compiled.range?.to, memoryKinds: compiled.memoryKinds,
+      // A canonical seed is an identity anchor, not a temporal fact. Apply
+      // time constraints after traversing to evidence-bearing nodes.
+      from: hasExplicitSeeds ? undefined : compiled.range?.from, to: hasExplicitSeeds ? undefined : compiled.range?.to, memoryKinds: compiled.memoryKinds,
       keywords: seedNodeIds.length ? [] : compiled.tokens,
       targetNodeIds: seedNodeIds.length ? seedNodeIds : undefined,
     });
@@ -54,19 +57,19 @@ export class MemoryAtlasService {
       const selected = new Set(explicitSeedNodeIds);
       let frontier = [...explicitSeedNodeIds];
       for (let depth = 0; depth < 3 && frontier.length; depth += 1) {
-        const edges = this.store.listEdgesForNodes(projectId, frontier, Math.max(60, limit * 12));
+        const edges = this.store.listEdgesForNodes(projectId, frontier, Math.max(400, limit * 20));
         const next: string[] = [];
         for (const edge of edges) {
           for (const id of [edge.source, edge.target]) if (!selected.has(id)) { selected.add(id); next.push(id); }
         }
-        frontier = next.slice(0, Math.max(1, limit * 2));
+        frontier = next.slice(0, Math.min(200, Math.max(1, limit * 8)));
       }
       const pathNodes = [...selected].map((id) => this.store.getNode(id, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node));
-      nodes = uniqueNodes([...nodes, ...pathNodes]).slice(0, limit);
+      nodes = uniqueNodes([...nodes, ...pathNodes]).slice(0, Math.min(1000, Math.max(limit, explicitSeedNodeIds.length * 100)));
     }
     if (cards.length) {
       const cardNodes = cards.map((card) => this.store.getNode(card.canonicalId, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node));
-      nodes = uniqueNodes([...cardNodes, ...nodes]).slice(0, limit);
+      nodes = uniqueNodes([...cardNodes, ...nodes]).slice(0, Math.min(1000, Math.max(limit, explicitSeedNodeIds.length * 100)));
     }
     if (compiled.actionIntent) {
       const actions = this.store.listActions(projectId, { target: compiled.target, targetEntityIds: target.entitySourceIds,
