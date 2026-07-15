@@ -29,7 +29,6 @@ export class MemoryFrameProjector {
     this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2')`).run(projectId, projectId);
     this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2'`).run(projectId);
     this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type IN ('frame','frame_edge') AND status='active'`).run(now, projectId);
-    this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE project_id=? AND source_frame_id IS NOT NULL AND status='active'`).run(now, projectId);
     if (this.tableExists('memory_atlas_alias_supports')) this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
     const blocked = new Set<string>();
     for (const frame of frames) {
@@ -118,6 +117,7 @@ export class MemoryFrameProjector {
           edges += 1;
         }
     }
+    this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE project_id=? AND source_frame_id IS NOT NULL AND status='active' AND NOT EXISTS (SELECT 1 FROM memory_atlas_alias_supports s WHERE s.alias_id=memory_atlas_aliases.alias_id AND s.status='active')`).run(now, projectId);
     this.db.prepare(`UPDATE memory_atlas_documents SET support_count=(SELECT COUNT(*) FROM memory_atlas_supports s WHERE s.project_id=memory_atlas_documents.project_id AND s.node_id=memory_atlas_documents.node_id AND s.status='active') WHERE project_id=? AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2' AND EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.project_id=memory_atlas_documents.project_id AND s.node_id=memory_atlas_documents.node_id AND s.status='active')`).run(projectId);
     return { frames: frames.length, nodes, edges, needsReview };
   }
@@ -144,7 +144,7 @@ export class MemoryFrameProjector {
       if (this.tableExists('memory_atlas_alias_ambiguities')) this.db.prepare(`
         INSERT INTO memory_atlas_alias_ambiguities(candidate_id,project_id,dimension,normalized_alias,node_ids_json,source_frame_id,status,created_at)
         VALUES(?,?,?,?,?,?,'pending',?)
-        ON CONFLICT(candidate_id) DO UPDATE SET node_ids_json=excluded.node_ids_json,status='pending'
+        ON CONFLICT(candidate_id) DO UPDATE SET node_ids_json=excluded.node_ids_json,status=CASE WHEN memory_atlas_alias_ambiguities.status IN ('resolved','rejected') THEN memory_atlas_alias_ambiguities.status ELSE 'pending' END
       `).run(candidateId, projectId, node.dimension, normalizedAlias, JSON.stringify([...aliasNodes].sort()), frame.frameId, Date.now());
       // A disputed alias must not silently bind evidence to an arbitrary
       // canonical node. Keep this frame's evidence visible under a provisional
