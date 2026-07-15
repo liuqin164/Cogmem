@@ -29,8 +29,16 @@ export class AtlasPathRetriever {
       limit: Math.min(options.limit ?? 30, 100),
     });
     const seedIds = [...new Set(this.atlas.resolveQueryAliases(query, options.projectId).map((alias) => alias.nodeId))];
-    const intersection = seedIds.length > 1 ? nodesReachableFromAll(seedIds, result.edges, 3) : undefined;
-    const reachable = seedIds.length === 1 ? nodesReachableFromAll(seedIds, result.edges, 3) : undefined;
+    const groups = new Map<string, string[]>();
+    for (const key of Object.keys(facetKeys)) {
+      const facets = queryFrame[facetKeys[key] as keyof typeof queryFrame];
+      if (!Array.isArray(facets)) continue;
+      const ids = facets.map((facet) => facet && typeof facet === 'object' ? facet.canonicalNodeId : undefined).filter((id): id is string => Boolean(id));
+      if (ids.length) groups.set(key, [...new Set(ids)]);
+    }
+    const reachableSets = [...groups.values()].map((ids) => nodesReachableFromAny(ids, result.edges, 3));
+    const intersection = reachableSets.reduce<Set<string> | undefined>((common, current) => common ? new Set([...common].filter((id) => current.has(id))) : current, undefined);
+    const reachable = reachableSets.length === 1 ? reachableSets[0] : undefined;
     const byId = new Map(result.nodes.map((node) => [node.id, node]));
     const matches = (node: (typeof result.nodes)[number]) => {
       const facets = Object.values(queryFrame).flatMap((value) => Array.isArray(value) ? value : []).filter((item): item is { label?: string; canonicalNodeId?: string } => Boolean(item && typeof item === 'object'));
@@ -75,13 +83,13 @@ function isLegacyFacet(type: string): boolean {
   return ['time', 'topic', 'issue', 'entity', 'session', 'thread', 'memoryKind', 'actionKind'].includes(type);
 }
 
-function nodesReachableFromAll(seedIds: string[], edges: Array<{ source: string; target: string }>, maxHops: number): Set<string> {
+function nodesReachableFromAny(seedIds: string[], edges: Array<{ source: string; target: string }>, maxHops: number): Set<string> {
   const adjacency = new Map<string, Set<string>>();
   for (const edge of edges) {
     (adjacency.get(edge.source) ?? adjacency.set(edge.source, new Set()).get(edge.source)!).add(edge.target);
     (adjacency.get(edge.target) ?? adjacency.set(edge.target, new Set()).get(edge.target)!).add(edge.source);
   }
-  let common: Set<string> | undefined;
+  const reachable = new Set<string>();
   for (const seed of seedIds) {
     const seen = new Set([seed]);
     let frontier = new Set([seed]);
@@ -90,9 +98,9 @@ function nodesReachableFromAll(seedIds: string[], edges: Array<{ source: string;
       for (const node of frontier) for (const neighbor of adjacency.get(node) ?? []) if (!seen.has(neighbor)) { seen.add(neighbor); next.add(neighbor); }
       frontier = next;
     }
-    common = common ? new Set([...common].filter((id) => seen.has(id))) : seen;
+    for (const id of seen) reachable.add(id);
   }
-  return common ?? new Set();
+  return reachable;
 }
 
 function nodeTimeMatches(node: { occurredAt?: number; evidence?: Array<{ sourceLocator?: { localDate?: string } }> }, range: { from?: number; to?: number }, keepCanonical: boolean): boolean {

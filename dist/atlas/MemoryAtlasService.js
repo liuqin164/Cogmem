@@ -282,7 +282,9 @@ export class MemoryAtlasService {
     }
     edgeProjection(nodes, projectId, priorityIds = new Set()) {
         const ids = new Set(nodes.map((node) => node.id));
-        const limit = 60;
+        // ponytail: seeded traversal needs the complete bounded candidate set for
+        // correctness; unseeded overview/search keeps the small display budget.
+        const limit = priorityIds.size > 0 ? 4000 : 60;
         const candidates = this.safeEdges(this.store.listEdgesWithinNodes(projectId, [...ids], 4000)
             .filter((edge) => ids.has(edge.source) && ids.has(edge.target)), projectId);
         const sorted = uniqueEdges(candidates).sort((left, right) => edgePriority(right, priorityIds) - edgePriority(left, priorityIds)
