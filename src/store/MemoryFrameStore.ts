@@ -7,11 +7,9 @@ export interface MemoryFrameSaveInput { frame: MemoryFrameV1; sourceFingerprint:
 
 export class MemoryFrameStore {
   constructor(readonly db: Database) {
-    for (const [name, declaration] of [['dream_job_lease_id', 'TEXT'], ['dream_lease_until', 'INTEGER'], ['attempt_generation', 'INTEGER'], ['revision_id', 'TEXT'], ['revision_number', 'INTEGER NOT NULL DEFAULT 1'], ['supersedes_frame_id', 'TEXT']] as const) {
-      const columns = this.db.prepare('PRAGMA table_info(memory_frames)').all() as Array<{ name: string }>;
-      if (!columns.some((column) => column.name === name)) this.db.exec(`ALTER TABLE memory_frames ADD COLUMN ${name} ${declaration}`);
-    }
-    this.db.exec(`UPDATE memory_frames SET revision_id=frame_id WHERE revision_id IS NULL`);
+    const columns = new Set((this.db.prepare('PRAGMA table_info(memory_frames)').all() as Array<{ name: string }>).map((column) => column.name));
+    const required = ['dream_job_lease_id', 'dream_lease_until', 'attempt_generation', 'revision_id', 'revision_number', 'supersedes_frame_id', 'publish_status'];
+    if (required.some((name) => !columns.has(name))) throw new Error('memory_frame_schema_not_migrated');
   }
 
   getDatabase(): Database { return this.db; }
@@ -260,6 +258,8 @@ export class MemoryFrameStore {
       stateTransitions: parseJsonArray(row.state_transitions_json),
       sourceAuthority: row.source_authority, semanticCompleteness: row.semantic_completeness, needsReview: Boolean(row.needs_review),
     } as unknown as MemoryFrameV1;
+    const validation = validateMemoryFrame(frame, { allowEmptyEvidence: frame.sourceAuthority === 'deterministic_fallback' && frame.status !== 'active' });
+    if (!validation.valid) throw new Error(`invalid_stored_memory_frame:${frameId}:${validation.errors.join(',')}`);
     return frame;
   }
 }
