@@ -235,7 +235,7 @@ export class MemoryAtlasService {
   }
 
   private evidence(nodeId: string, projectId: string, requested?: number, includeExcerpt?: boolean): MemoryAtlasEvidence[] {
-    const limit = Math.max(1, Math.min(requested ?? 2, 10));
+    const limit = Math.max(1, Math.min(requested ?? 2, 1000));
     return this.store.evidenceIds(nodeId, projectId, limit).flatMap((eventId) => {
       const event = this.eventStore.getEvent(eventId);
       if (!event || event.projectId !== projectId) return [];

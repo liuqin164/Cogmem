@@ -878,8 +878,8 @@ export class KernelAgentMemoryBackend {
         ].join('\n');
     }
     mergeRecallItems(primary, secondary, limit) {
-        const semanticAtlas = secondary.find((item) => item.source === 'memory_atlas' && item.tags.includes('atlas_node'));
-        const hasSemanticAtlas = primary.some((item) => item.source === 'memory_atlas' && item.tags.includes('atlas_node'));
+        const semanticAtlas = secondary.find((item) => item.source === 'memory_atlas' && (item.tags.includes('atlas_node') || item.tags.includes('facet_graph') || item.tags.includes('atlas_path')));
+        const hasSemanticAtlas = primary.some((item) => item.source === 'memory_atlas' && (item.tags.includes('atlas_node') || item.tags.includes('facet_graph') || item.tags.includes('atlas_path')));
         const prioritizedPrimary = semanticAtlas && !hasSemanticAtlas && primary.length >= limit
             ? [...primary.slice(0, Math.max(0, limit - 1)), semanticAtlas]
             : primary;

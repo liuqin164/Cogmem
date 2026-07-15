@@ -261,7 +261,7 @@ export class MemoryAtlasService {
         });
     }
     evidence(nodeId, projectId, requested, includeExcerpt) {
-        const limit = Math.max(1, Math.min(requested ?? 2, 10));
+        const limit = Math.max(1, Math.min(requested ?? 2, 1000));
         return this.store.evidenceIds(nodeId, projectId, limit).flatMap((eventId) => {
             const event = this.eventStore.getEvent(eventId);
             if (!event || event.projectId !== projectId)
