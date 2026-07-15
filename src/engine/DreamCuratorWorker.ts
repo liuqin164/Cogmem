@@ -155,12 +155,16 @@ export class DreamCuratorWorker {
           frame = await processor.process(frameInput);
         }
       } catch (error) {
+        semanticProcessorUnavailable = true;
         this.deps.pipelineMetrics?.recordNonFatal('memory_frame_processor_fallback', {
           projectId: options.projectId,
           message: error instanceof Error ? error.message : String(error),
           details: { episodeId: options.sourceEpisodeId, source: 'structured_semantic_processor' },
         });
-        frame = deterministicFrameFallback({ ...frameInput, now });
+        // A provider failure is not a semantic result. Keep the Dream
+        // candidate/run outcome observable without persisting an
+        // unreviewable pseudo-success Frame.
+        frame = undefined;
       }
       if (semanticProcessorUnavailable) {
         this.deps.pipelineMetrics?.recordNonFatal('semantic_processor_unavailable', { projectId: options.projectId, details: { episodeId: options.sourceEpisodeId } });

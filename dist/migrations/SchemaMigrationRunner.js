@@ -181,6 +181,9 @@ export class SchemaMigrationRunner {
             return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='_memory_frame_integrity_markers'`).get())
                 && Boolean(this.db.prepare(`SELECT 1 FROM _memory_frame_integrity_markers WHERE marker='memory_frame_integrity_0042'`).get())
                 && !Boolean(this.db.prepare(`SELECT 1 FROM memory_frames WHERE revision_number IS NULL OR revision_number<1`).get());
+        if (version === '0043')
+            return Boolean(this.db.prepare(`SELECT 1 FROM _memory_frame_integrity_markers WHERE marker='memory_frame_integrity_0043'`).get())
+                && !Boolean(this.db.prepare(`SELECT 1 FROM memory_atlas_alias_supports s LEFT JOIN memory_frames f ON f.frame_id=s.source_frame_id WHERE s.status='active' AND (f.frame_id IS NULL OR f.status<>'active') LIMIT 1`).get());
         return true;
     }
     tableExists(name) {

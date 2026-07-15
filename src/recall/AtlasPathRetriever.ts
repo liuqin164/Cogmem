@@ -47,7 +47,11 @@ export class AtlasPathRetriever {
       const timeMatch = !queryFrame.time || nodeTimeMatches(node, queryFrame.time, canonicalMatch);
       const stateMatch = !queryFrame.states?.length || node.nodeType !== 'state' || queryFrame.states.some((state) => node.label.toLocaleLowerCase('und').includes(state.replaceAll('_', ' ')));
       const pathMatch = !seedIds.length || Boolean(intersection?.has(node.id) || reachable?.has(node.id) || canonicalMatch);
-      const semanticMatch = !facets.length || canonicalMatch || labelMatch || Boolean(intersection?.has(node.id));
+      const constrainedTarget = new Set(['episode', 'event', 'raw_event', 'task']);
+      const strictIntersection = groups.size > 1
+        ? Boolean(intersection?.has(node.id) && constrainedTarget.has(node.nodeType))
+        : false;
+      const semanticMatch = !facets.length || canonicalMatch || labelMatch || strictIntersection || (groups.size <= 1 && Boolean(intersection?.has(node.id)));
       return timeMatch && stateMatch && pathMatch && semanticMatch;
     };
     const seeds = result.nodes.filter(matches);

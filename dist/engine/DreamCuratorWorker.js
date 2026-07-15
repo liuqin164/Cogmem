@@ -2,7 +2,6 @@ import { createHash } from 'crypto';
 import { isOperationalNoiseText } from '../recall/RecallGovernance.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { frameSourceFingerprint } from '../store/MemoryFrameStore.js';
-import { deterministicFrameFallback } from '../semantic/DeterministicFrameFallback.js';
 import { StructuredSemanticProcessor as StructuredSemanticProcessorImpl } from '../semantic/StructuredSemanticProcessor.js';
 import { MEMORY_FRAME_PROMPT_VERSION, MEMORY_FRAME_SYSTEM_PROMPT } from '../semantic/SemanticProcessorPrompt.js';
 const PREFERENCE_PATTERN = /(请以后|以后请|始终|总是|偏好|喜欢|希望|不要|别|必须|一定要|长期目标|目标是|约束|边界|本地优先|local-first|prefer|preference|always|never|must|do not|don't|goal|constraint|boundary)/iu;
@@ -67,12 +66,16 @@ export class DreamCuratorWorker {
                 }
             }
             catch (error) {
+                semanticProcessorUnavailable = true;
                 this.deps.pipelineMetrics?.recordNonFatal('memory_frame_processor_fallback', {
                     projectId: options.projectId,
                     message: error instanceof Error ? error.message : String(error),
                     details: { episodeId: options.sourceEpisodeId, source: 'structured_semantic_processor' },
                 });
-                frame = deterministicFrameFallback({ ...frameInput, now });
+                // A provider failure is not a semantic result. Keep the Dream
+                // candidate/run outcome observable without persisting an
+                // unreviewable pseudo-success Frame.
+                frame = undefined;
             }
             if (semanticProcessorUnavailable) {
                 this.deps.pipelineMetrics?.recordNonFatal('semantic_processor_unavailable', { projectId: options.projectId, details: { episodeId: options.sourceEpisodeId } });

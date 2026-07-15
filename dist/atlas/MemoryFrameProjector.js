@@ -77,7 +77,7 @@ export class MemoryFrameProjector {
                     continue;
                 }
                 if (!existingTime)
-                    this.atlasStore.upsertDocument({ id: timeId, projectId, nodeType: 'time', sourceId: timeId.slice(5), label: reference.label,
+                    this.atlasStore.upsertDocument({ id: timeId, projectId, nodeType: 'time', sourceId: decodeAtlasNodeId(timeId, projectId)?.id ?? timeId, label: reference.label,
                         confidence: reference.confidence, supportCount: 1, status: 'active', occurredAt: reference.occurredAt,
                         evidenceEventIds: reference.evidenceEventIds, metadata: { projection: 'memory_atlas.frame.v2', frameId: frame.frameId }, updatedAt: now });
                 this.upsertSupport(projectId, timeId, frame, reference.evidenceEventIds, now);
@@ -169,9 +169,6 @@ export class MemoryFrameProjector {
                 throw new Error(`raw_event_identity_requires_one_evidence:${node.frameNodeId}`);
             return encodeAtlasNodeId('raw_event', node.evidenceEventIds[0], projectId);
         }
-        if (['event', 'task', 'object', 'location'].includes(node.dimension) && node.evidenceEventIds.length) {
-            return encodeAtlasNodeId(node.dimension, createHash('sha256').update(`${projectId}\0${node.dimension}\0${normalizeAlias(node.label)}`).digest('hex').slice(0, 32), projectId);
-        }
         const aliasNodes = this.atlasStore.findAliasNodes(projectId, node.dimension, normalizeAlias(node.label));
         if (aliasNodes.length > 1) {
             const normalizedAlias = normalizeAlias(node.label);
@@ -189,7 +186,8 @@ export class MemoryFrameProjector {
         }
         if (aliasNodes.length === 1)
             return aliasNodes[0];
-        const key = `${projectId}\0${node.dimension}\0${normalizeAlias(node.label)}`;
+        const temporalIdentity = node.dimension === 'event' ? this.evidenceLocalDate(node.evidenceEventIds) ?? '' : '';
+        const key = `${projectId}\0${node.dimension}\0${normalizeAlias(node.label)}\0${temporalIdentity}`;
         return encodeAtlasNodeId(node.dimension, createHash('sha256').update(key).digest('hex').slice(0, 32), projectId);
     }
     upsertSupport(projectId, nodeId, frame, evidenceEventIds, now) {
@@ -205,7 +203,7 @@ export class MemoryFrameProjector {
         if (!normalized)
             return;
         const aliasId = createHash('sha256').update(`${projectId}\0${nodeId}\0${normalized}`).digest('hex');
-        this.db.prepare(`INSERT INTO memory_atlas_aliases(alias_id,project_id,node_id,normalized_alias,alias,dimension,status,confidence,source_frame_id,evidence_event_ids_json,created_at,updated_at) VALUES(?,?,?,?,? ,?,'active',?,?,?, ?,?) ON CONFLICT(project_id,normalized_alias,dimension,node_id) DO UPDATE SET status='active',confidence=excluded.confidence,source_frame_id=excluded.source_frame_id,evidence_event_ids_json=excluded.evidence_event_ids_json,updated_at=excluded.updated_at`).run(aliasId, projectId, nodeId, normalized, alias, node.dimension, node.confidence, frame.frameId, JSON.stringify(node.evidenceEventIds), now, now);
+        this.db.prepare(`INSERT INTO memory_atlas_aliases(alias_id,project_id,node_id,normalized_alias,alias,dimension,status,confidence,source_frame_id,evidence_event_ids_json,created_at,updated_at) VALUES(?,?,?,?,? ,?,'active',?,?,?, ?,?) ON CONFLICT(project_id,normalized_alias,dimension,node_id) DO UPDATE SET status='active',confidence=MAX(memory_atlas_aliases.confidence,excluded.confidence),updated_at=excluded.updated_at`).run(aliasId, projectId, nodeId, normalized, alias, node.dimension, node.confidence, frame.frameId, JSON.stringify(node.evidenceEventIds), now, now);
         if (this.tableExists('memory_atlas_alias_supports'))
             this.db.prepare(`INSERT INTO memory_atlas_alias_supports(support_id,alias_id,project_id,node_id,source_frame_id,source_episode_id,evidence_event_ids_json,status,created_at) VALUES(?,?,?,?,?,?,?,'active',?) ON CONFLICT(alias_id,source_frame_id) DO UPDATE SET status='active',invalidated_at=NULL,evidence_event_ids_json=excluded.evidence_event_ids_json`).run(createHash('sha256').update(`${aliasId}\0${frame.frameId}`).digest('hex'), aliasId, projectId, nodeId, frame.frameId, frame.episodeId, JSON.stringify(node.evidenceEventIds), now);
     }

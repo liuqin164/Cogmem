@@ -645,11 +645,13 @@ export class KernelAgentMemoryBackend {
         };
     }
     toAgentRecallItemFromAtlasNode(node, query) {
-        const eventId = node.evidence?.[0]?.eventId;
-        if (!eventId)
-            return null;
-        const event = this.kernel.eventStore.getEvent(eventId);
-        if (!event || !this.isAgentRawEvent(event, query.agentId) || !this.isRawEventInRecallScope(event, query, query.intent))
+        const scopedEvidence = (node.evidence ?? [])
+            .map((evidence) => this.kernel.eventStore.getEvent(evidence.eventId))
+            .filter((event) => Boolean(event))
+            .filter((event) => this.isAgentRawEvent(event, query.agentId) && this.isRawEventInRecallScope(event, query, query.intent));
+        const event = scopedEvidence[0];
+        const eventId = event?.eventId;
+        if (!event || !eventId)
             return null;
         const allowRaw = laneAllowed(query.retrievalPolicy, 'raw_source');
         return {
@@ -880,7 +882,8 @@ export class KernelAgentMemoryBackend {
     mergeRecallItems(primary, secondary, limit) {
         const semanticAtlas = secondary.find((item) => item.source === 'memory_atlas' && (item.tags.includes('atlas_node') || item.tags.includes('facet_graph') || item.tags.includes('atlas_path')));
         const hasSemanticAtlas = primary.some((item) => item.source === 'memory_atlas' && (item.tags.includes('atlas_node') || item.tags.includes('facet_graph') || item.tags.includes('atlas_path')));
-        const prioritizedPrimary = semanticAtlas && !hasSemanticAtlas && primary.length >= limit
+        const hasScopedPrimary = primary.some((item) => item.tags.some((tag) => tag.startsWith('agent:')));
+        const prioritizedPrimary = semanticAtlas && !hasSemanticAtlas && !hasScopedPrimary && primary.length >= limit
             ? [...primary.slice(0, Math.max(0, limit - 1)), semanticAtlas]
             : primary;
         const out = [];
