@@ -35,6 +35,9 @@ export interface DreamTickResult {
   candidateIds: string[];
   durationMs: number;
   failedEpisodes: Array<{ episodeId: string; error: string; failureCategory: string; retryAfter?: number }>;
+  semanticProcessorAvailable: boolean;
+  semanticProcessorUnavailableCount: number;
+  semanticProcessorFailedCount: number;
 }
 
 export class DreamScheduler {
@@ -78,7 +81,8 @@ export class DreamScheduler {
         runId, projectId: options.projectId, requestedMode, selectedMode: 'none', skipped: true,
         reason: 'no_sealed_episode_backlog', processedEpisodeCount: 0, failedEpisodeCount: 0,
         candidateCount: 0, episodeIds: [], candidateIds: [], durationMs: elapsed(startedAt, options.now),
-        selectedModes: { micro: 0, normal: 0, deep: 0 }, failedEpisodes: [],
+        selectedModes: { micro: 0, normal: 0, deep: 0 }, failedEpisodes: [], semanticProcessorAvailable: false,
+        semanticProcessorUnavailableCount: 0, semanticProcessorFailedCount: 0,
       };
       this.recordRun(result, startedAt, 'skipped');
       return result;
@@ -95,6 +99,9 @@ export class DreamScheduler {
     const selectedModes = { micro: 0, normal: 0, deep: 0 };
     const failedEpisodes: DreamTickResult['failedEpisodes'] = [];
     let failures = 0;
+    let semanticProcessorUnavailableCount = 0;
+    let semanticProcessorFailedCount = 0;
+    let semanticProcessorAvailable = false;
     for (const [jobIndex, job] of jobs.entries()) {
       const links = this.episodeStore.listEventLinks(job.episodeId);
       const episode = this.episodeStore.getEpisode(job.episodeId);
@@ -120,6 +127,9 @@ export class DreamScheduler {
           leaseUntil: job.leaseUntil,
           attemptGeneration: job.attemptGeneration,
         });
+        if (run.semanticProcessorAvailable) semanticProcessorAvailable = true;
+        if (run.semanticProcessorReason === 'semantic_processor_unavailable') semanticProcessorUnavailableCount += 1;
+        if (run.semanticProcessorReason === 'semantic_processor_failed') semanticProcessorFailedCount += 1;
         const ids = run.candidates.map((candidate) => candidate.candidateId);
         try {
           const commitCandidates = run.runId
@@ -158,6 +168,7 @@ export class DreamScheduler {
       processedEpisodeCount: episodeIds.length, failedEpisodeCount: failures,
       candidateCount: candidateIds.length, episodeIds, candidateIds, durationMs: elapsed(startedAt, options.now),
       selectedModes, failedEpisodes,
+      semanticProcessorAvailable, semanticProcessorUnavailableCount, semanticProcessorFailedCount,
     };
     this.recordRun(result, startedAt, failures ? 'partial' : 'succeeded');
     return result;

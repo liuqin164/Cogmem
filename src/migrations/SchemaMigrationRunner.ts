@@ -1,4 +1,5 @@
 import Database from 'bun:sqlite';
+import { createHash } from 'node:crypto';
 
 import type { Migration } from '../types/Migration.js';
 
@@ -41,18 +42,26 @@ export class SchemaMigrationRunner {
     }
     this.ensureMigrationTable();
     this.adoptLegacyVersion();
+    this.assertRecordedChecksums();
     const pending = this.plan();
     const applied: string[] = [];
     const recorded = new Set((this.db.prepare(`SELECT version FROM _schema_migrations`).all() as Array<{ version: string }>).map((row) => row.version));
     const transaction = this.db.transaction(() => {
       for (const migration of pending) {
         migration.up(this.db);
+        if (!this.migrationSchemaSatisfied(migration.version)) throw new Error(`migration_postcondition_failed:${migration.version}`);
         const appliedAt = new Date().toISOString();
+        const checksum = this.migrationChecksum(migration);
+        const hasChecksum = Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info('_schema_migrations') WHERE name='checksum'`).get());
         if (recorded.has(migration.version)) {
-          this.db.prepare(`UPDATE _schema_migrations SET description=?, applied_at=? WHERE version=?`).run(migration.description, appliedAt, migration.version);
+          if (hasChecksum) this.db.prepare(`UPDATE _schema_migrations SET description=?, applied_at=?, checksum=? WHERE version=?`).run(migration.description, appliedAt, checksum, migration.version);
+          else this.db.prepare(`UPDATE _schema_migrations SET description=?, applied_at=? WHERE version=?`).run(migration.description, appliedAt, migration.version);
+        } else if (hasChecksum) {
+          this.db.prepare(`INSERT INTO _schema_migrations (version, description, applied_at, checksum) VALUES (?, ?, ?, ?)`).run(migration.version, migration.description, appliedAt, checksum);
         } else {
           this.db.prepare(`INSERT INTO _schema_migrations (version, description, applied_at) VALUES (?, ?, ?)`).run(migration.version, migration.description, appliedAt);
         }
+        if (hasChecksum) this.backfillChecksums();
         applied.push(migration.version);
       }
     });
@@ -68,6 +77,27 @@ export class SchemaMigrationRunner {
         applied_at TEXT NOT NULL
       );
     `);
+  }
+
+  private migrationChecksum(migration: Migration): string {
+    return migration.checksum ?? createHash('sha256')
+      .update(`${migration.version}\0${migration.description}\0${migration.up.toString()}`)
+      .digest('hex');
+  }
+
+  private backfillChecksums(): void {
+    const update = this.db.prepare(`UPDATE _schema_migrations SET checksum=? WHERE version=? AND (checksum IS NULL OR checksum='')`);
+    for (const migration of this.migrations) update.run(this.migrationChecksum(migration), migration.version);
+  }
+
+  private assertRecordedChecksums(): void {
+    if (!Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info('_schema_migrations') WHERE name='checksum'`).get())) return;
+    const byVersion = new Map(this.migrations.map((migration) => [migration.version, migration]));
+    const rows = this.db.prepare(`SELECT version, checksum FROM _schema_migrations WHERE checksum IS NOT NULL AND checksum<>''`).all() as Array<{ version: string; checksum: string }>;
+    for (const row of rows) {
+      const migration = byVersion.get(row.version);
+      if (migration && row.checksum !== this.migrationChecksum(migration)) throw new Error(`migration_checksum_mismatch:${row.version}`);
+    }
   }
 
   currentVersion(): string | undefined {
@@ -193,7 +223,12 @@ export class SchemaMigrationRunner {
       && !Boolean(this.db.prepare(`SELECT 1 FROM memory_frames WHERE revision_number IS NULL OR revision_number<1`).get());
     if (version === '0043') return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='_memory_frame_integrity_markers'`).get())
       && Boolean(this.db.prepare(`SELECT 1 FROM _memory_frame_integrity_markers WHERE marker='memory_frame_integrity_0043'`).get())
+      && this.hasColumns('memory_atlas_alias_supports', ['alias_id','project_id','node_id','source_frame_id','status'])
       && !Boolean(this.db.prepare(`SELECT 1 FROM memory_atlas_alias_supports s LEFT JOIN memory_frames f ON f.frame_id=s.source_frame_id WHERE s.status='active' AND (f.frame_id IS NULL OR f.status<>'active') LIMIT 1`).get());
+    if (version === '0044') return Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info('_schema_migrations') WHERE name='checksum'`).get());
+    if (version === '0045') return this.hasColumns('memory_atlas_supports', ['payload_json', 'confidence', 'valid_from', 'valid_to', 'source_authority'])
+      && this.hasColumns('memory_atlas_alias_supports', ['payload_json', 'confidence', 'source_authority'])
+      && Boolean(this.db.prepare(`SELECT 1 FROM _memory_frame_integrity_markers WHERE marker='memory_frame_integrity_0045'`).get());
     return true;
   }
 

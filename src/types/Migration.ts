@@ -5,12 +5,14 @@ export interface Migration {
   description: string;
   up(db: Database): void;
   down(db: Database): void;
+  checksum?: string;
 }
 
 export interface MigrationRecord {
   version: string;
   appliedAt: string;
   description: string;
+  checksum?: string;
 }
 
 export interface BackupRecord {

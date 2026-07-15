@@ -59,6 +59,7 @@ export interface MemoryAtlasRelatedCard {
     matchedFacets?: MemoryAtlasMatchedFacet[];
 }
 export interface MemoryAtlasCard {
+    origin?: 'legacy_facet' | 'atlas_v2';
     canonicalId: string;
     nodeType: MemoryAtlasNodeType;
     displayTitle: string;

@@ -11,6 +11,11 @@ export declare class MemoryAtlasService {
         dimension: string;
         nodeId: string;
     }>;
+    nodeHasEvidenceInRange(nodeId: string, projectId: string, range: {
+        from?: number;
+        to?: number;
+    }): boolean;
+    nodeHasActiveState(nodeId: string, projectId: string, states: string[]): boolean;
     overview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     search(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     explore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;

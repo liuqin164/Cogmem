@@ -41,6 +41,7 @@ export class DreamCuratorWorker {
         const now = options.now ?? Date.now();
         const frameIds = [];
         let semanticProcessorUnavailable = false;
+        let semanticProcessorReason;
         if (options.sourceEpisodeId && this.deps.memoryFrameStore) {
             const frameInput = {
                 projectId: options.projectId || events[0]?.projectId || '', episodeId: options.sourceEpisodeId,
@@ -60,6 +61,7 @@ export class DreamCuratorWorker {
                     : this.deps.semanticProcessor;
                 if (!processor) {
                     semanticProcessorUnavailable = true;
+                    semanticProcessorReason = 'semantic_processor_unavailable';
                 }
                 else {
                     frame = await processor.process(frameInput);
@@ -67,6 +69,7 @@ export class DreamCuratorWorker {
             }
             catch (error) {
                 semanticProcessorUnavailable = true;
+                semanticProcessorReason = 'semantic_processor_failed';
                 this.deps.pipelineMetrics?.recordNonFatal('memory_frame_processor_fallback', {
                     projectId: options.projectId,
                     message: error instanceof Error ? error.message : String(error),
@@ -190,7 +193,7 @@ export class DreamCuratorWorker {
             })),
             frameIds,
             semanticProcessorAvailable: !semanticProcessorUnavailable && providerConfig.provider !== 'rule_only',
-            semanticProcessorReason: semanticProcessorUnavailable || providerConfig.provider === 'rule_only' ? 'semantic_processor_unavailable' : undefined,
+            semanticProcessorReason: semanticProcessorReason ?? (providerConfig.provider === 'rule_only' ? 'semantic_processor_unavailable' : undefined),
         };
     }
     async buildCandidates(events, options, now) {

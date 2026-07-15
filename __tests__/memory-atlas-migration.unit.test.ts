@@ -80,7 +80,7 @@ test('one command upgrades a 3.5.2 database through schema 35 without changing s
     DROP TABLE IF EXISTS memory_atlas_fts;
     DROP TABLE IF EXISTS memory_atlas_documents;
     DROP TABLE IF EXISTS deep_write_candidate_reviews;
-    DELETE FROM _schema_migrations WHERE version IN ('0025','0026','0027','0028','0029','0030','0031','0032','0033','0034','0035','0036','0037','0038','0039','0040','0041','0042','0043');
+    DELETE FROM _schema_migrations WHERE version IN ('0025','0026','0027','0028','0029','0030','0031','0032','0033','0034','0035','0036','0037','0038','0039','0040','0041','0042','0043','0044','0045');
     DROP TABLE IF EXISTS _memory_frame_integrity_markers;
     DELETE FROM _episode_integrity_markers WHERE marker = 'episode_boundary_integrity_0031';
     UPDATE _meta SET value = '24' WHERE key = 'schema_version';
@@ -93,14 +93,14 @@ test('one command upgrades a 3.5.2 database through schema 35 without changing s
   before.close();
 
   const dryRun = await migrate(dbPath, ['--dry-run']);
-  expect(dryRun.pending).toEqual(['0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043']);
+  expect(dryRun.pending).toEqual(['0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045']);
 
   const result = await migrate(dbPath, ['--yes', '--backup']);
-  expect(result.applied).toEqual(['0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043']);
+  expect(result.applied).toEqual(['0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045']);
   expect(existsSync(result.backupPath as string)).toBe(true);
 
   const upgraded = new Database(dbPath, { readonly: true });
-  expect(upgraded.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '43' });
+  expect(upgraded.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '45' });
   expect((upgraded.prepare('SELECT COUNT(*) AS count FROM memory_events').get() as { count: number }).count).toBe(beforeEvents);
   expect((upgraded.prepare('SELECT COUNT(*) AS count FROM memory_bindings').get() as { count: number }).count).toBe(beforeBindings);
   expect(upgraded.prepare(`SELECT node_id, project_id, node_type FROM memory_atlas_documents WHERE node_id = ?`).get(`entity:${entity.entityId}`)).toEqual({

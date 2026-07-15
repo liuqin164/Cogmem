@@ -1,6 +1,8 @@
 import type Database from 'bun:sqlite';
 import type { Migration } from '../types/Migration.js';
 
+const normalizeAlias = (value: string): string => value.normalize('NFKC').toLocaleLowerCase('und').trim().replace(/\s+/gu, ' ');
+
 const tableExists = (db: Database, name: string): boolean => Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name));
 
 /** Finalizes the 3.7.4 repair without changing any earlier migration. */
@@ -32,9 +34,11 @@ export const migration_0043: Migration = {
         for (const node of nodes) {
           let aliases: string[] = [];
           try { const parsed = JSON.parse(String(node.aliases_json ?? '[]')); if (Array.isArray(parsed)) aliases = parsed.filter((value): value is string => typeof value === 'string'); } catch { aliases = []; }
-          const labels = [...new Set([node.label, ...aliases].map((value) => value.normalize('NFKC').toLocaleLowerCase('und').trim()).filter(Boolean))];
+          let hintLabel: string | undefined;
+          try { const hint = JSON.parse(String((db.prepare(`SELECT canonical_hint_json FROM memory_frame_nodes WHERE frame_id=? AND dimension=? AND label=? LIMIT 1`).get(frame.frame_id, node.dimension, node.label) as { canonical_hint_json?: string } | null)?.canonical_hint_json ?? '{}')) as { canonicalLabel?: unknown }; if (typeof hint.canonicalLabel === 'string') hintLabel = hint.canonicalLabel; } catch { hintLabel = undefined; }
+          const labels = [...new Set([node.label, ...aliases, ...(hintLabel ? [hintLabel] : [])].map(normalizeAlias).filter(Boolean))];
           for (const label of labels) {
-            const rows = db.prepare(`SELECT alias_id,project_id,node_id FROM memory_atlas_aliases WHERE project_id=? AND dimension=? AND normalized_alias=?`).all(frame.project_id, node.dimension, label) as Array<{ alias_id: string; project_id: string; node_id: string }>;
+            const rows = db.prepare(`SELECT DISTINCT a.alias_id,a.project_id,a.node_id FROM memory_atlas_aliases a JOIN memory_atlas_documents d ON d.project_id=a.project_id AND d.node_id=a.node_id LEFT JOIN memory_atlas_supports fs ON fs.project_id=d.project_id AND fs.node_id=d.node_id AND fs.source_frame_id=? AND fs.source_type='frame' WHERE a.project_id=? AND a.dimension=? AND a.normalized_alias=? AND (json_extract(d.metadata_json,'$.frameId')=? OR fs.source_frame_id IS NOT NULL)`).all(frame.frame_id, frame.project_id, node.dimension, label, frame.frame_id) as Array<{ alias_id: string; project_id: string; node_id: string }>;
             for (const row of rows) {
               if (row.project_id !== frame.project_id) throw new Error('memory_frame_alias_cross_project');
               insert.run(`${row.alias_id}:${frame.frame_id}`, row.alias_id, frame.project_id, row.node_id, frame.frame_id, frame.episode_id, node.evidence_event_ids_json ?? '[]', frame.created_at);

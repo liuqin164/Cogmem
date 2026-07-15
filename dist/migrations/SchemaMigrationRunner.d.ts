@@ -20,6 +20,9 @@ export declare class SchemaMigrationRunner {
     plan(): Migration[];
     run(options?: SchemaMigrationRunOptions): SchemaMigrationResult;
     private ensureMigrationTable;
+    private migrationChecksum;
+    private backfillChecksums;
+    private assertRecordedChecksums;
     currentVersion(): string | undefined;
     private appliedVersions;
     private schemaMigrationsTableExists;

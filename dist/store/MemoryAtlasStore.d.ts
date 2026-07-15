@@ -40,6 +40,8 @@ export declare class MemoryAtlasStore {
     };
     evidenceIds(nodeId: string, projectId: string, limit: number): string[];
     evidenceTotal(nodeId: string, projectId: string): number;
+    hasEvidenceInRange(nodeId: string, projectId: string, from?: number, to?: number): boolean;
+    hasActiveState(nodeId: string, projectId: string, states: string[]): boolean;
     listEdges(projectId: string): MemoryAtlasEdge[];
     listEdgesForNodes(projectId: string, nodeIds: string[], limit?: number): MemoryAtlasEdge[];
     listEdgesWithinNodes(projectId: string, nodeIds: string[], limit?: number): MemoryAtlasEdge[];

@@ -51,8 +51,11 @@ export class AtlasPathRetriever {
             const facets = Object.values(queryFrame).flatMap((value) => Array.isArray(value) ? value : []).filter((item) => Boolean(item && typeof item === 'object'));
             const canonicalMatch = facets.some((facet) => facet.canonicalNodeId === node.id);
             const labelMatch = facets.map((facet) => String(facet.label ?? '').toLocaleLowerCase('und')).some((label) => label && node.label.toLocaleLowerCase('und').includes(label));
-            const timeMatch = !queryFrame.time || nodeTimeMatches(node, queryFrame.time, canonicalMatch);
-            const stateMatch = !queryFrame.states?.length || node.nodeType !== 'state' || queryFrame.states.some((state) => node.label.toLocaleLowerCase('und').includes(state.replaceAll('_', ' ')));
+            const timeMatch = !queryFrame.time || this.atlas.nodeHasEvidenceInRange(node.id, options.projectId, queryFrame.time) || nodeTimeMatches(node, queryFrame.time, canonicalMatch);
+            const stateMatch = !queryFrame.states?.length
+                || (node.nodeType === 'state'
+                    ? queryFrame.states.some((state) => node.label.toLocaleLowerCase('und').includes(state.replaceAll('_', ' ')))
+                    : this.atlas.nodeHasActiveState(node.id, options.projectId, queryFrame.states));
             const pathMatch = !seedIds.length || Boolean(intersection?.has(node.id) || reachable?.has(node.id) || canonicalMatch);
             const constrainedTarget = new Set(['episode', 'event', 'raw_event', 'task']);
             const strictIntersection = groups.size > 1
@@ -73,7 +76,7 @@ export class AtlasPathRetriever {
         if (queryFrame.time) {
             for (const id of [...selected]) {
                 const node = byId.get(id);
-                if (node && !seedIds.includes(id) && !nodeTimeMatches(node, queryFrame.time, false))
+                if (node && !seedIds.includes(id) && !this.atlas.nodeHasEvidenceInRange(node.id, options.projectId, queryFrame.time) && !nodeTimeMatches(node, queryFrame.time, false))
                     selected.delete(id);
             }
         }

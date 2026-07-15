@@ -12,6 +12,7 @@ import type {
   MemoryAtlasRelatedCard,
 } from '../atlas/MemoryAtlasTypes.js';
 import { decodeAtlasNodeId, encodeAtlasNodeId, fromAtlasEdgeEndpoint } from '../atlas/AtlasNodeIdCodec.js';
+import { normalizeAlias } from '../semantic/CanonicalMemoryResolver.js';
 
 export const MEMORY_ATLAS_PROJECTION_NAME = 'memory_atlas.v2';
 export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.4';
@@ -159,6 +160,7 @@ export class MemoryAtlasStore {
     const rows = this.db.prepare(`
       SELECT DISTINCT node_id FROM memory_atlas_aliases
       WHERE project_id=? AND dimension=? AND normalized_alias=? AND status='active'
+        AND (source_frame_id IS NULL OR EXISTS (SELECT 1 FROM memory_atlas_alias_supports s JOIN memory_frames f ON f.frame_id=s.source_frame_id WHERE s.alias_id=memory_atlas_aliases.alias_id AND s.status='active' AND f.status='active'))
       ORDER BY node_id
     `).all(projectId, dimension, normalizedAlias) as Array<{ node_id: string }>;
     return rows.length === 1 ? rows[0]!.node_id : undefined;
@@ -171,13 +173,14 @@ export class MemoryAtlasStore {
       JOIN memory_atlas_documents d ON d.project_id=a.project_id AND d.node_id=a.node_id
       WHERE a.project_id=? AND a.dimension=? AND a.normalized_alias=?
         AND a.status='active' AND d.status NOT IN ('rejected','archived','needs_confirmation')
+        AND (a.source_frame_id IS NULL OR EXISTS (SELECT 1 FROM memory_atlas_alias_supports s JOIN memory_frames f ON f.frame_id=s.source_frame_id WHERE s.alias_id=a.alias_id AND s.status='active' AND f.status='active'))
       ORDER BY a.node_id
     `).all(projectId, dimension, normalizedAlias) as Array<{ node_id: string }>;
     return rows.map((row) => row.node_id);
   }
 
   resolveQueryAliases(projectId: string, query: string): Array<{ label: string; dimension: string; nodeId: string }> {
-    const normalizedQuery = query.normalize('NFKC').toLocaleLowerCase('und').replace(/\s+/gu, ' ').trim();
+    const normalizedQuery = normalizeAlias(query);
     if (!normalizedQuery) return [];
     const rows = this.db.prepare(`
       SELECT a.normalized_alias AS label, a.dimension, a.node_id
@@ -185,6 +188,7 @@ export class MemoryAtlasStore {
       JOIN memory_atlas_documents d ON d.project_id=a.project_id AND d.node_id=a.node_id
       WHERE a.project_id=? AND a.status='active'
         AND d.status NOT IN ('rejected','archived','needs_confirmation')
+        AND (a.source_frame_id IS NULL OR EXISTS (SELECT 1 FROM memory_atlas_alias_supports s JOIN memory_frames f ON f.frame_id=s.source_frame_id WHERE s.alias_id=a.alias_id AND s.status='active' AND f.status='active'))
         AND length(a.normalized_alias) >= 2
         AND instr(?, a.normalized_alias)>0
       ORDER BY length(a.normalized_alias) DESC, a.node_id ASC
@@ -266,6 +270,7 @@ export class MemoryAtlasStore {
         FROM memory_atlas_aliases a
         JOIN memory_atlas_documents d ON d.project_id=a.project_id AND d.node_id=a.node_id
         WHERE a.project_id=? AND a.status='active'
+          AND (a.source_frame_id IS NULL OR EXISTS (SELECT 1 FROM memory_atlas_alias_supports s JOIN memory_frames f ON f.frame_id=s.source_frame_id WHERE s.alias_id=a.alias_id AND s.status='active' AND f.status='active'))
           AND d.status NOT IN ('rejected','archived','needs_confirmation')
       `).all(projectId) as Array<Record<string, unknown>>;
       for (const row of aliasRows) {
@@ -320,6 +325,35 @@ export class MemoryAtlasStore {
 
   evidenceTotal(nodeId: string, projectId: string): number {
     return this.evidenceIds(nodeId, projectId, 100_000).length;
+  }
+
+  hasEvidenceInRange(nodeId: string, projectId: string, from?: number, to?: number): boolean {
+    const fromDate = from === undefined ? undefined : new Date(from).toISOString().slice(0, 10);
+    const toDate = to === undefined ? undefined : new Date(to).toISOString().slice(0, 10);
+    const clauses = ['s.project_id=?', 's.node_id=?', "s.status='active'", 'e.event_id=json_each.value'];
+    const params: Array<string | number> = [projectId, nodeId];
+    if (from !== undefined) { clauses.push('(e.occurred_at>=? OR e.local_date>=?)'); params.push(from, fromDate!); }
+    if (to !== undefined) { clauses.push('(e.occurred_at<? OR e.local_date<?)'); params.push(to, toDate!); }
+    const row = this.db.prepare(`SELECT 1 FROM memory_atlas_supports s JOIN json_each(s.evidence_event_ids_json) ON true JOIN memory_events e ON ${clauses.slice(3).join(' AND ')} WHERE ${clauses.slice(0, 3).join(' AND ')} LIMIT 1`).get(...params);
+    return Boolean(row);
+  }
+
+  hasActiveState(nodeId: string, projectId: string, states: string[]): boolean {
+    const wanted = states.map((state) => normalizeAlias(state.replaceAll('_', ' '))).filter(Boolean);
+    if (!wanted.length) return true;
+    const parsed = parseNodeId(nodeId, projectId);
+    if (!parsed) return false;
+    const rows = this.db.prepare(`
+      SELECT d.label
+      FROM memory_edges e
+      JOIN memory_atlas_documents d
+        ON d.project_id=e.project_id AND d.node_type='state'
+       AND d.status NOT IN ('archived','rejected','needs_confirmation')
+       AND d.source_id=e.target_id
+      WHERE e.project_id=? AND e.source_type=? AND e.source_id=?
+        AND e.relation_type='HAS_STATE' AND e.status IN ('active','weak')
+    `).all(projectId, parsed.type, parsed.id) as Array<{ label?: string }>;
+    return rows.some((row) => wanted.includes(normalizeAlias(String(row.label ?? ''))));
   }
 
   listEdges(projectId: string): MemoryAtlasEdge[] {
@@ -752,6 +786,7 @@ export class MemoryAtlasStore {
     const topicHints = stringArray(metadata.topicHints);
     const matchedTopicPaths = matchedFacets.filter((facet) => facet.type === 'topic').map((facet) => facet.value);
     return {
+      origin: 'legacy_facet',
       canonicalId: row.node_id,
       nodeType: 'episode',
       displayTitle: row.label,

@@ -13,6 +13,14 @@ export class MemoryAtlasService {
     return this.store.resolveQueryAliases(projectId, query);
   }
 
+  nodeHasEvidenceInRange(nodeId: string, projectId: string, range: { from?: number; to?: number }): boolean {
+    return this.store.hasEvidenceInRange(nodeId, projectId, range.from, range.to);
+  }
+
+  nodeHasActiveState(nodeId: string, projectId: string, states: string[]): boolean {
+    return this.store.hasActiveState(nodeId, projectId, states);
+  }
+
   overview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
     const limit = boundedLimit(options.limit);
     const nodes = this.store.listNodes(requiredProject(options.projectId), limit);
@@ -77,7 +85,11 @@ export class MemoryAtlasService {
       nodes = uniqueNodes([...actions.map((action) => this.store.getNode(action.id, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node)), ...nodes]).slice(0, limit);
     }
     const nodesWithEvidence = this.attachEvidence(nodes, projectId, options);
-    const edgeProjection = this.edgeProjection(nodesWithEvidence, projectId, exactMatchedNodeIds(cards, facetResult.plan));
+    const edgeProjection = this.edgeProjection(
+      nodesWithEvidence,
+      projectId,
+      new Set([...exactMatchedNodeIds(cards, facetResult.plan), ...explicitSeedNodeIds]),
+    );
     const result = slice(projectId, nodesWithEvidence, edgeProjection.edges, query);
     result.facets = {
       ...facetsForPlan(facetResult.plan),

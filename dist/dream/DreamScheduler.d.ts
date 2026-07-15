@@ -41,6 +41,9 @@ export interface DreamTickResult {
         failureCategory: string;
         retryAfter?: number;
     }>;
+    semanticProcessorAvailable: boolean;
+    semanticProcessorUnavailableCount: number;
+    semanticProcessorFailedCount: number;
 }
 export declare class DreamScheduler {
     private readonly episodeStore;
