@@ -31,6 +31,11 @@ describe('MemoryFrame V1 contract', () => {
     expect(validateMemoryFrame(frame).errors.some((error) => error.startsWith('invalid_memory_frame_relation'))).toBe(true);
   });
 
+  test('returns structured errors for malformed nested model output', () => {
+    const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
+    expect(validateMemoryFrame({ ...frame, nodes: [{}] }).errors).toEqual(['invalid_memory_frame_nested_shape']);
+  });
+
   test('stores frames idempotently and publishes with CAS', () => {
     const db = new Database(':memory:');
     migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
@@ -38,8 +43,8 @@ describe('MemoryFrame V1 contract', () => {
     db.exec(`CREATE TABLE memory_events (event_id TEXT PRIMARY KEY, project_id TEXT, occurred_at INTEGER, local_date TEXT); CREATE TABLE memory_episode_events (episode_id TEXT, event_id TEXT); INSERT INTO memory_events VALUES ('event-1','p',1,'1970-01-01'); INSERT INTO memory_episode_events VALUES ('e','event-1');`);
     const store = new MemoryFrameStore(db);
     const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
-    store.save({ frame, sourceFingerprint: 'source-1', now: 0 });
-    store.save({ frame: { ...frame, frameId: 'different-id' }, sourceFingerprint: 'source-1', now: 1 });
+    store.save({ frame, sourceFingerprint: 'source-1', dreamJobLeaseId: 'lease-1', attemptGeneration: 1, now: 0 });
+    store.save({ frame: { ...frame, frameId: 'different-id' }, sourceFingerprint: 'source-1', dreamJobLeaseId: 'lease-1', attemptGeneration: 1, now: 1 });
     expect(store.list('p', { statuses: ['staged'] })).toHaveLength(1);
     expect(store.publish(frame.frameId, 'staged', 'needs_confirmation', 2)).toBe(true);
     expect(() => store.publish(frame.frameId, 'staged', 'active', 3)).toThrow('memory_frame_publish_conflict');

@@ -5,6 +5,12 @@ export function validateMemoryFrame(value, options = {}) {
         return { valid: false, errors: ['invalid_memory_frame_shape'] };
     const frame = value;
     const errors = [];
+    const malformedNode = frame.nodes.some((node) => typeof node.frameNodeId !== 'string' || typeof node.dimension !== 'string' || typeof node.label !== 'string' || !Array.isArray(node.evidenceEventIds));
+    const malformedRelation = frame.relations.some((relation) => typeof relation.sourceFrameNodeId !== 'string' || typeof relation.targetFrameNodeId !== 'string' || typeof relation.relationType !== 'string' || !Array.isArray(relation.evidenceEventIds));
+    const malformedTime = frame.temporalReferences.some((reference) => typeof reference.label !== 'string' || !Array.isArray(reference.evidenceEventIds));
+    const malformedState = frame.stateTransitions.some((transition) => typeof transition.subjectFrameNodeId !== 'string' || typeof transition.to !== 'string' || !Array.isArray(transition.evidenceEventIds));
+    if (malformedNode || malformedRelation || malformedTime || malformedState)
+        return { valid: false, errors: ['invalid_memory_frame_nested_shape'] };
     const limits = { nodes: 256, relations: 512, temporalReferences: 128, stateTransitions: 128, aliases: 64, evidence: 1000, text: 20000 };
     const episodeKinds = new Set(['discussion', 'operation', 'decision', 'correction', 'diagnostic', 'planning', 'status_update', 'preference', 'other']);
     const statuses = new Set(['staged', 'active', 'needs_confirmation', 'superseded', 'failed']);

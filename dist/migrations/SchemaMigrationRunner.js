@@ -24,13 +24,17 @@ export class SchemaMigrationRunner {
         this.adoptLegacyVersion();
         const pending = this.plan();
         const applied = [];
+        const recorded = new Set(this.db.prepare(`SELECT version FROM _schema_migrations`).all().map((row) => row.version));
         const transaction = this.db.transaction(() => {
             for (const migration of pending) {
                 migration.up(this.db);
-                this.db.prepare(`
-          INSERT INTO _schema_migrations (version, description, applied_at)
-          VALUES (?, ?, ?)
-        `).run(migration.version, migration.description, new Date().toISOString());
+                const appliedAt = new Date().toISOString();
+                if (recorded.has(migration.version)) {
+                    this.db.prepare(`UPDATE _schema_migrations SET description=?, applied_at=? WHERE version=?`).run(migration.description, appliedAt, migration.version);
+                }
+                else {
+                    this.db.prepare(`INSERT INTO _schema_migrations (version, description, applied_at) VALUES (?, ?, ?)`).run(migration.version, migration.description, appliedAt);
+                }
                 applied.push(migration.version);
             }
         });

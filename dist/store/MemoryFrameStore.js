@@ -22,8 +22,10 @@ export class MemoryFrameStore {
         const now = input.now ?? Date.now();
         const status = 'staged';
         const publishStatus = input.publishStatus ?? frame.publishStatus ?? (frame.needsReview ? 'needs_confirmation' : 'active');
-        const existing = this.db.prepare(`SELECT frame_id,revision_id,revision_number,status,dream_job_lease_id,attempt_generation FROM memory_frames WHERE episode_id=? AND source_fingerprint=? AND processor_prompt_version=? ORDER BY revision_number DESC, updated_at DESC LIMIT 1`).get(frame.episodeId, input.sourceFingerprint, frame.processor.promptVersion);
+        const existing = this.db.prepare(`SELECT frame_id,revision_id,revision_number,status,dream_job_lease_id,attempt_generation FROM memory_frames WHERE project_id=? AND episode_id=? AND source_fingerprint=? AND processor_prompt_version=? ORDER BY revision_number DESC, updated_at DESC LIMIT 1`).get(frame.projectId, frame.episodeId, input.sourceFingerprint, frame.processor.promptVersion);
         const sameOwner = existing?.status === 'staged'
+            && input.dreamJobLeaseId !== undefined
+            && input.attemptGeneration !== undefined
             && (existing.dream_job_lease_id ?? undefined) === input.dreamJobLeaseId
             && (existing.attempt_generation ?? undefined) === input.attemptGeneration;
         const storedFrameId = sameOwner ? existing.frame_id : (existing ? `${frame.frameId}:${randomUUID()}` : frame.frameId);
@@ -72,6 +74,7 @@ export class MemoryFrameStore {
                         throw new Error('memory_frame_relation_node_missing');
                     relation.run(randomUUID(), storedFrameId, sourceId, item.relationType, targetId, item.confidence, JSON.stringify(item.evidenceEventIds), item.validFrom ?? null, item.validTo ?? null);
                 }
+                this.markDirty(frame.projectId, now);
             })();
         }
         catch (error) {
@@ -81,7 +84,6 @@ export class MemoryFrameStore {
             }
             throw error;
         }
-        this.markDirty(frame.projectId, now);
         return { ...frame, frameId: storedFrameId, status, publishStatus };
     }
     get(frameId) {
