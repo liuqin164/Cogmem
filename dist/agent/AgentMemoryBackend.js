@@ -3,6 +3,7 @@ import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/Re
 import { compileAgentRecallQuery, } from './AgentRecallQueryCompiler.js';
 import { extractEntityCues } from '../utils/EntityCueExtractor.js';
 import { inferActionKinds } from '../utils/ActionKindRegistry.js';
+import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
 export class KernelAgentMemoryBackend {
     kernel;
     constructor(kernel) {
@@ -268,7 +269,7 @@ export class KernelAgentMemoryBackend {
         }
         const retrievalLimit = Math.max(limit * 4, 24);
         const multidimensionalRecall = query.projectId && allowsGraph
-            ? this.kernel.recall(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true })
+            ? this.kernel.recall(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone })
             : undefined;
         const atlasItems = allowsGraph
             ? [
@@ -589,7 +590,7 @@ export class KernelAgentMemoryBackend {
     }
     facetGraphItemsForQuery(query, limit) {
         try {
-            const recall = this.kernel.recall(query.query, { projectId: query.projectId, limit, includeRawEvidence: true });
+            const recall = this.kernel.recall(query.query, { projectId: query.projectId, limit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
             const atlas = recall.atlas;
             const plannedCards = atlas?.cards ?? [];
             const legacyAtlas = this.kernel.graphExplore(query.query, {
@@ -905,7 +906,7 @@ export class KernelAgentMemoryBackend {
         return { ...result, items: this.mergeRecallItems(result.items, atlasItems, limit) };
     }
     atlasItemsForAgentQuery(searchText, query, allowsRawSource) {
-        const recall = this.kernel.recall(searchText, { projectId: query.projectId, limit: Math.max((query.limit ?? 5) * 4, 24), includeRawEvidence: true });
+        const recall = this.kernel.recall(searchText, { projectId: query.projectId, limit: Math.max((query.limit ?? 5) * 4, 24), includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
         const cards = (recall.atlas?.cards ?? []).map((card) => this.toAgentRecallItemFromAtlasCard(card, query));
         const nodes = (recall.atlas?.nodes ?? [])
             .filter((node) => ['actor', 'event', 'task', 'object', 'location', 'state', 'project'].includes(node.nodeType))
@@ -1618,20 +1619,7 @@ function localYear(options) {
     const explicit = options.localDateNow?.match(/^(20\d{2})-\d{2}-\d{2}$/u)?.[1];
     if (explicit)
         return Number(explicit);
-    const now = options.now ?? Date.now();
-    try {
-        const parts = new Intl.DateTimeFormat('en-CA', {
-            timeZone: options.timeZone || 'Asia/Tokyo',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-        }).formatToParts(new Date(now));
-        const year = parts.find((part) => part.type === 'year')?.value;
-        if (year)
-            return Number(year);
-    }
-    catch { /* fall back below */ }
-    return new Date(now).getUTCFullYear();
+    return Number(localDateFor(options.now ?? Date.now(), resolveTimeZone(options.timeZone)).slice(0, 4));
 }
 function padDatePart(value) {
     return String(value).padStart(2, '0');

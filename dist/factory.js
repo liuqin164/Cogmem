@@ -528,7 +528,7 @@ export class MemoryKernel {
             // Agent and embedding callers use this entry point directly, so keep it
             // on the same freshness contract as graph CLI reads.
             this.ensureMemoryAtlas({ projectId: options.projectId });
-            const planned = this.atlasPathRetriever.retrieve(query, { projectId: options.projectId, limit: options.limit, includeEvidence: true, evidenceLimit: 1000, staleOk: true });
+            const planned = this.atlasPathRetriever.retrieve(query, { projectId: options.projectId, limit: options.limit, includeEvidence: true, evidenceLimit: 1000, staleOk: true, localDateNow: options.localDateNow, timeZone: options.timeZone, now: options.now });
             return { ...result, queryFrame: planned.queryFrame, atlas: planned.result };
         }
         catch (error) {

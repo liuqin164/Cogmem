@@ -22,6 +22,7 @@ export declare class SchemaMigrationRunner {
     private ensureMigrationTable;
     private migrationChecksum;
     private backfillChecksums;
+    private rewriteChecksums;
     private assertRecordedChecksums;
     currentVersion(): string | undefined;
     private appliedVersions;

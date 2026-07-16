@@ -30,7 +30,10 @@ export class SchemaMigrationRunner {
         const transaction = this.db.transaction(() => {
             for (const migration of pending) {
                 migration.up(this.db);
-                if (!this.migrationSchemaSatisfied(migration.version))
+                // 0046 repairs receipts created before checksum normalization. Its
+                // pre-receipt state is intentionally allowed to contain legacy NULL
+                // checksums; the post-receipt assertion below is the real gate.
+                if (migration.version !== '0046' && !this.migrationSchemaSatisfied(migration.version))
                     throw new Error(`migration_postcondition_failed:${migration.version}`);
                 const appliedAt = new Date().toISOString();
                 const checksum = this.migrationChecksum(migration);
@@ -47,8 +50,14 @@ export class SchemaMigrationRunner {
                 else {
                     this.db.prepare(`INSERT INTO _schema_migrations (version, description, applied_at) VALUES (?, ?, ?)`).run(migration.version, migration.description, appliedAt);
                 }
-                if (hasChecksum)
-                    this.backfillChecksums();
+                if (hasChecksum) {
+                    if (migration.version === '0046')
+                        this.rewriteChecksums();
+                    else
+                        this.backfillChecksums();
+                }
+                if (!this.migrationSchemaSatisfied(migration.version))
+                    throw new Error(`migration_postcondition_failed:${migration.version}`);
                 applied.push(migration.version);
             }
         });
@@ -65,12 +74,19 @@ export class SchemaMigrationRunner {
     `);
     }
     migrationChecksum(migration) {
+        // Keep the fallback invariant across TypeScript source, compiled JS and
+        // package builds. Migration descriptions are immutable once released.
         return migration.checksum ?? createHash('sha256')
-            .update(`${migration.version}\0${migration.description}\0${migration.up.toString()}`)
+            .update(`${migration.version}\0${migration.description}`)
             .digest('hex');
     }
     backfillChecksums() {
         const update = this.db.prepare(`UPDATE _schema_migrations SET checksum=? WHERE version=? AND (checksum IS NULL OR checksum='')`);
+        for (const migration of this.migrations)
+            update.run(this.migrationChecksum(migration), migration.version);
+    }
+    rewriteChecksums() {
+        const update = this.db.prepare(`UPDATE _schema_migrations SET checksum=? WHERE version=?`);
         for (const migration of this.migrations)
             update.run(this.migrationChecksum(migration), migration.version);
     }
@@ -79,9 +95,11 @@ export class SchemaMigrationRunner {
             return;
         const byVersion = new Map(this.migrations.map((migration) => [migration.version, migration]));
         const rows = this.db.prepare(`SELECT version, checksum FROM _schema_migrations WHERE checksum IS NOT NULL AND checksum<>''`).all();
+        const repairPending = this.migrations.some((migration) => migration.version === '0046')
+            && !this.migrationSchemaSatisfied('0046');
         for (const row of rows) {
             const migration = byVersion.get(row.version);
-            if (migration && row.checksum !== this.migrationChecksum(migration))
+            if (migration && row.checksum !== this.migrationChecksum(migration) && !repairPending)
                 throw new Error(`migration_checksum_mismatch:${row.version}`);
         }
     }
@@ -227,6 +245,10 @@ export class SchemaMigrationRunner {
             return this.hasColumns('memory_atlas_supports', ['payload_json', 'confidence', 'valid_from', 'valid_to', 'source_authority'])
                 && this.hasColumns('memory_atlas_alias_supports', ['payload_json', 'confidence', 'source_authority'])
                 && Boolean(this.db.prepare(`SELECT 1 FROM _memory_frame_integrity_markers WHERE marker='memory_frame_integrity_0045'`).get());
+        if (version === '0046')
+            return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='_memory_frame_integrity_markers'`).get())
+                && Boolean(this.db.prepare(`SELECT 1 FROM _memory_frame_integrity_markers WHERE marker='memory_frame_integrity_0046'`).get())
+                && !Boolean(this.db.prepare(`SELECT 1 FROM _schema_migrations WHERE version<>'0046' AND (checksum IS NULL OR checksum='')`).get());
         return true;
     }
     tableExists(name) {

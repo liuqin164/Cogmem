@@ -1,5 +1,6 @@
 import { extractEntityCues } from '../utils/EntityCueExtractor.js';
 import { ACTION_KIND_RULES } from '../utils/ActionKindRegistry.js';
+import { localDateFor, localDateRange, resolveTimeZone } from '../utils/LocalDateContext.js';
 
 export type FacetType = 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind';
 export type FacetOperator = 'intersection' | 'union';
@@ -173,70 +174,59 @@ function parseKindFacets(query: string, projectId: string): PlannedFacet[] {
 function parseTimeFacet(query: string, options: FacetQueryPlannerOptions): PlannedFacet | undefined {
   const currentYear = localYear(options);
   const isoDay = query.match(/(20\d{2})[-年\/.](\d{1,2})[-月\/.](\d{1,2})日?/);
-  if (isoDay) return dayFacet(Number(isoDay[1]), Number(isoDay[2]), Number(isoDay[3]));
+  if (isoDay) return dayFacet(Number(isoDay[1]), Number(isoDay[2]), Number(isoDay[3]), options.timeZone);
   const cnDay = query.match(/(?:(20\d{2})年)?(\d{1,2})月(\d{1,2})(?:号|日)?/);
-  if (cnDay) return dayFacet(cnDay[1] ? Number(cnDay[1]) : currentYear, Number(cnDay[2]), Number(cnDay[3]));
+  if (cnDay) return dayFacet(cnDay[1] ? Number(cnDay[1]) : currentYear, Number(cnDay[2]), Number(cnDay[3]), options.timeZone);
   const isoMonth = query.match(/(20\d{2})[-年\/.](\d{1,2})月?/);
-  if (isoMonth) return monthFacet(Number(isoMonth[1]), Number(isoMonth[2]));
+  if (isoMonth) return monthFacet(Number(isoMonth[1]), Number(isoMonth[2]), options.timeZone);
   const year = query.match(/\b(20\d{2})\b|((20\d{2})年)/);
-  if (year) return yearFacet(Number(year[1] ?? year[3]));
-  if (/去年/.test(query)) return yearFacet(currentYear - 1);
+  if (year) return yearFacet(Number(year[1] ?? year[3]), options.timeZone);
+  if (/去年/.test(query)) return yearFacet(currentYear - 1, options.timeZone);
   return undefined;
 }
 
 function localYear(options: FacetQueryPlannerOptions): number {
   const explicit = options.localDateNow?.match(/^(20\d{2})-\d{2}-\d{2}$/u)?.[1];
   if (explicit) return Number(explicit);
-  const now = options.now ?? Date.now();
-  try {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: options.timeZone || 'Asia/Tokyo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).formatToParts(new Date(now));
-    const year = parts.find((part) => part.type === 'year')?.value;
-    if (year) return Number(year);
-  } catch { /* fall back below */ }
-  return new Date(now).getUTCFullYear();
+  return Number(localDateFor(options.now ?? Date.now(), resolveTimeZone(options.timeZone)).slice(0, 4));
 }
 
-function dayFacet(year: number, month: number, day: number): PlannedFacet {
+function dayFacet(year: number, month: number, day: number, timeZone?: string): PlannedFacet {
   const label = `${year}-${pad(month)}-${pad(day)}`;
+  const range = localDateRange(year, month, day, year, month, day + 1, timeZone);
   return {
     type: 'time',
     value: label,
     label,
     relation: 'OCCURRED_ON',
     granularity: 'day',
-    from: Date.UTC(year, month - 1, day),
-    to: Date.UTC(year, month - 1, day + 1),
+    ...range,
   };
 }
 
-function monthFacet(year: number, month: number): PlannedFacet {
+function monthFacet(year: number, month: number, timeZone?: string): PlannedFacet {
   const label = `${year}-${pad(month)}`;
+  const range = localDateRange(year, month, 1, year, month + 1, 1, timeZone);
   return {
     type: 'time',
     value: label,
     label,
     relation: 'OCCURRED_IN',
     granularity: 'month',
-    from: Date.UTC(year, month - 1, 1),
-    to: Date.UTC(year, month, 1),
+    ...range,
   };
 }
 
-function yearFacet(year: number): PlannedFacet {
+function yearFacet(year: number, timeZone?: string): PlannedFacet {
   const label = String(year);
+  const range = localDateRange(year, 1, 1, year + 1, 1, 1, timeZone);
   return {
     type: 'time',
     value: label,
     label,
     relation: 'OCCURRED_IN',
     granularity: 'year',
-    from: Date.UTC(year, 0, 1),
-    to: Date.UTC(year + 1, 0, 1),
+    ...range,
   };
 }
 

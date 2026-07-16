@@ -30,15 +30,23 @@ export const migration_0043: Migration = {
           evidence_event_ids_json=excluded.evidence_event_ids_json,status='active',invalidated_at=NULL
       `);
       for (const frame of frames) {
-        const nodes = db.prepare(`SELECT dimension,label,aliases_json,evidence_event_ids_json FROM memory_frame_nodes WHERE frame_id=?`).all(frame.frame_id) as Array<{ dimension: string; label: string; aliases_json?: string; evidence_event_ids_json?: string }>;
+        const nodes = db.prepare(`SELECT frame_node_id,dimension,label,aliases_json,evidence_event_ids_json,canonical_hint_json FROM memory_frame_nodes WHERE frame_id=?`).all(frame.frame_id) as Array<{ frame_node_id: string; dimension: string; label: string; aliases_json?: string; evidence_event_ids_json?: string; canonical_hint_json?: string }>;
         for (const node of nodes) {
           let aliases: string[] = [];
           try { const parsed = JSON.parse(String(node.aliases_json ?? '[]')); if (Array.isArray(parsed)) aliases = parsed.filter((value): value is string => typeof value === 'string'); } catch { aliases = []; }
           let hintLabel: string | undefined;
-          try { const hint = JSON.parse(String((db.prepare(`SELECT canonical_hint_json FROM memory_frame_nodes WHERE frame_id=? AND dimension=? AND label=? LIMIT 1`).get(frame.frame_id, node.dimension, node.label) as { canonical_hint_json?: string } | null)?.canonical_hint_json ?? '{}')) as { canonicalLabel?: unknown }; if (typeof hint.canonicalLabel === 'string') hintLabel = hint.canonicalLabel; } catch { hintLabel = undefined; }
+          try { const hint = JSON.parse(String(node.canonical_hint_json ?? '{}')) as { canonicalLabel?: unknown }; if (typeof hint.canonicalLabel === 'string') hintLabel = hint.canonicalLabel; } catch { hintLabel = undefined; }
           const labels = [...new Set([node.label, ...aliases, ...(hintLabel ? [hintLabel] : [])].map(normalizeAlias).filter(Boolean))];
           for (const label of labels) {
             const rows = db.prepare(`SELECT DISTINCT a.alias_id,a.project_id,a.node_id FROM memory_atlas_aliases a JOIN memory_atlas_documents d ON d.project_id=a.project_id AND d.node_id=a.node_id LEFT JOIN memory_atlas_supports fs ON fs.project_id=d.project_id AND fs.node_id=d.node_id AND fs.source_frame_id=? AND fs.source_type='frame' WHERE a.project_id=? AND a.dimension=? AND a.normalized_alias=? AND (json_extract(d.metadata_json,'$.frameId')=? OR fs.source_frame_id IS NOT NULL)`).all(frame.frame_id, frame.project_id, node.dimension, label, frame.frame_id) as Array<{ alias_id: string; project_id: string; node_id: string }>;
+            const distinctNodes = [...new Set(rows.map((row) => row.node_id))];
+            if (distinctNodes.length > 1) {
+              if (tableExists(db, 'memory_atlas_alias_ambiguities')) {
+                const candidateId = `${frame.frame_id}:${node.frame_node_id}:${label}`;
+                db.prepare(`INSERT INTO memory_atlas_alias_ambiguities(candidate_id,project_id,dimension,normalized_alias,node_ids_json,source_frame_id,status,created_at) VALUES(?,?,?,?,?,?,'pending',?) ON CONFLICT(candidate_id) DO NOTHING`).run(candidateId, frame.project_id, node.dimension, label, JSON.stringify(distinctNodes.sort()), frame.frame_id, frame.created_at);
+              }
+              continue;
+            }
             for (const row of rows) {
               if (row.project_id !== frame.project_id) throw new Error('memory_frame_alias_cross_project');
               insert.run(`${row.alias_id}:${frame.frame_id}`, row.alias_id, frame.project_id, row.node_id, frame.frame_id, frame.episode_id, node.evidence_event_ids_json ?? '[]', frame.created_at);

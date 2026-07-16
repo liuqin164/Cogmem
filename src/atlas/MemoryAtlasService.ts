@@ -49,7 +49,7 @@ export class MemoryAtlasService {
     const projectId = requiredProject(options.projectId); const limit = boundedLimit(options.limit);
     const facetResult = this.searchFacetCardsWithRelaxation(query, projectId, limit, options);
     const cards = facetResult.cards;
-    const compiled = compileAtlasQuery(boundedQuery(query), options.now);
+    const compiled = compileAtlasQuery(boundedQuery(query), options);
     const target = this.store.resolveTargetNodeIds(projectId, compiled.text);
     const seedNodeIds = [...new Set([...(target.nodeIds ?? []), ...(options.seedNodeIds ?? [])])];
     const hasExplicitSeeds = seedNodeIds.length > 0;
@@ -180,7 +180,7 @@ export class MemoryAtlasService {
   }
 
   timeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult {
-    const projectId = requiredProject(options.projectId); const compiled = compileAtlasQuery(boundedQuery(query), options.now);
+    const projectId = requiredProject(options.projectId); const compiled = compileAtlasQuery(boundedQuery(query), options);
     const limit = boundedLimit(options.limit);
     const facetResult = this.searchFacetCardsWithRelaxation(query, projectId, limit, options);
     const cards = this.attachCardEvidence(facetResult.cards, projectId, options)

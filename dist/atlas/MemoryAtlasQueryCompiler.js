@@ -1,3 +1,4 @@
+import { localDateRange, localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
 const STOP_WORDS = new Set(['我', '你', '让', '对', '的', '年', '做过', '什么', '去年', '今年', 'the', 'a', 'an', 'what', 'did', 'do', 'to', 'last', 'year']);
 const ACTION_MARKERS = /启动|重启|停止|执行|配置|连接|安装|修复|更新|升级|比较|操作|设置|调试|start|started|launch|launched|boot|restart|restarted|stop|stopped|run|ran|configure|connect|install|repair|fix|update|upgrade|compare|setup|debug/iu;
 const MEMORY_KIND_MARKERS = [
@@ -7,7 +8,9 @@ const MEMORY_KIND_MARKERS = [
     [/人物|person/iu, 'person'], [/地点|place/iu, 'place'], [/项目|project/iu, 'project'],
     [ACTION_MARKERS, 'action'],
 ];
-export function compileAtlasQuery(query, now = Date.now()) {
+export function compileAtlasQuery(query, context = {}) {
+    const options = typeof context === 'number' ? { now: context } : context;
+    const now = options.now ?? Date.now();
     const text = String(query || '').trim().slice(0, 1000);
     const tokens = Array.from(new Set((text.match(/[\p{L}\p{N}_-]+/gu) || [])
         .map((item) => item.trim())
@@ -16,11 +19,14 @@ export function compileAtlasQuery(query, now = Date.now()) {
     let range;
     if (explicitYear) {
         const year = Number(explicitYear);
-        range = { from: Date.UTC(year, 0, 1), to: Date.UTC(year + 1, 0, 1), label: explicitYear };
+        const resolved = localDateRange(year, 1, 1, year + 1, 1, 1, options.timeZone);
+        range = { ...resolved, label: explicitYear };
     }
     else if (/去年|last year/iu.test(text)) {
-        const year = new Date(now).getUTCFullYear() - 1;
-        range = { from: Date.UTC(year, 0, 1), to: Date.UTC(year + 1, 0, 1), label: String(year) };
+        const currentYear = Number((options.localDateNow ?? localDateFor(now, resolveTimeZone(options.timeZone))).slice(0, 4));
+        const year = currentYear - 1;
+        const resolved = localDateRange(year, 1, 1, year + 1, 1, 1, options.timeZone);
+        range = { ...resolved, label: String(year) };
     }
     const target = tokens.find((token) => /^[A-Z][\p{L}\p{N}_.-]*$/u.test(token))
         ?? tokens.find((token) => !/^\d{4}$/u.test(token)

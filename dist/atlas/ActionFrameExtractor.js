@@ -61,7 +61,9 @@ export class ActionFrameExtractor {
                     });
                     created += 1;
                 }
-                const year = new Date(event.occurredAt).getUTCFullYear();
+                // EventStore's localDate is the authoritative calendar date for the
+                // source event; do not derive a user's year from the host's UTC clock.
+                const year = Number((event.localDate ?? new Date(event.occurredAt).toISOString().slice(0, 10)).slice(0, 4));
                 const key = `${event.projectId}\0${year}`;
                 const aggregate = yearEvidence.get(key) || { projectId: event.projectId, year, eventIds: new Set() };
                 aggregate.eventIds.add(event.eventId);

@@ -1,3 +1,5 @@
+import { localDateRange, localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
+
 export interface CompiledAtlasQuery {
   text: string;
   tokens: string[];
@@ -18,7 +20,9 @@ const MEMORY_KIND_MARKERS: Array<[RegExp, string]> = [
   [ACTION_MARKERS, 'action'],
 ];
 
-export function compileAtlasQuery(query: string, now = Date.now()): CompiledAtlasQuery {
+export function compileAtlasQuery(query: string, context: number | { now?: number; localDateNow?: string; timeZone?: string } = {}): CompiledAtlasQuery {
+  const options = typeof context === 'number' ? { now: context } : context;
+  const now = options.now ?? Date.now();
   const text = String(query || '').trim().slice(0, 1000);
   const tokens = Array.from(new Set((text.match(/[\p{L}\p{N}_-]+/gu) || [])
     .map((item) => item.trim())
@@ -27,10 +31,13 @@ export function compileAtlasQuery(query: string, now = Date.now()): CompiledAtla
   let range: CompiledAtlasQuery['range'];
   if (explicitYear) {
     const year = Number(explicitYear);
-    range = { from: Date.UTC(year, 0, 1), to: Date.UTC(year + 1, 0, 1), label: explicitYear };
+    const resolved = localDateRange(year, 1, 1, year + 1, 1, 1, options.timeZone);
+    range = { ...resolved, label: explicitYear };
   } else if (/去年|last year/iu.test(text)) {
-    const year = new Date(now).getUTCFullYear() - 1;
-    range = { from: Date.UTC(year, 0, 1), to: Date.UTC(year + 1, 0, 1), label: String(year) };
+    const currentYear = Number((options.localDateNow ?? localDateFor(now, resolveTimeZone(options.timeZone))).slice(0, 4));
+    const year = currentYear - 1;
+    const resolved = localDateRange(year, 1, 1, year + 1, 1, 1, options.timeZone);
+    range = { ...resolved, label: String(year) };
   }
   const target = tokens.find((token) => /^[A-Z][\p{L}\p{N}_.-]*$/u.test(token))
     ?? tokens.find((token) => !/^\d{4}$/u.test(token)

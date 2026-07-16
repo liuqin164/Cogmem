@@ -10,7 +10,7 @@ export class AtlasPathRetriever {
         this.ranker = ranker;
     }
     retrieve(query, options) {
-        const queryFrame = this.planner.plan(query, options.now);
+        const queryFrame = this.planner.plan(query, { now: options.now, localDateNow: options.localDateNow, timeZone: options.timeZone });
         const facetKeys = {
             actor: 'actors', project: 'projects', topic: 'topics', issue: 'issues', event: 'events', task: 'tasks', entity: 'entities', object: 'objects', location: 'locations',
         };

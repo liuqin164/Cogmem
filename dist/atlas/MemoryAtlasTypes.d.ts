@@ -188,6 +188,8 @@ export interface MemoryAtlasQueryOptions {
     includeEvidence?: boolean;
     evidenceLimit?: number;
     now?: number;
+    localDateNow?: string;
+    timeZone?: string;
     refresh?: boolean;
     staleOk?: boolean;
 }

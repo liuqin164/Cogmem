@@ -7,7 +7,7 @@ export class AtlasPathRetriever {
   constructor(private readonly atlas: MemoryAtlasService, private readonly planner = new MultidimensionalQueryPlanner(), private readonly ranker = new DimensionAwareRanker()) {}
 
   retrieve(query: string, options: MemoryAtlasQueryOptions): { queryFrame: ReturnType<MultidimensionalQueryPlanner['plan']>; result: MemoryAtlasSlice } {
-    const queryFrame = this.planner.plan(query, options.now);
+    const queryFrame = this.planner.plan(query, { now: options.now, localDateNow: options.localDateNow, timeZone: options.timeZone });
     const facetKeys: Record<string, 'actors' | 'projects' | 'topics' | 'issues' | 'events' | 'tasks' | 'entities' | 'objects' | 'locations'> = {
       actor: 'actors', project: 'projects', topic: 'topics', issue: 'issues', event: 'events', task: 'tasks', entity: 'entities', object: 'objects', location: 'locations',
     };

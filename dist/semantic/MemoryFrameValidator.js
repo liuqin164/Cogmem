@@ -84,6 +84,15 @@ export function validateMemoryFrame(value, options = {}) {
             errors.push(`invalid_node_aliases:${node.frameNodeId}`);
         if (Array.isArray(node.aliases) && node.aliases.some((alias) => !alias.trim()))
             errors.push(`empty_node_alias:${node.frameNodeId}`);
+        if (node.canonicalHint?.nodeId && ['episode', 'project', 'raw_event'].includes(node.dimension)) {
+            const expected = node.dimension === 'episode'
+                ? `episode:${frame.episodeId}`
+                : node.dimension === 'project'
+                    ? `project:${frame.projectId}`
+                    : node.evidenceEventIds.length === 1 ? `raw_event:${node.evidenceEventIds[0]}` : undefined;
+            if (!expected || node.canonicalHint.nodeId !== expected)
+                errors.push(`immutable_identity_hint_mismatch:${node.frameNodeId}`);
+        }
     }
     for (const relation of frame.relations) {
         const source = nodes.get(relation.sourceFrameNodeId);

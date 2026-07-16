@@ -25,7 +25,7 @@ export const migration_0043 = {
           evidence_event_ids_json=excluded.evidence_event_ids_json,status='active',invalidated_at=NULL
       `);
             for (const frame of frames) {
-                const nodes = db.prepare(`SELECT dimension,label,aliases_json,evidence_event_ids_json FROM memory_frame_nodes WHERE frame_id=?`).all(frame.frame_id);
+                const nodes = db.prepare(`SELECT frame_node_id,dimension,label,aliases_json,evidence_event_ids_json,canonical_hint_json FROM memory_frame_nodes WHERE frame_id=?`).all(frame.frame_id);
                 for (const node of nodes) {
                     let aliases = [];
                     try {
@@ -38,7 +38,7 @@ export const migration_0043 = {
                     }
                     let hintLabel;
                     try {
-                        const hint = JSON.parse(String(db.prepare(`SELECT canonical_hint_json FROM memory_frame_nodes WHERE frame_id=? AND dimension=? AND label=? LIMIT 1`).get(frame.frame_id, node.dimension, node.label)?.canonical_hint_json ?? '{}'));
+                        const hint = JSON.parse(String(node.canonical_hint_json ?? '{}'));
                         if (typeof hint.canonicalLabel === 'string')
                             hintLabel = hint.canonicalLabel;
                     }
@@ -48,6 +48,14 @@ export const migration_0043 = {
                     const labels = [...new Set([node.label, ...aliases, ...(hintLabel ? [hintLabel] : [])].map(normalizeAlias).filter(Boolean))];
                     for (const label of labels) {
                         const rows = db.prepare(`SELECT DISTINCT a.alias_id,a.project_id,a.node_id FROM memory_atlas_aliases a JOIN memory_atlas_documents d ON d.project_id=a.project_id AND d.node_id=a.node_id LEFT JOIN memory_atlas_supports fs ON fs.project_id=d.project_id AND fs.node_id=d.node_id AND fs.source_frame_id=? AND fs.source_type='frame' WHERE a.project_id=? AND a.dimension=? AND a.normalized_alias=? AND (json_extract(d.metadata_json,'$.frameId')=? OR fs.source_frame_id IS NOT NULL)`).all(frame.frame_id, frame.project_id, node.dimension, label, frame.frame_id);
+                        const distinctNodes = [...new Set(rows.map((row) => row.node_id))];
+                        if (distinctNodes.length > 1) {
+                            if (tableExists(db, 'memory_atlas_alias_ambiguities')) {
+                                const candidateId = `${frame.frame_id}:${node.frame_node_id}:${label}`;
+                                db.prepare(`INSERT INTO memory_atlas_alias_ambiguities(candidate_id,project_id,dimension,normalized_alias,node_ids_json,source_frame_id,status,created_at) VALUES(?,?,?,?,?,?,'pending',?) ON CONFLICT(candidate_id) DO NOTHING`).run(candidateId, frame.project_id, node.dimension, label, JSON.stringify(distinctNodes.sort()), frame.frame_id, frame.created_at);
+                            }
+                            continue;
+                        }
                         for (const row of rows) {
                             if (row.project_id !== frame.project_id)
                                 throw new Error('memory_frame_alias_cross_project');

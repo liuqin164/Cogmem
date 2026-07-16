@@ -1,6 +1,10 @@
 import type { MemoryQueryFrameV1 } from '../semantic/MemoryFrameTypes.js';
 export declare class MultidimensionalQueryPlanner {
-    plan(query: string, now?: number): MemoryQueryFrameV1;
+    plan(query: string, context?: {
+        now?: number;
+        localDateNow?: string;
+        timeZone?: string;
+    } | number): MemoryQueryFrameV1;
     private states;
     private intent;
     private timeRange;

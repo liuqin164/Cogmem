@@ -1,3 +1,4 @@
+import { localDateFor, localDateRange, resolveTimeZone } from '../utils/LocalDateContext.js';
 const DIMENSION_WORDS = [
     ['actor', /^(who|谁|谁参与(?:了)?|actor|作者)$/iu],
     ['project', /^(project|项目|仓库|repo)$/iu],
@@ -12,7 +13,8 @@ const FRAME_KEYS = {
     actor: 'actors', project: 'projects', topic: 'topics', issue: 'issues', event: 'events', task: 'tasks', entity: 'entities', object: 'objects', location: 'locations',
 };
 export class MultidimensionalQueryPlanner {
-    plan(query, now = Date.now()) {
+    plan(query, context = {}) {
+        const options = typeof context === 'number' ? { now: context } : context;
         const text = query.trim();
         const tokens = text.match(/[\p{L}\p{N}_-]+/gu)?.filter((token) => token.length > 1).slice(0, 24) ?? [];
         const facets = {};
@@ -23,7 +25,7 @@ export class MultidimensionalQueryPlanner {
                 (facets[key] ??= []).push({ label: token, dimension, confidence: 0.7 });
         }
         const intent = this.intent(text);
-        const time = this.timeRange(text, now);
+        const time = this.timeRange(text, options);
         const states = this.states(text);
         const frame = {
             schemaVersion: 'memory_query_frame.v1',
@@ -65,27 +67,35 @@ export class MultidimensionalQueryPlanner {
             return 'preference_recall';
         return 'exact_lookup';
     }
-    timeRange(query, now) {
+    timeRange(query, options) {
+        const now = options.now ?? Date.now();
         const month = query.match(/(?:20\d{2}[年/-]?)?(\d{1,2})月|\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/iu);
         if (month) {
             const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
             const raw = month[1] ?? month[0].slice(0, 3).toLocaleLowerCase('en');
             const monthIndex = month[1] ? Number(raw) - 1 : monthNames.indexOf(raw);
             if (monthIndex >= 0 && monthIndex < 12) {
-                const yearValue = Number(query.match(/\b(20\d{2})\b/u)?.[1] ?? new Date(now).getUTCFullYear());
-                return { from: Date.UTC(yearValue, monthIndex, 1), to: Date.UTC(yearValue, monthIndex + 1, 1), expressions: [month[0]] };
+                const yearValue = Number(query.match(/\b(20\d{2})\b/u)?.[1] ?? localYear(options));
+                const range = localDateRange(yearValue, monthIndex + 1, 1, yearValue, monthIndex + 2, 1, options.timeZone);
+                return { ...range, expressions: [month[0]] };
             }
         }
         const year = query.match(/\b(20\d{2})\b/u)?.[1];
         if (year) {
-            const from = Date.UTC(Number(year), 0, 1);
-            return { from, to: Date.UTC(Number(year) + 1, 0, 1), expressions: [year] };
+            const range = localDateRange(Number(year), 1, 1, Number(year) + 1, 1, 1, options.timeZone);
+            return { ...range, expressions: [year] };
         }
         if (/今天|today/iu.test(query)) {
-            const start = new Date(now);
-            start.setUTCHours(0, 0, 0, 0);
-            return { from: start.getTime(), to: start.getTime() + 86400000, expressions: ['today'] };
+            const date = options.localDateNow ?? localDateFor(now, options.timeZone);
+            const [year, monthValue, day] = date.split('-').map(Number);
+            return { ...localDateRange(year, monthValue, day, year, monthValue, day + 1, options.timeZone), expressions: ['today'] };
         }
         return undefined;
     }
+}
+function localYear(options) {
+    const explicit = options.localDateNow?.match(/^(20\d{2})-/u)?.[1];
+    if (explicit)
+        return Number(explicit);
+    return Number(localDateFor(options.now ?? Date.now(), resolveTimeZone(options.timeZone)).slice(0, 4));
 }

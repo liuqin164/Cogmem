@@ -36,6 +36,14 @@ describe('MemoryFrame V1 contract', () => {
     expect(validateMemoryFrame({ ...frame, nodes: [{}] }).errors).toEqual(['invalid_memory_frame_nested_shape']);
   });
 
+  test('immutable frame identities cannot be redirected by canonical hints', () => {
+    const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'episode-b', events: [] });
+    const episode = frame.nodes.find((node) => node.dimension === 'episode');
+    expect(episode).toBeDefined();
+    episode!.canonicalHint = { nodeId: 'episode:episode-a' };
+    expect(validateMemoryFrame(frame, { allowEmptyEvidence: true }).errors).toContain('immutable_identity_hint_mismatch:episode');
+  });
+
   test('stores frames idempotently and publishes with CAS', () => {
     const db = new Database(':memory:');
     migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
@@ -168,5 +176,11 @@ describe('MemoryFrame V1 contract', () => {
     const frame = new MultidimensionalQueryPlanner().plan('谁参与了 2026年6月的升级？', Date.UTC(2026, 6, 13));
     expect(frame.actors?.[0]?.label).toBe('谁参与了');
     expect(frame.time).toEqual({ from: Date.UTC(2026, 5, 1), to: Date.UTC(2026, 6, 1), expressions: ['2026年6月'] });
+  });
+
+  test('planner resolves relative dates using the supplied project timezone', () => {
+    const frame = new MultidimensionalQueryPlanner().plan('今天', { now: Date.UTC(2026, 6, 16, 15, 30), timeZone: 'Asia/Tokyo' });
+    expect(frame.time?.from).toBe(Date.UTC(2026, 6, 16, 15));
+    expect(frame.time?.to).toBe(Date.UTC(2026, 6, 17, 15));
   });
 });

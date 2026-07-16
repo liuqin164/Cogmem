@@ -11,7 +11,11 @@ export interface CompiledAtlasQuery {
     };
     memoryKinds: string[];
 }
-export declare function compileAtlasQuery(query: string, now?: number): CompiledAtlasQuery;
+export declare function compileAtlasQuery(query: string, context?: number | {
+    now?: number;
+    localDateNow?: string;
+    timeZone?: string;
+}): CompiledAtlasQuery;
 export declare function actionMarker(value: string): {
     frameType: string;
     action: string;

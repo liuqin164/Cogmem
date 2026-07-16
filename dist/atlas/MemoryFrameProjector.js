@@ -113,7 +113,7 @@ export class MemoryFrameProjector {
             for (const transition of [...frame.stateTransitions].sort((a, b) => this.latestEvidenceTime(b.evidenceEventIds, 0) - this.latestEvidenceTime(a.evidenceEventIds, 0))) {
                 const subject = nodeIds.get(transition.subjectFrameNodeId);
                 const subjectNode = frame.nodes.find((node) => node.frameNodeId === transition.subjectFrameNodeId);
-                if (!subject || !subjectNode || !['task', 'entity', 'event', 'object'].includes(subjectNode.dimension))
+                if (!subject || !subjectNode || !['task', 'entity', 'event', 'object'].includes(subjectNode.dimension) || blocked.has(subject))
                     continue;
                 const stateId = encodeAtlasNodeId('state', createHash('sha256').update(`${projectId}\0${canonicalStateKey(transition.to)}`).digest('hex').slice(0, 32), projectId);
                 const existingState = this.atlasStore.getNodeIncludingInactive(stateId, projectId);
@@ -152,7 +152,21 @@ export class MemoryFrameProjector {
             }
         }
         this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE project_id=? AND source_frame_id IS NOT NULL AND status='active' AND NOT EXISTS (SELECT 1 FROM memory_atlas_alias_supports s WHERE s.alias_id=memory_atlas_aliases.alias_id AND s.status='active')`).run(now, projectId);
-        this.db.prepare(`UPDATE memory_atlas_documents SET support_count=(SELECT COUNT(*) FROM memory_atlas_supports s WHERE s.project_id=memory_atlas_documents.project_id AND s.node_id=memory_atlas_documents.node_id AND s.status='active') WHERE project_id=? AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2' AND EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.project_id=memory_atlas_documents.project_id AND s.node_id=memory_atlas_documents.node_id AND s.status='active')`).run(projectId);
+        // Include legacy canonical documents that received Frame supports, while
+        // preserving counts maintained by older Atlas authorities.
+        this.db.prepare(`UPDATE memory_atlas_documents
+      SET support_count=MAX(COALESCE(support_count,0), (
+        SELECT COUNT(*) FROM memory_atlas_supports s
+        WHERE s.project_id=memory_atlas_documents.project_id
+          AND s.node_id=memory_atlas_documents.node_id
+          AND s.status='active'
+      ))
+      WHERE project_id=? AND EXISTS (
+        SELECT 1 FROM memory_atlas_supports s
+        WHERE s.project_id=memory_atlas_documents.project_id
+          AND s.node_id=memory_atlas_documents.node_id
+          AND s.status='active'
+      )`).run(projectId);
         this.rebuildAliasIndex.clear();
         return { frames: frames.length, nodes, edges, needsReview };
     }
@@ -179,12 +193,6 @@ export class MemoryFrameProjector {
         return index;
     }
     nodeId(projectId, node, frame) {
-        if (node.canonicalHint?.nodeId) {
-            const candidate = node.canonicalHint.nodeId;
-            const existing = this.atlasStore.getNodeIncludingInactive(candidate, projectId);
-            if (existing && existing.projectId === projectId && existing.nodeType === node.dimension)
-                return candidate;
-        }
         if (node.dimension === 'episode')
             return encodeAtlasNodeId('episode', frame.episodeId, projectId);
         if (node.dimension === 'project')
@@ -193,6 +201,12 @@ export class MemoryFrameProjector {
             if (node.evidenceEventIds.length !== 1)
                 throw new Error(`raw_event_identity_requires_one_evidence:${node.frameNodeId}`);
             return encodeAtlasNodeId('raw_event', node.evidenceEventIds[0], projectId);
+        }
+        if (node.canonicalHint?.nodeId) {
+            const candidate = node.canonicalHint.nodeId;
+            const existing = this.atlasStore.getNodeIncludingInactive(candidate, projectId);
+            if (existing && existing.projectId === projectId && existing.nodeType === node.dimension)
+                return candidate;
         }
         const normalizedLabel = normalizeAlias(node.label);
         const aliasNodes = this.rebuildAliasIndex.get(`${node.dimension}\0${normalizedLabel}`)
