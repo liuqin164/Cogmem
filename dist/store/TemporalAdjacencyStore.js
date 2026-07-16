@@ -29,24 +29,49 @@ export class TemporalAdjacencyStore {
     `);
     }
     syncBuckets(buckets, createdAt) {
-        for (const bucket of buckets) {
-            for (const adjacentId of this.getAdjacentBucketIds(bucket)) {
-                this.db.prepare(`
-          INSERT OR IGNORE INTO temporal_adjacency (
-            source_bucket_id, adjacent_bucket_id, bucket_type, weight, created_at
-          ) VALUES (?, ?, ?, ?, ?)
-        `).run(bucket.bucketId, adjacentId, bucket.bucketType, 0.72, createdAt);
-                this.db.prepare(`
-          INSERT OR IGNORE INTO temporal_adjacency (
-            source_bucket_id, adjacent_bucket_id, bucket_type, weight, created_at
-          ) VALUES (?, ?, ?, ?, ?)
-        `).run(adjacentId, bucket.bucketId, bucket.bucketType, 0.72, createdAt);
+        const insert = this.db.prepare(`
+      INSERT INTO temporal_adjacency (
+        source_bucket_id, adjacent_bucket_id, bucket_type, weight, created_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(source_bucket_id, adjacent_bucket_id) DO UPDATE SET
+        bucket_type=excluded.bucket_type, weight=excluded.weight, created_at=excluded.created_at
+    `);
+        this.db.transaction(() => {
+            for (const bucket of buckets) {
+                const { previous, next } = this.getAdjacentBucketIds(bucket);
+                this.db.prepare(`DELETE FROM temporal_adjacency WHERE source_bucket_id=? OR adjacent_bucket_id=?`).run(bucket.bucketId, bucket.bucketId);
+                if (previous && next) {
+                    this.db.prepare(`DELETE FROM temporal_adjacency WHERE (source_bucket_id=? AND adjacent_bucket_id=?) OR (source_bucket_id=? AND adjacent_bucket_id=?)`)
+                        .run(previous, next, next, previous);
+                }
+                for (const adjacentId of [previous, next].filter((id) => Boolean(id))) {
+                    insert.run(bucket.bucketId, adjacentId, bucket.bucketType, 0.72, createdAt);
+                    insert.run(adjacentId, bucket.bucketId, bucket.bucketType, 0.72, createdAt);
+                }
             }
-        }
+        })();
     }
-    collectAdjacentNeuronIds(bucketIds, limit = 48) {
+    rebuildAll(createdAt) {
+        const rows = this.db.prepare(`SELECT bucket_id,bucket_type,bucket_start,bucket_end,label FROM time_buckets ORDER BY bucket_type,bucket_start`).all();
+        const insert = this.db.prepare(`INSERT INTO temporal_adjacency(source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) VALUES(?,?,?,?,?)`);
+        this.db.transaction(() => {
+            this.db.exec(`DELETE FROM temporal_adjacency;`);
+            for (let index = 1; index < rows.length; index += 1) {
+                const previous = rows[index - 1];
+                const current = rows[index];
+                if (previous.bucket_type !== current.bucket_type)
+                    continue;
+                insert.run(previous.bucket_id, current.bucket_id, current.bucket_type, 0.72, createdAt);
+                insert.run(current.bucket_id, previous.bucket_id, current.bucket_type, 0.72, createdAt);
+            }
+        })();
+    }
+    collectAdjacentNeuronIds(bucketIds, limit = 48, projectId) {
         if (bucketIds.length === 0)
             return [];
+        if (projectId) {
+            return this.listNeuronIdsForBuckets(this.listAdjacentBucketIds(bucketIds, projectId), limit, projectId);
+        }
         const placeholders = bucketIds.map(() => '?').join(', ');
         const rows = this.db.prepare(`
       SELECT DISTINCT tbe.neuron_id
@@ -62,27 +87,21 @@ export class TemporalAdjacencyStore {
     collectContinuousTraversal(input) {
         const hopLimit = Math.max(1, input.hopLimit ?? 2);
         const limit = input.limit ?? 96;
-        if (input.bucketIds.length === 0) {
+        const seedBucketIds = this.filterBucketIdsForProject(input.bucketIds, input.projectId);
+        if (seedBucketIds.length === 0) {
             return { bucketIds: [], labels: [], neuronIds: [] };
         }
-        const visited = new Set(input.bucketIds);
-        let frontier = [...input.bucketIds];
+        const visited = new Set(seedBucketIds);
+        let frontier = [...seedBucketIds];
         for (let hop = 0; hop < hopLimit; hop += 1) {
             if (frontier.length === 0)
                 break;
-            const placeholders = frontier.map(() => '?').join(', ');
-            const rows = this.db.prepare(`
-        SELECT adjacent_bucket_id
-        FROM temporal_adjacency
-        WHERE source_bucket_id IN (${placeholders})
-        ORDER BY created_at DESC
-      `).all(...frontier);
             const next = [];
-            for (const row of rows) {
-                if (visited.has(row.adjacent_bucket_id))
+            for (const adjacentBucketId of this.listAdjacentBucketIds(frontier, input.projectId)) {
+                if (visited.has(adjacentBucketId))
                     continue;
-                visited.add(row.adjacent_bucket_id);
-                next.push(row.adjacent_bucket_id);
+                visited.add(adjacentBucketId);
+                next.push(adjacentBucketId);
                 if (visited.size >= limit)
                     break;
             }
@@ -96,18 +115,10 @@ export class TemporalAdjacencyStore {
       WHERE bucket_id IN (${placeholders})
       ORDER BY bucket_start DESC
     `).all(...bucketList);
-        const neuronRows = this.db.prepare(`
-      SELECT DISTINCT neuron_id
-      FROM time_bucket_entries
-      WHERE bucket_id IN (${placeholders})
-        AND neuron_id IS NOT NULL
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).all(...bucketList, limit);
         return {
             bucketIds: bucketList,
             labels: labelRows.map((row) => row.label),
-            neuronIds: neuronRows.map((row) => row.neuron_id).filter((value) => Boolean(value))
+            neuronIds: this.listNeuronIdsForBuckets(bucketList, limit, input.projectId)
         };
     }
     collectContinuousSurface(input) {
@@ -130,20 +141,22 @@ export class TemporalAdjacencyStore {
             startTime: input.startTime,
             endTime: input.endTime,
             bucketType,
+            projectId: input.projectId,
             limit
         })) {
             upsertSegment(segment);
         }
-        const seedRows = this.listBucketSegments((input.bucketIds || []).slice(0, limit), 'seed');
+        const seedRows = this.listBucketSegments((input.bucketIds || []).slice(0, limit), 'seed', input.projectId);
         for (const segment of seedRows)
             upsertSegment(segment);
         if (ordered.size === 0 && (input.bucketIds || []).length > 0) {
             const traversal = this.collectContinuousTraversal({
                 bucketIds: input.bucketIds || [],
+                projectId: input.projectId,
                 hopLimit: input.hopLimit,
                 limit
             });
-            for (const segment of this.listBucketSegments(traversal.bucketIds, 'adjacent')) {
+            for (const segment of this.listBucketSegments(traversal.bucketIds, 'adjacent', input.projectId)) {
                 upsertSegment(segment);
             }
         }
@@ -152,6 +165,7 @@ export class TemporalAdjacencyStore {
                 startTime: input.startTime,
                 endTime: input.endTime,
                 bucketType,
+                projectId: input.projectId,
                 limit: Math.min(limit, 6)
             })) {
                 upsertSegment(segment);
@@ -162,6 +176,7 @@ export class TemporalAdjacencyStore {
             startTime: input.startTime,
             endTime: input.endTime,
             bucketType,
+            projectId: input.projectId,
             limit
         });
         for (const segment of expandedBand)
@@ -184,52 +199,60 @@ export class TemporalAdjacencyStore {
     getAdjacentBucketIds(bucket) {
         const previous = this.db.prepare(`SELECT bucket_id FROM time_buckets WHERE bucket_type=? AND bucket_start<? ORDER BY bucket_start DESC LIMIT 1`).get(bucket.bucketType, bucket.bucketStart);
         const next = this.db.prepare(`SELECT bucket_id FROM time_buckets WHERE bucket_type=? AND bucket_start>? ORDER BY bucket_start ASC LIMIT 1`).get(bucket.bucketType, bucket.bucketStart);
-        return [previous?.bucket_id, next?.bucket_id].filter((id) => Boolean(id));
+        return { previous: previous?.bucket_id, next: next?.bucket_id };
     }
     listWindowSegments(input) {
-        if (!input.startTime && !input.endTime)
+        if (input.startTime === undefined && input.endTime === undefined)
             return [];
         const rows = this.db.prepare(`
       SELECT bucket_id, label, bucket_start, bucket_end
       FROM time_buckets
       WHERE bucket_type = ?
-        AND (? IS NULL OR bucket_end >= ?)
-        AND (? IS NULL OR bucket_start <= ?)
+        AND (? IS NULL OR bucket_end > ?)
+        AND (? IS NULL OR bucket_start < ?)
+        AND (? IS NULL OR EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+        ))
       ORDER BY bucket_start ASC
       LIMIT ?
-    `).all(input.bucketType, input.startTime ?? null, input.startTime ?? null, input.endTime ?? null, input.endTime ?? null, input.limit);
+    `).all(input.bucketType, input.startTime ?? null, input.startTime ?? null, input.endTime ?? null, input.endTime ?? null, input.projectId ?? null, input.projectId ?? null, input.limit);
         return rows.map((row) => ({
             bucketId: row.bucket_id,
             label: row.label,
             bucketStart: row.bucket_start,
             bucketEnd: row.bucket_end,
-            neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24),
+            neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24, input.projectId),
             source: 'window'
         }));
     }
     listNearestSegments(input) {
-        const center = input.startTime && input.endTime
+        const center = input.startTime !== undefined && input.endTime !== undefined
             ? Math.floor((input.startTime + input.endTime) / 2)
-            : input.startTime || input.endTime;
-        if (!center)
+            : input.startTime ?? input.endTime;
+        if (center === undefined)
             return [];
         const rows = this.db.prepare(`
       SELECT bucket_id, label, bucket_start, bucket_end
       FROM time_buckets
       WHERE bucket_type = ?
+        AND (? IS NULL OR EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+        ))
       ORDER BY ABS(bucket_start - ?) ASC
       LIMIT ?
-    `).all(input.bucketType, center, input.limit);
+    `).all(input.bucketType, input.projectId ?? null, input.projectId ?? null, center, input.limit);
         return rows.map((row) => ({
             bucketId: row.bucket_id,
             label: row.label,
             bucketStart: row.bucket_start,
             bucketEnd: row.bucket_end,
-            neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24),
+            neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24, input.projectId),
             source: 'nearest'
         }));
     }
-    listBucketSegments(bucketIds, source) {
+    listBucketSegments(bucketIds, source, projectId) {
         if (bucketIds.length === 0)
             return [];
         const placeholders = bucketIds.map(() => '?').join(', ');
@@ -237,74 +260,145 @@ export class TemporalAdjacencyStore {
       SELECT bucket_id, label, bucket_start, bucket_end
       FROM time_buckets
       WHERE bucket_id IN (${placeholders})
-    `).all(...bucketIds);
+        AND (? IS NULL OR EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+        ))
+    `).all(...bucketIds, projectId ?? null, projectId ?? null);
         return rows.map((row) => ({
             bucketId: row.bucket_id,
             label: row.label,
             bucketStart: row.bucket_start,
             bucketEnd: row.bucket_end,
-            neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24),
+            neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24, projectId),
             source
         }));
     }
-    listNeuronIdsForBucket(bucketId, limit) {
+    listNeuronIdsForBucket(bucketId, limit, projectId) {
         const rows = this.db.prepare(`
       SELECT DISTINCT neuron_id
       FROM time_bucket_entries
       WHERE bucket_id = ?
         AND neuron_id IS NOT NULL
+        AND (? IS NULL OR project_id=?)
       ORDER BY created_at DESC
       LIMIT ?
-    `).all(bucketId, limit);
+    `).all(bucketId, projectId ?? null, projectId ?? null, limit);
         return rows.map((row) => row.neuron_id).filter((value) => Boolean(value));
     }
     expandContinuousBand(input) {
-        const step = this.getBucketStepMs(input.bucketType);
-        if (!step)
+        const sorted = input.segments.slice().sort((a, b) => a.bucketStart - b.bucketStart);
+        const start = input.startTime ?? sorted[0]?.bucketStart;
+        const end = input.endTime ?? sorted[sorted.length - 1]?.bucketEnd;
+        if (start === undefined || end === undefined)
             return [];
-        const byStart = new Map();
-        for (const segment of input.segments)
-            byStart.set(segment.bucketStart, segment);
-        let start = input.startTime;
-        let end = input.endTime;
-        if (start === undefined || end === undefined) {
-            const sorted = input.segments.slice().sort((a, b) => a.bucketStart - b.bucketStart);
-            if (sorted.length === 0)
-                return [];
-            start = sorted[0].bucketStart;
-            end = sorted[sorted.length - 1].bucketStart;
+        const existing = new Set(input.segments.map((segment) => segment.bucketId));
+        const rows = this.db.prepare(`
+      SELECT bucket_id, label, bucket_start, bucket_end
+      FROM time_buckets
+      WHERE bucket_type=? AND bucket_end>? AND bucket_start<?
+        AND (? IS NULL OR EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+        ))
+      ORDER BY bucket_start ASC
+      LIMIT ?
+    `).all(input.bucketType, start, end, input.projectId ?? null, input.projectId ?? null, input.limit);
+        return rows
+            .filter((row) => !existing.has(row.bucket_id))
+            .map((row) => ({
+            bucketId: row.bucket_id,
+            label: row.label,
+            bucketStart: row.bucket_start,
+            bucketEnd: row.bucket_end,
+            neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24, input.projectId),
+            source: 'band',
+        }));
+    }
+    listAdjacentBucketIds(bucketIds, projectId) {
+        if (bucketIds.length === 0)
+            return [];
+        if (!projectId) {
+            const placeholders = bucketIds.map(() => '?').join(', ');
+            const rows = this.db.prepare(`
+        SELECT adjacent_bucket_id
+        FROM temporal_adjacency
+        WHERE source_bucket_id IN (${placeholders})
+        ORDER BY created_at DESC
+      `).all(...bucketIds);
+            return Array.from(new Set(rows.map((row) => row.adjacent_bucket_id)));
         }
-        const normalizedStart = this.normalizeBucketStart(start, step);
-        const normalizedEnd = this.normalizeBucketStart(end, step);
-        const segments = [];
-        for (let cursor = normalizedStart; cursor <= normalizedEnd && segments.length < input.limit; cursor += step) {
-            if (byStart.has(cursor))
+        const current = this.db.prepare(`
+      SELECT bucket_type,bucket_start
+      FROM time_buckets
+      WHERE bucket_id=?
+        AND EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+        )
+    `);
+        const previousBucket = this.db.prepare(`
+      SELECT candidate.bucket_id
+      FROM time_buckets candidate
+      WHERE candidate.bucket_type=?
+        AND candidate.bucket_start < ?
+        AND EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=candidate.bucket_id AND project_entry.project_id=?
+        )
+      ORDER BY candidate.bucket_start DESC
+      LIMIT 1
+    `);
+        const nextBucket = this.db.prepare(`
+      SELECT candidate.bucket_id
+      FROM time_buckets candidate
+      WHERE candidate.bucket_type=?
+        AND candidate.bucket_start > ?
+        AND EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=candidate.bucket_id AND project_entry.project_id=?
+        )
+      ORDER BY candidate.bucket_start ASC
+      LIMIT 1
+    `);
+        const result = new Set();
+        for (const bucketId of bucketIds) {
+            const row = current.get(bucketId, projectId);
+            if (!row)
                 continue;
-            const bucketId = `${input.bucketType}:${cursor}`;
-            segments.push({
-                bucketId,
-                label: new Date(cursor).toISOString().slice(0, 10),
-                bucketStart: cursor,
-                bucketEnd: cursor + step,
-                neuronIds: [],
-                source: 'band'
-            });
+            const previous = previousBucket.get(row.bucket_type, row.bucket_start, projectId)?.bucket_id;
+            const next = nextBucket.get(row.bucket_type, row.bucket_start, projectId)?.bucket_id;
+            if (previous)
+                result.add(previous);
+            if (next)
+                result.add(next);
         }
-        return segments;
+        return Array.from(result);
     }
-    getBucketStepMs(bucketType) {
-        switch (bucketType) {
-            case 'day':
-                return 86400000;
-            case 'week':
-                return 7 * 86400000;
-            case 'month':
-                return 30 * 86400000;
-            default:
-                return 0;
-        }
+    filterBucketIdsForProject(bucketIds, projectId) {
+        if (bucketIds.length === 0 || !projectId)
+            return bucketIds;
+        const placeholders = bucketIds.map(() => '?').join(', ');
+        const rows = this.db.prepare(`
+      SELECT DISTINCT bucket_id
+      FROM time_bucket_entries
+      WHERE bucket_id IN (${placeholders}) AND project_id=?
+    `).all(...bucketIds, projectId);
+        return rows.map((row) => row.bucket_id);
     }
-    normalizeBucketStart(ts, step) {
-        return Math.floor(ts / step) * step;
+    listNeuronIdsForBuckets(bucketIds, limit, projectId) {
+        if (bucketIds.length === 0)
+            return [];
+        const placeholders = bucketIds.map(() => '?').join(', ');
+        const rows = this.db.prepare(`
+      SELECT DISTINCT neuron_id
+      FROM time_bucket_entries
+      WHERE bucket_id IN (${placeholders})
+        AND neuron_id IS NOT NULL
+        AND (? IS NULL OR project_id=?)
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(...bucketIds, projectId ?? null, projectId ?? null, limit);
+        return rows.map((row) => row.neuron_id).filter((value) => Boolean(value));
     }
 }

@@ -5,7 +5,7 @@ import type { EventStore } from '../store/EventStore.js';
 import type { MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { actionMarkers } from './MemoryAtlasQueryCompiler.js';
-import { localDateRange } from '../utils/LocalDateContext.js';
+import { localDateFor, localDateRange } from '../utils/LocalDateContext.js';
 
 interface TargetMatch {
   entityId?: string;
@@ -76,7 +76,7 @@ export class ActionFrameExtractor {
         }
         // EventStore's localDate is the authoritative calendar date for the
         // source event; do not derive a user's year from the host's UTC clock.
-        const year = Number((event.localDate ?? new Date(event.occurredAt).toISOString().slice(0, 10)).slice(0, 4));
+        const year = Number((event.localDate ?? localDateFor(event.occurredAt, this.eventStore.getProjectTimeZone())).slice(0, 4));
         const key = `${event.projectId}\0${year}`;
         const aggregate = yearEvidence.get(key) || { projectId: event.projectId, year, eventIds: new Set<string>() };
         aggregate.eventIds.add(event.eventId); yearEvidence.set(key, aggregate);

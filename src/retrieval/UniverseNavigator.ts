@@ -62,6 +62,7 @@ export class UniverseNavigator {
     });
 
     const pulse = this.pulseRetrievalEngine.run({
+      projectId: input.projectId,
       plan,
       ir: compiledQuery.ir,
       entityIds: compiledQuery.entityResolution.resolved.map((entity) => entity.entityId),

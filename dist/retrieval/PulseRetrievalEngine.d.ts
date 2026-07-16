@@ -22,6 +22,7 @@ export declare class PulseRetrievalEngine {
     private fusionRanker;
     constructor(temporalAdjacencyStore: TemporalAdjacencyStore, entityActivationIndex: EntityActivationIndex, fusionRanker?: EvidenceFusionRanker);
     run(input: {
+        projectId?: string;
         plan: RetrievalExecutionPlan;
         ir: QueryIR;
         entityIds: string[];

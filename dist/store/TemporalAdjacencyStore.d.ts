@@ -14,9 +14,11 @@ export declare class TemporalAdjacencyStore {
     constructor(dbOrPath?: Database | string);
     private initializeSchema;
     syncBuckets(buckets: TimeBucketRecord[], createdAt: number): void;
-    collectAdjacentNeuronIds(bucketIds: string[], limit?: number): string[];
+    rebuildAll(createdAt: number): void;
+    collectAdjacentNeuronIds(bucketIds: string[], limit?: number, projectId?: string): string[];
     collectContinuousTraversal(input: {
         bucketIds: string[];
+        projectId?: string;
         hopLimit?: number;
         limit?: number;
     }): {
@@ -29,6 +31,7 @@ export declare class TemporalAdjacencyStore {
         startTime?: number;
         endTime?: number;
         preferredBucketType?: TimeBucketRecord['bucketType'];
+        projectId?: string;
         hopLimit?: number;
         limit?: number;
     }): {
@@ -45,7 +48,8 @@ export declare class TemporalAdjacencyStore {
     private listBucketSegments;
     private listNeuronIdsForBucket;
     private expandContinuousBand;
-    private getBucketStepMs;
-    private normalizeBucketStart;
+    private listAdjacentBucketIds;
+    private filterBucketIdsForProject;
+    private listNeuronIdsForBuckets;
 }
 //# sourceMappingURL=TemporalAdjacencyStore.d.ts.map

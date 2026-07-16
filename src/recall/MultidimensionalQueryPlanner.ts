@@ -85,7 +85,7 @@ export class MultidimensionalQueryPlanner {
     if (/今天|today/iu.test(query)) {
       const date = options.localDateNow ?? localDateFor(now, options.timeZone);
       const [year, monthValue, day] = date.split('-').map(Number);
-      const next = nextCivilDate(year, monthValue, day);
+      const next = nextCivilDate(year, monthValue, day, 1, options.timeZone);
       return { ...localDateRange(year, monthValue, day, ...next, options.timeZone), expressions: ['today'] };
     }
     return undefined;

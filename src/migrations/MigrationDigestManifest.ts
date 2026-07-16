@@ -46,13 +46,65 @@ export const MIGRATION_DIGESTS: Readonly<Record<string, string>> = {
   '0045': '3d9ae5a945b7bb96d761b94f4368f644b40256ccbc865ba410501485ce18059a',
   '0046': '264d132dac13453657fbddc2ac800f00c46479dfb694274004c4eb38dfa1c447',
   '0047': '735a4a9cdb8df3fa354a0195e6247120984dbd84aa8b8a8cff6c0bd7dcd599c0',
+  '0048': 'ecb74b03d92a0ec79e0adfb0d7e2f3a0edc54b09872435538b85df583659a818',
 };
 
-// Receipts written by the pre-manifest 3.7.4 development builds used the
-// function-text digest below. Keep the exact, audited values here so an
-// existing source or packed build can be upgraded without accepting arbitrary
-// legacy checksums.
-export const LEGACY_MIGRATION_DIGESTS: Readonly<Record<string, readonly string[]>> = {
-  '0044': ['76e9416f3a5f766b6853e7b149c7e3df93b45df0310d16648f26917c6302dd9a'],
-  '0045': ['523c54e90023aa89da9fba15c7428b98067ca79ec470cc616dffae8f11e871b2'],
+// CI recomputes this digest from the normalized checked-in migration source
+// files. Receipt identities stay build-independent, while implementation
+// changes without an explicit manifest update fail the integrity test.
+export const MIGRATION_CANONICAL_SOURCE_DIGEST = 'b78207069c496da6db7986394045165dc3975d1ea11e95dbfa8cc9af991ff6ca';
+
+// Exact receipts produced by the f71b20a source and dist artifacts. The two
+// artifacts produced the same values under their shipped Bun runtime, but are
+// retained as named profiles so future artifact-specific histories stay
+// auditable. A database is normalized only when all of its non-manifest
+// receipts match one complete profile.
+const F71B20A_RECEIPTS: Readonly<Record<string, string>> = {
+  '0001': '8a370a60607e4b8ec72d3a0befcd2d367cbe8f9fe26bc67b2829b77fe244c094',
+  '0002': 'f2a47909c321929eb001aa4b99ada2858c7de52c8f9721e7a21b5f37b57c0049',
+  '0003': '337dc3ef406166b14baa383d680fe0aa5d122a92e2068fc15bc2e3019f5e531f',
+  '0004': '29d02eabb6319dad26c554e4ddaf5daec0bf6acce8393ca8843bd8ed3000b27f',
+  '0005': '7640026c563cb8026e3e4cb06d77268e72082c3dc96a09bc788fbea4cb7b0d96',
+  '0006': '0c09abf9dff9c8066315ce2e21317c20d8ed7d86b546e8b24cedc2895c6c1bd7',
+  '0007': '607e27d7a9d99b17811e24498b7d1946b7a6526691b22207c420ce534de92405',
+  '0009': '7c8fd62363b071248e84180134f19d3ce6fe598cdec4cb920e6c9a4b9d53d784',
+  '0010': 'e5633abe3f43fae5be7f289c0d7965b70b9cab0dcd1087f1fd034c588fc0a588',
+  '0011': '47e2011ca97e2a3b533b8d42414014affe29d7accc25d9ff7a46dc9fcf61c0a4',
+  '0012': '9694b3a790a32db849175a36b7d7c90057ceb54f2ac51e859a4f65f9b54a0591',
+  '0015': '68725dd19ed493311193eef7f4cf9fb8dbac938f3ad9b4949c045728c83e0880',
+  '0016': 'f55185a24780cb1471a48489d7131dd99a791afac16d91e24ef6730e9924f266',
+  '0017': '1b36a098240fe8cc47c2951581926011afa29da4d2beaa96aa4daee559708055',
+  '0018': 'ec9b6f07620bf5433db2be21836128fefb6008142d94c805b894fd8b10a85e11',
+  '0019': 'fd3db35a2267688d561cc5e8c08779795730038de8a6f93781127a5880936aa0',
+  '0020': 'df5721b1251f31b1614e82156cc06c8036f22df89de3f5ec8139befac2dd96ae',
+  '0021': 'e729d5ebb0c333222703d46b6f4c32b14752b5f77984e703ad5259908cdf0441',
+  '0022': 'b6578042842c04ddd19b0a64d2c72224ddd46420ba4b25d954dcec6de5787422',
+  '0023': 'e521734ae4f1adb7e57dfd20415e5f8c7dc69d8c7787ed6e55f282fd0b35ff1b',
+  '0024': '36cf285d014a3437eb764486fcef3874d130757f233e15c927c600841cee3e50',
+  '0025': '8740ee2ed2602d7dc96e08d86d670fd2a0fa51a9aa4afb47c480fe0ef3c1dc63',
+  '0026': '01c4f2f994835d86bb3e04b0c09799a5eedfacd581dfb61229b1dabcfaf4bd1f',
+  '0027': 'b8c2604d065a3f759047f85c0311cb30f94bef64490abccc4a9235680b989f14',
+  '0028': 'ac34afb7e2505fe3de4972f53f8ee2984395fae418a9aac7f0c4031cfc20d1ea',
+  '0029': 'aed6f70f950c66fbc83c9afd575af9e49b1a9d294a91a72339d979c4cfb13593',
+  '0030': '4570c8f15d10b47566cc853976ddd427517eb15b2aa026cfca62d29c66e9480f',
+  '0031': 'b85ba059837cabd7d9c869021f3ac57b88d8764e4e28cea751c9bab3105f9b37',
+  '0032': '4dfb530b518255bfacc17138b70e7f906d69362d1dbd07523c03323fdd091a43',
+  '0033': '8991b8541c21d0a29418612ee81f441ad93f590ead4b183e82574df23268cedf',
+  '0034': '4ad68444a636b7e8eb1a9260e86bfa5a1ea1e78e8a6eaf71ec47b10ace9e10cc',
+  '0035': '9b6275ecd6b324c8b24ec7a1b8db9df4609f863ae754d06e2f2602b70fab7847',
+  '0036': '35dedbe5b263093c13e1ffca4bdea6e624b8ca604d481498f807ee25d3e4e07b',
+  '0037': '579401a5069e0eb2d06ece959547c15fc695a2d4d25268e46fdda2ba82e9669c',
+  '0038': 'e5ce7bc2b262622d3852bf650fbae724eb8b57fddc956b5c3668a10c3a278993',
+  '0039': '3f017e0c28fb30a48fa2c62a882dd693211de9f8f390377a77c4506ae8f387a5',
+  '0040': '55626cac7086993e22c9131e71e279db5b0224ab90056aac1fc887f2b2d1008b',
+  '0041': '691cdcc23c6ab41d11055e7d9216e90f6add5472f6462512322c348336b91b34',
+  '0042': '718ec5468d12ac4c53d0bfbff0d7b7d4ab9c832fc69f37ebefac3f11f45a3e6d',
+  '0043': 'c84abb8e9d9db045cd1df92e2f4ab2f7839d80befacd83548af91b26ffb8ce87',
+  '0044': '76e9416f3a5f766b6853e7b149c7e3df93b45df0310d16648f26917c6302dd9a',
+  '0045': '523c54e90023aa89da9fba15c7428b98067ca79ec470cc616dffae8f11e871b2',
+};
+
+export const LEGACY_MIGRATION_RECEIPT_PROFILES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  f71b20a_source: F71B20A_RECEIPTS,
+  f71b20a_dist: F71B20A_RECEIPTS,
 };

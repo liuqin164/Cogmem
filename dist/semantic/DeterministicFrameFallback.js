@@ -25,7 +25,7 @@ export function deterministicFrameFallback(input) {
     }
     return { schemaVersion: 'memory_frame.v1', frameId, projectId: input.projectId, episodeId: input.episodeId,
         title: input.episodeId, summary: '', episodeKind: input.episodeType ?? 'other', nodes,
-        relations, temporalReferences: events.length ? [{ label: new Date(events[0].occurredAt).toISOString().slice(0, 10), occurredAt: events[0].occurredAt, evidenceEventIds: [events[0].eventId], confidence: 0.8 }] : [], stateTransitions: [], confidence: 0.8, evidenceEventIds,
+        relations, temporalReferences: events.length ? [{ label: events[0].localDate ?? new Date(events[0].occurredAt).toISOString().slice(0, 10), occurredAt: events[0].occurredAt, evidenceEventIds: [events[0].eventId], confidence: 0.8 }] : [], stateTransitions: [], confidence: 0.8, evidenceEventIds,
         processor: { promptVersion: input.promptVersion ?? 'deterministic-fallback', generatedAt: input.now ?? Date.now() },
         status: 'needs_confirmation', sourceAuthority: 'deterministic_fallback', semanticCompleteness: 'minimal', needsReview: true };
 }

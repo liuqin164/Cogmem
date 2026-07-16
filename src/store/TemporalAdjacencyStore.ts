@@ -42,24 +42,49 @@ export class TemporalAdjacencyStore {
   }
 
   syncBuckets(buckets: TimeBucketRecord[], createdAt: number): void {
-    for (const bucket of buckets) {
-      for (const adjacentId of this.getAdjacentBucketIds(bucket)) {
-        this.db.prepare(`
-          INSERT OR IGNORE INTO temporal_adjacency (
-            source_bucket_id, adjacent_bucket_id, bucket_type, weight, created_at
-          ) VALUES (?, ?, ?, ?, ?)
-        `).run(bucket.bucketId, adjacentId, bucket.bucketType, 0.72, createdAt);
-        this.db.prepare(`
-          INSERT OR IGNORE INTO temporal_adjacency (
-            source_bucket_id, adjacent_bucket_id, bucket_type, weight, created_at
-          ) VALUES (?, ?, ?, ?, ?)
-        `).run(adjacentId, bucket.bucketId, bucket.bucketType, 0.72, createdAt);
+    const insert = this.db.prepare(`
+      INSERT INTO temporal_adjacency (
+        source_bucket_id, adjacent_bucket_id, bucket_type, weight, created_at
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(source_bucket_id, adjacent_bucket_id) DO UPDATE SET
+        bucket_type=excluded.bucket_type, weight=excluded.weight, created_at=excluded.created_at
+    `);
+    this.db.transaction(() => {
+      for (const bucket of buckets) {
+        const { previous, next } = this.getAdjacentBucketIds(bucket);
+        this.db.prepare(`DELETE FROM temporal_adjacency WHERE source_bucket_id=? OR adjacent_bucket_id=?`).run(bucket.bucketId, bucket.bucketId);
+        if (previous && next) {
+          this.db.prepare(`DELETE FROM temporal_adjacency WHERE (source_bucket_id=? AND adjacent_bucket_id=?) OR (source_bucket_id=? AND adjacent_bucket_id=?)`)
+            .run(previous, next, next, previous);
+        }
+        for (const adjacentId of [previous, next].filter((id): id is string => Boolean(id))) {
+          insert.run(bucket.bucketId, adjacentId, bucket.bucketType, 0.72, createdAt);
+          insert.run(adjacentId, bucket.bucketId, bucket.bucketType, 0.72, createdAt);
+        }
       }
-    }
+    })();
   }
 
-  collectAdjacentNeuronIds(bucketIds: string[], limit: number = 48): string[] {
+  rebuildAll(createdAt: number): void {
+    const rows = this.db.prepare(`SELECT bucket_id,bucket_type,bucket_start,bucket_end,label FROM time_buckets ORDER BY bucket_type,bucket_start`).all() as Array<{ bucket_id: string; bucket_type: TimeBucketRecord['bucketType']; bucket_start: number; bucket_end: number; label: string }>;
+    const insert = this.db.prepare(`INSERT INTO temporal_adjacency(source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) VALUES(?,?,?,?,?)`);
+    this.db.transaction(() => {
+      this.db.exec(`DELETE FROM temporal_adjacency;`);
+      for (let index = 1; index < rows.length; index += 1) {
+        const previous = rows[index - 1]!;
+        const current = rows[index]!;
+        if (previous.bucket_type !== current.bucket_type) continue;
+        insert.run(previous.bucket_id, current.bucket_id, current.bucket_type, 0.72, createdAt);
+        insert.run(current.bucket_id, previous.bucket_id, current.bucket_type, 0.72, createdAt);
+      }
+    })();
+  }
+
+  collectAdjacentNeuronIds(bucketIds: string[], limit: number = 48, projectId?: string): string[] {
     if (bucketIds.length === 0) return [];
+    if (projectId) {
+      return this.listNeuronIdsForBuckets(this.listAdjacentBucketIds(bucketIds, projectId), limit, projectId);
+    }
     const placeholders = bucketIds.map(() => '?').join(', ');
     const rows = this.db.prepare(`
       SELECT DISTINCT tbe.neuron_id
@@ -75,6 +100,7 @@ export class TemporalAdjacencyStore {
 
   collectContinuousTraversal(input: {
     bucketIds: string[];
+    projectId?: string;
     hopLimit?: number;
     limit?: number;
   }): {
@@ -84,28 +110,21 @@ export class TemporalAdjacencyStore {
   } {
     const hopLimit = Math.max(1, input.hopLimit ?? 2);
     const limit = input.limit ?? 96;
-    if (input.bucketIds.length === 0) {
+    const seedBucketIds = this.filterBucketIdsForProject(input.bucketIds, input.projectId);
+    if (seedBucketIds.length === 0) {
       return { bucketIds: [], labels: [], neuronIds: [] };
     }
 
-    const visited = new Set<string>(input.bucketIds);
-    let frontier = [...input.bucketIds];
+    const visited = new Set<string>(seedBucketIds);
+    let frontier = [...seedBucketIds];
 
     for (let hop = 0; hop < hopLimit; hop += 1) {
       if (frontier.length === 0) break;
-      const placeholders = frontier.map(() => '?').join(', ');
-      const rows = this.db.prepare(`
-        SELECT adjacent_bucket_id
-        FROM temporal_adjacency
-        WHERE source_bucket_id IN (${placeholders})
-        ORDER BY created_at DESC
-      `).all(...frontier) as Array<{ adjacent_bucket_id: string }>;
-
       const next: string[] = [];
-      for (const row of rows) {
-        if (visited.has(row.adjacent_bucket_id)) continue;
-        visited.add(row.adjacent_bucket_id);
-        next.push(row.adjacent_bucket_id);
+      for (const adjacentBucketId of this.listAdjacentBucketIds(frontier, input.projectId)) {
+        if (visited.has(adjacentBucketId)) continue;
+        visited.add(adjacentBucketId);
+        next.push(adjacentBucketId);
         if (visited.size >= limit) break;
       }
       frontier = next;
@@ -119,19 +138,11 @@ export class TemporalAdjacencyStore {
       WHERE bucket_id IN (${placeholders})
       ORDER BY bucket_start DESC
     `).all(...bucketList) as Array<{ bucket_id: string; label: string }>;
-    const neuronRows = this.db.prepare(`
-      SELECT DISTINCT neuron_id
-      FROM time_bucket_entries
-      WHERE bucket_id IN (${placeholders})
-        AND neuron_id IS NOT NULL
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).all(...bucketList, limit) as Array<{ neuron_id: string | null }>;
 
     return {
       bucketIds: bucketList,
       labels: labelRows.map((row) => row.label),
-      neuronIds: neuronRows.map((row) => row.neuron_id).filter((value): value is string => Boolean(value))
+      neuronIds: this.listNeuronIdsForBuckets(bucketList, limit, input.projectId)
     };
   }
 
@@ -140,6 +151,7 @@ export class TemporalAdjacencyStore {
     startTime?: number;
     endTime?: number;
     preferredBucketType?: TimeBucketRecord['bucketType'];
+    projectId?: string;
     hopLimit?: number;
     limit?: number;
   }): {
@@ -170,21 +182,23 @@ export class TemporalAdjacencyStore {
       startTime: input.startTime,
       endTime: input.endTime,
       bucketType,
+      projectId: input.projectId,
       limit
     })) {
       upsertSegment(segment);
     }
 
-    const seedRows = this.listBucketSegments((input.bucketIds || []).slice(0, limit), 'seed');
+    const seedRows = this.listBucketSegments((input.bucketIds || []).slice(0, limit), 'seed', input.projectId);
     for (const segment of seedRows) upsertSegment(segment);
 
     if (ordered.size === 0 && (input.bucketIds || []).length > 0) {
       const traversal = this.collectContinuousTraversal({
         bucketIds: input.bucketIds || [],
+        projectId: input.projectId,
         hopLimit: input.hopLimit,
         limit
       });
-      for (const segment of this.listBucketSegments(traversal.bucketIds, 'adjacent')) {
+      for (const segment of this.listBucketSegments(traversal.bucketIds, 'adjacent', input.projectId)) {
         upsertSegment(segment);
       }
     }
@@ -194,6 +208,7 @@ export class TemporalAdjacencyStore {
         startTime: input.startTime,
         endTime: input.endTime,
         bucketType,
+        projectId: input.projectId,
         limit: Math.min(limit, 6)
       })) {
         upsertSegment(segment);
@@ -205,6 +220,7 @@ export class TemporalAdjacencyStore {
       startTime: input.startTime,
       endTime: input.endTime,
       bucketType,
+      projectId: input.projectId,
       limit
     });
     for (const segment of expandedBand) upsertSegment(segment);
@@ -226,26 +242,31 @@ export class TemporalAdjacencyStore {
     if (this.ownsDb) this.db.close();
   }
 
-  private getAdjacentBucketIds(bucket: TimeBucketRecord): string[] {
+  private getAdjacentBucketIds(bucket: TimeBucketRecord): { previous?: string; next?: string } {
     const previous = this.db.prepare(`SELECT bucket_id FROM time_buckets WHERE bucket_type=? AND bucket_start<? ORDER BY bucket_start DESC LIMIT 1`).get(bucket.bucketType, bucket.bucketStart) as { bucket_id?: string } | null;
     const next = this.db.prepare(`SELECT bucket_id FROM time_buckets WHERE bucket_type=? AND bucket_start>? ORDER BY bucket_start ASC LIMIT 1`).get(bucket.bucketType, bucket.bucketStart) as { bucket_id?: string } | null;
-    return [previous?.bucket_id, next?.bucket_id].filter((id): id is string => Boolean(id));
+    return { previous: previous?.bucket_id, next: next?.bucket_id };
   }
 
   private listWindowSegments(input: {
     startTime?: number;
     endTime?: number;
     bucketType: TimeBucketRecord['bucketType'];
+    projectId?: string;
     limit: number;
   }): TemporalSurfaceSegment[] {
-    if (!input.startTime && !input.endTime) return [];
+    if (input.startTime === undefined && input.endTime === undefined) return [];
 
     const rows = this.db.prepare(`
       SELECT bucket_id, label, bucket_start, bucket_end
       FROM time_buckets
       WHERE bucket_type = ?
-        AND (? IS NULL OR bucket_end >= ?)
-        AND (? IS NULL OR bucket_start <= ?)
+        AND (? IS NULL OR bucket_end > ?)
+        AND (? IS NULL OR bucket_start < ?)
+        AND (? IS NULL OR EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+        ))
       ORDER BY bucket_start ASC
       LIMIT ?
     `).all(
@@ -254,6 +275,8 @@ export class TemporalAdjacencyStore {
       input.startTime ?? null,
       input.endTime ?? null,
       input.endTime ?? null,
+      input.projectId ?? null,
+      input.projectId ?? null,
       input.limit
     ) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
 
@@ -262,7 +285,7 @@ export class TemporalAdjacencyStore {
       label: row.label,
       bucketStart: row.bucket_start,
       bucketEnd: row.bucket_end,
-      neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24),
+      neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24, input.projectId),
       source: 'window' as const
     }));
   }
@@ -271,59 +294,69 @@ export class TemporalAdjacencyStore {
     startTime?: number;
     endTime?: number;
     bucketType: TimeBucketRecord['bucketType'];
+    projectId?: string;
     limit: number;
   }): TemporalSurfaceSegment[] {
-    const center = input.startTime && input.endTime
+    const center = input.startTime !== undefined && input.endTime !== undefined
       ? Math.floor((input.startTime + input.endTime) / 2)
-      : input.startTime || input.endTime;
-    if (!center) return [];
+      : input.startTime ?? input.endTime;
+    if (center === undefined) return [];
 
     const rows = this.db.prepare(`
       SELECT bucket_id, label, bucket_start, bucket_end
       FROM time_buckets
       WHERE bucket_type = ?
+        AND (? IS NULL OR EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+        ))
       ORDER BY ABS(bucket_start - ?) ASC
       LIMIT ?
-    `).all(input.bucketType, center, input.limit) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
+    `).all(input.bucketType, input.projectId ?? null, input.projectId ?? null, center, input.limit) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
 
     return rows.map((row) => ({
       bucketId: row.bucket_id,
       label: row.label,
       bucketStart: row.bucket_start,
       bucketEnd: row.bucket_end,
-      neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24),
+      neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24, input.projectId),
       source: 'nearest' as const
     }));
   }
 
-  private listBucketSegments(bucketIds: string[], source: TemporalSurfaceSegment['source']): TemporalSurfaceSegment[] {
+  private listBucketSegments(bucketIds: string[], source: TemporalSurfaceSegment['source'], projectId?: string): TemporalSurfaceSegment[] {
     if (bucketIds.length === 0) return [];
     const placeholders = bucketIds.map(() => '?').join(', ');
     const rows = this.db.prepare(`
       SELECT bucket_id, label, bucket_start, bucket_end
       FROM time_buckets
       WHERE bucket_id IN (${placeholders})
-    `).all(...bucketIds) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
+        AND (? IS NULL OR EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+        ))
+    `).all(...bucketIds, projectId ?? null, projectId ?? null) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
 
     return rows.map((row) => ({
       bucketId: row.bucket_id,
       label: row.label,
       bucketStart: row.bucket_start,
       bucketEnd: row.bucket_end,
-      neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24),
+      neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24, projectId),
       source
     }));
   }
 
-  private listNeuronIdsForBucket(bucketId: string, limit: number): string[] {
+  private listNeuronIdsForBucket(bucketId: string, limit: number, projectId?: string): string[] {
     const rows = this.db.prepare(`
       SELECT DISTINCT neuron_id
       FROM time_bucket_entries
       WHERE bucket_id = ?
         AND neuron_id IS NOT NULL
+        AND (? IS NULL OR project_id=?)
       ORDER BY created_at DESC
       LIMIT ?
-    `).all(bucketId, limit) as Array<{ neuron_id: string | null }>;
+    `).all(bucketId, projectId ?? null, projectId ?? null, limit) as Array<{ neuron_id: string | null }>;
     return rows.map((row) => row.neuron_id).filter((value): value is string => Boolean(value));
   }
 
@@ -332,57 +365,118 @@ export class TemporalAdjacencyStore {
     startTime?: number;
     endTime?: number;
     bucketType: TimeBucketRecord['bucketType'];
+    projectId?: string;
     limit: number;
   }): TemporalSurfaceSegment[] {
-    const step = this.getBucketStepMs(input.bucketType);
-    if (!step) return [];
-
-    const byStart = new Map<number, TemporalSurfaceSegment>();
-    for (const segment of input.segments) byStart.set(segment.bucketStart, segment);
-
-    let start = input.startTime;
-    let end = input.endTime;
-    if (start === undefined || end === undefined) {
-      const sorted = input.segments.slice().sort((a, b) => a.bucketStart - b.bucketStart);
-      if (sorted.length === 0) return [];
-      start = sorted[0].bucketStart;
-      end = sorted[sorted.length - 1].bucketStart;
-    }
-
-    const normalizedStart = this.normalizeBucketStart(start!, step);
-    const normalizedEnd = this.normalizeBucketStart(end!, step);
-    const segments: TemporalSurfaceSegment[] = [];
-
-    for (let cursor = normalizedStart; cursor <= normalizedEnd && segments.length < input.limit; cursor += step) {
-      if (byStart.has(cursor)) continue;
-      const bucketId = `${input.bucketType}:${cursor}`;
-      segments.push({
-        bucketId,
-        label: new Date(cursor).toISOString().slice(0, 10),
-        bucketStart: cursor,
-        bucketEnd: cursor + step,
-        neuronIds: [],
-        source: 'band'
-      });
-    }
-
-    return segments;
+    const sorted = input.segments.slice().sort((a, b) => a.bucketStart - b.bucketStart);
+    const start = input.startTime ?? sorted[0]?.bucketStart;
+    const end = input.endTime ?? sorted[sorted.length - 1]?.bucketEnd;
+    if (start === undefined || end === undefined) return [];
+    const existing = new Set(input.segments.map((segment) => segment.bucketId));
+    const rows = this.db.prepare(`
+      SELECT bucket_id, label, bucket_start, bucket_end
+      FROM time_buckets
+      WHERE bucket_type=? AND bucket_end>? AND bucket_start<?
+        AND (? IS NULL OR EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+        ))
+      ORDER BY bucket_start ASC
+      LIMIT ?
+    `).all(input.bucketType, start, end, input.projectId ?? null, input.projectId ?? null, input.limit) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
+    return rows
+      .filter((row) => !existing.has(row.bucket_id))
+      .map((row) => ({
+        bucketId: row.bucket_id,
+        label: row.label,
+        bucketStart: row.bucket_start,
+        bucketEnd: row.bucket_end,
+        neuronIds: this.listNeuronIdsForBucket(row.bucket_id, 24, input.projectId),
+        source: 'band' as const,
+      }));
   }
 
-  private getBucketStepMs(bucketType: TimeBucketRecord['bucketType']): number {
-    switch (bucketType) {
-      case 'day':
-        return 86400000;
-      case 'week':
-        return 7 * 86400000;
-      case 'month':
-        return 30 * 86400000;
-      default:
-        return 0;
+  private listAdjacentBucketIds(bucketIds: string[], projectId?: string): string[] {
+    if (bucketIds.length === 0) return [];
+    if (!projectId) {
+      const placeholders = bucketIds.map(() => '?').join(', ');
+      const rows = this.db.prepare(`
+        SELECT adjacent_bucket_id
+        FROM temporal_adjacency
+        WHERE source_bucket_id IN (${placeholders})
+        ORDER BY created_at DESC
+      `).all(...bucketIds) as Array<{ adjacent_bucket_id: string }>;
+      return Array.from(new Set(rows.map((row) => row.adjacent_bucket_id)));
     }
+
+    const current = this.db.prepare(`
+      SELECT bucket_type,bucket_start
+      FROM time_buckets
+      WHERE bucket_id=?
+        AND EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+        )
+    `);
+    const previousBucket = this.db.prepare(`
+      SELECT candidate.bucket_id
+      FROM time_buckets candidate
+      WHERE candidate.bucket_type=?
+        AND candidate.bucket_start < ?
+        AND EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=candidate.bucket_id AND project_entry.project_id=?
+        )
+      ORDER BY candidate.bucket_start DESC
+      LIMIT 1
+    `);
+    const nextBucket = this.db.prepare(`
+      SELECT candidate.bucket_id
+      FROM time_buckets candidate
+      WHERE candidate.bucket_type=?
+        AND candidate.bucket_start > ?
+        AND EXISTS (
+          SELECT 1 FROM time_bucket_entries project_entry
+          WHERE project_entry.bucket_id=candidate.bucket_id AND project_entry.project_id=?
+        )
+      ORDER BY candidate.bucket_start ASC
+      LIMIT 1
+    `);
+    const result = new Set<string>();
+    for (const bucketId of bucketIds) {
+      const row = current.get(bucketId, projectId) as { bucket_type: string; bucket_start: number } | null;
+      if (!row) continue;
+      const previous = (previousBucket.get(row.bucket_type, row.bucket_start, projectId) as { bucket_id?: string } | null)?.bucket_id;
+      const next = (nextBucket.get(row.bucket_type, row.bucket_start, projectId) as { bucket_id?: string } | null)?.bucket_id;
+      if (previous) result.add(previous);
+      if (next) result.add(next);
+    }
+    return Array.from(result);
   }
 
-  private normalizeBucketStart(ts: number, step: number): number {
-    return Math.floor(ts / step) * step;
+  private filterBucketIdsForProject(bucketIds: string[], projectId?: string): string[] {
+    if (bucketIds.length === 0 || !projectId) return bucketIds;
+    const placeholders = bucketIds.map(() => '?').join(', ');
+    const rows = this.db.prepare(`
+      SELECT DISTINCT bucket_id
+      FROM time_bucket_entries
+      WHERE bucket_id IN (${placeholders}) AND project_id=?
+    `).all(...bucketIds, projectId) as Array<{ bucket_id: string }>;
+    return rows.map((row) => row.bucket_id);
+  }
+
+  private listNeuronIdsForBuckets(bucketIds: string[], limit: number, projectId?: string): string[] {
+    if (bucketIds.length === 0) return [];
+    const placeholders = bucketIds.map(() => '?').join(', ');
+    const rows = this.db.prepare(`
+      SELECT DISTINCT neuron_id
+      FROM time_bucket_entries
+      WHERE bucket_id IN (${placeholders})
+        AND neuron_id IS NOT NULL
+        AND (? IS NULL OR project_id=?)
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(...bucketIds, projectId ?? null, projectId ?? null, limit) as Array<{ neuron_id: string | null }>;
+    return rows.map((row) => row.neuron_id).filter((value): value is string => Boolean(value));
   }
 }

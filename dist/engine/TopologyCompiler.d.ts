@@ -14,6 +14,7 @@ export declare class TopologyCompiler {
         taskIds: string[];
         clusterIds: string[];
     };
+    rebuildTimeBuckets(neurons: Neuron[], timeZone: string): TimeBucketRecord[];
     private attachTimeBuckets;
     private attachProjectBranches;
     private attachTaskBranches;

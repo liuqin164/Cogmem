@@ -3,6 +3,8 @@ import Database from 'bun:sqlite';
 import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createMemoryKernel } from '../src/factory.js';
+import { LEGACY_MIGRATION_RECEIPT_PROFILES } from '../src/migrations/MigrationDigestManifest.js';
 
 const migrateBin = join(import.meta.dir, '..', 'src', 'bin', 'migrate.ts');
 
@@ -36,13 +38,13 @@ test('cogmem migrate plans and upgrades a 2.7.1 database with a backup', async (
 
   const dryRun = await run(['--db', dbPath, '--dry-run', '--json']);
   expect(dryRun.exitCode).toBe(0);
-    expect(JSON.parse(dryRun.stdout).pending).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047']);
+    expect(JSON.parse(dryRun.stdout).pending).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047', '0048']);
   expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='_schema_migrations'`).get()).toBeNull();
 
   const applied = await run(['--db', dbPath, '--yes', '--backup', '--json']);
   expect(applied.exitCode).toBe(0);
   const result = JSON.parse(applied.stdout);
-    expect(result.applied).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047']);
+    expect(result.applied).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047', '0048']);
   expect(existsSync(result.backupPath)).toBe(true);
   const backup = new Database(result.backupPath, { readonly: true });
   expect(backup.prepare('SELECT value FROM legacy_wal_evidence').get()).toEqual({
@@ -60,7 +62,7 @@ test('cogmem migrate plans and upgrades a 2.7.1 database with a backup', async (
   expect(transitionIndexes.map((index) => index.name)).toContain('idx_prospective_transitions_candidate');
   const strategyIndexes = migrated.prepare(`PRAGMA index_list(context_strategy_outcomes)`).all() as Array<{ name: string }>;
   expect(strategyIndexes.map((index) => index.name)).toContain('idx_context_strategy_project_time');
-  expect(migrated.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '47' });
+  expect(migrated.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '48' });
   expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'topic_nodes'`).get()).toEqual({ name: 'topic_nodes' });
   expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_episodes'`).get()).toEqual({ name: 'memory_episodes' });
   expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episodes_one_active_scope'`).get()).toEqual({ name: 'idx_memory_episodes_one_active_scope' });
@@ -79,4 +81,14 @@ test('cogmem migrate plans and upgrades a 2.7.1 database with a backup', async (
 
   const repeated = await run(['--db', dbPath, '--yes', '--json']);
   expect(JSON.parse(repeated.stdout).applied).toEqual([]);
+
+  const legacyReceipts = new Database(dbPath);
+  const profile = LEGACY_MIGRATION_RECEIPT_PROFILES.f71b20a_source!;
+  const update = legacyReceipts.prepare(`UPDATE _schema_migrations SET checksum=? WHERE version=?`);
+  for (const [version, checksum] of Object.entries(profile)) update.run(checksum, version);
+  legacyReceipts.close();
+  const normalized = await run(['--db', dbPath, '--yes', '--json']);
+  expect(normalized.exitCode).toBe(0);
+  const kernel = createMemoryKernel({ dbPath });
+  kernel.close();
 });

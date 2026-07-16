@@ -22,7 +22,7 @@ export class PulseRetrievalEngine {
             ...input.graphIds.slice(0, input.plan.topK.graph),
             ...input.cognitiveGraphIds.slice(0, input.plan.topK.graph)
         ])).slice(0, 120);
-        const temporalAdjacentIds = this.temporalAdjacencyStore.collectAdjacentNeuronIds(input.temporalBucketIds, 48);
+        const temporalAdjacentIds = this.temporalAdjacencyStore.collectAdjacentNeuronIds(input.temporalBucketIds, 48, input.projectId);
         const pulse2Ids = Array.from(new Set([
             ...temporalAdjacentIds,
             ...input.branchIds,

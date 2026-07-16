@@ -195,6 +195,9 @@ export interface MemoryKernelNavigationOptions {
   limit?: number;
   startTime?: number;
   endTime?: number;
+  now?: number;
+  localDateNow?: string;
+  timeZone?: string;
 }
 
 export interface RawEventSearchOptions {
@@ -405,7 +408,7 @@ export interface RawMemoryEventInput {
   charEnd?: number;
   orderingConfidence?: OrderingConfidence;
   localDate?: string;
-  localDateSource?: 'explicit' | 'generated_project_timezone' | 'generated_host_timezone' | 'generated_utc_fallback' | 'generated_utc' | 'legacy_unknown';
+  localDateSource?: 'explicit' | 'legacy_unknown';
   timeZone?: string;
   projectTimeZone?: string;
   metadata?: Record<string, unknown>;
@@ -1032,6 +1035,9 @@ export class MemoryKernel {
     const consolidation = this.consolidationPipeline.consolidate(neuron, ingestedEvent.eventId);
     const topology = this.topologyCompiler.compile({ neuron, consolidation, timeZone: this.projectClock.timeZone });
     this.temporalAdjacencyStore.syncBuckets(topology.timeBuckets, neuron.metadata.createdAt);
+    if (neuron.metadata.projectId && !this.topologyStore.timeProjectionNeedsRebuild(neuron.metadata.projectId, this.projectClock.timeZone)) {
+      this.topologyStore.markTimeProjection(neuron.metadata.projectId, 'clean', this.projectClock.timeZone, neuron.metadata.createdAt);
+    }
     const cognitiveGraph = this.cognitiveGraphCompiler.compile({ neuron, consolidation, topology });
     this.eventStore.append({
       streamId: neuron.id,
@@ -1093,6 +1099,7 @@ export class MemoryKernel {
   }
 
   navigateMemory(query: string, options: MemoryKernelNavigationOptions = {}): MemoryKernelNavigationResult {
+    if (options.projectId) this.ensureProjectTimeTopology(options.projectId);
     const limit = Math.max(1, options.limit ?? 8);
     const seedLimit = Math.min(Math.max(limit * 4, 24), 120);
     const seedNeuronIds = this.memoryGraph.fullTextSearch(query, options.projectId, seedLimit);
@@ -1149,6 +1156,9 @@ export class MemoryKernel {
       projectId: options.projectId,
       limit,
       includeRawEvidence: true,
+      now: options.now,
+      localDateNow: options.localDateNow,
+      timeZone: options.timeZone,
     }).rawEvidence.filter((neuron) => !options.projectId || neuron.metadata.projectId === options.projectId);
     const governedFallbackEvidence = selectRecallableEvidence(fallbackEvidence, limit);
 
@@ -1164,6 +1174,23 @@ export class MemoryKernel {
         ...governedFallbackEvidence.filteredEvidence,
       ]),
     };
+  }
+
+  private ensureProjectTimeTopology(projectId: string): void {
+    const timeZone = this.projectClock.timeZone;
+    if (!this.topologyStore.timeProjectionNeedsRebuild(projectId, timeZone)) return;
+    const now = Date.now();
+    this.topologyStore.markTimeProjection(projectId, 'building', timeZone, now);
+    try {
+      this.topologyStore.resetProjectTimeBuckets(projectId);
+      const neurons = this.memoryGraph.getAllNeurons().filter((neuron) => neuron.metadata.projectId === projectId);
+      this.topologyCompiler.rebuildTimeBuckets(neurons, timeZone);
+      this.temporalAdjacencyStore.rebuildAll(now);
+      this.topologyStore.markTimeProjection(projectId, 'clean', timeZone, now);
+    } catch (error) {
+      this.topologyStore.markTimeProjection(projectId, 'failed', timeZone, now, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   }
 
   recordRawEvent(input: RawMemoryEventInput): MemoryEvent<{ text: string; metadata?: Record<string, unknown> }> {

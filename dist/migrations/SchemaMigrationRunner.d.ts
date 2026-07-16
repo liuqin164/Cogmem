@@ -27,6 +27,8 @@ export declare class SchemaMigrationRunner {
     private backfillChecksums;
     private rewriteChecksums;
     private assertRecordedChecksums;
+    private recordedChecksums;
+    private matchingLegacyReceiptProfile;
     currentVersion(): string | undefined;
     private appliedVersions;
     private schemaMigrationsTableExists;

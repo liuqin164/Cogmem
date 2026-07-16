@@ -277,7 +277,7 @@ export interface MemoryEvent<TPayload = Record<string, unknown>> {
     threadId?: string;
     sessionId?: string;
     localDate?: string;
-    localDateSource?: 'explicit' | 'generated_project_timezone' | 'generated_host_timezone' | 'generated_utc_fallback' | 'generated_utc' | 'legacy_unknown';
+    localDateSource?: 'explicit' | 'generated_explicit_timezone' | 'generated_project_timezone' | 'generated_host_timezone' | 'generated_utc_fallback' | 'generated_utc' | 'legacy_unknown';
     threadSeq?: number;
     turnId?: string;
     turnSeq?: number;

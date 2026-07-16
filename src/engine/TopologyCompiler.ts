@@ -30,6 +30,16 @@ export class TopologyCompiler {
     return { timeBuckets, branchIds, taskIds, clusterIds };
   }
 
+  rebuildTimeBuckets(neurons: Neuron[], timeZone: string): TimeBucketRecord[] {
+    const buckets = new Map<string, TimeBucketRecord>();
+    for (const neuron of neurons) {
+      for (const bucket of this.attachTimeBuckets(neuron.metadata.createdAt, neuron.metadata.projectId, { neuronId: neuron.id, createdAt: neuron.metadata.createdAt }, timeZone)) {
+        buckets.set(bucket.bucketId, bucket);
+      }
+    }
+    return [...buckets.values()];
+  }
+
   private attachTimeBuckets(
     createdAt: number,
     projectId: string | undefined,
@@ -280,7 +290,7 @@ export class TopologyCompiler {
 
   private buildBucket(bucketType: TimeBucketType, timestamp: number, timeZone?: string): TimeBucketRecord {
     const [year, month, day] = localDateFor(timestamp, timeZone).split('-').map(Number);
-    const civilDate = (offsetDays: number) => nextCivilDate(year, month, day, offsetDays);
+    const civilDate = (offsetDays: number) => nextCivilDate(year, month, day, offsetDays, timeZone);
     let start: number;
     let end: number;
     let label: string;
@@ -292,8 +302,8 @@ export class TopologyCompiler {
       const weekday = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(new Date(timestamp));
       const mondayOffset = ({ Mon: 0, Tue: -1, Wed: -2, Thu: -3, Fri: -4, Sat: -5, Sun: -6 } as Record<string, number>)[weekday] ?? 0;
       const monday = civilDate(mondayOffset);
-      const nextMondayDate = new Date(Date.UTC(monday[0], monday[1] - 1, monday[2] + 7));
-      ({ from: start, to: end } = localDateRange(monday[0], monday[1], monday[2], nextMondayDate.getUTCFullYear(), nextMondayDate.getUTCMonth() + 1, nextMondayDate.getUTCDate(), timeZone));
+      const nextMonday = nextCivilDate(monday[0], monday[1], monday[2], 7, timeZone);
+      ({ from: start, to: end } = localDateRange(monday[0], monday[1], monday[2], ...nextMonday, timeZone));
       label = `week:${localDateFor(start, timeZone)}`;
     } else {
       const nextMonth = month === 12 ? [year + 1, 1] : [year, month + 1];

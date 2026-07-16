@@ -191,8 +191,16 @@ export class EventStore {
         // so generated provenance cannot be forged by self-comparison.
         const clock = resolveProjectClockContext({ now: occurredAt, timeZone: input.timeZone, projectTimeZone: input.projectTimeZone ?? this.projectTimeZone });
         const localDate = input.localDate ?? clock.localDateNow;
-        const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : clock.source === 'explicit' || clock.source === 'project_config' ? 'generated_project_timezone' : clock.source === 'host_environment' ? 'generated_host_timezone' : 'generated_utc_fallback');
-        if (!['explicit', 'generated_project_timezone', 'generated_host_timezone', 'generated_utc_fallback', 'generated_utc', 'legacy_unknown'].includes(localDateSource))
+        const localDateSource = input.localDateSource ?? (input.localDate
+            ? 'explicit'
+            : clock.source === 'explicit'
+                ? 'generated_explicit_timezone'
+                : clock.source === 'project_config'
+                    ? 'generated_project_timezone'
+                    : clock.source === 'host_environment'
+                        ? 'generated_host_timezone'
+                        : 'generated_utc_fallback');
+        if (!['explicit', 'generated_explicit_timezone', 'generated_project_timezone', 'generated_host_timezone', 'generated_utc_fallback', 'legacy_unknown'].includes(localDateSource))
             throw new Error('invalid_local_date_source');
         if (localDateSource === 'explicit' && !input.localDate)
             throw new Error('explicit_local_date_required');
@@ -201,7 +209,7 @@ export class EventStore {
         // round-trip cost twice for every event.
         if (input.localDate)
             this.assertExplicitLocalDate(localDate, clock.timeZone);
-        if ((localDateSource === 'generated_project_timezone' || localDateSource === 'generated_host_timezone' || localDateSource === 'generated_utc_fallback') && localDate !== clock.localDateNow)
+        if (localDateSource.startsWith('generated_') && localDate !== clock.localDateNow)
             throw new Error('generated_local_date_mismatch');
         const event = {
             eventId: input.eventId || `evt-${randomUUID()}`,

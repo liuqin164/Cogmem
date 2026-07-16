@@ -57,10 +57,23 @@ export function localDateRange(year, month, day, endYear, endMonth, endDay, time
     return { from: zonedMidnight(year, month, day, timeZone), to: zonedMidnight(endYear, endMonth, endDay, timeZone) };
 }
 /** Advance an already-valid civil date without treating the result as user input. */
-export function nextCivilDate(year, month, day, days = 1) {
-    assertLocalDate(formatCivilDate(year, month, day));
-    const value = new Date(Date.UTC(year, month - 1, day + days));
-    return [value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate()];
+export function nextCivilDate(year, month, day, days = 1, timeZone) {
+    const zone = resolveTimeZone(timeZone);
+    assertLocalDate(formatCivilDate(year, month, day), zone);
+    const direction = days < 0 ? -1 : 1;
+    let value = new Date(Date.UTC(year, month - 1, day + days));
+    while (true) {
+        const result = [value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate()];
+        try {
+            assertLocalDate(formatCivilDate(...result), zone);
+            return result;
+        }
+        catch (error) {
+            if (!(error instanceof Error) || !error.message.startsWith('invalid_civil_date:'))
+                throw error;
+            value = new Date(Date.UTC(result[0], result[1] - 1, result[2] + direction));
+        }
+    }
 }
 function formatCivilDate(year, month, day) {
     if (![year, month, day].every((value) => Number.isInteger(value)))

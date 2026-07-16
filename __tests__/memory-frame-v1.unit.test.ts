@@ -36,6 +36,16 @@ describe('MemoryFrame V1 contract', () => {
     expect(validateMemoryFrame({ ...frame, nodes: [{}] }).errors).toEqual(['invalid_memory_frame_nested_shape']);
   });
 
+  test('runtime validation matches revision and nested schema constraints', () => {
+    const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
+    expect(validateMemoryFrame({ ...frame, revisionNumber: 0 }).errors).toEqual(['invalid_memory_frame_shape']);
+    expect(validateMemoryFrame({ ...frame, revisionNumber: 1.5 }).errors).toEqual(['invalid_memory_frame_shape']);
+    expect(validateMemoryFrame({ ...frame, revisionId: '' }).errors).toEqual(['invalid_memory_frame_shape']);
+    expect(validateMemoryFrame({ ...frame, supersedesFrameId: '' }).errors).toEqual(['invalid_memory_frame_shape']);
+    expect(validateMemoryFrame({ ...frame, processor: { ...frame.processor, unknown: true } }).errors).toEqual(['invalid_memory_frame_shape']);
+    expect(validateMemoryFrame({ ...frame, nodes: frame.nodes.map((node, index) => index ? node : { ...node, unknown: true }) }).errors).toEqual(['invalid_memory_frame_shape']);
+  });
+
   test('immutable frame identities cannot be redirected by canonical hints', () => {
     const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'episode-b', events: [] });
     const episode = frame.nodes.find((node) => node.dimension === 'episode');
@@ -134,6 +144,8 @@ describe('MemoryFrame V1 contract', () => {
       episodeId: episode.episodeId, eventId: event.eventId, relation: 'primary',
       confidence: 1, globalSeq: event.globalSeq, occurredAt: event.occurredAt,
     });
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const canonicalProject = kernel.memoryAtlasStore.getNode('project:p', 'p')!;
     const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }),
       evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
       nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['event-1'] })),
@@ -145,6 +157,11 @@ describe('MemoryFrame V1 contract', () => {
     expect(result.documents).toBeGreaterThanOrEqual(2);
     expect(kernel.memoryAtlasStore.getNode(`episode:${episode.episodeId}`, 'p')?.nodeType).toBe('episode');
     expect(kernel.memoryAtlasStore.getNode('project:p', 'p')?.nodeType).toBe('project');
+    kernel.memoryFrameStore.supersedeEpisodes([episode.episodeId], 2);
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const restoredProject = kernel.memoryAtlasStore.getNode('project:p', 'p')!;
+    expect({ label: restoredProject.label, summary: restoredProject.summary, confidence: restoredProject.confidence, supportCount: restoredProject.supportCount, evidence: restoredProject.evidenceEventIds })
+      .toEqual({ label: canonicalProject.label, summary: canonicalProject.summary, confidence: canonicalProject.confidence, supportCount: canonicalProject.supportCount, evidence: canonicalProject.evidenceEventIds });
     kernel.close();
   });
 

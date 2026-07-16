@@ -7,6 +7,7 @@ import type { MemoryEvent } from '../types/index.js';
 import { EpisodeTitleGenerator } from './EpisodeTitleGenerator.js';
 import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
 import { inferActionKinds } from '../utils/ActionKindRegistry.js';
+import { localDateFor } from '../utils/LocalDateContext.js';
 
 interface EpisodeRow {
   episode_id: string;
@@ -280,7 +281,7 @@ export class GraphCurator {
 
   private facetTargetsFor(projection: EpisodeProjection): FacetTarget[] {
     const targets: FacetTarget[] = [];
-    const date = projection.localDate ?? dateFromTimestamp(projection.row.started_at);
+    const date = projection.localDate ?? dateFromTimestamp(projection.row.started_at, this.eventStore.getProjectTimeZone());
     if (date) {
       const [year, month] = [date.slice(0, 4), date.slice(0, 7)];
       targets.push({ type: 'time', id: date, nodeId: `time:${projection.row.project_id}:${date}`, label: date, relation: 'OCCURRED_ON', confidence: 1 });
@@ -350,7 +351,7 @@ export class GraphCurator {
       projectId,
       nodeType: 'raw_event',
       sourceId: event.eventId,
-      label: `${event.role || 'event'} ${new Date(event.occurredAt).toISOString().slice(0, 10)}`,
+      label: `${event.role || 'event'} ${event.localDate ?? localDateFor(event.occurredAt, this.eventStore.getProjectTimeZone())}`,
       summary: text.slice(0, 220),
       confidence: 1,
       supportCount: 1,
@@ -500,9 +501,9 @@ export class GraphCurator {
   }
 }
 
-function dateFromTimestamp(timestamp: number): string | undefined {
+function dateFromTimestamp(timestamp: number, timeZone?: string): string | undefined {
   if (!Number.isFinite(timestamp)) return undefined;
-  return new Date(timestamp).toISOString().slice(0, 10);
+  return localDateFor(timestamp, timeZone);
 }
 
 function normalizedHints(values: string[]): string[] {

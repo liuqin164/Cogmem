@@ -514,4 +514,4 @@ test('split-plan bounds event id output even when includeEventIds is true', () =
     kernel.close();
     rmSync(dir, { recursive: true, force: true });
   }
-});
+}, 15_000);

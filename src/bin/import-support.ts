@@ -433,6 +433,8 @@ async function recordRawImportedEvidence(
   const sourceRef = envelope.ingestInput.sourceRefs?.[0];
   const record = envelope.record;
   const metadata = record.metadata || {};
+  const sourceLocalDate = stringRecordField(metadata.localDate);
+  const sourceTimeZone = stringRecordField(metadata.timeZone);
   const role = sourceRef?.role === 'assistant'
     ? 'assistant'
     : sourceRef?.role === 'tool'
@@ -487,13 +489,13 @@ async function recordRawImportedEvidence(
     sessionId,
     turnId: sourceRef?.turnId || record.turnId || record.recordId,
     turnSeq: sourceRef?.turnSeq,
-    localDate: localDateFromTimestamp(record.timestamp),
-    localDateSource: 'generated_utc',
     role,
     rawEventType: 'message',
     content: record.text,
     eventOrdinal,
     occurredAt: record.timestamp,
+    localDate: sourceLocalDate,
+    timeZone: sourceTimeZone,
     sourceId: record.provenance.sourceId,
     sourceOffset: sourceRef?.sourceOffset,
     lineStart: sourceRef?.lineStart,
@@ -544,12 +546,6 @@ function findImportedRawAnchor(
 
 function stringRecordField(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function localDateFromTimestamp(timestamp: number | undefined): string | undefined {
-  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) return undefined;
-  const date = new Date(timestamp);
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString().slice(0, 10);
 }
 
 function openKernel(args: ParsedArgs, workspaceRoot: string): { kernel: MemoryKernel; dbPath: string } {

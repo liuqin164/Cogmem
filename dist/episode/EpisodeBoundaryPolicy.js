@@ -155,7 +155,7 @@ export function resolveTrustedLocalDate(event, timezone) {
     const metadata = event.payload?.metadata;
     const legacyMetadataSource = metadata?.localDateSource === 'event_store_utc_default' ? 'generated_utc' : metadata?.localDateSource;
     const localDateSource = event.localDateSource ?? legacyMetadataSource ?? (event.localDate ? 'explicit' : undefined);
-    if (event.localDate && (localDateSource === 'explicit' || localDateSource === 'generated_project_timezone' || localDateSource === 'generated_host_timezone'))
+    if (event.localDate && (localDateSource === 'explicit' || localDateSource === 'generated_explicit_timezone' || localDateSource === 'generated_project_timezone' || localDateSource === 'generated_host_timezone'))
         return { date: event.localDate };
     if (event.localDate && localDateSource === 'legacy_unknown') {
         return { warning: { code: 'legacy_unknown_local_date_source', message: 'Legacy local date source is not trusted for boundary decisions.' } };

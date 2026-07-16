@@ -29,7 +29,7 @@ export interface AppendEventInput<TPayload = Record<string, unknown>> {
     threadId?: string;
     sessionId?: string;
     localDate?: string;
-    localDateSource?: 'explicit' | 'generated_project_timezone' | 'generated_host_timezone' | 'generated_utc_fallback' | 'generated_utc' | 'legacy_unknown';
+    localDateSource?: 'explicit' | 'legacy_unknown';
     timeZone?: string;
     projectTimeZone?: string;
     threadSeq?: number;

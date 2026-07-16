@@ -16,7 +16,7 @@ export class MemoryAtlasIndexer {
     installAtlasProjectionDirtyTriggers(db);
     this.actions = new ActionFrameExtractor(db, eventStore, store);
     this.curator = new GraphCurator(db, eventStore, store);
-    if (frameStore) this.frameProjector = new MemoryFrameProjector(db, frameStore, store);
+    if (frameStore) this.frameProjector = new MemoryFrameProjector(db, frameStore, store, eventStore.getProjectTimeZone());
   }
   rebuild(options: { projectId?: string } = {}): { documents: number; actions: number; curatedEpisodes: number } {
     const projectId = options.projectId;

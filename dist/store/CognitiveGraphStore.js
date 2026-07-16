@@ -140,9 +140,10 @@ export class CognitiveGraphStore {
             END
           WHERE (ce.source_node_id = ? OR ce.target_node_id = ?)
             AND (? IS NULL OR ce.project_id = ?)
+            AND (? IS NULL OR cn.project_id = ?)
           ORDER BY ce.created_at DESC
           LIMIT ?
-        `).all(nodeId, nodeId, nodeId, input.projectId || null, input.projectId || null, limit);
+        `).all(nodeId, nodeId, nodeId, input.projectId || null, input.projectId || null, input.projectId || null, input.projectId || null, limit);
                 traversedEdgeCount += rows.length;
                 for (const row of rows) {
                     const neighborId = row.source_node_id === nodeId ? row.target_node_id : row.source_node_id;
@@ -160,7 +161,8 @@ export class CognitiveGraphStore {
         SELECT node_id, node_type, source_neuron_id, node_key
         FROM cognitive_nodes
         WHERE node_id IN (${placeholders})
-      `).all(...Array.from(traversedNodeIds));
+          AND (? IS NULL OR project_id = ?)
+      `).all(...Array.from(traversedNodeIds), input.projectId || null, input.projectId || null);
             for (const row of rows) {
                 if (row.node_type === 'neuron') {
                     neuronIds.add(row.node_key.replace(/^neuron:/, ''));

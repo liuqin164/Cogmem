@@ -193,7 +193,7 @@ function localYear(options: FacetQueryPlannerOptions): number {
 
 function dayFacet(year: number, month: number, day: number, timeZone?: string): PlannedFacet {
   const label = `${year}-${pad(month)}-${pad(day)}`;
-  const next = nextCivilDate(year, month, day);
+  const next = nextCivilDate(year, month, day, 1, timeZone);
   const range = localDateRange(year, month, day, ...next, timeZone);
   return {
     type: 'time',

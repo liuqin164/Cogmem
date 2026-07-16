@@ -3,6 +3,7 @@ import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { EpisodeTitleGenerator } from './EpisodeTitleGenerator.js';
 import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
 import { inferActionKinds } from '../utils/ActionKindRegistry.js';
+import { localDateFor } from '../utils/LocalDateContext.js';
 const FACET_EDGE_RELATIONS = new Set([
     'OCCURRED_ON',
     'OCCURRED_IN',
@@ -226,7 +227,7 @@ export class GraphCurator {
     }
     facetTargetsFor(projection) {
         const targets = [];
-        const date = projection.localDate ?? dateFromTimestamp(projection.row.started_at);
+        const date = projection.localDate ?? dateFromTimestamp(projection.row.started_at, this.eventStore.getProjectTimeZone());
         if (date) {
             const [year, month] = [date.slice(0, 4), date.slice(0, 7)];
             targets.push({ type: 'time', id: date, nodeId: `time:${projection.row.project_id}:${date}`, label: date, relation: 'OCCURRED_ON', confidence: 1 });
@@ -296,7 +297,7 @@ export class GraphCurator {
             projectId,
             nodeType: 'raw_event',
             sourceId: event.eventId,
-            label: `${event.role || 'event'} ${new Date(event.occurredAt).toISOString().slice(0, 10)}`,
+            label: `${event.role || 'event'} ${event.localDate ?? localDateFor(event.occurredAt, this.eventStore.getProjectTimeZone())}`,
             summary: text.slice(0, 220),
             confidence: 1,
             supportCount: 1,
@@ -411,10 +412,10 @@ export class GraphCurator {
     `).run(edgeId, input.projectId, input.sourceType, input.sourceId, input.relationType, input.targetType, input.targetId, input.confidence, 1, input.status === 'weak' ? 0.35 : 0.85, 1, JSON.stringify(Array.from(new Set(input.evidenceEventIds)).slice(0, 30)), input.status, input.now, null, 1, input.sourceAuthority, input.now, input.now);
     }
 }
-function dateFromTimestamp(timestamp) {
+function dateFromTimestamp(timestamp, timeZone) {
     if (!Number.isFinite(timestamp))
         return undefined;
-    return new Date(timestamp).toISOString().slice(0, 10);
+    return localDateFor(timestamp, timeZone);
 }
 function normalizedHints(values) {
     return Array.from(new Set(values.map((value) => normalizeKind(value)).filter(Boolean)));

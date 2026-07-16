@@ -71,10 +71,21 @@ export function localDateRange(year: number, month: number, day: number, endYear
 }
 
 /** Advance an already-valid civil date without treating the result as user input. */
-export function nextCivilDate(year: number, month: number, day: number, days = 1): readonly [number, number, number] {
-  assertLocalDate(formatCivilDate(year, month, day));
-  const value = new Date(Date.UTC(year, month - 1, day + days));
-  return [value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate()];
+export function nextCivilDate(year: number, month: number, day: number, days = 1, timeZone?: string): readonly [number, number, number] {
+  const zone = resolveTimeZone(timeZone);
+  assertLocalDate(formatCivilDate(year, month, day), zone);
+  const direction = days < 0 ? -1 : 1;
+  let value = new Date(Date.UTC(year, month - 1, day + days));
+  while (true) {
+    const result = [value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate()] as const;
+    try {
+      assertLocalDate(formatCivilDate(...result), zone);
+      return result;
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith('invalid_civil_date:')) throw error;
+      value = new Date(Date.UTC(result[0], result[1] - 1, result[2] + direction));
+    }
+  }
 }
 
 function formatCivilDate(year: number, month: number, day: number): string {

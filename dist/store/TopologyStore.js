@@ -129,7 +129,32 @@ export class TopologyStore {
         ON topology_membership(project_id, dimension_type, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_topology_membership_dimension
         ON topology_membership(dimension_type, dimension_key, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS topology_projection_state (
+        project_id TEXT PRIMARY KEY,
+        projection_version INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL CHECK(status IN ('dirty','building','clean','failed')),
+        time_zone TEXT,
+        updated_at INTEGER NOT NULL,
+        error TEXT
+      );
     `);
+    }
+    timeProjectionNeedsRebuild(projectId, timeZone) {
+        const row = this.db.prepare(`SELECT projection_version,status,time_zone FROM topology_projection_state WHERE project_id=?`).get(projectId);
+        return Boolean(row && (row.projection_version !== 2 || row.status !== 'clean' || row.time_zone !== timeZone));
+    }
+    markTimeProjection(projectId, status, timeZone, updatedAt, error) {
+        this.db.prepare(`
+      INSERT INTO topology_projection_state(project_id,projection_version,status,time_zone,updated_at,error)
+      VALUES(?,2,?,?,?,?)
+      ON CONFLICT(project_id) DO UPDATE SET projection_version=2,status=excluded.status,time_zone=excluded.time_zone,updated_at=excluded.updated_at,error=excluded.error
+    `).run(projectId, status, timeZone, updatedAt, error ?? null);
+    }
+    resetProjectTimeBuckets(projectId) {
+        this.db.prepare(`DELETE FROM topology_membership WHERE project_id=? AND dimension_type='time_bucket'`).run(projectId);
+        this.db.prepare(`DELETE FROM time_bucket_entries WHERE project_id=?`).run(projectId);
+        this.db.exec(`DELETE FROM time_buckets WHERE bucket_id NOT IN (SELECT DISTINCT bucket_id FROM time_bucket_entries);`);
     }
     upsertTimeBucket(bucket) {
         this.db.prepare(`

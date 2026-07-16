@@ -106,6 +106,9 @@ export function explainRecallWithKernel(
       limit: retrievalLimit,
       startTime: options.startTime,
       endTime: options.endTime,
+      now: options.now,
+      localDateNow: options.localDateNow,
+      timeZone: options.timeZone,
     });
     const agentScoped = navigated.rawEvidence.filter((neuron) => isInAgentScope(neuron, options.agentId!));
     const scoped = agentScoped.filter((neuron) => isInCollectionScope(neuron, options.collection));
@@ -150,6 +153,9 @@ export function explainRecallWithKernel(
     limit: retrievalLimit,
     startTime: options.startTime,
     endTime: options.endTime,
+    now: options.now,
+    localDateNow: options.localDateNow,
+    timeZone: options.timeZone,
   });
   const collectionScoped = navigated.rawEvidence.filter((neuron) => isInCollectionScope(neuron, options.collection));
   const included = collectionScoped.slice(0, limit);

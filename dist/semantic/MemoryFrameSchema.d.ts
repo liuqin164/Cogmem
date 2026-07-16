@@ -58,16 +58,47 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
             readonly type: "array";
             readonly items: {
                 readonly type: "object";
+                readonly additionalProperties: false;
                 readonly required: readonly ["frameNodeId", "dimension", "label", "confidence", "evidenceEventIds"];
                 readonly properties: {
                     readonly frameNodeId: {
                         readonly type: "string";
+                        readonly minLength: 1;
+                        readonly maxLength: 512;
                     };
                     readonly dimension: {
                         readonly type: "string";
                     };
                     readonly label: {
                         readonly type: "string";
+                    };
+                    readonly description: {
+                        readonly type: "string";
+                    };
+                    readonly aliases: {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    };
+                    readonly canonicalHint: {
+                        readonly type: "object";
+                        readonly additionalProperties: false;
+                        readonly properties: {
+                            readonly nodeId: {
+                                readonly type: "string";
+                                readonly minLength: 1;
+                                readonly maxLength: 512;
+                            };
+                            readonly canonicalLabel: {
+                                readonly type: "string";
+                            };
+                            readonly confidence: {
+                                readonly type: "number";
+                                readonly minimum: 0;
+                                readonly maximum: 1;
+                            };
+                        };
                     };
                     readonly confidence: {
                         readonly type: "number";
@@ -87,16 +118,22 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
             readonly type: "array";
             readonly items: {
                 readonly type: "object";
+                readonly additionalProperties: false;
                 readonly required: readonly ["sourceFrameNodeId", "relationType", "targetFrameNodeId", "confidence", "evidenceEventIds"];
                 readonly properties: {
                     readonly sourceFrameNodeId: {
                         readonly type: "string";
+                        readonly minLength: 1;
+                        readonly maxLength: 512;
                     };
                     readonly relationType: {
                         readonly type: "string";
+                        readonly minLength: 1;
                     };
                     readonly targetFrameNodeId: {
                         readonly type: "string";
+                        readonly minLength: 1;
+                        readonly maxLength: 512;
                     };
                     readonly confidence: {
                         readonly type: "number";
@@ -122,6 +159,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
             readonly type: "array";
             readonly items: {
                 readonly type: "object";
+                readonly additionalProperties: false;
                 readonly required: readonly ["label", "confidence", "evidenceEventIds"];
                 readonly properties: {
                     readonly label: {
@@ -148,10 +186,13 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
             readonly type: "array";
             readonly items: {
                 readonly type: "object";
+                readonly additionalProperties: false;
                 readonly required: readonly ["subjectFrameNodeId", "to", "confidence", "evidenceEventIds"];
                 readonly properties: {
                     readonly subjectFrameNodeId: {
                         readonly type: "string";
+                        readonly minLength: 1;
+                        readonly maxLength: 512;
                     };
                     readonly from: {
                         readonly type: "string";
@@ -175,6 +216,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
         };
         readonly processor: {
             readonly type: "object";
+            readonly additionalProperties: false;
             readonly required: readonly ["promptVersion", "generatedAt"];
             readonly properties: {
                 readonly provider: {

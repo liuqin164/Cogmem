@@ -155,7 +155,7 @@ function localYear(options) {
 }
 function dayFacet(year, month, day, timeZone) {
     const label = `${year}-${pad(month)}-${pad(day)}`;
-    const next = nextCivilDate(year, month, day);
+    const next = nextCivilDate(year, month, day, 1, timeZone);
     const range = localDateRange(year, month, day, ...next, timeZone);
     return {
         type: 'time',

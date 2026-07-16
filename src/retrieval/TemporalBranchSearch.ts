@@ -58,6 +58,7 @@ export class TemporalBranchSearch {
     const aggregatedNeuronIds = new Set<string>([...candidates, ...branches.neuronIds]);
 
     const temporalSurface = this.temporalAdjacencyStore.collectContinuousSurface({
+      projectId: input.projectId,
       bucketIds: input.temporalBucketIds || [],
       startTime: input.startTime,
       endTime: input.endTime,

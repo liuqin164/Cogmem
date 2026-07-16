@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { LEGACY_MIGRATION_DIGESTS, MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
+import { LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
 export class SchemaMigrationRunner {
     db;
     migrations;
@@ -89,10 +89,15 @@ export class SchemaMigrationRunner {
     repairKnownLegacyFunctionChecksums() {
         if (!Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info('_schema_migrations') WHERE name='checksum'`).get()))
             return;
+        const rows = this.recordedChecksums();
+        const profile = this.matchingLegacyReceiptProfile(rows);
+        if (!profile)
+            return;
         const update = this.db.prepare(`UPDATE _schema_migrations SET checksum=? WHERE version=? AND checksum=?`);
-        for (const [version, checksums] of Object.entries(LEGACY_MIGRATION_DIGESTS)) {
-            for (const checksum of checksums)
-                update.run(MIGRATION_DIGESTS[version], version, checksum);
+        for (const row of rows) {
+            const legacyChecksum = profile[row.version];
+            if (legacyChecksum === row.checksum)
+                update.run(MIGRATION_DIGESTS[row.version], row.version, legacyChecksum);
         }
     }
     backfillChecksums() {
@@ -109,18 +114,44 @@ export class SchemaMigrationRunner {
         if (!Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info('_schema_migrations') WHERE name='checksum'`).get()))
             return;
         const byVersion = new Map(this.migrations.map((migration) => [migration.version, migration]));
-        const rows = this.db.prepare(`SELECT version, description, checksum FROM _schema_migrations WHERE checksum IS NOT NULL AND checksum<>''`).all();
+        const rows = this.recordedChecksums();
+        const legacyProfile = options.allowKnownLegacy ? this.matchingLegacyReceiptProfile(rows) : undefined;
         for (const row of rows) {
             const digest = MIGRATION_DIGESTS[row.version];
             if (!digest)
                 throw new Error(`migration_checksum_unknown:${row.version}`);
             const migration = byVersion.get(row.version);
             const stableLegacy = migration ? this.legacyStableChecksum(migration) : createHash('sha256').update(`${row.version}\0${row.description}`).digest('hex');
-            const knownLegacy = LEGACY_MIGRATION_DIGESTS[row.version]?.includes(row.checksum) ?? false;
+            const knownLegacy = legacyProfile?.[row.version] === row.checksum;
             if (row.checksum !== digest && row.checksum !== stableLegacy && !(options.allowKnownLegacy && knownLegacy)) {
                 throw new Error(`migration_checksum_mismatch:${row.version}`);
             }
         }
+    }
+    recordedChecksums() {
+        return this.db.prepare(`SELECT version, description, checksum FROM _schema_migrations WHERE checksum IS NOT NULL AND checksum<>'' ORDER BY version`).all();
+    }
+    matchingLegacyReceiptProfile(rows) {
+        for (const profile of Object.values(LEGACY_MIGRATION_RECEIPT_PROFILES)) {
+            let matchedLegacy = false;
+            let valid = true;
+            for (const row of rows) {
+                const manifest = MIGRATION_DIGESTS[row.version];
+                if (!manifest) {
+                    valid = false;
+                    break;
+                }
+                if (row.checksum === manifest || row.checksum === profile[row.version]) {
+                    matchedLegacy ||= row.checksum === profile[row.version];
+                    continue;
+                }
+                valid = false;
+                break;
+            }
+            if (valid && matchedLegacy)
+                return profile;
+        }
+        return undefined;
     }
     currentVersion() {
         const legacyCurrent = this.legacyCurrentVersion();
@@ -273,6 +304,8 @@ export class SchemaMigrationRunner {
             return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='_memory_frame_integrity_markers'`).get())
                 && Boolean(this.db.prepare(`SELECT 1 FROM _memory_frame_integrity_markers WHERE marker='memory_frame_integrity_0047'`).get())
                 && !Boolean(this.db.prepare(`SELECT 1 FROM memory_atlas_alias_supports s LEFT JOIN memory_frames f ON f.frame_id=s.source_frame_id WHERE s.status='active' AND (f.frame_id IS NULL OR f.status<>'active') LIMIT 1`).get());
+        if (version === '0048')
+            return this.hasColumns('topology_projection_state', ['project_id', 'projection_version', 'status', 'time_zone', 'updated_at', 'error']);
         return true;
     }
     tableExists(name) {

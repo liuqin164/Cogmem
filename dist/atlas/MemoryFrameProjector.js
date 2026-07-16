@@ -1,16 +1,19 @@
 import { createHash } from 'node:crypto';
 import { normalizeAlias } from '../semantic/CanonicalMemoryResolver.js';
 import { decodeAtlasNodeId, encodeAtlasNodeId, toAtlasNodeEndpoint } from './AtlasNodeIdCodec.js';
+import { localDateFor } from '../utils/LocalDateContext.js';
 export class MemoryFrameProjector {
     db;
     frameStore;
     atlasStore;
+    projectTimeZone;
     rebuildAliasIndex = new Map();
     affectedNodeIds = new Set();
-    constructor(db, frameStore, atlasStore) {
+    constructor(db, frameStore, atlasStore, projectTimeZone) {
         this.db = db;
         this.frameStore = frameStore;
         this.atlasStore = atlasStore;
+        this.projectTimeZone = projectTimeZone;
     }
     rebuild(projectId, now = Date.now()) {
         return this.db.transaction(() => this.rebuildUnsafe(projectId, now))();
@@ -38,6 +41,7 @@ export class MemoryFrameProjector {
         this.db.prepare(`DELETE FROM memory_edges WHERE project_id=? AND source_authority='memory_frame_projector'`).run(projectId);
         this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2')`).run(projectId, projectId);
         this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2'`).run(projectId);
+        this.refreshCanonicalBaselineSupports(projectId, now);
         this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type IN ('frame','frame_edge') AND status='active'`).run(now, projectId);
         if (this.tableExists('memory_atlas_alias_supports'))
             this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
@@ -81,7 +85,7 @@ export class MemoryFrameProjector {
             }
             for (const reference of frame.temporalReferences) {
                 const localDate = this.evidenceLocalDate(reference.evidenceEventIds);
-                const dayKey = localDate ?? (reference.occurredAt == null ? normalizeAlias(reference.label) : new Date(reference.occurredAt).toISOString().slice(0, 10));
+                const dayKey = localDate ?? (reference.occurredAt == null ? normalizeAlias(reference.label) : localDateFor(reference.occurredAt, this.projectTimeZone));
                 const timeId = encodeAtlasNodeId('time', dayKey, projectId);
                 const existingTime = this.atlasStore.getNodeIncludingInactive(timeId, projectId);
                 if (existingTime && !['active', 'weak'].includes(existingTime.status)) {
@@ -266,10 +270,40 @@ export class MemoryFrameProjector {
         const supportId = createHash('sha256').update(`${nodeId}\0canonical\0${sourceId}`).digest('hex');
         const supportCount = Math.max(0, Number(document.support_count ?? 0));
         this.db.prepare(`
-      INSERT OR IGNORE INTO memory_atlas_supports
+      INSERT INTO memory_atlas_supports
         (support_id,project_id,node_id,source_type,source_id,evidence_event_ids_json,status,created_at,payload_json,confidence,source_authority)
       VALUES (?,?,?,?,?,?, 'active', ?,?,?, 'canonical')
+      ON CONFLICT(node_id,source_type,source_id) DO UPDATE SET
+        evidence_event_ids_json=excluded.evidence_event_ids_json,
+        status='active', invalidated_at=NULL, created_at=excluded.created_at,
+        payload_json=excluded.payload_json, confidence=excluded.confidence,
+        source_authority='canonical'
     `).run(supportId, projectId, nodeId, 'canonical_baseline', sourceId, document.evidence_event_ids_json ?? '[]', now, JSON.stringify({ label: document.label, summary: document.summary, confidence: Number(document.confidence ?? 0), occurredAt: document.occurred_at, supportCount }), Number(document.confidence ?? 0));
+    }
+    refreshCanonicalBaselineSupports(projectId, now) {
+        if (!this.hasColumn('memory_atlas_supports', 'payload_json'))
+            return;
+        const rows = this.db.prepare(`SELECT DISTINCT node_id FROM memory_atlas_supports WHERE project_id=? AND source_type='canonical_baseline'`).all(projectId);
+        for (const row of rows) {
+            this.affectedNodeIds.add(row.node_id);
+            const document = this.db.prepare(`SELECT metadata_json FROM memory_atlas_documents WHERE project_id=? AND node_id=?`).get(projectId, row.node_id);
+            if (!document) {
+                this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated',invalidated_at=? WHERE project_id=? AND node_id=? AND source_type='canonical_baseline' AND status='active'`).run(now, projectId, row.node_id);
+                continue;
+            }
+            let frameProjection = false;
+            try {
+                frameProjection = JSON.parse(document.metadata_json ?? '{}')?.projection === 'memory_atlas.frame.v2';
+            }
+            catch {
+                frameProjection = true;
+            }
+            if (frameProjection) {
+                this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated',invalidated_at=? WHERE project_id=? AND node_id=? AND source_type='canonical_baseline' AND status='active'`).run(now, projectId, row.node_id);
+                continue;
+            }
+            this.ensureCanonicalBaselineSupport(projectId, row.node_id, now);
+        }
     }
     upsertAlias(projectId, nodeId, node, alias, frame, now) {
         const normalized = normalizeAlias(alias);
