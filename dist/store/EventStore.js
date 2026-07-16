@@ -11,10 +11,12 @@ const MEMORY_EVENT_COLUMNS = `
 `;
 export class EventStore {
     encryptionProvider;
+    projectTimeZone;
     db;
     ownsDb = true;
-    constructor(dbPath = ':memory:', encryptionProvider) {
+    constructor(dbPath = ':memory:', encryptionProvider, projectTimeZone) {
         this.encryptionProvider = encryptionProvider;
+        this.projectTimeZone = projectTimeZone;
         if (dbPath instanceof Database) {
             this.db = dbPath;
             this.ownsDb = false;
@@ -24,6 +26,7 @@ export class EventStore {
         }
         this.initializeSchema();
     }
+    getProjectTimeZone() { return this.projectTimeZone; }
     initializeSchema() {
         this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_events (
@@ -182,13 +185,15 @@ export class EventStore {
         const threadSeq = input.threadSeq ?? (threadId ? this.getNextThreadSeq(threadId) : undefined);
         const globalSeq = this.getNextGlobalSeq();
         const createdAt = Date.now();
-        const clock = resolveProjectClockContext({ now: occurredAt, localDateNow: input.localDate, timeZone: input.timeZone, projectTimeZone: input.projectTimeZone });
+        const clock = resolveProjectClockContext({ now: occurredAt, localDateNow: input.localDate, timeZone: input.timeZone, projectTimeZone: input.projectTimeZone ?? this.projectTimeZone });
         const localDate = input.localDate ?? clock.localDateNow;
-        const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : clock.source === 'project_config' ? 'generated_project_timezone' : clock.source === 'host_environment' ? 'generated_host_timezone' : 'generated_utc_fallback');
+        const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : clock.source === 'explicit' || clock.source === 'project_config' ? 'generated_project_timezone' : clock.source === 'host_environment' ? 'generated_host_timezone' : 'generated_utc_fallback');
         if (!['explicit', 'generated_project_timezone', 'generated_host_timezone', 'generated_utc_fallback', 'generated_utc', 'legacy_unknown'].includes(localDateSource))
             throw new Error('invalid_local_date_source');
         if (localDateSource === 'explicit' && !input.localDate)
             throw new Error('explicit_local_date_required');
+        if ((localDateSource === 'generated_project_timezone' || localDateSource === 'generated_host_timezone' || localDateSource === 'generated_utc_fallback') && localDate !== clock.localDateNow)
+            throw new Error('generated_local_date_mismatch');
         const event = {
             eventId: input.eventId || `evt-${randomUUID()}`,
             globalSeq,

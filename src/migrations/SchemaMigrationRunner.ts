@@ -43,6 +43,7 @@ export class SchemaMigrationRunner {
     }
     this.ensureMigrationTable();
     this.adoptLegacyVersion();
+    this.repairKnownLegacyFunctionChecksums();
     this.assertRecordedChecksums();
     const pending = this.plan();
     const applied: string[] = [];
@@ -95,6 +96,24 @@ export class SchemaMigrationRunner {
 
   private legacyStableChecksum(migration: Migration): string {
     return createHash('sha256').update(`${migration.version}\0${migration.description}`).digest('hex');
+  }
+
+  /**
+   * Versions 0044/0045 were released before the build-independent manifest.
+   * Accept only the exact function-text receipt produced by that release, and
+   * convert it before strict checksum validation. Unknown receipts remain
+   * fatal; this is deliberately narrower than a general checksum bypass.
+   */
+  private repairKnownLegacyFunctionChecksums(): void {
+    if (!Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info('_schema_migrations') WHERE name='checksum'`).get())) return;
+    const update = this.db.prepare(`UPDATE _schema_migrations SET checksum=? WHERE version=? AND checksum=?`);
+    for (const migration of this.migrations) {
+      if (migration.version !== '0044' && migration.version !== '0045') continue;
+      const legacyFunctionChecksum = createHash('sha256')
+        .update(`${migration.version}\0${migration.description}\0${migration.up.toString()}`)
+        .digest('hex');
+      update.run(this.migrationChecksum(migration), migration.version, legacyFunctionChecksum);
+    }
   }
 
   private backfillChecksums(): void {

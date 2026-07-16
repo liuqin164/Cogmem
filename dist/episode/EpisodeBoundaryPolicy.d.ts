@@ -58,7 +58,7 @@ export declare class EpisodeBoundaryPolicy {
             localDates?: string[];
             lastTrustedLocalDate?: string;
         };
-        primaryEvent: Pick<MemoryEvent, 'role' | 'occurredAt' | 'localDate' | 'payload'>;
+        primaryEvent: Pick<MemoryEvent, 'role' | 'occurredAt' | 'localDate' | 'localDateSource' | 'payload'>;
         imported?: boolean;
     }): EpisodeBoundaryGuardResult;
 }

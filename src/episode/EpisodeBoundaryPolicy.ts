@@ -123,7 +123,7 @@ export class EpisodeBoundaryPolicy {
 
   evaluate(input: {
     active?: { eventCount: number; startedAt?: number; updatedAt?: number; localDates?: string[]; lastTrustedLocalDate?: string };
-    primaryEvent: Pick<MemoryEvent, 'role' | 'occurredAt' | 'localDate' | 'payload'>;
+    primaryEvent: Pick<MemoryEvent, 'role' | 'occurredAt' | 'localDate' | 'localDateSource' | 'payload'>;
     imported?: boolean;
   }): EpisodeBoundaryGuardResult {
     const warnings: EpisodeBoundaryWarning[] = [];
@@ -258,7 +258,7 @@ function localDateInTimezone(occurredAt: number, timezone: string): string {
 }
 
 function trustedLocalDate(
-  event: Pick<MemoryEvent, 'occurredAt' | 'localDate'>,
+  event: Pick<MemoryEvent, 'occurredAt' | 'localDate' | 'localDateSource'>,
   timezone: string | undefined,
   warnings: EpisodeBoundaryWarning[],
 ): string | undefined {

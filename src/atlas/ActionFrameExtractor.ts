@@ -5,6 +5,7 @@ import type { EventStore } from '../store/EventStore.js';
 import type { MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { actionMarkers } from './MemoryAtlasQueryCompiler.js';
+import { localDateRange } from '../utils/LocalDateContext.js';
 
 interface TargetMatch {
   entityId?: string;
@@ -89,7 +90,7 @@ export class ActionFrameExtractor {
         id: `time:${aggregate.projectId}:${aggregate.year}`, projectId: aggregate.projectId,
         nodeType: 'time', memoryKind: 'time', sourceId: String(aggregate.year), label: String(aggregate.year),
         confidence: 1, supportCount: evidenceEventIds.length, status: 'active',
-        occurredAt: Date.UTC(aggregate.year, 0, 1), evidenceEventIds,
+        occurredAt: localDateRange(aggregate.year, 1, 1, aggregate.year, 1, 2, this.eventStore.getProjectTimeZone()).from, evidenceEventIds,
       });
     }
     return created;

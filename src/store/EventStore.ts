@@ -78,7 +78,7 @@ export class EventStore {
   private db: Database;
   private ownsDb = true;
 
-  constructor(dbPath: string | Database = ':memory:', private readonly encryptionProvider?: EncryptionProvider) {
+  constructor(dbPath: string | Database = ':memory:', private readonly encryptionProvider?: EncryptionProvider, private readonly projectTimeZone?: string) {
     if (dbPath instanceof Database) {
       this.db = dbPath;
       this.ownsDb = false;
@@ -87,6 +87,8 @@ export class EventStore {
     }
     this.initializeSchema();
   }
+
+  getProjectTimeZone(): string | undefined { return this.projectTimeZone; }
 
   private initializeSchema(): void {
     this.db.exec(`
@@ -248,11 +250,12 @@ export class EventStore {
     const threadSeq = input.threadSeq ?? (threadId ? this.getNextThreadSeq(threadId) : undefined);
     const globalSeq = this.getNextGlobalSeq();
     const createdAt = Date.now();
-    const clock = resolveProjectClockContext({ now: occurredAt, localDateNow: input.localDate, timeZone: input.timeZone, projectTimeZone: input.projectTimeZone });
+    const clock = resolveProjectClockContext({ now: occurredAt, localDateNow: input.localDate, timeZone: input.timeZone, projectTimeZone: input.projectTimeZone ?? this.projectTimeZone });
     const localDate = input.localDate ?? clock.localDateNow;
-    const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : clock.source === 'project_config' ? 'generated_project_timezone' : clock.source === 'host_environment' ? 'generated_host_timezone' : 'generated_utc_fallback');
+    const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : clock.source === 'explicit' || clock.source === 'project_config' ? 'generated_project_timezone' : clock.source === 'host_environment' ? 'generated_host_timezone' : 'generated_utc_fallback');
     if (!['explicit', 'generated_project_timezone', 'generated_host_timezone', 'generated_utc_fallback', 'generated_utc', 'legacy_unknown'].includes(localDateSource)) throw new Error('invalid_local_date_source');
     if (localDateSource === 'explicit' && !input.localDate) throw new Error('explicit_local_date_required');
+    if ((localDateSource === 'generated_project_timezone' || localDateSource === 'generated_host_timezone' || localDateSource === 'generated_utc_fallback') && localDate !== clock.localDateNow) throw new Error('generated_local_date_mismatch');
     const event: MemoryEvent<TPayload> = {
       eventId: input.eventId || `evt-${randomUUID()}`,
       globalSeq,

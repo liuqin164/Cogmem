@@ -51,7 +51,14 @@ export function localDateFor(ms, timeZone) {
     return `${value('year')}-${value('month')}-${value('day')}`;
 }
 export function localDateRange(year, month, day, endYear, endMonth, endDay, timeZone) {
+    const zone = resolveTimeZone(timeZone);
+    assertLocalDate(formatCivilDate(year, month, day), zone);
     return { from: zonedMidnight(year, month, day, timeZone), to: zonedMidnight(endYear, endMonth, endDay, timeZone) };
+}
+function formatCivilDate(year, month, day) {
+    if (![year, month, day].every((value) => Number.isInteger(value)))
+        throw new Error('invalid_local_date');
+    return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 function zonedMidnight(year, month, day, timeZone) {
     const zone = resolveTimeZone(timeZone);

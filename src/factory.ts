@@ -88,6 +88,7 @@ import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
 import { EpisodeAssembler, EpisodeStore, type EpisodeBoundaryDecisionRecord, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
 import { EpisodeBoundaryAuditService, type EpisodeBoundaryAuditResult } from './episode/EpisodeBoundaryAuditService.js';
+import { localDateFor, resolveProjectClockContext, type ProjectClockContext } from './utils/LocalDateContext.js';
 import { EpisodeBoundaryPolicy, normalizeEpisodeBoundaryConfig, type EpisodeBoundaryConfig } from './episode/EpisodeBoundaryPolicy.js';
 import { logicalTurnsFromPairs } from './episode/EpisodeBoundaryReplayEngine.js';
 import { EpisodeSplitPlanner, type EpisodeSplitPlan } from './episode/EpisodeSplitPlanner.js';
@@ -612,6 +613,7 @@ export class MemoryKernel {
   readonly configDiagnostics: ConfigDiagnosticLike[];
 
   private readonly dbPath: string;
+  private readonly projectClock: ProjectClockContext;
   private readonly embedder: Embedder;
   private readonly embeddingProvider?: EmbeddingProvider;
   private readonly modelRegistry: ModelRegistry;
@@ -654,13 +656,15 @@ export class MemoryKernel {
     this.configDiagnostics = [...(options.configDiagnostics || [])];
     const normalizedBoundary = normalizeEpisodeBoundaryConfig(options.episodeBoundary);
     this.configDiagnostics.push(...normalizedBoundary.diagnostics);
+    if (options.projectTimeZone && normalizedBoundary.config.timezone && options.projectTimeZone !== normalizedBoundary.config.timezone) throw new Error('project_timezone_conflict');
+    this.projectClock = resolveProjectClockContext({ projectTimeZone: options.projectTimeZone ?? normalizedBoundary.config.timezone });
     this.dbPath = options.dbPath ?? ':memory:';
     this.encryptionProvider = options.encryptionProvider;
     this.piiRedactor = options.redactionPolicy === false ? undefined : new PiiRedactor(options.redactionPolicy);
     this.memoryGraph = new MemoryGraph(this.dbPath);
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
-    this.eventStore = new EventStore(db, this.encryptionProvider);
+    this.eventStore = new EventStore(db, this.encryptionProvider, this.projectClock.timeZone);
     db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
     if ((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys?: number } | undefined)?.foreign_keys !== 1) {
       throw new Error('memory_kernel_foreign_keys_disabled');
@@ -704,7 +708,7 @@ export class MemoryKernel {
     this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
     this.dreamLedgerStore = new DreamLedgerStore(db);
     this.episodeStore = new EpisodeStore(db, (eventId) => this.eventStore.getEvent(eventId), { initializeSchemaForTests: false });
-    this.episodeBoundaryPolicy = new EpisodeBoundaryPolicy(normalizedBoundary.config);
+    this.episodeBoundaryPolicy = new EpisodeBoundaryPolicy({ ...normalizedBoundary.config, timezone: this.projectClock.timeZone });
     this.episodeBoundaryAuditService = new EpisodeBoundaryAuditService(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config, this.configDiagnostics);
     this.episodeSplitPlanner = new EpisodeSplitPlanner(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config, this.configDiagnostics);
     this.userTopicPathRegistry = new UserTopicPathRegistry(db);
@@ -1063,13 +1067,23 @@ export class MemoryKernel {
   }
 
   recall(query: string, options: BrainRecallOptions = {}) {
-    const result = this.brainRecall.recall(query, options);
-    if (!options.projectId) return result;
+    const recallNow = (options as BrainRecallOptions & { now?: number }).now ?? this.projectClock.now;
+    const recallTimeZone = options.timeZone ?? this.projectClock.timeZone;
+    const normalizedOptions: BrainRecallOptions = {
+      ...options,
+      now: recallNow,
+      timeZone: recallTimeZone,
+      localDateNow: options.localDateNow ?? localDateFor(recallNow, recallTimeZone),
+    } as BrainRecallOptions;
+    const result = this.brainRecall.recall(query, normalizedOptions);
+    if (!normalizedOptions.projectId) return result;
     try {
       // Agent and embedding callers use this entry point directly, so keep it
       // on the same freshness contract as graph CLI reads.
-      this.ensureMemoryAtlas({ projectId: options.projectId });
-      const planned = this.atlasPathRetriever.retrieve(query, { projectId: options.projectId, limit: options.limit, includeEvidence: true, evidenceLimit: 1000, staleOk: true, localDateNow: options.localDateNow, timeZone: options.timeZone, now: (options as BrainRecallOptions & { now?: number }).now });
+      this.ensureMemoryAtlas({ projectId: normalizedOptions.projectId });
+      const now = recallNow;
+      const timeZone = recallTimeZone;
+      const planned = this.atlasPathRetriever.retrieve(query, { projectId: normalizedOptions.projectId, limit: normalizedOptions.limit, includeEvidence: true, evidenceLimit: 1000, staleOk: true, localDateNow: normalizedOptions.localDateNow, timeZone, now });
       return { ...result, queryFrame: planned.queryFrame, atlas: planned.result };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2149,6 +2163,12 @@ export class MemoryKernel {
     }
   }
 
+  private withProjectClock(options: MemoryAtlasQueryOptions): MemoryAtlasQueryOptions {
+    const now = options.now ?? this.projectClock.now;
+    const timeZone = options.timeZone ?? this.projectClock.timeZone;
+    return { ...options, now, timeZone, localDateNow: options.localDateNow ?? localDateFor(now, timeZone) };
+  }
+
   private withAtlasFreshness<T extends object>(result: T, freshness: { atlasFresh: boolean; refreshError?: string }): T {
     return Object.assign(result, {
       atlasFresh: freshness.atlasFresh,
@@ -2162,16 +2182,19 @@ export class MemoryKernel {
   }
 
   graphSearch(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
+    options = this.withProjectClock(options);
     const freshness = this.prepareMemoryAtlasRead(options);
     return this.withAtlasFreshness(this.memoryAtlasService.search(query, options), freshness);
   }
 
   graphExplore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
+    options = this.withProjectClock(options);
     const freshness = this.prepareMemoryAtlasRead(options);
     return this.withAtlasFreshness(this.memoryAtlasService.explore(query, options), freshness);
   }
 
   planMemoryQuery(query: string, options: MemoryAtlasQueryOptions): { queryFrame: ReturnType<MultidimensionalQueryPlanner['plan']>; result: MemoryAtlasSlice } {
+    options = this.withProjectClock(options);
     const freshness = this.prepareMemoryAtlasRead(options);
     const planned = this.atlasPathRetriever.retrieve(query, options);
     return { queryFrame: planned.queryFrame, result: this.withAtlasFreshness(planned.result, freshness) };
@@ -2194,6 +2217,7 @@ export class MemoryKernel {
   }
 
   graphTimeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult {
+    options = this.withProjectClock(options);
     const freshness = this.prepareMemoryAtlasRead(options);
     return this.withAtlasFreshness(this.memoryAtlasService.timeline(query, options), freshness);
   }

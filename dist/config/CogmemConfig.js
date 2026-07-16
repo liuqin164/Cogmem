@@ -5,6 +5,7 @@ import { AesGcmEncryptionProvider } from '../encryption/index.js';
 import { ModelRegistry } from '../models/ModelRegistry.js';
 import { DEFAULT_VECTOR_DIMENSION, addVectorDimensionDiagnostics, parseVectorDimensionValue, } from './VectorDimension.js';
 import { normalizeEpisodeBoundaryConfig } from '../episode/EpisodeBoundaryPolicy.js';
+import { resolveTimeZone } from '../utils/LocalDateContext.js';
 export function defaultCogmemHome(env = process.env) {
     return join(env.HOME || homedir(), '.cogmem');
 }
@@ -61,8 +62,15 @@ export function loadCogmemConfig(options = {}) {
     const hermes = section(integrations, 'hermes');
     const optionsOut = {};
     const projectTimeZone = stringValue(project.timezone) || stringValue(root.timezone);
-    if (projectTimeZone)
-        optionsOut.projectTimeZone = projectTimeZone;
+    if (projectTimeZone) {
+        try {
+            resolveTimeZone(projectTimeZone);
+            optionsOut.projectTimeZone = projectTimeZone;
+        }
+        catch {
+            diagnostics.push({ severity: 'error', code: 'invalid_project_timezone', message: `project.timezone must be a valid IANA timezone: ${projectTimeZone}` });
+        }
+    }
     const dbPath = stringValue(core.db_path) || 'memory.db';
     optionsOut.dbPath = resolveConfigPath(interpolate(dbPath, env, diagnostics), homeDir, env);
     const vectorBackend = stringValue(core.vector_backend) || 'sqlite-vec';
@@ -125,6 +133,9 @@ export function loadCogmemConfig(options = {}) {
         const normalizedBoundary = normalizeEpisodeBoundaryConfig(boundaryInput);
         optionsOut.episodeBoundary = normalizedBoundary.config;
         diagnostics.push(...normalizedBoundary.diagnostics);
+        if (projectTimeZone && normalizedBoundary.config.timezone && projectTimeZone !== normalizedBoundary.config.timezone) {
+            diagnostics.push({ severity: 'error', code: 'conflicting_project_timezones', message: 'project.timezone and episode_boundary.timezone must match; project.timezone is the canonical project clock.' });
+        }
     }
     const encryptionEnabled = booleanValue(governance.encryption) === true;
     const encryptionPassphrase = interpolate(stringValue(governance.encryption_passphrase) || stringValue(governance.passphrase) || '', env, diagnostics);

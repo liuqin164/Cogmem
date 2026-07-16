@@ -497,6 +497,7 @@ export declare class MemoryKernel {
     readonly topicGovernance: TopicGovernance;
     readonly configDiagnostics: ConfigDiagnosticLike[];
     private readonly dbPath;
+    private readonly projectClock;
     private readonly embedder;
     private readonly embeddingProvider?;
     private readonly modelRegistry;
@@ -822,6 +823,7 @@ export declare class MemoryKernel {
         hasMore: boolean;
     };
     private prepareMemoryAtlasRead;
+    private withProjectClock;
     private withAtlasFreshness;
     graphOverview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     graphSearch(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;

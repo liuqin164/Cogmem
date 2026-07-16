@@ -27,6 +27,8 @@ export const MEMORY_FRAME_JSON_SCHEMA = {
 export function isMemoryFrame(value: unknown): value is MemoryFrameV1 {
   if (!value || typeof value !== 'object') return false;
   const frame = value as Partial<MemoryFrameV1>;
+  const allowedKeys = new Set(['schemaVersion','frameId','projectId','episodeId','revisionId','revisionNumber','supersedesFrameId','title','summary','episodeKind','nodes','relations','temporalReferences','stateTransitions','confidence','evidenceEventIds','processor','primaryLanguage','sourceAuthority','semanticCompleteness','needsReview','publishStatus','status']);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
   const objectArray = (items: unknown): boolean => Array.isArray(items) && items.every((item) => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
   const stringArray = (items: unknown): boolean => Array.isArray(items) && items.every((item) => typeof item === 'string' && item.trim().length > 0);
   const processor = frame.processor && typeof frame.processor === 'object' ? frame.processor : undefined;

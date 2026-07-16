@@ -24,6 +24,9 @@ export function isMemoryFrame(value) {
     if (!value || typeof value !== 'object')
         return false;
     const frame = value;
+    const allowedKeys = new Set(['schemaVersion', 'frameId', 'projectId', 'episodeId', 'revisionId', 'revisionNumber', 'supersedesFrameId', 'title', 'summary', 'episodeKind', 'nodes', 'relations', 'temporalReferences', 'stateTransitions', 'confidence', 'evidenceEventIds', 'processor', 'primaryLanguage', 'sourceAuthority', 'semanticCompleteness', 'needsReview', 'publishStatus', 'status']);
+    if (Object.keys(value).some((key) => !allowedKeys.has(key)))
+        return false;
     const objectArray = (items) => Array.isArray(items) && items.every((item) => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
     const stringArray = (items) => Array.isArray(items) && items.every((item) => typeof item === 'string' && item.trim().length > 0);
     const processor = frame.processor && typeof frame.processor === 'object' ? frame.processor : undefined;

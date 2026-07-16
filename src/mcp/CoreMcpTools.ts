@@ -136,6 +136,9 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
           limit: NUMBER_SCHEMA,
           since: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
           until: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
+          now: NUMBER_SCHEMA,
+          localDateNow: STRING_SCHEMA,
+          timeZone: STRING_SCHEMA,
         },
         required: ['query'],
       },
@@ -552,7 +555,7 @@ export async function callCogmemMcpTool(
       }
       case 'cogmem_graph_search': {
         const projectId = requiredString(input.projectId, 'projectId');
-        return jsonResult(opened.kernel.graphSearch(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit) }));
+        return jsonResult(opened.kernel.graphSearch(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit), now: optionalNumber(input.now), localDateNow: optionalString(input.localDateNow), timeZone: optionalString(input.timeZone) }));
       }
       case 'cogmem_graph_explore': {
         const projectId = requiredString(input.projectId, 'projectId');
@@ -581,7 +584,7 @@ export async function callCogmemMcpTool(
       }
       case 'cogmem_graph_timeline': {
         const projectId = requiredString(input.projectId, 'projectId');
-        return jsonResult(opened.kernel.graphTimeline(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit), includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit), now: optionalNumber(input.now) }));
+        return jsonResult(opened.kernel.graphTimeline(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit), includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit), now: optionalNumber(input.now), localDateNow: optionalString(input.localDateNow), timeZone: optionalString(input.timeZone) }));
       }
       case 'cogmem_graph_touch':
         return jsonResult(opened.kernel.touchMemoryAtlas({

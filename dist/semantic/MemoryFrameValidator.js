@@ -10,7 +10,9 @@ export function validateMemoryFrame(value, options = {}) {
         const malformedHint = hint !== undefined && (typeof hint !== 'object' || hint === null || Array.isArray(hint)
             || (hint.nodeId !== undefined && typeof hint.nodeId !== 'string')
             || (hint.canonicalLabel !== undefined && typeof hint.canonicalLabel !== 'string')
-            || (hint.confidence !== undefined && (typeof hint.confidence !== 'number' || !Number.isFinite(hint.confidence))));
+            || (hint.nodeId !== undefined && (!hint.nodeId.trim() || hint.nodeId.length > 512))
+            || (hint.canonicalLabel !== undefined && hint.canonicalLabel.length > 20000)
+            || (hint.confidence !== undefined && (typeof hint.confidence !== 'number' || !Number.isFinite(hint.confidence) || hint.confidence < 0 || hint.confidence > 1)));
         return typeof node.frameNodeId !== 'string' || typeof node.dimension !== 'string' || typeof node.label !== 'string'
             || (node.description !== undefined && typeof node.description !== 'string')
             || (node.aliases !== undefined && (!Array.isArray(node.aliases) || node.aliases.some((alias) => typeof alias !== 'string')))
@@ -144,7 +146,7 @@ export function validateMemoryFrame(value, options = {}) {
     for (const transition of frame.stateTransitions) {
         if (typeof transition.subjectFrameNodeId !== 'string' || !nodes.has(transition.subjectFrameNodeId))
             errors.push('state_transition_node_missing');
-        if (typeof transition.to !== 'string' || !Array.isArray(transition.evidenceEventIds) || !transition.to.trim() || !Number.isFinite(transition.confidence) || transition.confidence < 0 || transition.confidence > 1 || !transition.evidenceEventIds.length)
+        if (typeof transition.to !== 'string' || (transition.from !== undefined && typeof transition.from !== 'string') || !Array.isArray(transition.evidenceEventIds) || !transition.to.trim() || (transition.from !== undefined && !transition.from.trim()) || !Number.isFinite(transition.confidence) || transition.confidence < 0 || transition.confidence > 1 || !transition.evidenceEventIds.length)
             errors.push('invalid_state_transition');
         if (Array.isArray(transition.evidenceEventIds) && !transition.evidenceEventIds.every((id) => evidence.has(id)))
             errors.push('state_transition_evidence_not_in_frame');

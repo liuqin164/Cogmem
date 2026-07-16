@@ -30,6 +30,11 @@ export class MemoryFrameProjector {
         let edges = 0;
         let needsReview = 0;
         const currentStateSubjects = new Set();
+        if (this.tableExists('memory_atlas_supports')) {
+            const previous = this.db.prepare(`SELECT DISTINCT node_id FROM memory_atlas_supports WHERE project_id=? AND source_type IN ('frame','frame_edge') AND status='active'`).all(projectId);
+            for (const row of previous)
+                this.affectedNodeIds.add(row.node_id);
+        }
         this.db.prepare(`DELETE FROM memory_edges WHERE project_id=? AND source_authority='memory_frame_projector'`).run(projectId);
         this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2')`).run(projectId, projectId);
         this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2'`).run(projectId);
@@ -159,19 +164,6 @@ export class MemoryFrameProjector {
         this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE project_id=? AND source_frame_id IS NOT NULL AND status='active' AND NOT EXISTS (SELECT 1 FROM memory_atlas_alias_supports s WHERE s.alias_id=memory_atlas_aliases.alias_id AND s.status='active')`).run(now, projectId);
         // Include legacy canonical documents that received Frame supports, while
         // preserving counts maintained by older Atlas authorities.
-        this.db.prepare(`UPDATE memory_atlas_documents
-      SET support_count=MAX(COALESCE(support_count,0), (
-        SELECT COUNT(*) FROM memory_atlas_supports s
-        WHERE s.project_id=memory_atlas_documents.project_id
-          AND s.node_id=memory_atlas_documents.node_id
-          AND s.status='active'
-      ))
-      WHERE project_id=? AND EXISTS (
-        SELECT 1 FROM memory_atlas_supports s
-        WHERE s.project_id=memory_atlas_documents.project_id
-          AND s.node_id=memory_atlas_documents.node_id
-          AND s.status='active'
-      )`).run(projectId);
         this.reduceAffectedDocuments(projectId, now);
         this.rebuildAliasIndex.clear();
         return { frames: frames.length, nodes, edges, needsReview };
@@ -235,13 +227,15 @@ export class MemoryFrameProjector {
     }
     upsertSupport(projectId, nodeId, frame, evidenceEventIds, now, payload = {}) {
         this.affectedNodeIds.add(nodeId);
+        const sourceAuthority = frame.sourceAuthority === 'deterministic_fallback'
+            ? 'deterministic_fallback' : 'validated_processor';
         const supportId = createHash('sha256').update(`${nodeId}\0frame\0${frame.frameId}`).digest('hex');
         if (this.hasColumn('memory_atlas_supports', 'payload_json')) {
             this.db.prepare(`
         INSERT INTO memory_atlas_supports (support_id,project_id,node_id,source_type,source_id,source_episode_id,source_frame_id,evidence_event_ids_json,status,created_at,payload_json,confidence,source_authority)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(node_id,source_type,source_id) DO UPDATE SET evidence_event_ids_json=excluded.evidence_event_ids_json,payload_json=excluded.payload_json,confidence=excluded.confidence,source_authority=excluded.source_authority,status='active',invalidated_at=NULL
-      `).run(supportId, projectId, nodeId, 'frame', frame.frameId, frame.episodeId, frame.frameId, JSON.stringify(evidenceEventIds), 'active', now, JSON.stringify(payload), Number(payload.confidence ?? frame.confidence), 'memory_frame_projector');
+      `).run(supportId, projectId, nodeId, 'frame', frame.frameId, frame.episodeId, frame.frameId, JSON.stringify(evidenceEventIds), 'active', now, JSON.stringify(payload), Number(payload.confidence ?? frame.confidence), sourceAuthority);
             return;
         }
         this.db.prepare(`
@@ -305,11 +299,13 @@ export class MemoryFrameProjector {
         return Boolean(node && node.projectId === projectId && ['active', 'weak'].includes(node.status));
     }
     reduceAffectedDocuments(projectId, now) {
-        const authorityRank = { operator: 4, governed: 4, canonical: 3, memory_frame_projector: 2, deterministic_fallback: 1 };
+        const authorityRank = { operator: 5, governed: 5, canonical: 4, validated_processor: 3, memory_frame_projector: 2, deterministic_fallback: 1 };
         for (const nodeId of this.affectedNodeIds) {
             const supports = this.db.prepare(`SELECT payload_json,confidence,evidence_event_ids_json,source_authority,created_at FROM memory_atlas_supports WHERE project_id=? AND node_id=? AND status='active'`).all(projectId, nodeId);
-            if (!supports.length)
+            if (!supports.length) {
+                this.db.prepare(`UPDATE memory_atlas_documents SET support_count=0,status=CASE WHEN json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2' THEN 'archived' ELSE status END,updated_at=? WHERE project_id=? AND node_id=?`).run(now, projectId, nodeId);
                 continue;
+            }
             const parsed = supports.map((support) => {
                 let payload = {};
                 try {
@@ -325,8 +321,17 @@ export class MemoryFrameProjector {
             const label = typeof winner.payload.label === 'string' ? winner.payload.label : undefined;
             const summary = typeof winner.payload.summary === 'string' ? winner.payload.summary : undefined;
             const confidence = Number(winner.support.confidence ?? winner.payload.confidence ?? 0);
-            const evidence = winner.support.evidence_event_ids_json ?? '[]';
-            this.db.prepare(`UPDATE memory_atlas_documents SET support_count=(SELECT COUNT(*) FROM memory_atlas_supports WHERE project_id=? AND node_id=? AND status='active'), confidence=?, label=COALESCE(?,label), summary=COALESCE(?,summary), evidence_event_ids_json=?, updated_at=? WHERE project_id=? AND node_id=?`).run(projectId, nodeId, confidence, label ?? null, summary ?? null, evidence, now, projectId, nodeId);
+            const evidence = [...new Set(parsed.flatMap(({ support }) => {
+                    try {
+                        const value = JSON.parse(String(support.evidence_event_ids_json ?? '[]'));
+                        return Array.isArray(value) ? value.filter((id) => typeof id === 'string') : [];
+                    }
+                    catch {
+                        return [];
+                    }
+                }))].sort();
+            const occurredAt = parsed.map(({ payload }) => payload.occurredAt).find((value) => typeof value === 'number' && Number.isFinite(value));
+            this.db.prepare(`UPDATE memory_atlas_documents SET support_count=(SELECT COUNT(*) FROM memory_atlas_supports WHERE project_id=? AND node_id=? AND status='active'), confidence=?, label=COALESCE(?,label), summary=COALESCE(?,summary), occurred_at=COALESCE(?,occurred_at), evidence_event_ids_json=?, updated_at=? WHERE project_id=? AND node_id=?`).run(projectId, nodeId, confidence, label ?? null, summary ?? null, occurredAt ?? null, JSON.stringify(evidence), now, projectId, nodeId);
         }
     }
     evidenceTime(eventIds, fallback) {
