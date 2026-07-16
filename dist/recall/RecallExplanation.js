@@ -17,6 +17,9 @@ export function explainRecallWithKernel(kernel, options) {
             excludeSessionId: options.excludeSessionId,
             startTime: options.startTime,
             endTime: options.endTime,
+            now: options.now,
+            localDateNow: options.localDateNow,
+            timeZone: options.timeZone,
         });
         const navigated = kernel.navigateMemory(options.query, {
             projectId,

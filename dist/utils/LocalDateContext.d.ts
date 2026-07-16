@@ -18,4 +18,6 @@ export declare function localDateRange(year: number, month: number, day: number,
     from: number;
     to: number;
 };
+/** Advance an already-valid civil date without treating the result as user input. */
+export declare function nextCivilDate(year: number, month: number, day: number, days?: number): readonly [number, number, number];
 //# sourceMappingURL=LocalDateContext.d.ts.map

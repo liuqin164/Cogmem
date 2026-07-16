@@ -53,6 +53,7 @@ export interface AppendEventInput<TPayload = Record<string, unknown>> {
 export declare class EventStore {
     private readonly encryptionProvider?;
     private readonly projectTimeZone?;
+    private readonly validatedLocalDates;
     private db;
     private ownsDb;
     constructor(dbPath?: string | Database, encryptionProvider?: EncryptionProvider | undefined, projectTimeZone?: string | undefined);
@@ -60,6 +61,7 @@ export declare class EventStore {
     private initializeSchema;
     private ensureCompatibilityColumns;
     append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>, retry?: number): MemoryEvent<TPayload>;
+    private assertExplicitLocalDate;
     private upsertImportAnchor;
     getNextGlobalSeq(): number;
     getNextEventVersion(streamId: string): number;

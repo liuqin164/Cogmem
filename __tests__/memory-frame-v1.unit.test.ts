@@ -183,4 +183,19 @@ describe('MemoryFrame V1 contract', () => {
     expect(frame.time?.from).toBe(Date.UTC(2026, 6, 16, 15));
     expect(frame.time?.to).toBe(Date.UTC(2026, 6, 17, 15));
   });
+
+  test('kernel recomputes the default project-local date for each query', () => {
+    const originalNow = Date.now;
+    const kernel = createMemoryKernel({ projectTimeZone: 'Asia/Tokyo' });
+    try {
+      Date.now = () => Date.UTC(2026, 6, 16, 14, 59);
+      const before = kernel.planMemoryQuery('今天', { projectId: 'clock-project' }).queryFrame.time;
+      Date.now = () => Date.UTC(2026, 6, 16, 15, 1);
+      const after = kernel.planMemoryQuery('今天', { projectId: 'clock-project' }).queryFrame.time;
+      expect(before?.from).not.toBe(after?.from);
+    } finally {
+      Date.now = originalNow;
+      kernel.close();
+    }
+  });
 });

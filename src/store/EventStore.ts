@@ -12,7 +12,7 @@ import type {
   OrderingConfidence,
   StreamType,
 } from '../types/index.js';
-import { resolveProjectClockContext } from '../utils/LocalDateContext.js';
+import { assertLocalDate, resolveProjectClockContext } from '../utils/LocalDateContext.js';
 
 export interface ProjectionCheckpoint {
   projectionName: string;
@@ -75,6 +75,7 @@ const MEMORY_EVENT_COLUMNS = `
 `;
 
 export class EventStore {
+  private readonly validatedLocalDates = new Set<string>();
   private db: Database;
   private ownsDb = true;
 
@@ -250,11 +251,18 @@ export class EventStore {
     const threadSeq = input.threadSeq ?? (threadId ? this.getNextThreadSeq(threadId) : undefined);
     const globalSeq = this.getNextGlobalSeq();
     const createdAt = Date.now();
-    const clock = resolveProjectClockContext({ now: occurredAt, localDateNow: input.localDate, timeZone: input.timeZone, projectTimeZone: input.projectTimeZone ?? this.projectTimeZone });
+    // A caller-provided date is evidence supplied by the caller, never the
+    // clock used to prove a generated date. Compute the clock independently
+    // so generated provenance cannot be forged by self-comparison.
+    const clock = resolveProjectClockContext({ now: occurredAt, timeZone: input.timeZone, projectTimeZone: input.projectTimeZone ?? this.projectTimeZone });
     const localDate = input.localDate ?? clock.localDateNow;
     const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : clock.source === 'explicit' || clock.source === 'project_config' ? 'generated_project_timezone' : clock.source === 'host_environment' ? 'generated_host_timezone' : 'generated_utc_fallback');
     if (!['explicit', 'generated_project_timezone', 'generated_host_timezone', 'generated_utc_fallback', 'generated_utc', 'legacy_unknown'].includes(localDateSource)) throw new Error('invalid_local_date_source');
     if (localDateSource === 'explicit' && !input.localDate) throw new Error('explicit_local_date_required');
+    // Resolver validation already covers generated dates. Re-check only data
+    // supplied by a caller so bulk ingestion does not pay the civil-date
+    // round-trip cost twice for every event.
+    if (input.localDate) this.assertExplicitLocalDate(localDate, clock.timeZone);
     if ((localDateSource === 'generated_project_timezone' || localDateSource === 'generated_host_timezone' || localDateSource === 'generated_utc_fallback') && localDate !== clock.localDateNow) throw new Error('generated_local_date_mismatch');
     const event: MemoryEvent<TPayload> = {
       eventId: input.eventId || `evt-${randomUUID()}`,
@@ -373,6 +381,15 @@ export class EventStore {
       if (existing.contentHash !== event.contentHash) throw new Error(`import_anchor_content_conflict:${anchor}`);
       return existing as MemoryEvent<TPayload>;
     }
+  }
+
+  private assertExplicitLocalDate(localDate: string, timeZone: string): void {
+    const key = `${timeZone}\0${localDate}`;
+    if (this.validatedLocalDates.has(key)) return;
+    assertLocalDate(localDate, timeZone);
+    // Keep the cache bounded for long-lived import processes.
+    if (this.validatedLocalDates.size >= 512) this.validatedLocalDates.clear();
+    this.validatedLocalDates.add(key);
   }
 
   private upsertImportAnchor(event: MemoryEvent<unknown>): void {

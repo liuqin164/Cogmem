@@ -1,7 +1,9 @@
+import Database from 'bun:sqlite';
 import type { EventClusterRecord, EventClusterType, ProjectBranchKind, ProjectBranchRecord, TaskBranchRecord, TimeBucketRecord, TimeBucketType, TopologyReference } from '../types/index.js';
 export declare class TopologyStore {
     private db;
-    constructor(dbPath?: string);
+    private readonly ownsDb;
+    constructor(dbOrPath?: Database | string);
     private initializeSchema;
     upsertTimeBucket(bucket: TimeBucketRecord): TimeBucketRecord;
     attachToTimeBucket(bucketId: string, ref: TopologyReference & {

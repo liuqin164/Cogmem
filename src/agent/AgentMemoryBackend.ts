@@ -665,6 +665,9 @@ export class KernelAgentMemoryBackend {
       ? this.filterAgentEvidence((multidimensionalRecall ?? this.kernel.recall(queryPlan.primarySearchText, {
         projectId: query.projectId,
         limit: retrievalLimit,
+        now: query.now,
+        localDateNow: query.localDateNow,
+        timeZone: query.timeZone,
       })).rawEvidence, query.agentId, query.collection, query.excludeSessionId)
         .slice(0, limit)
         .map((neuron) => this.toAgentRecallItem(neuron))

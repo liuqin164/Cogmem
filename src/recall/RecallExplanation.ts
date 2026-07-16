@@ -25,6 +25,9 @@ export interface RecallExplanationOptions {
   limit?: number;
   startTime?: number;
   endTime?: number;
+  now?: number;
+  localDateNow?: string;
+  timeZone?: string;
 }
 
 export interface RecallExplanationEvidence {
@@ -94,6 +97,9 @@ export function explainRecallWithKernel(
       excludeSessionId: options.excludeSessionId,
       startTime: options.startTime,
       endTime: options.endTime,
+      now: options.now,
+      localDateNow: options.localDateNow,
+      timeZone: options.timeZone,
     });
     const navigated = kernel.navigateMemory(options.query, {
       projectId,

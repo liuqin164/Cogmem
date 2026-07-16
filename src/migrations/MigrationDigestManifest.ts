@@ -47,3 +47,12 @@ export const MIGRATION_DIGESTS: Readonly<Record<string, string>> = {
   '0046': '264d132dac13453657fbddc2ac800f00c46479dfb694274004c4eb38dfa1c447',
   '0047': '735a4a9cdb8df3fa354a0195e6247120984dbd84aa8b8a8cff6c0bd7dcd599c0',
 };
+
+// Receipts written by the pre-manifest 3.7.4 development builds used the
+// function-text digest below. Keep the exact, audited values here so an
+// existing source or packed build can be upgraded without accepting arbitrary
+// legacy checksums.
+export const LEGACY_MIGRATION_DIGESTS: Readonly<Record<string, readonly string[]>> = {
+  '0044': ['76e9416f3a5f766b6853e7b149c7e3df93b45df0310d16648f26917c6302dd9a'],
+  '0045': ['523c54e90023aa89da9fba15c7428b98067ca79ec470cc616dffae8f11e871b2'],
+};

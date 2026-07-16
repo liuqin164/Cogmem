@@ -875,6 +875,9 @@ function recall(kernel, input, includeExplanation) {
         limit,
         startTime,
         endTime,
+        now: optionalNumber(input.now),
+        localDateNow: optionalString(input.localDateNow),
+        timeZone: optionalString(input.timeZone),
     });
     return jsonResult(explanation);
 }

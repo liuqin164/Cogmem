@@ -66,7 +66,15 @@ export function localDateFor(ms: number, timeZone?: string): string {
 export function localDateRange(year: number, month: number, day: number, endYear: number, endMonth: number, endDay: number, timeZone?: string): { from: number; to: number } {
   const zone = resolveTimeZone(timeZone);
   assertLocalDate(formatCivilDate(year, month, day), zone);
+  assertLocalDate(formatCivilDate(endYear, endMonth, endDay), zone);
   return { from: zonedMidnight(year, month, day, timeZone), to: zonedMidnight(endYear, endMonth, endDay, timeZone) };
+}
+
+/** Advance an already-valid civil date without treating the result as user input. */
+export function nextCivilDate(year: number, month: number, day: number, days = 1): readonly [number, number, number] {
+  assertLocalDate(formatCivilDate(year, month, day));
+  const value = new Date(Date.UTC(year, month - 1, day + days));
+  return [value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate()];
 }
 
 function formatCivilDate(year: number, month: number, day: number): string {

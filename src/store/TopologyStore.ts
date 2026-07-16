@@ -12,9 +12,16 @@ import type {
 
 export class TopologyStore {
   private db: Database;
+  private readonly ownsDb: boolean;
 
-  constructor(dbPath: string = ':memory:') {
-    this.db = new Database(dbPath);
+  constructor(dbOrPath: Database | string = ':memory:') {
+    if (typeof dbOrPath === 'string') {
+      this.ownsDb = true;
+      this.db = new Database(dbOrPath);
+    } else {
+      this.ownsDb = false;
+      this.db = dbOrPath;
+    }
     this.initializeSchema();
   }
 
@@ -881,6 +888,6 @@ export class TopologyStore {
   }
 
   close(): void {
-    this.db.close();
+    if (this.ownsDb) this.db.close();
   }
 }

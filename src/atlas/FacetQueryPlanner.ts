@@ -1,6 +1,6 @@
 import { extractEntityCues } from '../utils/EntityCueExtractor.js';
 import { ACTION_KIND_RULES } from '../utils/ActionKindRegistry.js';
-import { localDateFor, localDateRange, resolveTimeZone } from '../utils/LocalDateContext.js';
+import { localDateFor, localDateRange, nextCivilDate, resolveTimeZone } from '../utils/LocalDateContext.js';
 
 export type FacetType = 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind';
 export type FacetOperator = 'intersection' | 'union';
@@ -193,7 +193,8 @@ function localYear(options: FacetQueryPlannerOptions): number {
 
 function dayFacet(year: number, month: number, day: number, timeZone?: string): PlannedFacet {
   const label = `${year}-${pad(month)}-${pad(day)}`;
-  const range = localDateRange(year, month, day, year, month, day + 1, timeZone);
+  const next = nextCivilDate(year, month, day);
+  const range = localDateRange(year, month, day, ...next, timeZone);
   return {
     type: 'time',
     value: label,
@@ -206,7 +207,7 @@ function dayFacet(year: number, month: number, day: number, timeZone?: string): 
 
 function monthFacet(year: number, month: number, timeZone?: string): PlannedFacet {
   const label = `${year}-${pad(month)}`;
-  const range = localDateRange(year, month, 1, year, month + 1, 1, timeZone);
+  const range = localDateRange(year, month, 1, month === 12 ? year + 1 : year, month === 12 ? 1 : month + 1, 1, timeZone);
   return {
     type: 'time',
     value: label,

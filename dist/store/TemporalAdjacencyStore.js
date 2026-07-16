@@ -1,8 +1,16 @@
 import Database from 'bun:sqlite';
 export class TemporalAdjacencyStore {
     db;
-    constructor(dbPath = ':memory:') {
-        this.db = new Database(dbPath);
+    ownsDb;
+    constructor(dbOrPath = ':memory:') {
+        if (typeof dbOrPath === 'string') {
+            this.ownsDb = true;
+            this.db = new Database(dbOrPath);
+        }
+        else {
+            this.ownsDb = false;
+            this.db = dbOrPath;
+        }
         this.initializeSchema();
     }
     initializeSchema() {
@@ -28,6 +36,11 @@ export class TemporalAdjacencyStore {
             source_bucket_id, adjacent_bucket_id, bucket_type, weight, created_at
           ) VALUES (?, ?, ?, ?, ?)
         `).run(bucket.bucketId, adjacentId, bucket.bucketType, 0.72, createdAt);
+                this.db.prepare(`
+          INSERT OR IGNORE INTO temporal_adjacency (
+            source_bucket_id, adjacent_bucket_id, bucket_type, weight, created_at
+          ) VALUES (?, ?, ?, ?, ?)
+        `).run(adjacentId, bucket.bucketId, bucket.bucketType, 0.72, createdAt);
             }
         }
     }
@@ -165,16 +178,13 @@ export class TemporalAdjacencyStore {
         };
     }
     close() {
-        this.db.close();
+        if (this.ownsDb)
+            this.db.close();
     }
     getAdjacentBucketIds(bucket) {
-        const ms = bucket.bucketEnd - bucket.bucketStart;
-        const previousStart = bucket.bucketStart - ms;
-        const nextStart = bucket.bucketStart + ms;
-        return [
-            `${bucket.bucketType}:${previousStart}`,
-            `${bucket.bucketType}:${nextStart}`
-        ];
+        const previous = this.db.prepare(`SELECT bucket_id FROM time_buckets WHERE bucket_type=? AND bucket_start<? ORDER BY bucket_start DESC LIMIT 1`).get(bucket.bucketType, bucket.bucketStart);
+        const next = this.db.prepare(`SELECT bucket_id FROM time_buckets WHERE bucket_type=? AND bucket_start>? ORDER BY bucket_start ASC LIMIT 1`).get(bucket.bucketType, bucket.bucketStart);
+        return [previous?.bucket_id, next?.bucket_id].filter((id) => Boolean(id));
     }
     listWindowSegments(input) {
         if (!input.startTime && !input.endTime)

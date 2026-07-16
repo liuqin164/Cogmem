@@ -19,6 +19,9 @@ export declare class MemoryFrameProjector {
     private loadActiveAliasIndex;
     private nodeId;
     private upsertSupport;
+    /** Preserve legacy/governed document fields as an authority support before
+     * Frame reduction can touch a shared canonical node. */
+    private ensureCanonicalBaselineSupport;
     private upsertAlias;
     private tableExists;
     private hasColumn;

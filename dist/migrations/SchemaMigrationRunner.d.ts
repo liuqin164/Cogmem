@@ -22,12 +22,7 @@ export declare class SchemaMigrationRunner {
     private ensureMigrationTable;
     private migrationChecksum;
     private legacyStableChecksum;
-    /**
-     * Versions 0044/0045 were released before the build-independent manifest.
-     * Accept only the exact function-text receipt produced by that release, and
-     * convert it before strict checksum validation. Unknown receipts remain
-     * fatal; this is deliberately narrower than a general checksum bypass.
-     */
+    /** Convert only audited pre-manifest receipts before strict validation. */
     private repairKnownLegacyFunctionChecksums;
     private backfillChecksums;
     private rewriteChecksums;

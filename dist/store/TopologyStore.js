@@ -1,8 +1,16 @@
 import Database from 'bun:sqlite';
 export class TopologyStore {
     db;
-    constructor(dbPath = ':memory:') {
-        this.db = new Database(dbPath);
+    ownsDb;
+    constructor(dbOrPath = ':memory:') {
+        if (typeof dbOrPath === 'string') {
+            this.ownsDb = true;
+            this.db = new Database(dbOrPath);
+        }
+        else {
+            this.ownsDb = false;
+            this.db = dbOrPath;
+        }
         this.initializeSchema();
     }
     initializeSchema() {
@@ -652,6 +660,7 @@ export class TopologyStore {
     `).run(neuronId, projectId || null, dimensionType, dimensionKey, title || null, createdAt);
     }
     close() {
-        this.db.close();
+        if (this.ownsDb)
+            this.db.close();
     }
 }

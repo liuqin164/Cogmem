@@ -224,9 +224,9 @@ export class MemoryKernel {
             ? new VectorStore(vectorDimension)
             : new SqliteVecStore(db, vectorDimension);
         this.topicRegistry = new TopicRegistry(this.memoryGraph);
-        this.topologyStore = new TopologyStore(this.dbPath);
+        this.topologyStore = new TopologyStore(db);
         this.cognitiveGraphStore = new CognitiveGraphStore(this.dbPath);
-        this.temporalAdjacencyStore = new TemporalAdjacencyStore(this.dbPath);
+        this.temporalAdjacencyStore = new TemporalAdjacencyStore(db);
         this.interactionUnitStore = new InteractionUnitStore(this.dbPath);
         this.compilerConfidenceStore = new CompilerConfidenceStore(this.dbPath);
         this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
@@ -491,7 +491,7 @@ export class MemoryKernel {
         this.reflection.onNeuronActivated(neuron.id);
         this.reflection.detectAndCreateOverrides(neuron, (vector, k) => this.vectorStore.search(vector, k));
         const consolidation = this.consolidationPipeline.consolidate(neuron, ingestedEvent.eventId);
-        const topology = this.topologyCompiler.compile({ neuron, consolidation });
+        const topology = this.topologyCompiler.compile({ neuron, consolidation, timeZone: this.projectClock.timeZone });
         this.temporalAdjacencyStore.syncBuckets(topology.timeBuckets, neuron.metadata.createdAt);
         const cognitiveGraph = this.cognitiveGraphCompiler.compile({ neuron, consolidation, topology });
         this.eventStore.append({
@@ -526,7 +526,7 @@ export class MemoryKernel {
         return neuron;
     }
     recall(query, options = {}) {
-        const recallNow = options.now ?? this.projectClock.now;
+        const recallNow = options.now ?? Date.now();
         const recallTimeZone = options.timeZone ?? this.projectClock.timeZone;
         const normalizedOptions = {
             ...options,
@@ -1557,7 +1557,7 @@ export class MemoryKernel {
         }
     }
     withProjectClock(options) {
-        const now = options.now ?? this.projectClock.now;
+        const now = options.now ?? Date.now();
         const timeZone = options.timeZone ?? this.projectClock.timeZone;
         return { ...options, now, timeZone, localDateNow: options.localDateNow ?? localDateFor(now, timeZone) };
     }

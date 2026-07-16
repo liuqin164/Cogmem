@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
+import { LEGACY_MIGRATION_DIGESTS, MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
 export class SchemaMigrationRunner {
     db;
     migrations;
@@ -19,6 +19,7 @@ export class SchemaMigrationRunner {
     }
     run(options = {}) {
         if (options.dryRun || this.options.readonly) {
+            this.assertRecordedChecksums({ allowKnownLegacy: true });
             const pending = this.plan();
             return { pending: pending.map((item) => item.version), applied: [], currentVersion: this.currentVersion(), dryRun: true };
         }
@@ -84,23 +85,14 @@ export class SchemaMigrationRunner {
     legacyStableChecksum(migration) {
         return createHash('sha256').update(`${migration.version}\0${migration.description}`).digest('hex');
     }
-    /**
-     * Versions 0044/0045 were released before the build-independent manifest.
-     * Accept only the exact function-text receipt produced by that release, and
-     * convert it before strict checksum validation. Unknown receipts remain
-     * fatal; this is deliberately narrower than a general checksum bypass.
-     */
+    /** Convert only audited pre-manifest receipts before strict validation. */
     repairKnownLegacyFunctionChecksums() {
         if (!Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info('_schema_migrations') WHERE name='checksum'`).get()))
             return;
         const update = this.db.prepare(`UPDATE _schema_migrations SET checksum=? WHERE version=? AND checksum=?`);
-        for (const migration of this.migrations) {
-            if (migration.version !== '0044' && migration.version !== '0045')
-                continue;
-            const legacyFunctionChecksum = createHash('sha256')
-                .update(`${migration.version}\0${migration.description}\0${migration.up.toString()}`)
-                .digest('hex');
-            update.run(this.migrationChecksum(migration), migration.version, legacyFunctionChecksum);
+        for (const [version, checksums] of Object.entries(LEGACY_MIGRATION_DIGESTS)) {
+            for (const checksum of checksums)
+                update.run(MIGRATION_DIGESTS[version], version, checksum);
         }
     }
     backfillChecksums() {
@@ -113,16 +105,19 @@ export class SchemaMigrationRunner {
         for (const migration of this.migrations)
             update.run(this.migrationChecksum(migration), migration.version, this.legacyStableChecksum(migration));
     }
-    assertRecordedChecksums() {
+    assertRecordedChecksums(options = {}) {
         if (!Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info('_schema_migrations') WHERE name='checksum'`).get()))
             return;
         const byVersion = new Map(this.migrations.map((migration) => [migration.version, migration]));
-        const rows = this.db.prepare(`SELECT version, checksum FROM _schema_migrations WHERE checksum IS NOT NULL AND checksum<>''`).all();
+        const rows = this.db.prepare(`SELECT version, description, checksum FROM _schema_migrations WHERE checksum IS NOT NULL AND checksum<>''`).all();
         for (const row of rows) {
-            const migration = byVersion.get(row.version);
-            if (!migration)
+            const digest = MIGRATION_DIGESTS[row.version];
+            if (!digest)
                 throw new Error(`migration_checksum_unknown:${row.version}`);
-            if (row.checksum !== this.migrationChecksum(migration) && row.checksum !== this.legacyStableChecksum(migration)) {
+            const migration = byVersion.get(row.version);
+            const stableLegacy = migration ? this.legacyStableChecksum(migration) : createHash('sha256').update(`${row.version}\0${row.description}`).digest('hex');
+            const knownLegacy = LEGACY_MIGRATION_DIGESTS[row.version]?.includes(row.checksum) ?? false;
+            if (row.checksum !== digest && row.checksum !== stableLegacy && !(options.allowKnownLegacy && knownLegacy)) {
                 throw new Error(`migration_checksum_mismatch:${row.version}`);
             }
         }

@@ -15,6 +15,9 @@ export interface RecallExplanationOptions {
     limit?: number;
     startTime?: number;
     endTime?: number;
+    now?: number;
+    localDateNow?: string;
+    timeZone?: string;
 }
 export interface RecallExplanationEvidence {
     id: string;

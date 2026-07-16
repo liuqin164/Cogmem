@@ -45,7 +45,7 @@ export class MemoryFrameProjector {
     const blocked = new Set<string>();
     for (const frame of frames) {
         if (frame.needsReview) needsReview += 1;
-        const nodeIds = new Map(frame.nodes.map((node) => [node.frameNodeId, this.nodeId(projectId, node, frame)]));
+        const nodeIds = new Map(frame.nodes.map((node) => [node.frameNodeId, this.nodeId(projectId, node, frame, now)]));
         for (const node of frame.nodes) {
           const id = nodeIds.get(node.frameNodeId)!;
           if (!id) continue;
@@ -160,7 +160,7 @@ export class MemoryFrameProjector {
     return index;
   }
 
-  private nodeId(projectId: string, node: MemoryFrameNode, frame: MemoryFrameV1): string | undefined {
+  private nodeId(projectId: string, node: MemoryFrameNode, frame: MemoryFrameV1, now: number): string | undefined {
     if (node.dimension === 'episode') return encodeAtlasNodeId('episode', frame.episodeId, projectId);
     if (node.dimension === 'project') return encodeAtlasNodeId('project', frame.projectId, projectId);
     if (node.dimension === 'raw_event') {
@@ -178,7 +178,7 @@ export class MemoryFrameProjector {
         INSERT INTO memory_atlas_alias_ambiguities(candidate_id,project_id,dimension,normalized_alias,node_ids_json,source_frame_id,status,created_at)
         VALUES(?,?,?,?,?,?,'pending',?)
         ON CONFLICT(candidate_id) DO UPDATE SET node_ids_json=excluded.node_ids_json,status=CASE WHEN memory_atlas_alias_ambiguities.status IN ('resolved','rejected') THEN memory_atlas_alias_ambiguities.status ELSE 'pending' END
-      `).run(candidateId, projectId, node.dimension, normalizedAlias, JSON.stringify([...aliasNodes].sort()), frame.frameId, Date.now());
+      `).run(candidateId, projectId, node.dimension, normalizedAlias, JSON.stringify([...aliasNodes].sort()), frame.frameId, now);
       // A disputed alias must not silently bind evidence to an arbitrary
       // canonical node. Keep this frame's evidence visible under a provisional
       // identity until governance resolves the ambiguity.
@@ -192,6 +192,7 @@ export class MemoryFrameProjector {
 
   private upsertSupport(projectId: string, nodeId: string, frame: MemoryFrameV1, evidenceEventIds: string[], now: number, payload: Record<string, unknown> = {}): void {
     this.affectedNodeIds.add(nodeId);
+    this.ensureCanonicalBaselineSupport(projectId, nodeId, now);
     const sourceAuthority = (frame as MemoryFrameV1 & { sourceAuthority?: string }).sourceAuthority === 'deterministic_fallback'
       ? 'deterministic_fallback' : 'validated_processor';
     const supportId = createHash('sha256').update(`${nodeId}\0frame\0${frame.frameId}`).digest('hex');
@@ -208,6 +209,32 @@ export class MemoryFrameProjector {
       VALUES (?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(node_id,source_type,source_id) DO UPDATE SET evidence_event_ids_json=excluded.evidence_event_ids_json,status='active',invalidated_at=NULL
     `).run(supportId, projectId, nodeId, 'frame', frame.frameId, frame.episodeId, frame.frameId, JSON.stringify(evidenceEventIds), 'active', now);
+  }
+
+  /** Preserve legacy/governed document fields as an authority support before
+   * Frame reduction can touch a shared canonical node. */
+  private ensureCanonicalBaselineSupport(projectId: string, nodeId: string, now: number): void {
+    if (!this.hasColumn('memory_atlas_supports', 'payload_json')) return;
+    const document = this.db.prepare(`SELECT label,summary,confidence,support_count,occurred_at,evidence_event_ids_json,metadata_json FROM memory_atlas_documents WHERE project_id=? AND node_id=?`).get(projectId, nodeId) as {
+      label: string; summary?: string | null; confidence?: number; support_count?: number; occurred_at?: number | null; evidence_event_ids_json?: string; metadata_json?: string;
+    } | null;
+    if (!document) return;
+    let metadata: Record<string, unknown> = {};
+    try { const value = JSON.parse(document.metadata_json ?? '{}'); if (value && typeof value === 'object') metadata = value as Record<string, unknown>; } catch { /* corrupt legacy metadata has no baseline authority */ }
+    if (metadata.projection === 'memory_atlas.frame.v2') return;
+    const sourceId = `baseline:${nodeId}`;
+    const supportId = createHash('sha256').update(`${nodeId}\0canonical\0${sourceId}`).digest('hex');
+    const supportCount = Math.max(0, Number(document.support_count ?? 0));
+    this.db.prepare(`
+      INSERT OR IGNORE INTO memory_atlas_supports
+        (support_id,project_id,node_id,source_type,source_id,evidence_event_ids_json,status,created_at,payload_json,confidence,source_authority)
+      VALUES (?,?,?,?,?,?, 'active', ?,?,?, 'canonical')
+    `).run(
+      supportId, projectId, nodeId, 'canonical_baseline', sourceId,
+      document.evidence_event_ids_json ?? '[]', now,
+      JSON.stringify({ label: document.label, summary: document.summary, confidence: Number(document.confidence ?? 0), occurredAt: document.occurred_at, supportCount }),
+      Number(document.confidence ?? 0),
+    );
   }
 
   private upsertAlias(projectId: string, nodeId: string, node: MemoryFrameNode, alias: string, frame: MemoryFrameV1, now: number): void {
@@ -285,7 +312,8 @@ export class MemoryFrameProjector {
         try { const value = JSON.parse(String(support.evidence_event_ids_json ?? '[]')); return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []; } catch { return []; }
       }))].sort();
       const occurredAt = parsed.map(({ payload }) => payload.occurredAt).find((value): value is number => typeof value === 'number' && Number.isFinite(value));
-      this.db.prepare(`UPDATE memory_atlas_documents SET support_count=(SELECT COUNT(*) FROM memory_atlas_supports WHERE project_id=? AND node_id=? AND status='active'), confidence=?, label=COALESCE(?,label), summary=COALESCE(?,summary), occurred_at=COALESCE(?,occurred_at), evidence_event_ids_json=?, updated_at=? WHERE project_id=? AND node_id=?`).run(projectId, nodeId, confidence, label ?? null, summary ?? null, occurredAt ?? null, JSON.stringify(evidence), now, projectId, nodeId);
+      const supportCount = parsed.reduce((total, { payload }) => total + Math.max(0, Number(payload.supportCount ?? 1)), 0);
+      this.db.prepare(`UPDATE memory_atlas_documents SET support_count=?, confidence=?, label=COALESCE(?,label), summary=COALESCE(?,summary), occurred_at=COALESCE(?,occurred_at), evidence_event_ids_json=?, updated_at=? WHERE project_id=? AND node_id=?`).run(supportCount, confidence, label ?? null, summary ?? null, occurredAt ?? null, JSON.stringify(evidence), now, projectId, nodeId);
     }
   }
 

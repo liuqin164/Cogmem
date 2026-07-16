@@ -1,3 +1,4 @@
+import Database from 'bun:sqlite';
 import type { TimeBucketRecord } from '../types/index.js';
 export interface TemporalSurfaceSegment {
     bucketId: string;
@@ -9,7 +10,8 @@ export interface TemporalSurfaceSegment {
 }
 export declare class TemporalAdjacencyStore {
     private db;
-    constructor(dbPath?: string);
+    private readonly ownsDb;
+    constructor(dbOrPath?: Database | string);
     private initializeSchema;
     syncBuckets(buckets: TimeBucketRecord[], createdAt: number): void;
     collectAdjacentNeuronIds(bucketIds: string[], limit?: number): string[];

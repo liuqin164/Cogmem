@@ -1,4 +1,4 @@
-import { localDateFor, localDateRange, resolveTimeZone } from '../utils/LocalDateContext.js';
+import { localDateFor, localDateRange, nextCivilDate, resolveTimeZone } from '../utils/LocalDateContext.js';
 const DIMENSION_WORDS = [
     ['actor', /^(who|谁|谁参与(?:了)?|actor|作者)$/iu],
     ['project', /^(project|项目|仓库|repo)$/iu],
@@ -76,7 +76,8 @@ export class MultidimensionalQueryPlanner {
             const monthIndex = month[1] ? Number(raw) - 1 : monthNames.indexOf(raw);
             if (monthIndex >= 0 && monthIndex < 12) {
                 const yearValue = Number(query.match(/\b(20\d{2})\b/u)?.[1] ?? localYear(options));
-                const range = localDateRange(yearValue, monthIndex + 1, 1, yearValue, monthIndex + 2, 1, options.timeZone);
+                const [endYear, endMonth] = monthIndex === 11 ? [yearValue + 1, 1] : [yearValue, monthIndex + 2];
+                const range = localDateRange(yearValue, monthIndex + 1, 1, endYear, endMonth, 1, options.timeZone);
                 return { ...range, expressions: [month[0]] };
             }
         }
@@ -88,7 +89,8 @@ export class MultidimensionalQueryPlanner {
         if (/今天|today/iu.test(query)) {
             const date = options.localDateNow ?? localDateFor(now, options.timeZone);
             const [year, monthValue, day] = date.split('-').map(Number);
-            return { ...localDateRange(year, monthValue, day, year, monthValue, day + 1, options.timeZone), expressions: ['today'] };
+            const next = nextCivilDate(year, monthValue, day);
+            return { ...localDateRange(year, monthValue, day, ...next, options.timeZone), expressions: ['today'] };
         }
         return undefined;
     }
