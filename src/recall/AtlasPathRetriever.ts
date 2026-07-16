@@ -2,6 +2,7 @@ import type { MemoryAtlasQueryOptions, MemoryAtlasService } from '../atlas/index
 import type { MemoryAtlasSlice } from '../atlas/MemoryAtlasTypes.js';
 import { DimensionAwareRanker } from './DimensionAwareRanker.js';
 import { MultidimensionalQueryPlanner } from './MultidimensionalQueryPlanner.js';
+import { localDateFor } from '../utils/LocalDateContext.js';
 
 export class AtlasPathRetriever {
   constructor(private readonly atlas: MemoryAtlasService, private readonly planner = new MultidimensionalQueryPlanner(), private readonly ranker = new DimensionAwareRanker()) {}
@@ -44,7 +45,7 @@ export class AtlasPathRetriever {
       const facets = Object.values(queryFrame).flatMap((value) => Array.isArray(value) ? value : []).filter((item): item is { label?: string; canonicalNodeId?: string } => Boolean(item && typeof item === 'object'));
       const canonicalMatch = facets.some((facet) => facet.canonicalNodeId === node.id);
       const labelMatch = facets.map((facet) => String(facet.label ?? '').toLocaleLowerCase('und')).some((label) => label && node.label.toLocaleLowerCase('und').includes(label));
-      const timeMatch = !queryFrame.time || this.atlas.nodeHasEvidenceInRange(node.id, options.projectId, queryFrame.time) || nodeTimeMatches(node, queryFrame.time, canonicalMatch);
+      const timeMatch = !queryFrame.time || this.atlas.nodeHasEvidenceInRange(node.id, options.projectId, queryFrame.time) || nodeTimeMatches(node, queryFrame.time, canonicalMatch, options.timeZone);
       const stateMatch = !queryFrame.states?.length
         || (node.nodeType === 'state'
           ? queryFrame.states.some((state) => node.label.toLocaleLowerCase('und').includes(state.replaceAll('_', ' ')))
@@ -67,7 +68,7 @@ export class AtlasPathRetriever {
     if (queryFrame.time) {
       for (const id of [...selected]) {
         const node = byId.get(id);
-        if (node && !seedIds.includes(id) && !this.atlas.nodeHasEvidenceInRange(node.id, options.projectId, queryFrame.time) && !nodeTimeMatches(node, queryFrame.time, false)) selected.delete(id);
+        if (node && !seedIds.includes(id) && !this.atlas.nodeHasEvidenceInRange(node.id, options.projectId, queryFrame.time) && !nodeTimeMatches(node, queryFrame.time, false, options.timeZone)) selected.delete(id);
       }
     }
     result.nodes = this.ranker.rank(result.nodes.filter((node) => selected.has(node.id)), queryFrame).slice(0, Math.min(options.limit ?? 30, 100));
@@ -110,12 +111,11 @@ function nodesReachableFromAny(seedIds: string[], edges: Array<{ source: string;
   return reachable;
 }
 
-function nodeTimeMatches(node: { occurredAt?: number; evidence?: Array<{ sourceLocator?: { localDate?: string } }> }, range: { from?: number; to?: number }, keepCanonical: boolean): boolean {
+function nodeTimeMatches(node: { occurredAt?: number; evidence?: Array<{ sourceLocator?: { localDate?: string } }> }, range: { from?: number; to?: number }, keepCanonical: boolean, timeZone?: string): boolean {
   if (node.occurredAt !== undefined) return (range.from === undefined || node.occurredAt >= range.from) && (range.to === undefined || node.occurredAt < range.to);
   const evidenceDates = (node.evidence ?? []).map((evidence) => evidence.sourceLocator?.localDate).filter((value): value is string => Boolean(value));
   if (!evidenceDates.length) return keepCanonical;
-  return evidenceDates.some((date) => {
-    const timestamp = Date.parse(`${date}T00:00:00Z`);
-    return Number.isFinite(timestamp) && (range.from === undefined || timestamp >= range.from) && (range.to === undefined || timestamp < range.to);
-  });
+  const fromDate = range.from === undefined ? undefined : localDateFor(range.from, timeZone);
+  const toDate = range.to === undefined ? undefined : localDateFor(range.to - 1, timeZone);
+  return evidenceDates.some((date) => (!fromDate || date >= fromDate) && (!toDate || date <= toDate));
 }

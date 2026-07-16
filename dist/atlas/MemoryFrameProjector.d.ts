@@ -12,6 +12,7 @@ export declare class MemoryFrameProjector {
     private readonly frameStore;
     private readonly atlasStore;
     private rebuildAliasIndex;
+    private affectedNodeIds;
     constructor(db: Database, frameStore: MemoryFrameStore, atlasStore: MemoryAtlasStore);
     rebuild(projectId: string, now?: number): MemoryFrameProjectionResult;
     private rebuildUnsafe;
@@ -22,6 +23,8 @@ export declare class MemoryFrameProjector {
     private tableExists;
     private hasColumn;
     private upsertEdge;
+    private isActiveEndpoint;
+    private reduceAffectedDocuments;
     private evidenceTime;
     private latestEvidenceTime;
     private evidenceLocalDate;

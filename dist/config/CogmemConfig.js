@@ -55,10 +55,14 @@ export function loadCogmemConfig(options = {}) {
     const reasoningModel = section(root, 'reasoning_model');
     const governance = section(root, 'governance');
     const episodeBoundary = section(root, 'episode_boundary');
+    const project = section(root, 'project');
     const integrations = section(root, 'integrations');
     const openclaw = section(integrations, 'openclaw');
     const hermes = section(integrations, 'hermes');
     const optionsOut = {};
+    const projectTimeZone = stringValue(project.timezone) || stringValue(root.timezone);
+    if (projectTimeZone)
+        optionsOut.projectTimeZone = projectTimeZone;
     const dbPath = stringValue(core.db_path) || 'memory.db';
     optionsOut.dbPath = resolveConfigPath(interpolate(dbPath, env, diagnostics), homeDir, env);
     const vectorBackend = stringValue(core.vector_backend) || 'sqlite-vec';

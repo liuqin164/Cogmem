@@ -173,6 +173,7 @@ export interface MemoryKernelOptions {
   redactionPolicy?: RedactionPolicy | false;
   turnRelationReviewer?: TurnRelationAdvisoryReviewer;
   episodeBoundary?: Partial<EpisodeBoundaryConfig>;
+  projectTimeZone?: string;
   configDiagnostics?: ConfigDiagnosticLike[];
 }
 
@@ -403,7 +404,9 @@ export interface RawMemoryEventInput {
   charEnd?: number;
   orderingConfidence?: OrderingConfidence;
   localDate?: string;
-  localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
+  localDateSource?: 'explicit' | 'generated_project_timezone' | 'generated_host_timezone' | 'generated_utc_fallback' | 'generated_utc' | 'legacy_unknown';
+  timeZone?: string;
+  projectTimeZone?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -1166,7 +1169,9 @@ export class MemoryKernel {
       threadId: input.threadId,
       sessionId: input.sessionId,
       localDate: input.localDate,
-      localDateSource: input.localDateSource ?? (input.localDate ? 'explicit' : 'generated_utc'),
+      localDateSource: input.localDateSource,
+      timeZone: input.timeZone,
+      projectTimeZone: input.projectTimeZone ?? this.options.projectTimeZone ?? this.options.episodeBoundary?.timezone,
       turnId: input.turnId,
       turnSeq: input.turnSeq,
       eventOrdinal: input.eventOrdinal,

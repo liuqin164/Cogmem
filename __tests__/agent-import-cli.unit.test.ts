@@ -40,13 +40,10 @@ async function runCli(
   return { exitCode, stdout, stderr };
 }
 
-let nextTestPort = 50_000 + (process.pid % 10_000);
-
 function serveWithRetry(options: Parameters<typeof Bun.serve>[0]): ReturnType<typeof Bun.serve> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 64; attempt += 1) {
-    const port = nextTestPort;
-    nextTestPort += 1;
+  for (let attempt = 0; attempt < 512; attempt += 1) {
+    const port = 60_000 + Math.floor(Math.random() * 5_500);
     try { return Bun.serve({ ...options, hostname: '127.0.0.1', port }); }
     catch (error) {
       lastError = error;

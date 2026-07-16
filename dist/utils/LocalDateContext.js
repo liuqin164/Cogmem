@@ -1,12 +1,49 @@
-export function resolveTimeZone(timeZone) {
-    const candidate = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+function assertTimeZone(timeZone) {
     try {
-        new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format();
-        return candidate;
+        new Intl.DateTimeFormat('en-US', { timeZone }).format();
+        return timeZone;
     }
     catch {
-        return 'UTC';
+        throw new Error(`invalid_time_zone:${timeZone}`);
     }
+}
+export function resolveTimeZone(timeZone) {
+    if (timeZone)
+        return assertTimeZone(timeZone);
+    const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return host ? assertTimeZone(host) : 'UTC';
+}
+export function resolveProjectClockContext(input = {}) {
+    const now = input.now ?? Date.now();
+    if (!Number.isFinite(now))
+        throw new Error('invalid_clock_now');
+    const explicitZone = input.timeZone;
+    const configuredZone = input.projectTimeZone;
+    const hostZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const timeZone = explicitZone
+        ? assertTimeZone(explicitZone)
+        : configuredZone
+            ? assertTimeZone(configuredZone)
+            : hostZone
+                ? assertTimeZone(hostZone)
+                : 'UTC';
+    const source = explicitZone || input.localDateNow ? 'explicit' : configuredZone ? 'project_config' : hostZone ? 'host_environment' : 'utc_fallback';
+    const localDateNow = input.localDateNow ?? localDateFor(now, timeZone);
+    assertLocalDate(localDateNow, timeZone);
+    return { now, timeZone, localDateNow, source };
+}
+export function assertLocalDate(value, timeZone) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value))
+        throw new Error(`invalid_local_date:${value}`);
+    const [year, month, day] = value.split('-').map(Number);
+    const check = new Date(Date.UTC(year, month - 1, day));
+    if (check.getUTCFullYear() !== year || check.getUTCMonth() + 1 !== month || check.getUTCDate() !== day)
+        throw new Error(`invalid_local_date:${value}`);
+    const zone = resolveTimeZone(timeZone);
+    const midnight = zonedMidnight(year, month, day, zone);
+    if (localDateFor(midnight, zone) !== value)
+        throw new Error(`invalid_civil_date:${value}:${zone}`);
+    return value;
 }
 export function localDateFor(ms, timeZone) {
     const parts = new Intl.DateTimeFormat('en-CA', { timeZone: resolveTimeZone(timeZone), year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(ms));

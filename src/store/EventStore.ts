@@ -12,6 +12,7 @@ import type {
   OrderingConfidence,
   StreamType,
 } from '../types/index.js';
+import { resolveProjectClockContext } from '../utils/LocalDateContext.js';
 
 export interface ProjectionCheckpoint {
   projectionName: string;
@@ -42,7 +43,9 @@ export interface AppendEventInput<TPayload = Record<string, unknown>> {
   threadId?: string;
   sessionId?: string;
   localDate?: string;
-  localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
+  localDateSource?: 'explicit' | 'generated_project_timezone' | 'generated_host_timezone' | 'generated_utc_fallback' | 'generated_utc' | 'legacy_unknown';
+  timeZone?: string;
+  projectTimeZone?: string;
   threadSeq?: number;
   turnId?: string;
   turnSeq?: number;
@@ -245,11 +248,11 @@ export class EventStore {
     const threadSeq = input.threadSeq ?? (threadId ? this.getNextThreadSeq(threadId) : undefined);
     const globalSeq = this.getNextGlobalSeq();
     const createdAt = Date.now();
-    const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : 'generated_utc');
-    if (localDateSource !== 'explicit' && localDateSource !== 'generated_utc' && localDateSource !== 'legacy_unknown') throw new Error('invalid_local_date_source');
+    const clock = resolveProjectClockContext({ now: occurredAt, localDateNow: input.localDate, timeZone: input.timeZone, projectTimeZone: input.projectTimeZone });
+    const localDate = input.localDate ?? clock.localDateNow;
+    const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : clock.source === 'project_config' ? 'generated_project_timezone' : clock.source === 'host_environment' ? 'generated_host_timezone' : 'generated_utc_fallback');
+    if (!['explicit', 'generated_project_timezone', 'generated_host_timezone', 'generated_utc_fallback', 'generated_utc', 'legacy_unknown'].includes(localDateSource)) throw new Error('invalid_local_date_source');
     if (localDateSource === 'explicit' && !input.localDate) throw new Error('explicit_local_date_required');
-    const generatedUtcDate = new Date(occurredAt).toISOString().slice(0, 10);
-    if (localDateSource === 'generated_utc' && input.localDate && input.localDate !== generatedUtcDate) throw new Error('generated_utc_local_date_mismatch');
     const event: MemoryEvent<TPayload> = {
       eventId: input.eventId || `evt-${randomUUID()}`,
       globalSeq,
@@ -268,7 +271,7 @@ export class EventStore {
       contentHash: input.contentHash ?? payloadHash,
       threadId,
       sessionId: input.sessionId,
-      localDate: input.localDate ?? new Date(occurredAt).toISOString().slice(0, 10),
+      localDate,
       localDateSource,
       threadSeq,
       turnId: input.turnId,

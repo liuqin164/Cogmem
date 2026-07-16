@@ -18,6 +18,9 @@ export interface AgentTurnMemory {
     userText: string;
     assistantText?: string;
     timestamp?: number;
+    localDate?: string;
+    timeZone?: string;
+    projectTimeZone?: string;
     ingestMode?: AgentTurnIngestMode;
     metadata?: Record<string, unknown>;
 }

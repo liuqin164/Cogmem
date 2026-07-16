@@ -10,6 +10,7 @@ export interface MemoryFrameProjectionResult { frames: number; nodes: number; ed
 
 export class MemoryFrameProjector {
   private rebuildAliasIndex = new Map<string, string[]>();
+  private affectedNodeIds = new Set<string>();
 
   constructor(private readonly db: Database, private readonly frameStore: MemoryFrameStore, private readonly atlasStore: MemoryAtlasStore) {}
 
@@ -18,7 +19,8 @@ export class MemoryFrameProjector {
   }
 
   private rebuildUnsafe(projectId: string, now: number): MemoryFrameProjectionResult {
-    this.rebuildAliasIndex = this.loadActiveAliasIndex(projectId);
+    this.rebuildAliasIndex.clear();
+    this.affectedNodeIds.clear();
     const frames: MemoryFrameV1[] = [];
     for (let offset = 0; ; offset += 500) {
       const page = this.frameStore.list(projectId, { statuses: ['active'], limit: 500, offset });
@@ -33,6 +35,9 @@ export class MemoryFrameProjector {
     this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2'`).run(projectId);
     this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type IN ('frame','frame_edge') AND status='active'`).run(now, projectId);
     if (this.tableExists('memory_atlas_alias_supports')) this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
+    // Resolve only governed/legacy aliases from the stable pre-projection
+    // state. Newly written Frame aliases must not become their own resolver.
+    this.rebuildAliasIndex = this.loadActiveAliasIndex(projectId);
     const blocked = new Set<string>();
     for (const frame of frames) {
         if (frame.needsReview) needsReview += 1;
@@ -70,8 +75,8 @@ export class MemoryFrameProjector {
             confidence: reference.confidence, supportCount: 1, status: 'active', occurredAt: reference.occurredAt,
             evidenceEventIds: reference.evidenceEventIds, metadata: { projection: 'memory_atlas.frame.v2', frameId: frame.frameId }, updatedAt: now });
           this.upsertSupport(projectId, timeId, frame, reference.evidenceEventIds, now, { label: reference.label, confidence: reference.confidence, occurredAt: reference.occurredAt, kind: 'time' });
-          const timeSources = reference.evidenceEventIds.filter((eventId) => this.atlasStore.getNodeIncludingInactive(`raw_event:${eventId}`, projectId)).map((eventId) => `raw_event:${eventId}`);
-          if (!timeSources.length) timeSources.push(`episode:${frame.episodeId}`);
+          const timeSources = reference.evidenceEventIds.filter((eventId) => this.isActiveEndpoint(projectId, `raw_event:${eventId}`)).map((eventId) => `raw_event:${eventId}`);
+          if (!timeSources.length && this.isActiveEndpoint(projectId, `episode:${frame.episodeId}`)) timeSources.push(`episode:${frame.episodeId}`);
           for (const timeSource of timeSources) if (!blocked.has(timeId)) this.upsertEdge(projectId, timeSource, timeId, { sourceFrameNodeId: timeSource, relationType: 'OCCURRED_ON', targetFrameNodeId: timeId, confidence: reference.confidence, evidenceEventIds: reference.evidenceEventIds }, frame, now);
           const dayMatch = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/u.exec(dayKey);
           if (dayMatch) {
@@ -137,6 +142,7 @@ export class MemoryFrameProjector {
           AND s.node_id=memory_atlas_documents.node_id
           AND s.status='active'
       )`).run(projectId);
+    this.reduceAffectedDocuments(projectId, now);
     this.rebuildAliasIndex.clear();
     return { frames: frames.length, nodes, edges, needsReview };
   }
@@ -147,9 +153,10 @@ export class MemoryFrameProjector {
     const rows = this.db.prepare(`
       SELECT a.dimension, a.normalized_alias, a.node_id
       FROM memory_atlas_aliases a
-      JOIN memory_atlas_alias_supports s ON s.alias_id=a.alias_id AND s.status='active'
-      JOIN memory_frames f ON f.frame_id=s.source_frame_id AND f.status='active'
+      LEFT JOIN memory_atlas_alias_supports s ON s.alias_id=a.alias_id AND s.status='active'
+      LEFT JOIN memory_frames f ON f.frame_id=s.source_frame_id AND f.status='active'
       WHERE a.project_id=? AND a.status='active'
+        AND (a.source_frame_id IS NULL OR f.frame_id IS NOT NULL)
       GROUP BY a.dimension, a.normalized_alias, a.node_id
       ORDER BY a.node_id
     `).all(projectId) as Array<{ dimension: string; normalized_alias: string; node_id: string }>;
@@ -169,14 +176,10 @@ export class MemoryFrameProjector {
       if (node.evidenceEventIds.length !== 1) throw new Error(`raw_event_identity_requires_one_evidence:${node.frameNodeId}`);
       return encodeAtlasNodeId('raw_event', node.evidenceEventIds[0]!, projectId);
     }
-    if (node.canonicalHint?.nodeId) {
-      const candidate = node.canonicalHint.nodeId;
-      const existing = this.atlasStore.getNodeIncludingInactive(candidate, projectId);
-      if (existing && existing.projectId === projectId && existing.nodeType === node.dimension) return candidate;
-    }
+    // Mutable canonical identities are resolved by the CPU resolver and
+    // governance tables. Model-provided node IDs are never trusted here.
     const normalizedLabel = normalizeAlias(node.label);
-    const aliasNodes = this.rebuildAliasIndex.get(`${node.dimension}\0${normalizedLabel}`)
-      ?? this.atlasStore.findAliasNodes(projectId, node.dimension, normalizedLabel);
+    const aliasNodes = this.rebuildAliasIndex.get(`${node.dimension}\0${normalizedLabel}`) ?? [];
     if (aliasNodes.length > 1) {
       const normalizedAlias = normalizeAlias(node.label);
       const candidateId = createHash('sha256').update(`${projectId}\0${node.dimension}\0${normalizedAlias}\0${frame.frameId}`).digest('hex');
@@ -197,6 +200,7 @@ export class MemoryFrameProjector {
   }
 
   private upsertSupport(projectId: string, nodeId: string, frame: MemoryFrameV1, evidenceEventIds: string[], now: number, payload: Record<string, unknown> = {}): void {
+    this.affectedNodeIds.add(nodeId);
     const supportId = createHash('sha256').update(`${nodeId}\0frame\0${frame.frameId}`).digest('hex');
     if (this.hasColumn('memory_atlas_supports', 'payload_json')) {
       this.db.prepare(`
@@ -234,6 +238,7 @@ export class MemoryFrameProjector {
   private upsertEdge(projectId: string, source: string, target: string, relation: MemoryFrameRelation, frame: MemoryFrameV1, now: number): void {
     const parsedSource = toAtlasNodeEndpoint(source, projectId); const parsedTarget = toAtlasNodeEndpoint(target, projectId);
     if (!parsedSource || !parsedTarget) throw new Error(`invalid_atlas_edge_endpoint:${source}:${target}`);
+    if (!this.isActiveEndpoint(projectId, source) || !this.isActiveEndpoint(projectId, target)) return;
     const edgeId = createHash('sha256').update(`${projectId}\0${source}\0${relation.relationType}\0${target}`).digest('hex');
     const existing = this.db.prepare(`SELECT source_authority,valid_from FROM memory_edges WHERE edge_id=?`).get(edgeId) as { source_authority?: string; valid_from?: number } | null;
     const validFrom = relation.validFrom ?? this.evidenceTime(relation.evidenceEventIds, frame.processor.generatedAt);
@@ -258,6 +263,31 @@ export class MemoryFrameProjector {
       VALUES (?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(node_id,source_type,source_id) DO UPDATE SET status='active', invalidated_at=NULL, evidence_event_ids_json=excluded.evidence_event_ids_json
     `).run(supportId, projectId, edgeId, 'frame_edge', frame.frameId, frame.episodeId, frame.frameId, JSON.stringify(relation.evidenceEventIds), 'active', now);
+  }
+
+  private isActiveEndpoint(projectId: string, nodeId: string): boolean {
+    const node = this.atlasStore.getNodeIncludingInactive(nodeId, projectId);
+    return Boolean(node && node.projectId === projectId && ['active', 'weak'].includes(node.status));
+  }
+
+  private reduceAffectedDocuments(projectId: string, now: number): void {
+    const authorityRank: Record<string, number> = { operator: 4, governed: 4, canonical: 3, memory_frame_projector: 2, deterministic_fallback: 1 };
+    for (const nodeId of this.affectedNodeIds) {
+      const supports = this.db.prepare(`SELECT payload_json,confidence,evidence_event_ids_json,source_authority,created_at FROM memory_atlas_supports WHERE project_id=? AND node_id=? AND status='active'`).all(projectId, nodeId) as Array<{ payload_json?: string; confidence?: number; evidence_event_ids_json?: string; source_authority?: string; created_at: number }>;
+      if (!supports.length) continue;
+      const parsed = supports.map((support) => {
+        let payload: Record<string, unknown> = {};
+        try { const value = JSON.parse(String(support.payload_json ?? '{}')); if (value && typeof value === 'object') payload = value as Record<string, unknown>; } catch { /* legacy support */ }
+        return { support, payload };
+      }).sort((a, b) => (authorityRank[String(b.support.source_authority ?? '')] ?? 0) - (authorityRank[String(a.support.source_authority ?? '')] ?? 0)
+        || Number(b.support.confidence ?? 0) - Number(a.support.confidence ?? 0) || b.support.created_at - a.support.created_at);
+      const winner = parsed[0]!;
+      const label = typeof winner.payload.label === 'string' ? winner.payload.label : undefined;
+      const summary = typeof winner.payload.summary === 'string' ? winner.payload.summary : undefined;
+      const confidence = Number(winner.support.confidence ?? winner.payload.confidence ?? 0);
+      const evidence = winner.support.evidence_event_ids_json ?? '[]';
+      this.db.prepare(`UPDATE memory_atlas_documents SET support_count=(SELECT COUNT(*) FROM memory_atlas_supports WHERE project_id=? AND node_id=? AND status='active'), confidence=?, label=COALESCE(?,label), summary=COALESCE(?,summary), evidence_event_ids_json=?, updated_at=? WHERE project_id=? AND node_id=?`).run(projectId, nodeId, confidence, label ?? null, summary ?? null, evidence, now, projectId, nodeId);
+    }
   }
 
   private evidenceTime(eventIds: string[], fallback: number): number {

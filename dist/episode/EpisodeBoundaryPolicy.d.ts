@@ -66,7 +66,7 @@ export declare function isTrustedLocalDate(value: string | undefined): value is 
 export declare function resolveTrustedLocalDate(event: {
     occurredAt?: number;
     localDate?: string;
-    localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
+    localDateSource?: 'explicit' | 'generated_project_timezone' | 'generated_host_timezone' | 'generated_utc_fallback' | 'generated_utc' | 'legacy_unknown';
     payload?: unknown;
 } | undefined, timezone?: string): {
     date?: string;

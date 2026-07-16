@@ -8,7 +8,17 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
   if (!isMemoryFrame(value)) return { valid: false, errors: ['invalid_memory_frame_shape'] };
   const frame = value as MemoryFrameV1;
   const errors: string[] = [];
-  const malformedNode = frame.nodes.some((node) => typeof node.frameNodeId !== 'string' || typeof node.dimension !== 'string' || typeof node.label !== 'string' || (node.description !== undefined && typeof node.description !== 'string') || (node.aliases !== undefined && (!Array.isArray(node.aliases) || node.aliases.some((alias) => typeof alias !== 'string'))) || (node.canonicalHint !== undefined && (typeof node.canonicalHint !== 'object' || node.canonicalHint === null || (node.canonicalHint.nodeId !== undefined && typeof node.canonicalHint.nodeId !== 'string') || (node.canonicalHint.canonicalLabel !== undefined && typeof node.canonicalHint.canonicalLabel !== 'string') || (node.canonicalHint.confidence !== undefined && typeof node.canonicalHint.confidence !== 'number'))) || !Array.isArray(node.evidenceEventIds));
+  const malformedNode = frame.nodes.some((node) => {
+    const hint = node.canonicalHint;
+    const malformedHint = hint !== undefined && (typeof hint !== 'object' || hint === null || Array.isArray(hint)
+      || (hint.nodeId !== undefined && typeof hint.nodeId !== 'string')
+      || (hint.canonicalLabel !== undefined && typeof hint.canonicalLabel !== 'string')
+      || (hint.confidence !== undefined && (typeof hint.confidence !== 'number' || !Number.isFinite(hint.confidence))));
+    return typeof node.frameNodeId !== 'string' || typeof node.dimension !== 'string' || typeof node.label !== 'string'
+      || (node.description !== undefined && typeof node.description !== 'string')
+      || (node.aliases !== undefined && (!Array.isArray(node.aliases) || node.aliases.some((alias) => typeof alias !== 'string')))
+      || malformedHint || !Array.isArray(node.evidenceEventIds);
+  });
   const malformedRelation = frame.relations.some((relation) => typeof relation.sourceFrameNodeId !== 'string' || typeof relation.targetFrameNodeId !== 'string' || typeof relation.relationType !== 'string' || !Array.isArray(relation.evidenceEventIds) || (relation.validFrom !== undefined && typeof relation.validFrom !== 'number') || (relation.validTo !== undefined && typeof relation.validTo !== 'number'));
   const malformedTime = frame.temporalReferences.some((reference) => typeof reference.label !== 'string' || !Array.isArray(reference.evidenceEventIds));
   const malformedState = frame.stateTransitions.some((transition) => typeof transition.subjectFrameNodeId !== 'string' || typeof transition.to !== 'string' || (transition.from !== undefined && typeof transition.from !== 'string') || !Array.isArray(transition.evidenceEventIds));
@@ -45,7 +55,7 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
   if (!frame.nodes.some((node) => node.dimension === 'episode' && node.label.trim())) errors.push('episode_node_required');
   if (!frame.nodes.some((node) => node.dimension === 'project' && node.label.trim())) errors.push('project_node_required');
   for (const node of frame.nodes) {
-    if (typeof node.frameNodeId !== 'string' || typeof node.label !== 'string' || !Array.isArray(node.evidenceEventIds)) { errors.push('invalid_frame_node_shape'); continue; }
+    if (typeof node.frameNodeId !== 'string' || !node.frameNodeId.trim() || typeof node.label !== 'string' || !Array.isArray(node.evidenceEventIds)) { errors.push('invalid_frame_node_shape'); continue; }
     if (!node.label.trim()) errors.push(`empty_frame_node_label:${node.frameNodeId}`);
     if (!Number.isFinite(node.confidence) || node.confidence < 0 || node.confidence > 1) errors.push(`invalid_node_confidence:${node.frameNodeId}`);
     if (!node.evidenceEventIds.length && !options.allowEmptyEvidence) errors.push(`node_evidence_required:${node.frameNodeId}`);
@@ -53,6 +63,7 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
     if (node.description !== undefined && node.description.length > limits.text) errors.push(`node_description_limit_exceeded:${node.frameNodeId}`);
     if (node.aliases !== undefined && (!Array.isArray(node.aliases) || node.aliases.length > limits.aliases || node.aliases.some((alias) => typeof alias !== 'string' || alias.length > 1000))) errors.push(`invalid_node_aliases:${node.frameNodeId}`);
     if (Array.isArray(node.aliases) && node.aliases.some((alias) => !alias.trim())) errors.push(`empty_node_alias:${node.frameNodeId}`);
+    if (node.canonicalHint?.nodeId && !['episode', 'project', 'raw_event'].includes(node.dimension)) errors.push(`mutable_identity_hint_not_allowed:${node.frameNodeId}`);
     if (node.canonicalHint?.nodeId && ['episode', 'project', 'raw_event'].includes(node.dimension)) {
       const expected = node.dimension === 'episode'
         ? `episode:${frame.episodeId}`

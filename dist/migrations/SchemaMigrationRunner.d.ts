@@ -21,6 +21,7 @@ export declare class SchemaMigrationRunner {
     run(options?: SchemaMigrationRunOptions): SchemaMigrationResult;
     private ensureMigrationTable;
     private migrationChecksum;
+    private legacyStableChecksum;
     private backfillChecksums;
     private rewriteChecksums;
     private assertRecordedChecksums;

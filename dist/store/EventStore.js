@@ -1,5 +1,6 @@
 import Database from 'bun:sqlite';
 import { createHash, randomUUID } from 'crypto';
+import { resolveProjectClockContext } from '../utils/LocalDateContext.js';
 const MEMORY_EVENT_COLUMNS = `
   event_id, global_seq, stream_id, stream_type, event_type, raw_event_type, event_version, project_id,
   workspace_id, actor_id, causation_id, correlation_id, source_neuron_id, source_id,
@@ -181,14 +182,13 @@ export class EventStore {
         const threadSeq = input.threadSeq ?? (threadId ? this.getNextThreadSeq(threadId) : undefined);
         const globalSeq = this.getNextGlobalSeq();
         const createdAt = Date.now();
-        const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : 'generated_utc');
-        if (localDateSource !== 'explicit' && localDateSource !== 'generated_utc' && localDateSource !== 'legacy_unknown')
+        const clock = resolveProjectClockContext({ now: occurredAt, localDateNow: input.localDate, timeZone: input.timeZone, projectTimeZone: input.projectTimeZone });
+        const localDate = input.localDate ?? clock.localDateNow;
+        const localDateSource = input.localDateSource ?? (input.localDate ? 'explicit' : clock.source === 'project_config' ? 'generated_project_timezone' : clock.source === 'host_environment' ? 'generated_host_timezone' : 'generated_utc_fallback');
+        if (!['explicit', 'generated_project_timezone', 'generated_host_timezone', 'generated_utc_fallback', 'generated_utc', 'legacy_unknown'].includes(localDateSource))
             throw new Error('invalid_local_date_source');
         if (localDateSource === 'explicit' && !input.localDate)
             throw new Error('explicit_local_date_required');
-        const generatedUtcDate = new Date(occurredAt).toISOString().slice(0, 10);
-        if (localDateSource === 'generated_utc' && input.localDate && input.localDate !== generatedUtcDate)
-            throw new Error('generated_utc_local_date_mismatch');
         const event = {
             eventId: input.eventId || `evt-${randomUUID()}`,
             globalSeq,
@@ -207,7 +207,7 @@ export class EventStore {
             contentHash: input.contentHash ?? payloadHash,
             threadId,
             sessionId: input.sessionId,
-            localDate: input.localDate ?? new Date(occurredAt).toISOString().slice(0, 10),
+            localDate,
             localDateSource,
             threadSeq,
             turnId: input.turnId,

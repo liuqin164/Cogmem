@@ -155,17 +155,17 @@ export function resolveTrustedLocalDate(event, timezone) {
     const metadata = event.payload?.metadata;
     const legacyMetadataSource = metadata?.localDateSource === 'event_store_utc_default' ? 'generated_utc' : metadata?.localDateSource;
     const localDateSource = event.localDateSource ?? legacyMetadataSource ?? (event.localDate ? 'explicit' : undefined);
-    if (event.localDate && localDateSource === 'explicit')
+    if (event.localDate && (localDateSource === 'explicit' || localDateSource === 'generated_project_timezone' || localDateSource === 'generated_host_timezone'))
         return { date: event.localDate };
     if (event.localDate && localDateSource === 'legacy_unknown') {
         return { warning: { code: 'legacy_unknown_local_date_source', message: 'Legacy local date source is not trusted for boundary decisions.' } };
     }
     if (timezone && typeof event.occurredAt === 'number' && Number.isFinite(event.occurredAt)) {
         const utcDate = new Date(event.occurredAt).toISOString().slice(0, 10);
-        if (!event.localDate || (localDateSource === 'generated_utc' && event.localDate === utcDate))
+        if (!event.localDate || localDateSource === 'generated_utc' || localDateSource === 'generated_utc_fallback')
             return { date: localDateInTimezone(event.occurredAt, timezone) };
     }
-    if (event.localDate && localDateSource === 'generated_utc' && isTrustedLocalDate(event.localDate))
+    if (event.localDate && (localDateSource === 'generated_utc' || localDateSource === 'generated_utc_fallback') && isTrustedLocalDate(event.localDate))
         return { date: event.localDate };
     return { warning: { code: 'trusted_local_date_unavailable', message: 'No trusted local date source was available.' } };
 }

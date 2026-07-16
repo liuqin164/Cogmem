@@ -46,6 +46,9 @@ export interface AgentTurnMemory {
   userText: string;
   assistantText?: string;
   timestamp?: number;
+  localDate?: string;
+  timeZone?: string;
+  projectTimeZone?: string;
   ingestMode?: AgentTurnIngestMode;
   metadata?: Record<string, unknown>;
 }
@@ -323,6 +326,9 @@ export class KernelAgentMemoryBackend {
       content: turn.userText,
       eventOrdinal: 1,
       occurredAt,
+      localDate: turn.localDate,
+      timeZone: turn.timeZone,
+      projectTimeZone: turn.projectTimeZone,
       sourceId,
       metadata: this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
     });
@@ -338,6 +344,9 @@ export class KernelAgentMemoryBackend {
         content: turn.assistantText,
         eventOrdinal: 2,
         occurredAt,
+        localDate: turn.localDate,
+        timeZone: turn.timeZone,
+        projectTimeZone: turn.projectTimeZone,
         parentEventId: userEvent.eventId,
         prevEventId: userEvent.eventId,
         causalityType: 'replies_to',

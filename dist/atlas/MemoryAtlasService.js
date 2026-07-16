@@ -235,7 +235,7 @@ export class MemoryAtlasService {
             warnings: [] };
     }
     searchFacetCardsWithRelaxation(query, projectId, limit, options) {
-        let plan = this.facetPlanner.plan(boundedQuery(query), { projectId, now: options.now });
+        let plan = this.facetPlanner.plan(boundedQuery(query), { projectId, now: options.now, localDateNow: options.localDateNow, timeZone: options.timeZone });
         const relaxationTrace = [];
         let cards = plan.facets.length ? this.store.searchCanonicalEpisodeCards(projectId, plan, limit) : [];
         for (let attempt = 0; !cards.length && plan.facets.length && attempt < 3; attempt += 1) {
