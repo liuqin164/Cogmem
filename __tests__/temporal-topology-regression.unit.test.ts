@@ -6,10 +6,14 @@ import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
 import { explainRecallWithKernel } from '../src/recall/RecallExplanation.js';
+import { TopologyCompiler } from '../src/engine/TopologyCompiler.js';
 import { EventStore } from '../src/store/EventStore.js';
 import { TemporalAdjacencyStore } from '../src/store/TemporalAdjacencyStore.js';
 import { TopologyStore } from '../src/store/TopologyStore.js';
-import { nextCivilDate } from '../src/utils/LocalDateContext.js';
+import { TemporalBranchSearch } from '../src/retrieval/TemporalBranchSearch.js';
+import { CognitiveGraphStore } from '../src/store/CognitiveGraphStore.js';
+import { localDateRange, nextCivilDate } from '../src/utils/LocalDateContext.js';
+import { timeBucketId } from '../src/topology/TimeBucketIdentity.js';
 import type { TimeBucketRecord } from '../src/types/index.js';
 
 const bucket = (id: string, start: number, end: number, type: TimeBucketRecord['bucketType'] = 'day'): TimeBucketRecord => ({
@@ -29,6 +33,18 @@ describe('project-local temporal topology regressions', () => {
 
     const surface = adjacency.collectContinuousSurface({ startTime: 10, endTime: 20, preferredBucketType: 'day' });
     expect(surface.bucketIds).toEqual(['target']);
+    adjacency.close();
+    topology.close();
+  });
+
+  test('Unix epoch zero remains a real temporal boundary', () => {
+    const db = new Database(':memory:');
+    const topology = new TopologyStore(db);
+    const adjacency = new TemporalAdjacencyStore(db);
+    topology.upsertTimeBucket(bucket('epoch', 0, 10));
+    const result = new TemporalBranchSearch(topology, adjacency).search({ startTime: 0, endTime: 10, terms: [] });
+    expect(result.temporalTraversal.bucketIds).toEqual(['epoch']);
+    expect(result.reasons).toContain('continuous temporal surface navigation across adjacent windows');
     adjacency.close();
     topology.close();
   });
@@ -79,6 +95,8 @@ describe('project-local temporal topology regressions', () => {
     const explicitZone = store.append({ streamId: 'z', streamType: 'thread', eventType: 'MESSAGE', occurredAt: Date.UTC(2026, 6, 17, 6, 30), timeZone: 'America/Los_Angeles', payload: {} });
     expect(explicitZone.localDateSource).toBe('generated_explicit_timezone');
     expect(() => store.append({ streamId: 'bad', streamType: 'thread', eventType: 'MESSAGE', occurredAt: 0, localDate: '2035-01-01', localDateSource: 'generated_utc', payload: {} } as never)).toThrow('invalid_local_date_source');
+    expect(() => store.append({ streamId: 'bad-explicit', streamType: 'thread', eventType: 'MESSAGE', occurredAt: 0, localDate: '2035-01-01', timeZone: 'UTC', payload: {} })).toThrow('explicit_local_date_timestamp_mismatch');
+    expect(() => store.append({ streamId: 'bad-project-zone', streamType: 'thread', eventType: 'MESSAGE', occurredAt: 0, projectTimeZone: 'America/Los_Angeles', payload: {} })).toThrow('project_timezone_override_forbidden');
     store.close();
   });
 
@@ -95,13 +113,47 @@ describe('project-local temporal topology regressions', () => {
     kernel.close();
   });
 
-  test('dirty legacy time topology is rebuilt lazily per project', async () => {
+  test('dirty legacy time topology stays read-only until explicit project rebuild', async () => {
     const kernel = createMemoryKernel({ projectTimeZone: 'America/Los_Angeles' });
     await kernel.ingest({ projectId: 'p', content: 'civil topology rebuild evidence' });
     kernel.topologyStore.markTimeProjection('p', 'dirty', 'America/Los_Angeles', 1);
     expect(kernel.topologyStore.timeProjectionNeedsRebuild('p', 'America/Los_Angeles')).toBe(true);
     kernel.navigateMemory('civil topology', { projectId: 'p' });
+    expect(kernel.topologyStore.timeProjectionNeedsRebuild('p', 'America/Los_Angeles')).toBe(true);
+    kernel.rebuildProjectTimeTopology('p');
     expect(kernel.topologyStore.timeProjectionNeedsRebuild('p', 'America/Los_Angeles')).toBe(false);
+    kernel.close();
+  });
+
+  test('explicit topology rebuild resumes from a persisted staging cursor', async () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    await kernel.ingest({ projectId: 'p', content: 'first staged topology neuron', occurredAt: 1000 });
+    await kernel.ingest({ projectId: 'p', content: 'second staged topology neuron', occurredAt: 2000 });
+    const neurons = kernel.memoryGraph.listTimeProjectionNeurons('p', { limit: 10 });
+    expect(neurons).toHaveLength(2);
+
+    const generation = 'test-resume-generation';
+    const first = neurons[0]!;
+    const planned = new TopologyCompiler(kernel.topologyStore).planTimeBuckets([first], 'UTC').get(first.id)!;
+    const db = kernel.factStore.getDatabase();
+    db.transaction(() => {
+      db.prepare(`INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,cursor_created_at,cursor_neuron_id,neuron_count,updated_at,error) VALUES(?,?,?,'building',?,?,1,?,NULL)`).run('p', generation, 'UTC', first.createdAt, first.id, 1000);
+      const insertBucket = db.prepare(`INSERT INTO topology_time_rebuild_buckets(generation,bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label) VALUES(?,?,?,?,?,?,?,?)`);
+      const insertEntry = db.prepare(`INSERT INTO topology_time_rebuild_entries(generation,bucket_id,neuron_id,project_id,created_at) VALUES(?,?,?,?,?)`);
+      for (const entry of planned) {
+        insertBucket.run(generation, entry.bucketId, 'p', 'UTC', entry.bucketType, entry.bucketStart, entry.bucketEnd, entry.label);
+        insertEntry.run(generation, entry.bucketId, first.id, 'p', first.createdAt);
+      }
+      kernel.topologyStore.markTimeProjection('p', 'building', 'UTC', 1000);
+    })();
+
+    const rebuilt = kernel.rebuildProjectTimeTopology('p');
+    expect(rebuilt.neurons).toBe(2);
+    expect(rebuilt.buckets).toBe(3);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM topology_time_rebuild_jobs`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM topology_time_rebuild_entries`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE project_id='p'`).get()).toEqual({ count: 6 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes WHERE project_id='p' AND node_type='time_bucket'`).get()).toEqual({ count: 3 });
     kernel.close();
   });
 
@@ -117,6 +169,8 @@ describe('project-local temporal topology regressions', () => {
     await kernel.ingest({ projectId: 'p', content: 'new timezone evidence', occurredAt: Date.UTC(2026, 6, 17, 0, 30) });
     expect(kernel.topologyStore.timeProjectionNeedsRebuild('p', 'Asia/Tokyo')).toBe(true);
     kernel.navigateMemory('timezone evidence', { projectId: 'p' });
+    expect(kernel.topologyStore.timeProjectionNeedsRebuild('p', 'Asia/Tokyo')).toBe(true);
+    kernel.rebuildProjectTimeTopology('p');
 
     const db = kernel.factStore.getDatabase();
     const memberships = db.prepare(`
@@ -133,7 +187,7 @@ describe('project-local temporal topology regressions', () => {
     kernel.close();
   });
 
-  test('lazy timezone rebuilds never expose another project through temporal traversal', async () => {
+  test('explicit timezone rebuilds never expose another project through temporal traversal', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cogmem-project-time-scope-'));
     const dbPath = join(dir, 'memory.db');
     let kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
@@ -152,6 +206,7 @@ describe('project-local temporal topology regressions', () => {
     kernel.close();
 
     kernel = createMemoryKernel({ dbPath, projectTimeZone: 'Asia/Tokyo' });
+    kernel.rebuildProjectTimeTopology('project-a');
     const result = kernel.navigateMemory('project a temporal scope evidence', { projectId: 'project-a' });
     const tracedIds = new Set([
       ...(result.navigation?.branchSearch.temporalTraversal.neuronIds || []),
@@ -164,5 +219,49 @@ describe('project-local temporal topology regressions', () => {
       expect(kernel.memoryGraph.getNeuron(neuronId)?.metadata.projectId).toBe('project-a');
     }
     kernel.close();
+  });
+
+  test('cognitive and civil time identities stay isolated across alternating projects', async () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    const occurredAt = Date.UTC(2026, 6, 17, 12);
+    await kernel.ingest({ projectId: 'project-a', content: 'project a first write', occurredAt });
+    await kernel.ingest({ projectId: 'project-b', content: 'project b same day write', occurredAt });
+    await kernel.ingest({ projectId: 'project-a', content: 'project a second write', occurredAt: occurredAt + 1 });
+
+    const db = kernel.factStore.getDatabase();
+    const cognitiveRows = db.prepare(`SELECT node_id,project_id,node_key FROM cognitive_nodes WHERE node_type='time_bucket' ORDER BY project_id,node_key`).all() as Array<{ node_id: string; project_id: string; node_key: string }>;
+    const bucketRows = db.prepare(`SELECT bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end FROM time_buckets ORDER BY project_id,bucket_type`).all() as Array<{ bucket_id: string; project_id: string; time_zone: string; bucket_type: string; bucket_start: number; bucket_end: number }>;
+    expect(cognitiveRows.filter((row) => row.project_id === 'project-a')).toHaveLength(3);
+    expect(cognitiveRows.filter((row) => row.project_id === 'project-b')).toHaveLength(3);
+    expect(new Set(cognitiveRows.map((row) => row.node_id)).size).toBe(6);
+    expect(new Set(bucketRows.map((row) => row.bucket_id)).size).toBe(6);
+    expect(bucketRows.every((row) => row.time_zone === 'UTC')).toBe(true);
+    kernel.close();
+  });
+
+  test('bucket identity includes timezone and DST-sensitive end boundaries', () => {
+    const utc = localDateRange(2026, 3, 29, 2026, 3, 30, 'UTC');
+    const london = localDateRange(2026, 3, 29, 2026, 3, 30, 'Europe/London');
+    expect(utc.from).toBe(london.from);
+    expect(utc.to).not.toBe(london.to);
+    const utcId = timeBucketId({ projectId: 'p', timeZone: 'UTC', bucketType: 'day', bucketStart: utc.from, bucketEnd: utc.to });
+    const londonId = timeBucketId({ projectId: 'p', timeZone: 'Europe/London', bucketType: 'day', bucketStart: london.from, bucketEnd: london.to });
+    expect(utcId).not.toBe(londonId);
+  });
+
+  test('stores reject forged cross-project bucket and cognitive edge identities', () => {
+    const db = new Database(':memory:');
+    const topology = new TopologyStore(db);
+    topology.upsertTimeBucket({ ...bucket('shared-id', 0, 10), projectId: 'a', timeZone: 'UTC' });
+    expect(() => topology.upsertTimeBucket({ ...bucket('shared-id', 0, 10), projectId: 'b', timeZone: 'UTC' })).toThrow('time_bucket_identity_conflict');
+    expect(() => topology.attachToTimeBucket('shared-id', { projectId: 'b', neuronId: 'n', createdAt: 0 })).toThrow('time_bucket_project_scope_mismatch');
+
+    const graph = new CognitiveGraphStore(db);
+    const a = graph.upsertNode({ nodeId: 'ignored-a', nodeType: 'entity', nodeKey: 'a', title: 'a', projectId: 'a', createdAt: 0 });
+    const b = graph.upsertNode({ nodeId: 'ignored-b', nodeType: 'entity', nodeKey: 'b', title: 'b', projectId: 'b', createdAt: 0 });
+    expect(() => graph.linkNodes({ sourceNodeId: a.nodeId, targetNodeId: b.nodeId, edgeType: 'mentions_entity', projectId: 'a', createdAt: 0 })).toThrow('cognitive_edge_project_scope_mismatch');
+    expect(graph.collectContext({ projectId: 'a', seedNodeIds: [b.nodeId] }).seedNodeIds).toEqual([]);
+    graph.close();
+    topology.close();
   });
 });

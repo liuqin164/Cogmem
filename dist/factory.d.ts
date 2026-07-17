@@ -212,7 +212,7 @@ export interface MaintenanceTickOptions {
     atlasAccessRetentionMs?: number;
 }
 export interface MaintenanceSuggestedAction {
-    kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots' | 'bind_raw_events' | 'inspect_binding_failures' | 'repair_episodes';
+    kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots' | 'bind_raw_events' | 'inspect_binding_failures' | 'repair_episodes' | 'rebuild_topology';
     command: string;
     reason: string;
 }
@@ -613,7 +613,13 @@ export declare class MemoryKernel {
         };
     };
     navigateMemory(query: string, options?: MemoryKernelNavigationOptions): MemoryKernelNavigationResult;
-    private ensureProjectTimeTopology;
+    rebuildProjectTimeTopology(projectId: string): {
+        projectId: string;
+        timeZone: string;
+        neurons: number;
+        buckets: number;
+        rebuiltAt: number;
+    };
     recordRawEvent(input: RawMemoryEventInput): MemoryEvent<{
         text: string;
         metadata?: Record<string, unknown>;

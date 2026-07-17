@@ -1,5 +1,7 @@
 import { randomUUID } from 'crypto';
 import { localDateFor, localDateRange, nextCivilDate } from '../utils/LocalDateContext.js';
+import { resolveTimeZone } from '../utils/LocalDateContext.js';
+import { timeBucketId } from '../topology/TimeBucketIdentity.js';
 export class TopologyCompiler {
     store;
     constructor(store) {
@@ -22,18 +24,33 @@ export class TopologyCompiler {
     }
     rebuildTimeBuckets(neurons, timeZone) {
         const buckets = new Map();
-        for (const neuron of neurons) {
-            for (const bucket of this.attachTimeBuckets(neuron.metadata.createdAt, neuron.metadata.projectId, { neuronId: neuron.id, createdAt: neuron.metadata.createdAt }, timeZone)) {
+        const byId = new Map(neurons.map((neuron) => [neuron.id, neuron]));
+        for (const [neuronId, planned] of this.planTimeBuckets(neurons, timeZone)) {
+            const neuron = byId.get(neuronId);
+            for (const bucket of planned) {
+                this.store.upsertTimeBucket(bucket);
+                this.store.attachToTimeBucket(bucket.bucketId, { neuronId, projectId: neuron.projectId, createdAt: neuron.createdAt });
                 buckets.set(bucket.bucketId, bucket);
             }
         }
         return [...buckets.values()];
     }
+    planTimeBuckets(neurons, timeZone) {
+        const planned = new Map();
+        for (const neuron of neurons) {
+            planned.set(neuron.id, [
+                this.buildBucket('day', neuron.createdAt, neuron.projectId, timeZone),
+                this.buildBucket('week', neuron.createdAt, neuron.projectId, timeZone),
+                this.buildBucket('month', neuron.createdAt, neuron.projectId, timeZone),
+            ]);
+        }
+        return planned;
+    }
     attachTimeBuckets(createdAt, projectId, ref, timeZone) {
         const buckets = [
-            this.buildBucket('day', createdAt, timeZone),
-            this.buildBucket('week', createdAt, timeZone),
-            this.buildBucket('month', createdAt, timeZone)
+            this.buildBucket('day', createdAt, projectId, timeZone),
+            this.buildBucket('week', createdAt, projectId, timeZone),
+            this.buildBucket('month', createdAt, projectId, timeZone)
         ];
         for (const bucket of buckets) {
             this.store.upsertTimeBucket(bucket);
@@ -239,32 +256,35 @@ export class TopologyCompiler {
         }
         return clusterIds;
     }
-    buildBucket(bucketType, timestamp, timeZone) {
-        const [year, month, day] = localDateFor(timestamp, timeZone).split('-').map(Number);
-        const civilDate = (offsetDays) => nextCivilDate(year, month, day, offsetDays, timeZone);
+    buildBucket(bucketType, timestamp, projectId, timeZone) {
+        const resolvedTimeZone = resolveTimeZone(timeZone);
+        const [year, month, day] = localDateFor(timestamp, resolvedTimeZone).split('-').map(Number);
+        const civilDate = (offsetDays) => nextCivilDate(year, month, day, offsetDays, resolvedTimeZone);
         let start;
         let end;
         let label;
         if (bucketType === 'day') {
             const next = civilDate(1);
-            ({ from: start, to: end } = localDateRange(year, month, day, ...next, timeZone));
-            label = localDateFor(start, timeZone);
+            ({ from: start, to: end } = localDateRange(year, month, day, ...next, resolvedTimeZone));
+            label = localDateFor(start, resolvedTimeZone);
         }
         else if (bucketType === 'week') {
-            const weekday = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(new Date(timestamp));
+            const weekday = new Intl.DateTimeFormat('en-US', { timeZone: resolvedTimeZone, weekday: 'short' }).format(new Date(timestamp));
             const mondayOffset = { Mon: 0, Tue: -1, Wed: -2, Thu: -3, Fri: -4, Sat: -5, Sun: -6 }[weekday] ?? 0;
             const monday = civilDate(mondayOffset);
-            const nextMonday = nextCivilDate(monday[0], monday[1], monday[2], 7, timeZone);
-            ({ from: start, to: end } = localDateRange(monday[0], monday[1], monday[2], ...nextMonday, timeZone));
-            label = `week:${localDateFor(start, timeZone)}`;
+            const nextMonday = nextCivilDate(monday[0], monday[1], monday[2], 7, resolvedTimeZone);
+            ({ from: start, to: end } = localDateRange(monday[0], monday[1], monday[2], ...nextMonday, resolvedTimeZone));
+            label = `week:${localDateFor(start, resolvedTimeZone)}`;
         }
         else {
             const nextMonth = month === 12 ? [year + 1, 1] : [year, month + 1];
-            ({ from: start, to: end } = localDateRange(year, month, 1, nextMonth[0], nextMonth[1], 1, timeZone));
+            ({ from: start, to: end } = localDateRange(year, month, 1, nextMonth[0], nextMonth[1], 1, resolvedTimeZone));
             label = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}`;
         }
         return {
-            bucketId: `${bucketType}:${start}`,
+            bucketId: timeBucketId({ projectId, timeZone: resolvedTimeZone, bucketType, bucketStart: start, bucketEnd: end }),
+            projectId,
+            timeZone: resolvedTimeZone,
             bucketType,
             bucketStart: start,
             bucketEnd: end,

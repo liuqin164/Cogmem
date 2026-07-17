@@ -936,7 +936,10 @@ export class KernelAgentMemoryBackend {
         limit: Math.max(limit * 2, 6),
         includeEvidence: true,
         evidenceLimit: 2,
-        refresh: true,
+        now: query.now,
+        localDateNow: query.localDateNow,
+        timeZone: query.timeZone,
+        refresh: false,
         staleOk: true,
       } as any);
       const cards = (atlas.cards ?? []).slice(0, Math.max(limit * 2, 6));
@@ -975,7 +978,10 @@ export class KernelAgentMemoryBackend {
         limit,
         includeEvidence: true,
         evidenceLimit: 2,
-        refresh: true,
+        now: query.now,
+        localDateNow: query.localDateNow,
+        timeZone: query.timeZone,
+        refresh: false,
         staleOk: true,
       } as any);
       const cards = [...plannedCards, ...(legacyAtlas.cards ?? [])]

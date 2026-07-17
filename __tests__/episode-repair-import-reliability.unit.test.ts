@@ -150,7 +150,7 @@ test('MCP generic import preserves turn and local date metadata', async () => {
       projectId: 'brain', sessionId: 's1', sourceAgent: 'hermes',
       messages: [{
         role: 'user', text: 'turn metadata survives import', externalMessageId: 'meta-1',
-        threadId: 'thread-7', turnId: 'turn-7', turnSeq: 7, localDate: '2026-07-06', eventOrdinal: 2,
+        threadId: 'thread-7', turnId: 'turn-7', turnSeq: 7, timestamp: Date.UTC(2026, 6, 6), localDate: '2026-07-06', eventOrdinal: 2,
       }],
     }, { kernel });
     const content = result.structuredContent as { messageResults: Array<{ eventId: string }> };

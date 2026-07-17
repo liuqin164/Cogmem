@@ -72,7 +72,7 @@ test('graph reads return stale projection metadata when refresh hits SQLite busy
       throw new Error('database is locked');
     };
     try {
-      const overview = kernel.graphOverview({ projectId: 'cogmem', staleOk: true });
+      const overview = kernel.graphOverview({ projectId: 'cogmem', staleOk: true, refresh: true });
       expect((overview as unknown as { atlasFresh: boolean }).atlasFresh).toBe(false);
       expect((overview as unknown as { refreshError: string }).refreshError).toContain('database is locked');
       expect(overview.nodes.some((node) => node.label === 'Hermes')).toBe(true);

@@ -28,12 +28,14 @@ export class TemporalAdjacencyStore {
   private initializeSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS temporal_adjacency (
+        project_id TEXT NOT NULL DEFAULT '',
+        time_zone TEXT NOT NULL DEFAULT 'UTC',
         source_bucket_id TEXT NOT NULL,
         adjacent_bucket_id TEXT NOT NULL,
         bucket_type TEXT NOT NULL,
         weight REAL NOT NULL,
         created_at INTEGER NOT NULL,
-        UNIQUE(source_bucket_id, adjacent_bucket_id)
+        UNIQUE(project_id, time_zone, source_bucket_id, adjacent_bucket_id)
       );
 
       CREATE INDEX IF NOT EXISTS idx_temporal_adjacency_source
@@ -44,40 +46,60 @@ export class TemporalAdjacencyStore {
   syncBuckets(buckets: TimeBucketRecord[], createdAt: number): void {
     const insert = this.db.prepare(`
       INSERT INTO temporal_adjacency (
-        source_bucket_id, adjacent_bucket_id, bucket_type, weight, created_at
-      ) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(source_bucket_id, adjacent_bucket_id) DO UPDATE SET
+        project_id, time_zone, source_bucket_id, adjacent_bucket_id, bucket_type, weight, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, time_zone, source_bucket_id, adjacent_bucket_id) DO UPDATE SET
         bucket_type=excluded.bucket_type, weight=excluded.weight, created_at=excluded.created_at
     `);
     this.db.transaction(() => {
       for (const bucket of buckets) {
         const { previous, next } = this.getAdjacentBucketIds(bucket);
-        this.db.prepare(`DELETE FROM temporal_adjacency WHERE source_bucket_id=? OR adjacent_bucket_id=?`).run(bucket.bucketId, bucket.bucketId);
+        const projectScope = bucket.projectId ?? '';
+        const timeZone = bucket.timeZone ?? 'UTC';
+        this.db.prepare(`DELETE FROM temporal_adjacency WHERE project_id=? AND time_zone=? AND (source_bucket_id=? OR adjacent_bucket_id=?)`).run(projectScope, timeZone, bucket.bucketId, bucket.bucketId);
         if (previous && next) {
-          this.db.prepare(`DELETE FROM temporal_adjacency WHERE (source_bucket_id=? AND adjacent_bucket_id=?) OR (source_bucket_id=? AND adjacent_bucket_id=?)`)
-            .run(previous, next, next, previous);
+          this.db.prepare(`DELETE FROM temporal_adjacency WHERE project_id=? AND time_zone=? AND ((source_bucket_id=? AND adjacent_bucket_id=?) OR (source_bucket_id=? AND adjacent_bucket_id=?))`)
+            .run(projectScope, timeZone, previous, next, next, previous);
         }
         for (const adjacentId of [previous, next].filter((id): id is string => Boolean(id))) {
-          insert.run(bucket.bucketId, adjacentId, bucket.bucketType, 0.72, createdAt);
-          insert.run(adjacentId, bucket.bucketId, bucket.bucketType, 0.72, createdAt);
+          insert.run(projectScope, timeZone, bucket.bucketId, adjacentId, bucket.bucketType, 0.72, createdAt);
+          insert.run(projectScope, timeZone, adjacentId, bucket.bucketId, bucket.bucketType, 0.72, createdAt);
         }
       }
     })();
   }
 
   rebuildAll(createdAt: number): void {
-    const rows = this.db.prepare(`SELECT bucket_id,bucket_type,bucket_start,bucket_end,label FROM time_buckets ORDER BY bucket_type,bucket_start`).all() as Array<{ bucket_id: string; bucket_type: TimeBucketRecord['bucketType']; bucket_start: number; bucket_end: number; label: string }>;
-    const insert = this.db.prepare(`INSERT INTO temporal_adjacency(source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) VALUES(?,?,?,?,?)`);
+    const rows = this.db.prepare(`SELECT bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label FROM time_buckets ORDER BY project_id,time_zone,bucket_type,bucket_start`).all() as Array<{ bucket_id: string; project_id: string; time_zone: string; bucket_type: TimeBucketRecord['bucketType']; bucket_start: number; bucket_end: number; label: string }>;
+    const insert = this.db.prepare(`INSERT INTO temporal_adjacency(project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) VALUES(?,?,?,?,?,?,?)`);
     this.db.transaction(() => {
       this.db.exec(`DELETE FROM temporal_adjacency;`);
       for (let index = 1; index < rows.length; index += 1) {
         const previous = rows[index - 1]!;
         const current = rows[index]!;
-        if (previous.bucket_type !== current.bucket_type) continue;
-        insert.run(previous.bucket_id, current.bucket_id, current.bucket_type, 0.72, createdAt);
-        insert.run(current.bucket_id, previous.bucket_id, current.bucket_type, 0.72, createdAt);
+        if (previous.project_id !== current.project_id || previous.time_zone !== current.time_zone || previous.bucket_type !== current.bucket_type) continue;
+        insert.run(current.project_id, current.time_zone, previous.bucket_id, current.bucket_id, current.bucket_type, 0.72, createdAt);
+        insert.run(current.project_id, current.time_zone, current.bucket_id, previous.bucket_id, current.bucket_type, 0.72, createdAt);
       }
     })();
+  }
+
+  rebuildProject(projectId: string, timeZone: string, createdAt: number): void {
+    const rows = this.db.prepare(`
+      SELECT bucket_id,bucket_type,bucket_start
+      FROM time_buckets
+      WHERE project_id=? AND time_zone=?
+      ORDER BY bucket_type,bucket_start
+    `).all(projectId, timeZone) as Array<{ bucket_id: string; bucket_type: TimeBucketRecord['bucketType']; bucket_start: number }>;
+    const insert = this.db.prepare(`INSERT INTO temporal_adjacency(project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) VALUES(?,?,?,?,?,?,?)`);
+    this.db.prepare(`DELETE FROM temporal_adjacency WHERE project_id=?`).run(projectId);
+    for (let index = 1; index < rows.length; index += 1) {
+      const previous = rows[index - 1]!;
+      const current = rows[index]!;
+      if (previous.bucket_type !== current.bucket_type) continue;
+      insert.run(projectId, timeZone, previous.bucket_id, current.bucket_id, current.bucket_type, 0.72, createdAt);
+      insert.run(projectId, timeZone, current.bucket_id, previous.bucket_id, current.bucket_type, 0.72, createdAt);
+    }
   }
 
   collectAdjacentNeuronIds(bucketIds: string[], limit: number = 48, projectId?: string): string[] {
@@ -203,7 +225,7 @@ export class TemporalAdjacencyStore {
       }
     }
 
-    if (ordered.size === 0 && (input.startTime || input.endTime)) {
+    if (ordered.size === 0 && (input.startTime !== undefined || input.endTime !== undefined)) {
       for (const segment of this.listNearestSegments({
         startTime: input.startTime,
         endTime: input.endTime,
@@ -243,8 +265,10 @@ export class TemporalAdjacencyStore {
   }
 
   private getAdjacentBucketIds(bucket: TimeBucketRecord): { previous?: string; next?: string } {
-    const previous = this.db.prepare(`SELECT bucket_id FROM time_buckets WHERE bucket_type=? AND bucket_start<? ORDER BY bucket_start DESC LIMIT 1`).get(bucket.bucketType, bucket.bucketStart) as { bucket_id?: string } | null;
-    const next = this.db.prepare(`SELECT bucket_id FROM time_buckets WHERE bucket_type=? AND bucket_start>? ORDER BY bucket_start ASC LIMIT 1`).get(bucket.bucketType, bucket.bucketStart) as { bucket_id?: string } | null;
+    const projectScope = bucket.projectId ?? '';
+    const timeZone = bucket.timeZone ?? 'UTC';
+    const previous = this.db.prepare(`SELECT bucket_id FROM time_buckets WHERE project_id=? AND time_zone=? AND bucket_type=? AND bucket_start<? ORDER BY bucket_start DESC LIMIT 1`).get(projectScope, timeZone, bucket.bucketType, bucket.bucketStart) as { bucket_id?: string } | null;
+    const next = this.db.prepare(`SELECT bucket_id FROM time_buckets WHERE project_id=? AND time_zone=? AND bucket_type=? AND bucket_start>? ORDER BY bucket_start ASC LIMIT 1`).get(projectScope, timeZone, bucket.bucketType, bucket.bucketStart) as { bucket_id?: string } | null;
     return { previous: previous?.bucket_id, next: next?.bucket_id };
   }
 

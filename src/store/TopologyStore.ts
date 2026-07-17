@@ -29,10 +29,13 @@ export class TopologyStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS time_buckets (
         bucket_id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT '',
+        time_zone TEXT NOT NULL DEFAULT 'UTC',
         bucket_type TEXT NOT NULL,
         bucket_start INTEGER NOT NULL,
         bucket_end INTEGER NOT NULL,
-        label TEXT NOT NULL
+        label TEXT NOT NULL,
+        UNIQUE(project_id, time_zone, bucket_type, bucket_start, bucket_end)
       );
 
       CREATE TABLE IF NOT EXISTS time_bucket_entries (
@@ -155,14 +158,20 @@ export class TopologyStore {
 
   timeProjectionNeedsRebuild(projectId: string, timeZone: string): boolean {
     const row = this.db.prepare(`SELECT projection_version,status,time_zone FROM topology_projection_state WHERE project_id=?`).get(projectId) as { projection_version?: number; status?: string; time_zone?: string | null } | null;
-    return Boolean(row && (row.projection_version !== 2 || row.status !== 'clean' || row.time_zone !== timeZone));
+    return Boolean(row && (row.projection_version !== 3 || row.status !== 'clean' || row.time_zone !== timeZone));
+  }
+
+  hasDirtyTimeProjection(projectId?: string): boolean {
+    return Boolean(projectId
+      ? this.db.prepare(`SELECT 1 FROM topology_projection_state WHERE project_id=? AND (projection_version<>3 OR status<>'clean') LIMIT 1`).get(projectId)
+      : this.db.prepare(`SELECT 1 FROM topology_projection_state WHERE projection_version<>3 OR status<>'clean' LIMIT 1`).get());
   }
 
   markTimeProjection(projectId: string, status: 'dirty' | 'building' | 'clean' | 'failed', timeZone: string, updatedAt: number, error?: string): void {
     this.db.prepare(`
       INSERT INTO topology_projection_state(project_id,projection_version,status,time_zone,updated_at,error)
-      VALUES(?,2,?,?,?,?)
-      ON CONFLICT(project_id) DO UPDATE SET projection_version=2,status=excluded.status,time_zone=excluded.time_zone,updated_at=excluded.updated_at,error=excluded.error
+      VALUES(?,3,?,?,?,?)
+      ON CONFLICT(project_id) DO UPDATE SET projection_version=3,status=excluded.status,time_zone=excluded.time_zone,updated_at=excluded.updated_at,error=excluded.error
     `).run(projectId, status, timeZone, updatedAt, error ?? null);
   }
 
@@ -172,13 +181,47 @@ export class TopologyStore {
     this.db.exec(`DELETE FROM time_buckets WHERE bucket_id NOT IN (SELECT DISTINCT bucket_id FROM time_bucket_entries);`);
   }
 
+  listProjectTimeBucketsByNeuron(projectId: string, neuronIds: string[]): Map<string, TimeBucketRecord[]> {
+    if (neuronIds.length === 0) return new Map();
+    const placeholders = neuronIds.map(() => '?').join(',');
+    const rows = this.db.prepare(`
+      SELECT e.neuron_id,b.bucket_id,b.project_id,b.time_zone,b.bucket_type,b.bucket_start,b.bucket_end,b.label
+      FROM time_bucket_entries e
+      JOIN time_buckets b ON b.bucket_id=e.bucket_id
+      WHERE e.project_id=? AND e.neuron_id IN (${placeholders})
+      ORDER BY e.created_at ASC,b.bucket_type ASC
+    `).all(projectId, ...neuronIds) as Array<{ neuron_id: string; bucket_id: string; project_id: string; time_zone: string; bucket_type: TimeBucketType; bucket_start: number; bucket_end: number; label: string }>;
+    const result = new Map<string, TimeBucketRecord[]>();
+    for (const row of rows) {
+      const values = result.get(row.neuron_id) ?? [];
+      values.push({ bucketId: row.bucket_id, projectId: row.project_id || undefined, timeZone: row.time_zone, bucketType: row.bucket_type, bucketStart: row.bucket_start, bucketEnd: row.bucket_end, label: row.label });
+      result.set(row.neuron_id, values);
+    }
+    return result;
+  }
+
   upsertTimeBucket(bucket: TimeBucketRecord): TimeBucketRecord {
+    const projectScope = bucket.projectId ?? '';
+    const timeZone = bucket.timeZone ?? 'UTC';
+    const existing = this.db.prepare(`SELECT project_id,time_zone,bucket_type,bucket_start,bucket_end FROM time_buckets WHERE bucket_id=?`).get(bucket.bucketId) as { project_id: string; time_zone: string; bucket_type: string; bucket_start: number; bucket_end: number } | null;
+    if (existing && (existing.project_id !== projectScope || existing.time_zone !== timeZone || existing.bucket_type !== bucket.bucketType || existing.bucket_start !== bucket.bucketStart || existing.bucket_end !== bucket.bucketEnd)) {
+      throw new Error('time_bucket_identity_conflict');
+    }
     this.db.prepare(`
-      INSERT OR REPLACE INTO time_buckets (
-        bucket_id, bucket_type, bucket_start, bucket_end, label
-      ) VALUES (?, ?, ?, ?, ?)
+      INSERT INTO time_buckets (
+        bucket_id, project_id, time_zone, bucket_type, bucket_start, bucket_end, label
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(bucket_id) DO UPDATE SET
+        project_id=excluded.project_id,
+        time_zone=excluded.time_zone,
+        bucket_type=excluded.bucket_type,
+        bucket_start=excluded.bucket_start,
+        bucket_end=excluded.bucket_end,
+        label=excluded.label
     `).run(
       bucket.bucketId,
+      projectScope,
+      timeZone,
       bucket.bucketType,
       bucket.bucketStart,
       bucket.bucketEnd,
@@ -188,6 +231,8 @@ export class TopologyStore {
   }
 
   attachToTimeBucket(bucketId: string, ref: TopologyReference & { projectId?: string }): void {
+    const bucket = this.db.prepare(`SELECT project_id FROM time_buckets WHERE bucket_id=?`).get(bucketId) as { project_id: string } | null;
+    if (!bucket || bucket.project_id !== (ref.projectId ?? '')) throw new Error('time_bucket_project_scope_mismatch');
     this.db.prepare(`
       INSERT OR IGNORE INTO time_bucket_entries (
         bucket_id, neuron_id, unit_id, belief_id, fact_id, event_id, project_id, created_at

@@ -15,11 +15,11 @@ export class MemoryFrameProjector {
 
   constructor(private readonly db: Database, private readonly frameStore: MemoryFrameStore, private readonly atlasStore: MemoryAtlasStore, private readonly projectTimeZone?: string) {}
 
-  rebuild(projectId: string, now = Date.now()): MemoryFrameProjectionResult {
-    return this.db.transaction(() => this.rebuildUnsafe(projectId, now))();
+  rebuild(projectId: string, now = Date.now(), options: { canonicalDocumentsRebuilt?: boolean } = {}): MemoryFrameProjectionResult {
+    return this.db.transaction(() => this.rebuildUnsafe(projectId, now, options))();
   }
 
-  private rebuildUnsafe(projectId: string, now: number): MemoryFrameProjectionResult {
+  private rebuildUnsafe(projectId: string, now: number, options: { canonicalDocumentsRebuilt?: boolean }): MemoryFrameProjectionResult {
     this.rebuildAliasIndex.clear();
     this.affectedNodeIds.clear();
     const frames: MemoryFrameV1[] = [];
@@ -32,13 +32,13 @@ export class MemoryFrameProjector {
     let nodes = 0; let edges = 0; let needsReview = 0;
     const currentStateSubjects = new Set<string>();
     if (this.tableExists('memory_atlas_supports')) {
-      const previous = this.db.prepare(`SELECT DISTINCT node_id FROM memory_atlas_supports WHERE project_id=? AND source_type IN ('frame','frame_edge') AND status='active'`).all(projectId) as Array<{ node_id: string }>;
+      const previous = this.db.prepare(`SELECT DISTINCT node_id FROM memory_atlas_supports WHERE project_id=? AND source_type IN ('frame','frame_edge')`).all(projectId) as Array<{ node_id: string }>;
       for (const row of previous) this.affectedNodeIds.add(row.node_id);
     }
     this.db.prepare(`DELETE FROM memory_edges WHERE project_id=? AND source_authority='memory_frame_projector'`).run(projectId);
     this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2')`).run(projectId, projectId);
     this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2'`).run(projectId);
-    this.refreshCanonicalBaselineSupports(projectId, now);
+    if (options.canonicalDocumentsRebuilt) this.refreshCanonicalBaselineSupports(projectId, now);
     this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type IN ('frame','frame_edge') AND status='active'`).run(now, projectId);
     if (this.tableExists('memory_atlas_alias_supports')) this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
     // Resolve only governed/legacy aliases from the stable pre-projection
@@ -215,8 +215,10 @@ export class MemoryFrameProjector {
 
   /** Preserve legacy/governed document fields as an authority support before
    * Frame reduction can touch a shared canonical node. */
-  private ensureCanonicalBaselineSupport(projectId: string, nodeId: string, now: number): void {
+  private ensureCanonicalBaselineSupport(projectId: string, nodeId: string, now: number, refresh = false): void {
     if (!this.hasColumn('memory_atlas_supports', 'payload_json')) return;
+    const existing = this.db.prepare(`SELECT 1 FROM memory_atlas_supports WHERE project_id=? AND node_id=? AND source_type='canonical_baseline' LIMIT 1`).get(projectId, nodeId);
+    if (existing && !refresh) return;
     const document = this.db.prepare(`SELECT label,summary,confidence,support_count,occurred_at,evidence_event_ids_json,metadata_json FROM memory_atlas_documents WHERE project_id=? AND node_id=?`).get(projectId, nodeId) as {
       label: string; summary?: string | null; confidence?: number; support_count?: number; occurred_at?: number | null; evidence_event_ids_json?: string; metadata_json?: string;
     } | null;
@@ -226,7 +228,16 @@ export class MemoryFrameProjector {
     if (metadata.projection === 'memory_atlas.frame.v2') return;
     const sourceId = `baseline:${nodeId}`;
     const supportId = createHash('sha256').update(`${nodeId}\0canonical\0${sourceId}`).digest('hex');
-    const supportCount = Math.max(0, Number(document.support_count ?? 0));
+    const representedSupports = this.db.prepare(`SELECT payload_json FROM memory_atlas_supports WHERE project_id=? AND node_id=? AND status='active' AND source_type NOT IN ('frame','frame_edge','canonical_baseline')`).all(projectId, nodeId) as Array<{ payload_json?: string }>;
+    const representedCount = representedSupports.reduce((total, support) => {
+      try {
+        const payload = JSON.parse(String(support.payload_json ?? '{}')) as { supportCount?: unknown };
+        return total + Math.max(0, Number(payload.supportCount ?? 1));
+      } catch {
+        return total + 1;
+      }
+    }, 0);
+    const supportCount = Math.max(0, Number(document.support_count ?? 0) - representedCount);
     this.db.prepare(`
       INSERT INTO memory_atlas_supports
         (support_id,project_id,node_id,source_type,source_id,evidence_event_ids_json,status,created_at,payload_json,confidence,source_authority)
@@ -260,7 +271,7 @@ export class MemoryFrameProjector {
         this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated',invalidated_at=? WHERE project_id=? AND node_id=? AND source_type='canonical_baseline' AND status='active'`).run(now, projectId, row.node_id);
         continue;
       }
-      this.ensureCanonicalBaselineSupport(projectId, row.node_id, now);
+      this.ensureCanonicalBaselineSupport(projectId, row.node_id, now, true);
     }
   }
 

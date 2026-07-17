@@ -1,7 +1,7 @@
-// Release-manifest digests are deliberately checked in. They are not derived
-// from function serialization or from the build output, so source and dist
-// share the same migration identity.
-export const MIGRATION_DIGESTS = {
+// Receipts emitted by development builds before migration identity was bound
+// to exact checked-in source. They are accepted only as one complete audited
+// profile and are immediately rewritten to the current per-version digests.
+const PRE_SOURCE_BOUND_MANIFEST_RECEIPTS = {
     '0001': '33a8a90c49693a671bdac120731805a2959e7602aca3d153fb8de76feecaa5f0',
     '0002': 'a08b3e28436b5877a72954474d1e18146d22a814fbf3306ea28c9750bb645b2c',
     '0003': 'b2d5fb959d09fb5965cfa49680bda798d004ce237bcdf6df0371b89072fc662f',
@@ -47,11 +47,61 @@ export const MIGRATION_DIGESTS = {
     '0046': '264d132dac13453657fbddc2ac800f00c46479dfb694274004c4eb38dfa1c447',
     '0047': '735a4a9cdb8df3fa354a0195e6247120984dbd84aa8b8a8cff6c0bd7dcd599c0',
     '0048': 'ecb74b03d92a0ec79e0adfb0d7e2f3a0edc54b09872435538b85df583659a818',
+    '0049': '846d893fefa299d54e7d33a086113fd6f0029fc489f5144560da430db36d8e78',
 };
-// CI recomputes this digest from the normalized checked-in migration source
-// files. Receipt identities stay build-independent, while implementation
-// changes without an explicit manifest update fail the integrity test.
-export const MIGRATION_CANONICAL_SOURCE_DIGEST = 'b78207069c496da6db7986394045165dc3975d1ea11e95dbfa8cc9af991ff6ca';
+// Each receipt digest is the SHA-256 of the normalized checked-in source file
+// for that exact migration. Dist imports this same manifest, so build output
+// formatting never changes database identity.
+export const MIGRATION_DIGESTS = {
+    '0001': '47615470b34813b3aafa5e2811a9da210e8573201ed13c9e637b807faca296ba',
+    '0002': '6f993592d962a54fa2bb406b5818625771f8167d5e43ab20abbfef5fb5bafc56',
+    '0003': '5b03c6db771496a48535433a8d0e846e6bf6beb40fa07d0f256874999f6cc889',
+    '0004': '6bdb468e2fb5d472630f6fc1ce24b010de606fefb7b5735310c6f2249b0f0c3c',
+    '0005': 'cdac9f4a1b311a1c26eab9ff4fd1c2073123b72e2c4131fd6b9338eeb675d921',
+    '0006': '3a3ffe75a635e5605b4e10c53839c5b246011c5aeaf1bd75be9b86dbf27f4a6e',
+    '0007': '899b6092de17ea59eb3e3cb39bb08e907131ef55bf5b92388879464e5a139961',
+    '0009': 'bd7762c600573c01b19f167b98b8a293482d7cab1e81f7d7370896a3c28c32f9',
+    '0010': '45ac2e51105db2f6fe4ef0156d55a310383335a6d67de5b4e2cf13b23b20e0ad',
+    '0011': '62828285407944edda0228d8d9d5ca7a0e6f940f58c91c04d1f297e26a8259c7',
+    '0012': '7342bd7364a1bc93ca4249d04b59ed132027e975fa545de2ccea15fcc1041917',
+    '0015': '291988cca173684472ea5ab80140d0d5e8cbe18b1989eb0045effb3954257d7c',
+    '0016': '9def2b3a2820d70c7c7dea83fb9b8f41028b86d1645aaf718493eedb523a8c75',
+    '0017': 'e0256e54952cb4a01601acc81ea580c6d0a3eda66b0ea20754221af5a8994794',
+    '0018': '92ff39d95c4ae05ec3f097e56e26c2eac097270612a85e2966220cfbdd04242f',
+    '0019': '63145e506dc88aa52ccac507b92d4bc0c2f383cfb57aa8f4d13a49043cb1c9aa',
+    '0020': 'd021cfcc09f1dec2fa87c99074bcb17be23ac98076ca6d906912550fde36c120',
+    '0021': '881e636f627e0225a019f8300a76cc3991566715041ac0a95c7cc0ad3ccbc0f3',
+    '0022': '20c6357c1a4b6d068c4d6ef90e7e8461ccde44c3c4a2a88dc1e31b8a30be3110',
+    '0023': '2ea34b41de78d81d66f1f934b432eec5dddc1026e7bb1c8deb26a6432ca61dba',
+    '0024': 'bd0f6873baccb5a3b70d977a5e8333b909095b90b29ef990439069b73d1b4163',
+    '0025': '952870574a8ed590779af6885bfa10ca05b63faaf2abe61e60e8558737912e31',
+    '0026': '1ab475acf8437535d75caa734a9bc884329bcae5b0f1c41310e3435e26cbec9a',
+    '0027': 'b78a9c36a1fc936bb746c750af15696f9e3f15c3d9e4bb9edba17208be4db7c8',
+    '0028': '1fe62ae9e6dbc2b0d03cc41c7e91e858a6ce4273fc3917246436660024d94bea',
+    '0029': 'a4dfb54e0c2db9207690fa2b23454c99606bf7bc92b53f0bcbe54df4f59f8e89',
+    '0030': '68fd1d90f2be4cb8548fae12caa3ea51e30a537c9968883acced52ceee2af3a3',
+    '0031': '5fcf03a7bbc451ef1a34a228c50e5f68416f2030d6fba9385bda4f2c14f27e44',
+    '0032': 'd9c4043068960b5bf5b801c87d8a70dee1ce4d28331306e1723d96b557631e09',
+    '0033': '0594601cc6052f12559532e98e75970c037e23bbd6324580884aa098a87ea45a',
+    '0034': '63f5cf419b50b062ee2eb836fc219eddd63519991f76d5f26e2a0e21c1f2a64e',
+    '0035': '82407aefab64e7ed5146d2c58f19c8c711d6683bfbfe8d17ff64b5b03a70254f',
+    '0036': '6a72c1d4ba2c2d1d9450f33095e84fbb2f9ecbca85a07545a0c7eed0638d6354',
+    '0037': 'e02794f3fd5acaae461f2662f6ae156665e7e30ad4c697cfebe8f0b68cc602e7',
+    '0038': 'fedf609c7f3338bf15ec285fdbe725e531566a43c770502d14ca164e9b6c6d77',
+    '0039': 'd52798b414777d8ceb85a5b39c93afef17301398db99fece4779cba7065417a2',
+    '0040': '3c256b0ac4e7f6d050368c5d57afaa6a17e2fd62c80c4f002a3c61a28bcf328c',
+    '0041': '16c756f97ad471c7d68871f0a943590149ed64912a1d8e0bfa795d2150ec3400',
+    '0042': '59c9be774d5b3d40c8b6134e385e20975404118a343033da239738f1ca34eaf1',
+    '0043': '4c4b37600117b197e10f499931a915eb7bba73550fb98775f82e7971fa00dd42',
+    '0044': '7fd364dcd6d10eb9093519eccffcdf432d92e1e9ca7d41ca0affd9f4abd241a0',
+    '0045': '417c1f0739a666aa7cfcd787e5da88b38d67c99806d2a294c94df46e2371e138',
+    '0046': 'efdd3283a8bec546946464501d4f6b024263bd28aa2ed1237f868700f873143c',
+    '0047': 'b139a4a906b2a5446c74bd4d87b959973cfc2fcadab6ec3017ab309ca240a5d7',
+    '0048': 'f3da713269b44adacf4a32c12fca1140cb31f25f66de9e28344d436aefe2aed2',
+    '0049': '534ee9c336c8be7b7ddcd85b6cee6d5d1baf2b1ecff227cc25a76104b4d2f00e',
+    '0050': '45edbdeb0d4b90ff3f91e9edfe09572d776523e3ded8bfff310bcd37a16879ef',
+};
+export const CANONICAL_MIGRATION_SOURCE_DIGESTS = MIGRATION_DIGESTS;
 // Exact receipts produced by the f71b20a source and dist artifacts. The two
 // artifacts produced the same values under their shipped Bun runtime, but are
 // retained as named profiles so future artifact-specific histories stay
@@ -104,4 +154,5 @@ const F71B20A_RECEIPTS = {
 export const LEGACY_MIGRATION_RECEIPT_PROFILES = {
     f71b20a_source: F71B20A_RECEIPTS,
     f71b20a_dist: F71B20A_RECEIPTS,
+    pre_source_bound_manifest_0048: Object.freeze(Object.fromEntries(Object.entries(PRE_SOURCE_BOUND_MANIFEST_RECEIPTS).filter(([version]) => version <= '0048'))),
 };

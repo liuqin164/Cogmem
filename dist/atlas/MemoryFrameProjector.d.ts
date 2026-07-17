@@ -15,7 +15,9 @@ export declare class MemoryFrameProjector {
     private rebuildAliasIndex;
     private affectedNodeIds;
     constructor(db: Database, frameStore: MemoryFrameStore, atlasStore: MemoryAtlasStore, projectTimeZone?: string | undefined);
-    rebuild(projectId: string, now?: number): MemoryFrameProjectionResult;
+    rebuild(projectId: string, now?: number, options?: {
+        canonicalDocumentsRebuilt?: boolean;
+    }): MemoryFrameProjectionResult;
     private rebuildUnsafe;
     private loadActiveAliasIndex;
     private nodeId;

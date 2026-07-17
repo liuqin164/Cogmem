@@ -21,7 +21,6 @@ export declare class SchemaMigrationRunner {
     run(options?: SchemaMigrationRunOptions): SchemaMigrationResult;
     private ensureMigrationTable;
     private migrationChecksum;
-    private legacyStableChecksum;
     /** Convert only audited pre-manifest receipts before strict validation. */
     private repairKnownLegacyFunctionChecksums;
     private backfillChecksums;
@@ -38,5 +37,6 @@ export declare class SchemaMigrationRunner {
     private migrationSchemaSatisfied;
     private tableExists;
     private hasColumns;
+    private hasUniqueIndex;
 }
 //# sourceMappingURL=SchemaMigrationRunner.d.ts.map

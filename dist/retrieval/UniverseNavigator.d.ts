@@ -31,6 +31,7 @@ export declare class UniverseNavigator {
         projectId?: string;
         startTime?: number;
         endTime?: number;
+        temporalEnabled?: boolean;
         topologyIds: string[];
         branchIds: string[];
         temporalBucketIds: string[];

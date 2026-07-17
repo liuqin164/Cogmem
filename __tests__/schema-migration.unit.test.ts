@@ -6,7 +6,8 @@ import { join } from 'node:path';
 
 import { SchemaMigrationRunner } from '../src/migrations/SchemaMigrationRunner.js';
 import { migration_0015 } from '../src/migrations/0015_memory_governance.js';
-import { LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_CANONICAL_SOURCE_DIGEST, MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
+import { migration_0049 } from '../src/migrations/0049_project_scoped_graph_identity.js';
+import { CANONICAL_MIGRATION_SOURCE_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 describe('schema migration runner', () => {
   test('plans pending migrations without mutating during dry run', () => {
@@ -77,10 +78,71 @@ describe('schema migration runner', () => {
     tampered.close();
   });
 
+  test('normalizes the complete pre-source-bound development receipt profile', () => {
+    const profile = LEGACY_MIGRATION_RECEIPT_PROFILES.pre_source_bound_manifest_0048!;
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE _schema_migrations (version TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL, checksum TEXT);`);
+    const insert = db.prepare(`INSERT INTO _schema_migrations VALUES (?,?,?,?)`);
+    for (const [version, checksum] of Object.entries(profile)) insert.run(version, `development-${version}`, new Date(0).toISOString(), checksum);
+    expect(() => new SchemaMigrationRunner(db, [migration_0015]).run()).not.toThrow();
+    const rows = db.prepare(`SELECT version,checksum FROM _schema_migrations`).all() as Array<{ version: string; checksum: string }>;
+    expect(rows.every((row) => row.checksum === MIGRATION_DIGESTS[row.version])).toBe(true);
+    db.close();
+  });
+
   test('migration manifest is bound to normalized checked-in source content', () => {
     const directory = join(import.meta.dir, '..', 'src', 'migrations');
     const files = readdirSync(directory).filter((file) => /^\d{4}_.*\.ts$/u.test(file)).sort();
-    const payload = files.map((file) => `${file}\0${readFileSync(join(directory, file), 'utf8').replace(/\r\n/g, '\n')}`).join('\0');
-    expect(createHash('sha256').update(payload).digest('hex')).toBe(MIGRATION_CANONICAL_SOURCE_DIGEST);
+    const versions = files.map((file) => file.slice(0, 4));
+    expect(Object.keys(MIGRATION_DIGESTS).sort()).toEqual(versions);
+    for (const file of files) {
+      const version = file.slice(0, 4);
+      const sourceDigest = createHash('sha256').update(readFileSync(join(directory, file), 'utf8').replace(/\r\n/g, '\n')).digest('hex');
+      expect(CANONICAL_MIGRATION_SOURCE_DIGESTS[version]).toBe(sourceDigest);
+      expect(MIGRATION_DIGESTS[version]).toBe(sourceDigest);
+    }
+  });
+
+  test('rejects a self-signed description checksum outside a complete audited profile', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE _schema_migrations (version TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL, checksum TEXT);`);
+    const description = 'attacker-selected-description';
+    const checksum = createHash('sha256').update(`0001\0${description}`).digest('hex');
+    db.prepare(`INSERT INTO _schema_migrations VALUES (?,?,?,?)`).run('0001', description, new Date(0).toISOString(), checksum);
+    expect(() => new SchemaMigrationRunner(db, [migration_0015], { readonly: true }).run({ dryRun: true })).toThrow('migration_checksum_mismatch:0001');
+    db.close();
+  });
+
+  test('0049 splits shared topology and cognitive graph identities by project', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE time_buckets(bucket_id TEXT PRIMARY KEY,bucket_type TEXT,bucket_start INTEGER,bucket_end INTEGER,label TEXT);
+      CREATE TABLE time_bucket_entries(bucket_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,project_id TEXT,created_at INTEGER);
+      INSERT INTO time_buckets VALUES('day:100','day',100,200,'day');
+      INSERT INTO time_bucket_entries VALUES('day:100','na',NULL,NULL,NULL,NULL,'a',100),('day:100','nb',NULL,NULL,NULL,NULL,'b',100);
+      CREATE TABLE cognitive_nodes(node_id TEXT PRIMARY KEY,node_type TEXT,node_key TEXT,title TEXT,project_id TEXT,source_neuron_id TEXT,metadata_json TEXT,created_at INTEGER,updated_at INTEGER);
+      CREATE TABLE cognitive_edges(edge_id TEXT PRIMARY KEY,source_node_id TEXT,target_node_id TEXT,edge_type TEXT,weight REAL,project_id TEXT,metadata_json TEXT,created_at INTEGER);
+      INSERT INTO cognitive_nodes VALUES
+        ('shared','entity','same','Same','a',NULL,NULL,100,100),
+        ('a-event','event','a-event','A event','a',NULL,NULL,100,100),
+        ('b-event','event','b-event','B event','b',NULL,NULL,100,100),
+        ('old-time','time_bucket','time_bucket:day:100','Day','a',NULL,NULL,100,100);
+      INSERT INTO cognitive_edges VALUES
+        ('ea','a-event','shared','mentions_entity',1,'a',NULL,100),
+        ('eb','b-event','shared','mentions_entity',1,'b',NULL,100),
+        ('et','a-event','old-time','occurred_in_time_bucket',1,'a',NULL,100);
+    `);
+
+    migration_0049.up(db);
+
+    const shared = db.prepare(`SELECT project_id,node_id FROM cognitive_nodes WHERE node_type='entity' AND node_key='same' ORDER BY project_id`).all() as Array<{ project_id: string; node_id: string }>;
+    expect(shared.map((row) => row.project_id)).toEqual(['a', 'b']);
+    expect(new Set(shared.map((row) => row.node_id)).size).toBe(2);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM cognitive_edges WHERE edge_type='mentions_entity'`).get()).toEqual({ count: 2 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes WHERE node_type='time_bucket'`).get()).toEqual({ count: 0 });
+    const buckets = db.prepare(`SELECT project_id,bucket_id FROM time_buckets ORDER BY project_id`).all() as Array<{ project_id: string; bucket_id: string }>;
+    expect(buckets.map((row) => row.project_id)).toEqual(['a', 'b']);
+    expect(new Set(buckets.map((row) => row.bucket_id)).size).toBe(2);
+    db.close();
   });
 });

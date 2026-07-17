@@ -290,6 +290,8 @@ export interface TopologyReference {
 
 export interface TimeBucketRecord {
   bucketId: string;
+  projectId?: string;
+  timeZone?: string;
   bucketType: TimeBucketType;
   bucketStart: number;
   bucketEnd: number;

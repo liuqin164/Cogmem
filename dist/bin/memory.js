@@ -43,6 +43,8 @@ function readArgs(argv) {
         replacementCandidateId: stringArg(values, 'replacement'),
         reviewAfter: numberArg(values, 'review-after'),
         now: numberArg(values, 'now'),
+        localDateNow: stringArg(values, 'local-date-now'),
+        timeZone: stringArg(values, 'timezone'),
         evidenceLimit: numberArg(values, 'evidence-limit'),
         agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
         intent: recallIntentArg(values, 'intent'),
@@ -105,6 +107,7 @@ function usage() {
         '  graph-path           find a bounded path from --from to --to',
         '  graph-timeline       reconstruct entity/time/action history for --query',
         '  graph-reindex        reproject one Atlas episode/card by --event or --episode without rebuilding the whole graph',
+        '  rebuild-topology     explicitly rebuild project-scoped time and cognitive projections',
         '',
         'Common options:',
         '  --project <id>       scope to one project',
@@ -138,6 +141,8 @@ function usage() {
         '  --include-evidence   include bounded raw excerpts; event ids are always returned',
         '  --evidence-limit <n> bound evidence locators per Atlas node, default 2, maximum 10',
         '  --now <epoch-ms>     deterministic reference time for relative Atlas time facets',
+        '  --local-date-now <YYYY-MM-DD>  explicit project-local date for deterministic recall',
+        '  --timezone <IANA>     project timezone for explicit --db recall/import maintenance',
         '  --refresh            force Atlas refresh before graph reads; default returns stale projection on SQLite busy',
         '  --no-refresh         skip Atlas refresh and read the existing projection',
         '  --stale-ok           allow stale graph reads if refresh is blocked by a SQLite lock',
@@ -171,6 +176,7 @@ function isMemoryCommand(value) {
         || value === 'graph-path'
         || value === 'graph-timeline'
         || value === 'graph-reindex'
+        || value === 'rebuild-topology'
         || value === 'frame'
         || value === 'frame-backfill'
         || value === 'frame-review';
@@ -236,7 +242,7 @@ function candidateStatusArg(values, key) {
 }
 function openKernel(args) {
     if (args.dbPath)
-        return createMemoryKernel({ dbPath: resolve(args.dbPath) });
+        return createMemoryKernel({ dbPath: resolve(args.dbPath), projectTimeZone: args.timeZone });
     return createMemoryKernelFromConfig({
         configPath: args.configPath ? resolve(args.configPath) : undefined,
         cwd: process.cwd(),
@@ -583,6 +589,9 @@ function runRecall(kernel, args) {
         intent: args.intent,
         query: args.query,
         limit: args.limit || 5,
+        now: args.now,
+        localDateNow: args.localDateNow,
+        timeZone: args.timeZone,
         retrievalPolicy: strategyCapsule.retrievalPolicy,
     });
     return {
@@ -618,6 +627,11 @@ function runBind(kernel, args) {
         limit: args.limit || 500,
     });
 }
+function runTopologyRebuild(kernel, args) {
+    if (!args.projectId)
+        throw new Error(`rebuild-topology requires --project.\n${usage()}`);
+    return kernel.rebuildProjectTimeTopology(args.projectId);
+}
 function runFrame(kernel, args) {
     if (args.command === 'frame-backfill') {
         if (!args.projectId)
@@ -642,9 +656,9 @@ function runGraphCommand(kernel, args) {
     if (!projectId)
         throw new Error(`Memory Atlas commands require --project.\n${usage()}`);
     const options = { projectId, limit: args.limit, includeEvidence: args.includeEvidence,
-        evidenceLimit: args.evidenceLimit, now: args.now,
-        refresh: args.refresh ? true : (args.staleOk ? false : undefined),
-        staleOk: args.staleOk || !args.refresh };
+        evidenceLimit: args.evidenceLimit, now: args.now, localDateNow: args.localDateNow, timeZone: args.timeZone,
+        refresh: args.refresh,
+        staleOk: true };
     if (args.command === 'graph-reindex') {
         if (!args.eventId && !args.episodeId)
             throw new Error(`graph-reindex requires --event or --episode.\n${usage()}`);
@@ -937,6 +951,14 @@ function printHuman(command, payload) {
         console.log(`failedEvents: ${payload.failedEvents}`);
         return;
     }
+    if (command === 'rebuild-topology') {
+        console.log(`project: ${payload.projectId}`);
+        console.log(`timeZone: ${payload.timeZone}`);
+        console.log(`neurons: ${payload.neurons}`);
+        console.log(`buckets: ${payload.buckets}`);
+        console.log(`rebuiltAt: ${payload.rebuiltAt}`);
+        return;
+    }
     if (command === 'graph' || command.startsWith('graph-')) {
         console.log(`memoryAtlas: ${payload.version || 'memory_atlas.v2'} project=${payload.projectId || 'unknown'}`);
         const rows = Array.isArray(payload.nodes) ? payload.nodes
@@ -999,6 +1021,9 @@ async function main() {
         runReadOnlyInspection(args);
         return;
     }
+    if (args.command === 'rebuild-topology' && args.dbPath && !args.timeZone) {
+        throw new Error('rebuild-topology with --db requires --timezone <IANA> so the projection does not depend on the host environment');
+    }
     const kernelArgs = { ...args };
     const kernel = openKernel(kernelArgs);
     try {
@@ -1026,9 +1051,11 @@ async function main() {
                                                     ? runTick(kernel, kernelArgs)
                                                     : kernelArgs.command === 'bind'
                                                         ? runBind(kernel, kernelArgs)
-                                                        : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill' || kernelArgs.command === 'frame-review'
-                                                            ? runFrame(kernel, kernelArgs)
-                                                            : runGraphCommand(kernel, kernelArgs);
+                                                        : kernelArgs.command === 'rebuild-topology'
+                                                            ? runTopologyRebuild(kernel, kernelArgs)
+                                                            : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill' || kernelArgs.command === 'frame-review'
+                                                                ? runFrame(kernel, kernelArgs)
+                                                                : runGraphCommand(kernel, kernelArgs);
         if (kernelArgs.json) {
             const queue = kernelArgs.command === 'status'
                 ? payload.dreamCandidateQueue

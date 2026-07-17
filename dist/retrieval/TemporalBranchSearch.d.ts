@@ -29,6 +29,7 @@ export declare class TemporalBranchSearch {
         projectId?: string;
         startTime?: number;
         endTime?: number;
+        temporalEnabled?: boolean;
         terms: string[];
         temporalBucketIds?: string[];
         entityNeuronIds?: string[];

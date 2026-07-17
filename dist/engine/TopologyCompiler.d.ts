@@ -1,6 +1,11 @@
 import type { Neuron, TimeBucketRecord } from '../types/index.js';
 import type { ConsolidationResult } from './ConsolidationPipeline.js';
 import { TopologyStore } from '../store/TopologyStore.js';
+export interface TimeProjectionNeuronInput {
+    id: string;
+    projectId: string;
+    createdAt: number;
+}
 export declare class TopologyCompiler {
     private store;
     constructor(store: TopologyStore);
@@ -14,7 +19,8 @@ export declare class TopologyCompiler {
         taskIds: string[];
         clusterIds: string[];
     };
-    rebuildTimeBuckets(neurons: Neuron[], timeZone: string): TimeBucketRecord[];
+    rebuildTimeBuckets(neurons: TimeProjectionNeuronInput[], timeZone: string): TimeBucketRecord[];
+    planTimeBuckets(neurons: TimeProjectionNeuronInput[], timeZone: string): Map<string, TimeBucketRecord[]>;
     private attachTimeBuckets;
     private attachProjectBranches;
     private attachTaskBranches;

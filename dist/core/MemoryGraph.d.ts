@@ -12,6 +12,12 @@ export interface TopicReclassifiedObservation {
     content: string;
     timestamp: number;
 }
+export interface TimeProjectionNeuron {
+    id: string;
+    projectId: string;
+    createdAt: number;
+    title: string;
+}
 export declare class MemoryGraph {
     private db;
     private timeIndex;
@@ -30,6 +36,11 @@ export declare class MemoryGraph {
     addSynapse(sourceId: string, synapse: Synapse): void;
     getNeuron(id: string): Neuron | null;
     getNeuronIdsByProject(projectId: string): string[];
+    listTimeProjectionNeurons(projectId: string, options?: {
+        afterCreatedAt?: number;
+        afterId?: string;
+        limit?: number;
+    }): TimeProjectionNeuron[];
     getSynapses(sourceId: string): Synapse[];
     getAllNeurons(): Neuron[];
     findNeuronsByType(type: NeuronType, options?: {

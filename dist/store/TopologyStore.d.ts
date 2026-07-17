@@ -6,8 +6,10 @@ export declare class TopologyStore {
     constructor(dbOrPath?: Database | string);
     private initializeSchema;
     timeProjectionNeedsRebuild(projectId: string, timeZone: string): boolean;
+    hasDirtyTimeProjection(projectId?: string): boolean;
     markTimeProjection(projectId: string, status: 'dirty' | 'building' | 'clean' | 'failed', timeZone: string, updatedAt: number, error?: string): void;
     resetProjectTimeBuckets(projectId: string): void;
+    listProjectTimeBucketsByNeuron(projectId: string, neuronIds: string[]): Map<string, TimeBucketRecord[]>;
     upsertTimeBucket(bucket: TimeBucketRecord): TimeBucketRecord;
     attachToTimeBucket(bucketId: string, ref: TopologyReference & {
         projectId?: string;

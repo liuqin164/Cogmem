@@ -30,6 +30,13 @@ export interface TopicReclassifiedObservation {
   timestamp: number;
 }
 
+export interface TimeProjectionNeuron {
+  id: string;
+  projectId: string;
+  createdAt: number;
+  title: string;
+}
+
 export class MemoryGraph {
   private db: Database;
   private timeIndex = new Map<string, Set<string>>();
@@ -310,6 +317,30 @@ export class MemoryGraph {
       WHERE project_id = ? AND is_deleted = 0
       ORDER BY created_at DESC
     `).all(projectId) as Array<{ id: string }>).map((row) => row.id);
+  }
+
+  listTimeProjectionNeurons(projectId: string, options: { afterCreatedAt?: number; afterId?: string; limit?: number } = {}): TimeProjectionNeuron[] {
+    const hasCursor = options.afterCreatedAt !== undefined && options.afterId !== undefined;
+    const rows = hasCursor ? this.db.prepare(`
+      SELECT id, project_id, created_at, COALESCE(NULLIF(aaak_summary, ''), substr(content, 1, 120), id) AS title
+      FROM neurons
+      WHERE project_id = ? AND is_deleted = 0
+        AND (created_at > ? OR (created_at = ? AND id > ?))
+      ORDER BY created_at ASC, id ASC
+      LIMIT ?
+    `).all(projectId, options.afterCreatedAt!, options.afterCreatedAt!, options.afterId!, options.limit ?? 500) : this.db.prepare(`
+      SELECT id, project_id, created_at, COALESCE(NULLIF(aaak_summary, ''), substr(content, 1, 120), id) AS title
+      FROM neurons
+      WHERE project_id = ? AND is_deleted = 0
+      ORDER BY created_at ASC, id ASC
+      LIMIT ?
+    `).all(projectId, options.limit ?? 500);
+    return (rows as Array<{ id: string; project_id: string; created_at: number; title: string }>).map((row) => ({
+      id: row.id,
+      projectId: row.project_id,
+      createdAt: row.created_at,
+      title: row.title,
+    }));
   }
 
   getSynapses(sourceId: string): Synapse[] {

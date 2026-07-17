@@ -1,7 +1,9 @@
+import Database from 'bun:sqlite';
 import type { CognitiveEdgeRecord, CognitiveEdgeType, CognitiveNodeRecord, CognitiveNodeType } from '../types/index.js';
 export declare class CognitiveGraphStore {
     private db;
-    constructor(dbPath?: string);
+    private readonly ownsDb;
+    constructor(dbOrPath?: Database | string);
     private initializeSchema;
     upsertNode(input: {
         nodeId: string;
@@ -22,6 +24,8 @@ export declare class CognitiveGraphStore {
         metadata?: Record<string, unknown>;
         createdAt: number;
     }): CognitiveEdgeRecord;
+    findNode(projectId: string | undefined, nodeType: CognitiveNodeType, nodeKey: string): CognitiveNodeRecord | null;
+    resetProjectTimeProjection(projectId: string): void;
     collectContext(input: {
         projectId?: string;
         terms?: string[];

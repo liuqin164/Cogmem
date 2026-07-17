@@ -216,6 +216,40 @@ export class CognitiveGraphCompiler {
             edgeCount
         };
     }
+    rebuildTimeBuckets(input) {
+        for (const neuron of input.neurons) {
+            const neuronKey = `neuron:${neuron.id}`;
+            const neuronNode = this.store.findNode(input.projectId, 'neuron', neuronKey) ?? this.store.upsertNode({
+                nodeId: `cgnode-${randomUUID()}`,
+                nodeType: 'neuron',
+                nodeKey: neuronKey,
+                title: neuron.title,
+                projectId: input.projectId,
+                sourceNeuronId: neuron.id,
+                metadata: { status: 'active' },
+                createdAt: neuron.createdAt,
+            });
+            for (const bucket of input.bucketsByNeuronId.get(neuron.id) ?? []) {
+                const bucketNode = this.store.upsertNode({
+                    nodeId: `cgnode-${randomUUID()}`,
+                    nodeType: 'time_bucket',
+                    nodeKey: `time_bucket:${bucket.bucketId}`,
+                    title: bucket.label,
+                    projectId: input.projectId,
+                    sourceNeuronId: neuron.id,
+                    metadata: { bucketType: bucket.bucketType, timeZone: bucket.timeZone },
+                    createdAt: neuron.createdAt,
+                });
+                this.store.linkNodes({
+                    sourceNodeId: neuronNode.nodeId,
+                    targetNodeId: bucketNode.nodeId,
+                    edgeType: 'occurred_in_time_bucket',
+                    projectId: input.projectId,
+                    createdAt: neuron.createdAt,
+                });
+            }
+        }
+    }
     attachBeliefNode(neuronNodeId, belief, projectId, createdAt, seedNodeIds) {
         const beliefNode = this.store.upsertNode({
             nodeId: `cgnode-${randomUUID()}`,

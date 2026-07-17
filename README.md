@@ -319,7 +319,10 @@ cogmem memory graph-path --project my-agent --from "entity:<id>" --to "action:<i
 cogmem memory graph-timeline --project my-agent --query "2025 <实体或工具名> 的决策和修复" --json
 cogmem memory graph-timeline --project openclaw --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
 cogmem memory graph-reindex --project openclaw --event <event-id> --json
+cogmem memory rebuild-topology --project openclaw --json
 ```
+
+Graph and recall reads never rebuild projections inline. If an upgrade marks a project's civil-time topology dirty, reads continue on last-known-good non-temporal lanes; run `rebuild-topology` explicitly (or follow the maintenance-tick suggestion). The command pages lightweight neuron metadata into generation-scoped staging tables, persists its cursor, resumes after interruption, and atomically swaps the completed project topology and cognitive time graph into service.
 
 Atlas filtering is not limited to entity + time + action. The facet planner combines whichever facets are actually present, such as project, day/month/year, topic, issue, entity/person/project, session/thread, memory kind, action kind, and ordinary keywords. Entity cue extraction supports Unicode letter/number names in ordinary historical and action-history questions, but it is still deterministic cue extraction, not full named-entity recognition or an automatic alias merge graph. Strict multi-facet matches may surface cold nodes even when their activation has decayed. If strict intersection is empty, JSON includes `relaxationTrace` for explicit fallbacks such as day → month → year or issue → parent topic instead of silently pretending an exact match existed. Project scope and raw evidence validation are never bypassed.
 
@@ -439,6 +442,7 @@ cogmem import-openclaw --workspace . --project openclaw --session ./one.md
 cogmem import-openclaw --workspace . --project openclaw --session ./one.md --session ./two.md
 cogmem import-openclaw --workspace . --project openclaw --memory ./one.md
 cogmem import-openclaw --workspace . --project openclaw --memory ./one.md --memory ./two.md
+cogmem import-openclaw --workspace . --project openclaw --db ./memory.db --timezone Asia/Tokyo
 ```
 
 Hermes:
@@ -451,7 +455,10 @@ cogmem import-hermes --workspace . --project hermes --state-db ./state.db
 cogmem import-hermes --workspace . --project hermes --profile ./memory/profile.md --sessions ./memory/sessions
 cogmem import-hermes --workspace . --project hermes --session ./one.md
 cogmem import-hermes --workspace . --project hermes --session ./one.md --session ./two.md
+cogmem import-hermes --workspace . --project hermes --db ./memory.db --timezone Asia/Tokyo
 ```
+
+When importing through an explicit `--db`, pass the project's IANA `--timezone`. If it is omitted, Cogmem records a `project_timezone_missing_using_host_environment` warning so host-local calendar behavior is never silent.
 
 Hermes `state.db` is scanned automatically when it exists at the workspace root. The importer reads the SQLite `messages` table, preserves message order, supports WAL-mode read-only databases through SQLite immutable mode, and prefers message-level `occurredAt` / `timestamp` / `createdAt` fields. Numeric `timestamp` values are treated as epoch seconds when they are below millisecond range. `InsertTime` is only a fallback when the original message time is absent.
 

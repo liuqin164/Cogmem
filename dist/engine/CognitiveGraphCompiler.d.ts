@@ -19,6 +19,15 @@ export declare class CognitiveGraphCompiler {
         seedNodeIds: string[];
         edgeCount: number;
     };
+    rebuildTimeBuckets(input: {
+        projectId: string;
+        neurons: Array<{
+            id: string;
+            title: string;
+            createdAt: number;
+        }>;
+        bucketsByNeuronId: Map<string, TimeBucketRecord[]>;
+    }): void;
     private attachBeliefNode;
 }
 //# sourceMappingURL=CognitiveGraphCompiler.d.ts.map

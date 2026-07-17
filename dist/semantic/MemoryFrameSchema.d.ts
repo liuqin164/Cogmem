@@ -1,5 +1,18 @@
 import type { MemoryFrameV1 } from './MemoryFrameTypes.js';
 export declare const MEMORY_FRAME_SCHEMA_VERSION: "memory_frame.v1";
+export declare const MEMORY_FRAME_LIMITS: {
+    readonly id: 512;
+    readonly text: 20000;
+    readonly dimension: 64;
+    readonly language: 128;
+    readonly nodes: 256;
+    readonly relations: 512;
+    readonly temporalReferences: 128;
+    readonly stateTransitions: 128;
+    readonly aliases: 64;
+    readonly alias: 1000;
+    readonly evidence: 1000;
+};
 export declare const MEMORY_FRAME_JSON_SCHEMA: {
     readonly type: "object";
     readonly additionalProperties: false;
@@ -11,18 +24,22 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
         readonly frameId: {
             readonly type: "string";
             readonly minLength: 1;
+            readonly maxLength: 512;
         };
         readonly projectId: {
             readonly type: "string";
             readonly minLength: 1;
+            readonly maxLength: 512;
         };
         readonly episodeId: {
             readonly type: "string";
             readonly minLength: 1;
+            readonly maxLength: 512;
         };
         readonly revisionId: {
             readonly type: "string";
             readonly minLength: 1;
+            readonly maxLength: 512;
         };
         readonly revisionNumber: {
             readonly type: "integer";
@@ -31,12 +48,15 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
         readonly supersedesFrameId: {
             readonly type: "string";
             readonly minLength: 1;
+            readonly maxLength: 512;
         };
         readonly title: {
             readonly type: "string";
+            readonly maxLength: 20000;
         };
         readonly summary: {
             readonly type: "string";
+            readonly maxLength: 20000;
         };
         readonly confidence: {
             readonly type: "number";
@@ -45,9 +65,11 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
         };
         readonly evidenceEventIds: {
             readonly type: "array";
+            readonly maxItems: 1000;
             readonly items: {
                 readonly type: "string";
                 readonly minLength: 1;
+                readonly maxLength: 512;
             };
         };
         readonly episodeKind: {
@@ -56,6 +78,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
         };
         readonly nodes: {
             readonly type: "array";
+            readonly maxItems: 256;
             readonly items: {
                 readonly type: "object";
                 readonly additionalProperties: false;
@@ -68,17 +91,25 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     };
                     readonly dimension: {
                         readonly type: "string";
+                        readonly minLength: 1;
+                        readonly maxLength: 64;
                     };
                     readonly label: {
                         readonly type: "string";
+                        readonly minLength: 1;
+                        readonly maxLength: 20000;
                     };
                     readonly description: {
                         readonly type: "string";
+                        readonly maxLength: 20000;
                     };
                     readonly aliases: {
                         readonly type: "array";
+                        readonly maxItems: 64;
                         readonly items: {
                             readonly type: "string";
+                            readonly minLength: 1;
+                            readonly maxLength: 1000;
                         };
                     };
                     readonly canonicalHint: {
@@ -92,6 +123,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                             };
                             readonly canonicalLabel: {
                                 readonly type: "string";
+                                readonly maxLength: 20000;
                             };
                             readonly confidence: {
                                 readonly type: "number";
@@ -107,8 +139,11 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     };
                     readonly evidenceEventIds: {
                         readonly type: "array";
+                        readonly maxItems: 1000;
                         readonly items: {
                             readonly type: "string";
+                            readonly minLength: 1;
+                            readonly maxLength: 512;
                         };
                     };
                 };
@@ -116,6 +151,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
         };
         readonly relations: {
             readonly type: "array";
+            readonly maxItems: 512;
             readonly items: {
                 readonly type: "object";
                 readonly additionalProperties: false;
@@ -129,6 +165,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     readonly relationType: {
                         readonly type: "string";
                         readonly minLength: 1;
+                        readonly maxLength: 512;
                     };
                     readonly targetFrameNodeId: {
                         readonly type: "string";
@@ -142,8 +179,11 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     };
                     readonly evidenceEventIds: {
                         readonly type: "array";
+                        readonly maxItems: 1000;
                         readonly items: {
                             readonly type: "string";
+                            readonly minLength: 1;
+                            readonly maxLength: 512;
                         };
                     };
                     readonly validFrom: {
@@ -157,6 +197,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
         };
         readonly temporalReferences: {
             readonly type: "array";
+            readonly maxItems: 128;
             readonly items: {
                 readonly type: "object";
                 readonly additionalProperties: false;
@@ -164,6 +205,8 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                 readonly properties: {
                     readonly label: {
                         readonly type: "string";
+                        readonly minLength: 1;
+                        readonly maxLength: 20000;
                     };
                     readonly occurredAt: {
                         readonly type: "number";
@@ -175,8 +218,11 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     };
                     readonly evidenceEventIds: {
                         readonly type: "array";
+                        readonly maxItems: 1000;
                         readonly items: {
                             readonly type: "string";
+                            readonly minLength: 1;
+                            readonly maxLength: 512;
                         };
                     };
                 };
@@ -184,6 +230,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
         };
         readonly stateTransitions: {
             readonly type: "array";
+            readonly maxItems: 128;
             readonly items: {
                 readonly type: "object";
                 readonly additionalProperties: false;
@@ -196,9 +243,13 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     };
                     readonly from: {
                         readonly type: "string";
+                        readonly minLength: 1;
+                        readonly maxLength: 20000;
                     };
                     readonly to: {
                         readonly type: "string";
+                        readonly minLength: 1;
+                        readonly maxLength: 20000;
                     };
                     readonly confidence: {
                         readonly type: "number";
@@ -207,8 +258,11 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     };
                     readonly evidenceEventIds: {
                         readonly type: "array";
+                        readonly maxItems: 1000;
                         readonly items: {
                             readonly type: "string";
+                            readonly minLength: 1;
+                            readonly maxLength: 512;
                         };
                     };
                 };
@@ -221,13 +275,16 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
             readonly properties: {
                 readonly provider: {
                     readonly type: "string";
+                    readonly maxLength: 512;
                 };
                 readonly model: {
                     readonly type: "string";
+                    readonly maxLength: 512;
                 };
                 readonly promptVersion: {
                     readonly type: "string";
                     readonly minLength: 1;
+                    readonly maxLength: 512;
                 };
                 readonly generatedAt: {
                     readonly type: "number";
@@ -236,6 +293,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
         };
         readonly primaryLanguage: {
             readonly type: "string";
+            readonly maxLength: 128;
         };
         readonly sourceAuthority: {
             readonly type: "string";

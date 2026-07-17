@@ -43,7 +43,7 @@ test('createMemoryKernel upgrades the runtime schema through the current migrati
   const { dir, kernel } = createKernel('cogmem-final-schema-');
   try {
     const db = kernel.factStore.getDatabase();
-    expect((db.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get() as { value: string }).value).toBe('48');
+    expect((db.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get() as { value: string }).value).toBe('50');
     expect((db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episode_events_episode_position_unique'`).get())).toBeTruthy();
     expect((db.prepare(`PRAGMA table_info(memory_events)`).all() as Array<{ name: string }>).some((row) => row.name === 'local_date_source')).toBe(true);
   } finally {
@@ -217,7 +217,7 @@ test('localDateSource column drives timezone trust and legacy warnings', () => {
     const explicit = kernel.appendEpisodeMessage({
       projectId: 'brain', sessionId: 'explicit', sourceAgent: 'test',
       role: 'user', text: 'explicit date', externalMessageId: 'e1',
-      timestamp: Date.UTC(2026, 6, 6, 15, 30), localDate: '2026-07-06',
+      timestamp: Date.UTC(2026, 6, 6, 14, 30), localDate: '2026-07-06',
     });
     expect(kernel.eventStore.getEvent(explicit.eventId)!.localDateSource).toBe('explicit');
 

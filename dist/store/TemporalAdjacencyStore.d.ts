@@ -15,6 +15,7 @@ export declare class TemporalAdjacencyStore {
     private initializeSchema;
     syncBuckets(buckets: TimeBucketRecord[], createdAt: number): void;
     rebuildAll(createdAt: number): void;
+    rebuildProject(projectId: string, timeZone: string, createdAt: number): void;
     collectAdjacentNeuronIds(bucketIds: string[], limit?: number, projectId?: string): string[];
     collectContinuousTraversal(input: {
         bucketIds: string[];

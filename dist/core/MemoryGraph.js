@@ -239,6 +239,29 @@ export class MemoryGraph {
       ORDER BY created_at DESC
     `).all(projectId).map((row) => row.id);
     }
+    listTimeProjectionNeurons(projectId, options = {}) {
+        const hasCursor = options.afterCreatedAt !== undefined && options.afterId !== undefined;
+        const rows = hasCursor ? this.db.prepare(`
+      SELECT id, project_id, created_at, COALESCE(NULLIF(aaak_summary, ''), substr(content, 1, 120), id) AS title
+      FROM neurons
+      WHERE project_id = ? AND is_deleted = 0
+        AND (created_at > ? OR (created_at = ? AND id > ?))
+      ORDER BY created_at ASC, id ASC
+      LIMIT ?
+    `).all(projectId, options.afterCreatedAt, options.afterCreatedAt, options.afterId, options.limit ?? 500) : this.db.prepare(`
+      SELECT id, project_id, created_at, COALESCE(NULLIF(aaak_summary, ''), substr(content, 1, 120), id) AS title
+      FROM neurons
+      WHERE project_id = ? AND is_deleted = 0
+      ORDER BY created_at ASC, id ASC
+      LIMIT ?
+    `).all(projectId, options.limit ?? 500);
+        return rows.map((row) => ({
+            id: row.id,
+            projectId: row.project_id,
+            createdAt: row.created_at,
+            title: row.title,
+        }));
+    }
     getSynapses(sourceId) {
         const rows = this.db.prepare(`SELECT * FROM synapses WHERE source_id = ?`).all(sourceId);
         return rows.map((row) => ({ targetId: row.target_id, type: row.type, weight: row.weight }));

@@ -415,12 +415,12 @@ test('explicit localDate is not overwritten by configured timezone', () => {
     const first = kernel.appendEpisodeMessage({
       projectId: 'brain', sessionId: 'explicit-date', sourceAgent: 'hermes',
       role: 'user', text: '我们讨论显式日期。', externalMessageId: 'ed-u1',
-      timestamp: Date.UTC(2026, 6, 6, 14, 59), localDate: '2026-07-06',
+      timestamp: Date.UTC(2026, 6, 6, 13, 59), localDate: '2026-07-06',
     });
     const next = kernel.appendEpisodeMessage({
       projectId: 'brain', sessionId: 'explicit-date', sourceAgent: 'hermes',
       role: 'user', text: '继续讨论显式日期。', externalMessageId: 'ed-u2',
-      timestamp: Date.UTC(2026, 6, 6, 15, 30), localDate: '2026-07-06',
+      timestamp: Date.UTC(2026, 6, 6, 14, 30), localDate: '2026-07-06',
     });
     expect(next.episodeId).toBe(first.episodeId);
     expect(next.boundaryGuardCodes).not.toContain('trusted_local_date_changed');
@@ -526,11 +526,11 @@ test('duplicate externalMessageId rejects changed turn metadata', () => {
   try {
     kernel.appendEpisodeMessage({
       projectId: 'brain', sessionId: 's1', sourceAgent: 'hermes', role: 'user', text: 'same identity',
-      externalMessageId: 'same', threadId: 'thread-a', turnId: 'turn-a', turnSeq: 1, localDate: '2026-07-06', eventOrdinal: 1,
+      externalMessageId: 'same', threadId: 'thread-a', turnId: 'turn-a', turnSeq: 1, timestamp: Date.UTC(2026, 6, 6), localDate: '2026-07-06', eventOrdinal: 1,
     });
     expect(() => kernel.appendEpisodeMessage({
       projectId: 'brain', sessionId: 's1', sourceAgent: 'hermes', role: 'user', text: 'same identity',
-      externalMessageId: 'same', threadId: 'thread-b', turnId: 'turn-a', turnSeq: 1, localDate: '2026-07-06', eventOrdinal: 1,
+      externalMessageId: 'same', threadId: 'thread-b', turnId: 'turn-a', turnSeq: 1, timestamp: Date.UTC(2026, 6, 6), localDate: '2026-07-06', eventOrdinal: 1,
     })).toThrow('episode_ingest_identity_conflict');
   } finally {
     kernel.close();

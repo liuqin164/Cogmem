@@ -115,6 +115,9 @@ test('OpenClaw import writes memory once and skips already imported records on r
   expect(first.exitCode).toBe(0);
   const firstParsed = JSON.parse(first.stdout);
   expect(firstParsed.recordsIngested).toBeGreaterThanOrEqual(2);
+  expect(firstParsed.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({ code: 'project_timezone_missing_using_host_environment', severity: 'warning' }),
+  ]));
 
   const second = await runCli([
     'bun',
@@ -228,6 +231,7 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
   expect(JSON.parse(again.stdout).rawRecordsAnchored).toBe(0);
 
   const kernel = createMemoryKernel({ dbPath });
+  kernel.rebuildMemoryAtlas({ projectId: 'openclaw-test' });
   const memory = new KernelAgentMemoryBackend(kernel);
   const recalled = memory.recall({
     agentId: 'openclaw',

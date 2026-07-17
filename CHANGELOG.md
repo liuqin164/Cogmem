@@ -10,6 +10,11 @@
 - Added immutable migrations 0038-0041 to repair legacy publication state, enforce one active Frame per episode, repair revision numbering, backfill alias provenance, and record populated-database integrity markers.
 - Wired structured processor output through staged Dream publication, paginated Atlas V2 projection, temporal/state projection, alias resolution, Repair invalidation, and forget-user cleanup.
 - Connected bounded multidimensional Atlas seed/path results to kernel and agent recall while preserving collection, workspace/session/thread scope, and retrieval-lane governance. Rule-only installations now report `semantic_processor_unavailable` instead of silently presenting fallback semantics as complete.
+- Added immutable migration 0049 to split CognitiveGraph nodes, edges, civil-time buckets, and adjacency by project, invalidate legacy cognitive time projections, and prevent normal multi-project writes from overwriting shared identities.
+- Added immutable migration 0050 for generation-scoped topology staging, persisted rebuild cursors, active-neuron snapshots, and crash-safe cleanup.
+- Made recall and MCP graph discovery read-only over last-known-good projections, added explicit paginated `cogmem memory rebuild-topology --project <id>`, and rebuilt topology plus cognitive temporal edges through resumable staging and a final atomic project-local swap.
+- Bound every migration receipt digest to its exact checked-in source, restricted legacy checksum conversion to complete audited profiles, and verified real `f71b20a` source/dist databases upgrade to the current schema.
+- Hardened import date provenance and explicit `--db` timezone diagnostics, made Frame baseline reduction idempotent across repeated direct rebuilds, and aligned MemoryFrame schema bounds with runtime validation.
 
 ## 3.7.3
 

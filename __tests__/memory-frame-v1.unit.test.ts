@@ -5,6 +5,7 @@ import Database from 'bun:sqlite';
 import { migration_0032, migration_0035, migration_0036, migration_0037, migration_0039 } from '../src/migrations/index.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { MultidimensionalQueryPlanner } from '../src/recall/index.js';
+import { MemoryFrameProjector } from '../src/atlas/MemoryFrameProjector.js';
 
 describe('MemoryFrame V1 contract', () => {
   test('normalizes Unicode aliases without changing display labels', () => {
@@ -157,11 +158,20 @@ describe('MemoryFrame V1 contract', () => {
     expect(result.documents).toBeGreaterThanOrEqual(2);
     expect(kernel.memoryAtlasStore.getNode(`episode:${episode.episodeId}`, 'p')?.nodeType).toBe('episode');
     expect(kernel.memoryAtlasStore.getNode('project:p', 'p')?.nodeType).toBe('project');
+    const projectedProject = kernel.memoryAtlasStore.getNode('project:p', 'p')!;
+    const directProjector = new MemoryFrameProjector(kernel.factStore.getDatabase(), kernel.memoryFrameStore, kernel.memoryAtlasStore, 'UTC');
+    for (let index = 0; index < 3; index += 1) directProjector.rebuild('p', 10 + index);
+    const repeatedProject = kernel.memoryAtlasStore.getNode('project:p', 'p')!;
+    expect({ supportCount: repeatedProject.supportCount, evidence: repeatedProject.evidenceEventIds })
+      .toEqual({ supportCount: projectedProject.supportCount, evidence: projectedProject.evidenceEventIds });
+    kernel.factStore.getDatabase().prepare(`UPDATE memory_atlas_documents SET label=?,summary=?,confidence=?,support_count=? WHERE project_id='p' AND node_id='project:p'`)
+      .run('Updated canonical project', 'Updated canonical summary', 0.91, canonicalProject.supportCount + 2);
+    directProjector.rebuild('p', 19, { canonicalDocumentsRebuilt: true });
     kernel.memoryFrameStore.supersedeEpisodes([episode.episodeId], 2);
-    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    directProjector.rebuild('p', 20);
     const restoredProject = kernel.memoryAtlasStore.getNode('project:p', 'p')!;
     expect({ label: restoredProject.label, summary: restoredProject.summary, confidence: restoredProject.confidence, supportCount: restoredProject.supportCount, evidence: restoredProject.evidenceEventIds })
-      .toEqual({ label: canonicalProject.label, summary: canonicalProject.summary, confidence: canonicalProject.confidence, supportCount: canonicalProject.supportCount, evidence: canonicalProject.evidenceEventIds });
+      .toEqual({ label: 'Updated canonical project', summary: 'Updated canonical summary', confidence: 0.91, supportCount: canonicalProject.supportCount + 2, evidence: canonicalProject.evidenceEventIds });
     kernel.close();
   });
 

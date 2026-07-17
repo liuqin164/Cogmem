@@ -1,5 +1,4 @@
 import Database from 'bun:sqlite';
-import { createHash } from 'node:crypto';
 
 import type { Migration } from '../types/Migration.js';
 import { LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
@@ -95,10 +94,6 @@ export class SchemaMigrationRunner {
     return digest;
   }
 
-  private legacyStableChecksum(migration: Migration): string {
-    return createHash('sha256').update(`${migration.version}\0${migration.description}`).digest('hex');
-  }
-
   /** Convert only audited pre-manifest receipts before strict validation. */
   private repairKnownLegacyFunctionChecksums(): void {
     if (!Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info('_schema_migrations') WHERE name='checksum'`).get())) return;
@@ -118,22 +113,19 @@ export class SchemaMigrationRunner {
   }
 
   private rewriteChecksums(): void {
-    const update = this.db.prepare(`UPDATE _schema_migrations SET checksum=? WHERE version=? AND (checksum IS NULL OR checksum='' OR checksum=?)`);
-    for (const migration of this.migrations) update.run(this.migrationChecksum(migration), migration.version, this.legacyStableChecksum(migration));
+    const update = this.db.prepare(`UPDATE _schema_migrations SET checksum=? WHERE version=? AND (checksum IS NULL OR checksum='')`);
+    for (const migration of this.migrations) update.run(this.migrationChecksum(migration), migration.version);
   }
 
   private assertRecordedChecksums(options: { allowKnownLegacy?: boolean } = {}): void {
     if (!Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info('_schema_migrations') WHERE name='checksum'`).get())) return;
-    const byVersion = new Map(this.migrations.map((migration) => [migration.version, migration]));
     const rows = this.recordedChecksums();
     const legacyProfile = options.allowKnownLegacy ? this.matchingLegacyReceiptProfile(rows) : undefined;
     for (const row of rows) {
       const digest = MIGRATION_DIGESTS[row.version];
       if (!digest) throw new Error(`migration_checksum_unknown:${row.version}`);
-      const migration = byVersion.get(row.version);
-      const stableLegacy = migration ? this.legacyStableChecksum(migration) : createHash('sha256').update(`${row.version}\0${row.description}`).digest('hex');
       const knownLegacy = legacyProfile?.[row.version] === row.checksum;
-      if (row.checksum !== digest && row.checksum !== stableLegacy && !(options.allowKnownLegacy && knownLegacy)) {
+      if (row.checksum !== digest && !(options.allowKnownLegacy && knownLegacy)) {
         throw new Error(`migration_checksum_mismatch:${row.version}`);
       }
     }
@@ -145,9 +137,16 @@ export class SchemaMigrationRunner {
 
   private matchingLegacyReceiptProfile(rows: Array<{ version: string; checksum: string }>): Readonly<Record<string, string>> | undefined {
     for (const profile of Object.values(LEGACY_MIGRATION_RECEIPT_PROFILES)) {
+      const profileVersions = Object.keys(profile).sort();
+      const expectedVersions = rows.some((row) => row.version < '0015')
+        ? profileVersions
+        : profileVersions.filter((version) => version >= '0015');
+      const byVersion = new Map(rows.map((row) => [row.version, row]));
+      if (expectedVersions.length === 0 || !expectedVersions.every((version) => byVersion.has(version))) continue;
       let matchedLegacy = false;
       let valid = true;
-      for (const row of rows) {
+      for (const version of expectedVersions) {
+        const row = byVersion.get(version)!;
         const manifest = MIGRATION_DIGESTS[row.version];
         if (!manifest) {
           valid = false;
@@ -159,6 +158,16 @@ export class SchemaMigrationRunner {
         }
         valid = false;
         break;
+      }
+      if (valid) {
+        const profileMax = profileVersions[profileVersions.length - 1]!;
+        for (const row of rows) {
+          if (row.version > profileMax) {
+            if (row.checksum !== MIGRATION_DIGESTS[row.version]) valid = false;
+            continue;
+          }
+          if (!expectedVersions.includes(row.version)) valid = false;
+        }
       }
       if (valid && matchedLegacy) return profile;
     }
@@ -302,6 +311,21 @@ export class SchemaMigrationRunner {
       && Boolean(this.db.prepare(`SELECT 1 FROM _memory_frame_integrity_markers WHERE marker='memory_frame_integrity_0047'`).get())
       && !Boolean(this.db.prepare(`SELECT 1 FROM memory_atlas_alias_supports s LEFT JOIN memory_frames f ON f.frame_id=s.source_frame_id WHERE s.status='active' AND (f.frame_id IS NULL OR f.status<>'active') LIMIT 1`).get());
     if (version === '0048') return this.hasColumns('topology_projection_state', ['project_id', 'projection_version', 'status', 'time_zone', 'updated_at', 'error']);
+    if (version === '0049') return this.hasColumns('time_buckets', ['bucket_id', 'project_id', 'time_zone', 'bucket_type', 'bucket_start', 'bucket_end'])
+      && this.hasColumns('temporal_adjacency', ['project_id', 'time_zone', 'source_bucket_id', 'adjacent_bucket_id'])
+      && this.hasColumns('cognitive_nodes', ['node_id', 'project_id', 'node_type', 'node_key'])
+      && this.hasColumns('cognitive_edges', ['edge_id', 'project_id', 'source_node_id', 'target_node_id'])
+      && this.hasUniqueIndex('time_buckets', ['project_id', 'time_zone', 'bucket_type', 'bucket_start', 'bucket_end'])
+      && this.hasUniqueIndex('cognitive_nodes', ['project_id', 'node_type', 'node_key'])
+      && this.hasUniqueIndex('cognitive_edges', ['project_id', 'source_node_id', 'target_node_id', 'edge_type'])
+      && !Boolean(this.db.prepare(`SELECT 1 FROM time_bucket_entries e JOIN time_buckets b ON b.bucket_id=e.bucket_id WHERE COALESCE(e.project_id,'')<>b.project_id LIMIT 1`).get())
+      && !Boolean(this.db.prepare(`SELECT 1 FROM cognitive_edges e LEFT JOIN cognitive_nodes s ON s.node_id=e.source_node_id LEFT JOIN cognitive_nodes t ON t.node_id=e.target_node_id WHERE s.node_id IS NULL OR t.node_id IS NULL OR s.project_id<>e.project_id OR t.project_id<>e.project_id LIMIT 1`).get());
+    if (version === '0050') return this.hasColumns('topology_time_rebuild_jobs', ['project_id', 'generation', 'time_zone', 'status', 'cursor_created_at', 'cursor_neuron_id', 'neuron_count', 'updated_at', 'error'])
+      && this.hasColumns('topology_time_rebuild_buckets', ['generation', 'bucket_id', 'project_id', 'time_zone', 'bucket_type', 'bucket_start', 'bucket_end', 'label'])
+      && this.hasColumns('topology_time_rebuild_entries', ['generation', 'bucket_id', 'neuron_id', 'project_id', 'created_at'])
+      && this.hasColumns('topology_time_rebuild_active_neurons', ['generation', 'neuron_id', 'project_id', 'created_at', 'title'])
+      && Boolean(this.db.prepare(`SELECT 1 FROM pragma_index_list('topology_time_rebuild_entries') WHERE name='idx_topology_time_rebuild_entries_neuron'`).get())
+      && Boolean(this.db.prepare(`SELECT 1 FROM pragma_index_list('topology_time_rebuild_active_neurons') WHERE name='idx_topology_time_rebuild_active_neurons'`).get());
     return true;
   }
 
@@ -313,5 +337,15 @@ export class SchemaMigrationRunner {
     if (!this.tableExists(table)) return false;
     const columns = new Set((this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((row) => row.name));
     return names.every((name) => columns.has(name));
+  }
+
+  private hasUniqueIndex(table: string, names: string[]): boolean {
+    if (!this.tableExists(table)) return false;
+    const indexes = this.db.prepare(`PRAGMA index_list(${table})`).all() as Array<{ name?: string; unique?: number }>;
+    return indexes.some((index) => {
+      if (!index.name || Number(index.unique) !== 1) return false;
+      const columns = this.db.prepare(`PRAGMA index_info(${index.name})`).all() as Array<{ name?: string }>;
+      return columns.map((column) => column.name).join('|') === names.join('|');
+    });
   }
 }

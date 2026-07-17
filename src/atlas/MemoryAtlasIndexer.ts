@@ -53,8 +53,8 @@ export class MemoryAtlasIndexer {
         reviewNeeded += result.reviewNeeded;
         this.store.aggregateFacetNodeSupport(id);
       }
-      if (projectId && this.frameProjector) this.frameProjector.rebuild(projectId);
-      else if (!projectId && this.frameProjector) for (const id of projects) this.frameProjector.rebuild(id);
+      if (projectId && this.frameProjector) this.frameProjector.rebuild(projectId, Date.now(), { canonicalDocumentsRebuilt: true });
+      else if (!projectId && this.frameProjector) for (const id of projects) this.frameProjector.rebuild(id, Date.now(), { canonicalDocumentsRebuilt: true });
       if (projectId) {
         this.store.markProjectionClean(projectId, { actions, curatedEpisodes, facetEdges, reviewNeeded, projectionVersion: 'v2', frameSchemaVersion: 'memory_frame.v1' });
       } else {
