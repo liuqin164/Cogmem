@@ -490,7 +490,7 @@ export class EventStore {
             params.push(filters.startTime);
         }
         if (filters?.endTime !== undefined) {
-            conditions.push('occurred_at <= ?');
+            conditions.push('occurred_at < ?');
             params.push(filters.endTime);
         }
         if (filters?.sinceGlobalSeq !== undefined) {
@@ -632,7 +632,7 @@ export class EventStore {
             params.push(options.startTime);
         }
         if (options.endTime !== undefined) {
-            conditions.push('e.occurred_at <= ?');
+            conditions.push('e.occurred_at < ?');
             params.push(options.endTime);
         }
         params.push(limit);
@@ -835,7 +835,7 @@ export class EventStore {
             params.push(options.startTime);
         }
         if (options.endTime !== undefined) {
-            conditions.push('e.occurred_at <= ?');
+            conditions.push('e.occurred_at < ?');
             params.push(options.endTime);
         }
         params.push(limit);

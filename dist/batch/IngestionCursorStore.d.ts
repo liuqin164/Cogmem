@@ -1,3 +1,4 @@
+import Database from 'bun:sqlite';
 import type { SourceAdapterKind, SourceDefinition } from '../adapters/types.js';
 export interface IngestionSourceCursor {
     sourceId: string;
@@ -25,8 +26,9 @@ export interface ProcessedSourceRecord {
 }
 export declare class IngestionCursorStore {
     private db;
+    private readonly ownsDb;
     private closed;
-    constructor(dbPath?: string);
+    constructor(dbOrPath?: Database | string);
     private initializeSchema;
     registerSource(source: SourceDefinition): void;
     listRegisteredSources(): IngestionSourceCursor[];

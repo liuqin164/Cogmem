@@ -16,7 +16,7 @@ export class TopologyCompiler {
             unitId: consolidation.interactionUnit?.unitId,
             createdAt
         };
-        const timeBuckets = this.attachTimeBuckets(createdAt, projectId, ref, input.timeZone);
+        const timeBuckets = input.temporalEnabled === false ? [] : this.attachTimeBuckets(createdAt, projectId, ref, input.timeZone);
         const branchIds = projectId ? this.attachProjectBranches(projectId, neuron, consolidation, ref) : [];
         const taskIds = this.attachTaskBranches(projectId, neuron, consolidation, ref);
         const clusterIds = this.attachEventClusters(projectId, neuron, consolidation, ref);

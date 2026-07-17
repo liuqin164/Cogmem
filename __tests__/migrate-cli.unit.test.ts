@@ -40,13 +40,13 @@ test('cogmem migrate plans and upgrades a 2.7.1 database with a backup', async (
 
   const dryRun = await run(['--db', dbPath, '--dry-run', '--json']);
   expect(dryRun.exitCode).toBe(0);
-    expect(JSON.parse(dryRun.stdout).pending).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047', '0048', '0049', '0050']);
+    expect(JSON.parse(dryRun.stdout).pending).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047', '0048', '0049', '0050', '0051']);
   expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='_schema_migrations'`).get()).toBeNull();
 
   const applied = await run(['--db', dbPath, '--yes', '--backup', '--json']);
   expect(applied.exitCode).toBe(0);
   const result = JSON.parse(applied.stdout);
-    expect(result.applied).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047', '0048', '0049', '0050']);
+    expect(result.applied).toEqual(['0015', '0016', '0017', '0018', '0019', '0020', '0021', '0022', '0023', '0024', '0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047', '0048', '0049', '0050', '0051']);
   expect(existsSync(result.backupPath)).toBe(true);
   const backup = new Database(result.backupPath, { readonly: true });
   expect(backup.prepare('SELECT value FROM legacy_wal_evidence').get()).toEqual({
@@ -64,7 +64,7 @@ test('cogmem migrate plans and upgrades a 2.7.1 database with a backup', async (
   expect(transitionIndexes.map((index) => index.name)).toContain('idx_prospective_transitions_candidate');
   const strategyIndexes = migrated.prepare(`PRAGMA index_list(context_strategy_outcomes)`).all() as Array<{ name: string }>;
   expect(strategyIndexes.map((index) => index.name)).toContain('idx_context_strategy_project_time');
-  expect(migrated.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '50' });
+  expect(migrated.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '51' });
   expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'topic_nodes'`).get()).toEqual({ name: 'topic_nodes' });
   expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_episodes'`).get()).toEqual({ name: 'memory_episodes' });
   expect(migrated.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episodes_one_active_scope'`).get()).toEqual({ name: 'idx_memory_episodes_one_active_scope' });
@@ -107,10 +107,10 @@ test('real f71b20a source and dist databases upgrade through current source and 
 
       const upgraded = await run(['--db', dbPath, '--yes', '--json'], target);
       expect({ fixture, target: target === migrateBin ? 'source' : 'dist', stderr: upgraded.stderr, exitCode: upgraded.exitCode }).toMatchObject({ exitCode: 0 });
-      expect(JSON.parse(upgraded.stdout).applied).toEqual(['0046', '0047', '0048', '0049', '0050']);
+      expect(JSON.parse(upgraded.stdout).applied).toEqual(['0046', '0047', '0048', '0049', '0050', '0051']);
 
       const db = new Database(dbPath, { readonly: true });
-      expect(db.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0050' });
+      expect(db.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0051' });
       expect(db.prepare(`SELECT COUNT(*) AS count FROM _schema_migrations WHERE checksum IS NULL OR checksum=''`).get()).toEqual({ count: 0 });
       db.close();
 

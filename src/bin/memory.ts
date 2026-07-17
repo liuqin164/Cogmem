@@ -41,6 +41,7 @@ interface MemoryArgs {
   agentId?: string;
   intent?: AgentRecallIntent;
   projectId?: string;
+  global: boolean;
   collection?: string;
   workspaceId?: string;
   threadId?: string;
@@ -112,6 +113,7 @@ function readArgs(argv: string[]): MemoryArgs {
     agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
     intent: recallIntentArg(values, 'intent'),
     projectId: stringArg(values, 'project') || stringArg(values, 'project-id'),
+    global: values.global === true,
     collection: stringArg(values, 'collection'),
     workspaceId: stringArg(values, 'workspace') || stringArg(values, 'workspace-id'),
     threadId: stringArg(values, 'thread') || stringArg(values, 'thread-id'),
@@ -171,10 +173,11 @@ function usage(): string {
     '  graph-path           find a bounded path from --from to --to',
     '  graph-timeline       reconstruct entity/time/action history for --query',
     '  graph-reindex        reproject one Atlas episode/card by --event or --episode without rebuilding the whole graph',
-    '  rebuild-topology     explicitly rebuild project-scoped time and cognitive projections',
+    '  rebuild-topology     explicitly rebuild project or global time and cognitive projections',
     '',
     'Common options:',
     '  --project <id>       scope to one project',
+    '  --global             select the projectless/global scope for topology rebuild',
     '  --collection <name>  recall from a named collection; default excludes collection:theseus',
     '  --workspace <id>     scope to one workspace',
     '  --thread <id>        scope to one thread',
@@ -734,8 +737,8 @@ function runBind(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown
 }
 
 function runTopologyRebuild(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
-  if (!args.projectId) throw new Error(`rebuild-topology requires --project.\n${usage()}`);
-  return kernel.rebuildProjectTimeTopology(args.projectId) as unknown as Record<string, unknown>;
+  if (Boolean(args.projectId) === args.global) throw new Error(`rebuild-topology requires exactly one of --project or --global.\n${usage()}`);
+  return kernel.rebuildProjectTimeTopology(args.global ? undefined : args.projectId) as unknown as Record<string, unknown>;
 }
 
 function runFrame(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
@@ -1036,7 +1039,7 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     return;
   }
   if (command === 'rebuild-topology') {
-    console.log(`project: ${payload.projectId}`);
+    console.log(`project: ${payload.projectId || '__global__'}`);
     console.log(`timeZone: ${payload.timeZone}`);
     console.log(`neurons: ${payload.neurons}`);
     console.log(`buckets: ${payload.buckets}`);

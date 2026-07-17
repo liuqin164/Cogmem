@@ -4,6 +4,7 @@ import type { TemporalBranchSearch } from './TemporalBranchSearch.js';
 import type { PulseRetrievalEngine } from './PulseRetrievalEngine.js';
 import type { NarrativeRecallAssembler } from './NarrativeRecallAssembler.js';
 import type { UniverseTraversalExecutor } from './UniverseTraversalExecutor.js';
+import type { ProjectClockContext } from '../utils/LocalDateContext.js';
 
 export interface UniverseNavigationResult {
   compiledQuery: ReturnType<QueryCompiler['compile']>;
@@ -36,6 +37,7 @@ export class UniverseNavigator {
     startTime?: number;
     endTime?: number;
     temporalEnabled?: boolean;
+    clock: Pick<ProjectClockContext, 'now' | 'localDateNow' | 'timeZone'>;
     topologyIds: string[];
     branchIds: string[];
     temporalBucketIds: string[];
@@ -44,7 +46,7 @@ export class UniverseNavigator {
     cognitiveGraphIds: string[];
     entityNeuronIds: string[];
   }): UniverseNavigationResult {
-    const compiledQuery = this.queryCompiler.compile(input.query, input.projectId);
+    const compiledQuery = this.queryCompiler.compile(input.query, input.projectId, input.clock);
     const plan = this.retrievalPlanner.plan(compiledQuery.ir);
     const startTime = input.startTime ?? compiledQuery.ir.temporal.start;
     const endTime = input.endTime ?? compiledQuery.ir.temporal.end;
@@ -70,8 +72,8 @@ export class UniverseNavigator {
       entityIds: compiledQuery.entityResolution.resolved.map((entity) => entity.entityId),
       topologyIds: Array.from(new Set([...input.topologyIds, ...branchSearch.neuronIds, ...branchSearch.denseJointNeuronIds])),
       branchIds: Array.from(new Set([...input.branchIds, ...branchSearch.neuronIds])),
-      temporalBucketIds: Array.from(new Set([...input.temporalBucketIds, ...branchSearch.temporalTraversal.bucketIds])),
-      temporalNeuronIds: Array.from(new Set([...input.temporalNeuronIds, ...branchSearch.temporalTraversal.neuronIds])),
+      temporalBucketIds: input.temporalEnabled === false ? [] : Array.from(new Set([...input.temporalBucketIds, ...branchSearch.temporalTraversal.bucketIds])),
+      temporalNeuronIds: input.temporalEnabled === false ? [] : Array.from(new Set([...input.temporalNeuronIds, ...branchSearch.temporalTraversal.neuronIds])),
       graphIds: input.graphIds,
       cognitiveGraphIds: input.cognitiveGraphIds,
       entityNeuronIds: Array.from(new Set([...input.entityNeuronIds, ...branchSearch.denseJointNeuronIds]))

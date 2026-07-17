@@ -103,27 +103,32 @@ export class SchemaMigrationRunner {
     const update = this.db.prepare(`UPDATE _schema_migrations SET checksum=? WHERE version=? AND checksum=?`);
     for (const row of rows) {
       const legacyChecksum = profile[row.version];
-      if (legacyChecksum === row.checksum) update.run(MIGRATION_DIGESTS[row.version], row.version, legacyChecksum);
+      if (legacyChecksum && legacyChecksum === row.checksum) update.run(MIGRATION_DIGESTS[row.version], row.version, legacyChecksum);
     }
   }
 
   private backfillChecksums(): void {
     const update = this.db.prepare(`UPDATE _schema_migrations SET checksum=? WHERE version=? AND (checksum IS NULL OR checksum='')`);
-    for (const migration of this.migrations) update.run(this.migrationChecksum(migration), migration.version);
+    for (const [version, checksum] of Object.entries(MIGRATION_DIGESTS)) update.run(checksum, version);
   }
 
   private rewriteChecksums(): void {
     const update = this.db.prepare(`UPDATE _schema_migrations SET checksum=? WHERE version=? AND (checksum IS NULL OR checksum='')`);
-    for (const migration of this.migrations) update.run(this.migrationChecksum(migration), migration.version);
+    for (const [version, checksum] of Object.entries(MIGRATION_DIGESTS)) update.run(checksum, version);
   }
 
   private assertRecordedChecksums(options: { allowKnownLegacy?: boolean } = {}): void {
     if (!Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info('_schema_migrations') WHERE name='checksum'`).get())) return;
     const rows = this.recordedChecksums();
     const legacyProfile = options.allowKnownLegacy ? this.matchingLegacyReceiptProfile(rows) : undefined;
+    const checksumNormalizationApplied = rows.some((row) => row.version >= '0046');
     for (const row of rows) {
       const digest = MIGRATION_DIGESTS[row.version];
       if (!digest) throw new Error(`migration_checksum_unknown:${row.version}`);
+      if (!row.checksum) {
+        if (!checksumNormalizationApplied && row.version < '0046') continue;
+        throw new Error(`migration_checksum_missing:${row.version}`);
+      }
       const knownLegacy = legacyProfile?.[row.version] === row.checksum;
       if (row.checksum !== digest && !(options.allowKnownLegacy && knownLegacy)) {
         throw new Error(`migration_checksum_mismatch:${row.version}`);
@@ -131,11 +136,11 @@ export class SchemaMigrationRunner {
     }
   }
 
-  private recordedChecksums(): Array<{ version: string; description: string; checksum: string }> {
-    return this.db.prepare(`SELECT version, description, checksum FROM _schema_migrations WHERE checksum IS NOT NULL AND checksum<>'' ORDER BY version`).all() as Array<{ version: string; description: string; checksum: string }>;
+  private recordedChecksums(): Array<{ version: string; description: string; checksum: string | null }> {
+    return this.db.prepare(`SELECT version, description, checksum FROM _schema_migrations ORDER BY version`).all() as Array<{ version: string; description: string; checksum: string | null }>;
   }
 
-  private matchingLegacyReceiptProfile(rows: Array<{ version: string; checksum: string }>): Readonly<Record<string, string>> | undefined {
+  private matchingLegacyReceiptProfile(rows: Array<{ version: string; checksum: string | null }>): Readonly<Record<string, string>> | undefined {
     for (const profile of Object.values(LEGACY_MIGRATION_RECEIPT_PROFILES)) {
       const profileVersions = Object.keys(profile).sort();
       const expectedVersions = rows.some((row) => row.version < '0015')
@@ -326,6 +331,15 @@ export class SchemaMigrationRunner {
       && this.hasColumns('topology_time_rebuild_active_neurons', ['generation', 'neuron_id', 'project_id', 'created_at', 'title'])
       && Boolean(this.db.prepare(`SELECT 1 FROM pragma_index_list('topology_time_rebuild_entries') WHERE name='idx_topology_time_rebuild_entries_neuron'`).get())
       && Boolean(this.db.prepare(`SELECT 1 FROM pragma_index_list('topology_time_rebuild_active_neurons') WHERE name='idx_topology_time_rebuild_active_neurons'`).get());
+    if (version === '0051') return this.hasColumns('topology_projection_state', ['source_revision'])
+      && this.hasColumns('topology_time_rebuild_jobs', ['source_revision'])
+      && this.hasColumns('topology_source_revisions', ['project_id', 'revision', 'updated_at'])
+      && this.hasColumns('topology_time_rebuild_cognitive_nodes', ['generation', 'node_id', 'project_id'])
+      && this.hasColumns('topology_time_rebuild_cognitive_edges', ['generation', 'edge_id', 'project_id'])
+      && this.hasColumns('topology_time_rebuild_adjacency', ['generation', 'project_id', 'source_bucket_id', 'adjacent_bucket_id'])
+      && Boolean(this.db.prepare(`SELECT 1 FROM pragma_index_list('time_bucket_entries') WHERE name='idx_time_bucket_entries_reference_unique'`).get())
+      && !Boolean(this.db.prepare(`SELECT 1 FROM topology_source_revisions r LEFT JOIN topology_projection_state s ON s.project_id=r.project_id WHERE s.project_id IS NULL LIMIT 1`).get())
+      && !Boolean(this.tableExists('neurons') && this.db.prepare(`SELECT 1 FROM (SELECT COALESCE(project_id,'') AS project_id,COUNT(*) AS source_count FROM neurons WHERE is_deleted=0 GROUP BY COALESCE(project_id,'')) n LEFT JOIN topology_source_revisions r ON r.project_id=n.project_id LEFT JOIN topology_projection_state s ON s.project_id=n.project_id WHERE r.project_id IS NULL OR r.revision<n.source_count OR s.project_id IS NULL LIMIT 1`).get());
     return true;
   }
 

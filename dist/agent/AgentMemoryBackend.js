@@ -295,6 +295,9 @@ export class KernelAgentMemoryBackend {
                 limit: retrievalLimit,
                 startTime: query.startTime,
                 endTime: query.endTime,
+                now: query.now,
+                localDateNow: query.localDateNow,
+                timeZone: query.timeZone,
             })
             : {
                 query: queryPlan.primarySearchText,
@@ -953,6 +956,9 @@ export class KernelAgentMemoryBackend {
                 limit: retrievalLimit,
                 startTime: query.startTime,
                 endTime: query.endTime,
+                now: query.now,
+                localDateNow: query.localDateNow,
+                timeZone: query.timeZone,
             }).rawEvidence;
             const items = this.filterAgentEvidence(rawEvidence, query.agentId, query.collection, query.excludeSessionId)
                 .map((neuron) => this.toAgentRecallItem(neuron));

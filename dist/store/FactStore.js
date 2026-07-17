@@ -3,9 +3,17 @@ import { randomUUID } from 'crypto';
 export class FactStore {
     encryptionProvider;
     db;
-    constructor(dbPath = ':memory:', encryptionProvider) {
+    ownsDb;
+    constructor(dbOrPath = ':memory:', encryptionProvider) {
         this.encryptionProvider = encryptionProvider;
-        this.db = new Database(dbPath);
+        if (typeof dbOrPath === 'string') {
+            this.db = new Database(dbOrPath);
+            this.ownsDb = true;
+        }
+        else {
+            this.db = dbOrPath;
+            this.ownsDb = false;
+        }
         this.initializeSchema();
     }
     initializeSchema() {
@@ -310,7 +318,8 @@ export class FactStore {
     `).run(status, confidence ?? null, status, Date.now(), eventId);
     }
     close() {
-        this.db.close();
+        if (this.ownsDb)
+            this.db.close();
     }
     mapFact(row) {
         return {

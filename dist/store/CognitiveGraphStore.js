@@ -133,11 +133,15 @@ export class CognitiveGraphStore {
         const limit = input.limit ?? 120;
         const hopLimit = Math.max(1, input.hopLimit ?? 2);
         const seedNodeIds = new Set();
-        const suppliedSeed = input.projectId
-            ? this.db.prepare(`SELECT 1 FROM cognitive_nodes WHERE node_id=? AND project_id=? LIMIT 1`)
-            : undefined;
+        const suppliedSeed = this.db.prepare(`
+      SELECT 1 FROM cognitive_nodes
+      WHERE node_id=?
+        AND (? IS NULL OR project_id=?)
+        AND (?=0 OR node_type<>'time_bucket')
+      LIMIT 1
+    `);
         for (const nodeId of input.seedNodeIds ?? []) {
-            if (!input.projectId || suppliedSeed?.get(nodeId, input.projectId))
+            if (suppliedSeed.get(nodeId, input.projectId ?? null, input.projectId ?? null, input.excludeTemporal ? 1 : 0))
                 seedNodeIds.add(nodeId);
         }
         const traversedNodeIds = new Set();
@@ -149,7 +153,8 @@ export class CognitiveGraphStore {
         FROM cognitive_nodes
         WHERE node_key = ?
           AND (? IS NULL OR project_id = ?)
-      `).all(key, input.projectId || null, input.projectId || null);
+          AND (? = 0 OR node_type <> 'time_bucket')
+      `).all(key, input.projectId || null, input.projectId || null, input.excludeTemporal ? 1 : 0);
             for (const row of rows)
                 seedNodeIds.add(row.node_id);
         }
@@ -158,10 +163,11 @@ export class CognitiveGraphStore {
         SELECT node_id
         FROM cognitive_nodes
         WHERE (? IS NULL OR project_id = ?)
+          AND (? = 0 OR node_type <> 'time_bucket')
           AND (lower(title) LIKE ? OR lower(node_key) LIKE ?)
         ORDER BY updated_at DESC
         LIMIT ?
-      `).all(input.projectId || null, input.projectId || null, `%${term}%`, `%${term}%`, limit);
+      `).all(input.projectId || null, input.projectId || null, input.excludeTemporal ? 1 : 0, `%${term}%`, `%${term}%`, limit);
             for (const row of rows)
                 seedNodeIds.add(row.node_id);
         }
@@ -185,9 +191,10 @@ export class CognitiveGraphStore {
           WHERE (ce.source_node_id = ? OR ce.target_node_id = ?)
             AND (? IS NULL OR ce.project_id = ?)
             AND (? IS NULL OR cn.project_id = ?)
+            AND (? = 0 OR (ce.edge_type <> 'occurred_in_time_bucket' AND cn.node_type <> 'time_bucket'))
           ORDER BY ce.created_at DESC
           LIMIT ?
-        `).all(nodeId, nodeId, nodeId, input.projectId || null, input.projectId || null, input.projectId || null, input.projectId || null, limit);
+        `).all(nodeId, nodeId, nodeId, input.projectId || null, input.projectId || null, input.projectId || null, input.projectId || null, input.excludeTemporal ? 1 : 0, limit);
                 traversedEdgeCount += rows.length;
                 for (const row of rows) {
                     const neighborId = row.source_node_id === nodeId ? row.target_node_id : row.source_node_id;

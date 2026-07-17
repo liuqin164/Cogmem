@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { SchemaMigrationRunner } from '../src/migrations/SchemaMigrationRunner.js';
 import { migration_0015 } from '../src/migrations/0015_memory_governance.js';
 import { migration_0049 } from '../src/migrations/0049_project_scoped_graph_identity.js';
-import { CANONICAL_MIGRATION_SOURCE_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
+import { migration_0046 } from '../src/migrations/0046_stable_migration_checksums.js';
+import { CANONICAL_MIGRATION_SOURCE_DIGESTS, FROZEN_MIGRATION_DEPENDENCY_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 describe('schema migration runner', () => {
   test('plans pending migrations without mutating during dry run', () => {
@@ -101,6 +102,42 @@ describe('schema migration runner', () => {
       expect(CANONICAL_MIGRATION_SOURCE_DIGESTS[version]).toBe(sourceDigest);
       expect(MIGRATION_DIGESTS[version]).toBe(sourceDigest);
     }
+  });
+
+  test('historical 0049 identity dependencies remain frozen', () => {
+    const root = join(import.meta.dir, '..', 'src');
+    const digest = (path: string) => createHash('sha256').update(readFileSync(join(root, path), 'utf8').replace(/\r\n/g, '\n')).digest('hex');
+    expect(digest('engine/CognitiveGraphIdentity.ts')).toBe(FROZEN_MIGRATION_DEPENDENCY_DIGESTS['0049:CognitiveGraphIdentity']);
+    expect(digest('topology/TimeBucketIdentity.ts')).toBe(FROZEN_MIGRATION_DEPENDENCY_DIGESTS['0049:TimeBucketIdentity']);
+  });
+
+  test('rejects missing checksums after checksum normalization', () => {
+    for (const [version, checksum] of [['0001', null], ['0046', ''], ['0049', null], ['0050', '']] as const) {
+      const db = new Database(':memory:');
+      db.exec(`CREATE TABLE _schema_migrations (version TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL, checksum TEXT);`);
+      db.prepare(`INSERT INTO _schema_migrations VALUES (?,?,?,?)`).run('0046', 'checksum normalization', new Date(0).toISOString(), version === '0046' ? checksum : MIGRATION_DIGESTS['0046']);
+      if (version !== '0046') db.prepare(`INSERT INTO _schema_migrations VALUES (?,?,?,?)`).run(version, `migration-${version}`, new Date(0).toISOString(), checksum);
+      expect(() => new SchemaMigrationRunner(db, [migration_0015], { readonly: true }).run({ dryRun: true })).toThrow(`migration_checksum_missing:${version}`);
+      db.close();
+    }
+  });
+
+  test('permits legacy null receipts only before checksum normalization', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE _schema_migrations (version TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL, checksum TEXT);`);
+    db.prepare(`INSERT INTO _schema_migrations VALUES (?,?,?,NULL)`).run('0015', 'legacy pre-checksum receipt', new Date(0).toISOString());
+    expect(() => new SchemaMigrationRunner(db, [migration_0015], { readonly: true }).run({ dryRun: true })).not.toThrow();
+    db.close();
+  });
+
+  test('0046 normalizes early receipts even when a Kernel runner uses a migration subset', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE _schema_migrations (version TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL, checksum TEXT);`);
+    db.prepare(`INSERT INTO _schema_migrations VALUES (?,?,?,NULL)`).run('0001', 'legacy early receipt', new Date(0).toISOString());
+    const result = new SchemaMigrationRunner(db, [migration_0046]).run();
+    expect(result.applied).toEqual(['0046']);
+    expect(db.prepare(`SELECT checksum FROM _schema_migrations WHERE version='0001'`).get()).toEqual({ checksum: MIGRATION_DIGESTS['0001'] });
+    db.close();
   });
 
   test('rejects a self-signed description checksum outside a complete audited profile', () => {

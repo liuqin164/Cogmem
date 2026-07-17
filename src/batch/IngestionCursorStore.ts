@@ -29,10 +29,17 @@ export interface ProcessedSourceRecord {
 
 export class IngestionCursorStore {
   private db: Database;
+  private readonly ownsDb: boolean;
   private closed = false;
 
-  constructor(dbPath: string = ':memory:') {
-    this.db = new Database(dbPath);
+  constructor(dbOrPath: Database | string = ':memory:') {
+    if (typeof dbOrPath === 'string') {
+      this.db = new Database(dbOrPath);
+      this.ownsDb = true;
+    } else {
+      this.db = dbOrPath;
+      this.ownsDb = false;
+    }
     this.initializeSchema();
   }
 
@@ -208,7 +215,7 @@ export class IngestionCursorStore {
 
   close(): void {
     if (this.closed) return;
-    this.db.close();
+    if (this.ownsDb) this.db.close();
     this.closed = true;
   }
 

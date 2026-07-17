@@ -33,6 +33,7 @@ export declare class CognitiveGraphStore {
         seedNodeIds?: string[];
         limit?: number;
         hopLimit?: number;
+        excludeTemporal?: boolean;
     }): {
         seedNodeIds: string[];
         traversedNodeIds: string[];

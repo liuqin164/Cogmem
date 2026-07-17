@@ -35,7 +35,8 @@ export interface EventRecord {
 export declare class FactStore {
     private readonly encryptionProvider?;
     private db;
-    constructor(dbPath?: string, encryptionProvider?: EncryptionProvider | undefined);
+    private readonly ownsDb;
+    constructor(dbOrPath?: Database | string, encryptionProvider?: EncryptionProvider | undefined);
     private initializeSchema;
     insertFacts(facts: Array<Omit<FactRecord, 'factId'>>): FactRecord[];
     insertEvents(events: Array<Omit<EventRecord, 'eventId'>>): EventRecord[];

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
+import { NeuronFactory } from '../src/core/Neuron.js';
 import { explainRecallWithKernel } from '../src/recall/RecallExplanation.js';
 import { TopologyCompiler } from '../src/engine/TopologyCompiler.js';
 import { EventStore } from '../src/store/EventStore.js';
@@ -14,6 +15,7 @@ import { TemporalBranchSearch } from '../src/retrieval/TemporalBranchSearch.js';
 import { CognitiveGraphStore } from '../src/store/CognitiveGraphStore.js';
 import { localDateRange, nextCivilDate } from '../src/utils/LocalDateContext.js';
 import { timeBucketId } from '../src/topology/TimeBucketIdentity.js';
+import { SchemaMigrationRunner, migration_0051 } from '../src/migrations/index.js';
 import type { TimeBucketRecord } from '../src/types/index.js';
 
 const bucket = (id: string, start: number, end: number, type: TimeBucketRecord['bucketType'] = 'day'): TimeBucketRecord => ({
@@ -137,7 +139,7 @@ describe('project-local temporal topology regressions', () => {
     const planned = new TopologyCompiler(kernel.topologyStore).planTimeBuckets([first], 'UTC').get(first.id)!;
     const db = kernel.factStore.getDatabase();
     db.transaction(() => {
-      db.prepare(`INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,cursor_created_at,cursor_neuron_id,neuron_count,updated_at,error) VALUES(?,?,?,'building',?,?,1,?,NULL)`).run('p', generation, 'UTC', first.createdAt, first.id, 1000);
+      db.prepare(`INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,cursor_created_at,cursor_neuron_id,neuron_count,updated_at,error,source_revision) VALUES(?,?,?,'building',?,?,1,?,NULL,?)`).run('p', generation, 'UTC', first.createdAt, first.id, 1000, kernel.topologyStore.getTimeProjectionSourceRevision('p'));
       const insertBucket = db.prepare(`INSERT INTO topology_time_rebuild_buckets(generation,bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label) VALUES(?,?,?,?,?,?,?,?)`);
       const insertEntry = db.prepare(`INSERT INTO topology_time_rebuild_entries(generation,bucket_id,neuron_id,project_id,created_at) VALUES(?,?,?,?,?)`);
       for (const entry of planned) {
@@ -239,6 +241,204 @@ describe('project-local temporal topology regressions', () => {
     kernel.close();
   });
 
+  test('projectless memories use a recoverable global time projection', async () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    const first = await kernel.ingest({ content: 'global scope temporal evidence one', createdAt: Date.UTC(2026, 6, 17, 12) });
+    const second = await kernel.ingest({ content: 'global scope temporal evidence two', createdAt: Date.UTC(2026, 6, 18, 12) });
+    const db = kernel.factStore.getDatabase();
+    kernel.topologyStore.markTimeProjection('', 'dirty', 'UTC', 1);
+    db.prepare(`DELETE FROM temporal_adjacency WHERE project_id=''`).run();
+    db.prepare(`DELETE FROM cognitive_edges WHERE project_id='' AND edge_type='occurred_in_time_bucket'`).run();
+    db.prepare(`DELETE FROM cognitive_nodes WHERE project_id='' AND node_type='time_bucket'`).run();
+
+    const rebuilt = kernel.rebuildProjectTimeTopology();
+    expect(rebuilt.projectId).toBe('');
+    expect(rebuilt.neurons).toBe(2);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE project_id='' AND neuron_id IN (?,?)`).get(first.id, second.id)).toEqual({ count: 6 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes WHERE project_id='' AND node_type='time_bucket'`).get()).toEqual({ count: 4 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM temporal_adjacency WHERE project_id=''`).get()).toEqual({ count: 2 });
+    expect(kernel.topologyStore.hasUsableTimeProjection('', 'UTC')).toBe(true);
+    kernel.close();
+  });
+
+  test('an empty project rebuild establishes a usable revision-zero projection', () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    const rebuilt = kernel.rebuildProjectTimeTopology('empty-project');
+    const db = kernel.factStore.getDatabase();
+
+    expect(rebuilt.neurons).toBe(0);
+    expect(db.prepare(`SELECT revision FROM topology_source_revisions WHERE project_id='empty-project'`).get()).toEqual({ revision: 0 });
+    expect(db.prepare(`SELECT status,source_revision FROM topology_projection_state WHERE project_id='empty-project'`).get()).toEqual({ status: 'clean', source_revision: 0 });
+    expect(kernel.topologyStore.hasUsableTimeProjection('empty-project', 'UTC')).toBe(true);
+    kernel.close();
+  });
+
+  test('the first write after an empty rebuild remains an incremental clean projection', async () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    kernel.rebuildProjectTimeTopology('empty-project');
+
+    await kernel.ingest({ projectId: 'empty-project', content: 'first temporal event', createdAt: 1000 });
+    const db = kernel.factStore.getDatabase();
+    expect(db.prepare(`SELECT revision FROM topology_source_revisions WHERE project_id='empty-project'`).get()).toEqual({ revision: 1 });
+    expect(kernel.topologyStore.hasUsableTimeProjection('empty-project', 'UTC')).toBe(true);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE project_id='empty-project'`).get()).toEqual({ count: 3 });
+    kernel.close();
+  });
+
+  test('0051 repairs an upgraded projectless scope that has no projection state', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-global-upgrade-'));
+    const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), projectTimeZone: 'UTC' });
+    await kernel.ingest({ content: 'legacy global scope', createdAt: Date.UTC(2026, 6, 17, 12) });
+    const db = kernel.factStore.getDatabase();
+    db.exec(`
+      DELETE FROM _schema_migrations WHERE version='0051';
+      UPDATE _meta SET value='50' WHERE key='schema_version';
+      DELETE FROM topology_projection_state WHERE project_id='';
+      DELETE FROM topology_source_revisions WHERE project_id='';
+      DELETE FROM temporal_adjacency WHERE project_id='';
+      DELETE FROM cognitive_edges WHERE project_id='' AND edge_type='occurred_in_time_bucket';
+      DELETE FROM cognitive_nodes WHERE project_id='' AND node_type='time_bucket';
+    `);
+
+    const applied = new SchemaMigrationRunner(db, [migration_0051]).run();
+    expect(applied.applied).toEqual(['0051']);
+    expect(db.prepare(`SELECT status,source_revision FROM topology_projection_state WHERE project_id=''`).get()).toEqual({ status: 'dirty', source_revision: 0 });
+    expect(db.prepare(`SELECT revision FROM topology_source_revisions WHERE project_id=''`).get()).toEqual({ revision: 1 });
+    kernel.rebuildProjectTimeTopology();
+    expect(kernel.topologyStore.hasUsableTimeProjection('', 'UTC')).toBe(true);
+    kernel.close();
+  });
+
+  test('0051 gives an upgraded empty projection an explicit revision-zero watermark', () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    const db = kernel.factStore.getDatabase();
+    db.exec(`
+      DELETE FROM _schema_migrations WHERE version='0051';
+      UPDATE _meta SET value='50' WHERE key='schema_version';
+      DELETE FROM topology_source_revisions WHERE project_id='empty-upgrade';
+      INSERT INTO topology_projection_state(project_id,projection_version,status,time_zone,updated_at,error,source_revision)
+      VALUES('empty-upgrade',3,'clean','UTC',1,NULL,0)
+      ON CONFLICT(project_id) DO UPDATE SET projection_version=3,status='clean',time_zone='UTC',source_revision=0;
+    `);
+
+    const applied = new SchemaMigrationRunner(db, [migration_0051]).run();
+    expect(applied.applied).toEqual(['0051']);
+    expect(db.prepare(`SELECT revision FROM topology_source_revisions WHERE project_id='empty-upgrade'`).get()).toEqual({ revision: 0 });
+    expect(kernel.topologyStore.hasUsableTimeProjection('empty-upgrade', 'UTC')).toBe(false);
+    kernel.rebuildProjectTimeTopology('empty-upgrade');
+    expect(kernel.topologyStore.hasUsableTimeProjection('empty-upgrade', 'UTC')).toBe(true);
+    kernel.close();
+  });
+
+  test('dirty projection ingest never writes partial main temporal state', async () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    await kernel.ingest({ projectId: 'p', content: 'first clean temporal event', createdAt: 1000 });
+    const db = kernel.factStore.getDatabase();
+    kernel.topologyStore.markTimeProjection('p', 'dirty', 'UTC', 2);
+    const beforeEntries = db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE project_id='p'`).get();
+    const beforeNodes = db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes WHERE project_id='p' AND node_type='time_bucket'`).get();
+
+    await kernel.ingest({ projectId: 'p', content: 'second event while projection is dirty', createdAt: 2000 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE project_id='p'`).get()).toEqual(beforeEntries);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes WHERE project_id='p' AND node_type='time_bucket'`).get()).toEqual(beforeNodes);
+    const navigation = kernel.navigateMemory('today', { projectId: 'p', now: 2000, localDateNow: '1970-01-01', timeZone: 'UTC' });
+    expect(navigation.navigation?.branchSearch.temporalTraversal.neuronIds).toEqual([]);
+    expect(navigation.navigation?.pulse.temporalNeuronIds ?? []).toEqual([]);
+    kernel.close();
+  });
+
+  test('stale ready rebuild is replaced when source revision changes', async () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    await kernel.ingest({ projectId: 'p', content: 'source revision one', createdAt: 1000 });
+    const db = kernel.factStore.getDatabase();
+    const staleRevision = kernel.topologyStore.getTimeProjectionSourceRevision('p');
+    db.prepare(`INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,neuron_count,updated_at,source_revision) VALUES('p','stale-ready','UTC','ready',1,1,?)`).run(staleRevision);
+    kernel.topologyStore.markTimeProjection('p', 'building', 'UTC', 1, undefined, staleRevision);
+    await kernel.ingest({ projectId: 'p', content: 'source revision two', createdAt: 2000 });
+
+    const rebuilt = kernel.rebuildProjectTimeTopology('p');
+    expect(rebuilt.neurons).toBe(2);
+    expect(kernel.topologyStore.hasUsableTimeProjection('p', 'UTC')).toBe(true);
+    expect(db.prepare(`SELECT COUNT(DISTINCT neuron_id) AS count FROM time_bucket_entries WHERE project_id='p'`).get()).toEqual({ count: 2 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM topology_time_rebuild_jobs WHERE project_id='p'`).get()).toEqual({ count: 0 });
+    kernel.close();
+  });
+
+  test('a rebuild must own the ready job before replacing the live projection', async () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    await kernel.ingest({ projectId: 'p', content: 'projection that must survive a lost publish claim', createdAt: 1000 });
+    const db = kernel.factStore.getDatabase();
+    const liveEntries = db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE project_id='p'`).get();
+    const sourceRevision = kernel.topologyStore.getTimeProjectionSourceRevision('p');
+    db.exec(`
+      INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,neuron_count,updated_at,source_revision)
+      VALUES('p','claim-race','UTC','ready',1,1,${sourceRevision});
+      CREATE TRIGGER simulate_lost_rebuild_claim
+      BEFORE UPDATE OF updated_at ON topology_time_rebuild_jobs
+      WHEN OLD.project_id='p' AND OLD.generation='claim-race' AND OLD.status='ready'
+      BEGIN
+        DELETE FROM topology_time_rebuild_jobs WHERE project_id=OLD.project_id AND generation=OLD.generation;
+      END;
+    `);
+
+    expect(() => kernel.rebuildProjectTimeTopology('p')).toThrow('time_projection_rebuild_publish_conflict');
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE project_id='p'`).get()).toEqual(liveEntries);
+    expect(kernel.topologyStore.hasUsableTimeProjection('p', 'UTC')).toBe(false);
+    db.exec(`DROP TRIGGER simulate_lost_rebuild_claim`);
+    kernel.close();
+  });
+
+  test('direct neuron writers atomically dirty the source revision', async () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    await kernel.ingest({ projectId: 'p', content: 'initial clean projection', createdAt: 1000 });
+    const before = kernel.topologyStore.getTimeProjectionSourceRevision('p');
+    const direct = NeuronFactory.create(
+      'direct semantic writer',
+      kernel.memoryGraph.getLatestNeuronSelfHash('p') || 'genesis',
+      { T: 2000, S: [0, 0, 0], V: [] },
+      { projectId: 'p', type: 'semantic_consolidation', createdAt: 2000, updatedAt: 2000 },
+    );
+
+    kernel.memoryGraph.addNeuron(direct);
+    expect(kernel.topologyStore.getTimeProjectionSourceRevision('p')).toBe(before + 1);
+    expect(kernel.topologyStore.hasUsableTimeProjection('p', 'UTC')).toBe(false);
+    kernel.rebuildProjectTimeTopology('p');
+    expect(kernel.factStore.getDatabase().prepare(`SELECT COUNT(DISTINCT neuron_id) AS count FROM time_bucket_entries WHERE project_id='p'`).get()).toEqual({ count: 2 });
+
+    const beforeMove = kernel.topologyStore.getTimeProjectionSourceRevision('p');
+    kernel.memoryGraph.updateNeuronMetadata(direct.id, { projectId: 'moved', updatedAt: 3000 });
+    expect(kernel.topologyStore.getTimeProjectionSourceRevision('p')).toBe(beforeMove + 1);
+    expect(kernel.topologyStore.getTimeProjectionSourceRevision('moved')).toBe(1);
+    expect(kernel.memoryGraph.getNeuronIdsByProject('p')).not.toContain(direct.id);
+    expect(kernel.memoryGraph.getNeuronIdsByProject('moved')).toContain(direct.id);
+    kernel.close();
+  });
+
+  test('Universe query compilation uses the caller project clock', () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    const now = Date.UTC(2026, 6, 16, 15, 30);
+    const result = kernel.navigateMemory('today', { projectId: 'p', now, localDateNow: '2026-07-17', timeZone: 'Asia/Tokyo' });
+    const expected = localDateRange(2026, 7, 17, 2026, 7, 18, 'Asia/Tokyo');
+    expect(result.navigation?.compiledQuery.ir.temporal.start).toBe(expected.from);
+    expect(result.navigation?.compiledQuery.ir.temporal.end).toBe(expected.to);
+    kernel.close();
+  });
+
+  test('a clean projection becomes unavailable when the Kernel timezone changes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-timezone-validity-'));
+    const dbPath = join(dir, 'memory.db');
+    let kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+    await kernel.ingest({ projectId: 'p', content: 'timezone-sensitive projection', createdAt: Date.UTC(2026, 6, 17, 0) });
+    expect(kernel.topologyStore.hasUsableTimeProjection('p', 'UTC')).toBe(true);
+    kernel.close();
+
+    kernel = createMemoryKernel({ dbPath, projectTimeZone: 'Asia/Tokyo' });
+    expect(kernel.topologyStore.hasUsableTimeProjection('p', 'Asia/Tokyo')).toBe(false);
+    const result = kernel.navigateMemory('today', { projectId: 'p', now: Date.UTC(2026, 6, 17, 0), timeZone: 'Asia/Tokyo' });
+    expect(result.navigation?.branchSearch.temporalTraversal.neuronIds).toEqual([]);
+    kernel.close();
+  });
+
   test('bucket identity includes timezone and DST-sensitive end boundaries', () => {
     const utc = localDateRange(2026, 3, 29, 2026, 3, 30, 'UTC');
     const london = localDateRange(2026, 3, 29, 2026, 3, 30, 'Europe/London');
@@ -263,5 +463,15 @@ describe('project-local temporal topology regressions', () => {
     expect(graph.collectContext({ projectId: 'a', seedNodeIds: [b.nodeId] }).seedNodeIds).toEqual([]);
     graph.close();
     topology.close();
+  });
+
+  test('global cognitive seeds still honor temporal exclusion', () => {
+    const db = new Database(':memory:');
+    const store = new CognitiveGraphStore(db);
+    const time = store.upsertNode({ nodeId: 'time', nodeType: 'time_bucket', nodeKey: 'time:day', title: 'day', createdAt: 1 });
+    const neuron = store.upsertNode({ nodeId: 'neuron', nodeType: 'neuron', nodeKey: 'neuron:n', title: 'memory', sourceNeuronId: 'n', createdAt: 1 });
+    const context = store.collectContext({ seedNodeIds: [time.nodeId, neuron.nodeId], excludeTemporal: true });
+    expect(context.seedNodeIds).toEqual([neuron.nodeId]);
+    store.close();
   });
 });

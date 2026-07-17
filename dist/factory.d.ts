@@ -613,13 +613,14 @@ export declare class MemoryKernel {
         };
     };
     navigateMemory(query: string, options?: MemoryKernelNavigationOptions): MemoryKernelNavigationResult;
-    rebuildProjectTimeTopology(projectId: string): {
+    rebuildProjectTimeTopology(projectId?: string): {
         projectId: string;
         timeZone: string;
         neurons: number;
         buckets: number;
         rebuiltAt: number;
     };
+    private stageTimeProjectionGraph;
     recordRawEvent(input: RawMemoryEventInput): MemoryEvent<{
         text: string;
         metadata?: Record<string, unknown>;

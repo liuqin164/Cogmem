@@ -13,9 +13,26 @@ export declare const MEMORY_FRAME_LIMITS: {
     readonly alias: 1000;
     readonly evidence: 1000;
 };
+export declare const MEMORY_DIMENSIONS: readonly ["actor", "entity", "project", "topic", "issue", "event", "raw_event", "episode", "task", "object", "location", "time", "state"];
+export declare const MEMORY_FRAME_REQUIRED_DIMENSIONS: readonly ["episode", "project"];
 export declare const MEMORY_FRAME_JSON_SCHEMA: {
     readonly type: "object";
     readonly additionalProperties: false;
+    readonly allOf: readonly {
+        properties: {
+            nodes: {
+                contains: {
+                    type: string;
+                    required: string[];
+                    properties: {
+                        dimension: {
+                            const: "project" | "episode";
+                        };
+                    };
+                };
+            };
+        };
+    }[];
     readonly required: readonly ["schemaVersion", "frameId", "projectId", "episodeId", "title", "summary", "episodeKind", "nodes", "relations", "temporalReferences", "stateTransitions", "confidence", "evidenceEventIds", "processor"];
     readonly properties: {
         readonly schemaVersion: {
@@ -65,6 +82,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
         };
         readonly evidenceEventIds: {
             readonly type: "array";
+            readonly minItems: 1;
             readonly maxItems: 1000;
             readonly items: {
                 readonly type: "string";
@@ -78,6 +96,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
         };
         readonly nodes: {
             readonly type: "array";
+            readonly minItems: 1;
             readonly maxItems: 256;
             readonly items: {
                 readonly type: "object";
@@ -91,8 +110,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     };
                     readonly dimension: {
                         readonly type: "string";
-                        readonly minLength: 1;
-                        readonly maxLength: 64;
+                        readonly enum: readonly ["actor", "entity", "project", "topic", "issue", "event", "raw_event", "episode", "task", "object", "location", "time", "state"];
                     };
                     readonly label: {
                         readonly type: "string";
@@ -139,6 +157,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     };
                     readonly evidenceEventIds: {
                         readonly type: "array";
+                        readonly minItems: 1;
                         readonly maxItems: 1000;
                         readonly items: {
                             readonly type: "string";
@@ -179,6 +198,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     };
                     readonly evidenceEventIds: {
                         readonly type: "array";
+                        readonly minItems: 1;
                         readonly maxItems: 1000;
                         readonly items: {
                             readonly type: "string";
@@ -218,6 +238,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     };
                     readonly evidenceEventIds: {
                         readonly type: "array";
+                        readonly minItems: 1;
                         readonly maxItems: 1000;
                         readonly items: {
                             readonly type: "string";
@@ -258,6 +279,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     };
                     readonly evidenceEventIds: {
                         readonly type: "array";
+                        readonly minItems: 1;
                         readonly maxItems: 1000;
                         readonly items: {
                             readonly type: "string";

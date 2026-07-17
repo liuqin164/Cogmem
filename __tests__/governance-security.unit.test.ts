@@ -170,6 +170,7 @@ describe('Governance and security v1.14', () => {
     ]) {
       expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE project_id = ?`).get('forget-me')).toEqual({ count: 0 });
     }
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM time_buckets WHERE project_id = ?`).get('forget-me')).toEqual({ count: 0 });
     expect(kernel.entityStore.findByEntityId(forgottenEntity.entityId)).toBeNull();
     expect(kernel.entityStore.findByEntityId(legacyMentionOnlyEntity.entityId)).toBeNull();
     expect(kernel.entityStore.findByEntityId(keptEntity.entityId)).not.toBeNull();

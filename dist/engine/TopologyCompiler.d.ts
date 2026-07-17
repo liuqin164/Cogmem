@@ -13,6 +13,7 @@ export declare class TopologyCompiler {
         neuron: Neuron;
         consolidation: ConsolidationResult;
         timeZone?: string;
+        temporalEnabled?: boolean;
     }): {
         timeBuckets: TimeBucketRecord[];
         branchIds: string[];

@@ -1,5 +1,5 @@
 import { relationConstraintRegistry } from './RelationConstraintRegistry.js';
-import { isMemoryFrame, MEMORY_FRAME_LIMITS } from './MemoryFrameSchema.js';
+import { isMemoryFrame, MEMORY_DIMENSIONS, MEMORY_FRAME_LIMITS, MEMORY_FRAME_REQUIRED_DIMENSIONS } from './MemoryFrameSchema.js';
 export function validateMemoryFrame(value, options = {}) {
     if (!isMemoryFrame(value))
         return { valid: false, errors: ['invalid_memory_frame_shape'] };
@@ -54,7 +54,7 @@ export function validateMemoryFrame(value, options = {}) {
     if (!frame.processor || typeof frame.processor.promptVersion !== 'string' || !frame.processor.promptVersion.trim() || frame.processor.promptVersion.length > idLimit || !Number.isFinite(frame.processor.generatedAt) || (frame.processor.provider !== undefined && (typeof frame.processor.provider !== 'string' || frame.processor.provider.length > idLimit)) || (frame.processor.model !== undefined && (typeof frame.processor.model !== 'string' || frame.processor.model.length > idLimit)))
         errors.push('invalid_processor_metadata');
     const evidence = new Set(frame.evidenceEventIds);
-    const dimensions = new Set(['actor', 'entity', 'project', 'topic', 'issue', 'event', 'raw_event', 'episode', 'task', 'object', 'location', 'time', 'state']);
+    const dimensions = new Set(MEMORY_DIMENSIONS);
     const allowedAuthorities = new Set(['processor', 'deterministic_fallback']);
     const allowedCompleteness = new Set(['full', 'minimal']);
     if (frame.sourceAuthority !== undefined && !allowedAuthorities.has(frame.sourceAuthority))
@@ -75,10 +75,10 @@ export function validateMemoryFrame(value, options = {}) {
     const nodes = new Map(frame.nodes.map((node) => [node.frameNodeId, node]));
     if (nodes.size !== frame.nodes.length)
         errors.push('duplicate_frame_node_id');
-    if (!frame.nodes.some((node) => node.dimension === 'episode' && node.label.trim()))
-        errors.push('episode_node_required');
-    if (!frame.nodes.some((node) => node.dimension === 'project' && node.label.trim()))
-        errors.push('project_node_required');
+    for (const dimension of MEMORY_FRAME_REQUIRED_DIMENSIONS) {
+        if (!frame.nodes.some((node) => node.dimension === dimension && node.label.trim()))
+            errors.push(`${dimension}_node_required`);
+    }
     for (const node of frame.nodes) {
         if (typeof node.frameNodeId !== 'string' || !node.frameNodeId.trim() || node.frameNodeId.length > idLimit || typeof node.label !== 'string' || !Array.isArray(node.evidenceEventIds)) {
             errors.push('invalid_frame_node_shape');

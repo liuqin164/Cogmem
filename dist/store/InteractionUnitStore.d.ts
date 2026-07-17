@@ -1,3 +1,4 @@
+import Database from 'bun:sqlite';
 export type InteractionUnitType = 'statement' | 'question' | 'proposal' | 'bound_reply';
 export type PendingBindingType = 'action' | 'entity' | 'question';
 export declare const BINDING_PRIORITY: Record<PendingBindingType, number>;
@@ -21,7 +22,8 @@ export interface PendingBindingRecord {
 }
 export declare class InteractionUnitStore {
     private db;
-    constructor(dbPath?: string);
+    private readonly ownsDb;
+    constructor(dbOrPath?: Database | string);
     private initializeSchema;
     createUnit(input: {
         type: InteractionUnitType;

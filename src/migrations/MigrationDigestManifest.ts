@@ -101,9 +101,18 @@ export const MIGRATION_DIGESTS: Readonly<Record<string, string>> = {
   '0048': 'f3da713269b44adacf4a32c12fca1140cb31f25f66de9e28344d436aefe2aed2',
   '0049': '534ee9c336c8be7b7ddcd85b6cee6d5d1baf2b1ecff227cc25a76104b4d2f00e',
   '0050': '45edbdeb0d4b90ff3f91e9edfe09572d776523e3ded8bfff310bcd37a16879ef',
+  '0051': '856962c943839284428bcd00f2a1bdc1470da2141c16e2e1bf38d0a76a520793',
 };
 
 export const CANONICAL_MIGRATION_SOURCE_DIGESTS = MIGRATION_DIGESTS;
+
+// 0049 calls these helpers while rewriting persisted identities. Their exact
+// source is frozen so a runtime refactor cannot silently change a historical
+// migration's output without a new compensating migration.
+export const FROZEN_MIGRATION_DEPENDENCY_DIGESTS = {
+  '0049:CognitiveGraphIdentity': '90cace5da9d8404b653f1e903f1932bcb947703e527bd08b93215dfb365425b5',
+  '0049:TimeBucketIdentity': 'de988d13a8d62087baf5a462a1acfb639445b289b47f481a008e9ba8acfacbe0',
+} as const;
 
 // Exact receipts produced by the f71b20a source and dist artifacts. The two
 // artifacts produced the same values under their shipped Bun runtime, but are

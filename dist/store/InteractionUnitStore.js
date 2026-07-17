@@ -7,8 +7,16 @@ export const BINDING_PRIORITY = {
 };
 export class InteractionUnitStore {
     db;
-    constructor(dbPath = ':memory:') {
-        this.db = new Database(dbPath);
+    ownsDb;
+    constructor(dbOrPath = ':memory:') {
+        if (typeof dbOrPath === 'string') {
+            this.db = new Database(dbOrPath);
+            this.ownsDb = true;
+        }
+        else {
+            this.db = dbOrPath;
+            this.ownsDb = false;
+        }
         this.initializeSchema();
     }
     initializeSchema() {
@@ -140,7 +148,8 @@ export class InteractionUnitStore {
         return this.getUnit(unit.unitId);
     }
     close() {
-        this.db.close();
+        if (this.ownsDb)
+            this.db.close();
     }
     mapUnit(row) {
         return {

@@ -9,15 +9,24 @@ import { ENTITY_TYPE_LEXICON, extractIssueRankingTokensFromText, extractRelative
 import { logger } from '../utils/Logger.js';
 export class MemoryGraph {
     db;
+    ownsDb;
     timeIndex = new Map();
     projectIndex = new Map();
     anchorIndex = new Map();
     topicReclassifiedListeners = new Set();
-    constructor(dbPath = ':memory:') {
+    constructor(dbOrPath = ':memory:') {
+        if (typeof dbOrPath !== 'string') {
+            this.db = dbOrPath;
+            this.ownsDb = false;
+            this.initializeSchema();
+            this.rebuildIndexes();
+            return;
+        }
+        this.ownsDb = true;
         let lastError;
         for (let attempt = 0; attempt < 6; attempt += 1) {
             try {
-                this.db = new Database(dbPath);
+                this.db = new Database(dbOrPath);
                 this.initializeSchema();
                 this.rebuildIndexes();
                 return;
@@ -149,17 +158,44 @@ export class MemoryGraph {
         this.db.exec(`CREATE INDEX IF NOT EXISTS idx_neurons_pinned ON neurons(is_pinned) WHERE is_pinned = 1;`);
     }
     addNeuron(neuron) {
-        this.insertNeuron(neuron);
-        this.insertIntoFTS(neuron);
+        this.db.transaction(() => {
+            this.insertNeuron(neuron);
+            this.insertIntoFTS(neuron);
+            for (const synapse of neuron.synapses)
+                this.addSynapse(neuron.id, synapse);
+            this.recordTimeProjectionSourceMutation([neuron.metadata.projectId], neuron.metadata.createdAt);
+        })();
         this.updateMemoryIndexes(neuron);
-        for (const synapse of neuron.synapses)
-            this.addSynapse(neuron.id, synapse);
     }
     addNeuronInTransaction(neuron) {
         this.insertNeuron(neuron);
         this.insertIntoFTS(neuron);
         for (const synapse of neuron.synapses)
             this.addSynapse(neuron.id, synapse);
+        this.recordTimeProjectionSourceMutation([neuron.metadata.projectId], neuron.metadata.createdAt);
+    }
+    recordTimeProjectionSourceMutation(projectIds, updatedAt) {
+        const revisionTable = this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='topology_source_revisions'`).get();
+        if (!revisionTable)
+            return;
+        const scopes = [...new Set(projectIds.map((projectId) => projectId ?? ''))];
+        const increment = this.db.prepare(`
+      INSERT INTO topology_source_revisions(project_id,revision,updated_at)
+      VALUES(?,1,?)
+      ON CONFLICT(project_id) DO UPDATE SET
+        revision=topology_source_revisions.revision+1,
+        updated_at=excluded.updated_at
+    `);
+        const markDirty = this.db.prepare(`
+      UPDATE topology_projection_state
+      SET status='dirty', source_revision=(SELECT revision FROM topology_source_revisions WHERE project_id=?),
+          updated_at=?, error=NULL
+      WHERE project_id=?
+    `);
+        for (const scope of scopes) {
+            increment.run(scope, updatedAt);
+            markDirty.run(scope, updatedAt, scope);
+        }
     }
     insertNeuron(neuron) {
         const vectorBuffer = neuron.coordinates.V.length > 0
@@ -240,24 +276,25 @@ export class MemoryGraph {
     `).all(projectId).map((row) => row.id);
     }
     listTimeProjectionNeurons(projectId, options = {}) {
+        const scope = projectId ?? '';
         const hasCursor = options.afterCreatedAt !== undefined && options.afterId !== undefined;
         const rows = hasCursor ? this.db.prepare(`
       SELECT id, project_id, created_at, COALESCE(NULLIF(aaak_summary, ''), substr(content, 1, 120), id) AS title
       FROM neurons
-      WHERE project_id = ? AND is_deleted = 0
+      WHERE COALESCE(project_id,'') = ? AND is_deleted = 0
         AND (created_at > ? OR (created_at = ? AND id > ?))
       ORDER BY created_at ASC, id ASC
       LIMIT ?
-    `).all(projectId, options.afterCreatedAt, options.afterCreatedAt, options.afterId, options.limit ?? 500) : this.db.prepare(`
+    `).all(scope, options.afterCreatedAt, options.afterCreatedAt, options.afterId, options.limit ?? 500) : this.db.prepare(`
       SELECT id, project_id, created_at, COALESCE(NULLIF(aaak_summary, ''), substr(content, 1, 120), id) AS title
       FROM neurons
-      WHERE project_id = ? AND is_deleted = 0
+      WHERE COALESCE(project_id,'') = ? AND is_deleted = 0
       ORDER BY created_at ASC, id ASC
       LIMIT ?
-    `).all(projectId, options.limit ?? 500);
+    `).all(scope, options.limit ?? 500);
         return rows.map((row) => ({
             id: row.id,
-            projectId: row.project_id,
+            projectId: row.project_id ?? '',
             createdAt: row.created_at,
             title: row.title,
         }));
@@ -520,6 +557,8 @@ export class MemoryGraph {
         this.db.transaction(fn)();
     }
     close() {
+        if (!this.ownsDb)
+            return;
         try {
             this.db.close();
         }
@@ -566,6 +605,19 @@ export class MemoryGraph {
         const updates = [];
         const values = [];
         const previousNeuron = metadata.topicPath !== undefined ? this.getNeuron(neuronId) : null;
+        const canAffectTimeProjection = metadata.projectId !== undefined
+            || metadata.aaak_summary !== undefined
+            || metadata.skillMeta !== undefined;
+        const sourceRow = canAffectTimeProjection
+            ? this.db.prepare(`SELECT project_id,aaak_summary FROM neurons WHERE id=? AND is_deleted=0`).get(neuronId)
+            : null;
+        const previousScope = sourceRow?.project_id ?? undefined;
+        const nextScope = metadata.projectId !== undefined ? (metadata.projectId || undefined) : previousScope;
+        const nextSummary = metadata.aaak_summary !== undefined || metadata.skillMeta !== undefined
+            ? (this.encodeAaakSummary(metadata) || null)
+            : (sourceRow?.aaak_summary ?? null);
+        const affectsTimeProjection = Boolean(sourceRow && ((previousScope ?? '') !== (nextScope ?? '')
+            || (sourceRow.aaak_summary ?? null) !== nextSummary));
         if (metadata.projectId !== undefined) {
             updates.push('project_id = ?');
             values.push(metadata.projectId || null);
@@ -669,7 +721,21 @@ export class MemoryGraph {
             values.push(Date.now());
         }
         values.push(neuronId);
-        this.db.prepare(`UPDATE neurons SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+        this.db.transaction(() => {
+            const result = this.db.prepare(`UPDATE neurons SET ${updates.join(', ')} WHERE id = ? AND is_deleted=0`).run(...values);
+            if (result.changes > 0 && affectsTimeProjection) {
+                this.recordTimeProjectionSourceMutation([previousScope, nextScope], metadata.updatedAt ?? Date.now());
+            }
+        })();
+        if ((previousScope ?? '') !== (nextScope ?? '')) {
+            if (previousScope)
+                this.projectIndex.get(previousScope)?.delete(neuronId);
+            if (nextScope) {
+                if (!this.projectIndex.has(nextScope))
+                    this.projectIndex.set(nextScope, new Set());
+                this.projectIndex.get(nextScope).add(neuronId);
+            }
+        }
         if (metadata.topicPath !== undefined && previousNeuron) {
             const updatedNeuron = this.getNeuron(neuronId);
             const from = previousNeuron.metadata.topicPath;
@@ -745,15 +811,23 @@ export class MemoryGraph {
     }
     updateNeuronContent(neuronId, content) {
         const now = Date.now();
-        this.db.prepare(`
-      UPDATE neurons
-      SET content = ?, updated_at = ?
-      WHERE id = ? AND is_deleted = 0
-    `).run(content, now, neuronId);
-        this.db.prepare(`DELETE FROM neurons_fts WHERE id = ?`).run(neuronId);
-        const neuron = this.getNeuron(neuronId);
-        if (neuron)
-            this.insertIntoFTS(neuron);
+        this.db.transaction(() => {
+            const existing = this.db.prepare(`SELECT project_id FROM neurons WHERE id=? AND is_deleted=0`).get(neuronId);
+            if (!existing)
+                return;
+            const result = this.db.prepare(`
+        UPDATE neurons
+        SET content = ?, updated_at = ?
+        WHERE id = ? AND is_deleted = 0
+      `).run(content, now, neuronId);
+            if (result.changes === 0)
+                return;
+            this.db.prepare(`DELETE FROM neurons_fts WHERE id = ?`).run(neuronId);
+            const neuron = this.getNeuron(neuronId);
+            if (neuron)
+                this.insertIntoFTS(neuron);
+            this.recordTimeProjectionSourceMutation([existing.project_id ?? undefined], now);
+        })();
     }
     updateNeuronImportance(neuronId, importanceLevel, isPinned = importanceLevel !== 'normal' && importanceLevel !== 'low') {
         this.updateNeuronMetadata(neuronId, {

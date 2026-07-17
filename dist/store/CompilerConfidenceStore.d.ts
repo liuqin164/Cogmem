@@ -1,3 +1,4 @@
+import Database from 'bun:sqlite';
 export interface CompilerConfidenceRecord {
     runId: string;
     targetType: 'memory' | 'query';
@@ -10,7 +11,8 @@ export interface CompilerConfidenceRecord {
 }
 export declare class CompilerConfidenceStore {
     private db;
-    constructor(dbPath?: string);
+    private readonly ownsDb;
+    constructor(dbOrPath?: Database | string);
     private initializeSchema;
     insert(record: CompilerConfidenceRecord): void;
     listByTarget(targetType: 'memory' | 'query', targetId: string): CompilerConfidenceRecord[];

@@ -7,7 +7,14 @@ export declare class TopologyStore {
     private initializeSchema;
     timeProjectionNeedsRebuild(projectId: string, timeZone: string): boolean;
     hasDirtyTimeProjection(projectId?: string): boolean;
-    markTimeProjection(projectId: string, status: 'dirty' | 'building' | 'clean' | 'failed', timeZone: string, updatedAt: number, error?: string): void;
+    hasUsableTimeProjection(projectId: string, timeZone: string): boolean;
+    hasUsableTimeProjections(timeZone: string): boolean;
+    beginTimeProjectionSourceUpdate(projectId: string | undefined, timeZone: string, updatedAt: number): {
+        sourceRevision: number;
+        incremental: boolean;
+    };
+    getTimeProjectionSourceRevision(projectId: string | undefined): number;
+    markTimeProjection(projectId: string, status: 'dirty' | 'building' | 'clean' | 'failed', timeZone: string, updatedAt: number, error?: string, sourceRevision?: number): void;
     resetProjectTimeBuckets(projectId: string): void;
     listProjectTimeBucketsByNeuron(projectId: string, neuronIds: string[]): Map<string, TimeBucketRecord[]>;
     upsertTimeBucket(bucket: TimeBucketRecord): TimeBucketRecord;
@@ -54,6 +61,7 @@ export declare class TopologyStore {
         endTime?: number;
         terms?: string[];
         limit?: number;
+        excludeTemporal?: boolean;
     }): string[];
     collectBranchNavigation(input: {
         projectId?: string;

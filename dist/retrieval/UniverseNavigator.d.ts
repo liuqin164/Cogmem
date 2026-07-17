@@ -4,6 +4,7 @@ import type { TemporalBranchSearch } from './TemporalBranchSearch.js';
 import type { PulseRetrievalEngine } from './PulseRetrievalEngine.js';
 import type { NarrativeRecallAssembler } from './NarrativeRecallAssembler.js';
 import type { UniverseTraversalExecutor } from './UniverseTraversalExecutor.js';
+import type { ProjectClockContext } from '../utils/LocalDateContext.js';
 export interface UniverseNavigationResult {
     compiledQuery: ReturnType<QueryCompiler['compile']>;
     branchSearch: ReturnType<TemporalBranchSearch['search']>;
@@ -32,6 +33,7 @@ export declare class UniverseNavigator {
         startTime?: number;
         endTime?: number;
         temporalEnabled?: boolean;
+        clock: Pick<ProjectClockContext, 'now' | 'localDateNow' | 'timeZone'>;
         topologyIds: string[];
         branchIds: string[];
         temporalBucketIds: string[];

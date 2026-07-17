@@ -1,3 +1,4 @@
+import Database from 'bun:sqlite';
 import type { MemoryAnchor, MemoryImportanceLevel, Neuron, NeuronMetadata, NeuronType, Synapse, TopicNode } from '../types/index.js';
 export interface VectorPageRow {
     id: string;
@@ -20,15 +21,17 @@ export interface TimeProjectionNeuron {
 }
 export declare class MemoryGraph {
     private db;
+    private readonly ownsDb;
     private timeIndex;
     private projectIndex;
     private anchorIndex;
     private topicReclassifiedListeners;
-    constructor(dbPath?: string);
+    constructor(dbOrPath?: Database | string);
     private initializeSchema;
     private ensureCompatibilityColumns;
     addNeuron(neuron: Neuron): void;
     addNeuronInTransaction(neuron: Neuron): void;
+    private recordTimeProjectionSourceMutation;
     private insertNeuron;
     private insertIntoFTS;
     rebuildIndexes(): void;
@@ -36,7 +39,7 @@ export declare class MemoryGraph {
     addSynapse(sourceId: string, synapse: Synapse): void;
     getNeuron(id: string): Neuron | null;
     getNeuronIdsByProject(projectId: string): string[];
-    listTimeProjectionNeurons(projectId: string, options?: {
+    listTimeProjectionNeurons(projectId?: string, options?: {
         afterCreatedAt?: number;
         afterId?: string;
         limit?: number;

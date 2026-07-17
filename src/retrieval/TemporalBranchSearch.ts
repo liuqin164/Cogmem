@@ -44,7 +44,8 @@ export class TemporalBranchSearch {
       startTime: input.temporalEnabled === false ? undefined : input.startTime,
       endTime: input.temporalEnabled === false ? undefined : input.endTime,
       terms: input.terms,
-      limit: 120
+      limit: 120,
+      excludeTemporal: input.temporalEnabled === false,
     });
 
     const branches = this.topologyStore.collectBranchNavigation({
@@ -84,7 +85,9 @@ export class TemporalBranchSearch {
         ? temporalSurface.bucketIds
         : fallbackLabels.map((_, index) => `derived:${index}:${input.startTime ?? 0}:${input.endTime ?? 0}`);
     const fallbackTemporalNeuronIds =
-      temporalSurface.neuronIds.length > 0
+      input.temporalEnabled === false
+        ? []
+        : temporalSurface.neuronIds.length > 0
         ? temporalSurface.neuronIds
         : branches.neuronIds.slice(0, 24);
     const traversalMode: TemporalBranchSearchResult['temporalTraversal']['traversalMode'] =

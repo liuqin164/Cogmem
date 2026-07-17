@@ -15,7 +15,7 @@ export interface TimeProjectionNeuronInput {
 export class TopologyCompiler {
   constructor(private store: TopologyStore) {}
 
-  compile(input: { neuron: Neuron; consolidation: ConsolidationResult; timeZone?: string }): {
+  compile(input: { neuron: Neuron; consolidation: ConsolidationResult; timeZone?: string; temporalEnabled?: boolean }): {
     timeBuckets: TimeBucketRecord[];
     branchIds: string[];
     taskIds: string[];
@@ -30,7 +30,7 @@ export class TopologyCompiler {
       createdAt
     };
 
-    const timeBuckets = this.attachTimeBuckets(createdAt, projectId, ref, input.timeZone);
+    const timeBuckets = input.temporalEnabled === false ? [] : this.attachTimeBuckets(createdAt, projectId, ref, input.timeZone);
     const branchIds = projectId ? this.attachProjectBranches(projectId, neuron, consolidation, ref) : [];
     const taskIds = this.attachTaskBranches(projectId, neuron, consolidation, ref);
     const clusterIds = this.attachEventClusters(projectId, neuron, consolidation, ref);

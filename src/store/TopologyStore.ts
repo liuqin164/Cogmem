@@ -1,4 +1,5 @@
 import Database from 'bun:sqlite';
+import { projectScope } from '../topology/ProjectScope.js';
 import type {
   EventClusterRecord,
   EventClusterType,
@@ -151,33 +152,99 @@ export class TopologyStore {
         status TEXT NOT NULL CHECK(status IN ('dirty','building','clean','failed')),
         time_zone TEXT,
         updated_at INTEGER NOT NULL,
-        error TEXT
+        error TEXT,
+        source_revision INTEGER NOT NULL DEFAULT 0
       );
+
+      CREATE TABLE IF NOT EXISTS topology_source_revisions (
+        project_id TEXT PRIMARY KEY,
+        revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_time_bucket_entries_reference_unique
+        ON time_bucket_entries(bucket_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''));
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_branch_entries_reference_unique
+        ON branch_entries(branch_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''));
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_task_branch_entries_reference_unique
+        ON task_branch_entries(task_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''));
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_event_cluster_entries_reference_unique
+        ON event_cluster_entries(cluster_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''));
     `);
   }
 
   timeProjectionNeedsRebuild(projectId: string, timeZone: string): boolean {
-    const row = this.db.prepare(`SELECT projection_version,status,time_zone FROM topology_projection_state WHERE project_id=?`).get(projectId) as { projection_version?: number; status?: string; time_zone?: string | null } | null;
-    return Boolean(row && (row.projection_version !== 3 || row.status !== 'clean' || row.time_zone !== timeZone));
+    return !this.hasUsableTimeProjection(projectId, timeZone);
   }
 
   hasDirtyTimeProjection(projectId?: string): boolean {
-    return Boolean(projectId
-      ? this.db.prepare(`SELECT 1 FROM topology_projection_state WHERE project_id=? AND (projection_version<>3 OR status<>'clean') LIMIT 1`).get(projectId)
-      : this.db.prepare(`SELECT 1 FROM topology_projection_state WHERE projection_version<>3 OR status<>'clean' LIMIT 1`).get());
+    const scope = projectId === undefined ? undefined : projectScope(projectId);
+    return Boolean(scope === undefined
+      ? this.db.prepare(`SELECT 1 FROM topology_projection_state s LEFT JOIN topology_source_revisions r ON r.project_id=s.project_id WHERE r.project_id IS NULL OR s.projection_version<>4 OR s.status<>'clean' OR s.source_revision<>r.revision UNION ALL SELECT 1 FROM topology_source_revisions r LEFT JOIN topology_projection_state s ON s.project_id=r.project_id WHERE s.project_id IS NULL LIMIT 1`).get()
+      : this.db.prepare(`SELECT 1 FROM topology_projection_state s LEFT JOIN topology_source_revisions r ON r.project_id=s.project_id WHERE s.project_id=? AND (r.project_id IS NULL OR s.projection_version<>4 OR s.status<>'clean' OR s.source_revision<>r.revision) UNION ALL SELECT 1 FROM topology_source_revisions r LEFT JOIN topology_projection_state s ON s.project_id=r.project_id WHERE r.project_id=? AND s.project_id IS NULL LIMIT 1`).get(scope, scope));
   }
 
-  markTimeProjection(projectId: string, status: 'dirty' | 'building' | 'clean' | 'failed', timeZone: string, updatedAt: number, error?: string): void {
+  hasUsableTimeProjection(projectId: string, timeZone: string): boolean {
+    const scope = projectScope(projectId);
+    const revisionRow = this.db.prepare(`SELECT revision FROM topology_source_revisions WHERE project_id=?`).get(scope) as { revision: number } | null;
+    const row = this.db.prepare(`SELECT projection_version,status,time_zone,source_revision FROM topology_projection_state WHERE project_id=?`).get(scope) as { projection_version: number; status: string; time_zone?: string | null; source_revision: number } | null;
+    if (!revisionRow) return !row;
+    return Boolean(row && row.projection_version === 4 && row.status === 'clean' && row.time_zone === timeZone && row.source_revision === revisionRow.revision);
+  }
+
+  hasUsableTimeProjections(timeZone: string): boolean {
+    return !Boolean(this.db.prepare(`
+      SELECT 1
+      FROM topology_source_revisions r
+      LEFT JOIN topology_projection_state s ON s.project_id=r.project_id
+      WHERE s.project_id IS NULL OR s.projection_version<>4 OR s.status<>'clean'
+        OR s.time_zone<>? OR s.source_revision<>r.revision
+      UNION ALL
+      SELECT 1 FROM topology_projection_state s
+      LEFT JOIN topology_source_revisions r ON r.project_id=s.project_id
+      WHERE r.project_id IS NULL
+      LIMIT 1
+    `).get(timeZone));
+  }
+
+  beginTimeProjectionSourceUpdate(projectId: string | undefined, timeZone: string, updatedAt: number): { sourceRevision: number; incremental: boolean } {
+    const scope = projectScope(projectId);
+    return this.db.transaction(() => {
+      const previousRevision = this.getTimeProjectionSourceRevision(scope);
+      const state = this.db.prepare(`SELECT projection_version,status,time_zone,source_revision FROM topology_projection_state WHERE project_id=?`).get(scope) as { projection_version: number; status: string; time_zone?: string | null; source_revision: number } | null;
+      const incremental = state
+        ? state.projection_version === 4 && state.status === 'clean' && state.time_zone === timeZone && state.source_revision === previousRevision
+        : previousRevision === 0;
+      const sourceRevision = previousRevision + 1;
+      this.db.prepare(`INSERT INTO topology_source_revisions(project_id,revision,updated_at) VALUES(?,?,?) ON CONFLICT(project_id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at`).run(scope, sourceRevision, updatedAt);
+      if (!state) {
+        this.markTimeProjection(scope, 'dirty', timeZone, updatedAt, undefined, previousRevision);
+      } else if (incremental || state.status === 'clean' || state.time_zone !== timeZone) {
+        this.markTimeProjection(scope, 'dirty', timeZone, updatedAt, undefined, state.source_revision);
+      }
+      return { sourceRevision, incremental };
+    })();
+  }
+
+  getTimeProjectionSourceRevision(projectId: string | undefined): number {
+    const row = this.db.prepare(`SELECT revision FROM topology_source_revisions WHERE project_id=?`).get(projectScope(projectId)) as { revision?: number } | null;
+    return Number(row?.revision ?? 0);
+  }
+
+  markTimeProjection(projectId: string, status: 'dirty' | 'building' | 'clean' | 'failed', timeZone: string, updatedAt: number, error?: string, sourceRevision = this.getTimeProjectionSourceRevision(projectId)): void {
+    const scope = projectScope(projectId);
+    this.db.prepare(`INSERT OR IGNORE INTO topology_source_revisions(project_id,revision,updated_at) VALUES(?,?,?)`).run(scope, sourceRevision, updatedAt);
     this.db.prepare(`
-      INSERT INTO topology_projection_state(project_id,projection_version,status,time_zone,updated_at,error)
-      VALUES(?,3,?,?,?,?)
-      ON CONFLICT(project_id) DO UPDATE SET projection_version=3,status=excluded.status,time_zone=excluded.time_zone,updated_at=excluded.updated_at,error=excluded.error
-    `).run(projectId, status, timeZone, updatedAt, error ?? null);
+      INSERT INTO topology_projection_state(project_id,projection_version,status,time_zone,updated_at,error,source_revision)
+      VALUES(?,4,?,?,?,?,?)
+      ON CONFLICT(project_id) DO UPDATE SET projection_version=4,status=excluded.status,time_zone=excluded.time_zone,updated_at=excluded.updated_at,error=excluded.error,source_revision=excluded.source_revision
+    `).run(scope, status, timeZone, updatedAt, error ?? null, sourceRevision);
   }
 
   resetProjectTimeBuckets(projectId: string): void {
-    this.db.prepare(`DELETE FROM topology_membership WHERE project_id=? AND dimension_type='time_bucket'`).run(projectId);
-    this.db.prepare(`DELETE FROM time_bucket_entries WHERE project_id=?`).run(projectId);
+    const scope = projectScope(projectId);
+    this.db.prepare(`DELETE FROM topology_membership WHERE COALESCE(project_id,'')=? AND dimension_type='time_bucket'`).run(scope);
+    this.db.prepare(`DELETE FROM time_bucket_entries WHERE COALESCE(project_id,'')=?`).run(scope);
     this.db.exec(`DELETE FROM time_buckets WHERE bucket_id NOT IN (SELECT DISTINCT bucket_id FROM time_bucket_entries);`);
   }
 
@@ -188,9 +255,9 @@ export class TopologyStore {
       SELECT e.neuron_id,b.bucket_id,b.project_id,b.time_zone,b.bucket_type,b.bucket_start,b.bucket_end,b.label
       FROM time_bucket_entries e
       JOIN time_buckets b ON b.bucket_id=e.bucket_id
-      WHERE e.project_id=? AND e.neuron_id IN (${placeholders})
+      WHERE COALESCE(e.project_id,'')=? AND e.neuron_id IN (${placeholders})
       ORDER BY e.created_at ASC,b.bucket_type ASC
-    `).all(projectId, ...neuronIds) as Array<{ neuron_id: string; bucket_id: string; project_id: string; time_zone: string; bucket_type: TimeBucketType; bucket_start: number; bucket_end: number; label: string }>;
+    `).all(projectScope(projectId), ...neuronIds) as Array<{ neuron_id: string; bucket_id: string; project_id: string; time_zone: string; bucket_type: TimeBucketType; bucket_start: number; bucket_end: number; label: string }>;
     const result = new Map<string, TimeBucketRecord[]>();
     for (const row of rows) {
       const values = result.get(row.neuron_id) ?? [];
@@ -511,7 +578,7 @@ export class TopologyStore {
       SELECT DISTINCT neuron_id
       FROM time_bucket_entries
       WHERE created_at >= ?
-        AND created_at <= ?
+        AND created_at < ?
         AND neuron_id IS NOT NULL
       ORDER BY created_at DESC
     `).all(start, end) as Array<{ neuron_id: string | null }>;
@@ -541,6 +608,7 @@ export class TopologyStore {
     endTime?: number;
     terms?: string[];
     limit?: number;
+    excludeTemporal?: boolean;
   }): string[] {
     const limit = input.limit ?? 200;
     const collected = new Set<string>();
@@ -550,13 +618,15 @@ export class TopologyStore {
       SELECT neuron_id
       FROM topology_membership
       WHERE (? IS NULL OR project_id = ?)
+        AND (? = 0 OR dimension_type <> 'time_bucket')
         AND (? IS NULL OR created_at >= ?)
-        AND (? IS NULL OR created_at <= ?)
+        AND (? IS NULL OR created_at < ?)
       ORDER BY created_at DESC
       LIMIT ?
     `).all(
       input.projectId ?? null,
       input.projectId ?? null,
+      input.excludeTemporal ? 1 : 0,
       input.startTime ?? null,
       input.startTime ?? null,
       input.endTime ?? null,
@@ -575,12 +645,14 @@ export class TopologyStore {
         SELECT neuron_id
         FROM topology_membership
         WHERE (? IS NULL OR project_id = ?)
+          AND (? = 0 OR dimension_type <> 'time_bucket')
           AND (lower(title) LIKE ? OR lower(dimension_key) LIKE ?)
         ORDER BY created_at DESC
         LIMIT ?
       `).all(
         input.projectId ?? null,
         input.projectId ?? null,
+        input.excludeTemporal ? 1 : 0,
         `%${term}%`,
         `%${term}%`,
         limit
@@ -886,7 +958,7 @@ export class TopologyStore {
       JOIN time_buckets tb ON tb.bucket_id = tbe.bucket_id
       WHERE tb.bucket_type = ?
         AND (? IS NULL OR tbe.created_at >= ?)
-        AND (? IS NULL OR tbe.created_at <= ?)
+        AND (? IS NULL OR tbe.created_at < ?)
       ORDER BY tb.bucket_start DESC, tbe.created_at DESC
       LIMIT ?
     `).all(

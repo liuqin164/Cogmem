@@ -32,9 +32,16 @@ export interface PendingBindingRecord {
 
 export class InteractionUnitStore {
   private db: Database;
+  private readonly ownsDb: boolean;
 
-  constructor(dbPath: string = ':memory:') {
-    this.db = new Database(dbPath);
+  constructor(dbOrPath: Database | string = ':memory:') {
+    if (typeof dbOrPath === 'string') {
+      this.db = new Database(dbOrPath);
+      this.ownsDb = true;
+    } else {
+      this.db = dbOrPath;
+      this.ownsDb = false;
+    }
     this.initializeSchema();
   }
 
@@ -223,7 +230,7 @@ export class InteractionUnitStore {
   }
 
   close(): void {
-    this.db.close();
+    if (this.ownsDb) this.db.close();
   }
 
   private mapUnit(row: any): InteractionUnitRecord {

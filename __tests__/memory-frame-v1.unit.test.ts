@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { deterministicFrameFallback, normalizeAlias, validateMemoryFrame } from '../src/semantic/index.js';
+import { deterministicFrameFallback, MEMORY_DIMENSIONS, MEMORY_FRAME_JSON_SCHEMA, MEMORY_FRAME_LIMITS, MEMORY_FRAME_REQUIRED_DIMENSIONS, normalizeAlias, validateMemoryFrame } from '../src/semantic/index.js';
 import { MemoryFrameStore } from '../src/store/MemoryFrameStore.js';
 import Database from 'bun:sqlite';
 import { migration_0032, migration_0035, migration_0036, migration_0037, migration_0039 } from '../src/migrations/index.js';
@@ -45,6 +45,18 @@ describe('MemoryFrame V1 contract', () => {
     expect(validateMemoryFrame({ ...frame, supersedesFrameId: '' }).errors).toEqual(['invalid_memory_frame_shape']);
     expect(validateMemoryFrame({ ...frame, processor: { ...frame.processor, unknown: true } }).errors).toEqual(['invalid_memory_frame_shape']);
     expect(validateMemoryFrame({ ...frame, nodes: frame.nodes.map((node, index) => index ? node : { ...node, unknown: true }) }).errors).toEqual(['invalid_memory_frame_shape']);
+  });
+
+  test('public JSON schema shares runtime dimensions, bounds, and required nodes', () => {
+    const schema = MEMORY_FRAME_JSON_SCHEMA as any;
+    expect(schema.properties.nodes.minItems).toBe(1);
+    expect(schema.properties.nodes.maxItems).toBe(MEMORY_FRAME_LIMITS.nodes);
+    expect(schema.properties.nodes.items.properties.dimension.enum).toEqual(MEMORY_DIMENSIONS);
+    expect(schema.properties.evidenceEventIds.minItems).toBe(1);
+    expect(schema.allOf.map((entry: any) => entry.properties.nodes.contains.properties.dimension.const)).toEqual(MEMORY_FRAME_REQUIRED_DIMENSIONS);
+    expect(schema.properties.relations.items.properties.evidenceEventIds.minItems).toBe(1);
+    expect(schema.properties.temporalReferences.items.properties.evidenceEventIds.minItems).toBe(1);
+    expect(schema.properties.stateTransitions.items.properties.evidenceEventIds.minItems).toBe(1);
   });
 
   test('immutable frame identities cannot be redirected by canonical hints', () => {

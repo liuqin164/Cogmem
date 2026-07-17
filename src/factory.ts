@@ -33,6 +33,7 @@ import { TopicDecayPolicy } from './recall/TopicDecayPolicy.js';
 import { TopicRegistry } from './recall/TopicRegistry.js';
 import { TopicSummaryBoard } from './recall/TopicSummaryBoard.js';
 import { CognitiveGraphCompiler } from './engine/CognitiveGraphCompiler.js';
+import { cognitiveEdgeId, cognitiveNodeId } from './engine/CognitiveGraphIdentity.js';
 import { ConsolidationPipeline } from './engine/ConsolidationPipeline.js';
 import { ConsolidationTrigger } from './engine/ConsolidationTrigger.js';
 import { CrossTopicSynthesizer } from './engine/CrossTopicSynthesizer.js';
@@ -132,6 +133,7 @@ import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { SummaryStore } from './store/SummaryStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
 import { TopologyStore } from './store/TopologyStore.js';
+import { projectScope } from './topology/ProjectScope.js';
 import type { IVectorStore, VectorBackend } from './store/IVectorStore.js';
 import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
@@ -154,8 +156,8 @@ import {
   type ImportResult,
   type SnapshotMeta,
 } from './snapshot/index.js';
+import { CORE_VERSION } from './version.js';
 
-const CORE_VERSION = '3.7.4';
 const LATEST_SCHEMA_VERSION = Math.max(...ALL_MIGRATIONS.map((migration) => Number.parseInt(migration.version, 10)));
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
@@ -665,9 +667,9 @@ export class MemoryKernel {
     this.dbPath = options.dbPath ?? ':memory:';
     this.encryptionProvider = options.encryptionProvider;
     this.piiRedactor = options.redactionPolicy === false ? undefined : new PiiRedactor(options.redactionPolicy);
-    this.memoryGraph = new MemoryGraph(this.dbPath);
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
+    this.memoryGraph = new MemoryGraph(db);
     this.eventStore = new EventStore(db, this.encryptionProvider, this.projectClock.timeZone);
     db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
     if ((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys?: number } | undefined)?.foreign_keys !== 1) {
@@ -699,7 +701,7 @@ export class MemoryKernel {
         content: eventPayloadText(event.payload),
       } : undefined;
     });
-    this.cursorStore = new IngestionCursorStore(this.dbPath);
+    this.cursorStore = new IngestionCursorStore(db);
     this.vectorStore = options.vectorBackend === 'hnswlib'
       ? new VectorStore(vectorDimension)
       : new SqliteVecStore(db, vectorDimension);
@@ -707,8 +709,8 @@ export class MemoryKernel {
     this.topologyStore = new TopologyStore(db);
     this.cognitiveGraphStore = new CognitiveGraphStore(db);
     this.temporalAdjacencyStore = new TemporalAdjacencyStore(db);
-    this.interactionUnitStore = new InteractionUnitStore(this.dbPath);
-    this.compilerConfidenceStore = new CompilerConfidenceStore(this.dbPath);
+    this.interactionUnitStore = new InteractionUnitStore(db);
+    this.compilerConfidenceStore = new CompilerConfidenceStore(db);
     this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
     this.dreamLedgerStore = new DreamLedgerStore(db);
     this.episodeStore = new EpisodeStore(db, (eventId) => this.eventStore.getEvent(eventId), { initializeSchemaForTests: false });
@@ -983,7 +985,6 @@ export class MemoryKernel {
     this.cursorStore.close();
     this.memoryGraph.close();
     this.eventStore.close();
-    this.factStore.close();
     this.entityStore.close();
     this.topologyStore.close();
     this.cognitiveGraphStore.close();
@@ -991,6 +992,11 @@ export class MemoryKernel {
     this.activationStore.close();
     this.interactionUnitStore.close();
     this.compilerConfidenceStore.close();
+    this.factStore.close();
+    // bun:sqlite close(false) waits for temporary prepared statements to be
+    // finalized. An explicit Kernel close must release the file before a CLI
+    // process can reopen it, even while the Kernel object remains reachable.
+    Bun.gc(true);
   }
 
   async ingest(input: IngestInput | { content: string; projectId?: string; tags?: string[] }): Promise<Neuron> {
@@ -1027,19 +1033,36 @@ export class MemoryKernel {
     neuron.metadata.sourceEventId = ingestedEvent.eventId;
     neuron.metadata.updatedAt = neuron.metadata.createdAt;
 
+    const temporalIncremental = this.topologyStore.hasUsableTimeProjection(
+      projectScope(neuron.metadata.projectId),
+      this.projectClock.timeZone,
+    );
     this.memoryGraph.addNeuron(neuron);
+    const sourceRevision = this.topologyStore.getTimeProjectionSourceRevision(neuron.metadata.projectId);
     this.topicRegistry.invalidate(neuron.metadata.projectId);
     this.vectorStore.addVector(neuron.id, neuron.coordinates.V);
     this.queueEmbedding(neuron);
     this.reflection.onNeuronActivated(neuron.id);
     this.reflection.detectAndCreateOverrides(neuron, (vector, k) => this.vectorStore.search(vector, k));
     const consolidation = this.consolidationPipeline.consolidate(neuron, ingestedEvent.eventId);
-    const topology = this.topologyCompiler.compile({ neuron, consolidation, timeZone: this.projectClock.timeZone });
-    this.temporalAdjacencyStore.syncBuckets(topology.timeBuckets, neuron.metadata.createdAt);
-    if (neuron.metadata.projectId && !this.topologyStore.timeProjectionNeedsRebuild(neuron.metadata.projectId, this.projectClock.timeZone)) {
-      this.topologyStore.markTimeProjection(neuron.metadata.projectId, 'clean', this.projectClock.timeZone, neuron.metadata.createdAt);
-    }
+    const topology = this.topologyCompiler.compile({
+      neuron,
+      consolidation,
+      timeZone: this.projectClock.timeZone,
+      temporalEnabled: temporalIncremental,
+    });
+    if (temporalIncremental) this.temporalAdjacencyStore.syncBuckets(topology.timeBuckets, neuron.metadata.createdAt);
     const cognitiveGraph = this.cognitiveGraphCompiler.compile({ neuron, consolidation, topology });
+    if (temporalIncremental) {
+      this.topologyStore.markTimeProjection(
+        projectScope(neuron.metadata.projectId),
+        'clean',
+        this.projectClock.timeZone,
+        neuron.metadata.createdAt,
+        undefined,
+        sourceRevision,
+      );
+    }
     this.eventStore.append({
       streamId: neuron.id,
       streamType: 'neuron',
@@ -1097,9 +1120,15 @@ export class MemoryKernel {
   }
 
   navigateMemory(query: string, options: MemoryKernelNavigationOptions = {}): MemoryKernelNavigationResult {
-    const temporalEnabled = options.projectId
-      ? !this.topologyStore.hasDirtyTimeProjection(options.projectId)
-      : !this.topologyStore.hasDirtyTimeProjection();
+    const clock = resolveProjectClockContext({
+      now: options.now,
+      localDateNow: options.localDateNow,
+      timeZone: options.timeZone,
+      projectTimeZone: this.projectClock.timeZone,
+    });
+    const temporalEnabled = options.projectId !== undefined
+      ? this.topologyStore.hasUsableTimeProjection(projectScope(options.projectId), clock.timeZone)
+      : this.topologyStore.hasUsableTimeProjections(clock.timeZone);
     const limit = Math.max(1, options.limit ?? 8);
     const seedLimit = Math.min(Math.max(limit * 4, 24), 120);
     const seedNeuronIds = this.memoryGraph.fullTextSearch(query, options.projectId, seedLimit);
@@ -1108,6 +1137,7 @@ export class MemoryKernel {
       terms: extractNavigationTerms(query),
       limit: seedLimit,
       hopLimit: 2,
+      excludeTemporal: !temporalEnabled,
     });
     const seedTemporalBucketIds = temporalEnabled ? this.topologyStore.listTimeBucketIdsByNeuronIds(
       seedNeuronIds,
@@ -1120,10 +1150,11 @@ export class MemoryKernel {
       startTime: options.startTime,
       endTime: options.endTime,
       temporalEnabled,
+      clock,
       topologyIds: seedNeuronIds,
       branchIds: [],
       temporalBucketIds: seedTemporalBucketIds,
-      temporalNeuronIds: seedNeuronIds,
+      temporalNeuronIds: temporalEnabled ? seedNeuronIds : [],
       graphIds: seedNeuronIds,
       cognitiveGraphIds: cognitiveContext.neuronIds,
       entityNeuronIds: [],
@@ -1157,9 +1188,9 @@ export class MemoryKernel {
       projectId: options.projectId,
       limit,
       includeRawEvidence: true,
-      now: options.now,
-      localDateNow: options.localDateNow,
-      timeZone: options.timeZone,
+      now: clock.now,
+      localDateNow: clock.localDateNow,
+      timeZone: clock.timeZone,
     }).rawEvidence.filter((neuron) => !options.projectId || neuron.metadata.projectId === options.projectId);
     const governedFallbackEvidence = selectRecallableEvidence(fallbackEvidence, limit);
 
@@ -1177,26 +1208,31 @@ export class MemoryKernel {
     };
   }
 
-  rebuildProjectTimeTopology(projectId: string): { projectId: string; timeZone: string; neurons: number; buckets: number; rebuiltAt: number } {
+  rebuildProjectTimeTopology(projectId?: string): { projectId: string; timeZone: string; neurons: number; buckets: number; rebuiltAt: number } {
+    const scope = projectScope(projectId);
     const timeZone = this.projectClock.timeZone;
     const now = Date.now();
     const db = this.factStore.getDatabase();
-    let job = db.prepare(`SELECT generation,time_zone,status,cursor_created_at,cursor_neuron_id,neuron_count FROM topology_time_rebuild_jobs WHERE project_id=?`).get(projectId) as {
-      generation: string; time_zone: string; status: 'building' | 'ready' | 'failed'; cursor_created_at?: number | null; cursor_neuron_id?: string | null; neuron_count: number;
+    const currentSourceRevision = () => this.topologyStore.getTimeProjectionSourceRevision(scope);
+    let job = db.prepare(`SELECT generation,time_zone,status,cursor_created_at,cursor_neuron_id,neuron_count,source_revision FROM topology_time_rebuild_jobs WHERE project_id=?`).get(scope) as {
+      generation: string; time_zone: string; status: 'building' | 'ready' | 'failed'; cursor_created_at?: number | null; cursor_neuron_id?: string | null; neuron_count: number; source_revision: number;
     } | null;
-    if (!job || job.status === 'failed' || job.time_zone !== timeZone) {
+    if (!job || job.status === 'failed' || job.time_zone !== timeZone || job.source_revision !== currentSourceRevision()) {
       const generation = `topology-${randomUUID()}`;
+      const sourceRevision = currentSourceRevision();
       db.transaction(() => {
-        db.prepare(`DELETE FROM topology_time_rebuild_entries WHERE project_id=?`).run(projectId);
-        db.prepare(`DELETE FROM topology_time_rebuild_buckets WHERE project_id=?`).run(projectId);
-        db.prepare(`DELETE FROM topology_time_rebuild_active_neurons WHERE project_id=?`).run(projectId);
-        db.prepare(`INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,cursor_created_at,cursor_neuron_id,neuron_count,updated_at,error) VALUES(?,?,?,'building',NULL,NULL,0,?,NULL) ON CONFLICT(project_id) DO UPDATE SET generation=excluded.generation,time_zone=excluded.time_zone,status='building',cursor_created_at=NULL,cursor_neuron_id=NULL,neuron_count=0,updated_at=excluded.updated_at,error=NULL`).run(projectId, generation, timeZone, now);
-        this.topologyStore.markTimeProjection(projectId, 'building', timeZone, now);
+        db.prepare(`DELETE FROM topology_time_rebuild_jobs WHERE project_id=?`).run(scope);
+        db.prepare(`INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,cursor_created_at,cursor_neuron_id,neuron_count,updated_at,error,source_revision) VALUES(?,?,?,'building',NULL,NULL,0,?,NULL,?)`).run(scope, generation, timeZone, now, sourceRevision);
+        this.topologyStore.markTimeProjection(scope, 'building', timeZone, now, undefined, sourceRevision);
       })();
-      job = { generation, time_zone: timeZone, status: 'building', neuron_count: 0 };
+      job = { generation, time_zone: timeZone, status: 'building', neuron_count: 0, source_revision: sourceRevision };
     }
     try {
       const generation = job.generation;
+      const sourceRevision = job.source_revision;
+      const assertCurrentSource = (): void => {
+        if (currentSourceRevision() !== sourceRevision) throw new Error('topology_source_revision_changed');
+      };
       let neuronCount = Number(job.neuron_count ?? 0);
       if (job.status === 'building') {
         let cursor = job.cursor_created_at !== null && job.cursor_created_at !== undefined && job.cursor_neuron_id
@@ -1205,6 +1241,7 @@ export class MemoryKernel {
         const insertBucket = db.prepare(`INSERT INTO topology_time_rebuild_buckets(generation,bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(generation,bucket_id) DO UPDATE SET label=excluded.label`);
         const insertEntry = db.prepare(`INSERT OR IGNORE INTO topology_time_rebuild_entries(generation,bucket_id,neuron_id,project_id,created_at) VALUES(?,?,?,?,?)`);
         for (;;) {
+          assertCurrentSource();
           const neurons = this.memoryGraph.listTimeProjectionNeurons(projectId, { afterCreatedAt: cursor?.createdAt, afterId: cursor?.id, limit: 500 });
           if (neurons.length === 0) break;
           const planned = this.topologyCompiler.planTimeBuckets(neurons, timeZone);
@@ -1212,58 +1249,107 @@ export class MemoryKernel {
           db.transaction(() => {
             for (const neuron of neurons) {
               for (const bucket of planned.get(neuron.id) ?? []) {
-                insertBucket.run(generation, bucket.bucketId, projectId, timeZone, bucket.bucketType, bucket.bucketStart, bucket.bucketEnd, bucket.label);
-                insertEntry.run(generation, bucket.bucketId, neuron.id, projectId, neuron.createdAt);
+                insertBucket.run(generation, bucket.bucketId, scope, timeZone, bucket.bucketType, bucket.bucketStart, bucket.bucketEnd, bucket.label);
+                insertEntry.run(generation, bucket.bucketId, neuron.id, scope, neuron.createdAt);
               }
             }
-            db.prepare(`UPDATE topology_time_rebuild_jobs SET cursor_created_at=?,cursor_neuron_id=?,neuron_count=neuron_count+?,updated_at=?,error=NULL WHERE project_id=? AND generation=? AND status='building'`).run(last.createdAt, last.id, neurons.length, Date.now(), projectId, generation);
+            db.prepare(`UPDATE topology_time_rebuild_jobs SET cursor_created_at=?,cursor_neuron_id=?,neuron_count=neuron_count+?,updated_at=?,error=NULL WHERE project_id=? AND generation=? AND status='building' AND source_revision=?`).run(last.createdAt, last.id, neurons.length, Date.now(), scope, generation, sourceRevision);
           })();
           neuronCount += neurons.length;
           cursor = { createdAt: last.createdAt, id: last.id };
         }
 
+        assertCurrentSource();
+        db.prepare(`DELETE FROM topology_time_rebuild_active_neurons WHERE generation=?`).run(generation);
+        const insertActive = db.prepare(`INSERT INTO topology_time_rebuild_active_neurons(generation,neuron_id,project_id,created_at,title) VALUES(?,?,?,?,?)`);
+        let snapshotCursor: { createdAt: number; id: string } | undefined;
         neuronCount = 0;
-        db.transaction(() => {
-          db.prepare(`DELETE FROM topology_time_rebuild_active_neurons WHERE generation=?`).run(generation);
-          const insertActive = db.prepare(`INSERT INTO topology_time_rebuild_active_neurons(generation,neuron_id,project_id,created_at,title) VALUES(?,?,?,?,?)`);
-          let snapshotCursor: { createdAt: number; id: string } | undefined;
-          for (;;) {
-            const neurons = this.memoryGraph.listTimeProjectionNeurons(projectId, { afterCreatedAt: snapshotCursor?.createdAt, afterId: snapshotCursor?.id, limit: 500 });
-            if (neurons.length === 0) break;
-            for (const neuron of neurons) insertActive.run(generation, neuron.id, projectId, neuron.createdAt, neuron.title);
-            neuronCount += neurons.length;
-            const last = neurons[neurons.length - 1]!;
-            snapshotCursor = { createdAt: last.createdAt, id: last.id };
-          }
-          db.prepare(`UPDATE topology_time_rebuild_jobs SET status='ready',neuron_count=?,updated_at=?,error=NULL WHERE project_id=? AND generation=? AND status='building'`).run(neuronCount, Date.now(), projectId, generation);
-        })();
+        for (;;) {
+          assertCurrentSource();
+          const neurons = this.memoryGraph.listTimeProjectionNeurons(projectId, { afterCreatedAt: snapshotCursor?.createdAt, afterId: snapshotCursor?.id, limit: 500 });
+          if (neurons.length === 0) break;
+          db.transaction(() => {
+            for (const neuron of neurons) insertActive.run(generation, neuron.id, scope, neuron.createdAt, neuron.title);
+          })();
+          neuronCount += neurons.length;
+          const last = neurons[neurons.length - 1]!;
+          snapshotCursor = { createdAt: last.createdAt, id: last.id };
+        }
+        assertCurrentSource();
+        this.stageTimeProjectionGraph(generation, scope, timeZone, now);
+        assertCurrentSource();
+        db.prepare(`UPDATE topology_time_rebuild_jobs SET status='ready',neuron_count=?,updated_at=?,error=NULL WHERE project_id=? AND generation=? AND status='building' AND source_revision=?`).run(neuronCount, Date.now(), scope, generation, sourceRevision);
       }
 
+      assertCurrentSource();
       const bucketCount = Number((db.prepare(`SELECT COUNT(*) AS count FROM topology_time_rebuild_buckets b WHERE b.generation=? AND EXISTS (SELECT 1 FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=b.generation AND e.bucket_id=b.bucket_id)`).get(generation) as { count?: number } | null)?.count ?? 0);
       db.transaction(() => {
-        this.topologyStore.resetProjectTimeBuckets(projectId);
+        const claim = db.prepare(`UPDATE topology_time_rebuild_jobs SET updated_at=updated_at WHERE project_id=? AND generation=? AND status='ready' AND source_revision=?`).run(scope, generation, sourceRevision);
+        const owned = db.prepare(`SELECT 1 FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND status='ready' AND source_revision=?`).get(scope, generation, sourceRevision);
+        if (claim.changes !== 1 || !owned) throw new Error('time_projection_rebuild_publish_conflict');
+        assertCurrentSource();
+        this.topologyStore.resetProjectTimeBuckets(scope);
         db.prepare(`INSERT INTO time_buckets(bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label) SELECT b.bucket_id,b.project_id,b.time_zone,b.bucket_type,b.bucket_start,b.bucket_end,b.label FROM topology_time_rebuild_buckets b WHERE b.generation=? AND EXISTS (SELECT 1 FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=b.generation AND e.bucket_id=b.bucket_id)`).run(generation);
         db.prepare(`INSERT INTO time_bucket_entries(bucket_id,neuron_id,unit_id,belief_id,fact_id,event_id,project_id,created_at) SELECT e.bucket_id,e.neuron_id,NULL,NULL,NULL,NULL,e.project_id,e.created_at FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=?`).run(generation);
         db.prepare(`INSERT OR IGNORE INTO topology_membership(neuron_id,project_id,dimension_type,dimension_key,title,created_at) SELECT e.neuron_id,e.project_id,'time_bucket',e.bucket_id,b.label,e.created_at FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_buckets b ON b.generation=e.generation AND b.bucket_id=e.bucket_id JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=?`).run(generation);
-        this.cognitiveGraphStore.resetProjectTimeProjection(projectId);
-        let cognitiveCursor: { createdAt: number; id: string } | undefined;
-        for (;;) {
-          const neurons = (cognitiveCursor ? db.prepare(`SELECT neuron_id AS id,title,created_at AS createdAt FROM topology_time_rebuild_active_neurons WHERE generation=? AND (created_at>? OR (created_at=? AND neuron_id>?)) ORDER BY created_at,neuron_id LIMIT 500`).all(generation, cognitiveCursor.createdAt, cognitiveCursor.createdAt, cognitiveCursor.id) : db.prepare(`SELECT neuron_id AS id,title,created_at AS createdAt FROM topology_time_rebuild_active_neurons WHERE generation=? ORDER BY created_at,neuron_id LIMIT 500`).all(generation)) as Array<{ id: string; title: string; createdAt: number }>;
-          if (neurons.length === 0) break;
-          this.cognitiveGraphCompiler.rebuildTimeBuckets({ projectId, neurons, bucketsByNeuronId: this.topologyStore.listProjectTimeBucketsByNeuron(projectId, neurons.map((neuron) => neuron.id)) });
-          const last = neurons[neurons.length - 1]!;
-          cognitiveCursor = { createdAt: last.createdAt, id: last.id };
-        }
-        this.temporalAdjacencyStore.rebuildProject(projectId, timeZone, now);
-        this.topologyStore.markTimeProjection(projectId, 'clean', timeZone, now);
-        db.prepare(`DELETE FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=?`).run(projectId, generation);
+        this.cognitiveGraphStore.resetProjectTimeProjection(scope);
+        db.prepare(`INSERT INTO cognitive_nodes(node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at) SELECT node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at FROM topology_time_rebuild_cognitive_nodes WHERE generation=? ON CONFLICT(node_id) DO NOTHING`).run(generation);
+        db.prepare(`INSERT INTO cognitive_edges(edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at) SELECT edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at FROM topology_time_rebuild_cognitive_edges WHERE generation=? ON CONFLICT(edge_id) DO UPDATE SET weight=excluded.weight,metadata_json=excluded.metadata_json`).run(generation);
+        db.prepare(`DELETE FROM temporal_adjacency WHERE project_id=?`).run(scope);
+        db.prepare(`INSERT INTO temporal_adjacency(project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) SELECT project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at FROM topology_time_rebuild_adjacency WHERE generation=?`).run(generation);
+        this.topologyStore.markTimeProjection(scope, 'clean', timeZone, now, undefined, sourceRevision);
+        db.prepare(`DELETE FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=?`).run(scope, generation);
       })();
-      return { projectId, timeZone, neurons: neuronCount, buckets: bucketCount, rebuiltAt: now };
+      return { projectId: scope, timeZone, neurons: neuronCount, buckets: bucketCount, rebuiltAt: now };
     } catch (error) {
-      db.prepare(`UPDATE topology_time_rebuild_jobs SET status='failed',updated_at=?,error=? WHERE project_id=? AND generation=?`).run(Date.now(), error instanceof Error ? error.message : String(error), projectId, job.generation);
-      this.topologyStore.markTimeProjection(projectId, 'failed', timeZone, now, error instanceof Error ? error.message : String(error));
+      const failed = db.prepare(`UPDATE topology_time_rebuild_jobs SET status='failed',updated_at=?,error=? WHERE project_id=? AND generation=?`).run(Date.now(), error instanceof Error ? error.message : String(error), scope, job.generation);
+      if (failed.changes === 1) {
+        this.topologyStore.markTimeProjection(scope, 'failed', timeZone, now, error instanceof Error ? error.message : String(error), currentSourceRevision());
+      }
       throw error;
     }
+  }
+
+  private stageTimeProjectionGraph(generation: string, projectId: string, timeZone: string, createdAt: number): void {
+    const db = this.factStore.getDatabase();
+    const neurons = db.prepare(`SELECT neuron_id,title,created_at FROM topology_time_rebuild_active_neurons WHERE generation=? ORDER BY created_at,neuron_id`).all(generation) as Array<{ neuron_id: string; title: string; created_at: number }>;
+    const buckets = db.prepare(`SELECT bucket_id,bucket_type,bucket_start,bucket_end,label FROM topology_time_rebuild_buckets WHERE generation=? ORDER BY bucket_type,bucket_start,bucket_id`).all(generation) as Array<{ bucket_id: string; bucket_type: string; bucket_start: number; bucket_end: number; label: string }>;
+    const entries = db.prepare(`SELECT bucket_id,neuron_id,created_at FROM topology_time_rebuild_entries WHERE generation=? ORDER BY created_at,neuron_id,bucket_id`).all(generation) as Array<{ bucket_id: string; neuron_id: string; created_at: number }>;
+    const neuronNodes = new Map<string, string>();
+    const bucketNodes = new Map<string, string>();
+    const insertNode = db.prepare(`INSERT INTO topology_time_rebuild_cognitive_nodes(generation,node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(generation,node_id) DO UPDATE SET title=excluded.title,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`);
+    const insertEdge = db.prepare(`INSERT OR IGNORE INTO topology_time_rebuild_cognitive_edges(generation,edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)`);
+    const insertAdjacent = db.prepare(`INSERT OR IGNORE INTO topology_time_rebuild_adjacency(generation,project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) VALUES(?,?,?,?,?,?,?,?)`);
+    db.transaction(() => {
+      db.prepare(`DELETE FROM topology_time_rebuild_cognitive_edges WHERE generation=?`).run(generation);
+      db.prepare(`DELETE FROM topology_time_rebuild_cognitive_nodes WHERE generation=?`).run(generation);
+      db.prepare(`DELETE FROM topology_time_rebuild_adjacency WHERE generation=?`).run(generation);
+      for (const neuron of neurons) {
+        const key = `neuron:${neuron.neuron_id}`;
+        const nodeId = cognitiveNodeId(projectId || undefined, 'neuron', key);
+        neuronNodes.set(neuron.neuron_id, nodeId);
+        insertNode.run(generation, nodeId, 'neuron', key, neuron.title, projectId, neuron.neuron_id, JSON.stringify({ status: 'active' }), neuron.created_at, neuron.created_at);
+      }
+      for (const bucket of buckets) {
+        const key = `time_bucket:${bucket.bucket_id}`;
+        const nodeId = cognitiveNodeId(projectId || undefined, 'time_bucket', key);
+        bucketNodes.set(bucket.bucket_id, nodeId);
+        insertNode.run(generation, nodeId, 'time_bucket', key, bucket.label, projectId, null, JSON.stringify({ bucketType: bucket.bucket_type, timeZone }), bucket.bucket_start, createdAt);
+      }
+      for (const entry of entries) {
+        const sourceNodeId = neuronNodes.get(entry.neuron_id);
+        const targetNodeId = bucketNodes.get(entry.bucket_id);
+        if (!sourceNodeId || !targetNodeId) continue;
+        insertEdge.run(generation, cognitiveEdgeId({ projectId: projectId || undefined, sourceNodeId, targetNodeId, edgeType: 'occurred_in_time_bucket' }), sourceNodeId, targetNodeId, 'occurred_in_time_bucket', 1, projectId, null, entry.created_at);
+      }
+      for (let index = 1; index < buckets.length; index += 1) {
+        const previous = buckets[index - 1]!;
+        const current = buckets[index]!;
+        if (previous.bucket_type !== current.bucket_type) continue;
+        insertAdjacent.run(generation, projectId, timeZone, previous.bucket_id, current.bucket_id, current.bucket_type, 0.72, createdAt);
+        insertAdjacent.run(generation, projectId, timeZone, current.bucket_id, previous.bucket_id, current.bucket_type, 0.72, createdAt);
+      }
+    })();
   }
 
   recordRawEvent(input: RawMemoryEventInput): MemoryEvent<{ text: string; metadata?: Record<string, unknown> }> {
@@ -2854,6 +2940,11 @@ export class MemoryKernel {
       deleted.activations += this.activationStore.deleteByProject(projectId);
       deleted.memoryBindings += this.memoryBindingStore.deleteByProject(projectId);
       runDelete(`DELETE FROM time_bucket_entries WHERE project_id = ?`, [projectId]);
+      runDelete(`DELETE FROM temporal_adjacency WHERE project_id = ?`, [projectId]);
+      runDelete(`DELETE FROM time_buckets WHERE project_id = ?`, [projectId]);
+      runDelete(`DELETE FROM topology_time_rebuild_jobs WHERE project_id = ?`, [projectId]);
+      runDelete(`DELETE FROM topology_projection_state WHERE project_id = ?`, [projectId]);
+      runDelete(`DELETE FROM topology_source_revisions WHERE project_id = ?`, [projectId]);
       runDelete(`DELETE FROM branch_links WHERE parent_branch_id IN (SELECT branch_id FROM project_branches WHERE project_id = ?) OR child_branch_id IN (SELECT branch_id FROM project_branches WHERE project_id = ?)`, [projectId, projectId]);
       runDelete(`DELETE FROM branch_entries WHERE branch_id IN (SELECT branch_id FROM project_branches WHERE project_id = ?)`, [projectId]);
       runDelete(`DELETE FROM project_branches WHERE project_id = ?`, [projectId]);

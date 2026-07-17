@@ -1,8 +1,16 @@
 import Database from 'bun:sqlite';
 export class CompilerConfidenceStore {
     db;
-    constructor(dbPath = ':memory:') {
-        this.db = new Database(dbPath);
+    ownsDb;
+    constructor(dbOrPath = ':memory:') {
+        if (typeof dbOrPath === 'string') {
+            this.db = new Database(dbOrPath);
+            this.ownsDb = true;
+        }
+        else {
+            this.db = dbOrPath;
+            this.ownsDb = false;
+        }
         this.initializeSchema();
     }
     initializeSchema() {
@@ -71,6 +79,7 @@ export class CompilerConfidenceStore {
         }));
     }
     close() {
-        this.db.close();
+        if (this.ownsDb)
+            this.db.close();
     }
 }
