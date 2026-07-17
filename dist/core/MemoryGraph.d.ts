@@ -29,8 +29,9 @@ export declare class MemoryGraph {
     constructor(dbOrPath?: Database | string);
     private initializeSchema;
     private ensureCompatibilityColumns;
-    addNeuron(neuron: Neuron): void;
-    addNeuronInTransaction(neuron: Neuron): void;
+    addNeuron(neuron: Neuron): number;
+    addNeuronInTransaction(neuron: Neuron): number;
+    indexCommittedNeuron(neuron: Neuron): void;
     private recordTimeProjectionSourceMutation;
     private insertNeuron;
     private insertIntoFTS;

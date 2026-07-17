@@ -92,13 +92,13 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
   }
   for (const node of frame.nodes) if (node.dimension === 'raw_event' && node.evidenceEventIds.length !== 1) errors.push(`raw_event_identity_requires_one_evidence:${node.frameNodeId}`);
   for (const reference of frame.temporalReferences) {
-    if (typeof reference.label !== 'string' || !Array.isArray(reference.evidenceEventIds) || !reference.label.trim() || reference.label.length > limits.text || !Number.isFinite(reference.confidence) || reference.confidence < 0 || reference.confidence > 1 || !reference.evidenceEventIds.length || invalidEvidence(reference.evidenceEventIds)) errors.push('invalid_temporal_reference');
+    if (typeof reference.label !== 'string' || !Array.isArray(reference.evidenceEventIds) || !reference.label.trim() || reference.label.length > limits.text || !Number.isFinite(reference.confidence) || reference.confidence < 0 || reference.confidence > 1 || (!reference.evidenceEventIds.length && !options.allowEmptyEvidence) || invalidEvidence(reference.evidenceEventIds)) errors.push('invalid_temporal_reference');
     if (reference.occurredAt !== undefined && !Number.isFinite(reference.occurredAt)) errors.push('invalid_temporal_reference_time');
     if (Array.isArray(reference.evidenceEventIds) && !reference.evidenceEventIds.every((id) => evidence.has(id))) errors.push('temporal_reference_evidence_not_in_frame');
   }
   for (const transition of frame.stateTransitions) {
     if (typeof transition.subjectFrameNodeId !== 'string' || !nodes.has(transition.subjectFrameNodeId)) errors.push('state_transition_node_missing');
-    if (typeof transition.to !== 'string' || (transition.from !== undefined && typeof transition.from !== 'string') || !Array.isArray(transition.evidenceEventIds) || !transition.to.trim() || transition.to.length > limits.text || (transition.from !== undefined && (!transition.from.trim() || transition.from.length > limits.text)) || !Number.isFinite(transition.confidence) || transition.confidence < 0 || transition.confidence > 1 || !transition.evidenceEventIds.length || invalidEvidence(transition.evidenceEventIds)) errors.push('invalid_state_transition');
+    if (typeof transition.to !== 'string' || (transition.from !== undefined && typeof transition.from !== 'string') || !Array.isArray(transition.evidenceEventIds) || !transition.to.trim() || transition.to.length > limits.text || (transition.from !== undefined && (!transition.from.trim() || transition.from.length > limits.text)) || !Number.isFinite(transition.confidence) || transition.confidence < 0 || transition.confidence > 1 || (!transition.evidenceEventIds.length && !options.allowEmptyEvidence) || invalidEvidence(transition.evidenceEventIds)) errors.push('invalid_state_transition');
     if (Array.isArray(transition.evidenceEventIds) && !transition.evidenceEventIds.every((id) => evidence.has(id))) errors.push('state_transition_evidence_not_in_frame');
   }
   return { valid: errors.length === 0, errors, frame: errors.length === 0 ? frame : undefined };

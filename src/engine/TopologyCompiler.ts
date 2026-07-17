@@ -217,7 +217,7 @@ export class TopologyCompiler {
       const task = this.store.upsertTaskBranch({
         taskId: `task-${randomUUID()}`,
         projectId,
-        taskKey: `${projectId || 'global'}:${this.normalizeKey(title)}`,
+        taskKey: this.normalizeKey(title),
         title,
         status: 'derived',
         createdAt
@@ -249,7 +249,7 @@ export class TopologyCompiler {
       const cluster = this.store.upsertEventCluster({
         clusterId: `cluster-${randomUUID()}`,
         projectId,
-        clusterKey: `${projectId || 'global'}:${clusterType}:${this.normalizeKey(event.target || event.actor || event.eventType)}`,
+        clusterKey: `${clusterType}:${this.normalizeKey(event.target || event.actor || event.eventType)}`,
         clusterType,
         title: event.target || event.actor || event.eventType,
         createdAt
@@ -267,7 +267,7 @@ export class TopologyCompiler {
       const cluster = this.store.upsertEventCluster({
         clusterId: `cluster-${randomUUID()}`,
         projectId,
-        clusterKey: `${projectId || 'global'}:${clusterType}:${this.normalizeKey(fact.object || fact.predicateValue || fact.subject)}`,
+        clusterKey: `${clusterType}:${this.normalizeKey(fact.object || fact.predicateValue || fact.subject)}`,
         clusterType,
         title: fact.object || fact.predicateValue || fact.subject,
         createdAt
@@ -284,7 +284,7 @@ export class TopologyCompiler {
       const cluster = this.store.upsertEventCluster({
         clusterId: `cluster-${randomUUID()}`,
         projectId,
-        clusterKey: `${projectId || 'global'}:fact:${this.normalizeKey(belief.predicate)}`,
+        clusterKey: `fact:${this.normalizeKey(belief.predicate)}`,
         clusterType: 'fact',
         title: belief.predicate,
         createdAt
@@ -300,7 +300,7 @@ export class TopologyCompiler {
       const cluster = this.store.upsertEventCluster({
         clusterId: `cluster-${randomUUID()}`,
         projectId,
-        clusterKey: `${projectId || 'global'}:generic:${this.normalizeKey(neuron.content).slice(0, 72)}`,
+        clusterKey: `generic:${this.normalizeKey(neuron.content).slice(0, 72)}`,
         clusterType: 'generic',
         title: neuron.content.slice(0, 96),
         createdAt

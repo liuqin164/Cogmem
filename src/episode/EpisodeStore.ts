@@ -953,20 +953,20 @@ export class EpisodeStore {
   deleteByProject(projectId: string): number {
     let count = 0;
     const run = (sql: string) => { count += Number(this.db.prepare(sql).run(projectId).changes || 0); };
-    run(`DELETE FROM episode_dream_runs WHERE project_id = ?`);
-    run(`DELETE FROM episode_dream_jobs WHERE project_id = ?`);
-    run(`DELETE FROM episode_boundary_decisions WHERE project_id = ?`);
-    run(`DELETE FROM episode_cross_refs WHERE project_id = ?`);
-    run(`DELETE FROM episode_repair_audit WHERE project_id = ?`);
-    run(`DELETE FROM episode_closure_receipts WHERE project_id = ?`);
-    run(`DELETE FROM episode_ingest_keys WHERE project_id = ?`);
-    run(`DELETE FROM episode_event_dispositions WHERE project_id = ?`);
-    const episodeIds = (this.db.prepare(`SELECT episode_id FROM memory_episodes WHERE project_id = ?`).all(projectId) as Array<{ episode_id: string }>).map((row) => row.episode_id);
+    run(`DELETE FROM episode_dream_runs WHERE COALESCE(project_id, '') = ?`);
+    run(`DELETE FROM episode_dream_jobs WHERE COALESCE(project_id, '') = ?`);
+    run(`DELETE FROM episode_boundary_decisions WHERE COALESCE(project_id, '') = ?`);
+    run(`DELETE FROM episode_cross_refs WHERE COALESCE(project_id, '') = ?`);
+    run(`DELETE FROM episode_repair_audit WHERE COALESCE(project_id, '') = ?`);
+    run(`DELETE FROM episode_closure_receipts WHERE COALESCE(project_id, '') = ?`);
+    run(`DELETE FROM episode_ingest_keys WHERE COALESCE(project_id, '') = ?`);
+    run(`DELETE FROM episode_event_dispositions WHERE COALESCE(project_id, '') = ?`);
+    const episodeIds = (this.db.prepare(`SELECT episode_id FROM memory_episodes WHERE COALESCE(project_id, '') = ?`).all(projectId) as Array<{ episode_id: string }>).map((row) => row.episode_id);
     if (episodeIds.length) {
       const placeholders = episodeIds.map(() => '?').join(', ');
       count += Number(this.db.prepare(`DELETE FROM memory_episode_events WHERE episode_id IN (${placeholders})`).run(...episodeIds).changes || 0);
     }
-    run(`DELETE FROM memory_episodes WHERE project_id = ?`);
+    run(`DELETE FROM memory_episodes WHERE COALESCE(project_id, '') = ?`);
     return count;
   }
 

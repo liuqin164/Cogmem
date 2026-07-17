@@ -577,12 +577,12 @@ export class MemoryAtlasStore {
 
   cleanupAccess(options: { projectId?: string; before: number; retainLatest?: number }): number {
     let changes = 0;
-    const expired = options.projectId
+    const expired = options.projectId !== undefined
       ? this.db.prepare(`DELETE FROM memory_atlas_access WHERE project_id=? AND accessed_at<?`).run(options.projectId, options.before)
       : this.db.prepare(`DELETE FROM memory_atlas_access WHERE accessed_at<?`).run(options.before);
     changes += Number(expired.changes || 0);
     const retain = Math.max(100, Math.min(options.retainLatest ?? 100_000, 1_000_000));
-    const projects = options.projectId ? [options.projectId] : this.listKnownProjectIds();
+    const projects = options.projectId !== undefined ? [options.projectId] : this.listKnownProjectIds();
     for (const projectId of projects) {
       const capped = this.db.prepare(`
         DELETE FROM memory_atlas_access WHERE project_id=? AND access_id NOT IN (
@@ -595,7 +595,7 @@ export class MemoryAtlasStore {
   }
 
   decay(projectId?: string, factor = 0.85, now = Date.now()): number {
-    const result = projectId
+    const result = projectId !== undefined
       ? this.db.prepare(`UPDATE memory_atlas_activation SET activation=MAX(0,activation*?),updated_at=? WHERE project_id=?`).run(factor, now, projectId)
       : this.db.prepare(`UPDATE memory_atlas_activation SET activation=MAX(0,activation*?),updated_at=?`).run(factor, now);
     return Number(result.changes || 0);
@@ -709,7 +709,7 @@ export class MemoryAtlasStore {
   }
 
   countDocuments(projectId?: string): number {
-    const row = projectId
+    const row = projectId !== undefined
       ? this.db.prepare(`SELECT COUNT(*) AS count FROM memory_atlas_documents WHERE project_id=?`).get(projectId)
       : this.db.prepare(`SELECT COUNT(*) AS count FROM memory_atlas_documents`).get();
     return Number((row as { count?: number } | null)?.count || 0);

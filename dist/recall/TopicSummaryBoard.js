@@ -42,25 +42,13 @@ export class TopicSummaryBoard {
             createdAt: now,
             updatedAt: now
         });
-        if (existing) {
-            this.memoryGraph.updateNeuronContent(existing.id, summaryText);
-            this.memoryGraph.updateNeuronMetadata(existing.id, {
-                tags,
-                updatedAt: now,
-                confidence: 0.86,
-                importanceLevel: 'normal',
-                isPinned: false,
-                status: 'active'
-            });
-            return existing.id;
-        }
         const summaryNeuron = NeuronFactory.create(summaryText, this.memoryGraph.getLatestNeuronSelfHash(projectId) || 'genesis', { T: now, S: [0, 0, 0], V: [] }, {
             projectId,
             topicPath: normalized,
             type: 'doc',
             createdAt: now,
             updatedAt: now,
-            tags,
+            tags: existing ? [...tags, `supersedes:${existing.id}`] : tags,
             status: 'active',
             confidence: 0.86,
             importanceLevel: 'normal',
@@ -68,6 +56,13 @@ export class TopicSummaryBoard {
             sourceType: 'llm_inference'
         });
         this.memoryGraph.addNeuron(summaryNeuron);
+        if (existing) {
+            this.memoryGraph.updateNeuronMetadata(existing.id, {
+                status: 'archived',
+                updatedAt: now,
+                tags: Array.from(new Set([...(existing.metadata.tags || []), `superseded_by:${summaryNeuron.id}`]))
+            });
+        }
         return summaryNeuron.id;
     }
     listEntries(projectId) {

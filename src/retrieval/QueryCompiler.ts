@@ -66,15 +66,15 @@ export class QueryCompiler {
     if (!ir.temporal.relative && nativeDirectives?.time) {
       ir.temporal.relative = this.mapNativeTime(nativeDirectives.time);
     }
-    if (!ir.temporal.start && nativeDirectives?.from) {
+    if (ir.temporal.start === undefined && nativeDirectives?.from) {
       const start = this.parseNativeDate(nativeDirectives.from, resolvedClock.timeZone);
       if (start !== undefined) ir.temporal.start = start;
     }
-    if (!ir.temporal.end && nativeDirectives?.to) {
+    if (ir.temporal.end === undefined && nativeDirectives?.to) {
       const end = this.parseNativeDate(nativeDirectives.to, resolvedClock.timeZone, true);
       if (end !== undefined) ir.temporal.end = end;
     }
-    if (!ir.temporal.relative && !ir.temporal.start && !ir.temporal.end && nativeDirectives?.around) {
+    if (!ir.temporal.relative && ir.temporal.start === undefined && ir.temporal.end === undefined && nativeDirectives?.around) {
       const center = this.parseNativeDate(nativeDirectives.around, resolvedClock.timeZone);
       if (center !== undefined) {
         const [year, month, day] = this.civilParts(nativeDirectives.around);

@@ -1,5 +1,6 @@
 import type { TopologyStore } from '../store/TopologyStore.js';
 import type { TemporalAdjacencyStore, TemporalSurfaceSegment } from '../store/TemporalAdjacencyStore.js';
+import { localDateFor } from '../utils/LocalDateContext.js';
 
 export interface TemporalTraversalSegment extends TemporalSurfaceSegment {
   branchIds: string[];
@@ -18,7 +19,7 @@ export interface TemporalBranchSearchResult {
     labels: string[];
     neuronIds: string[];
     segments: TemporalTraversalSegment[];
-    traversalMode: 'surface' | 'adjacent_fallback' | 'nearest_fallback';
+    traversalMode: 'surface' | 'adjacent_fallback' | 'nearest_fallback' | 'disabled';
   };
   denseJointNeuronIds: string[];
   reasons: string[];
@@ -35,6 +36,7 @@ export class TemporalBranchSearch {
     startTime?: number;
     endTime?: number;
     temporalEnabled?: boolean;
+    timeZone: string;
     terms: string[];
     temporalBucketIds?: string[];
     entityNeuronIds?: string[];
@@ -78,7 +80,7 @@ export class TemporalBranchSearch {
       temporalSurface.labels.length > 0
         ? temporalSurface.labels
         : input.temporalEnabled !== false && (input.startTime !== undefined || input.endTime !== undefined)
-          ? [this.formatTemporalWindow(input.startTime, input.endTime)]
+          ? [this.formatTemporalWindow(input.startTime, input.endTime, input.timeZone)]
           : [];
     const fallbackBucketIds =
       temporalSurface.bucketIds.length > 0
@@ -91,7 +93,9 @@ export class TemporalBranchSearch {
         ? temporalSurface.neuronIds
         : branches.neuronIds.slice(0, 24);
     const traversalMode: TemporalBranchSearchResult['temporalTraversal']['traversalMode'] =
-      temporalSurface.segments.some((segment) => segment.source === 'window' || segment.source === 'seed')
+      input.temporalEnabled === false
+        ? 'disabled'
+        : temporalSurface.segments.some((segment) => segment.source === 'window' || segment.source === 'seed')
         ? 'surface'
         : temporalSurface.segments.some((segment) => segment.source === 'adjacent')
           ? 'adjacent_fallback'
@@ -153,10 +157,10 @@ export class TemporalBranchSearch {
     };
   }
 
-  private formatTemporalWindow(startTime?: number, endTime?: number): string {
+  private formatTemporalWindow(startTime: number | undefined, endTime: number | undefined, timeZone: string): string {
     if (startTime === undefined && endTime === undefined) return 'temporal window';
-    const startLabel = startTime !== undefined ? new Date(startTime).toISOString().slice(0, 10) : 'open';
-    const endLabel = endTime !== undefined ? new Date(endTime).toISOString().slice(0, 10) : 'open';
+    const startLabel = startTime !== undefined ? localDateFor(startTime, timeZone) : 'open';
+    const endLabel = endTime !== undefined ? localDateFor(endTime - 1, timeZone) : 'open';
     return `${startLabel}..${endLabel}`;
   }
 }

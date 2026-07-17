@@ -153,8 +153,8 @@ export class SummaryStore {
       WHERE deep_write_summaries_fts MATCH ?
         AND s.status IN ('provisional', 'verified')
     `;
-        if (projectId) {
-            sql += ` AND (s.project_id = ? OR s.project_id IS NULL)`;
+        if (projectId !== undefined) {
+            sql += ` AND COALESCE(s.project_id, '') = ?`;
             params.push(projectId);
         }
         sql += ` ORDER BY s.confidence DESC, s.updated_at DESC LIMIT ?`;
@@ -181,10 +181,10 @@ export class SummaryStore {
         const rows = this.db.prepare(`
       SELECT * FROM deep_write_summaries
       WHERE status IN ('provisional', 'verified')
-        AND (? IS NULL OR project_id = ? OR project_id IS NULL)
+        AND (? IS NULL OR COALESCE(project_id, '') = ?)
       ORDER BY confidence DESC, updated_at DESC
       LIMIT 100
-    `).all(projectId || null, projectId || null);
+    `).all(projectId === undefined ? null : projectId, projectId === undefined ? null : projectId);
         return rows
             .map((row) => ({ row, score: tokens.filter((token) => row.text.toLowerCase().includes(token)).length }))
             .filter((item) => item.score > 0)

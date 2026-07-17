@@ -400,8 +400,8 @@ export class EventStore {
     listRawEventsAfterGlobalSeq(options = {}) {
         const conditions = [`event_type = 'RAW_EVENT_RECORDED'`];
         const params = [];
-        if (options.projectId) {
-            conditions.push('project_id = ?');
+        if (options.projectId !== undefined) {
+            conditions.push("COALESCE(project_id, '') = ?");
             params.push(options.projectId);
         }
         if (options.workspaceId) {
@@ -470,7 +470,7 @@ export class EventStore {
             params.push(...filters.correlationId);
         }
         if (filters?.projectId?.length) {
-            conditions.push(`project_id IN (${filters.projectId.map(() => '?').join(', ')})`);
+            conditions.push(`COALESCE(project_id, '') IN (${filters.projectId.map(() => '?').join(', ')})`);
             params.push(...filters.projectId);
         }
         if (filters?.workspaceId?.length) {
@@ -552,8 +552,8 @@ export class EventStore {
             `(thread_id = ? OR (thread_id IS NULL AND stream_type = 'thread' AND stream_id = ?))`,
         ];
         const params = [threadId, threadId];
-        if (options.projectId) {
-            conditions.push('project_id = ?');
+        if (options.projectId !== undefined) {
+            conditions.push("COALESCE(project_id, '') = ?");
             params.push(options.projectId);
         }
         if (options.sessionId) {
@@ -607,8 +607,8 @@ export class EventStore {
             return [];
         const conditions = ['memory_events_fts MATCH ?'];
         const params = [ftsQuery];
-        if (options.projectId) {
-            conditions.push('e.project_id = ?');
+        if (options.projectId !== undefined) {
+            conditions.push("COALESCE(e.project_id, '') = ?");
             params.push(options.projectId);
         }
         if (options.workspaceId) {
@@ -810,8 +810,8 @@ export class EventStore {
             return [];
         const conditions = tokens.map(() => `LOWER(memory_events_fts.text) LIKE ? ESCAPE '\\'`);
         const params = tokens.map((token) => `%${escapeSqlLike(token)}%`);
-        if (options.projectId) {
-            conditions.push('e.project_id = ?');
+        if (options.projectId !== undefined) {
+            conditions.push("COALESCE(e.project_id, '') = ?");
             params.push(options.projectId);
         }
         if (options.workspaceId) {

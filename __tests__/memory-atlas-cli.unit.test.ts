@@ -30,7 +30,7 @@ test('memory graph CLI commands use the shared JSON contract and source drilldow
   kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });
   kernel.close();
 
-  const search = await run(['graph-search', '--query', 'Hermes', '--project', 'cogmem', '--db', dbPath, '--json']);
+  const search = await run(['graph-search', '--query', 'Hermes', '--project', 'cogmem', '--db', dbPath, '--timezone', 'UTC', '--json']);
   expect(search.schemaVersion).toBe('cogmem.cli.v1');
   expect(search.command).toBe('memory.graph-search');
   const searchNode = (search.nodes as Array<Record<string, any>>).find((node) => node.label === 'Hermes');
@@ -52,7 +52,7 @@ test('memory graph CLI commands use the shared JSON contract and source drilldow
   expect((boundedNode.evidence as unknown[])).toHaveLength(1);
 
   const timeline = await run(['graph-timeline', '--query', '去年 Hermes 操作', '--now', String(Date.UTC(2026, 4, 1)),
-    '--evidence-limit', '1', '--project', 'cogmem', '--db', dbPath, '--json']);
+    '--evidence-limit', '1', '--project', 'cogmem', '--db', dbPath, '--timezone', 'UTC', '--json']);
   expect(timeline.range).toEqual(expect.objectContaining({ label: '2025' }));
   expect((timeline.actions as Array<{ evidence: unknown[] }>).every((action) => action.evidence.length <= 1)).toBe(true);
 });

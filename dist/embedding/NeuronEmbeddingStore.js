@@ -127,16 +127,16 @@ export class NeuronEmbeddingStore {
         }));
     }
     readRows(projectId, modelId) {
-        if (projectId && modelId) {
+        if (projectId !== undefined && modelId) {
             return this.db.prepare(`
         SELECT neuron_id, vector_blob FROM neuron_embeddings
-        WHERE project_id = ? AND model_id = ?
+        WHERE COALESCE(project_id, '') = ? AND model_id = ?
       `).all(projectId, modelId);
         }
-        if (projectId) {
+        if (projectId !== undefined) {
             return this.db.prepare(`
         SELECT neuron_id, vector_blob FROM neuron_embeddings
-        WHERE project_id = ?
+        WHERE COALESCE(project_id, '') = ?
       `).all(projectId);
         }
         if (modelId) {

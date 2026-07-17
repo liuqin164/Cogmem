@@ -751,7 +751,7 @@ export class KernelAgentMemoryBackend {
             return [];
         const [year, month, day] = localDate.split('-').map(Number);
         const byLocalDate = this.kernel.eventStore.queryEvents(1, 1000, {
-            projectId: query.projectId ? [query.projectId] : undefined,
+            projectId: query.projectId !== undefined ? [query.projectId] : undefined,
             workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
         }).records.filter((event) => event.localDate === localDate).slice(0, limit);
         if (byLocalDate.length)
@@ -759,7 +759,7 @@ export class KernelAgentMemoryBackend {
         const startTime = Date.UTC(year, month - 1, day);
         const endTime = Date.UTC(year, month - 1, day + 1);
         const byTime = this.kernel.eventStore.queryEvents(1, Math.max(1, Math.min(limit, 200)), {
-            projectId: query.projectId ? [query.projectId] : undefined,
+            projectId: query.projectId !== undefined ? [query.projectId] : undefined,
             workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
             startTime,
             endTime,
@@ -767,7 +767,7 @@ export class KernelAgentMemoryBackend {
         if (byTime.length)
             return byTime;
         return this.kernel.eventStore.queryEvents(1, 1000, {
-            projectId: query.projectId ? [query.projectId] : undefined,
+            projectId: query.projectId !== undefined ? [query.projectId] : undefined,
             workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
         }).records.filter((event) => event.localDate === localDate).slice(0, limit);
     }
@@ -1024,7 +1024,7 @@ export class KernelAgentMemoryBackend {
     }
     findPreviousSessionId(query) {
         const page = this.kernel.eventStore.queryEvents(1, 1000, {
-            projectId: query.projectId ? [query.projectId] : undefined,
+            projectId: query.projectId !== undefined ? [query.projectId] : undefined,
             workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
             startTime: query.startTime,
             endTime: query.endTime,
@@ -1044,7 +1044,7 @@ export class KernelAgentMemoryBackend {
     }
     getSessionEvents(sessionId, query, limit) {
         const page = this.kernel.eventStore.queryEvents(1, Math.max(limit, 1), {
-            projectId: query.projectId ? [query.projectId] : undefined,
+            projectId: query.projectId !== undefined ? [query.projectId] : undefined,
             workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
             sessionId: [sessionId],
             startTime: query.startTime,

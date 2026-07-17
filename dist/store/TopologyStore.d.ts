@@ -15,6 +15,7 @@ export declare class TopologyStore {
     };
     getTimeProjectionSourceRevision(projectId: string | undefined): number;
     markTimeProjection(projectId: string, status: 'dirty' | 'building' | 'clean' | 'failed', timeZone: string, updatedAt: number, error?: string, sourceRevision?: number): void;
+    markTimeProjectionCleanIfCurrent(projectId: string, timeZone: string, updatedAt: number, sourceRevision: number): boolean;
     resetProjectTimeBuckets(projectId: string): void;
     listProjectTimeBucketsByNeuron(projectId: string, neuronIds: string[]): Map<string, TimeBucketRecord[]>;
     upsertTimeBucket(bucket: TimeBucketRecord): TimeBucketRecord;
@@ -96,7 +97,11 @@ export declare class TopologyStore {
         bucketLabels: string[];
         neuronIds: string[];
     };
-    getTimeBucketEntryCount(bucketType: TimeBucketType, start: number): number;
+    getTimeBucketEntryCount(bucketType: TimeBucketType, start: number, options?: {
+        projectId?: string;
+        timeZone?: string;
+        end?: number;
+    }): number;
     getMaterializedMembershipCount(): number;
     private upsertMembership;
     close(): void;

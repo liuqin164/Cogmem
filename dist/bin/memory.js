@@ -1023,8 +1023,11 @@ async function main() {
         runReadOnlyInspection(args);
         return;
     }
-    if (args.command === 'rebuild-topology' && args.dbPath && !args.timeZone) {
-        throw new Error('rebuild-topology with --db requires --timezone <IANA> so the projection does not depend on the host environment');
+    const clockSensitiveCommands = new Set([
+        'recall', 'graph', 'graph-search', 'graph-explore', 'graph-plan', 'graph-timeline', 'rebuild-topology'
+    ]);
+    if (args.dbPath && !args.timeZone && clockSensitiveCommands.has(args.command)) {
+        throw new Error(`${args.command} with --db requires --timezone <IANA> so date recall does not depend on the host environment`);
     }
     const kernelArgs = { ...args };
     const kernel = openKernel(kernelArgs);

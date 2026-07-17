@@ -50,11 +50,12 @@ export class Reflection {
       const newStability = Math.min(2.5, (neuron.metadata.stability || 1.0) + 0.1);
       const newRepetitions = (neuron.metadata.repetitions || 0) + 1;
       
-      neuron.metadata.lastActivated = now;
-      neuron.metadata.activationCount = newCount;
-      neuron.metadata.stability = newStability;
-      neuron.metadata.repetitions = newRepetitions;
-      this.memoryGraph.updateNeuronMetadata(neuronId, neuron.metadata);
+      this.memoryGraph.updateNeuronMetadata(neuronId, {
+        lastActivated: now,
+        activationCount: newCount,
+        stability: newStability,
+        repetitions: newRepetitions,
+      });
     }
 
     if (recent.length >= 5) {

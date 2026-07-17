@@ -28,19 +28,19 @@ export class MemoryAtlasIndexer {
       this.db.transaction(() => {
       const ftsExists = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_atlas_fts'`).get());
       if (ftsExists) {
-        if (projectId) this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=?)`).run(projectId, projectId);
+        if (projectId !== undefined) this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=?)`).run(projectId, projectId);
         else this.db.exec(`DELETE FROM memory_atlas_fts WHERE node_id IN (SELECT node_id FROM memory_atlas_documents);`);
       }
-      if (projectId) {
+      if (projectId !== undefined) {
         this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time')`).run(projectId);
       } else {
         this.db.exec(`DELETE FROM memory_atlas_documents WHERE node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time');`);
       }
       backfillAtlasDocuments(this.db, projectId);
-      const projects = projectId
+      const projects = projectId !== undefined
         ? [projectId]
         : (this.db.prepare(`SELECT project_id FROM memory_atlas_documents WHERE project_id<>'' UNION SELECT project_id FROM memory_frames WHERE status='active' AND project_id<>''`).all() as Array<{ project_id: string }>).map((row) => row.project_id);
-      for (const id of projects) this.store.upsertDocument({
+      for (const id of projects.filter(Boolean)) this.store.upsertDocument({
         id: `project:${id}`, projectId: id, nodeType: 'project', sourceId: id, label: id,
         confidence: 1, supportCount: this.store.countDocuments(id), status: 'active', evidenceEventIds: [],
         metadata: { projection: MEMORY_ATLAS_PROJECTION_NAME, projectionSchemaVersion: MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION },
@@ -53,16 +53,16 @@ export class MemoryAtlasIndexer {
         reviewNeeded += result.reviewNeeded;
         this.store.aggregateFacetNodeSupport(id);
       }
-      if (projectId && this.frameProjector) this.frameProjector.rebuild(projectId, Date.now(), { canonicalDocumentsRebuilt: true });
-      else if (!projectId && this.frameProjector) for (const id of projects) this.frameProjector.rebuild(id, Date.now(), { canonicalDocumentsRebuilt: true });
-      if (projectId) {
+      if (projectId !== undefined && this.frameProjector) this.frameProjector.rebuild(projectId, Date.now(), { canonicalDocumentsRebuilt: true });
+      else if (projectId === undefined && this.frameProjector) for (const id of projects) this.frameProjector.rebuild(id, Date.now(), { canonicalDocumentsRebuilt: true });
+      if (projectId !== undefined) {
         this.store.markProjectionClean(projectId, { actions, curatedEpisodes, facetEdges, reviewNeeded, projectionVersion: 'v2', frameSchemaVersion: 'memory_frame.v1' });
       } else {
         for (const id of projects) this.store.markProjectionClean(id, { actions, curatedEpisodes, facetEdges, reviewNeeded, projectionVersion: 'v2', frameSchemaVersion: 'memory_frame.v1' });
       }
       })();
     } catch (error) {
-      this.store.markProjectionFailed(projectId || '__global__', error instanceof Error ? error.message : String(error));
+      this.store.markProjectionFailed(projectId ?? '__all__', error instanceof Error ? error.message : String(error));
       throw error;
     }
     return { documents: this.store.countDocuments(projectId), actions, curatedEpisodes };

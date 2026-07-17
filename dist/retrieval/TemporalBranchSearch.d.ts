@@ -16,7 +16,7 @@ export interface TemporalBranchSearchResult {
         labels: string[];
         neuronIds: string[];
         segments: TemporalTraversalSegment[];
-        traversalMode: 'surface' | 'adjacent_fallback' | 'nearest_fallback';
+        traversalMode: 'surface' | 'adjacent_fallback' | 'nearest_fallback' | 'disabled';
     };
     denseJointNeuronIds: string[];
     reasons: string[];
@@ -30,6 +30,7 @@ export declare class TemporalBranchSearch {
         startTime?: number;
         endTime?: number;
         temporalEnabled?: boolean;
+        timeZone: string;
         terms: string[];
         temporalBucketIds?: string[];
         entityNeuronIds?: string[];

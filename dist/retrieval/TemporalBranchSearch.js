@@ -1,3 +1,4 @@
+import { localDateFor } from '../utils/LocalDateContext.js';
 export class TemporalBranchSearch {
     topologyStore;
     temporalAdjacencyStore;
@@ -42,7 +43,7 @@ export class TemporalBranchSearch {
         const fallbackLabels = temporalSurface.labels.length > 0
             ? temporalSurface.labels
             : input.temporalEnabled !== false && (input.startTime !== undefined || input.endTime !== undefined)
-                ? [this.formatTemporalWindow(input.startTime, input.endTime)]
+                ? [this.formatTemporalWindow(input.startTime, input.endTime, input.timeZone)]
                 : [];
         const fallbackBucketIds = temporalSurface.bucketIds.length > 0
             ? temporalSurface.bucketIds
@@ -52,11 +53,13 @@ export class TemporalBranchSearch {
             : temporalSurface.neuronIds.length > 0
                 ? temporalSurface.neuronIds
                 : branches.neuronIds.slice(0, 24);
-        const traversalMode = temporalSurface.segments.some((segment) => segment.source === 'window' || segment.source === 'seed')
-            ? 'surface'
-            : temporalSurface.segments.some((segment) => segment.source === 'adjacent')
-                ? 'adjacent_fallback'
-                : 'nearest_fallback';
+        const traversalMode = input.temporalEnabled === false
+            ? 'disabled'
+            : temporalSurface.segments.some((segment) => segment.source === 'window' || segment.source === 'seed')
+                ? 'surface'
+                : temporalSurface.segments.some((segment) => segment.source === 'adjacent')
+                    ? 'adjacent_fallback'
+                    : 'nearest_fallback';
         const linkedSegments = temporalSurface.segments.map((segment) => {
             const navigation = this.topologyStore.collectNavigationFromNeuronIds({
                 neuronIds: segment.neuronIds,
@@ -113,11 +116,11 @@ export class TemporalBranchSearch {
             ]
         };
     }
-    formatTemporalWindow(startTime, endTime) {
+    formatTemporalWindow(startTime, endTime, timeZone) {
         if (startTime === undefined && endTime === undefined)
             return 'temporal window';
-        const startLabel = startTime !== undefined ? new Date(startTime).toISOString().slice(0, 10) : 'open';
-        const endLabel = endTime !== undefined ? new Date(endTime).toISOString().slice(0, 10) : 'open';
+        const startLabel = startTime !== undefined ? localDateFor(startTime, timeZone) : 'open';
+        const endLabel = endTime !== undefined ? localDateFor(endTime - 1, timeZone) : 'open';
         return `${startLabel}..${endLabel}`;
     }
 }

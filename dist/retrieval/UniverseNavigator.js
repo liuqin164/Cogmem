@@ -22,6 +22,7 @@ export class UniverseNavigator {
             projectId: input.projectId,
             startTime,
             endTime,
+            timeZone: input.clock.timeZone,
             temporalEnabled: input.temporalEnabled,
             temporalBucketIds: input.temporalBucketIds,
             entityNeuronIds: input.entityNeuronIds,

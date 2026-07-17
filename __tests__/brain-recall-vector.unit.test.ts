@@ -199,7 +199,7 @@ describe('BrainRecall vector search — triggered when FTS results sparse', () =
           ? { id, content: 'async vector content', prev_hash: '', self_hash: '',
               coordinates: { T: 0, S: [0,0,0] as [number,number,number], V: [] },
               synapses: [],
-              metadata: { type: 'chat' as const, createdAt: 0, tags: [] } }
+              metadata: { type: 'chat' as const, createdAt: 0, projectId: 'project-a', tags: [] } }
           : null,
         getNeuronIdsByProject: () => [],
       },

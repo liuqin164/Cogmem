@@ -4,6 +4,7 @@ import { normalizeLexiconText } from '../lexicon/coreMemoryLexicon.js';
 import { logger } from '../utils/Logger.js';
 import { config as globalConfig } from '../utils/Config.js';
 import { isRecallableMemoryEvidence } from './RecallGovernance.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 export class BrainRecall {
     deps;
     semanticCompiler = new LocalSemanticCompiler();
@@ -64,21 +65,23 @@ export class BrainRecall {
             query,
             projectId: options.projectId,
             limit
-        });
+        }).filter((belief) => matchesProjectScope(options.projectId, belief.projectId));
         const facts = this.rankFacts(query, [
             ...this.deps.factStore.listFactsByNeuronIds(candidateNeuronIds, limit * 8),
             ...this.deps.factStore.listFactsByEntityIds(candidateEntityIds, { limit: limit * 8 })
-        ]).slice(0, limit);
-        const events = this.rankEvents(query, this.deps.factStore.listEventsByNeuronIds(candidateNeuronIds, limit * 6)).slice(0, limit);
+        ].filter((fact) => matchesProjectScope(options.projectId, this.deps.memoryGraph.getNeuron(fact.neuronId)?.metadata.projectId))).slice(0, limit);
+        const events = this.rankEvents(query, this.deps.factStore.listEventsByNeuronIds(candidateNeuronIds, limit * 6)
+            .filter((event) => matchesProjectScope(options.projectId, this.deps.memoryGraph.getNeuron(event.neuronId)?.metadata.projectId))).slice(0, limit);
         const entityTimeline = this.deps.entityStore.getEntityTimeline({
             projectId: options.projectId,
             entityIds: candidateEntityIds.length > 0 ? candidateEntityIds : undefined,
             limit: limit * 3
-        });
+        }).filter((item) => matchesProjectScope(options.projectId, item.projectId));
         const compiledHitCount = beliefs.length + facts.length + events.length + entityTimeline.length;
         const rawEvidence = options.includeRawEvidence === false
             ? []
-            : this.toRecallableNeurons(candidateNeuronIds, limit);
+            : this.toRecallableNeurons(candidateNeuronIds, limit)
+                .filter((neuron) => matchesProjectScope(options.projectId, neuron.metadata.projectId));
         this._expandByCommunity(rawEvidence, limit);
         if (topicRouteResult && !topicRouteResult.fallbackToGlobal && options.includeRawEvidence !== false) {
             const summaryTopicPath = topicRouteResult.matchedTopicPath ?? options.topicPath ?? rawEvidence[0]?.metadata.topicPath ?? '';
@@ -324,7 +327,7 @@ export class BrainRecall {
         const tokens = this.extractTokens(query);
         const sources = this.deps.cursorStore
             .listRecentUnprocessedSources(Date.now() - 72 * 60 * 60 * 1000)
-            .filter((source) => !projectId || source.projectId === projectId);
+            .filter((source) => matchesProjectScope(projectId, source.projectId));
         const snippets = [];
         for (const sourceCursor of sources) {
             if (snippets.length >= limit)

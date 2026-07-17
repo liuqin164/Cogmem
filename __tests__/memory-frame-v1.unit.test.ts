@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { deterministicFrameFallback, MEMORY_DIMENSIONS, MEMORY_FRAME_JSON_SCHEMA, MEMORY_FRAME_LIMITS, MEMORY_FRAME_REQUIRED_DIMENSIONS, normalizeAlias, validateMemoryFrame } from '../src/semantic/index.js';
+import { deterministicFrameFallback, memoryFrameJsonSchema, MEMORY_DIMENSIONS, MEMORY_FRAME_JSON_SCHEMA, MEMORY_FRAME_LIMITS, MEMORY_FRAME_REQUIRED_DIMENSIONS, normalizeAlias, validateMemoryFrame } from '../src/semantic/index.js';
 import { MemoryFrameStore } from '../src/store/MemoryFrameStore.js';
 import Database from 'bun:sqlite';
 import { migration_0032, migration_0035, migration_0036, migration_0037, migration_0039 } from '../src/migrations/index.js';
@@ -57,6 +57,11 @@ describe('MemoryFrame V1 contract', () => {
     expect(schema.properties.relations.items.properties.evidenceEventIds.minItems).toBe(1);
     expect(schema.properties.temporalReferences.items.properties.evidenceEventIds.minItems).toBe(1);
     expect(schema.properties.stateTransitions.items.properties.evidenceEventIds.minItems).toBe(1);
+    expect(schema.properties.frameId.pattern).toBe('.*\\S.*');
+    expect(schema.properties.nodes.items.properties.label.pattern).toBe('.*\\S.*');
+    const repairSchema = memoryFrameJsonSchema({ allowEmptyEvidence: true }) as any;
+    expect(repairSchema.properties.evidenceEventIds.minItems).toBe(0);
+    expect(repairSchema.properties.nodes.items.properties.evidenceEventIds.minItems).toBe(0);
   });
 
   test('immutable frame identities cannot be redirected by canonical hints', () => {

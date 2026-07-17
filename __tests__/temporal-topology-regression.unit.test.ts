@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -163,12 +163,12 @@ describe('project-local temporal topology regressions', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cogmem-timezone-rebuild-'));
     const dbPath = join(dir, 'memory.db');
     let kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
-    await kernel.ingest({ projectId: 'p', content: 'old timezone evidence', occurredAt: Date.UTC(2026, 6, 16, 15, 30) });
+    await kernel.ingest({ projectId: 'p', content: 'old timezone evidence', createdAt: Date.UTC(2026, 6, 16, 15, 30) });
     kernel.topologyStore.markTimeProjection('p', 'dirty', 'UTC', 1);
     kernel.close();
 
     kernel = createMemoryKernel({ dbPath, projectTimeZone: 'Asia/Tokyo' });
-    await kernel.ingest({ projectId: 'p', content: 'new timezone evidence', occurredAt: Date.UTC(2026, 6, 17, 0, 30) });
+    await kernel.ingest({ projectId: 'p', content: 'new timezone evidence', createdAt: Date.UTC(2026, 6, 17, 0, 30) });
     expect(kernel.topologyStore.timeProjectionNeedsRebuild('p', 'Asia/Tokyo')).toBe(true);
     kernel.navigateMemory('timezone evidence', { projectId: 'p' });
     expect(kernel.topologyStore.timeProjectionNeedsRebuild('p', 'Asia/Tokyo')).toBe(true);
@@ -261,6 +261,108 @@ describe('project-local temporal topology regressions', () => {
     kernel.close();
   });
 
+  test('global scope stays isolated across FTS, topology, cognitive graph, ledger, and final recall', async () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    const globalNeuron = await kernel.ingest({ content: 'scope collision omega global evidence', createdAt: 1000 });
+    const projectNeuron = await kernel.ingest({ projectId: 'project-a', content: 'scope collision omega project evidence', createdAt: 2000 });
+    const namedDuplicate = await kernel.ingest({ projectId: 'project-a', content: 'scope exact duplicate owner check', createdAt: 3000 });
+    const globalDuplicate = await kernel.ingest({ content: 'scope exact duplicate owner check', createdAt: 4000 });
+    kernel.recordRawEvent({ threadId: 'global-thread', role: 'user', content: 'scope collision omega global ledger' });
+    kernel.recordRawEvent({ threadId: 'project-thread', projectId: 'project-a', role: 'user', content: 'scope collision omega project ledger' });
+    kernel.activationStore.touch({ neuronId: globalNeuron.id, source: 'global-scope-test' });
+    kernel.activationStore.touch({ neuronId: projectNeuron.id, projectId: 'project-a', source: 'global-scope-test' });
+
+    expect(kernel.memoryGraph.fullTextSearch('scope collision omega', '', 20)).toContain(globalNeuron.id);
+    expect(kernel.memoryGraph.fullTextSearch('scope collision omega', '', 20)).not.toContain(projectNeuron.id);
+    expect(kernel.topologyStore.collectCandidateNeuronIds({ projectId: '', terms: ['scope collision omega'], limit: 50 })).toContain(globalNeuron.id);
+    expect(kernel.topologyStore.collectCandidateNeuronIds({ projectId: '', terms: ['scope collision omega'], limit: 50 })).not.toContain(projectNeuron.id);
+    const cognitive = kernel.cognitiveGraphStore.collectContext({ projectId: '', terms: ['scope collision omega'], limit: 50 });
+    expect(cognitive.neuronIds).toContain(globalNeuron.id);
+    expect(cognitive.neuronIds).not.toContain(projectNeuron.id);
+    expect(kernel.eventStore.queryEvents(1, 100, { projectId: [''] }).records.every((event) => event.projectId === undefined)).toBe(true);
+    expect(kernel.eventStore.searchRawEvents('scope collision omega', { projectId: '', limit: 20 }).every((event) => event.projectId === undefined)).toBe(true);
+    const recalled = kernel.navigateMemory('scope collision omega', { projectId: '', limit: 50 });
+    expect(recalled.rawEvidence.map((item) => item.id)).toContain(globalNeuron.id);
+    expect(recalled.rawEvidence.map((item) => item.id)).not.toContain(projectNeuron.id);
+    expect(globalDuplicate.id).not.toBe(namedDuplicate.id);
+    expect(globalDuplicate.prev_hash).toBe(globalNeuron.self_hash);
+    expect(kernel.buildMemoryMap({ projectId: '' }).counters.activationHotspots).toBe(1);
+    kernel.close();
+  });
+
+  test('projectless scope and a literal global project have distinct task and cluster identities', () => {
+    const db = new Database(':memory:');
+    const topology = new TopologyStore(db);
+    const globalTask = topology.upsertTaskBranch({ taskId: 'task-projectless', taskKey: 'same-task', title: 'Same task', createdAt: 1 });
+    const namedTask = topology.upsertTaskBranch({ taskId: 'task-named', projectId: 'global', taskKey: 'same-task', title: 'Same task', createdAt: 2 });
+    const globalCluster = topology.upsertEventCluster({ clusterId: 'cluster-projectless', clusterKey: 'generic:same', clusterType: 'generic', title: 'Same cluster', createdAt: 1 });
+    const namedCluster = topology.upsertEventCluster({ clusterId: 'cluster-named', projectId: 'global', clusterKey: 'generic:same', clusterType: 'generic', title: 'Same cluster', createdAt: 2 });
+    topology.attachToTask(globalTask.taskId, { neuronId: 'global-neuron', createdAt: 1 });
+    topology.attachToTask(globalTask.taskId, { neuronId: 'global-neuron', createdAt: 1 });
+
+    expect(globalTask.taskId).not.toBe(namedTask.taskId);
+    expect(globalCluster.clusterId).not.toBe(namedCluster.clusterId);
+    expect(() => topology.upsertTaskBranch({ taskId: globalTask.taskId, projectId: 'other', taskKey: 'other-task', title: 'Other task', createdAt: 3 })).toThrow();
+    expect(() => topology.upsertEventCluster({ clusterId: globalCluster.clusterId, projectId: 'other', clusterKey: 'generic:other', clusterType: 'generic', title: 'Other cluster', createdAt: 3 })).toThrow();
+    expect(topology.listTaskBranches('')).toHaveLength(1);
+    expect(topology.listTaskBranches('global')).toHaveLength(1);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM task_branch_entries WHERE task_id=?`).get(globalTask.taskId)).toEqual({ count: 1 });
+    topology.close();
+    db.close();
+  });
+
+  test('a stale writer cannot mark a newer source revision clean', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-projection-cas-'));
+    const dbPath = join(dir, 'memory.db');
+    const writerA = new TopologyStore(dbPath);
+    const writerB = new TopologyStore(dbPath);
+    writerA.markTimeProjection('p', 'clean', 'UTC', 0, undefined, 0);
+
+    const a = writerA.beginTimeProjectionSourceUpdate('p', 'UTC', 1);
+    const b = writerB.beginTimeProjectionSourceUpdate('p', 'UTC', 2);
+    expect(a).toEqual({ sourceRevision: 1, incremental: true });
+    expect(b).toEqual({ sourceRevision: 2, incremental: false });
+    expect(writerA.markTimeProjectionCleanIfCurrent('p', 'UTC', 3, a.sourceRevision)).toBe(false);
+    expect(writerA.hasUsableTimeProjection('p', 'UTC')).toBe(false);
+    expect(writerB.markTimeProjectionCleanIfCurrent('p', 'UTC', 4, b.sourceRevision)).toBe(true);
+    expect(writerB.hasUsableTimeProjection('p', 'UTC')).toBe(true);
+    writerA.close();
+    writerB.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('maintenance returns shell-safe structured rebuild arguments for untrusted project ids', async () => {
+    const projectId = 'p; touch /tmp/cogmem-injected';
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    await kernel.ingest({ projectId, content: 'maintenance command safety evidence', createdAt: 1000 });
+    kernel.topologyStore.markTimeProjection(projectId, 'dirty', 'UTC', 2);
+    const action = kernel.runMaintenanceTick({ projectId }).suggestedActions.find((item) => item.kind === 'rebuild_topology');
+    expect(action?.executable).toBe('cogmem');
+    expect(action?.args).toEqual(['memory', 'rebuild-topology', '--project', projectId, '--json']);
+    expect(action?.command).toContain("'p; touch /tmp/cogmem-injected'");
+    kernel.close();
+  });
+
+  test('projection failure rolls back the neuron and a retry completes every derived surface', async () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    const internals = kernel as unknown as { cognitiveGraphCompiler: { compile: (...args: unknown[]) => unknown } };
+    const originalCompile = internals.cognitiveGraphCompiler.compile.bind(internals.cognitiveGraphCompiler);
+    internals.cognitiveGraphCompiler.compile = () => { throw new Error('projection_fault_injection'); };
+
+    await expect(kernel.ingest({ projectId: 'p', content: 'atomic projection retry evidence', createdAt: 1000 })).rejects.toThrow('projection_fault_injection');
+    const db = kernel.factStore.getDatabase();
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE project_id='p'`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM memory_events WHERE project_id='p'`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM topology_membership WHERE project_id='p'`).get()).toEqual({ count: 0 });
+
+    internals.cognitiveGraphCompiler.compile = originalCompile;
+    const neuron = await kernel.ingest({ projectId: 'p', content: 'atomic projection retry evidence', createdAt: 1000 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE id=?`).get(neuron.id)).toEqual({ count: 1 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM topology_membership WHERE neuron_id=?`).get(neuron.id)).not.toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes WHERE source_neuron_id=?`).get(neuron.id)).not.toEqual({ count: 0 });
+    kernel.close();
+  });
+
   test('an empty project rebuild establishes a usable revision-zero projection', () => {
     const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
     const rebuilt = kernel.rebuildProjectTimeTopology('empty-project');
@@ -343,6 +445,7 @@ describe('project-local temporal topology regressions', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes WHERE project_id='p' AND node_type='time_bucket'`).get()).toEqual(beforeNodes);
     const navigation = kernel.navigateMemory('today', { projectId: 'p', now: 2000, localDateNow: '1970-01-01', timeZone: 'UTC' });
     expect(navigation.navigation?.branchSearch.temporalTraversal.neuronIds).toEqual([]);
+    expect(navigation.navigation?.branchSearch.temporalTraversal.traversalMode).toBe('disabled');
     expect(navigation.navigation?.pulse.temporalNeuronIds ?? []).toEqual([]);
     kernel.close();
   });
@@ -405,12 +508,9 @@ describe('project-local temporal topology regressions', () => {
     kernel.rebuildProjectTimeTopology('p');
     expect(kernel.factStore.getDatabase().prepare(`SELECT COUNT(DISTINCT neuron_id) AS count FROM time_bucket_entries WHERE project_id='p'`).get()).toEqual({ count: 2 });
 
-    const beforeMove = kernel.topologyStore.getTimeProjectionSourceRevision('p');
-    kernel.memoryGraph.updateNeuronMetadata(direct.id, { projectId: 'moved', updatedAt: 3000 });
-    expect(kernel.topologyStore.getTimeProjectionSourceRevision('p')).toBe(beforeMove + 1);
-    expect(kernel.topologyStore.getTimeProjectionSourceRevision('moved')).toBe(1);
-    expect(kernel.memoryGraph.getNeuronIdsByProject('p')).not.toContain(direct.id);
-    expect(kernel.memoryGraph.getNeuronIdsByProject('moved')).toContain(direct.id);
+    expect(() => kernel.memoryGraph.updateNeuronMetadata(direct.id, { projectId: 'moved', updatedAt: 3000 })).toThrow('immutable_neuron_project_scope');
+    expect(kernel.memoryGraph.getNeuronIdsByProject('p')).toContain(direct.id);
+    expect(kernel.memoryGraph.getNeuronIdsByProject('moved')).not.toContain(direct.id);
     kernel.close();
   });
 

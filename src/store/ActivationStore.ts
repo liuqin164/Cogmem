@@ -96,8 +96,8 @@ export class ActivationStore {
     const exclude = options.excludeNeuronIds || [];
     const clauses = ['activation > 0'];
     const params: Array<string | number> = [];
-    if (options.projectId) {
-      clauses.push('project_id = ?');
+    if (options.projectId !== undefined) {
+      clauses.push("COALESCE(project_id, '') = ?");
       params.push(options.projectId);
     }
     if (exclude.length > 0) {
@@ -119,15 +119,15 @@ export class ActivationStore {
     const factor = clamp(options.factor ?? 0.85, 0, 1);
     const floor = Math.max(0, options.floor ?? 0.05);
     const now = options.now ?? Date.now();
-    const where = options.projectId ? 'WHERE project_id = ?' : '';
-    const params = options.projectId ? [options.projectId] : [];
+    const where = options.projectId !== undefined ? "WHERE COALESCE(project_id, '') = ?" : '';
+    const params = options.projectId !== undefined ? [options.projectId] : [];
     const decayed = this.db.prepare(`
       UPDATE memory_activation
       SET activation = activation * ?, last_decayed_at = ?
       ${where}
     `).run(factor, now, ...params);
-    const deleteWhere = options.projectId ? 'WHERE project_id = ? AND activation < ?' : 'WHERE activation < ?';
-    const deleteParams = options.projectId ? [options.projectId, floor] : [floor];
+    const deleteWhere = options.projectId !== undefined ? "WHERE COALESCE(project_id, '') = ? AND activation < ?" : 'WHERE activation < ?';
+    const deleteParams = options.projectId !== undefined ? [options.projectId, floor] : [floor];
     const removed = this.db.prepare(`
       DELETE FROM memory_activation
       ${deleteWhere}
@@ -143,7 +143,7 @@ export class ActivationStore {
   deleteByProject(projectId: string): number {
     const result = this.db.prepare(`
       DELETE FROM memory_activation
-      WHERE project_id = ?
+      WHERE COALESCE(project_id, '') = ?
     `).run(projectId);
     return Number(result.changes ?? 0);
   }

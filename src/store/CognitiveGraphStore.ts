@@ -6,6 +6,7 @@ import type {
   CognitiveNodeType
 } from '../types/index.js';
 import { cognitiveEdgeId, cognitiveNodeId } from '../engine/CognitiveGraphIdentity.js';
+import { projectQueryValue } from '../topology/ProjectScope.js';
 
 export class CognitiveGraphStore {
   private db: Database;
@@ -198,6 +199,7 @@ export class CognitiveGraphStore {
   } {
     const limit = input.limit ?? 120;
     const hopLimit = Math.max(1, input.hopLimit ?? 2);
+    const queryProject = projectQueryValue(input.projectId);
     const seedNodeIds = new Set<string>();
     const suppliedSeed = this.db.prepare(`
       SELECT 1 FROM cognitive_nodes
@@ -220,7 +222,7 @@ export class CognitiveGraphStore {
         WHERE node_key = ?
           AND (? IS NULL OR project_id = ?)
           AND (? = 0 OR node_type <> 'time_bucket')
-      `).all(key, input.projectId || null, input.projectId || null, input.excludeTemporal ? 1 : 0) as Array<{ node_id: string }>;
+      `).all(key, queryProject, queryProject, input.excludeTemporal ? 1 : 0) as Array<{ node_id: string }>;
       for (const row of rows) seedNodeIds.add(row.node_id);
     }
 
@@ -234,8 +236,8 @@ export class CognitiveGraphStore {
         ORDER BY updated_at DESC
         LIMIT ?
       `).all(
-        input.projectId || null,
-        input.projectId || null,
+        queryProject,
+        queryProject,
         input.excludeTemporal ? 1 : 0,
         `%${term}%`,
         `%${term}%`,
@@ -270,10 +272,10 @@ export class CognitiveGraphStore {
           nodeId,
           nodeId,
           nodeId,
-          input.projectId || null,
-          input.projectId || null,
-          input.projectId || null,
-          input.projectId || null,
+          queryProject,
+          queryProject,
+          queryProject,
+          queryProject,
           input.excludeTemporal ? 1 : 0,
           limit
         ) as Array<{
@@ -302,7 +304,7 @@ export class CognitiveGraphStore {
         FROM cognitive_nodes
         WHERE node_id IN (${placeholders})
           AND (? IS NULL OR project_id = ?)
-      `).all(...Array.from(traversedNodeIds), input.projectId || null, input.projectId || null) as Array<{
+      `).all(...Array.from(traversedNodeIds), queryProject, queryProject) as Array<{
         node_id: string;
         node_type: CognitiveNodeType;
         source_neuron_id?: string | null;

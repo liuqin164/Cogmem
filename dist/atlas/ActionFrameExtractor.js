@@ -22,7 +22,7 @@ export class ActionFrameExtractor {
         const pageSize = 1000;
         while (true) {
             const result = this.eventStore.queryEvents(page, pageSize, {
-                projectId: projectId ? [projectId] : undefined,
+                projectId: projectId !== undefined ? [projectId] : undefined,
             });
             for (const event of result.records) {
                 if (!event.projectId || (event.role !== 'user' && event.role !== 'tool'))
@@ -86,7 +86,7 @@ export class ActionFrameExtractor {
         return created;
     }
     clear(projectId) {
-        if (projectId) {
+        if (projectId !== undefined) {
             this.db.prepare(`DELETE FROM memory_action_frame_evidence WHERE project_id=?`).run(projectId);
             this.db.prepare(`DELETE FROM memory_action_frames WHERE project_id=?`).run(projectId);
             this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('action','time')`).run(projectId);

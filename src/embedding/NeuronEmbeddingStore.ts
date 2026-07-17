@@ -167,16 +167,16 @@ export class NeuronEmbeddingStore {
   }
 
   private readRows(projectId?: string, modelId?: string): Array<{ neuron_id: string; vector_blob: Uint8Array }> {
-    if (projectId && modelId) {
+    if (projectId !== undefined && modelId) {
       return this.db.prepare(`
         SELECT neuron_id, vector_blob FROM neuron_embeddings
-        WHERE project_id = ? AND model_id = ?
+        WHERE COALESCE(project_id, '') = ? AND model_id = ?
       `).all(projectId, modelId) as Array<{ neuron_id: string; vector_blob: Uint8Array }>;
     }
-    if (projectId) {
+    if (projectId !== undefined) {
       return this.db.prepare(`
         SELECT neuron_id, vector_blob FROM neuron_embeddings
-        WHERE project_id = ?
+        WHERE COALESCE(project_id, '') = ?
       `).all(projectId) as Array<{ neuron_id: string; vector_blob: Uint8Array }>;
     }
     if (modelId) {

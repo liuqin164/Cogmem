@@ -340,6 +340,11 @@ export class SchemaMigrationRunner {
       && Boolean(this.db.prepare(`SELECT 1 FROM pragma_index_list('time_bucket_entries') WHERE name='idx_time_bucket_entries_reference_unique'`).get())
       && !Boolean(this.db.prepare(`SELECT 1 FROM topology_source_revisions r LEFT JOIN topology_projection_state s ON s.project_id=r.project_id WHERE s.project_id IS NULL LIMIT 1`).get())
       && !Boolean(this.tableExists('neurons') && this.db.prepare(`SELECT 1 FROM (SELECT COALESCE(project_id,'') AS project_id,COUNT(*) AS source_count FROM neurons WHERE is_deleted=0 GROUP BY COALESCE(project_id,'')) n LEFT JOIN topology_source_revisions r ON r.project_id=n.project_id LEFT JOIN topology_projection_state s ON s.project_id=n.project_id WHERE r.project_id IS NULL OR r.revision<n.source_count OR s.project_id IS NULL LIMIT 1`).get());
+    if (version === '0052') return (!this.tableExists('task_branches') && !this.tableExists('event_clusters'))
+      || (this.hasUniqueIndex('task_branches', ['project_id', 'task_key'])
+      && this.hasUniqueIndex('event_clusters', ['project_id', 'cluster_key'])
+      && Boolean(this.db.prepare(`SELECT 1 FROM pragma_index_list('task_branch_entries') WHERE name='idx_task_branch_entries_reference_unique'`).get())
+      && Boolean(this.db.prepare(`SELECT 1 FROM pragma_index_list('event_cluster_entries') WHERE name='idx_event_cluster_entries_reference_unique'`).get()));
     return true;
   }
 

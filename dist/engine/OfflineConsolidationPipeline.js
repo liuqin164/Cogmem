@@ -77,7 +77,7 @@ export class OfflineConsolidationPipeline {
                     aliases: entity.aliases,
                     metadata: entity.metadata,
                     instanceMode: entity.instanceMode,
-                    createdAt: input.window.endTime || Date.now()
+                    createdAt: input.window.endTime ?? Date.now()
                 });
                 workingEntities.push(record);
                 inserted.push(record);

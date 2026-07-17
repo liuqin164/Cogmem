@@ -214,6 +214,8 @@ export interface MaintenanceTickOptions {
 export interface MaintenanceSuggestedAction {
     kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots' | 'bind_raw_events' | 'inspect_binding_failures' | 'repair_episodes' | 'rebuild_topology';
     command: string;
+    executable: string;
+    args: string[];
     reason: string;
 }
 export interface MaintenanceTickResult {

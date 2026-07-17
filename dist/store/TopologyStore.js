@@ -1,5 +1,5 @@
 import Database from 'bun:sqlite';
-import { projectScope } from '../topology/ProjectScope.js';
+import { projectQueryValue, projectScope } from '../topology/ProjectScope.js';
 export class TopologyStore {
     db;
     ownsDb;
@@ -71,12 +71,13 @@ export class TopologyStore {
 
       CREATE TABLE IF NOT EXISTS task_branches (
         task_id TEXT PRIMARY KEY,
-        project_id TEXT,
-        task_key TEXT NOT NULL UNIQUE,
+        project_id TEXT NOT NULL DEFAULT '',
+        task_key TEXT NOT NULL,
         title TEXT NOT NULL,
         status TEXT NOT NULL,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        UNIQUE(project_id, task_key)
       );
 
       CREATE TABLE IF NOT EXISTS task_branch_entries (
@@ -92,12 +93,13 @@ export class TopologyStore {
 
       CREATE TABLE IF NOT EXISTS event_clusters (
         cluster_id TEXT PRIMARY KEY,
-        project_id TEXT,
-        cluster_key TEXT NOT NULL UNIQUE,
+        project_id TEXT NOT NULL DEFAULT '',
+        cluster_key TEXT NOT NULL,
         cluster_type TEXT NOT NULL,
         title TEXT NOT NULL,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        UNIQUE(project_id, cluster_key)
       );
 
       CREATE TABLE IF NOT EXISTS event_cluster_entries (
@@ -201,12 +203,7 @@ export class TopologyStore {
                 : previousRevision === 0;
             const sourceRevision = previousRevision + 1;
             this.db.prepare(`INSERT INTO topology_source_revisions(project_id,revision,updated_at) VALUES(?,?,?) ON CONFLICT(project_id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at`).run(scope, sourceRevision, updatedAt);
-            if (!state) {
-                this.markTimeProjection(scope, 'dirty', timeZone, updatedAt, undefined, previousRevision);
-            }
-            else if (incremental || state.status === 'clean' || state.time_zone !== timeZone) {
-                this.markTimeProjection(scope, 'dirty', timeZone, updatedAt, undefined, state.source_revision);
-            }
+            this.markTimeProjection(scope, 'dirty', timeZone, updatedAt, undefined, sourceRevision);
             return { sourceRevision, incremental };
         })();
     }
@@ -222,6 +219,30 @@ export class TopologyStore {
       VALUES(?,4,?,?,?,?,?)
       ON CONFLICT(project_id) DO UPDATE SET projection_version=4,status=excluded.status,time_zone=excluded.time_zone,updated_at=excluded.updated_at,error=excluded.error,source_revision=excluded.source_revision
     `).run(scope, status, timeZone, updatedAt, error ?? null, sourceRevision);
+    }
+    markTimeProjectionCleanIfCurrent(projectId, timeZone, updatedAt, sourceRevision) {
+        const scope = projectScope(projectId);
+        const result = this.db.prepare(`
+      INSERT INTO topology_projection_state(project_id,projection_version,status,time_zone,updated_at,error,source_revision)
+      SELECT ?,4,'clean',?,?,NULL,?
+      WHERE EXISTS (
+        SELECT 1 FROM topology_source_revisions WHERE project_id=? AND revision=?
+      )
+      ON CONFLICT(project_id) DO UPDATE SET
+        projection_version=4,
+        status='clean',
+        time_zone=excluded.time_zone,
+        updated_at=excluded.updated_at,
+        error=NULL,
+        source_revision=excluded.source_revision
+      WHERE topology_projection_state.status='dirty'
+        AND topology_projection_state.time_zone=excluded.time_zone
+        AND topology_projection_state.source_revision=excluded.source_revision
+        AND EXISTS (
+          SELECT 1 FROM topology_source_revisions WHERE project_id=excluded.project_id AND revision=excluded.source_revision
+        )
+    `).run(scope, timeZone, updatedAt, sourceRevision, scope, sourceRevision);
+        return Number(result.changes ?? 0) === 1;
     }
     resetProjectTimeBuckets(projectId) {
         const scope = projectScope(projectId);
@@ -327,17 +348,22 @@ export class TopologyStore {
         }
     }
     upsertTaskBranch(input) {
+        const scope = projectScope(input.projectId);
         const existing = this.db.prepare(`
-      SELECT * FROM task_branches WHERE task_key = ?
-    `).get(input.taskKey);
+      SELECT * FROM task_branches WHERE project_id = ? AND task_key = ?
+    `).get(scope, input.taskKey);
         const taskId = existing?.task_id || input.taskId;
         const createdAt = existing?.created_at || input.createdAt;
         const status = input.status || 'derived';
         this.db.prepare(`
-      INSERT OR REPLACE INTO task_branches (
+      INSERT INTO task_branches (
         task_id, project_id, task_key, title, status, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(taskId, input.projectId || null, input.taskKey, input.title, status, createdAt, input.createdAt);
+      ON CONFLICT(project_id, task_key) DO UPDATE SET
+        title=excluded.title,
+        status=excluded.status,
+        updated_at=excluded.updated_at
+    `).run(taskId, scope, input.taskKey, input.title, status, createdAt, input.createdAt);
         return {
             taskId,
             projectId: input.projectId,
@@ -362,16 +388,21 @@ export class TopologyStore {
         }
     }
     upsertEventCluster(input) {
+        const scope = projectScope(input.projectId);
         const existing = this.db.prepare(`
-      SELECT * FROM event_clusters WHERE cluster_key = ?
-    `).get(input.clusterKey);
+      SELECT * FROM event_clusters WHERE project_id = ? AND cluster_key = ?
+    `).get(scope, input.clusterKey);
         const clusterId = existing?.cluster_id || input.clusterId;
         const createdAt = existing?.created_at || input.createdAt;
         this.db.prepare(`
-      INSERT OR REPLACE INTO event_clusters (
+      INSERT INTO event_clusters (
         cluster_id, project_id, cluster_key, cluster_type, title, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(clusterId, input.projectId || null, input.clusterKey, input.clusterType, input.title, createdAt, input.createdAt);
+      ON CONFLICT(project_id, cluster_key) DO UPDATE SET
+        cluster_type=excluded.cluster_type,
+        title=excluded.title,
+        updated_at=excluded.updated_at
+    `).run(clusterId, scope, input.clusterKey, input.clusterType, input.title, createdAt, input.createdAt);
         return {
             clusterId,
             projectId: input.projectId,
@@ -412,8 +443,8 @@ export class TopologyStore {
         }));
     }
     listTaskBranches(projectId) {
-        const rows = projectId
-            ? this.db.prepare(`SELECT * FROM task_branches WHERE project_id = ? ORDER BY updated_at DESC`).all(projectId)
+        const rows = projectId !== undefined
+            ? this.db.prepare(`SELECT * FROM task_branches WHERE COALESCE(project_id, '') = ? ORDER BY updated_at DESC`).all(projectScope(projectId))
             : this.db.prepare(`SELECT * FROM task_branches ORDER BY updated_at DESC`).all();
         return rows.map((row) => ({
             taskId: row.task_id,
@@ -426,8 +457,8 @@ export class TopologyStore {
         }));
     }
     listEventClusters(projectId) {
-        const rows = projectId
-            ? this.db.prepare(`SELECT * FROM event_clusters WHERE project_id = ? ORDER BY updated_at DESC`).all(projectId)
+        const rows = projectId !== undefined
+            ? this.db.prepare(`SELECT * FROM event_clusters WHERE COALESCE(project_id, '') = ? ORDER BY updated_at DESC`).all(projectScope(projectId))
             : this.db.prepare(`SELECT * FROM event_clusters ORDER BY updated_at DESC`).all();
         return rows.map((row) => ({
             clusterId: row.cluster_id,
@@ -469,30 +500,32 @@ export class TopologyStore {
             return [];
         const rowLimit = Math.max(1, Math.min(limit, 200));
         const placeholders = scopedNeuronIds.map(() => '?').join(', ');
+        const queryProject = projectQueryValue(projectId);
         const rows = this.db.prepare(`
       SELECT DISTINCT bucket_id
       FROM time_bucket_entries
       WHERE neuron_id IN (${placeholders})
-        AND (? IS NULL OR project_id = ?)
+        AND (? IS NULL OR COALESCE(project_id, '') = ?)
       ORDER BY created_at DESC
       LIMIT ?
-    `).all(...scopedNeuronIds, projectId || null, projectId || null, rowLimit);
+    `).all(...scopedNeuronIds, queryProject, queryProject, rowLimit);
         return rows.map((row) => row.bucket_id);
     }
     collectCandidateNeuronIds(input) {
         const limit = input.limit ?? 200;
         const collected = new Set();
+        const queryProject = projectQueryValue(input.projectId);
         const terms = (input.terms || []).map((term) => term.trim().toLowerCase()).filter((term) => term.length >= 2);
         const baseRows = this.db.prepare(`
       SELECT neuron_id
       FROM topology_membership
-      WHERE (? IS NULL OR project_id = ?)
+      WHERE (? IS NULL OR COALESCE(project_id, '') = ?)
         AND (? = 0 OR dimension_type <> 'time_bucket')
         AND (? IS NULL OR created_at >= ?)
         AND (? IS NULL OR created_at < ?)
       ORDER BY created_at DESC
       LIMIT ?
-    `).all(input.projectId ?? null, input.projectId ?? null, input.excludeTemporal ? 1 : 0, input.startTime ?? null, input.startTime ?? null, input.endTime ?? null, input.endTime ?? null, limit * 2);
+    `).all(queryProject, queryProject, input.excludeTemporal ? 1 : 0, input.startTime ?? null, input.startTime ?? null, input.endTime ?? null, input.endTime ?? null, limit * 2);
         for (const row of baseRows) {
             collected.add(row.neuron_id);
             if (collected.size >= limit)
@@ -504,12 +537,12 @@ export class TopologyStore {
             const rows = this.db.prepare(`
         SELECT neuron_id
         FROM topology_membership
-        WHERE (? IS NULL OR project_id = ?)
+        WHERE (? IS NULL OR COALESCE(project_id, '') = ?)
           AND (? = 0 OR dimension_type <> 'time_bucket')
           AND (lower(title) LIKE ? OR lower(dimension_key) LIKE ?)
         ORDER BY created_at DESC
         LIMIT ?
-      `).all(input.projectId ?? null, input.projectId ?? null, input.excludeTemporal ? 1 : 0, `%${term}%`, `%${term}%`, limit);
+      `).all(queryProject, queryProject, input.excludeTemporal ? 1 : 0, `%${term}%`, `%${term}%`, limit);
             for (const row of rows) {
                 collected.add(row.neuron_id);
                 if (collected.size >= limit)
@@ -522,6 +555,7 @@ export class TopologyStore {
         const limit = input.limit ?? 120;
         const siblingDepth = Math.max(0, input.siblingDepth ?? 1);
         const terms = (input.terms || []).map((term) => term.trim().toLowerCase()).filter((term) => term.length >= 2);
+        const queryProject = projectQueryValue(input.projectId);
         const branchIds = new Set();
         const taskIds = new Set();
         const clusterIds = new Set();
@@ -535,12 +569,12 @@ export class TopologyStore {
                     break;
             }
         };
-        if (input.projectId) {
+        if (input.projectId !== undefined) {
             const rootRows = this.db.prepare(`
         SELECT branch_id
         FROM project_branches
-        WHERE project_id = ?
-      `).all(input.projectId);
+        WHERE COALESCE(project_id, '') = ?
+      `).all(projectScope(input.projectId));
             for (const row of rootRows) {
                 branchIds.add(row.branch_id);
             }
@@ -549,31 +583,31 @@ export class TopologyStore {
             const branchRows = this.db.prepare(`
         SELECT branch_id
         FROM project_branches
-        WHERE (? IS NULL OR project_id = ?)
+        WHERE (? IS NULL OR COALESCE(project_id, '') = ?)
           AND (lower(title) LIKE ? OR lower(branch_key) LIKE ?)
         ORDER BY updated_at DESC
         LIMIT ?
-      `).all(input.projectId || null, input.projectId || null, `%${term}%`, `%${term}%`, limit);
+      `).all(queryProject, queryProject, `%${term}%`, `%${term}%`, limit);
             for (const row of branchRows)
                 branchIds.add(row.branch_id);
             const taskRows = this.db.prepare(`
         SELECT task_id
         FROM task_branches
-        WHERE (? IS NULL OR project_id = ?)
+        WHERE (? IS NULL OR COALESCE(project_id, '') = ?)
           AND (lower(title) LIKE ? OR lower(task_key) LIKE ?)
         ORDER BY updated_at DESC
         LIMIT ?
-      `).all(input.projectId || null, input.projectId || null, `%${term}%`, `%${term}%`, limit);
+      `).all(queryProject, queryProject, `%${term}%`, `%${term}%`, limit);
             for (const row of taskRows)
                 taskIds.add(row.task_id);
             const clusterRows = this.db.prepare(`
         SELECT cluster_id
         FROM event_clusters
-        WHERE (? IS NULL OR project_id = ?)
+        WHERE (? IS NULL OR COALESCE(project_id, '') = ?)
           AND (lower(title) LIKE ? OR lower(cluster_key) LIKE ?)
         ORDER BY updated_at DESC
         LIMIT ?
-      `).all(input.projectId || null, input.projectId || null, `%${term}%`, `%${term}%`, limit);
+      `).all(queryProject, queryProject, `%${term}%`, `%${term}%`, limit);
             for (const row of clusterRows)
                 clusterIds.add(row.cluster_id);
         }
@@ -654,16 +688,17 @@ export class TopologyStore {
         const taskIds = new Set();
         const clusterIds = new Set();
         const neuronIds = new Set(input.neuronIds);
+        const queryProject = projectQueryValue(input.projectId);
         const placeholders = input.neuronIds.map(() => '?').join(', ');
         const branchRows = this.db.prepare(`
       SELECT DISTINCT be.branch_id
       FROM branch_entries be
       JOIN project_branches pb ON pb.branch_id = be.branch_id
       WHERE be.neuron_id IN (${placeholders})
-        AND (? IS NULL OR pb.project_id = ?)
+        AND (? IS NULL OR COALESCE(pb.project_id, '') = ?)
       ORDER BY be.created_at DESC
       LIMIT ?
-    `).all(...input.neuronIds, input.projectId || null, input.projectId || null, limit);
+    `).all(...input.neuronIds, queryProject, queryProject, limit);
         for (const row of branchRows)
             branchIds.add(row.branch_id);
         const taskRows = this.db.prepare(`
@@ -671,10 +706,10 @@ export class TopologyStore {
       FROM task_branch_entries tbe
       JOIN task_branches tb ON tb.task_id = tbe.task_id
       WHERE tbe.neuron_id IN (${placeholders})
-        AND (? IS NULL OR tb.project_id = ?)
+        AND (? IS NULL OR COALESCE(tb.project_id, '') = ?)
       ORDER BY tbe.created_at DESC
       LIMIT ?
-    `).all(...input.neuronIds, input.projectId || null, input.projectId || null, limit);
+    `).all(...input.neuronIds, queryProject, queryProject, limit);
         for (const row of taskRows)
             taskIds.add(row.task_id);
         const clusterRows = this.db.prepare(`
@@ -682,10 +717,10 @@ export class TopologyStore {
       FROM event_cluster_entries ece
       JOIN event_clusters ec ON ec.cluster_id = ece.cluster_id
       WHERE ece.neuron_id IN (${placeholders})
-        AND (? IS NULL OR ec.project_id = ?)
+        AND (? IS NULL OR COALESCE(ec.project_id, '') = ?)
       ORDER BY ece.created_at DESC
       LIMIT ?
-    `).all(...input.neuronIds, input.projectId || null, input.projectId || null, limit);
+    `).all(...input.neuronIds, queryProject, queryProject, limit);
         for (const row of clusterRows)
             clusterIds.add(row.cluster_id);
         if (branchIds.size > 0 && siblingDepth > 0) {
@@ -776,11 +811,27 @@ export class TopologyStore {
             neuronIds: neuronIds.slice(0, limit)
         };
     }
-    getTimeBucketEntryCount(bucketType, start) {
-        const bucketId = `${bucketType}:${start}`;
+    getTimeBucketEntryCount(bucketType, start, options = {}) {
+        const clauses = ['b.bucket_type=?', 'b.bucket_start=?'];
+        const params = [bucketType, start];
+        if (options.projectId !== undefined) {
+            clauses.push('b.project_id=?');
+            params.push(projectScope(options.projectId));
+        }
+        if (options.timeZone !== undefined) {
+            clauses.push('b.time_zone=?');
+            params.push(options.timeZone);
+        }
+        if (options.end !== undefined) {
+            clauses.push('b.bucket_end=?');
+            params.push(options.end);
+        }
         const row = this.db.prepare(`
-      SELECT COUNT(*) AS count FROM time_bucket_entries WHERE bucket_id = ?
-    `).get(bucketId);
+      SELECT COUNT(*) AS count
+      FROM time_bucket_entries entry
+      JOIN time_buckets b ON b.bucket_id=entry.bucket_id
+      WHERE ${clauses.join(' AND ')}
+    `).get(...params);
         return row?.count || 0;
     }
     getMaterializedMembershipCount() {

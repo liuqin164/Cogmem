@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -163,6 +163,8 @@ describe('Governance and security v1.14', () => {
     expect(kernel.buildMemoryMap({ projectId: 'forget-me' }).counters.activationHotspots).toBe(0);
     expect(kernel.runMaintenanceTick({ projectId: 'forget-me' }).chargeVector.activationHotspots).toBe(0);
     const db = kernel.factStore.getDatabase();
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE project_id='forget-me'`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE content LIKE '%delete this project memory%'`).get()).toEqual({ count: 0 });
     for (const table of [
       'prospective_memories', 'context_strategy_outcomes', 'context_activation_receipts', 'memory_timeline_entries',
       'belief_graph_nodes', 'entity_merge_candidates', 'memory_governance_plans',
@@ -182,6 +184,33 @@ describe('Governance and security v1.14', () => {
     expect(canonical.metadata_json).not.toContain('forget-me');
     expect(kernel.getGovernanceAudit('forget-me')[0]?.action).toBe('forgetUser');
     kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('forgetUser physically erases global memory from sqlite and exported snapshots', async () => {
+    const dir = tempDir();
+    const dbPath = join(dir, 'memory.db');
+    const snapshotPath = join(dir, 'after-forget.snap');
+    const secret = 'GLOBAL_ERASURE_TOKEN_7c6437f4';
+    const kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+    const forgotten = await kernel.ingest({ content: `${secret} private projectless memory`, createdAt: 1000 });
+    kernel.recordRawEvent({ threadId: 'global-private', role: 'user', content: `${secret} raw ledger evidence`, occurredAt: 1000 });
+    await kernel.ingest({ projectId: 'keep-project', content: 'ordinary retained memory', createdAt: 2000 });
+
+    const result = await kernel.forgetUser('', 'global_user_requested');
+    expect(result.deleted.neurons).toBe(1);
+    const db = kernel.factStore.getDatabase();
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE project_id IS NULL`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM memory_events WHERE project_id IS NULL`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE content LIKE ?`).get(`%${secret}%`)).toEqual({ count: 0 });
+
+    const next = await kernel.ingest({ content: 'new global memory after privacy erasure', createdAt: 3000 });
+    expect(next.prev_hash).not.toBe(forgotten.self_hash);
+    await kernel.exportSnapshot(snapshotPath);
+    kernel.close();
+
+    expect(readFileSync(dbPath).includes(Buffer.from(secret))).toBe(false);
+    expect(readFileSync(snapshotPath).includes(Buffer.from(secret))).toBe(false);
     rmSync(dir, { recursive: true, force: true });
   });
 });

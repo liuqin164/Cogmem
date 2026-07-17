@@ -8,6 +8,7 @@ import { SchemaMigrationRunner } from '../src/migrations/SchemaMigrationRunner.j
 import { migration_0015 } from '../src/migrations/0015_memory_governance.js';
 import { migration_0049 } from '../src/migrations/0049_project_scoped_graph_identity.js';
 import { migration_0046 } from '../src/migrations/0046_stable_migration_checksums.js';
+import { migration_0052 } from '../src/migrations/0052_project_scoped_topology_identity.js';
 import { CANONICAL_MIGRATION_SOURCE_DIGESTS, FROZEN_MIGRATION_DEPENDENCY_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 describe('schema migration runner', () => {
@@ -180,6 +181,36 @@ describe('schema migration runner', () => {
     const buckets = db.prepare(`SELECT project_id,bucket_id FROM time_buckets ORDER BY project_id`).all() as Array<{ project_id: string; bucket_id: string }>;
     expect(buckets.map((row) => row.project_id)).toEqual(['a', 'b']);
     expect(new Set(buckets.map((row) => row.bucket_id)).size).toBe(2);
+    db.close();
+  });
+
+  test('0052 scopes task and event cluster identity and deduplicates nullable entries', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE task_branches(task_id TEXT PRIMARY KEY,project_id TEXT,task_key TEXT UNIQUE,title TEXT,status TEXT,created_at INTEGER,updated_at INTEGER);
+      CREATE TABLE task_branch_entries(task_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+      CREATE TABLE event_clusters(cluster_id TEXT PRIMARY KEY,project_id TEXT,cluster_key TEXT UNIQUE,cluster_type TEXT,title TEXT,created_at INTEGER,updated_at INTEGER);
+      CREATE TABLE event_cluster_entries(cluster_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+      CREATE TABLE topology_membership(neuron_id TEXT,project_id TEXT,dimension_type TEXT,dimension_key TEXT,title TEXT,created_at INTEGER,UNIQUE(neuron_id,dimension_type,dimension_key));
+      INSERT INTO task_branches VALUES('tp','p','p:same-task','Same task','active',1,1),('tq','q','q:same-task','Same task','active',2,2);
+      INSERT INTO task_branch_entries VALUES('tp','np',NULL,NULL,NULL,NULL,1),('tp','np',NULL,NULL,NULL,NULL,2),('tq','nq',NULL,NULL,NULL,NULL,2);
+      INSERT INTO event_clusters VALUES('cp','p','p:generic:same','generic','Same cluster',1,1),('cq','q','q:generic:same','generic','Same cluster',2,2);
+      INSERT INTO event_cluster_entries VALUES('cp','np',NULL,NULL,NULL,NULL,1),('cp','np',NULL,NULL,NULL,NULL,2),('cq','nq',NULL,NULL,NULL,NULL,2);
+    `);
+
+    migration_0052.up(db);
+
+    expect(db.prepare(`SELECT project_id,task_key FROM task_branches ORDER BY project_id`).all()).toEqual([
+      { project_id: 'p', task_key: 'same-task' },
+      { project_id: 'q', task_key: 'same-task' },
+    ]);
+    expect(db.prepare(`SELECT project_id,cluster_key FROM event_clusters ORDER BY project_id`).all()).toEqual([
+      { project_id: 'p', cluster_key: 'generic:same' },
+      { project_id: 'q', cluster_key: 'generic:same' },
+    ]);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM task_branch_entries WHERE task_id='tp'`).get()).toEqual({ count: 1 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM event_cluster_entries WHERE cluster_id='cp'`).get()).toEqual({ count: 1 });
+    expect(() => db.prepare(`INSERT INTO task_branches VALUES('duplicate','p','same-task','Duplicate','active',3,3)`).run()).toThrow();
     db.close();
   });
 });

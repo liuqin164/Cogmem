@@ -1,5 +1,6 @@
 import Database from 'bun:sqlite';
 import { cognitiveEdgeId, cognitiveNodeId } from '../engine/CognitiveGraphIdentity.js';
+import { projectQueryValue } from '../topology/ProjectScope.js';
 export class CognitiveGraphStore {
     db;
     ownsDb;
@@ -132,6 +133,7 @@ export class CognitiveGraphStore {
     collectContext(input) {
         const limit = input.limit ?? 120;
         const hopLimit = Math.max(1, input.hopLimit ?? 2);
+        const queryProject = projectQueryValue(input.projectId);
         const seedNodeIds = new Set();
         const suppliedSeed = this.db.prepare(`
       SELECT 1 FROM cognitive_nodes
@@ -154,7 +156,7 @@ export class CognitiveGraphStore {
         WHERE node_key = ?
           AND (? IS NULL OR project_id = ?)
           AND (? = 0 OR node_type <> 'time_bucket')
-      `).all(key, input.projectId || null, input.projectId || null, input.excludeTemporal ? 1 : 0);
+      `).all(key, queryProject, queryProject, input.excludeTemporal ? 1 : 0);
             for (const row of rows)
                 seedNodeIds.add(row.node_id);
         }
@@ -167,7 +169,7 @@ export class CognitiveGraphStore {
           AND (lower(title) LIKE ? OR lower(node_key) LIKE ?)
         ORDER BY updated_at DESC
         LIMIT ?
-      `).all(input.projectId || null, input.projectId || null, input.excludeTemporal ? 1 : 0, `%${term}%`, `%${term}%`, limit);
+      `).all(queryProject, queryProject, input.excludeTemporal ? 1 : 0, `%${term}%`, `%${term}%`, limit);
             for (const row of rows)
                 seedNodeIds.add(row.node_id);
         }
@@ -194,7 +196,7 @@ export class CognitiveGraphStore {
             AND (? = 0 OR (ce.edge_type <> 'occurred_in_time_bucket' AND cn.node_type <> 'time_bucket'))
           ORDER BY ce.created_at DESC
           LIMIT ?
-        `).all(nodeId, nodeId, nodeId, input.projectId || null, input.projectId || null, input.projectId || null, input.projectId || null, input.excludeTemporal ? 1 : 0, limit);
+        `).all(nodeId, nodeId, nodeId, queryProject, queryProject, queryProject, queryProject, input.excludeTemporal ? 1 : 0, limit);
                 traversedEdgeCount += rows.length;
                 for (const row of rows) {
                     const neighborId = row.source_node_id === nodeId ? row.target_node_id : row.source_node_id;
@@ -213,7 +215,7 @@ export class CognitiveGraphStore {
         FROM cognitive_nodes
         WHERE node_id IN (${placeholders})
           AND (? IS NULL OR project_id = ?)
-      `).all(...Array.from(traversedNodeIds), input.projectId || null, input.projectId || null);
+      `).all(...Array.from(traversedNodeIds), queryProject, queryProject);
             for (const row of rows) {
                 if (row.node_type === 'neuron') {
                     neuronIds.add(row.node_key.replace(/^neuron:/, ''));

@@ -291,8 +291,8 @@ export class MemoryBindingStore {
   listClusters(options: MemoryClusterListOptions = {}): MemoryClusterRecord[] {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
-    if (options.projectId) {
-      clauses.push('project_id = ?');
+    if (options.projectId !== undefined) {
+      clauses.push("COALESCE(project_id, '') = ?");
       params.push(options.projectId);
     }
     if (options.topicPath) {
@@ -388,8 +388,8 @@ export class MemoryBindingStore {
     const factor = clamp(options.factor ?? 0.85, 0, 1);
     const floor = Math.max(0, options.floor ?? 0.01);
     const now = options.now ?? Date.now();
-    const where = options.projectId ? 'WHERE project_id = ?' : '';
-    const params = options.projectId ? [options.projectId] : [];
+    const where = options.projectId !== undefined ? "WHERE COALESCE(project_id, '') = ?" : '';
+    const params = options.projectId !== undefined ? [options.projectId] : [];
     const result = this.db.prepare(`
       UPDATE memory_edges
       SET activation = CASE WHEN activation * ? < ? THEN 0 ELSE activation * ? END,
@@ -402,8 +402,8 @@ export class MemoryBindingStore {
   listEdges(options: MemoryEdgeListOptions = {}): MemoryEdgeRecord[] {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
-    if (options.projectId) {
-      clauses.push('project_id = ?');
+    if (options.projectId !== undefined) {
+      clauses.push("COALESCE(project_id, '') = ?");
       params.push(options.projectId);
     }
     if (options.sourceId) {
@@ -433,8 +433,8 @@ export class MemoryBindingStore {
   listBindings(options: MemoryBindingListOptions = {}): MemoryBindingRecord[] {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
-    if (options.projectId) {
-      clauses.push('project_id = ?');
+    if (options.projectId !== undefined) {
+      clauses.push("COALESCE(project_id, '') = ?");
       params.push(options.projectId);
     }
     if (options.eventId) {
@@ -470,8 +470,8 @@ export class MemoryBindingStore {
   }
 
   getStats(projectId?: string): MemoryBindingStats {
-    const params = projectId ? [projectId] : [];
-    const where = projectId ? 'WHERE project_id = ?' : '';
+    const params = projectId !== undefined ? [projectId] : [];
+    const where = projectId !== undefined ? "WHERE COALESCE(project_id, '') = ?" : '';
     const bindings = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_bindings ${where}`).get(...params) as CountRow;
     const topics = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_topics ${where}`).get(...params) as CountRow;
     const entities = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_entities ${where}`).get(...params) as CountRow;
@@ -487,11 +487,11 @@ export class MemoryBindingStore {
   }
 
   deleteByProject(projectId: string): number {
-    const bindings = this.db.prepare(`DELETE FROM memory_bindings WHERE project_id = ?`).run(projectId);
-    this.db.prepare(`DELETE FROM memory_clusters WHERE project_id = ?`).run(projectId);
-    this.db.prepare(`DELETE FROM memory_edges WHERE project_id = ?`).run(projectId);
-    this.db.prepare(`DELETE FROM memory_topics WHERE project_id = ?`).run(projectId);
-    this.db.prepare(`DELETE FROM memory_entities WHERE project_id = ?`).run(projectId);
+    const bindings = this.db.prepare(`DELETE FROM memory_bindings WHERE COALESCE(project_id, '') = ?`).run(projectId);
+    this.db.prepare(`DELETE FROM memory_clusters WHERE COALESCE(project_id, '') = ?`).run(projectId);
+    this.db.prepare(`DELETE FROM memory_edges WHERE COALESCE(project_id, '') = ?`).run(projectId);
+    this.db.prepare(`DELETE FROM memory_topics WHERE COALESCE(project_id, '') = ?`).run(projectId);
+    this.db.prepare(`DELETE FROM memory_entities WHERE COALESCE(project_id, '') = ?`).run(projectId);
     return Number(bindings.changes ?? 0);
   }
 

@@ -42,21 +42,25 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
             readonly type: "string";
             readonly minLength: 1;
             readonly maxLength: 512;
+            readonly pattern: ".*\\S.*";
         };
         readonly projectId: {
             readonly type: "string";
             readonly minLength: 1;
             readonly maxLength: 512;
+            readonly pattern: ".*\\S.*";
         };
         readonly episodeId: {
             readonly type: "string";
             readonly minLength: 1;
             readonly maxLength: 512;
+            readonly pattern: ".*\\S.*";
         };
         readonly revisionId: {
             readonly type: "string";
             readonly minLength: 1;
             readonly maxLength: 512;
+            readonly pattern: ".*\\S.*";
         };
         readonly revisionNumber: {
             readonly type: "integer";
@@ -66,6 +70,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
             readonly type: "string";
             readonly minLength: 1;
             readonly maxLength: 512;
+            readonly pattern: ".*\\S.*";
         };
         readonly title: {
             readonly type: "string";
@@ -88,6 +93,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                 readonly type: "string";
                 readonly minLength: 1;
                 readonly maxLength: 512;
+                readonly pattern: ".*\\S.*";
             };
         };
         readonly episodeKind: {
@@ -107,6 +113,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                         readonly type: "string";
                         readonly minLength: 1;
                         readonly maxLength: 512;
+                        readonly pattern: ".*\\S.*";
                     };
                     readonly dimension: {
                         readonly type: "string";
@@ -116,6 +123,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                         readonly type: "string";
                         readonly minLength: 1;
                         readonly maxLength: 20000;
+                        readonly pattern: ".*\\S.*";
                     };
                     readonly description: {
                         readonly type: "string";
@@ -128,6 +136,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                             readonly type: "string";
                             readonly minLength: 1;
                             readonly maxLength: 1000;
+                            readonly pattern: ".*\\S.*";
                         };
                     };
                     readonly canonicalHint: {
@@ -138,6 +147,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                                 readonly type: "string";
                                 readonly minLength: 1;
                                 readonly maxLength: 512;
+                                readonly pattern: ".*\\S.*";
                             };
                             readonly canonicalLabel: {
                                 readonly type: "string";
@@ -163,6 +173,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                             readonly type: "string";
                             readonly minLength: 1;
                             readonly maxLength: 512;
+                            readonly pattern: ".*\\S.*";
                         };
                     };
                 };
@@ -180,16 +191,19 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                         readonly type: "string";
                         readonly minLength: 1;
                         readonly maxLength: 512;
+                        readonly pattern: ".*\\S.*";
                     };
                     readonly relationType: {
                         readonly type: "string";
                         readonly minLength: 1;
                         readonly maxLength: 512;
+                        readonly pattern: ".*\\S.*";
                     };
                     readonly targetFrameNodeId: {
                         readonly type: "string";
                         readonly minLength: 1;
                         readonly maxLength: 512;
+                        readonly pattern: ".*\\S.*";
                     };
                     readonly confidence: {
                         readonly type: "number";
@@ -204,6 +218,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                             readonly type: "string";
                             readonly minLength: 1;
                             readonly maxLength: 512;
+                            readonly pattern: ".*\\S.*";
                         };
                     };
                     readonly validFrom: {
@@ -227,6 +242,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                         readonly type: "string";
                         readonly minLength: 1;
                         readonly maxLength: 20000;
+                        readonly pattern: ".*\\S.*";
                     };
                     readonly occurredAt: {
                         readonly type: "number";
@@ -244,6 +260,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                             readonly type: "string";
                             readonly minLength: 1;
                             readonly maxLength: 512;
+                            readonly pattern: ".*\\S.*";
                         };
                     };
                 };
@@ -261,16 +278,19 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                         readonly type: "string";
                         readonly minLength: 1;
                         readonly maxLength: 512;
+                        readonly pattern: ".*\\S.*";
                     };
                     readonly from: {
                         readonly type: "string";
                         readonly minLength: 1;
                         readonly maxLength: 20000;
+                        readonly pattern: ".*\\S.*";
                     };
                     readonly to: {
                         readonly type: "string";
                         readonly minLength: 1;
                         readonly maxLength: 20000;
+                        readonly pattern: ".*\\S.*";
                     };
                     readonly confidence: {
                         readonly type: "number";
@@ -285,6 +305,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                             readonly type: "string";
                             readonly minLength: 1;
                             readonly maxLength: 512;
+                            readonly pattern: ".*\\S.*";
                         };
                     };
                 };
@@ -307,6 +328,7 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
                     readonly type: "string";
                     readonly minLength: 1;
                     readonly maxLength: 512;
+                    readonly pattern: ".*\\S.*";
                 };
                 readonly generatedAt: {
                     readonly type: "number";
@@ -338,5 +360,8 @@ export declare const MEMORY_FRAME_JSON_SCHEMA: {
         };
     };
 };
+export declare function memoryFrameJsonSchema(options?: {
+    allowEmptyEvidence?: boolean;
+}): Record<string, unknown>;
 export declare function isMemoryFrame(value: unknown): value is MemoryFrameV1;
 //# sourceMappingURL=MemoryFrameSchema.d.ts.map

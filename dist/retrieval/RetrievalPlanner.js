@@ -89,7 +89,7 @@ export class RetrievalPlanner {
             plan.weights.fts -= 0.04;
             plan.diagnostics.reasons.push('history-oriented query increases graph and belief history weight');
         }
-        if (ir.temporal.start || ir.temporal.end || ir.temporal.relative) {
+        if (ir.temporal.start !== undefined || ir.temporal.end !== undefined || ir.temporal.relative) {
             plan.topK.fts += 2;
             plan.topK.vector += 4;
             plan.weights.fts += 0.03;
