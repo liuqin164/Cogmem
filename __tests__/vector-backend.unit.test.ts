@@ -35,6 +35,17 @@ describe('Vector backends v1.12', () => {
     recovered.close(); rmSync(dir, { recursive: true, force: true });
   });
 
+  test('hnswlib rebuilds historical vectors after a clean restart with an empty outbox', async () => {
+    const dir = tempDir(); const dbPath = join(dir, 'hnsw-restart.db');
+    const writer = createMemoryKernel({ dbPath, vectorBackend: 'hnswlib', vectorDimension: 3 });
+    const neuron = await writer.ingest({ projectId: 'p', content: 'persistent hnsw canonical vector' });
+    expect(writer.factStore.getDatabase().prepare(`SELECT COUNT(*) AS count FROM vector_write_outbox`).get()).toEqual({ count: 0 });
+    writer.close();
+    const reopened = createMemoryKernel({ dbPath, vectorBackend: 'hnswlib', vectorDimension: 3 });
+    expect(reopened.vectorStore.search(neuron.coordinates.V, 5).map((item) => item.id)).toContain(neuron.id);
+    reopened.close(); rmSync(dir, { recursive: true, force: true });
+  });
+
   test('SqliteVecStore persists vectors and returns cosine-ranked nearest neighbors', () => {
     const dir = tempDir();
     const dbPath = join(dir, 'vectors.db');

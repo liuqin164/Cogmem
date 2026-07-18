@@ -9,6 +9,7 @@ import { migration_0015 } from '../src/migrations/0015_memory_governance.js';
 import { migration_0049 } from '../src/migrations/0049_project_scoped_graph_identity.js';
 import { migration_0046 } from '../src/migrations/0046_stable_migration_checksums.js';
 import { migration_0052 } from '../src/migrations/0052_project_scoped_topology_identity.js';
+import { migration_0053 } from '../src/migrations/0053_topology_privacy_and_recovery.js';
 import { CANONICAL_MIGRATION_SOURCE_DIGESTS, FROZEN_MIGRATION_DEPENDENCY_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 describe('schema migration runner', () => {
@@ -110,6 +111,13 @@ describe('schema migration runner', () => {
     const digest = (path: string) => createHash('sha256').update(readFileSync(join(root, path), 'utf8').replace(/\r\n/g, '\n')).digest('hex');
     expect(digest('engine/CognitiveGraphIdentity.ts')).toBe(FROZEN_MIGRATION_DEPENDENCY_DIGESTS['0049:CognitiveGraphIdentity']);
     expect(digest('topology/TimeBucketIdentity.ts')).toBe(FROZEN_MIGRATION_DEPENDENCY_DIGESTS['0049:TimeBucketIdentity']);
+  });
+
+  test('0053 freezes cognitive identity inside the migration source', () => {
+    const source = readFileSync(join(import.meta.dir, '..', 'src', 'migrations', '0053_topology_privacy_and_recovery.ts'), 'utf8');
+    expect(source).not.toContain(`from '../engine/CognitiveGraphIdentity.js'`);
+    expect(source).toContain('function cognitiveNodeId(');
+    expect(source).toContain('function cognitiveEdgeId(');
   });
 
   test('rejects missing checksums after checksum normalization', () => {
@@ -216,7 +224,7 @@ describe('schema migration runner', () => {
     db.close();
   });
 
-  test('0052 splits both historical write orders for projectless and literal global identities', () => {
+  test('0053 splits both historical write orders for projectless and literal global identities', () => {
     for (const parentScope of [null, 'global'] as const) {
       const db = new Database(':memory:');
       db.exec(`
@@ -238,6 +246,7 @@ describe('schema migration runner', () => {
       }
 
       migration_0052.up(db);
+      migration_0053.up(db);
 
       expect(db.prepare(`SELECT project_id,task_key FROM task_branches ORDER BY project_id`).all()).toEqual([
         { project_id: '', task_key: 'same-task' }, { project_id: 'global', task_key: 'same-task' },
@@ -259,5 +268,62 @@ describe('schema migration runner', () => {
       ]);
       db.close();
     }
+  });
+
+  test('old and temporary 0052 receipts both upgrade through idempotent 0053', () => {
+    for (const checksum of [
+      'f1130413c964d2b6ec853dc43a1b5bb1d3a888b8942922befb9bcfd7880fc021',
+      'e5739079601e1dc3627e2f06beeaed3f1413f01431a637add4018bc1acdaf6a3',
+    ]) {
+      const db = new Database(':memory:');
+      db.exec(`
+        CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,content TEXT,created_at INTEGER,is_deleted INTEGER DEFAULT 0);
+        CREATE TABLE task_branches(task_id TEXT PRIMARY KEY,project_id TEXT NOT NULL DEFAULT '',task_key TEXT NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(project_id,task_key));
+        CREATE TABLE task_branch_entries(task_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+        CREATE UNIQUE INDEX idx_task_branch_entries_reference_unique ON task_branch_entries(task_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''));
+        CREATE TABLE event_clusters(cluster_id TEXT PRIMARY KEY,project_id TEXT NOT NULL DEFAULT '',cluster_key TEXT NOT NULL,cluster_type TEXT NOT NULL,title TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(project_id,cluster_key));
+        CREATE TABLE event_cluster_entries(cluster_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+        CREATE UNIQUE INDEX idx_event_cluster_entries_reference_unique ON event_cluster_entries(cluster_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''));
+        CREATE TABLE topology_membership(neuron_id TEXT,project_id TEXT,dimension_type TEXT,dimension_key TEXT,title TEXT,created_at INTEGER,UNIQUE(neuron_id,dimension_type,dimension_key));
+        CREATE TABLE _schema_migrations(version TEXT PRIMARY KEY,description TEXT NOT NULL,applied_at TEXT NOT NULL,checksum TEXT);
+      `);
+      db.prepare(`INSERT INTO _schema_migrations VALUES('0052','temporary or stable','2026-01-01',?)`).run(checksum);
+      const runner = new SchemaMigrationRunner(db, [migration_0052, migration_0053]);
+      expect(runner.run().applied).toEqual(['0053']);
+      expect(runner.run().applied).toEqual([]);
+      expect(db.prepare(`SELECT checksum FROM _schema_migrations WHERE version='0052'`).get()).toEqual({ checksum });
+      expect(db.prepare(`SELECT version FROM _schema_migrations ORDER BY version`).all()).toEqual([{ version: '0052' }, { version: '0053' }]);
+      db.close();
+    }
+  });
+
+  test('0053 quarantines deleted and cross-project provenance without reviving cognitive content', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,content TEXT,created_at INTEGER,is_deleted INTEGER DEFAULT 0);
+      CREATE TABLE facts(fact_id TEXT PRIMARY KEY,neuron_id TEXT);
+      CREATE TABLE task_branches(task_id TEXT PRIMARY KEY,project_id TEXT,task_key TEXT UNIQUE,title TEXT,status TEXT,created_at INTEGER,updated_at INTEGER);
+      CREATE TABLE task_branch_entries(task_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+      CREATE TABLE event_clusters(cluster_id TEXT PRIMARY KEY,project_id TEXT,cluster_key TEXT UNIQUE,cluster_type TEXT,title TEXT,created_at INTEGER,updated_at INTEGER);
+      CREATE TABLE event_cluster_entries(cluster_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+      CREATE TABLE topology_membership(neuron_id TEXT,project_id TEXT,dimension_type TEXT,dimension_key TEXT,title TEXT,created_at INTEGER,UNIQUE(neuron_id,dimension_type,dimension_key));
+      CREATE TABLE cognitive_nodes(node_id TEXT PRIMARY KEY,node_type TEXT,node_key TEXT,title TEXT,project_id TEXT,source_neuron_id TEXT,metadata_json TEXT,created_at INTEGER,updated_at INTEGER,UNIQUE(project_id,node_type,node_key));
+      CREATE TABLE cognitive_edges(edge_id TEXT PRIMARY KEY,source_node_id TEXT,target_node_id TEXT,edge_type TEXT,weight REAL,project_id TEXT,metadata_json TEXT,created_at INTEGER,UNIQUE(project_id,source_node_id,target_node_id,edge_type));
+      INSERT INTO neurons VALUES('live-a','a','live a',1,0),('live-b','b','live b',2,0),('deleted-a','a','DELETED_SECRET',3,1);
+      INSERT INTO facts VALUES('fact-b','live-b');
+      INSERT INTO task_branches VALUES('task','a','a:task','Task','active',1,1);
+      INSERT INTO task_branch_entries VALUES('task','live-a',NULL,NULL,NULL,NULL,1),('task','live-a',NULL,NULL,'fact-b',NULL,2),('task','deleted-a',NULL,NULL,NULL,NULL,3);
+      INSERT INTO cognitive_nodes VALUES('deleted-node','neuron','neuron:deleted-a','DELETED_SECRET','a','deleted-a','{}',3,3);
+    `);
+
+    migration_0053.up(db);
+
+    expect(db.prepare(`SELECT neuron_id FROM task_branch_entries`).all()).toEqual([{ neuron_id: 'live-a' }]);
+    expect(db.prepare(`SELECT reason FROM topology_identity_quarantine ORDER BY reason`).all()).toEqual([
+      { reason: 'entry_project_scope_conflict' },
+      { reason: 'entry_references_deleted_neuron' },
+    ]);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes WHERE title LIKE '%DELETED_SECRET%' OR source_neuron_id='deleted-a'`).get()).toEqual({ count: 0 });
+    db.close();
   });
 });

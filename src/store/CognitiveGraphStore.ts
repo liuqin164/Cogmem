@@ -200,6 +200,7 @@ export class CognitiveGraphStore {
     const limit = input.limit ?? 120;
     const hopLimit = Math.max(1, input.hopLimit ?? 2);
     const queryProject = projectQueryValue(input.projectId);
+    const excludeTemporal = Boolean(input.excludeTemporal || !this.hasReadableTimeProjection(input.projectId));
     const seedNodeIds = new Set<string>();
     const suppliedSeed = this.db.prepare(`
       SELECT 1 FROM cognitive_nodes
@@ -209,7 +210,7 @@ export class CognitiveGraphStore {
       LIMIT 1
     `);
     for (const nodeId of input.seedNodeIds ?? []) {
-      if (suppliedSeed.get(nodeId, input.projectId ?? null, input.projectId ?? null, input.excludeTemporal ? 1 : 0)) seedNodeIds.add(nodeId);
+      if (suppliedSeed.get(nodeId, input.projectId ?? null, input.projectId ?? null, excludeTemporal ? 1 : 0)) seedNodeIds.add(nodeId);
     }
     const traversedNodeIds = new Set<string>();
     const neuronIds = new Set<string>();
@@ -222,7 +223,7 @@ export class CognitiveGraphStore {
         WHERE node_key = ?
           AND (? IS NULL OR project_id = ?)
           AND (? = 0 OR node_type <> 'time_bucket')
-      `).all(key, queryProject, queryProject, input.excludeTemporal ? 1 : 0) as Array<{ node_id: string }>;
+      `).all(key, queryProject, queryProject, excludeTemporal ? 1 : 0) as Array<{ node_id: string }>;
       for (const row of rows) seedNodeIds.add(row.node_id);
     }
 
@@ -238,7 +239,7 @@ export class CognitiveGraphStore {
       `).all(
         queryProject,
         queryProject,
-        input.excludeTemporal ? 1 : 0,
+        excludeTemporal ? 1 : 0,
         `%${term}%`,
         `%${term}%`,
         limit
@@ -276,7 +277,7 @@ export class CognitiveGraphStore {
           queryProject,
           queryProject,
           queryProject,
-          input.excludeTemporal ? 1 : 0,
+          excludeTemporal ? 1 : 0,
           limit
         ) as Array<{
           source_node_id: string;
@@ -330,12 +331,19 @@ export class CognitiveGraphStore {
   }
 
   getNodeCount(): number {
-    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes`).get() as { count: number } | null;
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes WHERE ?=1 OR node_type<>'time_bucket'`).get(this.hasReadableTimeProjection() ? 1 : 0) as { count: number } | null;
     return row?.count || 0;
   }
 
+  private hasReadableTimeProjection(projectId?: string): boolean {
+    const scope = projectQueryValue(projectId);
+    return !Boolean(scope === null
+      ? this.db.prepare(`SELECT 1 FROM topology_source_revisions r LEFT JOIN topology_projection_state s ON s.project_id=r.project_id WHERE s.project_id IS NULL OR s.status<>'clean' OR s.source_revision<>r.revision LIMIT 1`).get()
+      : this.db.prepare(`SELECT 1 FROM topology_source_revisions r LEFT JOIN topology_projection_state s ON s.project_id=r.project_id WHERE r.project_id=? AND (s.project_id IS NULL OR s.status<>'clean' OR s.source_revision<>r.revision) LIMIT 1`).get(scope));
+  }
+
   getEdgeCount(): number {
-    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM cognitive_edges`).get() as { count: number } | null;
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM cognitive_edges WHERE ?=1 OR edge_type<>'occurred_in_time_bucket'`).get(this.hasReadableTimeProjection() ? 1 : 0) as { count: number } | null;
     return row?.count || 0;
   }
 

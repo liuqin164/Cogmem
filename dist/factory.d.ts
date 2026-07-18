@@ -909,7 +909,7 @@ export declare class MemoryKernel {
     startMetabolism(): Promise<void>;
     stopMetabolism(): void;
     getHotMemories(): Neuron[];
-    forgetUser(projectId: string, reason?: string): Promise<ForgetUserResult>;
+    forgetUser(projectId: string, _reason?: string): Promise<ForgetUserResult>;
     getGovernanceAudit(projectId?: string): GovernanceAuditRecord[];
     getProjectMemories(projectId: string): Neuron[];
     registerExtension(name: string, implementation: unknown): void;

@@ -272,7 +272,7 @@ export class TopologyStore {
   }
 
   listProjectTimeBucketsByNeuron(projectId: string, neuronIds: string[]): Map<string, TimeBucketRecord[]> {
-    if (neuronIds.length === 0) return new Map();
+    if (neuronIds.length === 0 || this.hasDirtyTimeProjection(projectId)) return new Map();
     const placeholders = neuronIds.map(() => '?').join(',');
     const rows = this.db.prepare(`
       SELECT e.neuron_id,b.bucket_id,b.project_id,b.time_zone,b.bucket_type,b.bucket_start,b.bucket_end,b.label
@@ -607,6 +607,7 @@ export class TopologyStore {
   }
 
   listNeuronIdsByTemporalRange(start: number, end: number): string[] {
+    if (this.hasDirtyTimeProjection()) return [];
     const rows = this.db.prepare(`
       SELECT DISTINCT neuron_id
       FROM time_bucket_entries
@@ -619,7 +620,7 @@ export class TopologyStore {
   }
 
   listTimeBucketIdsByNeuronIds(neuronIds: string[], projectId?: string, limit: number = 80): string[] {
-    if (neuronIds.length === 0) return [];
+    if (neuronIds.length === 0 || this.hasDirtyTimeProjection(projectId)) return [];
     const scopedNeuronIds = Array.from(new Set(neuronIds.filter(Boolean))).slice(0, 200);
     if (scopedNeuronIds.length === 0) return [];
     const rowLimit = Math.max(1, Math.min(limit, 200));
@@ -987,6 +988,7 @@ export class TopologyStore {
     bucketLabels: string[];
     neuronIds: string[];
   } {
+    if (this.hasDirtyTimeProjection()) return { bucketType: input.preferredBucketType ?? 'day', bucketIds: [], bucketLabels: [], neuronIds: [] };
     const limit = input.limit ?? 120;
     const bucketType = input.preferredBucketType ?? 'day';
     const rows = this.db.prepare(`
@@ -1039,6 +1041,7 @@ export class TopologyStore {
     start: number,
     options: { projectId?: string; timeZone?: string; end?: number } = {},
   ): number {
+    if (this.hasDirtyTimeProjection(options.projectId)) return 0;
     const clauses = ['b.bucket_type=?', 'b.bucket_start=?'];
     const params: Array<string | number> = [bucketType, start];
     if (options.projectId !== undefined) {

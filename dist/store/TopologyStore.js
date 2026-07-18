@@ -251,7 +251,7 @@ export class TopologyStore {
         this.db.exec(`DELETE FROM time_buckets WHERE bucket_id NOT IN (SELECT DISTINCT bucket_id FROM time_bucket_entries);`);
     }
     listProjectTimeBucketsByNeuron(projectId, neuronIds) {
-        if (neuronIds.length === 0)
+        if (neuronIds.length === 0 || this.hasDirtyTimeProjection(projectId))
             return new Map();
         const placeholders = neuronIds.map(() => '?').join(',');
         const rows = this.db.prepare(`
@@ -482,6 +482,8 @@ export class TopologyStore {
         return rows.map((row) => row.neuron_id).filter((value) => Boolean(value));
     }
     listNeuronIdsByTemporalRange(start, end) {
+        if (this.hasDirtyTimeProjection())
+            return [];
         const rows = this.db.prepare(`
       SELECT DISTINCT neuron_id
       FROM time_bucket_entries
@@ -493,7 +495,7 @@ export class TopologyStore {
         return rows.map((row) => row.neuron_id).filter((value) => Boolean(value));
     }
     listTimeBucketIdsByNeuronIds(neuronIds, projectId, limit = 80) {
-        if (neuronIds.length === 0)
+        if (neuronIds.length === 0 || this.hasDirtyTimeProjection(projectId))
             return [];
         const scopedNeuronIds = Array.from(new Set(neuronIds.filter(Boolean))).slice(0, 200);
         if (scopedNeuronIds.length === 0)
@@ -774,6 +776,8 @@ export class TopologyStore {
         };
     }
     collectTemporalContext(input) {
+        if (this.hasDirtyTimeProjection())
+            return { bucketType: input.preferredBucketType ?? 'day', bucketIds: [], bucketLabels: [], neuronIds: [] };
         const limit = input.limit ?? 120;
         const bucketType = input.preferredBucketType ?? 'day';
         const rows = this.db.prepare(`
@@ -812,6 +816,8 @@ export class TopologyStore {
         };
     }
     getTimeBucketEntryCount(bucketType, start, options = {}) {
+        if (this.hasDirtyTimeProjection(options.projectId))
+            return 0;
         const clauses = ['b.bucket_type=?', 'b.bucket_start=?'];
         const params = [bucketType, start];
         if (options.projectId !== undefined) {

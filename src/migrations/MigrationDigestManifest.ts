@@ -102,7 +102,14 @@ export const MIGRATION_DIGESTS: Readonly<Record<string, string>> = {
   '0049': '534ee9c336c8be7b7ddcd85b6cee6d5d1baf2b1ecff227cc25a76104b4d2f00e',
   '0050': '45edbdeb0d4b90ff3f91e9edfe09572d776523e3ded8bfff310bcd37a16879ef',
   '0051': '856962c943839284428bcd00f2a1bdc1470da2141c16e2e1bf38d0a76a520793',
-  '0052': 'e5739079601e1dc3627e2f06beeaed3f1413f01431a637add4018bc1acdaf6a3',
+  '0052': 'f1130413c964d2b6ec853dc43a1b5bb1d3a888b8942922befb9bcfd7880fc021',
+  '0053': '0497480c81661528bdd5fc4db6ebf85c8a389668f3f60c272a2d8c0b8c01dab1',
+};
+
+// Audited receipts emitted by the temporary cda1269 build. They remain
+// truthful and are accepted only so 0053 can repair that exact schema.
+export const COMPATIBLE_MIGRATION_DIGESTS: Readonly<Record<string, readonly string[]>> = {
+  '0052': ['e5739079601e1dc3627e2f06beeaed3f1413f01431a637add4018bc1acdaf6a3'],
 };
 
 export const CANONICAL_MIGRATION_SOURCE_DIGESTS = MIGRATION_DIGESTS;

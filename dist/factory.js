@@ -97,6 +97,7 @@ import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snaps
 import { CORE_VERSION } from './version.js';
 const LATEST_SCHEMA_VERSION = Math.max(...ALL_MIGRATIONS.map((migration) => Number.parseInt(migration.version, 10)));
 const TIME_PROJECTION_PUBLISH_BATCH_SIZE = 500;
+const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 export class MemoryKernel {
     options;
     memoryGraph;
@@ -201,6 +202,8 @@ export class MemoryKernel {
         const rebuildJobColumns = db.prepare(`PRAGMA table_info(topology_time_rebuild_jobs)`).all();
         if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_token'))
             db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_token TEXT`);
+        if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_lease_until'))
+            db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_lease_until INTEGER`);
         db.exec(`CREATE TABLE IF NOT EXISTS vector_write_outbox (neuron_id TEXT PRIMARY KEY, vector_json TEXT NOT NULL, created_at INTEGER NOT NULL)`);
         this.ensureMetaTable(db);
         this.entityStore = new EntityStore(db);
@@ -231,8 +234,13 @@ export class MemoryKernel {
         this.vectorStore = options.vectorBackend === 'hnswlib'
             ? new VectorStore(vectorDimension)
             : new SqliteVecStore(db, vectorDimension);
-        if (!(this.vectorStore instanceof SqliteVecStore))
+        if (!(this.vectorStore instanceof SqliteVecStore)) {
+            for (const page of this.memoryGraph.iterateNeuronVectors(2_000, { includeStatuses: ['active', 'cold'], onlyNotDeleted: true })) {
+                for (const row of page)
+                    this.vectorStore.addVector(row.id, row.vector);
+            }
             this.drainVectorOutbox();
+        }
         this.topicRegistry = new TopicRegistry(this.memoryGraph);
         this.topologyStore = new TopologyStore(db);
         this.cognitiveGraphStore = new CognitiveGraphStore(db);
@@ -720,6 +728,8 @@ export class MemoryKernel {
             })();
             job = { generation, time_zone: timeZone, status: 'building', neuron_count: 0, source_revision: sourceRevision };
         }
+        let publishToken;
+        let publishClaimed = false;
         try {
             const generation = job.generation;
             const sourceRevision = job.source_revision;
@@ -778,41 +788,51 @@ export class MemoryKernel {
             }
             assertCurrentSource();
             const bucketCount = Number(db.prepare(`SELECT COUNT(*) AS count FROM topology_time_rebuild_buckets b WHERE b.generation=? AND EXISTS (SELECT 1 FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=b.generation AND e.bucket_id=b.bucket_id)`).get(generation)?.count ?? 0);
-            const publishToken = `publish-${randomUUID()}`;
+            const claimedToken = `publish-${randomUUID()}`;
+            publishToken = claimedToken;
             db.transaction(() => {
-                const claim = db.prepare(`UPDATE topology_time_rebuild_jobs SET publish_token=?,updated_at=? WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token IS NULL`).run(publishToken, Date.now(), scope, generation, sourceRevision);
-                const owned = db.prepare(`SELECT 1 FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).get(scope, generation, sourceRevision, publishToken);
+                const claimNow = Date.now();
+                const claim = db.prepare(`UPDATE topology_time_rebuild_jobs SET publish_token=?,publish_lease_until=?,updated_at=? WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND (publish_token IS NULL OR publish_lease_until IS NULL OR publish_lease_until<?)`).run(claimedToken, claimNow + TIME_PROJECTION_PUBLISH_LEASE_MS, claimNow, scope, generation, sourceRevision, claimNow);
+                const owned = db.prepare(`SELECT 1 FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).get(scope, generation, sourceRevision, claimedToken);
                 if (claim.changes !== 1 || !owned)
                     throw new Error('time_projection_rebuild_publish_conflict');
             })();
+            publishClaimed = true;
             assertCurrentSource();
-            this.publishTimeProjectionInBatches({ generation, scope, publishToken, sourceRevision });
+            this.publishTimeProjectionInBatches({ generation, scope, publishToken: claimedToken, sourceRevision });
             db.transaction(() => {
                 assertCurrentSource();
-                const owned = db.prepare(`SELECT 1 FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).get(scope, generation, sourceRevision, publishToken);
+                const owned = db.prepare(`SELECT 1 FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).get(scope, generation, sourceRevision, claimedToken);
                 if (!owned)
                     throw new Error('time_projection_rebuild_publish_conflict');
                 this.topologyStore.markTimeProjection(scope, 'clean', timeZone, now, undefined, sourceRevision);
-                db.prepare(`DELETE FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND publish_token=?`).run(scope, generation, publishToken);
+                db.prepare(`DELETE FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND publish_token=?`).run(scope, generation, claimedToken);
             })();
             return { projectId: scope, timeZone, neurons: neuronCount, buckets: bucketCount, rebuiltAt: now };
         }
         catch (error) {
-            const failed = db.prepare(`UPDATE topology_time_rebuild_jobs SET status='failed',updated_at=?,error=? WHERE project_id=? AND generation=?`).run(Date.now(), error instanceof Error ? error.message : String(error), scope, job.generation);
+            const message = error instanceof Error ? error.message : String(error);
+            const failed = publishClaimed && publishToken
+                ? db.prepare(`UPDATE topology_time_rebuild_jobs SET status='failed',updated_at=?,error=? WHERE project_id=? AND generation=? AND publish_token=?`).run(Date.now(), message, scope, job.generation, publishToken)
+                : db.prepare(`UPDATE topology_time_rebuild_jobs SET status='failed',updated_at=?,error=? WHERE project_id=? AND generation=? AND publish_token IS NULL`).run(Date.now(), message, scope, job.generation);
             if (failed.changes === 1) {
-                this.topologyStore.markTimeProjection(scope, 'failed', timeZone, now, error instanceof Error ? error.message : String(error), currentSourceRevision());
+                this.topologyStore.markTimeProjection(scope, 'failed', timeZone, now, message, currentSourceRevision());
             }
             throw error;
         }
     }
     publishTimeProjectionInBatches(input) {
         const db = this.factStore.getDatabase();
-        const ownsPublish = () => Boolean(db.prepare(`SELECT 1 FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).get(input.scope, input.generation, input.sourceRevision, input.publishToken));
+        const renewPublish = () => {
+            const now = Date.now();
+            const renewed = db.prepare(`UPDATE topology_time_rebuild_jobs SET publish_lease_until=?,updated_at=? WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).run(now + TIME_PROJECTION_PUBLISH_LEASE_MS, now, input.scope, input.generation, input.sourceRevision, input.publishToken);
+            if (renewed.changes !== 1)
+                throw new Error('time_projection_rebuild_publish_conflict');
+        };
         const deleteBatches = (sql, ...params) => {
             for (;;) {
                 const changed = db.transaction(() => {
-                    if (!ownsPublish())
-                        throw new Error('time_projection_rebuild_publish_conflict');
+                    renewPublish();
                     return Number(db.prepare(sql).run(...params, TIME_PROJECTION_PUBLISH_BATCH_SIZE).changes ?? 0);
                 })();
                 if (changed < TIME_PROJECTION_PUBLISH_BATCH_SIZE)
@@ -823,8 +843,7 @@ export class MemoryKernel {
             const count = Number(db.prepare(countSql).get(input.generation)?.count ?? 0);
             for (let offset = 0; offset < count; offset += TIME_PROJECTION_PUBLISH_BATCH_SIZE)
                 db.transaction(() => {
-                    if (!ownsPublish())
-                        throw new Error('time_projection_rebuild_publish_conflict');
+                    renewPublish();
                     db.prepare(insertSql).run(input.generation, TIME_PROJECTION_PUBLISH_BATCH_SIZE, offset);
                 })();
         };
@@ -2350,11 +2369,12 @@ export class MemoryKernel {
     getHotMemories() {
         return this.metabolism.getHotMemories();
     }
-    async forgetUser(projectId, reason = 'unspecified') {
+    async forgetUser(projectId, _reason = 'unspecified') {
         const db = this.factStore.getDatabase();
         const scope = projectScope(projectId);
         const neuronIds = this.memoryGraph.getNeuronIdsByProject(scope);
         const auditId = `audit-${randomUUID()}`;
+        const auditScope = `sha256:${createHash('sha256').update(scope).digest('hex')}`;
         const deleted = {
             neurons: neuronIds.length,
             synapses: 0,
@@ -2487,11 +2507,12 @@ export class MemoryKernel {
             if (neuronIds.length > 0) {
                 runDelete(`DELETE FROM neurons WHERE id IN (${placeholders})`, neuronIds);
             }
+            runDelete(`DELETE FROM governance_audit_log WHERE COALESCE(project_id,'') IN (?,?)`, [scope, auditScope]);
             db.prepare(`
         INSERT INTO governance_audit_log (
           audit_id, action, project_id, reason, details_json, created_at
         ) VALUES (?, ?, ?, ?, ?, ?)
-      `).run(auditId, 'forgetUser', scope, reason, JSON.stringify({ deleted }), Date.now());
+      `).run(auditId, 'forgetUser', auditScope, 'privacy_erasure_requested', JSON.stringify({ deleted }), Date.now());
         })();
         db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
         db.exec(`VACUUM`);
@@ -2511,7 +2532,7 @@ export class MemoryKernel {
           FROM governance_audit_log
           WHERE COALESCE(project_id, '') = ?
           ORDER BY created_at DESC, audit_id DESC
-        `).all(projectId)
+        `).all(`sha256:${createHash('sha256').update(projectId).digest('hex')}`)
             : db.prepare(`
           SELECT *
           FROM governance_audit_log
@@ -2520,7 +2541,7 @@ export class MemoryKernel {
         return rows.map((row) => ({
             auditId: row.audit_id,
             action: row.action,
-            projectId: row.project_id || undefined,
+            projectId: (projectId ?? row.project_id) || undefined,
             reason: row.reason || undefined,
             details: row.details_json ? JSON.parse(row.details_json) : undefined,
             createdAt: Number(row.created_at),

@@ -41,6 +41,7 @@ export declare class CognitiveGraphStore {
         edgeCount: number;
     };
     getNodeCount(): number;
+    private hasReadableTimeProjection;
     getEdgeCount(): number;
     close(): void;
 }

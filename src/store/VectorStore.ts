@@ -3,6 +3,7 @@
 // ============================================
 
 import { createRequire } from 'node:module';
+import { readFile, writeFile } from 'node:fs/promises';
 import { config } from '../utils/Config.js';
 import { logger } from '../utils/Logger.js';
 import type { IVectorStore, VectorSearchResult, VectorStoreStats } from './IVectorStore.js';
@@ -156,12 +157,28 @@ export class VectorStore implements IVectorStore {
   async saveIndex(filePath: string): Promise<void> {
     if (!this.index) return;
     await this.index.writeIndex(filePath);
+    await writeFile(`${filePath}.meta.json`, JSON.stringify({
+      version: 1,
+      dimension: this.dimension,
+      nextLabel: this.nextLabel,
+      labels: [...this.neuronIdMap.entries()],
+    }));
   }
 
   async loadIndex(filePath: string): Promise<void> {
     if (!this.index) return;
+    const metadata = JSON.parse(await readFile(`${filePath}.meta.json`, 'utf8')) as {
+      version?: number; dimension?: number; nextLabel?: number; labels?: Array<[number, string]>;
+    };
+    if (metadata.version !== 1 || metadata.dimension !== this.dimension || !Array.isArray(metadata.labels)) {
+      throw new Error('vector_index_metadata_mismatch');
+    }
     await this.index.readIndex(filePath);
     this.index.setEf(this.efSearch);
+    this.neuronIdMap = new Map(metadata.labels);
+    this.idIndexMap = new Map(metadata.labels.map(([label, neuronId]) => [neuronId, label]));
+    this.nextLabel = metadata.nextLabel ?? Math.max(0, ...metadata.labels.map(([label]) => label + 1));
+    this.tombstones.clear();
   }
 
   getStats(): VectorStoreStats {

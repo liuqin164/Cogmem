@@ -43,6 +43,7 @@ export declare class TemporalAdjacencyStore {
         neuronIds: string[];
     };
     close(): void;
+    private hasReadableProjection;
     private getAdjacentBucketIds;
     private listWindowSegments;
     private listNearestSegments;

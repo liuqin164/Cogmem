@@ -1,4 +1,5 @@
 export declare const MIGRATION_DIGESTS: Readonly<Record<string, string>>;
+export declare const COMPATIBLE_MIGRATION_DIGESTS: Readonly<Record<string, readonly string[]>>;
 export declare const CANONICAL_MIGRATION_SOURCE_DIGESTS: Readonly<Record<string, string>>;
 export declare const FROZEN_MIGRATION_DEPENDENCY_DIGESTS: {
     readonly '0049:CognitiveGraphIdentity': "90cace5da9d8404b653f1e903f1932bcb947703e527bd08b93215dfb365425b5";

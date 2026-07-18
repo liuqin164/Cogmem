@@ -104,7 +104,7 @@ export class TemporalAdjacencyStore {
   }
 
   collectAdjacentNeuronIds(bucketIds: string[], limit: number = 48, projectId?: string): string[] {
-    if (bucketIds.length === 0) return [];
+    if (bucketIds.length === 0 || !this.hasReadableProjection(projectId)) return [];
     if (projectId !== undefined) return this.listNeuronIdsForBuckets(this.listAdjacentBucketIds(bucketIds, projectId), limit, projectId);
     const placeholders = bucketIds.map(() => '?').join(', ');
     const rows = this.db.prepare(`
@@ -129,6 +129,7 @@ export class TemporalAdjacencyStore {
     labels: string[];
     neuronIds: string[];
   } {
+    if (!this.hasReadableProjection(input.projectId)) return { bucketIds: [], labels: [], neuronIds: [] };
     const hopLimit = Math.max(1, input.hopLimit ?? 2);
     const limit = input.limit ?? 96;
     const seedBucketIds = this.filterBucketIdsForProject(input.bucketIds, input.projectId);
@@ -182,6 +183,7 @@ export class TemporalAdjacencyStore {
     labels: string[];
     neuronIds: string[];
   } {
+    if (!this.hasReadableProjection(input.projectId)) return { bucketType: input.preferredBucketType ?? 'day', segments: [], bucketIds: [], labels: [], neuronIds: [] };
     const limit = input.limit ?? 32;
     const bucketType = input.preferredBucketType ?? 'day';
     const ordered = new Map<string, TemporalSurfaceSegment>();
@@ -261,6 +263,13 @@ export class TemporalAdjacencyStore {
 
   close(): void {
     if (this.ownsDb) this.db.close();
+  }
+
+  private hasReadableProjection(projectId?: string): boolean {
+    const scope = projectQueryValue(projectId);
+    return !Boolean(scope === null
+      ? this.db.prepare(`SELECT 1 FROM topology_source_revisions r LEFT JOIN topology_projection_state s ON s.project_id=r.project_id WHERE s.project_id IS NULL OR s.status<>'clean' OR s.source_revision<>r.revision LIMIT 1`).get()
+      : this.db.prepare(`SELECT 1 FROM topology_source_revisions r LEFT JOIN topology_projection_state s ON s.project_id=r.project_id WHERE r.project_id=? AND (s.project_id IS NULL OR s.status<>'clean' OR s.source_revision<>r.revision) LIMIT 1`).get(scope));
   }
 
   private getAdjacentBucketIds(bucket: TimeBucketRecord): { previous?: string; next?: string } {

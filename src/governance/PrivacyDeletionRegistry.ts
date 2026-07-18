@@ -1,3 +1,5 @@
+import { dreamLedgerProjectKey } from '../store/DreamLedgerStore.js';
+
 export interface PrivacyDeletionContext {
   scope: string;
   neuronIds: string[];
@@ -26,6 +28,7 @@ export function deleteRegisteredProjectContent(context: PrivacyDeletionContext):
   remove('deep_write_summaries', `DELETE FROM deep_write_summaries WHERE COALESCE(project_id, '') = ?`);
   remove('pipeline_nonfatal_events', `DELETE FROM pipeline_nonfatal_events WHERE COALESCE(project_id, '') = ?`);
   remove('memory_frame_reviews', `DELETE FROM memory_frame_reviews WHERE COALESCE(project_id, '') = ?`);
+  remove('memory_atlas_alias_supports', `DELETE FROM memory_atlas_alias_supports WHERE COALESCE(project_id, '') = ?`);
   remove('memory_frame_relations', `DELETE FROM memory_frame_relations WHERE frame_id IN
     (SELECT frame_id FROM memory_frames WHERE COALESCE(project_id, '') = ?)`);
   remove('memory_frame_nodes', `DELETE FROM memory_frame_nodes WHERE frame_id IN
@@ -36,7 +39,7 @@ export function deleteRegisteredProjectContent(context: PrivacyDeletionContext):
   remove('episode_dream_attempts', `DELETE FROM episode_dream_attempts WHERE episode_id IN
     (SELECT episode_id FROM episodes WHERE COALESCE(project_id, '') = ?)`);
   remove('episode_dream_jobs', `DELETE FROM episode_dream_jobs WHERE COALESCE(project_id, '') = ?`);
-  remove('dream_ledger_state', `DELETE FROM dream_ledger_state WHERE COALESCE(project_id, '') = ?`);
+  remove('dream_ledger_state', `DELETE FROM dream_ledger_state WHERE project_key = ?`, [dreamLedgerProjectKey(scope)]);
   remove('topology_identity_quarantine', `DELETE FROM topology_identity_quarantine WHERE project_scope = ?`);
 
   if (neuronIds.length > 0) {

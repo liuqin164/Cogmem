@@ -522,7 +522,7 @@ describe('project-local temporal topology regressions', () => {
 
   test('a rebuild must own the ready job before replacing the live projection', async () => {
     const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
-    await kernel.ingest({ projectId: 'p', content: 'projection that must survive a lost publish claim', createdAt: 1000 });
+    const neuron = await kernel.ingest({ projectId: 'p', content: 'projection that must survive a lost publish claim', createdAt: 1000 });
     const db = kernel.factStore.getDatabase();
     const liveEntries = db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE project_id='p'`).get();
     const sourceRevision = kernel.topologyStore.getTimeProjectionSourceRevision('p');
@@ -540,7 +540,19 @@ describe('project-local temporal topology regressions', () => {
     expect(() => kernel.rebuildProjectTimeTopology('p')).toThrow('time_projection_rebuild_publish_conflict');
     expect(db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE project_id='p'`).get()).toEqual(liveEntries);
     expect(kernel.topologyStore.hasUsableTimeProjection('p', 'UTC')).toBe(false);
+    expect(kernel.topologyStore.listTimeBucketIdsByNeuronIds([neuron.id], 'p')).toEqual([]);
     db.exec(`DROP TRIGGER simulate_lost_rebuild_claim`);
+    kernel.close();
+  });
+
+  test('a competing publisher returns busy without failing the active owner', () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    const db = kernel.factStore.getDatabase();
+    db.prepare(`INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,neuron_count,updated_at,source_revision,publish_token,publish_lease_until) VALUES('p','owned','UTC','ready',0,1,0,'owner',?)`).run(Date.now() + 60_000);
+    kernel.topologyStore.markTimeProjection('p', 'building', 'UTC', 1, undefined, 0);
+
+    expect(() => kernel.rebuildProjectTimeTopology('p')).toThrow('time_projection_rebuild_publish_conflict');
+    expect(db.prepare(`SELECT status,publish_token FROM topology_time_rebuild_jobs WHERE project_id='p'`).get()).toEqual({ status: 'ready', publish_token: 'owner' });
     kernel.close();
   });
 
@@ -548,7 +560,7 @@ describe('project-local temporal topology regressions', () => {
     const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
     const db = kernel.factStore.getDatabase();
     const generation = 'bounded-publish';
-    db.prepare(`INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,neuron_count,updated_at,source_revision) VALUES('bulk',?,'UTC','ready',501,1,0)`).run(generation);
+    db.prepare(`INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,neuron_count,updated_at,source_revision,publish_token,publish_lease_until) VALUES('bulk',?,'UTC','ready',501,1,0,'crashed-owner',NULL)`).run(generation);
     kernel.topologyStore.markTimeProjection('bulk', 'building', 'UTC', 1, undefined, 0);
     db.prepare(`INSERT INTO topology_time_rebuild_buckets(generation,bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label) VALUES(?,'bulk-day','bulk','UTC','day',0,86400000,'day')`).run(generation);
     const active = db.prepare(`INSERT INTO topology_time_rebuild_active_neurons(generation,neuron_id,project_id,created_at,title) VALUES(?,?,'bulk',?,'title')`);

@@ -211,16 +211,21 @@ describe('Governance and security v1.14', () => {
     db.prepare(`INSERT INTO reasoning_steps VALUES('secret-chain',?,'evidence',0)`).run(forgotten.id);
     db.exec(`PRAGMA foreign_keys=OFF`);
     db.prepare(`INSERT INTO memory_frame_reviews(review_id,frame_id,project_id,action,actor,reason,created_at) VALUES('secret-frame-review','legacy-frame','','reject','tester',?,1)`).run(`${secret} frame review`);
+    db.prepare(`INSERT INTO memory_atlas_alias_supports(support_id,alias_id,project_id,node_id,source_frame_id,evidence_event_ids_json,status,created_at,payload_json) VALUES('secret-alias-support','secret-alias','','secret-node','secret-frame',?,'active',1,?)`).run(JSON.stringify([`${secret}-event`]), JSON.stringify({ secret }));
+    db.prepare(`INSERT INTO governance_audit_log VALUES('old-secret-audit','forgetUser','',?,?,1)`).run(`${secret} old reason`, JSON.stringify({ secret }));
+    db.exec(`INSERT OR REPLACE INTO dream_ledger_state VALUES('all',NULL,10,10,10),('scope:0:','',20,20,20),('scope:1:a','a',30,30,30)`);
     db.exec(`PRAGMA foreign_keys=ON`);
 
-    const result = await kernel.forgetUser('', 'global_user_requested');
+    const result = await kernel.forgetUser('', `${secret} raw audit reason`);
     expect(result.deleted.neurons).toBe(1);
     expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE project_id IS NULL`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM memory_events WHERE project_id IS NULL`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE content LIKE ?`).get(`%${secret}%`)).toEqual({ count: 0 });
-    for (const table of ['deep_write_summaries','deep_write_runs','deep_write_candidates','deep_write_candidate_reviews','pipeline_nonfatal_events','reasoning_chains','reasoning_steps','memory_frame_reviews']) {
+    for (const table of ['deep_write_summaries','deep_write_runs','deep_write_candidates','deep_write_candidate_reviews','pipeline_nonfatal_events','reasoning_chains','reasoning_steps','memory_frame_reviews','memory_atlas_alias_supports']) {
       expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
     }
+    expect(db.prepare(`SELECT project_key FROM dream_ledger_state ORDER BY project_key`).all()).toEqual([{ project_key: 'all' }, { project_key: 'scope:1:a' }]);
+    expect(db.prepare(`SELECT reason FROM governance_audit_log`).get()).toEqual({ reason: 'privacy_erasure_requested' });
 
     const next = await kernel.ingest({ content: 'new global memory after privacy erasure', createdAt: 3000 });
     expect(next.prev_hash).not.toBe(forgotten.self_hash);
