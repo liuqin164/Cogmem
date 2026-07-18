@@ -1,5 +1,6 @@
 import Database from 'bun:sqlite';
 import type { TimeBucketRecord } from '../types/index.js';
+import { projectQueryValue, projectScope } from '../topology/ProjectScope.js';
 
 export interface TemporalSurfaceSegment {
   bucketId: string;
@@ -104,9 +105,7 @@ export class TemporalAdjacencyStore {
 
   collectAdjacentNeuronIds(bucketIds: string[], limit: number = 48, projectId?: string): string[] {
     if (bucketIds.length === 0) return [];
-    if (projectId) {
-      return this.listNeuronIdsForBuckets(this.listAdjacentBucketIds(bucketIds, projectId), limit, projectId);
-    }
+    if (projectId !== undefined) return this.listNeuronIdsForBuckets(this.listAdjacentBucketIds(bucketIds, projectId), limit, projectId);
     const placeholders = bucketIds.map(() => '?').join(', ');
     const rows = this.db.prepare(`
       SELECT DISTINCT tbe.neuron_id
@@ -289,7 +288,7 @@ export class TemporalAdjacencyStore {
         AND (? IS NULL OR bucket_start < ?)
         AND (? IS NULL OR EXISTS (
           SELECT 1 FROM time_bucket_entries project_entry
-          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND COALESCE(project_entry.project_id, '')=?
         ))
       ORDER BY bucket_start ASC
       LIMIT ?
@@ -299,8 +298,8 @@ export class TemporalAdjacencyStore {
       input.startTime ?? null,
       input.endTime ?? null,
       input.endTime ?? null,
-      input.projectId ?? null,
-      input.projectId ?? null,
+      projectQueryValue(input.projectId),
+      projectQueryValue(input.projectId),
       input.limit
     ) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
 
@@ -332,11 +331,11 @@ export class TemporalAdjacencyStore {
       WHERE bucket_type = ?
         AND (? IS NULL OR EXISTS (
           SELECT 1 FROM time_bucket_entries project_entry
-          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND COALESCE(project_entry.project_id, '')=?
         ))
       ORDER BY ABS(bucket_start - ?) ASC
       LIMIT ?
-    `).all(input.bucketType, input.projectId ?? null, input.projectId ?? null, center, input.limit) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
+    `).all(input.bucketType, projectQueryValue(input.projectId), projectQueryValue(input.projectId), center, input.limit) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
 
     return rows.map((row) => ({
       bucketId: row.bucket_id,
@@ -357,9 +356,9 @@ export class TemporalAdjacencyStore {
       WHERE bucket_id IN (${placeholders})
         AND (? IS NULL OR EXISTS (
           SELECT 1 FROM time_bucket_entries project_entry
-          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND COALESCE(project_entry.project_id, '')=?
         ))
-    `).all(...bucketIds, projectId ?? null, projectId ?? null) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
+    `).all(...bucketIds, projectQueryValue(projectId), projectQueryValue(projectId)) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
 
     return rows.map((row) => ({
       bucketId: row.bucket_id,
@@ -377,10 +376,10 @@ export class TemporalAdjacencyStore {
       FROM time_bucket_entries
       WHERE bucket_id = ?
         AND neuron_id IS NOT NULL
-        AND (? IS NULL OR project_id=?)
+        AND (? IS NULL OR COALESCE(project_id, '')=?)
       ORDER BY created_at DESC
       LIMIT ?
-    `).all(bucketId, projectId ?? null, projectId ?? null, limit) as Array<{ neuron_id: string | null }>;
+    `).all(bucketId, projectQueryValue(projectId), projectQueryValue(projectId), limit) as Array<{ neuron_id: string | null }>;
     return rows.map((row) => row.neuron_id).filter((value): value is string => Boolean(value));
   }
 
@@ -403,11 +402,11 @@ export class TemporalAdjacencyStore {
       WHERE bucket_type=? AND bucket_end>? AND bucket_start<?
         AND (? IS NULL OR EXISTS (
           SELECT 1 FROM time_bucket_entries project_entry
-          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND COALESCE(project_entry.project_id, '')=?
         ))
       ORDER BY bucket_start ASC
       LIMIT ?
-    `).all(input.bucketType, start, end, input.projectId ?? null, input.projectId ?? null, input.limit) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
+    `).all(input.bucketType, start, end, projectQueryValue(input.projectId), projectQueryValue(input.projectId), input.limit) as Array<{ bucket_id: string; label: string; bucket_start: number; bucket_end: number }>;
     return rows
       .filter((row) => !existing.has(row.bucket_id))
       .map((row) => ({
@@ -422,7 +421,7 @@ export class TemporalAdjacencyStore {
 
   private listAdjacentBucketIds(bucketIds: string[], projectId?: string): string[] {
     if (bucketIds.length === 0) return [];
-    if (!projectId) {
+    if (projectId === undefined) {
       const placeholders = bucketIds.map(() => '?').join(', ');
       const rows = this.db.prepare(`
         SELECT adjacent_bucket_id
@@ -439,7 +438,7 @@ export class TemporalAdjacencyStore {
       WHERE bucket_id=?
         AND EXISTS (
           SELECT 1 FROM time_bucket_entries project_entry
-          WHERE project_entry.bucket_id=time_buckets.bucket_id AND project_entry.project_id=?
+          WHERE project_entry.bucket_id=time_buckets.bucket_id AND COALESCE(project_entry.project_id, '')=?
         )
     `);
     const previousBucket = this.db.prepare(`
@@ -449,7 +448,7 @@ export class TemporalAdjacencyStore {
         AND candidate.bucket_start < ?
         AND EXISTS (
           SELECT 1 FROM time_bucket_entries project_entry
-          WHERE project_entry.bucket_id=candidate.bucket_id AND project_entry.project_id=?
+          WHERE project_entry.bucket_id=candidate.bucket_id AND COALESCE(project_entry.project_id, '')=?
         )
       ORDER BY candidate.bucket_start DESC
       LIMIT 1
@@ -461,17 +460,17 @@ export class TemporalAdjacencyStore {
         AND candidate.bucket_start > ?
         AND EXISTS (
           SELECT 1 FROM time_bucket_entries project_entry
-          WHERE project_entry.bucket_id=candidate.bucket_id AND project_entry.project_id=?
+          WHERE project_entry.bucket_id=candidate.bucket_id AND COALESCE(project_entry.project_id, '')=?
         )
       ORDER BY candidate.bucket_start ASC
       LIMIT 1
     `);
     const result = new Set<string>();
     for (const bucketId of bucketIds) {
-      const row = current.get(bucketId, projectId) as { bucket_type: string; bucket_start: number } | null;
+      const row = current.get(bucketId, projectScope(projectId)) as { bucket_type: string; bucket_start: number } | null;
       if (!row) continue;
-      const previous = (previousBucket.get(row.bucket_type, row.bucket_start, projectId) as { bucket_id?: string } | null)?.bucket_id;
-      const next = (nextBucket.get(row.bucket_type, row.bucket_start, projectId) as { bucket_id?: string } | null)?.bucket_id;
+      const previous = (previousBucket.get(row.bucket_type, row.bucket_start, projectScope(projectId)) as { bucket_id?: string } | null)?.bucket_id;
+      const next = (nextBucket.get(row.bucket_type, row.bucket_start, projectScope(projectId)) as { bucket_id?: string } | null)?.bucket_id;
       if (previous) result.add(previous);
       if (next) result.add(next);
     }
@@ -479,13 +478,13 @@ export class TemporalAdjacencyStore {
   }
 
   private filterBucketIdsForProject(bucketIds: string[], projectId?: string): string[] {
-    if (bucketIds.length === 0 || !projectId) return bucketIds;
+    if (bucketIds.length === 0 || projectId === undefined) return bucketIds;
     const placeholders = bucketIds.map(() => '?').join(', ');
     const rows = this.db.prepare(`
       SELECT DISTINCT bucket_id
       FROM time_bucket_entries
-      WHERE bucket_id IN (${placeholders}) AND project_id=?
-    `).all(...bucketIds, projectId) as Array<{ bucket_id: string }>;
+      WHERE bucket_id IN (${placeholders}) AND COALESCE(project_id, '')=?
+    `).all(...bucketIds, projectScope(projectId)) as Array<{ bucket_id: string }>;
     return rows.map((row) => row.bucket_id);
   }
 
@@ -497,10 +496,10 @@ export class TemporalAdjacencyStore {
       FROM time_bucket_entries
       WHERE bucket_id IN (${placeholders})
         AND neuron_id IS NOT NULL
-        AND (? IS NULL OR project_id=?)
+        AND (? IS NULL OR COALESCE(project_id, '')=?)
       ORDER BY created_at DESC
       LIMIT ?
-    `).all(...bucketIds, projectId ?? null, projectId ?? null, limit) as Array<{ neuron_id: string | null }>;
+    `).all(...bucketIds, projectQueryValue(projectId), projectQueryValue(projectId), limit) as Array<{ neuron_id: string | null }>;
     return rows.map((row) => row.neuron_id).filter((value): value is string => Boolean(value));
   }
 }

@@ -34,7 +34,7 @@ export class TopologyStore {
         belief_id TEXT,
         fact_id TEXT,
         event_id TEXT,
-        project_id TEXT,
+        project_id TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL,
         UNIQUE(bucket_id, neuron_id, unit_id, belief_id, fact_id, event_id)
       );
@@ -298,7 +298,7 @@ export class TopologyStore {
       INSERT OR IGNORE INTO time_bucket_entries (
         bucket_id, neuron_id, unit_id, belief_id, fact_id, event_id, project_id, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(bucketId, ref.neuronId || null, ref.unitId || null, ref.beliefId || null, ref.factId || null, ref.eventId || null, ref.projectId || null, ref.createdAt);
+    `).run(bucketId, ref.neuronId || null, ref.unitId || null, ref.beliefId || null, ref.factId || null, ref.eventId || null, projectScope(ref.projectId), ref.createdAt);
         if (ref.neuronId) {
             const row = this.db.prepare(`
         SELECT label FROM time_buckets WHERE bucket_id = ?
@@ -843,7 +843,7 @@ export class TopologyStore {
       INSERT OR IGNORE INTO topology_membership (
         neuron_id, project_id, dimension_type, dimension_key, title, created_at
       ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(neuronId, projectId || null, dimensionType, dimensionKey, title || null, createdAt);
+    `).run(neuronId, projectScope(projectId), dimensionType, dimensionKey, title || null, createdAt);
     }
     close() {
         if (this.ownsDb)

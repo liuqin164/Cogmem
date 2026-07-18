@@ -261,7 +261,7 @@ export class KernelAgentMemoryBackend {
         const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
         const allowsCompiled = laneAllowed(query.retrievalPolicy, 'compiled');
         const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
-        const earlyAtlasItems = query.projectId && allowsGraph
+        const earlyAtlasItems = query.projectId !== undefined && allowsGraph
             ? this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource)
             : [];
         if (queryPlan.intent === 'previous_session_summary') {
@@ -274,7 +274,7 @@ export class KernelAgentMemoryBackend {
             return this.withAtlasItems(this.recallHistoricalDiscussion(query, queryPlan), earlyAtlasItems, limit);
         }
         const retrievalLimit = Math.max(limit * 4, 24);
-        const multidimensionalRecall = query.projectId && allowsGraph
+        const multidimensionalRecall = query.projectId !== undefined && allowsGraph
             ? this.kernel.recall(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone })
             : undefined;
         const atlasItems = allowsGraph
@@ -1164,7 +1164,7 @@ export class KernelAgentMemoryBackend {
         return false;
     }
     isRawEventInRecallScope(event, query, effectiveIntent) {
-        if (query.projectId && event.projectId !== query.projectId)
+        if (query.projectId !== undefined && (event.projectId ?? '') !== query.projectId)
             return false;
         if (query.workspaceId && event.workspaceId !== query.workspaceId)
             return false;

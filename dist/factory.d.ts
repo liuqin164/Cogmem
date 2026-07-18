@@ -550,6 +550,7 @@ export declare class MemoryKernel {
         projectId?: string;
         tags?: string[];
     }): Promise<Neuron>;
+    private drainVectorOutbox;
     recall(query: string, options?: BrainRecallOptions): import("./types/BrainRecallResult.js").BrainRecallResult | {
         atlasStatus: string;
         atlasErrorCode: string;
@@ -622,6 +623,7 @@ export declare class MemoryKernel {
         buckets: number;
         rebuiltAt: number;
     };
+    private publishTimeProjectionInBatches;
     private stageTimeProjectionGraph;
     recordRawEvent(input: RawMemoryEventInput): MemoryEvent<{
         text: string;

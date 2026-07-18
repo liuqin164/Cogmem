@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { projectScope } from '../topology/ProjectScope.js';
 export class CandidateReviewStore {
     db;
     constructor(db) {
@@ -16,15 +17,15 @@ export class CandidateReviewStore {
         confirmation_event_id, target_belief_id, replacement_candidate_id, review_after,
         decision_json, created_at
       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).run(record.reviewId, record.candidateId, record.projectId || null, record.action, record.actor, record.reason, record.fromStatus, record.toStatus, record.confirmationEventId || null, record.targetBeliefId || null, record.replacementCandidateId || null, record.reviewAfter ?? null, JSON.stringify(record.decision), record.createdAt);
+    `).run(record.reviewId, record.candidateId, record.projectId === undefined ? null : projectScope(record.projectId), record.action, record.actor, record.reason, record.fromStatus, record.toStatus, record.confirmationEventId || null, record.targetBeliefId || null, record.replacementCandidateId || null, record.reviewAfter ?? null, JSON.stringify(record.decision), record.createdAt);
         return record;
     }
     list(options = {}) {
         const clauses = [];
         const params = [];
-        if (options.projectId) {
-            clauses.push('project_id=?');
-            params.push(options.projectId);
+        if (options.projectId !== undefined) {
+            clauses.push("COALESCE(project_id, '')=?");
+            params.push(projectScope(options.projectId));
         }
         if (options.candidateId) {
             clauses.push('candidate_id=?');

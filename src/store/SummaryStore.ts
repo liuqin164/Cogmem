@@ -164,8 +164,8 @@ export class SummaryStore {
     const record: SummaryRecord = {
       ...input,
       summaryId: input.summaryId || `sum-${randomUUID()}`,
-      createdAt: input.createdAt || now,
-      updatedAt: input.updatedAt || now
+      createdAt: input.createdAt ?? now,
+      updatedAt: input.updatedAt ?? now
     };
     this.db.prepare(`
       INSERT INTO deep_write_summaries (
@@ -178,8 +178,8 @@ export class SummaryStore {
       record.projectId || null,
       record.sessionId || null,
       record.scope,
-      record.windowStart || null,
-      record.windowEnd || null,
+      record.windowStart ?? null,
+      record.windowEnd ?? null,
       record.text,
       record.confidence,
       record.status,
@@ -278,8 +278,8 @@ export class SummaryStore {
       projectId: row.project_id || undefined,
       sessionId: row.session_id || undefined,
       scope: row.scope,
-      windowStart: row.window_start || undefined,
-      windowEnd: row.window_end || undefined,
+      windowStart: row.window_start ?? undefined,
+      windowEnd: row.window_end ?? undefined,
       text: row.text,
       confidence: row.confidence,
       status: row.status,

@@ -1,4 +1,5 @@
 import type Database from 'bun:sqlite';
+export declare function dreamLedgerProjectKey(projectId?: string): string;
 export interface DreamBacklogStatus {
     projectId?: string;
     rawEventCount: number;
@@ -17,6 +18,5 @@ export declare class DreamLedgerStore {
     private initializeSchema;
     private getState;
     private countRawEvents;
-    private projectKey;
 }
 //# sourceMappingURL=DreamLedgerStore.d.ts.map

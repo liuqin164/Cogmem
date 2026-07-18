@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { projectQueryValue, projectScope } from '../topology/ProjectScope.js';
 export class DeepWriteCandidateStore {
     db;
     constructor(db) {
@@ -102,7 +103,7 @@ export class DeepWriteCandidateStore {
         model_name, mode, prompt_hash, output_hash, status, error, created_at
         , source_episode_id, dream_job_lease_id, lease_until, attempt_generation, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(record.runId, record.projectId || null, record.sessionId || null, JSON.stringify(record.sourceNeuronIds), record.modelProvider || null, record.modelName || null, record.mode, record.promptHash, record.outputHash, record.status, record.error || null, record.createdAt, record.sourceEpisodeId || null, record.dreamJobLeaseId || null, record.leaseUntil ?? null, record.attemptGeneration ?? null, record.updatedAt ?? record.createdAt);
+    `).run(record.runId, record.projectId === undefined ? null : projectScope(record.projectId), record.sessionId || null, JSON.stringify(record.sourceNeuronIds), record.modelProvider || null, record.modelName || null, record.mode, record.promptHash, record.outputHash, record.status, record.error || null, record.createdAt, record.sourceEpisodeId || null, record.dreamJobLeaseId || null, record.leaseUntil ?? null, record.attemptGeneration ?? null, record.updatedAt ?? record.createdAt);
         return record;
     }
     insertCandidates(inputs) {
@@ -193,9 +194,9 @@ export class DeepWriteCandidateStore {
             conditions.push(`c.candidate_type IN (${options.candidateTypes.map(() => '?').join(', ')})`);
             params.push(...options.candidateTypes);
         }
-        if (options.projectId) {
-            conditions.push('r.project_id = ?');
-            params.push(options.projectId);
+        if (options.projectId !== undefined) {
+            conditions.push("COALESCE(r.project_id, '') = ?");
+            params.push(projectScope(options.projectId));
         }
         if (options.runId) {
             conditions.push('c.run_id = ?');
@@ -228,9 +229,9 @@ export class DeepWriteCandidateStore {
             conditions.push(`c.candidate_type IN (${options.candidateTypes.map(() => '?').join(', ')})`);
             params.push(...options.candidateTypes);
         }
-        if (options.projectId) {
-            conditions.push('r.project_id = ?');
-            params.push(options.projectId);
+        if (options.projectId !== undefined) {
+            conditions.push("COALESCE(r.project_id, '') = ?");
+            params.push(projectScope(options.projectId));
         }
         if (options.runId) {
             conditions.push('c.run_id = ?');
@@ -282,7 +283,7 @@ export class DeepWriteCandidateStore {
         FROM deep_write_runs r
         LEFT JOIN episode_dream_jobs j ON j.episode_id = r.source_episode_id
         WHERE r.status = 'staged' AND r.created_at < ?
-          AND (? IS NULL OR r.project_id = ?)
+          AND (? IS NULL OR COALESCE(r.project_id, '') = ?)
           AND (
             j.episode_id IS NULL
             OR j.state <> 'processing'
@@ -290,7 +291,7 @@ export class DeepWriteCandidateStore {
             OR j.lease_until IS NULL
             OR j.lease_until < ?
           )
-      `).all(before, projectId || null, projectId || null, updatedAt);
+      `).all(before, projectQueryValue(projectId), projectQueryValue(projectId), updatedAt);
             let abandoned = 0;
             for (const row of candidates) {
                 this.db.prepare(`
@@ -325,9 +326,9 @@ export class DeepWriteCandidateStore {
       WHERE c.status = 'needs_confirmation'
         AND COALESCE(c.updated_at, c.created_at) < ?
     `;
-        if (input.projectId) {
-            sql += ' AND r.project_id = ?';
-            params.push(input.projectId);
+        if (input.projectId !== undefined) {
+            sql += " AND COALESCE(r.project_id, '') = ?";
+            params.push(projectScope(input.projectId));
         }
         sql += ' ORDER BY COALESCE(c.updated_at, c.created_at) ASC, c.candidate_id ASC LIMIT ?';
         params.push(input.limit ?? 1000);

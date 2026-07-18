@@ -1,4 +1,11 @@
 import type Database from 'bun:sqlite';
+import { projectScope } from '../topology/ProjectScope.js';
+
+export function dreamLedgerProjectKey(projectId?: string): string {
+  if (projectId === undefined) return 'all';
+  const scope = projectScope(projectId);
+  return `scope:${scope.length}:${scope}`;
+}
 
 export interface DreamBacklogStatus {
   projectId?: string;
@@ -37,7 +44,7 @@ export class DreamLedgerStore {
   }
 
   markDreamed(projectId: string | undefined, globalSeq: number, dreamedAt: number = Date.now()): DreamBacklogStatus {
-    const key = this.projectKey(projectId);
+    const key = dreamLedgerProjectKey(projectId);
     this.db.prepare(`
       INSERT INTO dream_ledger_state (project_key, project_id, last_dreamed_global_seq, last_dreamed_at, updated_at)
       VALUES (?, ?, ?, ?, ?)
@@ -45,7 +52,7 @@ export class DreamLedgerStore {
         last_dreamed_global_seq = excluded.last_dreamed_global_seq,
         last_dreamed_at = excluded.last_dreamed_at,
         updated_at = excluded.updated_at
-    `).run(key, projectId || null, globalSeq, dreamedAt, dreamedAt);
+    `).run(key, projectId === undefined ? null : projectScope(projectId), globalSeq, dreamedAt, dreamedAt);
     return this.getStatus(projectId);
   }
 
@@ -70,25 +77,25 @@ export class DreamLedgerStore {
       SELECT last_dreamed_global_seq, last_dreamed_at, updated_at
       FROM dream_ledger_state
       WHERE project_key = ?
-    `).get(this.projectKey(projectId)) as {
+    `).get(dreamLedgerProjectKey(projectId)) as {
       last_dreamed_global_seq?: number;
       last_dreamed_at?: number;
       updated_at?: number;
     } | null;
     if (!row) return null;
     return {
-      lastDreamedGlobalSeq: row.last_dreamed_global_seq || undefined,
-      lastDreamedAt: row.last_dreamed_at || undefined,
-      updatedAt: row.updated_at || undefined,
+      lastDreamedGlobalSeq: row.last_dreamed_global_seq ?? undefined,
+      lastDreamedAt: row.last_dreamed_at ?? undefined,
+      updatedAt: row.updated_at ?? undefined,
     };
   }
 
   private countRawEvents(projectId?: string, options: { maxGlobalSeq?: number } = {}): number {
     const conditions = [`event_type = 'RAW_EVENT_RECORDED'`];
     const params: Array<string | number> = [];
-    if (projectId) {
-      conditions.push('project_id = ?');
-      params.push(projectId);
+    if (projectId !== undefined) {
+      conditions.push("COALESCE(project_id, '') = ?");
+      params.push(projectScope(projectId));
     }
     if (options.maxGlobalSeq !== undefined) {
       conditions.push('global_seq <= ?');
@@ -102,7 +109,4 @@ export class DreamLedgerStore {
     return row?.count || 0;
   }
 
-  private projectKey(projectId?: string): string {
-    return projectId || '__global__';
-  }
 }

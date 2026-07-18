@@ -13,7 +13,7 @@ export declare class GraphCommunityEngine {
         communitiesDetected: number;
         neuronsUpdated: number;
     }>;
-    getCommunityMembers(communityId: string): string[];
+    getCommunityMembers(communityId: string, projectId?: string): string[];
     private neighborIds;
     private mergeSmallCommunities;
 }

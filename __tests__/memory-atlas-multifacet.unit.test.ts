@@ -12,6 +12,21 @@ function createKernel(): MemoryKernel {
   return createMemoryKernel({ dbPath: join(mkdtempSync(join(tmpdir(), 'cogmem-atlas-facet-')), 'memory.db') });
 }
 
+test('Agent global scope executes the multidimensional graph lane instead of treating empty scope as absent', async () => {
+  const kernel = createKernel();
+  try {
+    await kernel.ingest({ projectId: '', content: 'projectless graph lane evidence' });
+    let multidimensionalCalls = 0;
+    const originalRecall = kernel.recall.bind(kernel);
+    (kernel as unknown as { recall: MemoryKernel['recall'] }).recall = ((query, options) => {
+      multidimensionalCalls += 1;
+      return originalRecall(query, options);
+    }) as MemoryKernel['recall'];
+    new KernelAgentMemoryBackend(kernel).recall({ agentId: 'global-agent', sessionId: 's', projectId: '', query: 'graph lane evidence', limit: 3 });
+    expect(multidimensionalCalls).toBeGreaterThan(0);
+  } finally { kernel.close(); }
+});
+
 function addEpisode(kernel: MemoryKernel, input: {
   eventId: string;
   sessionId: string;

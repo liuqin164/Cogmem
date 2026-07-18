@@ -30,7 +30,7 @@ export declare class MemoryGraph {
     private initializeSchema;
     private ensureCompatibilityColumns;
     addNeuron(neuron: Neuron): number;
-    addNeuronInTransaction(neuron: Neuron): number;
+    addNeuronInTransaction(neuron: Neuron, recordSourceMutation?: boolean): number;
     indexCommittedNeuron(neuron: Neuron): void;
     private recordTimeProjectionSourceMutation;
     private insertNeuron;

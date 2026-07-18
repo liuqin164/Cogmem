@@ -192,6 +192,8 @@ describe('schema migration runner', () => {
       CREATE TABLE event_clusters(cluster_id TEXT PRIMARY KEY,project_id TEXT,cluster_key TEXT UNIQUE,cluster_type TEXT,title TEXT,created_at INTEGER,updated_at INTEGER);
       CREATE TABLE event_cluster_entries(cluster_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
       CREATE TABLE topology_membership(neuron_id TEXT,project_id TEXT,dimension_type TEXT,dimension_key TEXT,title TEXT,created_at INTEGER,UNIQUE(neuron_id,dimension_type,dimension_key));
+      CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,content TEXT,created_at INTEGER,is_deleted INTEGER DEFAULT 0);
+      INSERT INTO neurons VALUES('np','p','p',1,0),('nq','q','q',2,0);
       INSERT INTO task_branches VALUES('tp','p','p:same-task','Same task','active',1,1),('tq','q','q:same-task','Same task','active',2,2);
       INSERT INTO task_branch_entries VALUES('tp','np',NULL,NULL,NULL,NULL,1),('tp','np',NULL,NULL,NULL,NULL,2),('tq','nq',NULL,NULL,NULL,NULL,2);
       INSERT INTO event_clusters VALUES('cp','p','p:generic:same','generic','Same cluster',1,1),('cq','q','q:generic:same','generic','Same cluster',2,2);
@@ -208,9 +210,54 @@ describe('schema migration runner', () => {
       { project_id: 'p', cluster_key: 'generic:same' },
       { project_id: 'q', cluster_key: 'generic:same' },
     ]);
-    expect(db.prepare(`SELECT COUNT(*) AS count FROM task_branch_entries WHERE task_id='tp'`).get()).toEqual({ count: 1 });
-    expect(db.prepare(`SELECT COUNT(*) AS count FROM event_cluster_entries WHERE cluster_id='cp'`).get()).toEqual({ count: 1 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM task_branch_entries`).get()).toEqual({ count: 2 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM event_cluster_entries`).get()).toEqual({ count: 2 });
     expect(() => db.prepare(`INSERT INTO task_branches VALUES('duplicate','p','same-task','Duplicate','active',3,3)`).run()).toThrow();
     db.close();
+  });
+
+  test('0052 splits both historical write orders for projectless and literal global identities', () => {
+    for (const parentScope of [null, 'global'] as const) {
+      const db = new Database(':memory:');
+      db.exec(`
+        CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,content TEXT,created_at INTEGER,is_deleted INTEGER DEFAULT 0);
+        CREATE TABLE task_branches(task_id TEXT PRIMARY KEY,project_id TEXT,task_key TEXT UNIQUE,title TEXT,status TEXT,created_at INTEGER,updated_at INTEGER);
+        CREATE TABLE task_branch_entries(task_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+        CREATE TABLE event_clusters(cluster_id TEXT PRIMARY KEY,project_id TEXT,cluster_key TEXT UNIQUE,cluster_type TEXT,title TEXT,created_at INTEGER,updated_at INTEGER);
+        CREATE TABLE event_cluster_entries(cluster_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+        CREATE TABLE topology_membership(neuron_id TEXT,project_id TEXT,dimension_type TEXT,dimension_key TEXT,title TEXT,created_at INTEGER,UNIQUE(neuron_id,dimension_type,dimension_key));
+        CREATE TABLE cognitive_nodes(node_id TEXT PRIMARY KEY,node_type TEXT,node_key TEXT,title TEXT,project_id TEXT,source_neuron_id TEXT,metadata_json TEXT,created_at INTEGER,updated_at INTEGER,UNIQUE(project_id,node_type,node_key));
+        CREATE TABLE cognitive_edges(edge_id TEXT PRIMARY KEY,source_node_id TEXT,target_node_id TEXT,edge_type TEXT,weight REAL,project_id TEXT,metadata_json TEXT,created_at INTEGER,UNIQUE(project_id,source_node_id,target_node_id,edge_type));
+        INSERT INTO neurons VALUES('n-projectless',NULL,'projectless',1,0),('n-literal','global','literal global',2,0);
+      `);
+      db.prepare(`INSERT INTO task_branches VALUES('shared-task',?,'global:same-task','Same','active',1,2)`).run(parentScope);
+      db.prepare(`INSERT INTO event_clusters VALUES('shared-cluster',?,'global:generic:same','generic','Same',1,2)`).run(parentScope);
+      for (const [id, at] of [['n-projectless', 1], ['n-literal', 2]] as const) {
+        db.prepare(`INSERT INTO task_branch_entries VALUES('shared-task',?,NULL,NULL,NULL,NULL,?)`).run(id, at);
+        db.prepare(`INSERT INTO event_cluster_entries VALUES('shared-cluster',?,NULL,NULL,NULL,NULL,?)`).run(id, at);
+      }
+
+      migration_0052.up(db);
+
+      expect(db.prepare(`SELECT project_id,task_key FROM task_branches ORDER BY project_id`).all()).toEqual([
+        { project_id: '', task_key: 'same-task' }, { project_id: 'global', task_key: 'same-task' },
+      ]);
+      expect(db.prepare(`SELECT t.project_id,e.neuron_id FROM task_branch_entries e JOIN task_branches t ON t.task_id=e.task_id ORDER BY t.project_id`).all()).toEqual([
+        { project_id: '', neuron_id: 'n-projectless' }, { project_id: 'global', neuron_id: 'n-literal' },
+      ]);
+      expect(db.prepare(`SELECT c.project_id,e.neuron_id FROM event_cluster_entries e JOIN event_clusters c ON c.cluster_id=e.cluster_id ORDER BY c.project_id`).all()).toEqual([
+        { project_id: '', neuron_id: 'n-projectless' }, { project_id: 'global', neuron_id: 'n-literal' },
+      ]);
+      expect(db.prepare(`SELECT project_id,COUNT(*) AS count FROM topology_membership GROUP BY project_id ORDER BY project_id`).all()).toEqual([
+        { project_id: '', count: 2 }, { project_id: 'global', count: 2 },
+      ]);
+      expect(db.prepare(`SELECT project_id,edge_type,COUNT(*) AS count FROM cognitive_edges GROUP BY project_id,edge_type ORDER BY project_id,edge_type`).all()).toEqual([
+        { project_id: '', edge_type: 'belongs_to_event_cluster', count: 1 },
+        { project_id: '', edge_type: 'belongs_to_task', count: 1 },
+        { project_id: 'global', edge_type: 'belongs_to_event_cluster', count: 1 },
+        { project_id: 'global', edge_type: 'belongs_to_task', count: 1 },
+      ]);
+      db.close();
+    }
   });
 });

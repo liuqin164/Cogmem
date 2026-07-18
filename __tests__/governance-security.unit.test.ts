@@ -149,6 +149,9 @@ describe('Governance and security v1.14', () => {
       text: 'Forget this episode too.', externalMessageId: 'forget-episode-message',
     });
     kernel.sealEpisode(episodeMessage.episodeId!, { mode: 'manual', reason: 'test' });
+    const db = kernel.factStore.getDatabase();
+    db.prepare(`INSERT INTO deep_write_summaries(summary_id,project_id,scope,text,confidence,status,source_neuron_ids_json,created_at,updated_at) VALUES('named-secret','forget-me','turn_window','named private summary',1,'provisional','[]',1,1),('named-keep','keep-me','turn_window','retained summary',1,'provisional','[]',1,1)`).run();
+    db.prepare(`INSERT INTO pipeline_nonfatal_events(event_id,kind,project_id,message,occurred_at) VALUES('named-pipeline','test','forget-me','named private pipeline',1)`).run();
 
     const result = await kernel.forgetUser('forget-me', 'user_requested');
 
@@ -162,7 +165,6 @@ describe('Governance and security v1.14', () => {
     expect(kernel.activationStore.getTop({ projectId: 'forget-me' })).toHaveLength(0);
     expect(kernel.buildMemoryMap({ projectId: 'forget-me' }).counters.activationHotspots).toBe(0);
     expect(kernel.runMaintenanceTick({ projectId: 'forget-me' }).chargeVector.activationHotspots).toBe(0);
-    const db = kernel.factStore.getDatabase();
     expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE project_id='forget-me'`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE content LIKE '%delete this project memory%'`).get()).toEqual({ count: 0 });
     for (const table of [
@@ -173,6 +175,8 @@ describe('Governance and security v1.14', () => {
       expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE project_id = ?`).get('forget-me')).toEqual({ count: 0 });
     }
     expect(db.prepare(`SELECT COUNT(*) AS count FROM time_buckets WHERE project_id = ?`).get('forget-me')).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT summary_id FROM deep_write_summaries`).all()).toEqual([{ summary_id: 'named-keep' }]);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM pipeline_nonfatal_events WHERE project_id='forget-me'`).get()).toEqual({ count: 0 });
     expect(kernel.entityStore.findByEntityId(forgottenEntity.entityId)).toBeNull();
     expect(kernel.entityStore.findByEntityId(legacyMentionOnlyEntity.entityId)).toBeNull();
     expect(kernel.entityStore.findByEntityId(keptEntity.entityId)).not.toBeNull();
@@ -196,13 +200,27 @@ describe('Governance and security v1.14', () => {
     const forgotten = await kernel.ingest({ content: `${secret} private projectless memory`, createdAt: 1000 });
     kernel.recordRawEvent({ threadId: 'global-private', role: 'user', content: `${secret} raw ledger evidence`, occurredAt: 1000 });
     await kernel.ingest({ projectId: 'keep-project', content: 'ordinary retained memory', createdAt: 2000 });
+    const db = kernel.factStore.getDatabase();
+    db.prepare(`INSERT INTO deep_write_summaries(summary_id,project_id,scope,text,confidence,status,source_neuron_ids_json,created_at,updated_at) VALUES('secret-summary','','turn_window',?,1,'provisional','[]',1,1)`).run(`${secret} summary`);
+    db.prepare(`INSERT INTO deep_write_runs(run_id,project_id,source_neuron_ids_json,mode,prompt_hash,output_hash,status,error,created_at,updated_at) VALUES('secret-run','','[]','shadow','p','o','succeeded',?,1,1)`).run(`${secret} run error`);
+    db.prepare(`INSERT INTO deep_write_candidates(candidate_id,run_id,candidate_type,status,confidence,content_json,evidence_json,status_reason,created_at,updated_at) VALUES('secret-candidate','secret-run','belief','needs_confirmation',1,?,?,?,1,1)`).run(JSON.stringify({ secret }), JSON.stringify({ secret }), `${secret} status`);
+    db.prepare(`INSERT INTO deep_write_candidate_reviews(review_id,candidate_id,project_id,action,actor,reason,from_status,to_status,decision_json,created_at) VALUES('secret-review','secret-candidate','','defer','tester',?,'needs_confirmation','needs_confirmation',?,1)`).run(`${secret} review`, JSON.stringify({ secret }));
+    db.prepare(`INSERT INTO pipeline_nonfatal_events(event_id,kind,project_id,message,details_json,occurred_at) VALUES('secret-pipeline','test','',?,?,1)`).run(`${secret} pipeline`, JSON.stringify({ secret }));
+    db.exec(`CREATE TABLE IF NOT EXISTS reasoning_chains(id TEXT PRIMARY KEY,outcome TEXT NOT NULL,project_id TEXT,created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS reasoning_steps(chain_id TEXT NOT NULL,neuron_id TEXT NOT NULL,role TEXT NOT NULL,step_order INTEGER NOT NULL,PRIMARY KEY(chain_id,neuron_id));`);
+    db.prepare(`INSERT INTO reasoning_chains VALUES('secret-chain',?,'',1)`).run(`${secret} reasoning outcome`);
+    db.prepare(`INSERT INTO reasoning_steps VALUES('secret-chain',?,'evidence',0)`).run(forgotten.id);
+    db.exec(`PRAGMA foreign_keys=OFF`);
+    db.prepare(`INSERT INTO memory_frame_reviews(review_id,frame_id,project_id,action,actor,reason,created_at) VALUES('secret-frame-review','legacy-frame','','reject','tester',?,1)`).run(`${secret} frame review`);
+    db.exec(`PRAGMA foreign_keys=ON`);
 
     const result = await kernel.forgetUser('', 'global_user_requested');
     expect(result.deleted.neurons).toBe(1);
-    const db = kernel.factStore.getDatabase();
     expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE project_id IS NULL`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM memory_events WHERE project_id IS NULL`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE content LIKE ?`).get(`%${secret}%`)).toEqual({ count: 0 });
+    for (const table of ['deep_write_summaries','deep_write_runs','deep_write_candidates','deep_write_candidate_reviews','pipeline_nonfatal_events','reasoning_chains','reasoning_steps','memory_frame_reviews']) {
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
+    }
 
     const next = await kernel.ingest({ content: 'new global memory after privacy erasure', createdAt: 3000 });
     expect(next.prev_hash).not.toBe(forgotten.self_hash);

@@ -40,14 +40,15 @@ async function runCli(
   return { exitCode, stdout, stderr };
 }
 
-function serveWithRetry(options: Parameters<typeof Bun.serve>[0]): ReturnType<typeof Bun.serve> {
+async function serveWithRetry(options: Parameters<typeof Bun.serve>[0]): Promise<ReturnType<typeof Bun.serve>> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 512; attempt += 1) {
-    const port = 60_000 + Math.floor(Math.random() * 5_500);
-    try { return Bun.serve({ ...options, hostname: '127.0.0.1', port }); }
+  for (let attempt = 0; attempt < 2400; attempt += 1) {
+    try { return Bun.serve({ ...options, hostname: '127.0.0.1', port: 0 }); }
     catch (error) {
       lastError = error;
-      if (!String(error).includes('EADDRINUSE')) throw error;
+      const code = (error as { code?: string }).code;
+      if (code !== 'EADDRINUSE' && !String(error).includes('in use')) throw error;
+      await Bun.sleep(50);
     }
   }
   throw lastError;
@@ -615,7 +616,7 @@ test('agent import uses configured local OpenAI-compatible embedding endpoint du
   writeFileSync(join(workspace, 'memory', '2026-05-07.md'), 'User: local quantized embedding import remembered release notes.');
 
   let embedCalls = 0;
-  const server = serveWithRetry({
+  const server = await serveWithRetry({
     fetch: async (request) => {
       if (new URL(request.url).pathname !== '/v1/embeddings') {
         return new Response('not found', { status: 404 });

@@ -53,11 +53,11 @@ export class SqliteVecStore implements IVectorStore {
     this.assertDimension(queryVector, 'Query vector');
     if (k <= 0) return [];
     const query = new Float32Array(queryVector);
-    const rows = this.db.prepare(`
-      SELECT neuron_id, vector_blob
-      FROM vector_index
-      WHERE dimensions = ?
-    `).all(this.dimension) as VectorRow[];
+    const hasCanonicalNeurons = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='neurons'`).get());
+    const rows = this.db.prepare(hasCanonicalNeurons ? `
+      SELECT v.neuron_id, v.vector_blob FROM vector_index v
+      JOIN neurons n ON n.id=v.neuron_id AND n.is_deleted=0 WHERE v.dimensions = ?
+    ` : `SELECT neuron_id,vector_blob FROM vector_index WHERE dimensions=?`).all(this.dimension) as VectorRow[];
 
     return rows
       .map((row) => ({
@@ -116,6 +116,9 @@ export class SqliteVecStore implements IVectorStore {
       CREATE INDEX IF NOT EXISTS idx_vector_index_dimensions
         ON vector_index(dimensions);
     `);
+    if (this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='neurons'`).get()) {
+      this.db.exec(`DELETE FROM vector_index WHERE neuron_id NOT IN (SELECT id FROM neurons WHERE is_deleted=0)`);
+    }
   }
 
   private assertDimension(vector: number[], label: string): void {

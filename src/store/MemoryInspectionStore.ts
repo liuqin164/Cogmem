@@ -2,6 +2,8 @@ import Database from 'bun:sqlite';
 import { existsSync } from 'node:fs';
 
 import type { DeepWriteCandidateRecord, DeepWriteCandidateStatus } from './DeepWriteCandidateStore.js';
+import { dreamLedgerProjectKey } from './DreamLedgerStore.js';
+import { projectScope } from '../topology/ProjectScope.js';
 
 export interface MemoryInspectionScope {
   projectId?: string;
@@ -106,9 +108,9 @@ export class MemoryInspectionStore {
     if (!this.tableExists('deep_write_candidates') || !this.tableExists('deep_write_runs')) return [];
     const conditions = ['c.status = ?'];
     const params: Array<string | number> = [options.status];
-    if (options.projectId) {
-      conditions.push('r.project_id = ?');
-      params.push(options.projectId);
+    if (options.projectId !== undefined) {
+      conditions.push("COALESCE(r.project_id, '') = ?");
+      params.push(projectScope(options.projectId));
     }
     params.push(Math.max(1, Math.min(options.limit, 5000)));
     const rows = this.db!.prepare(`
@@ -159,9 +161,9 @@ export class MemoryInspectionStore {
       ['project_id', scope.projectId], ['workspace_id', scope.workspaceId],
       ['thread_id', scope.threadId], ['session_id', scope.sessionId],
     ] as const) {
-      if (!value) continue;
-      conditions.push(`${column} = ?`);
-      params.push(value);
+      if (value === undefined) continue;
+      conditions.push(`COALESCE(${column}, '') = ?`);
+      params.push(projectScope(value));
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     return Number((this.db!.prepare(`SELECT COUNT(*) AS count FROM memory_events ${where}`).get(...params) as { count?: number } | null)?.count || 0);
@@ -171,7 +173,7 @@ export class MemoryInspectionStore {
     if (!this.tableExists('memory_events')) return 0;
     const conditions = [`event_type = 'RAW_EVENT_RECORDED'`];
     const params: Array<string | number> = [];
-    if (projectId) { conditions.push('project_id = ?'); params.push(projectId); }
+    if (projectId !== undefined) { conditions.push("COALESCE(project_id, '') = ?"); params.push(projectScope(projectId)); }
     if (maxGlobalSeq !== undefined) { conditions.push('global_seq <= ?'); params.push(maxGlobalSeq); }
     return Number((this.db!.prepare(`SELECT COUNT(*) AS count FROM memory_events WHERE ${conditions.join(' AND ')}`).get(...params) as { count?: number } | null)?.count || 0);
   }
@@ -181,7 +183,7 @@ export class MemoryInspectionStore {
     const row = this.db!.prepare(`
       SELECT last_dreamed_global_seq, last_dreamed_at, updated_at
       FROM dream_ledger_state WHERE project_key = ?
-    `).get(projectId || '__global__') as Record<string, number | null> | null;
+    `).get(dreamLedgerProjectKey(projectId)) as Record<string, number | null> | null;
     return row ? {
       lastDreamedGlobalSeq: optionalNumber(row.last_dreamed_global_seq),
       lastDreamedAt: optionalNumber(row.last_dreamed_at),
@@ -195,8 +197,8 @@ export class MemoryInspectionStore {
       failedRetryable: 0, failedTerminal: 0, retryScheduled: 0, skipped: 0,
     };
     if (!this.tableExists('episode_dream_jobs')) return result;
-    const rows = (projectId
-      ? this.db!.prepare(`SELECT state, COUNT(*) AS count FROM episode_dream_jobs WHERE project_id = ? GROUP BY state`).all(projectId)
+    const rows = (projectId !== undefined
+      ? this.db!.prepare(`SELECT state, COUNT(*) AS count FROM episode_dream_jobs WHERE COALESCE(project_id, '') = ? GROUP BY state`).all(projectScope(projectId))
       : this.db!.prepare(`SELECT state, COUNT(*) AS count FROM episode_dream_jobs GROUP BY state`).all()) as Array<{ state: string; count: number }>;
     const keys: Record<string, string> = {
       pending: 'pending', processing: 'processing', processed: 'processed', skipped: 'skipped',
@@ -210,8 +212,8 @@ export class MemoryInspectionStore {
   private candidateQueue(projectId?: string): MemoryInspectionStatus['dreamCandidateQueue'] {
     const result = { candidate: 0, needsConfirmation: 0, promoted: 0, rejected: 0, superseded: 0, shadow: 0 };
     if (!this.tableExists('deep_write_candidates') || !this.tableExists('deep_write_runs')) return result;
-    const rows = (projectId
-      ? this.db!.prepare(`SELECT c.status, COUNT(*) AS count FROM deep_write_candidates c JOIN deep_write_runs r ON r.run_id = c.run_id WHERE r.project_id = ? GROUP BY c.status`).all(projectId)
+    const rows = (projectId !== undefined
+      ? this.db!.prepare(`SELECT c.status, COUNT(*) AS count FROM deep_write_candidates c JOIN deep_write_runs r ON r.run_id = c.run_id WHERE COALESCE(r.project_id, '') = ? GROUP BY c.status`).all(projectScope(projectId))
       : this.db!.prepare(`SELECT status, COUNT(*) AS count FROM deep_write_candidates GROUP BY status`).all()) as Array<{ status: string; count: number }>;
     for (const row of rows) {
       if (row.status === 'needs_confirmation') result.needsConfirmation = Number(row.count);
@@ -222,8 +224,8 @@ export class MemoryInspectionStore {
 
   private countBeliefs(projectId?: string): number {
     if (!this.tableExists('beliefs')) return 0;
-    const row = projectId
-      ? this.db!.prepare(`SELECT COUNT(*) AS count FROM beliefs WHERE status = 'active' AND project_id = ?`).get(projectId)
+    const row = projectId !== undefined
+      ? this.db!.prepare(`SELECT COUNT(*) AS count FROM beliefs WHERE status = 'active' AND COALESCE(project_id, '') = ?`).get(projectScope(projectId))
       : this.db!.prepare(`SELECT COUNT(*) AS count FROM beliefs WHERE status = 'active'`).get();
     return Number((row as { count?: number } | null)?.count || 0);
   }

@@ -82,7 +82,7 @@ export class BrainRecall {
             ? []
             : this.toRecallableNeurons(candidateNeuronIds, limit)
                 .filter((neuron) => matchesProjectScope(options.projectId, neuron.metadata.projectId));
-        this._expandByCommunity(rawEvidence, limit);
+        this._expandByCommunity(rawEvidence, limit, options.projectId);
         if (topicRouteResult && !topicRouteResult.fallbackToGlobal && options.includeRawEvidence !== false) {
             const summaryTopicPath = topicRouteResult.matchedTopicPath ?? options.topicPath ?? rawEvidence[0]?.metadata.topicPath ?? '';
             const summary = this.deps.topicSummaryBoard?.getSummaryNeuron(summaryTopicPath, options.projectId);
@@ -94,6 +94,10 @@ export class BrainRecall {
         }
         this._prependSemanticConsolidations(rawEvidence, options.projectId, topicRouteResult?.matchedTopicPath ?? options.topicPath);
         this._prependCrossDomainPrinciples(rawEvidence, options.projectId);
+        for (let index = rawEvidence.length - 1; index >= 0; index -= 1) {
+            if (!matchesProjectScope(options.projectId, rawEvidence[index]?.metadata.projectId))
+                rawEvidence.splice(index, 1);
+        }
         const profileSignals = this.collectProfileSignals(query, options.projectId, limit);
         const profileSurface = this.collectProfileSurface(query, options.projectId, limit);
         const totalStructuredHits = compiledHitCount + profileSignals.length + profileSurface.userProfile.length + profileSurface.agentPersona.length;
@@ -163,15 +167,15 @@ export class BrainRecall {
             return [];
         return indexedLookup.call(this.deps.memoryGraph, type, options);
     }
-    _expandByCommunity(rawEvidence, limit) {
+    _expandByCommunity(rawEvidence, limit, projectId) {
         const ids = new Set(rawEvidence.map((n) => n.id));
         const communityIds = Array.from(new Set(rawEvidence.map((n) => n.metadata.communityId).filter(Boolean)));
         for (const communityId of communityIds)
-            for (const id of this.deps.graphCommunityEngine?.getCommunityMembers(communityId) || []) {
+            for (const id of this.deps.graphCommunityEngine?.getCommunityMembers(communityId, projectId) || []) {
                 if (ids.has(id) || rawEvidence.length >= limit + 3)
                     continue;
                 const neuron = this.deps.memoryGraph.getNeuron(id);
-                if (this.isRecallableNeuron(neuron)) {
+                if (this.isRecallableNeuron(neuron) && matchesProjectScope(projectId, neuron.metadata.projectId)) {
                     rawEvidence.push(neuron);
                     ids.add(id);
                 }

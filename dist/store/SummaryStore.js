@@ -104,8 +104,8 @@ export class SummaryStore {
         const record = {
             ...input,
             summaryId: input.summaryId || `sum-${randomUUID()}`,
-            createdAt: input.createdAt || now,
-            updatedAt: input.updatedAt || now
+            createdAt: input.createdAt ?? now,
+            updatedAt: input.updatedAt ?? now
         };
         this.db.prepare(`
       INSERT INTO deep_write_summaries (
@@ -113,7 +113,7 @@ export class SummaryStore {
         text, confidence, status, source_neuron_ids_json, deep_write_run_id,
         deep_write_candidate_id, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(record.summaryId, record.projectId || null, record.sessionId || null, record.scope, record.windowStart || null, record.windowEnd || null, record.text, record.confidence, record.status, JSON.stringify(record.sourceNeuronIds), record.deepWriteRunId || null, record.deepWriteCandidateId || null, record.createdAt, record.updatedAt);
+    `).run(record.summaryId, record.projectId || null, record.sessionId || null, record.scope, record.windowStart ?? null, record.windowEnd ?? null, record.text, record.confidence, record.status, JSON.stringify(record.sourceNeuronIds), record.deepWriteRunId || null, record.deepWriteCandidateId || null, record.createdAt, record.updatedAt);
         return record;
     }
     getById(id) {
@@ -198,8 +198,8 @@ export class SummaryStore {
             projectId: row.project_id || undefined,
             sessionId: row.session_id || undefined,
             scope: row.scope,
-            windowStart: row.window_start || undefined,
-            windowEnd: row.window_end || undefined,
+            windowStart: row.window_start ?? undefined,
+            windowEnd: row.window_end ?? undefined,
             text: row.text,
             confidence: row.confidence,
             status: row.status,

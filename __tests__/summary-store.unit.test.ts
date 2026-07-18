@@ -65,4 +65,13 @@ describe('SummaryStore', () => {
     expect(row.count).toBe(5);
     db.close();
   });
+
+  it('round-trips Unix epoch zero without replacing it with now or null', () => {
+    const db = new Database(':memory:');
+    const store = new SummaryStore(db);
+    const saved = store.insertSummary({ projectId: '', scope: 'turn_window', text: 'epoch', confidence: 1, status: 'provisional', sourceNeuronIds: [], createdAt: 0, updatedAt: 0, windowStart: 0, windowEnd: 0 });
+    expect(saved.createdAt).toBe(0);
+    expect(store.getById(saved.summaryId)).toMatchObject({ createdAt: 0, updatedAt: 0, windowStart: 0, windowEnd: 0 });
+    db.close();
+  });
 });

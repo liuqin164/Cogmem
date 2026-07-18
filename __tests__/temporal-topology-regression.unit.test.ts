@@ -261,6 +261,17 @@ describe('project-local temporal topology regressions', () => {
     kernel.close();
   });
 
+  test('first projectless ingest is immediately date-recallable with non-null global temporal scope', async () => {
+    const at = Date.UTC(2026, 6, 17, 12);
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    const neuron = await kernel.ingest({ content: 'first global date evidence', createdAt: at });
+    const db = kernel.factStore.getDatabase();
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE neuron_id=? AND project_id=''`).get(neuron.id)).toEqual({ count: 3 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE neuron_id=? AND project_id IS NULL`).get(neuron.id)).toEqual({ count: 0 });
+    expect(kernel.navigateMemory('2026-07-17', { projectId: '', startTime: at, endTime: at + 1 }).rawEvidence.map((item) => item.id)).toContain(neuron.id);
+    kernel.close();
+  });
+
   test('global scope stays isolated across FTS, topology, cognitive graph, ledger, and final recall', async () => {
     const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
     const globalNeuron = await kernel.ingest({ content: 'scope collision omega global evidence', createdAt: 1000 });
@@ -287,6 +298,33 @@ describe('project-local temporal topology regressions', () => {
     expect(globalDuplicate.id).not.toBe(namedDuplicate.id);
     expect(globalDuplicate.prev_hash).toBe(globalNeuron.self_hash);
     expect(kernel.buildMemoryMap({ projectId: '' }).counters.activationHotspots).toBe(1);
+    kernel.close();
+  });
+
+  test('global maintenance, candidate views, reviews, and Dream backlog stay projectless-only', () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    const db = kernel.factStore.getDatabase();
+    for (const [runId, projectId] of [['global-run', ''], ['named-run', 'named']] as const) {
+      db.prepare(`INSERT INTO deep_write_runs(run_id,project_id,source_neuron_ids_json,mode,prompt_hash,output_hash,status,created_at,updated_at) VALUES(?,?, '[]','shadow','p','o','succeeded',1,1)`).run(runId, projectId);
+      db.prepare(`INSERT INTO deep_write_candidates(candidate_id,run_id,candidate_type,status,confidence,content_json,evidence_json,created_at,updated_at) VALUES(?,?, 'belief','needs_confirmation',1,'{}','{}',1,1)`).run(`${runId}-candidate`, runId);
+      db.prepare(`INSERT INTO deep_write_candidate_reviews(review_id,candidate_id,project_id,action,actor,reason,from_status,to_status,decision_json,created_at) VALUES(?,?,?,'defer','test','reason','needs_confirmation','needs_confirmation','{}',1)`).run(`${runId}-review`, `${runId}-candidate`, projectId);
+    }
+    const globalRaw = kernel.recordRawEvent({ projectId: '', threadId: 'g', role: 'user', content: 'global', occurredAt: 1 });
+    const namedRaw = kernel.recordRawEvent({ projectId: 'named', threadId: 'n', role: 'user', content: 'named', occurredAt: 2 });
+
+    expect(kernel.listDreamCandidates({ projectId: '' }).map((item) => item.candidateId)).toEqual(['global-run-candidate']);
+    expect(kernel.listDreamCandidateReviews({ projectId: '' }).map((item) => item.reviewId)).toEqual(['global-run-review']);
+    expect(kernel.getDreamBacklogStatus('').rawEventCount).toBe(1);
+    kernel.runMaintenanceTick({ projectId: '', now: 1000, confirmationTtlMs: 1 });
+    expect(db.prepare(`SELECT candidate_id,status FROM deep_write_candidates ORDER BY candidate_id`).all()).toEqual([
+      { candidate_id: 'global-run-candidate', status: 'superseded' },
+      { candidate_id: 'named-run-candidate', status: 'needs_confirmation' },
+    ]);
+    kernel.markDreamed('', globalRaw.globalSeq!, 1);
+    kernel.markDreamed('__global__', namedRaw.globalSeq!, 2);
+    expect(db.prepare(`SELECT project_key FROM dream_ledger_state ORDER BY project_key`).all()).toEqual([
+      { project_key: 'scope:0:' }, { project_key: 'scope:10:__global__' },
+    ]);
     kernel.close();
   });
 
@@ -329,6 +367,21 @@ describe('project-local temporal topology regressions', () => {
     writerA.close();
     writerB.close();
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('two Kernel connections with different timezones cannot restore a partial projection to clean', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-timezone-writers-'));
+    const dbPath = join(dir, 'memory.db');
+    const utc = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+    await utc.ingest({ projectId: 'p', content: 'utc baseline', createdAt: 1000 });
+    const tokyo = createMemoryKernel({ dbPath, projectTimeZone: 'Asia/Tokyo' });
+    const foreignZone = await tokyo.ingest({ projectId: 'p', content: 'tokyo delta', createdAt: 2000 });
+    const utcDelta = await utc.ingest({ projectId: 'p', content: 'utc delta after timezone conflict', createdAt: 3000 });
+    const db = utc.factStore.getDatabase();
+    expect(utc.topologyStore.hasUsableTimeProjection('p', 'UTC')).toBe(false);
+    expect(db.prepare(`SELECT status,source_revision FROM topology_projection_state WHERE project_id='p'`).get()).toEqual({ status: 'dirty', source_revision: 3 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE neuron_id IN (?,?)`).get(foreignZone.id, utcDelta.id)).toEqual({ count: 0 });
+    tokyo.close(); utc.close(); rmSync(dir, { recursive: true, force: true });
   });
 
   test('maintenance returns shell-safe structured rebuild arguments for untrusted project ids', async () => {
@@ -488,6 +541,22 @@ describe('project-local temporal topology regressions', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE project_id='p'`).get()).toEqual(liveEntries);
     expect(kernel.topologyStore.hasUsableTimeProjection('p', 'UTC')).toBe(false);
     db.exec(`DROP TRIGGER simulate_lost_rebuild_claim`);
+    kernel.close();
+  });
+
+  test('projection publish crosses the 500-row boundary without one unbounded write transaction', () => {
+    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
+    const db = kernel.factStore.getDatabase();
+    const generation = 'bounded-publish';
+    db.prepare(`INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,neuron_count,updated_at,source_revision) VALUES('bulk',?,'UTC','ready',501,1,0)`).run(generation);
+    kernel.topologyStore.markTimeProjection('bulk', 'building', 'UTC', 1, undefined, 0);
+    db.prepare(`INSERT INTO topology_time_rebuild_buckets(generation,bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label) VALUES(?,'bulk-day','bulk','UTC','day',0,86400000,'day')`).run(generation);
+    const active = db.prepare(`INSERT INTO topology_time_rebuild_active_neurons(generation,neuron_id,project_id,created_at,title) VALUES(?,?,'bulk',?,'title')`);
+    const entry = db.prepare(`INSERT INTO topology_time_rebuild_entries(generation,bucket_id,neuron_id,project_id,created_at) VALUES(?,'bulk-day',?,'bulk',?)`);
+    db.transaction(() => { for (let index = 0; index < 501; index += 1) { const id = `bulk-${index}`; active.run(generation, id, index); entry.run(generation, id, index); } })();
+    expect(kernel.rebuildProjectTimeTopology('bulk')).toMatchObject({ neurons: 501, buckets: 1 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE project_id='bulk'`).get()).toEqual({ count: 501 });
+    expect(kernel.topologyStore.hasUsableTimeProjection('bulk', 'UTC')).toBe(true);
     kernel.close();
   });
 

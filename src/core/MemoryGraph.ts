@@ -199,10 +199,11 @@ export class MemoryGraph {
     return sourceRevision;
   }
 
-  addNeuronInTransaction(neuron: Neuron): number {
+  addNeuronInTransaction(neuron: Neuron, recordSourceMutation = true): number {
     this.insertNeuron(neuron);
     this.insertIntoFTS(neuron);
     for (const synapse of neuron.synapses) this.addSynapse(neuron.id, synapse);
+    if (!recordSourceMutation) return 0;
     const revisions = this.recordTimeProjectionSourceMutation([neuron.metadata.projectId], neuron.metadata.createdAt);
     return revisions.get(projectScope(neuron.metadata.projectId)) ?? 0;
   }

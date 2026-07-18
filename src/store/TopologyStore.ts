@@ -46,7 +46,7 @@ export class TopologyStore {
         belief_id TEXT,
         fact_id TEXT,
         event_id TEXT,
-        project_id TEXT,
+        project_id TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL,
         UNIQUE(bucket_id, neuron_id, unit_id, belief_id, fact_id, event_id)
       );
@@ -334,7 +334,7 @@ export class TopologyStore {
       ref.beliefId || null,
       ref.factId || null,
       ref.eventId || null,
-      ref.projectId || null,
+      projectScope(ref.projectId),
       ref.createdAt
     );
     if (ref.neuronId) {
@@ -1081,7 +1081,7 @@ export class TopologyStore {
       ) VALUES (?, ?, ?, ?, ?, ?)
     `).run(
       neuronId,
-      projectId || null,
+      projectScope(projectId),
       dimensionType,
       dimensionKey,
       title || null,

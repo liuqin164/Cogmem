@@ -13,6 +13,28 @@ function tempDir(): string {
 }
 
 describe('Vector backends v1.12', () => {
+  test('SqliteVecStore filters vector rows without a canonical live neuron', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE neurons(id TEXT PRIMARY KEY,is_deleted INTEGER NOT NULL DEFAULT 0); INSERT INTO neurons VALUES('live',0)`);
+    const store = new SqliteVecStore(db, 3);
+    store.addVector('live', [1, 0, 0]);
+    store.addVector('orphan', [1, 0, 0]);
+    expect(store.search([1, 0, 0], 10).map((item) => item.id)).toEqual(['live']);
+    db.close();
+  });
+
+  test('external vector outbox is replayed after restart and cleared only after indexing', async () => {
+    const dir = tempDir(); const dbPath = join(dir, 'outbox.db');
+    const writer = createMemoryKernel({ dbPath, vectorDimension: 3 });
+    const neuron = await writer.ingest({ projectId: 'p', content: 'durable vector outbox recovery' });
+    writer.factStore.getDatabase().prepare(`INSERT OR REPLACE INTO vector_write_outbox(neuron_id,vector_json,created_at) VALUES(?,?,1)`).run(neuron.id, JSON.stringify(neuron.coordinates.V));
+    writer.close();
+    const recovered = createMemoryKernel({ dbPath, vectorBackend: 'hnswlib', vectorDimension: 3 });
+    expect(recovered.vectorStore.search(neuron.coordinates.V, 5).map((item) => item.id)).toContain(neuron.id);
+    expect(recovered.factStore.getDatabase().prepare(`SELECT COUNT(*) AS count FROM vector_write_outbox`).get()).toEqual({ count: 0 });
+    recovered.close(); rmSync(dir, { recursive: true, force: true });
+  });
+
   test('SqliteVecStore persists vectors and returns cosine-ranked nearest neighbors', () => {
     const dir = tempDir();
     const dbPath = join(dir, 'vectors.db');

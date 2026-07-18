@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
 import type { DeepWriteCandidateStatus } from './DeepWriteCandidateStore.js';
+import { projectScope } from '../topology/ProjectScope.js';
 
 export type CandidateReviewAction = 'approve' | 'reject' | 'defer' | 'supersede' | 'relink';
 
@@ -37,7 +38,7 @@ export class CandidateReviewStore {
         decision_json, created_at
       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
-      record.reviewId, record.candidateId, record.projectId || null, record.action,
+      record.reviewId, record.candidateId, record.projectId === undefined ? null : projectScope(record.projectId), record.action,
       record.actor, record.reason, record.fromStatus, record.toStatus,
       record.confirmationEventId || null, record.targetBeliefId || null,
       record.replacementCandidateId || null, record.reviewAfter ?? null,
@@ -49,7 +50,7 @@ export class CandidateReviewStore {
   list(options: { projectId?: string; candidateId?: string; limit?: number } = {}): CandidateReviewRecord[] {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
-    if (options.projectId) { clauses.push('project_id=?'); params.push(options.projectId); }
+    if (options.projectId !== undefined) { clauses.push("COALESCE(project_id, '')=?"); params.push(projectScope(options.projectId)); }
     if (options.candidateId) { clauses.push('candidate_id=?'); params.push(options.candidateId); }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const rows = this.db.prepare(`
