@@ -623,7 +623,7 @@ export declare class MemoryKernel {
         buckets: number;
         rebuiltAt: number;
     };
-    private publishTimeProjectionInBatches;
+    private publishTimeProjectionAtomically;
     private stageTimeProjectionGraph;
     recordRawEvent(input: RawMemoryEventInput): MemoryEvent<{
         text: string;

@@ -330,13 +330,14 @@ describe('project-local temporal topology regressions', () => {
 
   test('projectless scope and a literal global project have distinct task and cluster identities', () => {
     const db = new Database(':memory:');
+    db.exec(`CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,is_deleted INTEGER NOT NULL DEFAULT 0); INSERT INTO neurons VALUES('global-neuron',NULL,0)`);
     const topology = new TopologyStore(db);
     const globalTask = topology.upsertTaskBranch({ taskId: 'task-projectless', taskKey: 'same-task', title: 'Same task', createdAt: 1 });
     const namedTask = topology.upsertTaskBranch({ taskId: 'task-named', projectId: 'global', taskKey: 'same-task', title: 'Same task', createdAt: 2 });
     const globalCluster = topology.upsertEventCluster({ clusterId: 'cluster-projectless', clusterKey: 'generic:same', clusterType: 'generic', title: 'Same cluster', createdAt: 1 });
     const namedCluster = topology.upsertEventCluster({ clusterId: 'cluster-named', projectId: 'global', clusterKey: 'generic:same', clusterType: 'generic', title: 'Same cluster', createdAt: 2 });
-    topology.attachToTask(globalTask.taskId, { neuronId: 'global-neuron', createdAt: 1 });
-    topology.attachToTask(globalTask.taskId, { neuronId: 'global-neuron', createdAt: 1 });
+    topology.attachToTask(globalTask.taskId, { projectId: undefined, neuronId: 'global-neuron', createdAt: 1 });
+    topology.attachToTask(globalTask.taskId, { projectId: undefined, neuronId: 'global-neuron', createdAt: 1 });
 
     expect(globalTask.taskId).not.toBe(namedTask.taskId);
     expect(globalCluster.clusterId).not.toBe(namedCluster.clusterId);
@@ -347,6 +348,33 @@ describe('project-local temporal topology regressions', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM task_branch_entries WHERE task_id=?`).get(globalTask.taskId)).toEqual({ count: 1 });
     topology.close();
     db.close();
+  });
+
+  test('topology attach rejects every cross-project reference before writing', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,is_deleted INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE facts(fact_id TEXT PRIMARY KEY,neuron_id TEXT);
+      CREATE TABLE compiled_events(event_id TEXT PRIMARY KEY,neuron_id TEXT);
+      CREATE TABLE beliefs(id TEXT PRIMARY KEY,project_id TEXT,source_neuron_id TEXT);
+      CREATE TABLE belief_evidence(belief_id TEXT,neuron_id TEXT,event_id TEXT);
+      CREATE TABLE interaction_units(unit_id TEXT PRIMARY KEY,message_neuron_ids_json TEXT);
+      CREATE TABLE memory_events(event_id TEXT PRIMARY KEY,project_id TEXT);
+      INSERT INTO neurons VALUES('a','a',0),('b','b',0);
+      INSERT INTO facts VALUES('fact-b','b');
+      INSERT INTO compiled_events VALUES('event-b','b');
+      INSERT INTO beliefs VALUES('belief-b','b','b');
+      INSERT INTO interaction_units VALUES('unit-b','["b"]');
+    `);
+    const topology = new TopologyStore(db);
+    const task = topology.upsertTaskBranch({ taskId: 'task-a', projectId: 'a', taskKey: 'task', title: 'A', createdAt: 1 });
+    for (const ref of [
+      { neuronId: 'b' }, { factId: 'fact-b' }, { eventId: 'event-b' }, { beliefId: 'belief-b' }, { unitId: 'unit-b' },
+    ]) {
+      expect(() => topology.attachToTask(task.taskId, { projectId: 'a', ...ref, createdAt: 1 })).toThrow('topology_reference_project_scope_mismatch');
+    }
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM task_branch_entries`).get()).toEqual({ count: 0 });
+    topology.close(); db.close();
   });
 
   test('a stale writer cannot mark a newer source revision clean', () => {

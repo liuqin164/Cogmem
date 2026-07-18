@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { AesGcmEncryptionProvider, PiiRedactor, createMemoryKernel } from '../src/public.js';
+import { PRIVACY_BASELINE_CLASSIFICATION } from '../src/governance/PrivacyDeletionRegistry.js';
+import { V0_5_BASELINE_TABLES } from '../src/migrations/0001_init.js';
 
 function tempDir(): string {
   const dir = join(tmpdir(), `core-governance-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -13,6 +15,26 @@ function tempDir(): string {
 }
 
 describe('Governance and security v1.14', () => {
+  test('every baseline table has an explicit privacy classification', () => {
+    expect(Object.keys(PRIVACY_BASELINE_CLASSIFICATION).sort()).toEqual([...V0_5_BASELINE_TABLES].sort());
+  });
+
+  test('BeliefStore distinguishes all, projectless, and named project scopes', () => {
+    const kernel = createMemoryKernel();
+    const db = kernel.factStore.getDatabase();
+    const insert = db.prepare(`INSERT INTO beliefs(id,project_id,scope,subject,predicate,object_value,canonical_key,valid_from,created_at,updated_at) VALUES(?,?,'project','scopeprobe','is',?,?,1,1,1)`);
+    insert.run('belief-global', null, 'global', 'global-key');
+    insert.run('belief-a', 'a', 'a', 'a-key');
+    insert.run('belief-b', 'b', 'b', 'b-key');
+
+    expect(kernel.beliefStore.countActive()).toBe(3);
+    expect(kernel.beliefStore.countActive('')).toBe(1);
+    expect(kernel.beliefStore.countActive('a')).toBe(1);
+    expect(kernel.beliefStore.listByTimeRange(0, 2, { projectId: '' }).map((belief) => belief.id)).toEqual(['belief-global']);
+    expect(kernel.beliefStore.getActiveBeliefsForQuery({ query: 'scopeprobe', projectId: '', limit: 10 }).map((belief) => belief.id)).toEqual(['belief-global']);
+    kernel.close();
+  });
+
   test('AesGcmEncryptionProvider round-trips encrypted payloads', () => {
     const provider = AesGcmEncryptionProvider.fromPassphrase('correct horse battery staple');
     const ciphertext = provider.encrypt('sensitive source text');
@@ -199,6 +221,7 @@ describe('Governance and security v1.14', () => {
     const kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
     const forgotten = await kernel.ingest({ content: `${secret} private projectless memory`, createdAt: 1000 });
     kernel.recordRawEvent({ threadId: 'global-private', role: 'user', content: `${secret} raw ledger evidence`, occurredAt: 1000 });
+    const episodeMessage = kernel.appendEpisodeMessage({ projectId: '', sessionId: 'secret-session', sourceAgent: 'test', role: 'user', text: `${secret} episode`, externalMessageId: 'secret-message' });
     await kernel.ingest({ projectId: 'keep-project', content: 'ordinary retained memory', createdAt: 2000 });
     const db = kernel.factStore.getDatabase();
     db.prepare(`INSERT INTO deep_write_summaries(summary_id,project_id,scope,text,confidence,status,source_neuron_ids_json,created_at,updated_at) VALUES('secret-summary','','turn_window',?,1,'provisional','[]',1,1)`).run(`${secret} summary`);
@@ -213,6 +236,18 @@ describe('Governance and security v1.14', () => {
     db.prepare(`INSERT INTO memory_frame_reviews(review_id,frame_id,project_id,action,actor,reason,created_at) VALUES('secret-frame-review','legacy-frame','','reject','tester',?,1)`).run(`${secret} frame review`);
     db.prepare(`INSERT INTO memory_atlas_alias_supports(support_id,alias_id,project_id,node_id,source_frame_id,evidence_event_ids_json,status,created_at,payload_json) VALUES('secret-alias-support','secret-alias','','secret-node','secret-frame',?,'active',1,?)`).run(JSON.stringify([`${secret}-event`]), JSON.stringify({ secret }));
     db.prepare(`INSERT INTO governance_audit_log VALUES('old-secret-audit','forgetUser','',?,?,1)`).run(`${secret} old reason`, JSON.stringify({ secret }));
+    db.prepare(`INSERT INTO beliefs(id,project_id,scope,subject,predicate,object_value,canonical_key,source_neuron_id,valid_from,created_at,updated_at) VALUES('secret-belief',NULL,'global',?,?,?,'secret-key',?,1,1,1)`).run(`${secret} subject`, `${secret}.predicate`, `${secret} object`, forgotten.id);
+    db.prepare(`INSERT INTO belief_evidence(belief_id,neuron_id,event_id,evidence_type,created_at) VALUES('secret-belief',?,NULL,'source',1)`).run(forgotten.id);
+    db.prepare(`INSERT INTO topic_nodes(topic_id,project_id,topic_path,canonical_name,ontology_class,status,created_by,confidence,evidence_event_ids_json,evidence_episode_ids_json,last_used_at,merge_candidates_json,created_at,updated_at) VALUES('secret-topic','',?,?,'custom','active','user',1,?,'[]',1,'[]',1,1)`).run(`${secret}/path`, `${secret} topic`, JSON.stringify([`${secret}-event`]));
+    db.prepare(`INSERT INTO topic_aliases(alias_id,project_id,normalized_alias,alias,topic_id,status,created_by,confidence,evidence_event_ids_json,created_at,updated_at) VALUES('secret-topic-alias','',?,?, 'secret-topic','active','user',1,?,1,1)`).run(`${secret}-alias`, `${secret} alias`, JSON.stringify([`${secret}-event`]));
+    db.prepare(`INSERT INTO topic_relations(relation_id,project_id,source_topic_id,relation,target_topic_id,status,created_by,confidence,evidence_event_ids_json,evidence_episode_ids_json,created_at,updated_at) VALUES('secret-topic-relation','','secret-topic',?,'secret-topic','active','user',1,?,'[]',1,1)`).run(`${secret} relation`, JSON.stringify([`${secret}-event`]));
+    db.prepare(`INSERT INTO topic_operations(operation_id,project_id,operation_type,actor,target_topic_id,payload_json,before_json,after_json,inverse_operation_json,status,evidence_event_ids_json,created_at) VALUES('secret-topic-operation','','rename','user','secret-topic',?,?,?,?,'applied',?,1)`).run(JSON.stringify({ secret }), JSON.stringify({ secret }), JSON.stringify({ secret }), JSON.stringify({ secret }), JSON.stringify([`${secret}-event`]));
+    db.exec(`CREATE TABLE IF NOT EXISTS chat_sessions(session_id TEXT PRIMARY KEY,project_id TEXT,created_at INTEGER,last_active INTEGER,turn_count INTEGER); CREATE TABLE IF NOT EXISTS chat_turns(turn_id TEXT PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,timestamp INTEGER,entity_hints TEXT);`);
+    db.prepare(`INSERT INTO chat_sessions VALUES('secret-chat',NULL,1,1,1)`).run();
+    db.prepare(`INSERT INTO chat_turns(turn_id,session_id,role,content,timestamp,entity_hints) VALUES('secret-turn','secret-chat','user',?,1,'[]')`).run(`${secret} transcript`);
+    db.exec(`CREATE TABLE IF NOT EXISTS episode_dream_attempts(attempt_id TEXT PRIMARY KEY,episode_id TEXT NOT NULL,payload_json TEXT);`);
+    db.prepare(`INSERT INTO episode_dream_attempts VALUES('secret-attempt',?,?)`).run(episodeMessage.episodeId!, JSON.stringify({ secret }));
+    db.prepare(`INSERT INTO topology_identity_quarantine(quarantine_id,identity_type,old_parent_id,project_scope,entry_json,reason,created_at,implicated_scopes_json) VALUES('secret-quarantine','task','old','keep-project',?,'conflict',1,?)`).run(JSON.stringify({ fact_id: `${secret}-fact` }), JSON.stringify(['keep-project', '']));
     db.exec(`INSERT OR REPLACE INTO dream_ledger_state VALUES('all',NULL,10,10,10),('scope:0:','',20,20,20),('scope:1:a','a',30,30,30)`);
     db.exec(`PRAGMA foreign_keys=ON`);
 
@@ -221,7 +256,7 @@ describe('Governance and security v1.14', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE project_id IS NULL`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM memory_events WHERE project_id IS NULL`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE content LIKE ?`).get(`%${secret}%`)).toEqual({ count: 0 });
-    for (const table of ['deep_write_summaries','deep_write_runs','deep_write_candidates','deep_write_candidate_reviews','pipeline_nonfatal_events','reasoning_chains','reasoning_steps','memory_frame_reviews','memory_atlas_alias_supports']) {
+    for (const table of ['deep_write_summaries','deep_write_runs','deep_write_candidates','deep_write_candidate_reviews','pipeline_nonfatal_events','reasoning_chains','reasoning_steps','memory_frame_reviews','memory_atlas_alias_supports','beliefs','belief_evidence','topic_nodes','topic_aliases','topic_relations','topic_operations','chat_sessions','chat_turns','episode_dream_attempts','topology_identity_quarantine']) {
       expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
     }
     expect(db.prepare(`SELECT project_key FROM dream_ledger_state ORDER BY project_key`).all()).toEqual([{ project_key: 'all' }, { project_key: 'scope:1:a' }]);

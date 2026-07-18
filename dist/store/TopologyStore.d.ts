@@ -104,6 +104,8 @@ export declare class TopologyStore {
     }): number;
     getMaterializedMembershipCount(): number;
     private upsertMembership;
+    private assertReferenceScope;
+    private hasColumn;
     close(): void;
 }
 //# sourceMappingURL=TopologyStore.d.ts.map

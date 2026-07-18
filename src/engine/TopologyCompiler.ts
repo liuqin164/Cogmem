@@ -25,6 +25,7 @@ export class TopologyCompiler {
     const projectId = neuron.metadata.projectId;
     const createdAt = neuron.metadata.createdAt;
     const ref = {
+      projectId,
       neuronId: neuron.id,
       unitId: consolidation.interactionUnit?.unitId,
       createdAt
@@ -67,7 +68,7 @@ export class TopologyCompiler {
   private attachTimeBuckets(
     createdAt: number,
     projectId: string | undefined,
-    ref: { neuronId: string; unitId?: string; createdAt: number },
+    ref: { projectId: string | undefined; neuronId: string; unitId?: string; createdAt: number },
     timeZone?: string,
   ): TimeBucketRecord[] {
     const buckets = [
@@ -91,7 +92,7 @@ export class TopologyCompiler {
     projectId: string,
     neuron: Neuron,
     consolidation: ConsolidationResult,
-    ref: { neuronId: string; unitId?: string; createdAt: number }
+    ref: { projectId: string | undefined; neuronId: string; unitId?: string; createdAt: number }
   ): string[] {
     const createdAt = ref.createdAt;
     const branchIds: string[] = [];
@@ -192,7 +193,7 @@ export class TopologyCompiler {
     projectId: string | undefined,
     neuron: Neuron,
     consolidation: ConsolidationResult,
-    ref: { neuronId: string; unitId?: string; createdAt: number }
+    ref: { projectId: string | undefined; neuronId: string; unitId?: string; createdAt: number }
   ): string[] {
     const taskIds: string[] = [];
     const createdAt = ref.createdAt;
@@ -224,10 +225,10 @@ export class TopologyCompiler {
       });
       this.store.attachToTask(task.taskId, ref);
       for (const fact of consolidation.compiledFacts) {
-        this.store.attachToTask(task.taskId, { factId: fact.factId, createdAt });
+        this.store.attachToTask(task.taskId, { projectId, factId: fact.factId, createdAt });
       }
       for (const belief of consolidation.beliefs) {
-        this.store.attachToTask(task.taskId, { beliefId: belief.id, createdAt });
+        this.store.attachToTask(task.taskId, { projectId, beliefId: belief.id, createdAt });
       }
       taskIds.push(task.taskId);
     }
@@ -239,7 +240,7 @@ export class TopologyCompiler {
     projectId: string | undefined,
     neuron: Neuron,
     consolidation: ConsolidationResult,
-    ref: { neuronId: string; unitId?: string; createdAt: number }
+    ref: { projectId: string | undefined; neuronId: string; unitId?: string; createdAt: number }
   ): string[] {
     const clusterIds: string[] = [];
     const createdAt = ref.createdAt;

@@ -160,7 +160,6 @@ import {
 import { CORE_VERSION } from './version.js';
 
 const LATEST_SCHEMA_VERSION = Math.max(...ALL_MIGRATIONS.map((migration) => Number.parseInt(migration.version, 10)));
-const TIME_PROJECTION_PUBLISH_BATCH_SIZE = 500;
 const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
@@ -1351,7 +1350,7 @@ export class MemoryKernel {
       })();
       publishClaimed = true;
       assertCurrentSource();
-      this.publishTimeProjectionInBatches({ generation, scope, publishToken: claimedToken, sourceRevision });
+      this.publishTimeProjectionAtomically({ generation, scope, publishToken: claimedToken, sourceRevision });
       db.transaction(() => {
         assertCurrentSource();
         const owned = db.prepare(`SELECT 1 FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).get(scope, generation, sourceRevision, claimedToken);
@@ -1372,43 +1371,25 @@ export class MemoryKernel {
     }
   }
 
-  private publishTimeProjectionInBatches(input: { generation: string; scope: string; publishToken: string; sourceRevision: number }): void {
+  private publishTimeProjectionAtomically(input: { generation: string; scope: string; publishToken: string; sourceRevision: number }): void {
     const db = this.factStore.getDatabase();
-    const renewPublish = (): void => {
+    db.transaction(() => {
       const now = Date.now();
       const renewed = db.prepare(`UPDATE topology_time_rebuild_jobs SET publish_lease_until=?,updated_at=? WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).run(now + TIME_PROJECTION_PUBLISH_LEASE_MS, now, input.scope, input.generation, input.sourceRevision, input.publishToken);
       if (renewed.changes !== 1) throw new Error('time_projection_rebuild_publish_conflict');
-    };
-    const deleteBatches = (sql: string, ...params: Array<string | number>): void => {
-      for (;;) {
-        const changed = db.transaction(() => {
-          renewPublish();
-          return Number(db.prepare(sql).run(...params, TIME_PROJECTION_PUBLISH_BATCH_SIZE).changes ?? 0);
-        })();
-        if (changed < TIME_PROJECTION_PUBLISH_BATCH_SIZE) return;
-      }
-    };
-    const insertBatches = (countSql: string, insertSql: string): void => {
-      const count = Number((db.prepare(countSql).get(input.generation) as { count?: number } | null)?.count ?? 0);
-      for (let offset = 0; offset < count; offset += TIME_PROJECTION_PUBLISH_BATCH_SIZE) db.transaction(() => {
-        renewPublish();
-        db.prepare(insertSql).run(input.generation, TIME_PROJECTION_PUBLISH_BATCH_SIZE, offset);
-      })();
-    };
-
-    deleteBatches(`DELETE FROM time_bucket_entries WHERE rowid IN (SELECT rowid FROM time_bucket_entries WHERE COALESCE(project_id,'')=? LIMIT ?)`, input.scope);
-    deleteBatches(`DELETE FROM topology_membership WHERE rowid IN (SELECT rowid FROM topology_membership WHERE COALESCE(project_id,'')=? AND dimension_type='time_bucket' LIMIT ?)`, input.scope);
-    deleteBatches(`DELETE FROM cognitive_edges WHERE rowid IN (SELECT rowid FROM cognitive_edges WHERE project_id=? AND edge_type='occurred_in_time_bucket' LIMIT ?)`, input.scope);
-    deleteBatches(`DELETE FROM cognitive_nodes WHERE rowid IN (SELECT rowid FROM cognitive_nodes WHERE project_id=? AND node_type='time_bucket' LIMIT ?)`, input.scope);
-    deleteBatches(`DELETE FROM temporal_adjacency WHERE rowid IN (SELECT rowid FROM temporal_adjacency WHERE project_id=? LIMIT ?)`, input.scope);
-    deleteBatches(`DELETE FROM time_buckets WHERE rowid IN (SELECT rowid FROM time_buckets WHERE project_id=? AND bucket_id NOT IN (SELECT bucket_id FROM time_bucket_entries) LIMIT ?)`, input.scope);
-
-    insertBatches(`SELECT COUNT(*) AS count FROM topology_time_rebuild_buckets b WHERE b.generation=? AND EXISTS (SELECT 1 FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=b.generation AND e.bucket_id=b.bucket_id)`, `INSERT OR IGNORE INTO time_buckets(bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label) SELECT b.bucket_id,b.project_id,b.time_zone,b.bucket_type,b.bucket_start,b.bucket_end,b.label FROM topology_time_rebuild_buckets b WHERE b.generation=? AND EXISTS (SELECT 1 FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=b.generation AND e.bucket_id=b.bucket_id) ORDER BY b.bucket_id LIMIT ? OFFSET ?`);
-    insertBatches(`SELECT COUNT(*) AS count FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=?`, `INSERT OR IGNORE INTO time_bucket_entries(bucket_id,neuron_id,unit_id,belief_id,fact_id,event_id,project_id,created_at) SELECT e.bucket_id,e.neuron_id,NULL,NULL,NULL,NULL,e.project_id,e.created_at FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=? ORDER BY e.bucket_id,e.neuron_id LIMIT ? OFFSET ?`);
-    insertBatches(`SELECT COUNT(*) AS count FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=?`, `INSERT OR IGNORE INTO topology_membership(neuron_id,project_id,dimension_type,dimension_key,title,created_at) SELECT e.neuron_id,e.project_id,'time_bucket',e.bucket_id,b.label,e.created_at FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_buckets b ON b.generation=e.generation AND b.bucket_id=e.bucket_id JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=? ORDER BY e.bucket_id,e.neuron_id LIMIT ? OFFSET ?`);
-    insertBatches(`SELECT COUNT(*) AS count FROM topology_time_rebuild_cognitive_nodes WHERE generation=?`, `INSERT OR IGNORE INTO cognitive_nodes(node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at) SELECT node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at FROM topology_time_rebuild_cognitive_nodes WHERE generation=? ORDER BY node_id LIMIT ? OFFSET ?`);
-    insertBatches(`SELECT COUNT(*) AS count FROM topology_time_rebuild_cognitive_edges WHERE generation=?`, `INSERT OR REPLACE INTO cognitive_edges(edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at) SELECT edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at FROM topology_time_rebuild_cognitive_edges WHERE generation=? ORDER BY edge_id LIMIT ? OFFSET ?`);
-    insertBatches(`SELECT COUNT(*) AS count FROM topology_time_rebuild_adjacency WHERE generation=?`, `INSERT OR IGNORE INTO temporal_adjacency(project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) SELECT project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at FROM topology_time_rebuild_adjacency WHERE generation=? ORDER BY source_bucket_id,adjacent_bucket_id LIMIT ? OFFSET ?`);
+      db.prepare(`DELETE FROM time_bucket_entries WHERE COALESCE(project_id,'')=?`).run(input.scope);
+      db.prepare(`DELETE FROM topology_membership WHERE COALESCE(project_id,'')=? AND dimension_type='time_bucket'`).run(input.scope);
+      db.prepare(`DELETE FROM cognitive_edges WHERE project_id=? AND edge_type='occurred_in_time_bucket'`).run(input.scope);
+      db.prepare(`DELETE FROM cognitive_nodes WHERE project_id=? AND node_type='time_bucket'`).run(input.scope);
+      db.prepare(`DELETE FROM temporal_adjacency WHERE project_id=?`).run(input.scope);
+      db.prepare(`DELETE FROM time_buckets WHERE project_id=? AND bucket_id NOT IN (SELECT bucket_id FROM time_bucket_entries)`).run(input.scope);
+      db.prepare(`INSERT OR IGNORE INTO time_buckets(bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label) SELECT b.bucket_id,b.project_id,b.time_zone,b.bucket_type,b.bucket_start,b.bucket_end,b.label FROM topology_time_rebuild_buckets b WHERE b.generation=? AND EXISTS (SELECT 1 FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=b.generation AND e.bucket_id=b.bucket_id)`).run(input.generation);
+      db.prepare(`INSERT OR IGNORE INTO time_bucket_entries(bucket_id,neuron_id,unit_id,belief_id,fact_id,event_id,project_id,created_at) SELECT e.bucket_id,e.neuron_id,NULL,NULL,NULL,NULL,e.project_id,e.created_at FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=?`).run(input.generation);
+      db.prepare(`INSERT OR IGNORE INTO topology_membership(neuron_id,project_id,dimension_type,dimension_key,title,created_at) SELECT e.neuron_id,e.project_id,'time_bucket',e.bucket_id,b.label,e.created_at FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_buckets b ON b.generation=e.generation AND b.bucket_id=e.bucket_id JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=?`).run(input.generation);
+      db.prepare(`INSERT OR IGNORE INTO cognitive_nodes(node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at) SELECT node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at FROM topology_time_rebuild_cognitive_nodes WHERE generation=?`).run(input.generation);
+      db.prepare(`INSERT OR REPLACE INTO cognitive_edges(edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at) SELECT edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at FROM topology_time_rebuild_cognitive_edges WHERE generation=?`).run(input.generation);
+      db.prepare(`INSERT OR IGNORE INTO temporal_adjacency(project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) SELECT project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at FROM topology_time_rebuild_adjacency WHERE generation=?`).run(input.generation);
+    })();
   }
 
   private stageTimeProjectionGraph(generation: string, projectId: string, timeZone: string, createdAt: number): void {
@@ -3055,7 +3036,11 @@ export class MemoryKernel {
       try {
         return Number(db.prepare(sql).run(...params).changes ?? 0);
       } catch (error) {
-        if (error instanceof Error && /no such table/i.test(error.message)) return 0;
+        if (error instanceof Error) {
+          const missing = /no such table:\s*(?:main\.)?([\w]+)/i.exec(error.message)?.[1];
+          const target = /^\s*DELETE\s+FROM\s+([\w]+)/i.exec(sql)?.[1];
+          if (missing && target && missing.toLowerCase() === target.toLowerCase()) return 0;
+        }
         throw error;
       }
     };

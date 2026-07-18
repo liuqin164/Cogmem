@@ -60,6 +60,7 @@ export class TopologyStore {
 
       CREATE TABLE IF NOT EXISTS branch_entries (
         branch_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT '',
         neuron_id TEXT,
         unit_id TEXT,
         belief_id TEXT,
@@ -82,6 +83,7 @@ export class TopologyStore {
 
       CREATE TABLE IF NOT EXISTS task_branch_entries (
         task_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT '',
         neuron_id TEXT,
         unit_id TEXT,
         belief_id TEXT,
@@ -104,6 +106,7 @@ export class TopologyStore {
 
       CREATE TABLE IF NOT EXISTS event_cluster_entries (
         cluster_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT '',
         neuron_id TEXT,
         unit_id TEXT,
         belief_id TEXT,
@@ -161,6 +164,10 @@ export class TopologyStore {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_event_cluster_entries_reference_unique
         ON event_cluster_entries(cluster_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''));
     `);
+        for (const table of ['branch_entries', 'task_branch_entries', 'event_cluster_entries']) {
+            if (!this.hasColumn(table, 'project_id'))
+                this.db.exec(`ALTER TABLE ${table} ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`);
+        }
     }
     timeProjectionNeedsRebuild(projectId, timeZone) {
         return !this.hasUsableTimeProjection(projectId, timeZone);
@@ -335,17 +342,21 @@ export class TopologyStore {
     `).run(parentBranchId, childBranchId, relationType, createdAt);
     }
     attachToBranch(branchId, ref) {
-        this.db.prepare(`
+        this.db.transaction(() => {
+            const row = this.db.prepare(`SELECT project_id, branch_key, title FROM project_branches WHERE branch_id = ?`)
+                .get(branchId);
+            if (!row)
+                throw new Error('topology_parent_not_found');
+            this.assertReferenceScope(row.project_id, ref);
+            this.db.prepare(`
       INSERT OR IGNORE INTO branch_entries (
-        branch_id, neuron_id, unit_id, belief_id, fact_id, event_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(branchId, ref.neuronId || null, ref.unitId || null, ref.beliefId || null, ref.factId || null, ref.eventId || null, ref.createdAt);
-        if (ref.neuronId) {
-            const row = this.db.prepare(`
-        SELECT project_id, branch_key, title FROM project_branches WHERE branch_id = ?
-      `).get(branchId);
-            this.upsertMembership(ref.neuronId, row?.project_id || undefined, 'project_branch', row?.branch_key || branchId, row?.title, ref.createdAt);
-        }
+        branch_id, project_id, neuron_id, unit_id, belief_id, fact_id, event_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(branchId, row.project_id, ref.neuronId || null, ref.unitId || null, ref.beliefId || null, ref.factId || null, ref.eventId || null, ref.createdAt);
+            if (ref.neuronId) {
+                this.upsertMembership(ref.neuronId, row.project_id, 'project_branch', row.branch_key, row.title, ref.createdAt);
+            }
+        })();
     }
     upsertTaskBranch(input) {
         const scope = projectScope(input.projectId);
@@ -375,17 +386,21 @@ export class TopologyStore {
         };
     }
     attachToTask(taskId, ref) {
-        this.db.prepare(`
+        this.db.transaction(() => {
+            const row = this.db.prepare(`SELECT project_id, task_key, title FROM task_branches WHERE task_id = ?`)
+                .get(taskId);
+            if (!row)
+                throw new Error('topology_parent_not_found');
+            this.assertReferenceScope(row.project_id, ref);
+            this.db.prepare(`
       INSERT OR IGNORE INTO task_branch_entries (
-        task_id, neuron_id, unit_id, belief_id, fact_id, event_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(taskId, ref.neuronId || null, ref.unitId || null, ref.beliefId || null, ref.factId || null, ref.eventId || null, ref.createdAt);
-        if (ref.neuronId) {
-            const row = this.db.prepare(`
-        SELECT project_id, task_key, title FROM task_branches WHERE task_id = ?
-      `).get(taskId);
-            this.upsertMembership(ref.neuronId, row?.project_id || undefined, 'task_branch', row?.task_key || taskId, row?.title, ref.createdAt);
-        }
+        task_id, project_id, neuron_id, unit_id, belief_id, fact_id, event_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(taskId, row.project_id, ref.neuronId || null, ref.unitId || null, ref.beliefId || null, ref.factId || null, ref.eventId || null, ref.createdAt);
+            if (ref.neuronId) {
+                this.upsertMembership(ref.neuronId, row.project_id || undefined, 'task_branch', row.task_key, row.title, ref.createdAt);
+            }
+        })();
     }
     upsertEventCluster(input) {
         const scope = projectScope(input.projectId);
@@ -414,17 +429,21 @@ export class TopologyStore {
         };
     }
     attachToEventCluster(clusterId, ref) {
-        this.db.prepare(`
+        this.db.transaction(() => {
+            const row = this.db.prepare(`SELECT project_id, cluster_key, title FROM event_clusters WHERE cluster_id = ?`)
+                .get(clusterId);
+            if (!row)
+                throw new Error('topology_parent_not_found');
+            this.assertReferenceScope(row.project_id, ref);
+            this.db.prepare(`
       INSERT OR IGNORE INTO event_cluster_entries (
-        cluster_id, neuron_id, unit_id, belief_id, fact_id, event_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(clusterId, ref.neuronId || null, ref.unitId || null, ref.beliefId || null, ref.factId || null, ref.eventId || null, ref.createdAt);
-        if (ref.neuronId) {
-            const row = this.db.prepare(`
-        SELECT project_id, cluster_key, title FROM event_clusters WHERE cluster_id = ?
-      `).get(clusterId);
-            this.upsertMembership(ref.neuronId, row?.project_id || undefined, 'event_cluster', row?.cluster_key || clusterId, row?.title, ref.createdAt);
-        }
+        cluster_id, project_id, neuron_id, unit_id, belief_id, fact_id, event_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(clusterId, row.project_id, ref.neuronId || null, ref.unitId || null, ref.beliefId || null, ref.factId || null, ref.eventId || null, ref.createdAt);
+            if (ref.neuronId) {
+                this.upsertMembership(ref.neuronId, row.project_id || undefined, 'event_cluster', row.cluster_key, row.title, ref.createdAt);
+            }
+        })();
     }
     listProjectBranches(projectId) {
         const rows = this.db.prepare(`
@@ -851,8 +870,83 @@ export class TopologyStore {
       ) VALUES (?, ?, ?, ?, ?, ?)
     `).run(neuronId, projectScope(projectId), dimensionType, dimensionKey, title || null, createdAt);
     }
+    assertReferenceScope(parentScope, ref) {
+        const expected = projectScope(ref.projectId);
+        if (expected !== parentScope)
+            throw new Error('topology_reference_project_scope_mismatch');
+        const scopes = [];
+        const addNeuron = (neuronId) => {
+            if (!neuronId)
+                throw new Error('topology_reference_unresolved');
+            const row = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0`)
+                .get(neuronId);
+            if (!row)
+                throw new Error('topology_reference_unresolved');
+            scopes.push(row.scope);
+        };
+        if (ref.neuronId)
+            addNeuron(ref.neuronId);
+        if (ref.factId) {
+            const row = this.db.prepare(`SELECT neuron_id FROM facts WHERE fact_id=?`).get(ref.factId);
+            if (!row)
+                throw new Error('topology_reference_unresolved');
+            addNeuron(row.neuron_id);
+        }
+        if (ref.eventId) {
+            const row = this.db.prepare(`SELECT neuron_id FROM compiled_events WHERE event_id=?`).get(ref.eventId);
+            if (!row)
+                throw new Error('topology_reference_unresolved');
+            addNeuron(row.neuron_id);
+        }
+        if (ref.unitId) {
+            const row = this.db.prepare(`SELECT message_neuron_ids_json FROM interaction_units WHERE unit_id=?`).get(ref.unitId);
+            if (!row)
+                throw new Error('topology_reference_unresolved');
+            const ids = parseStringIds(row.message_neuron_ids_json);
+            if (ids.length === 0)
+                throw new Error('topology_reference_unresolved');
+            for (const neuronId of ids)
+                addNeuron(neuronId);
+        }
+        if (ref.beliefId) {
+            const belief = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope,source_neuron_id FROM beliefs WHERE id=?`)
+                .get(ref.beliefId);
+            if (!belief)
+                throw new Error('topology_reference_unresolved');
+            scopes.push(belief.scope);
+            if (belief.source_neuron_id)
+                addNeuron(belief.source_neuron_id);
+            const evidence = this.db.prepare(`SELECT neuron_id,event_id FROM belief_evidence WHERE belief_id=?`).all(ref.beliefId);
+            for (const item of evidence) {
+                if (item.neuron_id)
+                    addNeuron(item.neuron_id);
+                if (item.event_id) {
+                    const event = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM memory_events WHERE event_id=?`).get(item.event_id);
+                    if (!event)
+                        throw new Error('topology_reference_unresolved');
+                    scopes.push(event.scope);
+                }
+            }
+        }
+        if (scopes.length === 0)
+            throw new Error('topology_reference_unresolved');
+        if (scopes.some((scope) => scope !== parentScope))
+            throw new Error('topology_reference_project_scope_mismatch');
+    }
+    hasColumn(table, column) {
+        return Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name=?`).get(table, column));
+    }
     close() {
         if (this.ownsDb)
             this.db.close();
+    }
+}
+function parseStringIds(value) {
+    try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string' && item.length > 0) : [];
+    }
+    catch {
+        return [];
     }
 }

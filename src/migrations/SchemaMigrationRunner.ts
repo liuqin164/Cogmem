@@ -2,6 +2,7 @@ import Database from 'bun:sqlite';
 
 import type { Migration } from '../types/Migration.js';
 import { COMPATIBLE_MIGRATION_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
+import { topologyIntegritySatisfied } from './0054_topology_semantic_integrity.js';
 
 export interface SchemaMigrationRunOptions {
   dryRun?: boolean;
@@ -356,6 +357,11 @@ export class SchemaMigrationRunner {
       && this.hasUniqueIndex('event_clusters', ['project_id', 'cluster_key'])
       && Boolean(this.db.prepare(`SELECT 1 FROM pragma_index_list('task_branch_entries') WHERE name='idx_task_branch_entries_reference_unique'`).get())
       && Boolean(this.db.prepare(`SELECT 1 FROM pragma_index_list('event_cluster_entries') WHERE name='idx_event_cluster_entries_reference_unique'`).get())));
+    if (version === '0054') return this.hasColumns('topology_identity_quarantine', ['implicated_scopes_json'])
+      && (!this.tableExists('branch_entries') || this.hasColumns('branch_entries', ['project_id']))
+      && (!this.tableExists('task_branch_entries') || this.hasColumns('task_branch_entries', ['project_id']))
+      && (!this.tableExists('event_cluster_entries') || this.hasColumns('event_cluster_entries', ['project_id']))
+      && topologyIntegritySatisfied(this.db);
     return true;
   }
 

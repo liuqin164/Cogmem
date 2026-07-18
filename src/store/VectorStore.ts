@@ -3,7 +3,8 @@
 // ============================================
 
 import { createRequire } from 'node:module';
-import { readFile, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import { config } from '../utils/Config.js';
 import { logger } from '../utils/Logger.js';
 import type { IVectorStore, VectorSearchResult, VectorStoreStats } from './IVectorStore.js';
@@ -28,6 +29,7 @@ export class VectorStore implements IVectorStore {
   private tombstones = new Set<string>();
   private fallbackVectors = new Map<string, number[]>();
   private nextLabel = 0;
+  private deletedLabelCount = 0;
 
   constructor(
     dimension: number = config.vector.dimension,
@@ -63,12 +65,12 @@ export class VectorStore implements IVectorStore {
     const label = this.nextLabel++;
     if (this.index) {
       this.index.addPoint(vector, label);
-    } else {
-      this.fallbackVectors.set(neuronId, [...vector]);
     }
+    this.fallbackVectors.set(neuronId, [...vector]);
     this.neuronIdMap.set(label, neuronId);
     this.idIndexMap.set(neuronId, label);
     this.tombstones.delete(neuronId);
+    this.compactIfNeeded();
   }
 
   addVectors(vectors: Array<{ id: string; vector: number[] }>): void {
@@ -82,6 +84,7 @@ export class VectorStore implements IVectorStore {
     if (this.index) {
       try {
         this.index.markDelete(label);
+        this.deletedLabelCount += 1;
       } catch (error) {
         logger.warn(`Failed to mark vector deleted for ${neuronId}:`, error);
       }
@@ -102,7 +105,7 @@ export class VectorStore implements IVectorStore {
 
     if (this.index) {
       const rawK = Math.max(k * 3, k);
-      const result = this.index.searchKnn(queryVector, Math.min(rawK, this.nextLabel));
+      const result = this.index.searchKnn(queryVector, Math.min(rawK, this.idIndexMap.size));
       const ranked: VectorSearchResult[] = [];
 
       for (let i = 0; i < result.neighbors.length; i++) {
@@ -156,29 +159,51 @@ export class VectorStore implements IVectorStore {
 
   async saveIndex(filePath: string): Promise<void> {
     if (!this.index) return;
-    await this.index.writeIndex(filePath);
-    await writeFile(`${filePath}.meta.json`, JSON.stringify({
-      version: 1,
+    const generation = `${filePath}.generation-${randomUUID()}`;
+    await this.index.writeIndex(generation);
+    const indexBytes = await readFile(generation);
+    await writeFile(`${generation}.meta.json`, JSON.stringify({
+      version: 2,
+      generation,
       dimension: this.dimension,
       nextLabel: this.nextLabel,
+      labelCount: this.neuronIdMap.size,
+      indexChecksum: createHash('sha256').update(indexBytes).digest('hex'),
       labels: [...this.neuronIdMap.entries()],
+      vectors: [...this.fallbackVectors.entries()],
     }));
+    const pointer = `${filePath}.current`;
+    const temporaryPointer = `${pointer}.${randomUUID()}.tmp`;
+    await writeFile(temporaryPointer, JSON.stringify({ generation }));
+    await rename(temporaryPointer, pointer);
   }
 
   async loadIndex(filePath: string): Promise<void> {
     if (!this.index) return;
-    const metadata = JSON.parse(await readFile(`${filePath}.meta.json`, 'utf8')) as {
-      version?: number; dimension?: number; nextLabel?: number; labels?: Array<[number, string]>;
+    let generation = filePath;
+    try {
+      const pointer = JSON.parse(await readFile(`${filePath}.current`, 'utf8')) as { generation?: string };
+      if (pointer.generation) generation = pointer.generation;
+    } catch {}
+    const metadata = JSON.parse(await readFile(`${generation}.meta.json`, 'utf8')) as {
+      version?: number; generation?: string; dimension?: number; nextLabel?: number; labelCount?: number;
+      indexChecksum?: string; labels?: Array<[number, string]>; vectors?: Array<[string, number[]]>;
     };
-    if (metadata.version !== 1 || metadata.dimension !== this.dimension || !Array.isArray(metadata.labels)) {
+    const indexBytes = await readFile(generation);
+    const checksum = createHash('sha256').update(indexBytes).digest('hex');
+    if (metadata.version !== 2 || metadata.generation !== generation || metadata.dimension !== this.dimension
+      || metadata.indexChecksum !== checksum || metadata.labelCount !== metadata.labels?.length
+      || !Array.isArray(metadata.labels) || !Array.isArray(metadata.vectors)) {
       throw new Error('vector_index_metadata_mismatch');
     }
-    await this.index.readIndex(filePath);
+    await this.index.readIndex(generation);
     this.index.setEf(this.efSearch);
     this.neuronIdMap = new Map(metadata.labels);
     this.idIndexMap = new Map(metadata.labels.map(([label, neuronId]) => [neuronId, label]));
     this.nextLabel = metadata.nextLabel ?? Math.max(0, ...metadata.labels.map(([label]) => label + 1));
     this.tombstones.clear();
+    this.fallbackVectors = new Map(metadata.vectors);
+    this.deletedLabelCount = 0;
   }
 
   getStats(): VectorStoreStats {
@@ -189,7 +214,7 @@ export class VectorStore implements IVectorStore {
       maxElements: this.maxElements,
       efConstruction: this.efConstruction,
       efSearch: this.efSearch,
-      tombstones: this.tombstones.size
+      tombstones: this.deletedLabelCount
     };
   }
 
@@ -206,6 +231,7 @@ export class VectorStore implements IVectorStore {
     this.tombstones.clear();
     this.fallbackVectors.clear();
     this.nextLabel = 0;
+    this.deletedLabelCount = 0;
   }
 
   checkIntegrity(): boolean {
@@ -234,5 +260,12 @@ export class VectorStore implements IVectorStore {
     }
     this.index.resizeIndex(nextCapacity);
     this.maxElements = nextCapacity;
+  }
+
+  private compactIfNeeded(): void {
+    if (!this.index || this.deletedLabelCount < 64 || this.deletedLabelCount <= this.idIndexMap.size / 2) return;
+    const live = [...this.fallbackVectors.entries()].map(([id, vector]) => ({ id, vector }));
+    this.clear();
+    this.addVectors(live);
   }
 }

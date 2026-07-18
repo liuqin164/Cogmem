@@ -1,3 +1,5 @@
+export type PrivacyTableClassification = 'project_owned' | 'shared_canonical' | 'operational_non_personal';
+export declare const PRIVACY_BASELINE_CLASSIFICATION: Readonly<Record<string, PrivacyTableClassification>>;
 export interface PrivacyDeletionContext {
     scope: string;
     neuronIds: string[];

@@ -12,6 +12,7 @@ export class TopologyCompiler {
         const projectId = neuron.metadata.projectId;
         const createdAt = neuron.metadata.createdAt;
         const ref = {
+            projectId,
             neuronId: neuron.id,
             unitId: consolidation.interactionUnit?.unitId,
             createdAt
@@ -179,10 +180,10 @@ export class TopologyCompiler {
             });
             this.store.attachToTask(task.taskId, ref);
             for (const fact of consolidation.compiledFacts) {
-                this.store.attachToTask(task.taskId, { factId: fact.factId, createdAt });
+                this.store.attachToTask(task.taskId, { projectId, factId: fact.factId, createdAt });
             }
             for (const belief of consolidation.beliefs) {
-                this.store.attachToTask(task.taskId, { beliefId: belief.id, createdAt });
+                this.store.attachToTask(task.taskId, { projectId, beliefId: belief.id, createdAt });
             }
             taskIds.push(task.taskId);
         }

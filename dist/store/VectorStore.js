@@ -2,7 +2,8 @@
 // 向量存储 - hnswlib-node 实现
 // ============================================
 import { createRequire } from 'node:module';
-import { readFile, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import { config } from '../utils/Config.js';
 import { logger } from '../utils/Logger.js';
 const require = createRequire(import.meta.url);
@@ -24,6 +25,7 @@ export class VectorStore {
     tombstones = new Set();
     fallbackVectors = new Map();
     nextLabel = 0;
+    deletedLabelCount = 0;
     constructor(dimension = config.vector.dimension, maxElements = config.vector.maxElements, efConstruction = config.vector.efConstruction, efSearch = config.vector.efSearch) {
         this.dimension = dimension;
         this.maxElements = maxElements;
@@ -51,12 +53,11 @@ export class VectorStore {
         if (this.index) {
             this.index.addPoint(vector, label);
         }
-        else {
-            this.fallbackVectors.set(neuronId, [...vector]);
-        }
+        this.fallbackVectors.set(neuronId, [...vector]);
         this.neuronIdMap.set(label, neuronId);
         this.idIndexMap.set(neuronId, label);
         this.tombstones.delete(neuronId);
+        this.compactIfNeeded();
     }
     addVectors(vectors) {
         for (const item of vectors)
@@ -69,6 +70,7 @@ export class VectorStore {
         if (this.index) {
             try {
                 this.index.markDelete(label);
+                this.deletedLabelCount += 1;
             }
             catch (error) {
                 logger.warn(`Failed to mark vector deleted for ${neuronId}:`, error);
@@ -87,7 +89,7 @@ export class VectorStore {
             return [];
         if (this.index) {
             const rawK = Math.max(k * 3, k);
-            const result = this.index.searchKnn(queryVector, Math.min(rawK, this.nextLabel));
+            const result = this.index.searchKnn(queryVector, Math.min(rawK, this.idIndexMap.size));
             const ranked = [];
             for (let i = 0; i < result.neighbors.length; i++) {
                 const label = result.neighbors[i];
@@ -136,27 +138,50 @@ export class VectorStore {
     async saveIndex(filePath) {
         if (!this.index)
             return;
-        await this.index.writeIndex(filePath);
-        await writeFile(`${filePath}.meta.json`, JSON.stringify({
-            version: 1,
+        const generation = `${filePath}.generation-${randomUUID()}`;
+        await this.index.writeIndex(generation);
+        const indexBytes = await readFile(generation);
+        await writeFile(`${generation}.meta.json`, JSON.stringify({
+            version: 2,
+            generation,
             dimension: this.dimension,
             nextLabel: this.nextLabel,
+            labelCount: this.neuronIdMap.size,
+            indexChecksum: createHash('sha256').update(indexBytes).digest('hex'),
             labels: [...this.neuronIdMap.entries()],
+            vectors: [...this.fallbackVectors.entries()],
         }));
+        const pointer = `${filePath}.current`;
+        const temporaryPointer = `${pointer}.${randomUUID()}.tmp`;
+        await writeFile(temporaryPointer, JSON.stringify({ generation }));
+        await rename(temporaryPointer, pointer);
     }
     async loadIndex(filePath) {
         if (!this.index)
             return;
-        const metadata = JSON.parse(await readFile(`${filePath}.meta.json`, 'utf8'));
-        if (metadata.version !== 1 || metadata.dimension !== this.dimension || !Array.isArray(metadata.labels)) {
+        let generation = filePath;
+        try {
+            const pointer = JSON.parse(await readFile(`${filePath}.current`, 'utf8'));
+            if (pointer.generation)
+                generation = pointer.generation;
+        }
+        catch { }
+        const metadata = JSON.parse(await readFile(`${generation}.meta.json`, 'utf8'));
+        const indexBytes = await readFile(generation);
+        const checksum = createHash('sha256').update(indexBytes).digest('hex');
+        if (metadata.version !== 2 || metadata.generation !== generation || metadata.dimension !== this.dimension
+            || metadata.indexChecksum !== checksum || metadata.labelCount !== metadata.labels?.length
+            || !Array.isArray(metadata.labels) || !Array.isArray(metadata.vectors)) {
             throw new Error('vector_index_metadata_mismatch');
         }
-        await this.index.readIndex(filePath);
+        await this.index.readIndex(generation);
         this.index.setEf(this.efSearch);
         this.neuronIdMap = new Map(metadata.labels);
         this.idIndexMap = new Map(metadata.labels.map(([label, neuronId]) => [neuronId, label]));
         this.nextLabel = metadata.nextLabel ?? Math.max(0, ...metadata.labels.map(([label]) => label + 1));
         this.tombstones.clear();
+        this.fallbackVectors = new Map(metadata.vectors);
+        this.deletedLabelCount = 0;
     }
     getStats() {
         return {
@@ -166,7 +191,7 @@ export class VectorStore {
             maxElements: this.maxElements,
             efConstruction: this.efConstruction,
             efSearch: this.efSearch,
-            tombstones: this.tombstones.size
+            tombstones: this.deletedLabelCount
         };
     }
     clear() {
@@ -183,6 +208,7 @@ export class VectorStore {
         this.tombstones.clear();
         this.fallbackVectors.clear();
         this.nextLabel = 0;
+        this.deletedLabelCount = 0;
     }
     checkIntegrity() {
         try {
@@ -212,5 +238,12 @@ export class VectorStore {
         }
         this.index.resizeIndex(nextCapacity);
         this.maxElements = nextCapacity;
+    }
+    compactIfNeeded() {
+        if (!this.index || this.deletedLabelCount < 64 || this.deletedLabelCount <= this.idIndexMap.size / 2)
+            return;
+        const live = [...this.fallbackVectors.entries()].map(([id, vector]) => ({ id, vector }));
+        this.clear();
+        this.addVectors(live);
     }
 }

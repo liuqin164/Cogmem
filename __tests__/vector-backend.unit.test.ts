@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SqliteVecStore, createMemoryKernel } from '../src/public.js';
+import { SqliteVecStore, VectorStore, createMemoryKernel } from '../src/public.js';
 
 function tempDir(): string {
   const dir = join(tmpdir(), `core-vector-backend-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -44,6 +44,28 @@ describe('Vector backends v1.12', () => {
     const reopened = createMemoryKernel({ dbPath, vectorBackend: 'hnswlib', vectorDimension: 3 });
     expect(reopened.vectorStore.search(neuron.coordinates.V, 5).map((item) => item.id)).toContain(neuron.id);
     reopened.close(); rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('hnswlib compacts replacement tombstones and atomically validates saved generations', async () => {
+    const store = new VectorStore(3, 8);
+    store.addVector('stable', [0, 1, 0]);
+    for (let index = 0; index < 160; index += 1) store.addVector('changing', [1, index / 1000, 0]);
+    expect(store.getCurrentCount()).toBe(2);
+    expect(store.getStats().tombstones).toBeLessThan(64);
+    expect(store.search([1, 0, 0], 2).map((item) => item.id)).toContain('changing');
+
+    const dir = tempDir(); const path = join(dir, 'index');
+    await store.saveIndex(path);
+    if (!existsSync(`${path}.current`)) { rmSync(dir, { recursive: true, force: true }); return; }
+    const reopened = new VectorStore(3, 8);
+    await reopened.loadIndex(path);
+    expect(reopened.search([0, 1, 0], 2).map((item) => item.id)).toContain('stable');
+    const pointer = JSON.parse(readFileSync(`${path}.current`, 'utf8')) as { generation: string };
+    const metadataPath = `${pointer.generation}.meta.json`;
+    const metadata = JSON.parse(readFileSync(metadataPath, 'utf8')) as Record<string, unknown>;
+    writeFileSync(metadataPath, JSON.stringify({ ...metadata, indexChecksum: 'tampered' }));
+    await expect(new VectorStore(3, 8).loadIndex(path)).rejects.toThrow('vector_index_metadata_mismatch');
+    rmSync(dir, { recursive: true, force: true });
   });
 
   test('SqliteVecStore persists vectors and returns cosine-ranked nearest neighbors', () => {

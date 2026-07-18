@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { ConditionDslEvaluator } from '../retrieval/ConditionDslEvaluator.js';
 import { PlanDslExecutor } from '../retrieval/PlanDslExecutor.js';
 import { PolicyRuntimeEvaluator } from '../retrieval/PolicyRuntimeEvaluator.js';
+import { projectQueryValue } from '../topology/ProjectScope.js';
 export class BeliefStore {
     eventStore;
     static SOURCE_TRUST = {
@@ -85,31 +86,34 @@ export class BeliefStore {
         return rows.map((row) => this.mapBelief(row));
     }
     countActive(projectId) {
+        const queryProject = projectQueryValue(projectId);
         const row = this.db.prepare(`
       SELECT COUNT(*) AS count
       FROM beliefs
       WHERE status = 'active'
-        AND (? IS NULL OR project_id = ?)
-    `).get(projectId || null, projectId || null);
+        AND (? IS NULL OR COALESCE(project_id, '') = ?)
+    `).get(queryProject, queryProject);
         return row.count;
     }
     listByTimeRange(startTime, endTime, options) {
         const statuses = options?.statuses ?? ['active', 'superseded', 'suspect', 'expired', 'revoked'];
+        const queryProject = projectQueryValue(options?.projectId);
         const rows = this.db.prepare(`
       SELECT *
       FROM beliefs
       WHERE valid_from >= ?
         AND valid_from < ?
-        AND (? IS NULL OR project_id = ?)
+        AND (? IS NULL OR COALESCE(project_id, '') = ?)
         AND status IN (${statuses.map(() => '?').join(', ')})
       ORDER BY valid_from DESC, updated_at DESC
       LIMIT ?
-    `).all(startTime, endTime, options?.projectId || null, options?.projectId || null, ...statuses, options?.limit ?? 200);
+    `).all(startTime, endTime, queryProject, queryProject, ...statuses, options?.limit ?? 200);
         return rows.map((row) => this.mapBelief(row));
     }
     getActiveBeliefsForQuery(input) {
         const query = input.query.toLowerCase().trim();
         const atTime = input.atTime ?? Date.now();
+        const queryProject = projectQueryValue(input.projectId);
         const tokens = this.extractQueryTokens(query, input.entities, input.mustMatch, input.shouldMatch);
         const structuredTargets = this.extractStructuredTargets(query, input.intent, tokens, input.semantics);
         const rows = this.db.prepare(`
@@ -118,10 +122,10 @@ export class BeliefStore {
       WHERE status = 'active'
         AND valid_from <= ?
         AND (valid_to IS NULL OR valid_to > ?)
-        AND (? IS NULL OR project_id = ? OR scope = 'global')
+        AND (? IS NULL OR COALESCE(project_id, '') = ?)
       ORDER BY updated_at DESC, confidence DESC
       LIMIT 200
-    `).all(atTime, atTime, input.projectId || null, input.projectId || null);
+    `).all(atTime, atTime, queryProject, queryProject);
         const scored = rows
             .map((row) => this.mapBelief(row))
             .map((belief) => ({

@@ -10,6 +10,7 @@ import { migration_0049 } from '../src/migrations/0049_project_scoped_graph_iden
 import { migration_0046 } from '../src/migrations/0046_stable_migration_checksums.js';
 import { migration_0052 } from '../src/migrations/0052_project_scoped_topology_identity.js';
 import { migration_0053 } from '../src/migrations/0053_topology_privacy_and_recovery.js';
+import { migration_0054, topologyIntegritySatisfied } from '../src/migrations/0054_topology_semantic_integrity.js';
 import { CANONICAL_MIGRATION_SOURCE_DIGESTS, FROZEN_MIGRATION_DEPENDENCY_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 describe('schema migration runner', () => {
@@ -325,5 +326,49 @@ describe('schema migration runner', () => {
     ]);
     expect(db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes WHERE title LIKE '%DELETED_SECRET%' OR source_neuron_id='deleted-a'`).get()).toEqual({ count: 0 });
     db.close();
+  });
+
+  test('0054 restores canonical cluster keys and quarantines every dangling or conflicting provenance', () => {
+    for (const projectId of ['generic', 'issue', 'project', 'fact', 'approval', 'rejection']) {
+      const db = new Database(':memory:');
+      db.exec(`
+        CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,content TEXT,created_at INTEGER,is_deleted INTEGER DEFAULT 0);
+        CREATE TABLE facts(fact_id TEXT PRIMARY KEY,neuron_id TEXT);
+        CREATE TABLE compiled_events(event_id TEXT PRIMARY KEY,neuron_id TEXT);
+        CREATE TABLE memory_events(event_id TEXT PRIMARY KEY,project_id TEXT);
+        CREATE TABLE interaction_units(unit_id TEXT PRIMARY KEY,message_neuron_ids_json TEXT);
+        CREATE TABLE beliefs(id TEXT PRIMARY KEY,project_id TEXT,source_neuron_id TEXT);
+        CREATE TABLE belief_evidence(belief_id TEXT,neuron_id TEXT,event_id TEXT);
+        CREATE TABLE task_branches(task_id TEXT PRIMARY KEY,project_id TEXT NOT NULL,task_key TEXT,title TEXT,status TEXT,created_at INTEGER,updated_at INTEGER,UNIQUE(project_id,task_key));
+        CREATE TABLE task_branch_entries(task_id TEXT,project_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+        CREATE UNIQUE INDEX idx_task_branch_entries_reference_unique ON task_branch_entries(task_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''));
+        CREATE TABLE event_clusters(cluster_id TEXT PRIMARY KEY,project_id TEXT NOT NULL,cluster_key TEXT,cluster_type TEXT,title TEXT,created_at INTEGER,updated_at INTEGER,UNIQUE(project_id,cluster_key));
+        CREATE TABLE event_cluster_entries(cluster_id TEXT,project_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+        CREATE UNIQUE INDEX idx_event_cluster_entries_reference_unique ON event_cluster_entries(cluster_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''));
+        CREATE TABLE branch_entries(branch_id TEXT,project_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+        CREATE TABLE topology_identity_quarantine(quarantine_id TEXT PRIMARY KEY,identity_type TEXT,old_parent_id TEXT,project_scope TEXT,entry_json TEXT,reason TEXT,created_at INTEGER);
+        CREATE TABLE topology_membership(neuron_id TEXT,project_id TEXT,dimension_type TEXT,dimension_key TEXT,title TEXT,created_at INTEGER,UNIQUE(neuron_id,dimension_type,dimension_key));
+        CREATE TABLE cognitive_nodes(node_id TEXT PRIMARY KEY,node_type TEXT,node_key TEXT,title TEXT,project_id TEXT,source_neuron_id TEXT,metadata_json TEXT,created_at INTEGER,updated_at INTEGER,UNIQUE(project_id,node_type,node_key));
+        CREATE TABLE cognitive_edges(edge_id TEXT PRIMARY KEY,source_node_id TEXT,target_node_id TEXT,edge_type TEXT,weight REAL,project_id TEXT,metadata_json TEXT,created_at INTEGER,UNIQUE(project_id,source_node_id,target_node_id,edge_type));
+      `);
+      db.prepare(`INSERT INTO neurons VALUES(?,?,?,?,0),(?,?,?,?,0)`).run('a', projectId, `${projectId} own title`, 1, 'b', 'other', 'OTHER_PRIVATE_TITLE', 2);
+      db.prepare(`INSERT INTO event_clusters VALUES('cluster',?,?,?,'LEAKED_TITLE',1,1)`).run(projectId, 'cogmem', projectId);
+      db.prepare(`INSERT INTO event_cluster_entries VALUES('cluster',?,'a',NULL,NULL,NULL,NULL,1)`).run(projectId);
+      db.prepare(`INSERT INTO task_branches VALUES('task',?,'task','LEAKED_TITLE','active',1,1)`).run(projectId);
+      db.prepare(`INSERT INTO task_branch_entries VALUES('task',?,'a',NULL,NULL,NULL,NULL,1),('task',?,'a',NULL,NULL,'missing-fact',NULL,2)`).run(projectId, projectId);
+      db.prepare(`INSERT INTO beliefs VALUES('belief',?,'a')`).run(projectId);
+      db.exec(`INSERT INTO belief_evidence VALUES('belief','b',NULL); INSERT INTO task_branch_entries VALUES('task','',NULL,NULL,'belief',NULL,NULL,3)`);
+
+      migration_0054.up(db);
+      expect(db.prepare(`SELECT cluster_key,title FROM event_clusters`).get()).toEqual({ cluster_key: `${projectId}:cogmem`, title: `${projectId} own title` });
+      expect(db.prepare(`SELECT title,status FROM task_branches`).get()).toEqual({ title: `${projectId} own title`, status: 'derived' });
+      expect(db.prepare(`SELECT reason FROM topology_identity_quarantine ORDER BY reason`).all()).toEqual([
+        { reason: 'entry_project_scope_conflict' }, { reason: 'entry_reference_dangling' },
+      ]);
+      expect(topologyIntegritySatisfied(db)).toBe(true);
+      migration_0054.up(db);
+      expect(topologyIntegritySatisfied(db)).toBe(true);
+      db.close();
+    }
   });
 });

@@ -280,6 +280,7 @@ export type ProjectBranchKind = 'project_root' | 'interaction' | 'belief' | 'fac
 export type EventClusterType = 'approval' | 'rejection' | 'issue' | 'project' | 'fact' | 'generic';
 
 export interface TopologyReference {
+  projectId: string | undefined;
   neuronId?: string;
   unitId?: string;
   beliefId?: string;
