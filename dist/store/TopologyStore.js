@@ -1,5 +1,6 @@
 import Database from 'bun:sqlite';
 import { projectQueryValue, projectScope } from '../topology/ProjectScope.js';
+import { isCanonicalEventClusterKey } from '../topology/EventClusterIdentity.js';
 export class TopologyStore {
     db;
     ownsDb;
@@ -53,6 +54,7 @@ export class TopologyStore {
       CREATE TABLE IF NOT EXISTS branch_links (
         parent_branch_id TEXT NOT NULL,
         child_branch_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT '',
         relation_type TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         UNIQUE(parent_branch_id, child_branch_id, relation_type)
@@ -168,6 +170,9 @@ export class TopologyStore {
             if (!this.hasColumn(table, 'project_id'))
                 this.db.exec(`ALTER TABLE ${table} ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`);
         }
+        if (!this.hasColumn('branch_links', 'project_id'))
+            this.db.exec(`ALTER TABLE branch_links ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`);
+        this.installBranchScopeTriggers();
     }
     timeProjectionNeedsRebuild(projectId, timeZone) {
         return !this.hasUsableTimeProjection(projectId, timeZone);
@@ -298,48 +303,60 @@ export class TopologyStore {
         return bucket;
     }
     attachToTimeBucket(bucketId, ref) {
-        const bucket = this.db.prepare(`SELECT project_id FROM time_buckets WHERE bucket_id=?`).get(bucketId);
-        if (!bucket || bucket.project_id !== (ref.projectId ?? ''))
-            throw new Error('time_bucket_project_scope_mismatch');
-        this.db.prepare(`
+        this.db.transaction(() => {
+            const bucket = this.db.prepare(`SELECT project_id,label FROM time_buckets WHERE bucket_id=?`).get(bucketId);
+            if (!bucket || bucket.project_id !== projectScope(ref.projectId))
+                throw new Error('time_bucket_project_scope_mismatch');
+            this.assertReferenceScope(bucket.project_id, ref);
+            this.db.prepare(`
       INSERT OR IGNORE INTO time_bucket_entries (
         bucket_id, neuron_id, unit_id, belief_id, fact_id, event_id, project_id, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(bucketId, ref.neuronId || null, ref.unitId || null, ref.beliefId || null, ref.factId || null, ref.eventId || null, projectScope(ref.projectId), ref.createdAt);
-        if (ref.neuronId) {
-            const row = this.db.prepare(`
-        SELECT label FROM time_buckets WHERE bucket_id = ?
-      `).get(bucketId);
-            this.upsertMembership(ref.neuronId, ref.projectId, 'time_bucket', bucketId, row?.label, ref.createdAt);
-        }
+            if (ref.neuronId)
+                this.upsertMembership(ref.neuronId, ref.projectId, 'time_bucket', bucketId, bucket.label, ref.createdAt);
+        })();
     }
     upsertProjectBranch(input) {
-        const existing = this.db.prepare(`
-      SELECT * FROM project_branches WHERE project_id = ? AND branch_key = ?
-    `).get(input.projectId, input.branchKey);
-        const branchId = existing?.branch_id || input.branchId;
-        const createdAt = existing?.created_at || input.createdAt;
-        this.db.prepare(`
-      INSERT OR REPLACE INTO project_branches (
+        return this.db.transaction(() => {
+            const idOwner = this.db.prepare(`SELECT project_id,branch_key FROM project_branches WHERE branch_id=?`).get(input.branchId);
+            if (idOwner && (idOwner.project_id !== input.projectId || idOwner.branch_key !== input.branchKey))
+                throw new Error('project_branch_identity_conflict');
+            const existing = this.db.prepare(`SELECT * FROM project_branches WHERE project_id=? AND branch_key=?`).get(input.projectId, input.branchKey);
+            const branchId = existing?.branch_id || input.branchId;
+            const createdAt = existing?.created_at || input.createdAt;
+            this.db.prepare(`
+      INSERT INTO project_branches (
         branch_id, project_id, branch_key, branch_kind, title, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id,branch_key) DO UPDATE SET
+        branch_kind=excluded.branch_kind,title=excluded.title,updated_at=excluded.updated_at
     `).run(branchId, input.projectId, input.branchKey, input.branchKind, input.title, createdAt, input.createdAt);
-        return {
-            branchId,
-            projectId: input.projectId,
-            branchKey: input.branchKey,
-            branchKind: input.branchKind,
-            title: input.title,
-            createdAt,
-            updatedAt: input.createdAt
-        };
+            return {
+                branchId,
+                projectId: input.projectId,
+                branchKey: input.branchKey,
+                branchKind: input.branchKind,
+                title: input.title,
+                createdAt,
+                updatedAt: input.createdAt
+            };
+        })();
     }
     linkBranches(parentBranchId, childBranchId, relationType, createdAt) {
-        this.db.prepare(`
+        this.db.transaction(() => {
+            const parent = this.db.prepare(`SELECT project_id FROM project_branches WHERE branch_id=?`).get(parentBranchId);
+            const child = this.db.prepare(`SELECT project_id FROM project_branches WHERE branch_id=?`).get(childBranchId);
+            if (!parent || !child)
+                throw new Error('topology_parent_not_found');
+            if (parent.project_id !== child.project_id)
+                throw new Error('topology_branch_link_project_scope_mismatch');
+            this.db.prepare(`
       INSERT OR IGNORE INTO branch_links (
-        parent_branch_id, child_branch_id, relation_type, created_at
-      ) VALUES (?, ?, ?, ?)
-    `).run(parentBranchId, childBranchId, relationType, createdAt);
+        parent_branch_id, child_branch_id, project_id, relation_type, created_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `).run(parentBranchId, childBranchId, parent.project_id, relationType, createdAt);
+        })();
     }
     attachToBranch(branchId, ref) {
         this.db.transaction(() => {
@@ -404,6 +421,8 @@ export class TopologyStore {
     }
     upsertEventCluster(input) {
         const scope = projectScope(input.projectId);
+        if (!isCanonicalEventClusterKey(input.clusterType, input.clusterKey))
+            throw new Error('event_cluster_key_noncanonical');
         const existing = this.db.prepare(`
       SELECT * FROM event_clusters WHERE project_id = ? AND cluster_key = ?
     `).get(scope, input.clusterKey);
@@ -491,26 +510,30 @@ export class TopologyStore {
     }
     listNeuronIdsByProject(projectId) {
         const rows = this.db.prepare(`
-      SELECT DISTINCT neuron_id
+      SELECT DISTINCT be.neuron_id
       FROM branch_entries be
       JOIN project_branches pb ON pb.branch_id = be.branch_id
+      JOIN neurons n ON n.id = be.neuron_id AND n.is_deleted = 0
       WHERE pb.project_id = ?
-        AND neuron_id IS NOT NULL
+        AND COALESCE(n.project_id, '') = COALESCE(pb.project_id, '')
       ORDER BY be.created_at DESC
     `).all(projectId);
         return rows.map((row) => row.neuron_id).filter((value) => Boolean(value));
     }
-    listNeuronIdsByTemporalRange(start, end) {
-        if (this.hasDirtyTimeProjection())
+    listNeuronIdsByTemporalRange(start, end, projectId) {
+        if (this.hasDirtyTimeProjection(projectId))
             return [];
+        const queryProject = projectQueryValue(projectId);
         const rows = this.db.prepare(`
-      SELECT DISTINCT neuron_id
-      FROM time_bucket_entries
-      WHERE created_at >= ?
-        AND created_at < ?
-        AND neuron_id IS NOT NULL
-      ORDER BY created_at DESC
-    `).all(start, end);
+      SELECT DISTINCT tbe.neuron_id
+      FROM time_bucket_entries tbe
+      JOIN neurons n ON n.id=tbe.neuron_id AND n.is_deleted=0
+      WHERE tbe.created_at >= ?
+        AND tbe.created_at < ?
+        AND (? IS NULL OR COALESCE(tbe.project_id,'') = ?)
+        AND COALESCE(n.project_id,'')=COALESCE(tbe.project_id,'')
+      ORDER BY tbe.created_at DESC
+    `).all(start, end, queryProject, queryProject);
         return rows.map((row) => row.neuron_id).filter((value) => Boolean(value));
     }
     listTimeBucketIdsByNeuronIds(neuronIds, projectId, limit = 80) {
@@ -537,14 +560,19 @@ export class TopologyStore {
         const collected = new Set();
         const queryProject = projectQueryValue(input.projectId);
         const terms = (input.terms || []).map((term) => term.trim().toLowerCase()).filter((term) => term.length >= 2);
+        const hasNeurons = this.hasTable('neurons');
+        const liveJoin = hasNeurons ? 'JOIN neurons n ON n.id=tm.neuron_id AND n.is_deleted=0' : '';
+        const liveScope = hasNeurons ? "AND COALESCE(n.project_id,'')=COALESCE(tm.project_id,'')" : '';
         const baseRows = this.db.prepare(`
-      SELECT neuron_id
-      FROM topology_membership
-      WHERE (? IS NULL OR COALESCE(project_id, '') = ?)
-        AND (? = 0 OR dimension_type <> 'time_bucket')
-        AND (? IS NULL OR created_at >= ?)
-        AND (? IS NULL OR created_at < ?)
-      ORDER BY created_at DESC
+      SELECT tm.neuron_id
+      FROM topology_membership tm
+      ${liveJoin}
+      WHERE (? IS NULL OR COALESCE(tm.project_id, '') = ?)
+        ${liveScope}
+        AND (? = 0 OR tm.dimension_type <> 'time_bucket')
+        AND (? IS NULL OR tm.created_at >= ?)
+        AND (? IS NULL OR tm.created_at < ?)
+      ORDER BY tm.created_at DESC
       LIMIT ?
     `).all(queryProject, queryProject, input.excludeTemporal ? 1 : 0, input.startTime ?? null, input.startTime ?? null, input.endTime ?? null, input.endTime ?? null, limit * 2);
         for (const row of baseRows) {
@@ -556,12 +584,14 @@ export class TopologyStore {
             if (collected.size >= limit)
                 break;
             const rows = this.db.prepare(`
-        SELECT neuron_id
-        FROM topology_membership
-        WHERE (? IS NULL OR COALESCE(project_id, '') = ?)
-          AND (? = 0 OR dimension_type <> 'time_bucket')
-          AND (lower(title) LIKE ? OR lower(dimension_key) LIKE ?)
-        ORDER BY created_at DESC
+        SELECT tm.neuron_id
+        FROM topology_membership tm
+        ${liveJoin}
+        WHERE (? IS NULL OR COALESCE(tm.project_id, '') = ?)
+          ${liveScope}
+          AND (? = 0 OR tm.dimension_type <> 'time_bucket')
+          AND (lower(tm.title) LIKE ? OR lower(tm.dimension_key) LIKE ?)
+        ORDER BY tm.created_at DESC
         LIMIT ?
       `).all(queryProject, queryProject, input.excludeTemporal ? 1 : 0, `%${term}%`, `%${term}%`, limit);
             for (const row of rows) {
@@ -638,11 +668,7 @@ export class TopologyStore {
             for (let depth = 0; depth < siblingDepth; depth += 1) {
                 const next = [];
                 for (const branchId of frontier) {
-                    const linked = this.db.prepare(`
-            SELECT parent_branch_id, child_branch_id
-            FROM branch_links
-            WHERE parent_branch_id = ? OR child_branch_id = ?
-          `).all(branchId, branchId);
+                    const linked = this.listScopedBranchLinks(branchId, queryProject);
                     for (const row of linked) {
                         const candidates = [row.parent_branch_id, row.child_branch_id];
                         for (const candidate of candidates) {
@@ -663,34 +689,44 @@ export class TopologyStore {
             const placeholders = Array.from(branchIds).map(() => '?').join(', ');
             addNeuronRows(this.db.prepare(`
           SELECT DISTINCT neuron_id
-          FROM branch_entries
-          WHERE branch_id IN (${placeholders})
+          FROM branch_entries be
+          JOIN project_branches pb ON pb.branch_id=be.branch_id
+          JOIN neurons n ON n.id=be.neuron_id AND n.is_deleted=0
+          WHERE be.branch_id IN (${placeholders})
+            AND (? IS NULL OR COALESCE(pb.project_id,'') = ?)
+            AND COALESCE(n.project_id,'')=COALESCE(pb.project_id,'')
             AND neuron_id IS NOT NULL
-          ORDER BY created_at DESC
+          ORDER BY be.created_at DESC
           LIMIT ?
-        `).all(...Array.from(branchIds), limit));
+        `).all(...Array.from(branchIds), queryProject, queryProject, limit));
         }
         if (taskIds.size > 0) {
             const placeholders = Array.from(taskIds).map(() => '?').join(', ');
             addNeuronRows(this.db.prepare(`
-          SELECT DISTINCT neuron_id
-          FROM task_branch_entries
-          WHERE task_id IN (${placeholders})
-            AND neuron_id IS NOT NULL
-          ORDER BY created_at DESC
+          SELECT DISTINCT tbe.neuron_id
+          FROM task_branch_entries tbe
+          JOIN task_branches tb ON tb.task_id=tbe.task_id
+          JOIN neurons n ON n.id=tbe.neuron_id AND n.is_deleted=0
+          WHERE tbe.task_id IN (${placeholders})
+            AND (? IS NULL OR COALESCE(tb.project_id,'') = ?)
+            AND COALESCE(n.project_id,'')=COALESCE(tb.project_id,'')
+          ORDER BY tbe.created_at DESC
           LIMIT ?
-        `).all(...Array.from(taskIds), limit));
+        `).all(...Array.from(taskIds), queryProject, queryProject, limit));
         }
         if (clusterIds.size > 0) {
             const placeholders = Array.from(clusterIds).map(() => '?').join(', ');
             addNeuronRows(this.db.prepare(`
-          SELECT DISTINCT neuron_id
-          FROM event_cluster_entries
-          WHERE cluster_id IN (${placeholders})
-            AND neuron_id IS NOT NULL
-          ORDER BY created_at DESC
+          SELECT DISTINCT ece.neuron_id
+          FROM event_cluster_entries ece
+          JOIN event_clusters ec ON ec.cluster_id=ece.cluster_id
+          JOIN neurons n ON n.id=ece.neuron_id AND n.is_deleted=0
+          WHERE ece.cluster_id IN (${placeholders})
+            AND (? IS NULL OR COALESCE(ec.project_id,'') = ?)
+            AND COALESCE(n.project_id,'')=COALESCE(ec.project_id,'')
+          ORDER BY ece.created_at DESC
           LIMIT ?
-        `).all(...Array.from(clusterIds), limit));
+        `).all(...Array.from(clusterIds), queryProject, queryProject, limit));
         }
         return {
             branchIds: Array.from(branchIds).slice(0, limit),
@@ -705,12 +741,25 @@ export class TopologyStore {
         if (input.neuronIds.length === 0) {
             return { branchIds: [], taskIds: [], clusterIds: [], neuronIds: [] };
         }
+        const queryProject = projectQueryValue(input.projectId);
+        const requestedNeuronIds = Array.from(new Set(input.neuronIds.filter(Boolean))).slice(0, 200);
+        const scopedNeuronIds = queryProject === null
+            ? requestedNeuronIds
+            : this.db.prepare(`
+          SELECT id
+          FROM neurons
+          WHERE id IN (${requestedNeuronIds.map(() => '?').join(', ')})
+            AND is_deleted=0
+            AND COALESCE(project_id,'')=?
+        `).all(...requestedNeuronIds, queryProject).map((row) => row.id);
+        if (scopedNeuronIds.length === 0) {
+            return { branchIds: [], taskIds: [], clusterIds: [], neuronIds: [] };
+        }
         const branchIds = new Set();
         const taskIds = new Set();
         const clusterIds = new Set();
-        const neuronIds = new Set(input.neuronIds);
-        const queryProject = projectQueryValue(input.projectId);
-        const placeholders = input.neuronIds.map(() => '?').join(', ');
+        const neuronIds = new Set(scopedNeuronIds);
+        const placeholders = scopedNeuronIds.map(() => '?').join(', ');
         const branchRows = this.db.prepare(`
       SELECT DISTINCT be.branch_id
       FROM branch_entries be
@@ -719,7 +768,7 @@ export class TopologyStore {
         AND (? IS NULL OR COALESCE(pb.project_id, '') = ?)
       ORDER BY be.created_at DESC
       LIMIT ?
-    `).all(...input.neuronIds, queryProject, queryProject, limit);
+    `).all(...scopedNeuronIds, queryProject, queryProject, limit);
         for (const row of branchRows)
             branchIds.add(row.branch_id);
         const taskRows = this.db.prepare(`
@@ -730,7 +779,7 @@ export class TopologyStore {
         AND (? IS NULL OR COALESCE(tb.project_id, '') = ?)
       ORDER BY tbe.created_at DESC
       LIMIT ?
-    `).all(...input.neuronIds, queryProject, queryProject, limit);
+    `).all(...scopedNeuronIds, queryProject, queryProject, limit);
         for (const row of taskRows)
             taskIds.add(row.task_id);
         const clusterRows = this.db.prepare(`
@@ -741,7 +790,7 @@ export class TopologyStore {
         AND (? IS NULL OR COALESCE(ec.project_id, '') = ?)
       ORDER BY ece.created_at DESC
       LIMIT ?
-    `).all(...input.neuronIds, queryProject, queryProject, limit);
+    `).all(...scopedNeuronIds, queryProject, queryProject, limit);
         for (const row of clusterRows)
             clusterIds.add(row.cluster_id);
         if (branchIds.size > 0 && siblingDepth > 0) {
@@ -750,11 +799,7 @@ export class TopologyStore {
             for (let depth = 0; depth < siblingDepth; depth += 1) {
                 const next = [];
                 for (const branchId of frontier) {
-                    const linked = this.db.prepare(`
-            SELECT parent_branch_id, child_branch_id
-            FROM branch_links
-            WHERE parent_branch_id = ? OR child_branch_id = ?
-          `).all(branchId, branchId);
+                    const linked = this.listScopedBranchLinks(branchId, queryProject);
                     for (const row of linked) {
                         for (const candidate of [row.parent_branch_id, row.child_branch_id]) {
                             if (visited.has(candidate))
@@ -774,12 +819,16 @@ export class TopologyStore {
             const placeholders2 = Array.from(branchIds).map(() => '?').join(', ');
             const rows = this.db.prepare(`
         SELECT DISTINCT neuron_id
-        FROM branch_entries
-        WHERE branch_id IN (${placeholders2})
+        FROM branch_entries be
+        JOIN project_branches pb ON pb.branch_id=be.branch_id
+        JOIN neurons n ON n.id=be.neuron_id AND n.is_deleted=0
+        WHERE be.branch_id IN (${placeholders2})
+          AND (? IS NULL OR COALESCE(pb.project_id,'') = ?)
+          AND COALESCE(n.project_id,'')=COALESCE(pb.project_id,'')
           AND neuron_id IS NOT NULL
-        ORDER BY created_at DESC
+        ORDER BY be.created_at DESC
         LIMIT ?
-      `).all(...Array.from(branchIds), limit);
+      `).all(...Array.from(branchIds), queryProject, queryProject, limit);
             for (const row of rows) {
                 if (row.neuron_id)
                     neuronIds.add(row.neuron_id);
@@ -795,20 +844,24 @@ export class TopologyStore {
         };
     }
     collectTemporalContext(input) {
-        if (this.hasDirtyTimeProjection())
+        if (this.hasDirtyTimeProjection(input.projectId))
             return { bucketType: input.preferredBucketType ?? 'day', bucketIds: [], bucketLabels: [], neuronIds: [] };
         const limit = input.limit ?? 120;
         const bucketType = input.preferredBucketType ?? 'day';
+        const queryProject = projectQueryValue(input.projectId);
         const rows = this.db.prepare(`
       SELECT tb.bucket_id, tb.label, tbe.neuron_id
       FROM time_bucket_entries tbe
       JOIN time_buckets tb ON tb.bucket_id = tbe.bucket_id
+      JOIN neurons n ON n.id=tbe.neuron_id AND n.is_deleted=0
       WHERE tb.bucket_type = ?
+        AND (? IS NULL OR COALESCE(tbe.project_id,'') = ?)
+        AND COALESCE(n.project_id,'')=COALESCE(tbe.project_id,'')
         AND (? IS NULL OR tbe.created_at >= ?)
         AND (? IS NULL OR tbe.created_at < ?)
       ORDER BY tb.bucket_start DESC, tbe.created_at DESC
       LIMIT ?
-    `).all(bucketType, input.startTime ?? null, input.startTime ?? null, input.endTime ?? null, input.endTime ?? null, limit * 4);
+    `).all(bucketType, queryProject, queryProject, input.startTime ?? null, input.startTime ?? null, input.endTime ?? null, input.endTime ?? null, limit * 4);
         const bucketIds = [];
         const bucketLabels = [];
         const neuronIds = [];
@@ -869,6 +922,18 @@ export class TopologyStore {
         neuron_id, project_id, dimension_type, dimension_key, title, created_at
       ) VALUES (?, ?, ?, ?, ?, ?)
     `).run(neuronId, projectScope(projectId), dimensionType, dimensionKey, title || null, createdAt);
+    }
+    listScopedBranchLinks(branchId, queryProject) {
+        return this.db.prepare(`
+      SELECT bl.parent_branch_id,bl.child_branch_id
+      FROM branch_links bl
+      JOIN project_branches parent ON parent.branch_id=bl.parent_branch_id
+      JOIN project_branches child ON child.branch_id=bl.child_branch_id
+      WHERE (bl.parent_branch_id=? OR bl.child_branch_id=?)
+        AND parent.project_id=child.project_id
+        AND COALESCE(bl.project_id,'')=COALESCE(parent.project_id,'')
+        AND (? IS NULL OR COALESCE(parent.project_id,'')=?)
+    `).all(branchId, branchId, queryProject, queryProject);
     }
     assertReferenceScope(parentScope, ref) {
         const expected = projectScope(ref.projectId);
@@ -935,6 +1000,43 @@ export class TopologyStore {
     }
     hasColumn(table, column) {
         return Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name=?`).get(table, column));
+    }
+    hasTable(table) {
+        return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table));
+    }
+    installBranchScopeTriggers() {
+        this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_project_branch_scope_immutable
+      BEFORE UPDATE OF project_id,branch_key ON project_branches
+      WHEN NEW.project_id<>OLD.project_id OR NEW.branch_key<>OLD.branch_key
+      BEGIN SELECT RAISE(ABORT,'project_branch_identity_conflict'); END;
+      CREATE TRIGGER IF NOT EXISTS trg_branch_link_scope_insert
+      BEFORE INSERT ON branch_links
+      WHEN NOT EXISTS (
+        SELECT 1 FROM project_branches p JOIN project_branches c
+          ON p.project_id=c.project_id
+        WHERE p.branch_id=NEW.parent_branch_id AND c.branch_id=NEW.child_branch_id
+          AND p.project_id=COALESCE(NEW.project_id,'')
+      )
+      BEGIN SELECT RAISE(ABORT,'topology_branch_link_project_scope_mismatch'); END;
+      CREATE TRIGGER IF NOT EXISTS trg_branch_link_scope_update
+      BEFORE UPDATE ON branch_links
+      WHEN NOT EXISTS (
+        SELECT 1 FROM project_branches p JOIN project_branches c
+          ON p.project_id=c.project_id
+        WHERE p.branch_id=NEW.parent_branch_id AND c.branch_id=NEW.child_branch_id
+          AND p.project_id=COALESCE(NEW.project_id,'')
+      )
+      BEGIN SELECT RAISE(ABORT,'topology_branch_link_project_scope_mismatch'); END;
+      CREATE TRIGGER IF NOT EXISTS trg_branch_entry_parent_scope_insert
+      BEFORE INSERT ON branch_entries
+      WHEN NOT EXISTS (SELECT 1 FROM project_branches p WHERE p.branch_id=NEW.branch_id AND p.project_id=COALESCE(NEW.project_id,''))
+      BEGIN SELECT RAISE(ABORT,'topology_reference_project_scope_mismatch'); END;
+      CREATE TRIGGER IF NOT EXISTS trg_branch_entry_parent_scope_update
+      BEFORE UPDATE ON branch_entries
+      WHEN NOT EXISTS (SELECT 1 FROM project_branches p WHERE p.branch_id=NEW.branch_id AND p.project_id=COALESCE(NEW.project_id,''))
+      BEGIN SELECT RAISE(ABORT,'topology_reference_project_scope_mismatch'); END;
+    `);
     }
     close() {
         if (this.ownsDb)

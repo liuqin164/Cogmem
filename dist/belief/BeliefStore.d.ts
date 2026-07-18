@@ -40,6 +40,7 @@ export declare class BeliefStore {
         };
     }): BeliefRecord[];
     getBeliefHistoryForCanonicalKeys(canonicalKeys: string[], options?: {
+        projectId?: string;
         includeStatuses?: Array<'active' | 'superseded' | 'revoked' | 'suspect' | 'expired'>;
         limitPerCanonical?: number;
     }): Map<string, BeliefRecord[]>;

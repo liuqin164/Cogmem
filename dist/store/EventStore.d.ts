@@ -117,8 +117,10 @@ export declare class EventStore {
         endTime?: number;
         limit?: number;
     }): MemoryEvent[];
-    getChildEvents(parentEventId: string): MemoryEvent[];
+    getChildEvents(parentEventId: string, projectId?: string): MemoryEvent[];
     updateNextEventId(eventId: string, nextEventId: string | undefined): void;
+    private getEventInScope;
+    private assertLinkedEventScopes;
     getEventCount(): number;
     getProjectionCheckpoint(projectionName: string): ProjectionCheckpoint | null;
     upsertProjectionCheckpoint(checkpoint: ProjectionCheckpoint): void;

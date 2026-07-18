@@ -105,6 +105,7 @@ export const MIGRATION_DIGESTS: Readonly<Record<string, string>> = {
   '0052': 'f1130413c964d2b6ec853dc43a1b5bb1d3a888b8942922befb9bcfd7880fc021',
   '0053': '0497480c81661528bdd5fc4db6ebf85c8a389668f3f60c272a2d8c0b8c01dab1',
   '0054': '7ea0c8c12ebfb7ff27240f2d5a4f618573bc99f67f58c73b9ac230c0a03a6f7e',
+  '0055': 'c16ed6ffd36d2ed2dcd6f1f372817e8be4a47494d2b42263ccabb45de8d78c7b',
 };
 
 // Audited receipts emitted by the temporary cda1269 build. They remain

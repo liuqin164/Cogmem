@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { eventClusterKey } from '../topology/EventClusterIdentity.js';
 import { localDateFor, localDateRange, nextCivilDate } from '../utils/LocalDateContext.js';
 import { resolveTimeZone } from '../utils/LocalDateContext.js';
 import { timeBucketId } from '../topology/TimeBucketIdentity.js';
@@ -197,7 +198,7 @@ export class TopologyCompiler {
             const cluster = this.store.upsertEventCluster({
                 clusterId: `cluster-${randomUUID()}`,
                 projectId,
-                clusterKey: `${clusterType}:${this.normalizeKey(event.target || event.actor || event.eventType)}`,
+                clusterKey: eventClusterKey(clusterType, this.normalizeKey(event.target || event.actor || event.eventType)),
                 clusterType,
                 title: event.target || event.actor || event.eventType,
                 createdAt
@@ -215,7 +216,7 @@ export class TopologyCompiler {
             const cluster = this.store.upsertEventCluster({
                 clusterId: `cluster-${randomUUID()}`,
                 projectId,
-                clusterKey: `${clusterType}:${this.normalizeKey(fact.object || fact.predicateValue || fact.subject)}`,
+                clusterKey: eventClusterKey(clusterType, this.normalizeKey(fact.object || fact.predicateValue || fact.subject)),
                 clusterType,
                 title: fact.object || fact.predicateValue || fact.subject,
                 createdAt
@@ -232,7 +233,7 @@ export class TopologyCompiler {
             const cluster = this.store.upsertEventCluster({
                 clusterId: `cluster-${randomUUID()}`,
                 projectId,
-                clusterKey: `fact:${this.normalizeKey(belief.predicate)}`,
+                clusterKey: eventClusterKey('fact', this.normalizeKey(belief.predicate)),
                 clusterType: 'fact',
                 title: belief.predicate,
                 createdAt
@@ -247,7 +248,7 @@ export class TopologyCompiler {
             const cluster = this.store.upsertEventCluster({
                 clusterId: `cluster-${randomUUID()}`,
                 projectId,
-                clusterKey: `generic:${this.normalizeKey(neuron.content).slice(0, 72)}`,
+                clusterKey: eventClusterKey('generic', this.normalizeKey(neuron.content).slice(0, 72)),
                 clusterType: 'generic',
                 title: neuron.content.slice(0, 96),
                 createdAt

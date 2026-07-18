@@ -353,7 +353,7 @@ export class DeepWriteCandidateStore {
     mapRun(row) {
         return {
             runId: row.run_id,
-            projectId: row.project_id || undefined,
+            projectId: row.project_id ?? undefined,
             sessionId: row.session_id || undefined,
             sourceNeuronIds: JSON.parse(row.source_neuron_ids_json || '[]'),
             modelProvider: row.model_provider || undefined,

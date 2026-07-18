@@ -198,7 +198,7 @@ export class DeepWritePromotionPolicy {
   }
 
   promotePending(limit: number = 100, options: DeepWritePromotionOptions = {}): DeepWritePromotionDecision[] {
-    const candidates = options.projectId
+    const candidates = options.projectId !== undefined
       ? this.deps.candidateStore.listCandidates({ statuses: ['candidate'], projectId: options.projectId, limit })
       : this.deps.candidateStore.listCandidatesByStatus(['candidate'], { limit });
     return candidates.map((candidate) => this.atomicEvaluate(candidate));
@@ -454,8 +454,9 @@ export class DeepWritePromotionPolicy {
 
     const fromName = stringField(content, ['from', 'source', 'subject', 'cause', 'entityA', 'left']);
     const toName = stringField(content, ['to', 'target', 'object', 'effect', 'entityB', 'right']);
-    const fromEntity = this.resolveEntity(fromName, stringField(content, ['fromType', 'sourceType', 'subjectType', 'causeType']));
-    const toEntity = this.resolveEntity(toName, stringField(content, ['toType', 'targetType', 'objectType', 'effectType']));
+    const projectId = this.deps.candidateStore.getRun(candidate.runId)?.projectId;
+    const fromEntity = this.resolveEntity(fromName, stringField(content, ['fromType', 'sourceType', 'subjectType', 'causeType']), projectId);
+    const toEntity = this.resolveEntity(toName, stringField(content, ['toType', 'targetType', 'objectType', 'effectType']), projectId);
     if (!fromEntity || !toEntity) {
       return this.mark(candidate, 'needs_confirmation', {
         outcome: 'needs_confirmation',
@@ -494,12 +495,12 @@ export class DeepWritePromotionPolicy {
     });
   }
 
-  private resolveEntity(name: string | undefined, type?: string): { entityId: string } | undefined {
+  private resolveEntity(name: string | undefined, type?: string, projectId?: string): { entityId: string } | undefined {
     if (!name || !this.deps.entityStore) return undefined;
-    return this.deps.entityStore.findByCanonicalName(name, type)
-      || this.deps.entityStore.findByAlias(name, type)
-      || this.deps.entityStore.findByCanonicalName(name)
-      || this.deps.entityStore.findByAlias(name)
+    return this.deps.entityStore.findByCanonicalName(name, type, projectId)
+      || this.deps.entityStore.findByAlias(name, type, projectId)
+      || this.deps.entityStore.findByCanonicalName(name, undefined, projectId)
+      || this.deps.entityStore.findByAlias(name, undefined, projectId)
       || undefined;
   }
 

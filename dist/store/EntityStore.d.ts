@@ -102,9 +102,9 @@ export declare class EntityStore {
         createdAt?: number;
         instanceMode?: 'auto' | 'canonical' | 'new_instance';
     }): EntityRecord;
-    findByAlias(aliasText: string, type?: string): EntityRecord | null;
-    listByAlias(aliasText: string, type?: string): EntityRecord[];
-    findByCanonicalName(canonicalName: string, type?: string): EntityRecord | null;
+    findByAlias(aliasText: string, type?: string, projectId?: string): EntityRecord | null;
+    listByAlias(aliasText: string, type?: string, projectId?: string): EntityRecord[];
+    findByCanonicalName(canonicalName: string, type?: string, projectId?: string): EntityRecord | null;
     findByEntityId(entityId: string): EntityRecord | null;
     findActiveByEntityId(entityId: string): EntityRecord | null;
     getByEntityId(entityId: string): EntityRecord | null;
@@ -136,7 +136,7 @@ export declare class EntityStore {
         limit?: number;
         includeInactive?: boolean;
     }): EntityTimelineItem[];
-    listEntitiesUpdatedInRange(startTime: number, endTime: number, type?: string): EntityRecord[];
+    listEntitiesUpdatedInRange(startTime: number, endTime: number, type?: string, projectId?: string): EntityRecord[];
     archiveEntity(entityId: string, updatedAt?: number): void;
     addAttribute(input: {
         entityId: string;
@@ -145,7 +145,7 @@ export declare class EntityStore {
         sourceNeuronId?: string;
         createdAt?: number;
     }): EntityAttributeRecord;
-    listAttributes(entityId: string, attributeKey?: string): EntityAttributeRecord[];
+    listAttributes(entityId: string, attributeKey?: string, projectId?: string): EntityAttributeRecord[];
     addRelation(input: {
         sourceEntityId: string;
         targetEntityId: string;
@@ -163,6 +163,7 @@ export declare class EntityStore {
     listPendingResolutions(filter?: {
         status?: PendingEntityResolutionRecord['status'];
         entityType?: string;
+        projectId?: string;
     }): PendingEntityResolutionRecord[];
     listAliasConflicts(type?: string): EntityAliasConflictRecord[];
     close(): void;
@@ -194,6 +195,7 @@ export declare class EntityStore {
     private extractRelativeNameHint;
     private matchesExplicitRelativeHint;
     private isBareRelativeEntity;
+    private hasTable;
     private mapRow;
 }
 //# sourceMappingURL=EntityStore.d.ts.map

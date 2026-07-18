@@ -213,16 +213,21 @@ export class FactStore {
         const statuses = options?.statuses || [];
         const params = [startTime, endTime];
         let sql = `
-      SELECT *
-      FROM facts
-      WHERE valid_from >= ?
-        AND valid_from < ?
+      SELECT f.*
+      FROM facts f
+      JOIN neurons n ON n.id=f.neuron_id AND n.is_deleted=0
+      WHERE f.valid_from >= ?
+        AND f.valid_from < ?
     `;
+        if (options?.projectId !== undefined) {
+            sql += ` AND COALESCE(n.project_id,'') = ?`;
+            params.push(options.projectId);
+        }
         if (statuses.length > 0) {
-            sql += ` AND status IN (${statuses.map(() => '?').join(', ')})`;
+            sql += ` AND f.status IN (${statuses.map(() => '?').join(', ')})`;
             params.push(...statuses);
         }
-        sql += ` ORDER BY valid_from DESC, fact_id DESC LIMIT ?`;
+        sql += ` ORDER BY f.valid_from DESC, f.fact_id DESC LIMIT ?`;
         params.push(options?.limit ?? 500);
         const rows = this.db.prepare(sql).all(...params);
         return rows.map((row) => this.mapFact(row));
@@ -231,16 +236,21 @@ export class FactStore {
         const statuses = options?.statuses || [];
         const params = [startTime, endTime];
         let sql = `
-      SELECT *
-      FROM compiled_events
-      WHERE valid_from >= ?
-        AND valid_from < ?
+      SELECT e.*
+      FROM compiled_events e
+      JOIN neurons n ON n.id=e.neuron_id AND n.is_deleted=0
+      WHERE e.valid_from >= ?
+        AND e.valid_from < ?
     `;
+        if (options?.projectId !== undefined) {
+            sql += ` AND COALESCE(n.project_id,'') = ?`;
+            params.push(options.projectId);
+        }
         if (statuses.length > 0) {
-            sql += ` AND status IN (${statuses.map(() => '?').join(', ')})`;
+            sql += ` AND e.status IN (${statuses.map(() => '?').join(', ')})`;
             params.push(...statuses);
         }
-        sql += ` ORDER BY valid_from DESC, event_id DESC LIMIT ?`;
+        sql += ` ORDER BY e.valid_from DESC, e.event_id DESC LIMIT ?`;
         params.push(options?.limit ?? 500);
         const rows = this.db.prepare(sql).all(...params);
         return rows.map((row) => this.mapEvent(row));

@@ -373,6 +373,7 @@ export class EventStore {
     );
     try {
       this.db.transaction(() => {
+        this.assertLinkedEventScopes(event.projectId, [event.parentEventId, event.prevEventId, event.nextEventId]);
         insert();
         this.upsertImportAnchor(event);
         this.upsertRawEventFts(event);
@@ -737,7 +738,7 @@ export class EventStore {
     const afterCount = Math.max(0, options.after ?? 2);
     const ordered = event.threadId
       ? this.getThreadEvents(event.threadId, { projectId: event.projectId })
-      : this.getEventsByStreamId(event.streamId);
+      : this.getEventsByStreamId(event.streamId).filter((item) => (item.projectId ?? '') === (event.projectId ?? ''));
     const index = ordered.findIndex((item) => item.eventId === event.eventId);
     const before = index >= 0 ? ordered.slice(Math.max(0, index - beforeCount), index) : [];
     const after = index >= 0 ? ordered.slice(index + 1, index + 1 + afterCount) : [];
@@ -745,8 +746,8 @@ export class EventStore {
       event,
       before,
       after,
-      parent: event.parentEventId ? this.getEvent(event.parentEventId) || undefined : undefined,
-      children: this.getChildEvents(event.eventId),
+      parent: event.parentEventId ? this.getEventInScope(event.parentEventId, event.projectId) : undefined,
+      children: this.getChildEvents(event.eventId, event.projectId),
     };
   }
 
@@ -816,25 +817,42 @@ export class EventStore {
     return this.fallbackRawTextSearch(query, options, limit);
   }
 
-  getChildEvents(parentEventId: string): MemoryEvent[] {
+  getChildEvents(parentEventId: string, projectId?: string): MemoryEvent[] {
+    const queryProject = projectId === undefined ? null : projectId;
     const rows = this.db.prepare(`
       SELECT ${MEMORY_EVENT_COLUMNS}
       FROM memory_events
       WHERE parent_event_id = ?
+        AND (? IS NULL OR COALESCE(project_id,'') = ?)
       ORDER BY COALESCE(thread_seq, event_version) ASC,
                COALESCE(event_ordinal, 0) ASC,
                COALESCE(global_seq, 0) ASC,
                event_id ASC
-    `).all(parentEventId) as any[];
+    `).all(parentEventId, queryProject, queryProject) as any[];
     return rows.map((row) => this.mapRow(row));
   }
 
   updateNextEventId(eventId: string, nextEventId: string | undefined): void {
-    this.db.prepare(`
-      UPDATE memory_events
-      SET next_event_id = ?
-      WHERE event_id = ?
-    `).run(nextEventId || null, eventId);
+    this.db.transaction(() => {
+      const source = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM memory_events WHERE event_id=?`).get(eventId) as { scope: string } | null;
+      if (!source) throw new Error('event_link_source_not_found');
+      if (nextEventId) this.assertLinkedEventScopes(source.scope, [nextEventId]);
+      this.db.prepare(`UPDATE memory_events SET next_event_id=? WHERE event_id=?`).run(nextEventId || null, eventId);
+    })();
+  }
+
+  private getEventInScope(eventId: string, projectId: string | undefined): MemoryEvent | undefined {
+    const event = this.getEvent(eventId);
+    return event && (event.projectId ?? '') === (projectId ?? '') ? event : undefined;
+  }
+
+  private assertLinkedEventScopes(projectId: string | undefined, eventIds: Array<string | undefined>): void {
+    const scope = projectId ?? '';
+    for (const eventId of new Set(eventIds.filter((id): id is string => Boolean(id)))) {
+      const row = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM memory_events WHERE event_id=?`).get(eventId) as { scope: string } | null;
+      if (!row) throw new Error('event_link_target_not_found');
+      if (row.scope !== scope) throw new Error('event_link_project_scope_mismatch');
+    }
   }
 
   getEventCount(): number {

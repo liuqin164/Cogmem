@@ -11,6 +11,7 @@ import { migration_0046 } from '../src/migrations/0046_stable_migration_checksum
 import { migration_0052 } from '../src/migrations/0052_project_scoped_topology_identity.js';
 import { migration_0053 } from '../src/migrations/0053_topology_privacy_and_recovery.js';
 import { migration_0054, topologyIntegritySatisfied } from '../src/migrations/0054_topology_semantic_integrity.js';
+import { migration_0055, topologyFinalizationSatisfied } from '../src/migrations/0055_topology_scope_finalization.js';
 import { CANONICAL_MIGRATION_SOURCE_DIGESTS, FROZEN_MIGRATION_DEPENDENCY_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 describe('schema migration runner', () => {
@@ -370,5 +371,41 @@ describe('schema migration runner', () => {
       expect(topologyIntegritySatisfied(db)).toBe(true);
       db.close();
     }
+  });
+
+  test('0055 restores pre-0052 task identity without rewriting clean metadata', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,content TEXT,created_at INTEGER,is_deleted INTEGER DEFAULT 0);
+      CREATE TABLE facts(fact_id TEXT PRIMARY KEY,neuron_id TEXT,predicate_family TEXT,object_value TEXT);
+      CREATE TABLE compiled_events(event_id TEXT PRIMARY KEY,neuron_id TEXT);
+      CREATE TABLE memory_events(event_id TEXT PRIMARY KEY,project_id TEXT,parent_event_id TEXT,prev_event_id TEXT,next_event_id TEXT);
+      CREATE TABLE interaction_units(unit_id TEXT PRIMARY KEY,type TEXT,semantic_text TEXT,message_neuron_ids_json TEXT);
+      CREATE TABLE beliefs(id TEXT PRIMARY KEY,project_id TEXT,source_neuron_id TEXT,predicate TEXT);
+      CREATE TABLE belief_evidence(belief_id TEXT,neuron_id TEXT,event_id TEXT);
+      CREATE TABLE task_branches(task_id TEXT PRIMARY KEY,project_id TEXT,task_key TEXT UNIQUE,title TEXT,status TEXT,created_at INTEGER,updated_at INTEGER);
+      CREATE TABLE task_branch_entries(task_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+      CREATE TABLE event_clusters(cluster_id TEXT PRIMARY KEY,project_id TEXT,cluster_key TEXT UNIQUE,cluster_type TEXT,title TEXT,created_at INTEGER,updated_at INTEGER);
+      CREATE TABLE event_cluster_entries(cluster_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+      CREATE TABLE project_branches(branch_id TEXT PRIMARY KEY,project_id TEXT,branch_key TEXT,title TEXT);
+      CREATE TABLE branch_entries(branch_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+      CREATE TABLE branch_links(parent_branch_id TEXT,child_branch_id TEXT,relation_type TEXT,created_at INTEGER,UNIQUE(parent_branch_id,child_branch_id,relation_type));
+      CREATE TABLE topology_membership(neuron_id TEXT,project_id TEXT,dimension_type TEXT,dimension_key TEXT,title TEXT,created_at INTEGER,UNIQUE(neuron_id,dimension_type,dimension_key));
+      CREATE TABLE cognitive_nodes(node_id TEXT PRIMARY KEY,node_type TEXT,node_key TEXT,title TEXT,project_id TEXT,source_neuron_id TEXT,metadata_json TEXT,created_at INTEGER,updated_at INTEGER,UNIQUE(project_id,node_type,node_key));
+      CREATE TABLE cognitive_edges(edge_id TEXT PRIMARY KEY,source_node_id TEXT,target_node_id TEXT,edge_type TEXT,weight REAL,project_id TEXT,metadata_json TEXT,created_at INTEGER,UNIQUE(project_id,source_node_id,target_node_id,edge_type));
+      INSERT INTO neurons VALUES('n','issue','issue printer',1,0);
+      INSERT INTO facts VALUES('f','n','has_issue','printer');
+      INSERT INTO task_branches VALUES('prefixed','issue','issue:printer','CUSTOM_PREFIXED','active',1,1),('plain','issue','printer','CUSTOM_PLAIN','completed',2,2);
+      INSERT INTO task_branch_entries VALUES('prefixed','n',NULL,NULL,'f',NULL,1),('plain','n',NULL,NULL,NULL,NULL,2);
+    `);
+    const runner = new SchemaMigrationRunner(db, [migration_0052, migration_0053, migration_0054, migration_0055]);
+    expect(runner.run().applied).toEqual(['0052','0053','0054','0055']);
+    expect(db.prepare(`SELECT task_key,title,status FROM task_branches ORDER BY task_key`).all()).toEqual([
+      { task_key: 'issue:printer', title: 'CUSTOM_PREFIXED', status: 'active' },
+      { task_key: 'printer', title: 'CUSTOM_PLAIN', status: 'completed' },
+    ]);
+    expect(topologyFinalizationSatisfied(db)).toBe(true);
+    expect(runner.run().applied).toEqual([]);
+    db.close();
   });
 });

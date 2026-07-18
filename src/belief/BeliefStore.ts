@@ -204,6 +204,7 @@ export class BeliefStore {
   getBeliefHistoryForCanonicalKeys(
     canonicalKeys: string[],
     options: {
+      projectId?: string;
       includeStatuses?: Array<'active' | 'superseded' | 'revoked' | 'suspect' | 'expired'>;
       limitPerCanonical?: number;
     } = {}
@@ -213,13 +214,15 @@ export class BeliefStore {
     const includeStatuses = options.includeStatuses ?? ['active', 'superseded', 'suspect', 'expired', 'revoked'];
     const keyPlaceholders = canonicalKeys.map(() => '?').join(', ');
     const statusPlaceholders = includeStatuses.map(() => '?').join(', ');
+    const queryProject = projectQueryValue(options.projectId);
     const rows = this.db.prepare(`
       SELECT *
       FROM beliefs
       WHERE canonical_key IN (${keyPlaceholders})
         AND status IN (${statusPlaceholders})
+        AND (? IS NULL OR COALESCE(project_id,'') = ?)
       ORDER BY updated_at DESC, valid_from DESC, created_at DESC
-    `).all(...canonicalKeys, ...includeStatuses) as any[];
+    `).all(...canonicalKeys, ...includeStatuses, queryProject, queryProject) as any[];
 
     const grouped = new Map<string, BeliefRecord[]>();
     for (const row of rows) {

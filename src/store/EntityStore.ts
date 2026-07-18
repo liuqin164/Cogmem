@@ -346,41 +346,43 @@ export class EntityStore {
     return record;
   }
 
-  findByAlias(aliasText: string, type?: string): EntityRecord | null {
-    const matches = this.listByAlias(aliasText, type);
+  findByAlias(aliasText: string, type?: string, projectId?: string): EntityRecord | null {
+    const matches = this.listByAlias(aliasText, type, projectId);
     return matches[0] || null;
   }
 
-  listByAlias(aliasText: string, type?: string): EntityRecord[] {
+  listByAlias(aliasText: string, type?: string, projectId?: string): EntityRecord[] {
     const normalizedAlias = this.normalizeAlias(aliasText);
+    const scopeClause = projectId === undefined ? '' : ` AND (json_extract(e.metadata_json,'$.projectId') = ? OR EXISTS (SELECT 1 FROM entity_mentions em WHERE em.entity_id=e.instance_id AND COALESCE(em.project_id,'')=?))`;
     const rows = type
       ? this.db.prepare(`
           SELECT e.*
           FROM entity_aliases ea
           JOIN entity_instances e ON e.instance_id = ea.entity_id
-          WHERE ea.normalized_alias = ? AND e.type = ? AND e.status = 'active'
+          WHERE ea.normalized_alias = ? AND e.type = ? AND e.status = 'active'${scopeClause}
           ORDER BY ea.updated_at DESC
           LIMIT 12
-        `).all(normalizedAlias, type)
+        `).all(normalizedAlias, type, ...(projectId === undefined ? [] : [projectId, projectId]))
       : this.db.prepare(`
           SELECT e.*
           FROM entity_aliases ea
           JOIN entity_instances e ON e.instance_id = ea.entity_id
-          WHERE ea.normalized_alias = ? AND e.status = 'active'
+          WHERE ea.normalized_alias = ? AND e.status = 'active'${scopeClause}
           ORDER BY ea.updated_at DESC
           LIMIT 12
-        `).all(normalizedAlias);
+        `).all(normalizedAlias, ...(projectId === undefined ? [] : [projectId, projectId]));
     return (rows as any[]).map((row) => this.mapRow(row));
   }
 
-  findByCanonicalName(canonicalName: string, type?: string): EntityRecord | null {
+  findByCanonicalName(canonicalName: string, type?: string, projectId?: string): EntityRecord | null {
+    const scopeClause = projectId === undefined ? '' : ` AND (json_extract(metadata_json,'$.projectId') = ? OR EXISTS (SELECT 1 FROM entity_mentions em WHERE em.entity_id=entity_instances.instance_id AND COALESCE(em.project_id,'')=?))`;
     const row = type
       ? this.db.prepare(`
-          SELECT * FROM entity_instances WHERE canonical_name = ? AND type = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1
-        `).get(canonicalName, type)
+          SELECT * FROM entity_instances WHERE canonical_name = ? AND type = ? AND status = 'active'${scopeClause} ORDER BY updated_at DESC LIMIT 1
+        `).get(canonicalName, type, ...(projectId === undefined ? [] : [projectId, projectId]))
       : this.db.prepare(`
-          SELECT * FROM entity_instances WHERE canonical_name = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1
-        `).get(canonicalName);
+          SELECT * FROM entity_instances WHERE canonical_name = ? AND status = 'active'${scopeClause} ORDER BY updated_at DESC LIMIT 1
+        `).get(canonicalName, ...(projectId === undefined ? [] : [projectId, projectId]));
     return row ? this.mapRow(row as any) : null;
   }
 
@@ -457,10 +459,10 @@ export class EntityStore {
     if (disambiguation.length > 0) return disambiguation[0]!.entity;
 
     const directMatches = [
-      ...this.listByAlias(referenceText, typeHint),
+      ...this.listByAlias(referenceText, typeHint, options?.projectId),
       ...(typeHint
         ? (() => {
-            const exact = this.findByCanonicalName(referenceText, typeHint);
+            const exact = this.findByCanonicalName(referenceText, typeHint, options?.projectId);
             return exact ? [exact] : [];
           })()
         : [])
@@ -488,10 +490,10 @@ export class EntityStore {
     options?: ResolveEntityReferenceOptions
   ): EntityDisambiguationCandidate[] {
     const directMatches = [
-      ...this.listByAlias(referenceText, typeHint),
+      ...this.listByAlias(referenceText, typeHint, options?.projectId),
       ...(typeHint
         ? (() => {
-            const exact = this.findByCanonicalName(referenceText, typeHint);
+            const exact = this.findByCanonicalName(referenceText, typeHint, options?.projectId);
             return exact ? [exact] : [];
           })()
         : [])
@@ -632,8 +634,8 @@ export class EntityStore {
       sql += ` AND e.type = ?`;
       params.push(input.type);
     }
-    if (input.projectId) {
-      sql += ` AND em.project_id = ?`;
+    if (input.projectId !== undefined) {
+      sql += ` AND COALESCE(em.project_id,'') = ?`;
       params.push(input.projectId);
     }
     if (!input.includeInactive) sql += ` AND e.status = 'active'`;
@@ -672,8 +674,8 @@ export class EntityStore {
       sql += ` AND e.type = ?`;
       params.push(input.type);
     }
-    if (input.projectId) {
-      sql += ` AND em.project_id = ?`;
+    if (input.projectId !== undefined) {
+      sql += ` AND COALESCE(em.project_id,'') = ?`;
       params.push(input.projectId);
     }
     if (!input.includeInactive) sql += ` AND e.status = 'active'`;
@@ -698,20 +700,15 @@ export class EntityStore {
     }));
   }
 
-  listEntitiesUpdatedInRange(startTime: number, endTime: number, type?: string): EntityRecord[] {
-    const rows = type
-      ? this.db.prepare(`
-          SELECT *
-          FROM entity_instances
-          WHERE updated_at >= ? AND updated_at < ? AND type = ?
-          ORDER BY updated_at DESC, created_at DESC
-        `).all(startTime, endTime, type)
-      : this.db.prepare(`
-          SELECT *
-          FROM entity_instances
-          WHERE updated_at >= ? AND updated_at < ?
-          ORDER BY updated_at DESC, created_at DESC
-        `).all(startTime, endTime);
+  listEntitiesUpdatedInRange(startTime: number, endTime: number, type?: string, projectId?: string): EntityRecord[] {
+    const clauses = ['updated_at >= ?', 'updated_at < ?'];
+    const params: Array<string | number> = [startTime, endTime];
+    if (type) { clauses.push('type = ?'); params.push(type); }
+    if (projectId !== undefined) {
+      clauses.push(`(json_extract(metadata_json,'$.projectId') = ? OR EXISTS (SELECT 1 FROM entity_mentions em WHERE em.entity_id=entity_instances.instance_id AND COALESCE(em.project_id,'')=?))`);
+      params.push(projectId, projectId);
+    }
+    const rows = this.db.prepare(`SELECT * FROM entity_instances WHERE ${clauses.join(' AND ')} ORDER BY updated_at DESC,created_at DESC`).all(...params);
 
     return (rows as any[]).map((row) => this.mapRow(row));
   }
@@ -762,18 +759,25 @@ export class EntityStore {
     return record;
   }
 
-  listAttributes(entityId: string, attributeKey?: string): EntityAttributeRecord[] {
+  listAttributes(entityId: string, attributeKey?: string, projectId?: string): EntityAttributeRecord[] {
+    const hasNeurons = this.hasTable('neurons');
+    const scopeClause = projectId === undefined
+      ? ''
+      : hasNeurons
+        ? ` AND (source_neuron_id IN (SELECT id FROM neurons WHERE COALESCE(project_id,'')=?) OR (source_neuron_id IS NULL AND EXISTS (SELECT 1 FROM entity_instances e WHERE e.instance_id=entity_attributes.entity_id AND json_extract(e.metadata_json,'$.projectId')=?)))`
+        : ` AND source_neuron_id IS NULL AND EXISTS (SELECT 1 FROM entity_instances e WHERE e.instance_id=entity_attributes.entity_id AND json_extract(e.metadata_json,'$.projectId')=?)`;
+    const scopeParams = projectId === undefined ? [] : hasNeurons ? [projectId, projectId] : [projectId];
     const rows = attributeKey
       ? this.db.prepare(`
           SELECT * FROM entity_attributes
-          WHERE entity_id = ? AND attribute_key = ?
+          WHERE entity_id = ? AND attribute_key = ?${scopeClause}
           ORDER BY updated_at DESC
-        `).all(entityId, attributeKey)
+        `).all(entityId, attributeKey, ...scopeParams)
       : this.db.prepare(`
           SELECT * FROM entity_attributes
-          WHERE entity_id = ?
+          WHERE entity_id = ?${scopeClause}
           ORDER BY updated_at DESC
-        `).all(entityId);
+        `).all(entityId, ...scopeParams);
 
     return (rows as any[]).map((row) => ({
       attributeId: row.attribute_id,
@@ -887,18 +891,22 @@ export class EntityStore {
   listPendingResolutions(filter?: {
     status?: PendingEntityResolutionRecord['status'];
     entityType?: string;
+    projectId?: string;
   }): PendingEntityResolutionRecord[] {
     const rows = this.db.prepare(`
       SELECT *
       FROM pending_entity_resolution
       WHERE (? IS NULL OR status = ?)
         AND (? IS NULL OR entity_type = ?)
+        AND (? IS NULL OR context_neuron_id IN (SELECT id FROM neurons WHERE COALESCE(project_id,'')=?))
       ORDER BY updated_at DESC, created_at DESC
     `).all(
       filter?.status || null,
       filter?.status || null,
       filter?.entityType || null,
-      filter?.entityType || null
+      filter?.entityType || null,
+      filter?.projectId === undefined ? null : filter.projectId,
+      filter?.projectId === undefined ? null : filter.projectId
     ) as any[];
 
     return rows.map((row) => ({
@@ -1083,18 +1091,18 @@ export class EntityStore {
       ORDER BY updated_at DESC, created_at DESC
       LIMIT 12
     `).all(input.canonicalName, input.type) as any[];
-    const candidates = rows.map((row) => this.mapRow(row));
+    const allCandidates = rows.map((row) => this.mapRow(row));
+    const candidates = projectId === undefined
+      ? allCandidates
+      : allCandidates.filter((candidate) => candidate.metadata?.projectId === projectId
+        || this.listTimeline({ entityId: candidate.entityId, projectId, limit: 1 }).length > 0);
 
     if (input.instanceMode === 'canonical') return candidates[0] || null;
     if (input.createdFrom) {
       const exact = candidates.find((candidate) => candidate.createdFrom === input.createdFrom);
       if (exact) return exact;
     }
-    if (projectId) {
-      const inProject = candidates.find((candidate) => candidate.metadata?.projectId === projectId);
-      if (inProject) return inProject;
-      return null;
-    }
+    if (projectId !== undefined) return candidates[0] || null;
     return candidates[0] || null;
   }
 
@@ -1178,9 +1186,9 @@ export class EntityStore {
   }
 
   private matchesResolutionOptions(entityId: string, options?: ResolveEntityReferenceOptions): boolean {
-    if (!options?.projectId && !options?.beforeTime) return true;
-    const mentions = this.listTimeline({ entityId, limit: 12 });
-    if (options.projectId && !mentions.some((mention) => mention.projectId === options.projectId)) return false;
+    if (options?.projectId === undefined && !options?.beforeTime) return true;
+    const mentions = this.listTimeline({ entityId, projectId: options?.projectId, limit: 12 });
+    if (options?.projectId !== undefined && mentions.length === 0) return false;
     if (options.beforeTime && !mentions.some((mention) => mention.createdAt <= options.beforeTime!)) return false;
     return true;
   }
@@ -1195,8 +1203,8 @@ export class EntityStore {
     conflictPolicy?: EntityAliasConflictRecord['policy'],
     options?: ResolveEntityReferenceOptions
   ): EntityDisambiguationCandidate {
-    const mentions = this.listTimeline({ entityId: entity.entityId, limit: 12 });
-    const attributes = this.listAttributes(entity.entityId);
+    const mentions = this.listTimeline({ entityId: entity.entityId, projectId: options?.projectId, limit: 12 });
+    const attributes = this.listAttributes(entity.entityId, undefined, options?.projectId);
     const reasons: string[] = [];
     let score = 0.2;
 
@@ -1217,7 +1225,7 @@ export class EntityStore {
       score += latestMention.createdAt / 1e13;
       reasons.push('recent_mention');
     }
-    if (options?.projectId && mentions.some((mention) => mention.projectId === options.projectId)) {
+    if (options?.projectId !== undefined && mentions.length > 0) {
       score += 2.1;
       reasons.push('project_context_match');
     }
@@ -1230,11 +1238,11 @@ export class EntityStore {
       reasons.push('attribute_support');
     }
 
-    if (conflictPolicy === 'prefer_project_context' && options?.projectId && !mentions.some((mention) => mention.projectId === options.projectId)) {
+    if (conflictPolicy === 'prefer_project_context' && options?.projectId !== undefined && mentions.length === 0) {
       score -= 0.6;
       reasons.push('project_conflict_penalty');
     }
-    if (conflictPolicy === 'require_explicit_disambiguation' && !options?.projectId && mentions.length > 1) {
+    if (conflictPolicy === 'require_explicit_disambiguation' && options?.projectId === undefined && mentions.length > 1) {
       score -= 0.25;
       reasons.push('ambiguous_without_context');
     }
@@ -1268,6 +1276,10 @@ export class EntityStore {
     if (type === 'device') return !extractDeviceCandidate(entity.canonicalName);
     if (type === 'project') return !extractProjectCandidate(entity.canonicalName);
     return false;
+  }
+
+  private hasTable(table: string): boolean {
+    return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table));
   }
 
   private mapRow(row: any): EntityRecord {

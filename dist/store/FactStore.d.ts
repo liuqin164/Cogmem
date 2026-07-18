@@ -58,10 +58,12 @@ export declare class FactStore {
     listFactsByTimeRange(startTime: number, endTime: number, options?: {
         statuses?: FactRecord['status'][];
         limit?: number;
+        projectId?: string;
     }): FactRecord[];
     listEventsByTimeRange(startTime: number, endTime: number, options?: {
         statuses?: EventRecord['status'][];
         limit?: number;
+        projectId?: string;
     }): EventRecord[];
     updateFactStatus(factId: string, status: FactRecord['status'], confidence?: number, metadata?: Record<string, unknown>): void;
     bindFactEntity(factId: string, entityId: string, confidence?: number, metadata?: Record<string, unknown>): void;

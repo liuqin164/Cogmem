@@ -55,3 +55,32 @@ test('MemoryKernel.consolidate executes offline consolidation instead of returni
   expect(Array.isArray(result.verifiedEvents)).toBe(true);
   expect(kernel.pipelineMetrics.getLastRun()).toBeDefined();
 });
+
+test('MemoryKernel.consolidate cannot read or mutate another project records', async () => {
+  const kernel = createMemoryKernel({ dbPath: tempDbPath() });
+  const now = Date.now();
+  const a = await kernel.ingest({ content: 'project a consolidation source', projectId: 'a', createdAt: now });
+  const b = await kernel.ingest({ content: 'project b private consolidation source', projectId: 'b', createdAt: now + 1 });
+  kernel.factStore.insertFacts([{
+    neuronId: a.id, subject: 'a', predicateFamily: 'owns', object: 'alpha', validFrom: now,
+    certaintyLevel: 'certain', confidence: 0.9, status: 'provisional', sourceText: 'a owns alpha',
+  }]);
+  const [bFact] = kernel.factStore.insertFacts([{
+    neuronId: b.id, subject: 'b', predicateFamily: 'owns', object: 'private-beta', validFrom: now,
+    certaintyLevel: 'certain', confidence: 0.9, status: 'provisional', sourceText: 'b owns private beta',
+  }]);
+  const [bEvent] = kernel.factStore.insertEvents([{
+    neuronId: b.id, eventType: 'private-b-event', validFrom: now, confidence: 0.95, status: 'provisional',
+  }]);
+  const bEntity = kernel.entityStore.upsertEntity({
+    canonicalName: 'Private B Entity', type: 'project', aliases: ['private-beta'],
+    metadata: { projectId: 'b' }, instanceMode: 'new_instance', createdAt: now,
+  });
+
+  await kernel.consolidate({ projectId: 'a', startTime: 0, endTime: now + 10_000 });
+
+  expect(kernel.factStore.getFactById(bFact.factId)?.status).toBe('provisional');
+  expect(kernel.factStore.listEventsByTimeRange(0, now + 10_000, { projectId: 'b' }).find((event) => event.eventId === bEvent.eventId)?.status).toBe('provisional');
+  expect(kernel.entityStore.findByEntityId(bEntity.entityId)?.status).toBe('active');
+  kernel.close();
+});

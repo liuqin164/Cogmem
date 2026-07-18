@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { AesGcmEncryptionProvider, PiiRedactor, createMemoryKernel } from '../src/public.js';
-import { PRIVACY_BASELINE_CLASSIFICATION } from '../src/governance/PrivacyDeletionRegistry.js';
+import { PRIVACY_BASELINE_CLASSIFICATION, PRIVACY_SCHEMA_CLASSIFICATION } from '../src/governance/PrivacyDeletionRegistry.js';
 import { V0_5_BASELINE_TABLES } from '../src/migrations/0001_init.js';
 
 function tempDir(): string {
@@ -32,6 +32,15 @@ describe('Governance and security v1.14', () => {
     expect(kernel.beliefStore.countActive('a')).toBe(1);
     expect(kernel.beliefStore.listByTimeRange(0, 2, { projectId: '' }).map((belief) => belief.id)).toEqual(['belief-global']);
     expect(kernel.beliefStore.getActiveBeliefsForQuery({ query: 'scopeprobe', projectId: '', limit: 10 }).map((belief) => belief.id)).toEqual(['belief-global']);
+    expect([...kernel.beliefStore.getBeliefHistoryForCanonicalKeys(['global-key', 'a-key', 'b-key'], { projectId: '' }).values()].flat().map((belief) => belief.id)).toEqual(['belief-global']);
+    expect([...kernel.beliefStore.getBeliefHistoryForCanonicalKeys(['global-key', 'a-key', 'b-key'], { projectId: 'a' }).values()].flat().map((belief) => belief.id)).toEqual(['belief-a']);
+    kernel.close();
+  });
+
+  test('every current persistent table has an explicit privacy classification', () => {
+    const kernel = createMemoryKernel();
+    const tables = (kernel.factStore.getDatabase().prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name);
+    expect(tables.filter((table) => !PRIVACY_SCHEMA_CLASSIFICATION[table] && !/^(?:neurons|memory_events|memory_atlas|deep_write_summaries)_fts(?:_|$)/.test(table))).toEqual([]);
     kernel.close();
   });
 
@@ -98,6 +107,15 @@ describe('Governance and security v1.14', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test('forgetUser fails closed when a new persistent table has no privacy classification', async () => {
+    const kernel = createMemoryKernel();
+    await kernel.ingest({ projectId: 'classified-project', content: 'must remain until schema is classified' });
+    kernel.factStore.getDatabase().exec(`CREATE TABLE privacy_unknown_payload(id TEXT PRIMARY KEY, payload TEXT)`);
+    expect(kernel.forgetUser('classified-project')).rejects.toThrow('privacy_schema_unclassified:privacy_unknown_payload');
+    expect(kernel.recall('must remain until schema is classified', { projectId: 'classified-project' }).rawEvidence.length).toBeGreaterThan(0);
+    kernel.close();
+  });
+
   test('forgetUser deletes project memory and writes audit records', async () => {
     const dir = tempDir();
     const dbPath = join(dir, 'memory.db');
@@ -159,6 +177,12 @@ describe('Governance and security v1.14', () => {
     kernel.entityStore.recordMention({
       entityId: otherProjectOwnedEntity.entityId, projectId: 'forget-me', mentionType: 'referenced',
     });
+    const sharedLegacyEntity = kernel.entityStore.upsertEntity({
+      canonicalName: 'Shared Legacy Person', type: 'person', aliases: ['Shared Legacy Alias'],
+      instanceMode: 'new_instance',
+    });
+    kernel.entityStore.recordMention({ entityId: sharedLegacyEntity.entityId, projectId: 'forget-me', mentionType: 'referenced' });
+    kernel.entityStore.recordMention({ entityId: sharedLegacyEntity.entityId, projectId: 'keep-me', mentionType: 'referenced' });
     expect(kernel.buildMemoryMap({ projectId: 'forget-me' }).counters.activationHotspots).toBe(1);
     const capsule = kernel.strategyCortex.plan({ query: 'project status', intent: 'project_status', projectId: 'forget-me' });
     kernel.contextOutcomeStore.record(kernel.memoryUseJudge.judge({
@@ -203,6 +227,8 @@ describe('Governance and security v1.14', () => {
     expect(kernel.entityStore.findByEntityId(legacyMentionOnlyEntity.entityId)).toBeNull();
     expect(kernel.entityStore.findByEntityId(keptEntity.entityId)).not.toBeNull();
     expect(kernel.entityStore.findByEntityId(otherProjectOwnedEntity.entityId)).not.toBeNull();
+    expect(kernel.entityStore.findByEntityId(sharedLegacyEntity.entityId)).not.toBeNull();
+    expect(kernel.entityStore.listTimeline({ entityId: sharedLegacyEntity.entityId }).map((item) => item.projectId)).toEqual(['keep-me']);
     const canonical = db.prepare(`SELECT aliases_json, metadata_json FROM entities WHERE entity_id = ?`)
       .get(keptEntity.canonicalEntityId!) as { aliases_json: string; metadata_json: string };
     expect(canonical.aliases_json).not.toContain('Forgotten Alias');
@@ -248,6 +274,27 @@ describe('Governance and security v1.14', () => {
     db.exec(`CREATE TABLE IF NOT EXISTS episode_dream_attempts(attempt_id TEXT PRIMARY KEY,episode_id TEXT NOT NULL,payload_json TEXT);`);
     db.prepare(`INSERT INTO episode_dream_attempts VALUES('secret-attempt',?,?)`).run(episodeMessage.episodeId!, JSON.stringify({ secret }));
     db.prepare(`INSERT INTO topology_identity_quarantine(quarantine_id,identity_type,old_parent_id,project_scope,entry_json,reason,created_at,implicated_scopes_json) VALUES('secret-quarantine','task','old','keep-project',?,'conflict',1,?)`).run(JSON.stringify({ fact_id: `${secret}-fact` }), JSON.stringify(['keep-project', '']));
+    db.exec(`
+      CREATE TABLE scheduled_jobs(job_id TEXT PRIMARY KEY,payload_json TEXT NOT NULL);
+      CREATE TABLE scheduled_job_runs(run_id TEXT PRIMARY KEY,job_id TEXT,error TEXT,result_json TEXT);
+      CREATE TABLE notification_rules(rule_id TEXT PRIMARY KEY,workspace_id TEXT,trigger_json TEXT,channel_config_json TEXT,template TEXT);
+      CREATE TABLE notification_records(notification_id TEXT PRIMARY KEY,rule_id TEXT,payload_json TEXT,error TEXT);
+      CREATE TABLE workspaces(id TEXT PRIMARY KEY,config_json TEXT,name TEXT);
+      CREATE TABLE workspace_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+      CREATE TABLE trace_events(id TEXT PRIMARY KEY,project_id TEXT,payload TEXT);
+      CREATE TABLE meta_proposals(id TEXT PRIMARY KEY,summary TEXT,evidence TEXT,suggested_change TEXT);
+      CREATE TABLE meta_observations(id TEXT PRIMARY KEY,project_id TEXT,neuron_id TEXT,fact_id TEXT,content TEXT);
+    `);
+    db.prepare(`INSERT INTO scheduled_jobs VALUES('secret-job',?)`).run(JSON.stringify({ projectId: '', secret }));
+    db.prepare(`INSERT INTO scheduled_job_runs VALUES('secret-job-run','secret-job',?,?)`).run(secret, JSON.stringify({ secret }));
+    db.prepare(`INSERT INTO notification_rules VALUES('secret-rule','',?,?,?)`).run(JSON.stringify({ projectId: '', secret }), JSON.stringify({ secret }), secret);
+    db.prepare(`INSERT INTO notification_records VALUES('secret-notification','secret-rule',?,?)`).run(JSON.stringify({ secret }), secret);
+    db.prepare(`INSERT INTO workspaces VALUES('',?,?)`).run(JSON.stringify({ projectId: '', secret }), secret);
+    db.prepare(`INSERT INTO workspace_settings VALUES('project::secret',?)`).run(JSON.stringify({ projectId: '', secret }));
+    db.prepare(`INSERT INTO trace_events VALUES('secret-trace',NULL,?)`).run(JSON.stringify({ secret }));
+    db.prepare(`INSERT INTO meta_proposals VALUES('secret-proposal',?,?,?)`).run(secret, JSON.stringify([{ traceEventId: 'secret-trace', note: secret }]), JSON.stringify({ secret }));
+    db.prepare(`INSERT INTO meta_observations VALUES('secret-observation',NULL,?,NULL,?)`).run(forgotten.id, secret);
+    db.prepare(`INSERT INTO ingestion_processed_records(record_hash,source_id,source_path,source_type,content_hash,content_window_start,content_window_end,processed_at,neuron_id) VALUES('secret-ingest',?,?, 'test','hash',0,1,1,?)`).run(secret, secret, forgotten.id);
     db.exec(`INSERT OR REPLACE INTO dream_ledger_state VALUES('all',NULL,10,10,10),('scope:0:','',20,20,20),('scope:1:a','a',30,30,30)`);
     db.exec(`PRAGMA foreign_keys=ON`);
 
@@ -256,7 +303,7 @@ describe('Governance and security v1.14', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE project_id IS NULL`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM memory_events WHERE project_id IS NULL`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE content LIKE ?`).get(`%${secret}%`)).toEqual({ count: 0 });
-    for (const table of ['deep_write_summaries','deep_write_runs','deep_write_candidates','deep_write_candidate_reviews','pipeline_nonfatal_events','reasoning_chains','reasoning_steps','memory_frame_reviews','memory_atlas_alias_supports','beliefs','belief_evidence','topic_nodes','topic_aliases','topic_relations','topic_operations','chat_sessions','chat_turns','episode_dream_attempts','topology_identity_quarantine']) {
+    for (const table of ['deep_write_summaries','deep_write_runs','deep_write_candidates','deep_write_candidate_reviews','pipeline_nonfatal_events','reasoning_chains','reasoning_steps','memory_frame_reviews','memory_atlas_alias_supports','beliefs','belief_evidence','topic_nodes','topic_aliases','topic_relations','topic_operations','chat_sessions','chat_turns','episode_dream_attempts','topology_identity_quarantine','scheduled_jobs','scheduled_job_runs','notification_rules','notification_records','workspaces','workspace_settings','meta_proposals','meta_observations','ingestion_processed_records']) {
       expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
     }
     expect(db.prepare(`SELECT project_key FROM dream_ledger_state ORDER BY project_key`).all()).toEqual([{ project_key: 'all' }, { project_key: 'scope:1:a' }]);

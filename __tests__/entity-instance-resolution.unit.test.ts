@@ -202,4 +202,35 @@ describe('Entity instance resolution unit', () => {
 
     store.close();
   });
+
+  it('keeps identical aliases, attributes, and projectless timelines inside their exact project scope', () => {
+    const store = new EntityStore(':memory:');
+    store.getDatabase().exec(`CREATE TABLE neurons(id TEXT PRIMARY KEY, project_id TEXT, is_deleted INTEGER NOT NULL DEFAULT 0)`);
+    store.getDatabase().exec(`INSERT INTO neurons VALUES('n-a','a',0),('n-b','b',0),('n-global',NULL,0)`);
+    const a = store.upsertEntity({
+      canonicalName: 'Shared Alias A', type: 'person', aliases: ['shared'],
+      metadata: { projectId: 'a' }, instanceMode: 'new_instance', createdAt: 1,
+    });
+    const b = store.upsertEntity({
+      canonicalName: 'Shared Alias B', type: 'person', aliases: ['shared'],
+      metadata: { projectId: 'b' }, instanceMode: 'new_instance', createdAt: 2,
+    });
+    const global = store.upsertEntity({
+      canonicalName: 'Shared Alias Global', type: 'person', aliases: ['shared'],
+      metadata: { projectId: '' }, instanceMode: 'new_instance', createdAt: 3,
+    });
+    store.recordMention({ entityId: a.entityId, neuronId: 'n-a', projectId: 'a', createdAt: 1 });
+    store.recordMention({ entityId: b.entityId, neuronId: 'n-b', projectId: 'b', createdAt: 2 });
+    store.recordMention({ entityId: global.entityId, neuronId: 'n-global', projectId: '', createdAt: 3 });
+    store.addAttribute({ entityId: a.entityId, attributeKey: 'secret', attributeValue: 'a-only', sourceNeuronId: 'n-a' });
+    store.addAttribute({ entityId: a.entityId, attributeKey: 'secret', attributeValue: 'b-forged', sourceNeuronId: 'n-b' });
+
+    expect(store.findByAlias('shared', 'person', 'a')?.entityId).toBe(a.entityId);
+    expect(store.findByAlias('shared', 'person', 'b')?.entityId).toBe(b.entityId);
+    expect(store.findByAlias('shared', 'person', '')?.entityId).toBe(global.entityId);
+    expect(store.listAttributes(a.entityId, undefined, 'a').map((item) => item.attributeValue)).toEqual(['a-only']);
+    expect(store.listTimeline({ projectId: '' }).map((item) => item.entityId)).toEqual([global.entityId]);
+
+    store.close();
+  });
 });

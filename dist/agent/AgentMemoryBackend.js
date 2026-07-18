@@ -1424,7 +1424,7 @@ export class KernelAgentMemoryBackend {
     buildEntityCards(query) {
         const cards = new Map();
         for (const candidate of this.entityLookupCandidates(query.query)) {
-            const entity = this.kernel.entityStore.findByAlias(candidate);
+            const entity = this.kernel.entityStore.findByAlias(candidate, undefined, query.projectId);
             if (!entity || cards.has(entity.entityId))
                 continue;
             const mentions = this.kernel.entityStore.listTimeline({
@@ -1432,7 +1432,7 @@ export class KernelAgentMemoryBackend {
                 projectId: query.projectId,
                 limit: 6,
             });
-            const attributes = this.kernel.entityStore.listAttributes(entity.entityId).slice(0, 8);
+            const attributes = this.kernel.entityStore.listAttributes(entity.entityId, undefined, query.projectId).slice(0, 8);
             cards.set(entity.entityId, {
                 entityId: entity.entityId,
                 canonicalName: entity.canonicalName,
@@ -1462,7 +1462,7 @@ export class KernelAgentMemoryBackend {
             limit: 6,
             intent: 'recall',
         });
-        const history = this.kernel.beliefStore.getBeliefHistoryForCanonicalKeys(beliefs.map((belief) => belief.canonicalKey), { limitPerCanonical: 8 });
+        const history = this.kernel.beliefStore.getBeliefHistoryForCanonicalKeys(beliefs.map((belief) => belief.canonicalKey), { projectId: query.projectId, limitPerCanonical: 8 });
         return beliefs.map((belief) => {
             const alternatives = history.get(belief.canonicalKey) || [];
             return {

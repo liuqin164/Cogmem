@@ -37,8 +37,8 @@ export class BrainRecall {
         const compiledQuery = this.semanticCompiler.compileQuery({ text: query, projectId: options.projectId });
         const resolvedEntityIds = compiledQuery.entities
             .flatMap((entity) => {
-            const direct = this.deps.entityStore.findByCanonicalName(entity.text, entity.type);
-            const alias = direct || this.deps.entityStore.findByAlias(entity.text, entity.type);
+            const direct = this.deps.entityStore.findByCanonicalName(entity.text, entity.type, options.projectId);
+            const alias = direct || this.deps.entityStore.findByAlias(entity.text, entity.type, options.projectId);
             return alias ? [alias.entityId] : [];
         });
         const candidateEntityIds = this.expandEntityIdsViaPersistentGainEdges(Array.from(new Set(resolvedEntityIds)), options.enablePersistentGainEdges !== false, options.enableDeepWriteEdges === true);

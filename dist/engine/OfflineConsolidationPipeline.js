@@ -45,6 +45,7 @@ export class OfflineConsolidationPipeline {
             };
     }
     async run(input, reviewBackend) {
+        this.assertInputProjectScope(input);
         const algorithmReviewBackend = reviewBackend || this.algorithmReviewBackend;
         const correctedEntityBindings = [];
         const archivedFactIds = [];
@@ -54,7 +55,7 @@ export class OfflineConsolidationPipeline {
         const consolidatedBeliefs = [];
         const verifiedFacts = [];
         const verifiedEvents = [];
-        this.deps.deepWritePromotionPolicy?.promotePending(100);
+        this.deps.deepWritePromotionPolicy?.promotePending(100, { projectId: input.window.projectId });
         const episodeById = new Map(input.rawEpisodes.map((episode) => [episode.id, episode]));
         const lowConfidenceIndex = new Set(input.lowConfidenceItems.map((item) => `${item.targetType}:${item.targetId}`));
         const workingEntities = [...input.provisionalEntities];
@@ -75,7 +76,7 @@ export class OfflineConsolidationPipeline {
                     canonicalName: entity.canonicalName,
                     type: entity.type,
                     aliases: entity.aliases,
-                    metadata: entity.metadata,
+                    metadata: { ...(entity.metadata || {}), ...(input.window.projectId !== undefined ? { projectId: input.window.projectId } : {}) },
                     instanceMode: entity.instanceMode,
                     createdAt: input.window.endTime ?? Date.now()
                 });
@@ -173,7 +174,7 @@ export class OfflineConsolidationPipeline {
             }
             if (!winner.entityId && winner.object && this.deps.entityStore) {
                 const resolved = this.deps.entityStore.resolveReference(winner.object, this.inferEntityTypeFromFact(winner), {
-                    projectId: input.window.projectId || winnerEpisode?.metadata.projectId,
+                    projectId: input.window.projectId ?? winnerEpisode?.metadata.projectId,
                     beforeTime: input.window.endTime
                 });
                 if (resolved) {
@@ -408,7 +409,7 @@ export class OfflineConsolidationPipeline {
         const topicPaths = Array.from(new Set(input.rawEpisodes.map((episode) => episode.metadata.topicPath).filter((path) => Boolean(path))));
         const steps = [
             ['MemoryConsolidationEngine', async () => {
-                    if (!projectId)
+                    if (projectId === undefined)
                         return;
                     if (this.deps.topicSummaryBoard) {
                         for (const topicPath of topicPaths)
@@ -418,27 +419,27 @@ export class OfflineConsolidationPipeline {
                     await this.deps.memoryConsolidationEngine?.run(projectId);
                     this.deps.userModelManager?.refresh(projectId);
                 }],
-            ['ProceduralLearningBridge', async () => { if (projectId)
+            ['ProceduralLearningBridge', async () => { if (projectId !== undefined)
                     await this.deps.proceduralLearningBridge?.scan(projectId); }],
-            ['CrossTopicSynthesizer', async () => { if (projectId)
+            ['CrossTopicSynthesizer', async () => { if (projectId !== undefined)
                     await this.deps.crossTopicSynthesizer?.run(projectId); }],
-            ['PrincipleDecayPolicy', async () => { if (projectId)
+            ['PrincipleDecayPolicy', async () => { if (projectId !== undefined)
                     await this.deps.principleDecayPolicy?.run(projectId); }],
             ['GraphCommunityEngine', async () => {
-                    if (!projectId)
+                    if (projectId === undefined)
                         return;
                     await this.deps.graphCommunityEngine?.run(projectId);
                     this.deps.orphanCleaner?.run(projectId);
                 }],
             ['WorkingMemoryDeltaCleanup', () => { this.deps.workingMemoryDelta?.cleanup(); }, false]
         ];
-        let startIndex = projectId ? this.readCheckpointIndex(projectId, steps.map(([name]) => name)) : 0;
+        let startIndex = projectId !== undefined ? this.readCheckpointIndex(projectId, steps.map(([name]) => name)) : 0;
         for (let index = startIndex; index < steps.length; index += 1) {
             const [stepName, fn, budgeted] = steps[index];
             await runStep(stepName, fn, budgeted !== false);
             if (aborted) {
                 if (maxBudgetMs > 0) {
-                    this.recordRunAndCheckpoint(runId, timings, Date.now() - startedAt, true, projectId, projectId ? steps[Math.min(index + 1, steps.length - 1)][0] : undefined);
+                    this.recordRunAndCheckpoint(runId, timings, Date.now() - startedAt, true, projectId, projectId !== undefined ? steps[Math.min(index + 1, steps.length - 1)][0] : undefined);
                 }
                 break;
             }
@@ -454,6 +455,27 @@ export class OfflineConsolidationPipeline {
         savedAt INTEGER NOT NULL
       );
     `);
+    }
+    assertInputProjectScope(input) {
+        if (input.window.projectId === undefined)
+            return;
+        const scope = input.window.projectId;
+        const db = this.deps.factStore?.getDatabase();
+        const neuronMatches = (neuronId) => {
+            if (!neuronId || !db)
+                return false;
+            const row = db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0`).get(neuronId);
+            return row?.scope === scope;
+        };
+        const invalid = input.rawEpisodes.some((neuron) => (neuron.metadata.projectId ?? '') !== scope)
+            || input.provisionalFacts.some((fact) => !neuronMatches(fact.neuronId))
+            || input.provisionalEvents.some((event) => !neuronMatches(event.neuronId))
+            || input.recentBeliefs.some((belief) => (belief.projectId ?? '') !== scope)
+            || input.provisionalEntities.some((entity) => entity.metadata?.projectId !== scope
+                && (this.deps.entityStore?.listTimeline({ entityId: entity.entityId, projectId: scope, limit: 1 }).length ?? 0) === 0)
+            || input.unresolvedReferences.some((pending) => !neuronMatches(pending.contextNeuronId));
+        if (invalid)
+            throw new Error('offline_consolidation_project_scope_mismatch');
     }
     readCheckpointIndex(projectId, steps) {
         if (!this.deps.db)
@@ -472,7 +494,7 @@ export class OfflineConsolidationPipeline {
     recordRunAndCheckpoint(runId, timings, totalMs, aborted, projectId, nextStep) {
         const write = () => {
             this.deps.pipelineMetrics?.record(runId, timings, totalMs, aborted);
-            if (!projectId || !this.deps.db)
+            if (projectId === undefined || !this.deps.db)
                 return;
             if (aborted && nextStep) {
                 this.deps.db.prepare(`

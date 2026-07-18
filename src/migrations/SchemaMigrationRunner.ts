@@ -3,6 +3,7 @@ import Database from 'bun:sqlite';
 import type { Migration } from '../types/Migration.js';
 import { COMPATIBLE_MIGRATION_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
 import { topologyIntegritySatisfied } from './0054_topology_semantic_integrity.js';
+import { topologyFinalizationSatisfied } from './0055_topology_scope_finalization.js';
 
 export interface SchemaMigrationRunOptions {
   dryRun?: boolean;
@@ -50,6 +51,12 @@ export class SchemaMigrationRunner {
     const applied: string[] = [];
     const recorded = new Set((this.db.prepare(`SELECT version FROM _schema_migrations`).all() as Array<{ version: string }>).map((row) => row.version));
     const transaction = this.db.transaction(() => {
+      if (pending.some((migration) => migration.version === '0052') && pending.some((migration) => migration.version === '0055') && this.tableExists('task_branches') && this.tableExists('task_branch_entries')) {
+        this.db.exec(`DROP TABLE IF EXISTS temp._0055_task_identity_backup; DROP TABLE IF EXISTS temp._0055_task_entry_backup; CREATE TEMP TABLE _0055_task_identity_backup AS SELECT task_id,COALESCE(project_id,'') AS project_id,task_key,title,status,created_at,updated_at FROM task_branches; CREATE TEMP TABLE _0055_task_entry_backup AS SELECT * FROM task_branch_entries`);
+      }
+      if (pending.some((migration) => migration.version === '0054') && pending.some((migration) => migration.version === '0055') && this.tableExists('task_branches')) {
+        this.db.exec(`DROP TABLE IF EXISTS temp._0055_task_metadata_backup; CREATE TEMP TABLE _0055_task_metadata_backup AS SELECT task_id,COALESCE(project_id,'') AS project_id,task_key,title,status FROM task_branches`);
+      }
       for (const migration of pending) {
         migration.up(this.db);
         // 0046 repairs receipts created before checksum normalization. Its
@@ -362,6 +369,8 @@ export class SchemaMigrationRunner {
       && (!this.tableExists('task_branch_entries') || this.hasColumns('task_branch_entries', ['project_id']))
       && (!this.tableExists('event_cluster_entries') || this.hasColumns('event_cluster_entries', ['project_id']))
       && topologyIntegritySatisfied(this.db);
+    if (version === '0055') return (!this.tableExists('branch_links') || this.hasColumns('branch_links', ['project_id']))
+      && topologyFinalizationSatisfied(this.db);
     return true;
   }
 

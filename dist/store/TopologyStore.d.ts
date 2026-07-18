@@ -19,9 +19,7 @@ export declare class TopologyStore {
     resetProjectTimeBuckets(projectId: string): void;
     listProjectTimeBucketsByNeuron(projectId: string, neuronIds: string[]): Map<string, TimeBucketRecord[]>;
     upsertTimeBucket(bucket: TimeBucketRecord): TimeBucketRecord;
-    attachToTimeBucket(bucketId: string, ref: TopologyReference & {
-        projectId?: string;
-    }): void;
+    attachToTimeBucket(bucketId: string, ref: TopologyReference): void;
     upsertProjectBranch(input: {
         branchId: string;
         projectId: string;
@@ -54,7 +52,7 @@ export declare class TopologyStore {
     listTaskBranches(projectId?: string): TaskBranchRecord[];
     listEventClusters(projectId?: string): EventClusterRecord[];
     listNeuronIdsByProject(projectId: string): string[];
-    listNeuronIdsByTemporalRange(start: number, end: number): string[];
+    listNeuronIdsByTemporalRange(start: number, end: number, projectId?: string): string[];
     listTimeBucketIdsByNeuronIds(neuronIds: string[], projectId?: string, limit?: number): string[];
     collectCandidateNeuronIds(input: {
         projectId?: string;
@@ -87,6 +85,7 @@ export declare class TopologyStore {
         neuronIds: string[];
     };
     collectTemporalContext(input: {
+        projectId?: string;
         startTime?: number;
         endTime?: number;
         preferredBucketType?: TimeBucketType;
@@ -104,8 +103,11 @@ export declare class TopologyStore {
     }): number;
     getMaterializedMembershipCount(): number;
     private upsertMembership;
+    private listScopedBranchLinks;
     private assertReferenceScope;
     private hasColumn;
+    private hasTable;
+    private installBranchScopeTriggers;
     close(): void;
 }
 //# sourceMappingURL=TopologyStore.d.ts.map

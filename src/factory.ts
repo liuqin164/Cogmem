@@ -134,7 +134,7 @@ import { SummaryStore } from './store/SummaryStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
 import { TopologyStore } from './store/TopologyStore.js';
 import { matchesProjectScope, projectScope } from './topology/ProjectScope.js';
-import { deleteRegisteredProjectContent } from './governance/PrivacyDeletionRegistry.js';
+import { deleteRegisteredProjectContent, deleteResidualProjectOwnedContent } from './governance/PrivacyDeletionRegistry.js';
 import type { IVectorStore, VectorBackend } from './store/IVectorStore.js';
 import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
@@ -1653,14 +1653,16 @@ export class MemoryKernel {
     const rawEpisodes = this.memoryGraph.listNeuronsByTimeRange(startTime, endTime, options.projectId);
     const provisionalFacts = this.factStore.listFactsByTimeRange(startTime, endTime, {
       statuses: ['provisional', 'provisional_enriched', 'enriched_candidate', 'verified'],
+      projectId: options.projectId,
     });
     const provisionalEvents = this.factStore.listEventsByTimeRange(startTime, endTime, {
       statuses: ['provisional', 'verified'],
+      projectId: options.projectId,
     });
     const interactionUnits = this.interactionUnitStore.listUnitsByNeuronIds(rawEpisodes.map((episode) => episode.id));
-    const provisionalEntities = this.entityStore.listEntitiesUpdatedInRange(startTime, endTime);
+    const provisionalEntities = this.entityStore.listEntitiesUpdatedInRange(startTime, endTime, undefined, options.projectId);
     const unresolvedReferences = this.entityStore
-      .listPendingResolutions()
+      .listPendingResolutions({ projectId: options.projectId })
       .filter((item) => item.updatedAt >= startTime && item.updatedAt < endTime);
     const lowConfidenceItems = [
       ...provisionalFacts
@@ -3019,14 +3021,21 @@ export class MemoryKernel {
       : db.prepare(`SELECT DISTINCT entity_id FROM entity_mentions WHERE COALESCE(project_id, '') = ?`).all(scope)
     ) as Array<{ entity_id: string }>;
     const projectMentionEntityIds = new Set(projectMentionRows.map((row) => row.entity_id));
+    const mentionScopes = new Map<string, Set<string>>();
+    for (const row of db.prepare(`SELECT entity_id,COALESCE(project_id,'') AS scope FROM entity_mentions`).all() as Array<{ entity_id: string; scope: string }>) {
+      const scopes = mentionScopes.get(row.entity_id) ?? new Set<string>();
+      scopes.add(row.scope);
+      mentionScopes.set(row.entity_id, scopes);
+    }
     const projectEntityInstances = (db.prepare(`
       SELECT instance_id, canonical_entity_id, aliases_json, metadata_json
       FROM entity_instances
     `).all() as Array<{ instance_id: string; canonical_entity_id: string; aliases_json: string; metadata_json: string | null }>)
       .filter((row) => {
         const ownerProjectId = parseJsonObject(row.metadata_json).projectId;
-        return projectScope(typeof ownerProjectId === 'string' ? ownerProjectId : undefined) === scope
-          || (!ownerProjectId && projectMentionEntityIds.has(row.instance_id));
+        if (typeof ownerProjectId === 'string') return projectScope(ownerProjectId) === scope;
+        const scopes = mentionScopes.get(row.instance_id) ?? new Set<string>();
+        return projectMentionEntityIds.has(row.instance_id) && scopes.size > 0 && [...scopes].every((value) => value === scope);
       });
     const projectEntityIds = projectEntityInstances.map((row) => row.instance_id);
     const affectedCanonicalEntityIds = uniqueStrings(projectEntityInstances.map((row) => row.canonical_entity_id));
@@ -3051,7 +3060,13 @@ export class MemoryKernel {
 
     db.exec(`PRAGMA secure_delete = ON`);
     db.transaction(() => {
-      Object.assign(deleted, { privacyTables: deleteRegisteredProjectContent({ scope, neuronIds, runDelete }) });
+      Object.assign(deleted, { privacyTables: deleteRegisteredProjectContent({
+        scope,
+        neuronIds,
+        runDelete,
+        listPersistentTables: () => (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name),
+        hasColumn: (table, column) => Boolean(db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name=?`).get(table, column)),
+      }) });
       if (neuronIds.length > 0) {
         deleted.synapses += runDelete(`DELETE FROM synapses WHERE source_id IN (${placeholders}) OR target_id IN (${placeholders})`, [...neuronIds, ...neuronIds]);
         deleted.facts += runDelete(`DELETE FROM facts WHERE neuron_id IN (${placeholders})`, neuronIds);
@@ -3132,6 +3147,14 @@ export class MemoryKernel {
       for (const canonicalEntityId of affectedCanonicalEntityIds) {
         rebuildCanonicalEntityAfterForget(db, canonicalEntityId, runDelete);
       }
+      const residualPrivacyTables = deleteResidualProjectOwnedContent({
+        scope,
+        neuronIds,
+        runDelete,
+        listPersistentTables: () => (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name),
+        hasColumn: (table, column) => Boolean(db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name=?`).get(table, column)),
+      });
+      Object.assign((deleted as typeof deleted & { privacyTables?: Record<string, number> }).privacyTables ??= {}, residualPrivacyTables);
       if (neuronIds.length > 0) {
         runDelete(`DELETE FROM neurons WHERE id IN (${placeholders})`, neuronIds);
       }

@@ -377,6 +377,33 @@ describe('project-local temporal topology regressions', () => {
     topology.close(); db.close();
   });
 
+  test('branch links, time buckets, cluster keys, and public temporal reads enforce exact scope', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,is_deleted INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE facts(fact_id TEXT PRIMARY KEY,neuron_id TEXT);
+      CREATE TABLE compiled_events(event_id TEXT PRIMARY KEY,neuron_id TEXT);
+      CREATE TABLE beliefs(id TEXT PRIMARY KEY,project_id TEXT,source_neuron_id TEXT);
+      CREATE TABLE belief_evidence(belief_id TEXT,neuron_id TEXT,event_id TEXT);
+      CREATE TABLE interaction_units(unit_id TEXT PRIMARY KEY,message_neuron_ids_json TEXT);
+      CREATE TABLE memory_events(event_id TEXT PRIMARY KEY,project_id TEXT);
+      INSERT INTO neurons VALUES('a','a',0),('b','b',0);
+    `);
+    const topology = new TopologyStore(db);
+    const a = topology.upsertProjectBranch({ branchId: 'shared-id', projectId: 'a', branchKey: 'root', branchKind: 'project_root', title: 'A', createdAt: 1 });
+    const b = topology.upsertProjectBranch({ branchId: 'b-id', projectId: 'b', branchKey: 'root', branchKind: 'project_root', title: 'B', createdAt: 1 });
+    expect(() => topology.upsertProjectBranch({ branchId: 'shared-id', projectId: 'b', branchKey: 'other', branchKind: 'project_root', title: 'B', createdAt: 2 })).toThrow('project_branch_identity_conflict');
+    expect(() => topology.linkBranches(a.branchId, b.branchId, 'contains', 1)).toThrow('topology_branch_link_project_scope_mismatch');
+    expect(() => topology.upsertEventCluster({ clusterId: 'bad', projectId: 'a', clusterKey: 'wrong', clusterType: 'generic', title: 'Bad', createdAt: 1 })).toThrow('event_cluster_key_noncanonical');
+    topology.upsertTimeBucket({ bucketId: 'day-a', projectId: 'a', timeZone: 'UTC', bucketType: 'day', bucketStart: 0, bucketEnd: 100, label: 'A' });
+    expect(() => topology.attachToTimeBucket('day-a', { projectId: 'a', neuronId: 'b', createdAt: 1 })).toThrow('topology_reference_project_scope_mismatch');
+    topology.attachToTimeBucket('day-a', { projectId: 'a', neuronId: 'a', createdAt: 1 });
+    expect(topology.listNeuronIdsByTemporalRange(0, 2, 'a')).toEqual(['a']);
+    expect(topology.listNeuronIdsByTemporalRange(0, 2, 'b')).toEqual([]);
+    expect(topology.collectTemporalContext({ projectId: 'b', startTime: 0, endTime: 2 }).neuronIds).toEqual([]);
+    topology.close(); db.close();
+  });
+
   test('a stale writer cannot mark a newer source revision clean', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cogmem-projection-cas-'));
     const dbPath = join(dir, 'memory.db');
