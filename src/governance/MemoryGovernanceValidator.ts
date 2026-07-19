@@ -4,6 +4,7 @@ import type {
   MemoryGovernancePlan,
   MemoryGovernanceValidationResult,
 } from './MemoryGovernancePlan.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 
 export interface GovernanceEvidenceRecord {
   eventId: string;
@@ -32,6 +33,11 @@ export class MemoryGovernanceValidator {
       }
       operationIds.add(operation.operationId);
 
+      if (!matchesProjectScope(plan.projectId, operation.projectId)
+        || !matchesProjectScope(operation.projectId, plan.projectId)) {
+        issues.push({ code: 'operation_project_mismatch', message: 'Operation scope must equal plan scope.', operationId: operation.operationId });
+      }
+
       if (!operation.idempotencyKey.trim()) {
         issues.push({ code: 'missing_idempotency_key', message: 'idempotencyKey is required.', operationId: operation.operationId });
       } else if (idempotencyKeys.has(operation.idempotencyKey)) {
@@ -48,7 +54,7 @@ export class MemoryGovernanceValidator {
       if (evidence.some((record) => !record)) {
         issues.push({ code: 'unknown_evidence', message: 'Every evidence event must exist in the Raw Ledger.', operationId: operation.operationId });
       }
-      if (operation.projectId && evidence.some((record) => record?.projectId && record.projectId !== operation.projectId)) {
+      if (evidence.some((record) => !matchesProjectScope(operation.projectId, record?.projectId))) {
         issues.push({ code: 'project_boundary_violation', message: 'Evidence must remain inside the operation project.', operationId: operation.operationId });
       }
       if (operation.ownership === 'user' && !evidence.some((record) => record?.role === 'user')) {

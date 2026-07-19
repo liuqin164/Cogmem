@@ -77,9 +77,9 @@ describe('strategy cortex v1', () => {
     const plan = context.plan({
       query: 'debug this recall bug', projectId: 'brain', availableTokens: 1000, strategy: capsule,
       candidates: [
-        { id: 'belief', layer: 'belief', content: 'belief', estimatedTokens: 10, confidence: 1 },
-        { id: 'source', layer: 'raw_source', content: 'source', estimatedTokens: 10, confidence: 0.5 },
-        { id: 'graph', layer: 'graph', content: 'graph', estimatedTokens: 10, confidence: 0.5 },
+        { id: 'belief', layer: 'belief', content: 'belief', estimatedTokens: 10, confidence: 1, projectId: 'brain' },
+        { id: 'source', layer: 'raw_source', content: 'source', estimatedTokens: 10, confidence: 0.5, projectId: 'brain' },
+        { id: 'graph', layer: 'graph', content: 'graph', estimatedTokens: 10, confidence: 0.5, projectId: 'brain' },
       ],
     });
 

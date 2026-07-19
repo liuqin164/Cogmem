@@ -113,7 +113,7 @@ export class SummaryStore {
         text, confidence, status, source_neuron_ids_json, deep_write_run_id,
         deep_write_candidate_id, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(record.summaryId, record.projectId || null, record.sessionId || null, record.scope, record.windowStart ?? null, record.windowEnd ?? null, record.text, record.confidence, record.status, JSON.stringify(record.sourceNeuronIds), record.deepWriteRunId || null, record.deepWriteCandidateId || null, record.createdAt, record.updatedAt);
+    `).run(record.summaryId, record.projectId ?? null, record.sessionId || null, record.scope, record.windowStart ?? null, record.windowEnd ?? null, record.text, record.confidence, record.status, JSON.stringify(record.sourceNeuronIds), record.deepWriteRunId || null, record.deepWriteCandidateId || null, record.createdAt, record.updatedAt);
         return record;
     }
     getById(id) {
@@ -122,7 +122,7 @@ export class SummaryStore {
     }
     listByProject(projectId, options) {
         const params = [projectId];
-        let sql = `SELECT * FROM deep_write_summaries WHERE project_id = ?`;
+        let sql = `SELECT * FROM deep_write_summaries WHERE COALESCE(project_id,'') = ?`;
         if (options?.scope) {
             sql += ` AND scope = ?`;
             params.push(options.scope);

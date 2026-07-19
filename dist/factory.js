@@ -2423,7 +2423,13 @@ export class MemoryKernel {
             return projectMentionEntityIds.has(row.instance_id) && scopes.size > 0 && [...scopes].every((value) => value === scope);
         });
         const projectEntityIds = projectEntityInstances.map((row) => row.instance_id);
-        const affectedCanonicalEntityIds = uniqueStrings(projectEntityInstances.map((row) => row.canonical_entity_id));
+        const affectedCanonicalEntityIds = uniqueStrings([
+            ...projectEntityInstances.map((row) => row.canonical_entity_id),
+            ...(projectMentionEntityIds.size === 0 ? [] : db.prepare(`
+        SELECT DISTINCT canonical_entity_id FROM entity_instances
+        WHERE instance_id IN (${[...projectMentionEntityIds].map(() => '?').join(',')})
+      `).all(...projectMentionEntityIds).map((row) => row.canonical_entity_id)),
+        ]);
         const placeholders = neuronIds.map(() => '?').join(', ');
         const runDelete = (sql, params = []) => {
             try {
@@ -2516,8 +2522,12 @@ export class MemoryKernel {
         WHERE COALESCE(target.project_id,'')=?
           AND EXISTS (SELECT 1 FROM entity_mentions other WHERE other.entity_id=target.entity_id AND COALESCE(other.project_id,'')<>?)
       `).all(scope, scope).map((row) => row.entity_id);
-            for (const entityId of sharedEntityIds)
-                db.prepare(`UPDATE entity_instances SET aliases_json='[]',metadata_json='{}' WHERE instance_id=?`).run(entityId);
+            for (const entityId of sharedEntityIds) {
+                const survivingAlias = db.prepare(`SELECT alias_text FROM entity_aliases WHERE entity_id=? AND COALESCE(project_id,'')<>? ORDER BY updated_at DESC,alias_id LIMIT 1`)
+                    .get(entityId, scope);
+                db.prepare(`UPDATE entity_instances SET canonical_name=?,aliases_json='[]',metadata_json='{}',created_from=NULL WHERE instance_id=?`)
+                    .run(survivingAlias?.alias_text || `entity-${entityId.slice(-12)}`, entityId);
+            }
             deleted.entityRecords += deleteScoped('entity_aliases');
             deleted.entityRecords += deleteScoped('entity_relations');
             deleted.entityRecords += deleteScoped('entity_alias_conflicts');
@@ -2848,20 +2858,23 @@ function scrubEntityAliasConflicts(db, deletedEntityIds) {
 }
 function rebuildCanonicalEntityAfterForget(db, canonicalEntityId, runDelete) {
     const remaining = db.prepare(`
-    SELECT aliases_json FROM entity_instances WHERE canonical_entity_id = ?
+    SELECT instance_id,aliases_json,canonical_name FROM entity_instances WHERE canonical_entity_id = ?
+    ORDER BY updated_at DESC,instance_id
   `).all(canonicalEntityId);
     if (remaining.length === 0) {
         runDelete(`DELETE FROM entities WHERE entity_id = ?`, [canonicalEntityId]);
         return;
     }
-    const aliases = uniqueStrings(remaining.flatMap((row) => parseJsonStringArray(row.aliases_json)));
-    const canonical = db.prepare(`SELECT metadata_json FROM entities WHERE entity_id = ?`).get(canonicalEntityId);
-    const metadata = parseJsonObject(canonical?.metadata_json);
-    for (const key of ['projectId', 'rawMention', 'answerDisplayName', 'ens1RawMention', 'ens1RawMentions', 'ens1AnswerDisplayName']) {
-        delete metadata[key];
-    }
-    db.prepare(`UPDATE entities SET aliases_json = ?, metadata_json = ?, updated_at = ? WHERE entity_id = ?`)
-        .run(JSON.stringify(aliases), JSON.stringify(metadata), Date.now(), canonicalEntityId);
+    const scopedAliases = db.prepare(`SELECT alias_text FROM entity_aliases WHERE entity_id IN (
+    SELECT instance_id FROM entity_instances WHERE canonical_entity_id=?
+  ) ORDER BY updated_at DESC,alias_id`).all(canonicalEntityId);
+    const aliases = uniqueStrings([
+        ...scopedAliases.map((row) => row.alias_text),
+        ...remaining.flatMap((row) => parseJsonStringArray(row.aliases_json)),
+    ]);
+    const canonicalName = scopedAliases[0]?.alias_text || remaining[0]?.canonical_name || `entity-${canonicalEntityId.slice(-12)}`;
+    db.prepare(`UPDATE entities SET canonical_name = ?, aliases_json = ?, metadata_json = '{}', updated_at = ? WHERE entity_id = ?`)
+        .run(canonicalName, JSON.stringify(aliases), Date.now(), canonicalEntityId);
 }
 function optionalGovernancePayloadString(payload, field) {
     const value = payload[field];

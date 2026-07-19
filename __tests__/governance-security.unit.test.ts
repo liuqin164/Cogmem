@@ -8,6 +8,10 @@ import { AesGcmEncryptionProvider, PiiRedactor, createMemoryKernel } from '../sr
 import { PRIVACY_BASELINE_CLASSIFICATION, PRIVACY_SCHEMA_CLASSIFICATION } from '../src/governance/PrivacyDeletionRegistry.js';
 import { V0_5_BASELINE_TABLES } from '../src/migrations/0001_init.js';
 import type { EmbeddingProvider } from '../src/embedding/EmbeddingProvider.js';
+import { FileAssetStore } from '../src/assets/FileAssetStore.js';
+import { FileBlockStore } from '../src/assets/FileBlockStore.js';
+import { FileChunkStore } from '../src/assets/FileChunkStore.js';
+import { UserModelStore } from '../src/models/UserModelStore.js';
 
 function tempDir(): string {
   const dir = join(tmpdir(), `core-governance-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -252,7 +256,7 @@ describe('Governance and security v1.14', () => {
     expect(kernel.entityStore.findByEntityId(otherProjectOwnedEntity.entityId)).not.toBeNull();
     expect(kernel.entityStore.findByEntityId(sharedLegacyEntity.entityId)).not.toBeNull();
     expect(kernel.entityStore.listTimeline({ entityId: sharedLegacyEntity.entityId }).map((item) => item.projectId)).toEqual(['keep-me']);
-    expect(kernel.entityStore.findByCanonicalName('Shared Legacy Person', 'person', 'keep-me')?.aliases).not.toContain('Shared Legacy Alias');
+    expect(kernel.entityStore.findByEntityId(sharedLegacyEntity.entityId)?.aliases).not.toContain('Shared Legacy Alias');
     expect(db.prepare(`SELECT aliases_json,metadata_json FROM entity_instances WHERE instance_id=?`).get(sharedLegacyEntity.entityId)).toEqual({ aliases_json: '[]', metadata_json: '{}' });
     const canonical = db.prepare(`SELECT aliases_json, metadata_json FROM entities WHERE entity_id = ?`)
       .get(keptEntity.canonicalEntityId!) as { aliases_json: string; metadata_json: string };
@@ -261,6 +265,40 @@ describe('Governance and security v1.14', () => {
     expect(canonical.metadata_json).not.toContain('forget-me');
     expect(kernel.getGovernanceAudit('forget-me')[0]?.action).toBe('forgetUser');
     kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('forgetUser erases optional file/user-model stores and rebuilds touched shared canonical entities', async () => {
+    const dir = tempDir();
+    const dbPath = join(dir, 'memory.db');
+    const secret = 'OPTIONAL_PRIVATE_TOKEN_8e31';
+    const kernel = createMemoryKernel({ dbPath });
+    const neuron = await kernel.ingest({ projectId: 'a', content: `${secret} neuron` });
+    const db = kernel.factStore.getDatabase();
+    new FileAssetStore(db).upsert({ assetId: 'asset-a', projectId: 'a', filePath: `/tmp/${secret}.txt`, originalName: secret, sizeBytes: 1, contentHash: 'hash', mtimeMs: 1 });
+    new FileBlockStore(db);
+    new FileChunkStore(db);
+    new UserModelStore(db);
+    db.prepare(`INSERT INTO file_blocks(block_id,asset_id,block_index,kind,text,created_at) VALUES('block-a','asset-a',0,'paragraph',?,1)`).run(secret);
+    db.prepare(`INSERT INTO file_chunks(chunk_id,asset_id,neuron_id,chunk_index,block_start_index,block_end_index,kind,text_hash,created_at) VALUES('chunk-a','asset-a',?,0,0,0,'paragraph','hash',1)`).run(neuron.id);
+    db.exec(`INSERT INTO file_chunk_edges VALUES('chunk-a','chunk-a','next_chunk',1,1)`);
+    db.prepare(`INSERT INTO user_insights(id,project_id,category,content,confidence,evidence_neuron_ids,created_at,last_confirmed_at) VALUES('insight-a','a','preference',?,1,?,1,1)`).run(secret, JSON.stringify([neuron.id]));
+    db.exec(`
+      INSERT INTO entities(entity_id,canonical_name,type,aliases_json,status,metadata_json,created_at,updated_at) VALUES('canonical-shared', '${secret}', 'device', '["${secret}"]', 'active', '{"private":"${secret}"}', 1, 1);
+      INSERT INTO entity_instances(instance_id,canonical_entity_id,canonical_name,type,aliases_json,status,created_at,updated_at,metadata_json) VALUES('shared-instance','canonical-shared','${secret}','device','["${secret}"]','active',1,1,'{}');
+      INSERT INTO entity_mentions(mention_id,entity_id,project_id,mention_type,created_at) VALUES('mention-a','shared-instance','a','explicit',1),('mention-b','shared-instance','b','explicit',2);
+      INSERT INTO entity_aliases(alias_id,entity_id,project_id,alias_text,normalized_alias,created_at,updated_at) VALUES('alias-b','shared-instance','b','safe-name','safe-name',1,1);
+    `);
+
+    await kernel.forgetUser('a');
+    for (const table of ['file_assets','file_blocks','file_chunks','file_chunk_edges','user_insights']) {
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
+    }
+    expect(db.prepare(`SELECT canonical_name,aliases_json,metadata_json FROM entities WHERE entity_id='canonical-shared'`).get()).toEqual({
+      canonical_name: 'safe-name', aliases_json: '["safe-name"]', metadata_json: '{}',
+    });
+    kernel.close();
+    expect(readFileSync(dbPath).includes(Buffer.from(secret))).toBe(false);
     rmSync(dir, { recursive: true, force: true });
   });
 

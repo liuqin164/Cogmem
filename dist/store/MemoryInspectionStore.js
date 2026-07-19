@@ -26,8 +26,8 @@ export class MemoryInspectionStore {
             : this.countRawEvents(scope.projectId, dreamState.lastDreamedGlobalSeq);
         const undreamedRawCount = Math.max(0, rawLedgerCount - dreamedRawCount);
         const queue = this.candidateQueue(scope.projectId);
-        const vectorCount = this.countTable('vector_index');
-        const liveEmbeddings = this.countTable('neuron_embeddings');
+        const vectorCount = this.countVectors(scope.projectId);
+        const liveEmbeddings = this.countEmbeddings(scope.projectId);
         const episodeDream = this.episodeDream(scope.projectId);
         const dreamBacklog = {
             projectId: scope.projectId,
@@ -109,6 +109,24 @@ export class MemoryInspectionStore {
         if (!this.tableExists(name))
             return 0;
         return Number(this.db.prepare(`SELECT COUNT(*) AS count FROM "${name}"`).get()?.count || 0);
+    }
+    countVectors(projectId) {
+        if (!this.tableExists('vector_index'))
+            return 0;
+        if (projectId === undefined || !this.tableExists('neurons'))
+            return this.countTable('vector_index');
+        return Number(this.db.prepare(`SELECT COUNT(*) AS count FROM vector_index v JOIN neurons n ON n.id=v.neuron_id AND n.is_deleted=0 WHERE COALESCE(n.project_id,'')=?`)
+            .get(projectScope(projectId))?.count ?? 0);
+    }
+    countEmbeddings(projectId) {
+        if (!this.tableExists('neuron_embeddings'))
+            return 0;
+        if (projectId === undefined)
+            return this.countTable('neuron_embeddings');
+        if (!this.tableExists('neurons'))
+            return 0;
+        return Number(this.db.prepare(`SELECT COUNT(*) AS count FROM neuron_embeddings e JOIN neurons n ON n.id=e.neuron_id AND n.is_deleted=0 WHERE COALESCE(n.project_id,'')=?`)
+            .get(projectScope(projectId))?.count ?? 0);
     }
     countScopedEvents(scope) {
         if (!this.tableExists('memory_events'))

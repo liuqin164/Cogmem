@@ -27,7 +27,7 @@ export declare class MemoryFrameStore {
     review(frameId: string, projectId: string, action: 'approve' | 'reject', actor: string, reason: string, now?: number): boolean;
     failStaged(frameIds: string[], now?: number): void;
     failStagedForEpisode(episodeId: string, leaseId?: string, now?: number): void;
-    failStagedOlderThan(_cutoff: number, now?: number): number;
+    failStagedOlderThan(_cutoff: number, now?: number, projectId?: string): number;
     supersedeEpisodes(episodeIds: string[], now?: number): number;
     deleteByProject(projectId: string, now?: number): number;
     private tableExists;

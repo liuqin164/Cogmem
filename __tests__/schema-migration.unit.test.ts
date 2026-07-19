@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { SchemaMigrationRunner } from '../src/migrations/SchemaMigrationRunner.js';
@@ -410,11 +411,47 @@ describe('schema migration runner', () => {
     db.close();
   });
 
-  test('0056 refuses to receipt an already-closed 0055 database whose task identity has no durable proof', () => {
+  test('0056 persists a recovery manifest when reopening an already-closed 0055 database', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-0056-reopen-'));
+    const path = join(dir, 'memory.db');
+    const before = new Database(path);
+    before.exec(`CREATE TABLE task_branches(task_id TEXT PRIMARY KEY,project_id TEXT,task_key TEXT,title TEXT,status TEXT); INSERT INTO task_branches VALUES('damaged','a','derived','derived','derived')`);
+    before.close();
+    const db = new Database(path);
+    migration_0056.up(db);
+    expect(db.prepare(`SELECT task_key,title,status,source FROM task_identity_restoration_manifest WHERE task_id='damaged'`).get()).toEqual({
+      task_key: 'derived', title: 'derived', status: 'derived', source: 'persisted_0055_state',
+    });
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('0056 scopes supported entity data, rebuilds conflicts, and quarantines ambiguous aliases', () => {
     const db = new Database(':memory:');
-    db.exec(`CREATE TABLE task_branches(task_id TEXT PRIMARY KEY,project_id TEXT,task_key TEXT,title TEXT,status TEXT); INSERT INTO task_branches VALUES('damaged','a','derived','derived','derived')`);
-    expect(() => migration_0056.up(db)).toThrow('migration_0056_task_identity_recovery_unproven:damaged');
-    expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='task_identity_restoration_manifest'`).get()).toBeDefined();
+    db.exec(`
+      CREATE TABLE topology_identity_quarantine(quarantine_id TEXT PRIMARY KEY,identity_type TEXT,old_parent_id TEXT,project_scope TEXT,entry_json TEXT,reason TEXT,created_at INTEGER,implicated_scopes_json TEXT);
+      CREATE TABLE entity_instances(instance_id TEXT PRIMARY KEY,canonical_entity_id TEXT,canonical_name TEXT,type TEXT,status TEXT,aliases_json TEXT,metadata_json TEXT,created_at INTEGER,updated_at INTEGER);
+      CREATE TABLE entity_mentions(mention_id TEXT PRIMARY KEY,entity_id TEXT,project_id TEXT,neuron_id TEXT,created_at INTEGER);
+      CREATE TABLE entity_aliases(alias_id TEXT PRIMARY KEY,entity_id TEXT,alias_text TEXT,normalized_alias TEXT,created_at INTEGER,updated_at INTEGER);
+      CREATE TABLE entity_relations(relation_id TEXT PRIMARY KEY,source_entity_id TEXT,target_entity_id TEXT,relation_type TEXT,source_neuron_id TEXT,created_at INTEGER);
+      CREATE TABLE entity_alias_conflicts(conflict_id TEXT PRIMARY KEY);
+      INSERT INTO entity_instances VALUES
+        ('ea','ca','alpha','device','active','[]','{}',1,1),
+        ('eb','cb','beta','device','active','[]','{}',1,1),
+        ('shared','cs','shared','device','active','["private"]','{}',1,1);
+      INSERT INTO entity_mentions VALUES
+        ('ma','ea','a',NULL,1),('mb','eb','a',NULL,1),
+        ('ms1','shared','a',NULL,1),('ms2','shared','b',NULL,1);
+      INSERT INTO entity_aliases VALUES
+        ('aa','ea','printer','printer',1,2),('ab','eb','printer','printer',1,2),
+        ('ambiguous','shared','private','private',1,2);
+      INSERT INTO entity_relations VALUES('ra','ea','eb','related_to',NULL,1);
+    `);
+    migration_0056.up(db);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM entity_aliases WHERE project_id='a'`).get()).toEqual({ count: 2 });
+    expect(db.prepare(`SELECT entity_ids_json FROM entity_alias_conflicts WHERE project_id='a' AND normalized_alias='printer'`).get()).toBeDefined();
+    expect(db.prepare(`SELECT reason FROM topology_identity_quarantine WHERE old_parent_id='ambiguous'`).get()).toEqual({ reason: 'entity_alias_scope_ambiguous' });
+    expect(db.prepare(`SELECT project_id FROM entity_relations WHERE relation_type='related_to'`).get()).toEqual({ project_id: 'a' });
     db.close();
   });
 });

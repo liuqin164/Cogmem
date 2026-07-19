@@ -73,7 +73,7 @@ export class FileAssetStore {
         updated_at = excluded.updated_at,
         last_indexed_at = excluded.last_indexed_at,
         metadata_json = excluded.metadata_json
-    `).run(record.assetId, record.projectId || null, record.filePath, record.originalName || null, record.mimeType || null, record.extension || null, record.sizeBytes, record.contentHash, record.mtimeMs, record.ingestStatus, record.parseStatus, record.privacyLevel, record.createdAt, record.updatedAt, record.lastIndexedAt || null, record.metadata ? JSON.stringify(record.metadata) : null);
+    `).run(record.assetId, record.projectId ?? null, record.filePath, record.originalName || null, record.mimeType || null, record.extension || null, record.sizeBytes, record.contentHash, record.mtimeMs, record.ingestStatus, record.parseStatus, record.privacyLevel, record.createdAt, record.updatedAt, record.lastIndexedAt || null, record.metadata ? JSON.stringify(record.metadata) : null);
         return record;
     }
     markIndexed(assetId, parseStatus = 'text_extracted') {
@@ -92,10 +92,10 @@ export class FileAssetStore {
         return row ? this.mapRow(row) : null;
     }
     findByPath(filePath, projectId) {
-        const row = projectId
+        const row = projectId !== undefined
             ? this.db.prepare(`
           SELECT * FROM file_assets
-          WHERE file_path = ? AND project_id = ?
+          WHERE file_path = ? AND COALESCE(project_id,'') = ?
           ORDER BY updated_at DESC LIMIT 1
         `).get(filePath, projectId)
             : this.db.prepare(`
@@ -108,8 +108,8 @@ export class FileAssetStore {
     listByQuery(input) {
         const params = [];
         let sql = `SELECT * FROM file_assets WHERE 1=1`;
-        if (input.projectId) {
-            sql += ` AND project_id = ?`;
+        if (input.projectId !== undefined) {
+            sql += ` AND COALESCE(project_id,'') = ?`;
             params.push(input.projectId);
         }
         if (input.extension) {
@@ -132,7 +132,7 @@ export class FileAssetStore {
     mapRow(row) {
         return {
             assetId: row.asset_id,
-            projectId: row.project_id || undefined,
+            projectId: row.project_id ?? undefined,
             filePath: row.file_path,
             originalName: row.original_name || undefined,
             mimeType: row.mime_type || undefined,

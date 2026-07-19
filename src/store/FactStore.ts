@@ -227,6 +227,7 @@ export class FactStore {
     options?: {
       predicateFamilies?: string[];
       limit?: number;
+      projectId?: string;
     }
   ): FactRecord[] {
     if (entityIds.length === 0) return [];
@@ -234,6 +235,10 @@ export class FactStore {
     const limit = options?.limit ?? 50;
     const entityPlaceholders = entityIds.map(() => '?').join(', ');
     const predicateFamilies = options?.predicateFamilies || [];
+    const scopeSql = options?.projectId === undefined ? '' : ` AND EXISTS (
+      SELECT 1 FROM neurons n WHERE n.id=facts.neuron_id AND n.is_deleted=0 AND COALESCE(n.project_id,'')=?
+    )`;
+    const scopeParams = options?.projectId === undefined ? [] : [options.projectId];
 
     const rows = predicateFamilies.length > 0
       ? this.db.prepare(`
@@ -241,17 +246,19 @@ export class FactStore {
           FROM facts
           WHERE entity_id IN (${entityPlaceholders})
             AND status IN ('provisional', 'provisional_enriched', 'verified')
+            ${scopeSql}
             AND predicate_family IN (${predicateFamilies.map(() => '?').join(', ')})
           ORDER BY valid_from DESC, fact_id DESC
           LIMIT ?
-        `).all(...entityIds, ...predicateFamilies, limit)
+        `).all(...entityIds, ...scopeParams, ...predicateFamilies, limit)
       : this.db.prepare(`
       SELECT *
       FROM facts
       WHERE entity_id IN (${entityPlaceholders}) AND status IN ('provisional', 'provisional_enriched', 'verified')
+          ${scopeSql}
           ORDER BY valid_from DESC, fact_id DESC
           LIMIT ?
-        `).all(...entityIds, limit);
+        `).all(...entityIds, ...scopeParams, limit);
 
     return (rows as any[]).map((row) => this.mapFact(row));
   }
@@ -271,7 +278,7 @@ export class FactStore {
     return rows.map((row) => row.neuron_id);
   }
 
-  listEventsByNeuronIds(neuronIds: string[], limit: number = 50): EventRecord[] {
+  listEventsByNeuronIds(neuronIds: string[], limit: number = 50, projectId?: string): EventRecord[] {
     if (neuronIds.length === 0) return [];
 
     const placeholders = neuronIds.map(() => '?').join(', ');
@@ -279,9 +286,10 @@ export class FactStore {
       SELECT *
       FROM compiled_events
       WHERE neuron_id IN (${placeholders})
+        ${projectId === undefined ? '' : `AND EXISTS (SELECT 1 FROM neurons n WHERE n.id=compiled_events.neuron_id AND n.is_deleted=0 AND COALESCE(n.project_id,'')=?)`}
       ORDER BY valid_from DESC, event_id DESC
       LIMIT ?
-    `).all(...neuronIds, limit) as any[];
+    `).all(...neuronIds, ...(projectId === undefined ? [] : [projectId]), limit) as any[];
 
     return rows.map((row) => this.mapEvent(row));
   }

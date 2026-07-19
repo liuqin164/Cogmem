@@ -1,3 +1,4 @@
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 export class PrincipleDecayPolicy {
     memoryGraph;
     options;
@@ -9,7 +10,7 @@ export class PrincipleDecayPolicy {
         const now = Date.now();
         const staleDaysMs = this.options.staleDaysMs ?? 90 * 24 * 60 * 60 * 1000;
         const overlapThreshold = this.options.reinforcementOverlapThreshold ?? 0.3;
-        const neurons = this.memoryGraph.getAllNeurons().filter((neuron) => neuron.metadata.projectId === projectId);
+        const neurons = this.memoryGraph.getAllNeurons().filter((neuron) => matchesProjectScope(projectId, neuron.metadata.projectId));
         const principles = neurons.filter((neuron) => neuron.metadata.type === 'cross_domain_principle');
         const semantics = neurons.filter((neuron) => neuron.metadata.type === 'semantic_consolidation');
         let reinforced = 0;

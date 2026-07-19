@@ -105,12 +105,13 @@ export const MIGRATION_DIGESTS = {
     '0053': '0497480c81661528bdd5fc4db6ebf85c8a389668f3f60c272a2d8c0b8c01dab1',
     '0054': '7ea0c8c12ebfb7ff27240f2d5a4f618573bc99f67f58c73b9ac230c0a03a6f7e',
     '0055': 'c16ed6ffd36d2ed2dcd6f1f372817e8be4a47494d2b42263ccabb45de8d78c7b',
-    '0056': '829f09b056bf7384a65908e8dd066691e0ec1538324d37e6aed344a03b0253eb',
+    '0056': '2743172591b85040c01c0910dd4372f0675b7b95a743edd537bec696f9403a89',
 };
 // Audited receipts emitted by the temporary cda1269 build. They remain
 // truthful and are accepted only so 0053 can repair that exact schema.
 export const COMPATIBLE_MIGRATION_DIGESTS = {
     '0052': ['e5739079601e1dc3627e2f06beeaed3f1413f01431a637add4018bc1acdaf6a3'],
+    '0056': ['829f09b056bf7384a65908e8dd066691e0ec1538324d37e6aed344a03b0253eb'],
 };
 export const CANONICAL_MIGRATION_SOURCE_DIGESTS = MIGRATION_DIGESTS;
 // 0049 calls these helpers while rewriting persisted identities. Their exact

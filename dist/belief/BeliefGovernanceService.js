@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 export class BeliefGovernanceService {
     db;
     findEvidence;
@@ -17,7 +18,7 @@ export class BeliefGovernanceService {
         const evidence = input.evidenceEventIds.map((eventId) => this.findEvidence(eventId));
         if (evidence.some((item) => !item))
             throw new Error('unknown_evidence');
-        if (input.projectId && evidence.some((item) => item?.projectId && item.projectId !== input.projectId)) {
+        if (evidence.some((item) => !matchesProjectScope(input.projectId, item?.projectId))) {
             throw new Error('project_boundary_violation');
         }
         if (input.ownership === 'user' && !evidence.some((item) => item?.role === 'user')) {

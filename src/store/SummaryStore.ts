@@ -175,7 +175,7 @@ export class SummaryStore {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.summaryId,
-      record.projectId || null,
+      record.projectId ?? null,
       record.sessionId || null,
       record.scope,
       record.windowStart ?? null,
@@ -199,7 +199,7 @@ export class SummaryStore {
 
   listByProject(projectId: string, options?: { scope?: SummaryScope; limit?: number }): SummaryRecord[] {
     const params: Array<string | number> = [projectId];
-    let sql = `SELECT * FROM deep_write_summaries WHERE project_id = ?`;
+    let sql = `SELECT * FROM deep_write_summaries WHERE COALESCE(project_id,'') = ?`;
     if (options?.scope) {
       sql += ` AND scope = ?`;
       params.push(options.scope);

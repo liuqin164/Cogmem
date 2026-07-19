@@ -5,6 +5,7 @@ import type { TopicAliasRegistry } from './TopicAliasRegistry.js';
 import type { TopicPathRegistry } from './TopicPathRegistry.js';
 import type { TopicRelationGraph } from './TopicRelationGraph.js';
 import type { TopicOperationInput, TopicOperationRecord, TopicOperationType } from './TopicTypes.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 
 const OPERATIONS = new Set<TopicOperationType>([
   'USER_DEFINED_TOPIC_CREATE', 'USER_DEFINED_TOPIC_RENAME', 'USER_DEFINED_TOPIC_ALIAS', 'USER_DEFINED_TOPIC_MOVE',
@@ -23,6 +24,11 @@ export class TopicGovernance {
 
   apply(input: TopicOperationInput): TopicOperationRecord {
     if (!OPERATIONS.has(input.operationType)) throw new Error(`invalid_topic_operation:${input.operationType}`);
+    for (const eventId of input.evidenceEventIds ?? []) {
+      const evidence = this.db.prepare(`SELECT project_id FROM memory_events WHERE event_id=?`).get(eventId) as { project_id?: string | null } | null;
+      if (!evidence) throw new Error(`topic_evidence_not_found:${eventId}`);
+      if (!matchesProjectScope(input.projectId, evidence.project_id)) throw new Error(`topic_evidence_project_mismatch:${eventId}`);
+    }
     const now = input.now ?? Date.now();
     const operationId = `topic-operation-${randomUUID()}`;
     let targetTopicId = input.targetTopicId;

@@ -51,6 +51,8 @@ export declare class MemoryInspectionStore {
     close(): void;
     private tableExists;
     private countTable;
+    private countVectors;
+    private countEmbeddings;
     private countScopedEvents;
     private countRawEvents;
     private readDreamState;

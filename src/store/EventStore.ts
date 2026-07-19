@@ -383,7 +383,7 @@ export class EventStore {
       return event;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const streamConflict = /UNIQUE constraint failed: memory_events\.(stream_id|global_seq)/.test(message);
+      const streamConflict = /UNIQUE constraint failed: memory_events\.(?:project_scope, memory_events\.)?stream_id(?:, memory_events\.event_version)?/.test(message);
       const anchorConflict = message === 'import_anchor_already_exists';
       const autoEventVersion = input.eventVersion === undefined;
       const autoThreadSeq = input.threadSeq === undefined;

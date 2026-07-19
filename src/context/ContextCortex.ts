@@ -2,6 +2,7 @@ import Database from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
 
 import type { StrategyCapsule, StrategyTemplateId } from '../strategy/StrategyCapsule.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 
 export type ContextIntent =
   | 'greeting'
@@ -195,7 +196,7 @@ export class ContextCortex {
   }
 
   private hardSuppressionReason(candidate: ContextCandidate, input: ContextPlanInput, intent: ContextIntent): ContextSuppressionReason | undefined {
-    if (input.projectId && candidate.projectId && candidate.projectId !== input.projectId) return 'project_boundary';
+    if (!matchesProjectScope(input.projectId, candidate.projectId)) return 'project_boundary';
     if (candidate.superseded) return 'superseded';
     if (input.currentSessionId && candidate.sessionId === input.currentSessionId
       && candidate.layer !== 'session_state' && candidate.layer !== 'turn_bridge') return 'current_session_echo';

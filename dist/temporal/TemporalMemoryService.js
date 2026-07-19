@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 export class TemporalMemoryService {
     db;
     constructor(db) {
@@ -9,6 +10,13 @@ export class TemporalMemoryService {
         const title = input.title.trim();
         if (!title)
             throw new Error('timeline_title_required');
+        for (const eventId of input.evidenceEventIds) {
+            const evidence = this.db.prepare(`SELECT project_id FROM memory_events WHERE event_id=?`).get(eventId);
+            if (!evidence)
+                throw new Error(`timeline_evidence_not_found:${eventId}`);
+            if (!matchesProjectScope(input.projectId, evidence.project_id))
+                throw new Error(`timeline_evidence_project_mismatch:${eventId}`);
+        }
         const now = Date.now();
         const occurredAt = input.occurredAt ?? now;
         const entryId = `timeline-${randomUUID()}`;
@@ -27,8 +35,8 @@ export class TemporalMemoryService {
     list(options = {}) {
         const conditions = [];
         const params = [];
-        if (options.projectId) {
-            conditions.push('project_id = ?');
+        if (options.projectId !== undefined) {
+            conditions.push("COALESCE(project_id,'') = ?");
             params.push(options.projectId);
         }
         if (options.canonicalKey) {

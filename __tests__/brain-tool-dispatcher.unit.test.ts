@@ -241,6 +241,15 @@ describe('BrainToolDispatcher — get_neuron_context', () => {
     const output = result.result as { neighbors: Array<{ neuronId: string }> };
     expect(output.neighbors.some((n) => n.neuronId === 'nrn-neighbor')).toBe(true);
   });
+
+  it('rejects direct neuron IDs outside named and projectless scopes', async () => {
+    const neuron = makeNeuron('nrn-private');
+    const dispatcher = new BrainToolDispatcher(makeDeps({
+      memoryGraph: { getNeuron: () => neuron } as unknown as BrainToolDispatcherDeps['memoryGraph'],
+    }));
+    expect((await dispatcher.dispatch({ action: 'get_neuron_context', neuron_id: neuron.id }, { projectId: 'other' })).success).toBe(false);
+    expect((await dispatcher.dispatch({ action: 'get_neuron_context', neuron_id: neuron.id }, { projectId: '' })).success).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

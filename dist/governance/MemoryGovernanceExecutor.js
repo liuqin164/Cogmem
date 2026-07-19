@@ -19,6 +19,9 @@ export class MemoryGovernanceExecutor {
         }
         const appliedOperationIds = [];
         const transaction = this.db.transaction(() => {
+            const currentValidation = this.validator.validate(plan);
+            if (!currentValidation.valid)
+                throw new Error(`Memory governance plan rejected: ${currentValidation.issues.map((issue) => issue.code).join(', ')}`);
             for (const operation of plan.operations) {
                 if (this.store.isOperationApplied(operation.idempotencyKey))
                     continue;

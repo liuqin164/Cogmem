@@ -57,6 +57,7 @@ const MIGRATION_TABLES = [
     'task_identity_restoration_manifest', 'topic_aliases', 'topic_nodes', 'topic_operations', 'topic_relations', 'topology_identity_quarantine', 'topology_projection_state', 'topology_source_revisions',
     'topology_time_rebuild_active_neurons', 'topology_time_rebuild_adjacency', 'topology_time_rebuild_buckets', 'topology_time_rebuild_cognitive_edges', 'topology_time_rebuild_cognitive_nodes',
     'topology_time_rebuild_entries', 'topology_time_rebuild_jobs', 'user_session_runtime', 'vector_index', 'vector_write_outbox', 'web_session_tokens', 'working_memory_deltas', 'memory_activation',
+    'file_assets', 'file_blocks', 'file_chunks', 'file_chunk_edges', 'user_insights',
 ];
 const MIGRATION_PROJECT_OWNED = [
     'archived_sessions', 'belief_graph_conflicts', 'belief_graph_nodes', 'context_activation_receipts', 'context_strategy_outcomes',
@@ -73,12 +74,14 @@ const MIGRATION_PROJECT_OWNED = [
     'topology_time_rebuild_adjacency', 'topology_time_rebuild_buckets', 'topology_time_rebuild_cognitive_edges',
     'topology_time_rebuild_cognitive_nodes', 'topology_time_rebuild_entries', 'topology_time_rebuild_jobs', 'user_session_runtime',
     'web_session_tokens', 'working_memory_deltas', 'memory_activation',
+    'file_assets', 'user_insights',
 ];
 const MIGRATION_PROVENANCE_OWNED = [
     'belief_graph_evidence', 'belief_graph_versions', 'chat_turns', 'deep_write_candidates', 'entity_resolution_log',
     'episode_dream_attempts', 'memory_episode_events', 'memory_frame_nodes', 'memory_frame_relations',
     'prospective_memory_transitions', 'scheduled_job_runs', 'scheduled_jobs', 'notification_records', 'notification_rules',
     'workspace_settings', 'workspaces', 'meta_observations', 'topology_identity_quarantine', 'vector_index', 'vector_write_outbox',
+    'file_blocks', 'file_chunks', 'file_chunk_edges',
 ];
 const MIGRATION_OPERATIONAL_NON_PERSONAL = [
     '_episode_integrity_markers', '_memory_frame_integrity_markers', '_meta', 'agent_brain_health_checks', 'pipeline_runs',
@@ -105,6 +108,28 @@ export function deleteRegisteredProjectContent(context) {
     const remove = (name, sql, params = [scope]) => {
         audit[name] = runDelete(sql, params);
     };
+    if (persistentTables.has('file_assets')) {
+        if (persistentTables.has('file_chunk_edges') && persistentTables.has('file_chunks')) {
+            remove('file_chunk_edges', `DELETE FROM file_chunk_edges WHERE source_chunk_id IN (
+        SELECT chunk_id FROM file_chunks WHERE asset_id IN (SELECT asset_id FROM file_assets WHERE COALESCE(project_id,'')=?)
+      ) OR target_chunk_id IN (
+        SELECT chunk_id FROM file_chunks WHERE asset_id IN (SELECT asset_id FROM file_assets WHERE COALESCE(project_id,'')=?)
+      )`, [scope, scope]);
+        }
+        if (persistentTables.has('file_chunks'))
+            remove('file_chunks', `DELETE FROM file_chunks
+      WHERE asset_id IN (SELECT asset_id FROM file_assets WHERE COALESCE(project_id,'')=?)
+         OR neuron_id IN (SELECT id FROM neurons WHERE COALESCE(project_id,'')=?)`, [scope, scope]);
+        if (persistentTables.has('file_blocks'))
+            remove('file_blocks', `DELETE FROM file_blocks
+      WHERE asset_id IN (SELECT asset_id FROM file_assets WHERE COALESCE(project_id,'')=?)`);
+        remove('file_assets', `DELETE FROM file_assets WHERE COALESCE(project_id,'')=?`);
+    }
+    if (persistentTables.has('user_insights'))
+        remove('user_insights', `DELETE FROM user_insights
+    WHERE COALESCE(project_id,'')=?
+       OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(evidence_neuron_ids) THEN evidence_neuron_ids ELSE '[]' END)
+         WHERE value IN (SELECT id FROM neurons WHERE COALESCE(project_id,'')=?))`, [scope, scope]);
     remove('topology_identity_quarantine', `DELETE FROM topology_identity_quarantine
     WHERE project_scope = ?
        OR EXISTS (SELECT 1 FROM json_each(COALESCE(implicated_scopes_json, '[]')) WHERE value = ?)

@@ -271,6 +271,27 @@ test('Dream claim skips legacy empty jobs without consuming the batch slot', () 
   }
 });
 
+test('projectless Dream maintenance cannot claim or expire named-project jobs', () => {
+  const db = new Database(':memory:');
+  const store = new EpisodeStore(db);
+  const create = (projectId: string, eventId: string) => {
+    const episode = store.createEpisode({ projectId, sessionId: `s-${projectId || 'global'}`, episodeType: 'conversation', importance: 0.5, eventId, occurredAt: 1 });
+    store.appendEvent({ episodeId: episode.episodeId, eventId, relation: 'continues_previous', confidence: 1, occurredAt: 1 });
+    store.sealEpisode(episode.episodeId, { mode: 'hard', reason: 'test', now: 2 });
+    return episode.episodeId;
+  };
+  const globalId = create('', 'eg');
+  const aId = create('a', 'ea');
+  const bId = create('b', 'eb');
+  db.prepare(`UPDATE episode_dream_jobs SET state='processing',attempts=3,lease_id='a',lease_until=1 WHERE episode_id=?`).run(aId);
+  const claimed = store.claimDreamJobs({ projectId: '', limit: 10, now: 10, leaseMs: 5000, maxAttempts: 3 });
+  expect(claimed.map((job) => job.episodeId)).toEqual([globalId]);
+  expect(store.getDreamJobState(aId)).toBe('processing');
+  expect(store.getDreamJobState(bId)).toBe('pending');
+  expect(store.listEpisodes({ projectId: '' }).map((episode) => episode.episodeId)).toEqual([globalId]);
+  db.close();
+});
+
 test('migration 23 backfills episode Dream state from existing 3.5.0 jobs', () => {
   const db = new Database(':memory:');
   try {

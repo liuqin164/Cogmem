@@ -4,6 +4,7 @@ import type { SummaryStore } from '../store/SummaryStore.js';
 import type { Neuron } from '../types/index.js';
 import { normalizeTopicPath } from './HierarchicalRecallRouter.js';
 import { isRecallableMemoryEvidence } from './RecallGovernance.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 
 export interface TopicSummaryEntry {
   topicPath: string;
@@ -29,7 +30,7 @@ export class TopicSummaryBoard {
 
   refresh(topicPath: string, projectId: string, options: TopicSummaryRefreshOptions = {}): string | null {
     const normalized = normalizeTopicPath(topicPath);
-    if (!normalized || !projectId) return null;
+    if (!normalized) return null;
 
     const existing = this.getSummaryNeuron(normalized, projectId);
     const sourceNeurons = this.getSourceNeurons(normalized, projectId);
@@ -130,6 +131,7 @@ export class TopicSummaryBoard {
       .map((id) => this.memoryGraph.getNeuron(id))
       .filter((neuron): neuron is Neuron => Boolean(neuron))
       .filter((neuron) => !this.isSummaryNeuron(neuron))
+      .filter((neuron) => matchesProjectScope(projectId, neuron.metadata.projectId))
       .filter((neuron) => isRecallableMemoryEvidence(neuron))
       .sort((a, b) => (b.metadata.updatedAt || b.metadata.createdAt) - (a.metadata.updatedAt || a.metadata.createdAt));
   }

@@ -146,13 +146,17 @@ export class EntityGovernanceService {
     if (!log) throw new Error(`Missing entity merge audit log: ${candidateId}`);
 
     this.db.transaction(() => {
+      if (candidate.projectId === undefined) throw new Error('Entity merge candidate has no exact project scope.');
+      if (!this.entities.isExclusiveToProject(candidate.sourceEntityId, candidate.projectId)
+        || !this.entities.isExclusiveToProject(candidate.targetEntityId, candidate.projectId)) throw new Error('entity_project_scope_changed');
+      const evidence = candidate.evidenceEventIds.map((eventId) => this.findEvidence(eventId));
+      if (evidence.some((item) => !item || (item.projectId ?? '') !== candidate.projectId)) throw new Error('entity_evidence_scope_changed');
       this.entities.restoreInstance({
         entityId: candidate.sourceEntityId,
         canonicalEntityId: String(log.previous_canonical_entity_id),
         status: String(log.previous_status) as EntityRecord['status'],
         updatedAt: now,
       });
-      if (candidate.projectId === undefined) throw new Error('Entity merge candidate has no exact project scope.');
       this.entities.removeAlias(candidate.targetEntityId, String(log.alias), candidate.projectId, now);
       this.db.prepare(`
         INSERT INTO entity_resolution_log (

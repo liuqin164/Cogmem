@@ -71,7 +71,7 @@ export class FileChunkStore {
       ORDER BY chunk_index ASC
     `).all(assetId).map((row) => this.mapRow(row));
     }
-    listContext(assetId, chunkIndex, radius = 1) {
+    listContext(assetId, chunkIndex, radius = 1, projectId) {
         const start = Math.max(0, chunkIndex - Math.max(0, radius));
         const end = chunkIndex + Math.max(0, radius);
         return this.db.prepare(`
@@ -83,8 +83,9 @@ export class FileChunkStore {
       JOIN neurons n ON n.id = fc.neuron_id
       LEFT JOIN file_blocks fb ON fb.asset_id = fc.asset_id AND fb.block_index = fc.block_start_index
       WHERE fc.asset_id = ? AND fc.chunk_index BETWEEN ? AND ?
+        AND (? IS NULL OR COALESCE(fa.project_id,'') = ?)
       ORDER BY fc.chunk_index ASC
-    `).all(assetId, start, end).map((row) => this.mapEvidenceRow(row));
+    `).all(assetId, start, end, projectId === undefined ? null : projectId, projectId ?? '').map((row) => this.mapEvidenceRow(row));
     }
     listEvidenceByNeuronIds(neuronIds) {
         if (neuronIds.length === 0)

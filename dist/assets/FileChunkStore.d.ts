@@ -13,7 +13,7 @@ export declare class FileChunkStore {
     initSchema(): void;
     replaceChunks(assetId: string, chunks: InsertChunkInput[]): FileChunkRecord[];
     listByAsset(assetId: string): FileChunkRecord[];
-    listContext(assetId: string, chunkIndex: number, radius?: number): FileChunkEvidence[];
+    listContext(assetId: string, chunkIndex: number, radius?: number, projectId?: string): FileChunkEvidence[];
     listEvidenceByNeuronIds(neuronIds: string[]): FileChunkEvidence[];
     groupEvidenceByAsset(evidence: FileChunkEvidence[]): FileEvidence[];
     private insertSequentialEdges;

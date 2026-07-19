@@ -1,3 +1,4 @@
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 export class ConsolidationTrigger {
     memoryGraph;
     episodicThreshold;
@@ -11,7 +12,7 @@ export class ConsolidationTrigger {
         const now = Date.now();
         const grouped = new Map();
         const neurons = this.memoryGraph.getAllNeurons()
-            .filter((neuron) => neuron.metadata.projectId === projectId)
+            .filter((neuron) => matchesProjectScope(projectId, neuron.metadata.projectId))
             .filter((neuron) => isEpisodic(neuron));
         for (const neuron of neurons) {
             const topicPath = neuron.metadata.topicPath || 'global';
@@ -20,7 +21,7 @@ export class ConsolidationTrigger {
             grouped.set(topicPath, bucket);
         }
         const semantic = this.memoryGraph.getAllNeurons()
-            .filter((neuron) => neuron.metadata.projectId === projectId && neuron.metadata.type === 'semantic_consolidation');
+            .filter((neuron) => matchesProjectScope(projectId, neuron.metadata.projectId) && neuron.metadata.type === 'semantic_consolidation');
         return Array.from(grouped.entries())
             .filter(([topicPath, items]) => items.length >= this.episodicThreshold && !this.inCooldown(topicPath, semantic, now))
             .map(([topicPath, items]) => ({

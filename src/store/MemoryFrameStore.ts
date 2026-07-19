@@ -146,8 +146,10 @@ export class MemoryFrameStore {
     if (!leaseId) return;
     this.db.prepare(`UPDATE memory_frames SET status='failed', updated_at=? WHERE episode_id=? AND dream_job_lease_id=? AND status='staged'`).run(now, episodeId, leaseId);
   }
-  failStagedOlderThan(_cutoff: number, now = Date.now()): number {
-    return Number(this.db.prepare(`UPDATE memory_frames SET status='failed', updated_at=? WHERE status='staged' AND dream_job_lease_id IS NOT NULL AND dream_lease_until IS NOT NULL AND dream_lease_until<?`).run(now, now).changes ?? 0);
+  failStagedOlderThan(_cutoff: number, now = Date.now(), projectId?: string): number {
+    const scoped = projectId !== undefined;
+    return Number(this.db.prepare(`UPDATE memory_frames SET status='failed', updated_at=? WHERE status='staged' AND dream_job_lease_id IS NOT NULL AND dream_lease_until IS NOT NULL AND dream_lease_until<?${scoped ? " AND COALESCE(project_id,'')=?" : ''}`)
+      .run(now, now, ...(scoped ? [projectId] : [])).changes ?? 0);
   }
   supersedeEpisodes(episodeIds: string[], now = Date.now()): number {
     return this.db.transaction(() => {

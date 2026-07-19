@@ -50,6 +50,13 @@ export class ActivationStore {
     const now = input.touchedAt ?? Date.now();
     const delta = clamp(input.delta ?? 1, 0, 10);
     const existing = this.get(input.neuronId);
+    const hasNeurons = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='neurons'`).get());
+    const neuron = hasNeurons
+      ? this.db.prepare(`SELECT project_id FROM neurons WHERE id=? AND is_deleted=0`).get(input.neuronId) as { project_id?: string | null } | null
+      : null;
+    if (hasNeurons && !neuron) throw new Error(`activation_neuron_not_found:${input.neuronId}`);
+    const projectId = hasNeurons ? neuron?.project_id ?? undefined : existing?.projectId ?? input.projectId;
+    if (input.projectId !== undefined && input.projectId !== (projectId ?? '')) throw new Error(`activation_project_mismatch:${input.neuronId}`);
     const activation = clamp((existing?.activation ?? 0) + delta, 0, 10);
     const touchCount = (existing?.touchCount ?? 0) + 1;
     this.db.prepare(`
@@ -64,7 +71,7 @@ export class ActivationStore {
         last_touched_at = excluded.last_touched_at
     `).run(
       input.neuronId,
-      input.projectId || existing?.projectId || null,
+      projectId ?? null,
       activation,
       touchCount,
       input.source || existing?.source || null,
@@ -72,7 +79,7 @@ export class ActivationStore {
     );
     return {
       neuronId: input.neuronId,
-      projectId: input.projectId || existing?.projectId,
+      projectId,
       activation,
       touchCount,
       source: input.source || existing?.source,

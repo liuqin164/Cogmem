@@ -50,9 +50,10 @@ export declare class FactStore {
     listFactsByEntityIds(entityIds: string[], options?: {
         predicateFamilies?: string[];
         limit?: number;
+        projectId?: string;
     }): FactRecord[];
     listNeuronIdsByEntityIds(entityIds: string[], limit?: number): string[];
-    listEventsByNeuronIds(neuronIds: string[], limit?: number): EventRecord[];
+    listEventsByNeuronIds(neuronIds: string[], limit?: number, projectId?: string): EventRecord[];
     listEventsByUnitId(unitId: string): EventRecord[];
     listEventsByUnitIds(unitIds: string[], limit?: number): EventRecord[];
     listFactsByTimeRange(startTime: number, endTime: number, options?: {

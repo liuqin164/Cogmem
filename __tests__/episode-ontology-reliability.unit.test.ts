@@ -15,6 +15,7 @@ import { TopicRelationGraph } from '../src/topic/TopicRelationGraph.js';
 function topicDb() {
   const db = new Database(':memory:');
   migration_0024.up(db);
+  db.exec(`CREATE TABLE memory_events(event_id TEXT PRIMARY KEY,project_id TEXT); INSERT INTO memory_events VALUES('evt-name','brain'),('evt-alias','brain'),('evt-rename','brain')`);
   return db;
 }
 

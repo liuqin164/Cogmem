@@ -142,23 +142,29 @@ export class FactStore {
         const limit = options?.limit ?? 50;
         const entityPlaceholders = entityIds.map(() => '?').join(', ');
         const predicateFamilies = options?.predicateFamilies || [];
+        const scopeSql = options?.projectId === undefined ? '' : ` AND EXISTS (
+      SELECT 1 FROM neurons n WHERE n.id=facts.neuron_id AND n.is_deleted=0 AND COALESCE(n.project_id,'')=?
+    )`;
+        const scopeParams = options?.projectId === undefined ? [] : [options.projectId];
         const rows = predicateFamilies.length > 0
             ? this.db.prepare(`
           SELECT *
           FROM facts
           WHERE entity_id IN (${entityPlaceholders})
             AND status IN ('provisional', 'provisional_enriched', 'verified')
+            ${scopeSql}
             AND predicate_family IN (${predicateFamilies.map(() => '?').join(', ')})
           ORDER BY valid_from DESC, fact_id DESC
           LIMIT ?
-        `).all(...entityIds, ...predicateFamilies, limit)
+        `).all(...entityIds, ...scopeParams, ...predicateFamilies, limit)
             : this.db.prepare(`
       SELECT *
       FROM facts
       WHERE entity_id IN (${entityPlaceholders}) AND status IN ('provisional', 'provisional_enriched', 'verified')
+          ${scopeSql}
           ORDER BY valid_from DESC, fact_id DESC
           LIMIT ?
-        `).all(...entityIds, limit);
+        `).all(...entityIds, ...scopeParams, limit);
         return rows.map((row) => this.mapFact(row));
     }
     listNeuronIdsByEntityIds(entityIds, limit = 50) {
@@ -174,7 +180,7 @@ export class FactStore {
     `).all(...entityIds, limit);
         return rows.map((row) => row.neuron_id);
     }
-    listEventsByNeuronIds(neuronIds, limit = 50) {
+    listEventsByNeuronIds(neuronIds, limit = 50, projectId) {
         if (neuronIds.length === 0)
             return [];
         const placeholders = neuronIds.map(() => '?').join(', ');
@@ -182,9 +188,10 @@ export class FactStore {
       SELECT *
       FROM compiled_events
       WHERE neuron_id IN (${placeholders})
+        ${projectId === undefined ? '' : `AND EXISTS (SELECT 1 FROM neurons n WHERE n.id=compiled_events.neuron_id AND n.is_deleted=0 AND COALESCE(n.project_id,'')=?)`}
       ORDER BY valid_from DESC, event_id DESC
       LIMIT ?
-    `).all(...neuronIds, limit);
+    `).all(...neuronIds, ...(projectId === undefined ? [] : [projectId]), limit);
         return rows.map((row) => this.mapEvent(row));
     }
     listEventsByUnitId(unitId) {

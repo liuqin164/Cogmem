@@ -561,8 +561,8 @@ export class EntityStore {
           entity,
           score: index === 0 ? 0.74 : 0.38,
           reasons: ['relative_reference_latest'],
-          mentionCount: this.listTimeline({ entityId: entity.entityId, limit: 8 }).length,
-          latestMentionAt: this.listTimeline({ entityId: entity.entityId, limit: 1 })[0]?.createdAt
+          mentionCount: this.listTimeline({ entityId: entity.entityId, projectId: options?.projectId, limit: 8 }).length,
+          latestMentionAt: this.listTimeline({ entityId: entity.entityId, projectId: options?.projectId, limit: 1 })[0]?.createdAt
         }));
     }
 
@@ -578,8 +578,8 @@ export class EntityStore {
         reasons: items.length === 1
           ? ['relative_reference_ambiguous_single_candidate']
           : ['relative_reference_ambiguous_scope_only'],
-        mentionCount: this.listTimeline({ entityId: entity.entityId, limit: 8 }).length,
-        latestMentionAt: this.listTimeline({ entityId: entity.entityId, limit: 1 })[0]?.createdAt
+        mentionCount: this.listTimeline({ entityId: entity.entityId, projectId: options?.projectId, limit: 8 }).length,
+        latestMentionAt: this.listTimeline({ entityId: entity.entityId, projectId: options?.projectId, limit: 1 })[0]?.createdAt
       }));
   }
 
@@ -1168,7 +1168,7 @@ export class EntityStore {
       return;
     }
 
-    const policy = this.inferAliasConflictPolicy(entityIds);
+    const policy = this.inferAliasConflictPolicy(entityIds, projectId);
     const existing = this.db.prepare(`
       SELECT conflict_id, created_at
       FROM entity_alias_conflicts
@@ -1191,12 +1191,12 @@ export class EntityStore {
     );
   }
 
-  private inferAliasConflictPolicy(entityIds: string[]): EntityAliasConflictRecord['policy'] {
+  private inferAliasConflictPolicy(entityIds: string[], projectId: string): EntityAliasConflictRecord['policy'] {
     const projectIds = new Set<string>();
     for (const entityId of entityIds) {
-      const mentions = this.listTimeline({ entityId, limit: 8 });
+      const mentions = this.listTimeline({ entityId, projectId, limit: 8 });
       for (const mention of mentions) {
-        if (mention.projectId) projectIds.add(mention.projectId);
+        projectIds.add(mention.projectId ?? '');
       }
     }
 
@@ -1345,6 +1345,7 @@ export class EntityStore {
     const aliases = this.db.prepare(`SELECT alias_text FROM entity_aliases WHERE entity_id=? AND project_id=? ORDER BY updated_at DESC`).all(entity.entityId, projectId) as Array<{ alias_text: string }>;
     return {
       ...entity,
+      ...(this.listProjectScopes(entity.entityId).length > 1 ? { canonicalName: aliases[0]?.alias_text ?? `entity-${entity.entityId.slice(-12)}` } : {}),
       aliases: aliases.map((item) => item.alias_text),
       ...(this.listProjectScopes(entity.entityId).length > 1 ? { metadata: {} } : {}),
     };

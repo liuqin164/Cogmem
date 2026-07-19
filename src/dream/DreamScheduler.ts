@@ -60,7 +60,7 @@ export class DreamScheduler {
     const graceMs = Math.max(0, options.softSealGraceMs ?? 5 * 60_000);
     const leaseMs = Math.max(5_000, options.leaseMs ?? 5 * 60_000);
     this.candidateStore?.abandonStaleStagedRuns(startedAt - leaseMs, startedAt, options.projectId);
-    this.frameStore?.failStagedOlderThan(startedAt - leaseMs, startedAt);
+    this.frameStore?.failStagedOlderThan(startedAt - leaseMs, startedAt, options.projectId);
     this.episodeStore.finalizeMatureSoftSeals({
       projectId: options.projectId,
       sealedBefore: startedAt - graceMs,

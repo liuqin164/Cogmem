@@ -14,7 +14,7 @@ export class MemoryGovernanceStore {
         this.db.prepare(`
       INSERT INTO memory_governance_plans (plan_id, project_id, proposed_by, status, created_at, applied_at)
       VALUES (?, ?, ?, 'applied', ?, ?)
-    `).run(plan.planId, plan.projectId || null, plan.proposedBy, plan.createdAt, Date.now());
+    `).run(plan.planId, plan.projectId ?? null, plan.proposedBy, plan.createdAt, Date.now());
     }
     recordOperation(plan, operation) {
         const now = Date.now();
@@ -23,12 +23,12 @@ export class MemoryGovernanceStore {
         operation_id, plan_id, project_id, operation_type, idempotency_key, expected_version,
         evidence_event_ids_json, source_role, ownership, payload_json, status, created_at, applied_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'applied', ?, ?)
-    `).run(operation.operationId, plan.planId, operation.projectId || plan.projectId || null, operation.type, operation.idempotencyKey, operation.expectedVersion ?? null, JSON.stringify(operation.evidenceEventIds), operation.sourceRole, operation.ownership, JSON.stringify(operation.payload), plan.createdAt, now);
+    `).run(operation.operationId, plan.planId, operation.projectId ?? plan.projectId ?? null, operation.type, operation.idempotencyKey, operation.expectedVersion ?? null, JSON.stringify(operation.evidenceEventIds), operation.sourceRole, operation.ownership, JSON.stringify(operation.payload), plan.createdAt, now);
         this.db.prepare(`
       INSERT INTO memory_governance_audit (
         audit_id, plan_id, operation_id, project_id, operation_type, evidence_event_ids_json, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(`audit:${plan.planId}:${operation.operationId}`, plan.planId, operation.operationId, operation.projectId || plan.projectId || null, operation.type, JSON.stringify(operation.evidenceEventIds), now);
+    `).run(`audit:${plan.planId}:${operation.operationId}`, plan.planId, operation.operationId, operation.projectId ?? plan.projectId ?? null, operation.type, JSON.stringify(operation.evidenceEventIds), now);
     }
     listAppliedOperations(planId) {
         return this.db.prepare(`
@@ -38,14 +38,14 @@ export class MemoryGovernanceStore {
     `).all(planId).map((row) => row.operation_id);
     }
     listAudit(projectId) {
-        const rows = projectId
-            ? this.db.prepare(`SELECT * FROM memory_governance_audit WHERE project_id = ? ORDER BY created_at DESC`).all(projectId)
+        const rows = projectId !== undefined
+            ? this.db.prepare(`SELECT * FROM memory_governance_audit WHERE COALESCE(project_id,'') = ? ORDER BY created_at DESC`).all(projectId)
             : this.db.prepare(`SELECT * FROM memory_governance_audit ORDER BY created_at DESC`).all();
         return rows.map((row) => ({
             auditId: String(row.audit_id),
             planId: String(row.plan_id),
             operationId: String(row.operation_id),
-            projectId: row.project_id ? String(row.project_id) : undefined,
+            projectId: row.project_id == null ? undefined : String(row.project_id),
             operationType: String(row.operation_type),
             evidenceEventIds: parseStringArray(row.evidence_event_ids_json),
             createdAt: Number(row.created_at),
