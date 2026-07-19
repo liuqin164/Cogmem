@@ -102,6 +102,7 @@ export class EventStore {
         raw_event_type TEXT,
         event_version INTEGER NOT NULL,
         project_id TEXT,
+        project_scope TEXT NOT NULL DEFAULT '',
         workspace_id TEXT,
         actor_id TEXT,
         causation_id TEXT,
@@ -132,7 +133,7 @@ export class EventStore {
         payload_json TEXT NOT NULL,
         payload_hash TEXT NOT NULL,
         created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-        UNIQUE (stream_id, event_version)
+        UNIQUE (project_scope, stream_id, event_version)
       );
 
       CREATE INDEX IF NOT EXISTS idx_memory_events_stream
@@ -241,14 +242,14 @@ export class EventStore {
   }
 
   append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>, retry = 0): MemoryEvent<TPayload> {
-    const eventVersion = input.eventVersion ?? this.getNextEventVersion(input.streamId);
+    const eventVersion = input.eventVersion ?? this.getNextEventVersion(input.streamId, input.projectId ?? '');
     const occurredAt = input.occurredAt ?? Date.now();
     if (!Number.isFinite(occurredAt) || Math.abs(occurredAt) > 8_640_000_000_000_000) throw new Error('invalid_event_timestamp');
     const payloadJson = JSON.stringify(input.payload);
     const storedPayloadJson = this.encodePayload(payloadJson);
     const payloadHash = createHash('sha256').update(payloadJson).digest('hex');
     const threadId = input.threadId ?? (input.streamType === 'thread' ? input.streamId : undefined);
-    const threadSeq = input.threadSeq ?? (threadId ? this.getNextThreadSeq(threadId) : undefined);
+    const threadSeq = input.threadSeq ?? (threadId ? this.getNextThreadSeq(threadId, input.projectId ?? '') : undefined);
     const globalSeq = this.getNextGlobalSeq();
     const createdAt = Date.now();
     // A caller-provided date is evidence supplied by the caller, never the
@@ -324,13 +325,13 @@ export class EventStore {
 
     const insert = () => this.db.prepare(`
       INSERT INTO memory_events (
-        event_id, global_seq, stream_id, stream_type, event_type, raw_event_type, event_version, project_id,
+        event_id, global_seq, stream_id, stream_type, event_type, raw_event_type, event_version, project_id, project_scope,
         workspace_id, actor_id, causation_id, correlation_id, source_neuron_id, source_id,
         content_hash, thread_id, session_id, local_date, local_date_source, thread_seq, turn_id, turn_seq,
         event_ordinal, role, parent_event_id, prev_event_id, next_event_id, causality_type,
         source_offset, line_start, line_end, char_start, char_end, ordering_confidence,
         occurred_at, payload_json, payload_hash, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       event.eventId,
       event.globalSeq ?? null,
@@ -339,7 +340,8 @@ export class EventStore {
       event.eventType,
       event.rawEventType || null,
       event.eventVersion,
-      event.projectId || null,
+      event.projectId ?? null,
+      event.projectId ?? '',
       event.workspaceId || null,
       event.actorId || null,
       event.causationId || null,
@@ -391,7 +393,7 @@ export class EventStore {
       if (!anchorConflict) throw error;
       const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
       const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;
-      const existing = anchor && event.projectId && event.sourceId
+      const existing = anchor && event.projectId !== undefined && event.sourceId
         ? this.findImportedEventAnchor(event.projectId, event.sourceId, anchor)
         : null;
       if (!existing) throw error;
@@ -412,7 +414,7 @@ export class EventStore {
   private upsertImportAnchor(event: MemoryEvent<unknown>): void {
     const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
     const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;
-    if (!anchor || !event.projectId || !event.sourceId || !event.contentHash) return;
+    if (!anchor || event.projectId === undefined || !event.sourceId || !event.contentHash) return;
     this.db.prepare(`
       INSERT INTO import_source_anchors (project_id, source_id, import_anchor, event_id, content_hash, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -444,30 +446,33 @@ export class EventStore {
     return (row?.seq || 0) + 1;
   }
 
-  getNextEventVersion(streamId: string): number {
+  getNextEventVersion(streamId: string, projectId?: string): number {
+    const scope = projectId === undefined ? '' : ` AND project_scope=?`;
     const row = this.db.prepare(`
       SELECT COALESCE(MAX(event_version), 0) AS version
       FROM memory_events
-      WHERE stream_id = ?
-    `).get(streamId) as { version: number } | null;
+      WHERE stream_id = ?${scope}
+    `).get(streamId, ...(projectId === undefined ? [] : [projectId])) as { version: number } | null;
     return (row?.version || 0) + 1;
   }
 
-  getNextThreadSeq(threadId: string): number {
+  getNextThreadSeq(threadId: string, projectId?: string): number {
+    const scope = projectId === undefined ? '' : ` AND project_scope=?`;
     const row = this.db.prepare(`
       SELECT COALESCE(MAX(thread_seq), 0) AS seq
       FROM memory_events
-      WHERE thread_id = ? OR (thread_id IS NULL AND stream_type = 'thread' AND stream_id = ?)
-    `).get(threadId, threadId) as { seq: number } | null;
+      WHERE (thread_id = ? OR (thread_id IS NULL AND stream_type = 'thread' AND stream_id = ?))${scope}
+    `).get(threadId, threadId, ...(projectId === undefined ? [] : [projectId])) as { seq: number } | null;
     return (row?.seq || 0) + 1;
   }
 
-  getNextTurnSeq(threadId: string): number {
+  getNextTurnSeq(threadId: string, projectId?: string): number {
+    const scope = projectId === undefined ? '' : ` AND project_scope=?`;
     const row = this.db.prepare(`
       SELECT COALESCE(MAX(turn_seq), 0) AS seq
       FROM memory_events
-      WHERE thread_id = ? OR (thread_id IS NULL AND stream_type = 'thread' AND stream_id = ?)
-    `).get(threadId, threadId) as { seq: number } | null;
+      WHERE (thread_id = ? OR (thread_id IS NULL AND stream_type = 'thread' AND stream_id = ?))${scope}
+    `).get(threadId, threadId, ...(projectId === undefined ? [] : [projectId])) as { seq: number } | null;
     return (row?.seq || 0) + 1;
   }
 
@@ -545,13 +550,14 @@ export class EventStore {
     return rows.map((row) => this.mapRow(row));
   }
 
-  getEventsByStreamId(streamId: string): MemoryEvent[] {
+  getEventsByStreamId(streamId: string, projectId?: string): MemoryEvent[] {
+    const scope = projectId === undefined ? '' : ` AND project_scope=?`;
     const rows = this.db.prepare(`
       SELECT ${MEMORY_EVENT_COLUMNS}
       FROM memory_events
-      WHERE stream_id = ?
+      WHERE stream_id = ?${scope}
       ORDER BY event_version ASC, COALESCE(global_seq, 0) ASC, event_id ASC
-    `).all(streamId) as any[];
+    `).all(streamId, ...(projectId === undefined ? [] : [projectId])) as any[];
 
     return rows.map((row) => this.mapRow(row));
   }
@@ -738,7 +744,7 @@ export class EventStore {
     const afterCount = Math.max(0, options.after ?? 2);
     const ordered = event.threadId
       ? this.getThreadEvents(event.threadId, { projectId: event.projectId })
-      : this.getEventsByStreamId(event.streamId).filter((item) => (item.projectId ?? '') === (event.projectId ?? ''));
+      : this.getEventsByStreamId(event.streamId, event.projectId ?? '');
     const index = ordered.findIndex((item) => item.eventId === event.eventId);
     const before = index >= 0 ? ordered.slice(Math.max(0, index - beforeCount), index) : [];
     const after = index >= 0 ? ordered.slice(index + 1, index + 1 + afterCount) : [];
@@ -907,7 +913,7 @@ export class EventStore {
       eventType: row.event_type,
       rawEventType: row.raw_event_type || undefined,
       eventVersion: row.event_version,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       workspaceId: row.workspace_id || undefined,
       actorId: row.actor_id || undefined,
       causationId: row.causation_id || undefined,
@@ -954,7 +960,7 @@ export class EventStore {
     `).run(
       event.eventId,
       text,
-      event.projectId || null,
+      event.projectId ?? null,
       event.workspaceId || null,
       event.threadId || null,
       event.sessionId || null,

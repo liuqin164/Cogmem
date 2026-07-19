@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { AesGcmEncryptionProvider, PiiRedactor, createMemoryKernel } from '../src/public.js';
 import { PRIVACY_BASELINE_CLASSIFICATION, PRIVACY_SCHEMA_CLASSIFICATION } from '../src/governance/PrivacyDeletionRegistry.js';
 import { V0_5_BASELINE_TABLES } from '../src/migrations/0001_init.js';
+import type { EmbeddingProvider } from '../src/embedding/EmbeddingProvider.js';
 
 function tempDir(): string {
   const dir = join(tmpdir(), `core-governance-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -113,6 +114,28 @@ describe('Governance and security v1.14', () => {
     kernel.factStore.getDatabase().exec(`CREATE TABLE privacy_unknown_payload(id TEXT PRIMARY KEY, payload TEXT)`);
     expect(kernel.forgetUser('classified-project')).rejects.toThrow('privacy_schema_unclassified:privacy_unknown_payload');
     expect(kernel.recall('must remain until schema is classified', { projectId: 'classified-project' }).rawEvidence.length).toBeGreaterThan(0);
+    kernel.close();
+  });
+
+  test('forgetUser with an embedding provider prevents a deferred write from resurrecting deleted data', async () => {
+    let resolveEmbedding!: (value: Float32Array) => void;
+    const pending = new Promise<Float32Array>((resolve) => { resolveEmbedding = resolve; });
+    const provider: EmbeddingProvider = {
+      modelId: 'test/deferred', dimensions: 2,
+      embed: async () => pending,
+      embedBatch: async (texts) => Promise.all(texts.map(() => pending)),
+    };
+    const kernel = createMemoryKernel({ embeddingProvider: provider });
+    const neuron = await kernel.ingest({ projectId: 'erase-race', content: 'private deferred embedding' });
+
+    await kernel.forgetUser('erase-race');
+    resolveEmbedding(new Float32Array([1, 0]));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const db = kernel.factStore.getDatabase();
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM neuron_embeddings WHERE neuron_id=?`).get(neuron.id)).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM re_embedding_progress WHERE projectId='erase-race'`).get()).toEqual({ count: 0 });
     kernel.close();
   });
 
@@ -229,6 +252,8 @@ describe('Governance and security v1.14', () => {
     expect(kernel.entityStore.findByEntityId(otherProjectOwnedEntity.entityId)).not.toBeNull();
     expect(kernel.entityStore.findByEntityId(sharedLegacyEntity.entityId)).not.toBeNull();
     expect(kernel.entityStore.listTimeline({ entityId: sharedLegacyEntity.entityId }).map((item) => item.projectId)).toEqual(['keep-me']);
+    expect(kernel.entityStore.findByCanonicalName('Shared Legacy Person', 'person', 'keep-me')?.aliases).not.toContain('Shared Legacy Alias');
+    expect(db.prepare(`SELECT aliases_json,metadata_json FROM entity_instances WHERE instance_id=?`).get(sharedLegacyEntity.entityId)).toEqual({ aliases_json: '[]', metadata_json: '{}' });
     const canonical = db.prepare(`SELECT aliases_json, metadata_json FROM entities WHERE entity_id = ?`)
       .get(keptEntity.canonicalEntityId!) as { aliases_json: string; metadata_json: string };
     expect(canonical.aliases_json).not.toContain('Forgotten Alias');
@@ -246,7 +271,7 @@ describe('Governance and security v1.14', () => {
     const secret = 'GLOBAL_ERASURE_TOKEN_7c6437f4';
     const kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
     const forgotten = await kernel.ingest({ content: `${secret} private projectless memory`, createdAt: 1000 });
-    kernel.recordRawEvent({ threadId: 'global-private', role: 'user', content: `${secret} raw ledger evidence`, occurredAt: 1000 });
+    const rawEvent = kernel.recordRawEvent({ threadId: 'global-private', role: 'user', content: `${secret} raw ledger evidence`, occurredAt: 1000 });
     const episodeMessage = kernel.appendEpisodeMessage({ projectId: '', sessionId: 'secret-session', sourceAgent: 'test', role: 'user', text: `${secret} episode`, externalMessageId: 'secret-message' });
     await kernel.ingest({ projectId: 'keep-project', content: 'ordinary retained memory', createdAt: 2000 });
     const db = kernel.factStore.getDatabase();
@@ -283,7 +308,7 @@ describe('Governance and security v1.14', () => {
       CREATE TABLE workspace_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE trace_events(id TEXT PRIMARY KEY,project_id TEXT,payload TEXT);
       CREATE TABLE meta_proposals(id TEXT PRIMARY KEY,summary TEXT,evidence TEXT,suggested_change TEXT);
-      CREATE TABLE meta_observations(id TEXT PRIMARY KEY,project_id TEXT,neuron_id TEXT,fact_id TEXT,content TEXT);
+      CREATE TABLE meta_observations(id TEXT PRIMARY KEY,project_id TEXT,neuron_id TEXT,fact_id TEXT,content TEXT,evidence_event_ids TEXT);
     `);
     db.prepare(`INSERT INTO scheduled_jobs VALUES('secret-job',?)`).run(JSON.stringify({ projectId: '', secret }));
     db.prepare(`INSERT INTO scheduled_job_runs VALUES('secret-job-run','secret-job',?,?)`).run(secret, JSON.stringify({ secret }));
@@ -293,7 +318,8 @@ describe('Governance and security v1.14', () => {
     db.prepare(`INSERT INTO workspace_settings VALUES('project::secret',?)`).run(JSON.stringify({ projectId: '', secret }));
     db.prepare(`INSERT INTO trace_events VALUES('secret-trace',NULL,?)`).run(JSON.stringify({ secret }));
     db.prepare(`INSERT INTO meta_proposals VALUES('secret-proposal',?,?,?)`).run(secret, JSON.stringify([{ traceEventId: 'secret-trace', note: secret }]), JSON.stringify({ secret }));
-    db.prepare(`INSERT INTO meta_observations VALUES('secret-observation',NULL,?,NULL,?)`).run(forgotten.id, secret);
+    db.prepare(`INSERT INTO meta_observations VALUES('secret-observation',NULL,?,NULL,?,'[]')`).run(forgotten.id, secret);
+    db.prepare(`INSERT INTO meta_observations VALUES('secret-observation-evidence',NULL,NULL,NULL,?,?)`).run(secret, JSON.stringify([rawEvent.eventId]));
     db.prepare(`INSERT INTO ingestion_processed_records(record_hash,source_id,source_path,source_type,content_hash,content_window_start,content_window_end,processed_at,neuron_id) VALUES('secret-ingest',?,?, 'test','hash',0,1,1,?)`).run(secret, secret, forgotten.id);
     db.exec(`INSERT OR REPLACE INTO dream_ledger_state VALUES('all',NULL,10,10,10),('scope:0:','',20,20,20),('scope:1:a','a',30,30,30)`);
     db.exec(`PRAGMA foreign_keys=ON`);

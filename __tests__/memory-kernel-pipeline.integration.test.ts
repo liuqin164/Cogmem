@@ -84,3 +84,48 @@ test('MemoryKernel.consolidate cannot read or mutate another project records', a
   expect(kernel.entityStore.findByEntityId(bEntity.entityId)?.status).toBe('active');
   kernel.close();
 });
+
+test('MemoryKernel.consolidate without a project partitions named and projectless scopes', async () => {
+  const kernel = createMemoryKernel({ dbPath: tempDbPath() });
+  const now = Date.now();
+  const a = await kernel.ingest({ content: 'shared semantic claim', projectId: 'a', createdAt: now });
+  const b = await kernel.ingest({ content: 'shared semantic claim', projectId: 'b', createdAt: now + 1 });
+  const global = await kernel.ingest({ content: 'shared semantic claim', projectId: '', createdAt: now + 2 });
+  const facts = [a, b, global].map((neuron) => kernel.factStore.insertFacts([{
+    neuronId: neuron.id, subject: 'same', predicateFamily: 'owns', object: 'same', validFrom: now,
+    certaintyLevel: 'certain', confidence: 0.9, status: 'provisional', sourceText: 'same owns same',
+  }])[0]!);
+
+  await kernel.consolidate({ startTime: 0, endTime: now + 10_000 });
+
+  expect(facts.map((fact) => kernel.factStore.getFactById(fact.factId)?.status)).not.toContain('archived');
+  expect(facts.map((fact) => kernel.factStore.getFactById(fact.factId)?.status)).not.toContain('rejected');
+  kernel.close();
+});
+
+test('explicit consolidation leaves a legacy entity shared by two projects unchanged', async () => {
+  const kernel = createMemoryKernel({ dbPath: tempDbPath() });
+  const now = Date.now();
+  await kernel.ingest({ content: 'project a maintenance seed', projectId: 'a', createdAt: now });
+  const shared = kernel.entityStore.upsertEntity({
+    canonicalName: 'Shared Legacy Device', type: 'device', aliases: ['private shared alias'],
+    instanceMode: 'new_instance', createdAt: now,
+  });
+  kernel.entityStore.recordMention({ entityId: shared.entityId, projectId: 'a', createdAt: now });
+  kernel.entityStore.recordMention({ entityId: shared.entityId, projectId: 'b', createdAt: now + 1 });
+
+  await kernel.consolidate({ projectId: 'a', startTime: 0, endTime: now + 10_000 });
+
+  expect(kernel.entityStore.getByEntityId(shared.entityId)?.status).toBe('active');
+  expect(kernel.entityStore.listProjectScopes(shared.entityId)).toEqual(['a', 'b']);
+  kernel.close();
+});
+
+test('direct topology navigation validates caller supplied neuron ids against scope', async () => {
+  const kernel = createMemoryKernel({ dbPath: tempDbPath() });
+  const foreign = await kernel.ingest({ content: 'project b topology evidence', projectId: 'b' });
+  expect(kernel.topologyStore.collectNavigationFromNeuronIds({ neuronIds: [foreign.id], projectId: 'a' })).toEqual({
+    branchIds: [], taskIds: [], clusterIds: [], neuronIds: [],
+  });
+  kernel.close();
+});

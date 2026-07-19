@@ -111,7 +111,7 @@ export declare class EntityStore {
     findLatestByType(type: string): EntityRecord | null;
     listRecentByType(type: string, limit?: number): EntityRecord[];
     private listByCreationOrder;
-    listRelations(entityId: string, relationType?: EntityRelationRecord['relationType']): EntityRelationRecord[];
+    listRelations(entityId: string, relationType?: EntityRelationRecord['relationType'], projectId?: string): EntityRelationRecord[];
     resolveReference(referenceText: string, typeHint?: string, options?: ResolveEntityReferenceOptions): EntityRecord | null;
     listDisambiguationCandidates(referenceText: string, typeHint?: string, options?: ResolveEntityReferenceOptions): EntityDisambiguationCandidate[];
     listReferenceCandidatesWithRelativeSupport(referenceText: string, typeHint?: string, options?: ResolveEntityReferenceOptions): EntityDisambiguationCandidate[];
@@ -137,7 +137,9 @@ export declare class EntityStore {
         includeInactive?: boolean;
     }): EntityTimelineItem[];
     listEntitiesUpdatedInRange(startTime: number, endTime: number, type?: string, projectId?: string): EntityRecord[];
-    archiveEntity(entityId: string, updatedAt?: number): void;
+    listProjectScopes(entityId: string): string[];
+    isExclusiveToProject(entityId: string, projectId: string): boolean;
+    archiveEntity(entityId: string, updatedAt?: number, projectId?: string): void;
     addAttribute(input: {
         entityId: string;
         attributeKey: string;
@@ -150,6 +152,7 @@ export declare class EntityStore {
         sourceEntityId: string;
         targetEntityId: string;
         relationType: EntityRelationRecord['relationType'];
+        projectId: string;
         sourceNeuronId?: string;
         createdAt?: number;
     }): EntityRelationRecord;
@@ -165,14 +168,15 @@ export declare class EntityStore {
         entityType?: string;
         projectId?: string;
     }): PendingEntityResolutionRecord[];
-    listAliasConflicts(type?: string): EntityAliasConflictRecord[];
+    listAliasConflicts(type?: string, projectId?: string): EntityAliasConflictRecord[];
     close(): void;
-    addAlias(entityId: string, alias: string, updatedAt?: number): void;
-    removeAlias(entityId: string, alias: string, updatedAt?: number): void;
+    addAlias(entityId: string, alias: string, projectId: string, updatedAt?: number): void;
+    removeAlias(entityId: string, alias: string, projectId: string, updatedAt?: number): void;
     redirectInstance(input: {
         sourceEntityId: string;
         targetCanonicalEntityId: string;
         status?: EntityRecord['status'];
+        projectId: string;
         updatedAt?: number;
     }): void;
     restoreInstance(input: {
@@ -197,5 +201,6 @@ export declare class EntityStore {
     private isBareRelativeEntity;
     private hasTable;
     private mapRow;
+    private mapRowForProject;
 }
 //# sourceMappingURL=EntityStore.d.ts.map

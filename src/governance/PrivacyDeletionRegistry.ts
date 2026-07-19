@@ -58,8 +58,8 @@ const MIGRATION_TABLES = [
   'memory_atlas_alias_supports','memory_atlas_aliases','memory_atlas_documents','memory_atlas_projection_state','memory_atlas_supports','memory_bindings','memory_clusters','memory_edges','memory_entities',
   'memory_episode_events','memory_episodes','memory_frame_nodes','memory_frame_relations','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
   'memory_governance_plans','memory_timeline_entries','memory_topics','migration_repair_receipts','neuron_embeddings','pipeline_checkpoints','pipeline_nonfatal_events','pipeline_runs','pipeline_step_timings',
-  'prospective_memories','prospective_memory_transitions','scheduled_job_runs','scheduled_jobs','notification_records','notification_rules','workspace_settings','workspaces','meta_observations',
-  'topic_aliases','topic_nodes','topic_operations','topic_relations','topology_identity_quarantine','topology_projection_state','topology_source_revisions',
+  'prospective_memories','prospective_memory_transitions','re_embedding_progress','scheduled_job_runs','scheduled_jobs','notification_records','notification_rules','workspace_settings','workspaces','meta_observations',
+  'task_identity_restoration_manifest','topic_aliases','topic_nodes','topic_operations','topic_relations','topology_identity_quarantine','topology_projection_state','topology_source_revisions',
   'topology_time_rebuild_active_neurons','topology_time_rebuild_adjacency','topology_time_rebuild_buckets','topology_time_rebuild_cognitive_edges','topology_time_rebuild_cognitive_nodes',
   'topology_time_rebuild_entries','topology_time_rebuild_jobs','user_session_runtime','vector_index','vector_write_outbox','web_session_tokens','working_memory_deltas','memory_activation',
 ] as const;
@@ -73,7 +73,7 @@ const MIGRATION_PROJECT_OWNED = [
   'memory_atlas_projection_state','memory_atlas_supports','memory_bindings','memory_clusters','memory_edges','memory_entities',
   'memory_episodes','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
   'memory_governance_plans','memory_timeline_entries','memory_topics','neuron_embeddings','pipeline_checkpoints',
-  'pipeline_nonfatal_events','prospective_memories','topic_aliases','topic_nodes','topic_operations','topic_relations',
+  'pipeline_nonfatal_events','prospective_memories','re_embedding_progress','task_identity_restoration_manifest','topic_aliases','topic_nodes','topic_operations','topic_relations',
   'topology_projection_state','topology_source_revisions','topology_time_rebuild_active_neurons',
   'topology_time_rebuild_adjacency','topology_time_rebuild_buckets','topology_time_rebuild_cognitive_edges',
   'topology_time_rebuild_cognitive_nodes','topology_time_rebuild_entries','topology_time_rebuild_jobs','user_session_runtime',
@@ -157,10 +157,23 @@ export function deleteRegisteredProjectContent(context: PrivacyDeletionContext):
     (SELECT session_id FROM chat_sessions WHERE COALESCE(project_id, '') = ?)`);
   remove('chat_sessions', `DELETE FROM chat_sessions WHERE COALESCE(project_id, '') = ?`);
 
-  if (context.hasColumn('meta_observations', 'project_id')) remove('meta_observations', `DELETE FROM meta_observations
-    WHERE COALESCE(project_id,'')=?
-       OR neuron_id IN (SELECT id FROM neurons WHERE COALESCE(project_id,'')=?)
-       OR fact_id IN (SELECT fact_id FROM facts WHERE neuron_id IN (SELECT id FROM neurons WHERE COALESCE(project_id,'')=?))`, [scope, scope, scope]);
+  if (persistentTables.has('meta_observations')) {
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+    if (context.hasColumn('meta_observations', 'project_id')) { clauses.push(`COALESCE(project_id,'')=?`); params.push(scope); }
+    if (context.hasColumn('meta_observations', 'neuron_id')) { clauses.push(`neuron_id IN (SELECT id FROM neurons WHERE COALESCE(project_id,'')=?)`); params.push(scope); }
+    if (context.hasColumn('meta_observations', 'fact_id')) { clauses.push(`fact_id IN (SELECT fact_id FROM facts WHERE neuron_id IN (SELECT id FROM neurons WHERE COALESCE(project_id,'')=?))`); params.push(scope); }
+    if (context.hasColumn('meta_observations', 'evidence_event_ids')) {
+      const sources = [
+        `SELECT event_id AS id FROM memory_events WHERE COALESCE(project_id,'')=?`,
+        ...(persistentTables.has('trace_events') ? [`SELECT id FROM trace_events WHERE COALESCE(project_id,'')=?`] : []),
+      ];
+      clauses.push(`EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(evidence_event_ids) THEN evidence_event_ids ELSE '[]' END) evidence WHERE evidence.value IN (${sources.join(' UNION ALL ')}))`);
+      params.push(scope);
+      if (persistentTables.has('trace_events')) params.push(scope);
+    }
+    if (clauses.length > 0) remove('meta_observations', `DELETE FROM meta_observations WHERE ${clauses.join(' OR ')}`, params);
+  }
   remove('scheduled_job_runs', `DELETE FROM scheduled_job_runs WHERE job_id IN (SELECT job_id FROM scheduled_jobs WHERE json_extract(payload_json,'$.projectId')=?)`);
   remove('scheduled_jobs', `DELETE FROM scheduled_jobs WHERE json_extract(payload_json,'$.projectId')=?`);
   remove('notification_records', `DELETE FROM notification_records WHERE rule_id IN (SELECT rule_id FROM notification_rules WHERE workspace_id=?) OR json_extract(payload_json,'$.projectId')=?`, [scope, scope]);
@@ -218,10 +231,9 @@ export function deleteResidualProjectOwnedContent(context: PrivacyDeletionContex
     if (table === 'neurons' || table === 'dream_ledger_state' || PRIVACY_SCHEMA_CLASSIFICATION[table] !== 'project_owned') continue;
     if (context.hasColumn(table, 'project_id')) {
       audit[table] = context.runDelete(`DELETE FROM ${table} WHERE COALESCE(project_id,'')=?`, [context.scope]);
+    } else if (context.hasColumn(table, 'projectId')) {
+      audit[table] = context.runDelete(`DELETE FROM ${table} WHERE projectId=?`, [context.scope]);
     }
-  }
-  if (context.listPersistentTables().includes('pipeline_checkpoints')) {
-    audit.pipeline_checkpoints = context.runDelete(`DELETE FROM pipeline_checkpoints WHERE projectId=?`, [context.scope]);
   }
   return audit;
 }

@@ -1650,6 +1650,29 @@ export class MemoryKernel {
   async consolidate(options: MemoryKernelConsolidationOptions = {}): Promise<OfflineConsolidationOutput> {
     const endTime = options.endTime ?? Date.now() + 1;
     const startTime = options.startTime ?? 0;
+    if (options.projectId === undefined) {
+      const scopes = (this.factStore.getDatabase().prepare(`
+        SELECT DISTINCT COALESCE(project_id, '') AS project_id
+        FROM neurons
+        WHERE is_deleted = 0 AND created_at >= ? AND created_at < ?
+        ORDER BY project_id
+      `).all(startTime, endTime) as Array<{ project_id: string }>).map((row) => row.project_id);
+      const outputs: OfflineConsolidationOutput[] = [];
+      for (const projectId of scopes) outputs.push(await this.consolidate({ ...options, projectId, startTime, endTime }));
+      const seeded = outputs.reduce((sum, output) => sum + Number(output.autoEdgeSeeding?.seededEdgeCount ?? 0), 0);
+      return {
+        verifiedFacts: outputs.flatMap((output) => output.verifiedFacts),
+        verifiedEvents: outputs.flatMap((output) => output.verifiedEvents),
+        correctedEntityBindings: outputs.flatMap((output) => output.correctedEntityBindings),
+        consolidatedBeliefs: outputs.flatMap((output) => output.consolidatedBeliefs),
+        archivedFactIds: outputs.flatMap((output) => output.archivedFactIds),
+        rejectedFactIds: outputs.flatMap((output) => output.rejectedFactIds),
+        archivedEntityIds: outputs.flatMap((output) => output.archivedEntityIds),
+        unresolvedReferenceIds: outputs.flatMap((output) => output.unresolvedReferenceIds),
+        plasticityProposals: outputs.flatMap((output) => output.plasticityProposals),
+        ...(outputs.some((output) => output.autoEdgeSeeding) ? { autoEdgeSeeding: { seededEdgeCount: seeded } } : {}),
+      };
+    }
     const rawEpisodes = this.memoryGraph.listNeuronsByTimeRange(startTime, endTime, options.projectId);
     const provisionalFacts = this.factStore.listFactsByTimeRange(startTime, endTime, {
       statuses: ['provisional', 'provisional_enriched', 'enriched_candidate', 'verified'],
@@ -1660,7 +1683,9 @@ export class MemoryKernel {
       projectId: options.projectId,
     });
     const interactionUnits = this.interactionUnitStore.listUnitsByNeuronIds(rawEpisodes.map((episode) => episode.id));
-    const provisionalEntities = this.entityStore.listEntitiesUpdatedInRange(startTime, endTime, undefined, options.projectId);
+    const provisionalEntities = this.entityStore
+      .listEntitiesUpdatedInRange(startTime, endTime, undefined, options.projectId)
+      .filter((entity) => this.entityStore.isExclusiveToProject(entity.entityId, options.projectId!));
     const unresolvedReferences = this.entityStore
       .listPendingResolutions({ projectId: options.projectId })
       .filter((item) => item.updatedAt >= startTime && item.updatedAt < endTime);
@@ -3127,6 +3152,15 @@ export class MemoryKernel {
       deleted.brainProjections += runDelete(`DELETE FROM memory_governance_plans WHERE COALESCE(project_id, '') = ? OR plan_id IN (SELECT plan_id FROM memory_governance_operations WHERE COALESCE(project_id, '') = ?)`, [scope, scope]);
       deleted.brainProjections += deleteScoped('memory_governance_operations');
 
+      const sharedEntityIds = (db.prepare(`
+        SELECT DISTINCT entity_id FROM entity_mentions target
+        WHERE COALESCE(target.project_id,'')=?
+          AND EXISTS (SELECT 1 FROM entity_mentions other WHERE other.entity_id=target.entity_id AND COALESCE(other.project_id,'')<>?)
+      `).all(scope, scope) as Array<{ entity_id: string }>).map((row) => row.entity_id);
+      for (const entityId of sharedEntityIds) db.prepare(`UPDATE entity_instances SET aliases_json='[]',metadata_json='{}' WHERE instance_id=?`).run(entityId);
+      deleted.entityRecords += deleteScoped('entity_aliases');
+      deleted.entityRecords += deleteScoped('entity_relations');
+      deleted.entityRecords += deleteScoped('entity_alias_conflicts');
       deleted.entityRecords += deleteScoped('entity_mentions');
       if (projectEntityIds.length > 0) {
         const entityPlaceholders = projectEntityIds.map(() => '?').join(', ');

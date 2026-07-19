@@ -448,9 +448,10 @@ export class OfflineConsolidationPipeline {
             sourceEntityId: duplicate.entityId,
             targetEntityId: primary.entityId,
             relationType: 'same_as',
+            projectId: input.window.projectId!,
             createdAt: Date.now()
           });
-          this.deps.entityStore.archiveEntity(duplicate.entityId, Date.now());
+          this.deps.entityStore.archiveEntity(duplicate.entityId, Date.now(), input.window.projectId);
           archivedEntityIds.push(duplicate.entityId);
           correctedEntityBindings.push({
             targetId: duplicate.entityId,
@@ -478,9 +479,10 @@ export class OfflineConsolidationPipeline {
         sourceEntityId: duplicate.entityId,
         targetEntityId: primary.entityId,
         relationType: 'same_as',
+        projectId: input.window.projectId!,
         createdAt: Date.now()
       });
-      this.deps.entityStore?.archiveEntity(duplicate.entityId, Date.now());
+      this.deps.entityStore?.archiveEntity(duplicate.entityId, Date.now(), input.window.projectId);
       archivedEntityIds.push(duplicate.entityId);
       correctedEntityBindings.push({
         targetId: duplicate.entityId,
@@ -640,8 +642,7 @@ export class OfflineConsolidationPipeline {
       || input.provisionalFacts.some((fact) => !neuronMatches(fact.neuronId))
       || input.provisionalEvents.some((event) => !neuronMatches(event.neuronId))
       || input.recentBeliefs.some((belief) => (belief.projectId ?? '') !== scope)
-      || input.provisionalEntities.some((entity) => entity.metadata?.projectId !== scope
-        && (this.deps.entityStore?.listTimeline({ entityId: entity.entityId, projectId: scope, limit: 1 }).length ?? 0) === 0)
+      || input.provisionalEntities.some((entity) => !this.deps.entityStore?.isExclusiveToProject(entity.entityId, scope))
       || input.unresolvedReferences.some((pending) => !neuronMatches(pending.contextNeuronId));
     if (invalid) throw new Error('offline_consolidation_project_scope_mismatch');
   }

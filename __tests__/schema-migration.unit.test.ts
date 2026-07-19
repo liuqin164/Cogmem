@@ -12,6 +12,7 @@ import { migration_0052 } from '../src/migrations/0052_project_scoped_topology_i
 import { migration_0053 } from '../src/migrations/0053_topology_privacy_and_recovery.js';
 import { migration_0054, topologyIntegritySatisfied } from '../src/migrations/0054_topology_semantic_integrity.js';
 import { migration_0055, topologyFinalizationSatisfied } from '../src/migrations/0055_topology_scope_finalization.js';
+import { migration_0056 } from '../src/migrations/0056_project_isolation_finalization.js';
 import { CANONICAL_MIGRATION_SOURCE_DIGESTS, FROZEN_MIGRATION_DEPENDENCY_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 describe('schema migration runner', () => {
@@ -406,6 +407,14 @@ describe('schema migration runner', () => {
     ]);
     expect(topologyFinalizationSatisfied(db)).toBe(true);
     expect(runner.run().applied).toEqual([]);
+    db.close();
+  });
+
+  test('0056 refuses to receipt an already-closed 0055 database whose task identity has no durable proof', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE task_branches(task_id TEXT PRIMARY KEY,project_id TEXT,task_key TEXT,title TEXT,status TEXT); INSERT INTO task_branches VALUES('damaged','a','derived','derived','derived')`);
+    expect(() => migration_0056.up(db)).toThrow('migration_0056_task_identity_recovery_unproven:damaged');
+    expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='task_identity_restoration_manifest'`).get()).toBeDefined();
     db.close();
   });
 });

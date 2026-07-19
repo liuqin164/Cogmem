@@ -91,7 +91,12 @@ export class MemoryBindingStore {
 
   upsertEntity(input: UpsertMemoryEntityInput): MemoryEntityRecord {
     const now = input.now ?? Date.now();
-    const entityId = input.entityId || entityIdFor(input.projectId, input.entityType, input.canonicalName);
+    const existingOwner = input.entityId
+      ? this.db.prepare(`SELECT COALESCE(project_id,'') AS project_id FROM memory_entities WHERE entity_id=?`).get(input.entityId) as { project_id: string } | null
+      : null;
+    const entityId = input.entityId && (!existingOwner || existingOwner.project_id === (input.projectId ?? ''))
+      ? input.entityId
+      : entityIdFor(input.projectId, input.entityType, input.entityId || input.canonicalName);
     const aliases = Array.from(new Set([input.canonicalName, ...(input.aliases || [])]))
       .filter(Boolean);
     this.db.prepare(`

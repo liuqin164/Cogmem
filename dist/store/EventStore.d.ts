@@ -64,9 +64,9 @@ export declare class EventStore {
     private assertExplicitLocalDate;
     private upsertImportAnchor;
     getNextGlobalSeq(): number;
-    getNextEventVersion(streamId: string): number;
-    getNextThreadSeq(threadId: string): number;
-    getNextTurnSeq(threadId: string): number;
+    getNextEventVersion(streamId: string, projectId?: string): number;
+    getNextThreadSeq(threadId: string, projectId?: string): number;
+    getNextTurnSeq(threadId: string, projectId?: string): number;
     getEventsAfter(lastEventTime?: number): MemoryEvent[];
     findImportedEventAnchor(projectId: string, sourceId: string, importAnchor: string): MemoryEvent | null;
     getLatestEvent(): MemoryEvent | null;
@@ -78,7 +78,7 @@ export declare class EventStore {
         afterGlobalSeq?: number;
         limit?: number;
     }): MemoryEvent[];
-    getEventsByStreamId(streamId: string): MemoryEvent[];
+    getEventsByStreamId(streamId: string, projectId?: string): MemoryEvent[];
     queryEvents(page?: number, pageSize?: number, filters?: {
         streamId?: string[];
         streamType?: StreamType[];

@@ -120,6 +120,7 @@ export class FactCompiler {
                         sourceEntityId: previousDevice.entityId,
                         targetEntityId: entity.entityId,
                         relationType: 'replaced_by',
+                        projectId: projectId ?? '',
                         sourceNeuronId: input.neuron.id,
                         createdAt
                     });

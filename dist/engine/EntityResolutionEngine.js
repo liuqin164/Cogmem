@@ -36,7 +36,7 @@ export class EntityResolutionEngine {
         const resolved = disambiguation
             .map((item) => item.candidates[0]?.entity)
             .filter((entity) => Boolean(entity));
-        const relatedEntityIds = Array.from(new Set(resolved.flatMap((entity) => this.entityStore.listRelations(entity.entityId).map((relation) => relation.sourceEntityId === entity.entityId ? relation.targetEntityId : relation.sourceEntityId)))).filter((entityId) => !resolved.some((entity) => entity.entityId === entityId));
+        const relatedEntityIds = Array.from(new Set(resolved.flatMap((entity) => this.entityStore.listRelations(entity.entityId, undefined, input.projectId).map((relation) => relation.sourceEntityId === entity.entityId ? relation.targetEntityId : relation.sourceEntityId)))).filter((entityId) => !resolved.some((entity) => entity.entityId === entityId));
         return {
             resolved,
             relatedEntityIds,

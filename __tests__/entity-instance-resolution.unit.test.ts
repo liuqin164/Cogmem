@@ -234,3 +234,30 @@ describe('Entity instance resolution unit', () => {
     store.close();
   });
 });
+
+it('EntityStore applies project scope before relative and same-name LIMIT clauses', () => {
+  const store = new EntityStore();
+  const original = store.upsertEntity({ canonicalName: 'Shared Device', type: 'device', metadata: { projectId: 'a' }, createdAt: 1 });
+  store.recordMention({ entityId: original.entityId, projectId: 'a', createdAt: 1 });
+  for (let index = 0; index < 13; index += 1) {
+    const foreign = store.upsertEntity({ canonicalName: 'Shared Device', type: 'device', metadata: { projectId: 'b' }, instanceMode: 'new_instance', createdAt: 100 + index });
+    store.recordMention({ entityId: foreign.entityId, projectId: 'b', createdAt: 100 + index });
+  }
+  expect(store.listReferenceCandidatesWithRelativeSupport('最新设备', 'device', { projectId: 'a' })[0]?.entity.entityId).toBe(original.entityId);
+  expect(store.upsertEntity({ canonicalName: 'Shared Device', type: 'device', metadata: { projectId: 'a' }, createdAt: 1000 }).entityId).toBe(original.entityId);
+  store.close();
+});
+
+it('EntityStore isolates alias conflicts and relations by exact project scope', () => {
+  const store = new EntityStore();
+  const make = (name: string, projectId: string) => store.upsertEntity({ canonicalName: name, type: 'device', aliases: ['same alias'], metadata: { projectId }, instanceMode: 'new_instance' });
+  const a1 = make('a1', 'a'); const a2 = make('a2', 'a');
+  const b1 = make('b1', 'b'); const b2 = make('b2', 'b');
+  expect(store.listAliasConflicts('device', 'a')[0]?.entityIds.sort()).toEqual([a1.entityId, a2.entityId].sort());
+  expect(store.listAliasConflicts('device', 'b')[0]?.entityIds.sort()).toEqual([b1.entityId, b2.entityId].sort());
+  store.addRelation({ sourceEntityId: a1.entityId, targetEntityId: a2.entityId, relationType: 'same_as', projectId: 'a' });
+  expect(store.listRelations(a1.entityId, undefined, 'a')).toHaveLength(1);
+  expect(store.listRelations(a1.entityId, undefined, 'b')).toHaveLength(0);
+  expect(() => store.addRelation({ sourceEntityId: a1.entityId, targetEntityId: b1.entityId, relationType: 'same_as', projectId: 'a' })).toThrow('entity_relation_project_scope_mismatch');
+  store.close();
+});

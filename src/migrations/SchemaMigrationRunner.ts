@@ -4,6 +4,7 @@ import type { Migration } from '../types/Migration.js';
 import { COMPATIBLE_MIGRATION_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
 import { topologyIntegritySatisfied } from './0054_topology_semantic_integrity.js';
 import { topologyFinalizationSatisfied } from './0055_topology_scope_finalization.js';
+import { projectIsolationFinalizationSatisfied } from './0056_project_isolation_finalization.js';
 
 export interface SchemaMigrationRunOptions {
   dryRun?: boolean;
@@ -371,6 +372,7 @@ export class SchemaMigrationRunner {
       && topologyIntegritySatisfied(this.db);
     if (version === '0055') return (!this.tableExists('branch_links') || this.hasColumns('branch_links', ['project_id']))
       && topologyFinalizationSatisfied(this.db);
+    if (version === '0056') return projectIsolationFinalizationSatisfied(this.db);
     return true;
   }
 

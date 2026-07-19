@@ -15,7 +15,7 @@ export class KernelAgentMemoryBackend {
     async rememberTurnWithResult(turn) {
         const occurredAt = turn.timestamp ?? Date.now();
         const threadId = turn.threadId || turn.sessionId;
-        const turnSeq = turn.turnSeq ?? this.kernel.eventStore.getNextTurnSeq(threadId);
+        const turnSeq = turn.turnSeq ?? this.kernel.eventStore.getNextTurnSeq(threadId, turn.projectId ?? '');
         const turnId = turn.turnId || `${turn.agentId}:${turn.sessionId}:${turnSeq}:${occurredAt}`;
         const sourceId = `${turn.agentId}:${turn.sessionId}`;
         const mode = turn.ingestMode ?? 'immediate_compile';
