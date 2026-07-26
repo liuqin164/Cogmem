@@ -229,13 +229,13 @@ export class MemoryGraph {
         mime_type, original_name, blob_path, confidence, source_type, source_event_id,
         importance_level, is_pinned, stability, repetitions, procedural_link_json, community_id, last_reinforced_at, is_deleted
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(neuron.id, neuron.content, neuron.prev_hash, neuron.self_hash, neuron.coordinates.T, neuron.coordinates.S[0], neuron.coordinates.S[1], neuron.coordinates.S[2], vectorBuffer, neuron.metadata.projectId || null, neuron.metadata.topicPath || null, neuron.metadata.fileId || null, neuron.metadata.filePath || null, neuron.metadata.type, neuron.metadata.createdAt, neuron.metadata.updatedAt || neuron.metadata.createdAt, neuron.metadata.lastActivated || null, neuron.metadata.activationCount || 0, this.encodeAaakSummary(neuron.metadata) || null, neuron.metadata.status || 'active', neuron.metadata.tags?.join(',') || null, neuron.metadata.fileSize || null, neuron.metadata.mimeType || null, neuron.metadata.originalName || null, neuron.metadata.blobPath || null, neuron.metadata.confidence ?? 1, neuron.metadata.sourceType || null, neuron.metadata.sourceEventId || null, importanceLevel, isPinned ? 1 : 0, stability, neuron.metadata.repetitions ?? 0, neuron.metadata.proceduralLink ? JSON.stringify(neuron.metadata.proceduralLink) : null, neuron.metadata.communityId || null, neuron.metadata.lastReinforcedAt || null, 0);
+    `).run(neuron.id, neuron.content, neuron.prev_hash, neuron.self_hash, neuron.coordinates.T, neuron.coordinates.S[0], neuron.coordinates.S[1], neuron.coordinates.S[2], vectorBuffer, neuron.metadata.projectId ?? null, neuron.metadata.topicPath || null, neuron.metadata.fileId || null, neuron.metadata.filePath || null, neuron.metadata.type, neuron.metadata.createdAt, neuron.metadata.updatedAt || neuron.metadata.createdAt, neuron.metadata.lastActivated || null, neuron.metadata.activationCount || 0, this.encodeAaakSummary(neuron.metadata) || null, neuron.metadata.status || 'active', neuron.metadata.tags?.join(',') || null, neuron.metadata.fileSize || null, neuron.metadata.mimeType || null, neuron.metadata.originalName || null, neuron.metadata.blobPath || null, neuron.metadata.confidence ?? 1, neuron.metadata.sourceType || null, neuron.metadata.sourceEventId || null, importanceLevel, isPinned ? 1 : 0, stability, neuron.metadata.repetitions ?? 0, neuron.metadata.proceduralLink ? JSON.stringify(neuron.metadata.proceduralLink) : null, neuron.metadata.communityId || null, neuron.metadata.lastReinforcedAt || null, 0);
     }
     insertIntoFTS(neuron) {
         this.db.prepare(`
       INSERT INTO neurons_fts (id, content, aaak_summary, project_id, file_path)
       VALUES (?, ?, ?, ?, ?)
-    `).run(neuron.id, neuron.content, neuron.metadata.aaak_summary || null, neuron.metadata.projectId || null, neuron.metadata.filePath || null);
+    `).run(neuron.id, neuron.content, neuron.metadata.aaak_summary || null, neuron.metadata.projectId ?? null, neuron.metadata.filePath || null);
     }
     rebuildIndexes() {
         this.timeIndex.clear();
@@ -381,7 +381,7 @@ export class MemoryGraph {
             },
             synapses,
             metadata: {
-                projectId: row.project_id || undefined,
+                projectId: row.project_id == null ? undefined : String(row.project_id),
                 topicPath: row.topic_path || undefined,
                 fileId: row.file_id || undefined,
                 filePath: row.file_path || undefined,
@@ -458,7 +458,7 @@ export class MemoryGraph {
         this.db.prepare(`
       INSERT INTO anchors (id, neuron_count, created_at, prev_anchor_id, summary_hash, project_id, version)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(anchor.id, anchor.neuronCount, anchor.createdAt, anchor.prevAnchorId || null, anchor.summaryHash, anchor.metadata.projectId || null, anchor.metadata.version);
+    `).run(anchor.id, anchor.neuronCount, anchor.createdAt, anchor.prevAnchorId || null, anchor.summaryHash, anchor.metadata.projectId ?? null, anchor.metadata.version);
         this.anchorIndex.set(anchor.id, anchor);
         return anchor;
     }
@@ -482,7 +482,7 @@ export class MemoryGraph {
             createdAt: row.created_at,
             prevAnchorId: row.prev_anchor_id || undefined,
             summaryHash: row.summary_hash,
-            metadata: { projectId: row.project_id || undefined, version: row.version }
+            metadata: { projectId: row.project_id == null ? undefined : String(row.project_id), version: row.version }
         };
     }
     getLatestNeuronSelfHash(projectId) {
@@ -629,7 +629,7 @@ export class MemoryGraph {
             ? this.db.prepare(`SELECT project_id,aaak_summary,status FROM neurons WHERE id=? AND is_deleted=0`).get(neuronId)
             : null;
         const previousScope = sourceRow?.project_id ?? undefined;
-        const nextScope = metadata.projectId !== undefined ? (metadata.projectId || undefined) : previousScope;
+        const nextScope = metadata.projectId !== undefined ? metadata.projectId : previousScope;
         const nextSummary = metadata.aaak_summary !== undefined || metadata.skillMeta !== undefined
             ? (this.encodeAaakSummary(metadata) || null)
             : (sourceRow?.aaak_summary ?? null);
@@ -641,7 +641,7 @@ export class MemoryGraph {
         }
         if (metadata.projectId !== undefined) {
             updates.push('project_id = ?');
-            values.push(metadata.projectId || null);
+            values.push(metadata.projectId);
         }
         if (metadata.topicPath !== undefined) {
             updates.push('topic_path = ?');

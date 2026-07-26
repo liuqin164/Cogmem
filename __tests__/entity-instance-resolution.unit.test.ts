@@ -223,7 +223,15 @@ describe('Entity instance resolution unit', () => {
     store.recordMention({ entityId: b.entityId, neuronId: 'n-b', projectId: 'b', createdAt: 2 });
     store.recordMention({ entityId: global.entityId, neuronId: 'n-global', projectId: '', createdAt: 3 });
     store.addAttribute({ entityId: a.entityId, attributeKey: 'secret', attributeValue: 'a-only', sourceNeuronId: 'n-a' });
-    store.addAttribute({ entityId: a.entityId, attributeKey: 'secret', attributeValue: 'b-forged', sourceNeuronId: 'n-b' });
+    expect(() => store.addAttribute({ entityId: a.entityId, attributeKey: 'secret', attributeValue: 'b-forged', sourceNeuronId: 'n-b' }))
+      .toThrow('entity_project_scope_mismatch');
+    expect(() => store.recordMention({ entityId: a.entityId, neuronId: 'n-b', projectId: 'b' }))
+      .toThrow('entity_project_scope_mismatch');
+    const pending = store.registerPendingResolution({ referenceText: 'that device', entityType: 'device', contextNeuronId: 'n-a' });
+    expect(() => store.resolvePendingReference(pending.pendingId, b.entityId, 'a'))
+      .toThrow('entity_project_scope_mismatch');
+    expect(() => store.restoreInstance({ entityId: a.entityId, canonicalEntityId: a.canonicalEntityId, status: 'active', projectId: 'b' }))
+      .toThrow('entity_project_scope_not_exclusive');
 
     expect(store.findByAlias('shared', 'person', 'a')?.entityId).toBe(a.entityId);
     expect(store.findByAlias('shared', 'person', 'b')?.entityId).toBe(b.entityId);

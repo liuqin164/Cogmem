@@ -276,7 +276,7 @@ export class TopologyStore {
         const result = new Map();
         for (const row of rows) {
             const values = result.get(row.neuron_id) ?? [];
-            values.push({ bucketId: row.bucket_id, projectId: row.project_id || undefined, timeZone: row.time_zone, bucketType: row.bucket_type, bucketStart: row.bucket_start, bucketEnd: row.bucket_end, label: row.label });
+            values.push({ bucketId: row.bucket_id, projectId: row.project_id == null ? undefined : String(row.project_id), timeZone: row.time_zone, bucketType: row.bucket_type, bucketStart: row.bucket_start, bucketEnd: row.bucket_end, label: row.label });
             result.set(row.neuron_id, values);
         }
         return result;
@@ -415,7 +415,7 @@ export class TopologyStore {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(taskId, row.project_id, ref.neuronId || null, ref.unitId || null, ref.beliefId || null, ref.factId || null, ref.eventId || null, ref.createdAt);
             if (ref.neuronId) {
-                this.upsertMembership(ref.neuronId, row.project_id || undefined, 'task_branch', row.task_key, row.title, ref.createdAt);
+                this.upsertMembership(ref.neuronId, row.project_id == null ? undefined : String(row.project_id), 'task_branch', row.task_key, row.title, ref.createdAt);
             }
         })();
     }
@@ -460,7 +460,7 @@ export class TopologyStore {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(clusterId, row.project_id, ref.neuronId || null, ref.unitId || null, ref.beliefId || null, ref.factId || null, ref.eventId || null, ref.createdAt);
             if (ref.neuronId) {
-                this.upsertMembership(ref.neuronId, row.project_id || undefined, 'event_cluster', row.cluster_key, row.title, ref.createdAt);
+                this.upsertMembership(ref.neuronId, row.project_id == null ? undefined : String(row.project_id), 'event_cluster', row.cluster_key, row.title, ref.createdAt);
             }
         })();
     }
@@ -486,7 +486,7 @@ export class TopologyStore {
             : this.db.prepare(`SELECT * FROM task_branches ORDER BY updated_at DESC`).all();
         return rows.map((row) => ({
             taskId: row.task_id,
-            projectId: row.project_id || undefined,
+            projectId: row.project_id == null ? undefined : String(row.project_id),
             taskKey: row.task_key,
             title: row.title,
             status: row.status,
@@ -500,7 +500,7 @@ export class TopologyStore {
             : this.db.prepare(`SELECT * FROM event_clusters ORDER BY updated_at DESC`).all();
         return rows.map((row) => ({
             clusterId: row.cluster_id,
-            projectId: row.project_id || undefined,
+            projectId: row.project_id == null ? undefined : String(row.project_id),
             clusterKey: row.cluster_key,
             clusterType: row.cluster_type,
             title: row.title,

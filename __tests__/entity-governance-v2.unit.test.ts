@@ -92,7 +92,9 @@ describe('entity governance v2', () => {
     expect(projectless.status).toBe('approved');
     expect(service.list({ projectId: '' }).map((item) => item.candidateId)).toEqual([projectless.candidateId]);
 
-    entities.recordMention({ entityId: source.entityId, projectId: 'other' });
+    db.prepare(`INSERT INTO entity_mentions(
+      mention_id,entity_id,neuron_id,project_id,mention_type,created_at
+    ) VALUES('legacy-shared',?,NULL,'other','referenced',?)`).run(source.entityId, Date.now());
     expect(() => service.apply(projectless.candidateId)).toThrow('entity_project_scope_changed');
     expect(entities.getByEntityId(source.entityId)?.status).toBe('active');
     entities.close();

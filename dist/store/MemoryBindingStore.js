@@ -32,7 +32,7 @@ export class MemoryBindingStore {
         aliases_json = excluded.aliases_json,
         stable_path = COALESCE(excluded.stable_path, memory_entities.stable_path),
         updated_at = excluded.updated_at
-    `).run(entityId, input.projectId || null, input.canonicalName, input.entityType, JSON.stringify(aliases), input.stablePath || null, now, now);
+    `).run(entityId, input.projectId ?? null, input.canonicalName, input.entityType, JSON.stringify(aliases), input.stablePath || null, now, now);
         return {
             entityId,
             projectId: input.projectId,
@@ -54,7 +54,7 @@ export class MemoryBindingStore {
         parent_path = COALESCE(excluded.parent_path, memory_topics.parent_path),
         summary = COALESCE(excluded.summary, memory_topics.summary),
         updated_at = excluded.updated_at
-    `).run(input.topicPath, input.projectId || null, input.projectId || '', input.parentPath || parentPathFor(input.topicPath) || null, input.topicType, input.summary || null, now, now);
+    `).run(input.topicPath, input.projectId ?? null, input.projectId ?? '', input.parentPath || parentPathFor(input.topicPath) || null, input.topicType, input.summary || null, now, now);
         return {
             topicPath: input.topicPath,
             projectId: input.projectId,
@@ -80,7 +80,7 @@ export class MemoryBindingStore {
         binding_action = excluded.binding_action,
         cluster_id = excluded.cluster_id,
         related_event_ids_json = excluded.related_event_ids_json
-    `).run(bindingId, input.eventId, input.projectId || null, input.role || null, input.rawEventType || null, input.entityId || null, input.entityName || null, input.entityType || null, input.topicPath, input.bindingType, input.confidence, input.source, input.signal, input.claimKey, input.bindingAction || 'create_new_cluster', input.clusterId || null, JSON.stringify(input.relatedEventIds || []), now);
+    `).run(bindingId, input.eventId, input.projectId ?? null, input.role || null, input.rawEventType || null, input.entityId || null, input.entityName || null, input.entityType || null, input.topicPath, input.bindingType, input.confidence, input.source, input.signal, input.claimKey, input.bindingAction || 'create_new_cluster', input.clusterId || null, JSON.stringify(input.relatedEventIds || []), now);
         return {
             bindingId,
             eventId: input.eventId,
@@ -133,7 +133,7 @@ export class MemoryBindingStore {
         support_count = excluded.support_count,
         evidence_event_ids_json = excluded.evidence_event_ids_json,
         updated_at = excluded.updated_at
-    `).run(clusterId, input.projectId || null, input.topicPath, input.clusterType, input.title, input.summary, input.claimKey, status, JSON.stringify(reviewFlags), confidence, supportCount, JSON.stringify(evidenceEventIds), createdAt, now);
+    `).run(clusterId, input.projectId ?? null, input.topicPath, input.clusterType, input.title, input.summary, input.claimKey, status, JSON.stringify(reviewFlags), confidence, supportCount, JSON.stringify(evidenceEventIds), createdAt, now);
         return {
             clusterId,
             projectId: input.projectId,
@@ -210,7 +210,7 @@ export class MemoryBindingStore {
         version = memory_edges.version + 1,
         source_authority = excluded.source_authority,
         updated_at = excluded.updated_at
-    `).run(edgeId, input.projectId || null, input.sourceType, input.sourceId, input.relationType, input.targetType, input.targetId, input.confidence, clamp(input.baseWeight ?? 1, 0, 10), clamp(input.stability ?? 1, 0, 1), clamp(input.activation ?? 1, 0, 10), JSON.stringify(evidenceEventIds), input.status || 'active', input.validFrom ?? now, input.validTo ?? null, 1, input.sourceAuthority || 'raw_evidence', now, now);
+    `).run(edgeId, input.projectId ?? null, input.sourceType, input.sourceId, input.relationType, input.targetType, input.targetId, input.confidence, clamp(input.baseWeight ?? 1, 0, 10), clamp(input.stability ?? 1, 0, 1), clamp(input.activation ?? 1, 0, 10), JSON.stringify(evidenceEventIds), input.status || 'active', input.validFrom ?? now, input.validTo ?? null, 1, input.sourceAuthority || 'raw_evidence', now, now);
         return {
             edgeId,
             projectId: input.projectId,
@@ -507,7 +507,7 @@ function mapBindingRow(row) {
     return {
         bindingId: row.binding_id,
         eventId: row.event_id,
-        projectId: row.project_id || undefined,
+        projectId: row.project_id == null ? undefined : String(row.project_id),
         role: row.role || undefined,
         rawEventType: row.raw_event_type || undefined,
         entityId: row.entity_id || undefined,
@@ -528,7 +528,7 @@ function mapBindingRow(row) {
 function mapClusterRow(row) {
     return {
         clusterId: row.cluster_id,
-        projectId: row.project_id || undefined,
+        projectId: row.project_id == null ? undefined : String(row.project_id),
         topicPath: row.topic_path,
         clusterType: row.cluster_type,
         title: row.title,
@@ -546,7 +546,7 @@ function mapClusterRow(row) {
 function mapEdgeRow(row) {
     return {
         edgeId: row.edge_id,
-        projectId: row.project_id || undefined,
+        projectId: row.project_id == null ? undefined : String(row.project_id),
         sourceType: row.source_type,
         sourceId: row.source_id,
         relationType: row.relation_type,

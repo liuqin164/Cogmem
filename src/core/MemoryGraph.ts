@@ -270,7 +270,7 @@ export class MemoryGraph {
       neuron.coordinates.S[1],
       neuron.coordinates.S[2],
       vectorBuffer,
-      neuron.metadata.projectId || null,
+      neuron.metadata.projectId ?? null,
       neuron.metadata.topicPath || null,
       neuron.metadata.fileId || null,
       neuron.metadata.filePath || null,
@@ -308,7 +308,7 @@ export class MemoryGraph {
       neuron.id,
       neuron.content,
       neuron.metadata.aaak_summary || null,
-      neuron.metadata.projectId || null,
+      neuron.metadata.projectId ?? null,
       neuron.metadata.filePath || null
     );
   }
@@ -474,7 +474,7 @@ export class MemoryGraph {
       },
       synapses,
       metadata: {
-        projectId: row.project_id || undefined,
+        projectId: row.project_id == null ? undefined : String(row.project_id),
         topicPath: row.topic_path || undefined,
         fileId: row.file_id || undefined,
         filePath: row.file_path || undefined,
@@ -559,7 +559,7 @@ export class MemoryGraph {
       anchor.createdAt,
       anchor.prevAnchorId || null,
       anchor.summaryHash,
-      anchor.metadata.projectId || null,
+      anchor.metadata.projectId ?? null,
       anchor.metadata.version
     );
 
@@ -587,7 +587,7 @@ export class MemoryGraph {
       createdAt: row.created_at,
       prevAnchorId: row.prev_anchor_id || undefined,
       summaryHash: row.summary_hash,
-      metadata: { projectId: row.project_id || undefined, version: row.version }
+      metadata: { projectId: row.project_id == null ? undefined : String(row.project_id), version: row.version }
     };
   }
 
@@ -742,7 +742,7 @@ export class MemoryGraph {
       ? this.db.prepare(`SELECT project_id,aaak_summary,status FROM neurons WHERE id=? AND is_deleted=0`).get(neuronId) as { project_id?: string | null; aaak_summary?: string | null; status?: string | null } | null
       : null;
     const previousScope = sourceRow?.project_id ?? undefined;
-    const nextScope = metadata.projectId !== undefined ? (metadata.projectId || undefined) : previousScope;
+    const nextScope = metadata.projectId !== undefined ? metadata.projectId : previousScope;
     const nextSummary = metadata.aaak_summary !== undefined || metadata.skillMeta !== undefined
       ? (this.encodeAaakSummary(metadata) || null)
       : (sourceRow?.aaak_summary ?? null);
@@ -755,7 +755,7 @@ export class MemoryGraph {
       throw new Error('immutable_neuron_project_scope');
     }
 
-    if (metadata.projectId !== undefined) { updates.push('project_id = ?'); values.push(metadata.projectId || null); }
+    if (metadata.projectId !== undefined) { updates.push('project_id = ?'); values.push(metadata.projectId); }
     if (metadata.topicPath !== undefined) { updates.push('topic_path = ?'); values.push(metadata.topicPath || null); }
     if (metadata.fileId !== undefined) { updates.push('file_id = ?'); values.push(metadata.fileId || null); }
     if (metadata.filePath !== undefined) { updates.push('file_path = ?'); values.push(metadata.filePath || null); }

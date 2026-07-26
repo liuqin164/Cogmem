@@ -52,14 +52,14 @@ export const PRIVACY_BASELINE_CLASSIFICATION = explicitClassification(V0_5_BASEL
 const MIGRATION_TABLES = [
   '_episode_integrity_markers','_memory_frame_integrity_markers','_meta','_schema_migrations','agent_brain_health_checks','archived_sessions',
   'belief_graph_conflicts','belief_graph_evidence','belief_graph_nodes','belief_graph_versions','context_activation_receipts','context_strategy_outcomes',
-  'chat_sessions','chat_turns','deep_write_candidate_reviews','deep_write_candidates','deep_write_runs','deep_write_summaries','dream_ledger_state','entity_merge_candidates','entity_resolution_log',
+  'chat_sessions','chat_turns','deep_write_candidate_reviews','deep_write_candidates','deep_write_runs','deep_write_summaries','dream_ledger_state','entity_merge_candidates','entity_resolution_log','event_sequence_counters',
   'episode_boundary_decisions','episode_closure_receipts','episode_cross_refs','episode_dream_attempts','episode_dream_jobs','episode_dream_runs','episode_event_dispositions','episode_ingest_keys','episode_repair_audit',
   'governance_audit_log','import_source_anchors','memory_action_frame_evidence','memory_action_frames','memory_atlas_access','memory_atlas_activation','memory_atlas_alias_ambiguities',
   'memory_atlas_alias_supports','memory_atlas_aliases','memory_atlas_documents','memory_atlas_projection_state','memory_atlas_supports','memory_bindings','memory_clusters','memory_edges','memory_entities',
   'memory_episode_events','memory_episodes','memory_frame_nodes','memory_frame_relations','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
   'memory_governance_plans','memory_timeline_entries','memory_topics','migration_repair_receipts','neuron_embeddings','pipeline_checkpoints','pipeline_nonfatal_events','pipeline_runs','pipeline_step_timings',
   'prospective_memories','prospective_memory_transitions','re_embedding_progress','scheduled_job_runs','scheduled_jobs','notification_records','notification_rules','workspace_settings','workspaces','meta_observations',
-  'task_identity_restoration_manifest','topic_aliases','topic_nodes','topic_operations','topic_relations','topology_identity_quarantine','topology_projection_state','topology_source_revisions',
+  'task_identity_restoration_manifest','task_identity_recovery_quarantine','project_isolation_compensation_audit','topic_aliases','topic_nodes','topic_operations','topic_relations','topology_identity_quarantine','topology_projection_state','topology_source_revisions',
   'topology_time_rebuild_active_neurons','topology_time_rebuild_adjacency','topology_time_rebuild_buckets','topology_time_rebuild_cognitive_edges','topology_time_rebuild_cognitive_nodes',
   'topology_time_rebuild_entries','topology_time_rebuild_jobs','user_session_runtime','vector_index','vector_write_outbox','web_session_tokens','working_memory_deltas','memory_activation',
   'file_assets','file_blocks','file_chunks','file_chunk_edges','user_insights',
@@ -74,7 +74,7 @@ const MIGRATION_PROJECT_OWNED = [
   'memory_atlas_projection_state','memory_atlas_supports','memory_bindings','memory_clusters','memory_edges','memory_entities',
   'memory_episodes','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
   'memory_governance_plans','memory_timeline_entries','memory_topics','neuron_embeddings','pipeline_checkpoints',
-  'pipeline_nonfatal_events','prospective_memories','re_embedding_progress','task_identity_restoration_manifest','topic_aliases','topic_nodes','topic_operations','topic_relations',
+  'pipeline_nonfatal_events','prospective_memories','re_embedding_progress','task_identity_restoration_manifest','task_identity_recovery_quarantine','topic_aliases','topic_nodes','topic_operations','topic_relations',
   'topology_projection_state','topology_source_revisions','topology_time_rebuild_active_neurons',
   'topology_time_rebuild_adjacency','topology_time_rebuild_buckets','topology_time_rebuild_cognitive_edges',
   'topology_time_rebuild_cognitive_nodes','topology_time_rebuild_entries','topology_time_rebuild_jobs','user_session_runtime',
@@ -90,7 +90,7 @@ const MIGRATION_PROVENANCE_OWNED = [
 ] as const;
 const MIGRATION_OPERATIONAL_NON_PERSONAL = [
   '_episode_integrity_markers','_memory_frame_integrity_markers','_meta','agent_brain_health_checks','pipeline_runs',
-  'pipeline_step_timings',
+  'pipeline_step_timings','project_isolation_compensation_audit','event_sequence_counters',
 ] as const;
 const MIGRATION_IMMUTABLE_AUDIT = ['_schema_migrations','migration_repair_receipts','governance_audit_log'] as const;
 const MIGRATION_CLASSIFICATION = explicitClassification(MIGRATION_TABLES, {

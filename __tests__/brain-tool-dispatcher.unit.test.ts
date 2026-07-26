@@ -281,6 +281,29 @@ describe('BrainToolDispatcher — expand_entity', () => {
     expect(output.facts).toHaveLength(2);
   });
 
+  it('keeps store-validated facts and events for an explicit project', async () => {
+    const entity = makeEntityRecord('ent-a', 'Alice');
+    const fact = makeFactRecord('f-a');
+    const event = makeEventRecord('e-a');
+    const deps = makeDeps({
+      entityStore: {
+        findByCanonicalName: () => entity,
+        findByAlias: () => null,
+      } as unknown as BrainToolDispatcherDeps['entityStore'],
+      factStore: {
+        listFactsByEntityIds: (_ids: string[], options: { projectId?: string }) => options.projectId === 'a' ? [fact] : [],
+        listEventsByNeuronIds: (_ids: string[], _limit: number, projectId?: string) => projectId === 'a' ? [event] : [],
+      } as unknown as BrainToolDispatcherDeps['factStore'],
+    });
+    const result = await new BrainToolDispatcher(deps).dispatch(
+      { action: 'expand_entity', entity_name: 'Alice' },
+      { projectId: 'a' },
+    );
+    const output = result.result as { facts: FactRecord[]; events: EventRecord[] };
+    expect(output.facts).toEqual([fact]);
+    expect(output.events).toEqual([event]);
+  });
+
   it('falls back to alias lookup when canonical name not found', async () => {
     const entity = makeEntityRecord('ent-bob', 'Robert');
     const deps = makeDeps({

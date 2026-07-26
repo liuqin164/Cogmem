@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { describe, expect, it } from 'bun:test';
+import Database from 'bun:sqlite';
 import { FactCompiler } from '../src/engine/FactCompiler.js';
 import { LocalSemanticCompiler } from '../src/engine/LocalSemanticCompiler.js';
 import { EntityStore } from '../src/store/EntityStore.js';
@@ -146,10 +147,17 @@ function exactFactKey(fact: ExpectedFact | FactRecord): string {
   return `${fact.subject}::${predicateFamily}::${predicateValue}::${object}::${issueFamily}`;
 }
 
+function persistNeuron(db: Database, neuron: Neuron): void {
+  db.prepare(`INSERT OR REPLACE INTO neurons(id,project_id,is_deleted) VALUES(?,?,0)`)
+    .run(neuron.id, neuron.metadata.projectId ?? '');
+}
+
 describe('LocalSemanticCompiler abstract relation coverage', () => {
   it('computes exact fact-level precision and recall across devices, projects, and preferences', () => {
-    const factStore = new FactStore(':memory:');
-    const entityStore = new EntityStore(':memory:');
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,is_deleted INTEGER NOT NULL DEFAULT 0)`);
+    const factStore = new FactStore(db);
+    const entityStore = new EntityStore(db);
     const factCompiler = new FactCompiler(factStore, entityStore);
     const semanticCompiler = new LocalSemanticCompiler();
     const expectedFactKeys: string[] = [];
@@ -157,6 +165,7 @@ describe('LocalSemanticCompiler abstract relation coverage', () => {
 
     GROUND_TRUTH.forEach((item, index) => {
       const neuron = makeNeuron(item.input, Date.UTC(2025, 0, 1, 0, 0, index));
+      persistNeuron(db, neuron);
       const semanticCompilation = semanticCompiler.compileMemory({
         text: item.input,
         projectId: 'compiler-unit',
@@ -214,6 +223,7 @@ describe('LocalSemanticCompiler abstract relation coverage', () => {
 
     factStore.close();
     entityStore.close();
+    db.close();
   });
 });
 
@@ -304,13 +314,16 @@ describe('LocalSemanticCompiler realism variants', () => {
 
   it('matches exact fact lists for omitted subjects, multi-fact sentences, self-corrections, and mixed-language inputs', () => {
     variants.forEach((item, index) => {
-      const factStore = new FactStore(':memory:');
-      const entityStore = new EntityStore(':memory:');
+      const db = new Database(':memory:');
+      db.exec(`CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,is_deleted INTEGER NOT NULL DEFAULT 0)`);
+      const factStore = new FactStore(db);
+      const entityStore = new EntityStore(db);
       const factCompiler = new FactCompiler(factStore, entityStore);
       const semanticCompiler = new LocalSemanticCompiler();
 
       item.seedInputs?.forEach((seedInput, seedIndex) => {
         const neuron = makeNeuron(seedInput, Date.UTC(2025, 1, 1, 0, 0, index * 10 + seedIndex));
+        persistNeuron(db, neuron);
         const semanticCompilation = semanticCompiler.compileMemory({
           text: seedInput,
           projectId: 'compiler-realism',
@@ -321,6 +334,7 @@ describe('LocalSemanticCompiler realism variants', () => {
       });
 
       const neuron = makeNeuron(item.input, Date.UTC(2025, 1, 1, 0, 10, index));
+      persistNeuron(db, neuron);
       const semanticCompilation = semanticCompiler.compileMemory({
         text: item.input,
         projectId: 'compiler-realism',
@@ -350,6 +364,7 @@ describe('LocalSemanticCompiler realism variants', () => {
 
       factStore.close();
       entityStore.close();
+      db.close();
     });
   });
 });

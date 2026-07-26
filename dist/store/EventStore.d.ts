@@ -67,6 +67,9 @@ export declare class EventStore {
     getNextEventVersion(streamId: string, projectId?: string): number;
     getNextThreadSeq(threadId: string, projectId?: string): number;
     getNextTurnSeq(threadId: string, projectId?: string): number;
+    private nextSequence;
+    private advanceSequence;
+    private seedSequenceCounters;
     getEventsAfter(lastEventTime?: number): MemoryEvent[];
     findImportedEventAnchor(projectId: string, sourceId: string, importAnchor: string): MemoryEvent | null;
     getLatestEvent(): MemoryEvent | null;

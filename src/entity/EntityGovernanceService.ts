@@ -155,6 +155,7 @@ export class EntityGovernanceService {
         entityId: candidate.sourceEntityId,
         canonicalEntityId: String(log.previous_canonical_entity_id),
         status: String(log.previous_status) as EntityRecord['status'],
+        projectId: candidate.projectId,
         updatedAt: now,
       });
       this.entities.removeAlias(candidate.targetEntityId, String(log.alias), candidate.projectId, now);

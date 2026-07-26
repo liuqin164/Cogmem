@@ -1,4 +1,5 @@
 import { extractRelativeReferences, inferReferenceType, isLatestReference, isPreviousReference, normalizeLexiconText } from '../lexicon/coreMemoryLexicon.js';
+import { projectScope } from '../topology/ProjectScope.js';
 export class QueryTimePendingEntityResolver {
     entityStore;
     getNeuronById;
@@ -21,7 +22,7 @@ export class QueryTimePendingEntityResolver {
                 pendingCaptureMetrics: emptyPendingCaptureMetrics()
             };
         }
-        const pendingRecords = this.entityStore.listPendingResolutions({ status: 'pending' });
+        const pendingRecords = this.entityStore.listPendingResolutions({ status: 'pending', projectId: input.projectId });
         const beforeTime = this.resolveBeforeTime(input.ir);
         const results = [];
         for (const reference of references) {
@@ -44,7 +45,7 @@ export class QueryTimePendingEntityResolver {
             const contextNeuronIds = matchingPending
                 .map((record) => record.contextNeuronId)
                 .filter((id) => Boolean(id));
-            const effectiveProjectId = this.inferPendingScopedProjectId(matchingPending) || input.projectId;
+            const effectiveProjectId = this.inferPendingScopedProjectId(matchingPending) ?? input.projectId;
             const typeHint = matchingPending[0]?.entityType || inferReferenceType(normalizedReference, input.query);
             const candidates = this.entityStore.listReferenceCandidatesWithRelativeSupport(reference, typeHint, {
                 projectId: effectiveProjectId,
@@ -137,20 +138,8 @@ export class QueryTimePendingEntityResolver {
                 || Array.from(referenceSignals).some((signal) => pendingSignals.has(signal))
                 || sharesRelativePolarity;
         });
-        if (!input.projectId) {
-            if (matchingPending.length > 0)
-                return matchingPending;
-            return this.findSameTypePendingFallback(reference, pendingRecords, input);
-        }
-        const scopedPending = matchingPending.filter((record) => {
-            if (!record.contextNeuronId)
-                return true;
-            const neuron = this.getNeuronById(record.contextNeuronId);
-            return !neuron?.metadata.projectId || neuron.metadata.projectId === input.projectId;
-        });
-        const projectScopedPending = scopedPending.length > 0 ? scopedPending : matchingPending;
-        if (projectScopedPending.length > 0)
-            return projectScopedPending;
+        if (matchingPending.length > 0)
+            return matchingPending;
         return this.findSameTypePendingFallback(reference, pendingRecords, input);
     }
     canResolveNarrowly(topCandidate, secondCandidate) {
@@ -219,8 +208,8 @@ export class QueryTimePendingEntityResolver {
     }
     inferPendingScopedProjectId(records) {
         const projectIds = new Set(records
-            .map((record) => record.contextNeuronId ? this.getNeuronById(record.contextNeuronId)?.metadata.projectId : undefined)
-            .filter((projectId) => Boolean(projectId)));
+            .map((record) => record.contextNeuronId ? projectScope(this.getNeuronById(record.contextNeuronId)?.metadata.projectId) : undefined)
+            .filter((projectId) => projectId !== undefined));
         return projectIds.size === 1 ? Array.from(projectIds)[0] : undefined;
     }
     findSameTypePendingFallback(reference, pendingRecords, input) {
@@ -228,14 +217,7 @@ export class QueryTimePendingEntityResolver {
         const inferredType = inferReferenceType(normalizedReference, input.query);
         if (!inferredType || hasDirectionalRelativeSignal(normalizedReference))
             return [];
-        const sameTypePending = pendingRecords.filter((record) => {
-            if (record.entityType && record.entityType !== inferredType)
-                return false;
-            if (!input.projectId || !record.contextNeuronId)
-                return true;
-            const neuron = this.getNeuronById(record.contextNeuronId);
-            return !neuron?.metadata.projectId || neuron.metadata.projectId === input.projectId;
-        });
+        const sameTypePending = pendingRecords.filter((record) => !record.entityType || record.entityType === inferredType);
         return sameTypePending;
     }
 }

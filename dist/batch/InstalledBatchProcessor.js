@@ -1,4 +1,5 @@
 import { ConversationMarkdownAdapter, HermesStateDbAdapter, MarkdownSourceLoader, OpenClawDailyMemoryAdapter, OpenClawMemoryIndexAdapter, OpenClawPersonaAdapter, OpenClawSessionAdapter, OpenClawUserProfileAdapter, SoulMarkdownAdapter, buildEpisodeEnvelope } from '../adapters/index.js';
+import { projectScope } from '../topology/ProjectScope.js';
 export class InstalledBatchProcessor {
     deps;
     loader = new MarkdownSourceLoader();
@@ -48,7 +49,8 @@ export class InstalledBatchProcessor {
                 adapterKind: source.adapterKind
             });
             const snapshot = this.loader.read(source);
-            const cursor = this.deps.cursorStore.getCursor(source.sourceId);
+            const scope = projectScope(source.projectId);
+            const cursor = this.deps.cursorStore.getCursor(source.sourceId, scope);
             const adapted = adapter.adapt(source, snapshot, source.tags?.includes('ingest:profile_only')
                 ? undefined
                 : {
@@ -56,7 +58,7 @@ export class InstalledBatchProcessor {
                     end: options.window.end
                 });
             adapterDiagnostics.push(...(adapted.diagnostics || []));
-            const seenHashes = this.deps.cursorStore.listProcessedRecordHashes(source.sourceId, options.window.start, options.window.end);
+            const seenHashes = this.deps.cursorStore.listProcessedRecordHashes(source.sourceId, options.window.start, options.window.end, scope);
             const pending = adapted.records.filter((record) => !seenHashes.has(record.provenance.recordHash));
             recordsParsed += adapted.records.length;
             skippedRecords += adapted.records.length - pending.length;
@@ -121,6 +123,7 @@ export class InstalledBatchProcessor {
                         sourceId: source.sourceId,
                         sourcePath: source.sourcePath,
                         sourceType: source.adapterKind,
+                        projectId: scope,
                         contentHash: item.record.provenance.fileHash,
                         contentWindowStart: options.window.start,
                         contentWindowEnd: options.window.end,

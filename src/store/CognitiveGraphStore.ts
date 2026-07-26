@@ -170,7 +170,7 @@ export class CognitiveGraphStore {
       nodeType: row.node_type,
       nodeKey: row.node_key,
       title: row.title,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       sourceNeuronId: row.source_neuron_id || undefined,
       metadata: row.metadata_json ? JSON.parse(row.metadata_json) : undefined,
       createdAt: row.created_at,

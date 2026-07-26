@@ -761,7 +761,7 @@ export class EpisodeStore {
         run_id, project_id, requested_mode, selected_mode, reason, episode_ids_json,
         candidate_ids_json, status, duration_ms, error, created_at, failed_episode_ids_json, failure_details_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(input.runId, input.projectId || null, input.requestedMode, input.selectedMode, input.reason, JSON.stringify(input.episodeIds), JSON.stringify(input.candidateIds), input.status, input.durationMs, input.error || null, input.createdAt, JSON.stringify((input.failedEpisodes || []).map((item) => item.episodeId)), JSON.stringify(input.failedEpisodes || []));
+    `).run(input.runId, input.projectId ?? null, input.requestedMode, input.selectedMode, input.reason, JSON.stringify(input.episodeIds), JSON.stringify(input.candidateIds), input.status, input.durationMs, input.error || null, input.createdAt, JSON.stringify((input.failedEpisodes || []).map((item) => item.episodeId)), JSON.stringify(input.failedEpisodes || []));
     }
     getIngestedEvent(projectId, sourceAgent, sourceSessionId, externalMessageId) {
         const row = this.db.prepare(`

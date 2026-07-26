@@ -420,26 +420,35 @@ export class EntityStore {
         }));
     }
     recordMention(input) {
+        const neuronScope = input.neuronId ? this.requireLiveNeuronScope(input.neuronId) : undefined;
+        const projectId = neuronScope ?? input.projectId;
+        if (projectId === undefined)
+            throw new Error('entity_mention_project_scope_required');
+        if (input.projectId !== undefined && input.projectId !== projectId)
+            throw new Error('entity_mention_project_scope_mismatch');
+        this.assertEntityVisibleInProject(input.entityId, projectId, input.neuronId);
         const record = {
             mentionId: `ement-${randomUUID()}`,
             entityId: input.entityId,
             neuronId: input.neuronId,
-            projectId: input.projectId,
+            projectId,
             mentionType: input.mentionType || 'referenced',
             createdAt: input.createdAt ?? Date.now()
         };
-        this.db.prepare(`
-      INSERT INTO entity_mentions (
-        mention_id, entity_id, neuron_id, project_id, mention_type, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(record.mentionId, record.entityId, record.neuronId || null, record.projectId ?? null, record.mentionType, record.createdAt);
-        this.touchEntity(record.entityId, record.createdAt);
-        const entity = this.getByEntityId(record.entityId);
-        if (entity) {
-            for (const alias of [entity.canonicalName, ...(entity.aliases || [])]) {
-                this.refreshAliasConflict(this.normalizeAlias(alias), entity.type, record.projectId ?? '', record.createdAt);
+        this.db.transaction(() => {
+            this.db.prepare(`
+        INSERT INTO entity_mentions (
+          mention_id, entity_id, neuron_id, project_id, mention_type, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(record.mentionId, record.entityId, record.neuronId || null, projectId, record.mentionType, record.createdAt);
+            this.touchEntity(record.entityId, record.createdAt);
+            const entity = this.getByEntityId(record.entityId);
+            if (entity) {
+                for (const alias of [entity.canonicalName, ...(entity.aliases || [])]) {
+                    this.refreshAliasConflict(this.normalizeAlias(alias), entity.type, projectId, record.createdAt);
+                }
             }
-        }
+        })();
         return record;
     }
     listTimeline(input) {
@@ -472,7 +481,7 @@ export class EntityStore {
             mentionId: row.mention_id,
             entityId: row.entity_id,
             neuronId: row.neuron_id || undefined,
-            projectId: row.project_id || undefined,
+            projectId: row.project_id == null ? undefined : String(row.project_id),
             mentionType: row.mention_type,
             createdAt: row.created_at
         }));
@@ -509,7 +518,7 @@ export class EntityStore {
             type: row.type,
             mentionId: row.mention_id,
             neuronId: row.neuron_id || undefined,
-            projectId: row.project_id || undefined,
+            projectId: row.project_id == null ? undefined : String(row.project_id),
             mentionType: row.mention_type,
             createdAt: row.created_at
         }));
@@ -555,6 +564,8 @@ export class EntityStore {
     `).run(updatedAt, entityId);
     }
     addAttribute(input) {
+        const projectId = this.requireLiveNeuronScope(input.sourceNeuronId);
+        this.assertEntityVisibleInProject(input.entityId, projectId, input.sourceNeuronId);
         const now = input.createdAt ?? Date.now();
         const record = {
             attributeId: `eattr-${randomUUID()}`,
@@ -566,12 +577,14 @@ export class EntityStore {
             createdAt: now,
             updatedAt: now
         };
-        this.db.prepare(`
-      INSERT INTO entity_attributes (
-        attribute_id, entity_id, attribute_key, attribute_value, normalized_value, source_neuron_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(record.attributeId, record.entityId, record.attributeKey, record.attributeValue, record.normalizedValue, record.sourceNeuronId || null, record.createdAt, record.updatedAt);
-        this.touchEntity(record.entityId, now);
+        this.db.transaction(() => {
+            this.db.prepare(`
+        INSERT INTO entity_attributes (
+          attribute_id, entity_id, attribute_key, attribute_value, normalized_value, source_neuron_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(record.attributeId, record.entityId, record.attributeKey, record.attributeValue, record.normalizedValue, input.sourceNeuronId, record.createdAt, record.updatedAt);
+            this.touchEntity(record.entityId, now);
+        })();
         return record;
     }
     listAttributes(entityId, attributeKey, projectId) {
@@ -647,17 +660,24 @@ export class EntityStore {
     `).run(record.pendingId, record.referenceText, record.entityType || null, record.contextNeuronId || null, null, record.status, record.createdAt, record.updatedAt);
         return record;
     }
-    resolvePendingReference(pendingId, entityId, resolvedAt = Date.now()) {
+    resolvePendingReference(pendingId, entityId, projectId, resolvedAt = Date.now()) {
         const row = this.db.prepare(`
       SELECT * FROM pending_entity_resolution WHERE pending_id = ?
     `).get(pendingId);
         if (!row)
             return null;
-        this.db.prepare(`
-      UPDATE pending_entity_resolution
-      SET resolved_entity_id = ?, status = 'resolved', updated_at = ?
-      WHERE pending_id = ?
-    `).run(entityId, resolvedAt, pendingId);
+        if (!row.context_neuron_id)
+            throw new Error('pending_entity_context_required');
+        if (this.requireLiveNeuronScope(String(row.context_neuron_id)) !== projectId)
+            throw new Error('pending_entity_project_scope_mismatch');
+        this.assertEntityVisibleInProject(entityId, projectId);
+        this.db.transaction(() => {
+            this.db.prepare(`
+        UPDATE pending_entity_resolution
+        SET resolved_entity_id = ?, status = 'resolved', updated_at = ?
+        WHERE pending_id = ? AND status = 'pending'
+      `).run(entityId, resolvedAt, pendingId);
+        })();
         return {
             pendingId,
             referenceText: row.reference_text,
@@ -745,11 +765,34 @@ export class EntityStore {
     `).run(input.targetCanonicalEntityId, input.status || 'archived', input.updatedAt ?? Date.now(), input.sourceEntityId);
     }
     restoreInstance(input) {
+        if (!this.isExclusiveToProject(input.entityId, input.projectId))
+            throw new Error('entity_project_scope_not_exclusive');
         this.db.prepare(`
       UPDATE entity_instances
       SET canonical_entity_id = ?, status = ?, updated_at = ?
       WHERE instance_id = ?
     `).run(input.canonicalEntityId, input.status, input.updatedAt ?? Date.now(), input.entityId);
+    }
+    requireLiveNeuronScope(neuronId) {
+        const row = this.db.prepare(`
+      SELECT COALESCE(project_id,'') AS project_id
+      FROM neurons
+      WHERE id=? AND is_deleted=0
+    `).get(neuronId);
+        if (!row)
+            throw new Error('entity_provenance_neuron_not_live');
+        return row.project_id;
+    }
+    assertEntityVisibleInProject(entityId, projectId, sourceNeuronId) {
+        const scopes = this.listProjectScopes(entityId);
+        if (scopes.includes(projectId))
+            return;
+        const createdFrom = sourceNeuronId
+            ? this.db.prepare(`SELECT created_from FROM entity_instances WHERE instance_id=?`).get(entityId)
+            : null;
+        if (scopes.length === 0 && createdFrom?.created_from === sourceNeuronId)
+            return;
+        throw new Error('entity_project_scope_mismatch');
     }
     upsertAliases(entityId, entityType, aliases, projectId, timestamp) {
         const stmt = this.db.prepare(`

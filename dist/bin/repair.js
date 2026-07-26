@@ -13,6 +13,7 @@ function hasFlag(name) {
 function usage() {
     return [
         'Usage: cogmem repair project-scope --from <projectId> --to <projectId> [--db <memory.db>|--config <config.toml>] [--dry-run|--apply] [--json]',
+        '       cogmem repair task-identity --task-id <id> --project <projectId> --task-key <key> --title <title> --status <status> [--db <memory.db>|--config <config.toml>] [--dry-run|--apply] [--json]',
         '',
         'Conservatively moves empty-project upgrade residue into a real project scope.',
     ].join('\n');
@@ -55,10 +56,12 @@ function nonEmptyProjectIds(db, table) {
 }
 function main() {
     const [command] = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-    if (command !== 'project-scope' || hasFlag('--help') || hasFlag('-h')) {
+    if (!['project-scope', 'task-identity'].includes(command || '') || hasFlag('--help') || hasFlag('-h')) {
         console.log(usage());
-        process.exit(command === 'project-scope' ? 0 : 1);
+        process.exit(['project-scope', 'task-identity'].includes(command || '') ? 0 : 1);
     }
+    if (command === 'task-identity')
+        return repairTaskIdentity();
     const from = readArg('--from');
     const to = readArg('--to');
     if (from === undefined || !to)
@@ -110,6 +113,38 @@ function main() {
             for (const row of counts)
                 console.log(`${row.table}: ${row.fromCount}`);
         }
+    }
+    finally {
+        db.close();
+    }
+}
+function repairTaskIdentity() {
+    const taskId = readArg('--task-id');
+    const projectId = readArg('--project');
+    const taskKey = readArg('--task-key');
+    const title = readArg('--title');
+    const status = readArg('--status');
+    if (!taskId || projectId === undefined || !taskKey || !title || !status)
+        throw new Error(`Missing task identity field.\n${usage()}`);
+    const apply = hasFlag('--apply');
+    const dbPath = dbPathFromArgs();
+    const db = new Database(dbPath);
+    db.exec('PRAGMA busy_timeout = 5000;');
+    try {
+        const current = db.prepare(`SELECT task_id,COALESCE(project_id,'') AS project_id,task_key,title,status FROM task_branches WHERE task_id=?`).get(taskId);
+        if (!current)
+            throw new Error(`Unknown task: ${taskId}`);
+        if (apply)
+            db.transaction(() => {
+                db.prepare(`UPDATE task_branches SET project_id=?,task_key=?,title=?,status=?,updated_at=? WHERE task_id=?`)
+                    .run(projectId, taskKey, title, status, Date.now(), taskId);
+                db.prepare(`UPDATE task_identity_restoration_manifest
+        SET project_id=?,task_key=?,title=?,status=?,source='operator_confirmed',recovery_status='operator_confirmed',recorded_at=?
+        WHERE task_id=?`).run(projectId, taskKey, title, status, Date.now(), taskId);
+                db.prepare(`DELETE FROM task_identity_recovery_quarantine WHERE task_id=?`).run(taskId);
+            })();
+        const payload = { schemaVersion: 'cogmem.cli.v1', command: 'repair task-identity', dbPath, dryRun: !apply, apply, taskId, projectId, taskKey, title, status, current };
+        console.log(hasFlag('--json') ? JSON.stringify(payload) : `${apply ? 'applied' : 'dry-run'} task-identity repair ${JSON.stringify(payload)}`);
     }
     finally {
         db.close();

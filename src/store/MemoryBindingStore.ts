@@ -109,7 +109,7 @@ export class MemoryBindingStore {
         updated_at = excluded.updated_at
     `).run(
       entityId,
-      input.projectId || null,
+      input.projectId ?? null,
       input.canonicalName,
       input.entityType,
       JSON.stringify(aliases),
@@ -141,8 +141,8 @@ export class MemoryBindingStore {
         updated_at = excluded.updated_at
     `).run(
       input.topicPath,
-      input.projectId || null,
-      input.projectId || '',
+      input.projectId ?? null,
+      input.projectId ?? '',
       input.parentPath || parentPathFor(input.topicPath) || null,
       input.topicType,
       input.summary || null,
@@ -178,7 +178,7 @@ export class MemoryBindingStore {
     `).run(
       bindingId,
       input.eventId,
-      input.projectId || null,
+      input.projectId ?? null,
       input.role || null,
       input.rawEventType || null,
       input.entityId || null,
@@ -251,7 +251,7 @@ export class MemoryBindingStore {
         updated_at = excluded.updated_at
     `).run(
       clusterId,
-      input.projectId || null,
+      input.projectId ?? null,
       input.topicPath,
       input.clusterType,
       input.title,
@@ -347,7 +347,7 @@ export class MemoryBindingStore {
         updated_at = excluded.updated_at
     `).run(
       edgeId,
-      input.projectId || null,
+      input.projectId ?? null,
       input.sourceType,
       input.sourceId,
       input.relationType,
@@ -736,7 +736,7 @@ function mapBindingRow(row: MemoryBindingRow): MemoryBindingRecord {
   return {
     bindingId: row.binding_id,
     eventId: row.event_id,
-    projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
     role: row.role || undefined,
     rawEventType: row.raw_event_type || undefined,
     entityId: row.entity_id || undefined,
@@ -758,7 +758,7 @@ function mapBindingRow(row: MemoryBindingRow): MemoryBindingRecord {
 function mapClusterRow(row: MemoryClusterRow): MemoryClusterRecord {
   return {
     clusterId: row.cluster_id,
-    projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
     topicPath: row.topic_path,
     clusterType: row.cluster_type,
     title: row.title,
@@ -777,7 +777,7 @@ function mapClusterRow(row: MemoryClusterRow): MemoryClusterRecord {
 function mapEdgeRow(row: MemoryEdgeRow): MemoryEdgeRecord {
   return {
     edgeId: row.edge_id,
-    projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
     sourceType: row.source_type,
     sourceId: row.source_id,
     relationType: row.relation_type,

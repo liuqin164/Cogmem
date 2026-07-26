@@ -447,7 +447,7 @@ export class BeliefStore {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         belief.id,
-        belief.projectId || null,
+        belief.projectId ?? null,
         belief.scope,
         belief.subject,
         belief.predicate,
@@ -727,7 +727,7 @@ export class BeliefStore {
   private mapBelief(row: any): BeliefRecord {
     return {
       id: row.id,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       scope: row.scope,
       subject: row.subject,
       predicate: row.predicate,

@@ -132,7 +132,7 @@ export class ActivationStore {
 function mapRow(row) {
     return {
         neuronId: row.neuron_id,
-        projectId: row.project_id || undefined,
+        projectId: row.project_id == null ? undefined : String(row.project_id),
         activation: Number(row.activation),
         touchCount: Number(row.touch_count),
         source: row.source || undefined,

@@ -174,8 +174,14 @@ export class EventStore {
         status TEXT NOT NULL DEFAULT 'idle',
         metadata_json TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS event_sequence_counters (
+        counter_key TEXT PRIMARY KEY,
+        value INTEGER NOT NULL
+      );
     `);
     this.ensureCompatibilityColumns();
+    this.seedSequenceCounters();
   }
 
   private ensureCompatibilityColumns(): void {
@@ -377,6 +383,9 @@ export class EventStore {
       this.db.transaction(() => {
         this.assertLinkedEventScopes(event.projectId, [event.parentEventId, event.prevEventId, event.nextEventId]);
         insert();
+        this.advanceSequence(sequenceKey('event', event.projectId ?? '', event.streamId), event.eventVersion);
+        if (event.threadId && event.threadSeq !== undefined) this.advanceSequence(sequenceKey('thread', event.projectId ?? '', event.threadId), event.threadSeq);
+        if (event.threadId && event.turnSeq !== undefined) this.advanceSequence(sequenceKey('turn', event.projectId ?? '', event.threadId), event.turnSeq);
         this.upsertImportAnchor(event);
         this.upsertRawEventFts(event);
       })();
@@ -439,41 +448,48 @@ export class EventStore {
   }
 
   getNextGlobalSeq(): number {
-    const row = this.db.prepare(`
-      SELECT COALESCE(MAX(global_seq), 0) AS seq
-      FROM memory_events
-    `).get() as { seq: number } | null;
-    return (row?.seq || 0) + 1;
+    return this.nextSequence('global');
   }
 
   getNextEventVersion(streamId: string, projectId?: string): number {
-    const scope = projectId === undefined ? '' : ` AND project_scope=?`;
-    const row = this.db.prepare(`
-      SELECT COALESCE(MAX(event_version), 0) AS version
-      FROM memory_events
-      WHERE stream_id = ?${scope}
-    `).get(streamId, ...(projectId === undefined ? [] : [projectId])) as { version: number } | null;
-    return (row?.version || 0) + 1;
+    return this.nextSequence(sequenceKey('event', projectId ?? '', streamId));
   }
 
   getNextThreadSeq(threadId: string, projectId?: string): number {
-    const scope = projectId === undefined ? '' : ` AND project_scope=?`;
-    const row = this.db.prepare(`
-      SELECT COALESCE(MAX(thread_seq), 0) AS seq
-      FROM memory_events
-      WHERE (thread_id = ? OR (thread_id IS NULL AND stream_type = 'thread' AND stream_id = ?))${scope}
-    `).get(threadId, threadId, ...(projectId === undefined ? [] : [projectId])) as { seq: number } | null;
-    return (row?.seq || 0) + 1;
+    return this.nextSequence(sequenceKey('thread', projectId ?? '', threadId));
   }
 
   getNextTurnSeq(threadId: string, projectId?: string): number {
-    const scope = projectId === undefined ? '' : ` AND project_scope=?`;
+    return this.nextSequence(sequenceKey('turn', projectId ?? '', threadId));
+  }
+
+  private nextSequence(key: string): number {
     const row = this.db.prepare(`
-      SELECT COALESCE(MAX(turn_seq), 0) AS seq
-      FROM memory_events
-      WHERE (thread_id = ? OR (thread_id IS NULL AND stream_type = 'thread' AND stream_id = ?))${scope}
-    `).get(threadId, threadId, ...(projectId === undefined ? [] : [projectId])) as { seq: number } | null;
-    return (row?.seq || 0) + 1;
+      INSERT INTO event_sequence_counters(counter_key,value) VALUES(?,1)
+      ON CONFLICT(counter_key) DO UPDATE SET value=value+1
+      RETURNING value
+    `).get(key) as { value: number };
+    return row.value;
+  }
+
+  private advanceSequence(key: string, value: number): void {
+    this.db.prepare(`INSERT INTO event_sequence_counters(counter_key,value) VALUES(?,?)
+      ON CONFLICT(counter_key) DO UPDATE SET value=MAX(value,excluded.value)`).run(key, value);
+  }
+
+  private seedSequenceCounters(): void {
+    const upsert = this.db.prepare(`INSERT INTO event_sequence_counters(counter_key,value) VALUES(?,?)
+      ON CONFLICT(counter_key) DO UPDATE SET value=MAX(value,excluded.value)`);
+    const global = this.db.prepare(`SELECT COALESCE(MAX(global_seq),0) AS value FROM memory_events`).get() as { value: number };
+    upsert.run('global', global.value);
+    for (const row of this.db.prepare(`SELECT project_scope,stream_id,MAX(event_version) AS value FROM memory_events GROUP BY project_scope,stream_id`).all() as Array<{ project_scope: string; stream_id: string; value: number }>) {
+      upsert.run(sequenceKey('event', row.project_scope, row.stream_id), row.value);
+    }
+    for (const row of this.db.prepare(`SELECT project_scope,COALESCE(thread_id,stream_id) AS thread_id,MAX(thread_seq) AS thread_value,MAX(turn_seq) AS turn_value
+      FROM memory_events WHERE thread_id IS NOT NULL OR stream_type='thread' GROUP BY project_scope,COALESCE(thread_id,stream_id)`).all() as Array<{ project_scope: string; thread_id: string; thread_value?: number; turn_value?: number }>) {
+      if (row.thread_value != null) upsert.run(sequenceKey('thread', row.project_scope, row.thread_id), row.thread_value);
+      if (row.turn_value != null) upsert.run(sequenceKey('turn', row.project_scope, row.thread_id), row.turn_value);
+    }
   }
 
   getEventsAfter(lastEventTime?: number): MemoryEvent[] {
@@ -1089,6 +1105,10 @@ function qualifiedMemoryEventColumns(alias: string): string {
 
 function escapeSqlLike(value: string): string {
   return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+function sequenceKey(kind: string, projectId: string, id: string): string {
+  return `${kind}:${createHash('sha256').update(`${projectId}\0${id}`).digest('hex')}`;
 }
 
 function validCalendarDate(value: string): boolean {

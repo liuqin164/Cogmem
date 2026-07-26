@@ -5,6 +5,7 @@ import { COMPATIBLE_MIGRATION_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRAT
 import { topologyIntegritySatisfied } from './0054_topology_semantic_integrity.js';
 import { topologyFinalizationSatisfied } from './0055_topology_scope_finalization.js';
 import { projectIsolationFinalizationSatisfied } from './0056_project_isolation_finalization.js';
+import { projectIsolationCompensationSatisfied } from './0057_project_isolation_compensation.js';
 
 export interface SchemaMigrationRunOptions {
   dryRun?: boolean;
@@ -373,6 +374,7 @@ export class SchemaMigrationRunner {
     if (version === '0055') return (!this.tableExists('branch_links') || this.hasColumns('branch_links', ['project_id']))
       && topologyFinalizationSatisfied(this.db);
     if (version === '0056') return projectIsolationFinalizationSatisfied(this.db);
+    if (version === '0057') return projectIsolationCompensationSatisfied(this.db);
     return true;
   }
 

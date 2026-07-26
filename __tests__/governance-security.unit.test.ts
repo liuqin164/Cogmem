@@ -194,22 +194,21 @@ describe('Governance and security v1.14', () => {
       canonicalName: 'Legacy Private Person', type: 'person', aliases: ['Legacy Private Alias'],
       instanceMode: 'new_instance',
     });
-    kernel.entityStore.recordMention({
-      entityId: legacyMentionOnlyEntity.entityId, projectId: 'forget-me', mentionType: 'referenced',
-    });
+    const insertLegacyMention = kernel.entityStore.getDatabase().prepare(`INSERT INTO entity_mentions(
+      mention_id,entity_id,neuron_id,project_id,mention_type,created_at
+    ) VALUES(?,?,NULL,?,'referenced',?)`);
+    insertLegacyMention.run('legacy-private', legacyMentionOnlyEntity.entityId, 'forget-me', Date.now());
     const otherProjectOwnedEntity = kernel.entityStore.upsertEntity({
       canonicalName: 'Other Project Person', type: 'person', aliases: ['Other Project Alias'],
       metadata: { projectId: 'keep-me' }, instanceMode: 'new_instance',
     });
-    kernel.entityStore.recordMention({
-      entityId: otherProjectOwnedEntity.entityId, projectId: 'forget-me', mentionType: 'referenced',
-    });
+    insertLegacyMention.run('legacy-cross-owner', otherProjectOwnedEntity.entityId, 'forget-me', Date.now());
     const sharedLegacyEntity = kernel.entityStore.upsertEntity({
       canonicalName: 'Shared Legacy Person', type: 'person', aliases: ['Shared Legacy Alias'],
       instanceMode: 'new_instance',
     });
-    kernel.entityStore.recordMention({ entityId: sharedLegacyEntity.entityId, projectId: 'forget-me', mentionType: 'referenced' });
-    kernel.entityStore.recordMention({ entityId: sharedLegacyEntity.entityId, projectId: 'keep-me', mentionType: 'referenced' });
+    insertLegacyMention.run('legacy-shared-forget', sharedLegacyEntity.entityId, 'forget-me', Date.now());
+    insertLegacyMention.run('legacy-shared-keep', sharedLegacyEntity.entityId, 'keep-me', Date.now());
     expect(kernel.buildMemoryMap({ projectId: 'forget-me' }).counters.activationHotspots).toBe(1);
     const capsule = kernel.strategyCortex.plan({ query: 'project status', intent: 'project_status', projectId: 'forget-me' });
     kernel.contextOutcomeStore.record(kernel.memoryUseJudge.judge({

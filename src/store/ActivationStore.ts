@@ -189,7 +189,7 @@ interface ActivationRow {
 function mapRow(row: ActivationRow): ActivationHotspot {
   return {
     neuronId: row.neuron_id,
-    projectId: row.project_id || undefined,
+    projectId: row.project_id == null ? undefined : String(row.project_id),
     activation: Number(row.activation),
     touchCount: Number(row.touch_count),
     source: row.source || undefined,

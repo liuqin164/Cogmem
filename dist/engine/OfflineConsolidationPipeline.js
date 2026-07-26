@@ -253,7 +253,7 @@ export class OfflineConsolidationPipeline {
                 beforeTime: input.window.endTime
             });
             if (resolved) {
-                this.deps.entityStore?.resolvePendingReference(pending.pendingId, resolved.entityId, Date.now());
+                this.deps.entityStore?.resolvePendingReference(pending.pendingId, resolved.entityId, input.window.projectId ?? '', Date.now());
                 correctedEntityBindings.push({
                     targetId: pending.pendingId,
                     targetType: 'reference',

@@ -65,7 +65,7 @@ function mapReview(row: Record<string, unknown>): CandidateReviewRecord {
   return {
     reviewId: String(row.review_id),
     candidateId: String(row.candidate_id),
-    projectId: row.project_id ? String(row.project_id) : undefined,
+    projectId: row.project_id == null ? undefined : String(row.project_id),
     action: String(row.action) as CandidateReviewAction,
     actor: String(row.actor),
     reason: String(row.reason),

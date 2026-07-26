@@ -275,7 +275,7 @@ export class SummaryStore {
   private mapRow(row: SummaryRow): SummaryRecord {
     return {
       summaryId: row.summary_id,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       sessionId: row.session_id || undefined,
       scope: row.scope,
       windowStart: row.window_start ?? undefined,

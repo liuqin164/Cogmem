@@ -111,8 +111,12 @@ test('explicit consolidation leaves a legacy entity shared by two projects uncha
     canonicalName: 'Shared Legacy Device', type: 'device', aliases: ['private shared alias'],
     instanceMode: 'new_instance', createdAt: now,
   });
-  kernel.entityStore.recordMention({ entityId: shared.entityId, projectId: 'a', createdAt: now });
-  kernel.entityStore.recordMention({ entityId: shared.entityId, projectId: 'b', createdAt: now + 1 });
+  kernel.entityStore.getDatabase().prepare(`INSERT INTO entity_mentions(
+    mention_id,entity_id,neuron_id,project_id,mention_type,created_at
+  ) VALUES(?,?,NULL,?,'referenced',?)`).run('legacy-a', shared.entityId, 'a', now);
+  kernel.entityStore.getDatabase().prepare(`INSERT INTO entity_mentions(
+    mention_id,entity_id,neuron_id,project_id,mention_type,created_at
+  ) VALUES(?,?,NULL,?,'referenced',?)`).run('legacy-b', shared.entityId, 'b', now + 1);
 
   await kernel.consolidate({ projectId: 'a', startTime: 0, endTime: now + 10_000 });
 

@@ -42,7 +42,7 @@ export class ReasoningChainStore {
       this.db.prepare(`
         INSERT INTO reasoning_chains (id, outcome, project_id, created_at)
         VALUES (?, ?, ?, ?)
-      `).run(chain.id, chain.outcome, chain.projectId || null, chain.createdAt);
+      `).run(chain.id, chain.outcome, chain.projectId ?? null, chain.createdAt);
 
       for (const step of chain.steps) {
         this.db.prepare(`

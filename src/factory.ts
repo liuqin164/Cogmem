@@ -1416,7 +1416,7 @@ export class MemoryKernel {
       db.transaction(() => {
         for (const neuron of neurons) {
           const key = `neuron:${neuron.neuron_id}`;
-          const nodeId = cognitiveNodeId(projectId || undefined, 'neuron', key);
+          const nodeId = cognitiveNodeId(projectId, 'neuron', key);
           insertNode.run(generation, nodeId, 'neuron', key, neuron.title, projectId, neuron.neuron_id, JSON.stringify({ status: 'active' }), neuron.created_at, neuron.created_at);
         }
       })();
@@ -1448,7 +1448,7 @@ export class MemoryKernel {
       db.transaction(() => {
         for (const bucket of page) {
           const key = `time_bucket:${bucket.bucket_id}`;
-          const nodeId = cognitiveNodeId(projectId || undefined, 'time_bucket', key);
+          const nodeId = cognitiveNodeId(projectId, 'time_bucket', key);
           insertNode.run(generation, nodeId, 'time_bucket', key, bucket.label, projectId, null, JSON.stringify({ bucketType: bucket.bucket_type, timeZone }), bucket.bucket_start, createdAt);
           const previous = previousByType.get(bucket.bucket_type);
           if (previous) {
@@ -1474,9 +1474,9 @@ export class MemoryKernel {
       if (entries.length === 0) break;
       db.transaction(() => {
         for (const entry of entries) {
-          const sourceNodeId = cognitiveNodeId(projectId || undefined, 'neuron', `neuron:${entry.neuron_id}`);
-          const targetNodeId = cognitiveNodeId(projectId || undefined, 'time_bucket', `time_bucket:${entry.bucket_id}`);
-          insertEdge.run(generation, cognitiveEdgeId({ projectId: projectId || undefined, sourceNodeId, targetNodeId, edgeType: 'occurred_in_time_bucket' }), sourceNodeId, targetNodeId, 'occurred_in_time_bucket', 1, projectId, null, entry.created_at);
+          const sourceNodeId = cognitiveNodeId(projectId, 'neuron', `neuron:${entry.neuron_id}`);
+          const targetNodeId = cognitiveNodeId(projectId, 'time_bucket', `time_bucket:${entry.bucket_id}`);
+          insertEdge.run(generation, cognitiveEdgeId({ projectId, sourceNodeId, targetNodeId, edgeType: 'occurred_in_time_bucket' }), sourceNodeId, targetNodeId, 'occurred_in_time_bucket', 1, projectId, null, entry.created_at);
         }
       })();
       entryCursor = entries[entries.length - 1]!.rowid;
@@ -3247,7 +3247,7 @@ export class MemoryKernel {
     }>).map((row) => ({
       auditId: row.audit_id,
       action: row.action,
-      projectId: (projectId ?? row.project_id) || undefined,
+      projectId: projectId ?? row.project_id ?? undefined,
       reason: row.reason || undefined,
       details: row.details_json ? JSON.parse(row.details_json) : undefined,
       createdAt: Number(row.created_at),

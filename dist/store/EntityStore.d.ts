@@ -144,7 +144,7 @@ export declare class EntityStore {
         entityId: string;
         attributeKey: string;
         attributeValue: string;
-        sourceNeuronId?: string;
+        sourceNeuronId: string;
         createdAt?: number;
     }): EntityAttributeRecord;
     listAttributes(entityId: string, attributeKey?: string, projectId?: string): EntityAttributeRecord[];
@@ -162,7 +162,7 @@ export declare class EntityStore {
         contextNeuronId?: string;
         createdAt?: number;
     }): PendingEntityResolutionRecord;
-    resolvePendingReference(pendingId: string, entityId: string, resolvedAt?: number): PendingEntityResolutionRecord | null;
+    resolvePendingReference(pendingId: string, entityId: string, projectId: string, resolvedAt?: number): PendingEntityResolutionRecord | null;
     listPendingResolutions(filter?: {
         status?: PendingEntityResolutionRecord['status'];
         entityType?: string;
@@ -183,8 +183,11 @@ export declare class EntityStore {
         entityId: string;
         canonicalEntityId: string;
         status: EntityRecord['status'];
+        projectId: string;
         updatedAt?: number;
     }): void;
+    private requireLiveNeuronScope;
+    private assertEntityVisibleInProject;
     private upsertAliases;
     private touchEntity;
     private ensureCanonicalEntity;

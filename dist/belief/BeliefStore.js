@@ -339,7 +339,7 @@ export class BeliefStore {
           superseded_by_belief_id, contradiction_group, status, explanation,
           metadata_json, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(belief.id, belief.projectId || null, belief.scope, belief.subject, belief.predicate, belief.objectValue.normalized || belief.objectValue.raw, belief.objectValue.type, belief.canonicalKey, belief.confidence, belief.trustScore, belief.sourceNeuronId || null, belief.sourceEventId || null, belief.sourceType, belief.validityKind, belief.validFrom, belief.validTo || null, belief.supersedesBeliefId || null, null, belief.contradictionGroup || null, belief.status, belief.explanation || null, belief.metadata ? JSON.stringify(belief.metadata) : null, belief.createdAt, belief.updatedAt);
+      `).run(belief.id, belief.projectId ?? null, belief.scope, belief.subject, belief.predicate, belief.objectValue.normalized || belief.objectValue.raw, belief.objectValue.type, belief.canonicalKey, belief.confidence, belief.trustScore, belief.sourceNeuronId || null, belief.sourceEventId || null, belief.sourceType, belief.validityKind, belief.validFrom, belief.validTo || null, belief.supersedesBeliefId || null, null, belief.contradictionGroup || null, belief.status, belief.explanation || null, belief.metadata ? JSON.stringify(belief.metadata) : null, belief.createdAt, belief.updatedAt);
             if (belief.sourceNeuronId || belief.sourceEventId) {
                 this.attachEvidence([
                     {
@@ -553,7 +553,7 @@ export class BeliefStore {
     mapBelief(row) {
         return {
             id: row.id,
-            projectId: row.project_id || undefined,
+            projectId: row.project_id == null ? undefined : String(row.project_id),
             scope: row.scope,
             subject: row.subject,
             predicate: row.predicate,

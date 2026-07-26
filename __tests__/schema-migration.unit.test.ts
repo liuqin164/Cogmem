@@ -14,6 +14,7 @@ import { migration_0053 } from '../src/migrations/0053_topology_privacy_and_reco
 import { migration_0054, topologyIntegritySatisfied } from '../src/migrations/0054_topology_semantic_integrity.js';
 import { migration_0055, topologyFinalizationSatisfied } from '../src/migrations/0055_topology_scope_finalization.js';
 import { migration_0056 } from '../src/migrations/0056_project_isolation_finalization.js';
+import { migration_0057, projectIsolationCompensationSatisfied } from '../src/migrations/0057_project_isolation_compensation.js';
 import { CANONICAL_MIGRATION_SOURCE_DIGESTS, FROZEN_MIGRATION_DEPENDENCY_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 describe('schema migration runner', () => {
@@ -423,6 +424,37 @@ describe('schema migration runner', () => {
       task_key: 'derived', title: 'derived', status: 'derived', source: 'persisted_0055_state',
     });
     db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('0057 compensates a closed 0056 database without certifying persisted task state', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-0057-reopen-'));
+    const path = join(dir, 'memory.db');
+    const before = new Database(path);
+    before.exec(`
+      CREATE TABLE task_branches(task_id TEXT PRIMARY KEY,project_id TEXT,task_key TEXT,title TEXT,status TEXT);
+      INSERT INTO task_branches VALUES('damaged','a','derived','derived','derived');
+      CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,is_deleted INTEGER NOT NULL DEFAULT 0);
+      INSERT INTO neurons VALUES('n-a','a',0);
+      CREATE TABLE ingestion_source_cursors(source_id TEXT PRIMARY KEY,source_path TEXT NOT NULL,source_type TEXT NOT NULL,project_id TEXT,enabled INTEGER NOT NULL,last_processed_at INTEGER,last_seen_hash TEXT,last_seen_mtime INTEGER,content_window_start INTEGER,content_window_end INTEGER,updated_at INTEGER NOT NULL);
+      INSERT INTO ingestion_source_cursors VALUES('same','/a','conversation_markdown','a',1,1,'h',1,0,1,1);
+      CREATE TABLE ingestion_processed_records(record_hash TEXT PRIMARY KEY,source_id TEXT NOT NULL,source_path TEXT NOT NULL,source_type TEXT NOT NULL,content_hash TEXT NOT NULL,content_window_start INTEGER NOT NULL,content_window_end INTEGER NOT NULL,processed_at INTEGER NOT NULL,neuron_id TEXT);
+      INSERT INTO ingestion_processed_records VALUES('hash','same','/a','conversation_markdown','h',0,1,1,'n-a');
+    `);
+    migration_0056.up(before);
+    before.exec(`CREATE TABLE _schema_migrations(version TEXT PRIMARY KEY,description TEXT NOT NULL,applied_at TEXT NOT NULL,checksum TEXT)`);
+    before.prepare(`INSERT INTO _schema_migrations VALUES('0056','legacy 0056',?,?)`)
+      .run(new Date(0).toISOString(), '829f09b056bf7384a65908e8dd066691e0ec1538324d37e6aed344a03b0253eb');
+    before.close();
+
+    const after = new Database(path);
+    expect(new SchemaMigrationRunner(after, [migration_0056, migration_0057]).run().applied).toEqual(['0057']);
+    expect(after.prepare(`SELECT recovery_status FROM task_identity_restoration_manifest WHERE task_id='damaged'`).get()).toEqual({ recovery_status: 'unresolved' });
+    expect(after.prepare(`SELECT reason FROM task_identity_recovery_quarantine WHERE task_id='damaged'`).get()).toEqual({ reason: 'original_task_identity_unproven' });
+    expect(after.prepare(`SELECT project_scope,source_id FROM ingestion_source_cursors`).get()).toEqual({ project_scope: 'a', source_id: 'same' });
+    expect(after.prepare(`SELECT project_scope,source_id,record_hash FROM ingestion_processed_records`).get()).toEqual({ project_scope: 'a', source_id: 'same', record_hash: 'hash' });
+    expect(projectIsolationCompensationSatisfied(after)).toBe(true);
+    after.close();
     rmSync(dir, { recursive: true, force: true });
   });
 

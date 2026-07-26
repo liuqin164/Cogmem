@@ -40,14 +40,12 @@ export class EntityExpandTool {
     // Fetch facts (capped at MAX_FACTS)
     const facts = this.factStore
       .listFactsByEntityIds([entity.entityId], { limit: MAX_FACTS, projectId })
-      .filter((fact) => inProject(fact, projectId))
       .slice(0, MAX_FACTS);
 
     // Fetch events via neuron IDs associated with those facts
     const neuronIds = [...new Set(facts.map((f) => f.neuronId).filter(Boolean) as string[])];
     const events = this.factStore
-      .listEventsByNeuronIds(neuronIds, MAX_FACTS, projectId)
-      .filter((event) => inProject(event, projectId));
+      .listEventsByNeuronIds(neuronIds, MAX_FACTS, projectId);
 
     // Fetch active beliefs related to the entity name
     const beliefs = this.beliefStore.getActiveBeliefsForQuery({
@@ -65,12 +63,4 @@ export class EntityExpandTool {
       beliefs,
     };
   }
-}
-
-function inProject(record: unknown, projectId?: string): boolean {
-  const metadata = record && typeof record === 'object' && 'metadata' in record
-    ? (record as { metadata?: Record<string, unknown> }).metadata
-    : undefined;
-  const recordProjectId = metadata?.projectId;
-  return matchesProjectScope(projectId, typeof recordProjectId === 'string' ? recordProjectId : undefined);
 }

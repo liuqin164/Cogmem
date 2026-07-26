@@ -175,7 +175,7 @@ export class NeuronEmbeddingStore {
     }>;
     return rows.map((row) => ({
       neuronId: row.neuron_id,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       modelId: row.model_id,
       dimensions: Number(row.dimensions),
       vector: decodeVector(row.vector_blob),
@@ -208,7 +208,7 @@ export class NeuronEmbeddingStore {
   private lookupProjectId(neuronId: string): string | undefined {
     try {
       const row = this.db.prepare(`SELECT project_id FROM neurons WHERE id = ?`).get(neuronId) as { project_id?: string | null } | undefined;
-      return row?.project_id || undefined;
+      return row?.project_id == null ? undefined : String(row.project_id);
     } catch {
       return undefined;
     }

@@ -33,6 +33,19 @@ function makeSnapshot(source: SourceDefinition, content: string): SourceFileSnap
   };
 }
 
+test('EventStore allocates sequence values atomically across connections', () => {
+  const path = tempDbPath('cogmem-event-counter-');
+  const a = new EventStore(path);
+  const b = new EventStore(path);
+  const first = a.append({ streamId: 'shared', streamType: 'thread', eventType: 'message', projectId: 'a', payload: { text: 'one' } });
+  const second = b.append({ streamId: 'shared', streamType: 'thread', eventType: 'message', projectId: 'a', payload: { text: 'two' } });
+  expect([first.globalSeq, second.globalSeq]).toEqual([1, 2]);
+  expect([first.eventVersion, second.eventVersion]).toEqual([1, 2]);
+  expect([first.threadSeq, second.threadSeq]).toEqual([1, 2]);
+  a.close();
+  b.close();
+});
+
 test('EventStore replays same-timestamp thread events by threadSeq and eventOrdinal', () => {
   const store = new EventStore(tempDbPath('cogmem-ledger-store-'));
 
