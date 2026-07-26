@@ -440,6 +440,8 @@ describe('schema migration runner', () => {
       INSERT INTO ingestion_source_cursors VALUES('same','/a','conversation_markdown','a',1,1,'h',1,0,1,1);
       CREATE TABLE ingestion_processed_records(record_hash TEXT PRIMARY KEY,source_id TEXT NOT NULL,source_path TEXT NOT NULL,source_type TEXT NOT NULL,content_hash TEXT NOT NULL,content_window_start INTEGER NOT NULL,content_window_end INTEGER NOT NULL,processed_at INTEGER NOT NULL,neuron_id TEXT);
       INSERT INTO ingestion_processed_records VALUES('hash','same','/a','conversation_markdown','h',0,1,1,'n-a');
+      CREATE TABLE memory_entities(entity_id TEXT PRIMARY KEY,project_id TEXT,canonical_name TEXT NOT NULL,entity_type TEXT NOT NULL,aliases_json TEXT NOT NULL,stable_path TEXT,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+      INSERT INTO memory_entities VALUES('entity-a','a','Printer','device','["Office Printer"]','PROJECT/a/printer',1,1);
     `);
     migration_0056.up(before);
     before.exec(`CREATE TABLE _schema_migrations(version TEXT PRIMARY KEY,description TEXT NOT NULL,applied_at TEXT NOT NULL,checksum TEXT)`);
@@ -453,6 +455,9 @@ describe('schema migration runner', () => {
     expect(after.prepare(`SELECT reason FROM task_identity_recovery_quarantine WHERE task_id='damaged'`).get()).toEqual({ reason: 'original_task_identity_unproven' });
     expect(after.prepare(`SELECT project_scope,source_id FROM ingestion_source_cursors`).get()).toEqual({ project_scope: 'a', source_id: 'same' });
     expect(after.prepare(`SELECT project_scope,source_id,record_hash FROM ingestion_processed_records`).get()).toEqual({ project_scope: 'a', source_id: 'same', record_hash: 'hash' });
+    expect(after.prepare(`SELECT aliases_json,stable_path FROM memory_entities`).get()).toEqual({
+      aliases_json: '["Office Printer"]', stable_path: 'PROJECT/a/printer',
+    });
     expect(projectIsolationCompensationSatisfied(after)).toBe(true);
     after.close();
     rmSync(dir, { recursive: true, force: true });

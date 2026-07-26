@@ -79,10 +79,10 @@ export class NeuronEmbeddingStore {
         return Boolean(row);
     }
     countStaleVectors(currentModelId, projectId) {
-        const row = projectId
+        const row = projectId !== undefined
             ? this.db.prepare(`
           SELECT COUNT(*) AS count FROM neuron_embeddings
-          WHERE project_id = ? AND model_id <> ?
+          WHERE COALESCE(project_id,'') = ? AND model_id <> ?
         `).get(projectId, currentModelId)
             : this.db.prepare(`
           SELECT COUNT(*) AS count FROM neuron_embeddings

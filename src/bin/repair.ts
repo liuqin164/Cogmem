@@ -89,15 +89,8 @@ function main(): void {
         }
       }
     }
-    let changed = 0;
-    if (apply) {
-      db.transaction(() => {
-        for (const row of counts) {
-          const result = db.prepare(`UPDATE ${quoteIdent(row.table)} SET project_id=? WHERE COALESCE(project_id,'')=?`).run(to, from);
-          changed += Number(result.changes || 0);
-        }
-      })();
-    }
+    if (apply) throw new Error('Refusing project-scope repair: generic project_id rewrites are unsafe; use a schema migration or restore/import into the intended project.');
+    const changed = 0;
     const payload = {
       schemaVersion: 'cogmem.cli.v1',
       command: 'repair project-scope',
@@ -127,20 +120,47 @@ function repairTaskIdentity(): void {
   const title = readArg('--title');
   const status = readArg('--status');
   if (!taskId || projectId === undefined || !taskKey || !title || !status) throw new Error(`Missing task identity field.\n${usage()}`);
+  if (!['active', 'derived'].includes(status)) throw new Error('Invalid task status; expected active or derived.');
   const apply = hasFlag('--apply');
   const dbPath = dbPathFromArgs();
   const db = new Database(dbPath);
   db.exec('PRAGMA busy_timeout = 5000;');
   try {
-    const current = db.prepare(`SELECT task_id,COALESCE(project_id,'') AS project_id,task_key,title,status FROM task_branches WHERE task_id=?`).get(taskId);
+    const current = db.prepare(`SELECT task_id,COALESCE(project_id,'') AS project_id,task_key,title,status FROM task_branches WHERE task_id=?`)
+      .get(taskId) as { task_id: string; project_id: string; task_key: string; title: string; status: string } | null;
     if (!current) throw new Error(`Unknown task: ${taskId}`);
+    const recovery = db.prepare(`SELECT recovery_status FROM task_identity_restoration_manifest WHERE task_id=?`)
+      .get(taskId) as { recovery_status: string } | null;
+    const quarantine = db.prepare(`SELECT 1 FROM task_identity_recovery_quarantine WHERE task_id=?`).get(taskId);
+    if (recovery?.recovery_status !== 'unresolved' || !quarantine) throw new Error(`Task is not unresolved or lacks quarantine provenance: ${taskId}`);
+    if (projectId !== current.project_id) throw new Error('Task identity repair cannot change project scope.');
+    const collision = db.prepare(`SELECT task_id FROM task_branches WHERE project_id=? AND task_key=? AND task_id<>?`)
+      .get(projectId, taskKey, taskId);
+    if (collision) throw new Error(`Task identity collision: ${projectId}:${taskKey}`);
     if (apply) db.transaction(() => {
+      const oldKey = current.task_key;
+      const cognitiveNodeIds = db.prepare(`SELECT node_id FROM cognitive_nodes WHERE project_id=? AND node_type='task_branch' AND node_key=?`)
+        .all(projectId, oldKey) as Array<{ node_id: string }>;
+      for (const node of cognitiveNodeIds) {
+        db.prepare(`DELETE FROM cognitive_edges WHERE source_node_id=? OR target_node_id=?`).run(node.node_id, node.node_id);
+        db.prepare(`DELETE FROM cognitive_nodes WHERE node_id=?`).run(node.node_id);
+      }
+      db.prepare(`DELETE FROM topology_membership WHERE COALESCE(project_id,'')=? AND dimension_type='task_branch' AND dimension_key=?`)
+        .run(projectId, oldKey);
       db.prepare(`UPDATE task_branches SET project_id=?,task_key=?,title=?,status=?,updated_at=? WHERE task_id=?`)
         .run(projectId, taskKey, title, status, Date.now(), taskId);
+      db.prepare(`UPDATE task_branch_entries SET project_id=? WHERE task_id=?`).run(projectId, taskId);
       db.prepare(`UPDATE task_identity_restoration_manifest
         SET project_id=?,task_key=?,title=?,status=?,source='operator_confirmed',recovery_status='operator_confirmed',recorded_at=?
         WHERE task_id=?`).run(projectId, taskKey, title, status, Date.now(), taskId);
       db.prepare(`DELETE FROM task_identity_recovery_quarantine WHERE task_id=?`).run(taskId);
+      db.prepare(`UPDATE topology_projection_state SET status='dirty',updated_at=?,error=NULL WHERE project_id=?`)
+        .run(Date.now(), projectId);
+      db.prepare(`INSERT INTO migration_repair_receipts(repair_id,migration_version,repair_type,details_json,created_at)
+        VALUES(?,?,?,?,?)`).run(
+        `task-identity-${taskId}-${Date.now()}`,'0058','task_identity_operator_confirmation',
+        JSON.stringify({ taskId, projectId, previousTaskKey: oldKey, taskKey, title, status }),Date.now(),
+      );
     })();
     const payload = { schemaVersion: 'cogmem.cli.v1', command: 'repair task-identity', dbPath, dryRun: !apply, apply, taskId, projectId, taskKey, title, status, current };
     console.log(hasFlag('--json') ? JSON.stringify(payload) : `${apply ? 'applied' : 'dry-run'} task-identity repair ${JSON.stringify(payload)}`);

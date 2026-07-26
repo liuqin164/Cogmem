@@ -6,6 +6,7 @@ import type { Neuron, Synapse, MemoryAnchor } from '../types/index.js';
 import { MemoryGraph } from './MemoryGraph.js';
 import { SynapseUtils } from './Synapse.js';
 import { logger } from '../utils/Logger.js';
+import { projectScope } from '../topology/ProjectScope.js';
 
 export class Reflection {
   private memoryGraph: MemoryGraph;
@@ -121,6 +122,7 @@ export class Reflection {
         if (score < SIMILARITY_THRESHOLD) continue;
         const old = this.memoryGraph.getNeuron(id);
         if (!old || old.id === newNeuron.id) continue;
+        if (projectScope(old.metadata.projectId) !== projectScope(newNeuron.metadata.projectId)) continue;
         if (old.metadata.createdAt < windowStart) continue;
         if (old.metadata.type !== newNeuron.metadata.type) continue;
         if (this.checkPolarityCollision(newNeuron, old)) {

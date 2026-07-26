@@ -105,6 +105,8 @@ describe('entity governance v2', () => {
     const entities = new EntityStore(db);
     const bindings = new MemoryBindingStore(db);
     const service = new MemoryBindingService(bindings, entities);
+    db.exec(`CREATE TABLE memory_events(event_id TEXT PRIMARY KEY,project_id TEXT);
+      INSERT INTO memory_events VALUES('evt-cogmem','brain')`);
 
     const records = service.bindEvent({
       eventId: 'evt-cogmem',

@@ -77,12 +77,14 @@ export class BeliefStore {
       );
     `);
     }
-    findByCanonicalKey(canonicalKey) {
+    findByCanonicalKey(canonicalKey, projectId) {
+        const queryProject = projectQueryValue(projectId);
         const rows = this.db.prepare(`
       SELECT * FROM beliefs
       WHERE canonical_key = ?
+        AND (? IS NULL OR COALESCE(project_id,'') = ?)
       ORDER BY valid_from DESC, created_at DESC
-    `).all(canonicalKey);
+    `).all(canonicalKey, queryProject, queryProject);
         return rows.map((row) => this.mapBelief(row));
     }
     countActive(projectId) {
@@ -283,7 +285,8 @@ export class BeliefStore {
     }
     upsert(candidate, now = Date.now()) {
         const canonicalKey = this.toCanonicalKey(candidate.subject, candidate.predicate, candidate.scope);
-        const conflicts = this.findByCanonicalKey(canonicalKey).map((existing) => ({
+        const projectId = candidate.projectId ?? '';
+        const conflicts = this.findByCanonicalKey(canonicalKey, projectId).map((existing) => ({
             existing,
             incoming: candidate,
             reason: this.isSameBeliefValue(candidate.objectValue, existing.objectValue) ? 'same_value' : 'contradictory_value'
@@ -327,8 +330,8 @@ export class BeliefStore {
                     this.db.prepare(`
             UPDATE beliefs
             SET status = 'superseded', superseded_by_belief_id = ?, valid_to = ?, updated_at = ?
-            WHERE id = ?
-          `).run(belief.id, belief.validFrom, now, supersededId);
+            WHERE id = ? AND COALESCE(project_id,'') = ?
+          `).run(belief.id, belief.validFrom, now, supersededId, projectId);
                 }
             }
             this.db.prepare(`
@@ -377,9 +380,29 @@ export class BeliefStore {
         belief_id, neuron_id, event_id, evidence_type, weight, created_at
       ) VALUES (?, ?, ?, ?, ?, ?)
     `);
-        for (const record of records) {
-            stmt.run(record.beliefId, record.neuronId || null, record.eventId || null, record.evidenceType, record.weight, record.createdAt);
-        }
+        this.db.transaction(() => {
+            for (const record of records) {
+                const belief = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM beliefs WHERE id=?`)
+                    .get(record.beliefId);
+                if (!belief)
+                    throw new Error('belief_evidence_belief_not_found');
+                if (!record.neuronId && !record.eventId)
+                    throw new Error('belief_evidence_source_required');
+                if (record.neuronId) {
+                    const neuron = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0`)
+                        .get(record.neuronId);
+                    if (!neuron || neuron.scope !== belief.scope)
+                        throw new Error('belief_evidence_project_scope_mismatch');
+                }
+                if (record.eventId) {
+                    const event = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM memory_events WHERE event_id=?`)
+                        .get(record.eventId);
+                    if (!event || event.scope !== belief.scope)
+                        throw new Error('belief_evidence_project_scope_mismatch');
+                }
+                stmt.run(record.beliefId, record.neuronId || null, record.eventId || null, record.evidenceType, record.weight, record.createdAt);
+            }
+        })();
     }
     resolveConflict(incoming, conflicts, now = Date.now()) {
         if (conflicts.length === 0)

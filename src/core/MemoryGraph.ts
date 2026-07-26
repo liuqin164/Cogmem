@@ -130,6 +130,7 @@ export class MemoryGraph {
       CREATE TABLE IF NOT EXISTS synapses (
         source_id TEXT NOT NULL,
         target_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT '',
         type TEXT NOT NULL,
         weight REAL NOT NULL,
         created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
@@ -183,8 +184,18 @@ export class MemoryGraph {
     if (!names.has('last_reinforced_at')) {
       this.db.exec(`ALTER TABLE neurons ADD COLUMN last_reinforced_at INTEGER;`);
     }
+    const synapseColumns = new Set((this.db.prepare(`PRAGMA table_info(synapses)`).all() as Array<{ name: string }>).map((column) => column.name));
+    if (!synapseColumns.has('project_id')) this.db.exec(`ALTER TABLE synapses ADD COLUMN project_id TEXT NOT NULL DEFAULT '';`);
+    this.db.exec(`UPDATE synapses SET project_id=(
+      SELECT COALESCE(project_id,'') FROM neurons WHERE id=synapses.source_id
+    ) WHERE EXISTS (
+      SELECT 1 FROM neurons source JOIN neurons target ON target.id=synapses.target_id
+      WHERE source.id=synapses.source_id AND source.is_deleted=0 AND target.is_deleted=0
+        AND COALESCE(source.project_id,'')=COALESCE(target.project_id,'')
+    )`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_neurons_topic_path ON neurons(project_id, topic_path);`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_neurons_pinned ON neurons(is_pinned) WHERE is_pinned = 1;`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_synapses_project_source ON synapses(project_id, source_id);`);
   }
 
   addNeuron(neuron: Neuron): number {
@@ -344,10 +355,15 @@ export class MemoryGraph {
   }
 
   addSynapse(sourceId: string, synapse: Synapse): void {
+    const endpoints = this.db.prepare(`SELECT id,COALESCE(project_id,'') AS scope FROM neurons
+      WHERE id IN (?,?) AND is_deleted=0`).all(sourceId, synapse.targetId) as Array<{ id: string; scope: string }>;
+    const scopes = new Map(endpoints.map((row) => [row.id, row.scope]));
+    const scope = scopes.get(sourceId);
+    if (scope === undefined || scopes.get(synapse.targetId) !== scope) throw new Error('synapse_project_scope_mismatch');
     this.db.prepare(`
-      INSERT OR REPLACE INTO synapses (source_id, target_id, type, weight, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(sourceId, synapse.targetId, synapse.type, synapse.weight, Date.now());
+      INSERT OR REPLACE INTO synapses (source_id, target_id, project_id, type, weight, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(sourceId, synapse.targetId, scope, synapse.type, synapse.weight, Date.now());
   }
 
   getNeuron(id: string): Neuron | null {
@@ -393,7 +409,11 @@ export class MemoryGraph {
   }
 
   getSynapses(sourceId: string): Synapse[] {
-    const rows = this.db.prepare(`SELECT * FROM synapses WHERE source_id = ?`).all(sourceId) as any[];
+    const rows = this.db.prepare(`SELECT s.* FROM synapses s
+      JOIN neurons source ON source.id=s.source_id AND source.is_deleted=0
+      JOIN neurons target ON target.id=s.target_id AND target.is_deleted=0
+      WHERE s.source_id=? AND COALESCE(source.project_id,'')=COALESCE(target.project_id,'')
+        AND s.project_id=COALESCE(source.project_id,'')`).all(sourceId) as any[];
     return rows.map((row) => ({ targetId: row.target_id, type: row.type, weight: row.weight }));
   }
 
@@ -701,9 +721,9 @@ export class MemoryGraph {
     };
   }
 
-  findSimilarNeurons(vector: number[], topK: number): Array<{ id: string; score: number }> {
+  findSimilarNeurons(vector: number[], topK: number, projectId?: string): Array<{ id: string; score: number }> {
     const results: Array<{ id: string; score: number }> = [];
-    for (const page of this.iterateNeuronVectors(500, { includeStatuses: ['active'], onlyNotDeleted: true })) {
+    for (const page of this.iterateNeuronVectors(500, { includeStatuses: ['active'], onlyNotDeleted: true, projectId })) {
       for (const neuron of page) {
         if (neuron.vector.length !== vector.length) continue;
         const score = this.cosineSimilarity(vector, neuron.vector);

@@ -190,7 +190,7 @@ test('conditional dream tick ignores open episodes and processes each sealed epi
 
 test('auto scheduler selects normal for a batch, explicit deep is preserved, and failed jobs retry', async () => {
   const db = new Database(':memory:');
-  const store = new EpisodeStore(db);
+  const store = testEpisodeStore(db);
   let shouldFail = false;
   const curator = {
     run: async () => {
@@ -242,7 +242,7 @@ test('auto scheduler selects normal for a batch, explicit deep is preserved, and
 
 test('expired Dream leases stop processing at the attempt limit and become terminal', async () => {
   const db = new Database(':memory:');
-  const store = new EpisodeStore(db);
+  const store = testEpisodeStore(db);
   const scheduler = new DreamScheduler(store, { run: async () => ({ candidates: [] }) } as never);
   try {
     const episode = store.createEpisode({
@@ -453,3 +453,6 @@ test('episode import CLI is idempotent and dream CLI processes its batch-sealed 
     rmSync(dir, { recursive: true, force: true });
   }
 }, 15_000);
+function testEpisodeStore(db: Database, projectForEvent: (eventId: string) => string = () => 'brain'): EpisodeStore {
+  return new EpisodeStore(db, (eventId) => ({ eventId, projectId: projectForEvent(eventId) } as never));
+}

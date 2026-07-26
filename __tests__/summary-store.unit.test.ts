@@ -20,7 +20,7 @@ describe('SummaryStore', () => {
 
     expect(store.getById(summary.summaryId)?.text).toContain('Atlas');
     expect(store.listByProject('p1')).toHaveLength(1);
-    expect(store.listBySession('s1')).toHaveLength(1);
+    expect(store.listBySession('s1', 'p1')).toHaveLength(1);
     expect(store.findRelevant('Atlas auth', 'p1', 3)).toHaveLength(1);
     expect(store.markSuperseded(summary.summaryId, 'sum-next')?.status).toBe('superseded');
     expect(store.findRelevant('Atlas auth', 'p1', 3)).toHaveLength(0);

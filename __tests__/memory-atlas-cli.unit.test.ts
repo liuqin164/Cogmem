@@ -24,6 +24,7 @@ test('memory graph CLI commands use the shared JSON contract and source drilldow
   const kernel = createMemoryKernel({ dbPath });
   const event = kernel.eventStore.append({ eventId: 'evt-cli-hermes', streamId: 't', streamType: 'thread', eventType: 'MESSAGE', rawEventType: 'message', projectId: 'cogmem', role: 'user', occurredAt: Date.UTC(2025, 3, 1), payload: { text: '给 Hermes 配置 MCP' } });
   const entity = kernel.memoryBindingStore.upsertEntity({ projectId: 'cogmem', canonicalName: 'Hermes', entityType: 'project' });
+  kernel.memoryBindingStore.upsertTopic({ projectId: 'cogmem', topicPath: 'cogmem/hermes', topicType: 'project' });
   kernel.memoryBindingStore.insertBinding({ eventId: event.eventId, projectId: 'cogmem', role: 'user', entityId: entity.entityId, entityName: 'Hermes', entityType: 'project', topicPath: 'cogmem/hermes', bindingType: 'about', confidence: 1, source: 'deterministic', signal: 'Hermes', claimKey: 'mcp' });
   const second = kernel.eventStore.append({ eventId: 'evt-cli-hermes-2', streamId: 't2', streamType: 'thread', eventType: 'MESSAGE', rawEventType: 'message', projectId: 'cogmem', role: 'user', occurredAt: Date.UTC(2025, 4, 1), payload: { text: '更新 Hermes 配置' } });
   kernel.memoryBindingStore.insertBinding({ eventId: second.eventId, projectId: 'cogmem', role: 'user', entityId: entity.entityId, entityName: 'Hermes', entityType: 'project', topicPath: 'cogmem/hermes', bindingType: 'about', confidence: 1, source: 'deterministic', signal: 'Hermes', claimKey: 'mcp-update' });

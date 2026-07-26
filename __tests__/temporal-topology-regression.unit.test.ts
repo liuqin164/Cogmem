@@ -350,6 +350,30 @@ describe('project-local temporal topology regressions', () => {
     db.close();
   });
 
+  test('unresolved task identities stay outside every runtime topology path', () => {
+    const db = new Database(':memory:');
+    const topology = new TopologyStore(db);
+    const task = topology.upsertTaskBranch({
+      taskId: 'task-unresolved', projectId: 'a', taskKey: 'damaged',
+      title: 'damaged', status: 'derived', createdAt: 1,
+    });
+    db.exec(`CREATE TABLE task_identity_restoration_manifest(
+      task_id TEXT PRIMARY KEY,project_id TEXT NOT NULL,task_key TEXT NOT NULL,
+      recovery_status TEXT NOT NULL
+    )`);
+    db.prepare(`INSERT INTO task_identity_restoration_manifest VALUES(?,?,?,'unresolved')`)
+      .run(task.taskId, 'a', 'damaged');
+
+    expect(topology.listTaskBranches('a')).toEqual([]);
+    expect(() => topology.upsertTaskBranch({
+      taskId: task.taskId, projectId: 'a', taskKey: 'damaged',
+      title: 'damaged', status: 'derived', createdAt: 2,
+    })).toThrow('task_identity_unresolved');
+    expect(() => topology.attachToTask(task.taskId, { projectId: 'a', neuronId: 'n-a', createdAt: 2 }))
+      .toThrow('task_identity_unresolved');
+    topology.close();
+  });
+
   test('topology attach rejects every cross-project reference before writing', () => {
     const db = new Database(':memory:');
     db.exec(`
@@ -703,6 +727,8 @@ describe('project-local temporal topology regressions', () => {
 
   test('global cognitive seeds still honor temporal exclusion', () => {
     const db = new Database(':memory:');
+    db.exec(`CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,is_deleted INTEGER NOT NULL DEFAULT 0);
+      INSERT INTO neurons VALUES('n','',0)`);
     const store = new CognitiveGraphStore(db);
     const time = store.upsertNode({ nodeId: 'time', nodeType: 'time_bucket', nodeKey: 'time:day', title: 'day', createdAt: 1 });
     const neuron = store.upsertNode({ nodeId: 'neuron', nodeType: 'neuron', nodeKey: 'neuron:n', title: 'memory', sourceNeuronId: 'n', createdAt: 1 });

@@ -2,6 +2,7 @@
 // 共振核心 - 能量传导算法（含推理链强化 + 置信度乘数）
 // ============================================
 import { config } from '../utils/Config.js';
+import { projectScope } from '../topology/ProjectScope.js';
 export class ResonanceCore {
     static chainStore = null;
     static setChainStore(store) {
@@ -22,6 +23,8 @@ export class ResonanceCore {
             const neuron = getNeuron(neuronId);
             if (!neuron || neuron.metadata.status === 'suspect')
                 continue;
+            if (projectScope(neuron.metadata.projectId) !== projectScope(anchorNeuron.metadata.projectId))
+                continue;
             if (neuron.metadata.status === 'cold' || neuron.metadata.status === 'archived')
                 continue;
             // 置信度乘数
@@ -30,6 +33,9 @@ export class ResonanceCore {
             const existing = energyMap.get(neuronId) || 0;
             energyMap.set(neuronId, Math.max(existing, decayedEnergy));
             for (const synapse of neuron.synapses) {
+                const target = getNeuron(synapse.targetId);
+                if (!target || projectScope(target.metadata.projectId) !== projectScope(anchorNeuron.metadata.projectId))
+                    continue;
                 // 推理链强化：同一链内 Sequence 突触衰减系数提升至 0.85
                 const decayFactor = this.getDecayFactor(synapse, neuronId);
                 const nextEnergy = decayedEnergy * synapse.weight * decayFactor;

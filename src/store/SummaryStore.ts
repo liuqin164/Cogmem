@@ -209,13 +209,13 @@ export class SummaryStore {
     return (this.db.prepare(sql).all(...params) as SummaryRow[]).map((row) => this.mapRow(row));
   }
 
-  listBySession(sessionId: string, options?: { limit?: number }): SummaryRecord[] {
+  listBySession(sessionId: string, projectId: string, options?: { limit?: number }): SummaryRecord[] {
     const rows = this.db.prepare(`
       SELECT * FROM deep_write_summaries
-      WHERE session_id = ?
+      WHERE session_id = ? AND COALESCE(project_id,'') = ?
       ORDER BY created_at DESC, summary_id DESC
       LIMIT ?
-    `).all(sessionId, options?.limit ?? 20) as SummaryRow[];
+    `).all(sessionId, projectId, options?.limit ?? 20) as SummaryRow[];
     return rows.map((row) => this.mapRow(row));
   }
 

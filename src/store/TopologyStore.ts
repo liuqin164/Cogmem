@@ -444,6 +444,8 @@ export class TopologyStore {
     createdAt: number;
   }): TaskBranchRecord {
     const scope = projectScope(input.projectId);
+    if (this.isUnresolvedTask(input.taskId)
+      || this.isUnresolvedTaskIdentity(scope, input.taskKey)) throw new Error('task_identity_unresolved');
     const existing = this.db.prepare(`
       SELECT * FROM task_branches WHERE project_id = ? AND task_key = ?
     `).get(scope, input.taskKey) as any;
@@ -482,6 +484,7 @@ export class TopologyStore {
 
   attachToTask(taskId: string, ref: TopologyReference): void {
     this.db.transaction(() => {
+      if (this.isUnresolvedTask(taskId)) throw new Error('task_identity_unresolved');
       const row = this.db.prepare(`SELECT project_id, task_key, title FROM task_branches WHERE task_id = ?`)
         .get(taskId) as { project_id: string; task_key: string; title: string } | null;
       if (!row) throw new Error('topology_parent_not_found');
@@ -595,9 +598,10 @@ export class TopologyStore {
   }
 
   listTaskBranches(projectId?: string): TaskBranchRecord[] {
+    const guard = this.taskRuntimeGuard();
     const rows = projectId !== undefined
-      ? this.db.prepare(`SELECT * FROM task_branches WHERE COALESCE(project_id, '') = ? ORDER BY updated_at DESC`).all(projectScope(projectId))
-      : this.db.prepare(`SELECT * FROM task_branches ORDER BY updated_at DESC`).all();
+      ? this.db.prepare(`SELECT * FROM task_branches WHERE COALESCE(project_id, '') = ? ${guard} ORDER BY updated_at DESC`).all(projectScope(projectId))
+      : this.db.prepare(`SELECT * FROM task_branches WHERE 1=1 ${guard} ORDER BY updated_at DESC`).all();
     return (rows as any[]).map((row) => ({
       taskId: row.task_id,
       projectId: row.project_id == null ? undefined : String(row.project_id),
@@ -805,6 +809,7 @@ export class TopologyStore {
         SELECT task_id
         FROM task_branches
         WHERE (? IS NULL OR COALESCE(project_id, '') = ?)
+          ${this.taskRuntimeGuard()}
           AND (lower(title) LIKE ? OR lower(task_key) LIKE ?)
         ORDER BY updated_at DESC
         LIMIT ?
@@ -886,6 +891,7 @@ export class TopologyStore {
           JOIN neurons n ON n.id=tbe.neuron_id AND n.is_deleted=0
           WHERE tbe.task_id IN (${placeholders})
             AND (? IS NULL OR COALESCE(tb.project_id,'') = ?)
+            ${this.taskRuntimeGuard('tb')}
             AND COALESCE(n.project_id,'')=COALESCE(tb.project_id,'')
           ORDER BY tbe.created_at DESC
           LIMIT ?
@@ -973,6 +979,7 @@ export class TopologyStore {
       JOIN task_branches tb ON tb.task_id = tbe.task_id
       WHERE tbe.neuron_id IN (${placeholders})
         AND (? IS NULL OR COALESCE(tb.project_id, '') = ?)
+        ${this.taskRuntimeGuard('tb')}
       ORDER BY tbe.created_at DESC
       LIMIT ?
     `).all(...scopedNeuronIds, queryProject, queryProject, limit) as Array<{ task_id: string }>;
@@ -1229,6 +1236,29 @@ export class TopologyStore {
 
   private hasTable(table: string): boolean {
     return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table));
+  }
+
+  private taskRuntimeGuard(alias = 'task_branches'): string {
+    if (!this.hasTable('task_identity_restoration_manifest')
+      || !this.hasColumn('task_identity_restoration_manifest', 'recovery_status')) return '';
+    return `AND NOT EXISTS (
+      SELECT 1 FROM task_identity_restoration_manifest task_recovery
+      WHERE task_recovery.task_id=${alias}.task_id AND task_recovery.recovery_status='unresolved'
+    )`;
+  }
+
+  private isUnresolvedTask(taskId: string): boolean {
+    if (!this.hasTable('task_identity_restoration_manifest')
+      || !this.hasColumn('task_identity_restoration_manifest', 'recovery_status')) return false;
+    return Boolean(this.db.prepare(`SELECT 1 FROM task_identity_restoration_manifest
+      WHERE task_id=? AND recovery_status='unresolved'`).get(taskId));
+  }
+
+  private isUnresolvedTaskIdentity(projectId: string, taskKey: string): boolean {
+    if (!this.hasTable('task_identity_restoration_manifest')
+      || !this.hasColumn('task_identity_restoration_manifest', 'recovery_status')) return false;
+    return Boolean(this.db.prepare(`SELECT 1 FROM task_identity_restoration_manifest
+      WHERE project_id=? AND task_key=? AND recovery_status='unresolved'`).get(projectId, taskKey));
   }
 
   private installBranchScopeTriggers(): void {

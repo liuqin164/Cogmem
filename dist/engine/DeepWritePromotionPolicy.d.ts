@@ -45,6 +45,7 @@ export declare class DeepWritePromotionPolicy {
     private promotePreference;
     private promoteEntity;
     private keep;
+    private resolveProvenance;
     private mark;
 }
 //# sourceMappingURL=DeepWritePromotionPolicy.d.ts.map

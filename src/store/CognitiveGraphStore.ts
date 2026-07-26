@@ -75,6 +75,11 @@ export class CognitiveGraphStore {
     createdAt: number;
   }): CognitiveNodeRecord {
     const projectScope = input.projectId ?? '';
+    if (input.sourceNeuronId) {
+      const neuron = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0`)
+        .get(input.sourceNeuronId) as { scope: string } | null;
+      if (!neuron || neuron.scope !== projectScope) throw new Error('cognitive_node_project_scope_mismatch');
+    }
     const existing = this.db.prepare(`
       SELECT * FROM cognitive_nodes WHERE project_id = ? AND node_type = ? AND node_key = ?
     `).get(projectScope, input.nodeType, input.nodeKey) as any;

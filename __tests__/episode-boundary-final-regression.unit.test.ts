@@ -43,7 +43,7 @@ test('createMemoryKernel upgrades the runtime schema through the current migrati
   const { dir, kernel } = createKernel('cogmem-final-schema-');
   try {
     const db = kernel.factStore.getDatabase();
-    expect((db.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get() as { value: string }).value).toBe('57');
+    expect((db.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get() as { value: string }).value).toBe('58');
     expect((db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episode_events_episode_position_unique'`).get())).toBeTruthy();
     expect((db.prepare(`PRAGMA table_info(memory_events)`).all() as Array<{ name: string }>).some((row) => row.name === 'local_date_source')).toBe(true);
   } finally {
@@ -93,7 +93,7 @@ test('no-active closure is sealed and direct old EpisodeStore schema constructio
       PRIMARY KEY (episode_id, event_id)
     );
   `);
-  const store = new EpisodeStore(db);
+  const store = new EpisodeStore(db, (eventId) => ({ eventId, projectId: 'brain' } as never));
   expect(store.getEpisode('missing')).toBeUndefined();
   expect((db.prepare(`PRAGMA table_info(memory_episodes)`).all() as Array<{ name: string }>).some((row) => row.name === 'dream_status')).toBe(true);
   db.close();
@@ -141,7 +141,7 @@ test('timestamp 0 participates in live, audit, and split planner boundary replay
 test('active scope lookup is exact for source and thread, with open plus soft sidecar allowed', () => {
   const db = new Database(':memory:');
   try {
-    const store = new EpisodeStore(db);
+    const store = new EpisodeStore(db, (eventId) => ({ eventId, projectId: 'brain' } as never));
     const a = store.createEpisode({
       projectId: 'brain', sessionId: 's1', sourceAgent: 'openclaw', conversationThreadId: 'thread-a',
       episodeType: 'discussion', importance: 0.4, eventId: 'a-start', occurredAt: 1,
@@ -172,7 +172,7 @@ test('active scope lookup is exact for source and thread, with open plus soft si
 test('appendEvent is idempotent only for the same target episode', () => {
   const db = new Database(':memory:');
   try {
-    const store = new EpisodeStore(db);
+    const store = new EpisodeStore(db, (eventId) => ({ eventId, projectId: 'brain' } as never));
     const one = store.createEpisode({ projectId: 'brain', sessionId: 'one', episodeType: 'discussion', importance: 0.4, eventId: 'one-start', occurredAt: 1 });
     const two = store.createEpisode({ projectId: 'brain', sessionId: 'two', episodeType: 'discussion', importance: 0.4, eventId: 'two-start', occurredAt: 1 });
     const first = store.appendEvent({ episodeId: one.episodeId, eventId: 'evt-shared', relation: 'continues_previous', confidence: 1, occurredAt: 0 });
@@ -326,7 +326,7 @@ test('out-of-order policy retains max-event enforcement but suppresses temporal 
 test('Dream enqueue cannot relabel a processed job as queued and Store enables foreign keys', () => {
   const db = new Database(':memory:');
   try {
-    const store = new EpisodeStore(db);
+    const store = new EpisodeStore(db, (eventId) => ({ eventId, projectId: 'brain' } as never));
     expect((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number }).foreign_keys).toBe(1);
     const episode = store.createEpisode({ projectId: 'brain', sessionId: 'dream', episodeType: 'discussion', importance: 0.4, eventId: 'dream-1', occurredAt: 1 });
     store.appendEvent({ episodeId: episode.episodeId, eventId: 'dream-1', relation: 'continues_previous', confidence: 1, occurredAt: 1 });

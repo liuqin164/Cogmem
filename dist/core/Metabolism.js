@@ -55,7 +55,7 @@ export class Metabolism {
             const neuron = this.memoryGraph.getNeuron(id);
             if (!neuron)
                 continue;
-            const similar = this.memoryGraph.findSimilarNeurons(neuron.coordinates.V, 5);
+            const similar = this.memoryGraph.findSimilarNeurons(neuron.coordinates.V, 5, neuron.metadata.projectId ?? '');
             for (const { id, score } of similar) {
                 if (score > 0.8 && !this.memoryGraph.hasSynapse(neuron.id, id)) {
                     this.memoryGraph.addSynapse(neuron.id, { targetId: id, type: 'Similar', weight: 0.1 });

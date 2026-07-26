@@ -131,13 +131,13 @@ export class SummaryStore {
         params.push(options?.limit ?? 20);
         return this.db.prepare(sql).all(...params).map((row) => this.mapRow(row));
     }
-    listBySession(sessionId, options) {
+    listBySession(sessionId, projectId, options) {
         const rows = this.db.prepare(`
       SELECT * FROM deep_write_summaries
-      WHERE session_id = ?
+      WHERE session_id = ? AND COALESCE(project_id,'') = ?
       ORDER BY created_at DESC, summary_id DESC
       LIMIT ?
-    `).all(sessionId, options?.limit ?? 20);
+    `).all(sessionId, projectId, options?.limit ?? 20);
         return rows.map((row) => this.mapRow(row));
     }
     findRelevant(query, projectId, limit = 3) {

@@ -67,6 +67,11 @@ export class MemoryBindingStore {
     }
     insertBinding(input) {
         const now = input.createdAt ?? Date.now();
+        const scope = input.projectId ?? '';
+        this.assertEventScopes([input.eventId, ...(input.relatedEventIds || [])], scope);
+        if (input.entityId)
+            this.assertNodeScope('entity', input.entityId, scope);
+        this.assertNodeScope('topic', input.topicPath, scope);
         const bindingId = bindingIdFor(input);
         this.db.prepare(`
       INSERT INTO memory_bindings (
@@ -104,6 +109,7 @@ export class MemoryBindingStore {
     }
     upsertCluster(input) {
         const now = input.now ?? Date.now();
+        this.assertEventScopes([input.eventId], input.projectId ?? '');
         const clusterId = clusterIdFor(input.projectId, input.topicPath, input.clusterType, input.claimKey);
         const existing = this.getCluster(clusterId);
         const evidenceEventIds = existing
@@ -191,6 +197,10 @@ export class MemoryBindingStore {
     }
     upsertEdge(input) {
         const now = input.createdAt ?? Date.now();
+        const scope = input.projectId ?? '';
+        this.assertEventScopes(input.evidenceEventIds, scope);
+        this.assertNodeScope(input.sourceType, input.sourceId, scope);
+        this.assertNodeScope(input.targetType, input.targetId, scope);
         const edgeId = edgeIdFor(input);
         const evidenceEventIds = Array.from(new Set(input.evidenceEventIds.filter(Boolean)));
         this.db.prepare(`
@@ -338,6 +348,27 @@ export class MemoryBindingStore {
         this.db.prepare(`DELETE FROM memory_topics WHERE COALESCE(project_id, '') = ?`).run(projectId);
         this.db.prepare(`DELETE FROM memory_entities WHERE COALESCE(project_id, '') = ?`).run(projectId);
         return Number(bindings.changes ?? 0);
+    }
+    assertEventScopes(eventIds, projectId) {
+        for (const eventId of new Set(eventIds.filter(Boolean))) {
+            const row = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM memory_events WHERE event_id=?`)
+                .get(eventId);
+            if (!row || row.scope !== projectId)
+                throw new Error('memory_binding_event_project_scope_mismatch');
+        }
+    }
+    assertNodeScope(type, id, projectId) {
+        const query = type === 'event'
+            ? [`memory_events`, `event_id`]
+            : type === 'entity'
+                ? [`memory_entities`, `entity_id`]
+                : type === 'topic'
+                    ? [`memory_topics`, `topic_path`]
+                    : [`memory_clusters`, `cluster_id`];
+        const row = this.db.prepare(`SELECT 1 FROM ${query[0]} WHERE ${query[1]}=? AND COALESCE(project_id,'')=?`)
+            .get(id, projectId);
+        if (!row)
+            throw new Error('memory_binding_endpoint_project_scope_mismatch');
     }
     close() {
         if (this.ownsDb)

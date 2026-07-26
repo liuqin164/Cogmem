@@ -73,7 +73,7 @@ export declare class MemoryGraph {
         synapseCount: number;
         anchorCount: number;
     };
-    findSimilarNeurons(vector: number[], topK: number): Array<{
+    findSimilarNeurons(vector: number[], topK: number, projectId?: string): Array<{
         id: string;
         score: number;
     }>;

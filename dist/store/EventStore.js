@@ -182,6 +182,32 @@ export class EventStore {
         this.rebuildRawEventFtsIfNeeded();
     }
     append(input, retry = 0) {
+        try {
+            return this.db.transaction(() => this.appendAtomic(input))();
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const streamConflict = /UNIQUE constraint failed: memory_events\.(?:project_scope, memory_events\.)?stream_id(?:, memory_events\.event_version)?/.test(message);
+            const anchorConflict = message === 'import_anchor_already_exists';
+            if ((streamConflict || message.includes('database is locked')) && input.eventVersion === undefined && retry < 5) {
+                return this.append(input, retry + 1);
+            }
+            if (!anchorConflict)
+                throw error;
+            const metadata = input.payload?.metadata;
+            const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;
+            const existing = anchor && input.projectId !== undefined && input.sourceId
+                ? this.findImportedEventAnchor(input.projectId, input.sourceId, anchor)
+                : null;
+            if (!existing)
+                throw error;
+            const contentHash = input.contentHash ?? createHash('sha256').update(JSON.stringify(input.payload)).digest('hex');
+            if (existing.contentHash !== contentHash)
+                throw new Error(`import_anchor_content_conflict:${anchor}`);
+            return existing;
+        }
+    }
+    appendAtomic(input) {
         const eventVersion = input.eventVersion ?? this.getNextEventVersion(input.streamId, input.projectId ?? '');
         const occurredAt = input.occurredAt ?? Date.now();
         if (!Number.isFinite(occurredAt) || Math.abs(occurredAt) > 8_640_000_000_000_000)
@@ -276,42 +302,16 @@ export class EventStore {
         occurred_at, payload_json, payload_hash, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(event.eventId, event.globalSeq ?? null, event.streamId, event.streamType, event.eventType, event.rawEventType || null, event.eventVersion, event.projectId ?? null, event.projectId ?? '', event.workspaceId || null, event.actorId || null, event.causationId || null, event.correlationId || null, event.sourceNeuronId || null, event.sourceId || null, event.contentHash || null, event.threadId || null, event.sessionId || null, event.localDate || null, event.localDateSource || 'legacy_unknown', event.threadSeq ?? null, event.turnId || null, event.turnSeq ?? null, event.eventOrdinal ?? null, event.role || null, event.parentEventId || null, event.prevEventId || null, event.nextEventId || null, event.causalityType || null, event.sourceOffset ?? null, event.lineStart ?? null, event.lineEnd ?? null, event.charStart ?? null, event.charEnd ?? null, event.orderingConfidence || null, event.occurredAt, storedPayloadJson, event.payloadHash, event.createdAt);
-        try {
-            this.db.transaction(() => {
-                this.assertLinkedEventScopes(event.projectId, [event.parentEventId, event.prevEventId, event.nextEventId]);
-                insert();
-                this.advanceSequence(sequenceKey('event', event.projectId ?? '', event.streamId), event.eventVersion);
-                if (event.threadId && event.threadSeq !== undefined)
-                    this.advanceSequence(sequenceKey('thread', event.projectId ?? '', event.threadId), event.threadSeq);
-                if (event.threadId && event.turnSeq !== undefined)
-                    this.advanceSequence(sequenceKey('turn', event.projectId ?? '', event.threadId), event.turnSeq);
-                this.upsertImportAnchor(event);
-                this.upsertRawEventFts(event);
-            })();
-            return event;
-        }
-        catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            const streamConflict = /UNIQUE constraint failed: memory_events\.(?:project_scope, memory_events\.)?stream_id(?:, memory_events\.event_version)?/.test(message);
-            const anchorConflict = message === 'import_anchor_already_exists';
-            const autoEventVersion = input.eventVersion === undefined;
-            const autoThreadSeq = input.threadSeq === undefined;
-            if ((streamConflict || message.includes('database is locked')) && autoEventVersion && retry < 5) {
-                return this.append({ ...input, eventVersion: undefined, threadSeq: autoThreadSeq ? undefined : input.threadSeq }, retry + 1);
-            }
-            if (!anchorConflict)
-                throw error;
-            const metadata = event.payload?.metadata;
-            const anchor = typeof metadata?.importAnchor === 'string' ? metadata.importAnchor : undefined;
-            const existing = anchor && event.projectId !== undefined && event.sourceId
-                ? this.findImportedEventAnchor(event.projectId, event.sourceId, anchor)
-                : null;
-            if (!existing)
-                throw error;
-            if (existing.contentHash !== event.contentHash)
-                throw new Error(`import_anchor_content_conflict:${anchor}`);
-            return existing;
-        }
+        this.assertLinkedEventScopes(event.projectId, [event.parentEventId, event.prevEventId, event.nextEventId]);
+        insert();
+        this.advanceSequence(sequenceKey('event', event.projectId ?? '', event.streamId), event.eventVersion);
+        if (event.threadId && event.threadSeq !== undefined)
+            this.advanceSequence(sequenceKey('thread', event.projectId ?? '', event.threadId), event.threadSeq);
+        if (event.threadId && event.turnSeq !== undefined)
+            this.advanceSequence(sequenceKey('turn', event.projectId ?? '', event.threadId), event.turnSeq);
+        this.upsertImportAnchor(event);
+        this.upsertRawEventFts(event);
+        return event;
     }
     assertExplicitLocalDate(localDate, timeZone) {
         const key = `${timeZone}\0${localDate}`;

@@ -20,6 +20,7 @@ import type {
 } from './EpisodeTypes.js';
 import { type EpisodeBoundaryGuardResult } from './EpisodeBoundaryPolicy.js';
 import type { TurnRelationDecision } from './TurnRelationClassifier.js';
+import { projectScope } from '../topology/ProjectScope.js';
 
 interface CreateEpisodeInput {
   projectId: string;
@@ -252,13 +253,24 @@ export class EpisodeStore {
     importanceSignals?: string[];
     importanceReason?: string;
   }): EpisodeEventLink {
+    const episode = this.getEpisode(input.episodeId);
+    if (!episode || episode.status !== 'open') throw new Error(`episode_not_open:${input.episodeId}`);
+    const resolvedEvent = this.resolveEvent?.(input.eventId);
+    const storedEvent = resolvedEvent
+      ? null
+      : this.db.prepare(`SELECT event_id,project_id FROM memory_events WHERE event_id=?`).get(input.eventId) as {
+        event_id: string;
+        project_id: string | null;
+      } | null;
+    const eventProjectId = resolvedEvent?.projectId ?? storedEvent?.project_id ?? undefined;
+    if ((!resolvedEvent && !storedEvent) || projectScope(eventProjectId) !== projectScope(episode.projectId)) {
+      throw new Error(`episode_event_project_scope_mismatch:${input.eventId}`);
+    }
     const existing = this.getEventLink(input.eventId);
     if (existing) {
       if (existing.episodeId === input.episodeId) return existing;
       throw new Error(`episode_event_link_conflict:${input.eventId}`);
     }
-    const episode = this.getEpisode(input.episodeId);
-    if (!episode || episode.status !== 'open') throw new Error(`episode_not_open:${input.episodeId}`);
     let created: EpisodeEventLink | undefined;
     this.db.transaction(() => {
       const locked = this.db.prepare(`SELECT status FROM memory_episodes WHERE episode_id = ?`).get(input.episodeId) as { status?: string } | null;

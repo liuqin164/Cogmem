@@ -3,6 +3,7 @@
 // ============================================
 import { SynapseUtils } from './Synapse.js';
 import { logger } from '../utils/Logger.js';
+import { projectScope } from '../topology/ProjectScope.js';
 export class Reflection {
     memoryGraph;
     activationLog = new Map();
@@ -101,6 +102,8 @@ export class Reflection {
                     continue;
                 const old = this.memoryGraph.getNeuron(id);
                 if (!old || old.id === newNeuron.id)
+                    continue;
+                if (projectScope(old.metadata.projectId) !== projectScope(newNeuron.metadata.projectId))
                     continue;
                 if (old.metadata.createdAt < windowStart)
                     continue;

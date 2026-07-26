@@ -54,7 +54,7 @@ const MIGRATION_TABLES = [
     'memory_episode_events', 'memory_episodes', 'memory_frame_nodes', 'memory_frame_relations', 'memory_frame_reviews', 'memory_frames', 'memory_governance_audit', 'memory_governance_operations',
     'memory_governance_plans', 'memory_timeline_entries', 'memory_topics', 'migration_repair_receipts', 'neuron_embeddings', 'pipeline_checkpoints', 'pipeline_nonfatal_events', 'pipeline_runs', 'pipeline_step_timings',
     'prospective_memories', 'prospective_memory_transitions', 're_embedding_progress', 'scheduled_job_runs', 'scheduled_jobs', 'notification_records', 'notification_rules', 'workspace_settings', 'workspaces', 'meta_observations',
-    'task_identity_restoration_manifest', 'task_identity_recovery_quarantine', 'project_isolation_compensation_audit', 'topic_aliases', 'topic_nodes', 'topic_operations', 'topic_relations', 'topology_identity_quarantine', 'topology_projection_state', 'topology_source_revisions',
+    'task_identity_restoration_manifest', 'task_identity_recovery_quarantine', 'pending_entity_resolution_quarantine', 'project_isolation_compensation_audit', 'topic_aliases', 'topic_nodes', 'topic_operations', 'topic_relations', 'topology_identity_quarantine', 'topology_projection_state', 'topology_source_revisions',
     'topology_time_rebuild_active_neurons', 'topology_time_rebuild_adjacency', 'topology_time_rebuild_buckets', 'topology_time_rebuild_cognitive_edges', 'topology_time_rebuild_cognitive_nodes',
     'topology_time_rebuild_entries', 'topology_time_rebuild_jobs', 'user_session_runtime', 'vector_index', 'vector_write_outbox', 'web_session_tokens', 'working_memory_deltas', 'memory_activation',
     'file_assets', 'file_blocks', 'file_chunks', 'file_chunk_edges', 'user_insights',
@@ -80,7 +80,7 @@ const MIGRATION_PROVENANCE_OWNED = [
     'belief_graph_evidence', 'belief_graph_versions', 'chat_turns', 'deep_write_candidates', 'entity_resolution_log',
     'episode_dream_attempts', 'memory_episode_events', 'memory_frame_nodes', 'memory_frame_relations',
     'prospective_memory_transitions', 'scheduled_job_runs', 'scheduled_jobs', 'notification_records', 'notification_rules',
-    'workspace_settings', 'workspaces', 'meta_observations', 'topology_identity_quarantine', 'vector_index', 'vector_write_outbox',
+    'workspace_settings', 'workspaces', 'meta_observations', 'pending_entity_resolution_quarantine', 'topology_identity_quarantine', 'vector_index', 'vector_write_outbox',
     'file_blocks', 'file_chunks', 'file_chunk_edges',
 ];
 const MIGRATION_OPERATIONAL_NON_PERSONAL = [
@@ -202,9 +202,23 @@ export function deleteRegisteredProjectContent(context) {
       JOIN trace_events trace ON trace.id=json_extract(evidence.value,'$.traceEventId')
       WHERE COALESCE(trace.project_id,'')=?
     )`);
-    if (neuronIds.length > 0 && persistentTables.has('ingestion_processed_records')) {
+    if (persistentTables.has('ingestion_processed_records')) {
         const placeholders = neuronIds.map(() => '?').join(', ');
-        audit.ingestion_processed_records = runDelete(`DELETE FROM ingestion_processed_records WHERE neuron_id IN (${placeholders})`, neuronIds);
+        audit.ingestion_processed_records = runDelete(`DELETE FROM ingestion_processed_records
+      WHERE ${context.hasColumn('ingestion_processed_records', 'project_scope') ? `project_scope=? OR` : ''}
+        ${context.hasColumn('ingestion_processed_records', 'project_id') ? `COALESCE(project_id,'')=? OR` : ''}
+        ${neuronIds.length > 0 ? `neuron_id IN (${placeholders})` : '0'}`, [
+            ...(context.hasColumn('ingestion_processed_records', 'project_scope') ? [scope] : []),
+            ...(context.hasColumn('ingestion_processed_records', 'project_id') ? [scope] : []),
+            ...neuronIds,
+        ]);
+    }
+    if (persistentTables.has('pending_entity_resolution_quarantine')) {
+        const placeholders = neuronIds.map(() => '?').join(', ');
+        audit.pending_entity_resolution_quarantine = runDelete(`
+      DELETE FROM pending_entity_resolution_quarantine
+      WHERE (json_valid(record_json) AND COALESCE(json_extract(record_json,'$.project_scope'),'')=?)
+        ${neuronIds.length > 0 ? `OR (json_valid(record_json) AND json_extract(record_json,'$.context_neuron_id') IN (${placeholders}))` : ''}`, [scope, ...neuronIds]);
     }
     remove('deep_write_candidate_reviews', `DELETE FROM deep_write_candidate_reviews
     WHERE COALESCE(project_id, '') = ? OR candidate_id IN (

@@ -7,6 +7,7 @@ test('MCP exposes pure read-only Atlas queries and an explicit activation touch'
   try {
     const event = kernel.eventStore.append({ eventId: 'evt-mcp-atlas', streamId: 't', streamType: 'thread', eventType: 'MESSAGE', rawEventType: 'message', projectId: 'cogmem', role: 'user', payload: { text: '给 Hermes 配置 MCP' } });
     const entity = kernel.memoryBindingStore.upsertEntity({ projectId: 'cogmem', canonicalName: 'Hermes', entityType: 'project' });
+    kernel.memoryBindingStore.upsertTopic({ projectId: 'cogmem', topicPath: 'cogmem/hermes', topicType: 'project' });
     kernel.memoryBindingStore.insertBinding({ eventId: event.eventId, projectId: 'cogmem', role: 'user', entityId: entity.entityId, entityName: 'Hermes', entityType: 'project', topicPath: 'cogmem/hermes', bindingType: 'about', confidence: 1, source: 'deterministic', signal: 'Hermes', claimKey: 'mcp' });
     kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });
     const projectionBefore = kernel.memoryAtlasStore.getProjectionState('cogmem');

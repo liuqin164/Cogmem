@@ -9,7 +9,6 @@ export const migration_0057: Migration = {
     classifyTaskRecovery(db);
     auditEntityIsolation(db);
     rebuildAliasConflicts(db);
-    scrubMemoryEntityPayloads(db);
     migrateIngestionIdentity(db);
     migrateEventCounters(db);
     assertProjectIsolationCompensated(db);
@@ -86,24 +85,6 @@ function rebuildAliasConflicts(db: Database): void {
     stableId('alias-conflict', `${row.project_id}\0${row.normalized_alias}\0${row.type}`),
     row.project_id, row.normalized_alias, row.type, JSON.stringify(row.entity_ids.split(',').sort()), row.created_at, row.updated_at,
   );
-}
-
-function scrubMemoryEntityPayloads(db: Database): void {
-  if (!tableExists(db, 'memory_entities')) return;
-  ensureAuditTable(db);
-  const rows = db.prepare(`SELECT entity_id,COALESCE(project_id,'') AS project_id FROM memory_entities`).all() as Array<{ entity_id: string; project_id: string }>;
-  let proven = 0;
-  const update = db.prepare(`UPDATE memory_entities SET canonical_name=?,aliases_json=?,stable_path=NULL WHERE entity_id=?`);
-  for (const row of rows) {
-    const binding = tableExists(db, 'memory_bindings')
-      ? db.prepare(`SELECT entity_name FROM memory_bindings WHERE entity_id=? AND COALESCE(project_id,'')=? AND entity_name IS NOT NULL AND entity_name<>'' ORDER BY created_at DESC LIMIT 1`)
-          .get(row.entity_id, row.project_id) as { entity_name?: string } | null
-      : null;
-    const name = binding?.entity_name || `entity-${createHash('sha256').update(`${row.project_id}\0${row.entity_id}`).digest('hex').slice(0,12)}`;
-    if (binding?.entity_name) proven += 1;
-    update.run(name, binding?.entity_name ? JSON.stringify([name]) : '[]', row.entity_id);
-  }
-  recordAudit(db, 'memory_entity_payloads', rows.length, proven, 0, rows.length - proven);
 }
 
 function migrateIngestionIdentity(db: Database): void {

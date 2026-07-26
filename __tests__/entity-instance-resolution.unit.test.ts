@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { describe, expect, it } from 'bun:test';
+import Database from 'bun:sqlite';
 import {
   EntityInstanceDecisionSignal,
   PendingEntityFallbackStrategy,
@@ -80,7 +81,10 @@ describe('Entity instance resolution unit', () => {
   }
 
   it('routes ambiguous mentions into pending with an explicit STAY_PENDING fallback', () => {
-    const store = new EntityStore(':memory:');
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE neurons (id TEXT PRIMARY KEY, project_id TEXT, is_deleted INTEGER NOT NULL DEFAULT 0)`);
+    db.prepare(`INSERT INTO neurons(id,project_id,is_deleted) VALUES(?,?,0)`).run('n-1', '');
+    const store = new EntityStore(db);
     const decision = decideEntityInstanceResolution(entityReferenceSamplesZh.ambiguousReference);
     const pending = store.registerPendingResolution({
       referenceText: entityReferenceSamplesZh.ambiguousReference,
@@ -96,6 +100,7 @@ describe('Entity instance resolution unit', () => {
     expect(pending.referenceText).toBe(entityReferenceSamplesZh.ambiguousReference);
 
     store.close();
+    db.close();
   });
 
   for (const testCase of [

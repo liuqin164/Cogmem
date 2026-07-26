@@ -38,13 +38,21 @@ describe('memory binding v1.5', () => {
   test('decays activation without weakening confidence or stability', () => {
     const db = new Database(':memory:');
     const store = new MemoryBindingStore(db);
+    db.exec(`CREATE TABLE memory_events(event_id TEXT PRIMARY KEY,project_id TEXT)`);
+    db.prepare(`INSERT INTO memory_events VALUES(?,?)`).run('evt-1', 'brain');
+    store.upsertCluster({
+      projectId: 'brain', topicPath: 'PROJECT/Cogmem/test', clusterType: 'observation',
+      title: 'test', summary: 'test', claimKey: 'test', status: 'confirmed',
+      confidence: 0.9, eventId: 'evt-1',
+    });
+    const clusterId = store.listClusters({ projectId: 'brain' })[0]!.clusterId;
     const edge = store.upsertEdge({
       projectId: 'brain',
       sourceType: 'event',
       sourceId: 'evt-1',
       relationType: 'SUPPORTS',
       targetType: 'cluster',
-      targetId: 'cluster-1',
+      targetId: clusterId,
       confidence: 0.9,
       stability: 0.8,
       activation: 1,
@@ -64,6 +72,12 @@ describe('memory binding v1.5', () => {
   test('exposes bounded read-only graph traversal with provenance', () => {
     const db = new Database(':memory:');
     const store = new MemoryBindingStore(db);
+    db.exec(`CREATE TABLE memory_events(event_id TEXT PRIMARY KEY,project_id TEXT)`);
+    db.prepare(`INSERT INTO memory_events VALUES(?,?)`).run('evt-1', 'brain');
+    store.upsertTopic({
+      topicPath: 'PROJECT/Cogmem/memory-write-pipeline', projectId: 'brain',
+      topicType: 'project',
+    });
     store.upsertEdge({
       projectId: 'brain',
       sourceType: 'event',

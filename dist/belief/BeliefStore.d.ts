@@ -11,7 +11,7 @@ export declare class BeliefStore {
     private closed;
     constructor(dbPath?: string | Database, eventStore?: EventStore | undefined);
     private initializeSchema;
-    findByCanonicalKey(canonicalKey: string): BeliefRecord[];
+    findByCanonicalKey(canonicalKey: string, projectId?: string): BeliefRecord[];
     countActive(projectId?: string): number;
     listByTimeRange(startTime: number, endTime: number, options?: {
         projectId?: string;

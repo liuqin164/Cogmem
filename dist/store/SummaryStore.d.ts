@@ -45,7 +45,7 @@ export declare class SummaryStore {
         scope?: SummaryScope;
         limit?: number;
     }): SummaryRecord[];
-    listBySession(sessionId: string, options?: {
+    listBySession(sessionId: string, projectId: string, options?: {
         limit?: number;
     }): SummaryRecord[];
     findRelevant(query: string, projectId?: string, limit?: number): SummaryRecord[];

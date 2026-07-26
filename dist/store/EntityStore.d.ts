@@ -159,7 +159,7 @@ export declare class EntityStore {
     registerPendingResolution(input: {
         referenceText: string;
         entityType?: string;
-        contextNeuronId?: string;
+        contextNeuronId: string;
         createdAt?: number;
     }): PendingEntityResolutionRecord;
     resolvePendingReference(pendingId: string, entityId: string, projectId: string, resolvedAt?: number): PendingEntityResolutionRecord | null;

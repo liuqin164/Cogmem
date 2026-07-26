@@ -42,6 +42,34 @@ describe('Governance and security v1.14', () => {
     kernel.close();
   });
 
+  test('belief revisions and evidence cannot cross project scope', () => {
+    const kernel = createMemoryKernel();
+    const eventA = kernel.eventStore.append({
+      eventId: 'belief-a-event', streamId: 'belief-a', streamType: 'thread',
+      eventType: 'MESSAGE', projectId: 'a', payload: { text: 'A' },
+    });
+    const eventB = kernel.eventStore.append({
+      eventId: 'belief-b-event', streamId: 'belief-b', streamType: 'thread',
+      eventType: 'MESSAGE', projectId: 'b', payload: { text: 'B' },
+    });
+    const make = (projectId: string, sourceEventId: string, value: string) => kernel.beliefStore.upsert({
+      projectId, scope: 'project' as const, subject: 'shared', predicate: 'state',
+      objectValue: { raw: value, normalized: value, type: 'string' as const },
+      confidence: 0.9, sourceEventId, sourceType: 'user_input' as const,
+      validityKind: 'open' as const, validFrom: 1,
+    }).belief!;
+    const beliefA = make('a', eventA.eventId, 'A');
+    const beliefB = make('b', eventB.eventId, 'B');
+
+    expect(kernel.beliefStore.findByCanonicalKey(beliefA.canonicalKey, 'a').map((belief) => belief.id)).toEqual([beliefA.id]);
+    expect(kernel.beliefStore.findByCanonicalKey(beliefA.canonicalKey, 'b').map((belief) => belief.id)).toEqual([beliefB.id]);
+    expect(kernel.beliefStore.findByCanonicalKey(beliefA.canonicalKey, 'a')[0]?.status).toBe('active');
+    expect(() => kernel.beliefStore.attachEvidence([{
+      beliefId: beliefA.id, eventId: eventB.eventId, evidenceType: 'source_event', weight: 1, createdAt: 2,
+    }])).toThrow('belief_evidence_project_scope_mismatch');
+    kernel.close();
+  });
+
   test('every current persistent table has an explicit privacy classification', () => {
     const kernel = createMemoryKernel();
     const tables = (kernel.factStore.getDatabase().prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name);
@@ -224,6 +252,10 @@ describe('Governance and security v1.14', () => {
     const db = kernel.factStore.getDatabase();
     db.prepare(`INSERT INTO deep_write_summaries(summary_id,project_id,scope,text,confidence,status,source_neuron_ids_json,created_at,updated_at) VALUES('named-secret','forget-me','turn_window','named private summary',1,'provisional','[]',1,1),('named-keep','keep-me','turn_window','retained summary',1,'provisional','[]',1,1)`).run();
     db.prepare(`INSERT INTO pipeline_nonfatal_events(event_id,kind,project_id,message,occurred_at) VALUES('named-pipeline','test','forget-me','named private pipeline',1)`).run();
+    db.prepare(`INSERT INTO ingestion_processed_records(
+      record_hash,source_id,source_path,source_type,content_hash,content_window_start,
+      content_window_end,processed_at,neuron_id,project_scope
+    ) VALUES('dangling-forget','source','/private','conversation_markdown','secret',0,1,1,NULL,'forget-me')`).run();
 
     const result = await kernel.forgetUser('forget-me', 'user_requested');
 
@@ -249,6 +281,7 @@ describe('Governance and security v1.14', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM time_buckets WHERE project_id = ?`).get('forget-me')).toEqual({ count: 0 });
     expect(db.prepare(`SELECT summary_id FROM deep_write_summaries`).all()).toEqual([{ summary_id: 'named-keep' }]);
     expect(db.prepare(`SELECT COUNT(*) AS count FROM pipeline_nonfatal_events WHERE project_id='forget-me'`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM ingestion_processed_records WHERE project_scope='forget-me'`).get()).toEqual({ count: 0 });
     expect(kernel.entityStore.findByEntityId(forgottenEntity.entityId)).toBeNull();
     expect(kernel.entityStore.findByEntityId(legacyMentionOnlyEntity.entityId)).toBeNull();
     expect(kernel.entityStore.findByEntityId(keptEntity.entityId)).not.toBeNull();

@@ -70,6 +70,8 @@ export declare class MemoryBindingStore {
     listBindings(options?: MemoryBindingListOptions): MemoryBindingRecord[];
     getStats(projectId?: string): MemoryBindingStats;
     deleteByProject(projectId: string): number;
+    private assertEventScopes;
+    private assertNodeScope;
     close(): void;
     private initializeSchema;
     private ensureCompatibilityColumns;

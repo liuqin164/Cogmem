@@ -203,6 +203,7 @@ export class EntityStore {
         reference_text TEXT NOT NULL,
         entity_type TEXT,
         context_neuron_id TEXT,
+        project_scope TEXT NOT NULL DEFAULT '',
         resolved_entity_id TEXT,
         status TEXT NOT NULL,
         created_at INTEGER NOT NULL,
@@ -243,6 +244,10 @@ export class EntityStore {
       CREATE INDEX IF NOT EXISTS idx_entity_alias_conflicts_lookup
         ON entity_alias_conflicts(normalized_alias, entity_type, status);
     `);
+    const pendingColumns = new Set((this.db.prepare(`PRAGMA table_info(pending_entity_resolution)`).all() as Array<{ name: string }>).map((row) => row.name));
+    if (!pendingColumns.has('project_scope')) this.db.exec(`ALTER TABLE pending_entity_resolution ADD COLUMN project_scope TEXT NOT NULL DEFAULT ''`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_pending_entity_resolution_scope
+      ON pending_entity_resolution(project_scope,status,updated_at DESC)`);
   }
 
   upsertEntity(input: {
@@ -838,10 +843,14 @@ export class EntityStore {
     sourceNeuronId?: string;
     createdAt?: number;
   }): EntityRelationRecord {
-    if (!this.isExclusiveToProject(input.sourceEntityId, input.projectId)
-      || !this.isExclusiveToProject(input.targetEntityId, input.projectId)) throw new Error('entity_relation_project_scope_mismatch');
-    const createdAt = input.createdAt ?? Date.now();
-    const existing = this.db.prepare(`
+    return this.db.transaction(() => {
+      if (!this.isExclusiveToProject(input.sourceEntityId, input.projectId)
+        || !this.isExclusiveToProject(input.targetEntityId, input.projectId)) throw new Error('entity_relation_project_scope_mismatch');
+      if (input.sourceNeuronId && this.requireLiveNeuronScope(input.sourceNeuronId) !== input.projectId) {
+        throw new Error('entity_relation_project_scope_mismatch');
+      }
+      const createdAt = input.createdAt ?? Date.now();
+      const existing = this.db.prepare(`
       SELECT relation_id, created_at
       FROM entity_relations
       WHERE project_id=? AND source_entity_id = ? AND target_entity_id = ? AND relation_type = ?
@@ -862,23 +871,25 @@ export class EntityStore {
       existing?.created_at || createdAt
     );
 
-    return {
-      relationId,
-      sourceEntityId: input.sourceEntityId,
-      targetEntityId: input.targetEntityId,
-      relationType: input.relationType,
-      sourceNeuronId: input.sourceNeuronId,
-      createdAt: existing?.created_at || createdAt
-    };
+      return {
+        relationId,
+        sourceEntityId: input.sourceEntityId,
+        targetEntityId: input.targetEntityId,
+        relationType: input.relationType,
+        sourceNeuronId: input.sourceNeuronId,
+        createdAt: existing?.created_at || createdAt
+      };
+    })();
   }
 
   registerPendingResolution(input: {
     referenceText: string;
     entityType?: string;
-    contextNeuronId?: string;
+    contextNeuronId: string;
     createdAt?: number;
   }): PendingEntityResolutionRecord {
     const now = input.createdAt ?? Date.now();
+    const projectScope = this.requireLiveNeuronScope(input.contextNeuronId);
     const record: PendingEntityResolutionRecord = {
       pendingId: `eper-${randomUUID()}`,
       referenceText: input.referenceText,
@@ -891,13 +902,14 @@ export class EntityStore {
 
     this.db.prepare(`
       INSERT INTO pending_entity_resolution (
-        pending_id, reference_text, entity_type, context_neuron_id, resolved_entity_id, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        pending_id, reference_text, entity_type, context_neuron_id, project_scope, resolved_entity_id, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.pendingId,
       record.referenceText,
       record.entityType || null,
       record.contextNeuronId || null,
+      projectScope,
       null,
       record.status,
       record.createdAt,
@@ -913,7 +925,7 @@ export class EntityStore {
     `).get(pendingId) as any;
     if (!row) return null;
     if (!row.context_neuron_id) throw new Error('pending_entity_context_required');
-    if (this.requireLiveNeuronScope(String(row.context_neuron_id)) !== projectId) throw new Error('pending_entity_project_scope_mismatch');
+    if (row.project_scope !== projectId || this.requireLiveNeuronScope(String(row.context_neuron_id)) !== projectId) throw new Error('pending_entity_project_scope_mismatch');
     this.assertEntityVisibleInProject(entityId, projectId);
     this.db.transaction(() => {
       this.db.prepare(`
@@ -945,7 +957,7 @@ export class EntityStore {
       FROM pending_entity_resolution
       WHERE (? IS NULL OR status = ?)
         AND (? IS NULL OR entity_type = ?)
-        AND (? IS NULL OR context_neuron_id IN (SELECT id FROM neurons WHERE COALESCE(project_id,'')=?))
+        AND (? IS NULL OR project_scope=?)
       ORDER BY updated_at DESC, created_at DESC
     `).all(
       filter?.status || null,
@@ -1022,12 +1034,15 @@ export class EntityStore {
     projectId: string;
     updatedAt?: number;
   }): void {
-    if (!this.isExclusiveToProject(input.sourceEntityId, input.projectId)) throw new Error('entity_project_scope_not_exclusive');
-    this.db.prepare(`
+    this.db.transaction(() => {
+      if (!this.isExclusiveToProject(input.sourceEntityId, input.projectId)) throw new Error('entity_project_scope_not_exclusive');
+      if (!this.db.prepare(`SELECT 1 FROM entities WHERE entity_id=?`).get(input.targetCanonicalEntityId)) throw new Error('canonical_entity_not_found');
+      this.db.prepare(`
       UPDATE entity_instances
       SET canonical_entity_id = ?, status = ?, updated_at = ?
       WHERE instance_id = ?
     `).run(input.targetCanonicalEntityId, input.status || 'archived', input.updatedAt ?? Date.now(), input.sourceEntityId);
+    })();
   }
 
   restoreInstance(input: {
@@ -1037,12 +1052,15 @@ export class EntityStore {
     projectId: string;
     updatedAt?: number;
   }): void {
-    if (!this.isExclusiveToProject(input.entityId, input.projectId)) throw new Error('entity_project_scope_not_exclusive');
-    this.db.prepare(`
+    this.db.transaction(() => {
+      if (!this.isExclusiveToProject(input.entityId, input.projectId)) throw new Error('entity_project_scope_not_exclusive');
+      if (!this.db.prepare(`SELECT 1 FROM entities WHERE entity_id=?`).get(input.canonicalEntityId)) throw new Error('canonical_entity_not_found');
+      this.db.prepare(`
       UPDATE entity_instances
       SET canonical_entity_id = ?, status = ?, updated_at = ?
       WHERE instance_id = ?
     `).run(input.canonicalEntityId, input.status, input.updatedAt ?? Date.now(), input.entityId);
+    })();
   }
 
   private requireLiveNeuronScope(neuronId: string): string {

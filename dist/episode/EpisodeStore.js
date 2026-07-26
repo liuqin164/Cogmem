@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { sealDuplicateOpenEpisodes } from './EpisodeActiveScopeGuard.js';
 import { summarizeEpisode } from './EpisodeSemanticSummarizer.js';
 import { replayEpisodeBoundaryState } from './EpisodeBoundaryReplayEngine.js';
+import { projectScope } from '../topology/ProjectScope.js';
 export class EpisodeStore {
     db;
     resolveEvent;
@@ -150,15 +151,23 @@ export class EpisodeStore {
         };
     }
     appendEvent(input) {
+        const episode = this.getEpisode(input.episodeId);
+        if (!episode || episode.status !== 'open')
+            throw new Error(`episode_not_open:${input.episodeId}`);
+        const resolvedEvent = this.resolveEvent?.(input.eventId);
+        const storedEvent = resolvedEvent
+            ? null
+            : this.db.prepare(`SELECT event_id,project_id FROM memory_events WHERE event_id=?`).get(input.eventId);
+        const eventProjectId = resolvedEvent?.projectId ?? storedEvent?.project_id ?? undefined;
+        if ((!resolvedEvent && !storedEvent) || projectScope(eventProjectId) !== projectScope(episode.projectId)) {
+            throw new Error(`episode_event_project_scope_mismatch:${input.eventId}`);
+        }
         const existing = this.getEventLink(input.eventId);
         if (existing) {
             if (existing.episodeId === input.episodeId)
                 return existing;
             throw new Error(`episode_event_link_conflict:${input.eventId}`);
         }
-        const episode = this.getEpisode(input.episodeId);
-        if (!episode || episode.status !== 'open')
-            throw new Error(`episode_not_open:${input.episodeId}`);
         let created;
         this.db.transaction(() => {
             const locked = this.db.prepare(`SELECT status FROM memory_episodes WHERE episode_id = ?`).get(input.episodeId);

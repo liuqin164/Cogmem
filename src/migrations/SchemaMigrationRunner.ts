@@ -6,6 +6,7 @@ import { topologyIntegritySatisfied } from './0054_topology_semantic_integrity.j
 import { topologyFinalizationSatisfied } from './0055_topology_scope_finalization.js';
 import { projectIsolationFinalizationSatisfied } from './0056_project_isolation_finalization.js';
 import { projectIsolationCompensationSatisfied } from './0057_project_isolation_compensation.js';
+import { projectIsolationRuntimeGuardsSatisfied } from './0058_project_isolation_runtime_guards.js';
 
 export interface SchemaMigrationRunOptions {
   dryRun?: boolean;
@@ -375,6 +376,7 @@ export class SchemaMigrationRunner {
       && topologyFinalizationSatisfied(this.db);
     if (version === '0056') return projectIsolationFinalizationSatisfied(this.db);
     if (version === '0057') return projectIsolationCompensationSatisfied(this.db);
+    if (version === '0058') return projectIsolationRuntimeGuardsSatisfied(this.db);
     return true;
   }
 

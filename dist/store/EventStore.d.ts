@@ -61,6 +61,7 @@ export declare class EventStore {
     private initializeSchema;
     private ensureCompatibilityColumns;
     append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>, retry?: number): MemoryEvent<TPayload>;
+    private appendAtomic;
     private assertExplicitLocalDate;
     private upsertImportAnchor;
     getNextGlobalSeq(): number;
