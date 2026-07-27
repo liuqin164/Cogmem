@@ -9,7 +9,8 @@ export class PolicyExecutionProjector {
     private eventStore: EventStore,
     private executionStore: PolicyExecutionStore,
     private projectionStore: PolicyProjectionStore,
-    private projectionName: string = 'policy_execution_projection_main'
+    private projectId: string,
+    private projectionName: string = `policy_execution_projection:${projectId.length}:${projectId}`
   ) {}
 
   async bootstrap(): Promise<void> {
@@ -49,20 +50,20 @@ export class PolicyExecutionProjector {
       metadata: { reason }
     });
 
-    this.executionStore.clearAll();
+    this.executionStore.clearProject(this.projectId);
     const policyEvents = this.eventStore.getEventsAfter(undefined).filter((event) => this.isPolicyExecutionEvent(event));
     await this.replay(policyEvents);
   }
 
   async replay(events: MemoryEvent[], previousRebuildAt?: number): Promise<void> {
     if (events.length === 0) {
-      const latestEvent = this.eventStore.getLatestEvent();
+      const latestEvent = this.eventStore.getEventsAfter(undefined).filter((event) => this.isPolicyExecutionEvent(event)).at(-1);
       this.projectionStore.upsertCheckpoint({
         projectionName: this.projectionName,
         lastEventId: latestEvent?.eventId,
         lastEventTime: latestEvent?.occurredAt,
         lastRebuildAt: previousRebuildAt ?? Date.now(),
-        lastFullCount: this.executionStore.getExecutionCount(),
+        lastFullCount: this.executionStore.getExecutionCount(this.projectId),
         status: 'ready',
         metadata: { mode: 'incremental_replay', replayedEventCount: 0 }
       });
@@ -81,7 +82,7 @@ export class PolicyExecutionProjector {
       lastEventId: lastEvent?.eventId,
       lastEventTime: lastEvent?.occurredAt,
       lastRebuildAt: previousRebuildAt ?? Date.now(),
-      lastFullCount: this.executionStore.getExecutionCount(),
+      lastFullCount: this.executionStore.getExecutionCount(this.projectId),
       status: 'ready',
       metadata: {
         mode: 'incremental_replay',
@@ -97,6 +98,7 @@ export class PolicyExecutionProjector {
 
     this.executionStore.upsert({
       executionId: String(payload.executionId),
+      projectId: event.projectId!,
       idempotencyKey: String(payload.idempotencyKey),
       runtimeId: payload.runtimeId ? String(payload.runtimeId) : undefined,
       policy: String(payload.policy),
@@ -121,6 +123,6 @@ export class PolicyExecutionProjector {
   }
 
   private isPolicyExecutionEvent(event: MemoryEvent): boolean {
-    return event.eventType === 'POLICY_EXECUTION_UPDATED';
+    return event.eventType === 'POLICY_EXECUTION_UPDATED' && event.projectId === this.projectId;
   }
 }

@@ -15,6 +15,7 @@ import { migration_0054, topologyIntegritySatisfied } from '../src/migrations/00
 import { migration_0055, topologyFinalizationSatisfied } from '../src/migrations/0055_topology_scope_finalization.js';
 import { migration_0056 } from '../src/migrations/0056_project_isolation_finalization.js';
 import { migration_0057, projectIsolationCompensationSatisfied } from '../src/migrations/0057_project_isolation_compensation.js';
+import { migration_0059, projectExecutionAndProvenanceGuardsSatisfied } from '../src/migrations/0059_project_execution_and_provenance_guards.js';
 import { CANONICAL_MIGRATION_SOURCE_DIGESTS, FROZEN_MIGRATION_DEPENDENCY_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 describe('schema migration runner', () => {
@@ -63,6 +64,102 @@ describe('schema migration runner', () => {
     expect(() => runner.run({ dryRun: true })).not.toThrow();
     db.prepare(`INSERT INTO _schema_migrations VALUES (?,?,?,?)`).run('9999', 'unknown', new Date(0).toISOString(), 'not-a-digest');
     expect(() => runner.run({ dryRun: true })).toThrow('migration_checksum_unknown:9999');
+    db.close();
+  });
+
+  test('rejects the destructive temporary 0057 receipt with an explicit recovery path', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE _schema_migrations (version TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL, checksum TEXT);`);
+    db.prepare(`INSERT INTO _schema_migrations VALUES (?,?,?,?)`).run(
+      '0057',
+      'destructive development migration',
+      new Date(0).toISOString(),
+      '8dbcc0843afc4dbafe63d4e82585323db52d69d1a34fc4611aa8c14c263171d9',
+    );
+    expect(() => new SchemaMigrationRunner(db, [migration_0059], { readonly: true }).run({ dryRun: true }))
+      .toThrow('migration_recovery_required:0057:restore_pre_0057_backup');
+    db.close();
+  });
+
+  test('0059 quarantines unscoped policy rows and preserves deleted-context privacy scope', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE policy_executions(
+        execution_id TEXT PRIMARY KEY,idempotency_key TEXT UNIQUE,policy TEXT,action TEXT,status TEXT,
+        attempt_count INTEGER,detail TEXT,created_at INTEGER,updated_at INTEGER
+      );
+      INSERT INTO policy_executions VALUES('old','same','p','allow','executed',1,'OLD_SECRET',1,1);
+      CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,is_deleted INTEGER);
+      INSERT INTO neurons VALUES('deleted-a','a',1);
+      CREATE TABLE pending_entity_resolution_quarantine(
+        pending_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL
+      );
+      INSERT INTO pending_entity_resolution_quarantine VALUES
+        ('known','{"pending_id":"known","context_neuron_id":"deleted-a","reference_text":"KNOWN_SECRET"}','pending_context_unproven',1),
+        ('unknown','{"pending_id":"unknown","reference_text":"UNKNOWN_SECRET"}','pending_context_unproven',1);
+    `);
+
+    migration_0059.up(db);
+
+    expect(projectExecutionAndProvenanceGuardsSatisfied(db)).toBe(true);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM policy_executions`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT execution_id,reason FROM policy_execution_quarantine`).get()).toEqual({
+      execution_id: 'old', reason: 'project_scope_unproven',
+    });
+    expect(db.prepare(`SELECT project_scope,implicated_scopes_json,context_neuron_id,scope_resolved
+      FROM pending_entity_resolution_quarantine WHERE pending_id='known'`).get()).toEqual({
+      project_scope: 'a', implicated_scopes_json: '["a"]', context_neuron_id: 'deleted-a', scope_resolved: 1,
+    });
+    const unknown = db.prepare(`SELECT record_json,scope_resolved FROM pending_entity_resolution_quarantine WHERE pending_id='unknown'`).get() as {
+      record_json: string; scope_resolved: number;
+    };
+    expect(unknown.scope_resolved).toBe(0);
+    expect(unknown.record_json).not.toContain('UNKNOWN_SECRET');
+    db.close();
+  });
+
+  test('0059 removes unresolved projections and enforces synapse scope at the database boundary', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE neurons(id TEXT PRIMARY KEY,project_id TEXT,is_deleted INTEGER);
+      INSERT INTO neurons VALUES('a','a',0),('b','b',0);
+      CREATE TABLE synapses(
+        source_id TEXT,target_id TEXT,project_id TEXT NOT NULL DEFAULT '',type TEXT,weight REAL,
+        created_at INTEGER,updated_at INTEGER,PRIMARY KEY(source_id,target_id,type)
+      );
+      INSERT INTO synapses VALUES('a','b','a','related',1,1,1);
+      CREATE TABLE task_identity_restoration_manifest(
+        task_id TEXT PRIMARY KEY,project_id TEXT,task_key TEXT,title TEXT,status TEXT,source TEXT,
+        recorded_at INTEGER,recovery_status TEXT
+      );
+      INSERT INTO task_identity_restoration_manifest VALUES('task','a','secret-task','Secret','active','unknown',1,'unresolved');
+      CREATE TABLE task_branches(task_id TEXT PRIMARY KEY,project_id TEXT,task_key TEXT,title TEXT,status TEXT,created_at INTEGER,updated_at INTEGER);
+      INSERT INTO task_branches VALUES('task','a','secret-task','Secret','active',1,1);
+      CREATE TABLE task_branch_entries(task_id TEXT,project_id TEXT,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER);
+      INSERT INTO task_branch_entries VALUES('task','a','a',NULL,NULL,NULL,NULL,1);
+      CREATE TABLE topology_membership(neuron_id TEXT,project_id TEXT,dimension_type TEXT,dimension_key TEXT,title TEXT,created_at INTEGER);
+      INSERT INTO topology_membership VALUES('a','a','task_branch','secret-task','Secret',1);
+      CREATE TABLE cognitive_nodes(
+        node_id TEXT PRIMARY KEY,node_type TEXT,node_key TEXT,title TEXT,project_id TEXT,source_neuron_id TEXT,
+        metadata_json TEXT,created_at INTEGER,updated_at INTEGER
+      );
+      CREATE TABLE cognitive_edges(
+        edge_id TEXT PRIMARY KEY,source_node_id TEXT,target_node_id TEXT,edge_type TEXT,weight REAL,
+        project_id TEXT,metadata_json TEXT,created_at INTEGER
+      );
+      INSERT INTO cognitive_nodes VALUES('task-node','task_branch','secret-task','Secret','a',NULL,'{}',1,1);
+    `);
+
+    migration_0059.up(db);
+
+    expect(projectExecutionAndProvenanceGuardsSatisfied(db)).toBe(true);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM task_branches`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM task_branch_entries`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM topology_membership`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM synapses`).get()).toEqual({ count: 0 });
+    expect(() => db.prepare(`INSERT INTO synapses VALUES('a','b','a','related',1,1,1)`).run())
+      .toThrow('project_scope_mismatch');
     db.close();
   });
 

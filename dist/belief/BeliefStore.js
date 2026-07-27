@@ -5,6 +5,7 @@ import { ConditionDslEvaluator } from '../retrieval/ConditionDslEvaluator.js';
 import { PlanDslExecutor } from '../retrieval/PlanDslExecutor.js';
 import { PolicyRuntimeEvaluator } from '../retrieval/PolicyRuntimeEvaluator.js';
 import { projectQueryValue } from '../topology/ProjectScope.js';
+import { installRuntimeProvenanceGuards } from '../migrations/0059_project_execution_and_provenance_guards.js';
 export class BeliefStore {
     eventStore;
     static SOURCE_TRUST = {
@@ -33,6 +34,7 @@ export class BeliefStore {
             this.db = new Database(dbPath);
         }
         this.initializeSchema();
+        installRuntimeProvenanceGuards(this.db);
     }
     initializeSchema() {
         this.db.exec(`
@@ -172,16 +174,19 @@ export class BeliefStore {
         }
         return grouped;
     }
-    getExecutionFeedbackNeuronSignals(records) {
+    getExecutionFeedbackNeuronSignals(projectId, records) {
+        records = records.filter((record) => record.projectId === projectId);
         if (records.length === 0)
             return [];
         const rows = this.db.prepare(`
-      SELECT *
+      SELECT beliefs.*
       FROM beliefs
-      WHERE status = 'active'
-        AND source_neuron_id IS NOT NULL
+      JOIN neurons source ON source.id=beliefs.source_neuron_id AND source.is_deleted=0
+      WHERE beliefs.status = 'active'
+        AND COALESCE(beliefs.project_id,'') = ?
+        AND COALESCE(source.project_id,'') = ?
       ORDER BY updated_at DESC
-    `).all();
+    `).all(projectId, projectId);
         const signals = new Map();
         for (const row of rows) {
             const belief = this.mapBelief(row);
@@ -205,15 +210,17 @@ export class BeliefStore {
         }
         return Array.from(signals.values());
     }
-    applyExecutionFeedbackCalibration(records, now = Date.now()) {
+    applyExecutionFeedbackCalibration(projectId, records, now = Date.now()) {
+        records = records.filter((record) => record.projectId === projectId);
         if (records.length === 0)
             return 0;
         const rows = this.db.prepare(`
       SELECT *
       FROM beliefs
       WHERE status = 'active'
+        AND COALESCE(project_id,'') = ?
       ORDER BY updated_at DESC
-    `).all();
+    `).all(projectId);
         let updated = 0;
         for (const row of rows) {
             const belief = this.mapBelief(row);

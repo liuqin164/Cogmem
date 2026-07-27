@@ -3,11 +3,13 @@
 // ============================================
 import { logger } from '../utils/Logger.js';
 import { projectScope } from '../topology/ProjectScope.js';
+import { installRuntimeProvenanceGuards } from '../migrations/0059_project_execution_and_provenance_guards.js';
 export class ReasoningChainStore {
     db;
     constructor(db) {
         this.db = db;
         this.initSchema();
+        installRuntimeProvenanceGuards(this.db);
     }
     initSchema() {
         this.db.exec(`

@@ -6,6 +6,7 @@ import Database from 'bun:sqlite';
 import type { ReasoningChain, ReasoningStep } from '../types/reasoning.js';
 import { logger } from '../utils/Logger.js';
 import { projectScope } from '../topology/ProjectScope.js';
+import { installRuntimeProvenanceGuards } from '../migrations/0059_project_execution_and_provenance_guards.js';
 
 export class ReasoningChainStore {
   private db: Database;
@@ -13,6 +14,7 @@ export class ReasoningChainStore {
   constructor(db: Database) {
     this.db = db;
     this.initSchema();
+    installRuntimeProvenanceGuards(this.db);
   }
 
   private initSchema(): void {

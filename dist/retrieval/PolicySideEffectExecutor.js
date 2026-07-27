@@ -30,7 +30,7 @@ export class ReliablePolicySideEffectExecutor {
     async execute(effect) {
         const now = Date.now();
         const idempotencyKey = effect.idempotencyKey || this.computeIdempotencyKey(effect);
-        const existing = this.store.getByIdempotencyKey(idempotencyKey);
+        const existing = this.store.getByIdempotencyKey(effect.projectId, idempotencyKey);
         if (existing?.status === 'executed') {
             return {
                 policy: existing.policy,
@@ -49,6 +49,7 @@ export class ReliablePolicySideEffectExecutor {
                 const result = await this.delegate.execute({ ...effect, idempotencyKey });
                 record = {
                     ...record,
+                    projectId: effect.projectId,
                     runtimeId: effect.runtimeId,
                     policy: effect.policy,
                     action: effect.action,
@@ -79,6 +80,7 @@ export class ReliablePolicySideEffectExecutor {
                 const deadLetter = isLastAttempt && (replayPolicy === 'manual');
                 record = {
                     ...record,
+                    projectId: effect.projectId,
                     runtimeId: effect.runtimeId,
                     policy: effect.policy,
                     action: effect.action,
@@ -109,8 +111,8 @@ export class ReliablePolicySideEffectExecutor {
             detail: lastError instanceof Error ? lastError.message : String(lastError)
         };
     }
-    replay(runtimeId) {
-        return this.store.listByRuntime(runtimeId).map((record) => ({
+    replay(projectId, runtimeId) {
+        return this.store.listByRuntime(projectId, runtimeId).map((record) => ({
             policy: record.policy,
             action: record.action,
             target: record.target,
@@ -118,8 +120,8 @@ export class ReliablePolicySideEffectExecutor {
             detail: record.detail
         }));
     }
-    async replayPending(now = Date.now()) {
-        const pending = this.store.listPendingRetries(now)
+    async replayPending(projectId, now = Date.now()) {
+        const pending = this.store.listPendingRetries(projectId, now)
             .filter((record) => record.replayPolicy !== 'manual');
         const results = [];
         for (const record of pending) {
@@ -127,6 +129,7 @@ export class ReliablePolicySideEffectExecutor {
                 continue;
             }
             results.push(await this.execute({
+                projectId: record.projectId,
                 runtimeId: record.runtimeId,
                 policy: record.policy,
                 action: record.action,
@@ -142,8 +145,8 @@ export class ReliablePolicySideEffectExecutor {
         }
         return results;
     }
-    getDeadLetters(runtimeId) {
-        return this.store.listDeadLetters(runtimeId).map((record) => ({
+    getDeadLetters(projectId, runtimeId) {
+        return this.store.listDeadLetters(projectId, runtimeId).map((record) => ({
             policy: record.policy,
             action: record.action,
             target: record.target,
@@ -154,6 +157,7 @@ export class ReliablePolicySideEffectExecutor {
     buildRecord(effect, idempotencyKey, now, attemptCount) {
         return {
             executionId: `pex-${randomUUID()}`,
+            projectId: effect.projectId,
             idempotencyKey,
             runtimeId: effect.runtimeId,
             policy: effect.policy,
@@ -175,6 +179,7 @@ export class ReliablePolicySideEffectExecutor {
     }
     computeIdempotencyKey(effect) {
         const raw = JSON.stringify({
+            projectId: effect.projectId,
             runtimeId: effect.runtimeId,
             policy: effect.policy,
             action: effect.action,

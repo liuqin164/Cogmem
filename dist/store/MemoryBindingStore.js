@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import Database from 'bun:sqlite';
+import { installRuntimeProvenanceGuards } from '../migrations/0059_project_execution_and_provenance_guards.js';
 export class MemoryBindingStore {
     db;
     ownsDb;
@@ -13,15 +14,22 @@ export class MemoryBindingStore {
             this.ownsDb = false;
         }
         this.initializeSchema();
+        installRuntimeProvenanceGuards(this.db);
     }
     upsertEntity(input) {
         const now = input.now ?? Date.now();
+        const scope = input.projectId ?? '';
         const existingOwner = input.entityId
             ? this.db.prepare(`SELECT COALESCE(project_id,'') AS project_id FROM memory_entities WHERE entity_id=?`).get(input.entityId)
             : null;
-        const entityId = input.entityId && (!existingOwner || existingOwner.project_id === (input.projectId ?? ''))
+        const entityId = input.entityId && (!existingOwner || existingOwner.project_id === scope)
             ? input.entityId
             : entityIdFor(input.projectId, input.entityType, input.entityId || input.canonicalName);
+        const existing = this.db.prepare(`SELECT * FROM memory_entities WHERE entity_id=?`).get(entityId);
+        if (existing && ((existing.project_id ?? '') !== scope
+            || existing.canonical_name !== input.canonicalName
+            || existing.entity_type !== input.entityType))
+            throw new Error('memory_entity_immutable_identity_mismatch');
         const aliases = Array.from(new Set([input.canonicalName, ...(input.aliases || [])]))
             .filter(Boolean);
         this.db.prepare(`
@@ -33,15 +41,16 @@ export class MemoryBindingStore {
         stable_path = COALESCE(excluded.stable_path, memory_entities.stable_path),
         updated_at = excluded.updated_at
     `).run(entityId, input.projectId ?? null, input.canonicalName, input.entityType, JSON.stringify(aliases), input.stablePath || null, now, now);
+        const row = this.db.prepare(`SELECT * FROM memory_entities WHERE entity_id=?`).get(entityId);
         return {
-            entityId,
-            projectId: input.projectId,
-            canonicalName: input.canonicalName,
-            entityType: input.entityType,
-            aliases,
-            stablePath: input.stablePath,
-            createdAt: now,
-            updatedAt: now,
+            entityId: row.entity_id,
+            projectId: row.project_id ?? undefined,
+            canonicalName: row.canonical_name,
+            entityType: row.entity_type,
+            aliases: JSON.parse(row.aliases_json),
+            stablePath: row.stable_path ?? undefined,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
         };
     }
     upsertTopic(input) {

@@ -1,5 +1,6 @@
 import type { PolicyExecutionStore, PolicyReplayPolicy } from '../store/PolicyExecutionStore.js';
 export interface PolicySideEffect {
+    projectId: string;
     runtimeId?: string;
     policy: string;
     action: 'allow' | 'deny' | 'prefer';
@@ -40,9 +41,9 @@ export declare class ReliablePolicySideEffectExecutor implements PolicySideEffec
     private maxBackoffMs;
     constructor(delegate: PolicySideEffectExecutor, store: PolicyExecutionStore, maxRetries?: number, backoffMs?: number, options?: ReliablePolicyExecutorOptions);
     execute(effect: PolicySideEffect): Promise<PolicySideEffectResult>;
-    replay(runtimeId: string): PolicySideEffectResult[];
-    replayPending(now?: number): Promise<PolicySideEffectResult[]>;
-    getDeadLetters(runtimeId?: string): PolicySideEffectResult[];
+    replay(projectId: string, runtimeId: string): PolicySideEffectResult[];
+    replayPending(projectId: string, now?: number): Promise<PolicySideEffectResult[]>;
+    getDeadLetters(projectId: string, runtimeId?: string): PolicySideEffectResult[];
     private buildRecord;
     private computeIdempotencyKey;
     private computeBackoff;

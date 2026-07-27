@@ -1,12 +1,13 @@
 import Database from 'bun:sqlite';
 
 import type { Migration } from '../types/Migration.js';
-import { COMPATIBLE_MIGRATION_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
+import { COMPATIBLE_MIGRATION_DIGESTS, LEGACY_MIGRATION_RECEIPT_PROFILES, MIGRATION_DIGESTS, UNSAFE_MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
 import { topologyIntegritySatisfied } from './0054_topology_semantic_integrity.js';
 import { topologyFinalizationSatisfied } from './0055_topology_scope_finalization.js';
 import { projectIsolationFinalizationSatisfied } from './0056_project_isolation_finalization.js';
 import { projectIsolationCompensationSatisfied } from './0057_project_isolation_compensation.js';
 import { projectIsolationRuntimeGuardsSatisfied } from './0058_project_isolation_runtime_guards.js';
+import { projectExecutionAndProvenanceGuardsSatisfied } from './0059_project_execution_and_provenance_guards.js';
 
 export interface SchemaMigrationRunOptions {
   dryRun?: boolean;
@@ -136,6 +137,9 @@ export class SchemaMigrationRunner {
     for (const row of rows) {
       const digest = MIGRATION_DIGESTS[row.version];
       if (!digest) throw new Error(`migration_checksum_unknown:${row.version}`);
+      if (UNSAFE_MIGRATION_DIGESTS[row.version]?.includes(row.checksum ?? '')) {
+        throw new Error(`migration_recovery_required:${row.version}:restore_pre_${row.version}_backup`);
+      }
       if (!row.checksum) {
         if (!checksumNormalizationApplied && row.version < '0046') continue;
         throw new Error(`migration_checksum_missing:${row.version}`);
@@ -377,6 +381,7 @@ export class SchemaMigrationRunner {
     if (version === '0056') return projectIsolationFinalizationSatisfied(this.db);
     if (version === '0057') return projectIsolationCompensationSatisfied(this.db);
     if (version === '0058') return projectIsolationRuntimeGuardsSatisfied(this.db);
+    if (version === '0059') return projectExecutionAndProvenanceGuardsSatisfied(this.db);
     return true;
   }
 

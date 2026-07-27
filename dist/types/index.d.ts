@@ -710,6 +710,7 @@ export interface PolicyExecutionAuditPage {
     total: number;
     records: Array<{
         executionId: string;
+        projectId: string;
         idempotencyKey: string;
         runtimeId?: string;
         policy: string;
@@ -732,6 +733,7 @@ export interface PolicyExecutionAuditPage {
         updatedAt: number;
     }>;
     appliedFilters?: {
+        projectId?: string;
         runtimeId?: string;
         actorId?: string[];
         causationId?: string[];

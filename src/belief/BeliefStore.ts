@@ -17,6 +17,7 @@ import { ConditionDslEvaluator } from '../retrieval/ConditionDslEvaluator.js';
 import { PlanDslExecutor } from '../retrieval/PlanDslExecutor.js';
 import { PolicyRuntimeEvaluator } from '../retrieval/PolicyRuntimeEvaluator.js';
 import { projectQueryValue } from '../topology/ProjectScope.js';
+import { installRuntimeProvenanceGuards } from '../migrations/0059_project_execution_and_provenance_guards.js';
 
 export class BeliefStore {
   private static readonly SOURCE_TRUST: Record<SourceType, number> = {
@@ -46,6 +47,7 @@ export class BeliefStore {
       this.db = new Database(dbPath);
     }
     this.initializeSchema();
+    installRuntimeProvenanceGuards(this.db);
   }
 
   private initializeSchema(): void {
@@ -238,22 +240,25 @@ export class BeliefStore {
     return grouped;
   }
 
-  getExecutionFeedbackNeuronSignals(records: PolicyExecutionRecord[]): Array<{
+  getExecutionFeedbackNeuronSignals(projectId: string, records: PolicyExecutionRecord[]): Array<{
     neuronId: string;
     matchedExecutions: number;
     executed: number;
     failed: number;
     latestUpdatedAt?: number;
   }> {
+    records = records.filter((record) => record.projectId === projectId);
     if (records.length === 0) return [];
 
     const rows = this.db.prepare(`
-      SELECT *
+      SELECT beliefs.*
       FROM beliefs
-      WHERE status = 'active'
-        AND source_neuron_id IS NOT NULL
+      JOIN neurons source ON source.id=beliefs.source_neuron_id AND source.is_deleted=0
+      WHERE beliefs.status = 'active'
+        AND COALESCE(beliefs.project_id,'') = ?
+        AND COALESCE(source.project_id,'') = ?
       ORDER BY updated_at DESC
-    `).all() as any[];
+    `).all(projectId, projectId) as any[];
 
     const signals = new Map<string, {
       neuronId: string;
@@ -290,15 +295,17 @@ export class BeliefStore {
     return Array.from(signals.values());
   }
 
-  applyExecutionFeedbackCalibration(records: PolicyExecutionRecord[], now: number = Date.now()): number {
+  applyExecutionFeedbackCalibration(projectId: string, records: PolicyExecutionRecord[], now: number = Date.now()): number {
+    records = records.filter((record) => record.projectId === projectId);
     if (records.length === 0) return 0;
 
     const rows = this.db.prepare(`
       SELECT *
       FROM beliefs
       WHERE status = 'active'
+        AND COALESCE(project_id,'') = ?
       ORDER BY updated_at DESC
-    `).all() as any[];
+    `).all(projectId) as any[];
 
     let updated = 0;
     for (const row of rows) {

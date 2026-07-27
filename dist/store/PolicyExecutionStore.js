@@ -1,4 +1,5 @@
 import Database from 'bun:sqlite';
+import { createHash } from 'node:crypto';
 export class PolicyExecutionStore {
     db;
     eventStore;
@@ -8,10 +9,14 @@ export class PolicyExecutionStore {
         this.initializeSchema();
     }
     initializeSchema() {
+        const existing = this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='policy_executions'`).get();
+        if (existing && !this.hasScopedIdentity())
+            this.quarantineUnscopedExecutions();
         this.db.exec(`
       CREATE TABLE IF NOT EXISTS policy_executions (
         execution_id TEXT PRIMARY KEY,
-        idempotency_key TEXT NOT NULL UNIQUE,
+        project_scope TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
         runtime_id TEXT,
         policy TEXT NOT NULL,
         action TEXT NOT NULL,
@@ -30,11 +35,12 @@ export class PolicyExecutionStore {
         detail TEXT,
         metadata_json TEXT,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        UNIQUE(project_scope, idempotency_key)
       );
 
       CREATE INDEX IF NOT EXISTS idx_policy_executions_runtime
-        ON policy_executions(runtime_id, updated_at DESC);
+        ON policy_executions(project_scope, runtime_id, updated_at DESC);
 
       CREATE INDEX IF NOT EXISTS idx_policy_executions_policy_group
         ON policy_executions(policy_group, updated_at DESC);
@@ -66,32 +72,43 @@ export class PolicyExecutionStore {
             this.db.exec(`ALTER TABLE policy_executions ADD COLUMN event_type TEXT;`);
         }
     }
-    getByIdempotencyKey(idempotencyKey) {
+    getByIdempotencyKey(projectId, idempotencyKey) {
         const row = this.db.prepare(`
-      SELECT * FROM policy_executions WHERE idempotency_key = ?
-    `).get(idempotencyKey);
+      SELECT * FROM policy_executions WHERE project_scope = ? AND idempotency_key = ?
+    `).get(projectId, idempotencyKey);
         return row ? this.mapRow(row) : null;
     }
     upsert(record, options) {
         this.db.prepare(`
-      INSERT OR REPLACE INTO policy_executions (
-        execution_id, idempotency_key, runtime_id, policy, action, target,
+      INSERT INTO policy_executions (
+        execution_id, project_scope, idempotency_key, runtime_id, policy, action, target,
         status, attempt_count, next_retry_at, dead_lettered_at, replay_policy,
         actor_id, causation_id, correlation_id, policy_group, stream_type, event_type,
         detail, metadata_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(record.executionId, record.idempotencyKey, record.runtimeId || null, record.policy, record.action, record.target || null, record.status, record.attemptCount, record.nextRetryAt || null, record.deadLetteredAt || null, record.replayPolicy || null, record.actorId || null, record.causationId || null, record.correlationId || null, record.policyGroup || null, record.streamType || 'system', record.eventType || 'POLICY_EXECUTION_UPDATED', record.detail || null, record.metadata ? JSON.stringify(record.metadata) : null, record.createdAt, record.updatedAt);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_scope, idempotency_key) DO UPDATE SET
+        runtime_id=excluded.runtime_id, policy=excluded.policy, action=excluded.action,
+        target=excluded.target, status=excluded.status, attempt_count=excluded.attempt_count,
+        next_retry_at=excluded.next_retry_at, dead_lettered_at=excluded.dead_lettered_at,
+        replay_policy=excluded.replay_policy, actor_id=excluded.actor_id,
+        causation_id=excluded.causation_id, correlation_id=excluded.correlation_id,
+        policy_group=excluded.policy_group, stream_type=excluded.stream_type,
+        event_type=excluded.event_type, detail=excluded.detail,
+        metadata_json=excluded.metadata_json, updated_at=excluded.updated_at
+    `).run(record.executionId, record.projectId, record.idempotencyKey, record.runtimeId ?? null, record.policy, record.action, record.target ?? null, record.status, record.attemptCount, record.nextRetryAt ?? null, record.deadLetteredAt ?? null, record.replayPolicy ?? null, record.actorId ?? null, record.causationId ?? null, record.correlationId ?? null, record.policyGroup ?? null, record.streamType || 'system', record.eventType || 'POLICY_EXECUTION_UPDATED', record.detail ?? null, record.metadata ? JSON.stringify(record.metadata) : null, record.createdAt, record.updatedAt);
         if (options?.emitEvent !== false) {
             this.eventStore?.append({
-                streamId: `policy:${record.idempotencyKey}`,
+                streamId: `policy:${record.projectId.length}:${record.projectId}:${record.idempotencyKey}`,
                 streamType: 'system',
                 eventType: 'POLICY_EXECUTION_UPDATED',
+                projectId: record.projectId,
                 occurredAt: record.updatedAt,
                 actorId: record.actorId,
                 causationId: record.causationId,
                 correlationId: record.correlationId,
                 payload: {
                     executionId: record.executionId,
+                    projectId: record.projectId,
                     idempotencyKey: record.idempotencyKey,
                     runtimeId: record.runtimeId,
                     policy: record.policy,
@@ -116,35 +133,36 @@ export class PolicyExecutionStore {
             });
         }
     }
-    listByRuntime(runtimeId) {
+    listByRuntime(projectId, runtimeId) {
         const rows = this.db.prepare(`
-      SELECT * FROM policy_executions WHERE runtime_id = ? ORDER BY updated_at ASC, execution_id ASC
-    `).all(runtimeId);
+      SELECT * FROM policy_executions WHERE project_scope = ? AND runtime_id = ? ORDER BY updated_at ASC, execution_id ASC
+    `).all(projectId, runtimeId);
         return rows.map((row) => this.mapRow(row));
     }
-    listPendingRetries(now = Date.now()) {
+    listPendingRetries(projectId, now = Date.now()) {
         const rows = this.db.prepare(`
       SELECT * FROM policy_executions
       WHERE status = 'failed'
+        AND project_scope = ?
         AND dead_lettered_at IS NULL
         AND next_retry_at IS NOT NULL
         AND next_retry_at <= ?
       ORDER BY next_retry_at ASC, execution_id ASC
-    `).all(now);
+    `).all(projectId, now);
         return rows.map((row) => this.mapRow(row));
     }
-    listDeadLetters(runtimeId) {
+    listDeadLetters(projectId, runtimeId) {
         const rows = runtimeId
             ? this.db.prepare(`
           SELECT * FROM policy_executions
-          WHERE dead_lettered_at IS NOT NULL AND runtime_id = ?
+          WHERE project_scope = ? AND dead_lettered_at IS NOT NULL AND runtime_id = ?
           ORDER BY dead_lettered_at ASC, execution_id ASC
-        `).all(runtimeId)
+        `).all(projectId, runtimeId)
             : this.db.prepare(`
           SELECT * FROM policy_executions
-          WHERE dead_lettered_at IS NOT NULL
+          WHERE project_scope = ? AND dead_lettered_at IS NOT NULL
           ORDER BY dead_lettered_at ASC, execution_id ASC
-        `).all();
+        `).all(projectId);
         return rows.map((row) => this.mapRow(row));
     }
     listByFilters(filters) {
@@ -176,6 +194,7 @@ export class PolicyExecutionStore {
             total: totalRow?.count || 0,
             records: rows.map((row) => this.mapRow(row)),
             appliedFilters: {
+                projectId: filters?.projectId,
                 runtimeId: filters?.runtimeId,
                 actorId: filters?.actorId,
                 causationId: filters?.causationId,
@@ -192,12 +211,14 @@ export class PolicyExecutionStore {
             }
         };
     }
-    getExecutionCount() {
-        const row = this.db.prepare(`SELECT COUNT(*) AS count FROM policy_executions`).get();
+    getExecutionCount(projectId) {
+        const row = projectId === undefined
+            ? this.db.prepare(`SELECT COUNT(*) AS count FROM policy_executions`).get()
+            : this.db.prepare(`SELECT COUNT(*) AS count FROM policy_executions WHERE project_scope=?`).get(projectId);
         return row?.count || 0;
     }
-    clearAll() {
-        this.db.prepare(`DELETE FROM policy_executions`).run();
+    clearProject(projectId) {
+        this.db.prepare(`DELETE FROM policy_executions WHERE project_scope=?`).run(projectId);
     }
     close() {
         this.db.close();
@@ -205,6 +226,10 @@ export class PolicyExecutionStore {
     buildFilterSql(filters) {
         const conditions = [];
         const params = [];
+        if (filters?.projectId !== undefined) {
+            conditions.push('project_scope = ?');
+            params.push(filters.projectId);
+        }
         if (filters?.runtimeId) {
             conditions.push('runtime_id = ?');
             params.push(filters.runtimeId);
@@ -265,6 +290,7 @@ export class PolicyExecutionStore {
     mapRow(row) {
         return {
             executionId: row.execution_id,
+            projectId: row.project_scope,
             idempotencyKey: row.idempotency_key,
             runtimeId: row.runtime_id || undefined,
             policy: row.policy,
@@ -286,5 +312,31 @@ export class PolicyExecutionStore {
             createdAt: row.created_at,
             updatedAt: row.updated_at
         };
+    }
+    hasScopedIdentity() {
+        const columns = new Set(this.db.prepare(`PRAGMA table_info(policy_executions)`).all().map((row) => row.name));
+        if (!columns.has('project_scope'))
+            return false;
+        return this.db.prepare(`PRAGMA index_list(policy_executions)`).all()
+            .filter((index) => index.unique === 1)
+            .some((index) => this.db.prepare(`PRAGMA index_info(${index.name})`).all()
+            .map((column) => column.name).join('|') === 'project_scope|idempotency_key');
+    }
+    quarantineUnscopedExecutions() {
+        const rows = this.db.prepare(`SELECT * FROM policy_executions`).all();
+        this.db.exec(`
+      CREATE TABLE IF NOT EXISTS policy_execution_quarantine (
+        execution_id TEXT PRIMARY KEY,
+        record_hash TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      ALTER TABLE policy_executions RENAME TO policy_executions_unscoped;
+    `);
+        const insert = this.db.prepare(`INSERT OR REPLACE INTO policy_execution_quarantine VALUES(?,?,?,?)`);
+        for (const row of rows) {
+            insert.run(String(row.execution_id), createHash('sha256').update(JSON.stringify(row)).digest('hex'), 'project_scope_unproven', Date.now());
+        }
+        this.db.exec(`DROP TABLE policy_executions_unscoped`);
     }
 }

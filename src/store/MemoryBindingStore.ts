@@ -14,6 +14,7 @@ import type {
   MemoryEntityType,
   MemoryTopicRecord,
 } from '../binding/MemoryBindingTypes.js';
+import { installRuntimeProvenanceGuards } from '../migrations/0059_project_execution_and_provenance_guards.js';
 
 export interface UpsertMemoryEntityInput {
   entityId?: string;
@@ -87,16 +88,26 @@ export class MemoryBindingStore {
       this.ownsDb = false;
     }
     this.initializeSchema();
+    installRuntimeProvenanceGuards(this.db);
   }
 
   upsertEntity(input: UpsertMemoryEntityInput): MemoryEntityRecord {
     const now = input.now ?? Date.now();
+    const scope = input.projectId ?? '';
     const existingOwner = input.entityId
       ? this.db.prepare(`SELECT COALESCE(project_id,'') AS project_id FROM memory_entities WHERE entity_id=?`).get(input.entityId) as { project_id: string } | null
       : null;
-    const entityId = input.entityId && (!existingOwner || existingOwner.project_id === (input.projectId ?? ''))
+    const entityId = input.entityId && (!existingOwner || existingOwner.project_id === scope)
       ? input.entityId
       : entityIdFor(input.projectId, input.entityType, input.entityId || input.canonicalName);
+    const existing = this.db.prepare(`SELECT * FROM memory_entities WHERE entity_id=?`).get(entityId) as {
+      project_id: string | null; canonical_name: string; entity_type: MemoryEntityType;
+    } | null;
+    if (existing && (
+      (existing.project_id ?? '') !== scope
+      || existing.canonical_name !== input.canonicalName
+      || existing.entity_type !== input.entityType
+    )) throw new Error('memory_entity_immutable_identity_mismatch');
     const aliases = Array.from(new Set([input.canonicalName, ...(input.aliases || [])]))
       .filter(Boolean);
     this.db.prepare(`
@@ -117,15 +128,19 @@ export class MemoryBindingStore {
       now,
       now,
     );
+    const row = this.db.prepare(`SELECT * FROM memory_entities WHERE entity_id=?`).get(entityId) as {
+      entity_id: string; project_id: string | null; canonical_name: string; entity_type: MemoryEntityType;
+      aliases_json: string; stable_path: string | null; created_at: number; updated_at: number;
+    };
     return {
-      entityId,
-      projectId: input.projectId,
-      canonicalName: input.canonicalName,
-      entityType: input.entityType,
-      aliases,
-      stablePath: input.stablePath,
-      createdAt: now,
-      updatedAt: now,
+      entityId: row.entity_id,
+      projectId: row.project_id ?? undefined,
+      canonicalName: row.canonical_name,
+      entityType: row.entity_type,
+      aliases: JSON.parse(row.aliases_json) as string[],
+      stablePath: row.stable_path ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
     };
   }
 

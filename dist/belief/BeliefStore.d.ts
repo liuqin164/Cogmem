@@ -44,14 +44,14 @@ export declare class BeliefStore {
         includeStatuses?: Array<'active' | 'superseded' | 'revoked' | 'suspect' | 'expired'>;
         limitPerCanonical?: number;
     }): Map<string, BeliefRecord[]>;
-    getExecutionFeedbackNeuronSignals(records: PolicyExecutionRecord[]): Array<{
+    getExecutionFeedbackNeuronSignals(projectId: string, records: PolicyExecutionRecord[]): Array<{
         neuronId: string;
         matchedExecutions: number;
         executed: number;
         failed: number;
         latestUpdatedAt?: number;
     }>;
-    applyExecutionFeedbackCalibration(records: PolicyExecutionRecord[], now?: number): number;
+    applyExecutionFeedbackCalibration(projectId: string, records: PolicyExecutionRecord[], now?: number): number;
     getEvidenceNeuronIds(beliefIds: string[], limitPerBelief?: number): string[];
     upsert(candidate: BeliefCandidate, now?: number): {
         belief: BeliefRecord | null;

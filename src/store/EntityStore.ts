@@ -9,6 +9,7 @@ import {
   isPreviousReference,
   normalizeLexiconText
 } from '../lexicon/coreMemoryLexicon.js';
+import { installRuntimeProvenanceGuards } from '../migrations/0059_project_execution_and_provenance_guards.js';
 
 export interface EntityRecord {
   entityId: string;
@@ -120,6 +121,7 @@ export class EntityStore {
       this.ownsDb = false;
     }
     this.initializeSchema();
+    installRuntimeProvenanceGuards(this.db);
   }
 
   getDatabase(): Database {

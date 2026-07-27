@@ -51,6 +51,7 @@ import { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPath
 import { CorrectionResolver } from './episode/CorrectionResolver.js';
 import { CandidateReviewService, MemoryGovernanceExecutor, MemoryGovernanceValidator, PiiRedactor, } from './governance/index.js';
 import { ALL_MIGRATIONS, KERNEL_MIGRATIONS, SchemaMigrationRunner } from './migrations/index.js';
+import { installRuntimeProvenanceGuards } from './migrations/0059_project_execution_and_provenance_guards.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -271,6 +272,7 @@ export class MemoryKernel {
         }, this.episodeBoundaryPolicy);
         this.activationStore = new ActivationStore(db);
         this.memoryBindingStore = new MemoryBindingStore(db);
+        installRuntimeProvenanceGuards(db);
         this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
         this.memoryAtlasStore = new MemoryAtlasStore(db);
         this.memoryFrameStore = new MemoryFrameStore(db);

@@ -59,7 +59,7 @@ const MIGRATION_TABLES = [
   'memory_episode_events','memory_episodes','memory_frame_nodes','memory_frame_relations','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
   'memory_governance_plans','memory_timeline_entries','memory_topics','migration_repair_receipts','neuron_embeddings','pipeline_checkpoints','pipeline_nonfatal_events','pipeline_runs','pipeline_step_timings',
   'prospective_memories','prospective_memory_transitions','re_embedding_progress','scheduled_job_runs','scheduled_jobs','notification_records','notification_rules','workspace_settings','workspaces','meta_observations',
-  'task_identity_restoration_manifest','task_identity_recovery_quarantine','pending_entity_resolution_quarantine','project_isolation_compensation_audit','topic_aliases','topic_nodes','topic_operations','topic_relations','topology_identity_quarantine','topology_projection_state','topology_source_revisions',
+  'task_identity_restoration_manifest','task_identity_recovery_quarantine','pending_entity_resolution_quarantine','policy_execution_quarantine','project_isolation_compensation_audit','topic_aliases','topic_nodes','topic_operations','topic_relations','topology_identity_quarantine','topology_projection_state','topology_source_revisions',
   'topology_time_rebuild_active_neurons','topology_time_rebuild_adjacency','topology_time_rebuild_buckets','topology_time_rebuild_cognitive_edges','topology_time_rebuild_cognitive_nodes',
   'topology_time_rebuild_entries','topology_time_rebuild_jobs','user_session_runtime','vector_index','vector_write_outbox','web_session_tokens','working_memory_deltas','memory_activation',
   'file_assets','file_blocks','file_chunks','file_chunk_edges','user_insights',
@@ -90,7 +90,7 @@ const MIGRATION_PROVENANCE_OWNED = [
 ] as const;
 const MIGRATION_OPERATIONAL_NON_PERSONAL = [
   '_episode_integrity_markers','_memory_frame_integrity_markers','_meta','agent_brain_health_checks','pipeline_runs',
-  'pipeline_step_timings','project_isolation_compensation_audit','event_sequence_counters',
+  'pipeline_step_timings','policy_execution_quarantine','project_isolation_compensation_audit','event_sequence_counters',
 ] as const;
 const MIGRATION_IMMUTABLE_AUDIT = ['_schema_migrations','migration_repair_receipts','governance_audit_log'] as const;
 const MIGRATION_CLASSIFICATION = explicitClassification(MIGRATION_TABLES, {
@@ -226,9 +226,13 @@ export function deleteRegisteredProjectContent(context: PrivacyDeletionContext):
     const placeholders = neuronIds.map(() => '?').join(', ');
     audit.pending_entity_resolution_quarantine = runDelete(`
       DELETE FROM pending_entity_resolution_quarantine
-      WHERE (json_valid(record_json) AND COALESCE(json_extract(record_json,'$.project_scope'),'')=?)
+      WHERE (scope_resolved=1 AND project_scope=?)
+        OR EXISTS (SELECT 1 FROM json_each(COALESCE(implicated_scopes_json,'[]')) WHERE value=?)
         ${neuronIds.length > 0 ? `OR (json_valid(record_json) AND json_extract(record_json,'$.context_neuron_id') IN (${placeholders}))` : ''}`,
-      [scope, ...neuronIds]);
+      [scope, scope, ...neuronIds]);
+  }
+  if (persistentTables.has('policy_executions') && context.hasColumn('policy_executions', 'project_scope')) {
+    remove('policy_executions', `DELETE FROM policy_executions WHERE project_scope=?`);
   }
 
   remove('deep_write_candidate_reviews', `DELETE FROM deep_write_candidate_reviews

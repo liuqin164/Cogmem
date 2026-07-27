@@ -7,6 +7,7 @@ import type {
 } from '../types/index.js';
 import { cognitiveEdgeId, cognitiveNodeId } from '../engine/CognitiveGraphIdentity.js';
 import { projectQueryValue } from '../topology/ProjectScope.js';
+import { installRuntimeProvenanceGuards } from '../migrations/0059_project_execution_and_provenance_guards.js';
 
 export class CognitiveGraphStore {
   private db: Database;
@@ -21,6 +22,7 @@ export class CognitiveGraphStore {
       this.ownsDb = false;
     }
     this.initializeSchema();
+    installRuntimeProvenanceGuards(this.db);
   }
 
   private initializeSchema(): void {

@@ -6,6 +6,7 @@ import type {
 } from '../store/PolicyExecutionStore.js';
 
 export interface PolicySideEffect {
+  projectId: string;
   runtimeId?: string;
   policy: string;
   action: 'allow' | 'deny' | 'prefer';
@@ -69,7 +70,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
   async execute(effect: PolicySideEffect): Promise<PolicySideEffectResult> {
     const now = Date.now();
     const idempotencyKey = effect.idempotencyKey || this.computeIdempotencyKey(effect);
-    const existing = this.store.getByIdempotencyKey(idempotencyKey);
+    const existing = this.store.getByIdempotencyKey(effect.projectId, idempotencyKey);
 
     if (existing?.status === 'executed') {
       return {
@@ -91,6 +92,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
         const result = await this.delegate.execute({ ...effect, idempotencyKey });
         record = {
           ...record,
+          projectId: effect.projectId,
           runtimeId: effect.runtimeId,
           policy: effect.policy,
           action: effect.action,
@@ -121,6 +123,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
 
         record = {
           ...record,
+          projectId: effect.projectId,
           runtimeId: effect.runtimeId,
           policy: effect.policy,
           action: effect.action,
@@ -153,8 +156,8 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
     };
   }
 
-  replay(runtimeId: string): PolicySideEffectResult[] {
-    return this.store.listByRuntime(runtimeId).map((record) => ({
+  replay(projectId: string, runtimeId: string): PolicySideEffectResult[] {
+    return this.store.listByRuntime(projectId, runtimeId).map((record) => ({
       policy: record.policy,
       action: record.action as PolicySideEffectResult['action'],
       target: record.target,
@@ -163,8 +166,8 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
     }));
   }
 
-  async replayPending(now: number = Date.now()): Promise<PolicySideEffectResult[]> {
-    const pending = this.store.listPendingRetries(now)
+  async replayPending(projectId: string, now: number = Date.now()): Promise<PolicySideEffectResult[]> {
+    const pending = this.store.listPendingRetries(projectId, now)
       .filter((record) => record.replayPolicy !== 'manual');
     const results: PolicySideEffectResult[] = [];
 
@@ -174,6 +177,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
       }
 
       results.push(await this.execute({
+        projectId: record.projectId,
         runtimeId: record.runtimeId,
         policy: record.policy,
         action: record.action as PolicySideEffectResult['action'],
@@ -191,8 +195,8 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
     return results;
   }
 
-  getDeadLetters(runtimeId?: string): PolicySideEffectResult[] {
-    return this.store.listDeadLetters(runtimeId).map((record) => ({
+  getDeadLetters(projectId: string, runtimeId?: string): PolicySideEffectResult[] {
+    return this.store.listDeadLetters(projectId, runtimeId).map((record) => ({
       policy: record.policy,
       action: record.action as PolicySideEffectResult['action'],
       target: record.target,
@@ -209,6 +213,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
   ): PolicyExecutionRecord {
     return {
       executionId: `pex-${randomUUID()}`,
+      projectId: effect.projectId,
       idempotencyKey,
       runtimeId: effect.runtimeId,
       policy: effect.policy,
@@ -231,6 +236,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
 
   private computeIdempotencyKey(effect: PolicySideEffect): string {
     const raw = JSON.stringify({
+      projectId: effect.projectId,
       runtimeId: effect.runtimeId,
       policy: effect.policy,
       action: effect.action,

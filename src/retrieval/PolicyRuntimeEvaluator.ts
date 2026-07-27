@@ -3,7 +3,9 @@ import { PlanDslExecutor, type PlanExecutionContext } from './PlanDslExecutor.js
 import type { PlanRuntimeStore } from '../store/PlanRuntimeStore.js';
 import { NoopPolicySideEffectExecutor, type PolicySideEffectExecutor, type PolicySideEffectResult } from './PolicySideEffectExecutor.js';
 
-export interface PolicyRuntimeContext extends ConditionEvaluationContext, PlanExecutionContext {}
+export interface PolicyRuntimeContext extends ConditionEvaluationContext, PlanExecutionContext {
+  projectId: string;
+}
 
 export interface PolicyRuntimeDecision {
   runtimeId?: string;
@@ -122,6 +124,7 @@ export class PolicyRuntimeEvaluator {
         || decision.executableSteps[0];
 
       const result = await executor.execute({
+        projectId: context.projectId,
         runtimeId: decision.runtimeId,
         policy: policyAction.policy,
         action: policyAction.action,

@@ -77,6 +77,7 @@ export class PolicyRuntimeEvaluator {
             const target = policyRuntime.find((item) => item.policy === policyAction.policy)?.target
                 || decision.executableSteps[0];
             const result = await executor.execute({
+                projectId: context.projectId,
                 runtimeId: decision.runtimeId,
                 policy: policyAction.policy,
                 action: policyAction.action,

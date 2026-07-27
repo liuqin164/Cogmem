@@ -72,8 +72,13 @@ describe('Governance and security v1.14', () => {
 
   test('every current persistent table has an explicit privacy classification', () => {
     const kernel = createMemoryKernel();
-    const tables = (kernel.factStore.getDatabase().prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name);
+    const db = kernel.factStore.getDatabase();
+    const tables = (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name);
     expect(tables.filter((table) => !PRIVACY_SCHEMA_CLASSIFICATION[table] && !/^(?:neurons|memory_events|memory_atlas|deep_write_summaries)_fts(?:_|$)/.test(table))).toEqual([]);
+    const triggers = (db.prepare(`SELECT name FROM sqlite_master WHERE type='trigger'`).all() as Array<{ name: string }>).map((row) => row.name);
+    for (const trigger of ['synapses_scope_insert','belief_evidence_scope_insert','cognitive_node_source_insert','pending_entity_scope_insert','memory_binding_scope_insert']) {
+      expect(triggers).toContain(trigger);
+    }
     kernel.close();
   });
 
@@ -256,6 +261,18 @@ describe('Governance and security v1.14', () => {
       record_hash,source_id,source_path,source_type,content_hash,content_window_start,
       content_window_end,processed_at,neuron_id,project_scope
     ) VALUES('dangling-forget','source','/private','conversation_markdown','secret',0,1,1,NULL,'forget-me')`).run();
+    db.prepare(`INSERT INTO policy_executions(
+      execution_id,project_scope,idempotency_key,policy,action,status,attempt_count,detail,created_at,updated_at
+    ) VALUES('forget-policy','forget-me','forget-key','private','allow','executed',1,'private policy detail',1,1)`).run();
+    db.exec(`CREATE TABLE IF NOT EXISTS pending_entity_resolution_quarantine(
+      pending_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL,
+      project_scope TEXT NOT NULL DEFAULT '',implicated_scopes_json TEXT NOT NULL DEFAULT '[]',
+      context_neuron_id TEXT,scope_resolved INTEGER NOT NULL DEFAULT 0
+    )`);
+    db.prepare(`INSERT INTO pending_entity_resolution_quarantine(
+      pending_id,record_json,reason,created_at,project_scope,implicated_scopes_json,context_neuron_id,scope_resolved
+    ) VALUES('forget-pending',?,'pending_context_unproven',1,'forget-me','["forget-me"]',?,1)`)
+      .run(JSON.stringify({ context_neuron_id: forgotten.id, reference_text: 'private pending detail' }), forgotten.id);
 
     const result = await kernel.forgetUser('forget-me', 'user_requested');
 
@@ -282,6 +299,8 @@ describe('Governance and security v1.14', () => {
     expect(db.prepare(`SELECT summary_id FROM deep_write_summaries`).all()).toEqual([{ summary_id: 'named-keep' }]);
     expect(db.prepare(`SELECT COUNT(*) AS count FROM pipeline_nonfatal_events WHERE project_id='forget-me'`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM ingestion_processed_records WHERE project_scope='forget-me'`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM policy_executions WHERE project_scope='forget-me'`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM pending_entity_resolution_quarantine WHERE project_scope='forget-me'`).get()).toEqual({ count: 0 });
     expect(kernel.entityStore.findByEntityId(forgottenEntity.entityId)).toBeNull();
     expect(kernel.entityStore.findByEntityId(legacyMentionOnlyEntity.entityId)).toBeNull();
     expect(kernel.entityStore.findByEntityId(keptEntity.entityId)).not.toBeNull();
