@@ -13,7 +13,7 @@ export interface PolicyExecutionRecord {
   policy: string;
   action: string;
   target?: string;
-  status: 'executed' | 'skipped' | 'failed';
+  status: 'in_progress' | 'executed' | 'skipped' | 'failed';
   attemptCount: number;
   nextRetryAt?: number;
   deadLetteredAt?: number;
@@ -26,6 +26,8 @@ export interface PolicyExecutionRecord {
   eventType?: string;
   detail?: string;
   metadata?: Record<string, unknown>;
+  leaseOwner?: string;
+  leaseUntil?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -41,25 +43,37 @@ export interface PolicyExecutionAuditFilters {
   eventType?: string[];
   policy?: string[];
   target?: string[];
-  status?: Array<'executed' | 'skipped' | 'failed'>;
+  status?: Array<'in_progress' | 'executed' | 'skipped' | 'failed'>;
   replayPolicy?: PolicyReplayPolicy[];
   startTime?: number;
   endTime?: number;
 }
 
+export type PolicyExecutionClaim =
+  | { kind: 'claimed'; record: PolicyExecutionRecord }
+  | { kind: 'executed'; record: PolicyExecutionRecord }
+  | { kind: 'busy'; record: PolicyExecutionRecord }
+  | { kind: 'ambiguous'; record?: PolicyExecutionRecord };
+
 export class PolicyExecutionStore {
   private db: Database;
+  private ownsDb: boolean;
   private eventStore?: EventStore;
 
-  constructor(dbPath: string = ':memory:', eventStore?: EventStore) {
-    this.db = new Database(dbPath);
+  constructor(dbPath: string | Database = ':memory:', eventStore?: EventStore) {
+    this.db = typeof dbPath === 'string' ? new Database(dbPath) : dbPath;
+    this.ownsDb = typeof dbPath === 'string';
     this.eventStore = eventStore;
     this.initializeSchema();
   }
 
   private initializeSchema(): void {
+    this.db.exec('PRAGMA busy_timeout=5000');
     const existing = this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='policy_executions'`).get();
-    if (existing && !this.hasScopedIdentity()) this.quarantineUnscopedExecutions();
+    if (existing && (!this.hasScopedIdentity()
+      || !['lease_owner','lease_until'].every((column) => this.tableColumns().has(column)))) {
+      throw new Error('policy_execution_schema_not_migrated');
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS policy_executions (
         execution_id TEXT PRIMARY KEY,
@@ -82,6 +96,8 @@ export class PolicyExecutionStore {
         event_type TEXT,
         detail TEXT,
         metadata_json TEXT,
+        lease_owner TEXT,
+        lease_until INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         UNIQUE(project_scope, idempotency_key)
@@ -98,29 +114,15 @@ export class PolicyExecutionStore {
 
       CREATE INDEX IF NOT EXISTS idx_policy_executions_causation
         ON policy_executions(causation_id, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS policy_execution_legacy_tombstones (
+        idempotency_key_hash TEXT PRIMARY KEY,
+        legacy_execution_id TEXT NOT NULL,
+        legacy_status TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `);
-
-    const columns = this.db.prepare(`PRAGMA table_info(policy_executions)`).all() as Array<{ name: string }>;
-    const columnNames = new Set(columns.map((column) => column.name));
-
-    if (!columnNames.has('actor_id')) {
-      this.db.exec(`ALTER TABLE policy_executions ADD COLUMN actor_id TEXT;`);
-    }
-    if (!columnNames.has('causation_id')) {
-      this.db.exec(`ALTER TABLE policy_executions ADD COLUMN causation_id TEXT;`);
-    }
-    if (!columnNames.has('policy_group')) {
-      this.db.exec(`ALTER TABLE policy_executions ADD COLUMN policy_group TEXT;`);
-    }
-    if (!columnNames.has('correlation_id')) {
-      this.db.exec(`ALTER TABLE policy_executions ADD COLUMN correlation_id TEXT;`);
-    }
-    if (!columnNames.has('stream_type')) {
-      this.db.exec(`ALTER TABLE policy_executions ADD COLUMN stream_type TEXT;`);
-    }
-    if (!columnNames.has('event_type')) {
-      this.db.exec(`ALTER TABLE policy_executions ADD COLUMN event_type TEXT;`);
-    }
   }
 
   getByIdempotencyKey(projectId: string, idempotencyKey: string): PolicyExecutionRecord | null {
@@ -130,14 +132,96 @@ export class PolicyExecutionStore {
     return row ? this.mapRow(row) : null;
   }
 
+  claim(
+    seed: PolicyExecutionRecord,
+    leaseOwner: string,
+    leaseUntil: number,
+    now: number = Date.now(),
+  ): PolicyExecutionClaim {
+    return this.db.transaction((): PolicyExecutionClaim => {
+      const keyHash = createHash('sha256').update(seed.idempotencyKey).digest('hex');
+      if (this.db.prepare(`SELECT 1 FROM policy_execution_legacy_tombstones WHERE idempotency_key_hash=?`).get(keyHash)) {
+        return { kind: 'ambiguous' } as PolicyExecutionClaim;
+      }
+      const inserted = this.db.prepare(`
+        INSERT INTO policy_executions (
+          execution_id,project_scope,idempotency_key,runtime_id,policy,action,target,status,
+          attempt_count,next_retry_at,dead_lettered_at,replay_policy,actor_id,causation_id,
+          correlation_id,policy_group,stream_type,event_type,detail,metadata_json,
+          lease_owner,lease_until,created_at,updated_at
+        ) VALUES (?,?,?,?,?,?,?,'in_progress',?,NULL,NULL,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(project_scope,idempotency_key) DO NOTHING
+      `).run(
+        seed.executionId, seed.projectId, seed.idempotencyKey, seed.runtimeId ?? null,
+        seed.policy, seed.action, seed.target ?? null, seed.attemptCount,
+        seed.replayPolicy ?? null, seed.actorId ?? null, seed.causationId ?? null,
+        seed.correlationId ?? null, seed.policyGroup ?? null, seed.streamType ?? 'system',
+        seed.eventType ?? 'POLICY_EXECUTION_UPDATED', seed.detail ?? null,
+        seed.metadata ? JSON.stringify(seed.metadata) : null,
+        leaseOwner, leaseUntil, seed.createdAt, now,
+      );
+      if (inserted.changes === 1) {
+        return { kind: 'claimed', record: this.getByIdempotencyKey(seed.projectId, seed.idempotencyKey)! } as PolicyExecutionClaim;
+      }
+
+      let existing = this.getByIdempotencyKey(seed.projectId, seed.idempotencyKey)!;
+      if (existing.status === 'executed' || existing.status === 'skipped') return { kind: 'executed', record: existing };
+      if (existing.status === 'in_progress') {
+        if ((existing.leaseUntil ?? 0) > now) return { kind: 'busy', record: existing };
+        const expired = this.db.prepare(`
+          UPDATE policy_executions
+          SET status='failed',detail='execution_outcome_ambiguous_after_lease_expiry',
+              dead_lettered_at=?,next_retry_at=NULL,lease_owner=NULL,lease_until=NULL,updated_at=?
+          WHERE project_scope=? AND idempotency_key=? AND status='in_progress'
+            AND COALESCE(lease_until,0)<=?
+        `).run(now, now, seed.projectId, seed.idempotencyKey, now);
+        existing = this.getByIdempotencyKey(seed.projectId, seed.idempotencyKey)!;
+        return expired.changes === 1 ? { kind: 'ambiguous', record: existing } : { kind: 'busy', record: existing };
+      }
+      if (existing.deadLetteredAt !== undefined || (existing.nextRetryAt !== undefined && existing.nextRetryAt > now)) {
+        return { kind: 'busy', record: existing };
+      }
+      const claimed = this.db.prepare(`
+        UPDATE policy_executions
+        SET status='in_progress',lease_owner=?,lease_until=?,updated_at=?
+        WHERE project_scope=? AND idempotency_key=? AND status='failed'
+          AND dead_lettered_at IS NULL AND (next_retry_at IS NULL OR next_retry_at<=?)
+      `).run(leaseOwner, leaseUntil, now, seed.projectId, seed.idempotencyKey, now);
+      existing = this.getByIdempotencyKey(seed.projectId, seed.idempotencyKey)!;
+      return claimed.changes === 1 ? { kind: 'claimed', record: existing } : { kind: 'busy', record: existing };
+    })();
+  }
+
+  finishClaim(record: PolicyExecutionRecord, leaseOwner: string, options?: { emitEvent?: boolean }): void {
+    if (record.status === 'in_progress') throw new Error('policy_execution_terminal_status_required');
+    const result = this.db.prepare(`
+      UPDATE policy_executions SET
+        runtime_id=?,policy=?,action=?,target=?,status=?,attempt_count=?,
+        next_retry_at=?,dead_lettered_at=?,replay_policy=?,actor_id=?,causation_id=?,
+        correlation_id=?,policy_group=?,stream_type=?,event_type=?,detail=?,metadata_json=?,
+        lease_owner=NULL,lease_until=NULL,updated_at=?
+      WHERE project_scope=? AND idempotency_key=? AND status='in_progress' AND lease_owner=?
+    `).run(
+      record.runtimeId ?? null, record.policy, record.action, record.target ?? null,
+      record.status, record.attemptCount, record.nextRetryAt ?? null,
+      record.deadLetteredAt ?? null, record.replayPolicy ?? null, record.actorId ?? null,
+      record.causationId ?? null, record.correlationId ?? null, record.policyGroup ?? null,
+      record.streamType ?? 'system', record.eventType ?? 'POLICY_EXECUTION_UPDATED',
+      record.detail ?? null, record.metadata ? JSON.stringify(record.metadata) : null,
+      record.updatedAt, record.projectId, record.idempotencyKey, leaseOwner,
+    );
+    if (result.changes !== 1) throw new Error('policy_execution_claim_lost');
+    if (options?.emitEvent !== false) this.emitRecord(record);
+  }
+
   upsert(record: PolicyExecutionRecord, options?: { emitEvent?: boolean }): void {
     this.db.prepare(`
       INSERT INTO policy_executions (
         execution_id, project_scope, idempotency_key, runtime_id, policy, action, target,
         status, attempt_count, next_retry_at, dead_lettered_at, replay_policy,
         actor_id, causation_id, correlation_id, policy_group, stream_type, event_type,
-        detail, metadata_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        detail, metadata_json, lease_owner, lease_until, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(project_scope, idempotency_key) DO UPDATE SET
         runtime_id=excluded.runtime_id, policy=excluded.policy, action=excluded.action,
         target=excluded.target, status=excluded.status, attempt_count=excluded.attempt_count,
@@ -146,7 +230,8 @@ export class PolicyExecutionStore {
         causation_id=excluded.causation_id, correlation_id=excluded.correlation_id,
         policy_group=excluded.policy_group, stream_type=excluded.stream_type,
         event_type=excluded.event_type, detail=excluded.detail,
-        metadata_json=excluded.metadata_json, updated_at=excluded.updated_at
+        metadata_json=excluded.metadata_json, lease_owner=excluded.lease_owner,
+        lease_until=excluded.lease_until, updated_at=excluded.updated_at
     `).run(
       record.executionId,
       record.projectId,
@@ -168,12 +253,17 @@ export class PolicyExecutionStore {
       record.eventType || 'POLICY_EXECUTION_UPDATED',
       record.detail ?? null,
       record.metadata ? JSON.stringify(record.metadata) : null,
+      record.leaseOwner ?? null,
+      record.leaseUntil ?? null,
       record.createdAt,
       record.updatedAt
     );
 
-    if (options?.emitEvent !== false) {
-      this.eventStore?.append({
+    if (options?.emitEvent !== false) this.emitRecord(record);
+  }
+
+  private emitRecord(record: PolicyExecutionRecord): void {
+    this.eventStore?.append({
         streamId: `policy:${record.projectId.length}:${record.projectId}:${record.idempotencyKey}`,
         streamType: 'system',
         eventType: 'POLICY_EXECUTION_UPDATED',
@@ -206,8 +296,7 @@ export class PolicyExecutionStore {
           createdAt: record.createdAt,
           updatedAt: record.updatedAt
         }
-      });
-    }
+    });
   }
 
   listByRuntime(projectId: string, runtimeId: string): PolicyExecutionRecord[] {
@@ -313,7 +402,7 @@ export class PolicyExecutionStore {
   }
 
   close(): void {
-    this.db.close();
+    if (this.ownsDb) this.db.close();
   }
 
   private buildFilterSql(filters?: PolicyExecutionAuditFilters): {
@@ -408,13 +497,15 @@ export class PolicyExecutionStore {
       eventType: row.event_type || undefined,
       detail: row.detail || undefined,
       metadata: row.metadata_json ? JSON.parse(row.metadata_json) : undefined,
+      leaseOwner: row.lease_owner || undefined,
+      leaseUntil: row.lease_until ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at
     };
   }
 
   private hasScopedIdentity(): boolean {
-    const columns = new Set((this.db.prepare(`PRAGMA table_info(policy_executions)`).all() as Array<{ name: string }>).map((row) => row.name));
+    const columns = this.tableColumns();
     if (!columns.has('project_scope')) return false;
     return (this.db.prepare(`PRAGMA index_list(policy_executions)`).all() as Array<{ name: string; unique: number }>)
       .filter((index) => index.unique === 1)
@@ -422,26 +513,7 @@ export class PolicyExecutionStore {
         .map((column) => column.name).join('|') === 'project_scope|idempotency_key');
   }
 
-  private quarantineUnscopedExecutions(): void {
-    const rows = this.db.prepare(`SELECT * FROM policy_executions`).all() as Array<Record<string, unknown>>;
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS policy_execution_quarantine (
-        execution_id TEXT PRIMARY KEY,
-        record_hash TEXT NOT NULL,
-        reason TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-      ALTER TABLE policy_executions RENAME TO policy_executions_unscoped;
-    `);
-    const insert = this.db.prepare(`INSERT OR REPLACE INTO policy_execution_quarantine VALUES(?,?,?,?)`);
-    for (const row of rows) {
-      insert.run(
-        String(row.execution_id),
-        createHash('sha256').update(JSON.stringify(row)).digest('hex'),
-        'project_scope_unproven',
-        Date.now(),
-      );
-    }
-    this.db.exec(`DROP TABLE policy_executions_unscoped`);
+  private tableColumns(): Set<string> {
+    return new Set((this.db.prepare(`PRAGMA table_info(policy_executions)`).all() as Array<{ name: string }>).map((row) => row.name));
   }
 }

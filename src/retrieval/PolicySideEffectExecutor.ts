@@ -36,6 +36,7 @@ export interface ReliablePolicyExecutorOptions {
   strategy?: 'linear' | 'exponential';
   jitterRatio?: number;
   maxBackoffMs?: number;
+  leaseMs?: number;
 }
 
 export class NoopPolicySideEffectExecutor implements PolicySideEffectExecutor {
@@ -54,6 +55,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
   private strategy: 'linear' | 'exponential';
   private jitterRatio: number;
   private maxBackoffMs: number;
+  private leaseMs: number;
 
   constructor(
     private delegate: PolicySideEffectExecutor,
@@ -65,31 +67,56 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
     this.strategy = options?.strategy || 'linear';
     this.jitterRatio = Math.max(0, Math.min(options?.jitterRatio ?? 0, 1));
     this.maxBackoffMs = Math.max(backoffMs, options?.maxBackoffMs ?? backoffMs * 16);
+    this.leaseMs = Math.max(1_000, options?.leaseMs ?? 5 * 60_000);
   }
 
   async execute(effect: PolicySideEffect): Promise<PolicySideEffectResult> {
     const now = Date.now();
     const idempotencyKey = effect.idempotencyKey || this.computeIdempotencyKey(effect);
-    const existing = this.store.getByIdempotencyKey(effect.projectId, idempotencyKey);
-
-    if (existing?.status === 'executed') {
+    const leaseOwner = `policy-worker-${randomUUID()}`;
+    const claim = this.store.claim(
+      this.buildRecord(effect, idempotencyKey, now, 0),
+      leaseOwner,
+      now + this.leaseMs,
+      now,
+    );
+    if (claim.kind === 'executed') {
       return {
-        policy: existing.policy,
-        action: existing.action as PolicySideEffectResult['action'],
-        target: existing.target,
+        policy: claim.record.policy,
+        action: claim.record.action as PolicySideEffectResult['action'],
+        target: claim.record.target,
         status: 'skipped',
         detail: 'idempotent_replay'
       };
     }
+    if (claim.kind === 'ambiguous') return {
+      policy: effect.policy,
+      action: effect.action,
+      target: effect.target,
+      status: 'failed',
+      detail: claim.record?.detail || 'legacy_execution_scope_ambiguous',
+    };
+    if (claim.kind === 'busy') return {
+      policy: effect.policy,
+      action: effect.action,
+      target: effect.target,
+      status: claim.record.status === 'in_progress' ? 'skipped' : 'failed',
+      detail: claim.record.status === 'in_progress' ? 'execution_in_progress' : claim.record.detail || 'execution_retry_not_due',
+    };
 
-    let record = existing || this.buildRecord(effect, idempotencyKey, now, 0);
+    let record = claim.record;
     let lastError: unknown;
-    const attemptBase = existing?.attemptCount || 0;
+    const attemptBase = record.attemptCount;
 
     for (let localAttempt = 1; localAttempt <= this.maxRetries + 1; localAttempt++) {
       const totalAttempt = attemptBase + localAttempt;
       try {
         const result = await this.delegate.execute({ ...effect, idempotencyKey });
+        if (result.status === 'failed') {
+          lastError = new Error(result.detail || 'policy_delegate_failed');
+          if (localAttempt <= this.maxRetries) continue;
+          break;
+        }
         record = {
           ...record,
           projectId: effect.projectId,
@@ -103,7 +130,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
           policyGroup: effect.policyGroup,
           streamType: 'system',
           eventType: 'POLICY_EXECUTION_UPDATED',
-          status: result.status === 'failed' ? 'failed' : 'executed',
+          status: result.status,
           attemptCount: totalAttempt,
           nextRetryAt: undefined,
           deadLetteredAt: undefined,
@@ -112,47 +139,46 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
           metadata: effect.metadata,
           updatedAt: Date.now()
         };
-        this.store.upsert(record);
+        this.store.finishClaim(record, leaseOwner);
         return result;
       } catch (error) {
         lastError = error;
-        const replayPolicy = effect.replayPolicy || record.replayPolicy || 'manual';
-        const isLastAttempt = localAttempt >= this.maxRetries + 1;
-        const shouldRetryLater = !isLastAttempt || replayPolicy !== 'manual';
-        const deadLetter = isLastAttempt && (replayPolicy === 'manual');
-
-        record = {
-          ...record,
-          projectId: effect.projectId,
-          runtimeId: effect.runtimeId,
-          policy: effect.policy,
-          action: effect.action,
-          target: effect.target,
-          actorId: effect.actorId,
-          causationId: effect.causationId,
-          correlationId: effect.correlationId,
-          policyGroup: effect.policyGroup,
-          streamType: 'system',
-          eventType: 'POLICY_EXECUTION_UPDATED',
-          status: 'failed',
-          attemptCount: totalAttempt,
-          nextRetryAt: shouldRetryLater ? Date.now() + this.computeBackoff(totalAttempt, idempotencyKey) : undefined,
-          deadLetteredAt: deadLetter ? Date.now() : undefined,
-          replayPolicy,
-          detail: error instanceof Error ? error.message : String(error),
-          metadata: effect.metadata,
-          updatedAt: Date.now()
-        };
-        this.store.upsert(record);
+        if (localAttempt <= this.maxRetries) continue;
       }
     }
 
+    const replayPolicy = effect.replayPolicy || record.replayPolicy || 'manual';
+    const failedAt = Date.now();
+    const totalAttempt = attemptBase + this.maxRetries + 1;
+    record = {
+      ...record,
+      projectId: effect.projectId,
+      runtimeId: effect.runtimeId,
+      policy: effect.policy,
+      action: effect.action,
+      target: effect.target,
+      actorId: effect.actorId,
+      causationId: effect.causationId,
+      correlationId: effect.correlationId,
+      policyGroup: effect.policyGroup,
+      streamType: 'system',
+      eventType: 'POLICY_EXECUTION_UPDATED',
+      status: 'failed',
+      attemptCount: totalAttempt,
+      nextRetryAt: replayPolicy === 'manual' ? undefined : failedAt + this.computeBackoff(totalAttempt, idempotencyKey),
+      deadLetteredAt: replayPolicy === 'manual' ? failedAt : undefined,
+      replayPolicy,
+      detail: lastError instanceof Error ? lastError.message : String(lastError),
+      metadata: effect.metadata,
+      updatedAt: failedAt,
+    };
+    this.store.finishClaim(record, leaseOwner);
     return {
       policy: effect.policy,
       action: effect.action,
       target: effect.target,
       status: 'failed',
-      detail: lastError instanceof Error ? lastError.message : String(lastError)
+      detail: record.detail,
     };
   }
 

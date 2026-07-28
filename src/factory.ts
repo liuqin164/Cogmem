@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type Database from 'bun:sqlite';
+import Database from 'bun:sqlite';
 import type { GraphEdgeStoreLike } from './types/ExtensionPoints.js';
 
 import { BeliefStore } from './belief/BeliefStore.js';
@@ -82,6 +82,7 @@ import {
 } from './governance/index.js';
 import { ALL_MIGRATIONS, KERNEL_MIGRATIONS, SchemaMigrationRunner } from './migrations/index.js';
 import { installRuntimeProvenanceGuards } from './migrations/0059_project_execution_and_provenance_guards.js';
+import { backupDatabase } from './migrations/MigrationBackup.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -672,6 +673,31 @@ export class MemoryKernel {
     this.dbPath = options.dbPath ?? ':memory:';
     this.encryptionProvider = options.encryptionProvider;
     this.piiRedactor = options.redactionPolicy === false ? undefined : new PiiRedactor(options.redactionPolicy);
+
+    // Existing databases must be migrated before any Store constructor can
+    // inspect or patch an old table. Fresh databases still use the Stores as
+    // the compact bootstrap for the pre-0015 runtime schema.
+    const migrationDb = new Database(this.dbPath);
+    let existingSchema = false;
+    try {
+      migrationDb.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+      existingSchema = Boolean(migrationDb.prepare(`
+        SELECT 1 FROM sqlite_master
+        WHERE type='table' AND name NOT LIKE 'sqlite_%'
+        LIMIT 1
+      `).get());
+      if (existingSchema) {
+        const planner = new SchemaMigrationRunner(migrationDb, KERNEL_MIGRATIONS);
+        const needsBackup = planner.plan().some((migration) => migration.requiresBackup);
+        const backupPath = needsBackup ? backupDatabase(migrationDb, this.dbPath) : undefined;
+        new SchemaMigrationRunner(migrationDb, KERNEL_MIGRATIONS, {
+          backupVerified: !needsBackup || Boolean(backupPath),
+        }).run();
+      }
+    } finally {
+      migrationDb.close();
+    }
+
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
     this.memoryGraph = new MemoryGraph(db);
@@ -680,7 +706,7 @@ export class MemoryKernel {
     if ((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys?: number } | undefined)?.foreign_keys !== 1) {
       throw new Error('memory_kernel_foreign_keys_disabled');
     }
-    new SchemaMigrationRunner(db, KERNEL_MIGRATIONS).run();
+    if (!existingSchema) new SchemaMigrationRunner(db, KERNEL_MIGRATIONS, { backupVerified: true }).run();
     const rebuildJobColumns = db.prepare(`PRAGMA table_info(topology_time_rebuild_jobs)`).all() as Array<{ name: string }>;
     if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_token')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_token TEXT`);
     if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_lease_until')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_lease_until INTEGER`);
@@ -759,7 +785,7 @@ export class MemoryKernel {
     this.memoryBindingStore = new MemoryBindingStore(db);
     installRuntimeProvenanceGuards(db);
     this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
-    this.memoryAtlasStore = new MemoryAtlasStore(db);
+    this.memoryAtlasStore = new MemoryAtlasStore(db, this.projectClock.timeZone);
     this.memoryFrameStore = new MemoryFrameStore(db);
     this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore, this.memoryFrameStore);
     this.memoryAtlasService = new MemoryAtlasService(this.memoryAtlasStore, this.eventStore);

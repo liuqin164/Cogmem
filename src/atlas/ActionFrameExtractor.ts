@@ -6,6 +6,7 @@ import type { MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { actionMarkers } from './MemoryAtlasQueryCompiler.js';
 import { localDateFor, localDateRange } from '../utils/LocalDateContext.js';
+import { resolveTextAlias } from '../semantic/CanonicalMemoryResolver.js';
 
 interface TargetMatch {
   entityId?: string;
@@ -15,6 +16,7 @@ interface TargetMatch {
 }
 
 interface EntityCandidate {
+  stableId: string;
   entityId: string;
   canonicalName: string;
   aliases: string[];
@@ -128,12 +130,14 @@ export class ActionFrameExtractor {
     if (!candidates) {
       const rows = this.db.prepare(`SELECT entity_id,canonical_name,aliases_json FROM memory_entities WHERE project_id=?`).all(projectId) as Array<Record<string, unknown>>;
       candidates = rows.map((row) => ({
-        entityId: String(row.entity_id), canonicalName: String(row.canonical_name), aliases: parseAliases(row.aliases_json),
-      }));
+        stableId: String(row.entity_id),
+        entityId: String(row.entity_id),
+        canonicalName: String(row.canonical_name),
+        aliases: [String(row.canonical_name), ...parseAliases(row.aliases_json)],
+      })).sort((left, right) => left.stableId.localeCompare(right.stableId));
       cache.set(projectId, candidates);
     }
-    const normalized = normalize(text);
-    const matched = candidates.find((candidate) => candidate.aliases.some((alias) => alias.length > 1 && normalized.includes(normalize(alias))));
+    const matched = resolveTextAlias(text, candidates);
     return matched ? { entityId: matched.entityId, entityName: matched.canonicalName, confidence: 0.82 } : { confidence: 0.65 };
   }
 }
@@ -144,5 +148,4 @@ function parseAliases(value: unknown): string[] {
     return Array.from(new Set(Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []));
   } catch { return []; }
 }
-function normalize(value: string): string { return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ''); }
 function optionalString(value: unknown): string | undefined { return typeof value === 'string' && value ? value : undefined; }

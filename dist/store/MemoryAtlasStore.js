@@ -1,12 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { decodeAtlasNodeId, encodeAtlasNodeId, fromAtlasEdgeEndpoint } from '../atlas/AtlasNodeIdCodec.js';
-import { normalizeAlias } from '../semantic/CanonicalMemoryResolver.js';
+import { containsCanonicalAlias, normalizeAlias } from '../semantic/CanonicalMemoryResolver.js';
+import { localDateFor, localDateRange } from '../utils/LocalDateContext.js';
 export const MEMORY_ATLAS_PROJECTION_NAME = 'memory_atlas.v2';
 export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.4';
 export class MemoryAtlasStore {
     db;
-    constructor(db) {
+    projectTimeZone;
+    constructor(db, projectTimeZone) {
         this.db = db;
+        this.projectTimeZone = projectTimeZone;
     }
     upsertDocument(input) {
         this.db.prepare(`
@@ -217,21 +220,17 @@ export class MemoryAtlasStore {
             .slice(0, Math.max(1, Math.min(limit, 20)));
     }
     resolveTargetNodeIds(projectId, query) {
-        const normalizedQuery = normalizeLookup(query);
         const candidates = this.db.prepare(`
       SELECT node_id,node_type,source_id,label,topic_path,metadata_json,evidence_event_ids_json
       FROM memory_atlas_documents
       WHERE project_id=? AND node_type IN ('entity','topic','issue','project','actor','event','task','object','location','state','time','episode') AND status NOT IN ('rejected','archived','needs_confirmation')
     `).all(projectId);
-        const seeds = [];
-        const labels = [];
+        const matchedRows = [];
         for (const row of candidates) {
-            const aliases = lookupAliases(row);
-            const matched = aliases.find((alias) => alias.length > 1 && normalizedQuery.includes(normalizeLookup(alias)));
-            if (!matched)
-                continue;
-            seeds.push(row);
-            labels.push(String(row.label));
+            for (const alias of lookupAliases(row)) {
+                if (containsCanonicalAlias(query, alias))
+                    matchedRows.push({ alias: normalizeAlias(alias), row });
+            }
         }
         try {
             const aliasRows = this.db.prepare(`
@@ -243,16 +242,30 @@ export class MemoryAtlasStore {
           AND d.status NOT IN ('rejected','archived','needs_confirmation')
       `).all(projectId);
             for (const row of aliasRows) {
-                const alias = normalizeLookup(String(row.normalized_alias ?? ''));
-                if (alias.length <= 1 || !normalizedQuery.includes(alias))
-                    continue;
-                if (!seeds.some((seed) => seed.node_id === row.node_id)) {
-                    seeds.push(row);
-                    labels.push(String(row.label));
-                }
+                const alias = String(row.normalized_alias ?? '');
+                if (containsCanonicalAlias(query, alias))
+                    matchedRows.push({ alias: normalizeAlias(alias), row });
             }
         }
         catch { /* pre-0033 databases use document aliases only */ }
+        const seeds = [];
+        const labels = [];
+        const groups = new Map();
+        for (const match of matchedRows) {
+            const group = groups.get(match.alias) ?? [];
+            if (!group.some((row) => row.node_id === match.row.node_id))
+                group.push(match.row);
+            groups.set(match.alias, group);
+        }
+        for (const [alias, rows] of [...groups].sort((left, right) => right[0].length - left[0].length || left[0].localeCompare(right[0]))) {
+            if (rows.length !== 1)
+                continue;
+            const row = rows[0];
+            if (!seeds.some((seed) => seed.node_id === row.node_id)) {
+                seeds.push(row);
+                labels.push(String(row.label));
+            }
+        }
         if (!seeds.length)
             return { nodeIds: [], entitySourceIds: [], labels: [] };
         const ids = new Set(seeds.map((row) => String(row.node_id)));
@@ -315,17 +328,15 @@ export class MemoryAtlasStore {
         return this.evidenceIds(nodeId, projectId, 100_000).length;
     }
     hasEvidenceInRange(nodeId, projectId, from, to) {
-        const fromDate = from === undefined ? undefined : new Date(from).toISOString().slice(0, 10);
-        const toDate = to === undefined ? undefined : new Date(to).toISOString().slice(0, 10);
         const clauses = ['s.project_id=?', 's.node_id=?', "s.status='active'", 'e.event_id=json_each.value'];
         const params = [projectId, nodeId];
         if (from !== undefined) {
-            clauses.push('(e.occurred_at>=? OR e.local_date>=?)');
-            params.push(from, fromDate);
+            clauses.push('e.occurred_at>=?');
+            params.push(from);
         }
         if (to !== undefined) {
-            clauses.push('(e.occurred_at<? OR e.local_date<?)');
-            params.push(to, toDate);
+            clauses.push('e.occurred_at<?');
+            params.push(to);
         }
         const row = this.db.prepare(`SELECT 1 FROM memory_atlas_supports s JOIN json_each(s.evidence_event_ids_json) ON true JOIN memory_events e ON ${clauses.slice(3).join(' AND ')} WHERE ${clauses.slice(0, 3).join(' AND ')} LIMIT 1`).get(...params);
         return Boolean(row);
@@ -362,7 +373,7 @@ export class MemoryAtlasStore {
         for (const action of actions) {
             if (action.target_entity_id)
                 edges.push({ source: `action:${action.action_id}`, relation: 'TARGETS', target: `entity:${action.target_entity_id}`, confidence: action.confidence, evidenceEventIds: this.actionEvidenceIds(action.action_id, projectId) });
-            edges.push({ source: `action:${action.action_id}`, relation: 'OCCURRED_IN', target: timeNodeId(projectId, action.occurred_at), confidence: 1, evidenceEventIds: this.actionEvidenceIds(action.action_id, projectId) });
+            edges.push({ source: `action:${action.action_id}`, relation: 'OCCURRED_IN', target: timeNodeId(projectId, action.occurred_at, this.projectTimeZone), confidence: 1, evidenceEventIds: this.actionEvidenceIds(action.action_id, projectId) });
         }
         edges.push(...this.topicRelationEdges(projectId));
         return edges;
@@ -403,7 +414,8 @@ export class MemoryAtlasStore {
         }
         for (const year of years) {
             actionClauses.push('(occurred_at>=? AND occurred_at<?)');
-            actionParams.push(Date.UTC(year, 0, 1), Date.UTC(year + 1, 0, 1));
+            const range = localDateRange(year, 1, 1, year + 1, 1, 1, this.projectTimeZone);
+            actionParams.push(range.from, range.to);
         }
         if (actionClauses.length) {
             const actions = this.db.prepare(`SELECT action_id,target_entity_id,occurred_at,confidence FROM memory_action_frames WHERE project_id=? AND (${actionClauses.join(' OR ')}) ORDER BY occurred_at DESC LIMIT ?`).all(...actionParams, Math.max(1, Math.min(limit, 2000)));
@@ -411,7 +423,7 @@ export class MemoryAtlasStore {
                 const evidenceEventIds = this.actionEvidenceIds(action.action_id, projectId);
                 if (action.target_entity_id)
                     edges.push({ source: `action:${action.action_id}`, relation: 'TARGETS', target: `entity:${action.target_entity_id}`, confidence: action.confidence, evidenceEventIds });
-                edges.push({ source: `action:${action.action_id}`, relation: 'OCCURRED_IN', target: timeNodeId(projectId, action.occurred_at), confidence: 1, evidenceEventIds });
+                edges.push({ source: `action:${action.action_id}`, relation: 'OCCURRED_IN', target: timeNodeId(projectId, action.occurred_at, this.projectTimeZone), confidence: 1, evidenceEventIds });
             }
         }
         const topicPaths = parsed.filter((item) => item.type === 'topic').map((item) => item.id);
@@ -454,7 +466,7 @@ export class MemoryAtlasStore {
                     if (action.target_entity_id && selectedIds.has(`entity:${action.target_entity_id}`)) {
                         edges.push({ source: `action:${action.action_id}`, relation: 'TARGETS', target: `entity:${action.target_entity_id}`, confidence: action.confidence, evidenceEventIds });
                     }
-                    const timeId = timeNodeId(projectId, action.occurred_at);
+                    const timeId = timeNodeId(projectId, action.occurred_at, this.projectTimeZone);
                     if (selectedIds.has(timeId))
                         edges.push({ source: `action:${action.action_id}`, relation: 'OCCURRED_IN', target: timeId, confidence: 1, evidenceEventIds });
                 }
@@ -491,7 +503,7 @@ export class MemoryAtlasStore {
                 const candidates = [];
                 if (row.target_entity_id)
                     candidates.push({ source: `action:${row.action_id}`, relation: 'TARGETS', target: `entity:${row.target_entity_id}`, confidence: row.confidence, evidenceEventIds });
-                candidates.push({ source: `action:${row.action_id}`, relation: 'OCCURRED_IN', target: timeNodeId(projectId, row.occurred_at), confidence: 1, evidenceEventIds });
+                candidates.push({ source: `action:${row.action_id}`, relation: 'OCCURRED_IN', target: timeNodeId(projectId, row.occurred_at, this.projectTimeZone), confidence: 1, evidenceEventIds });
                 edges.push(...candidates.filter((edge) => (edge.source === leftNodeId && edge.target === rightNodeId) || (edge.source === rightNodeId && edge.target === leftNodeId)));
             }
         }
@@ -536,7 +548,7 @@ export class MemoryAtlasStore {
                 const candidates = [];
                 if (action.target_entity_id)
                     candidates.push({ source: `action:${action.action_id}`, relation: 'TARGETS', target: `entity:${action.target_entity_id}`, confidence: action.confidence, evidenceEventIds });
-                candidates.push({ source: `action:${action.action_id}`, relation: 'OCCURRED_IN', target: timeNodeId(projectId, action.occurred_at), confidence: 1, evidenceEventIds });
+                candidates.push({ source: `action:${action.action_id}`, relation: 'OCCURRED_IN', target: timeNodeId(projectId, action.occurred_at, this.projectTimeZone), confidence: 1, evidenceEventIds });
                 edges.push(...candidates.filter((edge) => endpointPairs.has(`${edge.source}\0${edge.target}`)));
             }
         }
@@ -798,7 +810,7 @@ export class MemoryAtlasStore {
             parentTopics: matchedTopicPaths.length ? matchedTopicPaths : topicHints.length ? topicHints : row.topic_path ? [row.topic_path] : [],
             issueType: issueHints[0],
             eventKind: optionalMetadataString(metadata.eventKind),
-            localDate: optionalMetadataString(metadata.localDate) ?? (row.occurred_at ? new Date(row.occurred_at).toISOString().slice(0, 10) : undefined),
+            localDate: optionalMetadataString(metadata.localDate) ?? (row.occurred_at ? localDateFor(row.occurred_at, this.projectTimeZone) : undefined),
             whyMatched: matchedFacets.length ? `matched ${matchedFacets.map((facet) => `${facet.type}:${facet.value}`).join(', ')}` : 'matched canonical episode',
             relatedButNotSelected: [],
             evidenceEventIds,
@@ -840,7 +852,6 @@ function deriveMemoryKind(nodeType, metadata) {
     }
     return undefined;
 }
-function normalizeLookup(value) { return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ''); }
 function optionalText(value) { return typeof value === 'string' && value ? value : undefined; }
 function lookupAliases(row) {
     const aliases = [String(row.label || ''), String(row.topic_path || '')];
@@ -863,8 +874,8 @@ catch {
 } }
 function escapeLike(value) { return value.replace(/[\\%_]/g, '\\$&'); }
 function nodeId(type, id, projectId) { return encodeAtlasNodeId(type, id, projectId); }
-function timeNodeId(projectId, occurredAt) {
-    return `time:${projectId}:${new Date(occurredAt).getUTCFullYear()}`;
+function timeNodeId(projectId, occurredAt, timeZone) {
+    return `time:${projectId}:${localDateFor(occurredAt, timeZone).slice(0, 4)}`;
 }
 function scopedEntityNodeId(db, value, projectId) {
     if (!value.startsWith('entity:') || value.startsWith(`entity:${projectId}:`))

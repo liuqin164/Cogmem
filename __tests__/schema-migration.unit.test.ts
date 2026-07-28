@@ -81,6 +81,20 @@ describe('schema migration runner', () => {
     db.close();
   });
 
+  test('rejects the destructive temporary 0059 receipt with an explicit recovery path', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE _schema_migrations (version TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL, checksum TEXT);`);
+    db.prepare(`INSERT INTO _schema_migrations VALUES (?,?,?,?)`).run(
+      '0059',
+      'destructive policy execution migration',
+      new Date(0).toISOString(),
+      '28810d285ff8fa842ab6551541dd21f2368883af3a92f75d76e6e29c887ce9e1',
+    );
+    expect(() => new SchemaMigrationRunner(db, [migration_0059], { readonly: true }).run({ dryRun: true }))
+      .toThrow('migration_recovery_required:0059:restore_pre_0059_backup');
+    db.close();
+  });
+
   test('0059 quarantines unscoped policy rows and preserves deleted-context privacy scope', () => {
     const db = new Database(':memory:');
     db.exec(`
@@ -106,6 +120,9 @@ describe('schema migration runner', () => {
     expect(db.prepare(`SELECT execution_id,reason FROM policy_execution_quarantine`).get()).toEqual({
       execution_id: 'old', reason: 'project_scope_unproven',
     });
+    expect(db.prepare(`SELECT legacy_execution_id,legacy_status,reason FROM policy_execution_legacy_tombstones`).get()).toEqual({
+      legacy_execution_id: 'old', legacy_status: 'executed', reason: 'legacy_execution_scope_ambiguous',
+    });
     expect(db.prepare(`SELECT project_scope,implicated_scopes_json,context_neuron_id,scope_resolved
       FROM pending_entity_resolution_quarantine WHERE pending_id='known'`).get()).toEqual({
       project_scope: 'a', implicated_scopes_json: '["a"]', context_neuron_id: 'deleted-a', scope_resolved: 1,
@@ -128,6 +145,7 @@ describe('schema migration runner', () => {
         created_at INTEGER,updated_at INTEGER,PRIMARY KEY(source_id,target_id,type)
       );
       INSERT INTO synapses VALUES('a','b','a','related',1,1,1);
+      CREATE TRIGGER synapses_scope_insert BEFORE INSERT ON synapses BEGIN SELECT 1; END;
       CREATE TABLE task_identity_restoration_manifest(
         task_id TEXT PRIMARY KEY,project_id TEXT,task_key TEXT,title TEXT,status TEXT,source TEXT,
         recorded_at INTEGER,recovery_status TEXT
@@ -159,6 +177,19 @@ describe('schema migration runner', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM synapses`).get()).toEqual({ count: 0 });
     expect(() => db.prepare(`INSERT INTO synapses VALUES('a','b','a','related',1,1,1)`).run())
+      .toThrow('project_scope_mismatch');
+    const triggerSql = (db.prepare(`SELECT sql FROM sqlite_master WHERE type='trigger' AND name='synapses_scope_insert'`).get() as { sql: string }).sql;
+    expect(triggerSql).toContain(`RAISE(ABORT,'project_scope_mismatch')`);
+    expect(() => db.prepare(`INSERT INTO task_branches VALUES('task','a','secret-task','Secret','active',1,1)`).run())
+      .toThrow('project_scope_mismatch');
+    expect(() => db.prepare(`INSERT INTO task_branch_entries VALUES('task','a','a',NULL,NULL,NULL,NULL,1)`).run())
+      .toThrow('project_scope_mismatch');
+    expect(() => db.prepare(`INSERT INTO topology_membership VALUES('a','a','task_branch','secret-task','Secret',1)`).run())
+      .toThrow('project_scope_mismatch');
+    expect(() => db.prepare(`INSERT INTO cognitive_nodes VALUES('task-node','task_branch','secret-task','Secret','a',NULL,'{}',1,1)`).run())
+      .toThrow('project_scope_mismatch');
+    db.prepare(`INSERT INTO task_branches VALUES('safe','a','safe-task','Safe','active',1,1)`).run();
+    expect(() => db.prepare(`UPDATE task_branches SET task_key='secret-task' WHERE task_id='safe'`).run())
       .toThrow('project_scope_mismatch');
     db.close();
   });

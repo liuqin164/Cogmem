@@ -10,6 +10,7 @@ import { EventStore } from '../src/store/EventStore.js';
 import { PolicyExecutionProjector } from '../src/store/PolicyExecutionProjector.js';
 import { PolicyExecutionStore, type PolicyExecutionRecord } from '../src/store/PolicyExecutionStore.js';
 import { PolicyProjectionStore } from '../src/store/PolicyProjectionStore.js';
+import { migration_0059 } from '../src/migrations/0059_project_execution_and_provenance_guards.js';
 
 describe('policy execution project isolation', () => {
   test('the same effect executes independently in each exact project scope', async () => {
@@ -92,5 +93,102 @@ describe('policy execution project isolation', () => {
     executions.close();
     events.close();
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('concurrent callers atomically claim one side effect', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-concurrent-'));
+    const path = join(dir, 'policy.db');
+    const stores = Array.from({ length: 20 }, () => new PolicyExecutionStore(path));
+    let calls = 0;
+    const executors = stores.map((store) => new ReliablePolicySideEffectExecutor({
+      async execute(effect) {
+        calls += 1;
+        await Bun.sleep(10);
+        return { policy: effect.policy, action: effect.action, status: 'executed' };
+      },
+    }, store));
+
+    const results = await Promise.all(executors.map((executor) => executor.execute({
+      projectId: 'a', policy: 'once', action: 'allow', idempotencyKey: 'shared',
+    })));
+
+    expect(calls).toBe(1);
+    expect(results.filter((result) => result.status === 'executed')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'skipped')).toHaveLength(19);
+    for (const store of stores) store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('returned failures use retries and end in the manual dead letter queue', async () => {
+    const store = new PolicyExecutionStore(':memory:');
+    let calls = 0;
+    const executor = new ReliablePolicySideEffectExecutor({
+      execute(effect) {
+        calls += 1;
+        return { policy: effect.policy, action: effect.action, status: 'failed', detail: 'returned_failure' };
+      },
+    }, store, 2, 1);
+
+    const result = await executor.execute({ projectId: 'a', policy: 'retry', action: 'deny', idempotencyKey: 'failed' });
+
+    expect(calls).toBe(3);
+    expect(result).toMatchObject({ status: 'failed', detail: 'returned_failure' });
+    expect(store.getByIdempotencyKey('a', 'failed')).toMatchObject({
+      status: 'failed', attemptCount: 3, detail: 'returned_failure',
+    });
+    expect(executor.getDeadLetters('a')).toHaveLength(1);
+    store.close();
+  });
+
+  test('expired in-progress leases fail closed instead of replaying an ambiguous external action', async () => {
+    const store = new PolicyExecutionStore(':memory:');
+    const seed: PolicyExecutionRecord = {
+      executionId: 'crashed', projectId: 'a', idempotencyKey: 'ambiguous',
+      policy: 'once', action: 'allow', status: 'failed', attemptCount: 0,
+      createdAt: 1, updatedAt: 1,
+    };
+    expect(store.claim(seed, 'dead-worker', 2, 1).kind).toBe('claimed');
+    let calls = 0;
+    const executor = new ReliablePolicySideEffectExecutor({
+      execute(effect) {
+        calls += 1;
+        return { policy: effect.policy, action: effect.action, status: 'executed' };
+      },
+    }, store);
+
+    const result = await executor.execute({
+      projectId: 'a', policy: 'once', action: 'allow', idempotencyKey: 'ambiguous',
+    });
+
+    expect(calls).toBe(0);
+    expect(result).toMatchObject({ status: 'failed', detail: 'execution_outcome_ambiguous_after_lease_expiry' });
+    store.close();
+  });
+
+  test('legacy executed keys become fail-closed tombstones after migration', async () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE policy_executions(
+      execution_id TEXT PRIMARY KEY,idempotency_key TEXT UNIQUE,policy TEXT,action TEXT,status TEXT,
+      attempt_count INTEGER,detail TEXT,created_at INTEGER,updated_at INTEGER
+    );
+    INSERT INTO policy_executions VALUES('legacy','already-ran','p','allow','executed',1,NULL,1,1)`);
+    migration_0059.up(db);
+    const store = new PolicyExecutionStore(db);
+    let calls = 0;
+    const executor = new ReliablePolicySideEffectExecutor({
+      execute(effect) {
+        calls += 1;
+        return { policy: effect.policy, action: effect.action, status: 'executed' };
+      },
+    }, store);
+
+    const result = await executor.execute({
+      projectId: 'a', policy: 'p', action: 'allow', idempotencyKey: 'already-ran',
+    });
+
+    expect(calls).toBe(0);
+    expect(result).toMatchObject({ status: 'failed', detail: 'legacy_execution_scope_ambiguous' });
+    store.close();
+    db.close();
   });
 });

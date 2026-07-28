@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
+import { localDateFor, localDateRange } from '../src/utils/LocalDateContext.js';
 
 function createFixture(): { kernel: MemoryKernel; hermesEventId: string; privateEventId: string; hermesEntityId: string; hermesClusterId: string } {
   const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-atlas-')), 'memory.db');
@@ -279,6 +280,62 @@ test('ActionFrame extraction scans raw events, captures every action, and aggreg
     expect(year?.supportCount).toBeGreaterThanOrEqual(2);
     expect(year?.evidence.map((item) => item.eventId)).toEqual(expect.arrayContaining([hermesEventId, unbound.eventId]));
   } finally { kernel.close(); }
+});
+
+test('ActionFrame time edges use the project civil year across UTC boundary zones', () => {
+  const cases = [
+    { timeZone: 'Asia/Tokyo', occurredAt: Date.UTC(2026, 11, 31, 15, 30) },
+    { timeZone: 'Pacific/Kiritimati', occurredAt: Date.UTC(2026, 11, 31, 10, 30) },
+    { timeZone: 'Pacific/Pago_Pago', occurredAt: Date.UTC(2027, 0, 1, 10, 30) },
+  ];
+  for (const item of cases) {
+    const kernel = createMemoryKernel({ projectTimeZone: item.timeZone });
+    try {
+      kernel.eventStore.append({
+        streamId: `thread-${item.timeZone}`, streamType: 'thread', eventType: 'MESSAGE',
+        projectId: 'p', role: 'user', occurredAt: item.occurredAt,
+        payload: { text: '请更新 Atlas。' },
+      });
+      kernel.rebuildMemoryAtlas({ projectId: 'p' });
+      const year = localDateFor(item.occurredAt, item.timeZone).slice(0, 4);
+      const action = kernel.memoryAtlasStore.listNodes('p', 100).find((node) => node.nodeType === 'action');
+      expect(action).toBeDefined();
+      expect(kernel.memoryAtlasStore.listEdges('p')).toContainEqual(expect.objectContaining({
+        source: action!.id, relation: 'OCCURRED_IN', target: `time:p:${year}`,
+      }));
+      const range = localDateRange(Number(year), 1, 1, Number(year) + 1, 1, 1, item.timeZone);
+      expect(kernel.memoryAtlasStore.listActions('p', { ...range, limit: 30 }).length).toBeGreaterThan(0);
+    } finally {
+      kernel.close();
+    }
+  }
+});
+
+test('Atlas alias matching respects Latin token boundaries and rejects ambiguous action targets', () => {
+  const kernel = createMemoryKernel();
+  try {
+    kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'AI', entityType: 'tool', aliases: ['AI'], now: 1,
+    });
+    kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'Device One', entityType: 'device', aliases: ['device'], now: 1,
+    });
+    kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'Device Two', entityType: 'device', aliases: ['device'], now: 1,
+    });
+    kernel.eventStore.append({
+      streamId: 'said', streamType: 'thread', eventType: 'MESSAGE', projectId: 'p', role: 'user',
+      occurredAt: 2, payload: { text: 'I said update device.' },
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+
+    expect(kernel.memoryAtlasStore.resolveTargetNodeIds('p', 'said').labels).not.toContain('AI');
+    expect(kernel.memoryAtlasStore.resolveTargetNodeIds('p', 'AI').labels).toContain('AI');
+    expect(kernel.memoryAtlasStore.db.prepare(`SELECT target_entity_id FROM memory_action_frames LIMIT 1`).get())
+      .toEqual({ target_entity_id: null });
+  } finally {
+    kernel.close();
+  }
 });
 
 test('path and explore return a bounded source-anchored local graph without vectors', () => {

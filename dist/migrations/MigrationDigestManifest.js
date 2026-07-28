@@ -108,7 +108,7 @@ export const MIGRATION_DIGESTS = {
     '0056': '2743172591b85040c01c0910dd4372f0675b7b95a743edd537bec696f9403a89',
     '0057': '8be7c25bb58b57c5f8910e635b4b37794d5cf6d77ee6c6ceb0d3a29a50ce6a81',
     '0058': '49eba88670315e8c4a6801a0f60e865fe2a1fd5e61a1c0ad20b83d934f35310d',
-    '0059': '28810d285ff8fa842ab6551541dd21f2368883af3a92f75d76e6e29c887ce9e1',
+    '0059': '3b47db008ba0d7c95e3b6c09d1dc7bec7c4761ba7263a139f4e7a34b4c0e1b90',
 };
 // Audited receipts emitted by temporary 3.7.4 development builds.
 export const COMPATIBLE_MIGRATION_DIGESTS = {
@@ -118,6 +118,7 @@ export const COMPATIBLE_MIGRATION_DIGESTS = {
 /** Receipts from builds that irreversibly removed user payload and require a pre-migration backup. */
 export const UNSAFE_MIGRATION_DIGESTS = {
     '0057': ['8dbcc0843afc4dbafe63d4e82585323db52d69d1a34fc4611aa8c14c263171d9'],
+    '0059': ['28810d285ff8fa842ab6551541dd21f2368883af3a92f75d76e6e29c887ce9e1'],
 };
 export const CANONICAL_MIGRATION_SOURCE_DIGESTS = MIGRATION_DIGESTS;
 // 0049 calls these helpers while rewriting persisted identities. Their exact

@@ -27,6 +27,7 @@ export interface ReliablePolicyExecutorOptions {
     strategy?: 'linear' | 'exponential';
     jitterRatio?: number;
     maxBackoffMs?: number;
+    leaseMs?: number;
 }
 export declare class NoopPolicySideEffectExecutor implements PolicySideEffectExecutor {
     execute(effect: PolicySideEffect): PolicySideEffectResult;
@@ -39,6 +40,7 @@ export declare class ReliablePolicySideEffectExecutor implements PolicySideEffec
     private strategy;
     private jitterRatio;
     private maxBackoffMs;
+    private leaseMs;
     constructor(delegate: PolicySideEffectExecutor, store: PolicyExecutionStore, maxRetries?: number, backoffMs?: number, options?: ReliablePolicyExecutorOptions);
     execute(effect: PolicySideEffect): Promise<PolicySideEffectResult>;
     replay(projectId: string, runtimeId: string): PolicySideEffectResult[];

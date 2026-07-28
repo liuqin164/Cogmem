@@ -54,7 +54,7 @@ const MIGRATION_TABLES = [
     'memory_episode_events', 'memory_episodes', 'memory_frame_nodes', 'memory_frame_relations', 'memory_frame_reviews', 'memory_frames', 'memory_governance_audit', 'memory_governance_operations',
     'memory_governance_plans', 'memory_timeline_entries', 'memory_topics', 'migration_repair_receipts', 'neuron_embeddings', 'pipeline_checkpoints', 'pipeline_nonfatal_events', 'pipeline_runs', 'pipeline_step_timings',
     'prospective_memories', 'prospective_memory_transitions', 're_embedding_progress', 'scheduled_job_runs', 'scheduled_jobs', 'notification_records', 'notification_rules', 'workspace_settings', 'workspaces', 'meta_observations',
-    'task_identity_restoration_manifest', 'task_identity_recovery_quarantine', 'pending_entity_resolution_quarantine', 'policy_execution_quarantine', 'project_isolation_compensation_audit', 'topic_aliases', 'topic_nodes', 'topic_operations', 'topic_relations', 'topology_identity_quarantine', 'topology_projection_state', 'topology_source_revisions',
+    'task_identity_restoration_manifest', 'task_identity_recovery_quarantine', 'pending_entity_resolution_quarantine', 'policy_execution_quarantine', 'policy_execution_legacy_tombstones', 'project_isolation_compensation_audit', 'topic_aliases', 'topic_nodes', 'topic_operations', 'topic_relations', 'topology_identity_quarantine', 'topology_projection_state', 'topology_source_revisions',
     'topology_time_rebuild_active_neurons', 'topology_time_rebuild_adjacency', 'topology_time_rebuild_buckets', 'topology_time_rebuild_cognitive_edges', 'topology_time_rebuild_cognitive_nodes',
     'topology_time_rebuild_entries', 'topology_time_rebuild_jobs', 'user_session_runtime', 'vector_index', 'vector_write_outbox', 'web_session_tokens', 'working_memory_deltas', 'memory_activation',
     'file_assets', 'file_blocks', 'file_chunks', 'file_chunk_edges', 'user_insights',
@@ -85,7 +85,7 @@ const MIGRATION_PROVENANCE_OWNED = [
 ];
 const MIGRATION_OPERATIONAL_NON_PERSONAL = [
     '_episode_integrity_markers', '_memory_frame_integrity_markers', '_meta', 'agent_brain_health_checks', 'pipeline_runs',
-    'pipeline_step_timings', 'policy_execution_quarantine', 'project_isolation_compensation_audit', 'event_sequence_counters',
+    'pipeline_step_timings', 'policy_execution_quarantine', 'policy_execution_legacy_tombstones', 'project_isolation_compensation_audit', 'event_sequence_counters',
 ];
 const MIGRATION_IMMUTABLE_AUDIT = ['_schema_migrations', 'migration_repair_receipts', 'governance_audit_log'];
 const MIGRATION_CLASSIFICATION = explicitClassification(MIGRATION_TABLES, {

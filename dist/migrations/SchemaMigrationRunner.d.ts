@@ -5,6 +5,7 @@ export interface SchemaMigrationRunOptions {
 }
 export interface SchemaMigrationRunnerOptions {
     readonly?: boolean;
+    backupVerified?: boolean;
 }
 export interface SchemaMigrationResult {
     pending: string[];

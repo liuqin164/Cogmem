@@ -33,6 +33,10 @@ export class SchemaMigrationRunner {
         this.repairKnownLegacyFunctionChecksums();
         this.assertRecordedChecksums();
         const pending = this.plan();
+        const filename = this.db.filename;
+        if (filename && filename !== ':memory:' && pending.some((migration) => migration.requiresBackup) && !this.options.backupVerified) {
+            throw new Error('migration_backup_required');
+        }
         const applied = [];
         const recorded = new Set(this.db.prepare(`SELECT version FROM _schema_migrations`).all().map((row) => row.version));
         const transaction = this.db.transaction(() => {

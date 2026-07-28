@@ -1,3 +1,4 @@
+import Database from 'bun:sqlite';
 import type { EventStore } from './EventStore.js';
 import type { PolicyExecutionAuditPage } from '../types/index.js';
 export type PolicyReplayPolicy = 'manual' | 'on_bootstrap' | 'always' | 'scheduled_only';
@@ -9,7 +10,7 @@ export interface PolicyExecutionRecord {
     policy: string;
     action: string;
     target?: string;
-    status: 'executed' | 'skipped' | 'failed';
+    status: 'in_progress' | 'executed' | 'skipped' | 'failed';
     attemptCount: number;
     nextRetryAt?: number;
     deadLetteredAt?: number;
@@ -22,6 +23,8 @@ export interface PolicyExecutionRecord {
     eventType?: string;
     detail?: string;
     metadata?: Record<string, unknown>;
+    leaseOwner?: string;
+    leaseUntil?: number;
     createdAt: number;
     updatedAt: number;
 }
@@ -36,20 +39,39 @@ export interface PolicyExecutionAuditFilters {
     eventType?: string[];
     policy?: string[];
     target?: string[];
-    status?: Array<'executed' | 'skipped' | 'failed'>;
+    status?: Array<'in_progress' | 'executed' | 'skipped' | 'failed'>;
     replayPolicy?: PolicyReplayPolicy[];
     startTime?: number;
     endTime?: number;
 }
+export type PolicyExecutionClaim = {
+    kind: 'claimed';
+    record: PolicyExecutionRecord;
+} | {
+    kind: 'executed';
+    record: PolicyExecutionRecord;
+} | {
+    kind: 'busy';
+    record: PolicyExecutionRecord;
+} | {
+    kind: 'ambiguous';
+    record?: PolicyExecutionRecord;
+};
 export declare class PolicyExecutionStore {
     private db;
+    private ownsDb;
     private eventStore?;
-    constructor(dbPath?: string, eventStore?: EventStore);
+    constructor(dbPath?: string | Database, eventStore?: EventStore);
     private initializeSchema;
     getByIdempotencyKey(projectId: string, idempotencyKey: string): PolicyExecutionRecord | null;
+    claim(seed: PolicyExecutionRecord, leaseOwner: string, leaseUntil: number, now?: number): PolicyExecutionClaim;
+    finishClaim(record: PolicyExecutionRecord, leaseOwner: string, options?: {
+        emitEvent?: boolean;
+    }): void;
     upsert(record: PolicyExecutionRecord, options?: {
         emitEvent?: boolean;
     }): void;
+    private emitRecord;
     listByRuntime(projectId: string, runtimeId: string): PolicyExecutionRecord[];
     listPendingRetries(projectId: string, now?: number): PolicyExecutionRecord[];
     listDeadLetters(projectId: string, runtimeId?: string): PolicyExecutionRecord[];
@@ -61,6 +83,6 @@ export declare class PolicyExecutionStore {
     private buildFilterSql;
     private mapRow;
     private hasScopedIdentity;
-    private quarantineUnscopedExecutions;
+    private tableColumns;
 }
 //# sourceMappingURL=PolicyExecutionStore.d.ts.map

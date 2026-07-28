@@ -5,7 +5,8 @@ export declare const MEMORY_ATLAS_PROJECTION_NAME = "memory_atlas.v2";
 export declare const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = "3.7.4";
 export declare class MemoryAtlasStore {
     readonly db: Database;
-    constructor(db: Database);
+    private readonly projectTimeZone?;
+    constructor(db: Database, projectTimeZone?: string | undefined);
     upsertDocument(input: Omit<MemoryAtlasNode, 'activation' | 'score' | 'evidenceCount' | 'evidenceTotal' | 'evidenceReturned'> & {
         evidenceEventIds?: string[];
         metadata?: Record<string, unknown>;

@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 
 import { createMemoryKernel } from '../src/factory.js';
 
@@ -118,4 +119,37 @@ test('one command upgrades a 3.5.2 database through schema 59 without changing s
 
   const repeated = await migrate(dbPath, ['--yes']);
   expect(repeated.applied).toEqual([]);
+});
+
+test('real 3.5.2 tag database upgrades before EventStore construction through CLI and Kernel paths', async () => {
+  const fixture = gunzipSync(readFileSync(join(import.meta.dir, 'fixtures', 'migrations', '3.5.2-real.sqlite.gz')));
+
+  const kernelDir = mkdtempSync(join(tmpdir(), 'cogmem-real-352-kernel-'));
+  const kernelPath = join(kernelDir, 'memory.db');
+  writeFileSync(kernelPath, fixture);
+  const kernel = createMemoryKernel({ dbPath: kernelPath, projectTimeZone: 'Asia/Tokyo' });
+  expect(kernel.eventStore.getEvent('legacy-event')?.projectId).toBe('legacy-project');
+  kernel.close();
+  expect(readdirSync(kernelDir).some((name) => name.includes('.pre-migrate-') && name.endsWith('.bak'))).toBe(true);
+  const kernelDb = new Database(kernelPath, { readonly: true });
+  expect(kernelDb.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0059' });
+  expect((kernelDb.prepare(`PRAGMA table_info(memory_events)`).all() as Array<{ name: string }>)
+    .some((column) => column.name === 'project_scope')).toBe(true);
+  expect(kernelDb.prepare(`SELECT legacy_status,reason FROM policy_execution_legacy_tombstones
+    WHERE legacy_execution_id='legacy-policy'`).get()).toEqual({
+    legacy_status: 'executed', reason: 'legacy_execution_scope_ambiguous',
+  });
+  kernelDb.close();
+
+  const cliDir = mkdtempSync(join(tmpdir(), 'cogmem-real-352-cli-'));
+  const cliPath = join(cliDir, 'memory.db');
+  writeFileSync(cliPath, fixture);
+  const dryRun = await migrate(cliPath, ['--dry-run']);
+  expect(dryRun.pending).toContain('0059');
+  const applied = await migrate(cliPath, ['--yes']);
+  expect(applied.applied).toContain('0059');
+  expect(existsSync(applied.backupPath as string)).toBe(true);
+  const cliDb = new Database(cliPath, { readonly: true });
+  expect(cliDb.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0059' });
+  cliDb.close();
 });

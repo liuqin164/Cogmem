@@ -5,6 +5,7 @@ import type { Migration } from '../types/Migration.js';
 export const migration_0059: Migration = {
   version: '0059',
   description: 'scope policy execution and finalize provenance guards',
+  requiresBackup: true,
   up(db) {
     migratePolicyExecutions(db);
     repairPendingQuarantine(db);
@@ -22,18 +23,42 @@ function migratePolicyExecutions(db: Database): void {
     record_hash TEXT NOT NULL,
     reason TEXT NOT NULL,
     created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS policy_execution_legacy_tombstones (
+    idempotency_key_hash TEXT PRIMARY KEY,
+    legacy_execution_id TEXT NOT NULL,
+    legacy_status TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at INTEGER NOT NULL
   )`);
   if (!tableExists(db, 'policy_executions')) {
     createPolicyExecutionTable(db);
     return;
   }
-  if (hasScopedPolicyIdentity(db)) return;
+  if (hasScopedPolicyIdentity(db)) {
+    addColumn(db, 'policy_executions', 'lease_owner', 'TEXT');
+    addColumn(db, 'policy_executions', 'lease_until', 'INTEGER');
+    return;
+  }
 
   const rows = db.prepare(`SELECT * FROM policy_executions`).all() as Array<Record<string, unknown>>;
   db.exec(`ALTER TABLE policy_executions RENAME TO policy_executions_0059_unscoped`);
   createPolicyExecutionTable(db);
   const quarantine = db.prepare(`INSERT OR REPLACE INTO policy_execution_quarantine VALUES(?,?,?,?)`);
+  const tombstone = db.prepare(`INSERT OR REPLACE INTO policy_execution_legacy_tombstones
+    (idempotency_key_hash,legacy_execution_id,legacy_status,reason,created_at)
+    VALUES(?,?,?,?,?)`);
   for (const row of rows) {
+    const idempotencyKey = typeof row.idempotency_key === 'string' ? row.idempotency_key : '';
+    if (idempotencyKey) {
+      tombstone.run(
+        createHash('sha256').update(idempotencyKey).digest('hex'),
+        String(row.execution_id),
+        typeof row.status === 'string' ? row.status : 'unknown',
+        'legacy_execution_scope_ambiguous',
+        Date.now(),
+      );
+    }
     quarantine.run(
       String(row.execution_id),
       createHash('sha256').update(JSON.stringify(row)).digest('hex'),
@@ -66,6 +91,8 @@ function createPolicyExecutionTable(db: Database): void {
     event_type TEXT,
     detail TEXT,
     metadata_json TEXT,
+    lease_owner TEXT,
+    lease_until INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     UNIQUE(project_scope,idempotency_key)
@@ -181,51 +208,8 @@ function removeDanglingRows(db: Database): void {
 }
 
 export function installRuntimeProvenanceGuards(db: Database): void {
-  if (tableExists(db, 'synapses') && tableExists(db, 'neurons')) {
-    scopeTrigger(db, 'synapses_scope_insert', 'synapses', 'INSERT', synapseGuard());
-    scopeTrigger(db, 'synapses_scope_update', 'synapses', 'UPDATE', synapseGuard());
-  }
-  if (tableExists(db, 'belief_evidence') && tableExists(db, 'beliefs')
-    && tableExists(db, 'neurons') && tableExists(db, 'memory_events')) {
-    scopeTrigger(db, 'belief_evidence_scope_insert', 'belief_evidence', 'INSERT', beliefEvidenceGuard());
-    scopeTrigger(db, 'belief_evidence_scope_update', 'belief_evidence', 'UPDATE', beliefEvidenceGuard());
-  }
-  if (tableExists(db, 'cognitive_nodes') && tableExists(db, 'neurons')) {
-    const guard = `NEW.source_neuron_id IS NOT NULL AND NOT EXISTS (
-      SELECT 1 FROM neurons n WHERE n.id=NEW.source_neuron_id AND n.is_deleted=0
-        AND COALESCE(n.project_id,'')=NEW.project_id)`;
-    scopeTrigger(db, 'cognitive_node_source_insert', 'cognitive_nodes', 'INSERT', guard);
-    scopeTrigger(db, 'cognitive_node_source_update', 'cognitive_nodes', 'UPDATE', guard);
-  }
-  if (tableExists(db, 'reasoning_steps') && tableExists(db, 'reasoning_chains') && tableExists(db, 'neurons')) {
-    const guard = `NOT EXISTS (
-      SELECT 1 FROM reasoning_chains c JOIN neurons n ON n.id=NEW.neuron_id
-      WHERE c.id=NEW.chain_id AND n.is_deleted=0 AND COALESCE(c.project_id,'')=COALESCE(n.project_id,''))`;
-    scopeTrigger(db, 'reasoning_step_scope_insert', 'reasoning_steps', 'INSERT', guard);
-    scopeTrigger(db, 'reasoning_step_scope_update', 'reasoning_steps', 'UPDATE', guard);
-  }
-  if (tableExists(db, 'pending_entity_resolution') && tableExists(db, 'neurons')) {
-    const guard = `NEW.context_neuron_id IS NULL OR NOT EXISTS (
-      SELECT 1 FROM neurons n WHERE n.id=NEW.context_neuron_id AND n.is_deleted=0
-        AND COALESCE(n.project_id,'')=NEW.project_scope)`;
-    scopeTrigger(db, 'pending_entity_scope_insert', 'pending_entity_resolution', 'INSERT', guard);
-    scopeTrigger(db, 'pending_entity_scope_update', 'pending_entity_resolution', 'UPDATE', guard);
-  }
-  if (tableExists(db, 'memory_bindings') && tableExists(db, 'memory_events')
-    && tableExists(db, 'memory_topics') && tableExists(db, 'memory_entities')) {
-    const guard = `NOT EXISTS (
-      SELECT 1 FROM memory_events e WHERE e.event_id=NEW.event_id
-        AND COALESCE(e.project_id,'')=COALESCE(NEW.project_id,'')
-    ) OR NOT EXISTS (
-      SELECT 1 FROM memory_topics t WHERE t.topic_path=NEW.topic_path
-        AND COALESCE(t.project_id,'')=COALESCE(NEW.project_id,'')
-    ) OR (NEW.entity_id IS NOT NULL AND NOT EXISTS (
-      SELECT 1 FROM memory_entities e WHERE e.entity_id=NEW.entity_id
-        AND COALESCE(e.project_id,'')=COALESCE(NEW.project_id,'')
-    ))`;
-    scopeTrigger(db, 'memory_binding_scope_insert', 'memory_bindings', 'INSERT', guard);
-    scopeTrigger(db, 'memory_binding_scope_update', 'memory_bindings', 'UPDATE', guard);
-  }
+  db.exec(`DROP TRIGGER IF EXISTS task_branch_entries_reject_unresolved_insert`);
+  for (const trigger of expectedTriggerSpecs(db)) scopeTrigger(db, trigger);
 }
 
 export function projectExecutionAndProvenanceGuardsSatisfied(db: Database): boolean {
@@ -239,7 +223,11 @@ export function projectExecutionAndProvenanceGuardsSatisfied(db: Database): bool
 
 function assertProjectExecutionAndProvenanceGuards(db: Database): void {
   if (!tableExists(db, 'policy_executions') || !hasScopedPolicyIdentity(db)
-    || !tableExists(db, 'policy_execution_quarantine')) throw new Error('policy_execution_scope_missing');
+    || !tableExists(db, 'policy_execution_quarantine')
+    || !tableExists(db, 'policy_execution_legacy_tombstones')
+    || !['lease_owner','lease_until'].every((column) => tableColumns(db, 'policy_executions').has(column))) {
+    throw new Error('policy_execution_scope_missing');
+  }
   if (tableExists(db, 'pending_entity_resolution_quarantine')) {
     for (const column of ['project_scope','implicated_scopes_json','context_neuron_id','scope_resolved']) {
       if (!tableColumns(db, 'pending_entity_resolution_quarantine').has(column)) throw new Error('pending_quarantine_scope_missing');
@@ -320,22 +308,76 @@ function assertProjectExecutionAndProvenanceGuards(db: Database): void {
         OR topic.topic_path IS NULL OR (b.entity_id IS NOT NULL AND (
           entity.entity_id IS NULL OR COALESCE(entity.project_id,'')<>COALESCE(b.project_id,'')
         )) LIMIT 1`).get()) throw new Error('memory_binding_endpoint_invalid');
-  for (const trigger of expectedTriggers(db)) {
-    if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?`).get(trigger)) throw new Error(`scope_trigger_missing:${trigger}`);
+  for (const trigger of expectedTriggerSpecs(db)) {
+    const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`).get(trigger.name) as { sql?: string } | null;
+    if (!row?.sql) throw new Error(`scope_trigger_missing:${trigger.name}`);
+    if (normalizeSql(row.sql) !== normalizeSql(triggerSql(trigger))) throw new Error(`scope_trigger_mismatch:${trigger.name}`);
   }
 }
 
-function expectedTriggers(db: Database): string[] {
-  return [
-    ...(tableExists(db, 'synapses') && tableExists(db, 'neurons') ? ['synapses_scope_insert','synapses_scope_update'] : []),
-    ...(tableExists(db, 'belief_evidence') && tableExists(db, 'beliefs') && tableExists(db, 'neurons') && tableExists(db, 'memory_events')
-      ? ['belief_evidence_scope_insert','belief_evidence_scope_update'] : []),
-    ...(tableExists(db, 'cognitive_nodes') && tableExists(db, 'neurons') ? ['cognitive_node_source_insert','cognitive_node_source_update'] : []),
-    ...(tableExists(db, 'reasoning_steps') && tableExists(db, 'reasoning_chains') && tableExists(db, 'neurons') ? ['reasoning_step_scope_insert','reasoning_step_scope_update'] : []),
-    ...(tableExists(db, 'pending_entity_resolution') && tableExists(db, 'neurons') ? ['pending_entity_scope_insert','pending_entity_scope_update'] : []),
-    ...(tableExists(db, 'memory_bindings') && tableExists(db, 'memory_events') && tableExists(db, 'memory_topics') && tableExists(db, 'memory_entities')
-      ? ['memory_binding_scope_insert','memory_binding_scope_update'] : []),
-  ];
+interface TriggerSpec {
+  name: string;
+  table: string;
+  operation: 'INSERT' | 'UPDATE';
+  guard: string;
+}
+
+function expectedTriggerSpecs(db: Database): TriggerSpec[] {
+  const specs: TriggerSpec[] = [];
+  const pair = (name: string, table: string, guard: string): void => {
+    specs.push({ name: `${name}_insert`, table, operation: 'INSERT', guard });
+    specs.push({ name: `${name}_update`, table, operation: 'UPDATE', guard });
+  };
+  if (tableExists(db, 'synapses') && tableExists(db, 'neurons')) pair('synapses_scope', 'synapses', synapseGuard());
+  if (tableExists(db, 'belief_evidence') && tableExists(db, 'beliefs')
+    && tableExists(db, 'neurons') && tableExists(db, 'memory_events')) {
+    pair('belief_evidence_scope', 'belief_evidence', beliefEvidenceGuard());
+  }
+  if (tableExists(db, 'cognitive_nodes') && tableExists(db, 'neurons')) pair('cognitive_node_source', 'cognitive_nodes', `NEW.source_neuron_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM neurons n WHERE n.id=NEW.source_neuron_id AND n.is_deleted=0
+      AND COALESCE(n.project_id,'')=NEW.project_id)`);
+  if (tableExists(db, 'reasoning_steps') && tableExists(db, 'reasoning_chains') && tableExists(db, 'neurons')) pair('reasoning_step_scope', 'reasoning_steps', `NOT EXISTS (
+    SELECT 1 FROM reasoning_chains c JOIN neurons n ON n.id=NEW.neuron_id
+    WHERE c.id=NEW.chain_id AND n.is_deleted=0 AND COALESCE(c.project_id,'')=COALESCE(n.project_id,''))`);
+  if (tableExists(db, 'pending_entity_resolution') && tableExists(db, 'neurons')) pair('pending_entity_scope', 'pending_entity_resolution', `NEW.context_neuron_id IS NULL OR NOT EXISTS (
+    SELECT 1 FROM neurons n WHERE n.id=NEW.context_neuron_id AND n.is_deleted=0
+      AND COALESCE(n.project_id,'')=NEW.project_scope)`);
+  if (tableExists(db, 'memory_bindings') && tableExists(db, 'memory_events')
+    && tableExists(db, 'memory_topics') && tableExists(db, 'memory_entities')) pair('memory_binding_scope', 'memory_bindings', `NOT EXISTS (
+    SELECT 1 FROM memory_events e WHERE e.event_id=NEW.event_id
+      AND COALESCE(e.project_id,'')=COALESCE(NEW.project_id,'')
+  ) OR NOT EXISTS (
+    SELECT 1 FROM memory_topics t WHERE t.topic_path=NEW.topic_path
+      AND COALESCE(t.project_id,'')=COALESCE(NEW.project_id,'')
+  ) OR (NEW.entity_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM memory_entities e WHERE e.entity_id=NEW.entity_id
+      AND COALESCE(e.project_id,'')=COALESCE(NEW.project_id,'')
+  ))`);
+  if (tableExists(db, 'task_identity_restoration_manifest')) {
+    if (tableExists(db, 'task_branches')) pair('task_branch_unresolved', 'task_branches', `EXISTS (
+      SELECT 1 FROM task_identity_restoration_manifest m
+      WHERE m.recovery_status='unresolved' AND (
+        m.task_id=NEW.task_id OR (m.project_id=COALESCE(NEW.project_id,'') AND m.task_key=NEW.task_key)
+      ))`);
+    if (tableExists(db, 'task_branch_entries') && tableExists(db, 'task_branches')) pair('task_branch_entry_unresolved', 'task_branch_entries', `NOT EXISTS (
+      SELECT 1 FROM task_branches t WHERE t.task_id=NEW.task_id
+    ) OR EXISTS (
+      SELECT 1 FROM task_branches t JOIN task_identity_restoration_manifest m
+        ON m.task_id=t.task_id OR (m.project_id=COALESCE(t.project_id,'') AND m.task_key=t.task_key)
+      WHERE t.task_id=NEW.task_id AND m.recovery_status='unresolved'
+    )`);
+    if (tableExists(db, 'topology_membership')) pair('task_membership_unresolved', 'topology_membership', `NEW.dimension_type='task_branch' AND EXISTS (
+      SELECT 1 FROM task_identity_restoration_manifest m
+      WHERE m.recovery_status='unresolved'
+        AND m.project_id=COALESCE(NEW.project_id,'') AND m.task_key=NEW.dimension_key
+    )`);
+    if (tableExists(db, 'cognitive_nodes')) pair('task_cognitive_unresolved', 'cognitive_nodes', `NEW.node_type='task_branch' AND EXISTS (
+      SELECT 1 FROM task_identity_restoration_manifest m
+      WHERE m.recovery_status='unresolved'
+        AND m.project_id=NEW.project_id AND m.task_key=NEW.node_key
+    )`);
+  }
+  return specs;
 }
 
 function synapseGuard(): string {
@@ -359,9 +401,18 @@ function beliefEvidenceGuard(): string {
     ))`;
 }
 
-function scopeTrigger(db: Database, name: string, table: string, operation: 'INSERT' | 'UPDATE', guard: string): void {
-  db.exec(`CREATE TRIGGER IF NOT EXISTS ${name} BEFORE ${operation} ON ${table}
-    WHEN ${guard} BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END`);
+function triggerSql(trigger: TriggerSpec): string {
+  return `CREATE TRIGGER ${trigger.name} BEFORE ${trigger.operation} ON ${trigger.table}
+    WHEN ${trigger.guard} BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END`;
+}
+
+function scopeTrigger(db: Database, trigger: TriggerSpec): void {
+  db.exec(`DROP TRIGGER IF EXISTS ${trigger.name}`);
+  db.exec(triggerSql(trigger));
+}
+
+function normalizeSql(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().replace(/;$/, '').toLowerCase();
 }
 
 function hasScopedPolicyIdentity(db: Database): boolean {

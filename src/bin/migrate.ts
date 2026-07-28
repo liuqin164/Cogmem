@@ -1,9 +1,13 @@
 #!/usr/bin/env bun
 import Database from 'bun:sqlite';
-import { existsSync, renameSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { ALL_MIGRATIONS, SchemaMigrationRunner } from '../migrations/index.js';
+import { backupDatabase, snapshotDatabase } from '../migrations/MigrationBackup.js';
 import { printCliJson } from './CliJson.js';
 
 interface MigrateArgs {
@@ -46,33 +50,43 @@ function resolveDbPath(args: MigrateArgs): string {
   return loaded.options.dbPath;
 }
 
-function backupDatabase(db: Database, dbPath: string): string | undefined {
-  if (dbPath === ':memory:') return undefined;
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupPath = `${dbPath}.pre-migrate-${stamp}.bak`;
-  const temporaryPath = `${backupPath}.tmp`;
-  try {
-    // VACUUM INTO includes committed WAL pages and produces a standalone backup.
-    db.prepare('VACUUM INTO ?').run(temporaryPath);
-    renameSync(temporaryPath, backupPath);
-    return backupPath;
-  } finally {
-    rmSync(temporaryPath, { force: true });
-  }
-}
-
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const dbPath = resolveDbPath(args);
-  const shouldBackup = !args.dryRun && args.backup && dbPath !== ':memory:' && existsSync(dbPath);
-  const db = new Database(dbPath, args.dryRun && dbPath !== ':memory:' ? { readonly: true, create: false } : undefined);
+  const sourceExists = dbPath === ':memory:' || existsSync(dbPath);
+  const db = new Database(args.dryRun && !sourceExists ? ':memory:' : dbPath);
   db.exec('PRAGMA busy_timeout = 5000;');
-  if (args.dryRun) db.exec('PRAGMA query_only = ON;');
   try {
-    const backupPath = shouldBackup ? backupDatabase(db, dbPath) : undefined;
-    const runner = new SchemaMigrationRunner(db, ALL_MIGRATIONS, { readonly: args.dryRun });
-    const result = runner.run({ dryRun: args.dryRun });
-    if (!args.dryRun) {
+    let backupPath: string | undefined;
+    let result;
+    if (args.dryRun) {
+      const temporaryPath = dbPath === ':memory:'
+        ? ':memory:'
+        : join(tmpdir(), `cogmem-migrate-dry-run-${randomUUID()}.db`);
+      try {
+        if (temporaryPath !== ':memory:') snapshotDatabase(db, temporaryPath);
+        const temporaryDb = new Database(temporaryPath);
+        try {
+          temporaryDb.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+          const runner = new SchemaMigrationRunner(temporaryDb, ALL_MIGRATIONS, { backupVerified: true });
+          const pending = runner.plan().map((migration) => migration.version);
+          const verified = runner.run();
+          result = { pending, applied: [], currentVersion: verified.currentVersion, dryRun: true };
+        } finally {
+          temporaryDb.close();
+        }
+      } finally {
+        if (temporaryPath !== ':memory:') rmSync(temporaryPath, { force: true });
+      }
+    } else {
+      const planner = new SchemaMigrationRunner(db, ALL_MIGRATIONS);
+      const pending = planner.plan();
+      const needsBackup = pending.some((migration) => migration.requiresBackup);
+      const shouldBackup = dbPath !== ':memory:' && existsSync(dbPath) && (args.backup || needsBackup);
+      backupPath = shouldBackup ? backupDatabase(db, dbPath) : undefined;
+      result = new SchemaMigrationRunner(db, ALL_MIGRATIONS, {
+        backupVerified: !needsBackup || Boolean(backupPath) || dbPath === ':memory:',
+      }).run();
       db.exec(`CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
       const numericVersion = Number.parseInt(result.currentVersion || '0', 10);
       db.prepare(`INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', ?)`).run(String(numericVersion));

@@ -15,6 +15,7 @@ export interface SchemaMigrationRunOptions {
 
 export interface SchemaMigrationRunnerOptions {
   readonly?: boolean;
+  backupVerified?: boolean;
 }
 
 export interface SchemaMigrationResult {
@@ -52,6 +53,10 @@ export class SchemaMigrationRunner {
     this.repairKnownLegacyFunctionChecksums();
     this.assertRecordedChecksums();
     const pending = this.plan();
+    const filename = (this.db as Database & { filename?: string }).filename;
+    if (filename && filename !== ':memory:' && pending.some((migration) => migration.requiresBackup) && !this.options.backupVerified) {
+      throw new Error('migration_backup_required');
+    }
     const applied: string[] = [];
     const recorded = new Set((this.db.prepare(`SELECT version FROM _schema_migrations`).all() as Array<{ version: string }>).map((row) => row.version));
     const transaction = this.db.transaction(() => {
