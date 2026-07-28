@@ -20,9 +20,9 @@ export class VectorProjector {
 
   async bootstrap(): Promise<void> {
     const checkpoint = this.eventStore.getProjectionCheckpoint(this.projectionName);
-    const pendingEvents = this.eventStore.getEventsAfter(checkpoint?.lastEventTime);
+    const pendingEvents = this.eventStore.getEventsAfterGlobalSeq(checkpoint?.lastGlobalSeq);
 
-    if (!checkpoint) {
+    if (!checkpoint || checkpoint.lastGlobalSeq === undefined) {
       await this.fullRebuild('initial_build');
       return;
     }
@@ -54,11 +54,10 @@ export class VectorProjector {
       metadata: { reason }
     });
 
-    this.vectorStore.clear();
-
     const pageSize = 2000;
-    let total = 0;
+    const vectors = new Map<string, number[]>();
     let pageNo = 0;
+    let sourceGlobalSeq = this.eventStore.getLatestGlobalSeq();
 
     await this.memoryGraph.forEachNeuronVectorPage(
       pageSize,
@@ -66,12 +65,11 @@ export class VectorProjector {
         pageNo += 1;
         for (const row of rows) {
           if (row.vector.length === 0) continue;
-          this.vectorStore.addVector(row.id, row.vector);
-          total += 1;
+          vectors.set(row.id, row.vector);
         }
 
         if (pageNo % 10 === 0) {
-          logger.info(`Vector rebuild progress: pages=${pageNo}, indexed=${total}`);
+          logger.info(`Vector rebuild progress: pages=${pageNo}, indexed=${vectors.size}`);
         }
 
         await Promise.resolve();
@@ -79,11 +77,27 @@ export class VectorProjector {
       { includeStatuses: ['active', 'cold'], onlyNotDeleted: true }
     );
 
-    const latestEvent = this.eventStore.getLatestEvent();
+    let throughGlobalSeq = this.eventStore.getLatestGlobalSeq();
+    for (const event of this.eventStore.getEventsAfterGlobalSeq(sourceGlobalSeq, throughGlobalSeq)) {
+      this.applyEventToMap(vectors, event);
+    }
+    await this.vectorStore.rebuildIndex([...vectors].map(([id, vector]) => ({ id, vector })));
+
+    while (true) {
+      const latestGlobalSeq = this.eventStore.getLatestGlobalSeq();
+      if (latestGlobalSeq <= throughGlobalSeq) break;
+      const events = this.eventStore.getEventsAfterGlobalSeq(throughGlobalSeq, latestGlobalSeq);
+      for (const event of events) this.applyEvent(event);
+      throughGlobalSeq = latestGlobalSeq;
+      await Promise.resolve();
+    }
+
+    const latestEvent = this.eventStore.getEventsAfterGlobalSeq(undefined, throughGlobalSeq).at(-1);
     this.eventStore.upsertProjectionCheckpoint({
       projectionName: this.projectionName,
       lastEventId: latestEvent?.eventId,
       lastEventTime: latestEvent?.occurredAt,
+      lastGlobalSeq: throughGlobalSeq,
       lastRebuildAt: Date.now(),
       lastFullCount: this.vectorStore.getCurrentCount(),
       status: 'ready',
@@ -109,6 +123,7 @@ export class VectorProjector {
       projectionName: this.projectionName,
       lastEventId: lastEvent?.eventId,
       lastEventTime: lastEvent?.occurredAt,
+      lastGlobalSeq: lastEvent?.globalSeq ?? this.eventStore.getLatestGlobalSeq(),
       lastRebuildAt: previousRebuildAt,
       lastFullCount: this.vectorStore.getCurrentCount(),
       status: 'ready',
@@ -137,6 +152,24 @@ export class VectorProjector {
       }
 
       default:
+        return;
+    }
+  }
+
+  private applyEventToMap(vectors: Map<string, number[]>, event: MemoryEvent): void {
+    switch (event.eventType) {
+      case 'INGESTED':
+      case 'RESTORED': {
+        const neuron = this.memoryGraph.getNeuron(event.streamId);
+        if (!neuron || neuron.metadata.status === 'archived' || !neuron.coordinates.V?.length) {
+          vectors.delete(event.streamId);
+          return;
+        }
+        vectors.set(neuron.id, neuron.coordinates.V);
+        return;
+      }
+      case 'ARCHIVED':
+        vectors.delete(event.streamId);
         return;
     }
   }

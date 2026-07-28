@@ -247,8 +247,21 @@ export class VectorStore implements IVectorStore {
   }
 
   async rebuildIndex(neurons: Array<{ id: string; vector: number[] }>): Promise<void> {
-    this.clear();
-    this.addVectors(neurons);
+    const replacement = new VectorStore(
+      this.dimension,
+      Math.max(this.maxElements, neurons.length || 1),
+      this.efConstruction,
+      this.efSearch
+    );
+    replacement.addVectors(neurons);
+    this.index = replacement.index;
+    this.maxElements = replacement.maxElements;
+    this.neuronIdMap = replacement.neuronIdMap;
+    this.idIndexMap = replacement.idIndexMap;
+    this.tombstones = replacement.tombstones;
+    this.fallbackVectors = replacement.fallbackVectors;
+    this.nextLabel = replacement.nextLabel;
+    this.deletedLabelCount = replacement.deletedLabelCount;
   }
 
   private ensureCapacity(requiredTotal: number): void {

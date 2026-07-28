@@ -5,6 +5,7 @@ export interface ProjectionCheckpoint {
     projectionName: string;
     lastEventId?: string;
     lastEventTime?: number;
+    lastGlobalSeq?: number;
     lastRebuildAt?: number;
     lastFullCount: number;
     lastChecksum?: string;
@@ -72,6 +73,8 @@ export declare class EventStore {
     private advanceSequence;
     private seedSequenceCounters;
     getEventsAfter(lastEventTime?: number): MemoryEvent[];
+    getEventsAfterGlobalSeq(lastGlobalSeq?: number, throughGlobalSeq?: number): MemoryEvent[];
+    getLatestGlobalSeq(): number;
     findImportedEventAnchor(projectId: string, sourceId: string, importAnchor: string): MemoryEvent | null;
     getLatestEvent(): MemoryEvent | null;
     listRawEventsAfterGlobalSeq(options?: {

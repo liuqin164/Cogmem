@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import Database from 'bun:sqlite';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -333,6 +334,62 @@ test('Atlas alias matching respects Latin token boundaries and rejects ambiguous
     expect(kernel.memoryAtlasStore.resolveTargetNodeIds('p', 'AI').labels).toContain('AI');
     expect(kernel.memoryAtlasStore.db.prepare(`SELECT target_entity_id FROM memory_action_frames LIMIT 1`).get())
       .toEqual({ target_entity_id: null });
+  } finally {
+    kernel.close();
+  }
+});
+
+test('Atlas keeps projectless action-only projects and preserves repeated multi-target actions', () => {
+  const kernel = createMemoryKernel();
+  try {
+    const alpha = kernel.memoryBindingStore.upsertEntity({
+      projectId: '', canonicalName: 'Alpha', entityType: 'device', aliases: ['Alpha'], now: 1,
+    });
+    const beta = kernel.memoryBindingStore.upsertEntity({
+      projectId: '', canonicalName: 'Beta', entityType: 'device', aliases: ['Beta'], now: 1,
+    });
+    kernel.eventStore.append({
+      streamId: 'projectless-actions', streamType: 'thread', eventType: 'MESSAGE',
+      projectId: '', role: 'user', occurredAt: 2,
+      payload: { text: '启动 Alpha，然后停止 Beta，再启动 Alpha。' },
+    });
+
+    kernel.rebuildMemoryAtlas();
+
+    const rows = kernel.memoryAtlasStore.db.prepare(`
+      SELECT frame_type,target_entity_id FROM memory_action_frames
+      WHERE project_id='' ORDER BY occurred_at,action_id
+    `).all() as Array<{ frame_type: string; target_entity_id: string | null }>;
+    expect(rows).toHaveLength(3);
+    expect(rows.filter((row) => row.frame_type === 'start' && row.target_entity_id === alpha.entityId)).toHaveLength(2);
+    expect(rows).toContainEqual({ frame_type: 'stop', target_entity_id: beta.entityId });
+    expect(kernel.memoryAtlasStore.listKnownProjectIds()).toContain('');
+    expect(kernel.memoryAtlasStore.listNodes('', 100).some((node) => node.id === 'project:')).toBe(true);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('Atlas reinstalls a same-name no-op dirty trigger and refreshes after raw events', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-atlas-trigger-'));
+  const dbPath = join(dir, 'memory.db');
+  createMemoryKernel({ dbPath }).close();
+  const db = new Database(dbPath);
+  db.exec(`
+    DROP TRIGGER IF EXISTS trg_memory_atlas_dirty_memory_events_insert;
+    CREATE TRIGGER trg_memory_atlas_dirty_memory_events_insert AFTER INSERT ON memory_events BEGIN SELECT 1; END;
+  `);
+  db.close();
+
+  const kernel = createMemoryKernel({ dbPath });
+  try {
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    kernel.eventStore.append({
+      streamId: 'dirty-action', streamType: 'thread', eventType: 'MESSAGE',
+      projectId: 'p', role: 'user', occurredAt: 2, payload: { text: 'update Atlas' },
+    });
+    expect(kernel.memoryAtlasStore.getProjectionState('p')?.status).toBe('dirty');
+    expect(kernel.graphOverview({ projectId: 'p', refresh: true }).nodes.some((node) => node.nodeType === 'action')).toBe(true);
   } finally {
     kernel.close();
   }

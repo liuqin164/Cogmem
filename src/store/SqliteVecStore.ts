@@ -100,8 +100,18 @@ export class SqliteVecStore implements IVectorStore {
   }
 
   async rebuildIndex(neurons: Array<{ id: string; vector: number[] }>): Promise<void> {
-    this.clear();
-    this.addVectors(neurons);
+    const insert = this.db.prepare(`
+      INSERT INTO vector_index (neuron_id, dimensions, vector_blob, updated_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    this.db.transaction(() => {
+      this.clear();
+      const now = Date.now();
+      for (const neuron of neurons) {
+        this.assertDimension(neuron.vector, 'Vector');
+        insert.run(neuron.id, this.dimension, Buffer.from(new Float32Array(neuron.vector).buffer), now);
+      }
+    })();
   }
 
   private initSchema(): void {

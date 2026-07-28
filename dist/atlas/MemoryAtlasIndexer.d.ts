@@ -15,6 +15,8 @@ export declare class MemoryAtlasIndexer {
         documents: number;
         actions: number;
         curatedEpisodes: number;
+        facetEdges: number;
+        reviewNeeded: number;
     };
     ensureFresh(options: {
         projectId: string;

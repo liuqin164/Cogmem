@@ -169,8 +169,9 @@ describe('MemoryFrame V1 contract', () => {
       nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['event-1'] })),
       relations: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).relations.map((relation) => ({ ...relation, evidenceEventIds: ['event-1'] })) };
     const storedFrame = { ...frame, episodeId: episode.episodeId };
-    kernel.memoryFrameStore.save({ frame: storedFrame, sourceFingerprint: 'projection-source', status: 'active', now: 0 });
-    kernel.memoryFrameStore.publish(storedFrame.frameId, 'staged', 'active', 1);
+    const savedFrame = kernel.memoryFrameStore.save({ frame: storedFrame, sourceFingerprint: 'projection-source', status: 'active', now: 0 });
+    expect(kernel.memoryFrameStore.get(savedFrame.frameId)?.status).toBe('staged');
+    kernel.memoryFrameStore.publish(savedFrame.frameId, 'staged', 'active', 1);
     const result = kernel.rebuildMemoryAtlas({ projectId: 'p' });
     expect(result.documents).toBeGreaterThanOrEqual(2);
     expect(kernel.memoryAtlasStore.getNode(`episode:${episode.episodeId}`, 'p')?.nodeType).toBe('episode');

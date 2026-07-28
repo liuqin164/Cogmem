@@ -81,6 +81,7 @@ async function main() {
         }
         else {
             const planner = new SchemaMigrationRunner(db, ALL_MIGRATIONS);
+            planner.preflight();
             const pending = planner.plan();
             const needsBackup = pending.some((migration) => migration.requiresBackup);
             const shouldBackup = dbPath !== ':memory:' && existsSync(dbPath) && (args.backup || needsBackup);

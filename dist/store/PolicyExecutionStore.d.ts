@@ -2,6 +2,7 @@ import Database from 'bun:sqlite';
 import type { EventStore } from './EventStore.js';
 import type { PolicyExecutionAuditPage } from '../types/index.js';
 export type PolicyReplayPolicy = 'manual' | 'on_bootstrap' | 'always' | 'scheduled_only';
+export type PolicyExecutionStatus = 'in_progress' | 'executed' | 'skipped' | 'failed';
 export interface PolicyExecutionRecord {
     executionId: string;
     projectId: string;
@@ -10,7 +11,7 @@ export interface PolicyExecutionRecord {
     policy: string;
     action: string;
     target?: string;
-    status: 'in_progress' | 'executed' | 'skipped' | 'failed';
+    status: PolicyExecutionStatus;
     attemptCount: number;
     nextRetryAt?: number;
     deadLetteredAt?: number;
@@ -39,7 +40,7 @@ export interface PolicyExecutionAuditFilters {
     eventType?: string[];
     policy?: string[];
     target?: string[];
-    status?: Array<'in_progress' | 'executed' | 'skipped' | 'failed'>;
+    status?: PolicyExecutionStatus[];
     replayPolicy?: PolicyReplayPolicy[];
     startTime?: number;
     endTime?: number;
@@ -68,17 +69,24 @@ export declare class PolicyExecutionStore {
     finishClaim(record: PolicyExecutionRecord, leaseOwner: string, options?: {
         emitEvent?: boolean;
     }): void;
+    renewLease(projectId: string, idempotencyKey: string, leaseOwner: string, leaseUntil: number, now?: number): boolean;
     upsert(record: PolicyExecutionRecord, options?: {
         emitEvent?: boolean;
     }): void;
     private emitRecord;
+    private enqueueAudit;
+    flushAuditOutbox(): number;
+    private auditEventId;
+    clearReadModelProject(projectId: string): void;
+    upsertReadModel(record: PolicyExecutionRecord, sourceGlobalSeq?: number): void;
+    getReadModelCount(projectId?: string): number;
+    getReadModelByIdempotencyKey(projectId: string, idempotencyKey: string): PolicyExecutionRecord | null;
     listByRuntime(projectId: string, runtimeId: string): PolicyExecutionRecord[];
     listPendingRetries(projectId: string, now?: number): PolicyExecutionRecord[];
     listDeadLetters(projectId: string, runtimeId?: string): PolicyExecutionRecord[];
     listByFilters(filters?: PolicyExecutionAuditFilters): PolicyExecutionRecord[];
     getAuditPage(page?: number, pageSize?: number, filters?: PolicyExecutionAuditFilters): PolicyExecutionAuditPage;
     getExecutionCount(projectId?: string): number;
-    clearProject(projectId: string): void;
     close(): void;
     private buildFilterSql;
     private mapRow;

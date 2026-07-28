@@ -24,7 +24,7 @@ export interface IVectorStore {
     getCurrentCount(): number;
     clear(): void;
     checkIntegrity?(): boolean;
-    rebuildIndex?(neurons: Array<{
+    rebuildIndex(neurons: Array<{
         id: string;
         vector: number[];
     }>): Promise<void>;

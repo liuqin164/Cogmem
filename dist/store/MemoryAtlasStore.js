@@ -687,7 +687,7 @@ export class MemoryAtlasStore {
         const rows = this.db.prepare(`
       SELECT target_type,target_id,evidence_event_ids_json
       FROM memory_edges
-      WHERE project_id=? AND source_type='episode'
+      WHERE project_id=?
         AND target_type IN ('topic','time','issue','entity','session','thread','memoryKind','actionKind')
         AND status IN ('active','weak')
       ORDER BY target_type,target_id
@@ -723,10 +723,10 @@ export class MemoryAtlasStore {
     }
     listKnownProjectIds() {
         const rows = this.db.prepare(`
-      SELECT project_id FROM memory_atlas_projection_state WHERE project_id<>''
-      UNION SELECT project_id FROM memory_atlas_documents WHERE project_id<>''
+      SELECT project_id FROM memory_atlas_projection_state
+      UNION SELECT project_id FROM memory_atlas_documents
     `).all();
-        return Array.from(new Set(rows.map((row) => row.project_id).filter(Boolean)));
+        return Array.from(new Set(rows.map((row) => row.project_id))).sort();
     }
     countDocuments(projectId) {
         const row = projectId !== undefined

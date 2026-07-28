@@ -1,5 +1,6 @@
 import { MEMORY_ATLAS_PROJECTION_NAME, MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION } from '../store/MemoryAtlasStore.js';
-import { backfillAtlasDocuments, installAtlasProjectionDirtyTriggers } from '../migrations/0025_memory_atlas.js';
+import { backfillAtlasDocuments } from '../migrations/0025_memory_atlas.js';
+import { installAtlasProjectionDirtyTriggersV2 } from '../migrations/0060_execution_projection_and_atlas_reliability.js';
 import { ActionFrameExtractor } from './ActionFrameExtractor.js';
 import { GraphCurator } from './GraphCurator.js';
 import { MemoryFrameProjector } from './MemoryFrameProjector.js';
@@ -12,7 +13,7 @@ export class MemoryAtlasIndexer {
     constructor(db, eventStore, store, frameStore) {
         this.db = db;
         this.store = store;
-        installAtlasProjectionDirtyTriggers(db);
+        installAtlasProjectionDirtyTriggersV2(db);
         this.actions = new ActionFrameExtractor(db, eventStore, store);
         this.curator = new GraphCurator(db, eventStore, store);
         if (frameStore)
@@ -40,16 +41,10 @@ export class MemoryAtlasIndexer {
                     this.db.exec(`DELETE FROM memory_atlas_documents WHERE node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time');`);
                 }
                 backfillAtlasDocuments(this.db, projectId);
+                actions = this.actions.rebuild(projectId);
                 const projects = projectId !== undefined
                     ? [projectId]
-                    : this.db.prepare(`SELECT project_id FROM memory_atlas_documents WHERE project_id<>'' UNION SELECT project_id FROM memory_frames WHERE status='active' AND project_id<>''`).all().map((row) => row.project_id);
-                for (const id of projects.filter(Boolean))
-                    this.store.upsertDocument({
-                        id: `project:${id}`, projectId: id, nodeType: 'project', sourceId: id, label: id,
-                        confidence: 1, supportCount: this.store.countDocuments(id), status: 'active', evidenceEventIds: [],
-                        metadata: { projection: MEMORY_ATLAS_PROJECTION_NAME, projectionSchemaVersion: MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION },
-                    });
-                actions = this.actions.rebuild(projectId);
+                    : this.store.listKnownProjectIds();
                 for (const id of projects) {
                     const result = this.curator.rebuild(id);
                     curatedEpisodes += result.episodeCount;
@@ -57,6 +52,12 @@ export class MemoryAtlasIndexer {
                     reviewNeeded += result.reviewNeeded;
                     this.store.aggregateFacetNodeSupport(id);
                 }
+                for (const id of projects)
+                    this.store.upsertDocument({
+                        id: `project:${id}`, projectId: id, nodeType: 'project', sourceId: id, label: id || 'Projectless',
+                        confidence: 1, supportCount: this.store.countDocuments(id), status: 'active', evidenceEventIds: [],
+                        metadata: { projection: MEMORY_ATLAS_PROJECTION_NAME, projectionSchemaVersion: MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION },
+                    });
                 if (projectId !== undefined && this.frameProjector)
                     this.frameProjector.rebuild(projectId, Date.now(), { canonicalDocumentsRebuilt: true });
                 else if (projectId === undefined && this.frameProjector)
@@ -75,7 +76,7 @@ export class MemoryAtlasIndexer {
             this.store.markProjectionFailed(projectId ?? '__all__', error instanceof Error ? error.message : String(error));
             throw error;
         }
-        return { documents: this.store.countDocuments(projectId), actions, curatedEpisodes };
+        return { documents: this.store.countDocuments(projectId), actions, curatedEpisodes, facetEdges, reviewNeeded };
     }
     ensureFresh(options) {
         if (!this.store.projectionNeedsRefresh(options.projectId)) {
@@ -105,8 +106,8 @@ export class MemoryAtlasIndexer {
             episodeIds: ids,
             refreshed: true,
             curatedEpisodes: rebuilt.curatedEpisodes,
-            facetEdges: 0,
-            reviewNeeded: 0,
+            facetEdges: rebuilt.facetEdges,
+            reviewNeeded: rebuilt.reviewNeeded,
         };
     }
     ensureAllFresh() {

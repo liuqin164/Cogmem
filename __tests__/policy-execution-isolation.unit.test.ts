@@ -86,9 +86,9 @@ describe('policy execution project isolation', () => {
     await new PolicyExecutionProjector(events, executions, projections, 'a').fullRebuild('test');
     await new PolicyExecutionProjector(events, executions, projections, '').fullRebuild('test');
 
-    expect(executions.getByIdempotencyKey('a', 'same-key')?.executionId).toBe('a-execution');
-    expect(executions.getByIdempotencyKey('', 'same-key')?.executionId).toBe('global-execution');
-    expect(executions.getByIdempotencyKey('b', 'same-key')).toBeNull();
+    expect(executions.getReadModelByIdempotencyKey('a', 'same-key')?.executionId).toBe('a-execution');
+    expect(executions.getReadModelByIdempotencyKey('', 'same-key')?.executionId).toBe('global-execution');
+    expect(executions.getReadModelByIdempotencyKey('b', 'same-key')).toBeNull();
     projections.close();
     executions.close();
     events.close();
@@ -114,9 +114,62 @@ describe('policy execution project isolation', () => {
 
     expect(calls).toBe(1);
     expect(results.filter((result) => result.status === 'executed')).toHaveLength(1);
-    expect(results.filter((result) => result.status === 'skipped')).toHaveLength(19);
+    expect(results.filter((result) => result.status === 'in_progress')).toHaveLength(19);
     for (const store of stores) store.close();
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('lease heartbeat prevents a second worker from taking a long-running side effect', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-heartbeat-'));
+    const path = join(dir, 'policy.db');
+    const firstStore = new PolicyExecutionStore(path);
+    const secondStore = new PolicyExecutionStore(path);
+    let calls = 0;
+    const delegate = {
+      async execute(effect: PolicySideEffect) {
+        calls += 1;
+        await Bun.sleep(1_300);
+        return { policy: effect.policy, action: effect.action, status: 'executed' as const };
+      },
+    };
+    const first = new ReliablePolicySideEffectExecutor(delegate, firstStore, 0, 1, {
+      leaseMs: 1_000, heartbeatIntervalMs: 100,
+    });
+    const second = new ReliablePolicySideEffectExecutor(delegate, secondStore, 0, 1, {
+      leaseMs: 1_000, heartbeatIntervalMs: 100,
+    });
+    const effect = { projectId: 'a', policy: 'slow', action: 'allow' as const, idempotencyKey: 'heartbeat' };
+    const running = first.execute(effect);
+    await Bun.sleep(1_100);
+    expect(await second.execute(effect)).toMatchObject({ status: 'in_progress', detail: 'execution_in_progress' });
+    expect((await running).status).toBe('executed');
+    expect(calls).toBe(1);
+    firstStore.close();
+    secondStore.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('automatic idempotency ignores volatile execution context and metadata ordering', async () => {
+    const store = new PolicyExecutionStore(':memory:');
+    let calls = 0;
+    const executor = new ReliablePolicySideEffectExecutor({
+      execute(effect) {
+        calls += 1;
+        return { policy: effect.policy, action: effect.action, status: 'executed' };
+      },
+    }, store);
+    await executor.execute({
+      projectId: 'a', policy: 'stable', action: 'allow', target: 'device',
+      runtimeId: 'run-1', actorId: 'actor-1', correlationId: 'trace-1',
+      metadata: { timestamp: 1, nested: { b: 2, a: 1 } },
+    });
+    expect((await executor.execute({
+      projectId: 'a', policy: 'stable', action: 'allow', target: 'device',
+      runtimeId: 'run-2', actorId: 'actor-2', correlationId: 'trace-2',
+      metadata: { nested: { a: 1, b: 2 }, timestamp: 2 },
+    })).status).toBe('skipped');
+    expect(calls).toBe(1);
+    store.close();
   });
 
   test('returned failures use retries and end in the manual dead letter queue', async () => {
@@ -125,7 +178,13 @@ describe('policy execution project isolation', () => {
     const executor = new ReliablePolicySideEffectExecutor({
       execute(effect) {
         calls += 1;
-        return { policy: effect.policy, action: effect.action, status: 'failed', detail: 'returned_failure' };
+        return {
+          policy: effect.policy,
+          action: effect.action,
+          status: 'failed',
+          outcome: 'definitely_not_executed',
+          detail: 'returned_failure',
+        };
       },
     }, store, 2, 1);
 
@@ -137,6 +196,75 @@ describe('policy execution project isolation', () => {
       status: 'failed', attemptCount: 3, detail: 'returned_failure',
     });
     expect(executor.getDeadLetters('a')).toHaveLength(1);
+    store.close();
+  });
+
+  test('unknown delegate exceptions are fail-closed and never retried automatically', async () => {
+    const store = new PolicyExecutionStore(':memory:');
+    let calls = 0;
+    const executor = new ReliablePolicySideEffectExecutor({
+      execute() {
+        calls += 1;
+        throw new Error('transport_disconnected_after_send');
+      },
+    }, store, 5, 1);
+
+    const result = await executor.execute({
+      projectId: 'a', policy: 'once', action: 'allow', idempotencyKey: 'unknown',
+    });
+
+    expect(calls).toBe(1);
+    expect(result).toMatchObject({ status: 'failed', outcome: 'outcome_unknown' });
+    expect(store.getByIdempotencyKey('a', 'unknown')?.nextRetryAt).toBeUndefined();
+    store.close();
+  });
+
+  test('audit delivery failure cannot turn a successful side effect into a retry', async () => {
+    const db = new Database(':memory:');
+    const eventStore = { append() { throw new Error('audit unavailable'); } } as unknown as EventStore;
+    const store = new PolicyExecutionStore(db, eventStore);
+    let calls = 0;
+    const executor = new ReliablePolicySideEffectExecutor({
+      execute(effect) {
+        calls += 1;
+        return { policy: effect.policy, action: effect.action, status: 'executed' };
+      },
+    }, store);
+
+    expect((await executor.execute({
+      projectId: 'a', policy: 'once', action: 'allow', idempotencyKey: 'audit-failure',
+    })).status).toBe('executed');
+    expect((await executor.execute({
+      projectId: 'a', policy: 'once', action: 'allow', idempotencyKey: 'audit-failure',
+    })).status).toBe('skipped');
+    expect(calls).toBe(1);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM policy_execution_audit_outbox`).get()).toEqual({ count: 1 });
+    store.close();
+    db.close();
+  });
+
+  test('delegate success followed by ledger failure is reported unknown without re-executing', async () => {
+    const store = new PolicyExecutionStore(':memory:');
+    const original = store.finishClaim.bind(store);
+    let persistCalls = 0;
+    (store as unknown as { finishClaim: PolicyExecutionStore['finishClaim'] }).finishClaim = (...args) => {
+      persistCalls += 1;
+      if (persistCalls === 1) throw new Error('simulated_crash_before_commit');
+      return original(...args);
+    };
+    let calls = 0;
+    const executor = new ReliablePolicySideEffectExecutor({
+      execute(effect) {
+        calls += 1;
+        return { policy: effect.policy, action: effect.action, status: 'executed' };
+      },
+    }, store);
+
+    const result = await executor.execute({
+      projectId: 'a', policy: 'once', action: 'allow', idempotencyKey: 'persist-failure',
+    });
+    expect(result).toMatchObject({ status: 'failed', outcome: 'outcome_unknown' });
+    expect(calls).toBe(1);
     store.close();
   });
 

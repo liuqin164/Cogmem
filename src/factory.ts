@@ -688,6 +688,7 @@ export class MemoryKernel {
       `).get());
       if (existingSchema) {
         const planner = new SchemaMigrationRunner(migrationDb, KERNEL_MIGRATIONS);
+        planner.preflight();
         const needsBackup = planner.plan().some((migration) => migration.requiresBackup);
         const backupPath = needsBackup ? backupDatabase(migrationDb, this.dbPath) : undefined;
         new SchemaMigrationRunner(migrationDb, KERNEL_MIGRATIONS, {

@@ -67,6 +67,9 @@ export declare class PlanRuntimeStore {
     }, options?: {
         emitEvent?: boolean;
     }): void;
+    private insertTransition;
+    private enqueueEvent;
+    flushEventOutbox(): void;
     getState(runtimeId: string, entityType: RuntimeEntityType, entityKey: string): RuntimeStateRecord | null;
     getSnapshot(runtimeId: string): RuntimeSnapshot;
     getHistoryPage(runtimeId: string, page?: number, pageSize?: number, filters?: {
@@ -77,6 +80,26 @@ export declare class PlanRuntimeStore {
         endTime?: number;
     }): RuntimeDiagnosticsHistoryPage;
     getStateCount(): number;
+    applyProjectedState(projectionName: string, sourceGlobalSeq: number, input: {
+        runtimeId: string;
+        entityType: RuntimeEntityType;
+        entityKey: string;
+        status: RuntimeStatus;
+        metadata?: Record<string, unknown>;
+        updatedAt: number;
+    }): void;
+    applyProjectedTransition(projectionName: string, sourceEventId: string, input: {
+        runtimeId: string;
+        entityType: RuntimeEntityType;
+        entityKey: string;
+        transitionType: string;
+        fromStatus?: string;
+        toStatus: string;
+        payload?: Record<string, unknown>;
+        occurredAt: number;
+    }): void;
+    clearProjection(projectionName: string): void;
+    getProjectionStateCount(projectionName: string): number;
     clearAll(): void;
     close(): void;
 }

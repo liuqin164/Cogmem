@@ -5,6 +5,7 @@ import { projectIsolationFinalizationSatisfied } from './0056_project_isolation_
 import { projectIsolationCompensationSatisfied } from './0057_project_isolation_compensation.js';
 import { projectIsolationRuntimeGuardsSatisfied } from './0058_project_isolation_runtime_guards.js';
 import { projectExecutionAndProvenanceGuardsSatisfied } from './0059_project_execution_and_provenance_guards.js';
+import { executionProjectionAndAtlasReliabilitySatisfied } from './0060_execution_projection_and_atlas_reliability.js';
 export class SchemaMigrationRunner {
     db;
     migrations;
@@ -21,6 +22,17 @@ export class SchemaMigrationRunner {
         return [...this.migrations]
             .sort((a, b) => a.version.localeCompare(b.version))
             .filter((migration) => !applied.has(migration.version) || !this.migrationSchemaSatisfied(migration.version));
+    }
+    preflight() {
+        if (!Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='_schema_migrations'`).get()))
+            return;
+        if (!Boolean(this.db.prepare(`SELECT 1 FROM pragma_table_info('_schema_migrations') WHERE name='checksum'`).get()))
+            return;
+        for (const row of this.recordedChecksums()) {
+            if (UNSAFE_MIGRATION_DIGESTS[row.version]?.includes(row.checksum ?? '')) {
+                throw new Error(`migration_recovery_required:${row.version}:restore_pre_${row.version}_backup`);
+            }
+        }
     }
     run(options = {}) {
         if (options.dryRun || this.options.readonly) {
@@ -406,6 +418,8 @@ export class SchemaMigrationRunner {
             return projectIsolationRuntimeGuardsSatisfied(this.db);
         if (version === '0059')
             return projectExecutionAndProvenanceGuardsSatisfied(this.db);
+        if (version === '0060')
+            return executionProjectionAndAtlasReliabilitySatisfied(this.db);
         return true;
     }
     tableExists(name) {

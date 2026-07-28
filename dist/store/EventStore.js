@@ -105,6 +105,7 @@ export class EventStore {
         projection_name TEXT PRIMARY KEY,
         last_event_id TEXT,
         last_event_time INTEGER,
+        last_global_seq INTEGER,
         last_rebuild_at INTEGER,
         last_full_count INTEGER NOT NULL DEFAULT 0,
         last_checksum TEXT,
@@ -398,6 +399,20 @@ export class EventStore {
       ORDER BY COALESCE(global_seq, 0) ASC, occurred_at ASC, event_id ASC
     `).all(lastEventTime ?? null, lastEventTime ?? null);
         return rows.map((row) => this.mapRow(row));
+    }
+    getEventsAfterGlobalSeq(lastGlobalSeq, throughGlobalSeq) {
+        const rows = this.db.prepare(`
+      SELECT ${MEMORY_EVENT_COLUMNS}
+      FROM memory_events
+      WHERE (? IS NULL OR COALESCE(global_seq, 0) > ?)
+        AND (? IS NULL OR COALESCE(global_seq, 0) <= ?)
+      ORDER BY COALESCE(global_seq, 0) ASC, occurred_at ASC, event_id ASC
+    `).all(lastGlobalSeq ?? null, lastGlobalSeq ?? null, throughGlobalSeq ?? null, throughGlobalSeq ?? null);
+        return rows.map((row) => this.mapRow(row));
+    }
+    getLatestGlobalSeq() {
+        const row = this.db.prepare(`SELECT COALESCE(MAX(global_seq), 0) AS value FROM memory_events`).get();
+        return row.value;
     }
     findImportedEventAnchor(projectId, sourceId, importAnchor) {
         const row = this.db.prepare(`
@@ -725,6 +740,7 @@ export class EventStore {
             projectionName: row.projection_name,
             lastEventId: row.last_event_id || undefined,
             lastEventTime: row.last_event_time || undefined,
+            lastGlobalSeq: row.last_global_seq ?? undefined,
             lastRebuildAt: row.last_rebuild_at || undefined,
             lastFullCount: row.last_full_count || 0,
             lastChecksum: row.last_checksum || undefined,
@@ -735,10 +751,10 @@ export class EventStore {
     upsertProjectionCheckpoint(checkpoint) {
         this.db.prepare(`
       INSERT OR REPLACE INTO vector_projection_state (
-        projection_name, last_event_id, last_event_time, last_rebuild_at,
+        projection_name, last_event_id, last_event_time, last_global_seq, last_rebuild_at,
         last_full_count, last_checksum, status, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(checkpoint.projectionName, checkpoint.lastEventId || null, checkpoint.lastEventTime || null, checkpoint.lastRebuildAt || null, checkpoint.lastFullCount, checkpoint.lastChecksum || null, checkpoint.status, checkpoint.metadata ? JSON.stringify(checkpoint.metadata) : null);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(checkpoint.projectionName, checkpoint.lastEventId || null, checkpoint.lastEventTime ?? null, checkpoint.lastGlobalSeq ?? null, checkpoint.lastRebuildAt ?? null, checkpoint.lastFullCount, checkpoint.lastChecksum || null, checkpoint.status, checkpoint.metadata ? JSON.stringify(checkpoint.metadata) : null);
     }
     close() {
         if (this.ownsDb)

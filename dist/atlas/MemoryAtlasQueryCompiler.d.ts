@@ -23,5 +23,9 @@ export declare function actionMarker(value: string): {
 export declare function actionMarkers(value: string): Array<{
     frameType: string;
     action: string;
+    index: number;
+    end: number;
+    clause: string;
+    ordinal: number;
 }>;
 //# sourceMappingURL=MemoryAtlasQueryCompiler.d.ts.map

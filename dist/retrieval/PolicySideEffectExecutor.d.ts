@@ -7,17 +7,20 @@ export interface PolicySideEffect {
     target?: string;
     metadata?: Record<string, unknown>;
     idempotencyKey?: string;
+    stableOperationId?: string;
     replayPolicy?: PolicyReplayPolicy;
     actorId?: string;
     causationId?: string;
     correlationId?: string;
     policyGroup?: string;
 }
+export type PolicyExecutionOutcome = 'executed' | 'definitely_not_executed' | 'failed_before_execution' | 'outcome_unknown';
 export interface PolicySideEffectResult {
     policy: string;
     action: 'allow' | 'deny' | 'prefer';
     target?: string;
-    status: 'executed' | 'skipped' | 'failed';
+    status: 'executed' | 'skipped' | 'failed' | 'in_progress';
+    outcome?: PolicyExecutionOutcome;
     detail?: string;
 }
 export interface PolicySideEffectExecutor {
@@ -28,26 +31,36 @@ export interface ReliablePolicyExecutorOptions {
     jitterRatio?: number;
     maxBackoffMs?: number;
     leaseMs?: number;
+    heartbeatIntervalMs?: number;
+}
+export declare class PolicySideEffectExecutionError extends Error {
+    readonly outcome: Exclude<PolicyExecutionOutcome, 'executed'>;
+    constructor(message: string, outcome?: Exclude<PolicyExecutionOutcome, 'executed'>);
 }
 export declare class NoopPolicySideEffectExecutor implements PolicySideEffectExecutor {
     execute(effect: PolicySideEffect): PolicySideEffectResult;
 }
 export declare class ReliablePolicySideEffectExecutor implements PolicySideEffectExecutor {
-    private delegate;
-    private store;
-    private maxRetries;
-    private backoffMs;
-    private strategy;
-    private jitterRatio;
-    private maxBackoffMs;
-    private leaseMs;
+    private readonly delegate;
+    private readonly store;
+    private readonly maxRetries;
+    private readonly backoffMs;
+    private readonly strategy;
+    private readonly jitterRatio;
+    private readonly maxBackoffMs;
+    private readonly leaseMs;
+    private readonly heartbeatIntervalMs;
     constructor(delegate: PolicySideEffectExecutor, store: PolicyExecutionStore, maxRetries?: number, backoffMs?: number, options?: ReliablePolicyExecutorOptions);
     execute(effect: PolicySideEffect): Promise<PolicySideEffectResult>;
     replay(projectId: string, runtimeId: string): PolicySideEffectResult[];
     replayPending(projectId: string, now?: number): Promise<PolicySideEffectResult[]>;
     getDeadLetters(projectId: string, runtimeId?: string): PolicySideEffectResult[];
+    private finishFailure;
+    private terminalRecord;
     private buildRecord;
     private computeIdempotencyKey;
+    private retryable;
+    private unknownResult;
     private computeBackoff;
 }
 //# sourceMappingURL=PolicySideEffectExecutor.d.ts.map

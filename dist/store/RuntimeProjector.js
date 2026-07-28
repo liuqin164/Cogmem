@@ -12,9 +12,9 @@ export class RuntimeProjector {
     }
     async bootstrap() {
         const checkpoint = this.projectionStore.getCheckpoint(this.projectionName);
-        const pendingEvents = this.eventStore.getEventsAfter(checkpoint?.lastEventTime)
+        const pendingEvents = this.eventStore.getEventsAfterGlobalSeq(checkpoint?.lastGlobalSeq)
             .filter((event) => this.isRuntimeEvent(event));
-        if (!checkpoint) {
+        if (!checkpoint || checkpoint.lastGlobalSeq === undefined) {
             await this.fullRebuild('initial_build');
             return;
         }
@@ -42,8 +42,8 @@ export class RuntimeProjector {
             lastFullCount: 0,
             metadata: { reason }
         });
-        this.runtimeStore.clearAll();
-        const runtimeEvents = this.eventStore.getEventsAfter(undefined).filter((event) => this.isRuntimeEvent(event));
+        this.runtimeStore.clearProjection(this.projectionName);
+        const runtimeEvents = this.eventStore.getEventsAfterGlobalSeq(undefined).filter((event) => this.isRuntimeEvent(event));
         await this.replay(runtimeEvents);
     }
     async replay(events, previousRebuildAt) {
@@ -53,8 +53,9 @@ export class RuntimeProjector {
                 projectionName: this.projectionName,
                 lastEventId: latestEvent?.eventId,
                 lastEventTime: latestEvent?.occurredAt,
+                lastGlobalSeq: this.eventStore.getLatestGlobalSeq(),
                 lastRebuildAt: previousRebuildAt ?? Date.now(),
-                lastFullCount: this.runtimeStore.getStateCount(),
+                lastFullCount: this.runtimeStore.getProjectionStateCount(this.projectionName),
                 status: 'ready',
                 metadata: { mode: 'incremental_replay', replayedEventCount: 0 }
             });
@@ -70,8 +71,9 @@ export class RuntimeProjector {
             projectionName: this.projectionName,
             lastEventId: lastEvent?.eventId,
             lastEventTime: lastEvent?.occurredAt,
+            lastGlobalSeq: lastEvent?.globalSeq ?? this.eventStore.getLatestGlobalSeq(),
             lastRebuildAt: previousRebuildAt ?? Date.now(),
-            lastFullCount: this.runtimeStore.getStateCount(),
+            lastFullCount: this.runtimeStore.getProjectionStateCount(this.projectionName),
             status: 'ready',
             metadata: {
                 mode: 'incremental_replay',
@@ -85,19 +87,19 @@ export class RuntimeProjector {
             case 'RUNTIME_STATE_UPDATED':
                 if (!payload.runtimeId || !payload.entityType || !payload.entityKey || !payload.status)
                     return;
-                this.runtimeStore.upsertState({
+                this.runtimeStore.applyProjectedState(this.projectionName, event.globalSeq ?? 0, {
                     runtimeId: String(payload.runtimeId),
                     entityType: String(payload.entityType),
                     entityKey: String(payload.entityKey),
                     status: String(payload.status),
                     metadata: payload.metadata || undefined,
                     updatedAt: event.occurredAt
-                }, { emitEvent: false });
+                });
                 return;
             case 'RUNTIME_TRANSITION_RECORDED':
                 if (!payload.runtimeId || !payload.entityType || !payload.entityKey || !payload.transitionType || !payload.toStatus)
                     return;
-                this.runtimeStore.recordTransition({
+                this.runtimeStore.applyProjectedTransition(this.projectionName, event.eventId, {
                     runtimeId: String(payload.runtimeId),
                     entityType: String(payload.entityType),
                     entityKey: String(payload.entityKey),
@@ -106,7 +108,7 @@ export class RuntimeProjector {
                     toStatus: String(payload.toStatus),
                     payload: payload.data || undefined,
                     occurredAt: event.occurredAt
-                }, { emitEvent: false });
+                });
                 return;
             default:
                 return;

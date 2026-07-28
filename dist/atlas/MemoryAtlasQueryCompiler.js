@@ -43,11 +43,21 @@ export function actionMarker(value) {
     return actionMarkers(value)[0];
 }
 export function actionMarkers(value) {
-    const matches = value.match(new RegExp(ACTION_MARKERS.source, 'giu')) || [];
-    return Array.from(new Set(matches.map((match) => match.toLocaleLowerCase()))).map((action) => ({
-        frameType: frameTypeForAction(action),
-        action,
-    }));
+    const matches = [...value.matchAll(new RegExp(ACTION_MARKERS.source, 'giu'))];
+    return matches.map((match, ordinal) => {
+        const index = match.index;
+        const end = index + match[0].length;
+        const next = matches[ordinal + 1]?.index ?? value.length;
+        const action = match[0].toLocaleLowerCase();
+        return {
+            frameType: frameTypeForAction(action),
+            action,
+            index,
+            end,
+            clause: value.slice(index, next),
+            ordinal,
+        };
+    });
 }
 function frameTypeForAction(lower) {
     const frameType = /修复|fix|repair|调试|debug/u.test(lower) ? 'repair'

@@ -14,9 +14,9 @@ export class PolicyExecutionProjector {
     }
     async bootstrap() {
         const checkpoint = this.projectionStore.getCheckpoint(this.projectionName);
-        const pendingEvents = this.eventStore.getEventsAfter(checkpoint?.lastEventTime)
+        const pendingEvents = this.eventStore.getEventsAfterGlobalSeq(checkpoint?.lastGlobalSeq)
             .filter((event) => this.isPolicyExecutionEvent(event));
-        if (!checkpoint) {
+        if (!checkpoint || checkpoint.lastGlobalSeq === undefined) {
             await this.fullRebuild('initial_build');
             return;
         }
@@ -44,19 +44,20 @@ export class PolicyExecutionProjector {
             lastFullCount: 0,
             metadata: { reason }
         });
-        this.executionStore.clearProject(this.projectId);
-        const policyEvents = this.eventStore.getEventsAfter(undefined).filter((event) => this.isPolicyExecutionEvent(event));
+        this.executionStore.clearReadModelProject(this.projectId);
+        const policyEvents = this.eventStore.getEventsAfterGlobalSeq(undefined).filter((event) => this.isPolicyExecutionEvent(event));
         await this.replay(policyEvents);
     }
     async replay(events, previousRebuildAt) {
         if (events.length === 0) {
-            const latestEvent = this.eventStore.getEventsAfter(undefined).filter((event) => this.isPolicyExecutionEvent(event)).at(-1);
+            const latestEvent = this.eventStore.getEventsAfterGlobalSeq(undefined).filter((event) => this.isPolicyExecutionEvent(event)).at(-1);
             this.projectionStore.upsertCheckpoint({
                 projectionName: this.projectionName,
                 lastEventId: latestEvent?.eventId,
                 lastEventTime: latestEvent?.occurredAt,
+                lastGlobalSeq: this.eventStore.getLatestGlobalSeq(),
                 lastRebuildAt: previousRebuildAt ?? Date.now(),
-                lastFullCount: this.executionStore.getExecutionCount(this.projectId),
+                lastFullCount: this.executionStore.getReadModelCount(this.projectId),
                 status: 'ready',
                 metadata: { mode: 'incremental_replay', replayedEventCount: 0 }
             });
@@ -72,8 +73,9 @@ export class PolicyExecutionProjector {
             projectionName: this.projectionName,
             lastEventId: lastEvent?.eventId,
             lastEventTime: lastEvent?.occurredAt,
+            lastGlobalSeq: lastEvent?.globalSeq ?? this.eventStore.getLatestGlobalSeq(),
             lastRebuildAt: previousRebuildAt ?? Date.now(),
-            lastFullCount: this.executionStore.getExecutionCount(this.projectId),
+            lastFullCount: this.executionStore.getReadModelCount(this.projectId),
             status: 'ready',
             metadata: {
                 mode: 'incremental_replay',
@@ -87,7 +89,7 @@ export class PolicyExecutionProjector {
             return;
         if (!payload.executionId || !payload.idempotencyKey || !payload.policy || !payload.action || !payload.status)
             return;
-        this.executionStore.upsert({
+        this.executionStore.upsertReadModel({
             executionId: String(payload.executionId),
             projectId: event.projectId,
             idempotencyKey: String(payload.idempotencyKey),
@@ -110,7 +112,7 @@ export class PolicyExecutionProjector {
             metadata: payload.metadata,
             createdAt: Number(payload.createdAt || event.occurredAt),
             updatedAt: Number(payload.updatedAt || event.occurredAt)
-        }, { emitEvent: false });
+        }, event.globalSeq ?? 0);
     }
     isPolicyExecutionEvent(event) {
         return event.eventType === 'POLICY_EXECUTION_UPDATED' && event.projectId === this.projectId;

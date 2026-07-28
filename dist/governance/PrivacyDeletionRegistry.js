@@ -58,6 +58,7 @@ const MIGRATION_TABLES = [
     'topology_time_rebuild_active_neurons', 'topology_time_rebuild_adjacency', 'topology_time_rebuild_buckets', 'topology_time_rebuild_cognitive_edges', 'topology_time_rebuild_cognitive_nodes',
     'topology_time_rebuild_entries', 'topology_time_rebuild_jobs', 'user_session_runtime', 'vector_index', 'vector_write_outbox', 'web_session_tokens', 'working_memory_deltas', 'memory_activation',
     'file_assets', 'file_blocks', 'file_chunks', 'file_chunk_edges', 'user_insights',
+    'policy_execution_read_model', 'policy_execution_audit_outbox', 'runtime_event_outbox', 'runtime_projection_states', 'runtime_projection_transitions',
 ];
 const MIGRATION_PROJECT_OWNED = [
     'archived_sessions', 'belief_graph_conflicts', 'belief_graph_nodes', 'context_activation_receipts', 'context_strategy_outcomes',
@@ -75,6 +76,7 @@ const MIGRATION_PROJECT_OWNED = [
     'topology_time_rebuild_cognitive_nodes', 'topology_time_rebuild_entries', 'topology_time_rebuild_jobs', 'user_session_runtime',
     'web_session_tokens', 'working_memory_deltas', 'memory_activation',
     'file_assets', 'user_insights',
+    'policy_execution_read_model', 'policy_execution_audit_outbox',
 ];
 const MIGRATION_PROVENANCE_OWNED = [
     'belief_graph_evidence', 'belief_graph_versions', 'chat_turns', 'deep_write_candidates', 'entity_resolution_log',
@@ -82,6 +84,7 @@ const MIGRATION_PROVENANCE_OWNED = [
     'prospective_memory_transitions', 'scheduled_job_runs', 'scheduled_jobs', 'notification_records', 'notification_rules',
     'workspace_settings', 'workspaces', 'meta_observations', 'pending_entity_resolution_quarantine', 'topology_identity_quarantine', 'vector_index', 'vector_write_outbox',
     'file_blocks', 'file_chunks', 'file_chunk_edges',
+    'runtime_event_outbox', 'runtime_projection_states', 'runtime_projection_transitions',
 ];
 const MIGRATION_OPERATIONAL_NON_PERSONAL = [
     '_episode_integrity_markers', '_memory_frame_integrity_markers', '_meta', 'agent_brain_health_checks', 'pipeline_runs',
@@ -248,6 +251,8 @@ export function deleteRegisteredProjectContent(context) {
     (SELECT episode_id FROM memory_episodes WHERE COALESCE(project_id, '') = ?)`);
     remove('episode_dream_jobs', `DELETE FROM episode_dream_jobs WHERE COALESCE(project_id, '') = ?`);
     remove('dream_ledger_state', `DELETE FROM dream_ledger_state WHERE project_key = ?`, [dreamLedgerProjectKey(scope)]);
+    remove('policy_execution_read_model', `DELETE FROM policy_execution_read_model WHERE project_scope = ?`);
+    remove('policy_execution_audit_outbox', `DELETE FROM policy_execution_audit_outbox WHERE project_scope = ?`);
     if (neuronIds.length > 0) {
         const placeholders = neuronIds.map(() => '?').join(', ');
         audit.reasoning_steps_by_neuron = runDelete(`DELETE FROM reasoning_steps WHERE neuron_id IN (${placeholders})`, neuronIds);

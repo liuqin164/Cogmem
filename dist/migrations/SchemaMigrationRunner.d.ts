@@ -19,6 +19,7 @@ export declare class SchemaMigrationRunner {
     private readonly options;
     constructor(db: Database, migrations: Migration[], options?: SchemaMigrationRunnerOptions);
     plan(): Migration[];
+    preflight(): void;
     run(options?: SchemaMigrationRunOptions): SchemaMigrationResult;
     private ensureMigrationTable;
     private migrationChecksum;

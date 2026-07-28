@@ -18,6 +18,7 @@ export interface ProjectionCheckpoint {
   projectionName: string;
   lastEventId?: string;
   lastEventTime?: number;
+  lastGlobalSeq?: number;
   lastRebuildAt?: number;
   lastFullCount: number;
   lastChecksum?: string;
@@ -168,6 +169,7 @@ export class EventStore {
         projection_name TEXT PRIMARY KEY,
         last_event_id TEXT,
         last_event_time INTEGER,
+        last_global_seq INTEGER,
         last_rebuild_at INTEGER,
         last_full_count INTEGER NOT NULL DEFAULT 0,
         last_checksum TEXT,
@@ -502,6 +504,27 @@ export class EventStore {
     `).all(lastEventTime ?? null, lastEventTime ?? null) as any[];
 
     return rows.map((row) => this.mapRow(row));
+  }
+
+  getEventsAfterGlobalSeq(lastGlobalSeq?: number, throughGlobalSeq?: number): MemoryEvent[] {
+    const rows = this.db.prepare(`
+      SELECT ${MEMORY_EVENT_COLUMNS}
+      FROM memory_events
+      WHERE (? IS NULL OR COALESCE(global_seq, 0) > ?)
+        AND (? IS NULL OR COALESCE(global_seq, 0) <= ?)
+      ORDER BY COALESCE(global_seq, 0) ASC, occurred_at ASC, event_id ASC
+    `).all(
+      lastGlobalSeq ?? null,
+      lastGlobalSeq ?? null,
+      throughGlobalSeq ?? null,
+      throughGlobalSeq ?? null
+    ) as any[];
+    return rows.map((row) => this.mapRow(row));
+  }
+
+  getLatestGlobalSeq(): number {
+    const row = this.db.prepare(`SELECT COALESCE(MAX(global_seq), 0) AS value FROM memory_events`).get() as { value: number };
+    return row.value;
   }
 
   findImportedEventAnchor(projectId: string, sourceId: string, importAnchor: string): MemoryEvent | null {
@@ -891,6 +914,7 @@ export class EventStore {
       projectionName: row.projection_name,
       lastEventId: row.last_event_id || undefined,
       lastEventTime: row.last_event_time || undefined,
+      lastGlobalSeq: row.last_global_seq ?? undefined,
       lastRebuildAt: row.last_rebuild_at || undefined,
       lastFullCount: row.last_full_count || 0,
       lastChecksum: row.last_checksum || undefined,
@@ -902,14 +926,15 @@ export class EventStore {
   upsertProjectionCheckpoint(checkpoint: ProjectionCheckpoint): void {
     this.db.prepare(`
       INSERT OR REPLACE INTO vector_projection_state (
-        projection_name, last_event_id, last_event_time, last_rebuild_at,
+        projection_name, last_event_id, last_event_time, last_global_seq, last_rebuild_at,
         last_full_count, last_checksum, status, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       checkpoint.projectionName,
       checkpoint.lastEventId || null,
-      checkpoint.lastEventTime || null,
-      checkpoint.lastRebuildAt || null,
+      checkpoint.lastEventTime ?? null,
+      checkpoint.lastGlobalSeq ?? null,
+      checkpoint.lastRebuildAt ?? null,
       checkpoint.lastFullCount,
       checkpoint.lastChecksum || null,
       checkpoint.status,

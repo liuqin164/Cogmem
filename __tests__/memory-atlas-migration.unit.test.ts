@@ -25,7 +25,7 @@ async function migrate(dbPath: string, args: string[]): Promise<Record<string, u
   return JSON.parse(stdout) as Record<string, unknown>;
 }
 
-test('one command upgrades a 3.5.2 database through schema 59 without changing source memory', async () => {
+test('one command upgrades a 3.5.2 database through schema 60 without changing source memory', async () => {
   const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-atlas-migrate-')), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   const event = kernel.eventStore.append({
@@ -82,7 +82,7 @@ test('one command upgrades a 3.5.2 database through schema 59 without changing s
     DROP TABLE IF EXISTS memory_atlas_documents;
     DROP TABLE IF EXISTS topology_projection_state;
     DROP TABLE IF EXISTS deep_write_candidate_reviews;
-    DELETE FROM _schema_migrations WHERE version IN ('0025','0026','0027','0028','0029','0030','0031','0032','0033','0034','0035','0036','0037','0038','0039','0040','0041','0042','0043','0044','0045','0046','0047','0048','0049','0050','0051','0052','0053','0054','0055','0056','0057','0058','0059');
+    DELETE FROM _schema_migrations WHERE version IN ('0025','0026','0027','0028','0029','0030','0031','0032','0033','0034','0035','0036','0037','0038','0039','0040','0041','0042','0043','0044','0045','0046','0047','0048','0049','0050','0051','0052','0053','0054','0055','0056','0057','0058','0059','0060');
     DROP TABLE IF EXISTS _memory_frame_integrity_markers;
     DELETE FROM _episode_integrity_markers WHERE marker = 'episode_boundary_integrity_0031';
     UPDATE _meta SET value = '24' WHERE key = 'schema_version';
@@ -95,14 +95,14 @@ test('one command upgrades a 3.5.2 database through schema 59 without changing s
   before.close();
 
   const dryRun = await migrate(dbPath, ['--dry-run']);
-  expect(dryRun.pending).toEqual(['0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047', '0048', '0049', '0050', '0051', '0052', '0053', '0054', '0055', '0056', '0057', '0058', '0059']);
+  expect(dryRun.pending).toEqual(['0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047', '0048', '0049', '0050', '0051', '0052', '0053', '0054', '0055', '0056', '0057', '0058', '0059', '0060']);
 
   const result = await migrate(dbPath, ['--yes', '--backup']);
-  expect(result.applied).toEqual(['0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047', '0048', '0049', '0050', '0051', '0052', '0053', '0054', '0055', '0056', '0057', '0058', '0059']);
+  expect(result.applied).toEqual(['0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047', '0048', '0049', '0050', '0051', '0052', '0053', '0054', '0055', '0056', '0057', '0058', '0059', '0060']);
   expect(existsSync(result.backupPath as string)).toBe(true);
 
   const upgraded = new Database(dbPath, { readonly: true });
-  expect(upgraded.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '59' });
+  expect(upgraded.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '60' });
   expect((upgraded.prepare('SELECT COUNT(*) AS count FROM memory_events').get() as { count: number }).count).toBe(beforeEvents);
   expect((upgraded.prepare('SELECT COUNT(*) AS count FROM memory_bindings').get() as { count: number }).count).toBe(beforeBindings);
   expect(upgraded.prepare(`SELECT node_id, project_id, node_type FROM memory_atlas_documents WHERE node_id = ?`).get(`entity:${entity.entityId}`)).toEqual({
@@ -132,7 +132,7 @@ test('real 3.5.2 tag database upgrades before EventStore construction through CL
   kernel.close();
   expect(readdirSync(kernelDir).some((name) => name.includes('.pre-migrate-') && name.endsWith('.bak'))).toBe(true);
   const kernelDb = new Database(kernelPath, { readonly: true });
-  expect(kernelDb.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0059' });
+  expect(kernelDb.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0060' });
   expect((kernelDb.prepare(`PRAGMA table_info(memory_events)`).all() as Array<{ name: string }>)
     .some((column) => column.name === 'project_scope')).toBe(true);
   expect(kernelDb.prepare(`SELECT legacy_status,reason FROM policy_execution_legacy_tombstones
@@ -150,6 +150,6 @@ test('real 3.5.2 tag database upgrades before EventStore construction through CL
   expect(applied.applied).toContain('0059');
   expect(existsSync(applied.backupPath as string)).toBe(true);
   const cliDb = new Database(cliPath, { readonly: true });
-  expect(cliDb.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0059' });
+  expect(cliDb.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0060' });
   cliDb.close();
 });

@@ -1,4 +1,5 @@
 import Database from 'bun:sqlite';
+import { randomUUID } from 'node:crypto';
 import type { EventStore } from './EventStore.js';
 
 export type RuntimeEntityType = 'step' | 'merge' | 'validation' | 'policy' | 'executor' | 'state_machine';
@@ -55,6 +56,7 @@ export class PlanRuntimeStore {
     this.db = new Database(dbPath);
     this.eventStore = eventStore;
     this.initializeSchema();
+    this.flushEventOutbox();
   }
 
   private initializeSchema(): void {
@@ -86,6 +88,38 @@ export class PlanRuntimeStore {
 
       CREATE INDEX IF NOT EXISTS idx_runtime_transitions_runtime
         ON runtime_transitions(runtime_id, occurred_at DESC);
+
+      CREATE TABLE IF NOT EXISTS runtime_event_outbox (
+        outbox_id TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS runtime_projection_states (
+        projection_name TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        metadata_json TEXT,
+        updated_at INTEGER NOT NULL,
+        source_global_seq INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (projection_name, runtime_id, entity_type, entity_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS runtime_projection_transitions (
+        projection_name TEXT NOT NULL,
+        transition_id TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_key TEXT NOT NULL,
+        transition_type TEXT NOT NULL,
+        from_status TEXT,
+        to_status TEXT NOT NULL,
+        payload_json TEXT,
+        occurred_at INTEGER NOT NULL,
+        PRIMARY KEY (projection_name, transition_id)
+      );
     `);
   }
 
@@ -97,37 +131,34 @@ export class PlanRuntimeStore {
     metadata?: Record<string, unknown>;
     updatedAt?: number;
   }, options?: { emitEvent?: boolean }): void {
-    const existing = this.getState(input.runtimeId, input.entityType, input.entityKey);
     const updatedAt = input.updatedAt ?? Date.now();
-
-    this.db.prepare(`
-      INSERT OR REPLACE INTO runtime_states (
-        runtime_id, entity_type, entity_key, status, metadata_json, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      input.runtimeId,
-      input.entityType,
-      input.entityKey,
-      input.status,
-      input.metadata ? JSON.stringify(input.metadata) : null,
-      updatedAt
-    );
-
-    if (!existing || existing.status !== input.status) {
-      this.recordTransition({
-        runtimeId: input.runtimeId,
-        entityType: input.entityType,
-        entityKey: input.entityKey,
-        transitionType: 'state_update',
-        fromStatus: existing?.status,
-        toStatus: input.status,
-        payload: input.metadata,
-        occurredAt: updatedAt
-      });
-    }
-
-    if (options?.emitEvent !== false) {
-      this.eventStore?.append({
+    this.db.transaction(() => {
+      const existing = this.getState(input.runtimeId, input.entityType, input.entityKey);
+      this.db.prepare(`
+        INSERT OR REPLACE INTO runtime_states (
+          runtime_id, entity_type, entity_key, status, metadata_json, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        input.runtimeId,
+        input.entityType,
+        input.entityKey,
+        input.status,
+        input.metadata ? JSON.stringify(input.metadata) : null,
+        updatedAt
+      );
+      if (!existing || existing.status !== input.status) {
+        this.insertTransition({
+          runtimeId: input.runtimeId,
+          entityType: input.entityType,
+          entityKey: input.entityKey,
+          transitionType: 'state_update',
+          fromStatus: existing?.status,
+          toStatus: input.status,
+          payload: input.metadata,
+          occurredAt: updatedAt
+        }, options?.emitEvent !== false);
+      }
+      if (options?.emitEvent !== false) this.enqueueEvent({
         streamId: `${input.runtimeId}:${input.entityType}:${input.entityKey}`,
         streamType: 'system',
         eventType: 'RUNTIME_STATE_UPDATED',
@@ -140,7 +171,8 @@ export class PlanRuntimeStore {
           metadata: input.metadata
         }
       });
-    }
+    })();
+    this.flushEventOutbox();
   }
 
   recordTransition(input: {
@@ -153,7 +185,22 @@ export class PlanRuntimeStore {
     payload?: Record<string, unknown>;
     occurredAt?: number;
   }, options?: { emitEvent?: boolean }): void {
-    const transitionId = `rt-${input.runtimeId}-${input.entityType}-${input.entityKey}-${input.occurredAt || Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.db.transaction(() => this.insertTransition(input, options?.emitEvent !== false))();
+    this.flushEventOutbox();
+  }
+
+  private insertTransition(input: {
+    runtimeId: string;
+    entityType: RuntimeEntityType;
+    entityKey: string;
+    transitionType: string;
+    fromStatus?: string;
+    toStatus: string;
+    payload?: Record<string, unknown>;
+    occurredAt?: number;
+  }, emitEvent: boolean): void {
+    const occurredAt = input.occurredAt ?? Date.now();
+    const transitionId = `rt-${randomUUID()}`;
     this.db.prepare(`
       INSERT INTO runtime_transitions (
         transition_id, runtime_id, entity_type, entity_key, transition_type,
@@ -168,15 +215,13 @@ export class PlanRuntimeStore {
       input.fromStatus || null,
       input.toStatus,
       input.payload ? JSON.stringify(input.payload) : null,
-      input.occurredAt ?? Date.now()
+      occurredAt
     );
-
-    if (options?.emitEvent !== false) {
-      this.eventStore?.append({
+    if (emitEvent) this.enqueueEvent({
         streamId: `${input.runtimeId}:${input.entityType}:${input.entityKey}`,
         streamType: 'system',
         eventType: 'RUNTIME_TRANSITION_RECORDED',
-        occurredAt: input.occurredAt,
+        occurredAt,
         payload: {
           runtimeId: input.runtimeId,
           entityType: input.entityType,
@@ -187,6 +232,28 @@ export class PlanRuntimeStore {
           data: input.payload
         }
       });
+  }
+
+  private enqueueEvent(input: Record<string, unknown>): void {
+    const outboxId = `evt-runtime-${randomUUID()}`;
+    this.db.prepare(`INSERT INTO runtime_event_outbox(outbox_id,payload_json,created_at) VALUES(?,?,?)`)
+      .run(outboxId, JSON.stringify({ ...input, eventId: outboxId }), Date.now());
+  }
+
+  flushEventOutbox(): void {
+    if (!this.eventStore) return;
+    const rows = this.db.prepare(`
+      SELECT outbox_id,payload_json FROM runtime_event_outbox ORDER BY created_at,outbox_id
+    `).all() as Array<{ outbox_id: string; payload_json: string }>;
+    for (const row of rows) {
+      try {
+        if (!this.eventStore.getEvent(row.outbox_id)) {
+          this.eventStore.append(JSON.parse(row.payload_json));
+        }
+        this.db.prepare(`DELETE FROM runtime_event_outbox WHERE outbox_id=?`).run(row.outbox_id);
+      } catch {
+        break;
+      }
     }
   }
 
@@ -356,6 +423,79 @@ export class PlanRuntimeStore {
   getStateCount(): number {
     const row = this.db.prepare(`SELECT COUNT(*) AS count FROM runtime_states`).get() as { count: number } | null;
     return row?.count || 0;
+  }
+
+  applyProjectedState(projectionName: string, sourceGlobalSeq: number, input: {
+    runtimeId: string;
+    entityType: RuntimeEntityType;
+    entityKey: string;
+    status: RuntimeStatus;
+    metadata?: Record<string, unknown>;
+    updatedAt: number;
+  }): void {
+    this.db.prepare(`
+      INSERT INTO runtime_projection_states (
+        projection_name, runtime_id, entity_type, entity_key, status, metadata_json, updated_at, source_global_seq
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(projection_name, runtime_id, entity_type, entity_key) DO UPDATE SET
+        status=excluded.status,
+        metadata_json=excluded.metadata_json,
+        updated_at=excluded.updated_at,
+        source_global_seq=excluded.source_global_seq
+      WHERE excluded.source_global_seq >= runtime_projection_states.source_global_seq
+    `).run(
+      projectionName,
+      input.runtimeId,
+      input.entityType,
+      input.entityKey,
+      input.status,
+      input.metadata ? JSON.stringify(input.metadata) : null,
+      input.updatedAt,
+      sourceGlobalSeq
+    );
+  }
+
+  applyProjectedTransition(projectionName: string, sourceEventId: string, input: {
+    runtimeId: string;
+    entityType: RuntimeEntityType;
+    entityKey: string;
+    transitionType: string;
+    fromStatus?: string;
+    toStatus: string;
+    payload?: Record<string, unknown>;
+    occurredAt: number;
+  }): void {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO runtime_projection_transitions (
+        projection_name, transition_id, runtime_id, entity_type, entity_key,
+        transition_type, from_status, to_status, payload_json, occurred_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      projectionName,
+      sourceEventId,
+      input.runtimeId,
+      input.entityType,
+      input.entityKey,
+      input.transitionType,
+      input.fromStatus ?? null,
+      input.toStatus,
+      input.payload ? JSON.stringify(input.payload) : null,
+      input.occurredAt
+    );
+  }
+
+  clearProjection(projectionName: string): void {
+    this.db.transaction(() => {
+      this.db.prepare(`DELETE FROM runtime_projection_states WHERE projection_name = ?`).run(projectionName);
+      this.db.prepare(`DELETE FROM runtime_projection_transitions WHERE projection_name = ?`).run(projectionName);
+    })();
+  }
+
+  getProjectionStateCount(projectionName: string): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM runtime_projection_states WHERE projection_name = ?
+    `).get(projectionName) as { count: number } | null;
+    return row?.count ?? 0;
   }
 
   clearAll(): void {
