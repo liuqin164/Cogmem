@@ -370,6 +370,38 @@ test('Atlas keeps projectless action-only projects and preserves repeated multi-
   }
 });
 
+test('Atlas action extraction rejects Latin substrings and preserves preposed CJK targets', () => {
+  const kernel = createMemoryKernel();
+  try {
+    const alpha = kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'Alpha', entityType: 'device', aliases: ['Alpha'], now: 1,
+    });
+    const hermes = kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'Hermes', entityType: 'device', aliases: ['Hermes'], now: 1,
+    });
+    kernel.eventStore.append({
+      streamId: 'latin-substrings', streamType: 'thread', eventType: 'MESSAGE',
+      projectId: 'p', role: 'user', occurredAt: 1,
+      payload: { text: 'runtime prefix connection installation' },
+    });
+    kernel.eventStore.append({
+      streamId: 'preposed-targets', streamType: 'thread', eventType: 'MESSAGE',
+      projectId: 'p', role: 'user', occurredAt: 2,
+      payload: { text: '把 Alpha 启动，请将 Hermes 更新。' },
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const rows = kernel.memoryAtlasStore.db.prepare(`
+      SELECT frame_type,target_entity_id FROM memory_action_frames
+      WHERE project_id='p' ORDER BY action_id
+    `).all() as Array<{ frame_type: string; target_entity_id: string | null }>;
+    expect(rows).toHaveLength(2);
+    expect(rows).toContainEqual({ frame_type: 'start', target_entity_id: alpha.entityId });
+    expect(rows).toContainEqual({ frame_type: 'update', target_entity_id: hermes.entityId });
+  } finally {
+    kernel.close();
+  }
+});
+
 test('Atlas reinstalls a same-name no-op dirty trigger and refreshes after raw events', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-atlas-trigger-'));
   const dbPath = join(dir, 'memory.db');
@@ -384,6 +416,11 @@ test('Atlas reinstalls a same-name no-op dirty trigger and refreshes after raw e
   const kernel = createMemoryKernel({ dbPath });
   try {
     kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    kernel.eventStore.append({
+      streamId: 'system-noise', streamType: 'system', eventType: 'POLICY_EXECUTION_UPDATED',
+      projectId: 'p', occurredAt: 1, payload: {},
+    });
+    expect(kernel.memoryAtlasStore.getProjectionState('p')?.status).toBe('clean');
     kernel.eventStore.append({
       streamId: 'dirty-action', streamType: 'thread', eventType: 'MESSAGE',
       projectId: 'p', role: 'user', occurredAt: 2, payload: { text: 'update Atlas' },

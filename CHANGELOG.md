@@ -15,6 +15,12 @@
 - Made recall and MCP graph discovery read-only over last-known-good projections, added explicit paginated `cogmem memory rebuild-topology --project <id>`, and rebuilt topology plus cognitive temporal edges through resumable staging and a final atomic project-local swap.
 - Bound every migration receipt digest to its exact checked-in source, restricted legacy checksum conversion to complete audited profiles, and verified real `f71b20a` source/dist databases upgrade to the current schema.
 - Hardened import date provenance and explicit `--db` timezone diagnostics, made Frame baseline reduction idempotent across repeated direct rebuilds, and aligned MemoryFrame schema bounds with runtime validation.
+- Added immutable migrations 0051-0061 for project-scoped topology, entity, event, policy-execution, runtime, Atlas, and projection identities; ambiguous legacy rows are quarantined instead of silently reassigned.
+- Made policy side effects require a caller-owned operation identity, atomically lease execution, validate terminal outcomes, preserve legacy idempotency tombstones, and recover pending audit events after restart.
+- Rebuilt policy/runtime projections with filtered global-sequence pages, fixed high-water checkpoints, and shadow tables that atomically replace the live read model without exposing empty or partial rebuilds.
+- Scoped runtime state, transition, outbox, and projection rows by project, included them in privacy erasure, and made standalone stores fail explicitly when opened before the required migration.
+- Restricted Atlas dirtying to user/tool evidence, projected MemoryFrames before aggregate/project counts, merged action evidence into time facets, and tightened multilingual action/target parsing.
+- Extended read-only status with the pending policy-audit outbox count and added migration, isolation, crash-recovery, timezone, parser, and privacy regression coverage.
 
 ## 3.7.3
 

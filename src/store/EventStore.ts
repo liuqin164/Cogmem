@@ -522,6 +522,34 @@ export class EventStore {
     return rows.map((row) => this.mapRow(row));
   }
 
+  getEventsByGlobalSeqPage(options: {
+    afterGlobalSeq?: number;
+    throughGlobalSeq: number;
+    eventTypes?: string[];
+    projectId?: string;
+    limit?: number;
+  }): MemoryEvent[] {
+    const conditions = ['COALESCE(global_seq,0)>?', 'COALESCE(global_seq,0)<=?'];
+    const params: Array<string | number> = [options.afterGlobalSeq ?? 0, options.throughGlobalSeq];
+    if (options.eventTypes?.length) {
+      conditions.push(`event_type IN (${options.eventTypes.map(() => '?').join(',')})`);
+      params.push(...options.eventTypes);
+    }
+    if (options.projectId !== undefined) {
+      conditions.push(`COALESCE(project_id,'')=?`);
+      params.push(options.projectId);
+    }
+    params.push(Math.max(1, Math.min(options.limit ?? 500, 5_000)));
+    const rows = this.db.prepare(`
+      SELECT ${MEMORY_EVENT_COLUMNS}
+      FROM memory_events
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY COALESCE(global_seq,0), occurred_at, event_id
+      LIMIT ?
+    `).all(...params) as any[];
+    return rows.map((row) => this.mapRow(row));
+  }
+
   getLatestGlobalSeq(): number {
     const row = this.db.prepare(`SELECT COALESCE(MAX(global_seq), 0) AS value FROM memory_events`).get() as { value: number };
     return row.value;

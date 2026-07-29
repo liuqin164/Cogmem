@@ -82,7 +82,9 @@ export class ActionFrameExtractor {
                 id: `time:${aggregate.projectId}:${aggregate.year}`, projectId: aggregate.projectId,
                 nodeType: 'time', memoryKind: 'time', sourceId: String(aggregate.year), label: String(aggregate.year),
                 confidence: 1, supportCount: evidenceEventIds.length, status: 'active',
-                occurredAt: localDateRange(aggregate.year, 1, 1, aggregate.year, 1, 2, this.eventStore.getProjectTimeZone()).from, evidenceEventIds,
+                occurredAt: localDateRange(aggregate.year, 1, 1, aggregate.year, 1, 2, this.eventStore.getProjectTimeZone()).from,
+                evidenceEventIds,
+                metadata: { projection: 'memory_atlas.actions' },
             });
         }
         return created;
@@ -117,11 +119,12 @@ export class ActionFrameExtractor {
         const matched = resolveTextAlias(text, candidates);
         if (matched)
             return { entityId: matched.entityId, entityName: matched.canonicalName, confidence: 0.82 };
-        const binding = this.db.prepare(`
+        const bindings = this.db.prepare(`
       SELECT entity_id,entity_name,topic_path,confidence FROM memory_bindings
       WHERE project_id=? AND event_id=? AND entity_id IS NOT NULL
-      ORDER BY confidence DESC,created_at DESC LIMIT 1
-    `).get(projectId, event.eventId);
+      ORDER BY confidence DESC,created_at DESC
+    `).all(projectId, event.eventId);
+        const binding = bindings.length === 1 ? bindings[0] : undefined;
         return binding ? {
             entityId: String(binding.entity_id), entityName: optionalString(binding.entity_name),
             topicPath: optionalString(binding.topic_path), confidence: Number(binding.confidence || 0.8),

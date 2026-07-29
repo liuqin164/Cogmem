@@ -6,6 +6,12 @@ export class RuntimeProjectionStore {
         this.initializeSchema();
     }
     initializeSchema() {
+        const exists = this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_projection_state'`).get();
+        if (exists) {
+            const columns = new Set(this.db.prepare(`PRAGMA table_info(runtime_projection_state)`).all().map((row) => row.name));
+            if (!columns.has('last_global_seq'))
+                throw new Error('projection_schema_not_migrated:runtime_projection_state');
+        }
         this.db.exec(`
       CREATE TABLE IF NOT EXISTS runtime_projection_state (
         projection_name TEXT PRIMARY KEY,

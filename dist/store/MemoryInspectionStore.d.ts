@@ -32,6 +32,10 @@ export interface MemoryInspectionStatus {
         shadow: number;
     };
     activeBeliefs: number;
+    policyAuditOutbox: {
+        pending: number;
+        oldestCreatedAt?: number;
+    };
 }
 /**
  * A query-only operational view. It deliberately does not initialize or migrate
@@ -59,5 +63,6 @@ export declare class MemoryInspectionStore {
     private episodeDream;
     private candidateQueue;
     private countBeliefs;
+    private policyAuditOutbox;
 }
 //# sourceMappingURL=MemoryInspectionStore.d.ts.map

@@ -6,6 +6,7 @@ import { projectIsolationCompensationSatisfied } from './0057_project_isolation_
 import { projectIsolationRuntimeGuardsSatisfied } from './0058_project_isolation_runtime_guards.js';
 import { projectExecutionAndProvenanceGuardsSatisfied } from './0059_project_execution_and_provenance_guards.js';
 import { executionProjectionAndAtlasReliabilitySatisfied } from './0060_execution_projection_and_atlas_reliability.js';
+import { runtimeScopeAndProjectionIntegritySatisfied } from './0061_runtime_scope_and_projection_integrity.js';
 export class SchemaMigrationRunner {
     db;
     migrations;
@@ -263,13 +264,14 @@ export class SchemaMigrationRunner {
         const legacyVersion = this.legacySchemaVersion();
         if (legacyVersion === undefined)
             return;
-        const insert = this.db.prepare(`
-      INSERT OR IGNORE INTO _schema_migrations (version, description, applied_at)
-      VALUES (?, ?, ?)
-    `);
+        const hasChecksum = this.hasColumns('_schema_migrations', ['checksum']);
+        const insert = this.db.prepare(hasChecksum
+            ? `INSERT OR IGNORE INTO _schema_migrations (version,description,applied_at,checksum) VALUES (?,?,?,?)`
+            : `INSERT OR IGNORE INTO _schema_migrations (version,description,applied_at) VALUES (?,?,?)`);
         for (const migration of this.migrations) {
             if (Number.parseInt(migration.version, 10) <= legacyVersion && this.migrationSchemaSatisfied(migration.version)) {
-                insert.run(migration.version, `adopted: ${migration.description}`, new Date(0).toISOString());
+                const values = [migration.version, `adopted: ${migration.description}`, new Date(0).toISOString()];
+                insert.run(...values, ...(hasChecksum ? [this.migrationChecksum(migration)] : []));
             }
         }
     }
@@ -419,7 +421,10 @@ export class SchemaMigrationRunner {
         if (version === '0059')
             return projectExecutionAndProvenanceGuardsSatisfied(this.db);
         if (version === '0060')
-            return executionProjectionAndAtlasReliabilitySatisfied(this.db);
+            return executionProjectionAndAtlasReliabilitySatisfied(this.db)
+                || runtimeScopeAndProjectionIntegritySatisfied(this.db);
+        if (version === '0061')
+            return runtimeScopeAndProjectionIntegritySatisfied(this.db);
         return true;
     }
     tableExists(name) {

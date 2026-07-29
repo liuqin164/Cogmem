@@ -376,6 +376,8 @@ export class MemoryFrameProjector {
     reduceAffectedDocuments(projectId, now) {
         const authorityRank = { operator: 5, governed: 5, canonical: 4, validated_processor: 3, memory_frame_projector: 2, deterministic_fallback: 1 };
         for (const nodeId of this.affectedNodeIds) {
+            if (nodeId === `project:${projectId}`)
+                continue;
             const supports = this.db.prepare(`SELECT payload_json,confidence,evidence_event_ids_json,source_authority,created_at FROM memory_atlas_supports WHERE project_id=? AND node_id=? AND status='active'`).all(projectId, nodeId);
             if (!supports.length) {
                 this.db.prepare(`UPDATE memory_atlas_documents SET support_count=0,status=CASE WHEN json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2' THEN 'archived' ELSE status END,updated_at=? WHERE project_id=? AND node_id=?`).run(now, projectId, nodeId);

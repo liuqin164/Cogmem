@@ -42,7 +42,18 @@ export class ReliablePolicySideEffectExecutor {
     }
     async execute(effect) {
         const now = Date.now();
-        const idempotencyKey = effect.idempotencyKey || this.computeIdempotencyKey(effect);
+        const idempotencyKey = effect.idempotencyKey?.trim()
+            || (effect.stableOperationId?.trim() ? this.computeIdempotencyKey(effect) : undefined);
+        if (!idempotencyKey) {
+            return {
+                policy: effect.policy,
+                action: effect.action,
+                target: effect.target,
+                status: 'failed',
+                outcome: 'definitely_not_executed',
+                detail: 'policy_operation_identity_required',
+            };
+        }
         const leaseOwner = `policy-worker-${randomUUID()}`;
         const claim = this.store.claim(this.buildRecord(effect, idempotencyKey, now, 0), leaseOwner, now + this.leaseMs, now);
         if (claim.kind === 'executed') {
@@ -59,16 +70,16 @@ export class ReliablePolicySideEffectExecutor {
             return this.unknownResult(effect, claim.record?.detail || 'legacy_execution_scope_ambiguous');
         }
         if (claim.kind === 'busy') {
-            return {
-                policy: effect.policy,
-                action: effect.action,
-                target: effect.target,
-                status: claim.record.status === 'in_progress' ? 'in_progress' : 'failed',
-                outcome: claim.record.status === 'in_progress' ? undefined : 'outcome_unknown',
-                detail: claim.record.status === 'in_progress'
-                    ? 'execution_in_progress'
-                    : claim.record.detail || 'execution_retry_not_due',
-            };
+            if (claim.record.status === 'in_progress') {
+                return {
+                    policy: effect.policy,
+                    action: effect.action,
+                    target: effect.target,
+                    status: 'in_progress',
+                    detail: 'execution_in_progress',
+                };
+            }
+            return this.unknownResult(effect, claim.record.detail || 'execution_retry_not_due');
         }
         const record = claim.record;
         const attemptBase = record.attemptCount;
@@ -95,11 +106,14 @@ export class ReliablePolicySideEffectExecutor {
                         continue;
                     return this.finishFailure(effect, record, leaseOwner, idempotencyKey, totalAttempt, outcome, error instanceof Error ? error.message : String(error));
                 }
+                if (!this.validResult(result, effect)) {
+                    return this.finishFailure(effect, record, leaseOwner, idempotencyKey, totalAttempt, 'outcome_unknown', 'delegate_protocol_error');
+                }
                 if (result.status === 'failed') {
-                    const outcome = result.outcome ?? 'outcome_unknown';
+                    const outcome = result.outcome;
                     if (this.retryable(outcome) && localAttempt <= this.maxRetries && !leaseLost)
                         continue;
-                    return this.finishFailure(effect, record, leaseOwner, idempotencyKey, totalAttempt, outcome === 'executed' ? 'outcome_unknown' : outcome, result.detail || 'policy_delegate_failed');
+                    return this.finishFailure(effect, record, leaseOwner, idempotencyKey, totalAttempt, outcome, result.detail || 'policy_delegate_failed');
                 }
                 if (result.status === 'in_progress') {
                     return this.finishFailure(effect, record, leaseOwner, idempotencyKey, totalAttempt, 'outcome_unknown', 'delegate_returned_in_progress');
@@ -117,7 +131,7 @@ export class ReliablePolicySideEffectExecutor {
                 catch {
                     return this.unknownResult(effect, 'external_effect_succeeded_persistence_unknown');
                 }
-                return { ...result, outcome: result.outcome ?? 'executed' };
+                return result;
             }
             return this.unknownResult(effect, 'execution_loop_exhausted');
         }
@@ -131,7 +145,9 @@ export class ReliablePolicySideEffectExecutor {
             action: record.action,
             target: record.target,
             status: record.status,
-            outcome: record.status === 'executed' || record.status === 'skipped' ? 'executed' : undefined,
+            ...(record.status === 'executed' || record.status === 'skipped'
+                ? { outcome: 'executed' }
+                : { outcome: 'outcome_unknown' }),
             detail: record.detail,
         }));
     }
@@ -252,6 +268,23 @@ export class ReliablePolicySideEffectExecutor {
     }
     retryable(outcome) {
         return outcome === 'definitely_not_executed' || outcome === 'failed_before_execution';
+    }
+    validResult(result, effect) {
+        if (!result || typeof result !== 'object')
+            return false;
+        const value = result;
+        if (value.policy !== effect.policy || value.action !== effect.action)
+            return false;
+        if (value.target !== undefined && value.target !== effect.target)
+            return false;
+        if (value.status === 'executed' || value.status === 'skipped')
+            return value.outcome === 'executed';
+        if (value.status === 'failed') {
+            return value.outcome === 'definitely_not_executed'
+                || value.outcome === 'failed_before_execution'
+                || value.outcome === 'outcome_unknown';
+        }
+        return value.status === 'in_progress' && value.outcome === undefined;
     }
     unknownResult(effect, detail) {
         return {

@@ -27,14 +27,21 @@ export type PolicyExecutionOutcome =
   | 'failed_before_execution'
   | 'outcome_unknown';
 
-export interface PolicySideEffectResult {
+interface PolicySideEffectResultBase {
   policy: string;
   action: 'allow' | 'deny' | 'prefer';
   target?: string;
-  status: 'executed' | 'skipped' | 'failed' | 'in_progress';
-  outcome?: PolicyExecutionOutcome;
   detail?: string;
 }
+
+export type PolicySideEffectResult =
+  | (PolicySideEffectResultBase & { status: 'executed'; outcome: 'executed' })
+  | (PolicySideEffectResultBase & { status: 'skipped'; outcome: 'executed' })
+  | (PolicySideEffectResultBase & {
+      status: 'failed';
+      outcome: Exclude<PolicyExecutionOutcome, 'executed'>;
+    })
+  | (PolicySideEffectResultBase & { status: 'in_progress'; outcome?: never });
 
 export interface PolicySideEffectExecutor {
   execute(effect: PolicySideEffect): Promise<PolicySideEffectResult> | PolicySideEffectResult;
@@ -94,7 +101,18 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
 
   async execute(effect: PolicySideEffect): Promise<PolicySideEffectResult> {
     const now = Date.now();
-    const idempotencyKey = effect.idempotencyKey || this.computeIdempotencyKey(effect);
+    const idempotencyKey = effect.idempotencyKey?.trim()
+      || (effect.stableOperationId?.trim() ? this.computeIdempotencyKey(effect) : undefined);
+    if (!idempotencyKey) {
+      return {
+        policy: effect.policy,
+        action: effect.action,
+        target: effect.target,
+        status: 'failed',
+        outcome: 'definitely_not_executed',
+        detail: 'policy_operation_identity_required',
+      };
+    }
     const leaseOwner = `policy-worker-${randomUUID()}`;
     const claim = this.store.claim(
       this.buildRecord(effect, idempotencyKey, now, 0),
@@ -116,16 +134,16 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
       return this.unknownResult(effect, claim.record?.detail || 'legacy_execution_scope_ambiguous');
     }
     if (claim.kind === 'busy') {
-      return {
-        policy: effect.policy,
-        action: effect.action,
-        target: effect.target,
-        status: claim.record.status === 'in_progress' ? 'in_progress' : 'failed',
-        outcome: claim.record.status === 'in_progress' ? undefined : 'outcome_unknown',
-        detail: claim.record.status === 'in_progress'
-          ? 'execution_in_progress'
-          : claim.record.detail || 'execution_retry_not_due',
-      };
+      if (claim.record.status === 'in_progress') {
+        return {
+          policy: effect.policy,
+          action: effect.action,
+          target: effect.target,
+          status: 'in_progress',
+          detail: 'execution_in_progress',
+        };
+      }
+      return this.unknownResult(effect, claim.record.detail || 'execution_retry_not_due');
     }
 
     const record = claim.record;
@@ -165,8 +183,20 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
           );
         }
 
+        if (!this.validResult(result, effect)) {
+          return this.finishFailure(
+            effect,
+            record,
+            leaseOwner,
+            idempotencyKey,
+            totalAttempt,
+            'outcome_unknown',
+            'delegate_protocol_error',
+          );
+        }
+
         if (result.status === 'failed') {
-          const outcome = result.outcome ?? 'outcome_unknown';
+          const outcome = result.outcome;
           if (this.retryable(outcome) && localAttempt <= this.maxRetries && !leaseLost) continue;
           return this.finishFailure(
             effect,
@@ -174,7 +204,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
             leaseOwner,
             idempotencyKey,
             totalAttempt,
-            outcome === 'executed' ? 'outcome_unknown' : outcome,
+            outcome,
             result.detail || 'policy_delegate_failed',
           );
         }
@@ -202,7 +232,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
         } catch {
           return this.unknownResult(effect, 'external_effect_succeeded_persistence_unknown');
         }
-        return { ...result, outcome: result.outcome ?? 'executed' };
+        return result;
       }
       return this.unknownResult(effect, 'execution_loop_exhausted');
     } finally {
@@ -216,9 +246,11 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
       action: record.action as PolicySideEffectResult['action'],
       target: record.target,
       status: record.status,
-      outcome: record.status === 'executed' || record.status === 'skipped' ? 'executed' : undefined,
+      ...(record.status === 'executed' || record.status === 'skipped'
+        ? { outcome: 'executed' as const }
+        : { outcome: 'outcome_unknown' as const }),
       detail: record.detail,
-    }));
+    })) as PolicySideEffectResult[];
   }
 
   async replayPending(projectId: string, now: number = Date.now()): Promise<PolicySideEffectResult[]> {
@@ -359,6 +391,20 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
 
   private retryable(outcome: PolicyExecutionOutcome): boolean {
     return outcome === 'definitely_not_executed' || outcome === 'failed_before_execution';
+  }
+
+  private validResult(result: unknown, effect: PolicySideEffect): result is PolicySideEffectResult {
+    if (!result || typeof result !== 'object') return false;
+    const value = result as Record<string, unknown>;
+    if (value.policy !== effect.policy || value.action !== effect.action) return false;
+    if (value.target !== undefined && value.target !== effect.target) return false;
+    if (value.status === 'executed' || value.status === 'skipped') return value.outcome === 'executed';
+    if (value.status === 'failed') {
+      return value.outcome === 'definitely_not_executed'
+        || value.outcome === 'failed_before_execution'
+        || value.outcome === 'outcome_unknown';
+    }
+    return value.status === 'in_progress' && value.outcome === undefined;
   }
 
   private unknownResult(effect: PolicySideEffect, detail: string): PolicySideEffectResult {

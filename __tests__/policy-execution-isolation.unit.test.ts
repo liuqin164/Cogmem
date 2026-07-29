@@ -21,7 +21,7 @@ describe('policy execution project isolation', () => {
     const executor = new ReliablePolicySideEffectExecutor({
       execute(effect: PolicySideEffect) {
         calls.push(effect.projectId);
-        return { policy: effect.policy, action: effect.action, status: 'executed' };
+        return { policy: effect.policy, action: effect.action, status: 'executed', outcome: 'executed' };
       },
     }, store);
 
@@ -104,7 +104,7 @@ describe('policy execution project isolation', () => {
       async execute(effect) {
         calls += 1;
         await Bun.sleep(10);
-        return { policy: effect.policy, action: effect.action, status: 'executed' };
+        return { policy: effect.policy, action: effect.action, status: 'executed', outcome: 'executed' };
       },
     }, store));
 
@@ -129,7 +129,7 @@ describe('policy execution project isolation', () => {
       async execute(effect: PolicySideEffect) {
         calls += 1;
         await Bun.sleep(1_300);
-        return { policy: effect.policy, action: effect.action, status: 'executed' as const };
+        return { policy: effect.policy, action: effect.action, status: 'executed' as const, outcome: 'executed' as const };
       },
     };
     const first = new ReliablePolicySideEffectExecutor(delegate, firstStore, 0, 1, {
@@ -149,26 +149,77 @@ describe('policy execution project isolation', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test('automatic idempotency ignores volatile execution context and metadata ordering', async () => {
+  test('stable operation identity executes distinct operations and deduplicates retries', async () => {
     const store = new PolicyExecutionStore(':memory:');
     let calls = 0;
     const executor = new ReliablePolicySideEffectExecutor({
       execute(effect) {
         calls += 1;
-        return { policy: effect.policy, action: effect.action, status: 'executed' };
+        return { policy: effect.policy, action: effect.action, status: 'executed', outcome: 'executed' };
       },
     }, store);
     await executor.execute({
       projectId: 'a', policy: 'stable', action: 'allow', target: 'device',
+      stableOperationId: 'operation-1',
       runtimeId: 'run-1', actorId: 'actor-1', correlationId: 'trace-1',
       metadata: { timestamp: 1, nested: { b: 2, a: 1 } },
     });
     expect((await executor.execute({
       projectId: 'a', policy: 'stable', action: 'allow', target: 'device',
+      stableOperationId: 'operation-1',
       runtimeId: 'run-2', actorId: 'actor-2', correlationId: 'trace-2',
       metadata: { nested: { a: 1, b: 2 }, timestamp: 2 },
     })).status).toBe('skipped');
-    expect(calls).toBe(1);
+    expect((await executor.execute({
+      projectId: 'a', policy: 'stable', action: 'allow', target: 'device',
+      stableOperationId: 'operation-2',
+    })).status).toBe('executed');
+    expect(calls).toBe(2);
+    store.close();
+  });
+
+  test('missing operation identity fails closed before invoking the delegate', async () => {
+    const store = new PolicyExecutionStore(':memory:');
+    let calls = 0;
+    const executor = new ReliablePolicySideEffectExecutor({
+      execute(effect) {
+        calls += 1;
+        return { policy: effect.policy, action: effect.action, status: 'executed', outcome: 'executed' };
+      },
+    }, store);
+    const result = await executor.execute({
+      projectId: 'a', policy: 'stable', action: 'allow', target: 'device',
+    });
+    expect(result).toMatchObject({
+      status: 'failed',
+      outcome: 'definitely_not_executed',
+      detail: 'policy_operation_identity_required',
+    });
+    expect(calls).toBe(0);
+    store.close();
+  });
+
+  test('contradictory delegate result is persisted only as an unknown protocol failure', async () => {
+    const store = new PolicyExecutionStore(':memory:');
+    const executor = new ReliablePolicySideEffectExecutor({
+      execute(effect) {
+        return {
+          policy: effect.policy,
+          action: effect.action,
+          status: 'executed',
+          outcome: 'outcome_unknown',
+        } as any;
+      },
+    }, store);
+    const result = await executor.execute({
+      projectId: 'a', policy: 'stable', action: 'allow', idempotencyKey: 'protocol-error',
+    });
+    expect(result).toMatchObject({
+      status: 'failed',
+      outcome: 'outcome_unknown',
+      detail: 'outcome_unknown:delegate_protocol_error',
+    });
+    expect(store.getByIdempotencyKey('a', 'protocol-error')?.status).toBe('failed');
     store.close();
   });
 
@@ -227,7 +278,7 @@ describe('policy execution project isolation', () => {
     const executor = new ReliablePolicySideEffectExecutor({
       execute(effect) {
         calls += 1;
-        return { policy: effect.policy, action: effect.action, status: 'executed' };
+        return { policy: effect.policy, action: effect.action, status: 'executed', outcome: 'executed' };
       },
     }, store);
 
@@ -243,6 +294,30 @@ describe('policy execution project isolation', () => {
     db.close();
   });
 
+  test('pending audit outbox drains automatically after restart', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-audit-restart-'));
+    const path = join(dir, 'policy.db');
+    const bootstrap = new EventStore(path);
+    bootstrap.close();
+    const unavailable = { append() { throw new Error('audit unavailable'); } } as unknown as EventStore;
+    const first = new PolicyExecutionStore(path, unavailable);
+    first.upsert({
+      executionId: 'restart', projectId: 'a', idempotencyKey: 'restart',
+      policy: 'once', action: 'allow', status: 'executed', attemptCount: 1,
+      createdAt: 1, updatedAt: 1,
+    });
+    expect(first.getAuditOutboxStats().pending).toBe(1);
+    first.close();
+
+    const events = new EventStore(path);
+    const recovered = new PolicyExecutionStore(path, events);
+    expect(recovered.getAuditOutboxStats().pending).toBe(0);
+    expect(events.getEventsByStreamId('policy:1:a:restart', 'a')).toHaveLength(1);
+    recovered.close();
+    events.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test('delegate success followed by ledger failure is reported unknown without re-executing', async () => {
     const store = new PolicyExecutionStore(':memory:');
     const original = store.finishClaim.bind(store);
@@ -256,7 +331,7 @@ describe('policy execution project isolation', () => {
     const executor = new ReliablePolicySideEffectExecutor({
       execute(effect) {
         calls += 1;
-        return { policy: effect.policy, action: effect.action, status: 'executed' };
+        return { policy: effect.policy, action: effect.action, status: 'executed', outcome: 'executed' };
       },
     }, store);
 
@@ -280,7 +355,7 @@ describe('policy execution project isolation', () => {
     const executor = new ReliablePolicySideEffectExecutor({
       execute(effect) {
         calls += 1;
-        return { policy: effect.policy, action: effect.action, status: 'executed' };
+        return { policy: effect.policy, action: effect.action, status: 'executed', outcome: 'executed' };
       },
     }, store);
 
@@ -306,7 +381,7 @@ describe('policy execution project isolation', () => {
     const executor = new ReliablePolicySideEffectExecutor({
       execute(effect) {
         calls += 1;
-        return { policy: effect.policy, action: effect.action, status: 'executed' };
+        return { policy: effect.policy, action: effect.action, status: 'executed', outcome: 'executed' };
       },
     }, store);
 

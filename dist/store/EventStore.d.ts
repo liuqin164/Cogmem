@@ -74,6 +74,13 @@ export declare class EventStore {
     private seedSequenceCounters;
     getEventsAfter(lastEventTime?: number): MemoryEvent[];
     getEventsAfterGlobalSeq(lastGlobalSeq?: number, throughGlobalSeq?: number): MemoryEvent[];
+    getEventsByGlobalSeqPage(options: {
+        afterGlobalSeq?: number;
+        throughGlobalSeq: number;
+        eventTypes?: string[];
+        projectId?: string;
+        limit?: number;
+    }): MemoryEvent[];
     getLatestGlobalSeq(): number;
     findImportedEventAnchor(projectId: string, sourceId: string, importAnchor: string): MemoryEvent | null;
     getLatestEvent(): MemoryEvent | null;

@@ -2,6 +2,7 @@ import type { EventStore } from './EventStore.js';
 export type RuntimeEntityType = 'step' | 'merge' | 'validation' | 'policy' | 'executor' | 'state_machine';
 export type RuntimeStatus = 'ready' | 'blocked' | 'pending' | 'matched' | 'missing';
 export interface RuntimeStateRecord {
+    projectId: string;
     runtimeId: string;
     entityType: RuntimeEntityType;
     entityKey: string;
@@ -10,6 +11,7 @@ export interface RuntimeStateRecord {
     updatedAt: number;
 }
 export interface RuntimeTransitionRecord {
+    projectId: string;
     transitionId: string;
     runtimeId: string;
     entityType: RuntimeEntityType;
@@ -21,11 +23,13 @@ export interface RuntimeTransitionRecord {
     occurredAt: number;
 }
 export interface RuntimeSnapshot {
+    projectId: string;
     runtimeId: string;
     states: RuntimeStateRecord[];
     transitions: RuntimeTransitionRecord[];
 }
 export interface RuntimeDiagnosticsHistoryPage {
+    projectId: string;
     runtimeId: string;
     page: number;
     pageSize: number;
@@ -46,6 +50,7 @@ export declare class PlanRuntimeStore {
     constructor(dbPath?: string, eventStore?: EventStore);
     private initializeSchema;
     upsertState(input: {
+        projectId: string;
         runtimeId: string;
         entityType: RuntimeEntityType;
         entityKey: string;
@@ -56,6 +61,7 @@ export declare class PlanRuntimeStore {
         emitEvent?: boolean;
     }): void;
     recordTransition(input: {
+        projectId: string;
         runtimeId: string;
         entityType: RuntimeEntityType;
         entityKey: string;
@@ -70,25 +76,30 @@ export declare class PlanRuntimeStore {
     private insertTransition;
     private enqueueEvent;
     flushEventOutbox(): void;
-    getState(runtimeId: string, entityType: RuntimeEntityType, entityKey: string): RuntimeStateRecord | null;
-    getSnapshot(runtimeId: string): RuntimeSnapshot;
-    getHistoryPage(runtimeId: string, page?: number, pageSize?: number, filters?: {
+    getState(projectId: string, runtimeId: string, entityType: RuntimeEntityType, entityKey: string): RuntimeStateRecord | null;
+    getSnapshot(projectId: string, runtimeId: string): RuntimeSnapshot;
+    getHistoryPage(projectId: string, runtimeId: string, page?: number, pageSize?: number, filters?: {
         entityTypes?: RuntimeEntityType[];
         transitionTypes?: string[];
         status?: RuntimeStatus[];
         startTime?: number;
         endTime?: number;
     }): RuntimeDiagnosticsHistoryPage;
-    getStateCount(): number;
+    getStateCount(projectId: string): number;
+    beginProjectionBuild(projectionName: string): void;
+    publishProjectionBuild(projectionName: string): void;
+    discardProjectionBuild(projectionName: string): void;
     applyProjectedState(projectionName: string, sourceGlobalSeq: number, input: {
+        projectId: string;
         runtimeId: string;
         entityType: RuntimeEntityType;
         entityKey: string;
         status: RuntimeStatus;
         metadata?: Record<string, unknown>;
         updatedAt: number;
-    }): void;
-    applyProjectedTransition(projectionName: string, sourceEventId: string, input: {
+    }, staging?: boolean): void;
+    applyProjectedTransition(projectionName: string, sourceEventId: string, sourceGlobalSeq: number, input: {
+        projectId: string;
         runtimeId: string;
         entityType: RuntimeEntityType;
         entityKey: string;
@@ -97,10 +108,10 @@ export declare class PlanRuntimeStore {
         toStatus: string;
         payload?: Record<string, unknown>;
         occurredAt: number;
-    }): void;
+    }, staging?: boolean): void;
     clearProjection(projectionName: string): void;
-    getProjectionStateCount(projectionName: string): number;
-    clearAll(): void;
+    getProjectionStateCount(projectionName: string, projectId?: string): number;
+    clearAll(projectId: string): void;
     close(): void;
 }
 //# sourceMappingURL=PlanRuntimeStore.d.ts.map

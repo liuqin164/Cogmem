@@ -11,6 +11,8 @@ export declare class RuntimeProjector {
     bootstrap(): Promise<void>;
     fullRebuild(reason: string): Promise<void>;
     replay(events: MemoryEvent[], previousRebuildAt?: number): Promise<void>;
+    private replayRange;
+    private writeCheckpoint;
     private applyEvent;
     private isRuntimeEvent;
 }

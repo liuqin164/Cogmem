@@ -1,6 +1,6 @@
 import { MEMORY_ATLAS_PROJECTION_NAME, MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION } from '../store/MemoryAtlasStore.js';
 import { backfillAtlasDocuments } from '../migrations/0025_memory_atlas.js';
-import { installAtlasProjectionDirtyTriggersV2 } from '../migrations/0060_execution_projection_and_atlas_reliability.js';
+import { installAtlasProjectionDirtyTriggersV3 } from '../migrations/0061_runtime_scope_and_projection_integrity.js';
 import { ActionFrameExtractor } from './ActionFrameExtractor.js';
 import { GraphCurator } from './GraphCurator.js';
 import { MemoryFrameProjector } from './MemoryFrameProjector.js';
@@ -13,7 +13,7 @@ export class MemoryAtlasIndexer {
     constructor(db, eventStore, store, frameStore) {
         this.db = db;
         this.store = store;
-        installAtlasProjectionDirtyTriggersV2(db);
+        installAtlasProjectionDirtyTriggersV3(db);
         this.actions = new ActionFrameExtractor(db, eventStore, store);
         this.curator = new GraphCurator(db, eventStore, store);
         if (frameStore)
@@ -50,19 +50,23 @@ export class MemoryAtlasIndexer {
                     curatedEpisodes += result.episodeCount;
                     facetEdges += result.facetEdgeCount;
                     reviewNeeded += result.reviewNeeded;
-                    this.store.aggregateFacetNodeSupport(id);
                 }
+                if (this.frameProjector)
+                    for (const id of projects) {
+                        const result = this.frameProjector.rebuild(id, Date.now(), { canonicalDocumentsRebuilt: true });
+                        facetEdges += result.edges;
+                        reviewNeeded += result.needsReview;
+                    }
                 for (const id of projects)
+                    this.store.aggregateFacetNodeSupport(id);
+                for (const id of projects) {
+                    const nodeId = `project:${id}`;
                     this.store.upsertDocument({
-                        id: `project:${id}`, projectId: id, nodeType: 'project', sourceId: id, label: id || 'Projectless',
-                        confidence: 1, supportCount: this.store.countDocuments(id), status: 'active', evidenceEventIds: [],
+                        id: nodeId, projectId: id, nodeType: 'project', sourceId: id, label: id || 'Projectless',
+                        confidence: 1, supportCount: this.store.countDocuments(id) + (this.store.getNodeIncludingInactive(nodeId, id) ? 0 : 1), status: 'active', evidenceEventIds: [],
                         metadata: { projection: MEMORY_ATLAS_PROJECTION_NAME, projectionSchemaVersion: MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION },
                     });
-                if (projectId !== undefined && this.frameProjector)
-                    this.frameProjector.rebuild(projectId, Date.now(), { canonicalDocumentsRebuilt: true });
-                else if (projectId === undefined && this.frameProjector)
-                    for (const id of projects)
-                        this.frameProjector.rebuild(id, Date.now(), { canonicalDocumentsRebuilt: true });
+                }
                 if (projectId !== undefined) {
                     this.store.markProjectionClean(projectId, { actions, curatedEpisodes, facetEdges, reviewNeeded, projectionVersion: 'v2', frameSchemaVersion: 'memory_frame.v1' });
                 }

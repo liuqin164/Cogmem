@@ -111,6 +111,7 @@ export const MIGRATION_DIGESTS: Readonly<Record<string, string>> = {
   '0058': '49eba88670315e8c4a6801a0f60e865fe2a1fd5e61a1c0ad20b83d934f35310d',
   '0059': '3b47db008ba0d7c95e3b6c09d1dc7bec7c4761ba7263a139f4e7a34b4c0e1b90',
   '0060': '2b64b2ff5933f9df438a159c758293c9e5d0c848ce4b36f71ffb6e6a577833f7',
+  '0061': 'e179d3ec3f3d916dc84a987f2db27659922a01749134243e1472c1cac4dd4bc8',
 };
 
 // Audited receipts emitted by temporary 3.7.4 development builds.

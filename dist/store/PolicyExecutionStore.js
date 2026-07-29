@@ -9,6 +9,7 @@ export class PolicyExecutionStore {
         this.ownsDb = typeof dbPath === 'string';
         this.eventStore = eventStore;
         this.initializeSchema();
+        this.flushAuditOutbox();
     }
     initializeSchema() {
         this.db.exec('PRAGMA busy_timeout=5000');
@@ -271,6 +272,16 @@ export class PolicyExecutionStore {
         }
         return flushed;
     }
+    getAuditOutboxStats() {
+        const row = this.db.prepare(`
+      SELECT COUNT(*) AS pending, MIN(created_at) AS oldest_created_at
+      FROM policy_execution_audit_outbox
+    `).get();
+        return {
+            pending: Number(row.pending),
+            oldestCreatedAt: row.oldest_created_at ?? undefined,
+        };
+    }
     auditEventId(record) {
         return `policy-audit-${createHash('sha256').update([
             record.projectId, record.idempotencyKey, record.status, String(record.updatedAt),
@@ -279,9 +290,32 @@ export class PolicyExecutionStore {
     clearReadModelProject(projectId) {
         this.db.prepare(`DELETE FROM policy_execution_read_model WHERE project_scope=?`).run(projectId);
     }
-    upsertReadModel(record, sourceGlobalSeq = 0) {
+    beginReadModelBuild(projectId) {
+        this.db.exec(`CREATE TEMP TABLE IF NOT EXISTS policy_execution_read_model_stage (
+      execution_id TEXT NOT NULL, project_scope TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+      runtime_id TEXT, policy TEXT NOT NULL, action TEXT NOT NULL, target TEXT, status TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0, next_retry_at INTEGER, dead_lettered_at INTEGER,
+      replay_policy TEXT, actor_id TEXT, causation_id TEXT, correlation_id TEXT, policy_group TEXT,
+      stream_type TEXT, event_type TEXT, detail TEXT, metadata_json TEXT, created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL, source_global_seq INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(project_scope,idempotency_key)
+    )`);
+        this.db.prepare(`DELETE FROM policy_execution_read_model_stage WHERE project_scope=?`).run(projectId);
+    }
+    publishReadModelBuild(projectId) {
+        this.db.transaction(() => {
+            this.db.prepare(`DELETE FROM policy_execution_read_model WHERE project_scope=?`).run(projectId);
+            this.db.prepare(`INSERT INTO policy_execution_read_model SELECT * FROM policy_execution_read_model_stage WHERE project_scope=?`).run(projectId);
+            this.db.prepare(`DELETE FROM policy_execution_read_model_stage WHERE project_scope=?`).run(projectId);
+        })();
+    }
+    discardReadModelBuild(projectId) {
+        this.db.prepare(`DELETE FROM policy_execution_read_model_stage WHERE project_scope=?`).run(projectId);
+    }
+    upsertReadModel(record, sourceGlobalSeq = 0, staging = false) {
+        const table = staging ? 'policy_execution_read_model_stage' : 'policy_execution_read_model';
         this.db.prepare(`
-      INSERT INTO policy_execution_read_model (
+      INSERT INTO ${table} (
         execution_id,project_scope,idempotency_key,runtime_id,policy,action,target,status,
         attempt_count,next_retry_at,dead_lettered_at,replay_policy,actor_id,causation_id,
         correlation_id,policy_group,stream_type,event_type,detail,metadata_json,created_at,updated_at,source_global_seq
@@ -296,7 +330,7 @@ export class PolicyExecutionStore {
         stream_type=excluded.stream_type,event_type=excluded.event_type,detail=excluded.detail,
         metadata_json=excluded.metadata_json,updated_at=excluded.updated_at,
         source_global_seq=excluded.source_global_seq
-      WHERE excluded.source_global_seq>=policy_execution_read_model.source_global_seq
+      WHERE excluded.source_global_seq>=${table}.source_global_seq
     `).run(record.executionId, record.projectId, record.idempotencyKey, record.runtimeId ?? null, record.policy, record.action, record.target ?? null, record.status, record.attemptCount, record.nextRetryAt ?? null, record.deadLetteredAt ?? null, record.replayPolicy ?? null, record.actorId ?? null, record.causationId ?? null, record.correlationId ?? null, record.policyGroup ?? null, record.streamType ?? null, record.eventType ?? null, record.detail ?? null, record.metadata ? JSON.stringify(record.metadata) : null, record.createdAt, record.updatedAt, sourceGlobalSeq);
     }
     getReadModelCount(projectId) {

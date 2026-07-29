@@ -76,9 +76,16 @@ export declare class PolicyExecutionStore {
     private emitRecord;
     private enqueueAudit;
     flushAuditOutbox(): number;
+    getAuditOutboxStats(): {
+        pending: number;
+        oldestCreatedAt?: number;
+    };
     private auditEventId;
     clearReadModelProject(projectId: string): void;
-    upsertReadModel(record: PolicyExecutionRecord, sourceGlobalSeq?: number): void;
+    beginReadModelBuild(projectId: string): void;
+    publishReadModelBuild(projectId: string): void;
+    discardReadModelBuild(projectId: string): void;
+    upsertReadModel(record: PolicyExecutionRecord, sourceGlobalSeq?: number, staging?: boolean): void;
     getReadModelCount(projectId?: string): number;
     getReadModelByIdempotencyKey(projectId: string, idempotencyKey: string): PolicyExecutionRecord | null;
     listByRuntime(projectId: string, runtimeId: string): PolicyExecutionRecord[];

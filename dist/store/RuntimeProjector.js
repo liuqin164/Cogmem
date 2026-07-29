@@ -12,8 +12,6 @@ export class RuntimeProjector {
     }
     async bootstrap() {
         const checkpoint = this.projectionStore.getCheckpoint(this.projectionName);
-        const pendingEvents = this.eventStore.getEventsAfterGlobalSeq(checkpoint?.lastGlobalSeq)
-            .filter((event) => this.isRuntimeEvent(event));
         if (!checkpoint || checkpoint.lastGlobalSeq === undefined) {
             await this.fullRebuild('initial_build');
             return;
@@ -22,12 +20,13 @@ export class RuntimeProjector {
             await this.fullRebuild(`checkpoint_${checkpoint.status}`);
             return;
         }
-        if (pendingEvents.length === 0) {
+        const throughGlobalSeq = this.eventStore.getLatestGlobalSeq();
+        if (throughGlobalSeq <= checkpoint.lastGlobalSeq) {
             logger.info(`Runtime projection ready: projection=${this.projectionName}`);
             return;
         }
         try {
-            await this.replay(pendingEvents, checkpoint.lastRebuildAt);
+            await this.replayRange(checkpoint.lastGlobalSeq, throughGlobalSeq, false, checkpoint.lastRebuildAt);
         }
         catch (error) {
             logger.warn('Runtime replay failed, falling back to full rebuild', error);
@@ -36,42 +35,34 @@ export class RuntimeProjector {
     }
     async fullRebuild(reason) {
         logger.warn(`Rebuilding runtime projection: reason=${reason}`);
+        const throughGlobalSeq = this.eventStore.getLatestGlobalSeq();
         this.projectionStore.upsertCheckpoint({
             projectionName: this.projectionName,
             status: 'building',
             lastFullCount: 0,
             metadata: { reason }
         });
-        this.runtimeStore.clearProjection(this.projectionName);
-        const runtimeEvents = this.eventStore.getEventsAfterGlobalSeq(undefined).filter((event) => this.isRuntimeEvent(event));
-        await this.replay(runtimeEvents);
+        this.runtimeStore.beginProjectionBuild(this.projectionName);
+        try {
+            const rebuilt = await this.replayRange(0, throughGlobalSeq, true, undefined, false);
+            this.runtimeStore.publishProjectionBuild(this.projectionName);
+            this.writeCheckpoint(throughGlobalSeq, rebuilt.lastEvent, rebuilt.replayedEventCount, 'full_rebuild');
+        }
+        catch (error) {
+            this.runtimeStore.discardProjectionBuild(this.projectionName);
+            throw error;
+        }
     }
     async replay(events, previousRebuildAt) {
-        if (events.length === 0) {
-            const latestEvent = this.eventStore.getLatestEvent();
-            this.projectionStore.upsertCheckpoint({
-                projectionName: this.projectionName,
-                lastEventId: latestEvent?.eventId,
-                lastEventTime: latestEvent?.occurredAt,
-                lastGlobalSeq: this.eventStore.getLatestGlobalSeq(),
-                lastRebuildAt: previousRebuildAt ?? Date.now(),
-                lastFullCount: this.runtimeStore.getProjectionStateCount(this.projectionName),
-                status: 'ready',
-                metadata: { mode: 'incremental_replay', replayedEventCount: 0 }
-            });
-            return;
-        }
         logger.info(`Replaying runtime projection events: count=${events.length}`);
-        for (const event of events) {
+        for (const event of events.filter((item) => this.isRuntimeEvent(item)))
             this.applyEvent(event);
-            await Promise.resolve();
-        }
         const lastEvent = events[events.length - 1];
         this.projectionStore.upsertCheckpoint({
             projectionName: this.projectionName,
             lastEventId: lastEvent?.eventId,
             lastEventTime: lastEvent?.occurredAt,
-            lastGlobalSeq: lastEvent?.globalSeq ?? this.eventStore.getLatestGlobalSeq(),
+            lastGlobalSeq: lastEvent?.globalSeq ?? 0,
             lastRebuildAt: previousRebuildAt ?? Date.now(),
             lastFullCount: this.runtimeStore.getProjectionStateCount(this.projectionName),
             status: 'ready',
@@ -81,25 +72,64 @@ export class RuntimeProjector {
             }
         });
     }
-    applyEvent(event) {
+    async replayRange(afterGlobalSeq, throughGlobalSeq, staging, previousRebuildAt, updateCheckpoint = true) {
+        let cursor = afterGlobalSeq;
+        let replayedEventCount = 0;
+        let lastEvent;
+        for (;;) {
+            const page = this.eventStore.getEventsByGlobalSeqPage({
+                afterGlobalSeq: cursor,
+                throughGlobalSeq,
+                eventTypes: ['RUNTIME_STATE_UPDATED', 'RUNTIME_TRANSITION_RECORDED'],
+                limit: 500,
+            });
+            if (page.length === 0)
+                break;
+            for (const event of page)
+                this.applyEvent(event, staging);
+            lastEvent = page[page.length - 1];
+            cursor = lastEvent?.globalSeq ?? cursor;
+            replayedEventCount += page.length;
+            await Promise.resolve();
+        }
+        if (updateCheckpoint)
+            this.writeCheckpoint(throughGlobalSeq, lastEvent, replayedEventCount, staging ? 'full_rebuild' : 'incremental_replay', previousRebuildAt);
+        return { lastEvent, replayedEventCount };
+    }
+    writeCheckpoint(throughGlobalSeq, lastEvent, replayedEventCount, mode, previousRebuildAt) {
+        this.projectionStore.upsertCheckpoint({
+            projectionName: this.projectionName,
+            lastEventId: lastEvent?.eventId,
+            lastEventTime: lastEvent?.occurredAt,
+            lastGlobalSeq: throughGlobalSeq,
+            lastRebuildAt: previousRebuildAt ?? Date.now(),
+            lastFullCount: this.runtimeStore.getProjectionStateCount(this.projectionName),
+            status: 'ready',
+            metadata: { mode, replayedEventCount },
+        });
+    }
+    applyEvent(event, staging = false) {
         const payload = (event.payload || {});
+        const projectId = event.projectId ?? (typeof payload.projectId === 'string' ? payload.projectId : '');
         switch (event.eventType) {
             case 'RUNTIME_STATE_UPDATED':
                 if (!payload.runtimeId || !payload.entityType || !payload.entityKey || !payload.status)
                     return;
                 this.runtimeStore.applyProjectedState(this.projectionName, event.globalSeq ?? 0, {
+                    projectId,
                     runtimeId: String(payload.runtimeId),
                     entityType: String(payload.entityType),
                     entityKey: String(payload.entityKey),
                     status: String(payload.status),
                     metadata: payload.metadata || undefined,
                     updatedAt: event.occurredAt
-                });
+                }, staging);
                 return;
             case 'RUNTIME_TRANSITION_RECORDED':
                 if (!payload.runtimeId || !payload.entityType || !payload.entityKey || !payload.transitionType || !payload.toStatus)
                     return;
-                this.runtimeStore.applyProjectedTransition(this.projectionName, event.eventId, {
+                this.runtimeStore.applyProjectedTransition(this.projectionName, event.eventId, event.globalSeq ?? 0, {
+                    projectId,
                     runtimeId: String(payload.runtimeId),
                     entityType: String(payload.entityType),
                     entityKey: String(payload.entityKey),
@@ -108,7 +138,7 @@ export class RuntimeProjector {
                     toStatus: String(payload.toStatus),
                     payload: payload.data || undefined,
                     occurredAt: event.occurredAt
-                });
+                }, staging);
                 return;
             default:
                 return;

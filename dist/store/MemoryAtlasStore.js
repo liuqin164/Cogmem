@@ -684,6 +684,24 @@ export class MemoryAtlasStore {
     `).run(projectId, now, JSON.stringify({ compatibilityAliasFor: MEMORY_ATLAS_PROJECTION_NAME, dirtyBecause: 'atlas_v2_targeted_reindex' }));
     }
     aggregateFacetNodeSupport(projectId, now = Date.now()) {
+        const documents = this.db.prepare(`
+      SELECT node_id,support_count,evidence_event_ids_json,metadata_json
+      FROM memory_atlas_documents
+      WHERE project_id=?
+        AND node_type IN ('topic','time','issue','entity','session','thread','memoryKind','actionKind')
+    `).all(projectId);
+        const buckets = new Map();
+        for (const row of documents) {
+            const metadata = parseJsonObject(row.metadata_json);
+            const actionSupport = metadata.projection === 'memory_atlas.actions' ? Number(row.support_count || 0) : 0;
+            buckets.set(row.node_id, {
+                edges: 0,
+                documents: actionSupport ? 0 : Number(row.support_count || 0),
+                actions: actionSupport,
+                evidence: new Set(parseStringArray(row.evidence_event_ids_json)),
+                metadata,
+            });
+        }
         const rows = this.db.prepare(`
       SELECT target_type,target_id,evidence_event_ids_json
       FROM memory_edges
@@ -692,18 +710,31 @@ export class MemoryAtlasStore {
         AND status IN ('active','weak')
       ORDER BY target_type,target_id
     `).all(projectId);
-        const buckets = new Map();
         for (const row of rows) {
             const id = nodeId(row.target_type, row.target_id, projectId);
-            const bucket = buckets.get(id) ?? { count: 0, evidence: new Set() };
-            bucket.count += 1;
+            const bucket = buckets.get(id) ?? {
+                edges: 0,
+                documents: 0,
+                actions: 0,
+                evidence: new Set(),
+                metadata: {},
+            };
+            bucket.edges += 1;
             for (const eventId of parseStringArray(row.evidence_event_ids_json).slice(0, 5))
                 bucket.evidence.add(eventId);
             buckets.set(id, bucket);
         }
-        const update = this.db.prepare(`UPDATE memory_atlas_documents SET support_count=?, evidence_event_ids_json=?, updated_at=? WHERE project_id=? AND node_id=?`);
+        const update = this.db.prepare(`UPDATE memory_atlas_documents SET support_count=?, evidence_event_ids_json=?, metadata_json=?, updated_at=? WHERE project_id=? AND node_id=?`);
         for (const [nodeIdValue, bucket] of buckets) {
-            update.run(bucket.count, JSON.stringify(Array.from(bucket.evidence).slice(0, 100)), now, projectId, nodeIdValue);
+            const supportCount = Math.max(bucket.evidence.size, bucket.edges, bucket.documents + bucket.actions);
+            update.run(supportCount, JSON.stringify(Array.from(bucket.evidence).slice(0, 100)), JSON.stringify({
+                ...bucket.metadata,
+                supportSources: {
+                    persistedEdges: bucket.edges,
+                    documents: bucket.documents,
+                    actionFrames: bucket.actions,
+                },
+            }), now, projectId, nodeIdValue);
             this.refreshFtsNode(nodeIdValue);
         }
     }
@@ -872,6 +903,15 @@ function parseStringArray(value) { try {
 catch {
     return [];
 } }
+function parseJsonObject(value) {
+    try {
+        const parsed = JSON.parse(value ?? '{}');
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    }
+    catch {
+        return {};
+    }
+}
 function escapeLike(value) { return value.replace(/[\\%_]/g, '\\$&'); }
 function nodeId(type, id, projectId) { return encodeAtlasNodeId(type, id, projectId); }
 function timeNodeId(projectId, occurredAt, timeZone) {

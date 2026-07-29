@@ -21,13 +21,13 @@ const BASELINE_PROJECT_OWNED = [
     'anchors', 'beliefs', 'branch_entries', 'branch_links', 'cognitive_edges', 'cognitive_nodes', 'compiler_confidence_runs',
     'event_cluster_entries', 'event_clusters', 'ingestion_source_cursors', 'memory_events', 'neurons', 'project_branches',
     'reasoning_chains', 'task_branch_entries', 'task_branches', 'temporal_adjacency', 'time_bucket_entries', 'time_buckets',
-    'topology_membership', 'trace_events', 'user_session_scopes', 'user_sessions',
+    'topology_membership', 'trace_events', 'user_session_scopes', 'user_sessions', 'runtime_states', 'runtime_transitions',
 ];
 const BASELINE_PROVENANCE_OWNED = [
     'agent_approval_queue', 'agent_task_records', 'belief_evidence', 'compiled_events', 'fact_access_log', 'fact_supersede_chain',
     'facts', 'graph_signals', 'ingestion_processed_records', 'interaction_units', 'meta_proposals', 'pending_bindings',
     'plasticity_graph_edge_audit', 'plasticity_graph_edges', 'plasticity_proposal_review_decisions', 'plasticity_proposals',
-    'policy_executions', 'reasoning_steps', 'runtime_states', 'runtime_transitions', 'sandbox_snapshots', 'synapses',
+    'policy_executions', 'reasoning_steps', 'sandbox_snapshots', 'synapses',
 ];
 const BASELINE_SHARED_CANONICAL = [
     'entities', 'entity_alias_conflicts', 'entity_aliases', 'entity_attributes', 'entity_instances', 'entity_mentions',
@@ -58,7 +58,7 @@ const MIGRATION_TABLES = [
     'topology_time_rebuild_active_neurons', 'topology_time_rebuild_adjacency', 'topology_time_rebuild_buckets', 'topology_time_rebuild_cognitive_edges', 'topology_time_rebuild_cognitive_nodes',
     'topology_time_rebuild_entries', 'topology_time_rebuild_jobs', 'user_session_runtime', 'vector_index', 'vector_write_outbox', 'web_session_tokens', 'working_memory_deltas', 'memory_activation',
     'file_assets', 'file_blocks', 'file_chunks', 'file_chunk_edges', 'user_insights',
-    'policy_execution_read_model', 'policy_execution_audit_outbox', 'runtime_event_outbox', 'runtime_projection_states', 'runtime_projection_transitions',
+    'policy_execution_read_model', 'policy_execution_audit_outbox', 'runtime_event_outbox', 'runtime_projection_states', 'runtime_projection_transitions', 'runtime_scope_quarantine',
 ];
 const MIGRATION_PROJECT_OWNED = [
     'archived_sessions', 'belief_graph_conflicts', 'belief_graph_nodes', 'context_activation_receipts', 'context_strategy_outcomes',
@@ -76,7 +76,7 @@ const MIGRATION_PROJECT_OWNED = [
     'topology_time_rebuild_cognitive_nodes', 'topology_time_rebuild_entries', 'topology_time_rebuild_jobs', 'user_session_runtime',
     'web_session_tokens', 'working_memory_deltas', 'memory_activation',
     'file_assets', 'user_insights',
-    'policy_execution_read_model', 'policy_execution_audit_outbox',
+    'policy_execution_read_model', 'policy_execution_audit_outbox', 'runtime_event_outbox', 'runtime_projection_states', 'runtime_projection_transitions',
 ];
 const MIGRATION_PROVENANCE_OWNED = [
     'belief_graph_evidence', 'belief_graph_versions', 'chat_turns', 'deep_write_candidates', 'entity_resolution_log',
@@ -84,11 +84,10 @@ const MIGRATION_PROVENANCE_OWNED = [
     'prospective_memory_transitions', 'scheduled_job_runs', 'scheduled_jobs', 'notification_records', 'notification_rules',
     'workspace_settings', 'workspaces', 'meta_observations', 'pending_entity_resolution_quarantine', 'topology_identity_quarantine', 'vector_index', 'vector_write_outbox',
     'file_blocks', 'file_chunks', 'file_chunk_edges',
-    'runtime_event_outbox', 'runtime_projection_states', 'runtime_projection_transitions',
 ];
 const MIGRATION_OPERATIONAL_NON_PERSONAL = [
     '_episode_integrity_markers', '_memory_frame_integrity_markers', '_meta', 'agent_brain_health_checks', 'pipeline_runs',
-    'pipeline_step_timings', 'policy_execution_quarantine', 'policy_execution_legacy_tombstones', 'project_isolation_compensation_audit', 'event_sequence_counters',
+    'pipeline_step_timings', 'policy_execution_quarantine', 'policy_execution_legacy_tombstones', 'project_isolation_compensation_audit', 'event_sequence_counters', 'runtime_scope_quarantine',
 ];
 const MIGRATION_IMMUTABLE_AUDIT = ['_schema_migrations', 'migration_repair_receipts', 'governance_audit_log'];
 const MIGRATION_CLASSIFICATION = explicitClassification(MIGRATION_TABLES, {
@@ -253,6 +252,11 @@ export function deleteRegisteredProjectContent(context) {
     remove('dream_ledger_state', `DELETE FROM dream_ledger_state WHERE project_key = ?`, [dreamLedgerProjectKey(scope)]);
     remove('policy_execution_read_model', `DELETE FROM policy_execution_read_model WHERE project_scope = ?`);
     remove('policy_execution_audit_outbox', `DELETE FROM policy_execution_audit_outbox WHERE project_scope = ?`);
+    remove('runtime_projection_transitions', `DELETE FROM runtime_projection_transitions WHERE project_scope = ?`);
+    remove('runtime_projection_states', `DELETE FROM runtime_projection_states WHERE project_scope = ?`);
+    remove('runtime_event_outbox', `DELETE FROM runtime_event_outbox WHERE project_scope = ?`);
+    remove('runtime_transitions', `DELETE FROM runtime_transitions WHERE project_scope = ?`);
+    remove('runtime_states', `DELETE FROM runtime_states WHERE project_scope = ?`);
     if (neuronIds.length > 0) {
         const placeholders = neuronIds.map(() => '?').join(', ');
         audit.reasoning_steps_by_neuron = runDelete(`DELETE FROM reasoning_steps WHERE neuron_id IN (${placeholders})`, neuronIds);
@@ -271,6 +275,9 @@ export function deleteResidualProjectOwnedContent(context) {
         }
         else if (context.hasColumn(table, 'projectId')) {
             audit[table] = context.runDelete(`DELETE FROM ${table} WHERE projectId=?`, [context.scope]);
+        }
+        else if (context.hasColumn(table, 'project_scope')) {
+            audit[table] = context.runDelete(`DELETE FROM ${table} WHERE project_scope=?`, [context.scope]);
         }
     }
     return audit;

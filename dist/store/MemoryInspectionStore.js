@@ -59,6 +59,7 @@ export class MemoryInspectionStore {
             episodeDream,
             dreamCandidateQueue: queue,
             activeBeliefs: this.countBeliefs(scope.projectId),
+            policyAuditOutbox: this.policyAuditOutbox(scope.projectId),
         };
     }
     listCandidates(options) {
@@ -215,6 +216,14 @@ export class MemoryInspectionStore {
             ? this.db.prepare(`SELECT COUNT(*) AS count FROM beliefs WHERE status = 'active' AND COALESCE(project_id, '') = ?`).get(projectScope(projectId))
             : this.db.prepare(`SELECT COUNT(*) AS count FROM beliefs WHERE status = 'active'`).get();
         return Number(row?.count || 0);
+    }
+    policyAuditOutbox(projectId) {
+        if (!this.tableExists('policy_execution_audit_outbox'))
+            return { pending: 0 };
+        const row = (projectId === undefined
+            ? this.db.prepare(`SELECT COUNT(*) AS pending,MIN(created_at) AS oldest FROM policy_execution_audit_outbox`).get()
+            : this.db.prepare(`SELECT COUNT(*) AS pending,MIN(created_at) AS oldest FROM policy_execution_audit_outbox WHERE project_scope=?`).get(projectScope(projectId)));
+        return { pending: Number(row.pending), oldestCreatedAt: row.oldest ?? undefined };
     }
 }
 function parseJson(value) {

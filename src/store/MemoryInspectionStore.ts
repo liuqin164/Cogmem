@@ -39,6 +39,7 @@ export interface MemoryInspectionStatus {
     shadow: number;
   };
   activeBeliefs: number;
+  policyAuditOutbox: { pending: number; oldestCreatedAt?: number };
 }
 
 /**
@@ -97,6 +98,7 @@ export class MemoryInspectionStore {
       episodeDream,
       dreamCandidateQueue: queue,
       activeBeliefs: this.countBeliefs(scope.projectId),
+      policyAuditOutbox: this.policyAuditOutbox(scope.projectId),
     };
   }
 
@@ -243,6 +245,15 @@ export class MemoryInspectionStore {
       ? this.db!.prepare(`SELECT COUNT(*) AS count FROM beliefs WHERE status = 'active' AND COALESCE(project_id, '') = ?`).get(projectScope(projectId))
       : this.db!.prepare(`SELECT COUNT(*) AS count FROM beliefs WHERE status = 'active'`).get();
     return Number((row as { count?: number } | null)?.count || 0);
+  }
+
+  private policyAuditOutbox(projectId?: string): { pending: number; oldestCreatedAt?: number } {
+    if (!this.tableExists('policy_execution_audit_outbox')) return { pending: 0 };
+    const row = (projectId === undefined
+      ? this.db!.prepare(`SELECT COUNT(*) AS pending,MIN(created_at) AS oldest FROM policy_execution_audit_outbox`).get()
+      : this.db!.prepare(`SELECT COUNT(*) AS pending,MIN(created_at) AS oldest FROM policy_execution_audit_outbox WHERE project_scope=?`).get(projectScope(projectId))
+    ) as { pending: number; oldest: number | null };
+    return { pending: Number(row.pending), oldestCreatedAt: row.oldest ?? undefined };
   }
 }
 

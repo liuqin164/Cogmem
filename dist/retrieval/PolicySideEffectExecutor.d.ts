@@ -15,14 +15,25 @@ export interface PolicySideEffect {
     policyGroup?: string;
 }
 export type PolicyExecutionOutcome = 'executed' | 'definitely_not_executed' | 'failed_before_execution' | 'outcome_unknown';
-export interface PolicySideEffectResult {
+interface PolicySideEffectResultBase {
     policy: string;
     action: 'allow' | 'deny' | 'prefer';
     target?: string;
-    status: 'executed' | 'skipped' | 'failed' | 'in_progress';
-    outcome?: PolicyExecutionOutcome;
     detail?: string;
 }
+export type PolicySideEffectResult = (PolicySideEffectResultBase & {
+    status: 'executed';
+    outcome: 'executed';
+}) | (PolicySideEffectResultBase & {
+    status: 'skipped';
+    outcome: 'executed';
+}) | (PolicySideEffectResultBase & {
+    status: 'failed';
+    outcome: Exclude<PolicyExecutionOutcome, 'executed'>;
+}) | (PolicySideEffectResultBase & {
+    status: 'in_progress';
+    outcome?: never;
+});
 export interface PolicySideEffectExecutor {
     execute(effect: PolicySideEffect): Promise<PolicySideEffectResult> | PolicySideEffectResult;
 }
@@ -60,7 +71,9 @@ export declare class ReliablePolicySideEffectExecutor implements PolicySideEffec
     private buildRecord;
     private computeIdempotencyKey;
     private retryable;
+    private validResult;
     private unknownResult;
     private computeBackoff;
 }
+export {};
 //# sourceMappingURL=PolicySideEffectExecutor.d.ts.map

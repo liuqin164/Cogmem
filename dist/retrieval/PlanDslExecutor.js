@@ -100,41 +100,42 @@ export class PlanDslExecutor {
             stateProgress
         };
     }
-    static persistAnalysis(runtimeId, analysis, store) {
+    static persistAnalysis(projectId, runtimeId, analysis, store) {
         for (const step of analysis.executableSteps) {
-            this.writeState(store, runtimeId, 'step', step, 'ready', { executable: true });
+            this.writeState(store, projectId, runtimeId, 'step', step, 'ready', { executable: true });
         }
         for (const blocked of analysis.blockedSteps) {
-            this.writeState(store, runtimeId, 'step', blocked.step, 'blocked', { reasons: blocked.reasons });
+            this.writeState(store, projectId, runtimeId, 'step', blocked.step, 'blocked', { reasons: blocked.reasons });
         }
         for (const merge of analysis.mergeReadiness) {
-            this.writeState(store, runtimeId, 'merge', merge.into, merge.ready ? 'ready' : 'blocked', { missing: merge.missing });
+            this.writeState(store, projectId, runtimeId, 'merge', merge.into, merge.ready ? 'ready' : 'blocked', { missing: merge.missing });
         }
         for (const validation of analysis.validationReadiness) {
-            this.writeState(store, runtimeId, 'validation', validation.target, validation.ready ? 'ready' : 'blocked', {
+            this.writeState(store, projectId, runtimeId, 'validation', validation.target, validation.ready ? 'ready' : 'blocked', {
                 missingChecks: validation.missingChecks
             });
         }
         for (const executor of analysis.executorMatches) {
-            this.writeState(store, runtimeId, 'executor', executor.target, executor.matched ? 'matched' : 'missing', {
+            this.writeState(store, projectId, runtimeId, 'executor', executor.target, executor.matched ? 'matched' : 'missing', {
                 executor: executor.executor,
                 mode: executor.mode
             });
         }
         for (const policy of analysis.policyCoverage) {
-            this.writeState(store, runtimeId, 'policy', policy.target, policy.matched ? 'matched' : 'missing', {
+            this.writeState(store, projectId, runtimeId, 'policy', policy.target, policy.matched ? 'matched' : 'missing', {
                 policy: policy.policy,
                 mode: policy.mode
             });
         }
         for (const state of analysis.stateProgress) {
-            this.writeState(store, runtimeId, 'state_machine', state.entity, state.matched ? 'matched' : 'pending', {
+            this.writeState(store, projectId, runtimeId, 'state_machine', state.entity, state.matched ? 'matched' : 'pending', {
                 current: state.current,
                 states: state.states
             });
         }
         for (const propagation of analysis.propagationTargets) {
             store.recordTransition({
+                projectId,
                 runtimeId,
                 entityType: 'merge',
                 entityKey: propagation.into,
@@ -148,8 +149,9 @@ export class PlanDslExecutor {
             ...analysis
         };
     }
-    static writeState(store, runtimeId, entityType, entityKey, status, metadata) {
+    static writeState(store, projectId, runtimeId, entityType, entityKey, status, metadata) {
         store.upsertState({
+            projectId,
             runtimeId,
             entityType,
             entityKey,

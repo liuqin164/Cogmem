@@ -12,6 +12,7 @@ import { FileAssetStore } from '../src/assets/FileAssetStore.js';
 import { FileBlockStore } from '../src/assets/FileBlockStore.js';
 import { FileChunkStore } from '../src/assets/FileChunkStore.js';
 import { UserModelStore } from '../src/models/UserModelStore.js';
+import { PlanRuntimeStore } from '../src/store/PlanRuntimeStore.js';
 
 function tempDir(): string {
   const dir = join(tmpdir(), `core-governance-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -264,6 +265,10 @@ describe('Governance and security v1.14', () => {
     db.prepare(`INSERT INTO policy_executions(
       execution_id,project_scope,idempotency_key,policy,action,status,attempt_count,detail,created_at,updated_at
     ) VALUES('forget-policy','forget-me','forget-key','private','allow','executed',1,'private policy detail',1,1)`).run();
+    const runtime = new PlanRuntimeStore(dbPath);
+    runtime.upsertState({ projectId: 'forget-me', runtimeId: 'same-runtime', entityType: 'step', entityKey: 'one', status: 'ready' });
+    runtime.upsertState({ projectId: 'keep-me', runtimeId: 'same-runtime', entityType: 'step', entityKey: 'one', status: 'blocked' });
+    runtime.close();
     db.exec(`CREATE TABLE IF NOT EXISTS pending_entity_resolution_quarantine(
       pending_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL,
       project_scope TEXT NOT NULL DEFAULT '',implicated_scopes_json TEXT NOT NULL DEFAULT '[]',
@@ -300,6 +305,9 @@ describe('Governance and security v1.14', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM pipeline_nonfatal_events WHERE project_id='forget-me'`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM ingestion_processed_records WHERE project_scope='forget-me'`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM policy_executions WHERE project_scope='forget-me'`).get()).toEqual({ count: 0 });
+    expect(db.prepare(`SELECT project_scope,status FROM runtime_states`).all()).toEqual([{ project_scope: 'keep-me', status: 'blocked' }]);
+    expect(db.prepare(`SELECT DISTINCT project_scope FROM runtime_transitions`).all()).toEqual([{ project_scope: 'keep-me' }]);
+    expect(db.prepare(`SELECT DISTINCT project_scope FROM runtime_event_outbox`).all()).toEqual([{ project_scope: 'keep-me' }]);
     expect(db.prepare(`SELECT COUNT(*) AS count FROM pending_entity_resolution_quarantine WHERE project_scope='forget-me'`).get()).toEqual({ count: 0 });
     expect(kernel.entityStore.findByEntityId(forgottenEntity.entityId)).toBeNull();
     expect(kernel.entityStore.findByEntityId(legacyMentionOnlyEntity.entityId)).toBeNull();

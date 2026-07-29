@@ -1,6 +1,12 @@
 import { localDateRange, localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
 const STOP_WORDS = new Set(['我', '你', '让', '对', '的', '年', '做过', '什么', '去年', '今年', 'the', 'a', 'an', 'what', 'did', 'do', 'to', 'last', 'year']);
-const ACTION_MARKERS = /启动|重启|停止|执行|配置|连接|安装|修复|更新|升级|比较|操作|设置|调试|start|started|launch|launched|boot|restart|restarted|stop|stopped|run|ran|configure|connect|install|repair|fix|update|upgrade|compare|setup|debug/iu;
+const CJK_ACTIONS = '启动|重启|停止|执行|配置|连接|安装|修复|更新|升级|比较|操作|设置|调试|起動';
+const LATIN_ACTIONS = [
+    'restarted', 'launched', 'configured', 'connected', 'installed', 'repaired', 'updated', 'upgraded',
+    'compared', 'stopped', 'started', 'restart', 'configure', 'connect', 'install', 'repair', 'update',
+    'upgrade', 'compare', 'launch', 'stopped', 'setup', 'debug', 'start', 'stop', 'boot', 'run', 'ran', 'fix',
+].sort((left, right) => right.length - left.length).join('|');
+const ACTION_MARKERS = new RegExp(`${CJK_ACTIONS}|(?<![\\p{L}\\p{N}_])(?:${LATIN_ACTIONS})(?![\\p{L}\\p{N}_])`, 'iu');
 const MEMORY_KIND_MARKERS = [
     [/决策|决定|decision/iu, 'decision'], [/修正|纠正|correction/iu, 'correction'],
     [/目标|goal/iu, 'goal'], [/偏好|preference/iu, 'preference'], [/计划|plan/iu, 'plan'],
@@ -47,22 +53,21 @@ export function actionMarkers(value) {
     return matches.map((match, ordinal) => {
         const index = match.index;
         const end = index + match[0].length;
-        const next = matches[ordinal + 1]?.index ?? value.length;
-        const action = match[0].toLocaleLowerCase();
+        const action = normalizeAction(match[0].toLocaleLowerCase());
         return {
             frameType: frameTypeForAction(action),
             action,
             index,
             end,
-            clause: value.slice(index, next),
+            clause: actionClause(value, index, end),
             ordinal,
         };
     });
 }
 function frameTypeForAction(lower) {
     const frameType = /修复|fix|repair|调试|debug/u.test(lower) ? 'repair'
-        : /启动|start|launch|boot/u.test(lower) ? 'start'
-            : /重启|restart/u.test(lower) ? 'restart'
+        : /重启|restart/u.test(lower) ? 'restart'
+            : /启动|起動|start|launch|boot/u.test(lower) ? 'start'
                 : /停止|stop/u.test(lower) ? 'stop'
                     : /安装|install/u.test(lower) ? 'install'
                         : /连接|connect/u.test(lower) ? 'connect'
@@ -71,4 +76,28 @@ function frameTypeForAction(lower) {
                                     : /配置|设置|configure|setup/u.test(lower) ? 'configuration'
                                         : 'operation';
     return frameType;
+}
+function normalizeAction(action) {
+    const normalized = {
+        started: 'start', launched: 'launch', restarted: 'restart', stopped: 'stop',
+        configured: 'configure', connected: 'connect', installed: 'install', repaired: 'repair',
+        updated: 'update', upgraded: 'upgrade', compared: 'compare', ran: 'run',
+    };
+    return normalized[action] ?? action;
+}
+function actionClause(value, index, end) {
+    const separators = [...value.matchAll(/[。！？!?；;，,\n]+|(?:然后|随后|并且|同时)|(?:\s+(?:and|then)\s+)/giu)];
+    let start = 0;
+    let finish = value.length;
+    for (const separator of separators) {
+        const separatorStart = separator.index;
+        const separatorEnd = separatorStart + separator[0].length;
+        if (separatorEnd <= index)
+            start = separatorEnd;
+        else if (separatorStart >= end) {
+            finish = separatorStart;
+            break;
+        }
+    }
+    return value.slice(start, finish).trim();
 }
