@@ -5,8 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
-import { createMemoryKernel } from '../src/factory.js';
-
 const migrateBin = join(import.meta.dir, '..', 'src', 'bin', 'migrate.ts');
 const distMigrateBin = join(import.meta.dir, '..', 'dist', 'bin', 'migrate.js');
 const fixturePath = join(import.meta.dir, 'fixtures', 'migrations', 'main-3.7.3-schema31.sqlite.gz');
@@ -71,18 +69,18 @@ test('migrate dry-run exercises and then upgrades real main schema 31 with one m
   rmSync(directory, { recursive: true, force: true });
 });
 
-test('current databases remain idempotent through source and built migrate commands', async () => {
+test('real schema31 upgrades through both source and built migration artifacts', async () => {
   for (const target of [migrateBin, distMigrateBin]) {
-    const directory = mkdtempSync(join(tmpdir(), 'cogmem-current-migrate-'));
-    const dbPath = join(directory, 'memory.db');
-    createMemoryKernel({ dbPath }).close();
-
-    const dryRun = await run(['--db', dbPath, '--dry-run', '--json'], target);
-    expect({ target: target === migrateBin ? 'source' : 'dist', stderr: dryRun.stderr, exitCode: dryRun.exitCode })
-      .toMatchObject({ exitCode: 0, stderr: '' });
-    expect(JSON.parse(dryRun.stdout).pending).toEqual([]);
+    const directory = mkdtempSync(join(tmpdir(), 'cogmem-artifact-migrate-'));
+    const dbPath = materializeFixture(directory);
     const applied = await run(['--db', dbPath, '--yes', '--json'], target);
-    expect(JSON.parse(applied.stdout).applied).toEqual([]);
+    expect({ target: target === migrateBin ? 'source' : 'dist', stderr: applied.stderr, exitCode: applied.exitCode })
+      .toMatchObject({ exitCode: 0, stderr: '' });
+    expect(JSON.parse(applied.stdout).applied).toEqual(['0032']);
+    const migrated = new Database(dbPath);
+    expect(migrated.prepare(`PRAGMA integrity_check`).get()).toEqual({ integrity_check: 'ok' });
+    expect(migrated.prepare(`PRAGMA foreign_key_check`).all()).toEqual([]);
+    migrated.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });

@@ -121,17 +121,18 @@ export class RuntimeProjector {
                 }, staging);
                 return;
             case 'RUNTIME_TRANSITION_RECORDED':
-                if (!isNonEmptyString(payload.runtimeId)
+                if (!isNonEmptyString(payload.transitionId)
+                    || !isNonEmptyString(payload.runtimeId)
                     || !isRuntimeEntityType(payload.entityType)
                     || !isNonEmptyString(payload.entityKey)
                     || !isNonEmptyString(payload.transitionType)
-                    || !isRuntimeStatus(payload.toStatus)
-                    || (payload.fromStatus !== undefined && !isRuntimeStatus(payload.fromStatus))
+                    || !isRuntimeTransitionStatus(payload.toStatus)
+                    || (payload.fromStatus !== undefined && !isRuntimeTransitionStatus(payload.fromStatus))
                     || !isOptionalRecord(payload.data)) {
                     this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'invalid_runtime_event_payload');
                     return;
                 }
-                this.runtimeStore.applyProjectedTransition(this.projectionName, event.eventId, event.globalSeq ?? 0, {
+                this.runtimeStore.applyProjectedTransition(this.projectionName, payload.transitionId, event.eventId, event.globalSeq ?? 0, {
                     projectId,
                     runtimeId: payload.runtimeId,
                     entityType: payload.entityType,
@@ -158,6 +159,9 @@ function isRuntimeEntityType(value) {
 }
 function isRuntimeStatus(value) {
     return typeof value === 'string' && RUNTIME_STATUSES.has(value);
+}
+function isRuntimeTransitionStatus(value) {
+    return typeof value === 'string' && value.length > 0 && value.length <= 256;
 }
 function isOptionalRecord(value) {
     return value === undefined || (typeof value === 'object' && value !== null && !Array.isArray(value));

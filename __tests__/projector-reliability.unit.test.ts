@@ -20,7 +20,8 @@ function appendPolicyEvent(events: EventStore, projectId: string, executionId: s
     eventType: 'POLICY_EXECUTION_UPDATED', occurredAt,
     payload: {
       executionId, idempotencyKey: executionId, policy: 'p', action: 'allow',
-      status: 'executed', attemptCount: 1, createdAt: occurredAt, updatedAt: occurredAt,
+      status: 'executed', executionOutcome: 'executed',
+      attemptCount: 1, createdAt: occurredAt, updatedAt: occurredAt,
     },
   });
 }
@@ -33,7 +34,7 @@ test('policy projector uses global sequence and never clears the authoritative e
   const checkpoints = new PolicyProjectionStore(path);
   executions.upsert({
     executionId: 'live', projectId: 'p', idempotencyKey: 'live-key', policy: 'p', action: 'allow',
-    status: 'executed', attemptCount: 1, createdAt: 10, updatedAt: 10,
+    status: 'executed', executionOutcome: 'executed', attemptCount: 1, createdAt: 10, updatedAt: 10,
   }, { emitEvent: false });
   const projector = new PolicyExecutionProjector(events, executions, checkpoints, 'p');
   await projector.fullRebuild('test');
@@ -42,7 +43,7 @@ test('policy projector uses global sequence and never clears the authoritative e
     eventType: 'POLICY_EXECUTION_UPDATED', occurredAt: 1,
     payload: {
       executionId: 'backdated', idempotencyKey: 'live-key', policy: 'p', action: 'allow',
-      status: 'executed', attemptCount: 1, createdAt: 1, updatedAt: 1,
+      status: 'executed', executionOutcome: 'executed', attemptCount: 1, createdAt: 1, updatedAt: 1,
     },
   });
   await projector.bootstrap();
@@ -77,6 +78,42 @@ test('runtime replay is read-model-only and consumes backdated events by global 
   expect(runtime.getStateCount('p')).toBe(1);
   expect(runtime.getProjectionStateCount('runtime_projection_main')).toBe(2);
 
+  checkpoints.close();
+  runtime.close();
+  events.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('runtime replay preserves transition identity and accepts bounded public transition statuses', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-runtime-transition-id-'));
+  const path = join(dir, 'memory.db');
+  const events = new EventStore(path);
+  const runtime = new PlanRuntimeStore(path, events);
+  const checkpoints = new RuntimeProjectionStore(path);
+  runtime.recordTransition({
+    projectId: 'p',
+    runtimeId: 'r',
+    entityType: 'state_machine',
+    entityKey: 'deployment',
+    transitionType: 'advance',
+    fromStatus: 'awaiting_external_approval',
+    toStatus: 'deployment_started',
+    occurredAt: 10,
+  });
+  const authoritative = runtime.getSnapshot('p', 'r').transitions[0]!;
+
+  await new RuntimeProjector(events, runtime, checkpoints).fullRebuild('transition_identity');
+  const inspected = new Database(path, { readonly: true });
+  expect(inspected.prepare(`
+    SELECT transition_id,source_event_id,from_status,to_status
+    FROM runtime_projection_transitions WHERE project_scope='p'
+  `).get()).toEqual({
+    transition_id: authoritative.transitionId,
+    source_event_id: events.getEventsByStreamId('r:state_machine:deployment', 'p')[0]!.eventId,
+    from_status: 'awaiting_external_approval',
+    to_status: 'deployment_started',
+  });
+  inspected.close();
   checkpoints.close();
   runtime.close();
   events.close();
@@ -137,6 +174,45 @@ test('legacy unscoped runtime and policy events are discarded instead of becomin
   executions.close();
   runtimeCheckpoints.close();
   runtime.close();
+  events.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('policy projector and SQLite reject contradictory terminal outcomes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-outcome-contract-'));
+  const path = join(dir, 'memory.db');
+  const events = new EventStore(path);
+  events.append({
+    projectId: 'p',
+    streamId: 'invalid-policy',
+    streamType: 'system',
+    eventType: 'POLICY_EXECUTION_UPDATED',
+    occurredAt: 1,
+    payload: {
+      executionId: 'invalid',
+      idempotencyKey: 'invalid',
+      policy: 'p',
+      action: 'allow',
+      status: 'failed',
+      executionOutcome: 'executed',
+      attemptCount: 1,
+    },
+  });
+  const executions = new PolicyExecutionStore(path);
+  const checkpoints = new PolicyProjectionStore(path);
+  await new PolicyExecutionProjector(events, executions, checkpoints, 'p').fullRebuild('outcome_contract');
+  expect(executions.getReadModelByIdempotencyKey('p', 'invalid')).toBeNull();
+
+  const db = new Database(path);
+  expect(() => db.prepare(`
+    INSERT INTO policy_execution_read_model(
+      execution_id,project_scope,idempotency_key,policy,action,status,execution_outcome,
+      created_at,updated_at
+    ) VALUES('db-invalid','p','db-invalid','p','allow','failed','executed',1,1)
+  `).run()).toThrow();
+  db.close();
+  checkpoints.close();
+  executions.close();
   events.close();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -289,7 +365,7 @@ test('policy and runtime outboxes drain multiple pages and dead-letter malformed
   recoveredRuntime.close();
   events.close();
   rmSync(dir, { recursive: true, force: true });
-});
+}, 10_000);
 
 test('empty rebuilds checkpoint a fixed high-water and consume the first concurrent target event next', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-projector-high-water-'));

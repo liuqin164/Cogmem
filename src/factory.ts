@@ -80,9 +80,8 @@ import {
   type CandidateReviewInput,
   type CandidateReviewResult,
 } from './governance/index.js';
-import { ALL_MIGRATIONS, KERNEL_MIGRATIONS, SchemaMigrationRunner } from './migrations/index.js';
-import { installMultidimensionalMemoryGraph374 } from './migrations/0032_multidimensional_memory_graph_3_7_4.js';
-import { installRuntimeProvenanceGuards } from './migrations/v3_7_4/0059_project_execution_and_provenance_guards.js';
+import { ALL_MIGRATIONS, KERNEL_MIGRATIONS, SchemaMigrationRunner, migration_0032 } from './migrations/index.js';
+import { installRuntimeProvenanceGuards } from './migrations/v3_7_4/FinalRuntimeGuards.js';
 import { backupDatabase } from './migrations/MigrationBackup.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
@@ -675,29 +674,44 @@ export class MemoryKernel {
     this.encryptionProvider = options.encryptionProvider;
     this.piiRedactor = options.redactionPolicy === false ? undefined : new PiiRedactor(options.redactionPolicy);
 
-    // Existing databases must be migrated before any Store constructor can
-    // inspect or patch an old table. Fresh databases still use the Stores as
-    // the compact bootstrap for the pre-0015 runtime schema.
-    const migrationDb = new Database(this.dbPath);
+    // File-backed databases migrate before any Store can inspect an old table.
+    // `:memory:` must migrate on the connection retained by FactStore.
+    const migrateAfterCoreBootstrap = this.dbPath === ':memory:';
     let existingSchema = false;
-    try {
-      migrationDb.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-      existingSchema = Boolean(migrationDb.prepare(`
-        SELECT 1 FROM sqlite_master
-        WHERE type='table' AND name NOT LIKE 'sqlite_%'
-        LIMIT 1
-      `).get());
-      if (existingSchema) {
-        const planner = new SchemaMigrationRunner(migrationDb, KERNEL_MIGRATIONS);
-        planner.preflight();
-        const needsBackup = planner.plan().some((migration) => migration.requiresBackup);
-        const backupPath = needsBackup ? backupDatabase(migrationDb, this.dbPath) : undefined;
-        new SchemaMigrationRunner(migrationDb, KERNEL_MIGRATIONS, {
-          backupVerified: !needsBackup || Boolean(backupPath),
-        }).run();
+    if (!migrateAfterCoreBootstrap) {
+      const migrationDb = new Database(this.dbPath);
+      try {
+        migrationDb.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+        existingSchema = Boolean(migrationDb.prepare(`
+          SELECT 1 FROM sqlite_master
+          WHERE type='table' AND name NOT LIKE 'sqlite_%'
+          LIMIT 1
+        `).get());
+        if (existingSchema) {
+          const bootstrapRecovery = Boolean(migrationDb.prepare(`
+            SELECT 1 FROM sqlite_master WHERE type='table' AND name='_cogmem_bootstrap_state'
+          `).get());
+          const migrations = bootstrapRecovery ? [migration_0032] : KERNEL_MIGRATIONS;
+          const planner = new SchemaMigrationRunner(migrationDb, migrations);
+          planner.preflight();
+          const needsBackup = planner.plan().some((migration) => migration.requiresBackup);
+          const backupPath = needsBackup && !bootstrapRecovery ? backupDatabase(migrationDb, this.dbPath) : undefined;
+          new SchemaMigrationRunner(migrationDb, migrations, {
+            backupVerified: bootstrapRecovery || !needsBackup || Boolean(backupPath),
+          }).run();
+        } else {
+          migrationDb.exec(`
+            CREATE TABLE _cogmem_bootstrap_state (
+              singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+              started_at INTEGER NOT NULL
+            );
+            INSERT INTO _cogmem_bootstrap_state(singleton,started_at) VALUES(1,unixepoch()*1000);
+          `);
+          new SchemaMigrationRunner(migrationDb, [migration_0032], { backupVerified: true }).run();
+        }
+      } finally {
+        migrationDb.close();
       }
-    } finally {
-      migrationDb.close();
     }
 
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
@@ -708,12 +722,20 @@ export class MemoryKernel {
     if ((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys?: number } | undefined)?.foreign_keys !== 1) {
       throw new Error('memory_kernel_foreign_keys_disabled');
     }
-    if (!existingSchema) new SchemaMigrationRunner(db, KERNEL_MIGRATIONS, { backupVerified: true }).run();
+    if (migrateAfterCoreBootstrap) {
+      db.exec(`
+        CREATE TABLE _cogmem_bootstrap_state (
+          singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+          started_at INTEGER NOT NULL
+        );
+        INSERT INTO _cogmem_bootstrap_state(singleton,started_at) VALUES(1,unixepoch()*1000);
+      `);
+      new SchemaMigrationRunner(db, [migration_0032], { backupVerified: true }).run();
+    }
     const rebuildJobColumns = db.prepare(`PRAGMA table_info(topology_time_rebuild_jobs)`).all() as Array<{ name: string }>;
     if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_token')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_token TEXT`);
     if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_lease_until')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_lease_until INTEGER`);
     db.exec(`CREATE TABLE IF NOT EXISTS vector_write_outbox (neuron_id TEXT PRIMARY KEY, vector_json TEXT NOT NULL, created_at INTEGER NOT NULL)`);
-    this.ensureMetaTable(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
     const vectorDimension = options.vectorDimension ?? config.vector.dimension;
@@ -1005,10 +1027,7 @@ export class MemoryKernel {
     this.reEmbeddingPipeline = this.embeddingProvider
       ? new ReEmbeddingPipeline(this.neuronEmbeddingStore, this.embeddingProvider, this.memoryGraph, db)
       : undefined;
-    // Fresh databases bootstrap optional Store tables after the first migration
-    // pass. Re-run the single release migration once so fresh and upgraded
-    // databases finish with the same canonical constraints and indexes.
-    if (!existingSchema) installMultidimensionalMemoryGraph374(db);
+    this.ensureMetaTable(db);
   }
 
   async initialize(skipWarmup = true): Promise<void> {

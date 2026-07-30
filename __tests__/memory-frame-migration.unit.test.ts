@@ -1,18 +1,11 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { migration_0032 } from '../src/migrations/v3_7_4/0032_memory_frames.js';
-import { migration_0033 } from '../src/migrations/v3_7_4/0033_atlas_aliases_and_supports.js';
-import { migration_0034 } from '../src/migrations/v3_7_4/0034_atlas_projection_v2.js';
+import { installMultidimensionalMemoryGraph374 } from '../src/migrations/0032_multidimensional_memory_graph_3_7_4.js';
 
-test('3.7.4 frame and Atlas V2 migrations are idempotent', () => {
+test('the final 3.7.4 frame and Atlas schema installer is idempotent', () => {
   const db = new Database(':memory:');
-  db.exec(`CREATE TABLE memory_atlas_projection_state (
-    project_id TEXT NOT NULL, projection_name TEXT NOT NULL, cursor_value TEXT,
-    status TEXT NOT NULL, last_rebuild_at INTEGER, last_error TEXT,
-    metadata_json TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(project_id, projection_name)
-  );`);
-  migration_0032.up(db); migration_0033.up(db); migration_0034.up(db);
-  migration_0032.up(db); migration_0033.up(db); migration_0034.up(db);
+  installMultidimensionalMemoryGraph374(db);
+  installMultidimensionalMemoryGraph374(db);
   expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='memory_frames'`).get()).toBeTruthy();
   expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='memory_atlas_supports'`).get()).toBeTruthy();
   const columns = db.prepare(`PRAGMA table_info(memory_atlas_projection_state)`).all() as Array<{ name: string }>;

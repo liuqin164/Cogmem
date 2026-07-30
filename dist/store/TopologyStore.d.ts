@@ -107,9 +107,6 @@ export declare class TopologyStore {
     private assertReferenceScope;
     private hasColumn;
     private hasTable;
-    private taskRuntimeGuard;
-    private isUnresolvedTask;
-    private isUnresolvedTaskIdentity;
     private installBranchScopeTriggers;
     close(): void;
 }

@@ -17,7 +17,7 @@ import { ConditionDslEvaluator } from '../retrieval/ConditionDslEvaluator.js';
 import { PlanDslExecutor } from '../retrieval/PlanDslExecutor.js';
 import { PolicyRuntimeEvaluator } from '../retrieval/PolicyRuntimeEvaluator.js';
 import { projectQueryValue } from '../topology/ProjectScope.js';
-import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/0059_project_execution_and_provenance_guards.js';
+import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 
 export class BeliefStore {
   private static readonly SOURCE_TRUST: Record<SourceType, number> = {

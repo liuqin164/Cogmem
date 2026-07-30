@@ -10,9 +10,7 @@ import { EventStore } from '../src/store/EventStore.js';
 import { PolicyExecutionProjector } from '../src/store/PolicyExecutionProjector.js';
 import { PolicyExecutionStore, type PolicyExecutionRecord } from '../src/store/PolicyExecutionStore.js';
 import { PolicyProjectionStore } from '../src/store/PolicyProjectionStore.js';
-import { migration_0059 } from '../src/migrations/v3_7_4/0059_project_execution_and_provenance_guards.js';
-import { migration_0061 } from '../src/migrations/v3_7_4/0061_runtime_scope_and_projection_integrity.js';
-import { migration_0062 } from '../src/migrations/v3_7_4/0062_projection_scope_and_outbox_recovery.js';
+import { installMultidimensionalMemoryGraph374 } from '../src/migrations/0032_multidimensional_memory_graph_3_7_4.js';
 
 describe('policy execution project isolation', () => {
   test('the same effect executes independently in each exact project scope', async () => {
@@ -78,7 +76,7 @@ describe('policy execution project isolation', () => {
       eventType: 'POLICY_EXECUTION_UPDATED', occurredAt: at,
       payload: {
         executionId, idempotencyKey: 'same-key', policy: 'safe', action: 'allow',
-        status: 'executed', attemptCount: 1, createdAt: at, updatedAt: at,
+        status: 'executed', executionOutcome: 'executed', attemptCount: 1, createdAt: at, updatedAt: at,
       },
     });
     append('a', 'a-execution', 1);
@@ -305,7 +303,7 @@ describe('policy execution project isolation', () => {
     const first = new PolicyExecutionStore(path, unavailable);
     first.upsert({
       executionId: 'restart', projectId: 'a', idempotencyKey: 'restart',
-      policy: 'once', action: 'allow', status: 'executed', attemptCount: 1,
+      policy: 'once', action: 'allow', status: 'executed', executionOutcome: 'executed', attemptCount: 1,
       createdAt: 1, updatedAt: 1,
     });
     expect(first.getAuditOutboxStats().pending).toBe(1);
@@ -338,7 +336,7 @@ describe('policy execution project isolation', () => {
     const store = new PolicyExecutionStore(path, unavailable);
     store.upsert({
       executionId: 'cycles', projectId: 'a', idempotencyKey: 'cycles',
-      policy: 'once', action: 'allow', status: 'executed', attemptCount: 1,
+      policy: 'once', action: 'allow', status: 'executed', executionOutcome: 'executed', attemptCount: 1,
       createdAt: 1, updatedAt: 1,
     });
 
@@ -479,9 +477,7 @@ describe('policy execution project isolation', () => {
       attempt_count INTEGER,detail TEXT,created_at INTEGER,updated_at INTEGER
     );
     INSERT INTO policy_executions VALUES('legacy','already-ran','p','allow','executed',1,NULL,1,1)`);
-    migration_0059.up(db);
-    migration_0061.up(db);
-    migration_0062.up(db);
+    installMultidimensionalMemoryGraph374(db);
     const store = new PolicyExecutionStore(db);
     let calls = 0;
     const executor = new ReliablePolicySideEffectExecutor({

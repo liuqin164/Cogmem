@@ -65,7 +65,8 @@ async function main(): Promise<void> {
   try {
     let backupPath: string | undefined;
     let result;
-    let runtimeDiscarded = 0;
+    let runtimeDiscardedThisRun = 0;
+    let runtimeDiscardedTotal = 0;
     if (args.dryRun) {
       const temporaryPath = dbPath === ':memory:'
         ? ':memory:'
@@ -75,10 +76,12 @@ async function main(): Promise<void> {
         const temporaryDb = new Database(temporaryPath);
         try {
           temporaryDb.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+          const discardedBefore = countRuntimeDiscarded(temporaryDb);
           const runner = new SchemaMigrationRunner(temporaryDb, ALL_MIGRATIONS, { backupVerified: true });
           const pending = runner.plan().map((migration) => migration.version);
           const verified = runner.run();
-          runtimeDiscarded = countRuntimeDiscarded(temporaryDb);
+          runtimeDiscardedTotal = countRuntimeDiscarded(temporaryDb);
+          runtimeDiscardedThisRun = runtimeDiscardedTotal - discardedBefore;
           result = { pending, applied: [], currentVersion: verified.currentVersion, dryRun: true };
         } finally {
           temporaryDb.close();
@@ -87,6 +90,7 @@ async function main(): Promise<void> {
         if (temporaryPath !== ':memory:') rmSync(temporaryPath, { force: true });
       }
     } else {
+      const discardedBefore = countRuntimeDiscarded(db);
       const planner = new SchemaMigrationRunner(db, ALL_MIGRATIONS);
       planner.preflight();
       const pending = planner.plan();
@@ -96,19 +100,28 @@ async function main(): Promise<void> {
       result = new SchemaMigrationRunner(db, ALL_MIGRATIONS, {
         backupVerified: !needsBackup || Boolean(backupPath) || dbPath === ':memory:',
       }).run();
-      runtimeDiscarded = countRuntimeDiscarded(db);
+      runtimeDiscardedTotal = countRuntimeDiscarded(db);
+      runtimeDiscardedThisRun = runtimeDiscardedTotal - discardedBefore;
       db.exec(`CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
       const numericVersion = Number.parseInt(result.currentVersion || '0', 10);
       db.prepare(`INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', ?)`).run(String(numericVersion));
     }
-    const output = { command: 'migrate', dbPath, backupPath, runtimeDiscarded, ...result };
+    const output = {
+      command: 'migrate',
+      dbPath,
+      backupPath,
+      runtimeDiscardedThisRun,
+      runtimeDiscardedTotal,
+      ...result,
+    };
     if (args.json) printCliJson('migrate', output);
     else {
       console.log(`cogmem migrate ${args.dryRun ? 'dry-run' : 'complete'}`);
       console.log(`database: ${dbPath}`);
       console.log(`pending: ${result.pending.join(', ') || 'none'}`);
       console.log(`applied: ${result.applied.join(', ') || 'none'}`);
-      console.log(`discarded unscoped runtime rows: ${runtimeDiscarded}`);
+      console.log(`discarded unscoped runtime rows this run: ${runtimeDiscardedThisRun}`);
+      console.log(`discarded unscoped runtime rows total: ${runtimeDiscardedTotal}`);
       if (backupPath) console.log(`backup: ${backupPath}`);
     }
   } finally {

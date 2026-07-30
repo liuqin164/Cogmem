@@ -46,9 +46,16 @@ describe('schema migration runner', () => {
     }
 
     const digest = createHash('sha256');
-    digest.update(readFileSync(join(directory, '0032_multidimensional_memory_graph_3_7_4.ts'), 'utf8').replace(/\r\n/g, '\n'));
-    for (const file of readdirSync(join(directory, 'v3_7_4')).filter((file) => file.endsWith('.ts')).sort()) {
-      digest.update(readFileSync(join(directory, 'v3_7_4', file), 'utf8').replace(/\r\n/g, '\n'));
+    const sources = [
+      '0032_multidimensional_memory_graph_3_7_4.ts',
+      ...readdirSync(join(directory, 'v3_7_4'))
+        .filter((file) => file.endsWith('.ts'))
+        .sort()
+        .map((file) => `v3_7_4/${file}`),
+    ];
+    for (const source of sources) {
+      const content = readFileSync(join(directory, source), 'utf8').replace(/\r\n/g, '\n');
+      digest.update(`${source}\0${Buffer.byteLength(content)}\0`).update(content);
     }
     expect(MIGRATION_DIGESTS['0032']).toBe(digest.digest('hex'));
   });

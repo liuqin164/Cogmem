@@ -23,6 +23,9 @@ export class PlanRuntimeStore {
             const columns = new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
             if (!columns.has('project_scope'))
                 throw new Error(`runtime_schema_not_migrated:${table}`);
+            if (table === 'runtime_projection_transitions' && !columns.has('source_event_id')) {
+                throw new Error('runtime_schema_not_migrated:runtime_projection_transitions');
+            }
             if (table === 'runtime_event_outbox'
                 && ['attempt_count', 'last_error', 'next_retry_at', 'dead_lettered_at'].some((column) => !columns.has(column))) {
                 throw new Error('runtime_schema_not_migrated:runtime_event_outbox');
@@ -95,6 +98,7 @@ export class PlanRuntimeStore {
         projection_name TEXT NOT NULL,
         project_scope TEXT NOT NULL,
         transition_id TEXT NOT NULL,
+        source_event_id TEXT NOT NULL,
         runtime_id TEXT NOT NULL,
         entity_type TEXT NOT NULL,
         entity_key TEXT NOT NULL,
@@ -149,6 +153,10 @@ export class PlanRuntimeStore {
         this.flushEventOutbox();
     }
     recordTransition(input, options) {
+        if (!validTransitionStatus(input.toStatus)
+            || (input.fromStatus !== undefined && !validTransitionStatus(input.fromStatus))) {
+            throw new Error('invalid_runtime_transition_status');
+        }
         this.db.transaction(() => this.insertTransition(input, options?.emitEvent !== false))();
         this.flushEventOutbox();
     }
@@ -169,6 +177,7 @@ export class PlanRuntimeStore {
                 eventType: 'RUNTIME_TRANSITION_RECORDED',
                 occurredAt,
                 payload: {
+                    transitionId,
                     runtimeId: input.runtimeId,
                     entityType: input.entityType,
                     entityKey: input.entityKey,
@@ -431,6 +440,7 @@ export class PlanRuntimeStore {
       );
       CREATE TEMP TABLE IF NOT EXISTS runtime_projection_transitions_stage (
         projection_name TEXT NOT NULL, project_scope TEXT NOT NULL, transition_id TEXT NOT NULL,
+        source_event_id TEXT NOT NULL,
         runtime_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_key TEXT NOT NULL,
         transition_type TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL, payload_json TEXT,
         occurred_at INTEGER NOT NULL, source_global_seq INTEGER NOT NULL DEFAULT 0,
@@ -466,14 +476,14 @@ export class PlanRuntimeStore {
       WHERE excluded.source_global_seq >= ${table}.source_global_seq
     `).run(projectionName, input.projectId, input.runtimeId, input.entityType, input.entityKey, input.status, input.metadata ? JSON.stringify(input.metadata) : null, input.updatedAt, sourceGlobalSeq);
     }
-    applyProjectedTransition(projectionName, sourceEventId, sourceGlobalSeq, input, staging = false) {
+    applyProjectedTransition(projectionName, transitionId, sourceEventId, sourceGlobalSeq, input, staging = false) {
         const table = staging ? 'runtime_projection_transitions_stage' : 'runtime_projection_transitions';
         this.db.prepare(`
       INSERT OR IGNORE INTO ${table} (
-        projection_name, project_scope, transition_id, runtime_id, entity_type, entity_key,
+        projection_name, project_scope, transition_id, source_event_id, runtime_id, entity_type, entity_key,
         transition_type, from_status, to_status, payload_json, occurred_at, source_global_seq
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(projectionName, input.projectId, sourceEventId, input.runtimeId, input.entityType, input.entityKey, input.transitionType, input.fromStatus ?? null, input.toStatus, input.payload ? JSON.stringify(input.payload) : null, input.occurredAt, sourceGlobalSeq);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(projectionName, input.projectId, transitionId, sourceEventId, input.runtimeId, input.entityType, input.entityKey, input.transitionType, input.fromStatus ?? null, input.toStatus, input.payload ? JSON.stringify(input.payload) : null, input.occurredAt, sourceGlobalSeq);
     }
     clearProjection(projectionName) {
         this.db.transaction(() => {
@@ -498,4 +508,7 @@ export class PlanRuntimeStore {
     close() {
         this.db.close();
     }
+}
+function validTransitionStatus(value) {
+    return value.length > 0 && value.length <= 256;
 }

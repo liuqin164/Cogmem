@@ -1,3 +1,4 @@
+import { policyExecutionStateIsValid, } from './PolicyExecutionStore.js';
 import { logger } from '../utils/Logger.js';
 export class PolicyExecutionProjector {
     eventStore;
@@ -112,6 +113,7 @@ export class PolicyExecutionProjector {
             || !isNonEmptyString(payload.action)
             || !isPolicyStatus(payload.status)
             || (payload.executionOutcome !== undefined && outcome === undefined)
+            || !policyExecutionStateIsValid(payload.status, outcome)
             || !isOptionalNonNegativeNumber(payload.attemptCount)
             || !isOptionalNumber(payload.nextRetryAt)
             || !isOptionalNumber(payload.deadLetteredAt)

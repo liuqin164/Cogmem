@@ -2,11 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { deterministicFrameFallback, memoryFrameJsonSchema, MEMORY_DIMENSIONS, MEMORY_FRAME_JSON_SCHEMA, MEMORY_FRAME_LIMITS, MEMORY_FRAME_REQUIRED_DIMENSIONS, normalizeAlias, validateMemoryFrame } from '../src/semantic/index.js';
 import { MemoryFrameStore } from '../src/store/MemoryFrameStore.js';
 import Database from 'bun:sqlite';
-import { migration_0032 } from '../src/migrations/v3_7_4/0032_memory_frames.js';
-import { migration_0035 } from '../src/migrations/v3_7_4/0035_memory_frame_integrity.js';
-import { migration_0036 } from '../src/migrations/v3_7_4/0036_memory_frame_publication_repair.js';
-import { migration_0037 } from '../src/migrations/v3_7_4/0037_memory_frame_revisions.js';
-import { migration_0039 } from '../src/migrations/v3_7_4/0039_memory_frame_publication_and_revision_repair.js';
+import { installMultidimensionalMemoryGraph374 } from '../src/migrations/0032_multidimensional_memory_graph_3_7_4.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { MultidimensionalQueryPlanner } from '../src/recall/index.js';
 import { MemoryFrameProjector } from '../src/atlas/MemoryFrameProjector.js';
@@ -78,9 +74,8 @@ describe('MemoryFrame V1 contract', () => {
 
   test('stores frames idempotently and publishes with CAS', () => {
     const db = new Database(':memory:');
-    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
-    migration_0035.up(db);
-    db.exec(`CREATE TABLE memory_events (event_id TEXT PRIMARY KEY, project_id TEXT, occurred_at INTEGER, local_date TEXT); CREATE TABLE memory_episode_events (episode_id TEXT, event_id TEXT); INSERT INTO memory_events VALUES ('event-1','p',1,'1970-01-01'); INSERT INTO memory_episode_events VALUES ('e','event-1');`);
+    installMultidimensionalMemoryGraph374(db);
+    seedMemoryFrameEvidence(db);
     const store = new MemoryFrameStore(db);
     const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
     store.save({ frame, sourceFingerprint: 'source-1', dreamJobLeaseId: 'lease-1', attemptGeneration: 1, now: 0 });
@@ -94,8 +89,8 @@ describe('MemoryFrame V1 contract', () => {
 
   test('staged revisions preserve the previous active frame until publish', () => {
     const db = new Database(':memory:');
-    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
-    db.exec(`CREATE TABLE memory_events (event_id TEXT PRIMARY KEY, project_id TEXT, occurred_at INTEGER, local_date TEXT); CREATE TABLE memory_episode_events (episode_id TEXT, event_id TEXT); INSERT INTO memory_events VALUES ('event-1','p',1,'1970-01-01'); INSERT INTO memory_episode_events VALUES ('e','event-1');`);
+    installMultidimensionalMemoryGraph374(db);
+    seedMemoryFrameEvidence(db);
     const store = new MemoryFrameStore(db);
     const base = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
     const frame = { ...base, evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
@@ -114,8 +109,8 @@ describe('MemoryFrame V1 contract', () => {
 
   test('review publication preserves the previous active frame', () => {
     const db = new Database(':memory:');
-    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
-    db.exec(`CREATE TABLE memory_events (event_id TEXT PRIMARY KEY, project_id TEXT, occurred_at INTEGER, local_date TEXT); CREATE TABLE memory_episode_events (episode_id TEXT, event_id TEXT); INSERT INTO memory_events VALUES ('event-1','p',1,'1970-01-01'); INSERT INTO memory_episode_events VALUES ('e','event-1');`);
+    installMultidimensionalMemoryGraph374(db);
+    seedMemoryFrameEvidence(db);
     const store = new MemoryFrameStore(db);
     const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }), evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
       nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['event-1'] })),
@@ -131,9 +126,8 @@ describe('MemoryFrame V1 contract', () => {
 
   test('active revision replacement satisfies the one-active partial index', () => {
     const db = new Database(':memory:');
-    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
-    db.exec(`CREATE TABLE memory_events (event_id TEXT PRIMARY KEY, project_id TEXT, occurred_at INTEGER, local_date TEXT); CREATE TABLE memory_episode_events (episode_id TEXT, event_id TEXT); INSERT INTO memory_events VALUES ('event-1','p',1,'1970-01-01'); INSERT INTO memory_episode_events VALUES ('e','event-1');`);
-    migration_0039.up(db);
+    installMultidimensionalMemoryGraph374(db);
+    seedMemoryFrameEvidence(db);
     const store = new MemoryFrameStore(db);
     const base = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
     const frame = { ...base, evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
@@ -207,7 +201,7 @@ describe('MemoryFrame V1 contract', () => {
 
   test('lease retry creates an independent staged revision without changing the source row', () => {
     const db = new Database(':memory:');
-    migration_0032.up(db); migration_0035.up(db); migration_0036.up(db); migration_0037.up(db);
+    installMultidimensionalMemoryGraph374(db);
     const store = new MemoryFrameStore(db);
     const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }),
       evidenceEventIds: ['evt-1'], nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['evt-1'] })),
@@ -248,3 +242,14 @@ describe('MemoryFrame V1 contract', () => {
     }
   });
 });
+
+function seedMemoryFrameEvidence(db: Database): void {
+  db.exec(`
+    INSERT INTO memory_events(
+      event_id,global_seq,stream_id,stream_type,event_type,event_version,project_id,project_scope,
+      local_date,role,occurred_at,payload_json,payload_hash
+    ) VALUES('event-1',1,'stream-1','thread','MESSAGE',1,'p','p','1970-01-01','user',1,'{}','hash');
+    INSERT INTO memory_episode_events(episode_id,event_id,position,relation,confidence,created_at)
+    VALUES('e','event-1',0,'primary',1,1);
+  `);
+}

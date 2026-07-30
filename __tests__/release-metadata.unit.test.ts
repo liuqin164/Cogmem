@@ -17,6 +17,7 @@ function packageJson(): {
   exports: Record<string, { import: string; types: string }>;
   bin: Record<string, string>;
   files: string[];
+  packageManager?: string;
   repository?: { type: string; url: string };
 } {
   return JSON.parse(readText(packageJsonPath));
@@ -47,6 +48,7 @@ describe('core release metadata', () => {
   });
 
   test('GitHub release workflow publishes through npm trusted publishing only on release publication', () => {
+    const manifest = packageJson();
     const workflow = readText(join(coreRoot, '.github', 'workflows', 'publish.yml'));
 
     expect(workflow).toContain('release:');
@@ -55,8 +57,12 @@ describe('core release metadata', () => {
     expect(workflow).not.toContain('tags:');
     expect(workflow).toContain('id-token: write');
     expect(workflow).toContain('environment: npm publish');
-    expect(workflow).toContain('bun install');
-    expect(workflow).not.toContain('bun install --frozen-lockfile');
+    expect(workflow).toContain('node-version: 24.12.0');
+    expect(workflow).toContain('npm@11.6.2');
+    expect(workflow).toContain('bun-version: 1.3.11');
+    expect(workflow).toContain('bun install --frozen-lockfile');
+    expect(workflow).toContain('sha256sum bun.lock');
+    expect(manifest.packageManager).toBe('bun@1.3.11');
     expect(workflow).toContain('bun test __tests__');
     expect(workflow).toContain('npm pack --dry-run --json');
     expect(workflow).toContain('npm publish --provenance --access public');

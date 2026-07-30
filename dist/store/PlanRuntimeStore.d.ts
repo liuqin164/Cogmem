@@ -106,7 +106,7 @@ export declare class PlanRuntimeStore {
         metadata?: Record<string, unknown>;
         updatedAt: number;
     }, staging?: boolean): void;
-    applyProjectedTransition(projectionName: string, sourceEventId: string, sourceGlobalSeq: number, input: {
+    applyProjectedTransition(projectionName: string, transitionId: string, sourceEventId: string, sourceGlobalSeq: number, input: {
         projectId: string;
         runtimeId: string;
         entityType: RuntimeEntityType;

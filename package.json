@@ -3,6 +3,8 @@
 
   "version": "3.7.4",
 
+  "packageManager": "bun@1.3.11",
+
   "type": "module",
   "description": "cogmem — agent-native memory kernel for a single local-first AI agent",
   "repository": {

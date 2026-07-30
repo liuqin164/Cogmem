@@ -1,7 +1,7 @@
 import Database from 'bun:sqlite';
 import { cognitiveEdgeId, cognitiveNodeId } from '../engine/CognitiveGraphIdentity.js';
 import { projectQueryValue } from '../topology/ProjectScope.js';
-import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/0059_project_execution_and_provenance_guards.js';
+import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 export class CognitiveGraphStore {
     db;
     ownsDb;

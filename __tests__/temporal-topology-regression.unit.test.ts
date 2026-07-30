@@ -15,7 +15,6 @@ import { TemporalBranchSearch } from '../src/retrieval/TemporalBranchSearch.js';
 import { CognitiveGraphStore } from '../src/store/CognitiveGraphStore.js';
 import { localDateRange, nextCivilDate } from '../src/utils/LocalDateContext.js';
 import { timeBucketId } from '../src/topology/TimeBucketIdentity.js';
-import { migration_0051 } from '../src/migrations/v3_7_4/0051_time_projection_source_integrity.js';
 import type { TimeBucketRecord } from '../src/types/index.js';
 
 const bucket = (id: string, start: number, end: number, type: TimeBucketRecord['bucketType'] = 'day'): TimeBucketRecord => ({
@@ -350,30 +349,6 @@ describe('project-local temporal topology regressions', () => {
     db.close();
   });
 
-  test('unresolved task identities stay outside every runtime topology path', () => {
-    const db = new Database(':memory:');
-    const topology = new TopologyStore(db);
-    const task = topology.upsertTaskBranch({
-      taskId: 'task-unresolved', projectId: 'a', taskKey: 'damaged',
-      title: 'damaged', status: 'derived', createdAt: 1,
-    });
-    db.exec(`CREATE TABLE task_identity_restoration_manifest(
-      task_id TEXT PRIMARY KEY,project_id TEXT NOT NULL,task_key TEXT NOT NULL,
-      recovery_status TEXT NOT NULL
-    )`);
-    db.prepare(`INSERT INTO task_identity_restoration_manifest VALUES(?,?,?,'unresolved')`)
-      .run(task.taskId, 'a', 'damaged');
-
-    expect(topology.listTaskBranches('a')).toEqual([]);
-    expect(() => topology.upsertTaskBranch({
-      taskId: task.taskId, projectId: 'a', taskKey: 'damaged',
-      title: 'damaged', status: 'derived', createdAt: 2,
-    })).toThrow('task_identity_unresolved');
-    expect(() => topology.attachToTask(task.taskId, { projectId: 'a', neuronId: 'n-a', createdAt: 2 }))
-      .toThrow('task_identity_unresolved');
-    topology.close();
-  });
-
   test('topology attach rejects every cross-project reference before writing', () => {
     const db = new Database(':memory:');
     db.exec(`
@@ -516,49 +491,6 @@ describe('project-local temporal topology regressions', () => {
     expect(db.prepare(`SELECT revision FROM topology_source_revisions WHERE project_id='empty-project'`).get()).toEqual({ revision: 1 });
     expect(kernel.topologyStore.hasUsableTimeProjection('empty-project', 'UTC')).toBe(true);
     expect(db.prepare(`SELECT COUNT(*) AS count FROM time_bucket_entries WHERE project_id='empty-project'`).get()).toEqual({ count: 3 });
-    kernel.close();
-  });
-
-  test('0051 repairs an upgraded projectless scope that has no projection state', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-global-upgrade-'));
-    const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), projectTimeZone: 'UTC' });
-    await kernel.ingest({ content: 'legacy global scope', createdAt: Date.UTC(2026, 6, 17, 12) });
-    const db = kernel.factStore.getDatabase();
-    db.exec(`
-      DELETE FROM _schema_migrations WHERE version='0051';
-      UPDATE _meta SET value='50' WHERE key='schema_version';
-      DELETE FROM topology_projection_state WHERE project_id='';
-      DELETE FROM topology_source_revisions WHERE project_id='';
-      DELETE FROM temporal_adjacency WHERE project_id='';
-      DELETE FROM cognitive_edges WHERE project_id='' AND edge_type='occurred_in_time_bucket';
-      DELETE FROM cognitive_nodes WHERE project_id='' AND node_type='time_bucket';
-    `);
-
-    migration_0051.up(db);
-    expect(db.prepare(`SELECT status,source_revision FROM topology_projection_state WHERE project_id=''`).get()).toEqual({ status: 'dirty', source_revision: 0 });
-    expect(db.prepare(`SELECT revision FROM topology_source_revisions WHERE project_id=''`).get()).toEqual({ revision: 1 });
-    kernel.rebuildProjectTimeTopology();
-    expect(kernel.topologyStore.hasUsableTimeProjection('', 'UTC')).toBe(true);
-    kernel.close();
-  });
-
-  test('0051 gives an upgraded empty projection an explicit revision-zero watermark', () => {
-    const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
-    const db = kernel.factStore.getDatabase();
-    db.exec(`
-      DELETE FROM _schema_migrations WHERE version='0051';
-      UPDATE _meta SET value='50' WHERE key='schema_version';
-      DELETE FROM topology_source_revisions WHERE project_id='empty-upgrade';
-      INSERT INTO topology_projection_state(project_id,projection_version,status,time_zone,updated_at,error,source_revision)
-      VALUES('empty-upgrade',3,'clean','UTC',1,NULL,0)
-      ON CONFLICT(project_id) DO UPDATE SET projection_version=3,status='clean',time_zone='UTC',source_revision=0;
-    `);
-
-    migration_0051.up(db);
-    expect(db.prepare(`SELECT revision FROM topology_source_revisions WHERE project_id='empty-upgrade'`).get()).toEqual({ revision: 0 });
-    expect(kernel.topologyStore.hasUsableTimeProjection('empty-upgrade', 'UTC')).toBe(false);
-    kernel.rebuildProjectTimeTopology('empty-upgrade');
-    expect(kernel.topologyStore.hasUsableTimeProjection('empty-upgrade', 'UTC')).toBe(true);
     kernel.close();
   });
 

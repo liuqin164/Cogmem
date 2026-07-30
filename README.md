@@ -237,7 +237,7 @@ cogmem migrate --yes --backup --json
 
 The release records a single 0032 receipt. Schemas 0032-0062 produced by unreleased 3.7.4 development builds are intentionally unsupported; restore a schema-31 backup or recreate a development database. Older released databases must first be upgraded with Cogmem 3.7.3.
 
-The 3.7.3 runtime state tables did not contain project scope and cannot be safely attributed. They are disposable read models in the 3.7.4 contract: migration backs up the database, reports `runtimeDiscarded`, stores hash-only discard receipts, and leaves canonical Raw Ledger evidence unchanged. The command is idempotent.
+The 3.7.3 runtime state tables did not contain project scope and cannot be safely attributed. They are disposable read models in the 3.7.4 contract: migration backs up the database, reports `runtimeDiscardedThisRun` and `runtimeDiscardedTotal`, stores hash-only discard receipts, and leaves canonical Raw Ledger evidence unchanged. The command is idempotent.
 
 For OpenClaw upgrades, `cogmem update --yes` now runs this refresh automatically when the config has `[integrations.openclaw] enabled = true`. You can also run it manually; this path does not open the Cogmem database, so it still works while an old drainer has the DB busy:
 

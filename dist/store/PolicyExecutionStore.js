@@ -1,5 +1,14 @@
 import Database from 'bun:sqlite';
 import { createHash } from 'node:crypto';
+export function policyExecutionStateIsValid(status, outcome) {
+    if (status === 'in_progress')
+        return outcome === undefined;
+    if (status === 'executed' || status === 'skipped')
+        return outcome === 'executed';
+    return outcome === 'definitely_not_executed'
+        || outcome === 'failed_before_execution'
+        || outcome === 'outcome_unknown';
+}
 export class PolicyExecutionStore {
     db;
     ownsDb;
@@ -38,7 +47,7 @@ export class PolicyExecutionStore {
         policy TEXT NOT NULL,
         action TEXT NOT NULL,
         target TEXT,
-        status TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('in_progress','executed','skipped','failed')),
         execution_outcome TEXT,
         attempt_count INTEGER NOT NULL DEFAULT 0,
         next_retry_at INTEGER,
@@ -56,7 +65,12 @@ export class PolicyExecutionStore {
         lease_until INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        UNIQUE(project_scope, idempotency_key)
+        UNIQUE(project_scope, idempotency_key),
+        CHECK(
+          (status IN ('executed','skipped') AND execution_outcome='executed')
+          OR (status='failed' AND execution_outcome IN ('definitely_not_executed','failed_before_execution','outcome_unknown'))
+          OR (status='in_progress' AND execution_outcome IS NULL)
+        )
       );
 
       CREATE INDEX IF NOT EXISTS idx_policy_executions_runtime
@@ -87,7 +101,7 @@ export class PolicyExecutionStore {
         policy TEXT NOT NULL,
         action TEXT NOT NULL,
         target TEXT,
-        status TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('in_progress','executed','skipped','failed')),
         execution_outcome TEXT,
         attempt_count INTEGER NOT NULL DEFAULT 0,
         next_retry_at INTEGER,
@@ -104,7 +118,12 @@ export class PolicyExecutionStore {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         source_global_seq INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY(project_scope,idempotency_key)
+        PRIMARY KEY(project_scope,idempotency_key),
+        CHECK(
+          (status IN ('executed','skipped') AND execution_outcome='executed')
+          OR (status='failed' AND execution_outcome IN ('definitely_not_executed','failed_before_execution','outcome_unknown'))
+          OR (status='in_progress' AND execution_outcome IS NULL)
+        )
       );
 
       CREATE TABLE IF NOT EXISTS policy_execution_audit_outbox (
@@ -205,6 +224,8 @@ export class PolicyExecutionStore {
     finishClaim(record, leaseOwner, options) {
         if (record.status === 'in_progress')
             throw new Error('policy_execution_terminal_status_required');
+        if (!policyExecutionStateIsValid(record.status, record.executionOutcome))
+            throw new Error('invalid_policy_execution_state');
         this.db.transaction(() => {
             const result = this.db.prepare(`
         UPDATE policy_executions SET
@@ -229,6 +250,8 @@ export class PolicyExecutionStore {
     `).run(leaseUntil, now, projectId, idempotencyKey, leaseOwner).changes === 1;
     }
     upsert(record, options) {
+        if (!policyExecutionStateIsValid(record.status, record.executionOutcome))
+            throw new Error('invalid_policy_execution_state');
         this.db.prepare(`
       INSERT INTO policy_executions (
         execution_id, project_scope, idempotency_key, runtime_id, policy, action, target,

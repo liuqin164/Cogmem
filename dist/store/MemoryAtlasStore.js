@@ -247,7 +247,7 @@ export class MemoryAtlasStore {
                     matchedRows.push({ alias: normalizeAlias(alias), row });
             }
         }
-        catch { /* pre-0033 databases use document aliases only */ }
+        catch { /* legacy databases may use document aliases only */ }
         const seeds = [];
         const labels = [];
         const groups = new Map();

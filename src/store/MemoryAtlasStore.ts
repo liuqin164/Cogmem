@@ -275,7 +275,7 @@ export class MemoryAtlasStore {
         const alias = String(row.normalized_alias ?? '');
         if (containsCanonicalAlias(query, alias)) matchedRows.push({ alias: normalizeAlias(alias), row });
       }
-    } catch { /* pre-0033 databases use document aliases only */ }
+    } catch { /* legacy databases may use document aliases only */ }
     const seeds: Array<Record<string, unknown>> = [];
     const labels: string[] = [];
     const groups = new Map<string, Array<Record<string, unknown>>>();

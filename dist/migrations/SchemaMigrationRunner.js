@@ -1,5 +1,5 @@
 import { MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
-import { multidimensionalMemoryGraph374Satisfied } from './0032_multidimensional_memory_graph_3_7_4.js';
+import { multidimensionalMemoryGraph374Issue, multidimensionalMemoryGraph374Satisfied, } from './0032_multidimensional_memory_graph_3_7_4.js';
 export class SchemaMigrationRunner {
     db;
     migrations;
@@ -107,27 +107,50 @@ export class SchemaMigrationRunner {
     }
     assertSupportedReleaseSchema() {
         const legacyVersion = this.legacySchemaVersion();
-        if (!this.schemaMigrationsTableExists()) {
-            if (legacyVersion !== undefined && legacyVersion !== 31 && legacyVersion !== 32) {
-                throw new Error(`unsupported_release_schema:${legacyVersion}`);
-            }
+        const userTables = this.db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type='table' AND name NOT LIKE 'sqlite_%'
+    `).all().map((row) => row.name);
+        if (userTables.length === 0 || userTables.includes('_cogmem_bootstrap_state'))
             return;
+        if (!this.schemaMigrationsTableExists()) {
+            if (legacyVersion === 32)
+                throw new Error('unsupported_development_schema:32');
+            if (legacyVersion === 31
+                && (this.migrationSchemaSatisfied('0031') || !this.migrations.some((migration) => migration.version === '0032')))
+                return;
+            throw new Error(legacyVersion === undefined
+                ? 'unsupported_database_identity'
+                : `unsupported_release_schema:${legacyVersion}`);
         }
         const rows = this.db.prepare(`SELECT version FROM _schema_migrations ORDER BY version`).all();
         const unsupported = rows.find((row) => row.version > '0032');
         if (unsupported)
             throw new Error(`unsupported_development_schema:${unsupported.version}`);
         const release0032 = rows.some((row) => row.version === '0032');
-        if (release0032 && this.hasColumns('_schema_migrations', ['checksum'])) {
+        if (release0032) {
+            if (!this.hasColumns('_schema_migrations', ['checksum']))
+                throw new Error('unsupported_development_schema:0032');
             const row = this.db.prepare(`SELECT checksum FROM _schema_migrations WHERE version='0032'`).get();
             if (row?.checksum !== MIGRATION_DIGESTS['0032'])
                 throw new Error('unsupported_development_schema:0032');
+            const issue = multidimensionalMemoryGraph374Issue(this.db);
+            if (!issue)
+                return;
+            if (issue.startsWith('trigger_definition:trg_memory_atlas_dirty_')
+                || issue.startsWith('trigger_missing:trg_memory_atlas_dirty_'))
+                return;
+            throw new Error(`final_schema_postcondition_failed:0032:${issue}`);
         }
         const latest = rows[rows.length - 1]?.version;
-        if (latest && latest < '0031')
-            throw new Error(`unsupported_release_schema:${latest}`);
-        if (legacyVersion !== undefined && legacyVersion > 32)
-            throw new Error(`unsupported_development_schema:${legacyVersion}`);
+        if (latest !== '0031' || !this.migrationSchemaSatisfied('0031')) {
+            throw new Error(latest ? `unsupported_release_schema:${latest}` : 'unsupported_database_identity');
+        }
+        if (legacyVersion !== undefined && legacyVersion !== 31) {
+            throw new Error(legacyVersion > 31
+                ? `unsupported_development_schema:${legacyVersion}`
+                : `unsupported_release_schema:${legacyVersion}`);
+        }
     }
     currentVersion() {
         const legacyCurrent = this.legacyCurrentVersion();
@@ -219,9 +242,7 @@ export class SchemaMigrationRunner {
       `).get());
         }
         if (version === '0032') {
-            const recorded = this.schemaMigrationsTableExists()
-                && Boolean(this.db.prepare(`SELECT 1 FROM _schema_migrations WHERE version='0032'`).get());
-            return recorded || multidimensionalMemoryGraph374Satisfied(this.db);
+            return multidimensionalMemoryGraph374Satisfied(this.db);
         }
         return true;
     }

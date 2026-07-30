@@ -4,6 +4,7 @@ import type { MemoryEvent, PolicyExecutionAuditPage } from '../types/index.js';
 export type PolicyReplayPolicy = 'manual' | 'on_bootstrap' | 'always' | 'scheduled_only';
 export type PolicyExecutionStatus = 'in_progress' | 'executed' | 'skipped' | 'failed';
 export type PolicyExecutionOutcome = 'executed' | 'definitely_not_executed' | 'failed_before_execution' | 'outcome_unknown';
+export declare function policyExecutionStateIsValid(status: PolicyExecutionStatus, outcome?: PolicyExecutionOutcome): boolean;
 export interface PolicyExecutionRecord {
     executionId: string;
     projectId: string;

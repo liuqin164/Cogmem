@@ -395,7 +395,7 @@ describe('Governance and security v1.14', () => {
     db.prepare(`INSERT INTO chat_turns(turn_id,session_id,role,content,timestamp,entity_hints) VALUES('secret-turn','secret-chat','user',?,1,'[]')`).run(`${secret} transcript`);
     db.exec(`CREATE TABLE IF NOT EXISTS episode_dream_attempts(attempt_id TEXT PRIMARY KEY,episode_id TEXT NOT NULL,payload_json TEXT);`);
     db.prepare(`INSERT INTO episode_dream_attempts VALUES('secret-attempt',?,?)`).run(episodeMessage.episodeId!, JSON.stringify({ secret }));
-    db.prepare(`INSERT INTO topology_identity_quarantine(quarantine_id,identity_type,old_parent_id,project_scope,entry_json,reason,created_at,implicated_scopes_json) VALUES('secret-quarantine','task','old','keep-project',?,'conflict',1,?)`).run(JSON.stringify({ fact_id: `${secret}-fact` }), JSON.stringify(['keep-project', '']));
+    db.prepare(`INSERT INTO entity_scope_migration_quarantine(quarantine_id,record_type,record_id,record_hash,implicated_scopes_json,reason,created_at) VALUES('secret-quarantine','entity_alias','old','hash',?,'conflict',1)`).run(JSON.stringify(['keep-project', '']));
     db.exec(`
       CREATE TABLE scheduled_jobs(job_id TEXT PRIMARY KEY,payload_json TEXT NOT NULL);
       CREATE TABLE scheduled_job_runs(run_id TEXT PRIMARY KEY,job_id TEXT,error TEXT,result_json TEXT);
@@ -426,7 +426,7 @@ describe('Governance and security v1.14', () => {
     expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE project_id IS NULL`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM memory_events WHERE project_id IS NULL`).get()).toEqual({ count: 0 });
     expect(db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE content LIKE ?`).get(`%${secret}%`)).toEqual({ count: 0 });
-    for (const table of ['deep_write_summaries','deep_write_runs','deep_write_candidates','deep_write_candidate_reviews','pipeline_nonfatal_events','reasoning_chains','reasoning_steps','memory_frame_reviews','memory_atlas_alias_supports','beliefs','belief_evidence','topic_nodes','topic_aliases','topic_relations','topic_operations','chat_sessions','chat_turns','episode_dream_attempts','topology_identity_quarantine','scheduled_jobs','scheduled_job_runs','notification_rules','notification_records','workspaces','workspace_settings','meta_proposals','meta_observations','ingestion_processed_records']) {
+    for (const table of ['deep_write_summaries','deep_write_runs','deep_write_candidates','deep_write_candidate_reviews','pipeline_nonfatal_events','reasoning_chains','reasoning_steps','memory_frame_reviews','memory_atlas_alias_supports','beliefs','belief_evidence','topic_nodes','topic_aliases','topic_relations','topic_operations','chat_sessions','chat_turns','episode_dream_attempts','entity_scope_migration_quarantine','scheduled_jobs','scheduled_job_runs','notification_rules','notification_records','workspaces','workspace_settings','meta_proposals','meta_observations','ingestion_processed_records']) {
       expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
     }
     expect(db.prepare(`SELECT project_key FROM dream_ledger_state ORDER BY project_key`).all()).toEqual([{ project_key: 'all' }, { project_key: 'scope:1:a' }]);

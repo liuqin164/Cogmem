@@ -5,6 +5,7 @@ import {
   type PolicyExecutionOutcome,
   type PolicyExecutionStatus,
   type PolicyReplayPolicy,
+  policyExecutionStateIsValid,
 } from './PolicyExecutionStore.js';
 import { PolicyProjectionStore } from './PolicyProjectionStore.js';
 import { logger } from '../utils/Logger.js';
@@ -138,6 +139,7 @@ export class PolicyExecutionProjector {
       || !isNonEmptyString(payload.action)
       || !isPolicyStatus(payload.status)
       || (payload.executionOutcome !== undefined && outcome === undefined)
+      || !policyExecutionStateIsValid(payload.status, outcome)
       || !isOptionalNonNegativeNumber(payload.attemptCount)
       || !isOptionalNumber(payload.nextRetryAt)
       || !isOptionalNumber(payload.deadLetteredAt)

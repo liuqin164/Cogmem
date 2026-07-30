@@ -1,25 +1,14 @@
-# Historical migration fixtures
+# Release migration fixtures
 
-`f71b20a-source.sqlite.gz` and `f71b20a-dist.sqlite.gz` were generated from
-the exact Cogmem development commit `f71b20a` with Bun 1.3.11. Each database
-started as the schema-14 fixture used by `migrate-cli.unit.test.ts`, then ran
-the old source or checked-in dist migration CLI through schema 45.
-
-The fixtures intentionally contain the real function-text checksums written by
-that runner for receipts 0001 through 0045. Tests expand each database and run
-the current source and dist migration CLIs, covering all four artifact upgrade
-directions. Do not recreate these files with the current migration runner.
-
-`3.5.2-real.sqlite.gz` was created by the exact `3.5.2` tag
-(`5b3e9d0`) through its public `createMemoryKernel()` and
-`PolicyExecutionStore`. It retains the original schema-24
-`memory_events` table without `project_scope` and an executed legacy policy
-record, then checkpoints the WAL before compression.
-
-Compressed SHA-256:
+`main-3.7.3-schema31.sqlite.gz` is the supported release fixture. It was
+created from `main@b4733454b17b37b0c25c63a4245b0fd7dd0e3dd5` (Cogmem 3.7.3,
+schema 0031) and is used to verify the single formal 0032 upgrade.
 
 ```text
-32b6f84ce6ab8a550c2b3d92e8d13d288d8bf98ec197e08f5447928a05b44c00  f71b20a-source.sqlite.gz
-b1c623a7dbde28980b2802845fede6ab35788e5ab7d950eb0dd9174b94cd3d4f  f71b20a-dist.sqlite.gz
-f004eba9e4244b645f6f71fb6e00037cefbe4a5abe95f2cf82616f08edcf4c59  3.5.2-real.sqlite.gz
+7907fcbffdcfd43f1b07f939fa9b773067434ffaedd64559eb1178a99398f79b  main-3.7.3-schema31.sqlite.gz
 ```
+
+The older `3.5.2-real` and `f71b20a` files are archival evidence only.
+3.7.4 development schemas and pre-3.7.3 releases are deliberately outside
+the formal upgrade matrix; the runner rejects them instead of pretending
+they executed the final 0032 migration.

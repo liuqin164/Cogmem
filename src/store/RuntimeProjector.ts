@@ -146,17 +146,18 @@ export class RuntimeProjector {
         return;
 
       case 'RUNTIME_TRANSITION_RECORDED':
-        if (!isNonEmptyString(payload.runtimeId)
+        if (!isNonEmptyString(payload.transitionId)
+          || !isNonEmptyString(payload.runtimeId)
           || !isRuntimeEntityType(payload.entityType)
           || !isNonEmptyString(payload.entityKey)
           || !isNonEmptyString(payload.transitionType)
-          || !isRuntimeStatus(payload.toStatus)
-          || (payload.fromStatus !== undefined && !isRuntimeStatus(payload.fromStatus))
+          || !isRuntimeTransitionStatus(payload.toStatus)
+          || (payload.fromStatus !== undefined && !isRuntimeTransitionStatus(payload.fromStatus))
           || !isOptionalRecord(payload.data)) {
           this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'invalid_runtime_event_payload');
           return;
         }
-        this.runtimeStore.applyProjectedTransition(this.projectionName, event.eventId, event.globalSeq ?? 0, {
+        this.runtimeStore.applyProjectedTransition(this.projectionName, payload.transitionId, event.eventId, event.globalSeq ?? 0, {
           projectId,
           runtimeId: payload.runtimeId,
           entityType: payload.entityType,
@@ -189,6 +190,10 @@ function isRuntimeEntityType(value: unknown): value is RuntimeEntityType {
 
 function isRuntimeStatus(value: unknown): value is RuntimeStatus {
   return typeof value === 'string' && RUNTIME_STATUSES.has(value as RuntimeStatus);
+}
+
+function isRuntimeTransitionStatus(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256;
 }
 
 function isOptionalRecord(value: unknown): value is Record<string, unknown> | undefined {

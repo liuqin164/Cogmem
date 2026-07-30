@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
 import { createMemoryKernel } from '../src/factory.js';
+import { MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 const migrateBin = join(import.meta.dir, '..', 'src', 'bin', 'migrate.ts');
 const fixturePath = join(import.meta.dir, 'fixtures', 'migrations', 'main-3.7.3-schema31.sqlite.gz');
@@ -34,47 +35,62 @@ function materializeFixture(directory: string): string {
   return dbPath;
 }
 
-function canonicalEvidence(db: Database): unknown {
-  return {
-    events: db.prepare(`SELECT event_id,project_id,payload_hash FROM memory_events ORDER BY event_id`).all(),
-    neurons: db.prepare(`SELECT id,project_id,content FROM neurons ORDER BY id`).all(),
-  };
+type CanonicalEvidence = Record<string, {
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+}>;
+
+function canonicalEvidence(db: Database, baseline?: CanonicalEvidence): CanonicalEvidence {
+  const tables = [
+    'memory_events',
+    'neurons',
+    'memory_episodes',
+    'memory_episode_events',
+    'episode_cross_refs',
+    'episode_ingest_keys',
+    'memory_bindings',
+    'entities',
+    'entity_instances',
+    'entity_aliases',
+    'entity_attributes',
+    'entity_mentions',
+    'entity_relations',
+    'memory_topics',
+    'topic_nodes',
+    'topic_aliases',
+    'topic_relations',
+    'topic_operations',
+    'facts',
+    'beliefs',
+    'belief_evidence',
+    'deep_write_summaries',
+    'prospective_memories',
+    'prospective_memory_transitions',
+    'anchors',
+    'import_source_anchors',
+  ];
+  return Object.fromEntries(tables.map((table) => {
+    const columns = baseline?.[table]?.columns
+      ?? (db.prepare(`PRAGMA table_info("${table}")`).all() as Array<{ name: string }>).map((column) => column.name);
+    const select = columns.map((column) => `"${column.replaceAll('"', '""')}"`).join(',');
+    const rows = db.prepare(`SELECT ${select} FROM "${table}"`).all() as Array<Record<string, unknown>>;
+    return [table, {
+      columns,
+      rows: rows.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+    }];
+  }));
 }
 
 function schema(db: Database): unknown {
-  const tables = (db.prepare(`
-    SELECT name FROM sqlite_master
-    WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'_schema_migrations'
-    ORDER BY name
-  `).all() as Array<{ name: string }>).map(({ name }) => ({
-    name,
-    columns: (db.prepare(`PRAGMA table_info(${name})`).all() as Array<Record<string, unknown>>)
-      .map(({ name: column, type, notnull, dflt_value, pk }) => ({ column, type, notnull, dflt_value, pk }))
-      .sort((left, right) => String(left.column).localeCompare(String(right.column))),
-    foreignKeys: db.prepare(`PRAGMA foreign_key_list(${name})`).all(),
-  }));
-  const indexes = (db.prepare(`
-    SELECT name,tbl_name FROM sqlite_master
-    WHERE type='index' AND name NOT LIKE 'sqlite_%'
-    ORDER BY name
-  `).all() as Array<{ name: string; tbl_name: string }>).map(({ name, tbl_name }) => ({
-    name,
-    table: tbl_name,
-    definition: (({ unique, origin, partial }) => ({ unique, origin, partial }))(
-      db.prepare(`PRAGMA index_list(${tbl_name})`).all()
-        .find((row) => (row as { name: string }).name === name) as { unique: number; origin: string; partial: number },
-    ),
-    columns: (db.prepare(`PRAGMA index_info(${name})`).all() as Array<{ name: string; seqno: number }>)
-      .sort((left, right) => left.seqno - right.seqno)
-      .map((column) => column.name),
-  }));
-  const triggers = (db.prepare(`
-    SELECT name,sql FROM sqlite_master WHERE type='trigger' ORDER BY name
-  `).all() as Array<{ name: string; sql: string }>).map(({ name, sql }) => ({
-    name,
-    sql: sql.replace(/\s+/gu, '').toLowerCase(),
-  }));
-  return { tables, indexes, triggers };
+  return (db.prepare(`
+    SELECT type,name,tbl_name,sql FROM sqlite_master
+    WHERE name NOT LIKE 'sqlite_%' AND name<>'_schema_migrations'
+    ORDER BY type,name
+  `).all() as Array<{ type: string; name: string; tbl_name: string; sql: string | null }>)
+    .map((row) => ({
+      ...row,
+      sql: row.sql?.replace(/\s+/gu, ' ').trim().toLowerCase() ?? null,
+    }));
 }
 
 test('real main 3.7.3 schema 31 upgrades atomically through the sole 0032 release migration', async () => {
@@ -99,7 +115,7 @@ test('real main 3.7.3 schema 31 upgrades atomically through the sole 0032 releas
   expect(existsSync(result.backupPath)).toBe(true);
 
   const upgraded = new Database(dbPath);
-  expect(canonicalEvidence(upgraded)).toEqual(evidence);
+  expect(canonicalEvidence(upgraded, evidence)).toEqual(evidence);
   expect(upgraded.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0032' });
   expect(upgraded.prepare(`SELECT COUNT(*) AS count FROM _schema_migrations WHERE version>'0032'`).get()).toEqual({ count: 0 });
   expect(upgraded.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='runtime_scope_quarantine'`).get()).toBeNull();
@@ -126,6 +142,9 @@ test('fresh and main-schema-31 upgrade paths produce the same runtime schema', a
   const upgraded = new Database(upgradedPath);
   const fresh = new Database(freshPath);
   expect(schema(upgraded)).toEqual(schema(fresh));
+  expect(fresh.prepare(`
+    SELECT version,checksum FROM _schema_migrations WHERE version='0032'
+  `).get()).toEqual({ version: '0032', checksum: MIGRATION_DIGESTS['0032'] });
   upgraded.close();
   fresh.close();
   rmSync(directory, { recursive: true, force: true });
@@ -143,5 +162,118 @@ test('development schema receipts fail fast without creating a migration backup'
   expect(result.exitCode).not.toBe(0);
   expect(result.stderr).toContain('unsupported_development_schema:0033');
   expect(readdirSync(directory).filter((name) => name.includes('pre-migrate') || name.endsWith('.bak'))).toEqual([]);
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('unchecksummed 0032 receipts and meta-only schema 32 databases are rejected', async () => {
+  for (const kind of ['receipt', 'meta'] as const) {
+    const directory = mkdtempSync(join(tmpdir(), `cogmem-untrusted-0032-${kind}-`));
+    const dbPath = materializeFixture(directory);
+    const db = new Database(dbPath);
+    if (kind === 'receipt') {
+      db.prepare(`INSERT INTO _schema_migrations(version,description,applied_at) VALUES(?,?,?)`)
+        .run('0032', 'unreleased development schema', new Date(0).toISOString());
+    } else {
+      db.prepare(`UPDATE _meta SET value='32' WHERE key='schema_version'`).run();
+    }
+    db.close();
+
+    const result = await migrate(dbPath, ['--yes']);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(kind === 'receipt'
+      ? 'unsupported_development_schema:0032'
+      : 'unsupported_development_schema:32');
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('a formal 0032 receipt cannot hide damaged tables, indexes, triggers, or CHECK constraints', async () => {
+  const tamperCases: Array<{ name: string; apply(db: Database): void }> = [
+    {
+      name: 'table',
+      apply: (db) => db.exec(`DROP TABLE runtime_scope_discard_receipts`),
+    },
+    {
+      name: 'index',
+      apply: (db) => db.exec(`
+        DROP INDEX idx_memory_events_stream;
+        CREATE INDEX idx_memory_events_stream ON memory_events(event_type);
+      `),
+    },
+    {
+      name: 'trigger',
+      apply: (db) => db.exec(`
+        DROP TRIGGER synapses_scope_insert;
+        CREATE TRIGGER synapses_scope_insert BEFORE INSERT ON synapses BEGIN SELECT 1; END;
+      `),
+    },
+    {
+      name: 'check',
+      apply: (db) => {
+        const row = db.prepare(`
+          SELECT sql FROM sqlite_master WHERE type='table' AND name='policy_execution_read_model'
+        `).get() as { sql: string };
+        const altered = row.sql.replace(
+          `status TEXT NOT NULL CHECK(status IN ('in_progress','executed','skipped','failed'))`,
+          'status TEXT NOT NULL',
+        );
+        expect(altered).not.toBe(row.sql);
+        db.exec(`DROP TABLE policy_execution_read_model`);
+        db.exec(altered);
+      },
+    },
+  ];
+
+  for (const tamper of tamperCases) {
+    const directory = mkdtempSync(join(tmpdir(), `cogmem-tampered-${tamper.name}-`));
+    const dbPath = materializeFixture(directory);
+    expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+    const db = new Database(dbPath);
+    tamper.apply(db);
+    db.close();
+
+    const result = await migrate(dbPath, ['--yes']);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('final_schema_postcondition_failed:0032');
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('an unrelated SQLite database is rejected without mutation', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-unrelated-db-'));
+  const dbPath = join(directory, 'unrelated.db');
+  const db = new Database(dbPath);
+  db.exec(`CREATE TABLE unrelated_data(id TEXT PRIMARY KEY,value TEXT); INSERT INTO unrelated_data VALUES('a','unchanged')`);
+  db.close();
+
+  const result = await migrate(dbPath, ['--yes']);
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain('unsupported_database_identity');
+  expect(() => createMemoryKernel({ dbPath })).toThrow('unsupported_database_identity');
+  const inspected = new Database(dbPath);
+  expect(inspected.prepare(`SELECT * FROM unrelated_data`).all()).toEqual([{ id: 'a', value: 'unchanged' }]);
+  expect(inspected.prepare(`SELECT 1 FROM sqlite_master WHERE name='_schema_migrations'`).get()).toBeNull();
+  inspected.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('a crashed fresh bootstrap resumes through the formal migration before stores open', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-bootstrap-recovery-'));
+  const dbPath = join(directory, 'memory.db');
+  const db = new Database(dbPath);
+  db.exec(`
+    CREATE TABLE _cogmem_bootstrap_state(singleton INTEGER PRIMARY KEY,started_at INTEGER NOT NULL);
+    INSERT INTO _cogmem_bootstrap_state VALUES(1,1);
+    CREATE TABLE memory_frames(frame_id TEXT PRIMARY KEY);
+  `);
+  db.close();
+
+  createMemoryKernel({ dbPath }).close();
+  const recovered = new Database(dbPath);
+  expect(recovered.prepare(`SELECT 1 FROM sqlite_master WHERE name='_cogmem_bootstrap_state'`).get()).toBeNull();
+  expect(recovered.prepare(`SELECT COUNT(*) AS count FROM _schema_migrations WHERE version='0032'`).get())
+    .toEqual({ count: 1 });
+  expect(recovered.prepare(`PRAGMA integrity_check`).get()).toEqual({ integrity_check: 'ok' });
+  recovered.close();
   rmSync(directory, { recursive: true, force: true });
 });

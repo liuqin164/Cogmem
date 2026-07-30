@@ -59,11 +59,12 @@ const MIGRATION_TABLES = [
   'memory_episode_events','memory_episodes','memory_frame_nodes','memory_frame_relations','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
   'memory_governance_plans','memory_timeline_entries','memory_topics','migration_repair_receipts','neuron_embeddings','pipeline_checkpoints','pipeline_nonfatal_events','pipeline_runs','pipeline_step_timings',
   'prospective_memories','prospective_memory_transitions','re_embedding_progress','scheduled_job_runs','scheduled_jobs','notification_records','notification_rules','workspace_settings','workspaces','meta_observations',
-  'task_identity_restoration_manifest','task_identity_recovery_quarantine','pending_entity_resolution_quarantine','policy_execution_quarantine','policy_execution_legacy_tombstones','project_isolation_compensation_audit','topic_aliases','topic_nodes','topic_operations','topic_relations','topology_identity_quarantine','topology_projection_state','topology_source_revisions',
+  'pending_entity_resolution_quarantine','policy_execution_quarantine','policy_execution_legacy_tombstones','topic_aliases','topic_nodes','topic_operations','topic_relations','topology_projection_state','topology_source_revisions',
   'topology_time_rebuild_active_neurons','topology_time_rebuild_adjacency','topology_time_rebuild_buckets','topology_time_rebuild_cognitive_edges','topology_time_rebuild_cognitive_nodes',
   'topology_time_rebuild_entries','topology_time_rebuild_jobs','user_session_runtime','vector_index','vector_write_outbox','web_session_tokens','working_memory_deltas','memory_activation',
   'file_assets','file_blocks','file_chunks','file_chunk_edges','user_insights',
   'policy_execution_read_model','policy_execution_audit_outbox','runtime_event_outbox','runtime_projection_states','runtime_projection_transitions','runtime_scope_discard_receipts','projection_event_discard_receipts',
+  'entity_scope_migration_quarantine',
 ] as const;
 const MIGRATION_PROJECT_OWNED = [
   'archived_sessions','belief_graph_conflicts','belief_graph_nodes','context_activation_receipts','context_strategy_outcomes',
@@ -75,7 +76,7 @@ const MIGRATION_PROJECT_OWNED = [
   'memory_atlas_projection_state','memory_atlas_supports','memory_bindings','memory_clusters','memory_edges','memory_entities',
   'memory_episodes','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
   'memory_governance_plans','memory_timeline_entries','memory_topics','neuron_embeddings','pipeline_checkpoints',
-  'pipeline_nonfatal_events','prospective_memories','re_embedding_progress','task_identity_restoration_manifest','task_identity_recovery_quarantine','topic_aliases','topic_nodes','topic_operations','topic_relations',
+  'pipeline_nonfatal_events','prospective_memories','re_embedding_progress','topic_aliases','topic_nodes','topic_operations','topic_relations',
   'topology_projection_state','topology_source_revisions','topology_time_rebuild_active_neurons',
   'topology_time_rebuild_adjacency','topology_time_rebuild_buckets','topology_time_rebuild_cognitive_edges',
   'topology_time_rebuild_cognitive_nodes','topology_time_rebuild_entries','topology_time_rebuild_jobs','user_session_runtime',
@@ -87,12 +88,12 @@ const MIGRATION_PROVENANCE_OWNED = [
   'belief_graph_evidence','belief_graph_versions','chat_turns','deep_write_candidates','entity_resolution_log',
   'episode_dream_attempts','memory_episode_events','memory_frame_nodes','memory_frame_relations',
   'prospective_memory_transitions','scheduled_job_runs','scheduled_jobs','notification_records','notification_rules',
-  'workspace_settings','workspaces','meta_observations','pending_entity_resolution_quarantine','topology_identity_quarantine','vector_index','vector_write_outbox',
-  'file_blocks','file_chunks','file_chunk_edges',
+  'workspace_settings','workspaces','meta_observations','pending_entity_resolution_quarantine','vector_index','vector_write_outbox',
+  'file_blocks','file_chunks','file_chunk_edges','entity_scope_migration_quarantine',
 ] as const;
 const MIGRATION_OPERATIONAL_NON_PERSONAL = [
   '_episode_integrity_markers','_memory_frame_integrity_markers','_meta','agent_brain_health_checks','pipeline_runs',
-  'pipeline_step_timings','policy_execution_quarantine','policy_execution_legacy_tombstones','project_isolation_compensation_audit','event_sequence_counters','runtime_scope_discard_receipts','projection_event_discard_receipts',
+  'pipeline_step_timings','policy_execution_quarantine','policy_execution_legacy_tombstones','event_sequence_counters','runtime_scope_discard_receipts','projection_event_discard_receipts',
 ] as const;
 const MIGRATION_IMMUTABLE_AUDIT = ['_schema_migrations','migration_repair_receipts','governance_audit_log'] as const;
 const MIGRATION_CLASSIFICATION = explicitClassification(MIGRATION_TABLES, {
@@ -146,15 +147,6 @@ export function deleteRegisteredProjectContent(context: PrivacyDeletionContext):
     WHERE COALESCE(project_id,'')=?
        OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(evidence_neuron_ids) THEN evidence_neuron_ids ELSE '[]' END)
          WHERE value IN (SELECT id FROM neurons WHERE COALESCE(project_id,'')=?))`, [scope, scope]);
-
-  remove('topology_identity_quarantine', `DELETE FROM topology_identity_quarantine
-    WHERE project_scope = ?
-       OR EXISTS (SELECT 1 FROM json_each(COALESCE(implicated_scopes_json, '[]')) WHERE value = ?)
-       OR json_extract(entry_json, '$.neuron_id') IN (SELECT id FROM neurons WHERE COALESCE(project_id, '') = ?)
-       OR json_extract(entry_json, '$.fact_id') IN (SELECT fact_id FROM facts WHERE neuron_id IN (SELECT id FROM neurons WHERE COALESCE(project_id, '') = ?))
-       OR json_extract(entry_json, '$.event_id') IN (SELECT event_id FROM compiled_events WHERE neuron_id IN (SELECT id FROM neurons WHERE COALESCE(project_id, '') = ?))
-       OR json_extract(entry_json, '$.belief_id') IN (SELECT id FROM beliefs WHERE COALESCE(project_id, '') = ?)`,
-    [scope, scope, scope, scope, scope, scope]);
 
   remove('belief_evidence', `DELETE FROM belief_evidence
     WHERE belief_id IN (
@@ -232,6 +224,13 @@ export function deleteRegisteredProjectContent(context: PrivacyDeletionContext):
         OR EXISTS (SELECT 1 FROM json_each(COALESCE(implicated_scopes_json,'[]')) WHERE value=?)
         ${neuronIds.length > 0 ? `OR (json_valid(record_json) AND json_extract(record_json,'$.context_neuron_id') IN (${placeholders}))` : ''}`,
       [scope, scope, ...neuronIds]);
+  }
+  if (persistentTables.has('entity_scope_migration_quarantine')) {
+    remove('entity_scope_migration_quarantine', `DELETE FROM entity_scope_migration_quarantine
+      WHERE EXISTS (
+        SELECT 1 FROM json_each(COALESCE(implicated_scopes_json,'[]'))
+        WHERE value=?
+      )`);
   }
   if (persistentTables.has('policy_executions') && context.hasColumn('policy_executions', 'project_scope')) {
     remove('policy_executions', `DELETE FROM policy_executions WHERE project_scope=?`);
