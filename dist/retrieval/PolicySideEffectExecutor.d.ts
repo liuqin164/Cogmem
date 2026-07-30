@@ -1,4 +1,5 @@
-import type { PolicyExecutionStore, PolicyReplayPolicy } from '../store/PolicyExecutionStore.js';
+import type { PolicyExecutionOutcome, PolicyExecutionStore, PolicyReplayPolicy } from '../store/PolicyExecutionStore.js';
+export type { PolicyExecutionOutcome } from '../store/PolicyExecutionStore.js';
 export interface PolicySideEffect {
     projectId: string;
     runtimeId?: string;
@@ -14,7 +15,6 @@ export interface PolicySideEffect {
     correlationId?: string;
     policyGroup?: string;
 }
-export type PolicyExecutionOutcome = 'executed' | 'definitely_not_executed' | 'failed_before_execution' | 'outcome_unknown';
 interface PolicySideEffectResultBase {
     policy: string;
     action: 'allow' | 'deny' | 'prefer';
@@ -73,7 +73,7 @@ export declare class ReliablePolicySideEffectExecutor implements PolicySideEffec
     private retryable;
     private validResult;
     private unknownResult;
+    private resultForRecord;
     private computeBackoff;
 }
-export {};
 //# sourceMappingURL=PolicySideEffectExecutor.d.ts.map

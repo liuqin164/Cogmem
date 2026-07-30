@@ -14,7 +14,10 @@ export function containsCanonicalAlias(text, alias) {
     if (/[\u3400-\u9fff\u3040-\u30ff]/u.test(normalizedAlias))
         return normalizedText.includes(normalizedAlias);
     const escaped = normalizedAlias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}(?:$|[^\\p{L}\\p{N}])`, 'u').test(normalizedText);
+    const word = /^[\p{Script=Latin}\p{N}_. -]+$/u.test(normalizedAlias)
+        ? '\\p{Script=Latin}\\p{N}'
+        : '\\p{L}\\p{N}';
+    return new RegExp(`(?:^|[^${word}])${escaped}(?:$|[^${word}])`, 'u').test(normalizedText);
 }
 export function resolveTextAlias(text, candidates) {
     const normalizedText = normalizeAlias(text);

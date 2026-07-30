@@ -83,6 +83,64 @@ test('runtime replay is read-model-only and consumes backdated events by global 
   rmSync(dir, { recursive: true, force: true });
 });
 
+test('legacy unscoped runtime and policy events are discarded instead of becoming projectless', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-projector-unscoped-'));
+  const path = join(dir, 'memory.db');
+  const events = new EventStore(path);
+  events.append({
+    streamId: 'legacy-runtime', streamType: 'system',
+    eventType: 'RUNTIME_STATE_UPDATED', occurredAt: 1,
+    payload: { runtimeId: 'same', entityType: 'step', entityKey: 'legacy', status: 'blocked' },
+  });
+  events.append({
+    projectId: '', streamId: 'projectless-runtime', streamType: 'system',
+    eventType: 'RUNTIME_STATE_UPDATED', occurredAt: 2,
+    payload: { runtimeId: 'same', entityType: 'step', entityKey: 'current', status: 'ready' },
+  });
+  events.append({
+    streamId: 'legacy-policy', streamType: 'system',
+    eventType: 'POLICY_EXECUTION_UPDATED', occurredAt: 3,
+    payload: {
+      executionId: 'legacy-policy', idempotencyKey: 'legacy', policy: 'p', action: 'allow',
+      status: 'executed', attemptCount: 1, createdAt: 3, updatedAt: 3,
+    },
+  });
+  events.append({
+    projectId: '', streamId: 'projectless-policy', streamType: 'system',
+    eventType: 'POLICY_EXECUTION_UPDATED', occurredAt: 4,
+    payload: {
+      executionId: 'projectless-policy', idempotencyKey: 'current', policy: 'p', action: 'allow',
+      status: 'executed', executionOutcome: 'executed', attemptCount: 1, createdAt: 4, updatedAt: 4,
+    },
+  });
+
+  const runtime = new PlanRuntimeStore(path, events);
+  const runtimeCheckpoints = new RuntimeProjectionStore(path);
+  await new RuntimeProjector(events, runtime, runtimeCheckpoints).fullRebuild('legacy_scope');
+  expect(runtime.getProjectionStateCount('runtime_projection_main', '')).toBe(1);
+
+  const executions = new PolicyExecutionStore(path, events);
+  const policyCheckpoints = new PolicyProjectionStore(path);
+  await new PolicyExecutionProjector(events, executions, policyCheckpoints, '').fullRebuild('legacy_scope');
+  expect(executions.getReadModelByIdempotencyKey('', 'legacy')).toBeNull();
+  expect(executions.getReadModelByIdempotencyKey('', 'current')?.executionId).toBe('projectless-policy');
+
+  const db = new Database(path, { readonly: true });
+  expect(db.prepare(`
+    SELECT projector,event_id FROM projection_event_discard_receipts ORDER BY projector,event_id
+  `).all()).toEqual([
+    { projector: 'policy_execution', event_id: expect.any(String) },
+    { projector: 'runtime', event_id: expect.any(String) },
+  ]);
+  db.close();
+  policyCheckpoints.close();
+  executions.close();
+  runtimeCheckpoints.close();
+  runtime.close();
+  events.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test('runtime command and its event outbox commit together and recover after event-store failure', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-runtime-outbox-'));
   const path = join(dir, 'memory.db');
@@ -108,6 +166,57 @@ test('runtime command and its event outbox commit together and recover after eve
   expect(verify.prepare(`SELECT COUNT(*) AS count FROM runtime_event_outbox`).get()).toEqual({ count: 0 });
   verify.close();
   recovered.close();
+  events.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('policy and runtime outboxes drain multiple pages and dead-letter malformed rows', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-outbox-pages-'));
+  const path = join(dir, 'memory.db');
+  const policy = new PolicyExecutionStore(path);
+  for (let index = 0; index < 250; index++) {
+    policy.upsert({
+      executionId: `execution-${index}`, projectId: index % 2 ? 'a' : 'b',
+      idempotencyKey: `key-${index}`, policy: 'p', action: 'allow',
+      status: 'executed', executionOutcome: 'executed', attemptCount: 1,
+      createdAt: index + 1, updatedAt: index + 1,
+    });
+  }
+  policy.close();
+  const seed = new Database(path);
+  seed.prepare(`
+    INSERT INTO policy_execution_audit_outbox(outbox_id,project_scope,payload_json,created_at)
+    VALUES('malformed-policy','a','{',0)
+  `).run();
+  seed.close();
+
+  const events = new EventStore(path);
+  const recoveredPolicy = new PolicyExecutionStore(path, events);
+  expect(recoveredPolicy.getAuditOutboxStats()).toMatchObject({ pending: 0, deadLetter: 1 });
+  expect(events.queryEvents(1, 500, { eventType: ['POLICY_EXECUTION_UPDATED'] }).total).toBe(250);
+  recoveredPolicy.close();
+
+  const runtime = new PlanRuntimeStore(path);
+  for (let index = 0; index < 125; index++) {
+    runtime.upsertState({
+      projectId: index % 2 ? 'a' : 'b', runtimeId: `runtime-${index}`,
+      entityType: 'step', entityKey: 'one', status: 'ready', updatedAt: index + 1,
+    });
+  }
+  runtime.close();
+  const corrupt = new Database(path);
+  corrupt.prepare(`
+    INSERT INTO runtime_event_outbox(project_scope,outbox_id,payload_json,created_at)
+    VALUES('a','malformed-runtime','{',0)
+  `).run();
+  corrupt.close();
+
+  const recoveredRuntime = new PlanRuntimeStore(path, events);
+  expect(recoveredRuntime.getEventOutboxStats()).toMatchObject({ pending: 0, deadLetter: 1 });
+  expect(events.queryEvents(1, 500, {
+    eventType: ['RUNTIME_STATE_UPDATED', 'RUNTIME_TRANSITION_RECORDED'],
+  }).total).toBe(250);
+  recoveredRuntime.close();
   events.close();
   rmSync(dir, { recursive: true, force: true });
 });

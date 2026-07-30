@@ -11,6 +11,8 @@ import { PolicyExecutionProjector } from '../src/store/PolicyExecutionProjector.
 import { PolicyExecutionStore, type PolicyExecutionRecord } from '../src/store/PolicyExecutionStore.js';
 import { PolicyProjectionStore } from '../src/store/PolicyProjectionStore.js';
 import { migration_0059 } from '../src/migrations/0059_project_execution_and_provenance_guards.js';
+import { migration_0061 } from '../src/migrations/0061_runtime_scope_and_projection_integrity.js';
+import { migration_0062 } from '../src/migrations/0062_projection_scope_and_outbox_recovery.js';
 
 describe('policy execution project isolation', () => {
   test('the same effect executes independently in each exact project scope', async () => {
@@ -368,6 +370,68 @@ describe('policy execution project isolation', () => {
     store.close();
   });
 
+  test('failure outcomes survive reopen and in-progress replay omits outcome', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-outcome-'));
+    const path = join(dir, 'policy.db');
+    const first = new PolicyExecutionStore(path);
+    const executor = new ReliablePolicySideEffectExecutor({
+      execute(effect) {
+        return {
+          policy: effect.policy,
+          action: effect.action,
+          status: 'failed',
+          outcome: 'definitely_not_executed',
+          detail: 'rejected_before_send',
+        };
+      },
+    }, first);
+    await executor.execute({
+      projectId: 'a', runtimeId: 'runtime', policy: 'once', action: 'allow',
+      idempotencyKey: 'failed', replayPolicy: 'manual',
+    });
+    first.close();
+
+    const reopened = new PolicyExecutionStore(path);
+    const replay = new ReliablePolicySideEffectExecutor({ execute: () => {
+      throw new Error('not called');
+    } }, reopened).replay('a', 'runtime');
+    expect(replay[0]).toMatchObject({ status: 'failed', outcome: 'definitely_not_executed' });
+    expect(reopened.getByIdempotencyKey('a', 'failed')?.executionOutcome).toBe('definitely_not_executed');
+
+    const seed: PolicyExecutionRecord = {
+      executionId: 'busy', projectId: 'a', idempotencyKey: 'busy',
+      runtimeId: 'runtime', policy: 'once', action: 'allow', status: 'in_progress',
+      attemptCount: 0, createdAt: 2, updatedAt: 2,
+    };
+    expect(reopened.claim(seed, 'worker', Date.now() + 60_000).kind).toBe('claimed');
+    const busy = new ReliablePolicySideEffectExecutor({ execute: () => {
+      throw new Error('not called');
+    } }, reopened).replay('a', 'runtime').find((result) => result.status === 'in_progress');
+    expect(busy).toEqual(expect.objectContaining({ status: 'in_progress' }));
+    expect(busy).not.toHaveProperty('outcome');
+    reopened.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('same-millisecond policy updates keep distinct audit events', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-audit-id-'));
+    const path = join(dir, 'policy.db');
+    const events = new EventStore(path);
+    const store = new PolicyExecutionStore(path, events);
+    const base: PolicyExecutionRecord = {
+      executionId: 'same', projectId: 'a', idempotencyKey: 'same',
+      policy: 'p', action: 'allow', status: 'failed',
+      executionOutcome: 'definitely_not_executed',
+      attemptCount: 1, createdAt: 1, updatedAt: 10,
+    };
+    store.upsert(base);
+    store.upsert({ ...base, attemptCount: 2, detail: 'second' });
+    expect(events.queryEvents(1, 10, { eventType: ['POLICY_EXECUTION_UPDATED'] }).total).toBe(2);
+    store.close();
+    events.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test('legacy executed keys become fail-closed tombstones after migration', async () => {
     const db = new Database(':memory:');
     db.exec(`CREATE TABLE policy_executions(
@@ -376,6 +440,8 @@ describe('policy execution project isolation', () => {
     );
     INSERT INTO policy_executions VALUES('legacy','already-ran','p','allow','executed',1,NULL,1,1)`);
     migration_0059.up(db);
+    migration_0061.up(db);
+    migration_0062.up(db);
     const store = new PolicyExecutionStore(db);
     let calls = 0;
     const executor = new ReliablePolicySideEffectExecutor({

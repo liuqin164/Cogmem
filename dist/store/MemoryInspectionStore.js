@@ -60,6 +60,7 @@ export class MemoryInspectionStore {
             dreamCandidateQueue: queue,
             activeBeliefs: this.countBeliefs(scope.projectId),
             policyAuditOutbox: this.policyAuditOutbox(scope.projectId),
+            runtimeEventOutbox: this.runtimeEventOutbox(scope.projectId),
         };
     }
     listCandidates(options) {
@@ -219,11 +220,36 @@ export class MemoryInspectionStore {
     }
     policyAuditOutbox(projectId) {
         if (!this.tableExists('policy_execution_audit_outbox'))
-            return { pending: 0 };
+            return { pending: 0, deadLetter: 0 };
+        return this.outboxStats('policy_execution_audit_outbox', projectId);
+    }
+    runtimeEventOutbox(projectId) {
+        if (!this.tableExists('runtime_event_outbox'))
+            return { pending: 0, deadLetter: 0 };
+        return this.outboxStats('runtime_event_outbox', projectId);
+    }
+    outboxStats(table, projectId) {
+        const where = projectId === undefined ? '' : 'WHERE project_scope=?';
+        const params = projectId === undefined ? [] : [projectScope(projectId)];
         const row = (projectId === undefined
-            ? this.db.prepare(`SELECT COUNT(*) AS pending,MIN(created_at) AS oldest FROM policy_execution_audit_outbox`).get()
-            : this.db.prepare(`SELECT COUNT(*) AS pending,MIN(created_at) AS oldest FROM policy_execution_audit_outbox WHERE project_scope=?`).get(projectScope(projectId)));
-        return { pending: Number(row.pending), oldestCreatedAt: row.oldest ?? undefined };
+            ? this.db.prepare(`SELECT SUM(dead_lettered_at IS NULL) AS pending,
+          MIN(CASE WHEN dead_lettered_at IS NULL THEN created_at END) AS oldest,
+          SUM(dead_lettered_at IS NOT NULL) AS dead_letter FROM ${table}`).get()
+            : this.db.prepare(`SELECT SUM(dead_lettered_at IS NULL) AS pending,
+          MIN(CASE WHEN dead_lettered_at IS NULL THEN created_at END) AS oldest,
+          SUM(dead_lettered_at IS NOT NULL) AS dead_letter FROM ${table} ${where}`).get(...params));
+        const errorWhere = projectId === undefined
+            ? 'WHERE last_error IS NOT NULL'
+            : 'WHERE project_scope=? AND last_error IS NOT NULL';
+        const error = this.db.prepare(`SELECT last_error FROM ${table} ${errorWhere}
+      ORDER BY COALESCE(dead_lettered_at,next_retry_at,created_at) DESC LIMIT 1`)
+            .get(...params);
+        return {
+            pending: Number(row.pending ?? 0),
+            oldestCreatedAt: row.oldest ?? undefined,
+            deadLetter: Number(row.dead_letter ?? 0),
+            lastError: error?.last_error,
+        };
     }
 }
 function parseJson(value) {

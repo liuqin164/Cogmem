@@ -1,8 +1,9 @@
 import Database from 'bun:sqlite';
 import type { EventStore } from './EventStore.js';
-import type { PolicyExecutionAuditPage } from '../types/index.js';
+import type { MemoryEvent, PolicyExecutionAuditPage } from '../types/index.js';
 export type PolicyReplayPolicy = 'manual' | 'on_bootstrap' | 'always' | 'scheduled_only';
 export type PolicyExecutionStatus = 'in_progress' | 'executed' | 'skipped' | 'failed';
+export type PolicyExecutionOutcome = 'executed' | 'definitely_not_executed' | 'failed_before_execution' | 'outcome_unknown';
 export interface PolicyExecutionRecord {
     executionId: string;
     projectId: string;
@@ -12,6 +13,7 @@ export interface PolicyExecutionRecord {
     action: string;
     target?: string;
     status: PolicyExecutionStatus;
+    executionOutcome?: PolicyExecutionOutcome;
     attemptCount: number;
     nextRetryAt?: number;
     deadLetteredAt?: number;
@@ -65,6 +67,7 @@ export declare class PolicyExecutionStore {
     constructor(dbPath?: string | Database, eventStore?: EventStore);
     private initializeSchema;
     getByIdempotencyKey(projectId: string, idempotencyKey: string): PolicyExecutionRecord | null;
+    recordDiscardedProjectionEvent(projector: string, event: MemoryEvent, reason: string): void;
     claim(seed: PolicyExecutionRecord, leaseOwner: string, leaseUntil: number, now?: number): PolicyExecutionClaim;
     finishClaim(record: PolicyExecutionRecord, leaseOwner: string, options?: {
         emitEvent?: boolean;
@@ -75,10 +78,12 @@ export declare class PolicyExecutionStore {
     }): void;
     private emitRecord;
     private enqueueAudit;
-    flushAuditOutbox(): number;
+    flushAuditOutbox(ignoreSchedule?: boolean): number;
     getAuditOutboxStats(): {
         pending: number;
         oldestCreatedAt?: number;
+        deadLetter: number;
+        lastError?: string;
     };
     private auditEventId;
     clearReadModelProject(projectId: string): void;

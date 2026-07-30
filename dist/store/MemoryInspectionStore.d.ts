@@ -35,6 +35,14 @@ export interface MemoryInspectionStatus {
     policyAuditOutbox: {
         pending: number;
         oldestCreatedAt?: number;
+        deadLetter: number;
+        lastError?: string;
+    };
+    runtimeEventOutbox: {
+        pending: number;
+        oldestCreatedAt?: number;
+        deadLetter: number;
+        lastError?: string;
     };
 }
 /**
@@ -64,5 +72,7 @@ export declare class MemoryInspectionStore {
     private candidateQueue;
     private countBeliefs;
     private policyAuditOutbox;
+    private runtimeEventOutbox;
+    private outboxStats;
 }
 //# sourceMappingURL=MemoryInspectionStore.d.ts.map

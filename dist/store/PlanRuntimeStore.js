@@ -1,5 +1,5 @@
 import Database from 'bun:sqlite';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 export class PlanRuntimeStore {
     db;
     eventStore;
@@ -7,7 +7,7 @@ export class PlanRuntimeStore {
         this.db = new Database(dbPath);
         this.eventStore = eventStore;
         this.initializeSchema();
-        this.flushEventOutbox();
+        this.flushEventOutbox(true);
     }
     initializeSchema() {
         for (const table of [
@@ -23,6 +23,10 @@ export class PlanRuntimeStore {
             const columns = new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
             if (!columns.has('project_scope'))
                 throw new Error(`runtime_schema_not_migrated:${table}`);
+            if (table === 'runtime_event_outbox'
+                && ['attempt_count', 'last_error', 'next_retry_at', 'dead_lettered_at'].some((column) => !columns.has(column))) {
+                throw new Error('runtime_schema_not_migrated:runtime_event_outbox');
+            }
         }
         this.db.exec(`
       CREATE TABLE IF NOT EXISTS runtime_states (
@@ -61,7 +65,17 @@ export class PlanRuntimeStore {
         outbox_id TEXT NOT NULL,
         payload_json TEXT NOT NULL,
         created_at INTEGER NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        next_retry_at INTEGER,
+        dead_lettered_at INTEGER,
         PRIMARY KEY (project_scope, outbox_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS projection_event_discard_receipts (
+        projector TEXT NOT NULL, event_id TEXT NOT NULL, global_seq INTEGER NOT NULL DEFAULT 0,
+        event_type TEXT NOT NULL, record_hash TEXT NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL,
+        PRIMARY KEY(projector,event_id)
       );
 
       CREATE TABLE IF NOT EXISTS runtime_projection_states (
@@ -170,23 +184,75 @@ export class PlanRuntimeStore {
         this.db.prepare(`INSERT INTO runtime_event_outbox(project_scope,outbox_id,payload_json,created_at) VALUES(?,?,?,?)`)
             .run(input.projectId, outboxId, JSON.stringify({ ...input, eventId: outboxId }), Date.now());
     }
-    flushEventOutbox() {
+    recordDiscardedProjectionEvent(projector, event, reason) {
+        const recordHash = createHash('sha256')
+            .update(`${event.eventId}\0${event.globalSeq ?? 0}\0${event.eventType}`)
+            .digest('hex');
+        this.db.prepare(`
+      INSERT OR IGNORE INTO projection_event_discard_receipts(
+        projector,event_id,global_seq,event_type,record_hash,reason,created_at
+      ) VALUES(?,?,?,?,?,?,?)
+    `).run(projector, event.eventId, event.globalSeq ?? 0, event.eventType, recordHash, reason, Date.now());
+    }
+    flushEventOutbox(ignoreSchedule = false) {
         if (!this.eventStore)
-            return;
-        const rows = this.db.prepare(`
-      SELECT project_scope,outbox_id,payload_json FROM runtime_event_outbox ORDER BY created_at,outbox_id
-    `).all();
-        for (const row of rows) {
-            try {
-                if (!this.eventStore.getEvent(row.outbox_id)) {
-                    this.eventStore.append(JSON.parse(row.payload_json));
-                }
-                this.db.prepare(`DELETE FROM runtime_event_outbox WHERE project_scope=? AND outbox_id=?`).run(row.project_scope, row.outbox_id);
-            }
-            catch {
+            return 0;
+        let flushed = 0;
+        for (;;) {
+            const now = Date.now();
+            const rows = this.db.prepare(`
+        SELECT project_scope,outbox_id,payload_json,attempt_count FROM runtime_event_outbox
+        WHERE dead_lettered_at IS NULL AND (? OR next_retry_at IS NULL OR next_retry_at<=?)
+        ORDER BY created_at,project_scope,outbox_id LIMIT 100
+      `).all(Number(ignoreSchedule), now);
+            if (rows.length === 0)
                 break;
+            for (const row of rows) {
+                try {
+                    if (!this.eventStore.getEvent(row.outbox_id)) {
+                        this.eventStore.append(JSON.parse(row.payload_json));
+                    }
+                    this.db.prepare(`DELETE FROM runtime_event_outbox WHERE project_scope=? AND outbox_id=?`)
+                        .run(row.project_scope, row.outbox_id);
+                    flushed += 1;
+                }
+                catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    const attempts = row.attempt_count + 1;
+                    const malformed = error instanceof SyntaxError;
+                    this.db.prepare(`
+            UPDATE runtime_event_outbox
+            SET attempt_count=?,last_error=?,next_retry_at=?,dead_lettered_at=?
+            WHERE project_scope=? AND outbox_id=?
+          `).run(attempts, message.slice(0, 1000), malformed || attempts >= 5 ? null : now + Math.min(60_000, 1000 * 2 ** (attempts - 1)), malformed || attempts >= 5 ? now : null, row.project_scope, row.outbox_id);
+                }
             }
         }
+        return flushed;
+    }
+    getEventOutboxStats(projectId) {
+        const scope = projectId === undefined ? '' : 'WHERE project_scope=?';
+        const params = projectId === undefined ? [] : [projectId];
+        const row = this.db.prepare(`
+      SELECT SUM(CASE WHEN dead_lettered_at IS NULL THEN 1 ELSE 0 END) AS pending,
+        MIN(CASE WHEN dead_lettered_at IS NULL THEN created_at END) AS oldest_created_at,
+        SUM(CASE WHEN dead_lettered_at IS NOT NULL THEN 1 ELSE 0 END) AS dead_letter
+      FROM runtime_event_outbox ${scope}
+    `).get(...params);
+        const errorWhere = projectId === undefined
+            ? 'WHERE last_error IS NOT NULL'
+            : 'WHERE project_scope=? AND last_error IS NOT NULL';
+        const error = this.db.prepare(`
+      SELECT last_error FROM runtime_event_outbox ${errorWhere}
+      ORDER BY COALESCE(dead_lettered_at,next_retry_at,created_at) DESC LIMIT 1
+    `)
+            .get(...params);
+        return {
+            pending: Number(row.pending ?? 0),
+            oldestCreatedAt: row.oldest_created_at ?? undefined,
+            deadLetter: Number(row.dead_letter ?? 0),
+            lastError: error?.last_error,
+        };
     }
     getState(projectId, runtimeId, entityType, entityKey) {
         const row = this.db.prepare(`

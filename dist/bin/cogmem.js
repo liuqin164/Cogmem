@@ -79,6 +79,7 @@ async function main() {
     const proc = Bun.spawn({
         cmd: [process.execPath || 'bun', siblingEntrypoint(entrypoint), ...rest],
         cwd: process.cwd(),
+        stdin: 'inherit',
         stdout: 'pipe',
         stderr: 'pipe',
         env: process.env,

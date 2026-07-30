@@ -1,4 +1,5 @@
 import type { EventStore } from './EventStore.js';
+import type { MemoryEvent } from '../types/index.js';
 export type RuntimeEntityType = 'step' | 'merge' | 'validation' | 'policy' | 'executor' | 'state_machine';
 export type RuntimeStatus = 'ready' | 'blocked' | 'pending' | 'matched' | 'missing';
 export interface RuntimeStateRecord {
@@ -75,7 +76,14 @@ export declare class PlanRuntimeStore {
     }): void;
     private insertTransition;
     private enqueueEvent;
-    flushEventOutbox(): void;
+    recordDiscardedProjectionEvent(projector: string, event: MemoryEvent, reason: string): void;
+    flushEventOutbox(ignoreSchedule?: boolean): number;
+    getEventOutboxStats(projectId?: string): {
+        pending: number;
+        oldestCreatedAt?: number;
+        deadLetter: number;
+        lastError?: string;
+    };
     getState(projectId: string, runtimeId: string, entityType: RuntimeEntityType, entityKey: string): RuntimeStateRecord | null;
     getSnapshot(projectId: string, runtimeId: string): RuntimeSnapshot;
     getHistoryPage(projectId: string, runtimeId: string, page?: number, pageSize?: number, filters?: {

@@ -55,25 +55,6 @@ export class PolicyExecutionProjector {
             throw error;
         }
     }
-    async replay(events, previousRebuildAt) {
-        logger.info(`Replaying policy execution projection events: count=${events.length}`);
-        for (const event of events.filter((item) => this.isPolicyExecutionEvent(item)))
-            this.applyEvent(event);
-        const lastEvent = events[events.length - 1];
-        this.projectionStore.upsertCheckpoint({
-            projectionName: this.projectionName,
-            lastEventId: lastEvent?.eventId,
-            lastEventTime: lastEvent?.occurredAt,
-            lastGlobalSeq: lastEvent?.globalSeq ?? 0,
-            lastRebuildAt: previousRebuildAt ?? Date.now(),
-            lastFullCount: this.executionStore.getReadModelCount(this.projectId),
-            status: 'ready',
-            metadata: {
-                mode: 'incremental_replay',
-                replayedEventCount: events.length
-            }
-        });
-    }
     async replayRange(afterGlobalSeq, throughGlobalSeq, staging, previousRebuildAt, updateCheckpoint = true) {
         let cursor = afterGlobalSeq;
         let replayedEventCount = 0;
@@ -117,15 +98,21 @@ export class PolicyExecutionProjector {
             return;
         if (!payload.executionId || !payload.idempotencyKey || !payload.policy || !payload.action || !payload.status)
             return;
+        const projectId = event.projectId ?? (typeof payload.projectId === 'string' ? payload.projectId : undefined);
+        if (projectId === undefined) {
+            this.executionStore.recordDiscardedProjectionEvent('policy_execution', event, 'legacy_event_scope_unproven');
+            return;
+        }
         this.executionStore.upsertReadModel({
             executionId: String(payload.executionId),
-            projectId: event.projectId,
+            projectId,
             idempotencyKey: String(payload.idempotencyKey),
             runtimeId: payload.runtimeId ? String(payload.runtimeId) : undefined,
             policy: String(payload.policy),
             action: String(payload.action),
             target: payload.target ? String(payload.target) : undefined,
             status: String(payload.status),
+            executionOutcome: policyOutcome(payload.executionOutcome),
             attemptCount: Number(payload.attemptCount || 0),
             nextRetryAt: payload.nextRetryAt ? Number(payload.nextRetryAt) : undefined,
             deadLetteredAt: payload.deadLetteredAt ? Number(payload.deadLetteredAt) : undefined,
@@ -142,7 +129,12 @@ export class PolicyExecutionProjector {
             updatedAt: Number(payload.updatedAt || event.occurredAt)
         }, event.globalSeq ?? 0, staging);
     }
-    isPolicyExecutionEvent(event) {
-        return event.eventType === 'POLICY_EXECUTION_UPDATED' && event.projectId === this.projectId;
-    }
+}
+function policyOutcome(value) {
+    return value === 'executed'
+        || value === 'definitely_not_executed'
+        || value === 'failed_before_execution'
+        || value === 'outcome_unknown'
+        ? value
+        : undefined;
 }

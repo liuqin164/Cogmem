@@ -53,25 +53,6 @@ export class RuntimeProjector {
             throw error;
         }
     }
-    async replay(events, previousRebuildAt) {
-        logger.info(`Replaying runtime projection events: count=${events.length}`);
-        for (const event of events.filter((item) => this.isRuntimeEvent(item)))
-            this.applyEvent(event);
-        const lastEvent = events[events.length - 1];
-        this.projectionStore.upsertCheckpoint({
-            projectionName: this.projectionName,
-            lastEventId: lastEvent?.eventId,
-            lastEventTime: lastEvent?.occurredAt,
-            lastGlobalSeq: lastEvent?.globalSeq ?? 0,
-            lastRebuildAt: previousRebuildAt ?? Date.now(),
-            lastFullCount: this.runtimeStore.getProjectionStateCount(this.projectionName),
-            status: 'ready',
-            metadata: {
-                mode: 'incremental_replay',
-                replayedEventCount: events.length
-            }
-        });
-    }
     async replayRange(afterGlobalSeq, throughGlobalSeq, staging, previousRebuildAt, updateCheckpoint = true) {
         let cursor = afterGlobalSeq;
         let replayedEventCount = 0;
@@ -110,7 +91,11 @@ export class RuntimeProjector {
     }
     applyEvent(event, staging = false) {
         const payload = (event.payload || {});
-        const projectId = event.projectId ?? (typeof payload.projectId === 'string' ? payload.projectId : '');
+        const projectId = event.projectId ?? (typeof payload.projectId === 'string' ? payload.projectId : undefined);
+        if (projectId === undefined) {
+            this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'legacy_event_scope_unproven');
+            return;
+        }
         switch (event.eventType) {
             case 'RUNTIME_STATE_UPDATED':
                 if (!payload.runtimeId || !payload.entityType || !payload.entityKey || !payload.status)
@@ -143,9 +128,5 @@ export class RuntimeProjector {
             default:
                 return;
         }
-    }
-    isRuntimeEvent(event) {
-        return event.eventType === 'RUNTIME_STATE_UPDATED'
-            || event.eventType === 'RUNTIME_TRANSITION_RECORDED';
     }
 }

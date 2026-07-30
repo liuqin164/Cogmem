@@ -39,7 +39,8 @@ export interface MemoryInspectionStatus {
     shadow: number;
   };
   activeBeliefs: number;
-  policyAuditOutbox: { pending: number; oldestCreatedAt?: number };
+  policyAuditOutbox: { pending: number; oldestCreatedAt?: number; deadLetter: number; lastError?: string };
+  runtimeEventOutbox: { pending: number; oldestCreatedAt?: number; deadLetter: number; lastError?: string };
 }
 
 /**
@@ -99,6 +100,7 @@ export class MemoryInspectionStore {
       dreamCandidateQueue: queue,
       activeBeliefs: this.countBeliefs(scope.projectId),
       policyAuditOutbox: this.policyAuditOutbox(scope.projectId),
+      runtimeEventOutbox: this.runtimeEventOutbox(scope.projectId),
     };
   }
 
@@ -247,13 +249,42 @@ export class MemoryInspectionStore {
     return Number((row as { count?: number } | null)?.count || 0);
   }
 
-  private policyAuditOutbox(projectId?: string): { pending: number; oldestCreatedAt?: number } {
-    if (!this.tableExists('policy_execution_audit_outbox')) return { pending: 0 };
+  private policyAuditOutbox(projectId?: string): MemoryInspectionStatus['policyAuditOutbox'] {
+    if (!this.tableExists('policy_execution_audit_outbox')) return { pending: 0, deadLetter: 0 };
+    return this.outboxStats('policy_execution_audit_outbox', projectId);
+  }
+
+  private runtimeEventOutbox(projectId?: string): MemoryInspectionStatus['runtimeEventOutbox'] {
+    if (!this.tableExists('runtime_event_outbox')) return { pending: 0, deadLetter: 0 };
+    return this.outboxStats('runtime_event_outbox', projectId);
+  }
+
+  private outboxStats(
+    table: 'policy_execution_audit_outbox' | 'runtime_event_outbox',
+    projectId?: string,
+  ): MemoryInspectionStatus['policyAuditOutbox'] {
+    const where = projectId === undefined ? '' : 'WHERE project_scope=?';
+    const params = projectId === undefined ? [] : [projectScope(projectId)];
     const row = (projectId === undefined
-      ? this.db!.prepare(`SELECT COUNT(*) AS pending,MIN(created_at) AS oldest FROM policy_execution_audit_outbox`).get()
-      : this.db!.prepare(`SELECT COUNT(*) AS pending,MIN(created_at) AS oldest FROM policy_execution_audit_outbox WHERE project_scope=?`).get(projectScope(projectId))
-    ) as { pending: number; oldest: number | null };
-    return { pending: Number(row.pending), oldestCreatedAt: row.oldest ?? undefined };
+      ? this.db!.prepare(`SELECT SUM(dead_lettered_at IS NULL) AS pending,
+          MIN(CASE WHEN dead_lettered_at IS NULL THEN created_at END) AS oldest,
+          SUM(dead_lettered_at IS NOT NULL) AS dead_letter FROM ${table}`).get()
+      : this.db!.prepare(`SELECT SUM(dead_lettered_at IS NULL) AS pending,
+          MIN(CASE WHEN dead_lettered_at IS NULL THEN created_at END) AS oldest,
+          SUM(dead_lettered_at IS NOT NULL) AS dead_letter FROM ${table} ${where}`).get(...params)
+    ) as { pending: number | null; oldest: number | null; dead_letter: number | null };
+    const errorWhere = projectId === undefined
+      ? 'WHERE last_error IS NOT NULL'
+      : 'WHERE project_scope=? AND last_error IS NOT NULL';
+    const error = this.db!.prepare(`SELECT last_error FROM ${table} ${errorWhere}
+      ORDER BY COALESCE(dead_lettered_at,next_retry_at,created_at) DESC LIMIT 1`)
+      .get(...params) as { last_error?: string } | null;
+    return {
+      pending: Number(row.pending ?? 0),
+      oldestCreatedAt: row.oldest ?? undefined,
+      deadLetter: Number(row.dead_letter ?? 0),
+      lastError: error?.last_error,
+    };
   }
 }
 

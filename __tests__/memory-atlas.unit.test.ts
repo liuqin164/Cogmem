@@ -402,6 +402,38 @@ test('Atlas action extraction rejects Latin substrings and preserves preposed CJ
   }
 });
 
+test('Atlas binds adjacent Chinese and Japanese actions to their local targets', () => {
+  const kernel = createMemoryKernel();
+  try {
+    const alpha = kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'Alpha', entityType: 'device', aliases: ['Alpha'], now: 1,
+    });
+    const beta = kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'Beta', entityType: 'device', aliases: ['Beta'], now: 1,
+    });
+    kernel.eventStore.append({
+      streamId: 'zh-actions', streamType: 'thread', eventType: 'MESSAGE',
+      projectId: 'p', role: 'user', occurredAt: 2,
+      payload: { text: '启动 Alpha 并停止 Beta' },
+    });
+    kernel.eventStore.append({
+      streamId: 'ja-actions', streamType: 'thread', eventType: 'MESSAGE',
+      projectId: 'p', role: 'user', occurredAt: 3,
+      payload: { text: 'Alphaを起動してBetaを停止' },
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const rows = kernel.memoryAtlasStore.db.prepare(`
+      SELECT frame_type,target_entity_id FROM memory_action_frames
+      WHERE project_id='p' ORDER BY occurred_at,action_id
+    `).all() as Array<{ frame_type: string; target_entity_id: string | null }>;
+    expect(rows).toHaveLength(4);
+    expect(rows.filter((row) => row.frame_type === 'start' && row.target_entity_id === alpha.entityId)).toHaveLength(2);
+    expect(rows.filter((row) => row.frame_type === 'stop' && row.target_entity_id === beta.entityId)).toHaveLength(2);
+  } finally {
+    kernel.close();
+  }
+});
+
 test('Atlas reinstalls a same-name no-op dirty trigger and refreshes after raw events', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-atlas-trigger-'));
   const dbPath = join(dir, 'memory.db');

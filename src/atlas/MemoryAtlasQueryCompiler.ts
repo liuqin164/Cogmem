@@ -105,7 +105,7 @@ function normalizeAction(action: string): string {
 }
 
 function actionClause(value: string, index: number, end: number): string {
-  const separators = [...value.matchAll(/[。！？!?；;，,\n]+|(?:然后|随后|并且|同时)|(?:\s+(?:and|then)\s+)/giu)];
+  const separators = [...value.matchAll(/[。！？!?；;，,\n]+|(?:然后|随后|并且|同时|そして|また|して|并|和|及|再)|(?:\s+(?:and|then)\s+)/giu)];
   let start = 0;
   let finish = value.length;
   for (const separator of separators) {

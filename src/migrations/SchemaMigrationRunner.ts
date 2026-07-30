@@ -10,6 +10,7 @@ import { projectIsolationRuntimeGuardsSatisfied } from './0058_project_isolation
 import { projectExecutionAndProvenanceGuardsSatisfied } from './0059_project_execution_and_provenance_guards.js';
 import { executionProjectionAndAtlasReliabilitySatisfied } from './0060_execution_projection_and_atlas_reliability.js';
 import { runtimeScopeAndProjectionIntegritySatisfied } from './0061_runtime_scope_and_projection_integrity.js';
+import { projectionScopeAndOutboxRecoverySatisfied } from './0062_projection_scope_and_outbox_recovery.js';
 
 export interface SchemaMigrationRunOptions {
   dryRun?: boolean;
@@ -401,8 +402,11 @@ export class SchemaMigrationRunner {
     if (version === '0058') return projectIsolationRuntimeGuardsSatisfied(this.db);
     if (version === '0059') return projectExecutionAndProvenanceGuardsSatisfied(this.db);
     if (version === '0060') return executionProjectionAndAtlasReliabilitySatisfied(this.db)
-      || runtimeScopeAndProjectionIntegritySatisfied(this.db);
-    if (version === '0061') return runtimeScopeAndProjectionIntegritySatisfied(this.db);
+      || runtimeScopeAndProjectionIntegritySatisfied(this.db)
+      || projectionScopeAndOutboxRecoverySatisfied(this.db);
+    if (version === '0061') return runtimeScopeAndProjectionIntegritySatisfied(this.db)
+      || projectionScopeAndOutboxRecoverySatisfied(this.db);
+    if (version === '0062') return projectionScopeAndOutboxRecoverySatisfied(this.db);
     return true;
   }
 

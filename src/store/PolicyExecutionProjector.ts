@@ -1,6 +1,6 @@
 import type { MemoryEvent } from '../types/index.js';
 import { EventStore } from './EventStore.js';
-import { PolicyExecutionStore } from './PolicyExecutionStore.js';
+import { PolicyExecutionStore, type PolicyExecutionOutcome } from './PolicyExecutionStore.js';
 import { PolicyProjectionStore } from './PolicyProjectionStore.js';
 import { logger } from '../utils/Logger.js';
 
@@ -58,25 +58,6 @@ export class PolicyExecutionProjector {
       this.executionStore.discardReadModelBuild(this.projectId);
       throw error;
     }
-  }
-
-  async replay(events: MemoryEvent[], previousRebuildAt?: number): Promise<void> {
-    logger.info(`Replaying policy execution projection events: count=${events.length}`);
-    for (const event of events.filter((item) => this.isPolicyExecutionEvent(item))) this.applyEvent(event);
-    const lastEvent = events[events.length - 1];
-    this.projectionStore.upsertCheckpoint({
-      projectionName: this.projectionName,
-      lastEventId: lastEvent?.eventId,
-      lastEventTime: lastEvent?.occurredAt,
-      lastGlobalSeq: lastEvent?.globalSeq ?? 0,
-      lastRebuildAt: previousRebuildAt ?? Date.now(),
-      lastFullCount: this.executionStore.getReadModelCount(this.projectId),
-      status: 'ready',
-      metadata: {
-        mode: 'incremental_replay',
-        replayedEventCount: events.length
-      }
-    });
   }
 
   private async replayRange(
@@ -137,16 +118,22 @@ export class PolicyExecutionProjector {
     const payload = (event.payload || {}) as Record<string, unknown>;
     if (event.eventType !== 'POLICY_EXECUTION_UPDATED') return;
     if (!payload.executionId || !payload.idempotencyKey || !payload.policy || !payload.action || !payload.status) return;
+    const projectId = event.projectId ?? (typeof payload.projectId === 'string' ? payload.projectId : undefined);
+    if (projectId === undefined) {
+      this.executionStore.recordDiscardedProjectionEvent('policy_execution', event, 'legacy_event_scope_unproven');
+      return;
+    }
 
     this.executionStore.upsertReadModel({
       executionId: String(payload.executionId),
-      projectId: event.projectId!,
+      projectId,
       idempotencyKey: String(payload.idempotencyKey),
       runtimeId: payload.runtimeId ? String(payload.runtimeId) : undefined,
       policy: String(payload.policy),
       action: String(payload.action),
       target: payload.target ? String(payload.target) : undefined,
       status: String(payload.status) as 'executed' | 'skipped' | 'failed',
+      executionOutcome: policyOutcome(payload.executionOutcome),
       attemptCount: Number(payload.attemptCount || 0),
       nextRetryAt: payload.nextRetryAt ? Number(payload.nextRetryAt) : undefined,
       deadLetteredAt: payload.deadLetteredAt ? Number(payload.deadLetteredAt) : undefined,
@@ -164,7 +151,13 @@ export class PolicyExecutionProjector {
     }, event.globalSeq ?? 0, staging);
   }
 
-  private isPolicyExecutionEvent(event: MemoryEvent): boolean {
-    return event.eventType === 'POLICY_EXECUTION_UPDATED' && event.projectId === this.projectId;
-  }
+}
+
+function policyOutcome(value: unknown): PolicyExecutionOutcome | undefined {
+  return value === 'executed'
+    || value === 'definitely_not_executed'
+    || value === 'failed_before_execution'
+    || value === 'outcome_unknown'
+    ? value
+    : undefined;
 }

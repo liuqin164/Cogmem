@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'crypto';
 import type {
   PolicyExecutionRecord,
+  PolicyExecutionOutcome,
   PolicyExecutionStore,
   PolicyReplayPolicy,
 } from '../store/PolicyExecutionStore.js';
+export type { PolicyExecutionOutcome } from '../store/PolicyExecutionStore.js';
 
 export interface PolicySideEffect {
   projectId: string;
@@ -20,12 +22,6 @@ export interface PolicySideEffect {
   correlationId?: string;
   policyGroup?: string;
 }
-
-export type PolicyExecutionOutcome =
-  | 'executed'
-  | 'definitely_not_executed'
-  | 'failed_before_execution'
-  | 'outcome_unknown';
 
 interface PolicySideEffectResultBase {
   policy: string;
@@ -224,6 +220,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
 
         const terminal = this.terminalRecord(effect, record, {
           status: result.status,
+          executionOutcome: 'executed',
           attemptCount: totalAttempt,
           detail: result.detail,
         });
@@ -241,16 +238,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
   }
 
   replay(projectId: string, runtimeId: string): PolicySideEffectResult[] {
-    return this.store.listByRuntime(projectId, runtimeId).map((record) => ({
-      policy: record.policy,
-      action: record.action as PolicySideEffectResult['action'],
-      target: record.target,
-      status: record.status,
-      ...(record.status === 'executed' || record.status === 'skipped'
-        ? { outcome: 'executed' as const }
-        : { outcome: 'outcome_unknown' as const }),
-      detail: record.detail,
-    })) as PolicySideEffectResult[];
+    return this.store.listByRuntime(projectId, runtimeId).map((record) => this.resultForRecord(record));
   }
 
   async replayPending(projectId: string, now: number = Date.now()): Promise<PolicySideEffectResult[]> {
@@ -283,7 +271,9 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
       action: record.action as PolicySideEffectResult['action'],
       target: record.target,
       status: 'failed',
-      outcome: 'outcome_unknown',
+      outcome: record.executionOutcome && record.executionOutcome !== 'executed'
+        ? record.executionOutcome
+        : 'outcome_unknown',
       detail: record.detail,
     }));
   }
@@ -302,6 +292,7 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
     const canReplay = this.retryable(outcome) && replayPolicy !== 'manual';
     const failed = this.terminalRecord(effect, record, {
       status: 'failed',
+      executionOutcome: outcome,
       attemptCount,
       detail: outcome === 'outcome_unknown' ? `outcome_unknown:${detail}` : detail,
       nextRetryAt: canReplay ? failedAt + this.computeBackoff(attemptCount, idempotencyKey) : undefined,
@@ -415,6 +406,26 @@ export class ReliablePolicySideEffectExecutor implements PolicySideEffectExecuto
       status: 'failed',
       outcome: 'outcome_unknown',
       detail,
+    };
+  }
+
+  private resultForRecord(record: PolicyExecutionRecord): PolicySideEffectResult {
+    const base = {
+      policy: record.policy,
+      action: record.action as PolicySideEffectResult['action'],
+      target: record.target,
+      detail: record.detail,
+    };
+    if (record.status === 'in_progress') return { ...base, status: 'in_progress' };
+    if (record.status === 'executed' || record.status === 'skipped') {
+      return { ...base, status: record.status, outcome: 'executed' };
+    }
+    return {
+      ...base,
+      status: 'failed',
+      outcome: record.executionOutcome && record.executionOutcome !== 'executed'
+        ? record.executionOutcome
+        : 'outcome_unknown',
     };
   }
 

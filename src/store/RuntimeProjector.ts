@@ -59,27 +59,6 @@ export class RuntimeProjector {
     }
   }
 
-  async replay(events: MemoryEvent[], previousRebuildAt?: number): Promise<void> {
-    logger.info(`Replaying runtime projection events: count=${events.length}`);
-
-    for (const event of events.filter((item) => this.isRuntimeEvent(item))) this.applyEvent(event);
-
-    const lastEvent = events[events.length - 1];
-    this.projectionStore.upsertCheckpoint({
-      projectionName: this.projectionName,
-      lastEventId: lastEvent?.eventId,
-      lastEventTime: lastEvent?.occurredAt,
-      lastGlobalSeq: lastEvent?.globalSeq ?? 0,
-      lastRebuildAt: previousRebuildAt ?? Date.now(),
-      lastFullCount: this.runtimeStore.getProjectionStateCount(this.projectionName),
-      status: 'ready',
-      metadata: {
-        mode: 'incremental_replay',
-        replayedEventCount: events.length
-      }
-    });
-  }
-
   private async replayRange(
     afterGlobalSeq: number,
     throughGlobalSeq: number,
@@ -135,7 +114,11 @@ export class RuntimeProjector {
 
   private applyEvent(event: MemoryEvent, staging = false): void {
     const payload = (event.payload || {}) as Record<string, unknown>;
-    const projectId = event.projectId ?? (typeof payload.projectId === 'string' ? payload.projectId : '');
+    const projectId = event.projectId ?? (typeof payload.projectId === 'string' ? payload.projectId : undefined);
+    if (projectId === undefined) {
+      this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'legacy_event_scope_unproven');
+      return;
+    }
 
     switch (event.eventType) {
       case 'RUNTIME_STATE_UPDATED':
@@ -171,8 +154,4 @@ export class RuntimeProjector {
     }
   }
 
-  private isRuntimeEvent(event: MemoryEvent): boolean {
-    return event.eventType === 'RUNTIME_STATE_UPDATED'
-      || event.eventType === 'RUNTIME_TRANSITION_RECORDED';
-  }
 }
