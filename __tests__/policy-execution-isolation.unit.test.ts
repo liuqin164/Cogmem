@@ -10,9 +10,9 @@ import { EventStore } from '../src/store/EventStore.js';
 import { PolicyExecutionProjector } from '../src/store/PolicyExecutionProjector.js';
 import { PolicyExecutionStore, type PolicyExecutionRecord } from '../src/store/PolicyExecutionStore.js';
 import { PolicyProjectionStore } from '../src/store/PolicyProjectionStore.js';
-import { migration_0059 } from '../src/migrations/0059_project_execution_and_provenance_guards.js';
-import { migration_0061 } from '../src/migrations/0061_runtime_scope_and_projection_integrity.js';
-import { migration_0062 } from '../src/migrations/0062_projection_scope_and_outbox_recovery.js';
+import { migration_0059 } from '../src/migrations/v3_7_4/0059_project_execution_and_provenance_guards.js';
+import { migration_0061 } from '../src/migrations/v3_7_4/0061_runtime_scope_and_projection_integrity.js';
+import { migration_0062 } from '../src/migrations/v3_7_4/0062_projection_scope_and_outbox_recovery.js';
 
 describe('policy execution project isolation', () => {
   test('the same effect executes independently in each exact project scope', async () => {
@@ -296,7 +296,7 @@ describe('policy execution project isolation', () => {
     db.close();
   });
 
-  test('pending audit outbox drains automatically after restart', () => {
+  test('restart respects audit retry schedule and a later due drain succeeds', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-audit-restart-'));
     const path = join(dir, 'policy.db');
     const bootstrap = new EventStore(path);
@@ -309,14 +309,54 @@ describe('policy execution project isolation', () => {
       createdAt: 1, updatedAt: 1,
     });
     expect(first.getAuditOutboxStats().pending).toBe(1);
+    const scheduled = new Database(path);
+    expect(scheduled.prepare(`SELECT attempt_count FROM policy_execution_audit_outbox`).get()).toEqual({ attempt_count: 1 });
+    scheduled.close();
     first.close();
 
     const events = new EventStore(path);
     const recovered = new PolicyExecutionStore(path, events);
+    expect(recovered.getAuditOutboxStats().pending).toBe(1);
+    const due = new Database(path);
+    expect(due.prepare(`SELECT attempt_count FROM policy_execution_audit_outbox`).get()).toEqual({ attempt_count: 1 });
+    due.exec(`UPDATE policy_execution_audit_outbox SET next_retry_at=0`);
+    due.close();
+    expect(recovered.flushAuditOutbox()).toBe(1);
     expect(recovered.getAuditOutboxStats().pending).toBe(0);
     expect(events.getEventsByStreamId('policy:1:a:restart', 'a')).toHaveLength(1);
     recovered.close();
     events.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('one audit drain attempts each due row once and dead-letters on the fifth due cycle', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-audit-cycles-'));
+    const path = join(dir, 'policy.db');
+    const bootstrap = new EventStore(path);
+    bootstrap.close();
+    const unavailable = { append() { throw new Error('audit unavailable'); } } as unknown as EventStore;
+    const store = new PolicyExecutionStore(path, unavailable);
+    store.upsert({
+      executionId: 'cycles', projectId: 'a', idempotencyKey: 'cycles',
+      policy: 'once', action: 'allow', status: 'executed', attemptCount: 1,
+      createdAt: 1, updatedAt: 1,
+    });
+
+    for (let expected = 2; expected <= 5; expected += 1) {
+      const due = new Database(path);
+      due.exec(`UPDATE policy_execution_audit_outbox SET next_retry_at=0`);
+      due.close();
+      store.flushAuditOutbox();
+      const inspected = new Database(path, { readonly: true });
+      const row = inspected.prepare(`SELECT attempt_count,dead_lettered_at FROM policy_execution_audit_outbox`).get() as {
+        attempt_count: number;
+        dead_lettered_at: number | null;
+      };
+      inspected.close();
+      expect(row.attempt_count).toBe(expected);
+      expect(Boolean(row.dead_lettered_at)).toBe(expected === 5);
+    }
+    store.close();
     rmSync(dir, { recursive: true, force: true });
   });
 

@@ -77,7 +77,7 @@ export declare class PlanRuntimeStore {
     private insertTransition;
     private enqueueEvent;
     recordDiscardedProjectionEvent(projector: string, event: MemoryEvent, reason: string): void;
-    flushEventOutbox(ignoreSchedule?: boolean): number;
+    flushEventOutbox(): number;
     getEventOutboxStats(projectId?: string): {
         pending: number;
         oldestCreatedAt?: number;

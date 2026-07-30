@@ -7,7 +7,7 @@ export class PlanRuntimeStore {
         this.db = new Database(dbPath);
         this.eventStore = eventStore;
         this.initializeSchema();
-        this.flushEventOutbox(true);
+        this.flushEventOutbox();
     }
     initializeSchema() {
         for (const table of [
@@ -74,7 +74,7 @@ export class PlanRuntimeStore {
 
       CREATE TABLE IF NOT EXISTS projection_event_discard_receipts (
         projector TEXT NOT NULL, event_id TEXT NOT NULL, global_seq INTEGER NOT NULL DEFAULT 0,
-        event_type TEXT NOT NULL, record_hash TEXT NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL,
+        event_type TEXT NOT NULL, event_identity_hash TEXT NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL,
         PRIMARY KEY(projector,event_id)
       );
 
@@ -185,26 +185,40 @@ export class PlanRuntimeStore {
             .run(input.projectId, outboxId, JSON.stringify({ ...input, eventId: outboxId }), Date.now());
     }
     recordDiscardedProjectionEvent(projector, event, reason) {
-        const recordHash = createHash('sha256')
-            .update(`${event.eventId}\0${event.globalSeq ?? 0}\0${event.eventType}`)
+        const eventIdentityHash = createHash('sha256')
+            .update(JSON.stringify({
+            eventId: event.eventId,
+            globalSeq: event.globalSeq ?? 0,
+            streamId: event.streamId,
+            streamType: event.streamType,
+            eventType: event.eventType,
+            eventVersion: event.eventVersion,
+            projectId: event.projectId,
+            occurredAt: event.occurredAt,
+            payloadHash: event.payloadHash,
+            causationId: event.causationId,
+            correlationId: event.correlationId,
+            actorId: event.actorId,
+            sourceId: event.sourceId,
+        }))
             .digest('hex');
         this.db.prepare(`
       INSERT OR IGNORE INTO projection_event_discard_receipts(
-        projector,event_id,global_seq,event_type,record_hash,reason,created_at
+        projector,event_id,global_seq,event_type,event_identity_hash,reason,created_at
       ) VALUES(?,?,?,?,?,?,?)
-    `).run(projector, event.eventId, event.globalSeq ?? 0, event.eventType, recordHash, reason, Date.now());
+    `).run(projector, event.eventId, event.globalSeq ?? 0, event.eventType, eventIdentityHash, reason, Date.now());
     }
-    flushEventOutbox(ignoreSchedule = false) {
+    flushEventOutbox() {
         if (!this.eventStore)
             return 0;
         let flushed = 0;
+        const dueAt = Date.now();
         for (;;) {
-            const now = Date.now();
             const rows = this.db.prepare(`
         SELECT project_scope,outbox_id,payload_json,attempt_count FROM runtime_event_outbox
-        WHERE dead_lettered_at IS NULL AND (? OR next_retry_at IS NULL OR next_retry_at<=?)
+        WHERE dead_lettered_at IS NULL AND (next_retry_at IS NULL OR next_retry_at<=?)
         ORDER BY created_at,project_scope,outbox_id LIMIT 100
-      `).all(Number(ignoreSchedule), now);
+      `).all(dueAt);
             if (rows.length === 0)
                 break;
             for (const row of rows) {
@@ -220,11 +234,12 @@ export class PlanRuntimeStore {
                     const message = error instanceof Error ? error.message : String(error);
                     const attempts = row.attempt_count + 1;
                     const malformed = error instanceof SyntaxError;
+                    const failedAt = Date.now();
                     this.db.prepare(`
             UPDATE runtime_event_outbox
             SET attempt_count=?,last_error=?,next_retry_at=?,dead_lettered_at=?
             WHERE project_scope=? AND outbox_id=?
-          `).run(attempts, message.slice(0, 1000), malformed || attempts >= 5 ? null : now + Math.min(60_000, 1000 * 2 ** (attempts - 1)), malformed || attempts >= 5 ? now : null, row.project_scope, row.outbox_id);
+          `).run(attempts, message.slice(0, 1000), malformed || attempts >= 5 ? null : failedAt + Math.min(60_000, 1000 * 2 ** (attempts - 1)), malformed || attempts >= 5 ? failedAt : null, row.project_scope, row.outbox_id);
                 }
             }
         }

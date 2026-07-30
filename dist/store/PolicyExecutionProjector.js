@@ -96,27 +96,46 @@ export class PolicyExecutionProjector {
         const payload = (event.payload || {});
         if (event.eventType !== 'POLICY_EXECUTION_UPDATED')
             return;
-        if (!payload.executionId || !payload.idempotencyKey || !payload.policy || !payload.action || !payload.status)
-            return;
-        const projectId = event.projectId ?? (typeof payload.projectId === 'string' ? payload.projectId : undefined);
+        const projectId = event.projectId;
         if (projectId === undefined) {
             this.executionStore.recordDiscardedProjectionEvent('policy_execution', event, 'legacy_event_scope_unproven');
             return;
         }
+        if (payload.projectId !== undefined && payload.projectId !== projectId) {
+            this.executionStore.recordDiscardedProjectionEvent('policy_execution', event, 'event_payload_scope_mismatch');
+            return;
+        }
+        const outcome = policyOutcome(payload.executionOutcome);
+        if (!isNonEmptyString(payload.executionId)
+            || !isNonEmptyString(payload.idempotencyKey)
+            || !isNonEmptyString(payload.policy)
+            || !isNonEmptyString(payload.action)
+            || !isPolicyStatus(payload.status)
+            || (payload.executionOutcome !== undefined && outcome === undefined)
+            || !isOptionalNonNegativeNumber(payload.attemptCount)
+            || !isOptionalNumber(payload.nextRetryAt)
+            || !isOptionalNumber(payload.deadLetteredAt)
+            || !isOptionalReplayPolicy(payload.replayPolicy)
+            || !isOptionalRecord(payload.metadata)
+            || !isOptionalNumber(payload.createdAt)
+            || !isOptionalNumber(payload.updatedAt)) {
+            this.executionStore.recordDiscardedProjectionEvent('policy_execution', event, 'invalid_policy_event_payload');
+            return;
+        }
         this.executionStore.upsertReadModel({
-            executionId: String(payload.executionId),
+            executionId: payload.executionId,
             projectId,
-            idempotencyKey: String(payload.idempotencyKey),
+            idempotencyKey: payload.idempotencyKey,
             runtimeId: payload.runtimeId ? String(payload.runtimeId) : undefined,
-            policy: String(payload.policy),
-            action: String(payload.action),
+            policy: payload.policy,
+            action: payload.action,
             target: payload.target ? String(payload.target) : undefined,
-            status: String(payload.status),
-            executionOutcome: policyOutcome(payload.executionOutcome),
-            attemptCount: Number(payload.attemptCount || 0),
-            nextRetryAt: payload.nextRetryAt ? Number(payload.nextRetryAt) : undefined,
-            deadLetteredAt: payload.deadLetteredAt ? Number(payload.deadLetteredAt) : undefined,
-            replayPolicy: payload.replayPolicy ? String(payload.replayPolicy) : undefined,
+            status: payload.status,
+            executionOutcome: outcome,
+            attemptCount: payload.attemptCount ?? 0,
+            nextRetryAt: payload.nextRetryAt,
+            deadLetteredAt: payload.deadLetteredAt,
+            replayPolicy: payload.replayPolicy,
             actorId: payload.actorId ? String(payload.actorId) : undefined,
             causationId: payload.causationId ? String(payload.causationId) : undefined,
             correlationId: payload.correlationId ? String(payload.correlationId) : event.correlationId,
@@ -125,10 +144,30 @@ export class PolicyExecutionProjector {
             eventType: payload.eventType ? String(payload.eventType) : event.eventType,
             detail: payload.detail ? String(payload.detail) : undefined,
             metadata: payload.metadata,
-            createdAt: Number(payload.createdAt || event.occurredAt),
-            updatedAt: Number(payload.updatedAt || event.occurredAt)
+            createdAt: payload.createdAt ?? event.occurredAt,
+            updatedAt: payload.updatedAt ?? event.occurredAt
         }, event.globalSeq ?? 0, staging);
     }
+}
+const POLICY_STATUSES = new Set(['in_progress', 'executed', 'skipped', 'failed']);
+const REPLAY_POLICIES = new Set(['manual', 'on_bootstrap', 'always', 'scheduled_only']);
+function isNonEmptyString(value) {
+    return typeof value === 'string' && value.length > 0;
+}
+function isPolicyStatus(value) {
+    return typeof value === 'string' && POLICY_STATUSES.has(value);
+}
+function isOptionalReplayPolicy(value) {
+    return value === undefined || (typeof value === 'string' && REPLAY_POLICIES.has(value));
+}
+function isOptionalNumber(value) {
+    return value === undefined || (typeof value === 'number' && Number.isFinite(value));
+}
+function isOptionalNonNegativeNumber(value) {
+    return isOptionalNumber(value) && (value === undefined || value >= 0);
+}
+function isOptionalRecord(value) {
+    return value === undefined || (typeof value === 'object' && value !== null && !Array.isArray(value));
 }
 function policyOutcome(value) {
     return value === 'executed'

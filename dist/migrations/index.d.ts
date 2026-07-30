@@ -27,37 +27,7 @@ import { migration_0028 } from './0028_episode_boundary_guardrails.js';
 import { migration_0029 } from './0029_episode_active_scope_guard.js';
 import { migration_0030 } from './0030_memory_event_local_date_source.js';
 import { migration_0031 } from './0031_episode_boundary_integrity_repair.js';
-import { migration_0032 } from './0032_memory_frames.js';
-import { migration_0033 } from './0033_atlas_aliases_and_supports.js';
-import { migration_0034 } from './0034_atlas_projection_v2.js';
-import { migration_0035 } from './0035_memory_frame_integrity.js';
-import { migration_0036 } from './0036_memory_frame_publication_repair.js';
-import { migration_0037 } from './0037_memory_frame_revisions.js';
-import { migration_0038 } from './0038_memory_frame_revision_integrity.js';
-import { migration_0039 } from './0039_memory_frame_publication_and_revision_repair.js';
-import { migration_0040 } from './0040_atlas_alias_supports.js';
-import { migration_0041 } from './0041_memory_frame_integrity_repair.js';
-import { migration_0042 } from './0042_memory_frame_revision_alias_repair.js';
-import { migration_0043 } from './0043_memory_frame_provenance_finalize.js';
-import { migration_0044 } from './0044_migration_receipts_and_alias_guard.js';
-import { migration_0045 } from './0045_support_payload_reduction.js';
-import { migration_0046 } from './0046_stable_migration_checksums.js';
-import { migration_0047 } from './0047_memory_frame_alias_provenance_repair.js';
-import { migration_0048 } from './0048_project_time_topology_v2.js';
-import { migration_0049 } from './0049_project_scoped_graph_identity.js';
-import { migration_0050 } from './0050_resumable_time_topology_rebuild.js';
-import { migration_0051 } from './0051_time_projection_source_integrity.js';
-import { migration_0052 } from './0052_project_scoped_topology_identity.js';
-import { migration_0053 } from './0053_topology_privacy_and_recovery.js';
-import { migration_0054 } from './0054_topology_semantic_integrity.js';
-import { migration_0055 } from './0055_topology_scope_finalization.js';
-import { migration_0056 } from './0056_project_isolation_finalization.js';
-import { migration_0057 } from './0057_project_isolation_compensation.js';
-import { migration_0058 } from './0058_project_isolation_runtime_guards.js';
-import { migration_0059 } from './0059_project_execution_and_provenance_guards.js';
-import { migration_0060 } from './0060_execution_projection_and_atlas_reliability.js';
-import { migration_0061 } from './0061_runtime_scope_and_projection_integrity.js';
-import { migration_0062 } from './0062_projection_scope_and_outbox_recovery.js';
+import { migration_0032 } from './0032_multidimensional_memory_graph_3_7_4.js';
 /**
  * Ordered list of all schema migrations.
  * Add new migrations here in ascending version order.
@@ -65,7 +35,7 @@ import { migration_0062 } from './0062_projection_scope_and_outbox_recovery.js';
  */
 export declare const ALL_MIGRATIONS: Migration[];
 export declare const KERNEL_MIGRATIONS: Migration[];
-export { migration_0001, migration_0002, migration_0003, migration_0004, migration_0005, migration_0006, migration_0007, migration_0009, migration_0010, migration_0011, migration_0012, migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028, migration_0029, migration_0030, migration_0031, migration_0032, migration_0033, migration_0034, migration_0035, migration_0036, migration_0037, migration_0038, migration_0039, migration_0040, migration_0041, migration_0042, migration_0043, migration_0044, migration_0045, migration_0046, migration_0047, migration_0048, migration_0049, migration_0050, migration_0051, migration_0052, migration_0053, migration_0054, migration_0055, migration_0056, migration_0057, migration_0058, migration_0059, migration_0060, migration_0061, migration_0062 };
+export { migration_0001, migration_0002, migration_0003, migration_0004, migration_0005, migration_0006, migration_0007, migration_0009, migration_0010, migration_0011, migration_0012, migration_0015, migration_0016, migration_0017, migration_0018, migration_0019, migration_0020, migration_0021, migration_0022, migration_0023, migration_0024, migration_0025, migration_0026, migration_0027, migration_0028, migration_0029, migration_0030, migration_0031, migration_0032 };
 export { SchemaMigrationRunner } from './SchemaMigrationRunner.js';
 export type { SchemaMigrationResult, SchemaMigrationRunOptions } from './SchemaMigrationRunner.js';
 export type { Migration };

@@ -1,7 +1,7 @@
 import Database from 'bun:sqlite';
 import { randomUUID } from 'crypto';
 import { extractDeviceCandidate, extractProjectCandidate, extractRelativeReferences, inferReferenceType, isLatestReference, isPreviousReference, normalizeLexiconText } from '../lexicon/coreMemoryLexicon.js';
-import { installRuntimeProvenanceGuards } from '../migrations/0059_project_execution_and_provenance_guards.js';
+import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/0059_project_execution_and_provenance_guards.js';
 export class EntityStore {
     db;
     ownsDb;

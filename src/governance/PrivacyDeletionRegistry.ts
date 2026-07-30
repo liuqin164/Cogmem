@@ -63,7 +63,7 @@ const MIGRATION_TABLES = [
   'topology_time_rebuild_active_neurons','topology_time_rebuild_adjacency','topology_time_rebuild_buckets','topology_time_rebuild_cognitive_edges','topology_time_rebuild_cognitive_nodes',
   'topology_time_rebuild_entries','topology_time_rebuild_jobs','user_session_runtime','vector_index','vector_write_outbox','web_session_tokens','working_memory_deltas','memory_activation',
   'file_assets','file_blocks','file_chunks','file_chunk_edges','user_insights',
-  'policy_execution_read_model','policy_execution_audit_outbox','runtime_event_outbox','runtime_projection_states','runtime_projection_transitions','runtime_scope_quarantine','runtime_scope_discard_receipts','projection_event_discard_receipts',
+  'policy_execution_read_model','policy_execution_audit_outbox','runtime_event_outbox','runtime_projection_states','runtime_projection_transitions','runtime_scope_discard_receipts','projection_event_discard_receipts',
 ] as const;
 const MIGRATION_PROJECT_OWNED = [
   'archived_sessions','belief_graph_conflicts','belief_graph_nodes','context_activation_receipts','context_strategy_outcomes',
@@ -92,7 +92,7 @@ const MIGRATION_PROVENANCE_OWNED = [
 ] as const;
 const MIGRATION_OPERATIONAL_NON_PERSONAL = [
   '_episode_integrity_markers','_memory_frame_integrity_markers','_meta','agent_brain_health_checks','pipeline_runs',
-  'pipeline_step_timings','policy_execution_quarantine','policy_execution_legacy_tombstones','project_isolation_compensation_audit','event_sequence_counters','runtime_scope_quarantine','runtime_scope_discard_receipts','projection_event_discard_receipts',
+  'pipeline_step_timings','policy_execution_quarantine','policy_execution_legacy_tombstones','project_isolation_compensation_audit','event_sequence_counters','runtime_scope_discard_receipts','projection_event_discard_receipts',
 ] as const;
 const MIGRATION_IMMUTABLE_AUDIT = ['_schema_migrations','migration_repair_receipts','governance_audit_log'] as const;
 const MIGRATION_CLASSIFICATION = explicitClassification(MIGRATION_TABLES, {

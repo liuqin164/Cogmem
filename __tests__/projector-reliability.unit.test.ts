@@ -141,7 +141,66 @@ test('legacy unscoped runtime and policy events are discarded instead of becomin
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('runtime command and its event outbox commit together and recover after event-store failure', () => {
+test('projectors reject scope conflicts and invalid payload enums', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-projector-invalid-'));
+  const path = join(dir, 'memory.db');
+  const events = new EventStore(path);
+  events.append({
+    projectId: 'a', streamId: 'runtime-scope', streamType: 'system',
+    eventType: 'RUNTIME_STATE_UPDATED', occurredAt: 1,
+    payload: { projectId: 'b', runtimeId: 'r', entityType: 'step', entityKey: 'one', status: 'ready' },
+  });
+  events.append({
+    projectId: 'a', streamId: 'runtime-invalid', streamType: 'system',
+    eventType: 'RUNTIME_STATE_UPDATED', occurredAt: 2,
+    payload: { projectId: 'a', runtimeId: 'r', entityType: 'alien', entityKey: 'two', status: 'ready' },
+  });
+  events.append({
+    projectId: 'a', streamId: 'policy-scope', streamType: 'system',
+    eventType: 'POLICY_EXECUTION_UPDATED', occurredAt: 3,
+    payload: {
+      projectId: 'b', executionId: 'scope', idempotencyKey: 'scope', policy: 'p', action: 'allow',
+      status: 'executed', attemptCount: 1, createdAt: 3, updatedAt: 3,
+    },
+  });
+  events.append({
+    projectId: 'a', streamId: 'policy-invalid', streamType: 'system',
+    eventType: 'POLICY_EXECUTION_UPDATED', occurredAt: 4,
+    payload: {
+      projectId: 'a', executionId: 'invalid', idempotencyKey: 'invalid', policy: 'p', action: 'allow',
+      status: 'invented', attemptCount: 1, createdAt: 4, updatedAt: 4,
+    },
+  });
+
+  const runtime = new PlanRuntimeStore(path, events);
+  const runtimeCheckpoints = new RuntimeProjectionStore(path);
+  await new RuntimeProjector(events, runtime, runtimeCheckpoints).fullRebuild('invalid');
+  const executions = new PolicyExecutionStore(path, events);
+  const policyCheckpoints = new PolicyProjectionStore(path);
+  await new PolicyExecutionProjector(events, executions, policyCheckpoints, 'a').fullRebuild('invalid');
+
+  expect(runtime.getProjectionStateCount('runtime_projection_main', 'a')).toBe(0);
+  expect(executions.getReadModelByIdempotencyKey('a', 'scope')).toBeNull();
+  expect(executions.getReadModelByIdempotencyKey('a', 'invalid')).toBeNull();
+  const db = new Database(path, { readonly: true });
+  expect(db.prepare(`
+    SELECT projector,reason FROM projection_event_discard_receipts ORDER BY projector,reason
+  `).all()).toEqual([
+    { projector: 'policy_execution', reason: 'event_payload_scope_mismatch' },
+    { projector: 'policy_execution', reason: 'invalid_policy_event_payload' },
+    { projector: 'runtime', reason: 'event_payload_scope_mismatch' },
+    { projector: 'runtime', reason: 'invalid_runtime_event_payload' },
+  ]);
+  db.close();
+  policyCheckpoints.close();
+  executions.close();
+  runtimeCheckpoints.close();
+  runtime.close();
+  events.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('runtime command and outbox commit together, respect retry time, and later recover', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-runtime-outbox-'));
   const path = join(dir, 'memory.db');
   const bootstrap = new EventStore(path);
@@ -157,10 +216,19 @@ test('runtime command and its event outbox commit together and recover after eve
   const db = new Database(path);
   expect(db.prepare(`SELECT COUNT(*) AS count FROM runtime_states`).get()).toEqual({ count: 1 });
   expect(db.prepare(`SELECT COUNT(*) AS count FROM runtime_event_outbox`).get()).toEqual({ count: 2 });
+  expect(db.prepare(`SELECT MIN(attempt_count) AS minimum,MAX(attempt_count) AS maximum FROM runtime_event_outbox`).get())
+    .toEqual({ minimum: 1, maximum: 1 });
   db.close();
 
   const events = new EventStore(path);
   const recovered = new PlanRuntimeStore(path, events);
+  expect(events.getEventsAfterGlobalSeq().filter((event) => event.eventType.startsWith('RUNTIME_'))).toHaveLength(0);
+  const due = new Database(path);
+  expect(due.prepare(`SELECT MIN(attempt_count) AS minimum,MAX(attempt_count) AS maximum FROM runtime_event_outbox`).get())
+    .toEqual({ minimum: 1, maximum: 1 });
+  due.exec(`UPDATE runtime_event_outbox SET next_retry_at=0`);
+  due.close();
+  expect(recovered.flushEventOutbox()).toBe(2);
   expect(events.getEventsAfterGlobalSeq().filter((event) => event.eventType.startsWith('RUNTIME_'))).toHaveLength(2);
   const verify = new Database(path);
   expect(verify.prepare(`SELECT COUNT(*) AS count FROM runtime_event_outbox`).get()).toEqual({ count: 0 });
@@ -188,6 +256,7 @@ test('policy and runtime outboxes drain multiple pages and dead-letter malformed
     INSERT INTO policy_execution_audit_outbox(outbox_id,project_scope,payload_json,created_at)
     VALUES('malformed-policy','a','{',0)
   `).run();
+  seed.exec(`UPDATE policy_execution_audit_outbox SET next_retry_at=0`);
   seed.close();
 
   const events = new EventStore(path);
@@ -209,6 +278,7 @@ test('policy and runtime outboxes drain multiple pages and dead-letter malformed
     INSERT INTO runtime_event_outbox(project_scope,outbox_id,payload_json,created_at)
     VALUES('a','malformed-runtime','{',0)
   `).run();
+  corrupt.exec(`UPDATE runtime_event_outbox SET next_retry_at=0`);
   corrupt.close();
 
   const recoveredRuntime = new PlanRuntimeStore(path, events);

@@ -3,20 +3,15 @@
 ## 3.7.4
 
 - Added evidence-backed MemoryFrame V1 contracts, controlled relation validation, canonical alias normalization, and bounded MemoryQueryFrame helpers.
-- Added schema migrations 0032-0034 for staged frames, Atlas aliases/supports, and V2 projection provenance.
-- Added migration 0035 for complete Frame fields and publication intent, with legacy fallback rows backfilled to `needs_confirmation`.
-- Added immutable migration 0036 for Dream-owned Frame revisions, review receipts, lease recovery, and publication repair.
-- Added immutable migration 0037 so source fingerprints remain stable while lease retries use independent Frame revisions.
-- Added immutable migrations 0038-0041 to repair legacy publication state, enforce one active Frame per episode, repair revision numbering, backfill alias provenance, and record populated-database integrity markers.
+- Added one formal schema migration, 0032, from the released 3.7.3/schema-31 database to the complete 3.7.4 schema. Unreleased development schemas are rejected instead of becoming permanent compatibility history.
+- Added staged MemoryFrame revisions, Atlas aliases/supports, V2 projection provenance, project-scoped graph identities, resumable topology rebuilds, and the final isolation constraints inside that atomic release migration.
 - Wired structured processor output through staged Dream publication, paginated Atlas V2 projection, temporal/state projection, alias resolution, Repair invalidation, and forget-user cleanup.
 - Connected bounded multidimensional Atlas seed/path results to kernel and agent recall while preserving collection, workspace/session/thread scope, and retrieval-lane governance. Rule-only installations now report `semantic_processor_unavailable` instead of silently presenting fallback semantics as complete.
-- Added immutable migration 0049 to split CognitiveGraph nodes, edges, civil-time buckets, and adjacency by project, invalidate legacy cognitive time projections, and prevent normal multi-project writes from overwriting shared identities.
-- Added immutable migration 0050 for generation-scoped topology staging, persisted rebuild cursors, active-neuron snapshots, and crash-safe cleanup.
 - Made recall and MCP graph discovery read-only over last-known-good projections, added explicit paginated `cogmem memory rebuild-topology --project <id>`, and rebuilt topology plus cognitive temporal edges through resumable staging and a final atomic project-local swap.
-- Bound every migration receipt digest to its exact checked-in source, restricted legacy checksum conversion to complete audited profiles, and verified real `f71b20a` source/dist databases upgrade to the current schema.
+- Bound the 0032 receipt digest to the release entrypoint and every internal atomic install source, and verified a real `main@b4733454` 3.7.3 database upgrades with one receipt.
 - Hardened import date provenance and explicit `--db` timezone diagnostics, made Frame baseline reduction idempotent across repeated direct rebuilds, and aligned MemoryFrame schema bounds with runtime validation.
-- Added immutable migrations 0051-0062 for project-scoped topology, entity, event, policy-execution, runtime, Atlas, and projection identities; ambiguous legacy runtime rows are removed after the mandatory backup and retained only as hash-based discard receipts.
-- Made policy side effects require a caller-owned operation identity, atomically lease execution, validate terminal outcomes, preserve legacy idempotency tombstones, and recover pending audit events after restart.
+- Scoped topology, entity, event, policy-execution, runtime, Atlas, and projection identities. Unscoped 3.7.3 runtime read-model rows are treated as disposable runtime state: migration requires a backup, reports the discarded count, and retains only hash-based discard receipts.
+- Made policy side effects require a caller-owned operation identity, atomically lease execution, validate terminal outcomes, preserve legacy idempotency tombstones, and recover pending audit events after restart without bypassing retry schedules.
 - Rebuilt policy/runtime projections with filtered global-sequence pages, fixed high-water checkpoints, and shadow tables that atomically replace the live read model without exposing empty or partial rebuilds.
 - Scoped runtime state, transition, outbox, and projection rows by project, included them in privacy erasure, and made standalone stores fail explicitly when opened before the required migration.
 - Restricted Atlas dirtying to user/tool evidence, projected MemoryFrames before aggregate/project counts, merged action evidence into time facets, and tightened multilingual action/target parsing.

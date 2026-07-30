@@ -78,7 +78,7 @@ export declare class PolicyExecutionStore {
     }): void;
     private emitRecord;
     private enqueueAudit;
-    flushAuditOutbox(ignoreSchedule?: boolean): number;
+    flushAuditOutbox(): number;
     getAuditOutboxStats(): {
         pending: number;
         oldestCreatedAt?: number;

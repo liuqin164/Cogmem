@@ -1,17 +1,20 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
 import { createMemoryKernel } from '../src/factory.js';
-import { migration_0061, runtimeScopeAndProjectionIntegritySatisfied } from '../src/migrations/0061_runtime_scope_and_projection_integrity.js';
-import { migration_0062, projectionScopeAndOutboxRecoverySatisfied } from '../src/migrations/0062_projection_scope_and_outbox_recovery.js';
 
 const migrateBin = join(import.meta.dir, '..', 'src', 'bin', 'migrate.ts');
+const fixturePath = join(import.meta.dir, 'fixtures', 'migrations', 'main-3.7.3-schema31.sqlite.gz');
 
-async function migrate(dbPath: string, args: string[]): Promise<Record<string, unknown>> {
+async function migrate(dbPath: string, args: string[]): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
   const proc = Bun.spawn({
     cmd: ['bun', migrateBin, '--db', dbPath, ...args, '--json'],
     stdout: 'pipe',
@@ -22,200 +25,123 @@ async function migrate(dbPath: string, args: string[]): Promise<Record<string, u
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  expect(stderr).toBe('');
-  expect(exitCode).toBe(0);
-  return JSON.parse(stdout) as Record<string, unknown>;
+  return { exitCode, stdout, stderr };
 }
 
-test('one command upgrades a 3.5.2 database through schema 62 without changing source memory', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-atlas-migrate-')), 'memory.db');
-  const kernel = createMemoryKernel({ dbPath });
-  const event = kernel.eventStore.append({
-    eventId: 'evt-hermes-2025',
-    streamId: 'thread-hermes',
-    streamType: 'thread',
-    eventType: 'MESSAGE',
-    rawEventType: 'message',
-    projectId: 'cogmem',
-    sessionId: 'session-hermes',
-    role: 'user',
-    occurredAt: Date.UTC(2025, 5, 1),
-    payload: { text: '请给 Hermes 配置 MCP 并连接 Cogmem。' },
-  });
-  const entity = kernel.memoryBindingStore.upsertEntity({
-    projectId: 'cogmem',
-    canonicalName: 'Hermes',
-    entityType: 'project',
-    now: event.occurredAt,
-  });
-  kernel.memoryBindingStore.upsertTopic({
-    projectId: 'cogmem',
-    topicPath: 'cogmem/hermes',
-    topicType: 'project',
-    summary: 'Hermes integration work',
-    now: event.occurredAt,
-  });
-  kernel.memoryBindingStore.insertBinding({
-    eventId: event.eventId,
-    projectId: 'cogmem',
-    role: 'user',
-    rawEventType: 'message',
-    entityId: entity.entityId,
-    entityName: 'Hermes',
-    entityType: 'project',
-    topicPath: 'cogmem/hermes',
-    bindingType: 'about',
-    confidence: 0.95,
-    source: 'deterministic',
-    signal: 'Hermes',
-    claimKey: 'hermes-mcp-setup',
-    createdAt: event.occurredAt,
-  });
-  kernel.close();
+function materializeFixture(directory: string): string {
+  const dbPath = join(directory, 'memory.db');
+  writeFileSync(dbPath, gunzipSync(readFileSync(fixturePath)));
+  return dbPath;
+}
 
-  const fixture = new Database(dbPath);
-  fixture.exec(`
-    DROP TABLE IF EXISTS memory_atlas_projection_state;
-    DROP TABLE IF EXISTS memory_atlas_activation;
-    DROP TABLE IF EXISTS memory_atlas_access;
-    DROP TABLE IF EXISTS memory_action_frame_evidence;
-    DROP TABLE IF EXISTS memory_action_frames;
-    DROP TABLE IF EXISTS memory_atlas_fts;
-    DROP TABLE IF EXISTS memory_atlas_documents;
-    DROP TABLE IF EXISTS topology_projection_state;
-    DROP TABLE IF EXISTS deep_write_candidate_reviews;
-    DELETE FROM _schema_migrations WHERE version IN ('0025','0026','0027','0028','0029','0030','0031','0032','0033','0034','0035','0036','0037','0038','0039','0040','0041','0042','0043','0044','0045','0046','0047','0048','0049','0050','0051','0052','0053','0054','0055','0056','0057','0058','0059','0060','0061','0062');
-    DROP TABLE IF EXISTS _memory_frame_integrity_markers;
-    DELETE FROM _episode_integrity_markers WHERE marker = 'episode_boundary_integrity_0031';
-    UPDATE _meta SET value = '24' WHERE key = 'schema_version';
-  `);
-  fixture.close();
+function canonicalEvidence(db: Database): unknown {
+  return {
+    events: db.prepare(`SELECT event_id,project_id,payload_hash FROM memory_events ORDER BY event_id`).all(),
+    neurons: db.prepare(`SELECT id,project_id,content FROM neurons ORDER BY id`).all(),
+  };
+}
 
-  const before = new Database(dbPath, { readonly: true });
-  const beforeEvents = (before.prepare('SELECT COUNT(*) AS count FROM memory_events').get() as { count: number }).count;
-  const beforeBindings = (before.prepare('SELECT COUNT(*) AS count FROM memory_bindings').get() as { count: number }).count;
+function schema(db: Database): unknown {
+  const tables = (db.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'_schema_migrations'
+    ORDER BY name
+  `).all() as Array<{ name: string }>).map(({ name }) => ({
+    name,
+    columns: (db.prepare(`PRAGMA table_info(${name})`).all() as Array<Record<string, unknown>>)
+      .map(({ name: column, type, notnull, dflt_value, pk }) => ({ column, type, notnull, dflt_value, pk }))
+      .sort((left, right) => String(left.column).localeCompare(String(right.column))),
+    foreignKeys: db.prepare(`PRAGMA foreign_key_list(${name})`).all(),
+  }));
+  const indexes = (db.prepare(`
+    SELECT name,tbl_name FROM sqlite_master
+    WHERE type='index' AND name NOT LIKE 'sqlite_%'
+    ORDER BY name
+  `).all() as Array<{ name: string; tbl_name: string }>).map(({ name, tbl_name }) => ({
+    name,
+    table: tbl_name,
+    definition: (({ unique, origin, partial }) => ({ unique, origin, partial }))(
+      db.prepare(`PRAGMA index_list(${tbl_name})`).all()
+        .find((row) => (row as { name: string }).name === name) as { unique: number; origin: string; partial: number },
+    ),
+    columns: (db.prepare(`PRAGMA index_info(${name})`).all() as Array<{ name: string; seqno: number }>)
+      .sort((left, right) => left.seqno - right.seqno)
+      .map((column) => column.name),
+  }));
+  const triggers = (db.prepare(`
+    SELECT name,sql FROM sqlite_master WHERE type='trigger' ORDER BY name
+  `).all() as Array<{ name: string; sql: string }>).map(({ name, sql }) => ({
+    name,
+    sql: sql.replace(/\s+/gu, '').toLowerCase(),
+  }));
+  return { tables, indexes, triggers };
+}
+
+test('real main 3.7.3 schema 31 upgrades atomically through the sole 0032 release migration', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-main-373-'));
+  const dbPath = materializeFixture(directory);
+  const before = new Database(dbPath);
+  const evidence = canonicalEvidence(before);
+  const receiptCount = (before.prepare(`SELECT COUNT(*) AS count FROM _schema_migrations`).get() as { count: number }).count;
   before.close();
 
   const dryRun = await migrate(dbPath, ['--dry-run']);
-  expect(dryRun.pending).toEqual(['0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047', '0048', '0049', '0050', '0051', '0052', '0053', '0054', '0055', '0056', '0057', '0058', '0059', '0060', '0061', '0062']);
+  expect({ exitCode: dryRun.exitCode, stderr: dryRun.stderr }).toEqual({ exitCode: 0, stderr: '' });
+  expect(JSON.parse(dryRun.stdout).pending).toEqual(['0032']);
+  const afterDryRun = new Database(dbPath);
+  expect(afterDryRun.prepare(`SELECT COUNT(*) AS count FROM _schema_migrations`).get()).toEqual({ count: receiptCount });
+  afterDryRun.close();
 
-  const result = await migrate(dbPath, ['--yes', '--backup']);
-  expect(result.applied).toEqual(['0025', '0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', '0042', '0043', '0044', '0045', '0046', '0047', '0048', '0049', '0050', '0051', '0052', '0053', '0054', '0055', '0056', '0057', '0058', '0059', '0060', '0061', '0062']);
-  expect(existsSync(result.backupPath as string)).toBe(true);
+  const applied = await migrate(dbPath, ['--yes']);
+  expect({ exitCode: applied.exitCode, stderr: applied.stderr }).toEqual({ exitCode: 0, stderr: '' });
+  const result = JSON.parse(applied.stdout);
+  expect(result.applied).toEqual(['0032']);
+  expect(existsSync(result.backupPath)).toBe(true);
 
-  const upgraded = new Database(dbPath, { readonly: true });
-  expect(upgraded.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '62' });
-  expect((upgraded.prepare('SELECT COUNT(*) AS count FROM memory_events').get() as { count: number }).count).toBe(beforeEvents);
-  expect((upgraded.prepare('SELECT COUNT(*) AS count FROM memory_bindings').get() as { count: number }).count).toBe(beforeBindings);
-  expect(upgraded.prepare(`SELECT node_id, project_id, node_type FROM memory_atlas_documents WHERE node_id = ?`).get(`entity:${entity.entityId}`)).toEqual({
-    node_id: `entity:${entity.entityId}`,
-    project_id: 'cogmem',
-    node_type: 'entity',
-  });
-  expect(upgraded.prepare(`SELECT status FROM memory_atlas_projection_state WHERE project_id='cogmem' AND projection_name='memory_atlas.v1'`).get()).toEqual({
-    status: 'dirty',
-  });
-  const eventColumns = upgraded.prepare('PRAGMA table_info(memory_events)').all() as Array<{ name: string }>;
-  expect(eventColumns.map((column) => column.name)).toContain('local_date_source');
+  const upgraded = new Database(dbPath);
+  expect(canonicalEvidence(upgraded)).toEqual(evidence);
+  expect(upgraded.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0032' });
+  expect(upgraded.prepare(`SELECT COUNT(*) AS count FROM _schema_migrations WHERE version>'0032'`).get()).toEqual({ count: 0 });
+  expect(upgraded.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='runtime_scope_quarantine'`).get()).toBeNull();
+  expect(upgraded.prepare(`PRAGMA integrity_check`).get()).toEqual({ integrity_check: 'ok' });
+  expect(upgraded.prepare(`PRAGMA foreign_key_check`).all()).toEqual([]);
   upgraded.close();
 
+  createMemoryKernel({ dbPath, projectTimeZone: 'Asia/Tokyo' }).close();
   const repeated = await migrate(dbPath, ['--yes']);
-  expect(repeated.applied).toEqual([]);
+  expect(JSON.parse(repeated.stdout).applied).toEqual([]);
+  rmSync(directory, { recursive: true, force: true });
 });
 
-test('real 3.5.2 tag database upgrades before EventStore construction through CLI and Kernel paths', async () => {
-  const fixture = gunzipSync(readFileSync(join(import.meta.dir, 'fixtures', 'migrations', '3.5.2-real.sqlite.gz')));
+test('fresh and main-schema-31 upgrade paths produce the same runtime schema', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema-equivalence-'));
+  const upgradedPath = materializeFixture(directory);
+  const freshPath = join(directory, 'fresh.db');
 
-  const kernelDir = mkdtempSync(join(tmpdir(), 'cogmem-real-352-kernel-'));
-  const kernelPath = join(kernelDir, 'memory.db');
-  writeFileSync(kernelPath, fixture);
-  const kernel = createMemoryKernel({ dbPath: kernelPath, projectTimeZone: 'Asia/Tokyo' });
-  expect(kernel.eventStore.getEvent('legacy-event')?.projectId).toBe('legacy-project');
-  kernel.close();
-  expect(readdirSync(kernelDir).some((name) => name.includes('.pre-migrate-') && name.endsWith('.bak'))).toBe(true);
-  const kernelDb = new Database(kernelPath, { readonly: true });
-  expect(kernelDb.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0062' });
-  expect((kernelDb.prepare(`PRAGMA table_info(memory_events)`).all() as Array<{ name: string }>)
-    .some((column) => column.name === 'project_scope')).toBe(true);
-  expect(kernelDb.prepare(`SELECT legacy_status,reason FROM policy_execution_legacy_tombstones
-    WHERE legacy_execution_id='legacy-policy'`).get()).toEqual({
-    legacy_status: 'executed', reason: 'legacy_execution_scope_ambiguous',
-  });
-  kernelDb.close();
+  const applied = await migrate(upgradedPath, ['--yes']);
+  expect(applied.exitCode).toBe(0);
+  createMemoryKernel({ dbPath: upgradedPath, projectTimeZone: 'Asia/Tokyo' }).close();
+  createMemoryKernel({ dbPath: freshPath, projectTimeZone: 'Asia/Tokyo' }).close();
 
-  const cliDir = mkdtempSync(join(tmpdir(), 'cogmem-real-352-cli-'));
-  const cliPath = join(cliDir, 'memory.db');
-  writeFileSync(cliPath, fixture);
-  const dryRun = await migrate(cliPath, ['--dry-run']);
-  expect(dryRun.pending).toContain('0059');
-  const applied = await migrate(cliPath, ['--yes']);
-  expect(applied.applied).toContain('0059');
-  expect(existsSync(applied.backupPath as string)).toBe(true);
-  const cliDb = new Database(cliPath, { readonly: true });
-  expect(cliDb.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0062' });
-  cliDb.close();
+  const upgraded = new Database(upgradedPath);
+  const fresh = new Database(freshPath);
+  expect(schema(upgraded)).toEqual(schema(fresh));
+  upgraded.close();
+  fresh.close();
+  rmSync(directory, { recursive: true, force: true });
 });
 
-test('0061 quarantines unscoped runtime rows and rebuilds canonical projection identities', () => {
-  const db = new Database(':memory:');
-  db.exec(`
-    CREATE TABLE runtime_states(
-      runtime_id TEXT,entity_type TEXT,entity_key TEXT,status TEXT,metadata_json TEXT,updated_at INTEGER
-    );
-    INSERT INTO runtime_states VALUES('legacy','step','one','ready','{"secret":"not-copied"}',1);
-    CREATE TABLE policy_execution_read_model(
-      execution_id TEXT,project_scope TEXT,idempotency_key TEXT,policy TEXT,action TEXT,status TEXT,
-      attempt_count INTEGER,created_at INTEGER,updated_at INTEGER,source_global_seq INTEGER
-    );
-  `);
-
-  migration_0061.up(db);
-
-  expect(runtimeScopeAndProjectionIntegritySatisfied(db)).toBe(true);
-  expect(db.prepare(`SELECT source_table,reason FROM runtime_scope_quarantine`).all()).toContainEqual({
-    source_table: 'runtime_states',
-    reason: 'legacy_runtime_scope_unproven',
-  });
-  expect(db.prepare(`SELECT COUNT(*) AS count FROM runtime_states`).get()).toEqual({ count: 0 });
-  expect(db.prepare(`PRAGMA integrity_check`).get()).toEqual({ integrity_check: 'ok' });
-  expect(db.prepare(`PRAGMA foreign_key_check`).all()).toEqual([]);
+test('development schema receipts fail fast without creating a migration backup', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-development-schema-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  db.prepare(`INSERT INTO _schema_migrations(version,description,applied_at) VALUES(?,?,?)`)
+    .run('0033', 'unreleased development schema', new Date(0).toISOString());
   db.close();
-});
 
-test('0062 records unscoped projector events and repairs same-name indexes', () => {
-  const db = new Database(':memory:');
-  db.exec(`
-    CREATE TABLE memory_events(
-      event_id TEXT PRIMARY KEY,global_seq INTEGER,event_type TEXT,project_id TEXT
-    );
-    INSERT INTO memory_events VALUES
-      ('legacy-runtime',1,'RUNTIME_STATE_UPDATED',NULL),
-      ('legacy-policy',2,'POLICY_EXECUTION_UPDATED',NULL),
-      ('projectless-runtime',3,'RUNTIME_STATE_UPDATED','');
-    CREATE TABLE runtime_projection_state(projection_name TEXT PRIMARY KEY);
-    CREATE TABLE policy_projection_state(projection_name TEXT PRIMARY KEY);
-    CREATE TABLE policy_executions(
-      execution_id TEXT PRIMARY KEY,project_scope TEXT,idempotency_key TEXT,status TEXT
-    );
-  `);
-  migration_0061.up(db);
-  db.exec(`
-    DROP INDEX idx_runtime_states_scope_runtime;
-    CREATE INDEX idx_runtime_states_scope_runtime ON runtime_states(status);
-  `);
-
-  migration_0062.up(db);
-
-  expect(projectionScopeAndOutboxRecoverySatisfied(db)).toBe(true);
-  expect(db.prepare(`
-    SELECT projector,event_id,reason FROM projection_event_discard_receipts ORDER BY event_id
-  `).all()).toEqual([
-    { projector: 'policy_execution', event_id: 'legacy-policy', reason: 'legacy_event_scope_unproven' },
-    { projector: 'runtime', event_id: 'legacy-runtime', reason: 'legacy_event_scope_unproven' },
-  ]);
-  expect((db.prepare(`PRAGMA index_info(idx_runtime_states_scope_runtime)`).all() as Array<{ name: string }>)
-    .map((column) => column.name)).toEqual(['project_scope', 'runtime_id', 'entity_type', 'updated_at']);
-  expect(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_scope_quarantine'`).get()).toBeTruthy();
-  expect(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_scope_discard_receipts'`).get()).toBeTruthy();
-  db.close();
+  const result = await migrate(dbPath, ['--yes', '--backup']);
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain('unsupported_development_schema:0033');
+  expect(readdirSync(directory).filter((name) => name.includes('pre-migrate') || name.endsWith('.bak'))).toEqual([]);
+  rmSync(directory, { recursive: true, force: true });
 });

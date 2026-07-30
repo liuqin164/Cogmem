@@ -1,6 +1,6 @@
 import type { MemoryEvent } from '../types/index.js';
 import { EventStore } from './EventStore.js';
-import { PlanRuntimeStore } from './PlanRuntimeStore.js';
+import { PlanRuntimeStore, type RuntimeEntityType, type RuntimeStatus } from './PlanRuntimeStore.js';
 import { RuntimeProjectionStore } from './RuntimeProjectionStore.js';
 import { logger } from '../utils/Logger.js';
 
@@ -114,37 +114,57 @@ export class RuntimeProjector {
 
   private applyEvent(event: MemoryEvent, staging = false): void {
     const payload = (event.payload || {}) as Record<string, unknown>;
-    const projectId = event.projectId ?? (typeof payload.projectId === 'string' ? payload.projectId : undefined);
+    const projectId = event.projectId;
     if (projectId === undefined) {
       this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'legacy_event_scope_unproven');
+      return;
+    }
+    if (payload.projectId !== undefined && payload.projectId !== projectId) {
+      this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'event_payload_scope_mismatch');
       return;
     }
 
     switch (event.eventType) {
       case 'RUNTIME_STATE_UPDATED':
-        if (!payload.runtimeId || !payload.entityType || !payload.entityKey || !payload.status) return;
+        if (!isNonEmptyString(payload.runtimeId)
+          || !isRuntimeEntityType(payload.entityType)
+          || !isNonEmptyString(payload.entityKey)
+          || !isRuntimeStatus(payload.status)
+          || !isOptionalRecord(payload.metadata)) {
+          this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'invalid_runtime_event_payload');
+          return;
+        }
         this.runtimeStore.applyProjectedState(this.projectionName, event.globalSeq ?? 0, {
           projectId,
-          runtimeId: String(payload.runtimeId),
-          entityType: String(payload.entityType) as any,
-          entityKey: String(payload.entityKey),
-          status: String(payload.status) as any,
-          metadata: (payload.metadata as Record<string, unknown> | undefined) || undefined,
+          runtimeId: payload.runtimeId,
+          entityType: payload.entityType,
+          entityKey: payload.entityKey,
+          status: payload.status,
+          metadata: payload.metadata,
           updatedAt: event.occurredAt
         }, staging);
         return;
 
       case 'RUNTIME_TRANSITION_RECORDED':
-        if (!payload.runtimeId || !payload.entityType || !payload.entityKey || !payload.transitionType || !payload.toStatus) return;
+        if (!isNonEmptyString(payload.runtimeId)
+          || !isRuntimeEntityType(payload.entityType)
+          || !isNonEmptyString(payload.entityKey)
+          || !isNonEmptyString(payload.transitionType)
+          || !isRuntimeStatus(payload.toStatus)
+          || (payload.fromStatus !== undefined && !isRuntimeStatus(payload.fromStatus))
+          || !isOptionalRecord(payload.data)) {
+          this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'invalid_runtime_event_payload');
+          return;
+        }
         this.runtimeStore.applyProjectedTransition(this.projectionName, event.eventId, event.globalSeq ?? 0, {
           projectId,
-          runtimeId: String(payload.runtimeId),
-          entityType: String(payload.entityType) as any,
-          entityKey: String(payload.entityKey),
-          transitionType: String(payload.transitionType),
-          fromStatus: payload.fromStatus ? String(payload.fromStatus) : undefined,
-          toStatus: String(payload.toStatus),
-          payload: (payload.data as Record<string, unknown> | undefined) || undefined,
+          runtimeId: payload.runtimeId,
+          entityType: payload.entityType,
+          entityKey: payload.entityKey,
+          transitionType: payload.transitionType,
+          fromStatus: payload.fromStatus,
+          toStatus: payload.toStatus,
+          payload: payload.data,
           occurredAt: event.occurredAt
         }, staging);
         return;
@@ -154,4 +174,23 @@ export class RuntimeProjector {
     }
   }
 
+}
+
+const RUNTIME_ENTITY_TYPES = new Set<RuntimeEntityType>(['step', 'merge', 'validation', 'policy', 'executor', 'state_machine']);
+const RUNTIME_STATUSES = new Set<RuntimeStatus>(['ready', 'blocked', 'pending', 'matched', 'missing']);
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isRuntimeEntityType(value: unknown): value is RuntimeEntityType {
+  return typeof value === 'string' && RUNTIME_ENTITY_TYPES.has(value as RuntimeEntityType);
+}
+
+function isRuntimeStatus(value: unknown): value is RuntimeStatus {
+  return typeof value === 'string' && RUNTIME_STATUSES.has(value as RuntimeStatus);
+}
+
+function isOptionalRecord(value: unknown): value is Record<string, unknown> | undefined {
+  return value === undefined || (typeof value === 'object' && value !== null && !Array.isArray(value));
 }

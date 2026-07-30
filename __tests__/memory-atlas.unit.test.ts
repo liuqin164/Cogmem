@@ -434,6 +434,40 @@ test('Atlas binds adjacent Chinese and Japanese actions to their local targets',
   }
 });
 
+test('Atlas does not split connector characters inside CJK entity names', () => {
+  const kernel = createMemoryKernel();
+  try {
+    const targets = [
+      ['和歌山服务器', '配置和歌山服务器'],
+      ['和平号', '检查和平号'],
+      ['再生服务', '配置再生服务'],
+      ['及川节点', '更新及川节点'],
+    ] as const;
+    const entityIds = new Map(targets.map(([name], index) => [
+      name,
+      kernel.memoryBindingStore.upsertEntity({
+        projectId: 'p', canonicalName: name, entityType: 'device', aliases: [name], now: index + 1,
+      }).entityId,
+    ]));
+    for (const [name, text] of targets) {
+      kernel.eventStore.append({
+        streamId: `cjk-${name}`, streamType: 'thread', eventType: 'MESSAGE',
+        projectId: 'p', role: 'user', occurredAt: 10,
+        payload: { text },
+      });
+    }
+
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const rows = kernel.memoryAtlasStore.db.prepare(`
+      SELECT target_entity_id FROM memory_action_frames WHERE project_id='p'
+    `).all() as Array<{ target_entity_id: string | null }>;
+    expect(rows).toHaveLength(4);
+    expect(new Set(rows.map((row) => row.target_entity_id))).toEqual(new Set(entityIds.values()));
+  } finally {
+    kernel.close();
+  }
+});
+
 test('Atlas reinstalls a same-name no-op dirty trigger and refreshes after raw events', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-atlas-trigger-'));
   const dbPath = join(dir, 'memory.db');

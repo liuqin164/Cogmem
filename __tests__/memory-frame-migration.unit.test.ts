@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { migration_0032, migration_0033, migration_0034 } from '../src/migrations/index.js';
+import { migration_0032 } from '../src/migrations/v3_7_4/0032_memory_frames.js';
+import { migration_0033 } from '../src/migrations/v3_7_4/0033_atlas_aliases_and_supports.js';
+import { migration_0034 } from '../src/migrations/v3_7_4/0034_atlas_projection_v2.js';
 
 test('3.7.4 frame and Atlas V2 migrations are idempotent', () => {
   const db = new Database(':memory:');

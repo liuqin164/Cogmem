@@ -50,6 +50,12 @@ function resolveDbPath(args: MigrateArgs): string {
   return loaded.options.dbPath;
 }
 
+function countRuntimeDiscarded(db: Database): number {
+  if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_scope_discard_receipts'`).get()) return 0;
+  return (db.prepare(`SELECT COUNT(*) AS count FROM runtime_scope_discard_receipts
+    WHERE source_table IN ('runtime_states','runtime_transitions')`).get() as { count: number }).count;
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const dbPath = resolveDbPath(args);
@@ -59,6 +65,7 @@ async function main(): Promise<void> {
   try {
     let backupPath: string | undefined;
     let result;
+    let runtimeDiscarded = 0;
     if (args.dryRun) {
       const temporaryPath = dbPath === ':memory:'
         ? ':memory:'
@@ -71,6 +78,7 @@ async function main(): Promise<void> {
           const runner = new SchemaMigrationRunner(temporaryDb, ALL_MIGRATIONS, { backupVerified: true });
           const pending = runner.plan().map((migration) => migration.version);
           const verified = runner.run();
+          runtimeDiscarded = countRuntimeDiscarded(temporaryDb);
           result = { pending, applied: [], currentVersion: verified.currentVersion, dryRun: true };
         } finally {
           temporaryDb.close();
@@ -88,17 +96,19 @@ async function main(): Promise<void> {
       result = new SchemaMigrationRunner(db, ALL_MIGRATIONS, {
         backupVerified: !needsBackup || Boolean(backupPath) || dbPath === ':memory:',
       }).run();
+      runtimeDiscarded = countRuntimeDiscarded(db);
       db.exec(`CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
       const numericVersion = Number.parseInt(result.currentVersion || '0', 10);
       db.prepare(`INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', ?)`).run(String(numericVersion));
     }
-    const output = { command: 'migrate', dbPath, backupPath, ...result };
+    const output = { command: 'migrate', dbPath, backupPath, runtimeDiscarded, ...result };
     if (args.json) printCliJson('migrate', output);
     else {
       console.log(`cogmem migrate ${args.dryRun ? 'dry-run' : 'complete'}`);
       console.log(`database: ${dbPath}`);
       console.log(`pending: ${result.pending.join(', ') || 'none'}`);
       console.log(`applied: ${result.applied.join(', ') || 'none'}`);
+      console.log(`discarded unscoped runtime rows: ${runtimeDiscarded}`);
       if (backupPath) console.log(`backup: ${backupPath}`);
     }
   } finally {

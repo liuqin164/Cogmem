@@ -1,6 +1,11 @@
 import type { MemoryEvent } from '../types/index.js';
 import { EventStore } from './EventStore.js';
-import { PolicyExecutionStore, type PolicyExecutionOutcome } from './PolicyExecutionStore.js';
+import {
+  PolicyExecutionStore,
+  type PolicyExecutionOutcome,
+  type PolicyExecutionStatus,
+  type PolicyReplayPolicy,
+} from './PolicyExecutionStore.js';
 import { PolicyProjectionStore } from './PolicyProjectionStore.js';
 import { logger } from '../utils/Logger.js';
 
@@ -117,27 +122,47 @@ export class PolicyExecutionProjector {
   private applyEvent(event: MemoryEvent, staging = false): void {
     const payload = (event.payload || {}) as Record<string, unknown>;
     if (event.eventType !== 'POLICY_EXECUTION_UPDATED') return;
-    if (!payload.executionId || !payload.idempotencyKey || !payload.policy || !payload.action || !payload.status) return;
-    const projectId = event.projectId ?? (typeof payload.projectId === 'string' ? payload.projectId : undefined);
+    const projectId = event.projectId;
     if (projectId === undefined) {
       this.executionStore.recordDiscardedProjectionEvent('policy_execution', event, 'legacy_event_scope_unproven');
       return;
     }
+    if (payload.projectId !== undefined && payload.projectId !== projectId) {
+      this.executionStore.recordDiscardedProjectionEvent('policy_execution', event, 'event_payload_scope_mismatch');
+      return;
+    }
+    const outcome = policyOutcome(payload.executionOutcome);
+    if (!isNonEmptyString(payload.executionId)
+      || !isNonEmptyString(payload.idempotencyKey)
+      || !isNonEmptyString(payload.policy)
+      || !isNonEmptyString(payload.action)
+      || !isPolicyStatus(payload.status)
+      || (payload.executionOutcome !== undefined && outcome === undefined)
+      || !isOptionalNonNegativeNumber(payload.attemptCount)
+      || !isOptionalNumber(payload.nextRetryAt)
+      || !isOptionalNumber(payload.deadLetteredAt)
+      || !isOptionalReplayPolicy(payload.replayPolicy)
+      || !isOptionalRecord(payload.metadata)
+      || !isOptionalNumber(payload.createdAt)
+      || !isOptionalNumber(payload.updatedAt)) {
+      this.executionStore.recordDiscardedProjectionEvent('policy_execution', event, 'invalid_policy_event_payload');
+      return;
+    }
 
     this.executionStore.upsertReadModel({
-      executionId: String(payload.executionId),
+      executionId: payload.executionId,
       projectId,
-      idempotencyKey: String(payload.idempotencyKey),
+      idempotencyKey: payload.idempotencyKey,
       runtimeId: payload.runtimeId ? String(payload.runtimeId) : undefined,
-      policy: String(payload.policy),
-      action: String(payload.action),
+      policy: payload.policy,
+      action: payload.action,
       target: payload.target ? String(payload.target) : undefined,
-      status: String(payload.status) as 'executed' | 'skipped' | 'failed',
-      executionOutcome: policyOutcome(payload.executionOutcome),
-      attemptCount: Number(payload.attemptCount || 0),
-      nextRetryAt: payload.nextRetryAt ? Number(payload.nextRetryAt) : undefined,
-      deadLetteredAt: payload.deadLetteredAt ? Number(payload.deadLetteredAt) : undefined,
-      replayPolicy: payload.replayPolicy ? String(payload.replayPolicy) as 'manual' | 'on_bootstrap' | 'always' | 'scheduled_only' : undefined,
+      status: payload.status,
+      executionOutcome: outcome,
+      attemptCount: payload.attemptCount ?? 0,
+      nextRetryAt: payload.nextRetryAt,
+      deadLetteredAt: payload.deadLetteredAt,
+      replayPolicy: payload.replayPolicy,
       actorId: payload.actorId ? String(payload.actorId) : undefined,
       causationId: payload.causationId ? String(payload.causationId) : undefined,
       correlationId: payload.correlationId ? String(payload.correlationId) : event.correlationId,
@@ -145,12 +170,39 @@ export class PolicyExecutionProjector {
       streamType: payload.streamType ? String(payload.streamType) : event.streamType,
       eventType: payload.eventType ? String(payload.eventType) : event.eventType,
       detail: payload.detail ? String(payload.detail) : undefined,
-      metadata: payload.metadata as Record<string, unknown> | undefined,
-      createdAt: Number(payload.createdAt || event.occurredAt),
-      updatedAt: Number(payload.updatedAt || event.occurredAt)
+      metadata: payload.metadata,
+      createdAt: payload.createdAt ?? event.occurredAt,
+      updatedAt: payload.updatedAt ?? event.occurredAt
     }, event.globalSeq ?? 0, staging);
   }
 
+}
+
+const POLICY_STATUSES = new Set<PolicyExecutionStatus>(['in_progress', 'executed', 'skipped', 'failed']);
+const REPLAY_POLICIES = new Set<PolicyReplayPolicy>(['manual', 'on_bootstrap', 'always', 'scheduled_only']);
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isPolicyStatus(value: unknown): value is PolicyExecutionStatus {
+  return typeof value === 'string' && POLICY_STATUSES.has(value as PolicyExecutionStatus);
+}
+
+function isOptionalReplayPolicy(value: unknown): value is PolicyReplayPolicy | undefined {
+  return value === undefined || (typeof value === 'string' && REPLAY_POLICIES.has(value as PolicyReplayPolicy));
+}
+
+function isOptionalNumber(value: unknown): value is number | undefined {
+  return value === undefined || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function isOptionalNonNegativeNumber(value: unknown): value is number | undefined {
+  return isOptionalNumber(value) && (value === undefined || value >= 0);
+}
+
+function isOptionalRecord(value: unknown): value is Record<string, unknown> | undefined {
+  return value === undefined || (typeof value === 'object' && value !== null && !Array.isArray(value));
 }
 
 function policyOutcome(value: unknown): PolicyExecutionOutcome | undefined {

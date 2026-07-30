@@ -15,7 +15,7 @@ import {
 } from '../lexicon/coreMemoryLexicon.js';
 import { logger } from '../utils/Logger.js';
 import { projectQueryValue, projectScope } from '../topology/ProjectScope.js';
-import { installRuntimeProvenanceGuards } from '../migrations/0059_project_execution_and_provenance_guards.js';
+import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/0059_project_execution_and_provenance_guards.js';
 
 export interface VectorPageRow {
   id: string;

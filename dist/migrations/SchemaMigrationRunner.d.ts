@@ -23,13 +23,10 @@ export declare class SchemaMigrationRunner {
     run(options?: SchemaMigrationRunOptions): SchemaMigrationResult;
     private ensureMigrationTable;
     private migrationChecksum;
-    /** Convert only audited pre-manifest receipts before strict validation. */
-    private repairKnownLegacyFunctionChecksums;
     private backfillChecksums;
-    private rewriteChecksums;
     private assertRecordedChecksums;
     private recordedChecksums;
-    private matchingLegacyReceiptProfile;
+    private assertSupportedReleaseSchema;
     currentVersion(): string | undefined;
     private appliedVersions;
     private schemaMigrationsTableExists;
@@ -39,6 +36,5 @@ export declare class SchemaMigrationRunner {
     private migrationSchemaSatisfied;
     private tableExists;
     private hasColumns;
-    private hasUniqueIndex;
 }
 //# sourceMappingURL=SchemaMigrationRunner.d.ts.map

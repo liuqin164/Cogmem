@@ -227,15 +227,17 @@ cogmem update --dry-run --json
 cogmem migrate --dry-run --json
 ```
 
-For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
+For a manual migration, run `cogmem migrate --yes --backup`. The 3.7.4 migration accepts the released 3.7.3/schema-31 database, preserves canonical Raw Ledger and memory evidence, and creates a timestamped, transaction-consistent standalone backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
-Upgrade a 3.5.2 database, a 3.6.x database, or a pre-release schema-25 test database into the current 3.7.4 schema and projection set with one command:
+Upgrade a 3.7.3/schema-31 database into the current 3.7.4 schema and projection set with one command:
 
 ```bash
 cogmem migrate --yes --backup --json
 ```
 
-Schema 25 backfills the rebuildable Atlas projection. Schema 26 adds audited candidate reviews and exact Atlas projection metadata. Schema 27 marks 3.6.0-upgraded Atlas projections dirty so the first real action/time rebuild is not skipped. All preserve Raw Ledger, episodes, bindings, beliefs, and governed topic state; the command is idempotent.
+The release records a single 0032 receipt. Schemas 0032-0062 produced by unreleased 3.7.4 development builds are intentionally unsupported; restore a schema-31 backup or recreate a development database. Older released databases must first be upgraded with Cogmem 3.7.3.
+
+The 3.7.3 runtime state tables did not contain project scope and cannot be safely attributed. They are disposable read models in the 3.7.4 contract: migration backs up the database, reports `runtimeDiscarded`, stores hash-only discard receipts, and leaves canonical Raw Ledger evidence unchanged. The command is idempotent.
 
 For OpenClaw upgrades, `cogmem update --yes` now runs this refresh automatically when the config has `[integrations.openclaw] enabled = true`. You can also run it manually; this path does not open the Cogmem database, so it still works while an old drainer has the DB busy:
 

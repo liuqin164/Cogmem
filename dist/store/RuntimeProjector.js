@@ -91,37 +91,55 @@ export class RuntimeProjector {
     }
     applyEvent(event, staging = false) {
         const payload = (event.payload || {});
-        const projectId = event.projectId ?? (typeof payload.projectId === 'string' ? payload.projectId : undefined);
+        const projectId = event.projectId;
         if (projectId === undefined) {
             this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'legacy_event_scope_unproven');
             return;
         }
+        if (payload.projectId !== undefined && payload.projectId !== projectId) {
+            this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'event_payload_scope_mismatch');
+            return;
+        }
         switch (event.eventType) {
             case 'RUNTIME_STATE_UPDATED':
-                if (!payload.runtimeId || !payload.entityType || !payload.entityKey || !payload.status)
+                if (!isNonEmptyString(payload.runtimeId)
+                    || !isRuntimeEntityType(payload.entityType)
+                    || !isNonEmptyString(payload.entityKey)
+                    || !isRuntimeStatus(payload.status)
+                    || !isOptionalRecord(payload.metadata)) {
+                    this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'invalid_runtime_event_payload');
                     return;
+                }
                 this.runtimeStore.applyProjectedState(this.projectionName, event.globalSeq ?? 0, {
                     projectId,
-                    runtimeId: String(payload.runtimeId),
-                    entityType: String(payload.entityType),
-                    entityKey: String(payload.entityKey),
-                    status: String(payload.status),
-                    metadata: payload.metadata || undefined,
+                    runtimeId: payload.runtimeId,
+                    entityType: payload.entityType,
+                    entityKey: payload.entityKey,
+                    status: payload.status,
+                    metadata: payload.metadata,
                     updatedAt: event.occurredAt
                 }, staging);
                 return;
             case 'RUNTIME_TRANSITION_RECORDED':
-                if (!payload.runtimeId || !payload.entityType || !payload.entityKey || !payload.transitionType || !payload.toStatus)
+                if (!isNonEmptyString(payload.runtimeId)
+                    || !isRuntimeEntityType(payload.entityType)
+                    || !isNonEmptyString(payload.entityKey)
+                    || !isNonEmptyString(payload.transitionType)
+                    || !isRuntimeStatus(payload.toStatus)
+                    || (payload.fromStatus !== undefined && !isRuntimeStatus(payload.fromStatus))
+                    || !isOptionalRecord(payload.data)) {
+                    this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'invalid_runtime_event_payload');
                     return;
+                }
                 this.runtimeStore.applyProjectedTransition(this.projectionName, event.eventId, event.globalSeq ?? 0, {
                     projectId,
-                    runtimeId: String(payload.runtimeId),
-                    entityType: String(payload.entityType),
-                    entityKey: String(payload.entityKey),
-                    transitionType: String(payload.transitionType),
-                    fromStatus: payload.fromStatus ? String(payload.fromStatus) : undefined,
-                    toStatus: String(payload.toStatus),
-                    payload: payload.data || undefined,
+                    runtimeId: payload.runtimeId,
+                    entityType: payload.entityType,
+                    entityKey: payload.entityKey,
+                    transitionType: payload.transitionType,
+                    fromStatus: payload.fromStatus,
+                    toStatus: payload.toStatus,
+                    payload: payload.data,
                     occurredAt: event.occurredAt
                 }, staging);
                 return;
@@ -129,4 +147,18 @@ export class RuntimeProjector {
                 return;
         }
     }
+}
+const RUNTIME_ENTITY_TYPES = new Set(['step', 'merge', 'validation', 'policy', 'executor', 'state_machine']);
+const RUNTIME_STATUSES = new Set(['ready', 'blocked', 'pending', 'matched', 'missing']);
+function isNonEmptyString(value) {
+    return typeof value === 'string' && value.length > 0;
+}
+function isRuntimeEntityType(value) {
+    return typeof value === 'string' && RUNTIME_ENTITY_TYPES.has(value);
+}
+function isRuntimeStatus(value) {
+    return typeof value === 'string' && RUNTIME_STATUSES.has(value);
+}
+function isOptionalRecord(value) {
+    return value === undefined || (typeof value === 'object' && value !== null && !Array.isArray(value));
 }

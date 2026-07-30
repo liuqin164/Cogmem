@@ -11,7 +11,7 @@ export interface CompiledAtlasQuery {
 }
 
 const STOP_WORDS = new Set(['我', '你', '让', '对', '的', '年', '做过', '什么', '去年', '今年', 'the', 'a', 'an', 'what', 'did', 'do', 'to', 'last', 'year']);
-const CJK_ACTIONS = '启动|重启|停止|执行|配置|连接|安装|修复|更新|升级|比较|操作|设置|调试|起動';
+const CJK_ACTIONS = '启动|重启|停止|执行|配置|连接|安装|修复|更新|升级|比较|检查|操作|设置|调试|起動';
 const LATIN_ACTIONS = [
   'restarted', 'launched', 'configured', 'connected', 'installed', 'repaired', 'updated', 'upgraded',
   'compared', 'stopped', 'started', 'restart', 'configure', 'connect', 'install', 'repair', 'update',
@@ -75,7 +75,7 @@ export function actionMarkers(value: string): Array<{ frameType: string; action:
       action,
       index,
       end,
-      clause: actionClause(value, index, end),
+      clause: actionClause(value, index, end, matches[ordinal - 1], matches[ordinal + 1]),
       ordinal,
     };
   });
@@ -104,15 +104,28 @@ function normalizeAction(action: string): string {
   return normalized[action] ?? action;
 }
 
-function actionClause(value: string, index: number, end: number): string {
+function actionClause(
+  value: string,
+  index: number,
+  end: number,
+  previousAction?: RegExpMatchArray,
+  nextAction?: RegExpMatchArray,
+): string {
   const separators = [...value.matchAll(/[。！？!?；;，,\n]+|(?:然后|随后|并且|同时|そして|また|して|并|和|及|再)|(?:\s+(?:and|then)\s+)/giu)];
   let start = 0;
   let finish = value.length;
   for (const separator of separators) {
     const separatorStart = separator.index;
     const separatorEnd = separatorStart + separator[0].length;
-    if (separatorEnd <= index) start = separatorEnd;
-    else if (separatorStart >= end) {
+    const punctuation = /^[。！？!?；;，,\n]+$/u.test(separator[0]);
+    const betweenPreviousActions = previousAction
+      && separatorStart >= previousAction.index! + previousAction[0].length
+      && separatorEnd <= index;
+    const betweenNextActions = nextAction
+      && separatorStart >= end
+      && separatorEnd <= nextAction.index!;
+    if (separatorEnd <= index && (punctuation || betweenPreviousActions)) start = separatorEnd;
+    else if (separatorStart >= end && (punctuation || betweenNextActions)) {
       finish = separatorStart;
       break;
     }

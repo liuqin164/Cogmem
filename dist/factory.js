@@ -52,7 +52,8 @@ import { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPath
 import { CorrectionResolver } from './episode/CorrectionResolver.js';
 import { CandidateReviewService, MemoryGovernanceExecutor, MemoryGovernanceValidator, PiiRedactor, } from './governance/index.js';
 import { ALL_MIGRATIONS, KERNEL_MIGRATIONS, SchemaMigrationRunner } from './migrations/index.js';
-import { installRuntimeProvenanceGuards } from './migrations/0059_project_execution_and_provenance_guards.js';
+import { installMultidimensionalMemoryGraph374 } from './migrations/0032_multidimensional_memory_graph_3_7_4.js';
+import { installRuntimeProvenanceGuards } from './migrations/v3_7_4/0059_project_execution_and_provenance_guards.js';
 import { backupDatabase } from './migrations/MigrationBackup.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
@@ -468,6 +469,11 @@ export class MemoryKernel {
         this.reEmbeddingPipeline = this.embeddingProvider
             ? new ReEmbeddingPipeline(this.neuronEmbeddingStore, this.embeddingProvider, this.memoryGraph, db)
             : undefined;
+        // Fresh databases bootstrap optional Store tables after the first migration
+        // pass. Re-run the single release migration once so fresh and upgraded
+        // databases finish with the same canonical constraints and indexes.
+        if (!existingSchema)
+            installMultidimensionalMemoryGraph374(db);
     }
     async initialize(skipWarmup = true) {
         if (this.initialized)

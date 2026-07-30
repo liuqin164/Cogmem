@@ -15,7 +15,7 @@ import { TemporalBranchSearch } from '../src/retrieval/TemporalBranchSearch.js';
 import { CognitiveGraphStore } from '../src/store/CognitiveGraphStore.js';
 import { localDateRange, nextCivilDate } from '../src/utils/LocalDateContext.js';
 import { timeBucketId } from '../src/topology/TimeBucketIdentity.js';
-import { SchemaMigrationRunner, migration_0051 } from '../src/migrations/index.js';
+import { migration_0051 } from '../src/migrations/v3_7_4/0051_time_projection_source_integrity.js';
 import type { TimeBucketRecord } from '../src/types/index.js';
 
 const bucket = (id: string, start: number, end: number, type: TimeBucketRecord['bucketType'] = 'day'): TimeBucketRecord => ({
@@ -534,8 +534,7 @@ describe('project-local temporal topology regressions', () => {
       DELETE FROM cognitive_nodes WHERE project_id='' AND node_type='time_bucket';
     `);
 
-    const applied = new SchemaMigrationRunner(db, [migration_0051]).run();
-    expect(applied.applied).toEqual(['0051']);
+    migration_0051.up(db);
     expect(db.prepare(`SELECT status,source_revision FROM topology_projection_state WHERE project_id=''`).get()).toEqual({ status: 'dirty', source_revision: 0 });
     expect(db.prepare(`SELECT revision FROM topology_source_revisions WHERE project_id=''`).get()).toEqual({ revision: 1 });
     kernel.rebuildProjectTimeTopology();
@@ -555,8 +554,7 @@ describe('project-local temporal topology regressions', () => {
       ON CONFLICT(project_id) DO UPDATE SET projection_version=3,status='clean',time_zone='UTC',source_revision=0;
     `);
 
-    const applied = new SchemaMigrationRunner(db, [migration_0051]).run();
-    expect(applied.applied).toEqual(['0051']);
+    migration_0051.up(db);
     expect(db.prepare(`SELECT revision FROM topology_source_revisions WHERE project_id='empty-upgrade'`).get()).toEqual({ revision: 0 });
     expect(kernel.topologyStore.hasUsableTimeProjection('empty-upgrade', 'UTC')).toBe(false);
     kernel.rebuildProjectTimeTopology('empty-upgrade');
