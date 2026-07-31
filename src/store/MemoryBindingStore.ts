@@ -14,6 +14,7 @@ import type {
   MemoryEntityType,
   MemoryTopicRecord,
 } from '../binding/MemoryBindingTypes.js';
+import { memoryEdgeId, memoryEntityId } from '../binding/MemoryBindingIdentity.js';
 import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 
 export interface UpsertMemoryEntityInput {
@@ -99,7 +100,7 @@ export class MemoryBindingStore {
       : null;
     const entityId = input.entityId && (!existingOwner || existingOwner.project_id === scope)
       ? input.entityId
-      : entityIdFor(input.projectId, input.entityType, input.entityId || input.canonicalName);
+      : memoryEntityId(input.projectId, input.entityType, input.entityId || input.canonicalName);
     const existing = this.db.prepare(`SELECT * FROM memory_entities WHERE entity_id=?`).get(entityId) as {
       project_id: string | null; canonical_name: string; entity_type: MemoryEntityType;
     } | null;
@@ -350,7 +351,7 @@ export class MemoryBindingStore {
     this.assertEventScopes(input.evidenceEventIds, scope);
     this.assertNodeScope(input.sourceType, input.sourceId, scope);
     this.assertNodeScope(input.targetType, input.targetId, scope);
-    const edgeId = edgeIdFor(input);
+    const edgeId = memoryEdgeId(input);
     const evidenceEventIds = Array.from(new Set(input.evidenceEventIds.filter(Boolean)));
     this.db.prepare(`
       INSERT INTO memory_edges (
@@ -843,10 +844,6 @@ function mapEdgeRow(row: MemoryEdgeRow): MemoryEdgeRecord {
   };
 }
 
-function entityIdFor(projectId: string | undefined, entityType: MemoryEntityType, canonicalName: string): string {
-  return `entity-${hash([projectId || '', entityType, canonicalName.toLowerCase()].join('\0'))}`;
-}
-
 function bindingIdFor(input: MemoryBindingInput): string {
   return `binding-${hash([
     input.eventId,
@@ -863,17 +860,6 @@ function clusterIdFor(
   claimKey: string,
 ): string {
   return `cluster-${hash([projectId || '', topicPath, clusterType, claimKey].join('\0'))}`;
-}
-
-function edgeIdFor(input: UpsertMemoryEdgeInput): string {
-  return `edge-${hash([
-    input.projectId || '',
-    input.sourceType,
-    input.sourceId,
-    input.relationType,
-    input.targetType,
-    input.targetId,
-  ].join('\0'))}`;
 }
 
 function hash(value: string): string {

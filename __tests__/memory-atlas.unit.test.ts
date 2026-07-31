@@ -468,11 +468,36 @@ test('Atlas does not split connector characters inside CJK entity names', () => 
   }
 });
 
-test('Atlas reinstalls a same-name no-op dirty trigger and refreshes after raw events', () => {
+test('Atlas reinstalls a same-name no-op dirty trigger without rerunning the release migration', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-atlas-trigger-'));
   const dbPath = join(dir, 'memory.db');
-  createMemoryKernel({ dbPath }).close();
+  const seeded = createMemoryKernel({ dbPath });
+  await seeded.ingest({ content: 'seed non-temporal topology', projectId: 'p' });
+  const event = seeded.eventStore.append({
+    streamId: 'seed-action', streamType: 'thread', eventType: 'MESSAGE',
+    projectId: 'p', role: 'user', occurredAt: 1, payload: { text: 'update Atlas' },
+  });
+  const entity = seeded.memoryBindingStore.upsertEntity({
+    entityId: 'entity-trigger-repair', projectId: 'p',
+    canonicalName: 'Atlas', entityType: 'concept',
+  });
+  seeded.memoryBindingStore.upsertTopic({
+    projectId: 'p', topicPath: 'trigger/repair', topicType: 'semantic',
+  });
+  seeded.memoryBindingStore.upsertEdge({
+    projectId: 'p', sourceType: 'entity', sourceId: entity.entityId,
+    relationType: 'belongs_to', targetType: 'topic', targetId: 'trigger/repair',
+    confidence: 1, evidenceEventIds: [event.eventId],
+  });
+  seeded.rebuildMemoryAtlas({ projectId: 'p' });
+  seeded.close();
   const db = new Database(dbPath);
+  const tables = ['memory_entities', 'memory_edges', 'memory_action_frames', 'project_branches', 'cognitive_nodes', 'cognitive_edges'];
+  const before = Object.fromEntries(tables.map((table) => [
+    table,
+    db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all(),
+  ]));
+  const receipt = db.prepare(`SELECT applied_at FROM _schema_migrations WHERE version='0032'`).get();
   db.exec(`
     DROP TRIGGER IF EXISTS trg_memory_atlas_dirty_memory_events_insert;
     CREATE TRIGGER trg_memory_atlas_dirty_memory_events_insert AFTER INSERT ON memory_events BEGIN SELECT 1; END;
@@ -481,7 +506,11 @@ test('Atlas reinstalls a same-name no-op dirty trigger and refreshes after raw e
 
   const kernel = createMemoryKernel({ dbPath });
   try {
-    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    for (const table of tables) {
+      expect(kernel.memoryAtlasStore.db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all()).toEqual(before[table]);
+    }
+    expect(kernel.memoryAtlasStore.db.prepare(`SELECT applied_at FROM _schema_migrations WHERE version='0032'`).get())
+      .toEqual(receipt);
     kernel.eventStore.append({
       streamId: 'system-noise', streamType: 'system', eventType: 'POLICY_EXECUTION_UPDATED',
       projectId: 'p', occurredAt: 1, payload: {},

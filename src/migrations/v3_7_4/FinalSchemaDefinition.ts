@@ -1693,6 +1693,9 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
   { type: "index", name: "idx_memory_edges_project_target", table: "memory_edges", sql: `CREATE INDEX idx_memory_edges_project_target
         ON memory_edges(project_id, target_type, target_id)` },
 
+  { type: "index", name: "idx_memory_edges_logical_unique", table: "memory_edges", sql: `CREATE UNIQUE INDEX idx_memory_edges_logical_unique
+        ON memory_edges(COALESCE(project_id,''),source_type,source_id,relation_type,target_type,target_id)` },
+
   { type: "index", name: "idx_pipeline_runs_completed_at", table: "pipeline_runs", sql: `CREATE INDEX idx_pipeline_runs_completed_at
         ON pipeline_runs(completed_at DESC)` },
 

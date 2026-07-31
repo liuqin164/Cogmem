@@ -1,0 +1,135 @@
+import Database from 'bun:sqlite';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { gunzipSync } from 'node:zlib';
+
+import { memoryEdgeId } from '../src/binding/MemoryBindingIdentity.js';
+import { MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
+
+const root = resolve(import.meta.dir, '..');
+const fixture = join(root, '__tests__', 'fixtures', 'migrations', 'main-3.7.3-schema31.sqlite.gz');
+const directory = mkdtempSync(join(tmpdir(), 'cogmem-packed-migration-'));
+let tarball: string | undefined;
+
+try {
+  const npmEnv = {
+    npm_config_cache: join(directory, 'npm-cache'),
+    npm_config_dry_run: 'false',
+  };
+  const packed = await run(['npm', 'pack', '--json'], root, npmEnv);
+  tarball = join(root, String((JSON.parse(packed) as Array<{ filename: string }>)[0]!.filename));
+  const install = join(directory, 'install');
+  mkdirSync(install);
+  await run(['npm', 'install', '--prefix', install, tarball], root, npmEnv);
+
+  const cliDb = materialize('cli.db');
+  const kernelDb = materialize('kernel.db');
+  seedIdentityFixture(cliDb);
+  seedIdentityFixture(kernelDb);
+
+  await run([
+    'bun', join(install, 'node_modules', 'cogmem', 'dist', 'bin', 'migrate.js'),
+    '--db', cliDb, '--yes', '--json',
+  ], install);
+  await run([
+    'bun', '-e',
+    `import {createMemoryKernel} from 'cogmem';
+     const kernel=createMemoryKernel({dbPath:process.env.DB_PATH});
+     kernel.memoryBindingStore.upsertEntity({
+       entityId:'packed-entity',projectId:'project-a',canonicalName:'Packed Entity',entityType:'concept'
+     });
+     kernel.close();`,
+  ], install, { DB_PATH: kernelDb });
+
+  verify(cliDb);
+  verify(kernelDb);
+  console.log('packed schema31 -> 0032 migration verified');
+} finally {
+  if (tarball) rmSync(tarball, { force: true });
+  rmSync(directory, { recursive: true, force: true });
+}
+
+function materialize(name: string): string {
+  const path = join(directory, name);
+  writeFileSync(path, gunzipSync(readFileSync(fixture)));
+  return path;
+}
+
+function seedIdentityFixture(path: string): void {
+  const db = new Database(path);
+  const edgeId = memoryEdgeId({
+    projectId: 'project-a',
+    sourceType: 'entity',
+    sourceId: 'packed-entity',
+    relationType: 'belongs_to',
+    targetType: 'topic',
+    targetId: 'packed/topic',
+  });
+  db.exec(`
+    INSERT INTO memory_entities(entity_id,project_id,canonical_name,entity_type,aliases_json,created_at,updated_at)
+    VALUES('packed-entity','project-a','Packed Entity','concept','["Packed Alias"]',1,1);
+    INSERT INTO memory_topics(topic_path,project_id,project_id_key,topic_type,created_at,updated_at)
+    VALUES('packed/topic','project-a','project-a','semantic',1,1);
+  `);
+  db.prepare(`
+    INSERT INTO memory_bindings(
+      binding_id,event_id,project_id,entity_id,entity_name,entity_type,topic_path,binding_type,
+      confidence,source,signal,claim_key,binding_action,related_event_ids_json,created_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    'packed-binding', 'main-373-event-a', 'project-a', 'packed-entity', 'Packed Entity', 'concept',
+    'packed/topic', 'entity', 1, 'explicit', 'packed', 'default', 'create_new_cluster', '[]', 1,
+  );
+  db.prepare(`
+    INSERT INTO memory_edges(
+      edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,
+      confidence,evidence_event_ids_json,status,created_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    edgeId, 'project-a', 'entity', 'packed-entity', 'belongs_to', 'topic', 'packed/topic',
+    1, '["main-373-event-a"]', 'active', 1,
+  );
+  db.close();
+}
+
+function verify(path: string): void {
+  const db = new Database(path);
+  const receipt = db.prepare(`
+    SELECT checksum FROM _schema_migrations WHERE version='0032'
+  `).get() as { checksum?: string } | null;
+  if (receipt?.checksum !== MIGRATION_DIGESTS['0032']) throw new Error('packed_migration_receipt_mismatch');
+  if ((db.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check !== 'ok') {
+    throw new Error('packed_migration_integrity_failed');
+  }
+  if (db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('packed_migration_foreign_key_failed');
+  if ((db.prepare(`
+    SELECT COUNT(*) AS count FROM memory_entities
+    WHERE entity_id='packed-entity' AND project_id='project-a'
+  `).get() as { count: number }).count !== 1) throw new Error('packed_migration_entity_identity_failed');
+  if ((db.prepare(`SELECT COUNT(*) AS count FROM memory_edges`).get() as { count: number }).count < 1) {
+    throw new Error('packed_migration_edge_identity_failed');
+  }
+  if ((db.prepare(`SELECT COUNT(*) AS count FROM project_branches`).get() as { count: number }).count < 1
+    || (db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes`).get() as { count: number }).count < 1) {
+    throw new Error('packed_migration_topology_lost');
+  }
+  db.close();
+}
+
+async function run(command: string[], cwd: string, env: Record<string, string> = {}): Promise<string> {
+  const process = Bun.spawn({
+    cmd: command,
+    cwd,
+    env: { ...Bun.env, ...env },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(process.stdout).text(),
+    new Response(process.stderr).text(),
+    process.exited,
+  ]);
+  if (exitCode !== 0) throw new Error(`${command.join(' ')} failed:\n${stderr || stdout}`);
+  return stdout;
+}

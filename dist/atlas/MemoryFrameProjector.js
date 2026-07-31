@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { normalizeAlias } from '../semantic/CanonicalMemoryResolver.js';
 import { decodeAtlasNodeId, encodeAtlasNodeId, toAtlasNodeEndpoint } from './AtlasNodeIdCodec.js';
+import { memoryEdgeId } from '../binding/MemoryBindingIdentity.js';
 import { localDateFor } from '../utils/LocalDateContext.js';
 export class MemoryFrameProjector {
     db;
@@ -344,7 +345,14 @@ export class MemoryFrameProjector {
             throw new Error(`invalid_atlas_edge_endpoint:${source}:${target}`);
         if (!this.isActiveEndpoint(projectId, source) || !this.isActiveEndpoint(projectId, target))
             return;
-        const edgeId = createHash('sha256').update(`${projectId}\0${source}\0${relation.relationType}\0${target}`).digest('hex');
+        const edgeId = memoryEdgeId({
+            projectId,
+            sourceType: parsedSource.type,
+            sourceId: parsedSource.id,
+            relationType: relation.relationType,
+            targetType: parsedTarget.type,
+            targetId: parsedTarget.id,
+        });
         const existing = this.db.prepare(`SELECT source_authority,valid_from FROM memory_edges WHERE edge_id=?`).get(edgeId);
         const validFrom = relation.validFrom ?? this.evidenceTime(relation.evidenceEventIds, frame.processor.generatedAt);
         const shouldUpdate = !existing || (existing.source_authority === 'memory_frame_projector' && Number(existing.valid_from ?? Number.NEGATIVE_INFINITY) < validFrom);

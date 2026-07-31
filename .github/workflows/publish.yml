@@ -75,20 +75,7 @@ jobs:
         run: npm pack --dry-run --json
 
       - name: Verify packed schema31 migration
-        run: |
-          set -euo pipefail
-          TARBALL="$(npm pack --json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(JSON.parse(s)[0].filename))")"
-          VERIFY_DIR="$(mktemp -d)"
-          npm install --prefix "$VERIFY_DIR/install" "$GITHUB_WORKSPACE/$TARBALL"
-          gunzip -c __tests__/fixtures/migrations/main-3.7.3-schema31.sqlite.gz > "$VERIFY_DIR/cli.db"
-          bun "$VERIFY_DIR/install/node_modules/cogmem/dist/bin/migrate.js" --db "$VERIFY_DIR/cli.db" --yes --json
-          gunzip -c __tests__/fixtures/migrations/main-3.7.3-schema31.sqlite.gz > "$VERIFY_DIR/kernel.db"
-          (
-            cd "$VERIFY_DIR/install"
-            DB_PATH="$VERIFY_DIR/kernel.db" bun -e "import {createMemoryKernel} from 'cogmem'; createMemoryKernel({dbPath:process.env.DB_PATH}).close()"
-          )
-          DB_PATH="$VERIFY_DIR/kernel.db" bun -e "import Database from 'bun:sqlite'; const db=new Database(process.env.DB_PATH); if(db.prepare('PRAGMA integrity_check').get().integrity_check!=='ok'||db.prepare('PRAGMA foreign_key_check').all().length) process.exit(1); db.close()"
-          rm -f "$TARBALL"
+        run: bun run verify:packed-migration
 
       - name: Publish to npm
         run: npm publish --provenance --access public

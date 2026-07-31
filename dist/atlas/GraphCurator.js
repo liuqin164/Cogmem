@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { EpisodeTitleGenerator } from './EpisodeTitleGenerator.js';
 import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
@@ -394,9 +393,7 @@ export class GraphCurator {
     `).run(projectId, ...relations, ...episodeIds, ...episodeIds);
     }
     upsertEdge(input) {
-        const edgeId = createHash('sha256')
-            .update([input.projectId, input.sourceType, input.sourceId, input.relationType, input.targetType, input.targetId].join('\0'))
-            .digest('hex');
+        const edgeId = memoryEdgeId(input);
         this.db.prepare(`
       INSERT INTO memory_edges (
         edge_id, project_id, source_type, source_id, relation_type, target_type, target_id,
@@ -500,3 +497,4 @@ function relationKey(left, right, relationType) {
         : `${left.row.episode_id}\0${right.row.episode_id}`;
     return `${relationType}\0${pair}`;
 }
+import { memoryEdgeId } from '../binding/MemoryBindingIdentity.js';

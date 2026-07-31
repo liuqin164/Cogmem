@@ -29,5 +29,5 @@ export const MIGRATION_DIGESTS: Readonly<Record<string, string>> = {
   '0029': 'a4dfb54e0c2db9207690fa2b23454c99606bf7bc92b53f0bcbe54df4f59f8e89',
   '0030': '68fd1d90f2be4cb8548fae12caa3ea51e30a537c9968883acced52ceee2af3a3',
   '0031': '5fcf03a7bbc451ef1a34a228c50e5f68416f2030d6fba9385bda4f2c14f27e44',
-  '0032': 'd7e2b44a91424148e51b44a9e0933861f3c07f8589e77d5394cbeb7710477b75',
+  '0032': 'f4c6d9c00b63efd614b221ee40c159a6714f476b268f3fbb0e2c843cfbd976e1',
 };

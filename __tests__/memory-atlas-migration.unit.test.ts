@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
 import { createMemoryKernel } from '../src/factory.js';
+import { memoryEdgeId, memoryEntityId } from '../src/binding/MemoryBindingIdentity.js';
+import { installMultidimensionalMemoryGraph374 } from '../src/migrations/0032_multidimensional_memory_graph_3_7_4.js';
 import { MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 const migrateBin = join(import.meta.dir, '..', 'src', 'bin', 'migrate.ts');
@@ -49,6 +51,10 @@ function canonicalEvidence(db: Database, baseline?: CanonicalEvidence): Canonica
     'episode_cross_refs',
     'episode_ingest_keys',
     'memory_bindings',
+    'memory_entities',
+    'memory_edges',
+    'memory_action_frames',
+    'memory_action_frame_evidence',
     'entities',
     'entity_instances',
     'entity_aliases',
@@ -68,12 +74,25 @@ function canonicalEvidence(db: Database, baseline?: CanonicalEvidence): Canonica
     'prospective_memory_transitions',
     'anchors',
     'import_source_anchors',
+    'project_branches',
+    'branch_links',
+    'branch_entries',
+    'task_branches',
+    'task_branch_entries',
+    'event_clusters',
+    'event_cluster_entries',
+    'topology_membership',
+    'cognitive_nodes',
+    'cognitive_edges',
   ];
   return Object.fromEntries(tables.map((table) => {
     const columns = baseline?.[table]?.columns
       ?? (db.prepare(`PRAGMA table_info("${table}")`).all() as Array<{ name: string }>).map((column) => column.name);
     const select = columns.map((column) => `"${column.replaceAll('"', '""')}"`).join(',');
-    const rows = db.prepare(`SELECT ${select} FROM "${table}"`).all() as Array<Record<string, unknown>>;
+    const rows = (db.prepare(`SELECT ${select} FROM "${table}"`).all() as Array<Record<string, unknown>>)
+      .map((row) => columns.includes('project_id') && row.project_id == null
+        ? { ...row, project_id: '' }
+        : row);
     return [table, {
       columns,
       rows: rows.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
@@ -147,6 +166,188 @@ test('fresh and main-schema-31 upgrade paths produce the same runtime schema', a
   `).get()).toEqual({ version: '0032', checksum: MIGRATION_DIGESTS['0032'] });
   upgraded.close();
   fresh.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('schema31 entity, edge, and non-temporal topology identities survive upgrade and repeated install', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-identities-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  const entityId = 'entity-schema31-project-a';
+  const edgeId = memoryEdgeId({
+    projectId: 'project-a',
+    sourceType: 'entity',
+    sourceId: entityId,
+    relationType: 'belongs_to',
+    targetType: 'topic',
+    targetId: 'schema31/topic',
+  });
+  db.prepare(`
+    INSERT INTO memory_entities(entity_id,project_id,canonical_name,entity_type,aliases_json,stable_path,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?)
+  `).run(entityId, 'project-a', 'Schema Entity', 'concept', '["Schema Alias"]', null, 1, 1);
+  db.prepare(`
+    INSERT INTO entities(entity_id,canonical_name,type,aliases_json,status,metadata_json,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?)
+  `).run('canonical-schema31', 'Schema Entity', 'concept', '["Schema Alias"]', 'active', '{}', 1, 1);
+  db.prepare(`
+    INSERT INTO entity_instances(
+      instance_id,canonical_entity_id,canonical_name,type,aliases_json,status,metadata_json,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?)
+  `).run(
+    entityId, 'canonical-schema31', 'Schema Entity', 'concept', '["Schema Alias"]',
+    'active', '{"projectId":"project-a"}', 1, 1,
+  );
+  db.prepare(`
+    INSERT INTO memory_topics(topic_path,project_id,project_id_key,parent_path,topic_type,summary,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?)
+  `).run('schema31/topic', 'project-a', 'project-a', null, 'semantic', null, 1, 1);
+  db.prepare(`
+    INSERT INTO memory_bindings(
+      binding_id,event_id,project_id,entity_id,entity_name,entity_type,topic_path,binding_type,
+      confidence,source,signal,claim_key,binding_action,related_event_ids_json,created_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    'binding-schema31-a', 'main-373-event-a', 'project-a', entityId, 'Schema Entity', 'concept',
+    'schema31/topic', 'entity', 1, 'explicit', 'schema31', 'default', 'create_new_cluster', '[]', 1,
+  );
+  db.prepare(`
+    INSERT INTO memory_edges(
+      edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,confidence,
+      evidence_event_ids_json,status,created_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    edgeId, 'project-a', 'entity', entityId, 'belongs_to', 'topic', 'schema31/topic',
+    1, '["main-373-event-a"]', 'active', 1,
+  );
+  db.prepare(`
+    INSERT INTO memory_action_frames(
+      action_id,project_id,frame_type,action,actor,target_entity_id,target_label,occurred_at,
+      confidence,source_authority,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run('action-schema31', 'project-a', 'update', 'update', 'user', entityId, 'Schema Entity', 1, 1, 'raw_evidence', 1, 1);
+  db.prepare(`
+    INSERT INTO memory_action_frame_evidence(action_id,event_id,project_id,created_at)
+    VALUES(?,?,?,?)
+  `).run('action-schema31', 'main-373-event-a', 'project-a', 1);
+  db.exec(`
+    CREATE VIEW custom_schema31_entities AS SELECT entity_id FROM memory_entities;
+    CREATE INDEX custom_schema31_entity_name ON memory_entities(canonical_name);
+    CREATE TRIGGER custom_schema31_entity_audit AFTER UPDATE ON memory_entities BEGIN SELECT 1; END;
+  `);
+  const topologyBefore = canonicalEvidence(db);
+  db.close();
+
+  expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+  const upgraded = new Database(dbPath);
+  expect(upgraded.prepare(`SELECT entity_id FROM memory_entities WHERE project_id='project-a'`).all())
+    .toEqual([{ entity_id: entityId }]);
+  expect(upgraded.prepare(`SELECT edge_id FROM memory_edges`).all()).toEqual([{ edge_id: edgeId }]);
+  expect(upgraded.prepare(`SELECT COUNT(*) AS count FROM memory_action_frames`).get()).toEqual({ count: 0 });
+  expect(upgraded.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE name IN ('custom_schema31_entities','custom_schema31_entity_name','custom_schema31_entity_audit')
+    ORDER BY name
+  `).all()).toEqual([
+    { name: 'custom_schema31_entities' },
+    { name: 'custom_schema31_entity_audit' },
+    { name: 'custom_schema31_entity_name' },
+  ]);
+  for (const table of [
+    'project_branches', 'branch_links', 'branch_entries', 'task_branches',
+    'task_branch_entries', 'event_clusters', 'event_cluster_entries',
+    'topology_membership', 'cognitive_nodes', 'cognitive_edges',
+  ]) {
+    const before = topologyBefore[table]!;
+    const columns = before.columns.map((column) => `"${column}"`).join(',');
+    const rows = (upgraded.prepare(`SELECT ${columns} FROM "${table}"`).all() as Array<Record<string, unknown>>)
+      .map((row) => before.columns.includes('project_id') && row.project_id == null
+        ? { ...row, project_id: '' }
+        : row);
+    expect(rows.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))).toEqual(before.rows);
+  }
+  installMultidimensionalMemoryGraph374(upgraded);
+  expect(upgraded.prepare(`SELECT entity_id FROM memory_entities WHERE project_id='project-a'`).all())
+    .toEqual([{ entity_id: entityId }]);
+  expect(upgraded.prepare(`SELECT edge_id FROM memory_edges`).all()).toEqual([{ edge_id: edgeId }]);
+  upgraded.close();
+
+  const kernel = createMemoryKernel({ dbPath, projectTimeZone: 'Asia/Tokyo' });
+  const runtimeEntity = kernel.entityStore.findByCanonicalName('Schema Entity', 'concept', 'project-a');
+  expect(runtimeEntity?.entityId).toBe(entityId);
+  kernel.memoryBindingStore.upsertEntity({
+    entityId: runtimeEntity!.entityId,
+    projectId: 'project-a',
+    canonicalName: 'Schema Entity',
+    entityType: 'concept',
+  });
+  kernel.close();
+  const finalDb = new Database(dbPath);
+  expect(finalDb.prepare(`SELECT COUNT(*) AS count FROM memory_entities WHERE project_id='project-a'`).get())
+    .toEqual({ count: 1 });
+  finalDb.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('schema31 shared memory entity keeps its owner ID and uses the runtime ID for secondary scopes', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-shared-entity-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  const entityId = 'entity-schema31-shared';
+  db.prepare(`
+    INSERT INTO memory_entities(entity_id,project_id,canonical_name,entity_type,aliases_json,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?)
+  `).run(entityId, 'project-a', 'Shared Entity', 'concept', '["Shared"]', 1, 1);
+  for (const [projectId, eventId] of [['project-a', 'main-373-event-a'], ['project-b', 'main-373-event-b']] as const) {
+    db.prepare(`
+      INSERT INTO memory_topics(topic_path,project_id,project_id_key,topic_type,created_at,updated_at)
+      VALUES(?,?,?,?,?,?)
+    `).run(`shared/${projectId}`, projectId, projectId, 'semantic', 1, 1);
+    db.prepare(`
+      INSERT INTO memory_bindings(
+        binding_id,event_id,project_id,entity_id,entity_name,entity_type,topic_path,binding_type,
+        confidence,source,signal,claim_key,binding_action,related_event_ids_json,created_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      `binding-${projectId}`, eventId, projectId, entityId, 'Shared Entity', 'concept',
+      `shared/${projectId}`, 'entity', 1, 'explicit', 'shared', 'default', 'create_new_cluster', '[]', 1,
+    );
+  }
+  db.prepare(`
+    INSERT INTO memory_edges(
+      edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,
+      confidence,evidence_event_ids_json,status,created_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    'legacy-project-b-edge', 'project-b', 'entity', entityId, 'belongs_to', 'topic',
+    'shared/project-b', 1, '["main-373-event-b"]', 'active', 1,
+  );
+  db.close();
+
+  expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+  const secondaryId = memoryEntityId('project-b', 'concept', entityId);
+  const upgraded = new Database(dbPath);
+  expect(upgraded.prepare(`SELECT entity_id,COALESCE(project_id,'') AS project_id FROM memory_entities ORDER BY project_id`).all())
+    .toEqual([
+      { entity_id: entityId, project_id: 'project-a' },
+      { entity_id: secondaryId, project_id: 'project-b' },
+    ]);
+  expect(upgraded.prepare(`SELECT entity_id FROM memory_bindings WHERE project_id='project-b'`).get())
+    .toEqual({ entity_id: secondaryId });
+  expect(upgraded.prepare(`
+    SELECT edge_id,source_id FROM memory_edges WHERE project_id='project-b'
+  `).get()).toEqual({
+    edge_id: memoryEdgeId({
+      projectId: 'project-b',
+      sourceType: 'entity',
+      sourceId: secondaryId,
+      relationType: 'belongs_to',
+      targetType: 'topic',
+      targetId: 'shared/project-b',
+    }),
+    source_id: secondaryId,
+  });
+  upgraded.close();
   rmSync(directory, { recursive: true, force: true });
 });
 

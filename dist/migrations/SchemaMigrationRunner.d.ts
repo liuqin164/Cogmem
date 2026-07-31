@@ -34,6 +34,7 @@ export declare class SchemaMigrationRunner {
     private legacyCurrentVersion;
     private adoptLegacyVersion;
     private migrationSchemaSatisfied;
+    private repairRecordedRuntimeGuards;
     private tableExists;
     private hasColumns;
 }

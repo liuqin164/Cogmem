@@ -1,5 +1,6 @@
 import { MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
 import { multidimensionalMemoryGraph374Issue, multidimensionalMemoryGraph374Satisfied, } from './0032_multidimensional_memory_graph_3_7_4.js';
+import { installAtlasProjectionDirtyTriggersV3 } from './v3_7_4/FinalRuntimeGuards.js';
 export class SchemaMigrationRunner {
     db;
     migrations;
@@ -15,7 +16,8 @@ export class SchemaMigrationRunner {
         const applied = this.appliedVersions();
         return [...this.migrations]
             .sort((a, b) => a.version.localeCompare(b.version))
-            .filter((migration) => !applied.has(migration.version) || !this.migrationSchemaSatisfied(migration.version));
+            .filter((migration) => !applied.has(migration.version)
+            || (migration.version !== '0032' && !this.migrationSchemaSatisfied(migration.version)));
     }
     preflight() {
         this.assertSupportedReleaseSchema();
@@ -30,6 +32,7 @@ export class SchemaMigrationRunner {
         this.ensureMigrationTable();
         this.adoptLegacyVersion();
         this.assertRecordedChecksums();
+        this.repairRecordedRuntimeGuards();
         const pending = this.plan();
         const filename = this.db.filename;
         if (filename && filename !== ':memory:' && pending.some((migration) => migration.requiresBackup) && !this.options.backupVerified) {
@@ -179,7 +182,7 @@ export class SchemaMigrationRunner {
             return applied;
         }
         for (const row of this.db.prepare(`SELECT version FROM _schema_migrations`).all()) {
-            if (this.migrationSchemaSatisfied(row.version))
+            if (row.version === '0032' || this.migrationSchemaSatisfied(row.version))
                 applied.add(row.version);
         }
         return applied;
@@ -245,6 +248,18 @@ export class SchemaMigrationRunner {
             return multidimensionalMemoryGraph374Satisfied(this.db);
         }
         return true;
+    }
+    repairRecordedRuntimeGuards() {
+        if (!this.schemaMigrationsTableExists())
+            return;
+        const recorded = this.db.prepare(`SELECT 1 FROM _schema_migrations WHERE version='0032'`).get();
+        if (!recorded)
+            return;
+        const issue = multidimensionalMemoryGraph374Issue(this.db);
+        if (issue?.startsWith('trigger_definition:trg_memory_atlas_dirty_')
+            || issue?.startsWith('trigger_missing:trg_memory_atlas_dirty_')) {
+            installAtlasProjectionDirtyTriggersV3(this.db);
+        }
     }
     tableExists(name) {
         return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name));

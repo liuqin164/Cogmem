@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type Database from 'bun:sqlite';
+import { memoryEdgeId, memoryEntityId } from '../binding/MemoryBindingIdentity.js';
 import type { Migration } from '../types/Migration.js';
 import {
   FINAL_AUXILIARY_OBJECTS,
@@ -13,19 +14,11 @@ const REBUILDABLE_PROJECTIONS = [
   'memory_atlas_activation',
   'memory_atlas_documents',
   'memory_atlas_projection_state',
+  'memory_action_frame_evidence',
+  'memory_action_frames',
   'vector_projection_state',
   'time_bucket_entries',
   'time_buckets',
-  'branch_links',
-  'branch_entries',
-  'project_branches',
-  'task_branch_entries',
-  'task_branches',
-  'event_cluster_entries',
-  'event_clusters',
-  'topology_membership',
-  'cognitive_edges',
-  'cognitive_nodes',
   'temporal_adjacency',
   'neuron_embeddings',
   'topology_projection_state',
@@ -51,7 +44,7 @@ export const migration_0032: Migration = {
 
 export function installMultidimensionalMemoryGraph374(db: Database): void {
   db.exec('PRAGMA defer_foreign_keys=ON; PRAGMA legacy_alter_table=ON');
-  dropUserDefinedAuxiliaryObjects(db);
+  const preservedAuxiliaryObjects = detachAuxiliaryObjects(db);
   resetFreshBootstrap(db);
   installMissingFinalTables(db);
   installMigrationAuditTables(db);
@@ -65,6 +58,7 @@ export function installMultidimensionalMemoryGraph374(db: Database): void {
   reconcileChangedTables(db);
   initializeProjectionState(db);
   installFinalAuxiliaryObjects(db);
+  restoreAuxiliaryObjects(db, preservedAuxiliaryObjects);
   db.exec('DROP TABLE IF EXISTS _cogmem_bootstrap_state; PRAGMA legacy_alter_table=OFF');
 
   const issue = multidimensionalMemoryGraph374Issue(db);
@@ -113,6 +107,41 @@ export function multidimensionalMemoryGraph374Issue(db: Database): string | unde
         )
     ) LIMIT 1
   `).get()) return 'entity_alias_scope';
+  if (tableExists(db, 'memory_action_frames') && db.prepare(`
+    SELECT 1 FROM memory_action_frames a
+    WHERE a.target_entity_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM memory_entities e
+      WHERE e.entity_id=a.target_entity_id
+        AND COALESCE(e.project_id,'')=a.project_id
+    ) LIMIT 1
+  `).get()) return 'memory_action_target';
+  if (tableExists(db, 'memory_edges')) {
+    const seen = new Set<string>();
+    for (const row of db.prepare(`
+      SELECT edge_id,COALESCE(project_id,'') AS project_id,source_type,source_id,
+        relation_type,target_type,target_id
+      FROM memory_edges
+    `).all() as Array<{
+      edge_id: string;
+      project_id: string;
+      source_type: string;
+      source_id: string;
+      relation_type: string;
+      target_type: string;
+      target_id: string;
+    }>) {
+      const expected = memoryEdgeId({
+        projectId: row.project_id,
+        sourceType: row.source_type,
+        sourceId: row.source_id,
+        relationType: row.relation_type,
+        targetType: row.target_type,
+        targetId: row.target_id,
+      });
+      if (row.edge_id !== expected || seen.has(expected)) return 'memory_edge_identity';
+      seen.add(expected);
+    }
+  }
   return undefined;
 }
 
@@ -255,13 +284,6 @@ function migrateEntityScope(db: Database): void {
   installTable(db, 'entity_alias_conflicts');
   rebuildAliasConflicts(db);
 
-  if (tableExists(db, 'entity_instances')) {
-    for (const row of db.prepare('SELECT instance_id FROM entity_instances').all() as Array<{ instance_id: string }>) {
-      if (entityScopes(db, row.instance_id).length > 1) {
-        db.prepare(`UPDATE entity_instances SET aliases_json='[]',metadata_json='{}' WHERE instance_id=?`).run(row.instance_id);
-      }
-    }
-  }
 }
 
 function migratePendingEntityResolution(db: Database): void {
@@ -323,20 +345,30 @@ function migrateMemoryEntityProjectionIds(db: Database): void {
   `);
   for (const row of rows) {
     const oldId = String(row.entity_id);
-    const scopes = new Set<string>([String(row.project_id ?? '')]);
+    const ownerScope = String(row.project_id ?? '');
+    const scopes = new Set<string>([ownerScope]);
     for (const item of db.prepare(`
       SELECT DISTINCT COALESCE(project_id,'') AS scope FROM memory_bindings WHERE entity_id=?
     `).all(oldId) as Array<{ scope: string }>) scopes.add(item.scope);
-    for (const scope of scopes) {
-      const nextId = scopedId('entity', `${String(row.entity_type)}\0${oldId}`, scope);
-      const ownsPayload = String(row.project_id ?? '') === scope;
+    for (const scope of [ownerScope, ...[...scopes].filter((item) => item !== ownerScope).sort()]) {
+      const nextId = scope === ownerScope
+        ? oldId
+        : memoryEntityId(scope, String(row.entity_type), oldId);
+      if (nextId === oldId) continue;
+      const scopedAliases = tableExists(db, 'entity_aliases')
+        ? (db.prepare(`
+            SELECT alias_text FROM entity_aliases
+            WHERE entity_id=? AND project_id=?
+            ORDER BY normalized_alias
+          `).all(oldId, scope) as Array<{ alias_text: string }>).map((item) => item.alias_text)
+        : [];
       insert.run(
         nextId,
         scope || null,
-        ownsPayload ? String(row.canonical_name) : `entity-${nextId.slice(-12)}`,
+        String(row.canonical_name),
         String(row.entity_type),
-        ownsPayload ? String(row.aliases_json) : '[]',
-        ownsPayload && row.stable_path != null ? String(row.stable_path) : null,
+        JSON.stringify(scopedAliases),
+        null,
         Number(row.created_at),
         Number(row.updated_at),
       );
@@ -355,7 +387,79 @@ function migrateMemoryEntityProjectionIds(db: Database): void {
         `).run(nextId, oldId, scope);
       }
     }
-    db.prepare('DELETE FROM memory_entities WHERE entity_id=?').run(oldId);
+  }
+  rekeyMemoryEdges(db);
+}
+
+function rekeyMemoryEdges(db: Database): void {
+  if (!tableExists(db, 'memory_edges')) return;
+  type EdgeRow = {
+    edge_id: string;
+    project_id: string | null;
+    source_type: string;
+    source_id: string;
+    relation_type: string;
+    target_type: string;
+    target_id: string;
+    confidence: number;
+    base_weight: number;
+    stability: number;
+    activation: number;
+    evidence_event_ids_json: string;
+    status: string;
+    valid_from: number;
+    valid_to: number | null;
+    version: number;
+    source_authority: string;
+    created_at: number;
+    updated_at: number;
+  };
+  const rows = db.prepare('SELECT * FROM memory_edges ORDER BY edge_id').all() as EdgeRow[];
+  for (const row of rows) {
+    const edgeId = memoryEdgeId({
+      projectId: row.project_id ?? '',
+      sourceType: row.source_type,
+      sourceId: row.source_id,
+      relationType: row.relation_type,
+      targetType: row.target_type,
+      targetId: row.target_id,
+    });
+    if (edgeId === row.edge_id) continue;
+    const existing = db.prepare('SELECT * FROM memory_edges WHERE edge_id=?').get(edgeId) as EdgeRow | null;
+    if (!existing) {
+      db.prepare('UPDATE memory_edges SET edge_id=? WHERE edge_id=?').run(edgeId, row.edge_id);
+      continue;
+    }
+    const evidence = new Set<string>();
+    for (const value of [existing.evidence_event_ids_json, row.evidence_event_ids_json]) {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) if (typeof item === 'string' && item) evidence.add(item);
+        }
+      } catch { /* malformed legacy evidence is discarded during deterministic merge */ }
+    }
+    db.prepare(`
+      UPDATE memory_edges SET
+        confidence=?,base_weight=?,stability=?,activation=?,evidence_event_ids_json=?,
+        status=?,valid_from=?,valid_to=?,version=?,source_authority=?,created_at=?,updated_at=?
+      WHERE edge_id=?
+    `).run(
+      Math.max(existing.confidence, row.confidence),
+      Math.max(existing.base_weight, row.base_weight),
+      Math.max(existing.stability, row.stability),
+      Math.max(existing.activation, row.activation),
+      JSON.stringify([...evidence].sort()),
+      existing.status === 'active' || row.status === 'active' ? 'active' : existing.status,
+      Math.min(existing.valid_from, row.valid_from),
+      existing.valid_to == null || row.valid_to == null ? null : Math.max(existing.valid_to, row.valid_to),
+      Math.max(existing.version, row.version) + 1,
+      existing.source_authority,
+      Math.min(existing.created_at, row.created_at),
+      Math.max(existing.updated_at, row.updated_at),
+      edgeId,
+    );
+    db.prepare('DELETE FROM memory_edges WHERE edge_id=?').run(row.edge_id);
   }
 }
 
@@ -382,6 +486,43 @@ function reconcileChangedTables(db: Database): void {
         SELECT project_scope FROM ingestion_source_cursors
         WHERE source_id=ingestion_processed_records.source_id
       ),'')`,
+    },
+    branch_links: {
+      project_id: `COALESCE((
+        SELECT project_id FROM project_branches WHERE branch_id=parent_branch_id
+      ),'')`,
+    },
+    branch_entries: {
+      project_id: `COALESCE((
+        SELECT project_id FROM project_branches WHERE branch_id=branch_entries.branch_id
+      ),'')`,
+    },
+    task_branches: { project_id: `COALESCE(project_id,'')` },
+    task_branch_entries: {
+      project_id: `COALESCE((
+        SELECT project_id FROM task_branches WHERE task_id=task_branch_entries.task_id
+      ),'')`,
+    },
+    event_clusters: { project_id: `COALESCE(project_id,'')` },
+    event_cluster_entries: {
+      project_id: `COALESCE((
+        SELECT project_id FROM event_clusters WHERE cluster_id=event_cluster_entries.cluster_id
+      ),'')`,
+    },
+    topology_membership: {
+      project_id: `COALESCE((
+        SELECT project_id FROM neurons WHERE id=topology_membership.neuron_id
+      ),project_id,'')`,
+    },
+    cognitive_nodes: {
+      project_id: `COALESCE((
+        SELECT project_id FROM neurons WHERE id=cognitive_nodes.source_neuron_id
+      ),project_id,'')`,
+    },
+    cognitive_edges: {
+      project_id: `COALESCE((
+        SELECT project_id FROM cognitive_nodes WHERE node_id=cognitive_edges.source_node_id
+      ),project_id,'')`,
     },
   };
   const filters: Record<string, string> = {
@@ -467,13 +608,19 @@ function initializeProjectionState(db: Database): void {
   }
 }
 
-function dropUserDefinedAuxiliaryObjects(db: Database): void {
+function detachAuxiliaryObjects(db: Database): string[] {
+  const owned = new Set(FINAL_AUXILIARY_OBJECTS.map((object) => object.name));
   const rows = db.prepare(`
-    SELECT type,name FROM sqlite_master
+    SELECT type,name,sql FROM sqlite_master
     WHERE type IN ('view','trigger','index') AND sql IS NOT NULL AND name NOT GLOB 'sqlite_*'
     ORDER BY CASE type WHEN 'view' THEN 0 WHEN 'trigger' THEN 1 ELSE 2 END
-  `).all() as Array<{ type: 'view' | 'trigger' | 'index'; name: string }>;
+  `).all() as Array<{ type: 'view' | 'trigger' | 'index'; name: string; sql: string }>;
   for (const row of rows) db.exec(`DROP ${row.type.toUpperCase()} IF EXISTS ${quoteIdentifier(row.name)}`);
+  return rows.filter((row) => !owned.has(row.name)).map((row) => row.sql);
+}
+
+function restoreAuxiliaryObjects(db: Database, sql: string[]): void {
+  for (const statement of sql) db.exec(statement);
 }
 
 function resetFreshBootstrap(db: Database): void {

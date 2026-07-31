@@ -89,6 +89,7 @@ bun run typecheck
 bun run build
 bun test
 npm pack --dry-run --json
+bun run verify:packed-migration
 npm publish --dry-run --access public
 ```
 
@@ -99,5 +100,6 @@ After verification, create a GitHub Release from the matching version tag, for e
 Emergency manual fallback:
 
 ```bash
+bun run verify:packed-migration
 npm publish --provenance --access public
 ```

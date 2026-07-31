@@ -32,7 +32,7 @@ describe('schema migration runner', () => {
     db.close();
   });
 
-  test('formal migration manifest contains only release history and binds 0032 to every atomic install source', () => {
+  test('formal migration manifest contains only release history and binds 0032 to immutable install sources', () => {
     const directory = join(import.meta.dir, '..', 'src', 'migrations');
     const releaseFiles = readdirSync(directory).filter((file) => /^\d{4}_.*\.ts$/u.test(file)).sort();
     expect(Object.keys(MIGRATION_DIGESTS).sort()).toEqual(releaseFiles.map((file) => file.slice(0, 4)));
@@ -48,10 +48,8 @@ describe('schema migration runner', () => {
     const digest = createHash('sha256');
     const sources = [
       '0032_multidimensional_memory_graph_3_7_4.ts',
-      ...readdirSync(join(directory, 'v3_7_4'))
-        .filter((file) => file.endsWith('.ts'))
-        .sort()
-        .map((file) => `v3_7_4/${file}`),
+      '../binding/MemoryBindingIdentity.ts',
+      'v3_7_4/FinalSchemaDefinition.ts',
     ];
     for (const source of sources) {
       const content = readFileSync(join(directory, source), 'utf8').replace(/\r\n/g, '\n');
