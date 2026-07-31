@@ -52,6 +52,29 @@ function countRuntimeDiscarded(db) {
     return db.prepare(`SELECT COUNT(*) AS count FROM runtime_scope_discard_receipts
     WHERE source_table IN ('runtime_states','runtime_transitions')`).get().count;
 }
+function migrationDiagnostics(db) {
+    const count = (table, where = '1=1', ...params) => {
+        if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table))
+            return 0;
+        return Number(db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${where}`).get(...params).count);
+    };
+    return {
+        runtimeStatesDiscarded: count('runtime_scope_discard_receipts', 'source_table=?', 'runtime_states'),
+        runtimeTransitionsDiscarded: count('runtime_scope_discard_receipts', 'source_table=?', 'runtime_transitions'),
+        runtimeOutboxDiscarded: count('runtime_scope_discard_receipts', 'source_table=?', 'runtime_event_outbox'),
+        policyExecutionsQuarantined: count('policy_execution_quarantine'),
+        entityAliasesQuarantined: count('entity_scope_migration_quarantine', 'record_type=?', 'entity_alias'),
+        entityRelationsQuarantined: count('entity_scope_migration_quarantine', 'record_type=?', 'entity_relation'),
+        pendingEntityResolutionsQuarantined: count('pending_entity_resolution_quarantine'),
+        malformedEdgeEvidenceDiscarded: count('entity_scope_migration_quarantine', 'record_type=? AND reason=?', 'memory_edge', 'memory_edge_evidence_malformed'),
+    };
+}
+function subtractDiagnostics(after, before) {
+    return Object.fromEntries(Object.entries(after).map(([key, value]) => [
+        key,
+        value - before[key],
+    ]));
+}
 async function main() {
     const args = parseArgs(process.argv.slice(2));
     const dbPath = resolveDbPath(args);
@@ -63,6 +86,7 @@ async function main() {
         let result;
         let runtimeDiscardedThisRun = 0;
         let runtimeDiscardedTotal = 0;
+        let diagnosticsThisRun = migrationDiagnostics(db);
         if (args.dryRun) {
             const temporaryPath = dbPath === ':memory:'
                 ? ':memory:'
@@ -74,11 +98,13 @@ async function main() {
                 try {
                     temporaryDb.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
                     const discardedBefore = countRuntimeDiscarded(temporaryDb);
+                    const diagnosticsBefore = migrationDiagnostics(temporaryDb);
                     const runner = new SchemaMigrationRunner(temporaryDb, ALL_MIGRATIONS, { backupVerified: true });
                     const pending = runner.plan().map((migration) => migration.version);
                     const verified = runner.run();
                     runtimeDiscardedTotal = countRuntimeDiscarded(temporaryDb);
                     runtimeDiscardedThisRun = runtimeDiscardedTotal - discardedBefore;
+                    diagnosticsThisRun = subtractDiagnostics(migrationDiagnostics(temporaryDb), diagnosticsBefore);
                     result = { pending, applied: [], currentVersion: verified.currentVersion, dryRun: true };
                 }
                 finally {
@@ -92,6 +118,7 @@ async function main() {
         }
         else {
             const discardedBefore = countRuntimeDiscarded(db);
+            const diagnosticsBefore = migrationDiagnostics(db);
             const planner = new SchemaMigrationRunner(db, ALL_MIGRATIONS);
             planner.preflight();
             const pending = planner.plan();
@@ -103,6 +130,7 @@ async function main() {
             }).run();
             runtimeDiscardedTotal = countRuntimeDiscarded(db);
             runtimeDiscardedThisRun = runtimeDiscardedTotal - discardedBefore;
+            diagnosticsThisRun = subtractDiagnostics(migrationDiagnostics(db), diagnosticsBefore);
             db.exec(`CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
             const numericVersion = Number.parseInt(result.currentVersion || '0', 10);
             db.prepare(`INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', ?)`).run(String(numericVersion));
@@ -113,6 +141,11 @@ async function main() {
             backupPath,
             runtimeDiscardedThisRun,
             runtimeDiscardedTotal,
+            ...Object.fromEntries(Object.entries(diagnosticsThisRun).map(([key, value]) => [`${key}ThisRun`, value])),
+            recovery: backupPath ? {
+                backupPath,
+                instruction: 'Stop Cogmem, preserve the failed database, and restore this backup before retrying migration.',
+            } : undefined,
             ...result,
         };
         if (args.json)
@@ -124,6 +157,8 @@ async function main() {
             console.log(`applied: ${result.applied.join(', ') || 'none'}`);
             console.log(`discarded unscoped runtime rows this run: ${runtimeDiscardedThisRun}`);
             console.log(`discarded unscoped runtime rows total: ${runtimeDiscardedTotal}`);
+            for (const [key, value] of Object.entries(diagnosticsThisRun))
+                console.log(`${key} this run: ${value}`);
             if (backupPath)
                 console.log(`backup: ${backupPath}`);
         }

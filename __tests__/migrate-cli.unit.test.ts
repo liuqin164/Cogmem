@@ -46,7 +46,14 @@ test('migrate dry-run exercises and then upgrades real main schema 31 with one m
 
   const dryRun = await run(['--db', dbPath, '--dry-run', '--json']);
   expect({ exitCode: dryRun.exitCode, stderr: dryRun.stderr }).toEqual({ exitCode: 0, stderr: '' });
-  expect(JSON.parse(dryRun.stdout).pending).toEqual(['0032']);
+  const dryResult = JSON.parse(dryRun.stdout);
+  expect(dryResult.pending).toEqual(['0032']);
+  for (const field of [
+    'runtimeStatesDiscardedThisRun', 'runtimeTransitionsDiscardedThisRun', 'runtimeOutboxDiscardedThisRun',
+    'policyExecutionsQuarantinedThisRun', 'entityAliasesQuarantinedThisRun',
+    'entityRelationsQuarantinedThisRun', 'pendingEntityResolutionsQuarantinedThisRun',
+    'malformedEdgeEvidenceDiscardedThisRun',
+  ]) expect(dryResult[field]).toBeNumber();
   const unchanged = new Database(dbPath);
   expect(unchanged.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0031' });
   unchanged.close();

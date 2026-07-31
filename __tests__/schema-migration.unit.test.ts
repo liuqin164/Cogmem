@@ -49,6 +49,7 @@ describe('schema migration runner', () => {
     const sources = [
       '0032_multidimensional_memory_graph_3_7_4.ts',
       '../binding/MemoryBindingIdentity.ts',
+      '../engine/CognitiveGraphIdentity.ts',
       'v3_7_4/FinalSchemaDefinition.ts',
     ];
     for (const source of sources) {

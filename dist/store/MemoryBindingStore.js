@@ -20,18 +20,35 @@ export class MemoryBindingStore {
     upsertEntity(input) {
         const now = input.now ?? Date.now();
         const scope = input.projectId ?? '';
+        const mapped = input.entityId
+            ? this.db.prepare(`
+          SELECT scoped_entity_id FROM memory_entity_scope_identity
+          WHERE root_entity_id=? AND project_id=?
+        `).get(input.entityId, scope)
+            : null;
         const existingOwner = input.entityId
             ? this.db.prepare(`SELECT COALESCE(project_id,'') AS project_id FROM memory_entities WHERE entity_id=?`).get(input.entityId)
             : null;
-        const entityId = input.entityId && (!existingOwner || existingOwner.project_id === scope)
-            ? input.entityId
-            : memoryEntityId(input.projectId, input.entityType, input.entityId || input.canonicalName);
+        const derivedId = memoryEntityId(input.projectId, input.entityType, input.entityId || input.canonicalName);
+        const derivedExists = Boolean(this.db.prepare(`
+      SELECT 1 FROM memory_entities WHERE entity_id=? AND COALESCE(project_id,'')=?
+    `).get(derivedId, scope));
+        const entityId = mapped?.scoped_entity_id
+            ?? (input.entityId && existingOwner?.project_id === scope
+                ? input.entityId
+                : input.entityId && (existingOwner || derivedExists)
+                    ? derivedId
+                    : input.entityId || derivedId);
         const existing = this.db.prepare(`SELECT * FROM memory_entities WHERE entity_id=?`).get(entityId);
         if (existing && ((existing.project_id ?? '') !== scope
             || existing.canonical_name !== input.canonicalName
             || existing.entity_type !== input.entityType))
             throw new Error('memory_entity_immutable_identity_mismatch');
-        const aliases = Array.from(new Set([input.canonicalName, ...(input.aliases || [])]))
+        const aliases = Array.from(new Set([
+            input.canonicalName,
+            ...parseStringArray(existing?.aliases_json),
+            ...(input.aliases || []),
+        ]))
             .filter(Boolean);
         this.db.prepare(`
       INSERT INTO memory_entities (
@@ -42,6 +59,12 @@ export class MemoryBindingStore {
         stable_path = COALESCE(excluded.stable_path, memory_entities.stable_path),
         updated_at = excluded.updated_at
     `).run(entityId, input.projectId ?? null, input.canonicalName, input.entityType, JSON.stringify(aliases), input.stablePath || null, now, now);
+        if (input.entityId)
+            this.db.prepare(`
+      INSERT OR IGNORE INTO memory_entity_scope_identity(
+        root_entity_id,project_id,scoped_entity_id,entity_type,created_at
+      ) VALUES(?,?,?,?,?)
+    `).run(input.entityId, scope, entityId, input.entityType, now);
         const row = this.db.prepare(`SELECT * FROM memory_entities WHERE entity_id=?`).get(entityId);
         return {
             entityId: row.entity_id,
@@ -212,7 +235,12 @@ export class MemoryBindingStore {
         this.assertNodeScope(input.sourceType, input.sourceId, scope);
         this.assertNodeScope(input.targetType, input.targetId, scope);
         const edgeId = memoryEdgeId(input);
-        const evidenceEventIds = Array.from(new Set(input.evidenceEventIds.filter(Boolean)));
+        const existing = this.db.prepare(`SELECT evidence_event_ids_json FROM memory_edges WHERE edge_id=?`)
+            .get(edgeId);
+        const evidenceEventIds = Array.from(new Set([
+            ...parseStringArray(existing?.evidence_event_ids_json),
+            ...input.evidenceEventIds.filter(Boolean),
+        ]));
         this.db.prepare(`
       INSERT INTO memory_edges (
         edge_id, project_id, source_type, source_id, relation_type, target_type, target_id,
@@ -357,6 +385,7 @@ export class MemoryBindingStore {
         this.db.prepare(`DELETE FROM memory_edges WHERE COALESCE(project_id, '') = ?`).run(projectId);
         this.db.prepare(`DELETE FROM memory_topics WHERE COALESCE(project_id, '') = ?`).run(projectId);
         this.db.prepare(`DELETE FROM memory_entities WHERE COALESCE(project_id, '') = ?`).run(projectId);
+        this.db.prepare(`DELETE FROM memory_entity_scope_identity WHERE project_id = ?`).run(projectId);
         return Number(bindings.changes ?? 0);
     }
     assertEventScopes(eventIds, projectId) {
@@ -395,6 +424,15 @@ export class MemoryBindingStore {
         stable_path TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_entity_scope_identity (
+        root_entity_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT '',
+        scoped_entity_id TEXT NOT NULL UNIQUE,
+        entity_type TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (root_entity_id, project_id)
       );
 
       CREATE INDEX IF NOT EXISTS idx_memory_entities_project_name

@@ -1024,6 +1024,15 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
         updated_at INTEGER NOT NULL
       )` },
 
+  { type: "table", name: "memory_entity_scope_identity", table: "memory_entity_scope_identity", sql: `CREATE TABLE memory_entity_scope_identity (
+        root_entity_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT '',
+        scoped_entity_id TEXT NOT NULL UNIQUE,
+        entity_type TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (root_entity_id, project_id)
+      )` },
+
   { type: "table", name: "memory_topics", table: "memory_topics", sql: `CREATE TABLE memory_topics (
         topic_path TEXT NOT NULL,
         project_id TEXT,

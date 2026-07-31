@@ -77,13 +77,6 @@ function canonicalEvidence(db: Database, baseline?: CanonicalEvidence): Canonica
     'project_branches',
     'branch_links',
     'branch_entries',
-    'task_branches',
-    'task_branch_entries',
-    'event_clusters',
-    'event_cluster_entries',
-    'topology_membership',
-    'cognitive_nodes',
-    'cognitive_edges',
   ];
   return Object.fromEntries(tables.map((table) => {
     const columns = baseline?.[table]?.columns
@@ -169,7 +162,7 @@ test('fresh and main-schema-31 upgrade paths produce the same runtime schema', a
   rmSync(directory, { recursive: true, force: true });
 });
 
-test('schema31 entity, edge, and non-temporal topology identities survive upgrade and repeated install', async () => {
+test('schema31 canonical evidence survives projection rebuild and repeated install', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-identities-'));
   const dbPath = materializeFixture(directory);
   const db = new Database(dbPath);
@@ -253,11 +246,7 @@ test('schema31 entity, edge, and non-temporal topology identities survive upgrad
     { name: 'custom_schema31_entity_audit' },
     { name: 'custom_schema31_entity_name' },
   ]);
-  for (const table of [
-    'project_branches', 'branch_links', 'branch_entries', 'task_branches',
-    'task_branch_entries', 'event_clusters', 'event_cluster_entries',
-    'topology_membership', 'cognitive_nodes', 'cognitive_edges',
-  ]) {
+  for (const table of ['project_branches', 'branch_links', 'branch_entries']) {
     const before = topologyBefore[table]!;
     const columns = before.columns.map((column) => `"${column}"`).join(',');
     const rows = (upgraded.prepare(`SELECT ${columns} FROM "${table}"`).all() as Array<Record<string, unknown>>)
@@ -286,6 +275,74 @@ test('schema31 entity, edge, and non-temporal topology identities survive upgrad
   expect(finalDb.prepare(`SELECT COUNT(*) AS count FROM memory_entities WHERE project_id='project-a'`).get())
     .toEqual({ count: 1 });
   finalDb.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('schema31 polluted topology is split by live provenance and cognitive identities are project scoped', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-topology-scope-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  const neuron = (scope: string) => (db.prepare(`
+    SELECT id FROM neurons WHERE COALESCE(project_id,'')=? AND is_deleted=0 LIMIT 1
+  `).get(scope) as { id: string }).id;
+  const neurons = ['project-a', 'project-b', ''].map(neuron);
+  db.prepare(`INSERT INTO task_branches VALUES(?,?,?,?,?,?,?)`)
+    .run('legacy-task', 'project-b', 'shared-task', 'Shared task', 'active', 1, 1);
+  db.prepare(`INSERT INTO event_clusters VALUES(?,?,?,?,?,?,?)`)
+    .run('legacy-cluster', 'project-b', 'shared-cluster', 'semantic', 'Shared cluster', 1, 1);
+  const insertTask = db.prepare(`
+    INSERT INTO task_branch_entries(task_id,neuron_id,created_at) VALUES('legacy-task',?,1)
+  `);
+  const insertCluster = db.prepare(`
+    INSERT INTO event_cluster_entries(cluster_id,neuron_id,created_at) VALUES('legacy-cluster',?,1)
+  `);
+  for (const neuronId of neurons) insertTask.run(neuronId);
+  for (const neuronId of neurons.slice(0, 2)) insertCluster.run(neuronId);
+  for (const [index, neuronId] of neurons.slice(0, 2).entries()) db.prepare(`
+    INSERT INTO facts(
+      fact_id,neuron_id,subject,predicate_family,object_value,entity_id,valid_from,
+      certainty_level,confidence,status,source_text
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    `shared-entity-fact-${index}`, neuronId, 'shared', 'mentions', 'entity',
+    'shared-cognitive-entity', 1, 'observed', 1, 'active', 'shared',
+  );
+  db.close();
+
+  expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+  const upgraded = new Database(dbPath);
+  expect(upgraded.prepare(`SELECT project_id FROM task_branches WHERE task_key='shared-task' ORDER BY project_id`).all())
+    .toEqual([{ project_id: '' }, { project_id: 'project-a' }, { project_id: 'project-b' }]);
+  expect(upgraded.prepare(`
+    SELECT e.project_id,COALESCE(n.project_id,'') AS neuron_project
+    FROM task_branch_entries e JOIN neurons n ON n.id=e.neuron_id
+    ORDER BY e.project_id
+  `).all()).toEqual([
+    { project_id: '', neuron_project: '' },
+    { project_id: 'project-a', neuron_project: 'project-a' },
+    { project_id: 'project-b', neuron_project: 'project-b' },
+  ]);
+  expect(upgraded.prepare(`SELECT project_id FROM event_clusters WHERE cluster_key='shared-cluster' ORDER BY project_id`).all())
+    .toEqual([{ project_id: 'project-a' }, { project_id: 'project-b' }]);
+  expect(upgraded.prepare(`
+    SELECT project_id,node_id FROM cognitive_nodes
+    WHERE node_type='entity' AND node_key='entity:shared-cognitive-entity'
+    ORDER BY project_id
+  `).all()).toEqual([
+    expect.objectContaining({ project_id: 'project-a' }),
+    expect.objectContaining({ project_id: 'project-b' }),
+  ]);
+  expect(upgraded.prepare(`
+    SELECT COUNT(DISTINCT node_id) AS count FROM cognitive_nodes
+    WHERE node_type='entity' AND node_key='entity:shared-cognitive-entity'
+  `).get()).toEqual({ count: 2 });
+  expect(upgraded.prepare(`
+    SELECT COUNT(*) AS count FROM cognitive_edges e
+    JOIN cognitive_nodes s ON s.node_id=e.source_node_id
+    JOIN cognitive_nodes t ON t.node_id=e.target_node_id
+    WHERE e.project_id<>s.project_id OR e.project_id<>t.project_id
+  `).get()).toEqual({ count: 0 });
+  upgraded.close();
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -347,6 +404,77 @@ test('schema31 shared memory entity keeps its owner ID and uses the runtime ID f
     }),
     source_id: secondaryId,
   });
+  upgraded.close();
+
+  const kernel = createMemoryKernel({ dbPath });
+  await kernel.forgetUser('project-a', 'test');
+  expect(kernel.memoryBindingStore.upsertEntity({
+    entityId, projectId: 'project-b', canonicalName: 'Shared Entity', entityType: 'concept', now: 2,
+  }).entityId).toBe(secondaryId);
+  kernel.close();
+  const reopened = createMemoryKernel({ dbPath });
+  expect(reopened.memoryBindingStore.upsertEntity({
+    entityId, projectId: 'project-b', canonicalName: 'Shared Entity', entityType: 'concept', now: 3,
+  }).entityId).toBe(secondaryId);
+  reopened.close();
+  const final = new Database(dbPath);
+  expect(final.prepare(`SELECT COUNT(*) AS count FROM memory_entities WHERE project_id='project-b'`).get())
+    .toEqual({ count: 1 });
+  final.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('schema31 edge-only entity scopes split safely and duplicate edges merge evidence deterministically', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-edge-scope-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  const entityId = 'edge-only-shared-entity';
+  db.prepare(`
+    INSERT INTO memory_entities(entity_id,project_id,canonical_name,entity_type,aliases_json,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?)
+  `).run(entityId, 'project-a', 'Edge only', 'concept', '[]', 1, 1);
+  db.prepare(`
+    INSERT INTO memory_topics(topic_path,project_id,project_id_key,topic_type,created_at,updated_at)
+    VALUES('edge-only-topic','project-b','project-b','semantic',1,1)
+  `).run();
+  const insertEdge = db.prepare(`
+    INSERT INTO memory_edges(
+      edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,confidence,
+      base_weight,stability,activation,evidence_event_ids_json,status,valid_from,version,
+      source_authority,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  insertEdge.run(
+    'legacy-edge-one', 'project-b', 'entity', entityId, 'belongs_to', 'topic', 'edge-only-topic',
+    0.8, 1, 1, 1, '["main-373-event-b"]', 'active', 1, 1, 'model_candidate', 1, 1,
+  );
+  insertEdge.run(
+    'legacy-edge-two', 'project-b', 'entity', entityId, 'belongs_to', 'topic', 'edge-only-topic',
+    0.9, 1, 1, 1, '["evt-aabad7cd-30ab-468b-b855-13d70d0e2da5"]', 'active', 1, 1, 'raw_evidence', 1, 2,
+  );
+  insertEdge.run(
+    'legacy-edge-malformed', 'project-b', 'entity', entityId, 'mentions', 'topic', 'edge-only-topic',
+    1, 1, 1, 1, 'not-json', 'active', 1, 1, 'raw_evidence', 1, 1,
+  );
+  db.close();
+
+  expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+  const upgraded = new Database(dbPath);
+  const secondaryId = memoryEntityId('project-b', 'concept', entityId);
+  expect(upgraded.prepare(`SELECT entity_id FROM memory_entities WHERE project_id='project-b'`).get())
+    .toEqual({ entity_id: secondaryId });
+  expect(upgraded.prepare(`
+    SELECT source_id,evidence_event_ids_json,source_authority FROM memory_edges
+    WHERE project_id='project-b'
+  `).all()).toEqual([{
+    source_id: secondaryId,
+    evidence_event_ids_json: '["evt-aabad7cd-30ab-468b-b855-13d70d0e2da5","main-373-event-b"]',
+    source_authority: 'raw_evidence',
+  }]);
+  expect(upgraded.prepare(`
+    SELECT reason FROM entity_scope_migration_quarantine
+    WHERE record_type='memory_edge' AND record_id='legacy-edge-malformed'
+  `).get()).toEqual({ reason: 'memory_edge_evidence_malformed' });
   upgraded.close();
   rmSync(directory, { recursive: true, force: true });
 });

@@ -107,7 +107,10 @@ export class ActionFrameExtractor {
     resolveTarget(projectId, event, text, cache) {
         let candidates = cache.get(projectId);
         if (!candidates) {
-            const rows = this.db.prepare(`SELECT entity_id,canonical_name,aliases_json FROM memory_entities WHERE project_id=?`).all(projectId);
+            const rows = this.db.prepare(`
+        SELECT entity_id,canonical_name,aliases_json FROM memory_entities
+        WHERE COALESCE(project_id,'')=?
+      `).all(projectId);
             candidates = rows.map((row) => ({
                 stableId: String(row.entity_id),
                 entityId: String(row.entity_id),
@@ -121,7 +124,7 @@ export class ActionFrameExtractor {
             return { entityId: matched.entityId, entityName: matched.canonicalName, confidence: 0.82 };
         const bindings = this.db.prepare(`
       SELECT entity_id,entity_name,topic_path,confidence FROM memory_bindings
-      WHERE project_id=? AND event_id=? AND entity_id IS NOT NULL
+      WHERE COALESCE(project_id,'')=? AND event_id=? AND entity_id IS NOT NULL
       ORDER BY confidence DESC,created_at DESC
     `).all(projectId, event.eventId);
         const binding = bindings.length === 1 ? bindings[0] : undefined;

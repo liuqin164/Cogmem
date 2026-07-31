@@ -370,6 +370,25 @@ test('Atlas keeps projectless action-only projects and preserves repeated multi-
   }
 });
 
+test('Atlas action extraction matches omitted project scope to SQL NULL entities', () => {
+  const kernel = createMemoryKernel();
+  try {
+    const alpha = kernel.memoryBindingStore.upsertEntity({
+      canonicalName: 'Alpha', entityType: 'device', aliases: ['Alpha'], now: 1,
+    });
+    kernel.eventStore.append({
+      streamId: 'implicit-projectless-action', streamType: 'thread', eventType: 'MESSAGE',
+      role: 'user', occurredAt: 2, payload: { text: '启动 Alpha。' },
+    });
+    kernel.rebuildMemoryAtlas();
+    expect(kernel.memoryAtlasStore.db.prepare(`
+      SELECT target_entity_id FROM memory_action_frames WHERE project_id=''
+    `).get()).toEqual({ target_entity_id: alpha.entityId });
+  } finally {
+    kernel.close();
+  }
+});
+
 test('Atlas action extraction rejects Latin substrings and preserves preposed CJK targets', () => {
   const kernel = createMemoryKernel();
   try {

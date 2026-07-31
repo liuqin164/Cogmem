@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { memoryEdgeId, memoryEntityId } from '../binding/MemoryBindingIdentity.js';
+import { cognitiveEdgeId, cognitiveNodeId } from '../engine/CognitiveGraphIdentity.js';
 import { FINAL_AUXILIARY_OBJECTS, FINAL_TABLES, } from './v3_7_4/FinalSchemaDefinition.js';
 const REBUILDABLE_PROJECTIONS = [
     'memory_atlas_fts',
@@ -9,6 +10,8 @@ const REBUILDABLE_PROJECTIONS = [
     'memory_atlas_projection_state',
     'memory_action_frame_evidence',
     'memory_action_frames',
+    'cognitive_edges',
+    'cognitive_nodes',
     'vector_projection_state',
     'time_bucket_entries',
     'time_buckets',
@@ -44,9 +47,12 @@ export function installMultidimensionalMemoryGraph374(db) {
     migrateEntityScope(db);
     migratePendingEntityResolution(db);
     migrateMemoryEntityProjectionIds(db);
+    migrateScopedTopology(db);
     dropRebuildableProjections(db);
     installMissingFinalTables(db);
     reconcileChangedTables(db);
+    rebuildTopologyMembership(db);
+    rebuildCognitiveGraph(db);
     initializeProjectionState(db);
     installFinalAuxiliaryObjects(db);
     restoreAuxiliaryObjects(db, preservedAuxiliaryObjects);
@@ -130,7 +136,68 @@ export function multidimensionalMemoryGraph374Issue(db) {
             });
             if (row.edge_id !== expected || seen.has(expected))
                 return 'memory_edge_identity';
+            if (!memoryEndpointMatchesScope(db, row.source_type, row.source_id, row.project_id)
+                || !memoryEndpointMatchesScope(db, row.target_type, row.target_id, row.project_id)) {
+                return 'memory_edge_endpoint_scope';
+            }
             seen.add(expected);
+        }
+    }
+    if (tableExists(db, 'memory_entity_scope_identity') && db.prepare(`
+    SELECT 1 FROM memory_entity_scope_identity m
+    LEFT JOIN memory_entities e ON e.entity_id=m.scoped_entity_id
+    WHERE e.entity_id IS NULL OR COALESCE(e.project_id,'')<>m.project_id OR e.entity_type<>m.entity_type
+    LIMIT 1
+  `).get())
+        return 'memory_entity_scope_identity';
+    for (const config of [
+        { parent: 'task_branches', entries: 'task_branch_entries', id: 'task_id' },
+        { parent: 'event_clusters', entries: 'event_cluster_entries', id: 'cluster_id' },
+        { parent: 'project_branches', entries: 'branch_entries', id: 'branch_id' },
+    ]) {
+        if (!tableExists(db, config.parent) || !tableExists(db, config.entries))
+            continue;
+        for (const entry of db.prepare(`SELECT * FROM ${config.entries}`).all()) {
+            const parent = db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM ${config.parent} WHERE ${config.id}=?`)
+                .get(String(entry[config.id]));
+            const inferred = inferTopologyEntryScope(db, entry);
+            if (!parent || inferred.scope !== parent.scope || String(entry.project_id ?? '') !== parent.scope) {
+                return `${config.entries}_scope`;
+            }
+        }
+    }
+    if (tableExists(db, 'topology_membership') && db.prepare(`
+    SELECT 1 FROM topology_membership m LEFT JOIN neurons n ON n.id=m.neuron_id
+    WHERE n.id IS NULL OR n.is_deleted<>0 OR COALESCE(n.project_id,'')<>COALESCE(m.project_id,'')
+    LIMIT 1
+  `).get())
+        return 'topology_membership_scope';
+    if (tableExists(db, 'cognitive_nodes')) {
+        for (const row of db.prepare(`SELECT * FROM cognitive_nodes`).all()) {
+            const scope = String(row.project_id ?? '');
+            if (String(row.node_id) !== cognitiveNodeId(scope, row.node_type, String(row.node_key))) {
+                return 'cognitive_node_identity';
+            }
+            if (row.source_neuron_id != null && !(scopeForNeuron(db, String(row.source_neuron_id)) ?? []).includes(scope)) {
+                return 'cognitive_node_scope';
+            }
+        }
+    }
+    if (tableExists(db, 'cognitive_edges')) {
+        for (const row of db.prepare(`
+      SELECT e.*,s.project_id AS source_project,t.project_id AS target_project
+      FROM cognitive_edges e LEFT JOIN cognitive_nodes s ON s.node_id=e.source_node_id
+      LEFT JOIN cognitive_nodes t ON t.node_id=e.target_node_id
+    `).all()) {
+            const scope = String(row.project_id ?? '');
+            if (row.source_project !== scope || row.target_project !== scope
+                || String(row.edge_id) !== cognitiveEdgeId({
+                    projectId: scope,
+                    sourceNodeId: String(row.source_node_id),
+                    targetNodeId: String(row.target_node_id),
+                    edgeType: row.edge_type,
+                }))
+                return 'cognitive_edge_scope';
         }
     }
     return undefined;
@@ -285,11 +352,17 @@ function migratePendingEntityResolution(db) {
 function migrateMemoryEntityProjectionIds(db) {
     if (!tableExists(db, 'memory_entities') || !tableExists(db, 'memory_bindings'))
         return;
+    pruneInvalidMemoryEdges(db, false);
     const rows = db.prepare('SELECT * FROM memory_entities').all();
     const insert = db.prepare(`
     INSERT OR IGNORE INTO memory_entities(
       entity_id,project_id,canonical_name,entity_type,aliases_json,stable_path,created_at,updated_at
     ) VALUES(?,?,?,?,?,?,?,?)
+  `);
+    const mapIdentity = db.prepare(`
+    INSERT OR IGNORE INTO memory_entity_scope_identity(
+      root_entity_id,project_id,scoped_entity_id,entity_type,created_at
+    ) VALUES(?,?,?,?,?)
   `);
     for (const row of rows) {
         const oldId = String(row.entity_id);
@@ -299,20 +372,30 @@ function migrateMemoryEntityProjectionIds(db) {
       SELECT DISTINCT COALESCE(project_id,'') AS scope FROM memory_bindings WHERE entity_id=?
     `).all(oldId))
             scopes.add(item.scope);
+        if (tableExists(db, 'memory_edges')) {
+            for (const item of db.prepare(`
+        SELECT DISTINCT COALESCE(project_id,'') AS scope FROM memory_edges
+        WHERE (source_type='entity' AND source_id=?) OR (target_type='entity' AND target_id=?)
+      `).all(oldId, oldId))
+                scopes.add(item.scope);
+        }
         for (const scope of [ownerScope, ...[...scopes].filter((item) => item !== ownerScope).sort()]) {
             const nextId = scope === ownerScope
                 ? oldId
                 : memoryEntityId(scope, String(row.entity_type), oldId);
+            if (nextId !== oldId) {
+                const scopedAliases = tableExists(db, 'entity_aliases')
+                    ? db.prepare(`
+              SELECT alias_text FROM entity_aliases
+              WHERE entity_id=? AND project_id=?
+              ORDER BY normalized_alias
+            `).all(oldId, scope).map((item) => item.alias_text)
+                    : [];
+                insert.run(nextId, scope || null, String(row.canonical_name), String(row.entity_type), JSON.stringify(scopedAliases), null, Number(row.created_at), Number(row.updated_at));
+            }
+            mapIdentity.run(oldId, scope, nextId, String(row.entity_type), Number(row.created_at));
             if (nextId === oldId)
                 continue;
-            const scopedAliases = tableExists(db, 'entity_aliases')
-                ? db.prepare(`
-            SELECT alias_text FROM entity_aliases
-            WHERE entity_id=? AND project_id=?
-            ORDER BY normalized_alias
-          `).all(oldId, scope).map((item) => item.alias_text)
-                : [];
-            insert.run(nextId, scope || null, String(row.canonical_name), String(row.entity_type), JSON.stringify(scopedAliases), null, Number(row.created_at), Number(row.updated_at));
             db.prepare(`
         UPDATE memory_bindings SET entity_id=?
         WHERE entity_id=? AND COALESCE(project_id,'')=?
@@ -329,7 +412,80 @@ function migrateMemoryEntityProjectionIds(db) {
             }
         }
     }
+    pruneInvalidMemoryEdges(db, true);
     rekeyMemoryEdges(db);
+}
+function pruneInvalidMemoryEdges(db, validateEntities) {
+    if (!tableExists(db, 'memory_edges'))
+        return;
+    const rows = db.prepare(`SELECT * FROM memory_edges ORDER BY edge_id`).all();
+    for (const row of rows) {
+        const scope = String(row.project_id ?? '');
+        const evidence = parseEvidenceIds(row.evidence_event_ids_json);
+        let reason = evidence ? undefined : 'memory_edge_evidence_malformed';
+        if (!reason && evidence.some((eventId) => !recordMatchesScope(db, 'memory_events', 'event_id', eventId, scope))) {
+            reason = 'memory_edge_evidence_scope_mismatch';
+        }
+        for (const endpoint of [
+            { type: String(row.source_type), id: String(row.source_id) },
+            { type: String(row.target_type), id: String(row.target_id) },
+        ]) {
+            if (reason || (!validateEntities && endpoint.type === 'entity'))
+                continue;
+            if (!memoryEndpointMatchesScope(db, endpoint.type, endpoint.id, scope)) {
+                reason = 'memory_edge_endpoint_scope_mismatch';
+            }
+        }
+        if (!reason)
+            continue;
+        quarantineEntityRow(db, 'memory_edge', String(row.edge_id), row, [scope], reason);
+        db.prepare(`DELETE FROM memory_edges WHERE edge_id=?`).run(String(row.edge_id));
+    }
+}
+function memoryEndpointMatchesScope(db, type, id, scope) {
+    if (type === 'event' || type === 'raw_event')
+        return recordMatchesScope(db, 'memory_events', 'event_id', id, scope);
+    if (type === 'episode')
+        return recordMatchesScope(db, 'memory_episodes', 'episode_id', id, scope);
+    if (type === 'entity')
+        return optionalRecordMatchesScope(db, 'memory_entities', 'entity_id', id, scope);
+    if (type === 'topic')
+        return optionalRecordMatchesScope(db, 'memory_topics', 'topic_path', id, scope);
+    if (type === 'cluster')
+        return optionalRecordMatchesScope(db, 'memory_clusters', 'cluster_id', id, scope);
+    return true;
+}
+function optionalRecordMatchesScope(db, table, idColumn, id, scope) {
+    if (!tableExists(db, table))
+        return true;
+    const rows = db.prepare(`
+    SELECT COALESCE(project_id,'') AS scope FROM ${quoteIdentifier(table)}
+    WHERE ${quoteIdentifier(idColumn)}=?
+  `).all(id);
+    return rows.length === 0 || rows.some((row) => row.scope === scope);
+}
+function recordMatchesScope(db, table, idColumn, id, scope) {
+    if (!tableExists(db, table))
+        return false;
+    return Boolean(db.prepare(`
+    SELECT 1 FROM ${quoteIdentifier(table)}
+    WHERE ${quoteIdentifier(idColumn)}=? AND COALESCE(project_id,'')=?
+  `).get(id, scope));
+}
+function parseEvidenceIds(value) {
+    try {
+        const parsed = JSON.parse(String(value ?? '[]'));
+        return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')
+            ? [...new Set(parsed.filter(Boolean))]
+            : null;
+    }
+    catch {
+        return null;
+    }
+}
+function preferredEdgeAuthority(left, right) {
+    const priority = ['model_candidate', 'atlas_curator', 'memory_frame_projector', 'governed_projection', 'raw_evidence'];
+    return priority.indexOf(left) >= priority.indexOf(right) ? left : right;
 }
 function rekeyMemoryEdges(db) {
     if (!tableExists(db, 'memory_edges'))
@@ -351,25 +507,321 @@ function rekeyMemoryEdges(db) {
             db.prepare('UPDATE memory_edges SET edge_id=? WHERE edge_id=?').run(edgeId, row.edge_id);
             continue;
         }
-        const evidence = new Set();
-        for (const value of [existing.evidence_event_ids_json, row.evidence_event_ids_json]) {
-            try {
-                const parsed = JSON.parse(value);
-                if (Array.isArray(parsed)) {
-                    for (const item of parsed)
-                        if (typeof item === 'string' && item)
-                            evidence.add(item);
-                }
-            }
-            catch { /* malformed legacy evidence is discarded during deterministic merge */ }
-        }
+        const evidence = new Set([
+            ...(parseEvidenceIds(existing.evidence_event_ids_json) ?? []),
+            ...(parseEvidenceIds(row.evidence_event_ids_json) ?? []),
+        ]);
         db.prepare(`
       UPDATE memory_edges SET
         confidence=?,base_weight=?,stability=?,activation=?,evidence_event_ids_json=?,
         status=?,valid_from=?,valid_to=?,version=?,source_authority=?,created_at=?,updated_at=?
       WHERE edge_id=?
-    `).run(Math.max(existing.confidence, row.confidence), Math.max(existing.base_weight, row.base_weight), Math.max(existing.stability, row.stability), Math.max(existing.activation, row.activation), JSON.stringify([...evidence].sort()), existing.status === 'active' || row.status === 'active' ? 'active' : existing.status, Math.min(existing.valid_from, row.valid_from), existing.valid_to == null || row.valid_to == null ? null : Math.max(existing.valid_to, row.valid_to), Math.max(existing.version, row.version) + 1, existing.source_authority, Math.min(existing.created_at, row.created_at), Math.max(existing.updated_at, row.updated_at), edgeId);
+    `).run(Math.max(existing.confidence, row.confidence), Math.max(existing.base_weight, row.base_weight), Math.max(existing.stability, row.stability), Math.max(existing.activation, row.activation), JSON.stringify([...evidence].sort()), existing.status === 'active' || row.status === 'active' ? 'active' : existing.status, Math.min(existing.valid_from, row.valid_from), existing.valid_to == null || row.valid_to == null ? null : Math.max(existing.valid_to, row.valid_to), Math.max(existing.version, row.version) + 1, preferredEdgeAuthority(existing.source_authority, row.source_authority), Math.min(existing.created_at, row.created_at), Math.max(existing.updated_at, row.updated_at), edgeId);
         db.prepare('DELETE FROM memory_edges WHERE edge_id=?').run(row.edge_id);
+    }
+}
+function migrateScopedTopology(db) {
+    rebuildScopedTopologyParents(db, 'task');
+    rebuildScopedTopologyParents(db, 'event_cluster');
+    cleanProjectBranchTopology(db);
+}
+function rebuildScopedTopologyParents(db, kind) {
+    const parentTable = kind === 'task' ? 'task_branches' : 'event_clusters';
+    const entryTable = kind === 'task' ? 'task_branch_entries' : 'event_cluster_entries';
+    const idColumn = kind === 'task' ? 'task_id' : 'cluster_id';
+    const keyColumn = kind === 'task' ? 'task_key' : 'cluster_key';
+    if (!tableExists(db, parentTable) || !tableExists(db, entryTable))
+        return;
+    const parents = db.prepare(`SELECT * FROM ${parentTable}`).all();
+    const entries = db.prepare(`SELECT rowid AS migration_rowid,* FROM ${entryTable}`).all();
+    const parentsById = new Map(parents.map((row) => [String(row[idColumn]), row]));
+    const grouped = new Map();
+    for (const entry of entries) {
+        const oldId = String(entry[idColumn]);
+        const parent = parentsById.get(oldId);
+        const inferred = inferTopologyEntryScope(db, entry);
+        if (!parent || inferred.scope === undefined) {
+            quarantineEntityRow(db, `${kind}_entry`, `${oldId}:${String(entry.migration_rowid)}`, entry, inferred.scopes, parent ? inferred.reason : `${kind}_parent_missing`);
+            continue;
+        }
+        const groupKey = `${oldId}\0${inferred.scope}`;
+        const group = grouped.get(groupKey) ?? [];
+        group.push(entry);
+        grouped.set(groupKey, group);
+    }
+    db.exec(`DROP TABLE ${entryTable}; DROP TABLE ${parentTable};`);
+    installTable(db, parentTable);
+    installTable(db, entryTable);
+    const inserted = new Set();
+    for (const [groupKey, scopedEntries] of [...grouped].sort(([left], [right]) => left.localeCompare(right))) {
+        const [oldId, scope] = groupKey.split('\0');
+        const parent = parentsById.get(oldId);
+        const key = String(parent[keyColumn]);
+        const nextId = scopedId(kind, key, scope);
+        if (!inserted.has(nextId)) {
+            if (kind === 'task') {
+                db.prepare(`
+          INSERT INTO task_branches(task_id,project_id,task_key,title,status,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,?)
+        `).run(nextId, scope, key, String(parent.title), String(parent.status), Number(parent.created_at), Number(parent.updated_at));
+            }
+            else {
+                db.prepare(`
+          INSERT INTO event_clusters(cluster_id,project_id,cluster_key,cluster_type,title,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,?)
+        `).run(nextId, scope, key, String(parent.cluster_type), String(parent.title), Number(parent.created_at), Number(parent.updated_at));
+            }
+            inserted.add(nextId);
+        }
+        const insertEntry = db.prepare(`
+      INSERT INTO ${entryTable}(
+        ${idColumn},project_id,neuron_id,unit_id,belief_id,fact_id,event_id,created_at
+      ) VALUES(?,?,?,?,?,?,?,?)
+    `);
+        for (const entry of scopedEntries)
+            insertEntry.run(nextId, scope, entry.neuron_id ?? null, entry.unit_id ?? null, entry.belief_id ?? null, entry.fact_id ?? null, entry.event_id ?? null, Number(entry.created_at));
+    }
+}
+function inferTopologyEntryScope(db, entry) {
+    const scopes = new Set();
+    let unresolved = false;
+    let referenced = false;
+    const add = (resolved) => {
+        referenced = true;
+        if (!resolved?.length)
+            unresolved = true;
+        else
+            for (const scope of resolved)
+                scopes.add(scope);
+    };
+    if (entry.neuron_id)
+        add(scopeForNeuron(db, String(entry.neuron_id)));
+    if (entry.unit_id)
+        add(scopesForUnit(db, String(entry.unit_id)));
+    if (entry.belief_id)
+        add(scopeForBelief(db, String(entry.belief_id)));
+    if (entry.fact_id)
+        add(scopeForNeuronReference(db, 'facts', 'fact_id', String(entry.fact_id)));
+    if (entry.event_id) {
+        add(scopeForNeuronReference(db, 'compiled_events', 'event_id', String(entry.event_id))
+            ?? scopeForProjectRecord(db, 'memory_events', 'event_id', String(entry.event_id)));
+    }
+    if (!referenced || unresolved || scopes.size !== 1)
+        return {
+            scopes: [...scopes].sort(),
+            reason: !referenced || unresolved ? 'topology_entry_scope_unresolved' : 'topology_entry_scope_conflict',
+        };
+    return { scope: [...scopes][0], scopes: [...scopes], reason: '' };
+}
+function scopeForNeuron(db, neuronId) {
+    if (!tableExists(db, 'neurons'))
+        return null;
+    const row = db.prepare(`
+    SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0
+  `).get(neuronId);
+    return row ? [row.scope] : null;
+}
+function scopeForProjectRecord(db, table, idColumn, id) {
+    if (!tableExists(db, table))
+        return null;
+    const row = db.prepare(`
+    SELECT COALESCE(project_id,'') AS scope FROM ${quoteIdentifier(table)}
+    WHERE ${quoteIdentifier(idColumn)}=?
+  `).get(id);
+    return row ? [row.scope] : null;
+}
+function scopeForNeuronReference(db, table, idColumn, id) {
+    if (!tableExists(db, table) || !tableExists(db, 'neurons'))
+        return null;
+    const row = db.prepare(`
+    SELECT COALESCE(n.project_id,'') AS scope
+    FROM ${quoteIdentifier(table)} r JOIN neurons n ON n.id=r.neuron_id
+    WHERE r.${quoteIdentifier(idColumn)}=? AND n.is_deleted=0
+  `).get(id);
+    return row ? [row.scope] : null;
+}
+function scopeForBelief(db, beliefId) {
+    return scopeForProjectRecord(db, 'beliefs', 'id', beliefId)
+        ?? scopeForProjectRecord(db, 'belief_graph_nodes', 'belief_id', beliefId);
+}
+function scopesForUnit(db, unitId) {
+    if (!tableExists(db, 'interaction_units'))
+        return null;
+    const row = db.prepare(`SELECT message_neuron_ids_json FROM interaction_units WHERE unit_id=?`)
+        .get(unitId);
+    const neuronIds = row ? parseEvidenceIds(row.message_neuron_ids_json) : null;
+    if (!neuronIds?.length)
+        return null;
+    const scopes = new Set();
+    for (const neuronId of neuronIds) {
+        const scope = scopeForNeuron(db, neuronId);
+        if (!scope)
+            return null;
+        scopes.add(scope[0]);
+    }
+    return [...scopes];
+}
+function cleanProjectBranchTopology(db) {
+    if (tableExists(db, 'branch_entries') && tableExists(db, 'project_branches')) {
+        for (const entry of db.prepare(`SELECT rowid AS migration_rowid,* FROM branch_entries`).all()) {
+            const parent = db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM project_branches WHERE branch_id=?`)
+                .get(String(entry.branch_id));
+            const inferred = inferTopologyEntryScope(db, entry);
+            if (parent && inferred.scope === parent.scope)
+                continue;
+            quarantineEntityRow(db, 'branch_entry', String(entry.migration_rowid), entry, inferred.scopes, parent ? inferred.reason || 'branch_entry_scope_mismatch' : 'branch_parent_missing');
+            db.prepare(`DELETE FROM branch_entries WHERE rowid=?`).run(Number(entry.migration_rowid));
+        }
+    }
+    if (tableExists(db, 'branch_links') && tableExists(db, 'project_branches')) {
+        for (const row of db.prepare(`SELECT rowid AS migration_rowid,* FROM branch_links`).all()) {
+            const scopes = db.prepare(`
+        SELECT COALESCE(a.project_id,'') AS parent_scope,COALESCE(b.project_id,'') AS child_scope
+        FROM project_branches a JOIN project_branches b ON b.branch_id=? WHERE a.branch_id=?
+      `).get(String(row.child_branch_id), String(row.parent_branch_id));
+            if (scopes && scopes.parent_scope === scopes.child_scope)
+                continue;
+            quarantineEntityRow(db, 'branch_link', String(row.migration_rowid), row, scopes ? [scopes.parent_scope, scopes.child_scope] : [], 'branch_link_scope_mismatch');
+            db.prepare(`DELETE FROM branch_links WHERE rowid=?`).run(Number(row.migration_rowid));
+        }
+    }
+}
+function rebuildTopologyMembership(db) {
+    if (!tableExists(db, 'topology_membership'))
+        return;
+    db.exec(`DELETE FROM topology_membership`);
+    const insert = db.prepare(`
+    INSERT OR IGNORE INTO topology_membership(
+      neuron_id,project_id,dimension_type,dimension_key,title,created_at
+    ) VALUES(?,?,?,?,?,?)
+  `);
+    for (const config of [
+        { parent: 'project_branches', entries: 'branch_entries', id: 'branch_id', type: 'project_branch', key: 'branch_key' },
+        { parent: 'task_branches', entries: 'task_branch_entries', id: 'task_id', type: 'task_branch', key: 'task_key' },
+        { parent: 'event_clusters', entries: 'event_cluster_entries', id: 'cluster_id', type: 'event_cluster', key: 'cluster_key' },
+    ]) {
+        for (const row of db.prepare(`
+      SELECT e.neuron_id,p.project_id,p.${config.key} AS dimension_key,p.title,e.created_at
+      FROM ${config.entries} e JOIN ${config.parent} p ON p.${config.id}=e.${config.id}
+      JOIN neurons n ON n.id=e.neuron_id AND n.is_deleted=0
+      WHERE e.neuron_id IS NOT NULL AND COALESCE(n.project_id,'')=p.project_id
+    `).all())
+            insert.run(String(row.neuron_id), String(row.project_id), config.type, String(row.dimension_key), String(row.title), Number(row.created_at));
+    }
+}
+function rebuildCognitiveGraph(db) {
+    if (!tableExists(db, 'cognitive_nodes') || !tableExists(db, 'cognitive_edges'))
+        return;
+    db.exec(`DELETE FROM cognitive_edges; DELETE FROM cognitive_nodes;`);
+    const insertNode = db.prepare(`
+    INSERT OR IGNORE INTO cognitive_nodes(
+      node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?)
+  `);
+    const insertEdge = db.prepare(`
+    INSERT OR IGNORE INTO cognitive_edges(
+      edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at
+    ) VALUES(?,?,?,?,?,?,?,?)
+  `);
+    const addNode = (scope, nodeType, nodeKey, title, sourceNeuronId, metadata, createdAt) => {
+        const nodeId = cognitiveNodeId(scope, nodeType, nodeKey);
+        insertNode.run(nodeId, nodeType, nodeKey, title, scope, sourceNeuronId, metadata ? JSON.stringify(metadata) : null, createdAt, createdAt);
+        return nodeId;
+    };
+    const addEdge = (scope, sourceNodeId, targetNodeId, edgeType, createdAt) => insertEdge.run(cognitiveEdgeId({ projectId: scope, sourceNodeId, targetNodeId, edgeType }), sourceNodeId, targetNodeId, edgeType, 1, scope, null, createdAt);
+    const neuronNodes = new Map();
+    const neuronScopes = new Map();
+    for (const row of db.prepare(`
+    SELECT id,content,COALESCE(project_id,'') AS scope,type,created_at
+    FROM neurons WHERE is_deleted=0 ORDER BY id
+  `).all()) {
+        const neuronId = String(row.id);
+        const scope = String(row.scope);
+        neuronScopes.set(neuronId, scope);
+        neuronNodes.set(neuronId, addNode(scope, 'neuron', `neuron:${neuronId}`, String(row.content).slice(0, 120), neuronId, { type: String(row.type) }, Number(row.created_at)));
+    }
+    if (tableExists(db, 'interaction_units')) {
+        for (const row of db.prepare(`SELECT * FROM interaction_units ORDER BY unit_id`).all()) {
+            const scopes = scopesForUnit(db, String(row.unit_id));
+            if (scopes?.length !== 1) {
+                quarantineEntityRow(db, 'cognitive_unit', String(row.unit_id), row, scopes ?? [], 'cognitive_unit_scope_unresolved');
+                continue;
+            }
+            const scope = scopes[0];
+            const unitNode = addNode(scope, 'unit', `unit:${String(row.unit_id)}`, String(row.semantic_text), null, { type: String(row.type) }, Number(row.created_at));
+            for (const neuronId of parseEvidenceIds(row.message_neuron_ids_json) ?? []) {
+                const neuronNode = neuronNodes.get(neuronId);
+                if (neuronNode)
+                    addEdge(scope, unitNode, neuronNode, 'summarizes', Number(row.created_at));
+            }
+        }
+    }
+    if (tableExists(db, 'beliefs')) {
+        for (const row of db.prepare(`SELECT * FROM beliefs ORDER BY id`).all()) {
+            const sourceNeuronId = typeof row.source_neuron_id === 'string' && neuronNodes.has(row.source_neuron_id)
+                ? row.source_neuron_id
+                : null;
+            const scope = sourceNeuronId ? neuronScopes.get(sourceNeuronId) : String(row.project_id ?? '');
+            const beliefNode = addNode(scope, 'belief', `belief:${String(row.id)}`, `${String(row.subject)} ${String(row.predicate)} ${String(row.object_value)}`.trim(), sourceNeuronId, null, Number(row.created_at));
+            if (sourceNeuronId)
+                addEdge(scope, beliefNode, neuronNodes.get(sourceNeuronId), 'supports_belief', Number(row.created_at));
+        }
+    }
+    if (tableExists(db, 'facts')) {
+        for (const row of db.prepare(`
+      SELECT f.*,COALESCE(n.project_id,'') AS scope,n.created_at AS neuron_created_at
+      FROM facts f JOIN neurons n ON n.id=f.neuron_id WHERE n.is_deleted=0 ORDER BY f.fact_id
+    `).all()) {
+            const scope = String(row.scope);
+            const factNode = addNode(scope, 'fact', `fact:${String(row.fact_id)}`, `${String(row.subject)} ${String(row.predicate_family)} ${String(row.object_value ?? row.predicate_value ?? '')}`.trim(), String(row.neuron_id), null, Number(row.valid_from ?? row.neuron_created_at));
+            addEdge(scope, factNode, neuronNodes.get(String(row.neuron_id)), 'references_fact', Number(row.valid_from ?? row.neuron_created_at));
+            if (typeof row.entity_id === 'string' && row.entity_id) {
+                const entity = tableExists(db, 'entity_instances')
+                    ? db.prepare(`SELECT canonical_name,type FROM entity_instances WHERE instance_id=?`).get(row.entity_id)
+                    : null;
+                const entityNode = addNode(scope, 'entity', `entity:${row.entity_id}`, String(entity?.canonical_name ?? row.entity_id), String(row.neuron_id), entity ? { type: String(entity.type) } : null, Number(row.valid_from ?? row.neuron_created_at));
+                addEdge(scope, factNode, entityNode, 'mentions_entity', Number(row.valid_from ?? row.neuron_created_at));
+            }
+        }
+    }
+    if (tableExists(db, 'compiled_events')) {
+        for (const row of db.prepare(`
+      SELECT e.*,COALESCE(n.project_id,'') AS scope,n.created_at AS neuron_created_at
+      FROM compiled_events e JOIN neurons n ON n.id=e.neuron_id WHERE n.is_deleted=0 ORDER BY e.event_id
+    `).all()) {
+            const scope = String(row.scope);
+            const eventNode = addNode(scope, 'compiled_event', `compiled_event:${String(row.event_id)}`, `${String(row.event_type)}:${String(row.target ?? row.actor ?? 'event')}`, String(row.neuron_id), null, Number(row.valid_from ?? row.neuron_created_at));
+            addEdge(scope, eventNode, neuronNodes.get(String(row.neuron_id)), 'references_event', Number(row.valid_from ?? row.neuron_created_at));
+        }
+    }
+    for (const config of [
+        { parent: 'project_branches', entries: 'branch_entries', id: 'branch_id', type: 'project_branch', prefix: 'project_branch', edge: 'belongs_to_project_branch' },
+        { parent: 'task_branches', entries: 'task_branch_entries', id: 'task_id', type: 'task_branch', prefix: 'task_branch', edge: 'belongs_to_task' },
+        { parent: 'event_clusters', entries: 'event_cluster_entries', id: 'cluster_id', type: 'event_cluster', prefix: 'event_cluster', edge: 'belongs_to_event_cluster' },
+    ]) {
+        for (const parent of db.prepare(`SELECT * FROM ${config.parent} ORDER BY ${config.id}`).all()) {
+            const scope = String(parent.project_id ?? '');
+            const parentId = String(parent[config.id]);
+            const parentNode = addNode(scope, config.type, `${config.prefix}:${parentId}`, String(parent.title), null, { [config.id]: parentId }, Number(parent.created_at));
+            for (const entry of db.prepare(`
+        SELECT neuron_id,created_at FROM ${config.entries}
+        WHERE ${config.id}=? AND project_id=? AND neuron_id IS NOT NULL
+      `).all(parentId, scope)) {
+                const neuronNode = neuronNodes.get(entry.neuron_id);
+                if (neuronNode)
+                    addEdge(scope, neuronNode, parentNode, config.edge, Number(entry.created_at));
+            }
+        }
+    }
+    if (tableExists(db, 'branch_links')) {
+        for (const row of db.prepare(`
+      SELECT l.*,COALESCE(a.project_id,'') AS scope
+      FROM branch_links l JOIN project_branches a ON a.branch_id=l.parent_branch_id
+      JOIN project_branches b ON b.branch_id=l.child_branch_id AND b.project_id=a.project_id
+    `).all()) {
+            const scope = String(row.scope);
+            addEdge(scope, cognitiveNodeId(scope, 'project_branch', `project_branch:${String(row.parent_branch_id)}`), cognitiveNodeId(scope, 'project_branch', `project_branch:${String(row.child_branch_id)}`), 'extends_branch', Number(row.created_at));
+        }
     }
 }
 function dropRebuildableProjections(db) {
@@ -583,13 +1035,13 @@ function entityScopes(db, entityId) {
     }
     return [...scopes].sort();
 }
-function quarantineEntityRow(db, recordType, recordId, row, scopes) {
+function quarantineEntityRow(db, recordType, recordId, row, scopes, reason) {
     const hash = stableHash(row);
     db.prepare(`
     INSERT OR IGNORE INTO entity_scope_migration_quarantine(
       quarantine_id,record_type,record_id,record_hash,implicated_scopes_json,reason,created_at
     ) VALUES(?,?,?,?,?,?,?)
-  `).run(`${recordType}-${hash.slice(0, 32)}`, recordType, recordId, hash, JSON.stringify(scopes), scopes.length ? `${recordType}_scope_ambiguous` : `${recordType}_scope_unresolved`, Date.now());
+  `).run(`${recordType}-${hash.slice(0, 32)}`, recordType, recordId, hash, JSON.stringify(scopes), reason ?? (scopes.length ? `${recordType}_scope_ambiguous` : `${recordType}_scope_unresolved`), Date.now());
 }
 function scopedId(kind, id, scope) {
     return `${kind}-${createHash('sha256').update(`${scope}\0${id}`).digest('hex').slice(0, 32)}`;

@@ -120,7 +120,10 @@ export class ActionFrameExtractor {
   private resolveTarget(projectId: string, event: MemoryEvent, text: string, cache: Map<string, EntityCandidate[]>): TargetMatch {
     let candidates = cache.get(projectId);
     if (!candidates) {
-      const rows = this.db.prepare(`SELECT entity_id,canonical_name,aliases_json FROM memory_entities WHERE project_id=?`).all(projectId) as Array<Record<string, unknown>>;
+      const rows = this.db.prepare(`
+        SELECT entity_id,canonical_name,aliases_json FROM memory_entities
+        WHERE COALESCE(project_id,'')=?
+      `).all(projectId) as Array<Record<string, unknown>>;
       candidates = rows.map((row) => ({
         stableId: String(row.entity_id),
         entityId: String(row.entity_id),
@@ -133,7 +136,7 @@ export class ActionFrameExtractor {
     if (matched) return { entityId: matched.entityId, entityName: matched.canonicalName, confidence: 0.82 };
     const bindings = this.db.prepare(`
       SELECT entity_id,entity_name,topic_path,confidence FROM memory_bindings
-      WHERE project_id=? AND event_id=? AND entity_id IS NOT NULL
+      WHERE COALESCE(project_id,'')=? AND event_id=? AND entity_id IS NOT NULL
       ORDER BY confidence DESC,created_at DESC
     `).all(projectId, event.eventId) as Array<Record<string, unknown>>;
     const binding = bindings.length === 1 ? bindings[0] : undefined;
