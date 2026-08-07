@@ -547,25 +547,25 @@ test('schema31 edge-only entity scopes split safely and duplicate edges merge ev
   const insertEdge = db.prepare(`
     INSERT INTO memory_edges(
       edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,confidence,
-      base_weight,stability,activation,evidence_event_ids_json,status,valid_from,version,
+      base_weight,stability,activation,evidence_event_ids_json,status,valid_from,valid_to,version,
       source_authority,created_at,updated_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `);
   insertEdge.run(
     'legacy-edge-one', 'project-b', 'entity', entityId, 'belongs_to', 'topic', 'edge-only-topic',
-    0.8, 1, 1, 1, '["main-373-event-b"]', 'active', 1, 1, 'model_candidate', 1, 1,
+    0.99, 9, 1, 1, '["main-373-event-b"]', 'active', 1, null, 1, 'model_candidate', 1, 1,
   );
   insertEdge.run(
     'legacy-edge-two', 'project-b', 'entity', entityId, 'belongs_to', 'topic', 'edge-only-topic',
-    0.9, 1, 1, 1, '["evt-aabad7cd-30ab-468b-b855-13d70d0e2da5"]', 'active', 1, 1, 'raw_evidence', 1, 2,
+    0.9, 2, 1, 1, '["evt-aabad7cd-30ab-468b-b855-13d70d0e2da5"]', 'rejected', 2, 3, 1, 'raw_evidence', 1, 2,
   );
   insertEdge.run(
     'legacy-edge-malformed', 'project-b', 'entity', entityId, 'mentions', 'topic', 'edge-only-topic',
-    1, 1, 1, 1, 'not-json', 'active', 1, 1, 'raw_evidence', 1, 1,
+    1, 1, 1, 1, 'not-json', 'active', 1, null, 1, 'raw_evidence', 1, 1,
   );
   insertEdge.run(
     'legacy-edge-orphan', 'project-b', 'entity', 'missing-entity', 'mentions', 'topic', 'edge-only-topic',
-    1, 1, 1, 1, '["main-373-event-b"]', 'active', 1, 1, 'raw_evidence', 1, 1,
+    1, 1, 1, 1, '["main-373-event-b"]', 'active', 1, null, 1, 'raw_evidence', 1, 1,
   );
   db.close();
 
@@ -575,12 +575,16 @@ test('schema31 edge-only entity scopes split safely and duplicate edges merge ev
   expect(upgraded.prepare(`SELECT entity_id FROM memory_entities WHERE project_id='project-b'`).get())
     .toEqual({ entity_id: secondaryId });
   expect(upgraded.prepare(`
-    SELECT source_id,evidence_event_ids_json,source_authority FROM memory_edges
+    SELECT source_id,evidence_event_ids_json,source_authority,confidence,base_weight,status,valid_to FROM memory_edges
     WHERE project_id='project-b'
   `).all()).toEqual([{
     source_id: secondaryId,
-    evidence_event_ids_json: '["evt-aabad7cd-30ab-468b-b855-13d70d0e2da5","main-373-event-b"]',
+    evidence_event_ids_json: '["main-373-event-b","evt-aabad7cd-30ab-468b-b855-13d70d0e2da5"]',
     source_authority: 'raw_evidence',
+    confidence: 0.9,
+    base_weight: 2,
+    status: 'rejected',
+    valid_to: 3,
   }]);
   expect(upgraded.prepare(`
     SELECT reason FROM entity_scope_migration_quarantine
@@ -590,6 +594,32 @@ test('schema31 edge-only entity scopes split safely and duplicate edges merge ev
     SELECT reason FROM entity_scope_migration_quarantine
     WHERE record_type='memory_edge' AND record_id='legacy-edge-orphan'
   `).get()).toEqual({ reason: 'memory_edge_endpoint_scope_mismatch' });
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('schema31 bindings quarantine cross-scope clusters and related events', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-binding-scope-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  db.prepare(`INSERT INTO memory_topics(topic_path,project_id,project_id_key,topic_type,created_at,updated_at) VALUES(?,?,?,?,?,?)`)
+    .run('binding-scope-a', 'project-a', 'project-a', 'concept', 1, 1);
+  db.prepare(`INSERT INTO memory_topics(topic_path,project_id,project_id_key,topic_type,created_at,updated_at) VALUES(?,?,?,?,?,?)`)
+    .run('binding-scope-b', 'project-b', 'project-b', 'concept', 1, 1);
+  db.prepare(`INSERT INTO memory_clusters(cluster_id,project_id,topic_path,cluster_type,title,summary,status,confidence,support_count,evidence_event_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run('cluster-b', 'project-b', 'binding-scope-b', 'about', 'b', 'b', 'active', 1, 1, '["main-373-event-b"]', 1, 1);
+  const insert = db.prepare(`INSERT INTO memory_bindings(binding_id,event_id,project_id,topic_path,binding_type,confidence,source,signal,claim_key,binding_action,cluster_id,related_event_ids_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  insert.run('binding-bad-cluster', 'main-373-event-a', 'project-a', 'binding-scope-a', 'about', 1, 'deterministic', 'a', 'a', 'attach_to_existing', 'cluster-b', '[]', 1);
+  insert.run('binding-bad-related', 'main-373-event-a', 'project-a', 'binding-scope-a', 'about', 1, 'deterministic', 'a', 'b', 'attach_to_existing', null, '["main-373-event-b"]', 1);
+  db.close();
+
+  expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+  const upgraded = new Database(dbPath);
+  expect(upgraded.prepare(`SELECT COUNT(*) AS count FROM memory_bindings WHERE binding_id LIKE 'binding-bad-%'`).get()).toEqual({ count: 0 });
+  expect(upgraded.prepare(`SELECT record_id,reason FROM entity_scope_migration_quarantine WHERE record_type='memory_binding' ORDER BY record_id`).all()).toEqual([
+    { record_id: 'binding-bad-cluster', reason: 'memory_binding_cluster_scope_mismatch' },
+    { record_id: 'binding-bad-related', reason: 'memory_binding_related_event_scope_mismatch' },
+  ]);
   upgraded.close();
   rmSync(directory, { recursive: true, force: true });
 });

@@ -88,3 +88,34 @@ export function isOperationalNoiseText(text: string | null | undefined): boolean
     /\broutine system ping\b/i,
   ].some((pattern) => pattern.test(normalized));
 }
+
+export function recallableNeuronSql(alias: string, columns: ReadonlySet<string>): string {
+  const tagSet = (values: string[]) => columns.has('tags')
+    ? `EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(${alias}.tags) THEN ${alias}.tags ELSE '[]' END) WHERE value IN (${values.map(sqlString).join(',')}))`
+    : '0';
+  const rawUser = columns.has('source_type') && columns.has('tags')
+    ? `${alias}.source_type='user_input'
+      AND ${tagSet(['reliability:raw_utterance'])}
+      AND ${tagSet(['role:user'])}
+      AND ${tagSet(['record:raw_utterance', 'record:conversation_message'])}`
+    : '0';
+  const status = columns.has('status')
+    ? `(COALESCE(${alias}.status,'active') IN ('active','cold') OR (COALESCE(${alias}.status,'active')='suspect' AND ${rawUser}))`
+    : '1';
+  const imported = `(${tagSet(['governance:imported_summary_support'])} OR (${tagSet(['source_class:daily_memory'])} AND ${tagSet(['provenance:imported_summary'])}))`;
+  const noiseTags = tagSet(['operational_noise', 'record:heartbeat', 'system:heartbeat', 'routine:heartbeat']);
+  const noiseText = columns.has('content')
+    ? `(instr(lower(trim(${alias}.content)),'[openclaw heartbeat poll]')>0
+      OR lower(trim(${alias}.content))='heartbeat_ok'
+      OR instr(lower(trim(${alias}.content)),'heartbeat_ok')>0
+      OR instr(lower(trim(${alias}.content)),'heartbeat poll')>0
+      OR instr(lower(trim(${alias}.content)),'please complete your identity setup')>0
+      OR instr(lower(trim(${alias}.content)),'test your telegram bot by searching for it')>0
+      OR instr(lower(trim(${alias}.content)),'routine system ping')>0)`
+    : '0';
+  return `${status} AND NOT (${noiseTags} OR ${noiseText}) AND NOT ${imported}`;
+}
+
+function sqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}

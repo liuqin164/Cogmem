@@ -1600,7 +1600,16 @@ export const FINAL_AUXILIARY_OBJECTS = [
   ) OR (NEW.entity_id IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM memory_entities e WHERE e.entity_id=NEW.entity_id
       AND COALESCE(e.project_id,'')=COALESCE(NEW.project_id,'')
-  )) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
+  )) OR (NEW.cluster_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM memory_clusters c WHERE c.cluster_id=NEW.cluster_id
+      AND COALESCE(c.project_id,'')=COALESCE(NEW.project_id,'')
+  )) OR NOT json_valid(NEW.related_event_ids_json) OR EXISTS (
+    SELECT 1 FROM json_each(CASE WHEN json_valid(NEW.related_event_ids_json) THEN NEW.related_event_ids_json ELSE '[]' END) r
+    WHERE r.type<>'text' OR NOT EXISTS (
+      SELECT 1 FROM memory_events e WHERE e.event_id=r.value
+        AND COALESCE(e.project_id,'')=COALESCE(NEW.project_id,'')
+    )
+  ) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
     { type: "trigger", name: "memory_binding_scope_update", table: "memory_bindings", sql: `CREATE TRIGGER memory_binding_scope_update BEFORE UPDATE ON memory_bindings
     WHEN NOT EXISTS (
     SELECT 1 FROM memory_events e WHERE e.event_id=NEW.event_id
@@ -1611,7 +1620,16 @@ export const FINAL_AUXILIARY_OBJECTS = [
   ) OR (NEW.entity_id IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM memory_entities e WHERE e.entity_id=NEW.entity_id
       AND COALESCE(e.project_id,'')=COALESCE(NEW.project_id,'')
-  )) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
+  )) OR (NEW.cluster_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM memory_clusters c WHERE c.cluster_id=NEW.cluster_id
+      AND COALESCE(c.project_id,'')=COALESCE(NEW.project_id,'')
+  )) OR NOT json_valid(NEW.related_event_ids_json) OR EXISTS (
+    SELECT 1 FROM json_each(CASE WHEN json_valid(NEW.related_event_ids_json) THEN NEW.related_event_ids_json ELSE '[]' END) r
+    WHERE r.type<>'text' OR NOT EXISTS (
+      SELECT 1 FROM memory_events e WHERE e.event_id=r.value
+        AND COALESCE(e.project_id,'')=COALESCE(NEW.project_id,'')
+    )
+  ) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
     { type: "trigger", name: "trg_memory_atlas_dirty_memory_entities_insert", table: "memory_entities", sql: `CREATE TRIGGER trg_memory_atlas_dirty_memory_entities_insert AFTER INSERT ON memory_entities BEGIN
 
     INSERT INTO memory_atlas_projection_state(

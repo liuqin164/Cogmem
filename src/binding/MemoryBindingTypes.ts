@@ -157,7 +157,7 @@ export interface MemoryEdgeRecord {
   validFrom: number;
   validTo?: number;
   version: number;
-  sourceAuthority: 'raw_evidence' | 'governed_projection' | 'model_candidate';
+  sourceAuthority: 'raw_evidence' | 'governed_projection' | 'memory_frame_projector' | 'atlas_curator' | 'model_candidate';
 }
 
 export interface MemoryEdgeListOptions {

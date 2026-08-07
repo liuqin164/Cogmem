@@ -7,4 +7,5 @@ export declare function isRawUserUtteranceEvidence(neuron: Neuron): boolean;
 export declare function isOperationalNoiseMemoryEvidence(neuron: Neuron): boolean;
 export declare function isImportedSummarySupportMemoryEvidence(neuron: Neuron): boolean;
 export declare function isOperationalNoiseText(text: string | null | undefined): boolean;
+export declare function recallableNeuronSql(alias: string, columns: ReadonlySet<string>): string;
 //# sourceMappingURL=RecallGovernance.d.ts.map

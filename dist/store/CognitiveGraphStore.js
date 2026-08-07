@@ -2,6 +2,7 @@ import Database from 'bun:sqlite';
 import { cognitiveEdgeId, cognitiveNodeId } from '../engine/CognitiveGraphIdentity.js';
 import { projectQueryValue } from '../topology/ProjectScope.js';
 import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
+import { recallableNeuronSql } from '../recall/RecallGovernance.js';
 export class CognitiveGraphStore {
     db;
     ownsDb;
@@ -280,9 +281,11 @@ export class CognitiveGraphStore {
     }
 }
 function recallableCognitiveNodeSql(db, alias) {
-    const conditions = [tableExists(db, 'neurons') ? `(${alias}.source_neuron_id IS NULL OR EXISTS (
+    const neuronColumns = tableColumns(db, 'neurons');
+    const conditions = [neuronColumns.size ? `(${alias}.source_neuron_id IS NULL OR EXISTS (
       SELECT 1 FROM neurons n WHERE n.id=${alias}.source_neuron_id AND n.is_deleted=0
         AND COALESCE(n.project_id,'')=${alias}.project_id
+        AND ${recallableNeuronSql('n', neuronColumns)}
     ))` : '1=1'];
     if (tableExists(db, 'facts'))
         conditions.push(`(${alias}.node_type<>'fact' OR EXISTS (
@@ -305,4 +308,9 @@ function recallableCognitiveNodeSql(db, alias) {
 }
 function tableExists(db, name) {
     return Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name));
+}
+function tableColumns(db, name) {
+    if (!tableExists(db, name))
+        return new Set();
+    return new Set(db.prepare(`PRAGMA table_info("${name.replaceAll('"', '""')}")`).all().map((row) => row.name));
 }

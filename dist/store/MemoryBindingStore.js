@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import Database from 'bun:sqlite';
-import { memoryEdgeId, memoryEdgeAuthorityRankSql, memoryEntityId, preferredMemoryEdgeAuthoritySql, } from '../binding/MemoryBindingIdentity.js';
+import { memoryEntityId, } from '../binding/MemoryBindingIdentity.js';
+import { mergeMemoryEdge } from '../binding/MemoryEdgeMerge.js';
 import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 export class MemoryBindingStore {
     db;
@@ -89,15 +90,9 @@ export class MemoryBindingStore {
         summary = COALESCE(excluded.summary, memory_topics.summary),
         updated_at = excluded.updated_at
     `).run(input.topicPath, input.projectId ?? null, input.projectId ?? '', input.parentPath || parentPathFor(input.topicPath) || null, input.topicType, input.summary || null, now, now);
-        return {
-            topicPath: input.topicPath,
-            projectId: input.projectId,
-            parentPath: input.parentPath || parentPathFor(input.topicPath),
-            topicType: input.topicType,
-            summary: input.summary,
-            createdAt: now,
-            updatedAt: now,
-        };
+        return mapTopicRow(this.db.prepare(`
+      SELECT * FROM memory_topics WHERE topic_path=? AND project_id_key=?
+    `).get(input.topicPath, input.projectId ?? ''));
     }
     insertBinding(input) {
         const now = input.createdAt ?? Date.now();
@@ -106,6 +101,8 @@ export class MemoryBindingStore {
         if (input.entityId)
             this.assertNodeScope('entity', input.entityId, scope);
         this.assertNodeScope('topic', input.topicPath, scope);
+        if (input.clusterId)
+            this.assertNodeScope('cluster', input.clusterId, scope);
         const bindingId = bindingIdFor(input);
         this.db.prepare(`
       INSERT INTO memory_bindings (
@@ -120,26 +117,7 @@ export class MemoryBindingStore {
         cluster_id = excluded.cluster_id,
         related_event_ids_json = excluded.related_event_ids_json
     `).run(bindingId, input.eventId, input.projectId ?? null, input.role || null, input.rawEventType || null, input.entityId || null, input.entityName || null, input.entityType || null, input.topicPath, input.bindingType, input.confidence, input.source, input.signal, input.claimKey, input.bindingAction || 'create_new_cluster', input.clusterId || null, JSON.stringify(input.relatedEventIds || []), now);
-        return {
-            bindingId,
-            eventId: input.eventId,
-            projectId: input.projectId,
-            role: input.role,
-            rawEventType: input.rawEventType,
-            entityId: input.entityId,
-            entityName: input.entityName,
-            entityType: input.entityType,
-            topicPath: input.topicPath,
-            bindingType: input.bindingType,
-            confidence: input.confidence,
-            source: input.source,
-            signal: input.signal,
-            claimKey: input.claimKey,
-            bindingAction: input.bindingAction || 'create_new_cluster',
-            clusterId: input.clusterId,
-            relatedEventIds: input.relatedEventIds || [],
-            createdAt: now,
-        };
+        return mapBindingRow(this.db.prepare(`SELECT * FROM memory_bindings WHERE binding_id=?`).get(bindingId));
     }
     upsertCluster(input) {
         const now = input.now ?? Date.now();
@@ -235,38 +213,7 @@ export class MemoryBindingStore {
         this.assertEventScopes(input.evidenceEventIds, scope);
         this.assertNodeScope(input.sourceType, input.sourceId, scope);
         this.assertNodeScope(input.targetType, input.targetId, scope);
-        const edgeId = memoryEdgeId(input);
-        const evidenceEventIds = Array.from(new Set(input.evidenceEventIds.filter(Boolean)));
-        this.db.prepare(`
-      INSERT INTO memory_edges (
-        edge_id, project_id, source_type, source_id, relation_type, target_type, target_id,
-        confidence, base_weight, stability, activation, evidence_event_ids_json, status,
-        valid_from, valid_to, version, source_authority, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(edge_id) DO UPDATE SET
-        confidence = MAX(memory_edges.confidence, excluded.confidence),
-        base_weight = CASE WHEN ${memoryEdgeAuthorityRankSql('memory_edges.source_authority')}
-          >= ${memoryEdgeAuthorityRankSql('excluded.source_authority')}
-          THEN memory_edges.base_weight ELSE excluded.base_weight END,
-        stability = MAX(memory_edges.stability, excluded.stability),
-        activation = MAX(memory_edges.activation, excluded.activation),
-        evidence_event_ids_json = (SELECT json_group_array(value) FROM (
-          SELECT value,MIN(position) AS position FROM (
-            SELECT value,CAST(key AS INTEGER) AS position FROM json_each(memory_edges.evidence_event_ids_json)
-            UNION ALL
-            SELECT value,1000000+CAST(key AS INTEGER) FROM json_each(excluded.evidence_event_ids_json)
-          ) GROUP BY value ORDER BY position
-        )),
-        status = CASE WHEN ${memoryEdgeAuthorityRankSql('memory_edges.source_authority')}
-          >= ${memoryEdgeAuthorityRankSql('excluded.source_authority')}
-          THEN memory_edges.status ELSE excluded.status END,
-        valid_to = CASE WHEN ${memoryEdgeAuthorityRankSql('memory_edges.source_authority')}
-          >= ${memoryEdgeAuthorityRankSql('excluded.source_authority')}
-          THEN memory_edges.valid_to ELSE excluded.valid_to END,
-        version = memory_edges.version + 1,
-        source_authority = ${preferredMemoryEdgeAuthoritySql('memory_edges.source_authority', 'excluded.source_authority')},
-        updated_at = excluded.updated_at
-    `).run(edgeId, input.projectId ?? null, input.sourceType, input.sourceId, input.relationType, input.targetType, input.targetId, input.confidence, clamp(input.baseWeight ?? 1, 0, 10), clamp(input.stability ?? 1, 0, 1), clamp(input.activation ?? 1, 0, 10), JSON.stringify(evidenceEventIds), input.status || 'active', input.validFrom ?? now, input.validTo ?? null, 1, input.sourceAuthority || 'raw_evidence', now, now);
+        const edgeId = mergeMemoryEdge(this.db, { ...input, createdAt: now, updatedAt: now });
         return mapEdgeRow(this.db.prepare(`SELECT * FROM memory_edges WHERE edge_id=?`).get(edgeId));
     }
     decayEdgeActivation(options = {}) {
@@ -590,6 +537,17 @@ function mapBindingRow(row) {
         clusterId: row.cluster_id || undefined,
         relatedEventIds: parseStringArray(row.related_event_ids_json),
         createdAt: Number(row.created_at),
+    };
+}
+function mapTopicRow(row) {
+    return {
+        topicPath: row.topic_path,
+        projectId: row.project_id == null ? undefined : String(row.project_id),
+        parentPath: row.parent_path || undefined,
+        topicType: row.topic_type,
+        summary: row.summary || undefined,
+        createdAt: Number(row.created_at),
+        updatedAt: Number(row.updated_at),
     };
 }
 function mapClusterRow(row) {

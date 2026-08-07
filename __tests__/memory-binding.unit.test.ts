@@ -278,7 +278,7 @@ test('corrections create explicit correction edges without poisoning active clus
     topicPath: 'PROJECT/Cogmem/memory-write-pipeline',
   });
   expect(clusters.some((cluster) => cluster.clusterType === 'diagnostic' && cluster.status === 'active')).toBe(true);
-  expect(clusters.some((cluster) => cluster.clusterType === 'correction' && cluster.reviewFlags.includes('possible_conflict'))).toBe(true);
+  expect(clusters.some((cluster) => cluster.clusterType === 'correction' && cluster.status === 'possible_conflict' && cluster.reviewFlags.includes('possible_conflict'))).toBe(true);
 
   kernel.close();
   rmSync(dir, { recursive: true, force: true });

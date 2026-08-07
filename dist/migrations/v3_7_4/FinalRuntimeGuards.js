@@ -40,7 +40,7 @@ function provenanceDependenciesPresent(db, name) {
             : name.startsWith('cognitive_node_source_') ? ['neurons']
                 : name.startsWith('reasoning_step_scope_') ? ['reasoning_chains', 'neurons']
                     : name.startsWith('pending_entity_scope_') ? ['neurons', 'entity_instances', 'entity_mentions']
-                        : ['memory_events', 'memory_topics', 'memory_entities'];
+                        : ['memory_events', 'memory_topics', 'memory_entities', 'memory_clusters'];
     return dependencies.every((table) => tableExists(db, table));
 }
 function normalizeSql(value) {

@@ -6,6 +6,8 @@ import { installMultidimensionalMemoryGraph374 } from '../src/migrations/0032_mu
 import { createMemoryKernel } from '../src/factory.js';
 import { MultidimensionalQueryPlanner } from '../src/recall/index.js';
 import { MemoryFrameProjector } from '../src/atlas/MemoryFrameProjector.js';
+import { GraphCurator } from '../src/atlas/GraphCurator.js';
+import { memoryEdgeId } from '../src/binding/MemoryBindingIdentity.js';
 
 describe('MemoryFrame V1 contract', () => {
   test('normalizes Unicode aliases without changing display labels', () => {
@@ -188,6 +190,45 @@ describe('MemoryFrame V1 contract', () => {
     const restoredProject = kernel.memoryAtlasStore.getNode('project:p', 'p')!;
     expect({ label: restoredProject.label, summary: restoredProject.summary, confidence: restoredProject.confidence, supportCount: restoredProject.supportCount, evidence: restoredProject.evidenceEventIds })
       .toEqual({ label: 'Updated canonical project', summary: 'Updated canonical summary', confidence: 0.91, supportCount: canonicalProject.supportCount + 2, evidence: canonicalProject.evidenceEventIds });
+    kernel.close();
+  });
+
+  test('frame authority wins curator collisions and remains stable across rebuilds', () => {
+    const kernel = createMemoryKernel();
+    const event = kernel.eventStore.append({
+      eventId: 'authority-event', streamId: 'authority-thread', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: 'p', sessionId: 'authority-session', threadId: 'authority-thread',
+      localDate: '1970-01-01', role: 'user', occurredAt: 1, payload: { text: 'shared time evidence' },
+    });
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'p', sessionId: 'authority-session', conversationThreadId: 'authority-thread',
+      episodeType: 'discussion', importance: 0.5, eventId: event.eventId, globalSeq: event.globalSeq, occurredAt: 1,
+    });
+    kernel.episodeStore.appendEvent({ episodeId: episode.episodeId, eventId: event.eventId, relation: 'primary', confidence: 1, globalSeq: event.globalSeq, occurredAt: 1 });
+    const db = kernel.factStore.getDatabase();
+    db.prepare(`UPDATE memory_episodes SET status='active' WHERE episode_id=?`).run(episode.episodeId);
+    db.prepare(`INSERT INTO memory_atlas_aliases(alias_id,project_id,node_id,normalized_alias,alias,dimension,status,confidence,evidence_event_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,'active',1,'[]',1,1)`)
+      .run('governed-shared-time', 'p', 'time:p:1970-01-01', '1970-01-01', '1970-01-01', 'time');
+    const base = deterministicFrameFallback({ projectId: 'p', episodeId: episode.episodeId, events: [event] });
+    const episodeNode = base.nodes.find((node) => node.dimension === 'episode')!;
+    const frame = {
+      ...base,
+      needsReview: false,
+      sourceAuthority: 'processor' as const,
+      nodes: [...base.nodes, { frameNodeId: 'shared-time', dimension: 'time' as const, label: '1970-01-01', confidence: 0.97, evidenceEventIds: [event.eventId] }],
+      relations: [...base.relations, { sourceFrameNodeId: episodeNode.frameNodeId, relationType: 'OCCURRED_ON' as const, targetFrameNodeId: 'shared-time', confidence: 0.97, evidenceEventIds: [event.eventId] }],
+    };
+    const saved = kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'authority-collision', status: 'active', now: 1 });
+    kernel.memoryFrameStore.publish(saved.frameId, 'staged', 'active', 2);
+    const edgeId = memoryEdgeId({ projectId: 'p', sourceType: 'episode', sourceId: episode.episodeId, relationType: 'OCCURRED_ON', targetType: 'time', targetId: '1970-01-01' });
+    for (let index = 0; index < 2; index += 1) {
+      kernel.rebuildMemoryAtlas({ projectId: 'p' });
+      expect(db.prepare(`SELECT source_authority,confidence FROM memory_edges WHERE edge_id=?`).get(edgeId))
+        .toEqual({ source_authority: 'memory_frame_projector', confidence: 0.97 });
+    }
+    new GraphCurator(db, kernel.eventStore, kernel.memoryAtlasStore).rebuild('p', 10);
+    expect(db.prepare(`SELECT source_authority,confidence FROM memory_edges WHERE edge_id=?`).get(edgeId))
+      .toEqual({ source_authority: 'memory_frame_projector', confidence: 0.97 });
     kernel.close();
   });
 

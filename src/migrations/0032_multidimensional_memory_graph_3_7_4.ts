@@ -3,8 +3,8 @@ import type Database from 'bun:sqlite';
 import {
   memoryEdgeId,
   memoryEntityId,
-  preferredMemoryEdgeAuthority,
 } from '../binding/MemoryBindingIdentity.js';
+import { mergeMemoryEdge } from '../binding/MemoryEdgeMerge.js';
 import { cognitiveEdgeId, cognitiveNodeId } from '../engine/CognitiveGraphIdentity.js';
 import type { Migration } from '../types/Migration.js';
 import {
@@ -64,6 +64,7 @@ export function installMultidimensionalMemoryGraph374(db: Database): void {
   dropRebuildableProjections(db);
   installMissingFinalTables(db);
   reconcileChangedTables(db);
+  pruneInvalidMemoryBindings(db);
   rebuildTopologyMembership(db);
   rebuildCognitiveGraph(db);
   initializeProjectionState(db);
@@ -163,6 +164,11 @@ export function multidimensionalMemoryGraph374Issue(db: Database): string | unde
     WHERE e.entity_id IS NULL OR COALESCE(e.project_id,'')<>m.project_id OR e.entity_type<>m.entity_type
     LIMIT 1
   `).get()) return 'memory_entity_scope_identity';
+  if (tableExists(db, 'memory_bindings')) {
+    for (const row of db.prepare(`SELECT * FROM memory_bindings`).all() as MemoryBindingMigrationRow[]) {
+      if (memoryBindingReferenceIssue(db, row)) return 'memory_binding_reference_scope';
+    }
+  }
   if (tableExists(db, 'pending_entity_resolution')) {
     for (const row of db.prepare(`
       SELECT pending_id,project_scope,resolved_entity_id,status
@@ -509,6 +515,39 @@ function migrateMemoryEntityProjectionIds(db: Database): void {
   rekeyMemoryEdges(db);
 }
 
+type MemoryBindingMigrationRow = Record<string, unknown> & {
+  binding_id: string;
+  project_id?: string | null;
+  event_id: string;
+  topic_path: string;
+  entity_id?: string | null;
+  cluster_id?: string | null;
+  related_event_ids_json?: string | null;
+};
+
+function pruneInvalidMemoryBindings(db: Database): void {
+  if (!tableExists(db, 'memory_bindings')) return;
+  for (const row of db.prepare(`SELECT * FROM memory_bindings ORDER BY binding_id`).all() as MemoryBindingMigrationRow[]) {
+    const reason = memoryBindingReferenceIssue(db, row);
+    if (!reason) continue;
+    const scope = String(row.project_id ?? '');
+    quarantineEntityRow(db, 'memory_binding', String(row.binding_id), row, [scope], reason);
+    db.prepare(`DELETE FROM memory_bindings WHERE binding_id=?`).run(String(row.binding_id));
+  }
+}
+
+function memoryBindingReferenceIssue(db: Database, row: MemoryBindingMigrationRow): string | undefined {
+  const scope = String(row.project_id ?? '');
+  if (!recordMatchesScope(db, 'memory_events', 'event_id', String(row.event_id), scope)) return 'memory_binding_event_scope_mismatch';
+  if (!recordMatchesScope(db, 'memory_topics', 'topic_path', String(row.topic_path), scope)) return 'memory_binding_topic_scope_mismatch';
+  if (row.entity_id != null && !recordMatchesScope(db, 'memory_entities', 'entity_id', String(row.entity_id), scope)) return 'memory_binding_entity_scope_mismatch';
+  if (row.cluster_id != null && !recordMatchesScope(db, 'memory_clusters', 'cluster_id', String(row.cluster_id), scope)) return 'memory_binding_cluster_scope_mismatch';
+  const related = parseEvidenceIds(row.related_event_ids_json);
+  if (!related) return 'memory_binding_related_events_malformed';
+  if (related.some((eventId) => !recordMatchesScope(db, 'memory_events', 'event_id', eventId, scope))) return 'memory_binding_related_event_scope_mismatch';
+  return undefined;
+}
+
 function pruneInvalidMemoryEdges(db: Database, validateEntities: boolean): void {
   if (!tableExists(db, 'memory_edges')) return;
   const rows = db.prepare(`SELECT * FROM memory_edges ORDER BY edge_id`).all() as Record<string, unknown>[];
@@ -631,30 +670,26 @@ function rekeyMemoryEdges(db: Database): void {
       db.prepare('UPDATE memory_edges SET edge_id=? WHERE edge_id=?').run(edgeId, row.edge_id);
       continue;
     }
-    const evidence = new Set([
-      ...(parseEvidenceIds(existing.evidence_event_ids_json) ?? []),
-      ...(parseEvidenceIds(row.evidence_event_ids_json) ?? []),
-    ]);
-    db.prepare(`
-      UPDATE memory_edges SET
-        confidence=?,base_weight=?,stability=?,activation=?,evidence_event_ids_json=?,
-        status=?,valid_from=?,valid_to=?,version=?,source_authority=?,created_at=?,updated_at=?
-      WHERE edge_id=?
-    `).run(
-      Math.max(existing.confidence, row.confidence),
-      Math.max(existing.base_weight, row.base_weight),
-      Math.max(existing.stability, row.stability),
-      Math.max(existing.activation, row.activation),
-      JSON.stringify([...evidence].sort()),
-      existing.status === 'active' || row.status === 'active' ? 'active' : existing.status,
-      Math.min(existing.valid_from, row.valid_from),
-      existing.valid_to == null || row.valid_to == null ? null : Math.max(existing.valid_to, row.valid_to),
-      Math.max(existing.version, row.version) + 1,
-      preferredMemoryEdgeAuthority(existing.source_authority, row.source_authority),
-      Math.min(existing.created_at, row.created_at),
-      Math.max(existing.updated_at, row.updated_at),
-      edgeId,
-    );
+    mergeMemoryEdge(db, {
+      projectId: row.project_id ?? '',
+      sourceType: row.source_type,
+      sourceId: row.source_id,
+      relationType: row.relation_type,
+      targetType: row.target_type,
+      targetId: row.target_id,
+      confidence: row.confidence,
+      baseWeight: row.base_weight,
+      stability: row.stability,
+      activation: row.activation,
+      evidenceEventIds: parseEvidenceIds(row.evidence_event_ids_json) ?? [],
+      status: row.status,
+      validFrom: row.valid_from,
+      validTo: row.valid_to,
+      version: row.version,
+      sourceAuthority: row.source_authority,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    });
     db.prepare('DELETE FROM memory_edges WHERE edge_id=?').run(row.edge_id);
   }
 }

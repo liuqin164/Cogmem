@@ -5,7 +5,7 @@ import type { MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
 import type { MemoryFrameNode, MemoryFrameRelation, MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
 import { normalizeAlias } from '../semantic/CanonicalMemoryResolver.js';
 import { decodeAtlasNodeId, encodeAtlasNodeId, toAtlasNodeEndpoint } from './AtlasNodeIdCodec.js';
-import { memoryEdgeId } from '../binding/MemoryBindingIdentity.js';
+import { mergeMemoryEdge } from '../binding/MemoryEdgeMerge.js';
 import { localDateFor } from '../utils/LocalDateContext.js';
 
 export interface MemoryFrameProjectionResult { frames: number; nodes: number; edges: number; needsReview: number; }
@@ -298,28 +298,29 @@ export class MemoryFrameProjector {
     const parsedSource = toAtlasNodeEndpoint(source, projectId); const parsedTarget = toAtlasNodeEndpoint(target, projectId);
     if (!parsedSource || !parsedTarget) throw new Error(`invalid_atlas_edge_endpoint:${source}:${target}`);
     if (!this.isActiveEndpoint(projectId, source) || !this.isActiveEndpoint(projectId, target)) return;
-    const edgeId = memoryEdgeId({
+    const validFrom = relation.validFrom ?? this.evidenceTime(relation.evidenceEventIds, frame.processor.generatedAt);
+    const edgeId = mergeMemoryEdge(this.db, {
       projectId,
       sourceType: parsedSource.type,
       sourceId: parsedSource.id,
       relationType: relation.relationType,
       targetType: parsedTarget.type,
       targetId: parsedTarget.id,
+      confidence: relation.confidence,
+      stability: 0.85,
+      evidenceEventIds: relation.evidenceEventIds,
+      status: 'active',
+      validFrom,
+      validTo: relation.validTo,
+      sourceAuthority: 'memory_frame_projector',
+      createdAt: now,
+      updatedAt: now,
     });
-    const existing = this.db.prepare(`SELECT source_authority,valid_from FROM memory_edges WHERE edge_id=?`).get(edgeId) as { source_authority?: string; valid_from?: number } | null;
-    const validFrom = relation.validFrom ?? this.evidenceTime(relation.evidenceEventIds, frame.processor.generatedAt);
-    const shouldUpdate = !existing || (existing.source_authority === 'memory_frame_projector' && Number(existing.valid_from ?? Number.NEGATIVE_INFINITY) < validFrom);
-    if (shouldUpdate) this.db.prepare(`
-      INSERT INTO memory_edges (edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,confidence,base_weight,stability,activation,evidence_event_ids_json,status,valid_from,valid_to,version,source_authority,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(edge_id) DO UPDATE SET confidence=excluded.confidence,evidence_event_ids_json=excluded.evidence_event_ids_json,status='active',valid_from=excluded.valid_from,valid_to=excluded.valid_to,updated_at=excluded.updated_at
-    `).run(edgeId, projectId, parsedSource.type, parsedSource.id, relation.relationType, parsedTarget.type, parsedTarget.id,
-      relation.confidence, 1, 0.85, 1, JSON.stringify(relation.evidenceEventIds), 'active', validFrom, relation.validTo ?? null, 1, 'memory_frame_projector', now, now);
     const supportId = createHash('sha256').update(`${edgeId}\0frame_edge\0${frame.frameId}`).digest('hex');
     if (this.hasColumn('memory_atlas_supports', 'payload_json')) {
       this.db.prepare(`
         INSERT INTO memory_atlas_supports (support_id,project_id,node_id,source_type,source_id,source_episode_id,source_frame_id,evidence_event_ids_json,status,created_at,payload_json,confidence,valid_from,valid_to,source_authority)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(node_id,source_type,source_id) DO UPDATE SET status='active', invalidated_at=NULL,evidence_event_ids_json=excluded.evidence_event_ids_json,payload_json=excluded.payload_json,confidence=excluded.confidence,valid_from=excluded.valid_from,valid_to=excluded.valid_to,source_authority=excluded.source_authority
       `).run(supportId, projectId, edgeId, 'frame_edge', frame.frameId, frame.episodeId, frame.frameId, JSON.stringify(relation.evidenceEventIds), 'active', now, JSON.stringify({ relationType: relation.relationType, confidence: relation.confidence, validFrom, validTo: relation.validTo ?? null, kind: 'edge' }), relation.confidence, validFrom, relation.validTo ?? null, 'memory_frame_projector');
       return;

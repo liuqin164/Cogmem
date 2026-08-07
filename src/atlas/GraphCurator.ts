@@ -8,6 +8,7 @@ import { EpisodeTitleGenerator } from './EpisodeTitleGenerator.js';
 import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
 import { inferActionKinds } from '../utils/ActionKindRegistry.js';
 import { localDateFor } from '../utils/LocalDateContext.js';
+import { mergeMemoryEdge } from '../binding/MemoryEdgeMerge.js';
 
 interface EpisodeRow {
   episode_id: string;
@@ -462,40 +463,14 @@ export class GraphCurator {
     sourceAuthority: string;
     now: number;
   }): void {
-    const edgeId = memoryEdgeId(input);
-    this.db.prepare(`
-      INSERT INTO memory_edges (
-        edge_id, project_id, source_type, source_id, relation_type, target_type, target_id,
-        confidence, base_weight, stability, activation, evidence_event_ids_json, status,
-        valid_from, valid_to, version, source_authority, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(edge_id) DO UPDATE SET
-        confidence=excluded.confidence,
-        evidence_event_ids_json=excluded.evidence_event_ids_json,
-        status=excluded.status,
-        source_authority=${preferredMemoryEdgeAuthoritySql('memory_edges.source_authority', 'excluded.source_authority')},
-        updated_at=excluded.updated_at
-    `).run(
-      edgeId,
-      input.projectId,
-      input.sourceType,
-      input.sourceId,
-      input.relationType,
-      input.targetType,
-      input.targetId,
-      input.confidence,
-      1,
-      input.status === 'weak' ? 0.35 : 0.85,
-      1,
-      JSON.stringify(Array.from(new Set(input.evidenceEventIds)).slice(0, 30)),
-      input.status,
-      input.now,
-      null,
-      1,
-      input.sourceAuthority,
-      input.now,
-      input.now,
-    );
+    mergeMemoryEdge(this.db, {
+      ...input,
+      stability: input.status === 'weak' ? 0.35 : 0.85,
+      evidenceEventIds: input.evidenceEventIds.slice(0, 30),
+      validFrom: input.now,
+      createdAt: input.now,
+      updatedAt: input.now,
+    });
   }
 }
 
@@ -584,4 +559,3 @@ function relationKey(left: EpisodeProjection, right: EpisodeProjection, relation
     : `${left.row.episode_id}\0${right.row.episode_id}`;
   return `${relationType}\0${pair}`;
 }
-import { memoryEdgeId, preferredMemoryEdgeAuthoritySql } from '../binding/MemoryBindingIdentity.js';

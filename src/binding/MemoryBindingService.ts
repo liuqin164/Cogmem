@@ -101,7 +101,7 @@ export class MemoryBindingService {
         title: clusterTitle(decision.topicPath, decision.bindingType),
         summary: decision.summary,
         claimKey: decision.claimKey,
-        status: 'active',
+        status: clusterStatus,
         reviewFlags: clusterStatus === 'possible_conflict' ? ['possible_conflict'] : [],
         confidence: decision.confidence,
         eventId: input.eventId,
