@@ -176,6 +176,7 @@ export class GraphCurator {
           evidenceEventIds,
           status: 'active',
           sourceAuthority: 'atlas_curator',
+          validFrom: row.started_at,
           now,
         });
         facetEdgeCount += 1;
@@ -274,6 +275,7 @@ export class GraphCurator {
         evidenceEventIds,
         status: 'active',
         sourceAuthority: 'atlas_curator',
+        validFrom: row.started_at,
         now,
       });
       facetEdgeCount += 1;
@@ -420,6 +422,7 @@ export class GraphCurator {
       evidenceEventIds: Array.from(new Set([...left.eventIds.slice(0, 3), ...right.eventIds.slice(0, 3)])),
       status,
       sourceAuthority: 'atlas_curator',
+      validFrom: Math.min(left.row.started_at, right.row.started_at),
       now,
     });
   }
@@ -474,13 +477,15 @@ export class GraphCurator {
     evidenceEventIds: string[];
     status: string;
     sourceAuthority: string;
+    validFrom: number;
     now: number;
   }): void {
     mergeMemoryEdge(this.db, {
       ...input,
       stability: input.status === 'weak' ? 0.35 : 0.85,
       evidenceEventIds: input.evidenceEventIds.slice(0, 30),
-      validFrom: input.now,
+      operation: 'replace',
+      validFrom: input.validFrom,
       createdAt: input.now,
       updatedAt: input.now,
     });

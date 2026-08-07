@@ -18,7 +18,7 @@ export interface MemoryEdgeMergeInput {
     sourceAuthority?: string;
     supportSourceType?: string;
     supportSourceId?: string;
-    operation?: 'support' | 'revision';
+    operation?: 'append' | 'replace' | 'revision';
     createdAt?: number;
     updatedAt?: number;
 }

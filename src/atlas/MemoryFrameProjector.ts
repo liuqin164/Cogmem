@@ -318,6 +318,7 @@ export class MemoryFrameProjector {
       sourceAuthority: 'memory_frame_projector',
       supportSourceType: 'frame',
       supportSourceId: frame.frameId,
+      operation: 'replace',
       createdAt: now,
       updatedAt: now,
     });

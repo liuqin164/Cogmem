@@ -239,6 +239,54 @@ describe('MemoryFrame V1 contract', () => {
     kernel.close();
   });
 
+  test('episode repair removes stale Curator evidence after one rebuild', () => {
+    const kernel = createMemoryKernel();
+    const events = [1, 2, 3].map((occurredAt, index) => kernel.eventStore.append({
+      eventId: `repair-event-${index + 1}`, streamId: 'repair-thread', streamType: 'thread',
+      eventType: 'MESSAGE', rawEventType: 'message', projectId: 'p', sessionId: 'repair-session',
+      threadId: 'repair-thread', role: 'user', occurredAt, payload: { text: `repair ${index + 1}` },
+    }));
+    const source = kernel.episodeStore.createEpisode({
+      projectId: 'p', sessionId: 'repair-session', conversationThreadId: 'repair-thread',
+      topicPath: 'repair/topic', episodeType: 'discussion', importance: 0.5,
+      eventId: events[0]!.eventId, globalSeq: events[0]!.globalSeq, occurredAt: events[0]!.occurredAt,
+    });
+    for (const event of events.slice(0, 2)) kernel.episodeStore.appendEvent({
+      episodeId: source.episodeId, eventId: event.eventId, relation: 'primary', confidence: 1,
+      globalSeq: event.globalSeq, occurredAt: event.occurredAt,
+    });
+    kernel.episodeStore.sealEpisode(source.episodeId, { mode: 'manual', reason: 'test', reasonCode: 'test', now: 4 });
+    const target = kernel.episodeStore.createEpisode({
+      projectId: 'p', sessionId: 'repair-session', conversationThreadId: 'repair-thread',
+      topicPath: 'repair/topic', episodeType: 'discussion', importance: 0.5,
+      eventId: events[2]!.eventId, globalSeq: events[2]!.globalSeq, occurredAt: events[2]!.occurredAt,
+    });
+    kernel.episodeStore.appendEvent({
+      episodeId: target.episodeId, eventId: events[2]!.eventId, relation: 'primary', confidence: 1,
+      globalSeq: events[2]!.globalSeq, occurredAt: events[2]!.occurredAt,
+    });
+    const db = kernel.factStore.getDatabase();
+    const edgeId = memoryEdgeId({
+      projectId: 'p', sourceType: 'episode', sourceId: source.episodeId,
+      relationType: 'ABOUT_TOPIC', targetType: 'topic', targetId: 'repair/topic',
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    expect(JSON.parse(String((db.prepare(`SELECT evidence_event_ids_json FROM memory_edge_supports WHERE edge_id=? AND source_authority='atlas_curator'`).get(edgeId) as { evidence_event_ids_json: string }).evidence_event_ids_json)))
+      .toEqual(events.slice(0, 2).map((event) => event.eventId));
+
+    kernel.repairEpisode({ operation: 'move-event', projectId: 'p', eventId: events[0]!.eventId, targetEpisodeId: target.episodeId, now: 10 });
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const support = db.prepare(`SELECT evidence_event_ids_json,confidence,version,updated_at FROM memory_edge_supports WHERE edge_id=? AND source_authority='atlas_curator'`).get(edgeId) as { evidence_event_ids_json: string; confidence: number; version: number; updated_at: number };
+    const edge = db.prepare(`SELECT evidence_event_ids_json,confidence,version,updated_at FROM memory_edges WHERE edge_id=?`).get(edgeId) as { evidence_event_ids_json: string; confidence: number; version: number; updated_at: number };
+    expect(JSON.parse(support.evidence_event_ids_json)).toEqual([events[1]!.eventId]);
+    expect(JSON.parse(edge.evidence_event_ids_json)).toEqual([events[1]!.eventId]);
+
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    expect(db.prepare(`SELECT evidence_event_ids_json,confidence,version,updated_at FROM memory_edge_supports WHERE edge_id=? AND source_authority='atlas_curator'`).get(edgeId)).toEqual(support);
+    expect(db.prepare(`SELECT evidence_event_ids_json,confidence,version,updated_at FROM memory_edges WHERE edge_id=?`).get(edgeId)).toEqual(edge);
+    kernel.close();
+  });
+
   test('builds a bounded multilingual query frame', () => {
     const frame = new MultidimensionalQueryPlanner().plan('谁参与了 2026 年的 database issue？', Date.UTC(2026, 6, 13));
     expect(frame.schemaVersion).toBe('memory_query_frame.v1');

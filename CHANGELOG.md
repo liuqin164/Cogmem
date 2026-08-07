@@ -17,6 +17,7 @@
 - Restricted Atlas dirtying to user/tool evidence, projected MemoryFrames before aggregate/project counts, merged action evidence into time facets, and tightened multilingual action/target parsing.
 - Extended read-only status with the pending policy-audit outbox count and added migration, isolation, crash-recovery, timezone, parser, and privacy regression coverage.
 - Reduced multi-authority graph edges from project-scoped support rows, so Frame/Curator withdrawal immediately restores the surviving edge without stale evidence or a second rebuild; aligned the public edge contract, binding invariants, and recall-governance SQL with runtime behavior.
+- Split edge-support updates into append, replace, and lifecycle revision semantics so Curator/Frame rebuilds can remove stale evidence and lower projection strength after episode repair while repeated rebuilds remain version-idempotent.
 
 ## 3.7.3
 

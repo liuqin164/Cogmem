@@ -73,7 +73,7 @@ export interface UpsertMemoryEdgeInput {
   sourceAuthority?: MemoryEdgeRecord['sourceAuthority'];
   supportSourceType?: string;
   supportSourceId?: string;
-  operation?: 'support' | 'revision';
+  operation?: 'append' | 'replace' | 'revision';
 }
 
 export interface DecayMemoryEdgeActivationOptions {

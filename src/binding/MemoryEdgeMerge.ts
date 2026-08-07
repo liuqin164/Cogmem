@@ -22,7 +22,7 @@ export interface MemoryEdgeMergeInput {
   sourceAuthority?: string;
   supportSourceType?: string;
   supportSourceId?: string;
-  operation?: 'support' | 'revision';
+  operation?: 'append' | 'replace' | 'revision';
   createdAt?: number;
   updatedAt?: number;
 }
@@ -96,7 +96,7 @@ function mergeMemoryEdgeInTransaction(db: Database, input: MemoryEdgeMergeInput)
     .get(supportId) as MemoryEdgeSupportRow | null;
   const operation = input.operation ?? ((input.status && !['active', 'weak'].includes(input.status)) || input.validTo != null
     ? 'revision'
-    : 'support');
+    : 'append');
 
   if (!existing) {
     db.prepare(`
@@ -115,19 +115,26 @@ function mergeMemoryEdgeInTransaction(db: Database, input: MemoryEdgeMergeInput)
       input.validTo ?? null, input.version ?? 1, sourceAuthority, createdAt, updatedAt,
     );
   } else {
+    const append = operation === 'append';
+    const replace = operation === 'replace';
     const next = {
-      confidence: operation === 'revision' ? clamp(input.confidence, 0, 1) : Math.max(existing.confidence, clamp(input.confidence, 0, 1)),
-      baseWeight: operation === 'revision' ? clamp(input.baseWeight ?? existing.base_weight, 0, 10) : Math.max(existing.base_weight, clamp(input.baseWeight ?? 1, 0, 10)),
-      stability: operation === 'revision' ? clamp(input.stability ?? existing.stability, 0, 1) : Math.max(existing.stability, clamp(input.stability ?? 1, 0, 1)),
-      activation: operation === 'revision' ? clamp(input.activation ?? existing.activation, 0, 10) : Math.max(existing.activation, clamp(input.activation ?? 1, 0, 10)),
-      evidence: unique([...parseStringArray(existing.evidence_event_ids_json), ...evidence]),
-      status: operation === 'revision' || existing.support_status !== 'active' ? input.status ?? 'active' : existing.status,
-      validFrom: Math.min(existing.valid_from, input.validFrom ?? createdAt),
-      validTo: operation === 'revision' ? input.validTo ?? null : existing.valid_to,
+      confidence: append ? Math.max(existing.confidence, clamp(input.confidence, 0, 1)) : clamp(input.confidence, 0, 1),
+      baseWeight: append
+        ? Math.max(existing.base_weight, clamp(input.baseWeight ?? 1, 0, 10))
+        : clamp(input.baseWeight ?? (replace ? 1 : existing.base_weight), 0, 10),
+      stability: append
+        ? Math.max(existing.stability, clamp(input.stability ?? 1, 0, 1))
+        : clamp(input.stability ?? (replace ? 1 : existing.stability), 0, 1),
+      activation: append
+        ? Math.max(existing.activation, clamp(input.activation ?? 1, 0, 10))
+        : clamp(input.activation ?? (replace ? 1 : existing.activation), 0, 10),
+      evidence: replace ? evidence : unique([...parseStringArray(existing.evidence_event_ids_json), ...evidence]),
+      status: append && existing.support_status === 'active' ? existing.status : input.status ?? 'active',
+      validFrom: replace ? input.validFrom ?? createdAt : Math.min(existing.valid_from, input.validFrom ?? createdAt),
+      validTo: append ? existing.valid_to : input.validTo ?? null,
       createdAt: Math.min(existing.created_at, createdAt),
     };
-    const changed = existing.support_status !== 'active'
-      || existing.confidence !== next.confidence
+    const semanticChanged = existing.confidence !== next.confidence
       || existing.base_weight !== next.baseWeight
       || existing.stability !== next.stability
       || existing.activation !== next.activation
@@ -135,16 +142,16 @@ function mergeMemoryEdgeInTransaction(db: Database, input: MemoryEdgeMergeInput)
       || existing.status !== next.status
       || existing.valid_from !== next.validFrom
       || existing.valid_to !== next.validTo;
-    if (changed) db.prepare(`
+    if (semanticChanged || existing.support_status !== 'active') db.prepare(`
       UPDATE memory_edge_supports SET
         confidence=?,base_weight=?,stability=?,activation=?,evidence_event_ids_json=?,status=?,
-        valid_from=?,valid_to=?,version=version+1,support_status='active',invalidated_at=NULL,
+        valid_from=?,valid_to=?,version=version+?,support_status='active',invalidated_at=NULL,
         created_at=?,updated_at=?
       WHERE support_id=?
     `).run(
       next.confidence, next.baseWeight, next.stability, next.activation, JSON.stringify(next.evidence),
-      next.status, next.validFrom, next.validTo, next.createdAt,
-      existing.support_status === 'active' ? updatedAt : existing.updated_at, supportId,
+      next.status, next.validFrom, next.validTo, semanticChanged ? 1 : 0, next.createdAt,
+      semanticChanged ? updatedAt : existing.updated_at, supportId,
     );
   }
 

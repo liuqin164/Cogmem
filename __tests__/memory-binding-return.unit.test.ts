@@ -111,6 +111,40 @@ test('edge supports keep the earliest validity and fall back without stale evide
   kernel.close();
 });
 
+test('replace edge supports shrink to the producer snapshot and remain idempotent', () => {
+  const kernel = createMemoryKernel();
+  const topic = kernel.memoryBindingStore.upsertTopic({ projectId: 'a', topicPath: 'snapshot', topicType: 'concept', now: 1 });
+  const events = [1, 2].map((occurredAt) => kernel.eventStore.append({
+    projectId: 'a', streamId: 'snapshot', streamType: 'thread', eventType: 'MESSAGE',
+    occurredAt, payload: { text: String(occurredAt) },
+  }));
+  const input = {
+    projectId: 'a', sourceType: 'event' as const, sourceId: events[0]!.eventId,
+    relationType: 'ABOUT' as const, targetType: 'topic' as const, targetId: topic.topicPath,
+    sourceAuthority: 'atlas_curator', supportSourceType: 'curator', supportSourceId: 'snapshot',
+    operation: 'replace' as const, status: 'active' as const,
+  };
+  kernel.memoryBindingStore.upsertEdge({
+    ...input, confidence: 0.9, baseWeight: 2, stability: 0.8, activation: 0.7,
+    evidenceEventIds: events.map((event) => event.eventId), validFrom: 1, createdAt: 1,
+  });
+  const replaced = kernel.memoryBindingStore.upsertEdge({
+    ...input, confidence: 0.6, baseWeight: 0.5, stability: 0.4, activation: 0.3,
+    evidenceEventIds: [events[1]!.eventId], validFrom: 2, createdAt: 2,
+  });
+  expect(replaced).toMatchObject({ confidence: 0.6, baseWeight: 0.5, stability: 0.4, activation: 0.3, validFrom: 2 });
+  expect(replaced.evidenceEventIds).toEqual([events[1]!.eventId]);
+  const db = kernel.factStore.getDatabase();
+  const beforeRepeat = db.prepare(`SELECT evidence_event_ids_json,confidence,base_weight,stability,activation,valid_from,version,updated_at FROM memory_edge_supports WHERE support_source_id='snapshot'`).get();
+  kernel.memoryBindingStore.upsertEdge({
+    ...input, confidence: 0.6, baseWeight: 0.5, stability: 0.4, activation: 0.3,
+    evidenceEventIds: [events[1]!.eventId], validFrom: 2, createdAt: 3,
+  });
+  expect(db.prepare(`SELECT evidence_event_ids_json,confidence,base_weight,stability,activation,valid_from,version,updated_at FROM memory_edge_supports WHERE support_source_id='snapshot'`).get())
+    .toEqual(beforeRepeat);
+  kernel.close();
+});
+
 test('topic and binding upserts return persisted rows and reject cross-scope cluster references', () => {
   const kernel = createMemoryKernel();
   const firstTopic = kernel.memoryBindingStore.upsertTopic({ projectId: 'a', topicPath: 'persisted', topicType: 'project', now: 1 });
