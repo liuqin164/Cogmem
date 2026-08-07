@@ -75,6 +75,30 @@ test('higher edge authority owns lifecycle fields and lower rebuilds cannot corr
   kernel.close();
 });
 
+test('edge validity ignores lower authority ranges and fails closed on disjoint peers', () => {
+  const kernel = createMemoryKernel();
+  const topic = kernel.memoryBindingStore.upsertTopic({ projectId: 'a', topicPath: 'validity', topicType: 'concept', now: 1 });
+  const event = kernel.eventStore.append({
+    projectId: 'a', streamId: 'validity', streamType: 'thread', eventType: 'MESSAGE',
+    occurredAt: 1, payload: { text: 'validity' },
+  });
+  const base = {
+    projectId: 'a', sourceType: 'event' as const, sourceId: event.eventId,
+    relationType: 'ABOUT' as const, targetType: 'topic' as const, targetId: topic.topicPath,
+    confidence: 0.9, evidenceEventIds: [event.eventId], operation: 'replace' as const,
+  };
+  kernel.memoryBindingStore.upsertEdge({ ...base, sourceAuthority: 'atlas_curator', supportSourceType: 'curator', supportSourceId: 'old', validFrom: 10, validTo: 20, createdAt: 10 });
+  let edge = kernel.memoryBindingStore.upsertEdge({ ...base, sourceAuthority: 'memory_frame_projector', supportSourceType: 'frame', supportSourceId: 'new-a', validFrom: 30, validTo: 40, createdAt: 30 });
+  expect(edge).toMatchObject({ status: 'active', validFrom: 30, validTo: 40 });
+
+  edge = kernel.memoryBindingStore.upsertEdge({ ...base, sourceAuthority: 'memory_frame_projector', supportSourceType: 'frame', supportSourceId: 'new-b', validFrom: 50, validTo: 60, createdAt: 50 });
+  expect(edge).toMatchObject({ status: 'needs_confirmation', validFrom: 50, validTo: 60 });
+
+  edge = kernel.memoryBindingStore.upsertEdge({ ...base, sourceAuthority: 'memory_frame_projector', supportSourceType: 'frame', supportSourceId: 'new-b', validFrom: 35, validTo: 55, createdAt: 35 });
+  expect(edge).toMatchObject({ status: 'active', validFrom: 30, validTo: 55 });
+  kernel.close();
+});
+
 test('edge supports keep the earliest validity and fall back without stale evidence', () => {
   const kernel = createMemoryKernel();
   const topic = kernel.memoryBindingStore.upsertTopic({ projectId: 'a', topicPath: 'support', topicType: 'concept', now: 1 });

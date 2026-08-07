@@ -22,19 +22,24 @@ export declare class MemoryFrameProjector {
     private loadActiveAliasIndex;
     private nodeId;
     private upsertSupport;
+    private contributeSupport;
+    private flushNodeSnapshots;
     /** Preserve legacy/governed document fields as an authority support before
      * Frame reduction can touch a shared canonical node. */
     private ensureCanonicalBaselineSupport;
     private refreshCanonicalBaselineSupports;
+    private contributeAlias;
+    private flushAliasSnapshots;
     private upsertAlias;
     private tableExists;
     private hasColumn;
     private contributeEdge;
     private flushEdgeSnapshots;
+    private resolveCurrentStates;
     private isActiveEndpoint;
     private reduceAffectedDocuments;
     private evidenceTime;
-    private latestEvidenceTime;
+    private latestEvidenceOrder;
     private evidenceLocalDate;
     private frameEvidenceTime;
 }

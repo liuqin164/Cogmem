@@ -1,5 +1,23 @@
 import { createHash } from 'node:crypto';
 import { memoryEdgeId } from './MemoryBindingIdentity.js';
+export function mergeMemoryValidityIntervals(intervals) {
+    const ranges = intervals.slice().sort((left, right) => left.validFrom - right.validFrom
+        || (left.validTo ?? Number.POSITIVE_INFINITY) - (right.validTo ?? Number.POSITIVE_INFINITY));
+    if (!ranges.length)
+        throw new Error('memory_edge_validity_required');
+    const components = [];
+    for (const range of ranges) {
+        const current = components.at(-1);
+        if (!current || (current.validTo !== null && range.validFrom > current.validTo)) {
+            components.push({ ...range });
+            continue;
+        }
+        current.validTo = current.validTo === null || range.validTo === null
+            ? null
+            : Math.max(current.validTo, range.validTo);
+    }
+    return { ...components.at(-1), disjoint: components.length > 1 };
+}
 export function mergeMemoryEdge(db, input) {
     const merge = () => mergeMemoryEdgeInTransaction(db, input);
     if (db.inTransaction)
@@ -105,6 +123,10 @@ export function reduceMemoryEdge(db, edgeId, now = Date.now()) {
     const highestRank = Math.max(...supports.map((support) => authorityRank(support.source_authority)));
     const authoritative = supports.filter((support) => authorityRank(support.source_authority) === highestRank);
     const winner = authoritative[0];
+    const validity = mergeMemoryValidityIntervals(authoritative.map((support) => ({
+        validFrom: support.valid_from,
+        validTo: support.valid_to,
+    })));
     const evidence = unique(supports
         .slice()
         .sort((left, right) => left.created_at - right.created_at
@@ -125,9 +147,9 @@ export function reduceMemoryEdge(db, edgeId, now = Date.now()) {
         stability: Math.max(...authoritative.map((support) => support.stability)),
         activation: Math.max(...authoritative.map((support) => support.activation)),
         evidenceJson: JSON.stringify(evidence),
-        status: winner.status,
-        validFrom: Math.min(...supports.map((support) => support.valid_from)),
-        validTo: winner.valid_to,
+        status: validity.disjoint || authoritative.some((support) => support.status === 'needs_confirmation') ? 'needs_confirmation' : winner.status,
+        validFrom: validity.validFrom,
+        validTo: validity.validTo,
         sourceAuthority: winner.source_authority,
         createdAt: Math.min(...supports.map((support) => support.created_at)),
     };

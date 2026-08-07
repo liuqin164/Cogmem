@@ -22,6 +22,13 @@ export interface MemoryEdgeMergeInput {
     createdAt?: number;
     updatedAt?: number;
 }
+export interface MemoryValidityInterval {
+    validFrom: number;
+    validTo: number | null;
+}
+export declare function mergeMemoryValidityIntervals(intervals: readonly MemoryValidityInterval[]): MemoryValidityInterval & {
+    disjoint: boolean;
+};
 export declare function mergeMemoryEdge(db: Database, input: MemoryEdgeMergeInput): string;
 export declare function invalidateMemoryEdgeSupportIds(db: Database, supportIds: readonly string[], now?: number, reduce?: boolean): string[];
 export declare function reduceMemoryEdges(db: Database, edgeIds: Iterable<string>, now?: number): void;
