@@ -18,6 +18,7 @@
 - Extended read-only status with the pending policy-audit outbox count and added migration, isolation, crash-recovery, timezone, parser, and privacy regression coverage.
 - Reduced multi-authority graph edges from project-scoped support rows, so Frame/Curator withdrawal immediately restores the surviving edge without stale evidence or a second rebuild; aligned the public edge contract, binding invariants, and recall-governance SQL with runtime behavior.
 - Split edge-support updates into append, replace, and lifecycle revision semantics so Curator/Frame rebuilds can remove stale evidence and lower projection strength after episode repair while repeated rebuilds remain version-idempotent.
+- Aggregated duplicate relation, temporal, and state fragments inside each MemoryFrame before replacing its edge support, making evidence, confidence, validity, and rebuild versions independent of array order while preserving snapshot shrink.
 
 ## 3.7.3
 

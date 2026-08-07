@@ -29,7 +29,8 @@ export declare class MemoryFrameProjector {
     private upsertAlias;
     private tableExists;
     private hasColumn;
-    private upsertEdge;
+    private contributeEdge;
+    private flushEdgeSnapshots;
     private isActiveEndpoint;
     private reduceAffectedDocuments;
     private evidenceTime;

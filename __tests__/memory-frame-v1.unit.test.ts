@@ -287,6 +287,97 @@ describe('MemoryFrame V1 contract', () => {
     kernel.close();
   });
 
+  test('same-frame edge fragments aggregate independent of order, shrink, and rebuild idempotently', () => {
+    const kernel = createMemoryKernel();
+    const timestamps = [Date.UTC(2026, 7, 7, 1), Date.UTC(2026, 7, 7, 2)];
+    const events = timestamps.map((occurredAt, index) => kernel.eventStore.append({
+      eventId: `fragment-event-${index + 1}`, streamId: 'fragment-thread', streamType: 'thread',
+      eventType: 'MESSAGE', rawEventType: 'message', projectId: 'p', sessionId: 'fragment-session',
+      threadId: 'fragment-thread', localDate: '2026-08-07', role: 'user', occurredAt,
+      payload: { text: `fragment ${index + 1}` },
+    }));
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'p', sessionId: 'fragment-session', conversationThreadId: 'fragment-thread',
+      episodeType: 'discussion', importance: 0.5, eventId: events[0]!.eventId,
+      globalSeq: events[0]!.globalSeq, occurredAt: events[0]!.occurredAt,
+    });
+    for (const event of events) kernel.episodeStore.appendEvent({
+      episodeId: episode.episodeId, eventId: event.eventId, relation: 'primary', confidence: 1,
+      globalSeq: event.globalSeq, occurredAt: event.occurredAt,
+    });
+    const base = deterministicFrameFallback({ projectId: 'p', episodeId: episode.episodeId, events });
+    const relation = base.relations[0]!;
+    const references = events.map((event, index) => ({
+      label: '2026-08-07', occurredAt: event.occurredAt, confidence: index ? 0.6 : 0.9,
+      evidenceEventIds: [event.eventId],
+    }));
+    const frame = {
+      ...base, frameId: 'fragment-frame', sourceAuthority: 'processor' as const, needsReview: false,
+      nodes: base.nodes.map((node) => node.dimension === 'raw_event'
+        ? node
+        : { ...node, evidenceEventIds: events.map((event) => event.eventId) }),
+      relations: events.map((event, index) => ({
+        ...relation, confidence: index ? 0.6 : 0.9, evidenceEventIds: [event.eventId],
+      })),
+      temporalReferences: references,
+    };
+    expect(validateMemoryFrame(frame).errors).toEqual([]);
+    const saved = kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'fragment-source', now: 1 });
+    kernel.memoryFrameStore.publish(saved.frameId, 'staged', 'active', 2);
+    const db = kernel.factStore.getDatabase();
+    const projector = new MemoryFrameProjector(db, kernel.memoryFrameStore, kernel.memoryAtlasStore, 'UTC');
+    const temporalEdgeId = memoryEdgeId({
+      projectId: 'p', sourceType: 'time', sourceId: '2026-08-07',
+      relationType: 'OCCURRED_IN', targetType: 'time', targetId: '2026-08',
+    });
+    const relationEdgeId = memoryEdgeId({
+      projectId: 'p', sourceType: 'episode', sourceId: episode.episodeId,
+      relationType: relation.relationType, targetType: 'project', targetId: 'p',
+    });
+    const readProjection = (edgeId: string, frameId: string) => ({
+      support: db.prepare(`SELECT evidence_event_ids_json,confidence,valid_from,valid_to,version,updated_at FROM memory_edge_supports WHERE edge_id=? AND support_source_id=?`).get(edgeId, frameId),
+      edge: db.prepare(`SELECT evidence_event_ids_json,confidence,valid_from,valid_to,version,updated_at FROM memory_edges WHERE edge_id=?`).get(edgeId),
+    });
+    projector.rebuild('p', 10);
+    const temporal = readProjection(temporalEdgeId, saved.frameId);
+    const related = readProjection(relationEdgeId, saved.frameId);
+    for (const projection of [temporal, related]) {
+      expect(JSON.parse(String((projection.support as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual(events.map((event) => event.eventId));
+      expect(JSON.parse(String((projection.edge as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual(events.map((event) => event.eventId));
+      expect(projection.support).toMatchObject({ confidence: 0.9, valid_to: null });
+    }
+
+    db.prepare(`UPDATE memory_frames SET temporal_references_json=? WHERE frame_id=?`).run(JSON.stringify([...references].reverse()), saved.frameId);
+    const relationRows = db.prepare(`SELECT frame_relation_id FROM memory_frame_relations WHERE frame_id=? ORDER BY frame_relation_id`).all(saved.frameId) as Array<{ frame_relation_id: string }>;
+    db.prepare(`UPDATE memory_frame_relations SET frame_relation_id=? WHERE frame_relation_id=?`).run('zz-fragment-relation', relationRows[0]!.frame_relation_id);
+    db.prepare(`UPDATE memory_frame_relations SET frame_relation_id=? WHERE frame_relation_id=?`).run('aa-fragment-relation', relationRows[1]!.frame_relation_id);
+    projector.rebuild('p', 11);
+    expect(readProjection(temporalEdgeId, saved.frameId)).toEqual(temporal);
+    expect(readProjection(relationEdgeId, saved.frameId)).toEqual(related);
+
+    const shrunkFrame = {
+      ...frame, frameId: 'fragment-frame-shrunk', evidenceEventIds: [events[0]!.eventId],
+      nodes: frame.nodes
+        .filter((node) => node.dimension !== 'raw_event' || node.evidenceEventIds.includes(events[0]!.eventId))
+        .map((node) => ({ ...node, evidenceEventIds: [events[0]!.eventId] })),
+      relations: [{ ...relation, confidence: 0.9, evidenceEventIds: [events[0]!.eventId] }],
+      temporalReferences: [references[0]!],
+    };
+    const shrunk = kernel.memoryFrameStore.save({ frame: shrunkFrame, sourceFingerprint: 'fragment-source-shrunk', now: 12 });
+    kernel.memoryFrameStore.publish(shrunk.frameId, 'staged', 'active', 13);
+    projector.rebuild('p', 14);
+    const shrunkTemporal = readProjection(temporalEdgeId, shrunk.frameId);
+    const shrunkRelation = readProjection(relationEdgeId, shrunk.frameId);
+    for (const projection of [shrunkTemporal, shrunkRelation]) {
+      expect(JSON.parse(String((projection.support as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual([events[0]!.eventId]);
+      expect(JSON.parse(String((projection.edge as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual([events[0]!.eventId]);
+    }
+    projector.rebuild('p', 15);
+    expect(readProjection(temporalEdgeId, shrunk.frameId)).toEqual(shrunkTemporal);
+    expect(readProjection(relationEdgeId, shrunk.frameId)).toEqual(shrunkRelation);
+    kernel.close();
+  });
+
   test('builds a bounded multilingual query frame', () => {
     const frame = new MultidimensionalQueryPlanner().plan('谁参与了 2026 年的 database issue？', Date.UTC(2026, 6, 13));
     expect(frame.schemaVersion).toBe('memory_query_frame.v1');
