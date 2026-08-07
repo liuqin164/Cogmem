@@ -298,6 +298,15 @@ test('schema31 polluted topology is split by live provenance and cognitive ident
   `);
   for (const neuronId of neurons) insertTask.run(neuronId);
   for (const neuronId of neurons.slice(0, 2)) insertCluster.run(neuronId);
+  insertTask.run(neurons[0]!);
+  insertCluster.run(neurons[0]!);
+  db.prepare(`INSERT INTO project_branches VALUES(?,?,?,?,?,?,?)`)
+    .run('duplicate-branch', 'project-a', 'duplicate-branch', 'semantic', 'Duplicate branch', 1, 1);
+  const insertBranch = db.prepare(`
+    INSERT INTO branch_entries(branch_id,neuron_id,created_at) VALUES('duplicate-branch',?,?)
+  `);
+  insertBranch.run(neurons[0]!, 2);
+  insertBranch.run(neurons[0]!, 1);
   for (const [index, neuronId] of neurons.slice(0, 2).entries()) db.prepare(`
     INSERT INTO facts(
       fact_id,neuron_id,subject,predicate_family,object_value,entity_id,valid_from,
@@ -305,8 +314,26 @@ test('schema31 polluted topology is split by live provenance and cognitive ident
     ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     `shared-entity-fact-${index}`, neuronId, 'shared', 'mentions', 'entity',
-    'shared-cognitive-entity', 1, 'observed', 1, 'active', 'shared',
+    'shared-cognitive-entity', 1, 'observed', 1, 'verified', 'shared',
   );
+  db.prepare(`
+    INSERT INTO facts(
+      fact_id,neuron_id,subject,predicate_family,object_value,valid_from,
+      certainty_level,confidence,status,source_text
+    ) VALUES('inactive-cognitive-fact',?,'private retired fact','mentions','secret',1,'observed',1,'superseded','private retired fact')
+  `).run(neurons[0]!);
+  db.prepare(`
+    INSERT INTO beliefs(
+      id,project_id,scope,subject,predicate,object_value,canonical_key,source_neuron_id,
+      valid_from,status,created_at,updated_at
+    ) VALUES('inactive-cognitive-belief','project-a','project','private','is','retired',
+      'private:is',? ,1,'revoked',1,1)
+  `).run(neurons[0]!);
+  db.prepare(`
+    INSERT INTO compiled_events(
+      event_id,neuron_id,event_type,target,valid_from,confidence,status
+    ) VALUES('inactive-cognitive-event',?,'private_event','retired',1,1,'archived')
+  `).run(neurons[0]!);
   db.close();
 
   expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
@@ -337,6 +364,22 @@ test('schema31 polluted topology is split by live provenance and cognitive ident
     WHERE node_type='entity' AND node_key='entity:shared-cognitive-entity'
   `).get()).toEqual({ count: 2 });
   expect(upgraded.prepare(`
+    SELECT node_id FROM cognitive_nodes WHERE node_key='fact:inactive-cognitive-fact'
+  `).all()).toEqual([]);
+  expect(upgraded.prepare(`
+    SELECT node_id FROM cognitive_nodes
+    WHERE node_key IN ('belief:inactive-cognitive-belief','compiled_event:inactive-cognitive-event')
+  `).all()).toEqual([]);
+  for (const [table, parentColumn] of [
+    ['branch_entries', 'branch_id'],
+    ['task_branch_entries', 'task_id'],
+    ['event_cluster_entries', 'cluster_id'],
+  ] as const) expect(upgraded.prepare(`
+    SELECT COUNT(*) AS count FROM ${table}
+    GROUP BY ${parentColumn},COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),
+      COALESCE(fact_id,''),COALESCE(event_id,'') HAVING COUNT(*)>1
+  `).all()).toEqual([]);
+  expect(upgraded.prepare(`
     SELECT COUNT(*) AS count FROM cognitive_edges e
     JOIN cognitive_nodes s ON s.node_id=e.source_node_id
     JOIN cognitive_nodes t ON t.node_id=e.target_node_id
@@ -345,6 +388,70 @@ test('schema31 polluted topology is split by live provenance and cognitive ident
   upgraded.close();
   rmSync(directory, { recursive: true, force: true });
 });
+
+test('schema31 resolved pending entities cannot cross their inferred project scope', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-pending-scope-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  const contextNeuronId = (db.prepare(`
+    SELECT id FROM neurons WHERE project_id='project-a' AND is_deleted=0 LIMIT 1
+  `).get() as { id: string }).id;
+  db.prepare(`
+    INSERT INTO entities(entity_id,canonical_name,type,aliases_json,status,metadata_json,created_at,updated_at)
+    VALUES('pending-canonical-b','Private B','concept','[]','active','{}',1,1)
+  `).run();
+  db.prepare(`
+    INSERT INTO entity_instances(
+      instance_id,canonical_entity_id,canonical_name,type,aliases_json,status,metadata_json,created_at,updated_at
+    ) VALUES('pending-entity-b','pending-canonical-b','Private B','concept','[]','active',
+      '{"projectId":"project-b"}',1,1)
+  `).run();
+  db.prepare(`
+    INSERT INTO pending_entity_resolution(
+      pending_id,reference_text,entity_type,context_neuron_id,resolved_entity_id,status,created_at,updated_at
+    ) VALUES('pending-cross','private b','concept',?,'pending-entity-b','resolved',1,1)
+  `).run(contextNeuronId);
+  db.close();
+
+  expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+  const upgraded = new Database(dbPath);
+  expect(upgraded.prepare(`SELECT pending_id FROM pending_entity_resolution WHERE pending_id='pending-cross'`).get()).toBeNull();
+  expect(upgraded.prepare(`
+    SELECT reason FROM pending_entity_resolution_quarantine WHERE pending_id='pending-cross'
+  `).get()).toEqual({ reason: 'pending_resolved_entity_scope_mismatch' });
+  expect(() => upgraded.prepare(`
+    INSERT INTO pending_entity_resolution(
+      pending_id,reference_text,entity_type,context_neuron_id,project_scope,resolved_entity_id,status,created_at,updated_at
+    ) VALUES('pending-runtime-cross','private b','concept',?,'project-a','pending-entity-b','resolved',2,2)
+  `).run(contextNeuronId)).toThrow('project_scope_mismatch');
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('schema31 migration deduplicates one hundred thousand legal nullable topology rows', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-large-topology-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  const neuronId = (db.prepare(`
+    SELECT id FROM neurons WHERE project_id='project-a' AND is_deleted=0 LIMIT 1
+  `).get() as { id: string }).id;
+  db.prepare(`INSERT INTO project_branches VALUES(?,?,?,?,?,?,?)`)
+    .run('large-branch', 'project-a', 'large-branch', 'semantic', 'Large branch', 1, 1);
+  const insert = db.prepare(`
+    INSERT INTO branch_entries(branch_id,neuron_id,created_at) VALUES('large-branch',?,?)
+  `);
+  db.transaction(() => {
+    for (let index = 100_000; index > 0; index -= 1) insert.run(neuronId, index);
+  })();
+
+  installMultidimensionalMemoryGraph374(db);
+  expect(db.prepare(`
+    SELECT COUNT(*) AS count,MIN(created_at) AS created_at
+    FROM branch_entries WHERE branch_id='large-branch'
+  `).get()).toEqual({ count: 1, created_at: 1 });
+  db.close();
+  rmSync(directory, { recursive: true, force: true });
+}, 30_000);
 
 test('schema31 shared memory entity keeps its owner ID and uses the runtime ID for secondary scopes', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-shared-entity-'));
@@ -456,6 +563,10 @@ test('schema31 edge-only entity scopes split safely and duplicate edges merge ev
     'legacy-edge-malformed', 'project-b', 'entity', entityId, 'mentions', 'topic', 'edge-only-topic',
     1, 1, 1, 1, 'not-json', 'active', 1, 1, 'raw_evidence', 1, 1,
   );
+  insertEdge.run(
+    'legacy-edge-orphan', 'project-b', 'entity', 'missing-entity', 'mentions', 'topic', 'edge-only-topic',
+    1, 1, 1, 1, '["main-373-event-b"]', 'active', 1, 1, 'raw_evidence', 1, 1,
+  );
   db.close();
 
   expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
@@ -475,6 +586,10 @@ test('schema31 edge-only entity scopes split safely and duplicate edges merge ev
     SELECT reason FROM entity_scope_migration_quarantine
     WHERE record_type='memory_edge' AND record_id='legacy-edge-malformed'
   `).get()).toEqual({ reason: 'memory_edge_evidence_malformed' });
+  expect(upgraded.prepare(`
+    SELECT reason FROM entity_scope_migration_quarantine
+    WHERE record_type='memory_edge' AND record_id='legacy-edge-orphan'
+  `).get()).toEqual({ reason: 'memory_edge_endpoint_scope_mismatch' });
   upgraded.close();
   rmSync(directory, { recursive: true, force: true });
 });

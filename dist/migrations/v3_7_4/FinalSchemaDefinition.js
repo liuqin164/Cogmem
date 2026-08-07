@@ -1569,11 +1569,27 @@ export const FINAL_AUXILIARY_OBJECTS = [
     { type: "trigger", name: "pending_entity_scope_insert", table: "pending_entity_resolution", sql: `CREATE TRIGGER pending_entity_scope_insert BEFORE INSERT ON pending_entity_resolution
     WHEN NEW.context_neuron_id IS NULL OR NOT EXISTS (
     SELECT 1 FROM neurons n WHERE n.id=NEW.context_neuron_id AND n.is_deleted=0
-      AND COALESCE(n.project_id,'')=NEW.project_scope) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
+      AND COALESCE(n.project_id,'')=NEW.project_scope) OR (NEW.status='resolved' AND (
+        NEW.resolved_entity_id IS NULL OR NOT EXISTS (
+          SELECT 1 FROM entity_instances i WHERE i.instance_id=NEW.resolved_entity_id AND i.status='active'
+            AND (json_extract(i.metadata_json,'$.projectId')=NEW.project_scope OR EXISTS (
+              SELECT 1 FROM entity_mentions m WHERE m.entity_id=i.instance_id
+                AND COALESCE(m.project_id,'')=NEW.project_scope
+            ))
+        )
+      )) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
     { type: "trigger", name: "pending_entity_scope_update", table: "pending_entity_resolution", sql: `CREATE TRIGGER pending_entity_scope_update BEFORE UPDATE ON pending_entity_resolution
     WHEN NEW.context_neuron_id IS NULL OR NOT EXISTS (
     SELECT 1 FROM neurons n WHERE n.id=NEW.context_neuron_id AND n.is_deleted=0
-      AND COALESCE(n.project_id,'')=NEW.project_scope) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
+      AND COALESCE(n.project_id,'')=NEW.project_scope) OR (NEW.status='resolved' AND (
+        NEW.resolved_entity_id IS NULL OR NOT EXISTS (
+          SELECT 1 FROM entity_instances i WHERE i.instance_id=NEW.resolved_entity_id AND i.status='active'
+            AND (json_extract(i.metadata_json,'$.projectId')=NEW.project_scope OR EXISTS (
+              SELECT 1 FROM entity_mentions m WHERE m.entity_id=i.instance_id
+                AND COALESCE(m.project_id,'')=NEW.project_scope
+            ))
+        )
+      )) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
     { type: "trigger", name: "memory_binding_scope_insert", table: "memory_bindings", sql: `CREATE TRIGGER memory_binding_scope_insert BEFORE INSERT ON memory_bindings
     WHEN NOT EXISTS (
     SELECT 1 FROM memory_events e WHERE e.event_id=NEW.event_id

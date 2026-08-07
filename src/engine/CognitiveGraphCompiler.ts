@@ -89,10 +89,12 @@ export class CognitiveGraphCompiler {
     }
 
     for (const belief of consolidation.beliefs) {
+      if (belief.status !== 'active') continue;
       edgeCount += this.attachBeliefNode(neuronNode.nodeId, belief, projectId, createdAt, seedNodeIds);
     }
 
     for (const fact of consolidation.compiledFacts) {
+      if (!['provisional', 'provisional_enriched', 'verified'].includes(fact.status)) continue;
       const factNode = this.store.upsertNode({
         nodeId: `cgnode-${randomUUID()}`,
         nodeType: 'fact',
@@ -101,6 +103,7 @@ export class CognitiveGraphCompiler {
         projectId,
         sourceNeuronId: neuron.id,
         metadata: {
+          status: fact.status,
           predicateFamily: fact.predicateFamily,
           predicateValue: fact.predicateValue,
           object: fact.object
@@ -129,7 +132,8 @@ export class CognitiveGraphCompiler {
             sourceNeuronId: neuron.id,
             metadata: {
               type: entity.type,
-              aliases: entity.aliases
+              aliases: entity.aliases,
+              sourceFactId: fact.factId
             },
             createdAt
           });
@@ -147,6 +151,7 @@ export class CognitiveGraphCompiler {
     }
 
     for (const event of consolidation.compiledEvents) {
+      if (!['provisional', 'verified'].includes(event.status)) continue;
       const eventNode = this.store.upsertNode({
         nodeId: `cgnode-${randomUUID()}`,
         nodeType: 'compiled_event',
@@ -155,6 +160,7 @@ export class CognitiveGraphCompiler {
         projectId,
         sourceNeuronId: neuron.id,
         metadata: {
+          status: event.status,
           eventType: event.eventType,
           actor: event.actor,
           target: event.target

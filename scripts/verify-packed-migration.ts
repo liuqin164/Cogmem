@@ -41,10 +41,11 @@ try {
      });
      kernel.close();`,
   ], install, { DB_PATH: kernelDb });
+  await verifyMcp(install, kernelDb);
 
   verify(cliDb);
   verify(kernelDb);
-  console.log('packed schema31 -> 0032 migration verified');
+  console.log('packed install, schema31 -> 0032 migration, and MCP startup verified');
 } finally {
   if (tarball) rmSync(tarball, { force: true });
   rmSync(directory, { recursive: true, force: true });
@@ -132,4 +133,31 @@ async function run(command: string[], cwd: string, env: Record<string, string> =
   ]);
   if (exitCode !== 0) throw new Error(`${command.join(' ')} failed:\n${stderr || stdout}`);
   return stdout;
+}
+
+async function verifyMcp(install: string, dbPath: string): Promise<void> {
+  const input = [
+    JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'packed-test', version: '1' } },
+    }),
+    JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+    JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+    '',
+  ].join('\n');
+  const process = Bun.spawn({
+    cmd: ['bun', join(install, 'node_modules', 'cogmem', 'dist', 'bin', 'mcp.js'), '--db', dbPath],
+    cwd: install,
+    stdin: new Blob([input]),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(process.stdout).text(),
+    new Response(process.stderr).text(),
+    process.exited,
+  ]);
+  if (exitCode !== 0 || stderr || !stdout.includes('"name":"cogmem_recall"')) {
+    throw new Error(`packed MCP startup failed:\n${stderr || stdout}`);
+  }
 }

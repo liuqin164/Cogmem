@@ -65,6 +65,9 @@ interface MigrationDiagnostics {
   entityRelationsQuarantined: number;
   pendingEntityResolutionsQuarantined: number;
   malformedEdgeEvidenceDiscarded: number;
+  quarantineTotal: number;
+  quarantineByRecordType: Record<string, number>;
+  quarantineByReason: Record<string, number>;
 }
 
 function migrationDiagnostics(db: Database): MigrationDiagnostics {
@@ -72,6 +75,22 @@ function migrationDiagnostics(db: Database): MigrationDiagnostics {
     if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table)) return 0;
     return Number((db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${where}`).get(...params) as { count: number }).count);
   };
+  const quarantineByRecordType: Record<string, number> = {};
+  const quarantineByReason: Record<string, number> = {};
+  const addGroups = (table: string, recordType: string, reason: string) => {
+    if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table)) return;
+    for (const row of db.prepare(`
+      SELECT ${recordType} AS record_type,${reason} AS reason,COUNT(*) AS count
+      FROM ${table} GROUP BY ${recordType},${reason}
+    `).all() as Array<{ record_type: string; reason: string; count: number }>) {
+      quarantineByRecordType[row.record_type] = (quarantineByRecordType[row.record_type] ?? 0) + Number(row.count);
+      quarantineByReason[row.reason] = (quarantineByReason[row.reason] ?? 0) + Number(row.count);
+    }
+  };
+  addGroups('entity_scope_migration_quarantine', 'record_type', 'reason');
+  addGroups('pending_entity_resolution_quarantine', "'pending_entity_resolution'", 'reason');
+  addGroups('policy_execution_quarantine', "'policy_execution'", 'reason');
+  addGroups('runtime_scope_discard_receipts', 'source_table', 'reason');
   return {
     runtimeStatesDiscarded: count('runtime_scope_discard_receipts', 'source_table=?', 'runtime_states'),
     runtimeTransitionsDiscarded: count('runtime_scope_discard_receipts', 'source_table=?', 'runtime_transitions'),
@@ -86,14 +105,25 @@ function migrationDiagnostics(db: Database): MigrationDiagnostics {
       'memory_edge',
       'memory_edge_evidence_malformed',
     ),
+    quarantineTotal: Object.values(quarantineByRecordType).reduce((sum, value) => sum + value, 0),
+    quarantineByRecordType,
+    quarantineByReason,
   };
 }
 
 function subtractDiagnostics(after: MigrationDiagnostics, before: MigrationDiagnostics): MigrationDiagnostics {
-  return Object.fromEntries(Object.entries(after).map(([key, value]) => [
-    key,
-    value - before[key as keyof MigrationDiagnostics],
-  ])) as unknown as MigrationDiagnostics;
+  const subtractMap = (left: Record<string, number>, right: Record<string, number>) => Object.fromEntries(
+    [...new Set([...Object.keys(left), ...Object.keys(right)])]
+      .map((key) => [key, (left[key] ?? 0) - (right[key] ?? 0)] as const)
+      .filter(([, value]) => value !== 0),
+  );
+  return {
+    ...Object.fromEntries(Object.entries(after)
+      .filter(([, value]) => typeof value === 'number')
+      .map(([key, value]) => [key, value - Number(before[key as keyof MigrationDiagnostics])])),
+    quarantineByRecordType: subtractMap(after.quarantineByRecordType, before.quarantineByRecordType),
+    quarantineByReason: subtractMap(after.quarantineByReason, before.quarantineByReason),
+  } as unknown as MigrationDiagnostics;
 }
 
 async function main(): Promise<void> {

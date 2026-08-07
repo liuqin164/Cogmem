@@ -7,4 +7,7 @@ export declare function memoryEdgeId(input: {
     targetType: string;
     targetId: string;
 }): string;
+export declare function preferredMemoryEdgeAuthority(left: string, right: string): string;
+export declare function preferredMemoryEdgeAuthoritySql(left: string, right: string): string;
+export declare function memoryEdgeAuthorityRankSql(value: string): string;
 //# sourceMappingURL=MemoryBindingIdentity.d.ts.map

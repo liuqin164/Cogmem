@@ -14,7 +14,12 @@ import type {
   MemoryEntityType,
   MemoryTopicRecord,
 } from '../binding/MemoryBindingTypes.js';
-import { memoryEdgeId, memoryEntityId } from '../binding/MemoryBindingIdentity.js';
+import {
+  memoryEdgeId,
+  memoryEdgeAuthorityRankSql,
+  memoryEntityId,
+  preferredMemoryEdgeAuthoritySql,
+} from '../binding/MemoryBindingIdentity.js';
 import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 
 export interface UpsertMemoryEntityInput {
@@ -115,25 +120,26 @@ export class MemoryBindingStore {
           ? derivedId
           : input.entityId || derivedId);
     const existing = this.db.prepare(`SELECT * FROM memory_entities WHERE entity_id=?`).get(entityId) as {
-      project_id: string | null; canonical_name: string; entity_type: MemoryEntityType; aliases_json: string;
+      project_id: string | null; canonical_name: string; entity_type: MemoryEntityType;
     } | null;
     if (existing && (
       (existing.project_id ?? '') !== scope
       || existing.canonical_name !== input.canonicalName
       || existing.entity_type !== input.entityType
     )) throw new Error('memory_entity_immutable_identity_mismatch');
-    const aliases = Array.from(new Set([
-      input.canonicalName,
-      ...parseStringArray(existing?.aliases_json),
-      ...(input.aliases || []),
-    ]))
-      .filter(Boolean);
+    const aliases = Array.from(new Set([input.canonicalName, ...(input.aliases || [])])).filter(Boolean);
     this.db.prepare(`
       INSERT INTO memory_entities (
         entity_id, project_id, canonical_name, entity_type, aliases_json, stable_path, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(entity_id) DO UPDATE SET
-        aliases_json = excluded.aliases_json,
+        aliases_json = (SELECT json_group_array(value) FROM (
+          SELECT value,MIN(position) AS position FROM (
+            SELECT value,CAST(key AS INTEGER) AS position FROM json_each(memory_entities.aliases_json)
+            UNION ALL
+            SELECT value,1000000+CAST(key AS INTEGER) FROM json_each(excluded.aliases_json)
+          ) GROUP BY value ORDER BY position
+        )),
         stable_path = COALESCE(excluded.stable_path, memory_entities.stable_path),
         updated_at = excluded.updated_at
     `).run(
@@ -374,12 +380,7 @@ export class MemoryBindingStore {
     this.assertNodeScope(input.sourceType, input.sourceId, scope);
     this.assertNodeScope(input.targetType, input.targetId, scope);
     const edgeId = memoryEdgeId(input);
-    const existing = this.db.prepare(`SELECT evidence_event_ids_json FROM memory_edges WHERE edge_id=?`)
-      .get(edgeId) as { evidence_event_ids_json: string } | null;
-    const evidenceEventIds = Array.from(new Set([
-      ...parseStringArray(existing?.evidence_event_ids_json),
-      ...input.evidenceEventIds.filter(Boolean),
-    ]));
+    const evidenceEventIds = Array.from(new Set(input.evidenceEventIds.filter(Boolean)));
     this.db.prepare(`
       INSERT INTO memory_edges (
         edge_id, project_id, source_type, source_id, relation_type, target_type, target_id,
@@ -388,14 +389,26 @@ export class MemoryBindingStore {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(edge_id) DO UPDATE SET
         confidence = MAX(memory_edges.confidence, excluded.confidence),
-        base_weight = excluded.base_weight,
+        base_weight = CASE WHEN ${memoryEdgeAuthorityRankSql('memory_edges.source_authority')}
+          >= ${memoryEdgeAuthorityRankSql('excluded.source_authority')}
+          THEN memory_edges.base_weight ELSE excluded.base_weight END,
         stability = MAX(memory_edges.stability, excluded.stability),
         activation = MAX(memory_edges.activation, excluded.activation),
-        evidence_event_ids_json = excluded.evidence_event_ids_json,
-        status = excluded.status,
-        valid_to = excluded.valid_to,
+        evidence_event_ids_json = (SELECT json_group_array(value) FROM (
+          SELECT value,MIN(position) AS position FROM (
+            SELECT value,CAST(key AS INTEGER) AS position FROM json_each(memory_edges.evidence_event_ids_json)
+            UNION ALL
+            SELECT value,1000000+CAST(key AS INTEGER) FROM json_each(excluded.evidence_event_ids_json)
+          ) GROUP BY value ORDER BY position
+        )),
+        status = CASE WHEN ${memoryEdgeAuthorityRankSql('memory_edges.source_authority')}
+          >= ${memoryEdgeAuthorityRankSql('excluded.source_authority')}
+          THEN memory_edges.status ELSE excluded.status END,
+        valid_to = CASE WHEN ${memoryEdgeAuthorityRankSql('memory_edges.source_authority')}
+          >= ${memoryEdgeAuthorityRankSql('excluded.source_authority')}
+          THEN memory_edges.valid_to ELSE excluded.valid_to END,
         version = memory_edges.version + 1,
-        source_authority = excluded.source_authority,
+        source_authority = ${preferredMemoryEdgeAuthoritySql('memory_edges.source_authority', 'excluded.source_authority')},
         updated_at = excluded.updated_at
     `).run(
       edgeId,
@@ -418,27 +431,7 @@ export class MemoryBindingStore {
       now,
       now,
     );
-    return {
-      edgeId,
-      projectId: input.projectId,
-      sourceType: input.sourceType,
-      sourceId: input.sourceId,
-      relationType: input.relationType,
-      targetType: input.targetType,
-      targetId: input.targetId,
-      confidence: input.confidence,
-      baseWeight: clamp(input.baseWeight ?? 1, 0, 10),
-      stability: clamp(input.stability ?? 1, 0, 1),
-      activation: clamp(input.activation ?? 1, 0, 10),
-      evidenceEventIds,
-      status: input.status || 'active',
-      createdAt: now,
-      updatedAt: now,
-      validFrom: input.validFrom ?? now,
-      validTo: input.validTo,
-      version: 1,
-      sourceAuthority: input.sourceAuthority || 'raw_evidence',
-    };
+    return mapEdgeRow(this.db.prepare(`SELECT * FROM memory_edges WHERE edge_id=?`).get(edgeId) as MemoryEdgeRow);
   }
 
   decayEdgeActivation(options: DecayMemoryEdgeActivationOptions = {}): number {

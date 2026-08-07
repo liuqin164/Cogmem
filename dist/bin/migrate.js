@@ -58,6 +58,23 @@ function migrationDiagnostics(db) {
             return 0;
         return Number(db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${where}`).get(...params).count);
     };
+    const quarantineByRecordType = {};
+    const quarantineByReason = {};
+    const addGroups = (table, recordType, reason) => {
+        if (!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table))
+            return;
+        for (const row of db.prepare(`
+      SELECT ${recordType} AS record_type,${reason} AS reason,COUNT(*) AS count
+      FROM ${table} GROUP BY ${recordType},${reason}
+    `).all()) {
+            quarantineByRecordType[row.record_type] = (quarantineByRecordType[row.record_type] ?? 0) + Number(row.count);
+            quarantineByReason[row.reason] = (quarantineByReason[row.reason] ?? 0) + Number(row.count);
+        }
+    };
+    addGroups('entity_scope_migration_quarantine', 'record_type', 'reason');
+    addGroups('pending_entity_resolution_quarantine', "'pending_entity_resolution'", 'reason');
+    addGroups('policy_execution_quarantine', "'policy_execution'", 'reason');
+    addGroups('runtime_scope_discard_receipts', 'source_table', 'reason');
     return {
         runtimeStatesDiscarded: count('runtime_scope_discard_receipts', 'source_table=?', 'runtime_states'),
         runtimeTransitionsDiscarded: count('runtime_scope_discard_receipts', 'source_table=?', 'runtime_transitions'),
@@ -67,13 +84,22 @@ function migrationDiagnostics(db) {
         entityRelationsQuarantined: count('entity_scope_migration_quarantine', 'record_type=?', 'entity_relation'),
         pendingEntityResolutionsQuarantined: count('pending_entity_resolution_quarantine'),
         malformedEdgeEvidenceDiscarded: count('entity_scope_migration_quarantine', 'record_type=? AND reason=?', 'memory_edge', 'memory_edge_evidence_malformed'),
+        quarantineTotal: Object.values(quarantineByRecordType).reduce((sum, value) => sum + value, 0),
+        quarantineByRecordType,
+        quarantineByReason,
     };
 }
 function subtractDiagnostics(after, before) {
-    return Object.fromEntries(Object.entries(after).map(([key, value]) => [
-        key,
-        value - before[key],
-    ]));
+    const subtractMap = (left, right) => Object.fromEntries([...new Set([...Object.keys(left), ...Object.keys(right)])]
+        .map((key) => [key, (left[key] ?? 0) - (right[key] ?? 0)])
+        .filter(([, value]) => value !== 0));
+    return {
+        ...Object.fromEntries(Object.entries(after)
+            .filter(([, value]) => typeof value === 'number')
+            .map(([key, value]) => [key, value - Number(before[key])])),
+        quarantineByRecordType: subtractMap(after.quarantineByRecordType, before.quarantineByRecordType),
+        quarantineByReason: subtractMap(after.quarantineByReason, before.quarantineByReason),
+    };
 }
 async function main() {
     const args = parseArgs(process.argv.slice(2));

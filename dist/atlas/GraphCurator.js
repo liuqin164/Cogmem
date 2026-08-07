@@ -404,7 +404,7 @@ export class GraphCurator {
         confidence=excluded.confidence,
         evidence_event_ids_json=excluded.evidence_event_ids_json,
         status=excluded.status,
-        source_authority=excluded.source_authority,
+        source_authority=${preferredMemoryEdgeAuthoritySql('memory_edges.source_authority', 'excluded.source_authority')},
         updated_at=excluded.updated_at
     `).run(edgeId, input.projectId, input.sourceType, input.sourceId, input.relationType, input.targetType, input.targetId, input.confidence, 1, input.status === 'weak' ? 0.35 : 0.85, 1, JSON.stringify(Array.from(new Set(input.evidenceEventIds)).slice(0, 30)), input.status, input.now, null, 1, input.sourceAuthority, input.now, input.now);
     }
@@ -497,4 +497,4 @@ function relationKey(left, right, relationType) {
         : `${left.row.episode_id}\0${right.row.episode_id}`;
     return `${relationType}\0${pair}`;
 }
-import { memoryEdgeId } from '../binding/MemoryBindingIdentity.js';
+import { memoryEdgeId, preferredMemoryEdgeAuthoritySql } from '../binding/MemoryBindingIdentity.js';

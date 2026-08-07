@@ -38,8 +38,13 @@ test('memory edge upsert preserves all evidence', () => {
     projectId: 'a', sourceType: 'entity' as const, sourceId: entity.entityId,
     relationType: 'belongs_to' as const, targetType: 'topic' as const, targetId: 'device', confidence: 1,
   };
-  kernel.memoryBindingStore.upsertEdge({ ...edge, evidenceEventIds: [events[0]!.eventId] });
-  expect(kernel.memoryBindingStore.upsertEdge({ ...edge, evidenceEventIds: [events[1]!.eventId] }).evidenceEventIds)
-    .toEqual(events.map((event) => event.eventId));
+  kernel.memoryBindingStore.upsertEdge({
+    ...edge, evidenceEventIds: [events[0]!.eventId], sourceAuthority: 'raw_evidence', createdAt: 1,
+  });
+  const persisted = kernel.memoryBindingStore.upsertEdge({
+    ...edge, evidenceEventIds: [events[1]!.eventId], sourceAuthority: 'model_candidate', createdAt: 2,
+  });
+  expect(persisted.evidenceEventIds).toEqual(events.map((event) => event.eventId));
+  expect(persisted).toMatchObject({ sourceAuthority: 'raw_evidence', version: 2, createdAt: 1, updatedAt: 2 });
   kernel.close();
 });
