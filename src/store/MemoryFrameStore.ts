@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
+import { invalidateMemoryEdgeSupportIds } from '../binding/MemoryEdgeMerge.js';
 import { validateMemoryFrame } from '../semantic/MemoryFrameValidator.js';
 import type { MemoryFrameStatus, MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
 
@@ -155,15 +156,18 @@ export class MemoryFrameStore {
     return this.db.transaction(() => {
     let changed = 0; let derivedChanged = false; for (const id of episodeIds) {
       changed += Number(this.db.prepare(`UPDATE memory_frames SET status='superseded',publish_status='needs_confirmation', updated_at=? WHERE episode_id=? AND status IN ('active','needs_confirmation','staged')`).run(now, id).changes ?? 0);
+      if (this.tableExists('memory_edge_supports')) {
+        const supportIds = (this.db.prepare(`SELECT support_id FROM memory_edge_supports WHERE source_authority='memory_frame_projector' AND support_source_type='frame' AND support_status='active' AND support_source_id IN (SELECT frame_id FROM memory_frames WHERE episode_id=?)`).all(id) as Array<{ support_id: string }>).map((row) => row.support_id);
+        derivedChanged = invalidateMemoryEdgeSupportIds(this.db, supportIds, now).length > 0 || derivedChanged;
+      }
       if (this.tableExists('memory_atlas_supports')) {
-        derivedChanged = Number(this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE source_type IN ('frame','frame_edge') AND source_episode_id=? AND status='active'`).run(now, id).changes ?? 0) > 0 || derivedChanged;
+        derivedChanged = Number(this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE source_type='frame' AND source_episode_id=? AND status='active'`).run(now, id).changes ?? 0) > 0 || derivedChanged;
         if (this.tableExists('memory_atlas_alias_supports')) {
           derivedChanged = Number(this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE source_episode_id=? AND status='active'`).run(now, id).changes ?? 0) > 0 || derivedChanged;
           if (this.tableExists('memory_atlas_aliases')) derivedChanged = Number(this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE source_frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id=?) AND status='active' AND NOT EXISTS (SELECT 1 FROM memory_atlas_alias_supports s WHERE s.alias_id=memory_atlas_aliases.alias_id AND s.status='active')`).run(now, id).changes ?? 0) > 0 || derivedChanged;
         } else if (this.tableExists('memory_atlas_aliases')) {
           derivedChanged = Number(this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE source_frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id=?) AND status='active' AND NOT EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.node_id=memory_atlas_aliases.node_id AND s.source_type='frame' AND s.status='active')`).run(now, id).changes ?? 0) > 0 || derivedChanged;
         }
-        if (this.tableExists('memory_edges')) derivedChanged = Number(this.db.prepare(`UPDATE memory_edges SET status='archived', updated_at=? WHERE edge_id IN (SELECT node_id FROM memory_atlas_supports WHERE source_episode_id=? AND source_type='frame_edge') AND source_authority='memory_frame_projector' AND status IN ('active','weak') AND NOT EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.node_id=memory_edges.edge_id AND s.source_type='frame_edge' AND s.status='active')`).run(now, id).changes ?? 0) > 0 || derivedChanged;
         if (this.tableExists('memory_atlas_documents')) derivedChanged = Number(this.db.prepare(`UPDATE memory_atlas_documents SET status='archived', updated_at=? WHERE project_id IN (SELECT project_id FROM memory_frames WHERE episode_id=?) AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2' AND NOT EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.node_id=memory_atlas_documents.node_id AND s.status='active')`).run(now, id).changes ?? 0) > 0 || derivedChanged;
       }
     }
@@ -176,14 +180,17 @@ export class MemoryFrameStore {
     return this.db.transaction(() => {
       const countRow = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_frames WHERE project_id=?`).get(projectId) as { count?: number } | null;
       const count = Number(countRow?.count ?? 0);
-      if (this.tableExists('memory_atlas_supports')) this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type IN ('frame','frame_edge') AND status='active'`).run(now, projectId);
+      if (this.tableExists('memory_edge_supports')) {
+        const supportIds = (this.db.prepare(`SELECT support_id FROM memory_edge_supports WHERE project_id=? AND source_authority='memory_frame_projector' AND support_status='active'`).all(projectId) as Array<{ support_id: string }>).map((row) => row.support_id);
+        invalidateMemoryEdgeSupportIds(this.db, supportIds, now);
+      }
+      if (this.tableExists('memory_atlas_supports')) this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type='frame' AND status='active'`).run(now, projectId);
       if (this.tableExists('memory_atlas_alias_supports')) this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
       if (this.tableExists('memory_atlas_aliases')) this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE project_id=? AND source_frame_id IS NOT NULL AND status='active'`).run(now, projectId);
       if (this.tableExists('memory_atlas_documents')) {
         if (this.tableExists('memory_atlas_fts')) this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2')`).run(projectId, projectId);
         this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2'`).run(projectId);
       }
-      if (this.tableExists('memory_edges')) this.db.prepare(`UPDATE memory_edges SET status='archived', updated_at=? WHERE project_id=? AND source_authority='memory_frame_projector' AND status IN ('active','weak')`).run(now, projectId);
       const deleted = Number(this.db.prepare(`DELETE FROM memory_frames WHERE project_id=?`).run(projectId).changes ?? 0);
       if (deleted || count) this.markDirty(projectId, now);
       return deleted;

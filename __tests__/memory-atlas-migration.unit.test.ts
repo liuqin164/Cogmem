@@ -606,10 +606,15 @@ test('schema31 bindings quarantine cross-scope clusters and related events', asy
     .run('binding-scope-a', 'project-a', 'project-a', 'concept', 1, 1);
   db.prepare(`INSERT INTO memory_topics(topic_path,project_id,project_id_key,topic_type,created_at,updated_at) VALUES(?,?,?,?,?,?)`)
     .run('binding-scope-b', 'project-b', 'project-b', 'concept', 1, 1);
+  db.prepare(`INSERT INTO memory_topics(topic_path,project_id,project_id_key,topic_type,created_at,updated_at) VALUES(?,?,?,?,?,?)`)
+    .run('binding-scope-other', 'project-a', 'project-a', 'concept', 1, 1);
   db.prepare(`INSERT INTO memory_clusters(cluster_id,project_id,topic_path,cluster_type,title,summary,status,confidence,support_count,evidence_event_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run('cluster-b', 'project-b', 'binding-scope-b', 'about', 'b', 'b', 'active', 1, 1, '["main-373-event-b"]', 1, 1);
+  db.prepare(`INSERT INTO memory_clusters(cluster_id,project_id,topic_path,cluster_type,title,summary,status,confidence,support_count,evidence_event_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run('cluster-a-other', 'project-a', 'binding-scope-other', 'about', 'other', 'other', 'active', 1, 1, '["main-373-event-a"]', 1, 1);
   const insert = db.prepare(`INSERT INTO memory_bindings(binding_id,event_id,project_id,topic_path,binding_type,confidence,source,signal,claim_key,binding_action,cluster_id,related_event_ids_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   insert.run('binding-bad-cluster', 'main-373-event-a', 'project-a', 'binding-scope-a', 'about', 1, 'deterministic', 'a', 'a', 'attach_to_existing', 'cluster-b', '[]', 1);
+  insert.run('binding-bad-cluster-topic', 'main-373-event-a', 'project-a', 'binding-scope-a', 'about', 1, 'deterministic', 'a', 'topic', 'attach_to_existing', 'cluster-a-other', '[]', 1);
   insert.run('binding-bad-related', 'main-373-event-a', 'project-a', 'binding-scope-a', 'about', 1, 'deterministic', 'a', 'b', 'attach_to_existing', null, '["main-373-event-b"]', 1);
   db.close();
 
@@ -618,6 +623,7 @@ test('schema31 bindings quarantine cross-scope clusters and related events', asy
   expect(upgraded.prepare(`SELECT COUNT(*) AS count FROM memory_bindings WHERE binding_id LIKE 'binding-bad-%'`).get()).toEqual({ count: 0 });
   expect(upgraded.prepare(`SELECT record_id,reason FROM entity_scope_migration_quarantine WHERE record_type='memory_binding' ORDER BY record_id`).all()).toEqual([
     { record_id: 'binding-bad-cluster', reason: 'memory_binding_cluster_scope_mismatch' },
+    { record_id: 'binding-bad-cluster-topic', reason: 'memory_binding_cluster_topic_mismatch' },
     { record_id: 'binding-bad-related', reason: 'memory_binding_related_event_scope_mismatch' },
   ]);
   upgraded.close();

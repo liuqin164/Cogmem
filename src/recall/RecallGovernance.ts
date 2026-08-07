@@ -104,18 +104,26 @@ export function recallableNeuronSql(alias: string, columns: ReadonlySet<string>)
     : '1';
   const imported = `(${tagSet(['governance:imported_summary_support'])} OR (${tagSet(['source_class:daily_memory'])} AND ${tagSet(['provenance:imported_summary'])}))`;
   const noiseTags = tagSet(['operational_noise', 'record:heartbeat', 'system:heartbeat', 'routine:heartbeat']);
+  const text = `lower(trim(${alias}.content))`;
   const noiseText = columns.has('content')
-    ? `(instr(lower(trim(${alias}.content)),'[openclaw heartbeat poll]')>0
-      OR lower(trim(${alias}.content))='heartbeat_ok'
-      OR instr(lower(trim(${alias}.content)),'heartbeat_ok')>0
-      OR instr(lower(trim(${alias}.content)),'heartbeat poll')>0
-      OR instr(lower(trim(${alias}.content)),'please complete your identity setup')>0
-      OR instr(lower(trim(${alias}.content)),'test your telegram bot by searching for it')>0
-      OR instr(lower(trim(${alias}.content)),'routine system ping')>0)`
+    ? `(instr(${text},'[openclaw heartbeat poll]')>0
+      OR ${sqlAsciiWordBoundary(text, 'heartbeat_ok')}
+      OR ${sqlAsciiWordBoundary(text, 'heartbeat poll')}
+      OR instr(${text},'please complete your identity setup')>0
+      OR instr(${text},'test your telegram bot by searching for it')>0
+      OR ${sqlAsciiWordBoundary(text, 'routine system ping')})`
     : '0';
   return `${status} AND NOT (${noiseTags} OR ${noiseText}) AND NOT ${imported}`;
 }
 
 function sqlString(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
+}
+
+function sqlAsciiWordBoundary(expression: string, value: string): string {
+  const escaped = value.replaceAll('[', '[[]').replaceAll('*', '[*]').replaceAll('?', '[?]');
+  return `(${expression}=${sqlString(value)}
+    OR ${expression} GLOB ${sqlString(`${escaped}[^a-z0-9_]*`)}
+    OR ${expression} GLOB ${sqlString(`*[^a-z0-9_]${escaped}`)}
+    OR ${expression} GLOB ${sqlString(`*[^a-z0-9_]${escaped}[^a-z0-9_]*`)})`;
 }

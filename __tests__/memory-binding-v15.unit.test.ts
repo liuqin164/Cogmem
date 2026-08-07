@@ -40,6 +40,10 @@ describe('memory binding v1.5', () => {
     const store = new MemoryBindingStore(db);
     db.exec(`CREATE TABLE memory_events(event_id TEXT PRIMARY KEY,project_id TEXT)`);
     db.prepare(`INSERT INTO memory_events VALUES(?,?)`).run('evt-1', 'brain');
+    store.upsertTopic({
+      projectId: 'brain', topicPath: 'PROJECT/Cogmem/test', topicType: 'project',
+      summary: 'test',
+    });
     store.upsertCluster({
       projectId: 'brain', topicPath: 'PROJECT/Cogmem/test', clusterType: 'observation',
       title: 'test', summary: 'test', claimKey: 'test', status: 'confirmed',

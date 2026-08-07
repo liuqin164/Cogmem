@@ -2,6 +2,29 @@ import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
 
 import { CognitiveGraphStore } from '../src/store/CognitiveGraphStore.js';
+import { isOperationalNoiseText, recallableNeuronSql } from '../src/recall/RecallGovernance.js';
+
+test('SQL and JavaScript recall governance agree on operational-noise token boundaries', () => {
+  const db = new Database(':memory:');
+  db.exec(`CREATE TABLE neurons(id TEXT PRIMARY KEY,content TEXT NOT NULL,project_id TEXT,is_deleted INTEGER NOT NULL DEFAULT 0,status TEXT,source_type TEXT,tags TEXT);`);
+  const corpus = [
+    'heartbeat_ok',
+    'heartbeat_okay',
+    'prefix heartbeat_ok suffix',
+    'prefixheartbeat_ok suffix',
+    'heartbeat poll',
+    'heartbeat poller',
+    'routine system ping',
+    'routine system pinged',
+    '[openclaw heartbeat poll]',
+    'please complete your identity setup now',
+  ];
+  const insert = db.prepare(`INSERT INTO neurons VALUES(?,?,'a',0,'active','user_input','[]')`);
+  corpus.forEach((content, index) => insert.run(String(index), content));
+  const rows = new Set((db.prepare(`SELECT id FROM neurons n WHERE ${recallableNeuronSql('n', new Set(['content', 'status', 'source_type', 'tags']))}`).all() as Array<{ id: string }>).map((row) => row.id));
+  corpus.forEach((content, index) => expect(rows.has(String(index))).toBe(!isOperationalNoiseText(content)));
+  db.close();
+});
 
 test('cognitive recall stops using facts, beliefs, events, and derived entities after deactivation', () => {
   const db = new Database(':memory:');

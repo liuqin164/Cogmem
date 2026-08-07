@@ -9,7 +9,7 @@ import type {
   MemoryClusterRecord,
   MemoryEdgeListOptions,
   MemoryEdgeRecord,
-  MemoryEdgeRelation,
+  MemoryGraphRelation,
   MemoryEntityRecord,
   MemoryEntityType,
   MemoryTopicRecord,
@@ -18,7 +18,7 @@ import {
   memoryEdgeId,
   memoryEntityId,
 } from '../binding/MemoryBindingIdentity.js';
-import { mergeMemoryEdge } from '../binding/MemoryEdgeMerge.js';
+import { mergeMemoryEdge, reduceMemoryEdges } from '../binding/MemoryEdgeMerge.js';
 import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 
 export interface UpsertMemoryEntityInput {
@@ -58,7 +58,7 @@ export interface UpsertMemoryEdgeInput {
   projectId?: string;
   sourceType: MemoryEdgeRecord['sourceType'];
   sourceId: string;
-  relationType: MemoryEdgeRelation;
+  relationType: MemoryGraphRelation;
   targetType: MemoryEdgeRecord['targetType'];
   targetId: string;
   confidence: number;
@@ -71,6 +71,9 @@ export interface UpsertMemoryEdgeInput {
   validFrom?: number;
   validTo?: number;
   sourceAuthority?: MemoryEdgeRecord['sourceAuthority'];
+  supportSourceType?: string;
+  supportSourceId?: string;
+  operation?: 'support' | 'revision';
 }
 
 export interface DecayMemoryEdgeActivationOptions {
@@ -203,7 +206,7 @@ export class MemoryBindingStore {
     this.assertEventScopes([input.eventId, ...(input.relatedEventIds || [])], scope);
     if (input.entityId) this.assertNodeScope('entity', input.entityId, scope);
     this.assertNodeScope('topic', input.topicPath, scope);
-    if (input.clusterId) this.assertNodeScope('cluster', input.clusterId, scope);
+    if (input.clusterId) this.assertClusterTopic(input.clusterId, input.topicPath, scope);
     const bindingId = bindingIdFor(input);
     this.db.prepare(`
       INSERT INTO memory_bindings (
@@ -242,6 +245,7 @@ export class MemoryBindingStore {
 
   upsertCluster(input: UpsertMemoryClusterInput): MemoryClusterRecord {
     const now = input.now ?? Date.now();
+    this.assertNodeScope('topic', input.topicPath, input.projectId ?? '');
     this.assertEventScopes([input.eventId], input.projectId ?? '');
     const clusterId = clusterIdFor(input.projectId, input.topicPath, input.clusterType, input.claimKey);
     const existing = this.getCluster(clusterId);
@@ -364,12 +368,17 @@ export class MemoryBindingStore {
     const now = options.now ?? Date.now();
     const where = options.projectId !== undefined ? "WHERE COALESCE(project_id, '') = ?" : '';
     const params = options.projectId !== undefined ? [options.projectId] : [];
+    const activeWhere = `${where} ${where ? 'AND' : 'WHERE'} support_status='active'`;
+    const edgeIds = (this.db.prepare(`
+      SELECT DISTINCT edge_id FROM memory_edge_supports ${activeWhere}
+    `).all(...params) as Array<{ edge_id: string }>).map((row) => row.edge_id);
     const result = this.db.prepare(`
-      UPDATE memory_edges
+      UPDATE memory_edge_supports
       SET activation = CASE WHEN activation * ? < ? THEN 0 ELSE activation * ? END,
           updated_at = ?
-      ${where}
+      ${activeWhere}
     `).run(factor, floor, factor, now, ...params);
+    reduceMemoryEdges(this.db, edgeIds, now);
     return Number(result.changes ?? 0);
   }
 
@@ -463,6 +472,7 @@ export class MemoryBindingStore {
   deleteByProject(projectId: string): number {
     const bindings = this.db.prepare(`DELETE FROM memory_bindings WHERE COALESCE(project_id, '') = ?`).run(projectId);
     this.db.prepare(`DELETE FROM memory_clusters WHERE COALESCE(project_id, '') = ?`).run(projectId);
+    this.db.prepare(`DELETE FROM memory_edge_supports WHERE COALESCE(project_id, '') = ?`).run(projectId);
     this.db.prepare(`DELETE FROM memory_edges WHERE COALESCE(project_id, '') = ?`).run(projectId);
     this.db.prepare(`DELETE FROM memory_topics WHERE COALESCE(project_id, '') = ?`).run(projectId);
     this.db.prepare(`DELETE FROM memory_entities WHERE COALESCE(project_id, '') = ?`).run(projectId);
@@ -485,10 +495,24 @@ export class MemoryBindingStore {
         ? [`memory_entities`, `entity_id`]
         : type === 'topic'
           ? [`memory_topics`, `topic_path`]
-          : [`memory_clusters`, `cluster_id`];
-    const row = this.db.prepare(`SELECT 1 FROM ${query[0]} WHERE ${query[1]}=? AND COALESCE(project_id,'')=?`)
-      .get(id, projectId);
+          : type === 'cluster'
+            ? [`memory_clusters`, `cluster_id`]
+            : [`memory_atlas_documents`, `source_id`];
+    const row = query[0] === 'memory_atlas_documents'
+      ? this.db.prepare(`SELECT 1 FROM memory_atlas_documents WHERE node_type=? AND source_id=? AND project_id=?`)
+        .get(type, id, projectId)
+      : this.db.prepare(`SELECT 1 FROM ${query[0]} WHERE ${query[1]}=? AND COALESCE(project_id,'')=?`)
+        .get(id, projectId);
     if (!row) throw new Error('memory_binding_endpoint_project_scope_mismatch');
+  }
+
+  private assertClusterTopic(clusterId: string, topicPath: string, projectId: string): void {
+    const row = this.db.prepare(`
+      SELECT topic_path FROM memory_clusters
+      WHERE cluster_id=? AND COALESCE(project_id,'')=?
+    `).get(clusterId, projectId) as { topic_path: string } | null;
+    if (!row) throw new Error('memory_binding_endpoint_project_scope_mismatch');
+    if (row.topic_path !== topicPath) throw new Error('memory_binding_cluster_topic_mismatch');
   }
 
   close(): void {
@@ -607,11 +631,45 @@ export class MemoryBindingStore {
         updated_at INTEGER NOT NULL DEFAULT 0
       );
 
+      CREATE TABLE IF NOT EXISTS memory_edge_supports (
+        support_id TEXT PRIMARY KEY,
+        edge_id TEXT NOT NULL,
+        project_id TEXT,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        relation_type TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        support_source_type TEXT NOT NULL,
+        support_source_id TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        base_weight REAL NOT NULL DEFAULT 1,
+        stability REAL NOT NULL DEFAULT 1,
+        activation REAL NOT NULL DEFAULT 1,
+        evidence_event_ids_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        valid_from INTEGER NOT NULL,
+        valid_to INTEGER,
+        version INTEGER NOT NULL DEFAULT 1,
+        source_authority TEXT NOT NULL,
+        support_status TEXT NOT NULL DEFAULT 'active' CHECK (support_status IN ('active','invalidated')),
+        invalidated_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(edge_id,source_authority,support_source_type,support_source_id)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_memory_edges_project_source
         ON memory_edges(project_id, source_type, source_id);
 
       CREATE INDEX IF NOT EXISTS idx_memory_edges_project_target
         ON memory_edges(project_id, target_type, target_id);
+
+      CREATE INDEX IF NOT EXISTS idx_memory_edge_supports_edge_status
+        ON memory_edge_supports(edge_id, support_status);
+
+      CREATE INDEX IF NOT EXISTS idx_memory_edge_supports_project_authority
+        ON memory_edge_supports(project_id, source_authority, support_status);
     `);
     this.ensureCompatibilityColumns();
   }

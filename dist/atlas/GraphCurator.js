@@ -3,7 +3,7 @@ import { EpisodeTitleGenerator } from './EpisodeTitleGenerator.js';
 import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
 import { inferActionKinds } from '../utils/ActionKindRegistry.js';
 import { localDateFor } from '../utils/LocalDateContext.js';
-import { mergeMemoryEdge } from '../binding/MemoryEdgeMerge.js';
+import { invalidateMemoryEdgeSupportIds, mergeMemoryEdge, reduceMemoryEdges, } from '../binding/MemoryEdgeMerge.js';
 const FACET_EDGE_RELATIONS = new Set([
     'OCCURRED_ON',
     'OCCURRED_IN',
@@ -34,7 +34,7 @@ export class GraphCurator {
         this.atlasStore = atlasStore;
     }
     rebuild(projectId, now = Date.now()) {
-        this.deleteFacetEdges(projectId);
+        const staleEdgeIds = this.deleteFacetEdges(projectId, now);
         const rows = this.db.prepare(`
       SELECT episode_id,project_id,session_id,conversation_thread_id,topic_path,episode_type,status,
         importance,summary,start_event_id,end_event_id,event_count,started_at,updated_at
@@ -126,13 +126,14 @@ export class GraphCurator {
             }
         }
         facetEdgeCount += this.projectEpisodeRelations(projectId, projections, now);
+        reduceMemoryEdges(this.db, staleEdgeIds, now);
         return { episodeCount: rows.length, facetNodeCount, facetEdgeCount, reviewNeeded };
     }
     rebuildEpisodes(projectId, episodeIds, now = Date.now()) {
         const bounded = Array.from(new Set(episodeIds.filter(Boolean))).slice(0, 100);
         if (!bounded.length)
             return { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
-        this.deleteFacetEdgesForEpisodes(projectId, bounded);
+        const staleEdgeIds = this.deleteFacetEdgesForEpisodes(projectId, bounded, now);
         const rows = this.db.prepare(`
       SELECT episode_id,project_id,session_id,conversation_thread_id,topic_path,episode_type,status,
         importance,summary,start_event_id,end_event_id,event_count,started_at,updated_at
@@ -151,6 +152,7 @@ export class GraphCurator {
             facetEdgeCount += projection.facetEdgeCount;
             reviewNeeded += projection.reviewNeeded;
         }
+        reduceMemoryEdges(this.db, staleEdgeIds, now);
         return { episodeCount: rows.length, facetNodeCount, facetEdgeCount, reviewNeeded };
     }
     projectEpisode(row, projectId, now) {
@@ -377,21 +379,28 @@ export class GraphCurator {
         }
         return Array.from(hints);
     }
-    deleteFacetEdges(projectId) {
+    deleteFacetEdges(projectId, now) {
         const relations = Array.from(FACET_EDGE_RELATIONS);
-        this.db.prepare(`DELETE FROM memory_edges WHERE project_id=? AND source_authority='atlas_curator' AND relation_type IN (${relations.map(() => '?').join(',')})`).run(projectId, ...relations);
+        const supportIds = this.db.prepare(`
+      SELECT support_id FROM memory_edge_supports
+      WHERE project_id=? AND source_authority='atlas_curator' AND support_status='active'
+        AND relation_type IN (${relations.map(() => '?').join(',')})
+    `).all(projectId, ...relations).map((row) => row.support_id);
+        return invalidateMemoryEdgeSupportIds(this.db, supportIds, now, false);
     }
-    deleteFacetEdgesForEpisodes(projectId, episodeIds) {
+    deleteFacetEdgesForEpisodes(projectId, episodeIds, now) {
         const relations = Array.from(FACET_EDGE_RELATIONS);
-        this.db.prepare(`
-      DELETE FROM memory_edges
+        const supportIds = this.db.prepare(`
+      SELECT support_id FROM memory_edge_supports
       WHERE project_id=? AND source_authority='atlas_curator'
+        AND support_status='active'
         AND relation_type IN (${relations.map(() => '?').join(',')})
         AND (
           (source_type='episode' AND source_id IN (${episodeIds.map(() => '?').join(',')}))
           OR (target_type='episode' AND target_id IN (${episodeIds.map(() => '?').join(',')}))
         )
-    `).run(projectId, ...relations, ...episodeIds, ...episodeIds);
+    `).all(projectId, ...relations, ...episodeIds, ...episodeIds).map((row) => row.support_id);
+        return invalidateMemoryEdgeSupportIds(this.db, supportIds, now, false);
     }
     upsertEdge(input) {
         mergeMemoryEdge(this.db, {

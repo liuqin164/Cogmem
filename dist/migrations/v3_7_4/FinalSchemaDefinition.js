@@ -996,6 +996,33 @@ export const FINAL_TABLES = [
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL DEFAULT 0
       )` },
+    { type: "table", name: "memory_edge_supports", table: "memory_edge_supports", sql: `CREATE TABLE memory_edge_supports (
+        support_id TEXT PRIMARY KEY,
+        edge_id TEXT NOT NULL,
+        project_id TEXT,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        relation_type TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        support_source_type TEXT NOT NULL,
+        support_source_id TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        base_weight REAL NOT NULL DEFAULT 1,
+        stability REAL NOT NULL DEFAULT 1,
+        activation REAL NOT NULL DEFAULT 1,
+        evidence_event_ids_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        valid_from INTEGER NOT NULL,
+        valid_to INTEGER,
+        version INTEGER NOT NULL DEFAULT 1,
+        source_authority TEXT NOT NULL,
+        support_status TEXT NOT NULL DEFAULT 'active' CHECK (support_status IN ('active','invalidated')),
+        invalidated_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(edge_id,source_authority,support_source_type,support_source_id)
+      )` },
     { type: "table", name: "pipeline_runs", table: "pipeline_runs", sql: `CREATE TABLE pipeline_runs (
         run_id TEXT PRIMARY KEY,
         total_ms INTEGER NOT NULL,
@@ -1458,6 +1485,10 @@ export const FINAL_AUXILIARY_OBJECTS = [
         ON memory_edges(project_id, target_type, target_id)` },
     { type: "index", name: "idx_memory_edges_logical_unique", table: "memory_edges", sql: `CREATE UNIQUE INDEX idx_memory_edges_logical_unique
         ON memory_edges(COALESCE(project_id,''),source_type,source_id,relation_type,target_type,target_id)` },
+    { type: "index", name: "idx_memory_edge_supports_edge_status", table: "memory_edge_supports", sql: `CREATE INDEX idx_memory_edge_supports_edge_status
+        ON memory_edge_supports(edge_id, support_status)` },
+    { type: "index", name: "idx_memory_edge_supports_project_authority", table: "memory_edge_supports", sql: `CREATE INDEX idx_memory_edge_supports_project_authority
+        ON memory_edge_supports(project_id, source_authority, support_status)` },
     { type: "index", name: "idx_pipeline_runs_completed_at", table: "pipeline_runs", sql: `CREATE INDEX idx_pipeline_runs_completed_at
         ON pipeline_runs(completed_at DESC)` },
     { type: "index", name: "idx_pipeline_step_name", table: "pipeline_step_timings", sql: `CREATE INDEX idx_pipeline_step_name
@@ -1603,7 +1634,9 @@ export const FINAL_AUXILIARY_OBJECTS = [
   )) OR (NEW.cluster_id IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM memory_clusters c WHERE c.cluster_id=NEW.cluster_id
       AND COALESCE(c.project_id,'')=COALESCE(NEW.project_id,'')
-  )) OR NOT json_valid(NEW.related_event_ids_json) OR EXISTS (
+      AND c.topic_path=NEW.topic_path
+  )) OR NOT json_valid(NEW.related_event_ids_json)
+    OR json_type(NEW.related_event_ids_json)<>'array' OR EXISTS (
     SELECT 1 FROM json_each(CASE WHEN json_valid(NEW.related_event_ids_json) THEN NEW.related_event_ids_json ELSE '[]' END) r
     WHERE r.type<>'text' OR NOT EXISTS (
       SELECT 1 FROM memory_events e WHERE e.event_id=r.value
@@ -1623,7 +1656,9 @@ export const FINAL_AUXILIARY_OBJECTS = [
   )) OR (NEW.cluster_id IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM memory_clusters c WHERE c.cluster_id=NEW.cluster_id
       AND COALESCE(c.project_id,'')=COALESCE(NEW.project_id,'')
-  )) OR NOT json_valid(NEW.related_event_ids_json) OR EXISTS (
+      AND c.topic_path=NEW.topic_path
+  )) OR NOT json_valid(NEW.related_event_ids_json)
+    OR json_type(NEW.related_event_ids_json)<>'array' OR EXISTS (
     SELECT 1 FROM json_each(CASE WHEN json_valid(NEW.related_event_ids_json) THEN NEW.related_event_ids_json ELSE '[]' END) r
     WHERE r.type<>'text' OR NOT EXISTS (
       SELECT 1 FROM memory_events e WHERE e.event_id=r.value

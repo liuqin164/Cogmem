@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import type Database from 'bun:sqlite';
 
-import { memoryEdgeAuthorityRankSql, memoryEdgeId } from './MemoryBindingIdentity.js';
+import { memoryEdgeId } from './MemoryBindingIdentity.js';
 
 export interface MemoryEdgeMergeInput {
   projectId?: string;
@@ -19,64 +20,288 @@ export interface MemoryEdgeMergeInput {
   validTo?: number | null;
   version?: number;
   sourceAuthority?: string;
+  supportSourceType?: string;
+  supportSourceId?: string;
+  operation?: 'support' | 'revision';
   createdAt?: number;
   updatedAt?: number;
 }
 
+interface MemoryEdgeSupportRow {
+  support_id: string;
+  edge_id: string;
+  project_id: string | null;
+  source_type: string;
+  source_id: string;
+  relation_type: string;
+  target_type: string;
+  target_id: string;
+  support_source_type: string;
+  support_source_id: string;
+  confidence: number;
+  base_weight: number;
+  stability: number;
+  activation: number;
+  evidence_event_ids_json: string;
+  status: string;
+  valid_from: number;
+  valid_to: number | null;
+  version: number;
+  source_authority: string;
+  support_status: string;
+  invalidated_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface MemoryEdgeProjectionRow {
+  edge_id: string;
+  project_id: string | null;
+  source_type: string;
+  source_id: string;
+  relation_type: string;
+  target_type: string;
+  target_id: string;
+  confidence: number;
+  base_weight: number;
+  stability: number;
+  activation: number;
+  evidence_event_ids_json: string;
+  status: string;
+  valid_from: number;
+  valid_to: number | null;
+  version: number;
+  source_authority: string;
+  created_at: number;
+  updated_at: number;
+}
+
 export function mergeMemoryEdge(db: Database, input: MemoryEdgeMergeInput): string {
+  const merge = () => mergeMemoryEdgeInTransaction(db, input);
+  if (db.inTransaction) return merge();
+  const transaction = db.transaction(merge) as (() => string) & { immediate?: () => string };
+  return typeof transaction.immediate === 'function' ? transaction.immediate() : transaction();
+}
+
+function mergeMemoryEdgeInTransaction(db: Database, input: MemoryEdgeMergeInput): string {
   const updatedAt = input.updatedAt ?? input.createdAt ?? Date.now();
   const createdAt = input.createdAt ?? updatedAt;
   const edgeId = memoryEdgeId(input);
-  const existingRank = memoryEdgeAuthorityRankSql('memory_edges.source_authority');
-  const incomingRank = memoryEdgeAuthorityRankSql('excluded.source_authority');
-  const incomingWins = `(${incomingRank}>${existingRank} OR (${incomingRank}=${existingRank} AND excluded.valid_from>=memory_edges.valid_from))`;
+  const sourceAuthority = input.sourceAuthority ?? 'raw_evidence';
+  const supportSourceType = input.supportSourceType ?? sourceAuthority;
+  const supportSourceId = input.supportSourceId ?? edgeId;
+  const supportId = memoryEdgeSupportId(edgeId, sourceAuthority, supportSourceType, supportSourceId);
+  const evidence = unique(input.evidenceEventIds);
+  const existing = db.prepare(`SELECT * FROM memory_edge_supports WHERE support_id=?`)
+    .get(supportId) as MemoryEdgeSupportRow | null;
+  const operation = input.operation ?? ((input.status && !['active', 'weak'].includes(input.status)) || input.validTo != null
+    ? 'revision'
+    : 'support');
+
+  if (!existing) {
+    db.prepare(`
+      INSERT INTO memory_edge_supports(
+        support_id,edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,
+        support_source_type,support_source_id,confidence,base_weight,stability,activation,
+        evidence_event_ids_json,status,valid_from,valid_to,version,source_authority,
+        support_status,invalidated_at,created_at,updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'active',NULL,?,?)
+    `).run(
+      supportId, edgeId, input.projectId ?? null, input.sourceType, input.sourceId,
+      input.relationType, input.targetType, input.targetId, supportSourceType, supportSourceId,
+      clamp(input.confidence, 0, 1), clamp(input.baseWeight ?? 1, 0, 10),
+      clamp(input.stability ?? 1, 0, 1), clamp(input.activation ?? 1, 0, 10),
+      JSON.stringify(evidence), input.status ?? 'active', input.validFrom ?? createdAt,
+      input.validTo ?? null, input.version ?? 1, sourceAuthority, createdAt, updatedAt,
+    );
+  } else {
+    const next = {
+      confidence: operation === 'revision' ? clamp(input.confidence, 0, 1) : Math.max(existing.confidence, clamp(input.confidence, 0, 1)),
+      baseWeight: operation === 'revision' ? clamp(input.baseWeight ?? existing.base_weight, 0, 10) : Math.max(existing.base_weight, clamp(input.baseWeight ?? 1, 0, 10)),
+      stability: operation === 'revision' ? clamp(input.stability ?? existing.stability, 0, 1) : Math.max(existing.stability, clamp(input.stability ?? 1, 0, 1)),
+      activation: operation === 'revision' ? clamp(input.activation ?? existing.activation, 0, 10) : Math.max(existing.activation, clamp(input.activation ?? 1, 0, 10)),
+      evidence: unique([...parseStringArray(existing.evidence_event_ids_json), ...evidence]),
+      status: operation === 'revision' || existing.support_status !== 'active' ? input.status ?? 'active' : existing.status,
+      validFrom: Math.min(existing.valid_from, input.validFrom ?? createdAt),
+      validTo: operation === 'revision' ? input.validTo ?? null : existing.valid_to,
+      createdAt: Math.min(existing.created_at, createdAt),
+    };
+    const changed = existing.support_status !== 'active'
+      || existing.confidence !== next.confidence
+      || existing.base_weight !== next.baseWeight
+      || existing.stability !== next.stability
+      || existing.activation !== next.activation
+      || existing.evidence_event_ids_json !== JSON.stringify(next.evidence)
+      || existing.status !== next.status
+      || existing.valid_from !== next.validFrom
+      || existing.valid_to !== next.validTo;
+    if (changed) db.prepare(`
+      UPDATE memory_edge_supports SET
+        confidence=?,base_weight=?,stability=?,activation=?,evidence_event_ids_json=?,status=?,
+        valid_from=?,valid_to=?,version=version+1,support_status='active',invalidated_at=NULL,
+        created_at=?,updated_at=?
+      WHERE support_id=?
+    `).run(
+      next.confidence, next.baseWeight, next.stability, next.activation, JSON.stringify(next.evidence),
+      next.status, next.validFrom, next.validTo, next.createdAt,
+      existing.support_status === 'active' ? updatedAt : existing.updated_at, supportId,
+    );
+  }
+
+  reduceMemoryEdge(db, edgeId, updatedAt);
+  return edgeId;
+}
+
+export function invalidateMemoryEdgeSupportIds(
+  db: Database,
+  supportIds: readonly string[],
+  now = Date.now(),
+  reduce = true,
+): string[] {
+  if (!supportIds.length) return [];
+  const select = db.prepare(`SELECT edge_id FROM memory_edge_supports WHERE support_id=? AND support_status='active'`);
+  const update = db.prepare(`UPDATE memory_edge_supports SET support_status='invalidated',invalidated_at=? WHERE support_id=? AND support_status='active'`);
+  const edgeIds = new Set<string>();
+  for (const supportId of new Set(supportIds)) {
+    const row = select.get(supportId) as { edge_id: string } | null;
+    if (!row) continue;
+    update.run(now, supportId);
+    edgeIds.add(row.edge_id);
+  }
+  if (reduce) reduceMemoryEdges(db, edgeIds, now);
+  return [...edgeIds];
+}
+
+export function reduceMemoryEdges(db: Database, edgeIds: Iterable<string>, now = Date.now()): void {
+  for (const edgeId of new Set(edgeIds)) reduceMemoryEdge(db, edgeId, now);
+}
+
+export function reduceMemoryEdge(db: Database, edgeId: string, now = Date.now()): void {
+  const supports = db.prepare(`
+    SELECT * FROM memory_edge_supports
+    WHERE edge_id=? AND support_status='active'
+    ORDER BY updated_at DESC,support_id ASC
+  `).all(edgeId) as MemoryEdgeSupportRow[];
+  if (!supports.length) {
+    db.prepare(`DELETE FROM memory_edges WHERE edge_id=?`).run(edgeId);
+    return;
+  }
+
+  const highestRank = Math.max(...supports.map((support) => authorityRank(support.source_authority)));
+  const authoritative = supports.filter((support) => authorityRank(support.source_authority) === highestRank);
+  const winner = authoritative[0]!;
+  const evidence = unique(supports
+    .slice()
+    .sort((left, right) => left.created_at - right.created_at
+      || left.support_source_type.localeCompare(right.support_source_type)
+      || left.support_source_id.localeCompare(right.support_source_id)
+      || authorityRank(right.source_authority) - authorityRank(left.source_authority)
+      || left.support_id.localeCompare(right.support_id))
+    .flatMap((support) => parseStringArray(support.evidence_event_ids_json)));
+  const desired = {
+    projectId: winner.project_id,
+    sourceType: winner.source_type,
+    sourceId: winner.source_id,
+    relationType: winner.relation_type,
+    targetType: winner.target_type,
+    targetId: winner.target_id,
+    confidence: Math.max(...authoritative.map((support) => support.confidence)),
+    baseWeight: Math.max(...authoritative.map((support) => support.base_weight)),
+    stability: Math.max(...authoritative.map((support) => support.stability)),
+    activation: Math.max(...authoritative.map((support) => support.activation)),
+    evidenceJson: JSON.stringify(evidence),
+    status: winner.status,
+    validFrom: Math.min(...supports.map((support) => support.valid_from)),
+    validTo: winner.valid_to,
+    sourceAuthority: winner.source_authority,
+    createdAt: Math.min(...supports.map((support) => support.created_at)),
+  };
+  const current = db.prepare(`SELECT * FROM memory_edges WHERE edge_id=?`).get(edgeId) as MemoryEdgeProjectionRow | null;
+  if (current && projectionMatches(current, desired)) return;
   db.prepare(`
-    INSERT INTO memory_edges (
+    INSERT INTO memory_edges(
       edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,
       confidence,base_weight,stability,activation,evidence_event_ids_json,status,
       valid_from,valid_to,version,source_authority,created_at,updated_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(edge_id) DO UPDATE SET
-      confidence=CASE WHEN ${incomingWins} THEN excluded.confidence ELSE memory_edges.confidence END,
-      base_weight=CASE WHEN ${incomingWins} THEN excluded.base_weight ELSE memory_edges.base_weight END,
-      stability=CASE WHEN ${incomingWins} THEN excluded.stability ELSE memory_edges.stability END,
-      activation=CASE WHEN ${incomingWins} THEN excluded.activation ELSE memory_edges.activation END,
-      evidence_event_ids_json=(SELECT json_group_array(value) FROM (
-        SELECT value,MIN(position) AS position FROM (
-          SELECT value,CAST(key AS INTEGER) AS position FROM json_each(memory_edges.evidence_event_ids_json)
-          UNION ALL
-          SELECT value,1000000+CAST(key AS INTEGER) FROM json_each(excluded.evidence_event_ids_json)
-        ) GROUP BY value ORDER BY position
-      )),
-      status=CASE WHEN ${incomingWins} THEN excluded.status ELSE memory_edges.status END,
-      valid_from=CASE WHEN ${incomingWins} THEN excluded.valid_from ELSE memory_edges.valid_from END,
-      valid_to=CASE WHEN ${incomingWins} THEN excluded.valid_to ELSE memory_edges.valid_to END,
-      version=MAX(memory_edges.version,excluded.version)+1,
-      source_authority=CASE WHEN ${incomingWins} THEN excluded.source_authority ELSE memory_edges.source_authority END,
-      created_at=MIN(memory_edges.created_at,excluded.created_at),
-      updated_at=MAX(memory_edges.updated_at,excluded.updated_at)
+      project_id=excluded.project_id,source_type=excluded.source_type,source_id=excluded.source_id,
+      relation_type=excluded.relation_type,target_type=excluded.target_type,target_id=excluded.target_id,
+      confidence=excluded.confidence,base_weight=excluded.base_weight,stability=excluded.stability,
+      activation=excluded.activation,evidence_event_ids_json=excluded.evidence_event_ids_json,
+      status=excluded.status,valid_from=excluded.valid_from,valid_to=excluded.valid_to,
+      version=memory_edges.version+1,source_authority=excluded.source_authority,
+      created_at=excluded.created_at,updated_at=excluded.updated_at
   `).run(
-    edgeId,
-    input.projectId ?? null,
-    input.sourceType,
-    input.sourceId,
-    input.relationType,
-    input.targetType,
-    input.targetId,
-    clamp(input.confidence, 0, 1),
-    clamp(input.baseWeight ?? 1, 0, 10),
-    clamp(input.stability ?? 1, 0, 1),
-    clamp(input.activation ?? 1, 0, 10),
-    JSON.stringify(Array.from(new Set(input.evidenceEventIds.filter(Boolean)))),
-    input.status ?? 'active',
-    input.validFrom ?? createdAt,
-    input.validTo ?? null,
-    input.version ?? 1,
-    input.sourceAuthority ?? 'raw_evidence',
-    createdAt,
-    updatedAt,
+    edgeId, desired.projectId, desired.sourceType, desired.sourceId, desired.relationType,
+    desired.targetType, desired.targetId, desired.confidence, desired.baseWeight, desired.stability,
+    desired.activation, desired.evidenceJson, desired.status, desired.validFrom, desired.validTo,
+    current ? current.version + 1 : Math.max(...supports.map((support) => support.version)),
+    desired.sourceAuthority, desired.createdAt, now,
   );
-  return edgeId;
+}
+
+function projectionMatches(current: MemoryEdgeProjectionRow, desired: {
+  projectId: string | null;
+  sourceType: string;
+  sourceId: string;
+  relationType: string;
+  targetType: string;
+  targetId: string;
+  confidence: number;
+  baseWeight: number;
+  stability: number;
+  activation: number;
+  evidenceJson: string;
+  status: string;
+  validFrom: number;
+  validTo: number | null;
+  sourceAuthority: string;
+  createdAt: number;
+}): boolean {
+  return current.project_id === desired.projectId
+    && current.source_type === desired.sourceType
+    && current.source_id === desired.sourceId
+    && current.relation_type === desired.relationType
+    && current.target_type === desired.targetType
+    && current.target_id === desired.targetId
+    && current.confidence === desired.confidence
+    && current.base_weight === desired.baseWeight
+    && current.stability === desired.stability
+    && current.activation === desired.activation
+    && current.evidence_event_ids_json === desired.evidenceJson
+    && current.status === desired.status
+    && current.valid_from === desired.validFrom
+    && current.valid_to === desired.validTo
+    && current.source_authority === desired.sourceAuthority
+    && current.created_at === desired.createdAt;
+}
+
+function memoryEdgeSupportId(edgeId: string, authority: string, sourceType: string, sourceId: string): string {
+  return `edge-support-${createHash('sha256').update(`${edgeId}\0${authority}\0${sourceType}\0${sourceId}`).digest('hex').slice(0, 32)}`;
+}
+
+function authorityRank(value: string): number {
+  switch (value) {
+    case 'raw_evidence': return 4;
+    case 'governed_projection': return 3;
+    case 'memory_frame_projector': return 2;
+    case 'atlas_curator': return 1;
+    default: return 0;
+  }
+}
+
+function parseStringArray(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string' && Boolean(item)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function clamp(value: number, min: number, max: number): number {

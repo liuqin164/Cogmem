@@ -157,6 +157,35 @@ export function multidimensionalMemoryGraph374Issue(db: Database): string | unde
       }
       seen.add(expected);
     }
+    if (!tableExists(db, 'memory_edge_supports') || db.prepare(`
+      SELECT 1 FROM memory_edges e
+      WHERE NOT EXISTS (
+        SELECT 1 FROM memory_edge_supports s
+        WHERE s.edge_id=e.edge_id AND s.support_status='active'
+      ) LIMIT 1
+    `).get()) return 'memory_edge_support_projection';
+    if (db.prepare(`
+      SELECT 1 FROM memory_edge_supports s
+      WHERE s.support_status='active' AND NOT EXISTS (
+        SELECT 1 FROM memory_edges e WHERE e.edge_id=s.edge_id
+      ) LIMIT 1
+    `).get()) return 'memory_edge_support_orphan';
+    for (const support of db.prepare(`SELECT * FROM memory_edge_supports`).all() as Array<Record<string, unknown>>) {
+      const scope = String(support.project_id ?? '');
+      const expected = memoryEdgeId({
+        projectId: scope,
+        sourceType: String(support.source_type),
+        sourceId: String(support.source_id),
+        relationType: String(support.relation_type),
+        targetType: String(support.target_type),
+        targetId: String(support.target_id),
+      });
+      if (String(support.edge_id) !== expected) return 'memory_edge_support_identity';
+      const evidence = parseEvidenceIds(support.evidence_event_ids_json);
+      if (!evidence || evidence.some((eventId) => !recordMatchesScope(db, 'memory_events', 'event_id', eventId, scope))) {
+        return 'memory_edge_support_evidence';
+      }
+    }
   }
   if (tableExists(db, 'memory_entity_scope_identity') && db.prepare(`
     SELECT 1 FROM memory_entity_scope_identity m
@@ -541,7 +570,14 @@ function memoryBindingReferenceIssue(db: Database, row: MemoryBindingMigrationRo
   if (!recordMatchesScope(db, 'memory_events', 'event_id', String(row.event_id), scope)) return 'memory_binding_event_scope_mismatch';
   if (!recordMatchesScope(db, 'memory_topics', 'topic_path', String(row.topic_path), scope)) return 'memory_binding_topic_scope_mismatch';
   if (row.entity_id != null && !recordMatchesScope(db, 'memory_entities', 'entity_id', String(row.entity_id), scope)) return 'memory_binding_entity_scope_mismatch';
-  if (row.cluster_id != null && !recordMatchesScope(db, 'memory_clusters', 'cluster_id', String(row.cluster_id), scope)) return 'memory_binding_cluster_scope_mismatch';
+  if (row.cluster_id != null) {
+    const cluster = db.prepare(`
+      SELECT topic_path FROM memory_clusters
+      WHERE cluster_id=? AND COALESCE(project_id,'')=?
+    `).get(String(row.cluster_id), scope) as { topic_path: string } | null;
+    if (!cluster) return 'memory_binding_cluster_scope_mismatch';
+    if (cluster.topic_path !== String(row.topic_path)) return 'memory_binding_cluster_topic_mismatch';
+  }
   const related = parseEvidenceIds(row.related_event_ids_json);
   if (!related) return 'memory_binding_related_events_malformed';
   if (related.some((eventId) => !recordMatchesScope(db, 'memory_events', 'event_id', eventId, scope))) return 'memory_binding_related_event_scope_mismatch';
@@ -655,21 +691,8 @@ function rekeyMemoryEdges(db: Database): void {
     updated_at: number;
   };
   const rows = db.prepare('SELECT * FROM memory_edges ORDER BY edge_id').all() as EdgeRow[];
+  db.exec('DELETE FROM memory_edge_supports; DELETE FROM memory_edges');
   for (const row of rows) {
-    const edgeId = memoryEdgeId({
-      projectId: row.project_id ?? '',
-      sourceType: row.source_type,
-      sourceId: row.source_id,
-      relationType: row.relation_type,
-      targetType: row.target_type,
-      targetId: row.target_id,
-    });
-    if (edgeId === row.edge_id) continue;
-    const existing = db.prepare('SELECT * FROM memory_edges WHERE edge_id=?').get(edgeId) as EdgeRow | null;
-    if (!existing) {
-      db.prepare('UPDATE memory_edges SET edge_id=? WHERE edge_id=?').run(edgeId, row.edge_id);
-      continue;
-    }
     mergeMemoryEdge(db, {
       projectId: row.project_id ?? '',
       sourceType: row.source_type,
@@ -687,10 +710,11 @@ function rekeyMemoryEdges(db: Database): void {
       validTo: row.valid_to,
       version: row.version,
       sourceAuthority: row.source_authority,
+      supportSourceType: 'legacy_edge',
+      supportSourceId: row.edge_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     });
-    db.prepare('DELETE FROM memory_edges WHERE edge_id=?').run(row.edge_id);
   }
 }
 
@@ -1124,6 +1148,10 @@ function rebuildCognitiveGraph(db: Database): void {
 }
 
 function dropRebuildableProjections(db: Database): void {
+  if (tableExists(db, 'memory_edge_supports')) db.exec(`
+    DELETE FROM memory_edge_supports
+    WHERE source_authority IN ('atlas_curator','memory_frame_projector')
+  `);
   if (tableExists(db, 'memory_edges')) db.exec(`
     DELETE FROM memory_edges
     WHERE source_authority IN ('atlas_curator','memory_frame_projector')

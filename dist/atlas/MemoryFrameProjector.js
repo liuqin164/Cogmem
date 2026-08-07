@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { normalizeAlias } from '../semantic/CanonicalMemoryResolver.js';
 import { decodeAtlasNodeId, encodeAtlasNodeId, toAtlasNodeEndpoint } from './AtlasNodeIdCodec.js';
-import { mergeMemoryEdge } from '../binding/MemoryEdgeMerge.js';
+import { invalidateMemoryEdgeSupportIds, mergeMemoryEdge, reduceMemoryEdges } from '../binding/MemoryEdgeMerge.js';
 import { localDateFor } from '../utils/LocalDateContext.js';
 export class MemoryFrameProjector {
     db;
@@ -35,16 +35,17 @@ export class MemoryFrameProjector {
         let needsReview = 0;
         const currentStateSubjects = new Set();
         if (this.tableExists('memory_atlas_supports')) {
-            const previous = this.db.prepare(`SELECT DISTINCT node_id FROM memory_atlas_supports WHERE project_id=? AND source_type IN ('frame','frame_edge')`).all(projectId);
+            const previous = this.db.prepare(`SELECT DISTINCT node_id FROM memory_atlas_supports WHERE project_id=? AND source_type='frame'`).all(projectId);
             for (const row of previous)
                 this.affectedNodeIds.add(row.node_id);
         }
-        this.db.prepare(`DELETE FROM memory_edges WHERE project_id=? AND source_authority='memory_frame_projector'`).run(projectId);
+        const staleSupportIds = this.db.prepare(`SELECT support_id FROM memory_edge_supports WHERE project_id=? AND source_authority='memory_frame_projector' AND support_status='active'`).all(projectId).map((row) => row.support_id);
+        const staleEdgeIds = invalidateMemoryEdgeSupportIds(this.db, staleSupportIds, now, false);
         this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2')`).run(projectId, projectId);
         this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2'`).run(projectId);
         if (options.canonicalDocumentsRebuilt)
             this.refreshCanonicalBaselineSupports(projectId, now);
-        this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type IN ('frame','frame_edge') AND status='active'`).run(now, projectId);
+        this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type='frame' AND status='active'`).run(now, projectId);
         if (this.tableExists('memory_atlas_alias_supports'))
             this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
         // Resolve only governed/legacy aliases from the stable pre-projection
@@ -142,7 +143,8 @@ export class MemoryFrameProjector {
                 if (!parsedSubject)
                     continue;
                 if (isCurrentState) {
-                    this.db.prepare(`UPDATE memory_edges SET status='archived', updated_at=? WHERE project_id=? AND source_type=? AND source_id=? AND relation_type='HAS_STATE' AND target_id<>? AND source_authority='memory_frame_projector' AND status IN ('active','weak')`).run(now, projectId, parsedSubject.type, parsedSubject.id, decodeAtlasNodeId(stateId, projectId)?.id ?? stateId);
+                    const obsolete = this.db.prepare(`SELECT support_id FROM memory_edge_supports WHERE project_id=? AND source_type=? AND source_id=? AND relation_type='HAS_STATE' AND target_id<>? AND source_authority='memory_frame_projector' AND support_status='active'`).all(projectId, parsedSubject.type, parsedSubject.id, decodeAtlasNodeId(stateId, projectId)?.id ?? stateId).map((row) => row.support_id);
+                    invalidateMemoryEdgeSupportIds(this.db, obsolete, now);
                 }
                 if (!existingState)
                     this.atlasStore.upsertDocument({ id: stateId, projectId, nodeType: 'state', sourceId: decodeAtlasNodeId(stateId, projectId)?.id ?? stateId, label: transition.to,
@@ -171,6 +173,7 @@ export class MemoryFrameProjector {
         // Include legacy canonical documents that received Frame supports, while
         // preserving counts maintained by older Atlas authorities.
         this.reduceAffectedDocuments(projectId, now);
+        reduceMemoryEdges(this.db, staleEdgeIds, now);
         this.rebuildAliasIndex.clear();
         return { frames: frames.length, nodes, edges, needsReview };
     }
@@ -346,7 +349,7 @@ export class MemoryFrameProjector {
         if (!this.isActiveEndpoint(projectId, source) || !this.isActiveEndpoint(projectId, target))
             return;
         const validFrom = relation.validFrom ?? this.evidenceTime(relation.evidenceEventIds, frame.processor.generatedAt);
-        const edgeId = mergeMemoryEdge(this.db, {
+        mergeMemoryEdge(this.db, {
             projectId,
             sourceType: parsedSource.type,
             sourceId: parsedSource.id,
@@ -360,23 +363,11 @@ export class MemoryFrameProjector {
             validFrom,
             validTo: relation.validTo,
             sourceAuthority: 'memory_frame_projector',
+            supportSourceType: 'frame',
+            supportSourceId: frame.frameId,
             createdAt: now,
             updatedAt: now,
         });
-        const supportId = createHash('sha256').update(`${edgeId}\0frame_edge\0${frame.frameId}`).digest('hex');
-        if (this.hasColumn('memory_atlas_supports', 'payload_json')) {
-            this.db.prepare(`
-        INSERT INTO memory_atlas_supports (support_id,project_id,node_id,source_type,source_id,source_episode_id,source_frame_id,evidence_event_ids_json,status,created_at,payload_json,confidence,valid_from,valid_to,source_authority)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(node_id,source_type,source_id) DO UPDATE SET status='active', invalidated_at=NULL,evidence_event_ids_json=excluded.evidence_event_ids_json,payload_json=excluded.payload_json,confidence=excluded.confidence,valid_from=excluded.valid_from,valid_to=excluded.valid_to,source_authority=excluded.source_authority
-      `).run(supportId, projectId, edgeId, 'frame_edge', frame.frameId, frame.episodeId, frame.frameId, JSON.stringify(relation.evidenceEventIds), 'active', now, JSON.stringify({ relationType: relation.relationType, confidence: relation.confidence, validFrom, validTo: relation.validTo ?? null, kind: 'edge' }), relation.confidence, validFrom, relation.validTo ?? null, 'memory_frame_projector');
-            return;
-        }
-        this.db.prepare(`
-      INSERT INTO memory_atlas_supports (support_id,project_id,node_id,source_type,source_id,source_episode_id,source_frame_id,evidence_event_ids_json,status,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(node_id,source_type,source_id) DO UPDATE SET status='active', invalidated_at=NULL, evidence_event_ids_json=excluded.evidence_event_ids_json
-    `).run(supportId, projectId, edgeId, 'frame_edge', frame.frameId, frame.episodeId, frame.frameId, JSON.stringify(relation.evidenceEventIds), 'active', now);
     }
     isActiveEndpoint(projectId, nodeId) {
         const node = this.atlasStore.getNodeIncludingInactive(nodeId, projectId);

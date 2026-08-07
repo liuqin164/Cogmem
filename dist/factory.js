@@ -2519,7 +2519,7 @@ export class MemoryKernel {
             }
             deleted.episodes += this.episodeStore.deleteByProject(scope);
             for (const table of [
-                'memory_atlas_supports', 'memory_atlas_aliases', 'memory_edges', 'memory_atlas_fts',
+                'memory_atlas_supports', 'memory_atlas_aliases', 'memory_edge_supports', 'memory_edges', 'memory_atlas_fts',
                 'memory_atlas_documents', 'memory_action_frame_evidence', 'memory_action_frames',
                 'memory_atlas_access', 'memory_atlas_activation', 'memory_atlas_projection_state',
                 'memory_frames'

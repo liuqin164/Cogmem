@@ -240,6 +240,10 @@ test('target time and kind facets are intersected exactly like table filters', (
       rawEventType: 'message', projectId: 'cogmem', sessionId: 'session-openclaw', role: 'user',
       occurredAt: Date.UTC(2025, 4, 1), payload: { text: 'OpenClaw deployment decision' },
     });
+    kernel.memoryBindingStore.upsertTopic({
+      projectId: 'cogmem', topicPath: 'cogmem/openclaw', topicType: 'project',
+      summary: 'OpenClaw integration', now: Date.UTC(2025, 5, 1),
+    });
     kernel.memoryBindingStore.upsertCluster({ projectId: 'cogmem', topicPath: 'cogmem/openclaw', clusterType: 'decision',
       title: 'OpenClaw decision', summary: 'unrelated decision', status: 'active', confidence: 0.99,
       claimKey: 'openclaw-decision', eventId: openclawEvent.eventId, now: Date.UTC(2025, 5, 1) });

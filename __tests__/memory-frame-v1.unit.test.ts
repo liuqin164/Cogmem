@@ -229,6 +229,13 @@ describe('MemoryFrame V1 contract', () => {
     new GraphCurator(db, kernel.eventStore, kernel.memoryAtlasStore).rebuild('p', 10);
     expect(db.prepare(`SELECT source_authority,confidence FROM memory_edges WHERE edge_id=?`).get(edgeId))
       .toEqual({ source_authority: 'memory_frame_projector', confidence: 0.97 });
+    kernel.memoryFrameStore.supersedeEpisodes([episode.episodeId], 11);
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const fallback = db.prepare(`SELECT source_authority,confidence,evidence_event_ids_json,status,valid_from,valid_to FROM memory_edges WHERE edge_id=?`).get(edgeId);
+    expect(fallback).toMatchObject({ source_authority: 'atlas_curator', confidence: 1, status: 'active' });
+    expect(JSON.parse(String((fallback as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual([event.eventId]);
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    expect(db.prepare(`SELECT source_authority,confidence,evidence_event_ids_json,status,valid_from,valid_to FROM memory_edges WHERE edge_id=?`).get(edgeId)).toEqual(fallback);
     kernel.close();
   });
 
