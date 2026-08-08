@@ -6,6 +6,7 @@
 
 import type { MemoryGraph } from '../../core/MemoryGraph.js';
 import type { GraphEdgeStoreLike } from '../../types/ExtensionPoints.js';
+import { matchesProjectScope } from '../../topology/ProjectScope.js';
 
 /** SI-16: max content length returned per neuron */
 const MAX_CONTENT_LENGTH = 2000;
@@ -39,7 +40,7 @@ export class NeuronContextTool {
   execute(neuronId: string, projectId?: string): NeuronContextOutput | null {
     const neuron = this.memoryGraph.getNeuron(neuronId);
     if (!neuron) return null;
-    if (projectId && neuron.metadata.projectId !== projectId) return null;
+    if (!matchesProjectScope(projectId, neuron.metadata.projectId)) return null;
 
     // Truncate content per SI-16
     const truncatedContent = neuron.content.slice(0, MAX_CONTENT_LENGTH);
@@ -64,7 +65,7 @@ export class NeuronContextTool {
     for (const nid of neighborIds) {
       if (nid === neuronId) continue;
       const n = this.memoryGraph.getNeuron(nid);
-      if (n && (!projectId || n.metadata.projectId === projectId)) {
+      if (n && matchesProjectScope(projectId, n.metadata.projectId)) {
         neighbors.push({
           neuronId: n.id,
           content: n.content.slice(0, 200),

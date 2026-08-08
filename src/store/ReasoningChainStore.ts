@@ -5,6 +5,8 @@
 import Database from 'bun:sqlite';
 import type { ReasoningChain, ReasoningStep } from '../types/reasoning.js';
 import { logger } from '../utils/Logger.js';
+import { projectScope } from '../topology/ProjectScope.js';
+import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 
 export class ReasoningChainStore {
   private db: Database;
@@ -12,6 +14,7 @@ export class ReasoningChainStore {
   constructor(db: Database) {
     this.db = db;
     this.initSchema();
+    installRuntimeProvenanceGuards(this.db);
   }
 
   private initSchema(): void {
@@ -39,10 +42,16 @@ export class ReasoningChainStore {
 
   addChain(chain: ReasoningChain): void {
     this.db.transaction(() => {
+      const scope = projectScope(chain.projectId);
+      for (const step of chain.steps) {
+        const neuron = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0`)
+          .get(step.neuronId) as { scope: string } | null;
+        if (!neuron || neuron.scope !== scope) throw new Error('reasoning_chain_project_scope_mismatch');
+      }
       this.db.prepare(`
         INSERT INTO reasoning_chains (id, outcome, project_id, created_at)
         VALUES (?, ?, ?, ?)
-      `).run(chain.id, chain.outcome, chain.projectId || null, chain.createdAt);
+      `).run(chain.id, chain.outcome, scope, chain.createdAt);
 
       for (const step of chain.steps) {
         this.db.prepare(`
@@ -69,14 +78,13 @@ export class ReasoningChainStore {
   }
 
   getChainIdForNeuron(neuronId: string): string | null {
-    const row = this.db.prepare(`SELECT chain_id FROM reasoning_steps WHERE neuron_id = ?`).get(neuronId) as any;
+    const row = this.db.prepare(`SELECT chain_id FROM reasoning_steps WHERE neuron_id = ? ORDER BY chain_id LIMIT 1`).get(neuronId) as any;
     return row?.chain_id || null;
   }
 
   areNeuronsInSameChain(neuronId1: string, neuronId2: string): boolean {
-    const chain1 = this.getChainIdForNeuron(neuronId1);
-    const chain2 = this.getChainIdForNeuron(neuronId2);
-    return chain1 !== null && chain1 === chain2;
+    return Boolean(this.db.prepare(`SELECT 1 FROM reasoning_steps a JOIN reasoning_steps b
+      ON b.chain_id=a.chain_id WHERE a.neuron_id=? AND b.neuron_id=? LIMIT 1`).get(neuronId1, neuronId2));
   }
 
   getChainsByProject(projectId: string): ReasoningChain[] {

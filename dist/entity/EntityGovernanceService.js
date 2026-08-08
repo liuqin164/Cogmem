@@ -19,18 +19,19 @@ export class EntityGovernanceService {
             reasons.push('same_entity');
         if (source.type !== target.type)
             reasons.push('entity_type_mismatch');
-        if (projectIdOf(source) && input.projectId && projectIdOf(source) !== input.projectId)
-            reasons.push('project_boundary_violation');
-        if (projectIdOf(target) && input.projectId && projectIdOf(target) !== input.projectId)
+        if (input.projectId === undefined)
+            reasons.push('project_scope_required');
+        else if (!this.entities.isExclusiveToProject(source.entityId, input.projectId)
+            || !this.entities.isExclusiveToProject(target.entityId, input.projectId))
             reasons.push('project_boundary_violation');
         if (evidence.length !== input.evidenceEventIds.length)
             reasons.push('unknown_evidence');
-        if (evidence.some((item) => item.projectId && input.projectId && item.projectId !== input.projectId))
+        if (input.projectId !== undefined && evidence.some((item) => (item.projectId ?? '') !== input.projectId))
             reasons.push('project_boundary_violation');
         const hasUserEvidence = evidence.some((item) => item.role === 'user');
         if (source.type === 'person' && !hasUserEvidence)
             reasons.push('person_merge_requires_explicit_user_evidence');
-        const fatal = reasons.some((reason) => ['same_entity', 'entity_type_mismatch', 'project_boundary_violation', 'unknown_evidence'].includes(reason));
+        const fatal = reasons.some((reason) => ['same_entity', 'entity_type_mismatch', 'project_scope_required', 'project_boundary_violation', 'unknown_evidence'].includes(reason));
         const threshold = source.type === 'person' ? 0.99 : 0.95;
         const status = fatal
             ? 'rejected'
@@ -56,7 +57,7 @@ export class EntityGovernanceService {
         evidence_event_ids_json = excluded.evidence_event_ids_json,
         updated_at = excluded.updated_at,
         version = entity_merge_candidates.version + 1
-    `).run(candidateId, input.projectId || null, source.entityId, target.entityId, input.alias, input.confidence, status, JSON.stringify(reasons), JSON.stringify(input.evidenceEventIds), now, now);
+    `).run(candidateId, input.projectId ?? null, source.entityId, target.entityId, input.alias, input.confidence, status, JSON.stringify(reasons), JSON.stringify(input.evidenceEventIds), now, now);
         return this.get(candidateId);
     }
     apply(candidateId, now = Date.now()) {
@@ -69,9 +70,17 @@ export class EntityGovernanceService {
         const target = this.requireEntity(candidate.targetEntityId);
         if (!source.canonicalEntityId || !target.canonicalEntityId)
             throw new Error('Entity merge requires canonical entity ids.');
+        if (candidate.projectId === undefined)
+            throw new Error('Entity merge candidate has no exact project scope.');
         this.db.transaction(() => {
-            this.entities.addAlias(target.entityId, candidate.alias, now);
-            this.entities.redirectInstance({ sourceEntityId: source.entityId, targetCanonicalEntityId: target.canonicalEntityId, updatedAt: now });
+            if (!this.entities.isExclusiveToProject(source.entityId, candidate.projectId)
+                || !this.entities.isExclusiveToProject(target.entityId, candidate.projectId))
+                throw new Error('entity_project_scope_changed');
+            const evidence = candidate.evidenceEventIds.map((eventId) => this.findEvidence(eventId));
+            if (evidence.some((item) => !item || (item.projectId ?? '') !== candidate.projectId))
+                throw new Error('entity_evidence_scope_changed');
+            this.entities.addAlias(target.entityId, candidate.alias, candidate.projectId, now);
+            this.entities.redirectInstance({ sourceEntityId: source.entityId, targetCanonicalEntityId: target.canonicalEntityId, projectId: candidate.projectId, updatedAt: now });
             this.db.prepare(`
         INSERT INTO entity_resolution_log (
           log_id, candidate_id, source_entity_id, target_entity_id, previous_canonical_entity_id,
@@ -95,13 +104,22 @@ export class EntityGovernanceService {
         if (!log)
             throw new Error(`Missing entity merge audit log: ${candidateId}`);
         this.db.transaction(() => {
+            if (candidate.projectId === undefined)
+                throw new Error('Entity merge candidate has no exact project scope.');
+            if (!this.entities.isExclusiveToProject(candidate.sourceEntityId, candidate.projectId)
+                || !this.entities.isExclusiveToProject(candidate.targetEntityId, candidate.projectId))
+                throw new Error('entity_project_scope_changed');
+            const evidence = candidate.evidenceEventIds.map((eventId) => this.findEvidence(eventId));
+            if (evidence.some((item) => !item || (item.projectId ?? '') !== candidate.projectId))
+                throw new Error('entity_evidence_scope_changed');
             this.entities.restoreInstance({
                 entityId: candidate.sourceEntityId,
                 canonicalEntityId: String(log.previous_canonical_entity_id),
                 status: String(log.previous_status),
+                projectId: candidate.projectId,
                 updatedAt: now,
             });
-            this.entities.removeAlias(candidate.targetEntityId, String(log.alias), now);
+            this.entities.removeAlias(candidate.targetEntityId, String(log.alias), candidate.projectId, now);
             this.db.prepare(`
         INSERT INTO entity_resolution_log (
           log_id, candidate_id, source_entity_id, target_entity_id, previous_canonical_entity_id,
@@ -119,8 +137,8 @@ export class EntityGovernanceService {
     list(options = {}) {
         const clauses = [];
         const params = [];
-        if (options.projectId) {
-            clauses.push('project_id = ?');
+        if (options.projectId !== undefined) {
+            clauses.push(`COALESCE(project_id,'') = ?`);
             params.push(options.projectId);
         }
         if (options.status) {
@@ -182,7 +200,7 @@ export class EntityGovernanceService {
     }
 }
 function candidateIdFor(input) {
-    const value = [input.projectId || '', input.sourceEntityId, input.targetEntityId, input.alias.toLowerCase()].join('\0');
+    const value = [input.projectId ?? '<all>', input.sourceEntityId, input.targetEntityId, input.alias.toLowerCase()].join('\0');
     return `emerge-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
 }
 function projectIdOf(entity) {
@@ -191,7 +209,7 @@ function projectIdOf(entity) {
 function mapCandidate(row) {
     return {
         candidateId: String(row.candidate_id),
-        projectId: row.project_id ? String(row.project_id) : undefined,
+        projectId: row.project_id == null ? undefined : String(row.project_id),
         sourceEntityId: String(row.source_entity_id),
         targetEntityId: String(row.target_entity_id),
         alias: String(row.alias),

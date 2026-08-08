@@ -1,12 +1,22 @@
 import { randomUUID } from 'crypto';
 import type { BeliefRecord, EventClusterType, Neuron, TimeBucketRecord, TimeBucketType } from '../types/index.js';
+import { eventClusterKey } from '../topology/EventClusterIdentity.js';
 import type { ConsolidationResult } from './ConsolidationPipeline.js';
 import { TopologyStore } from '../store/TopologyStore.js';
+import { localDateFor, localDateRange, nextCivilDate } from '../utils/LocalDateContext.js';
+import { resolveTimeZone } from '../utils/LocalDateContext.js';
+import { timeBucketId } from '../topology/TimeBucketIdentity.js';
+
+export interface TimeProjectionNeuronInput {
+  id: string;
+  projectId: string;
+  createdAt: number;
+}
 
 export class TopologyCompiler {
   constructor(private store: TopologyStore) {}
 
-  compile(input: { neuron: Neuron; consolidation: ConsolidationResult }): {
+  compile(input: { neuron: Neuron; consolidation: ConsolidationResult; timeZone?: string; temporalEnabled?: boolean }): {
     timeBuckets: TimeBucketRecord[];
     branchIds: string[];
     taskIds: string[];
@@ -16,12 +26,13 @@ export class TopologyCompiler {
     const projectId = neuron.metadata.projectId;
     const createdAt = neuron.metadata.createdAt;
     const ref = {
+      projectId,
       neuronId: neuron.id,
       unitId: consolidation.interactionUnit?.unitId,
       createdAt
     };
 
-    const timeBuckets = this.attachTimeBuckets(createdAt, projectId, ref);
+    const timeBuckets = input.temporalEnabled === false ? [] : this.attachTimeBuckets(createdAt, projectId, ref, input.timeZone);
     const branchIds = projectId ? this.attachProjectBranches(projectId, neuron, consolidation, ref) : [];
     const taskIds = this.attachTaskBranches(projectId, neuron, consolidation, ref);
     const clusterIds = this.attachEventClusters(projectId, neuron, consolidation, ref);
@@ -29,15 +40,42 @@ export class TopologyCompiler {
     return { timeBuckets, branchIds, taskIds, clusterIds };
   }
 
+  rebuildTimeBuckets(neurons: TimeProjectionNeuronInput[], timeZone: string): TimeBucketRecord[] {
+    const buckets = new Map<string, TimeBucketRecord>();
+    const byId = new Map(neurons.map((neuron) => [neuron.id, neuron]));
+    for (const [neuronId, planned] of this.planTimeBuckets(neurons, timeZone)) {
+      const neuron = byId.get(neuronId)!;
+      for (const bucket of planned) {
+        this.store.upsertTimeBucket(bucket);
+        this.store.attachToTimeBucket(bucket.bucketId, { neuronId, projectId: neuron.projectId, createdAt: neuron.createdAt });
+        buckets.set(bucket.bucketId, bucket);
+      }
+    }
+    return [...buckets.values()];
+  }
+
+  planTimeBuckets(neurons: TimeProjectionNeuronInput[], timeZone: string): Map<string, TimeBucketRecord[]> {
+    const planned = new Map<string, TimeBucketRecord[]>();
+    for (const neuron of neurons) {
+      planned.set(neuron.id, [
+        this.buildBucket('day', neuron.createdAt, neuron.projectId, timeZone),
+        this.buildBucket('week', neuron.createdAt, neuron.projectId, timeZone),
+        this.buildBucket('month', neuron.createdAt, neuron.projectId, timeZone),
+      ]);
+    }
+    return planned;
+  }
+
   private attachTimeBuckets(
     createdAt: number,
     projectId: string | undefined,
-    ref: { neuronId: string; unitId?: string; createdAt: number }
+    ref: { projectId: string | undefined; neuronId: string; unitId?: string; createdAt: number },
+    timeZone?: string,
   ): TimeBucketRecord[] {
     const buckets = [
-      this.buildBucket('day', createdAt),
-      this.buildBucket('week', createdAt),
-      this.buildBucket('month', createdAt)
+      this.buildBucket('day', createdAt, projectId, timeZone),
+      this.buildBucket('week', createdAt, projectId, timeZone),
+      this.buildBucket('month', createdAt, projectId, timeZone)
     ];
 
     for (const bucket of buckets) {
@@ -55,7 +93,7 @@ export class TopologyCompiler {
     projectId: string,
     neuron: Neuron,
     consolidation: ConsolidationResult,
-    ref: { neuronId: string; unitId?: string; createdAt: number }
+    ref: { projectId: string | undefined; neuronId: string; unitId?: string; createdAt: number }
   ): string[] {
     const createdAt = ref.createdAt;
     const branchIds: string[] = [];
@@ -156,7 +194,7 @@ export class TopologyCompiler {
     projectId: string | undefined,
     neuron: Neuron,
     consolidation: ConsolidationResult,
-    ref: { neuronId: string; unitId?: string; createdAt: number }
+    ref: { projectId: string | undefined; neuronId: string; unitId?: string; createdAt: number }
   ): string[] {
     const taskIds: string[] = [];
     const createdAt = ref.createdAt;
@@ -181,17 +219,17 @@ export class TopologyCompiler {
       const task = this.store.upsertTaskBranch({
         taskId: `task-${randomUUID()}`,
         projectId,
-        taskKey: `${projectId || 'global'}:${this.normalizeKey(title)}`,
+        taskKey: this.normalizeKey(title),
         title,
         status: 'derived',
         createdAt
       });
       this.store.attachToTask(task.taskId, ref);
       for (const fact of consolidation.compiledFacts) {
-        this.store.attachToTask(task.taskId, { factId: fact.factId, createdAt });
+        this.store.attachToTask(task.taskId, { projectId, factId: fact.factId, createdAt });
       }
       for (const belief of consolidation.beliefs) {
-        this.store.attachToTask(task.taskId, { beliefId: belief.id, createdAt });
+        this.store.attachToTask(task.taskId, { projectId, beliefId: belief.id, createdAt });
       }
       taskIds.push(task.taskId);
     }
@@ -203,7 +241,7 @@ export class TopologyCompiler {
     projectId: string | undefined,
     neuron: Neuron,
     consolidation: ConsolidationResult,
-    ref: { neuronId: string; unitId?: string; createdAt: number }
+    ref: { projectId: string | undefined; neuronId: string; unitId?: string; createdAt: number }
   ): string[] {
     const clusterIds: string[] = [];
     const createdAt = ref.createdAt;
@@ -213,7 +251,7 @@ export class TopologyCompiler {
       const cluster = this.store.upsertEventCluster({
         clusterId: `cluster-${randomUUID()}`,
         projectId,
-        clusterKey: `${projectId || 'global'}:${clusterType}:${this.normalizeKey(event.target || event.actor || event.eventType)}`,
+        clusterKey: eventClusterKey(clusterType, this.normalizeKey(event.target || event.actor || event.eventType)),
         clusterType,
         title: event.target || event.actor || event.eventType,
         createdAt
@@ -231,7 +269,7 @@ export class TopologyCompiler {
       const cluster = this.store.upsertEventCluster({
         clusterId: `cluster-${randomUUID()}`,
         projectId,
-        clusterKey: `${projectId || 'global'}:${clusterType}:${this.normalizeKey(fact.object || fact.predicateValue || fact.subject)}`,
+        clusterKey: eventClusterKey(clusterType, this.normalizeKey(fact.object || fact.predicateValue || fact.subject)),
         clusterType,
         title: fact.object || fact.predicateValue || fact.subject,
         createdAt
@@ -248,7 +286,7 @@ export class TopologyCompiler {
       const cluster = this.store.upsertEventCluster({
         clusterId: `cluster-${randomUUID()}`,
         projectId,
-        clusterKey: `${projectId || 'global'}:fact:${this.normalizeKey(belief.predicate)}`,
+        clusterKey: eventClusterKey('fact', this.normalizeKey(belief.predicate)),
         clusterType: 'fact',
         title: belief.predicate,
         createdAt
@@ -264,7 +302,7 @@ export class TopologyCompiler {
       const cluster = this.store.upsertEventCluster({
         clusterId: `cluster-${randomUUID()}`,
         projectId,
-        clusterKey: `${projectId || 'global'}:generic:${this.normalizeKey(neuron.content).slice(0, 72)}`,
+        clusterKey: eventClusterKey('generic', this.normalizeKey(neuron.content).slice(0, 72)),
         clusterType: 'generic',
         title: neuron.content.slice(0, 96),
         createdAt
@@ -276,30 +314,34 @@ export class TopologyCompiler {
     return clusterIds;
   }
 
-  private buildBucket(bucketType: TimeBucketType, timestamp: number): TimeBucketRecord {
-    const date = new Date(timestamp);
+  private buildBucket(bucketType: TimeBucketType, timestamp: number, projectId?: string, timeZone?: string): TimeBucketRecord {
+    const resolvedTimeZone = resolveTimeZone(timeZone);
+    const [year, month, day] = localDateFor(timestamp, resolvedTimeZone).split('-').map(Number);
+    const civilDate = (offsetDays: number) => nextCivilDate(year, month, day, offsetDays, resolvedTimeZone);
     let start: number;
     let end: number;
     let label: string;
-
     if (bucketType === 'day') {
-      start = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-      end = start + 24 * 60 * 60 * 1000;
-      label = new Date(start).toISOString().slice(0, 10);
+      const next = civilDate(1);
+      ({ from: start, to: end } = localDateRange(year, month, day, ...next, resolvedTimeZone));
+      label = localDateFor(start, resolvedTimeZone);
     } else if (bucketType === 'week') {
-      const day = date.getDay();
-      const diff = (day + 6) % 7;
-      start = new Date(date.getFullYear(), date.getMonth(), date.getDate() - diff).getTime();
-      end = start + 7 * 24 * 60 * 60 * 1000;
-      label = `week:${new Date(start).toISOString().slice(0, 10)}`;
+      const weekday = new Intl.DateTimeFormat('en-US', { timeZone: resolvedTimeZone, weekday: 'short' }).format(new Date(timestamp));
+      const mondayOffset = ({ Mon: 0, Tue: -1, Wed: -2, Thu: -3, Fri: -4, Sat: -5, Sun: -6 } as Record<string, number>)[weekday] ?? 0;
+      const monday = civilDate(mondayOffset);
+      const nextMonday = nextCivilDate(monday[0], monday[1], monday[2], 7, resolvedTimeZone);
+      ({ from: start, to: end } = localDateRange(monday[0], monday[1], monday[2], ...nextMonday, resolvedTimeZone));
+      label = `week:${localDateFor(start, resolvedTimeZone)}`;
     } else {
-      start = new Date(date.getFullYear(), date.getMonth(), 1).getTime();
-      end = new Date(date.getFullYear(), date.getMonth() + 1, 1).getTime();
-      label = new Date(start).toISOString().slice(0, 7);
+      const nextMonth = month === 12 ? [year + 1, 1] : [year, month + 1];
+      ({ from: start, to: end } = localDateRange(year, month, 1, nextMonth[0]!, nextMonth[1]!, 1, resolvedTimeZone));
+      label = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}`;
     }
 
     return {
-      bucketId: `${bucketType}:${start}`,
+      bucketId: timeBucketId({ projectId, timeZone: resolvedTimeZone, bucketType, bucketStart: start, bucketEnd: end }),
+      projectId,
+      timeZone: resolvedTimeZone,
       bucketType,
       bucketStart: start,
       bucketEnd: end,

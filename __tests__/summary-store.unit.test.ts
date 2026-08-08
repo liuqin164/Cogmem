@@ -20,7 +20,7 @@ describe('SummaryStore', () => {
 
     expect(store.getById(summary.summaryId)?.text).toContain('Atlas');
     expect(store.listByProject('p1')).toHaveLength(1);
-    expect(store.listBySession('s1')).toHaveLength(1);
+    expect(store.listBySession('s1', 'p1')).toHaveLength(1);
     expect(store.findRelevant('Atlas auth', 'p1', 3)).toHaveLength(1);
     expect(store.markSuperseded(summary.summaryId, 'sum-next')?.status).toBe('superseded');
     expect(store.findRelevant('Atlas auth', 'p1', 3)).toHaveLength(0);
@@ -63,6 +63,16 @@ describe('SummaryStore', () => {
     expect(store.findRelevant('summary', undefined, 10)).toHaveLength(5);
     const row = db.prepare(`SELECT COUNT(*) AS count FROM facts WHERE status = 'superseded'`).get() as { count: number };
     expect(row.count).toBe(5);
+    db.close();
+  });
+
+  it('round-trips Unix epoch zero without replacing it with now or null', () => {
+    const db = new Database(':memory:');
+    const store = new SummaryStore(db);
+    const saved = store.insertSummary({ projectId: '', scope: 'turn_window', text: 'epoch', confidence: 1, status: 'provisional', sourceNeuronIds: [], createdAt: 0, updatedAt: 0, windowStart: 0, windowEnd: 0 });
+    expect(saved.createdAt).toBe(0);
+    expect(store.getById(saved.summaryId)).toMatchObject({ createdAt: 0, updatedAt: 0, windowStart: 0, windowEnd: 0 });
+    expect(store.listByProject('').map((summary) => summary.summaryId)).toEqual([saved.summaryId]);
     db.close();
   });
 });

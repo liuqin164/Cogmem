@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { describe, expect, it } from 'bun:test';
+import Database from 'bun:sqlite';
 import {
   EntityInstanceDecisionSignal,
   PendingEntityFallbackStrategy,
@@ -80,7 +81,10 @@ describe('Entity instance resolution unit', () => {
   }
 
   it('routes ambiguous mentions into pending with an explicit STAY_PENDING fallback', () => {
-    const store = new EntityStore(':memory:');
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE neurons (id TEXT PRIMARY KEY, project_id TEXT, is_deleted INTEGER NOT NULL DEFAULT 0)`);
+    db.prepare(`INSERT INTO neurons(id,project_id,is_deleted) VALUES(?,?,0)`).run('n-1', '');
+    const store = new EntityStore(db);
     const decision = decideEntityInstanceResolution(entityReferenceSamplesZh.ambiguousReference);
     const pending = store.registerPendingResolution({
       referenceText: entityReferenceSamplesZh.ambiguousReference,
@@ -96,6 +100,7 @@ describe('Entity instance resolution unit', () => {
     expect(pending.referenceText).toBe(entityReferenceSamplesZh.ambiguousReference);
 
     store.close();
+    db.close();
   });
 
   for (const testCase of [
@@ -202,4 +207,70 @@ describe('Entity instance resolution unit', () => {
 
     store.close();
   });
+
+  it('keeps identical aliases, attributes, and projectless timelines inside their exact project scope', () => {
+    const store = new EntityStore(':memory:');
+    store.getDatabase().exec(`CREATE TABLE neurons(id TEXT PRIMARY KEY, project_id TEXT, is_deleted INTEGER NOT NULL DEFAULT 0)`);
+    store.getDatabase().exec(`INSERT INTO neurons VALUES('n-a','a',0),('n-b','b',0),('n-global',NULL,0)`);
+    const a = store.upsertEntity({
+      canonicalName: 'Shared Alias A', type: 'person', aliases: ['shared'],
+      metadata: { projectId: 'a' }, instanceMode: 'new_instance', createdAt: 1,
+    });
+    const b = store.upsertEntity({
+      canonicalName: 'Shared Alias B', type: 'person', aliases: ['shared'],
+      metadata: { projectId: 'b' }, instanceMode: 'new_instance', createdAt: 2,
+    });
+    const global = store.upsertEntity({
+      canonicalName: 'Shared Alias Global', type: 'person', aliases: ['shared'],
+      metadata: { projectId: '' }, instanceMode: 'new_instance', createdAt: 3,
+    });
+    store.recordMention({ entityId: a.entityId, neuronId: 'n-a', projectId: 'a', createdAt: 1 });
+    store.recordMention({ entityId: b.entityId, neuronId: 'n-b', projectId: 'b', createdAt: 2 });
+    store.recordMention({ entityId: global.entityId, neuronId: 'n-global', projectId: '', createdAt: 3 });
+    store.addAttribute({ entityId: a.entityId, attributeKey: 'secret', attributeValue: 'a-only', sourceNeuronId: 'n-a' });
+    expect(() => store.addAttribute({ entityId: a.entityId, attributeKey: 'secret', attributeValue: 'b-forged', sourceNeuronId: 'n-b' }))
+      .toThrow('entity_project_scope_mismatch');
+    expect(() => store.recordMention({ entityId: a.entityId, neuronId: 'n-b', projectId: 'b' }))
+      .toThrow('entity_project_scope_mismatch');
+    const pending = store.registerPendingResolution({ referenceText: 'that device', entityType: 'device', contextNeuronId: 'n-a' });
+    expect(() => store.resolvePendingReference(pending.pendingId, b.entityId, 'a'))
+      .toThrow('entity_project_scope_mismatch');
+    expect(() => store.restoreInstance({ entityId: a.entityId, canonicalEntityId: a.canonicalEntityId, status: 'active', projectId: 'b' }))
+      .toThrow('entity_project_scope_not_exclusive');
+
+    expect(store.findByAlias('shared', 'person', 'a')?.entityId).toBe(a.entityId);
+    expect(store.findByAlias('shared', 'person', 'b')?.entityId).toBe(b.entityId);
+    expect(store.findByAlias('shared', 'person', '')?.entityId).toBe(global.entityId);
+    expect(store.listAttributes(a.entityId, undefined, 'a').map((item) => item.attributeValue)).toEqual(['a-only']);
+    expect(store.listTimeline({ projectId: '' }).map((item) => item.entityId)).toEqual([global.entityId]);
+
+    store.close();
+  });
+});
+
+it('EntityStore applies project scope before relative and same-name LIMIT clauses', () => {
+  const store = new EntityStore();
+  const original = store.upsertEntity({ canonicalName: 'Shared Device', type: 'device', metadata: { projectId: 'a' }, createdAt: 1 });
+  store.recordMention({ entityId: original.entityId, projectId: 'a', createdAt: 1 });
+  for (let index = 0; index < 13; index += 1) {
+    const foreign = store.upsertEntity({ canonicalName: 'Shared Device', type: 'device', metadata: { projectId: 'b' }, instanceMode: 'new_instance', createdAt: 100 + index });
+    store.recordMention({ entityId: foreign.entityId, projectId: 'b', createdAt: 100 + index });
+  }
+  expect(store.listReferenceCandidatesWithRelativeSupport('最新设备', 'device', { projectId: 'a' })[0]?.entity.entityId).toBe(original.entityId);
+  expect(store.upsertEntity({ canonicalName: 'Shared Device', type: 'device', metadata: { projectId: 'a' }, createdAt: 1000 }).entityId).toBe(original.entityId);
+  store.close();
+});
+
+it('EntityStore isolates alias conflicts and relations by exact project scope', () => {
+  const store = new EntityStore();
+  const make = (name: string, projectId: string) => store.upsertEntity({ canonicalName: name, type: 'device', aliases: ['same alias'], metadata: { projectId }, instanceMode: 'new_instance' });
+  const a1 = make('a1', 'a'); const a2 = make('a2', 'a');
+  const b1 = make('b1', 'b'); const b2 = make('b2', 'b');
+  expect(store.listAliasConflicts('device', 'a')[0]?.entityIds.sort()).toEqual([a1.entityId, a2.entityId].sort());
+  expect(store.listAliasConflicts('device', 'b')[0]?.entityIds.sort()).toEqual([b1.entityId, b2.entityId].sort());
+  store.addRelation({ sourceEntityId: a1.entityId, targetEntityId: a2.entityId, relationType: 'same_as', projectId: 'a' });
+  expect(store.listRelations(a1.entityId, undefined, 'a')).toHaveLength(1);
+  expect(store.listRelations(a1.entityId, undefined, 'b')).toHaveLength(0);
+  expect(() => store.addRelation({ sourceEntityId: a1.entityId, targetEntityId: b1.entityId, relationType: 'same_as', projectId: 'a' })).toThrow('entity_relation_project_scope_mismatch');
+  store.close();
 });

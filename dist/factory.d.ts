@@ -4,6 +4,7 @@ import { type MemoryBindingListOptions, type MemoryBindingRecord, type MemoryBin
 import { IngestionCursorStore } from './batch/IngestionCursorStore.js';
 import { MemoryGraph } from './core/MemoryGraph.js';
 import { type BrainRecallOptions } from './recall/BrainRecall.js';
+import { MultidimensionalQueryPlanner } from './recall/index.js';
 import { type RecallGovernanceSuppressionReason } from './recall/RecallGovernance.js';
 import { TopicRegistry } from './recall/TopicRegistry.js';
 import { type DeepWritePromotionDecision } from './engine/DeepWritePromotionPolicy.js';
@@ -41,6 +42,8 @@ import { EventStore } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
 import { MemoryBindingStore } from './store/MemoryBindingStore.js';
 import { MemoryAtlasStore } from './store/MemoryAtlasStore.js';
+import { MemoryFrameStore } from './store/MemoryFrameStore.js';
+import type { MemoryFrameV1 } from './semantic/MemoryFrameTypes.js';
 import { MemoryAtlasService, type MemoryAtlasNodeDetail, type MemoryAtlasPathResult, type MemoryAtlasQueryOptions, type MemoryAtlasSlice, type MemoryAtlasTimelineResult } from './atlas/index.js';
 import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
@@ -63,6 +66,7 @@ export interface MemoryKernelOptions {
     redactionPolicy?: RedactionPolicy | false;
     turnRelationReviewer?: TurnRelationAdvisoryReviewer;
     episodeBoundary?: Partial<EpisodeBoundaryConfig>;
+    projectTimeZone?: string;
     configDiagnostics?: ConfigDiagnosticLike[];
 }
 export interface MemoryKernelFromConfigOptions extends MemoryKernelOptions {
@@ -80,6 +84,9 @@ export interface MemoryKernelNavigationOptions {
     limit?: number;
     startTime?: number;
     endTime?: number;
+    now?: number;
+    localDateNow?: string;
+    timeZone?: string;
 }
 export interface RawEventSearchOptions {
     projectId?: string;
@@ -205,8 +212,10 @@ export interface MaintenanceTickOptions {
     atlasAccessRetentionMs?: number;
 }
 export interface MaintenanceSuggestedAction {
-    kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots' | 'bind_raw_events' | 'inspect_binding_failures' | 'repair_episodes';
+    kind: 'dream_curator' | 'govern_candidates' | 'resolve_entities' | 're_embed' | 'inspect_hotspots' | 'bind_raw_events' | 'inspect_binding_failures' | 'repair_episodes' | 'rebuild_topology';
     command: string;
+    executable: string;
+    args: string[];
     reason: string;
 }
 export interface MaintenanceTickResult {
@@ -274,7 +283,9 @@ export interface RawMemoryEventInput {
     charEnd?: number;
     orderingConfidence?: OrderingConfidence;
     localDate?: string;
-    localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
+    localDateSource?: 'explicit' | 'legacy_unknown';
+    timeZone?: string;
+    projectTimeZone?: string;
     metadata?: Record<string, unknown>;
 }
 export interface EpisodeMessageInput {
@@ -474,7 +485,9 @@ export declare class MemoryKernel {
     readonly activationStore: ActivationStore;
     readonly memoryBindingStore: MemoryBindingStore;
     readonly memoryAtlasStore: MemoryAtlasStore;
+    readonly memoryFrameStore: MemoryFrameStore;
     readonly memoryAtlasService: MemoryAtlasService;
+    readonly multidimensionalQueryPlanner: MultidimensionalQueryPlanner;
     readonly memoryGovernanceStore: MemoryGovernanceStore;
     readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;
     readonly pipelineMetrics: PipelineMetrics;
@@ -489,6 +502,7 @@ export declare class MemoryKernel {
     readonly topicGovernance: TopicGovernance;
     readonly configDiagnostics: ConfigDiagnosticLike[];
     private readonly dbPath;
+    private readonly projectClock;
     private readonly embedder;
     private readonly embeddingProvider?;
     private readonly modelRegistry;
@@ -505,6 +519,7 @@ export declare class MemoryKernel {
     private readonly dreamScheduler;
     private readonly memoryBindingService;
     private readonly memoryAtlasIndexer;
+    private readonly atlasPathRetriever;
     private readonly topicSummaryBoard;
     private readonly topicDecayPolicy;
     private readonly localSemanticCompiler;
@@ -535,8 +550,81 @@ export declare class MemoryKernel {
         projectId?: string;
         tags?: string[];
     }): Promise<Neuron>;
-    recall(query: string, options?: BrainRecallOptions): import("./types/BrainRecallResult.js").BrainRecallResult;
+    private drainVectorOutbox;
+    recall(query: string, options?: BrainRecallOptions): import("./types/BrainRecallResult.js").BrainRecallResult | {
+        atlasStatus: string;
+        atlasErrorCode: string;
+        query: string;
+        atlas?: MemoryAtlasSlice;
+        queryFrame?: import("./semantic/MemoryFrameTypes.js").MemoryQueryFrameV1;
+        strategy: {
+            primaryLevel: "compiled_memory" | "raw_evidence" | "recent_unprocessed_sources";
+            fallbackUsed: boolean;
+            vectorSearchUsed?: boolean;
+        };
+        compiledMemory: {
+            beliefs: import("./types/index.js").BeliefRecord[];
+            facts: import("./store/FactStore.js").FactRecord[];
+            events: import("./store/FactStore.js").EventRecord[];
+            entityTimeline: import("./store/EntityStore.js").EntityTimelineItem[];
+        };
+        rawEvidence: Neuron[];
+        fallbackSnippets: Array<{
+            sourceId: string;
+            sourcePath: string;
+            text: string;
+            timestamp: number;
+            sourceType: "conversation_markdown" | "soul_markdown" | "hermes_state_db" | "openclaw_daily_memory" | "openclaw_session" | "openclaw_memory_index" | "openclaw_user_profile" | "openclaw_persona";
+        }>;
+        profileSignals: Array<{
+            neuronId: string;
+            sourcePath?: string;
+            text: string;
+            tags: string[];
+            namespace: "user_profile" | "agent_persona";
+        }>;
+        profileSurface: {
+            userProfile: Array<{
+                neuronId: string;
+                sourcePath?: string;
+                label: string;
+                value: string;
+                section?: string;
+            }>;
+            agentPersona: Array<{
+                neuronId: string;
+                sourcePath?: string;
+                label: string;
+                value: string;
+                section?: string;
+            }>;
+        };
+        summaries?: Array<{
+            summaryId: string;
+            text: string;
+            scope: string;
+            windowStart?: number;
+            windowEnd?: number;
+            confidence: number;
+        }>;
+        fileEvidence?: import("./assets/types.js").FileEvidence[];
+        skillCandidates?: import("./types/ExtensionPoints.js").SkillCandidateLike[];
+        topicRouteInfo?: {
+            matchedTopicPath: string | null;
+            confidence: number;
+            fallbackToGlobal: boolean;
+        };
+    };
     navigateMemory(query: string, options?: MemoryKernelNavigationOptions): MemoryKernelNavigationResult;
+    rebuildProjectTimeTopology(projectId?: string): {
+        projectId: string;
+        timeZone: string;
+        neurons: number;
+        buckets: number;
+        rebuiltAt: number;
+    };
+    private publishTimeProjectionAtomically;
+    private stageTimeProjectionGraph;
     recordRawEvent(input: RawMemoryEventInput): MemoryEvent<{
         text: string;
         metadata?: Record<string, unknown>;
@@ -719,11 +807,46 @@ export declare class MemoryKernel {
         actions: number;
         refreshed: boolean;
     };
+    getMemoryFrame(episodeId: string, projectId?: string, options?: {
+        includeStaged?: boolean;
+    }): MemoryFrameV1 | null;
+    reviewMemoryFrame(input: {
+        frameId: string;
+        projectId: string;
+        action: 'approve' | 'reject';
+        actor: string;
+        reason: string;
+    }): boolean;
+    listMemoryDimensions(projectId: string, nodeType?: string, limit?: number): Array<{
+        id: string;
+        nodeType: string;
+        label: string;
+        confidence: number;
+        evidenceEventIds: string[];
+    }>;
+    backfillMemoryFrames(options: {
+        projectId: string;
+        limit?: number;
+        cursor?: string;
+        mode?: 'shadow' | 'active';
+    }): {
+        projectId: string;
+        processed: number;
+        created: number;
+        needsReview: number;
+        nextCursor?: string;
+        hasMore: boolean;
+    };
     private prepareMemoryAtlasRead;
+    private withProjectClock;
     private withAtlasFreshness;
     graphOverview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     graphSearch(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
     graphExplore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice;
+    planMemoryQuery(query: string, options: MemoryAtlasQueryOptions): {
+        queryFrame: ReturnType<MultidimensionalQueryPlanner['plan']>;
+        result: MemoryAtlasSlice;
+    };
     graphNode(nodeId: string, options: MemoryAtlasQueryOptions): MemoryAtlasNodeDetail | null;
     graphNeighbors(nodeId: string, options: MemoryAtlasQueryOptions & {
         hops?: number;
@@ -786,7 +909,7 @@ export declare class MemoryKernel {
     startMetabolism(): Promise<void>;
     stopMetabolism(): void;
     getHotMemories(): Neuron[];
-    forgetUser(projectId: string, reason?: string): Promise<ForgetUserResult>;
+    forgetUser(projectId: string, _reason?: string): Promise<ForgetUserResult>;
     getGovernanceAudit(projectId?: string): GovernanceAuditRecord[];
     getProjectMemories(projectId: string): Neuron[];
     registerExtension(name: string, implementation: unknown): void;

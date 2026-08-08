@@ -102,16 +102,16 @@ export declare class EntityStore {
         createdAt?: number;
         instanceMode?: 'auto' | 'canonical' | 'new_instance';
     }): EntityRecord;
-    findByAlias(aliasText: string, type?: string): EntityRecord | null;
-    listByAlias(aliasText: string, type?: string): EntityRecord[];
-    findByCanonicalName(canonicalName: string, type?: string): EntityRecord | null;
+    findByAlias(aliasText: string, type?: string, projectId?: string): EntityRecord | null;
+    listByAlias(aliasText: string, type?: string, projectId?: string): EntityRecord[];
+    findByCanonicalName(canonicalName: string, type?: string, projectId?: string): EntityRecord | null;
     findByEntityId(entityId: string): EntityRecord | null;
     findActiveByEntityId(entityId: string): EntityRecord | null;
     getByEntityId(entityId: string): EntityRecord | null;
     findLatestByType(type: string): EntityRecord | null;
     listRecentByType(type: string, limit?: number): EntityRecord[];
     private listByCreationOrder;
-    listRelations(entityId: string, relationType?: EntityRelationRecord['relationType']): EntityRelationRecord[];
+    listRelations(entityId: string, relationType?: EntityRelationRecord['relationType'], projectId?: string): EntityRelationRecord[];
     resolveReference(referenceText: string, typeHint?: string, options?: ResolveEntityReferenceOptions): EntityRecord | null;
     listDisambiguationCandidates(referenceText: string, typeHint?: string, options?: ResolveEntityReferenceOptions): EntityDisambiguationCandidate[];
     listReferenceCandidatesWithRelativeSupport(referenceText: string, typeHint?: string, options?: ResolveEntityReferenceOptions): EntityDisambiguationCandidate[];
@@ -136,50 +136,58 @@ export declare class EntityStore {
         limit?: number;
         includeInactive?: boolean;
     }): EntityTimelineItem[];
-    listEntitiesUpdatedInRange(startTime: number, endTime: number, type?: string): EntityRecord[];
-    archiveEntity(entityId: string, updatedAt?: number): void;
+    listEntitiesUpdatedInRange(startTime: number, endTime: number, type?: string, projectId?: string): EntityRecord[];
+    listProjectScopes(entityId: string): string[];
+    isExclusiveToProject(entityId: string, projectId: string): boolean;
+    archiveEntity(entityId: string, updatedAt?: number, projectId?: string): void;
     addAttribute(input: {
         entityId: string;
         attributeKey: string;
         attributeValue: string;
-        sourceNeuronId?: string;
+        sourceNeuronId: string;
         createdAt?: number;
     }): EntityAttributeRecord;
-    listAttributes(entityId: string, attributeKey?: string): EntityAttributeRecord[];
+    listAttributes(entityId: string, attributeKey?: string, projectId?: string): EntityAttributeRecord[];
     addRelation(input: {
         sourceEntityId: string;
         targetEntityId: string;
         relationType: EntityRelationRecord['relationType'];
+        projectId: string;
         sourceNeuronId?: string;
         createdAt?: number;
     }): EntityRelationRecord;
     registerPendingResolution(input: {
         referenceText: string;
         entityType?: string;
-        contextNeuronId?: string;
+        contextNeuronId: string;
         createdAt?: number;
     }): PendingEntityResolutionRecord;
-    resolvePendingReference(pendingId: string, entityId: string, resolvedAt?: number): PendingEntityResolutionRecord | null;
+    resolvePendingReference(pendingId: string, entityId: string, projectId: string, resolvedAt?: number): PendingEntityResolutionRecord | null;
     listPendingResolutions(filter?: {
         status?: PendingEntityResolutionRecord['status'];
         entityType?: string;
+        projectId?: string;
     }): PendingEntityResolutionRecord[];
-    listAliasConflicts(type?: string): EntityAliasConflictRecord[];
+    listAliasConflicts(type?: string, projectId?: string): EntityAliasConflictRecord[];
     close(): void;
-    addAlias(entityId: string, alias: string, updatedAt?: number): void;
-    removeAlias(entityId: string, alias: string, updatedAt?: number): void;
+    addAlias(entityId: string, alias: string, projectId: string, updatedAt?: number): void;
+    removeAlias(entityId: string, alias: string, projectId: string, updatedAt?: number): void;
     redirectInstance(input: {
         sourceEntityId: string;
         targetCanonicalEntityId: string;
         status?: EntityRecord['status'];
+        projectId: string;
         updatedAt?: number;
     }): void;
     restoreInstance(input: {
         entityId: string;
         canonicalEntityId: string;
         status: EntityRecord['status'];
+        projectId: string;
         updatedAt?: number;
     }): void;
+    private requireLiveNeuronScope;
+    private assertEntityVisibleInProject;
     private upsertAliases;
     private touchEntity;
     private ensureCanonicalEntity;
@@ -194,6 +202,8 @@ export declare class EntityStore {
     private extractRelativeNameHint;
     private matchesExplicitRelativeHint;
     private isBareRelativeEntity;
+    private hasTable;
     private mapRow;
+    private mapRowForProject;
 }
 //# sourceMappingURL=EntityStore.d.ts.map

@@ -119,14 +119,18 @@ describe('TopicSummaryBoard', () => {
     expect(second).toBe(first);
   });
 
-  test('forceRebuild updates the existing summary neuron instead of duplicating it', () => {
+  test('forceRebuild creates an immutable summary revision and preserves both hashes', () => {
     const graph = new MemoryGraph();
     addNeuron(graph, 'memory governance policy');
     const b = board(graph);
     const first = b.refresh('memory/governance', 'project-a');
     const second = b.refresh('memory/governance', 'project-a', { forceRebuild: true });
-    expect(second).toBe(first);
-    expect(graph.getNeuronIdsByTopicPrefix('memory/governance', 'project-a').filter((id) => graph.getNeuron(id)?.metadata.tags?.includes('topic_summary')).length).toBe(1);
+    expect(second).not.toBe(first);
+    expect(graph.getNeuron(first!)?.metadata.status).toBe('archived');
+    expect(graph.getNeuron(second!)?.metadata.tags).toContain(`supersedes:${first}`);
+    expect(NeuronFactory.verify(graph.getNeuron(first!)!)).toBe(true);
+    expect(NeuronFactory.verify(graph.getNeuron(second!)!)).toBe(true);
+    expect(graph.getNeuronIdsByTopicPrefix('memory/governance', 'project-a').filter((id) => graph.getNeuron(id)?.metadata.tags?.includes('topic_summary')).length).toBe(2);
   });
 
   test('listEntries reports summary metadata', () => {

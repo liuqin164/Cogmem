@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.7.3`
+Current version: `3.7.4`
 
 Distribution: npm registry. GitHub remains the source mirror and hosts this installer, but package install and upgrade resolve `cogmem` from npm by default.
 
@@ -227,15 +227,17 @@ cogmem update --dry-run --json
 cogmem migrate --dry-run --json
 ```
 
-For a manual migration, run `cogmem migrate --yes --backup`. The migration runner adopts the existing `_meta.schema_version`, applies only later idempotent migrations, preserves Raw Ledger rows, and creates a timestamped, transaction-consistent standalone database backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
+For a manual migration, run `cogmem migrate --yes --backup`. The 3.7.4 migration accepts the released 3.7.3/schema-31 database, preserves canonical Raw Ledger and memory evidence, and creates a timestamped, transaction-consistent standalone backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
-Upgrade a 3.5.2 database, a 3.6.x database, or a pre-release schema-25 test database into the current 3.7.3 schema and projection set with one command:
+Upgrade a 3.7.3/schema-31 database into the current 3.7.4 schema and projection set with one command:
 
 ```bash
 cogmem migrate --yes --backup --json
 ```
 
-Schema 25 backfills the rebuildable Atlas projection. Schema 26 adds audited candidate reviews and exact Atlas projection metadata. Schema 27 marks 3.6.0-upgraded Atlas projections dirty so the first real action/time rebuild is not skipped. All preserve Raw Ledger, episodes, bindings, beliefs, and governed topic state; the command is idempotent.
+The release records a single 0032 receipt. Schemas 0032-0062 produced by unreleased 3.7.4 development builds are intentionally unsupported; restore a schema-31 backup or recreate a development database. Older released databases must first be upgraded with Cogmem 3.7.3.
+
+The 3.7.3 runtime state tables did not contain project scope and cannot be safely attributed. They are disposable read models in the 3.7.4 contract: migration backs up the database, reports `runtimeDiscardedThisRun` and `runtimeDiscardedTotal`, stores hash-only discard receipts, and leaves canonical Raw Ledger evidence unchanged. The command is idempotent.
 
 For OpenClaw upgrades, `cogmem update --yes` now runs this refresh automatically when the config has `[integrations.openclaw] enabled = true`. You can also run it manually; this path does not open the Cogmem database, so it still works while an old drainer has the DB busy:
 
@@ -283,7 +285,7 @@ Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_
 User-shaped topic state is project-scoped. Explicit user operations become active and auditable; model-proposed topics, aliases, and relations remain candidates. Use MCP `cogmem_topic_list` to inspect nodes, `cogmem_topic_operate` to create, rename, alias, move, merge, split, or relate topics, and `cogmem_topic_rollback` to reverse an audited operation. Alias collisions fail closed as `needs_review`; applications can also call `TopicGovernance.rollback()` through the public API.
 
 Episode surgery is available through `cogmem episode split|merge|move-event|reclassify|requeue-dream` or MCP `cogmem_episode_repair`. Structural repair recomputes closure receipts, invalidates candidates derived from the old episode boundary, preserves cross-references, requeues eligible sealed episodes, and writes an audit record.
-Use `cogmem episode audit-boundaries` for read-only boundary diagnostics and `cogmem episode split-plan` for deterministic read-only split previews. The split preview does not call repair, does not move events, and returns no executable apply command in 3.7.3.
+Use `cogmem episode audit-boundaries` for read-only boundary diagnostics and `cogmem episode split-plan` for deterministic read-only split previews. The split preview does not call repair, does not move events, and returns no executable apply command in 3.7.4.
 
 Inspect queue state:
 
@@ -319,7 +321,10 @@ cogmem memory graph-path --project my-agent --from "entity:<id>" --to "action:<i
 cogmem memory graph-timeline --project my-agent --query "2025 <实体或工具名> 的决策和修复" --json
 cogmem memory graph-timeline --project openclaw --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
 cogmem memory graph-reindex --project openclaw --event <event-id> --json
+cogmem memory rebuild-topology --project openclaw --json
 ```
+
+Graph and recall reads never rebuild projections inline. If an upgrade marks a project's civil-time topology dirty, reads continue on last-known-good non-temporal lanes; run `rebuild-topology` explicitly (or follow the maintenance-tick suggestion). The command pages lightweight neuron metadata into generation-scoped staging tables, persists its cursor, resumes after interruption, and atomically swaps the completed project topology and cognitive time graph into service.
 
 Atlas filtering is not limited to entity + time + action. The facet planner combines whichever facets are actually present, such as project, day/month/year, topic, issue, entity/person/project, session/thread, memory kind, action kind, and ordinary keywords. Entity cue extraction supports Unicode letter/number names in ordinary historical and action-history questions, but it is still deterministic cue extraction, not full named-entity recognition or an automatic alias merge graph. Strict multi-facet matches may surface cold nodes even when their activation has decayed. If strict intersection is empty, JSON includes `relaxationTrace` for explicit fallbacks such as day → month → year or issue → parent topic instead of silently pretending an exact match existed. Project scope and raw evidence validation are never bypassed.
 
@@ -439,6 +444,7 @@ cogmem import-openclaw --workspace . --project openclaw --session ./one.md
 cogmem import-openclaw --workspace . --project openclaw --session ./one.md --session ./two.md
 cogmem import-openclaw --workspace . --project openclaw --memory ./one.md
 cogmem import-openclaw --workspace . --project openclaw --memory ./one.md --memory ./two.md
+cogmem import-openclaw --workspace . --project openclaw --db ./memory.db --timezone Asia/Tokyo
 ```
 
 Hermes:
@@ -451,7 +457,10 @@ cogmem import-hermes --workspace . --project hermes --state-db ./state.db
 cogmem import-hermes --workspace . --project hermes --profile ./memory/profile.md --sessions ./memory/sessions
 cogmem import-hermes --workspace . --project hermes --session ./one.md
 cogmem import-hermes --workspace . --project hermes --session ./one.md --session ./two.md
+cogmem import-hermes --workspace . --project hermes --db ./memory.db --timezone Asia/Tokyo
 ```
+
+When importing through an explicit `--db`, pass the project's IANA `--timezone`. If it is omitted, Cogmem records a `project_timezone_missing_using_host_environment` warning so host-local calendar behavior is never silent.
 
 Hermes `state.db` is scanned automatically when it exists at the workspace root. The importer reads the SQLite `messages` table, preserves message order, supports WAL-mode read-only databases through SQLite immutable mode, and prefers message-level `occurredAt` / `timestamp` / `createdAt` fields. Numeric `timestamp` values are treated as epoch seconds when they are below millisecond range. `InsertTime` is only a fallback when the original message time is absent.
 
@@ -799,7 +808,7 @@ npm pack --dry-run --json
 npm publish --dry-run --access public
 ```
 
-Create a GitHub Release from the matching version tag, for example `v3.7.3`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
+Create a GitHub Release from the matching version tag, for example `v3.7.4`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
 
 Publish manually only for emergency fallback:
 

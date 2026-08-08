@@ -123,7 +123,7 @@ export class TraceStore {
       id: row.id,
       timestamp: row.timestamp,
       taskId: row.task_id ?? undefined,
-      projectId: row.project_id ?? undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       eventType: row.event_type,
       payload: this.parsePayload(row.payload),
       parentEventId: row.parent_event_id ?? undefined

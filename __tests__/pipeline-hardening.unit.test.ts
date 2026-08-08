@@ -218,6 +218,25 @@ describe('OfflineConsolidationPipeline checkpoints', () => {
     expect(steps.map((row) => row.step_name)).toContain('ProceduralLearningBridge');
     expect(steps.map((row) => row.step_name)).toContain('CrossTopicSynthesizer');
   });
+
+  test('projectless scope runs every project maintenance stage with the empty-string scope', async () => {
+    const db = new Database(':memory:');
+    const calls: string[] = [];
+    const pipeline = new OfflineConsolidationPipeline({
+      db,
+      pipelineMetrics: new PipelineMetrics(db),
+      maxBudgetMs: 0,
+      memoryConsolidationEngine: { run: async (projectId: string) => { calls.push(`memory:${projectId}`); } } as never,
+      proceduralLearningBridge: { scan: async (projectId: string) => { calls.push(`procedural:${projectId}`); } } as never,
+      crossTopicSynthesizer: { run: async (projectId: string) => { calls.push(`cross-topic:${projectId}`); } } as never,
+      principleDecayPolicy: { run: async (projectId: string) => { calls.push(`principle:${projectId}`); } } as never,
+      graphCommunityEngine: { run: async (projectId: string) => { calls.push(`community:${projectId}`); } } as never,
+    });
+
+    await (pipeline as any).refreshTopicMaintenance({ rawEpisodes: [], window: { projectId: '' } });
+
+    expect(calls).toEqual(['memory:', 'procedural:', 'cross-topic:', 'principle:', 'community:']);
+  });
 });
 
 describe('WorkingMemoryDelta cleanup', () => {

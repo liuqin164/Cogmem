@@ -1,12 +1,25 @@
+import Database from 'bun:sqlite';
 import type { EventClusterRecord, EventClusterType, ProjectBranchKind, ProjectBranchRecord, TaskBranchRecord, TimeBucketRecord, TimeBucketType, TopologyReference } from '../types/index.js';
 export declare class TopologyStore {
     private db;
-    constructor(dbPath?: string);
+    private readonly ownsDb;
+    constructor(dbOrPath?: Database | string);
     private initializeSchema;
+    timeProjectionNeedsRebuild(projectId: string, timeZone: string): boolean;
+    hasDirtyTimeProjection(projectId?: string): boolean;
+    hasUsableTimeProjection(projectId: string, timeZone: string): boolean;
+    hasUsableTimeProjections(timeZone: string): boolean;
+    beginTimeProjectionSourceUpdate(projectId: string | undefined, timeZone: string, updatedAt: number): {
+        sourceRevision: number;
+        incremental: boolean;
+    };
+    getTimeProjectionSourceRevision(projectId: string | undefined): number;
+    markTimeProjection(projectId: string, status: 'dirty' | 'building' | 'clean' | 'failed', timeZone: string, updatedAt: number, error?: string, sourceRevision?: number): void;
+    markTimeProjectionCleanIfCurrent(projectId: string, timeZone: string, updatedAt: number, sourceRevision: number): boolean;
+    resetProjectTimeBuckets(projectId: string): void;
+    listProjectTimeBucketsByNeuron(projectId: string, neuronIds: string[]): Map<string, TimeBucketRecord[]>;
     upsertTimeBucket(bucket: TimeBucketRecord): TimeBucketRecord;
-    attachToTimeBucket(bucketId: string, ref: TopologyReference & {
-        projectId?: string;
-    }): void;
+    attachToTimeBucket(bucketId: string, ref: TopologyReference): void;
     upsertProjectBranch(input: {
         branchId: string;
         projectId: string;
@@ -39,7 +52,7 @@ export declare class TopologyStore {
     listTaskBranches(projectId?: string): TaskBranchRecord[];
     listEventClusters(projectId?: string): EventClusterRecord[];
     listNeuronIdsByProject(projectId: string): string[];
-    listNeuronIdsByTemporalRange(start: number, end: number): string[];
+    listNeuronIdsByTemporalRange(start: number, end: number, projectId?: string): string[];
     listTimeBucketIdsByNeuronIds(neuronIds: string[], projectId?: string, limit?: number): string[];
     collectCandidateNeuronIds(input: {
         projectId?: string;
@@ -47,6 +60,7 @@ export declare class TopologyStore {
         endTime?: number;
         terms?: string[];
         limit?: number;
+        excludeTemporal?: boolean;
     }): string[];
     collectBranchNavigation(input: {
         projectId?: string;
@@ -71,6 +85,7 @@ export declare class TopologyStore {
         neuronIds: string[];
     };
     collectTemporalContext(input: {
+        projectId?: string;
         startTime?: number;
         endTime?: number;
         preferredBucketType?: TimeBucketType;
@@ -81,9 +96,18 @@ export declare class TopologyStore {
         bucketLabels: string[];
         neuronIds: string[];
     };
-    getTimeBucketEntryCount(bucketType: TimeBucketType, start: number): number;
+    getTimeBucketEntryCount(bucketType: TimeBucketType, start: number, options?: {
+        projectId?: string;
+        timeZone?: string;
+        end?: number;
+    }): number;
     getMaterializedMembershipCount(): number;
     private upsertMembership;
+    private listScopedBranchLinks;
+    private assertReferenceScope;
+    private hasColumn;
+    private hasTable;
+    private installBranchScopeTriggers;
     close(): void;
 }
 //# sourceMappingURL=TopologyStore.d.ts.map

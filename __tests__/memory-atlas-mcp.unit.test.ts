@@ -7,12 +7,18 @@ test('MCP exposes pure read-only Atlas queries and an explicit activation touch'
   try {
     const event = kernel.eventStore.append({ eventId: 'evt-mcp-atlas', streamId: 't', streamType: 'thread', eventType: 'MESSAGE', rawEventType: 'message', projectId: 'cogmem', role: 'user', payload: { text: '给 Hermes 配置 MCP' } });
     const entity = kernel.memoryBindingStore.upsertEntity({ projectId: 'cogmem', canonicalName: 'Hermes', entityType: 'project' });
+    kernel.memoryBindingStore.upsertTopic({ projectId: 'cogmem', topicPath: 'cogmem/hermes', topicType: 'project' });
     kernel.memoryBindingStore.insertBinding({ eventId: event.eventId, projectId: 'cogmem', role: 'user', entityId: entity.entityId, entityName: 'Hermes', entityType: 'project', topicPath: 'cogmem/hermes', bindingType: 'about', confidence: 1, source: 'deterministic', signal: 'Hermes', claimKey: 'mcp' });
+    kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });
+    const projectionBefore = kernel.memoryAtlasStore.getProjectionState('cogmem');
 
     const names = listCogmemMcpTools().map((tool) => tool.name);
     expect(names).toContain('cogmem_graph_overview');
     expect(names).toContain('cogmem_graph_explore');
     expect(names).toContain('cogmem_graph_path');
+    expect(names).toContain('cogmem_memory_frame_show');
+    expect(names).toContain('cogmem_memory_dimensions');
+    expect(names).toContain('cogmem_memory_query_plan');
     expect(listCogmemMcpTools().filter((tool) => tool.name.startsWith('cogmem_graph_') && tool.name !== 'cogmem_graph_touch').every((tool) =>
       tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint === false && tool.annotations.idempotentHint === true)).toBe(true);
     expect(names).toContain('cogmem_graph_touch');
@@ -21,7 +27,13 @@ test('MCP exposes pure read-only Atlas queries and an explicit activation touch'
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual(expect.objectContaining({ id: `entity:${entity.entityId}` }));
     expect(JSON.stringify(result.structuredContent)).toContain('memory show --event evt-mcp-atlas');
+    expect(kernel.memoryAtlasStore.getProjectionState('cogmem')).toEqual(projectionBefore);
     expect((kernel.memoryAtlasStore.db.prepare(`SELECT COUNT(*) AS count FROM memory_atlas_access`).get() as { count: number }).count).toBe(0);
+    kernel.memoryAtlasStore.markProjectionDirty('cogmem', { reason: 'read_only_recall_test' }, 123);
+    const dirtyProjection = kernel.memoryAtlasStore.getProjectionState('cogmem');
+    const recall = await callCogmemMcpTool('cogmem_recall', { projectId: 'cogmem', agentId: 'cogmem', query: 'Hermes MCP', now: 123, timeZone: 'UTC' }, { kernel });
+    expect(recall.isError).toBeFalsy();
+    expect(kernel.memoryAtlasStore.getProjectionState('cogmem')).toEqual(dirtyProjection);
     const touch = await callCogmemMcpTool('cogmem_graph_touch', {
       projectId: 'cogmem', nodeIds: [`entity:${entity.entityId}`], reason: 'used_in_answer',
     }, { kernel });

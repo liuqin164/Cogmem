@@ -1,5 +1,5 @@
 import Database from 'bun:sqlite';
-import type { MemoryBindingInput, MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingStats, MemoryClusterListOptions, MemoryClusterRecord, MemoryEdgeListOptions, MemoryEdgeRecord, MemoryEdgeRelation, MemoryEntityRecord, MemoryEntityType, MemoryTopicRecord } from '../binding/MemoryBindingTypes.js';
+import type { MemoryBindingInput, MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingStats, MemoryClusterListOptions, MemoryClusterRecord, MemoryEdgeListOptions, MemoryEdgeRecord, MemoryGraphRelation, MemoryEntityRecord, MemoryEntityType, MemoryTopicRecord } from '../binding/MemoryBindingTypes.js';
 export interface UpsertMemoryEntityInput {
     entityId?: string;
     projectId?: string;
@@ -34,7 +34,7 @@ export interface UpsertMemoryEdgeInput {
     projectId?: string;
     sourceType: MemoryEdgeRecord['sourceType'];
     sourceId: string;
-    relationType: MemoryEdgeRelation;
+    relationType: MemoryGraphRelation;
     targetType: MemoryEdgeRecord['targetType'];
     targetId: string;
     confidence: number;
@@ -47,6 +47,9 @@ export interface UpsertMemoryEdgeInput {
     validFrom?: number;
     validTo?: number;
     sourceAuthority?: MemoryEdgeRecord['sourceAuthority'];
+    supportSourceType?: string;
+    supportSourceId?: string;
+    operation?: 'append' | 'replace' | 'revision';
 }
 export interface DecayMemoryEdgeActivationOptions {
     projectId?: string;
@@ -70,6 +73,9 @@ export declare class MemoryBindingStore {
     listBindings(options?: MemoryBindingListOptions): MemoryBindingRecord[];
     getStats(projectId?: string): MemoryBindingStats;
     deleteByProject(projectId: string): number;
+    private assertEventScopes;
+    private assertNodeScope;
+    private assertClusterTopic;
     close(): void;
     private initializeSchema;
     private ensureCompatibilityColumns;

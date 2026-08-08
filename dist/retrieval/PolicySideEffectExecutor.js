@@ -1,4 +1,12 @@
 import { createHash, randomUUID } from 'crypto';
+export class PolicySideEffectExecutionError extends Error {
+    outcome;
+    constructor(message, outcome = 'outcome_unknown') {
+        super(message);
+        this.outcome = outcome;
+        this.name = 'PolicySideEffectExecutionError';
+    }
+}
 export class NoopPolicySideEffectExecutor {
     execute(effect) {
         return {
@@ -6,7 +14,8 @@ export class NoopPolicySideEffectExecutor {
             action: effect.action,
             target: effect.target,
             status: 'executed',
-            detail: 'noop'
+            outcome: 'executed',
+            detail: 'noop',
         };
     }
 }
@@ -18,6 +27,8 @@ export class ReliablePolicySideEffectExecutor {
     strategy;
     jitterRatio;
     maxBackoffMs;
+    leaseMs;
+    heartbeatIntervalMs;
     constructor(delegate, store, maxRetries = 2, backoffMs = 1000, options) {
         this.delegate = delegate;
         this.store = store;
@@ -26,107 +37,121 @@ export class ReliablePolicySideEffectExecutor {
         this.strategy = options?.strategy || 'linear';
         this.jitterRatio = Math.max(0, Math.min(options?.jitterRatio ?? 0, 1));
         this.maxBackoffMs = Math.max(backoffMs, options?.maxBackoffMs ?? backoffMs * 16);
+        this.leaseMs = Math.max(1_000, options?.leaseMs ?? 5 * 60_000);
+        this.heartbeatIntervalMs = Math.max(100, Math.min(options?.heartbeatIntervalMs ?? this.leaseMs / 3, this.leaseMs / 2));
     }
     async execute(effect) {
         const now = Date.now();
-        const idempotencyKey = effect.idempotencyKey || this.computeIdempotencyKey(effect);
-        const existing = this.store.getByIdempotencyKey(idempotencyKey);
-        if (existing?.status === 'executed') {
+        const idempotencyKey = effect.idempotencyKey?.trim()
+            || (effect.stableOperationId?.trim() ? this.computeIdempotencyKey(effect) : undefined);
+        if (!idempotencyKey) {
             return {
-                policy: existing.policy,
-                action: existing.action,
-                target: existing.target,
-                status: 'skipped',
-                detail: 'idempotent_replay'
+                policy: effect.policy,
+                action: effect.action,
+                target: effect.target,
+                status: 'failed',
+                outcome: 'definitely_not_executed',
+                detail: 'policy_operation_identity_required',
             };
         }
-        let record = existing || this.buildRecord(effect, idempotencyKey, now, 0);
-        let lastError;
-        const attemptBase = existing?.attemptCount || 0;
-        for (let localAttempt = 1; localAttempt <= this.maxRetries + 1; localAttempt++) {
-            const totalAttempt = attemptBase + localAttempt;
-            try {
-                const result = await this.delegate.execute({ ...effect, idempotencyKey });
-                record = {
-                    ...record,
-                    runtimeId: effect.runtimeId,
+        const leaseOwner = `policy-worker-${randomUUID()}`;
+        const claim = this.store.claim(this.buildRecord(effect, idempotencyKey, now, 0), leaseOwner, now + this.leaseMs, now);
+        if (claim.kind === 'executed') {
+            return {
+                policy: claim.record.policy,
+                action: claim.record.action,
+                target: claim.record.target,
+                status: 'skipped',
+                outcome: 'executed',
+                detail: 'idempotent_replay',
+            };
+        }
+        if (claim.kind === 'ambiguous') {
+            return this.unknownResult(effect, claim.record?.detail || 'legacy_execution_scope_ambiguous');
+        }
+        if (claim.kind === 'busy') {
+            if (claim.record.status === 'in_progress') {
+                return {
                     policy: effect.policy,
                     action: effect.action,
                     target: effect.target,
-                    actorId: effect.actorId,
-                    causationId: effect.causationId,
-                    correlationId: effect.correlationId,
-                    policyGroup: effect.policyGroup,
-                    streamType: 'system',
-                    eventType: 'POLICY_EXECUTION_UPDATED',
-                    status: result.status === 'failed' ? 'failed' : 'executed',
-                    attemptCount: totalAttempt,
-                    nextRetryAt: undefined,
-                    deadLetteredAt: undefined,
-                    replayPolicy: effect.replayPolicy || record.replayPolicy || 'manual',
-                    detail: result.detail,
-                    metadata: effect.metadata,
-                    updatedAt: Date.now()
+                    status: 'in_progress',
+                    detail: 'execution_in_progress',
                 };
-                this.store.upsert(record);
+            }
+            return this.unknownResult(effect, claim.record.detail || 'execution_retry_not_due');
+        }
+        const record = claim.record;
+        const attemptBase = record.attemptCount;
+        let leaseLost = false;
+        const heartbeat = setInterval(() => {
+            try {
+                leaseLost ||= !this.store.renewLease(effect.projectId, idempotencyKey, leaseOwner, Date.now() + this.leaseMs);
+            }
+            catch {
+                leaseLost = true;
+            }
+        }, this.heartbeatIntervalMs);
+        heartbeat.unref?.();
+        try {
+            for (let localAttempt = 1; localAttempt <= this.maxRetries + 1; localAttempt++) {
+                const totalAttempt = attemptBase + localAttempt;
+                let result;
+                try {
+                    result = await this.delegate.execute({ ...effect, idempotencyKey });
+                }
+                catch (error) {
+                    const outcome = error instanceof PolicySideEffectExecutionError ? error.outcome : 'outcome_unknown';
+                    if (this.retryable(outcome) && localAttempt <= this.maxRetries && !leaseLost)
+                        continue;
+                    return this.finishFailure(effect, record, leaseOwner, idempotencyKey, totalAttempt, outcome, error instanceof Error ? error.message : String(error));
+                }
+                if (!this.validResult(result, effect)) {
+                    return this.finishFailure(effect, record, leaseOwner, idempotencyKey, totalAttempt, 'outcome_unknown', 'delegate_protocol_error');
+                }
+                if (result.status === 'failed') {
+                    const outcome = result.outcome;
+                    if (this.retryable(outcome) && localAttempt <= this.maxRetries && !leaseLost)
+                        continue;
+                    return this.finishFailure(effect, record, leaseOwner, idempotencyKey, totalAttempt, outcome, result.detail || 'policy_delegate_failed');
+                }
+                if (result.status === 'in_progress') {
+                    return this.finishFailure(effect, record, leaseOwner, idempotencyKey, totalAttempt, 'outcome_unknown', 'delegate_returned_in_progress');
+                }
+                if (leaseLost)
+                    return this.unknownResult(effect, 'external_effect_succeeded_lease_lost');
+                const terminal = this.terminalRecord(effect, record, {
+                    status: result.status,
+                    executionOutcome: 'executed',
+                    attemptCount: totalAttempt,
+                    detail: result.detail,
+                });
+                try {
+                    this.store.finishClaim(terminal, leaseOwner);
+                }
+                catch {
+                    return this.unknownResult(effect, 'external_effect_succeeded_persistence_unknown');
+                }
                 return result;
             }
-            catch (error) {
-                lastError = error;
-                const replayPolicy = effect.replayPolicy || record.replayPolicy || 'manual';
-                const isLastAttempt = localAttempt >= this.maxRetries + 1;
-                const shouldRetryLater = !isLastAttempt || replayPolicy !== 'manual';
-                const deadLetter = isLastAttempt && (replayPolicy === 'manual');
-                record = {
-                    ...record,
-                    runtimeId: effect.runtimeId,
-                    policy: effect.policy,
-                    action: effect.action,
-                    target: effect.target,
-                    actorId: effect.actorId,
-                    causationId: effect.causationId,
-                    correlationId: effect.correlationId,
-                    policyGroup: effect.policyGroup,
-                    streamType: 'system',
-                    eventType: 'POLICY_EXECUTION_UPDATED',
-                    status: 'failed',
-                    attemptCount: totalAttempt,
-                    nextRetryAt: shouldRetryLater ? Date.now() + this.computeBackoff(totalAttempt, idempotencyKey) : undefined,
-                    deadLetteredAt: deadLetter ? Date.now() : undefined,
-                    replayPolicy,
-                    detail: error instanceof Error ? error.message : String(error),
-                    metadata: effect.metadata,
-                    updatedAt: Date.now()
-                };
-                this.store.upsert(record);
-            }
+            return this.unknownResult(effect, 'execution_loop_exhausted');
         }
-        return {
-            policy: effect.policy,
-            action: effect.action,
-            target: effect.target,
-            status: 'failed',
-            detail: lastError instanceof Error ? lastError.message : String(lastError)
-        };
+        finally {
+            clearInterval(heartbeat);
+        }
     }
-    replay(runtimeId) {
-        return this.store.listByRuntime(runtimeId).map((record) => ({
-            policy: record.policy,
-            action: record.action,
-            target: record.target,
-            status: record.status === 'executed' ? 'executed' : record.status === 'failed' ? 'failed' : 'skipped',
-            detail: record.detail
-        }));
+    replay(projectId, runtimeId) {
+        return this.store.listByRuntime(projectId, runtimeId).map((record) => this.resultForRecord(record));
     }
-    async replayPending(now = Date.now()) {
-        const pending = this.store.listPendingRetries(now)
+    async replayPending(projectId, now = Date.now()) {
+        const pending = this.store.listPendingRetries(projectId, now)
             .filter((record) => record.replayPolicy !== 'manual');
         const results = [];
         for (const record of pending) {
-            if (record.replayPolicy === 'on_bootstrap' && now > (record.nextRetryAt || 0) + 365 * 24 * 60 * 60 * 1000) {
+            if (record.replayPolicy === 'on_bootstrap' && now > (record.nextRetryAt || 0) + 365 * 24 * 60 * 60 * 1000)
                 continue;
-            }
             results.push(await this.execute({
+                projectId: record.projectId,
                 runtimeId: record.runtimeId,
                 policy: record.policy,
                 action: record.action,
@@ -137,29 +162,83 @@ export class ReliablePolicySideEffectExecutor {
                 actorId: record.actorId,
                 causationId: record.causationId,
                 correlationId: record.correlationId,
-                policyGroup: record.policyGroup
+                policyGroup: record.policyGroup,
             }));
         }
         return results;
     }
-    getDeadLetters(runtimeId) {
-        return this.store.listDeadLetters(runtimeId).map((record) => ({
+    getDeadLetters(projectId, runtimeId) {
+        return this.store.listDeadLetters(projectId, runtimeId).map((record) => ({
             policy: record.policy,
             action: record.action,
             target: record.target,
             status: 'failed',
-            detail: record.detail
+            outcome: record.executionOutcome && record.executionOutcome !== 'executed'
+                ? record.executionOutcome
+                : 'outcome_unknown',
+            detail: record.detail,
         }));
+    }
+    finishFailure(effect, record, leaseOwner, idempotencyKey, attemptCount, outcome, detail) {
+        const failedAt = Date.now();
+        const replayPolicy = effect.replayPolicy || record.replayPolicy || 'manual';
+        const canReplay = this.retryable(outcome) && replayPolicy !== 'manual';
+        const failed = this.terminalRecord(effect, record, {
+            status: 'failed',
+            executionOutcome: outcome,
+            attemptCount,
+            detail: outcome === 'outcome_unknown' ? `outcome_unknown:${detail}` : detail,
+            nextRetryAt: canReplay ? failedAt + this.computeBackoff(attemptCount, idempotencyKey) : undefined,
+            deadLetteredAt: canReplay ? undefined : failedAt,
+            updatedAt: failedAt,
+        });
+        try {
+            this.store.finishClaim(failed, leaseOwner);
+        }
+        catch {
+            return this.unknownResult(effect, 'policy_failure_persistence_unknown');
+        }
+        return {
+            policy: effect.policy,
+            action: effect.action,
+            target: effect.target,
+            status: 'failed',
+            outcome,
+            detail: failed.detail,
+        };
+    }
+    terminalRecord(effect, record, terminal) {
+        return {
+            ...record,
+            projectId: effect.projectId,
+            runtimeId: effect.runtimeId,
+            policy: effect.policy,
+            action: effect.action,
+            target: effect.target,
+            actorId: effect.actorId,
+            causationId: effect.causationId,
+            correlationId: effect.correlationId,
+            policyGroup: effect.policyGroup,
+            streamType: 'system',
+            eventType: 'POLICY_EXECUTION_UPDATED',
+            nextRetryAt: undefined,
+            deadLetteredAt: undefined,
+            replayPolicy: effect.replayPolicy || record.replayPolicy || 'manual',
+            metadata: effect.metadata,
+            updatedAt: Date.now(),
+            ...terminal,
+        };
     }
     buildRecord(effect, idempotencyKey, now, attemptCount) {
         return {
             executionId: `pex-${randomUUID()}`,
+            projectId: effect.projectId,
             idempotencyKey,
             runtimeId: effect.runtimeId,
             policy: effect.policy,
             action: effect.action,
             target: effect.target,
-            status: 'failed',
+            status: 'in_progress',
             attemptCount,
             replayPolicy: effect.replayPolicy || 'manual',
             actorId: effect.actorId,
@@ -170,22 +249,67 @@ export class ReliablePolicySideEffectExecutor {
             eventType: 'POLICY_EXECUTION_UPDATED',
             metadata: effect.metadata,
             createdAt: now,
-            updatedAt: now
+            updatedAt: now,
         };
     }
     computeIdempotencyKey(effect) {
-        const raw = JSON.stringify({
-            runtimeId: effect.runtimeId,
+        return createHash('sha256').update(canonicalJson({
+            projectId: effect.projectId,
             policy: effect.policy,
             action: effect.action,
             target: effect.target,
-            metadata: effect.metadata || {},
-            actorId: effect.actorId,
-            causationId: effect.causationId,
-            correlationId: effect.correlationId,
-            policyGroup: effect.policyGroup
-        });
-        return createHash('sha256').update(raw).digest('hex');
+            stableOperationId: effect.stableOperationId,
+        })).digest('hex');
+    }
+    retryable(outcome) {
+        return outcome === 'definitely_not_executed' || outcome === 'failed_before_execution';
+    }
+    validResult(result, effect) {
+        if (!result || typeof result !== 'object')
+            return false;
+        const value = result;
+        if (value.policy !== effect.policy || value.action !== effect.action)
+            return false;
+        if (value.target !== undefined && value.target !== effect.target)
+            return false;
+        if (value.status === 'executed' || value.status === 'skipped')
+            return value.outcome === 'executed';
+        if (value.status === 'failed') {
+            return value.outcome === 'definitely_not_executed'
+                || value.outcome === 'failed_before_execution'
+                || value.outcome === 'outcome_unknown';
+        }
+        return value.status === 'in_progress' && value.outcome === undefined;
+    }
+    unknownResult(effect, detail) {
+        return {
+            policy: effect.policy,
+            action: effect.action,
+            target: effect.target,
+            status: 'failed',
+            outcome: 'outcome_unknown',
+            detail,
+        };
+    }
+    resultForRecord(record) {
+        const base = {
+            policy: record.policy,
+            action: record.action,
+            target: record.target,
+            detail: record.detail,
+        };
+        if (record.status === 'in_progress')
+            return { ...base, status: 'in_progress' };
+        if (record.status === 'executed' || record.status === 'skipped') {
+            return { ...base, status: record.status, outcome: 'executed' };
+        }
+        return {
+            ...base,
+            status: 'failed',
+            outcome: record.executionOutcome && record.executionOutcome !== 'executed'
+                ? record.executionOutcome
+                : 'outcome_unknown',
+        };
     }
     computeBackoff(attempt, idempotencyKey) {
         const base = this.strategy === 'exponential'
@@ -195,8 +319,19 @@ export class ReliablePolicySideEffectExecutor {
         if (this.jitterRatio === 0)
             return bounded;
         const hash = createHash('sha256').update(`${idempotencyKey}:${attempt}`).digest();
-        const normalized = hash[0] / 255;
-        const jitter = (normalized * 2 - 1) * this.jitterRatio * bounded;
+        const jitter = (hash[0] / 255 * 2 - 1) * this.jitterRatio * bounded;
         return Math.max(0, Math.round(bounded + jitter));
     }
+}
+function canonicalJson(value) {
+    if (Array.isArray(value))
+        return `[${value.map(canonicalJson).join(',')}]`;
+    if (value && typeof value === 'object') {
+        return `{${Object.entries(value)
+            .filter(([, item]) => item !== undefined)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+            .join(',')}}`;
+    }
+    return JSON.stringify(value) ?? 'null';
 }

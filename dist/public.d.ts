@@ -26,7 +26,7 @@ export { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPath
  */
 export { defaultCogmemConfigPath, defaultCogmemHome, loadCogmemConfig, resolveCogmemConfigPath, } from './config/CogmemConfig.js';
 export type { CogmemConfigResolution, CogmemConfigResolutionOptions, LoadedCogmemConfig, LoadCogmemConfigOptions, } from './config/CogmemConfig.js';
-export type { MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingSource, MemoryBindingStats, MemoryBindingType, MemoryBindingAction, MemoryClusterListOptions, MemoryClusterRecord, MemoryClusterStatus, MemoryEdgeListOptions, MemoryEdgeRecord, MemoryEdgeRelation, MemoryEntityRecord, MemoryEntityType, MemoryGraphRecallAnchor, MemoryTopicRecord, } from './binding/index.js';
+export type { MemoryBindingListOptions, MemoryBindingRecord, MemoryBindingSource, MemoryBindingStats, MemoryBindingType, MemoryBindingAction, MemoryClusterListOptions, MemoryClusterRecord, MemoryClusterStatus, MemoryEdgeListOptions, MemoryEdgeRecord, MemoryEdgeRelation, MemoryGraphEdgeStatus, MemoryGraphEndpointType, MemoryGraphRelation, MemoryEntityRecord, MemoryEntityType, MemoryGraphRecallAnchor, MemoryTopicRecord, } from './binding/index.js';
 export { BeliefGovernanceService, type ApplyBeliefInput, type BeliefEvidenceLookup, type BeliefEvidenceRecord, type BeliefOwnership, type BeliefRelation, type GovernedBeliefRecord, type GovernedBeliefStatus, type GovernedBeliefType, } from './belief/BeliefGovernanceService.js';
 export { TemporalMemoryService, type RecordTimelineEntryInput, type TemporalBeliefRecord, type TimelineEntryRecord, type TimelineEntryType, type TimelineListOptions, } from './temporal/index.js';
 export { ContextCortex, type ContextActivationPlan, type ContextActivationReceipt, type ContextCandidate, type ContextIntent, type ContextLayer, type ContextPlanInput, type ContextSuppressionReason, } from './context/index.js';
@@ -150,7 +150,15 @@ export type { RecallExplanation, RecallExplanationEvidence, RecallExplanationOpt
 export { callCogmemMcpTool, listCogmemMcpTools } from './mcp/CoreMcpTools.js';
 export type { CogmemMcpCallResult, CogmemMcpRuntime, CogmemMcpTool } from './mcp/CoreMcpTools.js';
 export type { DreamBacklogStatus } from './store/DreamLedgerStore.js';
+export { MemoryFrameStore, frameSourceFingerprint } from './store/MemoryFrameStore.js';
+export type { MemoryFrameSaveInput } from './store/MemoryFrameStore.js';
 export * from './atlas/index.js';
+export * from './semantic/index.js';
+export { createMemoryQueryFrame, queryFacet } from './recall/MemoryQueryFrame.js';
+export type { MemoryQueryFacet, MemoryQueryFrameV1, MemoryQueryIntent } from './recall/MemoryQueryFrame.js';
+export { AtlasPathRetriever, DimensionAwareRanker, MultidimensionalQueryPlanner } from './recall/index.js';
+export { assertLocalDate, localDateFor, localDateRange, resolveProjectClockContext, resolveTimeZone } from './utils/LocalDateContext.js';
+export type { ProjectClockContext, ProjectClockSource } from './utils/LocalDateContext.js';
 /**
  * Chinese-language lexicons for entity hints, stopwords, and topic classification.
  * @experimental @since 1.13.0

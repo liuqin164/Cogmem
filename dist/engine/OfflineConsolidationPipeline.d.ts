@@ -133,6 +133,7 @@ export declare class OfflineConsolidationPipeline {
     run(input: OfflineConsolidationInput, reviewBackend?: AlgorithmReviewBackend): Promise<OfflineConsolidationOutput>;
     private refreshTopicMaintenance;
     private initCheckpointSchema;
+    private assertInputProjectScope;
     private readCheckpointIndex;
     private recordRunAndCheckpoint;
     private shouldVerifyFact;

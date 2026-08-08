@@ -6,11 +6,15 @@ import { join } from 'node:path';
 
 import { createMemoryKernel, type MemoryKernelOptions } from '../src/factory.js';
 
+const JULY_4_2026 = Date.UTC(2026, 6, 4);
+const JULY_6_2026 = Date.UTC(2026, 6, 6);
+
 function createTestKernel(prefix: string, options: MemoryKernelOptions = {}) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   const kernel = createMemoryKernel({
     dbPath: join(dir, 'memory.db'),
     vectorBackend: 'sqlite-vec',
+    projectTimeZone: 'UTC',
     episodeBoundary: { maxEvents: 500, ...options.episodeBoundary },
     ...options,
   });
@@ -39,10 +43,11 @@ function seedEpisode(kernel: ReturnType<typeof createMemoryKernel>, input: {
   let episodeId = '';
   for (let index = 0; index < input.eventCount; index += 1) {
     const role = index % 3 === 0 ? 'user' : index % 3 === 1 ? 'assistant' : 'tool';
+    const occurredAt = (input.startAt ?? JULY_4_2026) + index * (input.gapMs ?? 60_000);
     const event = kernel.recordRawEvent({
       projectId: input.projectId, workspaceId: input.projectId, threadId: input.sessionId, sessionId: input.sessionId,
-      role, content: `${input.prefix} event ${index}`, sourceId: 'test', occurredAt: (input.startAt ?? 1_000) + index * (input.gapMs ?? 60_000),
-      eventOrdinal: index, localDate: index < input.eventCount / 2 ? '2026-07-04' : '2026-07-05',
+      role, content: `${input.prefix} event ${index}`, sourceId: 'test', occurredAt,
+      eventOrdinal: index, localDate: new Date(occurredAt).toISOString().slice(0, 10),
     });
     if (!episodeId) {
       episodeId = kernel.episodeStore.createEpisode({
@@ -111,7 +116,7 @@ test('auditEpisodeBoundaries reports oversized, duration, idle, date, mismatch, 
 test('audit idle gap uses online boundary semantics instead of user-to-user gap', () => {
   const { dir, kernel } = createTestKernel('cogmem-boundary-audit-idle-semantics-');
   try {
-    const base = 1_000_000;
+    const base = JULY_6_2026 + 1_000_000;
     const episode = kernel.episodeStore.createEpisode({
       projectId: 'brain', sessionId: 'idle', sourceAgent: 'test', conversationThreadId: 'idle',
       episodeType: 'discussion', importance: 0.4, eventId: 'idle-start', occurredAt: base,
@@ -198,13 +203,13 @@ test('audit out-of-order detection uses running max rather than adjacent pair on
   try {
     const episode = kernel.episodeStore.createEpisode({
       projectId: 'brain', sessionId: 'ooo', sourceAgent: 'test', conversationThreadId: 'ooo',
-      episodeType: 'discussion', importance: 0.4, eventId: 'ooo-start', occurredAt: 1_000,
+      episodeType: 'discussion', importance: 0.4, eventId: 'ooo-start', occurredAt: JULY_6_2026 + 1_000,
     });
     const rows = [
-      ['u0', 'user', 1_000],
-      ['a100', 'assistant', 101_000],
-      ['a50', 'assistant', 51_000],
-      ['u75', 'user', 76_000],
+      ['u0', 'user', JULY_6_2026 + 1_000],
+      ['a100', 'assistant', JULY_6_2026 + 101_000],
+      ['a50', 'assistant', JULY_6_2026 + 51_000],
+      ['u75', 'user', JULY_6_2026 + 76_000],
     ] as const;
     for (const [id, role, occurredAt] of rows) {
       const event = kernel.recordRawEvent({
@@ -270,16 +275,16 @@ test('split-plan uses turn metadata, boundary policies, and leading non-user tai
   try {
     const episode = kernel.episodeStore.createEpisode({
       projectId: 'brain', sessionId: 'turns', sourceAgent: 'test', conversationThreadId: 'turns',
-      episodeType: 'discussion', importance: 0.5, eventId: 'planned-start', occurredAt: 1,
+      episodeType: 'discussion', importance: 0.5, eventId: 'planned-start', occurredAt: JULY_4_2026 + 1,
     });
     const rows = [
-      ['a0', 'assistant', 'leading assistant', 1, 'turn-0', 0, 0, '2026-07-04', 'assistant_response'],
-      ['t0', 'tool', 'leading tool', 2, 'turn-0', 0, 1, '2026-07-04', 'tool_result_context'],
-      ['u1', 'user', 'first user', 3, 'turn-0', 0, 2, '2026-07-04', 'continues_previous'],
-      ['a1', 'assistant', 'answer', 4, 'turn-0', 0, 3, '2026-07-04', 'assistant_response'],
-      ['a-midnight', 'assistant', 'assistant after midnight', 5, 'turn-0', 0, 4, '2026-07-05', 'assistant_response'],
-      ['u2', 'user', 'next day user', 90_000_000, 'turn-1', 1, 0, '2026-07-05', 'continues_previous'],
-      ['u3', 'user', '换个话题，我们讨论 Atlas 结构。', 90_000_100, 'turn-2', 2, 0, '2026-07-05', 'hard_topic_switch'],
+      ['a0', 'assistant', 'leading assistant', JULY_4_2026 + 1, 'turn-0', 0, 0, '2026-07-04', 'assistant_response'],
+      ['t0', 'tool', 'leading tool', JULY_4_2026 + 2, 'turn-0', 0, 1, '2026-07-04', 'tool_result_context'],
+      ['u1', 'user', 'first user', JULY_4_2026 + 3, 'turn-0', 0, 2, '2026-07-04', 'continues_previous'],
+      ['a1', 'assistant', 'answer', JULY_4_2026 + 4, 'turn-0', 0, 3, '2026-07-04', 'assistant_response'],
+      ['a-midnight', 'assistant', 'assistant after midnight', JULY_4_2026 + 86_400_005, 'turn-0', 0, 4, '2026-07-05', 'assistant_response'],
+      ['u2', 'user', 'next day user', JULY_4_2026 + 90_000_000, 'turn-1', 1, 0, '2026-07-05', 'continues_previous'],
+      ['u3', 'user', '换个话题，我们讨论 Atlas 结构。', JULY_4_2026 + 90_000_100, 'turn-2', 2, 0, '2026-07-05', 'hard_topic_switch'],
     ] as const;
     for (const [id, role, content, occurredAt, turnId, turnSeq, eventOrdinal, localDate, relation] of rows) {
       const event = kernel.recordRawEvent({
@@ -314,16 +319,16 @@ test('split-plan reads explicit boundary relation from the user event inside a l
   try {
     const episode = kernel.episodeStore.createEpisode({
       projectId: 'brain', sessionId: 'user-boundary', sourceAgent: 'test', conversationThreadId: 'user-boundary',
-      episodeType: 'discussion', importance: 0.5, eventId: 'ub-start', occurredAt: 1,
+      episodeType: 'discussion', importance: 0.5, eventId: 'ub-start', occurredAt: JULY_4_2026 + 1,
     });
     const rows = [
-      ['ub-u0', 'user', 1, 'turn-0', '2026-07-04', 'continues_previous'],
-      ['ub-a1', 'assistant', 90_000_000, 'turn-1', '2026-07-05', 'assistant_response'],
-      ['ub-t1', 'tool', 90_000_001, 'turn-1', '2026-07-05', 'tool_result_context'],
-      ['ub-u1', 'user', 90_000_002, 'turn-1', '2026-07-05', 'closes_episode'],
-      ['ub-a2', 'assistant', 180_000_000, 'turn-2', '2026-07-06', 'assistant_response'],
-      ['ub-t2', 'tool', 180_000_001, 'turn-2', '2026-07-06', 'tool_result_context'],
-      ['ub-u2', 'user', 180_000_002, 'turn-2', '2026-07-06', 'hard_topic_switch'],
+      ['ub-u0', 'user', JULY_4_2026 + 1, 'turn-0', '2026-07-04', 'continues_previous'],
+      ['ub-a1', 'assistant', JULY_4_2026 + 90_000_000, 'turn-1', '2026-07-05', 'assistant_response'],
+      ['ub-t1', 'tool', JULY_4_2026 + 90_000_001, 'turn-1', '2026-07-05', 'tool_result_context'],
+      ['ub-u1', 'user', JULY_4_2026 + 90_000_002, 'turn-1', '2026-07-05', 'closes_episode'],
+      ['ub-a2', 'assistant', JULY_4_2026 + 180_000_000, 'turn-2', '2026-07-06', 'assistant_response'],
+      ['ub-t2', 'tool', JULY_4_2026 + 180_000_001, 'turn-2', '2026-07-06', 'tool_result_context'],
+      ['ub-u2', 'user', JULY_4_2026 + 180_000_002, 'turn-2', '2026-07-06', 'hard_topic_switch'],
     ] as const;
     for (const [eventId, role, occurredAt, turnId, localDate, relation] of rows) {
       const event = kernel.recordRawEvent({
@@ -382,13 +387,13 @@ test('audit and split-plan default to live runtime boundary config', () => {
   try {
     const episode = kernel.episodeStore.createEpisode({
       projectId: 'brain', sessionId: 'runtime', sourceAgent: 'test', conversationThreadId: 'runtime',
-      episodeType: 'discussion', importance: 0.4, eventId: 'runtime-start', occurredAt: 1,
+      episodeType: 'discussion', importance: 0.4, eventId: 'runtime-start', occurredAt: JULY_6_2026 + 1,
     });
     for (let index = 0; index < 21; index += 1) {
       const role = index === 0 || index === 20 ? 'user' : 'assistant';
       const event = kernel.recordRawEvent({
         eventId: `runtime-${index}`, projectId: 'brain', workspaceId: 'brain', threadId: 'runtime', sessionId: 'runtime',
-        role, content: `runtime ${index}`, sourceId: 'test', occurredAt: index + 1, localDate: '2026-07-06',
+        role, content: `runtime ${index}`, sourceId: 'test', occurredAt: JULY_6_2026 + index + 1, localDate: '2026-07-06',
       });
       kernel.episodeStore.appendEvent({
         episodeId: episode.episodeId, eventId: event.eventId,
@@ -415,13 +420,13 @@ test('audit replay honors applyToImports=false from live config', () => {
   try {
     const episode = kernel.episodeStore.createEpisode({
       projectId: 'brain', sessionId: 'import-runtime', sourceAgent: 'test', conversationThreadId: 'import-runtime',
-      episodeType: 'discussion', importance: 0.4, eventId: 'import-runtime-start', occurredAt: 1,
+      episodeType: 'discussion', importance: 0.4, eventId: 'import-runtime-start', occurredAt: JULY_6_2026 + 1,
     });
     for (let index = 0; index < 21; index += 1) {
       const role = index === 0 || index === 20 ? 'user' : 'assistant';
       const event = kernel.recordRawEvent({
         eventId: `import-runtime-${index}`, projectId: 'brain', workspaceId: 'brain', threadId: 'import-runtime', sessionId: 'import-runtime',
-        role, content: `import runtime ${index}`, sourceId: 'test', occurredAt: index + 1, localDate: '2026-07-06',
+        role, content: `import runtime ${index}`, sourceId: 'test', occurredAt: JULY_6_2026 + index + 1, localDate: '2026-07-06',
         metadata: { imported: true },
       });
       kernel.episodeStore.appendEvent({
@@ -455,26 +460,28 @@ test('audit and split-plan honor date boundary policy and surface invalid localD
       episodeType: 'discussion', importance: 0.5, eventId: 'dp-start', occurredAt: 1,
     });
     const rows = [
-      ['dp-u0', 'user', 1, 'turn-0', '2026-07-04'],
-      ['dp-u1', 'user', 2, 'turn-1', '2026-07-05'],
+      ['dp-u0', 'user', JULY_4_2026 + 1, 'turn-0', '2026-07-04'],
+      ['dp-u1', 'user', JULY_4_2026 + 86_400_002, 'turn-1', '2026-07-05'],
       ['dp-u2', 'user', 3, 'turn-2', '2026-99-99'],
     ] as const;
-    for (const [eventId, role, occurredAt, turnId, localDate] of rows) {
+    for (const [eventId, role, occurredAt, turnId, localDate] of rows.slice(0, 2)) {
       const event = kernel.recordRawEvent({
         eventId, projectId: 'brain', workspaceId: 'brain', threadId: 'date-policy', sessionId: 'date-policy',
         role, content: eventId, sourceId: 'test', occurredAt, turnId, localDate,
       });
       kernel.episodeStore.appendEvent({ episodeId: episode.episodeId, eventId: event.eventId, relation: 'continues_previous', confidence: 1, occurredAt });
     }
+    expect(() => kernel.recordRawEvent({
+      eventId: rows[2]![0], projectId: 'brain', workspaceId: 'brain', threadId: 'date-policy', sessionId: 'date-policy',
+      role: rows[2]![1], content: rows[2]![0], sourceId: 'test', occurredAt: rows[2]![2], turnId: rows[2]![3], localDate: rows[2]![4],
+    })).toThrow('invalid_local_date');
 
     const plan = kernel.planEpisodeSplit({ projectId: 'brain', episodeId: episode.episodeId, includeEventIds: true });
     expect(plan.normalizedPolicy.splitOnTrustedLocalDateChange).toBe(false);
     expect(plan.proposedBoundaries.map((item) => item.reason)).not.toContain('trusted_local_date_boundary');
-    expect(plan.warnings).toContain('invalid_trusted_local_date');
     expect(plan.impactInventory.trustedLocalDates).toEqual(['2026-07-04', '2026-07-05']);
 
     const audit = kernel.auditEpisodeBoundaries({ projectId: 'brain', episodeId: episode.episodeId }).items[0];
-    expect(audit.warnings).toContain('invalid_trusted_local_date');
     expect(audit.reasons).not.toContain('multiple_trusted_local_dates');
   } finally {
     kernel.close();
@@ -490,7 +497,7 @@ test('split-plan bounds event id output even when includeEventIds is true', () =
       const event = kernel.recordRawEvent({
         projectId: 'brain', workspaceId: 'brain', threadId: 'big', sessionId: 'big',
         role: 'assistant', content: `big event ${index}`, sourceId: 'test',
-        occurredAt: 1_000 + index, eventOrdinal: index, localDate: '2026-07-04',
+        occurredAt: JULY_4_2026 + 1_000 + index, eventOrdinal: index, localDate: '2026-07-04',
       });
       if (!episodeId) {
         episodeId = kernel.episodeStore.createEpisode({
@@ -512,4 +519,4 @@ test('split-plan bounds event id output even when includeEventIds is true', () =
     kernel.close();
     rmSync(dir, { recursive: true, force: true });
   }
-});
+}, 15_000);

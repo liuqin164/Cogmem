@@ -2,10 +2,11 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { callCogmemMcpTool, listCogmemMcpTools, } from './CoreMcpTools.js';
+import { CORE_VERSION } from '../version.js';
 export function createCogmemMcpServer(runtime = {}) {
     const server = new Server({
         name: 'cogmem-core',
-        version: '3.7.2',
+        version: CORE_VERSION,
     }, {
         capabilities: {
             tools: {},

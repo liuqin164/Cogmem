@@ -19,6 +19,7 @@ import {
 import type { IngestionCursorStore } from './IngestionCursorStore.js';
 import type { OfflineConsolidationOutput } from '../engine/OfflineConsolidationPipeline.js';
 import type { MemoryEvent, MemorySourceRef } from '../types/index.js';
+import { projectScope } from '../topology/ProjectScope.js';
 
 export interface BatchConsolidationWindow {
   start: number;
@@ -158,7 +159,8 @@ export class InstalledBatchProcessor {
       });
 
       const snapshot = this.loader.read(source);
-      const cursor = this.deps.cursorStore.getCursor(source.sourceId);
+      const scope = projectScope(source.projectId);
+      const cursor = this.deps.cursorStore.getCursor(source.sourceId, scope);
       const adapted = adapter.adapt(
         source,
         snapshot,
@@ -170,7 +172,7 @@ export class InstalledBatchProcessor {
             }
       );
       adapterDiagnostics.push(...(adapted.diagnostics || []));
-      const seenHashes = this.deps.cursorStore.listProcessedRecordHashes(source.sourceId, options.window.start, options.window.end);
+      const seenHashes = this.deps.cursorStore.listProcessedRecordHashes(source.sourceId, options.window.start, options.window.end, scope);
       const pending = adapted.records.filter((record) => !seenHashes.has(record.provenance.recordHash));
 
       recordsParsed += adapted.records.length;
@@ -236,6 +238,7 @@ export class InstalledBatchProcessor {
             sourceId: source.sourceId,
             sourcePath: source.sourcePath,
             sourceType: source.adapterKind,
+            projectId: scope,
             contentHash: item.record.provenance.fileHash,
             contentWindowStart: options.window.start,
             contentWindowEnd: options.window.end,

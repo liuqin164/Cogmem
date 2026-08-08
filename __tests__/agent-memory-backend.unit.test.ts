@@ -45,7 +45,6 @@ test('agent backend recall falls back to bounded raw ledger search for raw-only 
     timestamp: 1_700_000_000_000,
     ingestMode: 'raw_archive_only',
   });
-
   const recalled = backend.recall({
     agentId: 'openclaw',
     projectId: 'demo',
@@ -444,6 +443,7 @@ test('agent backend historical discussion recall prefers original memory-context
     timestamp: Date.UTC(2026, 5, 28),
     ingestMode: 'raw_archive_only',
   });
+  kernel.rebuildMemoryAtlas({ projectId: 'demo' });
 
   const recalled = backend.recall({
     agentId: 'openclaw',

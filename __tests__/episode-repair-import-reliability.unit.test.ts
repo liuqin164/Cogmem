@@ -69,7 +69,7 @@ test('assistant-only decision needs confirmation and summary candidates are non-
 
 test('auto Dream mode is selected per job and failure details are returned and persisted', async () => {
   const db = new Database(':memory:');
-  const store = new EpisodeStore(db);
+  const store = new EpisodeStore(db, (eventId) => ({ eventId, projectId: 'brain' } as never));
   const modes: string[] = [];
   let failingEpisodeId: string | undefined;
   const scheduler = new DreamScheduler(store, {
@@ -104,7 +104,7 @@ test('auto Dream mode is selected per job and failure details are returned and p
 
 test('auto Dream recommends deep work for a daily maintenance window', async () => {
   const db = new Database(':memory:');
-  const store = new EpisodeStore(db);
+  const store = new EpisodeStore(db, (eventId) => ({ eventId, projectId: 'brain' } as never));
   const modes: string[] = [];
   const scheduler = new DreamScheduler(store, {
     run: async (options: { dreamMode: string }) => { modes.push(options.dreamMode); return { candidates: [] }; },
@@ -150,7 +150,7 @@ test('MCP generic import preserves turn and local date metadata', async () => {
       projectId: 'brain', sessionId: 's1', sourceAgent: 'hermes',
       messages: [{
         role: 'user', text: 'turn metadata survives import', externalMessageId: 'meta-1',
-        threadId: 'thread-7', turnId: 'turn-7', turnSeq: 7, localDate: '2026-07-06', eventOrdinal: 2,
+        threadId: 'thread-7', turnId: 'turn-7', turnSeq: 7, timestamp: Date.UTC(2026, 6, 6), localDate: '2026-07-06', eventOrdinal: 2,
       }],
     }, { kernel });
     const content = result.structuredContent as { messageResults: Array<{ eventId: string }> };

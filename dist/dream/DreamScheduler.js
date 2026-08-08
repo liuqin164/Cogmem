@@ -3,12 +3,16 @@ export class DreamScheduler {
     episodeStore;
     curator;
     candidateStore;
-    constructor(episodeStore, curator, candidateStore) {
+    frameStore;
+    constructor(episodeStore, curator, candidateStore, frameStore) {
         this.episodeStore = episodeStore;
         this.curator = curator;
         this.candidateStore = candidateStore;
+        this.frameStore = frameStore;
     }
     async tick(options = {}) {
+        if (this.frameStore && this.frameStore.getDatabase() !== this.episodeStore.getDatabase())
+            throw new Error('frame_store_database_mismatch');
         const wallStartedAt = Date.now();
         const clock = options.clock ?? {
             now: () => options.now === undefined ? Date.now() : options.now + (Date.now() - wallStartedAt),
@@ -19,6 +23,7 @@ export class DreamScheduler {
         const graceMs = Math.max(0, options.softSealGraceMs ?? 5 * 60_000);
         const leaseMs = Math.max(5_000, options.leaseMs ?? 5 * 60_000);
         this.candidateStore?.abandonStaleStagedRuns(startedAt - leaseMs, startedAt, options.projectId);
+        this.frameStore?.failStagedOlderThan(startedAt - leaseMs, startedAt, options.projectId);
         this.episodeStore.finalizeMatureSoftSeals({
             projectId: options.projectId,
             sealedBefore: startedAt - graceMs,
@@ -39,7 +44,8 @@ export class DreamScheduler {
                 runId, projectId: options.projectId, requestedMode, selectedMode: 'none', skipped: true,
                 reason: 'no_sealed_episode_backlog', processedEpisodeCount: 0, failedEpisodeCount: 0,
                 candidateCount: 0, episodeIds: [], candidateIds: [], durationMs: elapsed(startedAt, options.now),
-                selectedModes: { micro: 0, normal: 0, deep: 0 }, failedEpisodes: [],
+                selectedModes: { micro: 0, normal: 0, deep: 0 }, failedEpisodes: [], semanticProcessorAvailable: false,
+                semanticProcessorUnavailableCount: 0, semanticProcessorFailedCount: 0,
             };
             this.recordRun(result, startedAt, 'skipped');
             return result;
@@ -55,6 +61,9 @@ export class DreamScheduler {
         const selectedModes = { micro: 0, normal: 0, deep: 0 };
         const failedEpisodes = [];
         let failures = 0;
+        let semanticProcessorUnavailableCount = 0;
+        let semanticProcessorFailedCount = 0;
+        let semanticProcessorAvailable = false;
         for (const [jobIndex, job] of jobs.entries()) {
             const links = this.episodeStore.listEventLinks(job.episodeId);
             const episode = this.episodeStore.getEpisode(job.episodeId);
@@ -80,6 +89,12 @@ export class DreamScheduler {
                     leaseUntil: job.leaseUntil,
                     attemptGeneration: job.attemptGeneration,
                 });
+                if (run.semanticProcessorAvailable)
+                    semanticProcessorAvailable = true;
+                if (run.semanticProcessorReason === 'semantic_processor_unavailable')
+                    semanticProcessorUnavailableCount += 1;
+                if (run.semanticProcessorReason === 'semantic_processor_failed')
+                    semanticProcessorFailedCount += 1;
                 const ids = run.candidates.map((candidate) => candidate.candidateId);
                 try {
                     const commitCandidates = run.runId
@@ -89,6 +104,8 @@ export class DreamScheduler {
                             }
                             this.candidateStore.publishStagedCandidates(run.runId, ids, startedAt);
                             this.candidateStore.updateRunStatus(run.runId, 'staged', 'succeeded');
+                            if (this.frameStore && run.frameIds?.length)
+                                this.frameStore.publishStaged(run.frameIds, startedAt);
                         }
                         : undefined;
                     const completedAt = clock.now();
@@ -98,6 +115,8 @@ export class DreamScheduler {
                     const failedAt = clock.now();
                     if (run.runId)
                         this.candidateStore.failStagedRun(run.runId, failedAt, 'dream_job_completion_failed');
+                    if (this.frameStore && run.frameIds?.length)
+                        this.frameStore.failStaged(run.frameIds, failedAt);
                     throw completionError;
                 }
                 episodeIds.push(job.episodeId);
@@ -107,6 +126,8 @@ export class DreamScheduler {
                 failures += 1;
                 const message = error instanceof Error ? error.message : String(error);
                 const failureNow = clock.now();
+                if (this.frameStore)
+                    this.frameStore.failStagedForEpisode(job.episodeId, job.leaseId, failureNow);
                 const failure = classifyFailure(message, job.attempts, failureNow);
                 this.episodeStore.failDreamJob(job.episodeId, job.leaseId, message, failure);
                 failedEpisodes.push({ episodeId: job.episodeId, error: message, failureCategory: failure.failureCategory, retryAfter: failure.retryAfter });
@@ -118,6 +139,7 @@ export class DreamScheduler {
             processedEpisodeCount: episodeIds.length, failedEpisodeCount: failures,
             candidateCount: candidateIds.length, episodeIds, candidateIds, durationMs: elapsed(startedAt, options.now),
             selectedModes, failedEpisodes,
+            semanticProcessorAvailable, semanticProcessorUnavailableCount, semanticProcessorFailedCount,
         };
         this.recordRun(result, startedAt, failures ? 'partial' : 'succeeded');
         return result;

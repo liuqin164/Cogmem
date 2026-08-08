@@ -75,12 +75,26 @@ describe('context cortex v1', () => {
     const cortex = new ContextCortex(db);
     const plan = cortex.plan({
       query: 'Why did the project decision change?', projectId: 'brain', availableTokens: 1000,
-      candidates: [{ id: 'timeline', layer: 'temporal', content: 'decision changed at v3', estimatedTokens: 20, confidence: 0.9 }],
+      candidates: [{ id: 'timeline', layer: 'temporal', content: 'decision changed at v3', estimatedTokens: 20, confidence: 0.9, projectId: 'brain' }],
     });
     const receipt = cortex.getReceipt(plan.receipt.receiptId);
 
     expect(receipt?.intent).toBe('decision_history');
     expect(receipt?.selected[0]?.id).toBe('timeline');
     expect(receipt?.budgetTokens).toBe(250);
+  });
+
+  test('treats projectless as an exact context boundary', () => {
+    const cortex = new ContextCortex();
+    const plan = cortex.plan({
+      query: 'project status', projectId: '', availableTokens: 1000,
+      candidates: [
+        { id: 'global', layer: 'graph', content: 'global', projectId: '' },
+        { id: 'a', layer: 'graph', content: 'named', projectId: 'a' },
+        { id: 'implicit', layer: 'graph', content: 'implicit' },
+      ],
+    });
+    expect(plan.selected.map((item) => item.id)).toEqual(['global', 'implicit']);
+    expect(plan.receipt.suppressed).toContainEqual(expect.objectContaining({ id: 'a', reason: 'project_boundary' }));
   });
 });

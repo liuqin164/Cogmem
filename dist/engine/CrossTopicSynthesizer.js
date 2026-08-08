@@ -1,4 +1,5 @@
 import { NeuronFactory } from '../core/Neuron.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 export class CrossTopicSynthesizer {
     memoryGraph;
     trigger;
@@ -23,7 +24,7 @@ export class CrossTopicSynthesizer {
         const sources = input.semanticNeuronIds
             .map((id) => this.memoryGraph.getNeuron(id))
             .filter((neuron) => Boolean(neuron))
-            .filter((neuron) => neuron.metadata.projectId === input.projectId)
+            .filter((neuron) => matchesProjectScope(input.projectId, neuron.metadata.projectId))
             .slice(0, this.options.maxSourceNeuronsPerBatch ?? 20);
         if (sources.length === 0)
             return null;

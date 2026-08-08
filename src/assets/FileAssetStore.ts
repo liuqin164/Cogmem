@@ -119,7 +119,7 @@ export class FileAssetStore {
         metadata_json = excluded.metadata_json
     `).run(
       record.assetId,
-      record.projectId || null,
+      record.projectId ?? null,
       record.filePath,
       record.originalName || null,
       record.mimeType || null,
@@ -156,10 +156,10 @@ export class FileAssetStore {
   }
 
   findByPath(filePath: string, projectId?: string): FileAssetRecord | null {
-    const row = projectId
+    const row = projectId !== undefined
       ? this.db.prepare(`
           SELECT * FROM file_assets
-          WHERE file_path = ? AND project_id = ?
+          WHERE file_path = ? AND COALESCE(project_id,'') = ?
           ORDER BY updated_at DESC LIMIT 1
         `).get(filePath, projectId) as FileAssetRow | null
       : this.db.prepare(`
@@ -173,8 +173,8 @@ export class FileAssetStore {
   listByQuery(input: { query?: string; projectId?: string; extension?: string; mimeType?: string; limit?: number }): FileAssetRecord[] {
     const params: Array<string | number> = [];
     let sql = `SELECT * FROM file_assets WHERE 1=1`;
-    if (input.projectId) {
-      sql += ` AND project_id = ?`;
+    if (input.projectId !== undefined) {
+      sql += ` AND COALESCE(project_id,'') = ?`;
       params.push(input.projectId);
     }
     if (input.extension) {
@@ -198,7 +198,7 @@ export class FileAssetStore {
   private mapRow(row: FileAssetRow): FileAssetRecord {
     return {
       assetId: row.asset_id,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id ?? undefined,
       filePath: row.file_path,
       originalName: row.original_name || undefined,
       mimeType: row.mime_type || undefined,
@@ -216,4 +216,3 @@ export class FileAssetStore {
     };
   }
 }
-

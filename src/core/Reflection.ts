@@ -6,6 +6,7 @@ import type { Neuron, Synapse, MemoryAnchor } from '../types/index.js';
 import { MemoryGraph } from './MemoryGraph.js';
 import { SynapseUtils } from './Synapse.js';
 import { logger } from '../utils/Logger.js';
+import { projectScope } from '../topology/ProjectScope.js';
 
 export class Reflection {
   private memoryGraph: MemoryGraph;
@@ -50,11 +51,12 @@ export class Reflection {
       const newStability = Math.min(2.5, (neuron.metadata.stability || 1.0) + 0.1);
       const newRepetitions = (neuron.metadata.repetitions || 0) + 1;
       
-      neuron.metadata.lastActivated = now;
-      neuron.metadata.activationCount = newCount;
-      neuron.metadata.stability = newStability;
-      neuron.metadata.repetitions = newRepetitions;
-      this.memoryGraph.updateNeuronMetadata(neuronId, neuron.metadata);
+      this.memoryGraph.updateNeuronMetadata(neuronId, {
+        lastActivated: now,
+        activationCount: newCount,
+        stability: newStability,
+        repetitions: newRepetitions,
+      });
     }
 
     if (recent.length >= 5) {
@@ -120,6 +122,7 @@ export class Reflection {
         if (score < SIMILARITY_THRESHOLD) continue;
         const old = this.memoryGraph.getNeuron(id);
         if (!old || old.id === newNeuron.id) continue;
+        if (projectScope(old.metadata.projectId) !== projectScope(newNeuron.metadata.projectId)) continue;
         if (old.metadata.createdAt < windowStart) continue;
         if (old.metadata.type !== newNeuron.metadata.type) continue;
         if (this.checkPolarityCollision(newNeuron, old)) {

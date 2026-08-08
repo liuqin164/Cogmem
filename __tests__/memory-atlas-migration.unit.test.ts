@@ -1,14 +1,23 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 
 import { createMemoryKernel } from '../src/factory.js';
+import { memoryEdgeId, memoryEntityId } from '../src/binding/MemoryBindingIdentity.js';
+import { installMultidimensionalMemoryGraph374 } from '../src/migrations/0032_multidimensional_memory_graph_3_7_4.js';
+import { MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 const migrateBin = join(import.meta.dir, '..', 'src', 'bin', 'migrate.ts');
+const fixturePath = join(import.meta.dir, 'fixtures', 'migrations', 'main-3.7.3-schema31.sqlite.gz');
 
-async function migrate(dbPath: string, args: string[]): Promise<Record<string, unknown>> {
+async function migrate(dbPath: string, args: string[]): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
   const proc = Bun.spawn({
     cmd: ['bun', migrateBin, '--db', dbPath, ...args, '--json'],
     stdout: 'pipe',
@@ -19,101 +28,732 @@ async function migrate(dbPath: string, args: string[]): Promise<Record<string, u
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  expect(stderr).toBe('');
-  expect(exitCode).toBe(0);
-  return JSON.parse(stdout) as Record<string, unknown>;
+  return { exitCode, stdout, stderr };
 }
 
-test('one command upgrades a 3.5.2 database through schema 31 without changing source memory', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-atlas-migrate-')), 'memory.db');
-  const kernel = createMemoryKernel({ dbPath });
-  const event = kernel.eventStore.append({
-    eventId: 'evt-hermes-2025',
-    streamId: 'thread-hermes',
-    streamType: 'thread',
-    eventType: 'MESSAGE',
-    rawEventType: 'message',
-    projectId: 'cogmem',
-    sessionId: 'session-hermes',
-    role: 'user',
-    occurredAt: Date.UTC(2025, 5, 1),
-    payload: { text: '请给 Hermes 配置 MCP 并连接 Cogmem。' },
-  });
-  const entity = kernel.memoryBindingStore.upsertEntity({
-    projectId: 'cogmem',
-    canonicalName: 'Hermes',
-    entityType: 'project',
-    now: event.occurredAt,
-  });
-  kernel.memoryBindingStore.upsertTopic({
-    projectId: 'cogmem',
-    topicPath: 'cogmem/hermes',
-    topicType: 'project',
-    summary: 'Hermes integration work',
-    now: event.occurredAt,
-  });
-  kernel.memoryBindingStore.insertBinding({
-    eventId: event.eventId,
-    projectId: 'cogmem',
-    role: 'user',
-    rawEventType: 'message',
-    entityId: entity.entityId,
-    entityName: 'Hermes',
-    entityType: 'project',
-    topicPath: 'cogmem/hermes',
-    bindingType: 'about',
-    confidence: 0.95,
-    source: 'deterministic',
-    signal: 'Hermes',
-    claimKey: 'hermes-mcp-setup',
-    createdAt: event.occurredAt,
-  });
-  kernel.close();
+function materializeFixture(directory: string): string {
+  const dbPath = join(directory, 'memory.db');
+  writeFileSync(dbPath, gunzipSync(readFileSync(fixturePath)));
+  return dbPath;
+}
 
-  const fixture = new Database(dbPath);
-  fixture.exec(`
-    DROP TABLE IF EXISTS memory_atlas_projection_state;
-    DROP TABLE IF EXISTS memory_atlas_activation;
-    DROP TABLE IF EXISTS memory_atlas_access;
-    DROP TABLE IF EXISTS memory_action_frame_evidence;
-    DROP TABLE IF EXISTS memory_action_frames;
-    DROP TABLE IF EXISTS memory_atlas_fts;
-    DROP TABLE IF EXISTS memory_atlas_documents;
-    DROP TABLE IF EXISTS deep_write_candidate_reviews;
-    DELETE FROM _schema_migrations WHERE version IN ('0025','0026','0027','0028','0029','0030','0031');
-    DELETE FROM _episode_integrity_markers WHERE marker = 'episode_boundary_integrity_0031';
-    UPDATE _meta SET value = '24' WHERE key = 'schema_version';
-  `);
-  fixture.close();
+type CanonicalEvidence = Record<string, {
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+}>;
 
-  const before = new Database(dbPath, { readonly: true });
-  const beforeEvents = (before.prepare('SELECT COUNT(*) AS count FROM memory_events').get() as { count: number }).count;
-  const beforeBindings = (before.prepare('SELECT COUNT(*) AS count FROM memory_bindings').get() as { count: number }).count;
+function canonicalEvidence(db: Database, baseline?: CanonicalEvidence): CanonicalEvidence {
+  const tables = [
+    'memory_events',
+    'neurons',
+    'memory_episodes',
+    'memory_episode_events',
+    'episode_cross_refs',
+    'episode_ingest_keys',
+    'memory_bindings',
+    'memory_entities',
+    'memory_edges',
+    'memory_action_frames',
+    'memory_action_frame_evidence',
+    'entities',
+    'entity_instances',
+    'entity_aliases',
+    'entity_attributes',
+    'entity_mentions',
+    'entity_relations',
+    'memory_topics',
+    'topic_nodes',
+    'topic_aliases',
+    'topic_relations',
+    'topic_operations',
+    'facts',
+    'beliefs',
+    'belief_evidence',
+    'deep_write_summaries',
+    'prospective_memories',
+    'prospective_memory_transitions',
+    'anchors',
+    'import_source_anchors',
+    'project_branches',
+    'branch_links',
+    'branch_entries',
+  ];
+  return Object.fromEntries(tables.map((table) => {
+    const columns = baseline?.[table]?.columns
+      ?? (db.prepare(`PRAGMA table_info("${table}")`).all() as Array<{ name: string }>).map((column) => column.name);
+    const select = columns.map((column) => `"${column.replaceAll('"', '""')}"`).join(',');
+    const rows = (db.prepare(`SELECT ${select} FROM "${table}"`).all() as Array<Record<string, unknown>>)
+      .map((row) => columns.includes('project_id') && row.project_id == null
+        ? { ...row, project_id: '' }
+        : row);
+    return [table, {
+      columns,
+      rows: rows.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+    }];
+  }));
+}
+
+function schema(db: Database): unknown {
+  return (db.prepare(`
+    SELECT type,name,tbl_name,sql FROM sqlite_master
+    WHERE name NOT LIKE 'sqlite_%' AND name<>'_schema_migrations'
+    ORDER BY type,name
+  `).all() as Array<{ type: string; name: string; tbl_name: string; sql: string | null }>)
+    .map((row) => ({
+      ...row,
+      sql: row.sql?.replace(/\s+/gu, ' ').trim().toLowerCase() ?? null,
+    }));
+}
+
+test('real main 3.7.3 schema 31 upgrades atomically through the sole 0032 release migration', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-main-373-'));
+  const dbPath = materializeFixture(directory);
+  const before = new Database(dbPath);
+  const evidence = canonicalEvidence(before);
+  const receiptCount = (before.prepare(`SELECT COUNT(*) AS count FROM _schema_migrations`).get() as { count: number }).count;
   before.close();
 
   const dryRun = await migrate(dbPath, ['--dry-run']);
-  expect(dryRun.pending).toEqual(['0025', '0026', '0027', '0028', '0029', '0030', '0031']);
+  expect({ exitCode: dryRun.exitCode, stderr: dryRun.stderr }).toEqual({ exitCode: 0, stderr: '' });
+  expect(JSON.parse(dryRun.stdout).pending).toEqual(['0032']);
+  const afterDryRun = new Database(dbPath);
+  expect(afterDryRun.prepare(`SELECT COUNT(*) AS count FROM _schema_migrations`).get()).toEqual({ count: receiptCount });
+  afterDryRun.close();
 
-  const result = await migrate(dbPath, ['--yes', '--backup']);
-  expect(result.applied).toEqual(['0025', '0026', '0027', '0028', '0029', '0030', '0031']);
-  expect(existsSync(result.backupPath as string)).toBe(true);
+  const applied = await migrate(dbPath, ['--yes']);
+  expect({ exitCode: applied.exitCode, stderr: applied.stderr }).toEqual({ exitCode: 0, stderr: '' });
+  const result = JSON.parse(applied.stdout);
+  expect(result.applied).toEqual(['0032']);
+  expect(existsSync(result.backupPath)).toBe(true);
 
-  const upgraded = new Database(dbPath, { readonly: true });
-  expect(upgraded.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get()).toEqual({ value: '31' });
-  expect((upgraded.prepare('SELECT COUNT(*) AS count FROM memory_events').get() as { count: number }).count).toBe(beforeEvents);
-  expect((upgraded.prepare('SELECT COUNT(*) AS count FROM memory_bindings').get() as { count: number }).count).toBe(beforeBindings);
-  expect(upgraded.prepare(`SELECT node_id, project_id, node_type FROM memory_atlas_documents WHERE node_id = ?`).get(`entity:${entity.entityId}`)).toEqual({
-    node_id: `entity:${entity.entityId}`,
-    project_id: 'cogmem',
-    node_type: 'entity',
-  });
-  expect(upgraded.prepare(`SELECT status FROM memory_atlas_projection_state WHERE project_id='cogmem' AND projection_name='memory_atlas.v1'`).get()).toEqual({
-    status: 'dirty',
-  });
-  const eventColumns = upgraded.prepare('PRAGMA table_info(memory_events)').all() as Array<{ name: string }>;
-  expect(eventColumns.map((column) => column.name)).toContain('local_date_source');
+  const upgraded = new Database(dbPath);
+  expect(canonicalEvidence(upgraded, evidence)).toEqual(evidence);
+  expect(upgraded.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get()).toEqual({ version: '0032' });
+  expect(upgraded.prepare(`SELECT COUNT(*) AS count FROM _schema_migrations WHERE version>'0032'`).get()).toEqual({ count: 0 });
+  expect(upgraded.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='runtime_scope_quarantine'`).get()).toBeNull();
+  expect(upgraded.prepare(`PRAGMA integrity_check`).get()).toEqual({ integrity_check: 'ok' });
+  expect(upgraded.prepare(`PRAGMA foreign_key_check`).all()).toEqual([]);
   upgraded.close();
 
+  createMemoryKernel({ dbPath, projectTimeZone: 'Asia/Tokyo' }).close();
   const repeated = await migrate(dbPath, ['--yes']);
-  expect(repeated.applied).toEqual([]);
+  expect(JSON.parse(repeated.stdout).applied).toEqual([]);
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('fresh and main-schema-31 upgrade paths produce the same runtime schema', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema-equivalence-'));
+  const upgradedPath = materializeFixture(directory);
+  const freshPath = join(directory, 'fresh.db');
+
+  const applied = await migrate(upgradedPath, ['--yes']);
+  expect(applied.exitCode).toBe(0);
+  createMemoryKernel({ dbPath: upgradedPath, projectTimeZone: 'Asia/Tokyo' }).close();
+  createMemoryKernel({ dbPath: freshPath, projectTimeZone: 'Asia/Tokyo' }).close();
+
+  const upgraded = new Database(upgradedPath);
+  const fresh = new Database(freshPath);
+  expect(schema(upgraded)).toEqual(schema(fresh));
+  expect(fresh.prepare(`
+    SELECT version,checksum FROM _schema_migrations WHERE version='0032'
+  `).get()).toEqual({ version: '0032', checksum: MIGRATION_DIGESTS['0032'] });
+  upgraded.close();
+  fresh.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('schema31 canonical evidence survives projection rebuild and repeated install', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-identities-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  const entityId = 'entity-schema31-project-a';
+  const edgeId = memoryEdgeId({
+    projectId: 'project-a',
+    sourceType: 'entity',
+    sourceId: entityId,
+    relationType: 'belongs_to',
+    targetType: 'topic',
+    targetId: 'schema31/topic',
+  });
+  db.prepare(`
+    INSERT INTO memory_entities(entity_id,project_id,canonical_name,entity_type,aliases_json,stable_path,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?)
+  `).run(entityId, 'project-a', 'Schema Entity', 'concept', '["Schema Alias"]', null, 1, 1);
+  db.prepare(`
+    INSERT INTO entities(entity_id,canonical_name,type,aliases_json,status,metadata_json,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?)
+  `).run('canonical-schema31', 'Schema Entity', 'concept', '["Schema Alias"]', 'active', '{}', 1, 1);
+  db.prepare(`
+    INSERT INTO entity_instances(
+      instance_id,canonical_entity_id,canonical_name,type,aliases_json,status,metadata_json,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?)
+  `).run(
+    entityId, 'canonical-schema31', 'Schema Entity', 'concept', '["Schema Alias"]',
+    'active', '{"projectId":"project-a"}', 1, 1,
+  );
+  db.prepare(`
+    INSERT INTO memory_topics(topic_path,project_id,project_id_key,parent_path,topic_type,summary,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?)
+  `).run('schema31/topic', 'project-a', 'project-a', null, 'semantic', null, 1, 1);
+  db.prepare(`
+    INSERT INTO memory_bindings(
+      binding_id,event_id,project_id,entity_id,entity_name,entity_type,topic_path,binding_type,
+      confidence,source,signal,claim_key,binding_action,related_event_ids_json,created_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    'binding-schema31-a', 'main-373-event-a', 'project-a', entityId, 'Schema Entity', 'concept',
+    'schema31/topic', 'entity', 1, 'explicit', 'schema31', 'default', 'create_new_cluster', '[]', 1,
+  );
+  db.prepare(`
+    INSERT INTO memory_edges(
+      edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,confidence,
+      evidence_event_ids_json,status,created_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    edgeId, 'project-a', 'entity', entityId, 'belongs_to', 'topic', 'schema31/topic',
+    1, '["main-373-event-a"]', 'active', 1,
+  );
+  db.prepare(`
+    INSERT INTO memory_action_frames(
+      action_id,project_id,frame_type,action,actor,target_entity_id,target_label,occurred_at,
+      confidence,source_authority,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run('action-schema31', 'project-a', 'update', 'update', 'user', entityId, 'Schema Entity', 1, 1, 'raw_evidence', 1, 1);
+  db.prepare(`
+    INSERT INTO memory_action_frame_evidence(action_id,event_id,project_id,created_at)
+    VALUES(?,?,?,?)
+  `).run('action-schema31', 'main-373-event-a', 'project-a', 1);
+  db.exec(`
+    CREATE VIEW custom_schema31_entities AS SELECT entity_id FROM memory_entities;
+    CREATE INDEX custom_schema31_entity_name ON memory_entities(canonical_name);
+    CREATE TRIGGER custom_schema31_entity_audit AFTER UPDATE ON memory_entities BEGIN SELECT 1; END;
+  `);
+  const topologyBefore = canonicalEvidence(db);
+  db.close();
+
+  expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+  const upgraded = new Database(dbPath);
+  expect(upgraded.prepare(`SELECT entity_id FROM memory_entities WHERE project_id='project-a'`).all())
+    .toEqual([{ entity_id: entityId }]);
+  expect(upgraded.prepare(`SELECT edge_id FROM memory_edges`).all()).toEqual([{ edge_id: edgeId }]);
+  expect(upgraded.prepare(`SELECT COUNT(*) AS count FROM memory_action_frames`).get()).toEqual({ count: 0 });
+  expect(upgraded.prepare(`
+    SELECT name FROM sqlite_master
+    WHERE name IN ('custom_schema31_entities','custom_schema31_entity_name','custom_schema31_entity_audit')
+    ORDER BY name
+  `).all()).toEqual([
+    { name: 'custom_schema31_entities' },
+    { name: 'custom_schema31_entity_audit' },
+    { name: 'custom_schema31_entity_name' },
+  ]);
+  for (const table of ['project_branches', 'branch_links', 'branch_entries']) {
+    const before = topologyBefore[table]!;
+    const columns = before.columns.map((column) => `"${column}"`).join(',');
+    const rows = (upgraded.prepare(`SELECT ${columns} FROM "${table}"`).all() as Array<Record<string, unknown>>)
+      .map((row) => before.columns.includes('project_id') && row.project_id == null
+        ? { ...row, project_id: '' }
+        : row);
+    expect(rows.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))).toEqual(before.rows);
+  }
+  installMultidimensionalMemoryGraph374(upgraded);
+  expect(upgraded.prepare(`SELECT entity_id FROM memory_entities WHERE project_id='project-a'`).all())
+    .toEqual([{ entity_id: entityId }]);
+  expect(upgraded.prepare(`SELECT edge_id FROM memory_edges`).all()).toEqual([{ edge_id: edgeId }]);
+  upgraded.close();
+
+  const kernel = createMemoryKernel({ dbPath, projectTimeZone: 'Asia/Tokyo' });
+  const runtimeEntity = kernel.entityStore.findByCanonicalName('Schema Entity', 'concept', 'project-a');
+  expect(runtimeEntity?.entityId).toBe(entityId);
+  kernel.memoryBindingStore.upsertEntity({
+    entityId: runtimeEntity!.entityId,
+    projectId: 'project-a',
+    canonicalName: 'Schema Entity',
+    entityType: 'concept',
+  });
+  kernel.close();
+  const finalDb = new Database(dbPath);
+  expect(finalDb.prepare(`SELECT COUNT(*) AS count FROM memory_entities WHERE project_id='project-a'`).get())
+    .toEqual({ count: 1 });
+  finalDb.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('schema31 polluted topology is split by live provenance and cognitive identities are project scoped', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-topology-scope-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  const neuron = (scope: string) => (db.prepare(`
+    SELECT id FROM neurons WHERE COALESCE(project_id,'')=? AND is_deleted=0 LIMIT 1
+  `).get(scope) as { id: string }).id;
+  const neurons = ['project-a', 'project-b', ''].map(neuron);
+  db.prepare(`INSERT INTO task_branches VALUES(?,?,?,?,?,?,?)`)
+    .run('legacy-task', 'project-b', 'shared-task', 'Shared task', 'active', 1, 1);
+  db.prepare(`INSERT INTO event_clusters VALUES(?,?,?,?,?,?,?)`)
+    .run('legacy-cluster', 'project-b', 'shared-cluster', 'semantic', 'Shared cluster', 1, 1);
+  const insertTask = db.prepare(`
+    INSERT INTO task_branch_entries(task_id,neuron_id,created_at) VALUES('legacy-task',?,1)
+  `);
+  const insertCluster = db.prepare(`
+    INSERT INTO event_cluster_entries(cluster_id,neuron_id,created_at) VALUES('legacy-cluster',?,1)
+  `);
+  for (const neuronId of neurons) insertTask.run(neuronId);
+  for (const neuronId of neurons.slice(0, 2)) insertCluster.run(neuronId);
+  insertTask.run(neurons[0]!);
+  insertCluster.run(neurons[0]!);
+  db.prepare(`INSERT INTO project_branches VALUES(?,?,?,?,?,?,?)`)
+    .run('duplicate-branch', 'project-a', 'duplicate-branch', 'semantic', 'Duplicate branch', 1, 1);
+  const insertBranch = db.prepare(`
+    INSERT INTO branch_entries(branch_id,neuron_id,created_at) VALUES('duplicate-branch',?,?)
+  `);
+  insertBranch.run(neurons[0]!, 2);
+  insertBranch.run(neurons[0]!, 1);
+  for (const [index, neuronId] of neurons.slice(0, 2).entries()) db.prepare(`
+    INSERT INTO facts(
+      fact_id,neuron_id,subject,predicate_family,object_value,entity_id,valid_from,
+      certainty_level,confidence,status,source_text
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    `shared-entity-fact-${index}`, neuronId, 'shared', 'mentions', 'entity',
+    'shared-cognitive-entity', 1, 'observed', 1, 'verified', 'shared',
+  );
+  db.prepare(`
+    INSERT INTO facts(
+      fact_id,neuron_id,subject,predicate_family,object_value,valid_from,
+      certainty_level,confidence,status,source_text
+    ) VALUES('inactive-cognitive-fact',?,'private retired fact','mentions','secret',1,'observed',1,'superseded','private retired fact')
+  `).run(neurons[0]!);
+  db.prepare(`
+    INSERT INTO beliefs(
+      id,project_id,scope,subject,predicate,object_value,canonical_key,source_neuron_id,
+      valid_from,status,created_at,updated_at
+    ) VALUES('inactive-cognitive-belief','project-a','project','private','is','retired',
+      'private:is',? ,1,'revoked',1,1)
+  `).run(neurons[0]!);
+  db.prepare(`
+    INSERT INTO compiled_events(
+      event_id,neuron_id,event_type,target,valid_from,confidence,status
+    ) VALUES('inactive-cognitive-event',?,'private_event','retired',1,1,'archived')
+  `).run(neurons[0]!);
+  db.close();
+
+  expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+  const upgraded = new Database(dbPath);
+  expect(upgraded.prepare(`SELECT project_id FROM task_branches WHERE task_key='shared-task' ORDER BY project_id`).all())
+    .toEqual([{ project_id: '' }, { project_id: 'project-a' }, { project_id: 'project-b' }]);
+  expect(upgraded.prepare(`
+    SELECT e.project_id,COALESCE(n.project_id,'') AS neuron_project
+    FROM task_branch_entries e JOIN neurons n ON n.id=e.neuron_id
+    ORDER BY e.project_id
+  `).all()).toEqual([
+    { project_id: '', neuron_project: '' },
+    { project_id: 'project-a', neuron_project: 'project-a' },
+    { project_id: 'project-b', neuron_project: 'project-b' },
+  ]);
+  expect(upgraded.prepare(`SELECT project_id FROM event_clusters WHERE cluster_key='shared-cluster' ORDER BY project_id`).all())
+    .toEqual([{ project_id: 'project-a' }, { project_id: 'project-b' }]);
+  expect(upgraded.prepare(`
+    SELECT project_id,node_id FROM cognitive_nodes
+    WHERE node_type='entity' AND node_key='entity:shared-cognitive-entity'
+    ORDER BY project_id
+  `).all()).toEqual([
+    expect.objectContaining({ project_id: 'project-a' }),
+    expect.objectContaining({ project_id: 'project-b' }),
+  ]);
+  expect(upgraded.prepare(`
+    SELECT COUNT(DISTINCT node_id) AS count FROM cognitive_nodes
+    WHERE node_type='entity' AND node_key='entity:shared-cognitive-entity'
+  `).get()).toEqual({ count: 2 });
+  expect(upgraded.prepare(`
+    SELECT node_id FROM cognitive_nodes WHERE node_key='fact:inactive-cognitive-fact'
+  `).all()).toEqual([]);
+  expect(upgraded.prepare(`
+    SELECT node_id FROM cognitive_nodes
+    WHERE node_key IN ('belief:inactive-cognitive-belief','compiled_event:inactive-cognitive-event')
+  `).all()).toEqual([]);
+  for (const [table, parentColumn] of [
+    ['branch_entries', 'branch_id'],
+    ['task_branch_entries', 'task_id'],
+    ['event_cluster_entries', 'cluster_id'],
+  ] as const) expect(upgraded.prepare(`
+    SELECT COUNT(*) AS count FROM ${table}
+    GROUP BY ${parentColumn},COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),
+      COALESCE(fact_id,''),COALESCE(event_id,'') HAVING COUNT(*)>1
+  `).all()).toEqual([]);
+  expect(upgraded.prepare(`
+    SELECT COUNT(*) AS count FROM cognitive_edges e
+    JOIN cognitive_nodes s ON s.node_id=e.source_node_id
+    JOIN cognitive_nodes t ON t.node_id=e.target_node_id
+    WHERE e.project_id<>s.project_id OR e.project_id<>t.project_id
+  `).get()).toEqual({ count: 0 });
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('schema31 resolved pending entities cannot cross their inferred project scope', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-pending-scope-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  const contextNeuronId = (db.prepare(`
+    SELECT id FROM neurons WHERE project_id='project-a' AND is_deleted=0 LIMIT 1
+  `).get() as { id: string }).id;
+  db.prepare(`
+    INSERT INTO entities(entity_id,canonical_name,type,aliases_json,status,metadata_json,created_at,updated_at)
+    VALUES('pending-canonical-b','Private B','concept','[]','active','{}',1,1)
+  `).run();
+  db.prepare(`
+    INSERT INTO entity_instances(
+      instance_id,canonical_entity_id,canonical_name,type,aliases_json,status,metadata_json,created_at,updated_at
+    ) VALUES('pending-entity-b','pending-canonical-b','Private B','concept','[]','active',
+      '{"projectId":"project-b"}',1,1)
+  `).run();
+  db.prepare(`
+    INSERT INTO pending_entity_resolution(
+      pending_id,reference_text,entity_type,context_neuron_id,resolved_entity_id,status,created_at,updated_at
+    ) VALUES('pending-cross','private b','concept',?,'pending-entity-b','resolved',1,1)
+  `).run(contextNeuronId);
+  db.close();
+
+  expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+  const upgraded = new Database(dbPath);
+  expect(upgraded.prepare(`SELECT pending_id FROM pending_entity_resolution WHERE pending_id='pending-cross'`).get()).toBeNull();
+  expect(upgraded.prepare(`
+    SELECT reason FROM pending_entity_resolution_quarantine WHERE pending_id='pending-cross'
+  `).get()).toEqual({ reason: 'pending_resolved_entity_scope_mismatch' });
+  expect(() => upgraded.prepare(`
+    INSERT INTO pending_entity_resolution(
+      pending_id,reference_text,entity_type,context_neuron_id,project_scope,resolved_entity_id,status,created_at,updated_at
+    ) VALUES('pending-runtime-cross','private b','concept',?,'project-a','pending-entity-b','resolved',2,2)
+  `).run(contextNeuronId)).toThrow('project_scope_mismatch');
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('schema31 migration deduplicates one hundred thousand legal nullable topology rows', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-large-topology-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  const neuronId = (db.prepare(`
+    SELECT id FROM neurons WHERE project_id='project-a' AND is_deleted=0 LIMIT 1
+  `).get() as { id: string }).id;
+  db.prepare(`INSERT INTO project_branches VALUES(?,?,?,?,?,?,?)`)
+    .run('large-branch', 'project-a', 'large-branch', 'semantic', 'Large branch', 1, 1);
+  const insert = db.prepare(`
+    INSERT INTO branch_entries(branch_id,neuron_id,created_at) VALUES('large-branch',?,?)
+  `);
+  db.transaction(() => {
+    for (let index = 100_000; index > 0; index -= 1) insert.run(neuronId, index);
+  })();
+
+  installMultidimensionalMemoryGraph374(db);
+  expect(db.prepare(`
+    SELECT COUNT(*) AS count,MIN(created_at) AS created_at
+    FROM branch_entries WHERE branch_id='large-branch'
+  `).get()).toEqual({ count: 1, created_at: 1 });
+  db.close();
+  rmSync(directory, { recursive: true, force: true });
+}, 30_000);
+
+test('schema31 shared memory entity keeps its owner ID and uses the runtime ID for secondary scopes', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-shared-entity-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  const entityId = 'entity-schema31-shared';
+  db.prepare(`
+    INSERT INTO memory_entities(entity_id,project_id,canonical_name,entity_type,aliases_json,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?)
+  `).run(entityId, 'project-a', 'Shared Entity', 'concept', '["Shared"]', 1, 1);
+  for (const [projectId, eventId] of [['project-a', 'main-373-event-a'], ['project-b', 'main-373-event-b']] as const) {
+    db.prepare(`
+      INSERT INTO memory_topics(topic_path,project_id,project_id_key,topic_type,created_at,updated_at)
+      VALUES(?,?,?,?,?,?)
+    `).run(`shared/${projectId}`, projectId, projectId, 'semantic', 1, 1);
+    db.prepare(`
+      INSERT INTO memory_bindings(
+        binding_id,event_id,project_id,entity_id,entity_name,entity_type,topic_path,binding_type,
+        confidence,source,signal,claim_key,binding_action,related_event_ids_json,created_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      `binding-${projectId}`, eventId, projectId, entityId, 'Shared Entity', 'concept',
+      `shared/${projectId}`, 'entity', 1, 'explicit', 'shared', 'default', 'create_new_cluster', '[]', 1,
+    );
+  }
+  db.prepare(`
+    INSERT INTO memory_edges(
+      edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,
+      confidence,evidence_event_ids_json,status,created_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    'legacy-project-b-edge', 'project-b', 'entity', entityId, 'belongs_to', 'topic',
+    'shared/project-b', 1, '["main-373-event-b"]', 'active', 1,
+  );
+  db.close();
+
+  expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+  const secondaryId = memoryEntityId('project-b', 'concept', entityId);
+  const upgraded = new Database(dbPath);
+  expect(upgraded.prepare(`SELECT entity_id,COALESCE(project_id,'') AS project_id FROM memory_entities ORDER BY project_id`).all())
+    .toEqual([
+      { entity_id: entityId, project_id: 'project-a' },
+      { entity_id: secondaryId, project_id: 'project-b' },
+    ]);
+  expect(upgraded.prepare(`SELECT entity_id FROM memory_bindings WHERE project_id='project-b'`).get())
+    .toEqual({ entity_id: secondaryId });
+  expect(upgraded.prepare(`
+    SELECT edge_id,source_id FROM memory_edges WHERE project_id='project-b'
+  `).get()).toEqual({
+    edge_id: memoryEdgeId({
+      projectId: 'project-b',
+      sourceType: 'entity',
+      sourceId: secondaryId,
+      relationType: 'belongs_to',
+      targetType: 'topic',
+      targetId: 'shared/project-b',
+    }),
+    source_id: secondaryId,
+  });
+  upgraded.close();
+
+  const kernel = createMemoryKernel({ dbPath });
+  await kernel.forgetUser('project-a', 'test');
+  expect(kernel.memoryBindingStore.upsertEntity({
+    entityId, projectId: 'project-b', canonicalName: 'Shared Entity', entityType: 'concept', now: 2,
+  }).entityId).toBe(secondaryId);
+  kernel.close();
+  const reopened = createMemoryKernel({ dbPath });
+  expect(reopened.memoryBindingStore.upsertEntity({
+    entityId, projectId: 'project-b', canonicalName: 'Shared Entity', entityType: 'concept', now: 3,
+  }).entityId).toBe(secondaryId);
+  reopened.close();
+  const final = new Database(dbPath);
+  expect(final.prepare(`SELECT COUNT(*) AS count FROM memory_entities WHERE project_id='project-b'`).get())
+    .toEqual({ count: 1 });
+  final.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('schema31 edge-only entity scopes split safely and duplicate edges merge evidence deterministically', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-edge-scope-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  const entityId = 'edge-only-shared-entity';
+  db.prepare(`
+    INSERT INTO memory_entities(entity_id,project_id,canonical_name,entity_type,aliases_json,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?)
+  `).run(entityId, 'project-a', 'Edge only', 'concept', '[]', 1, 1);
+  db.prepare(`
+    INSERT INTO memory_topics(topic_path,project_id,project_id_key,topic_type,created_at,updated_at)
+    VALUES('edge-only-topic','project-b','project-b','semantic',1,1)
+  `).run();
+  const insertEdge = db.prepare(`
+    INSERT INTO memory_edges(
+      edge_id,project_id,source_type,source_id,relation_type,target_type,target_id,confidence,
+      base_weight,stability,activation,evidence_event_ids_json,status,valid_from,valid_to,version,
+      source_authority,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  insertEdge.run(
+    'legacy-edge-one', 'project-b', 'entity', entityId, 'belongs_to', 'topic', 'edge-only-topic',
+    0.99, 9, 1, 1, '["main-373-event-b"]', 'active', 1, null, 1, 'model_candidate', 1, 1,
+  );
+  insertEdge.run(
+    'legacy-edge-two', 'project-b', 'entity', entityId, 'belongs_to', 'topic', 'edge-only-topic',
+    0.9, 2, 1, 1, '["evt-aabad7cd-30ab-468b-b855-13d70d0e2da5"]', 'rejected', 2, 3, 1, 'raw_evidence', 1, 2,
+  );
+  insertEdge.run(
+    'legacy-edge-malformed', 'project-b', 'entity', entityId, 'mentions', 'topic', 'edge-only-topic',
+    1, 1, 1, 1, 'not-json', 'active', 1, null, 1, 'raw_evidence', 1, 1,
+  );
+  insertEdge.run(
+    'legacy-edge-orphan', 'project-b', 'entity', 'missing-entity', 'mentions', 'topic', 'edge-only-topic',
+    1, 1, 1, 1, '["main-373-event-b"]', 'active', 1, null, 1, 'raw_evidence', 1, 1,
+  );
+  db.close();
+
+  expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+  const upgraded = new Database(dbPath);
+  const secondaryId = memoryEntityId('project-b', 'concept', entityId);
+  expect(upgraded.prepare(`SELECT entity_id FROM memory_entities WHERE project_id='project-b'`).get())
+    .toEqual({ entity_id: secondaryId });
+  expect(upgraded.prepare(`
+    SELECT source_id,evidence_event_ids_json,source_authority,confidence,base_weight,status,valid_to FROM memory_edges
+    WHERE project_id='project-b'
+  `).all()).toEqual([{
+    source_id: secondaryId,
+    evidence_event_ids_json: '["main-373-event-b","evt-aabad7cd-30ab-468b-b855-13d70d0e2da5"]',
+    source_authority: 'raw_evidence',
+    confidence: 0.9,
+    base_weight: 2,
+    status: 'rejected',
+    valid_to: 3,
+  }]);
+  expect(upgraded.prepare(`
+    SELECT reason FROM entity_scope_migration_quarantine
+    WHERE record_type='memory_edge' AND record_id='legacy-edge-malformed'
+  `).get()).toEqual({ reason: 'memory_edge_evidence_malformed' });
+  expect(upgraded.prepare(`
+    SELECT reason FROM entity_scope_migration_quarantine
+    WHERE record_type='memory_edge' AND record_id='legacy-edge-orphan'
+  `).get()).toEqual({ reason: 'memory_edge_endpoint_scope_mismatch' });
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('schema31 bindings quarantine cross-scope clusters and related events', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-schema31-binding-scope-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  db.prepare(`INSERT INTO memory_topics(topic_path,project_id,project_id_key,topic_type,created_at,updated_at) VALUES(?,?,?,?,?,?)`)
+    .run('binding-scope-a', 'project-a', 'project-a', 'concept', 1, 1);
+  db.prepare(`INSERT INTO memory_topics(topic_path,project_id,project_id_key,topic_type,created_at,updated_at) VALUES(?,?,?,?,?,?)`)
+    .run('binding-scope-b', 'project-b', 'project-b', 'concept', 1, 1);
+  db.prepare(`INSERT INTO memory_topics(topic_path,project_id,project_id_key,topic_type,created_at,updated_at) VALUES(?,?,?,?,?,?)`)
+    .run('binding-scope-other', 'project-a', 'project-a', 'concept', 1, 1);
+  db.prepare(`INSERT INTO memory_clusters(cluster_id,project_id,topic_path,cluster_type,title,summary,status,confidence,support_count,evidence_event_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run('cluster-b', 'project-b', 'binding-scope-b', 'about', 'b', 'b', 'active', 1, 1, '["main-373-event-b"]', 1, 1);
+  db.prepare(`INSERT INTO memory_clusters(cluster_id,project_id,topic_path,cluster_type,title,summary,status,confidence,support_count,evidence_event_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run('cluster-a-other', 'project-a', 'binding-scope-other', 'about', 'other', 'other', 'active', 1, 1, '["main-373-event-a"]', 1, 1);
+  const insert = db.prepare(`INSERT INTO memory_bindings(binding_id,event_id,project_id,topic_path,binding_type,confidence,source,signal,claim_key,binding_action,cluster_id,related_event_ids_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  insert.run('binding-bad-cluster', 'main-373-event-a', 'project-a', 'binding-scope-a', 'about', 1, 'deterministic', 'a', 'a', 'attach_to_existing', 'cluster-b', '[]', 1);
+  insert.run('binding-bad-cluster-topic', 'main-373-event-a', 'project-a', 'binding-scope-a', 'about', 1, 'deterministic', 'a', 'topic', 'attach_to_existing', 'cluster-a-other', '[]', 1);
+  insert.run('binding-bad-related', 'main-373-event-a', 'project-a', 'binding-scope-a', 'about', 1, 'deterministic', 'a', 'b', 'attach_to_existing', null, '["main-373-event-b"]', 1);
+  db.close();
+
+  expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+  const upgraded = new Database(dbPath);
+  expect(upgraded.prepare(`SELECT COUNT(*) AS count FROM memory_bindings WHERE binding_id LIKE 'binding-bad-%'`).get()).toEqual({ count: 0 });
+  expect(upgraded.prepare(`SELECT record_id,reason FROM entity_scope_migration_quarantine WHERE record_type='memory_binding' ORDER BY record_id`).all()).toEqual([
+    { record_id: 'binding-bad-cluster', reason: 'memory_binding_cluster_scope_mismatch' },
+    { record_id: 'binding-bad-cluster-topic', reason: 'memory_binding_cluster_topic_mismatch' },
+    { record_id: 'binding-bad-related', reason: 'memory_binding_related_event_scope_mismatch' },
+  ]);
+  upgraded.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('development schema receipts fail fast without creating a migration backup', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-development-schema-'));
+  const dbPath = materializeFixture(directory);
+  const db = new Database(dbPath);
+  db.prepare(`INSERT INTO _schema_migrations(version,description,applied_at) VALUES(?,?,?)`)
+    .run('0033', 'unreleased development schema', new Date(0).toISOString());
+  db.close();
+
+  const result = await migrate(dbPath, ['--yes', '--backup']);
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain('unsupported_development_schema:0033');
+  expect(readdirSync(directory).filter((name) => name.includes('pre-migrate') || name.endsWith('.bak'))).toEqual([]);
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('unchecksummed 0032 receipts and meta-only schema 32 databases are rejected', async () => {
+  for (const kind of ['receipt', 'meta'] as const) {
+    const directory = mkdtempSync(join(tmpdir(), `cogmem-untrusted-0032-${kind}-`));
+    const dbPath = materializeFixture(directory);
+    const db = new Database(dbPath);
+    if (kind === 'receipt') {
+      db.prepare(`INSERT INTO _schema_migrations(version,description,applied_at) VALUES(?,?,?)`)
+        .run('0032', 'unreleased development schema', new Date(0).toISOString());
+    } else {
+      db.prepare(`UPDATE _meta SET value='32' WHERE key='schema_version'`).run();
+    }
+    db.close();
+
+    const result = await migrate(dbPath, ['--yes']);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(kind === 'receipt'
+      ? 'unsupported_development_schema:0032'
+      : 'unsupported_development_schema:32');
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('a formal 0032 receipt cannot hide damaged tables, indexes, triggers, or CHECK constraints', async () => {
+  const tamperCases: Array<{ name: string; apply(db: Database): void }> = [
+    {
+      name: 'table',
+      apply: (db) => db.exec(`DROP TABLE runtime_scope_discard_receipts`),
+    },
+    {
+      name: 'index',
+      apply: (db) => db.exec(`
+        DROP INDEX idx_memory_events_stream;
+        CREATE INDEX idx_memory_events_stream ON memory_events(event_type);
+      `),
+    },
+    {
+      name: 'trigger',
+      apply: (db) => db.exec(`
+        DROP TRIGGER synapses_scope_insert;
+        CREATE TRIGGER synapses_scope_insert BEFORE INSERT ON synapses BEGIN SELECT 1; END;
+      `),
+    },
+    {
+      name: 'check',
+      apply: (db) => {
+        const row = db.prepare(`
+          SELECT sql FROM sqlite_master WHERE type='table' AND name='policy_execution_read_model'
+        `).get() as { sql: string };
+        const altered = row.sql.replace(
+          `status TEXT NOT NULL CHECK(status IN ('in_progress','executed','skipped','failed'))`,
+          'status TEXT NOT NULL',
+        );
+        expect(altered).not.toBe(row.sql);
+        db.exec(`DROP TABLE policy_execution_read_model`);
+        db.exec(altered);
+      },
+    },
+  ];
+
+  for (const tamper of tamperCases) {
+    const directory = mkdtempSync(join(tmpdir(), `cogmem-tampered-${tamper.name}-`));
+    const dbPath = materializeFixture(directory);
+    expect((await migrate(dbPath, ['--yes'])).exitCode).toBe(0);
+    const db = new Database(dbPath);
+    tamper.apply(db);
+    db.close();
+
+    const result = await migrate(dbPath, ['--yes']);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('final_schema_postcondition_failed:0032');
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('an unrelated SQLite database is rejected without mutation', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-unrelated-db-'));
+  const dbPath = join(directory, 'unrelated.db');
+  const db = new Database(dbPath);
+  db.exec(`CREATE TABLE unrelated_data(id TEXT PRIMARY KEY,value TEXT); INSERT INTO unrelated_data VALUES('a','unchanged')`);
+  db.close();
+
+  const result = await migrate(dbPath, ['--yes']);
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain('unsupported_database_identity');
+  expect(() => createMemoryKernel({ dbPath })).toThrow('unsupported_database_identity');
+  const inspected = new Database(dbPath);
+  expect(inspected.prepare(`SELECT * FROM unrelated_data`).all()).toEqual([{ id: 'a', value: 'unchanged' }]);
+  expect(inspected.prepare(`SELECT 1 FROM sqlite_master WHERE name='_schema_migrations'`).get()).toBeNull();
+  inspected.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test('a crashed fresh bootstrap resumes through the formal migration before stores open', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cogmem-bootstrap-recovery-'));
+  const dbPath = join(directory, 'memory.db');
+  const db = new Database(dbPath);
+  db.exec(`
+    CREATE TABLE _cogmem_bootstrap_state(singleton INTEGER PRIMARY KEY,started_at INTEGER NOT NULL);
+    INSERT INTO _cogmem_bootstrap_state VALUES(1,1);
+    CREATE TABLE memory_frames(frame_id TEXT PRIMARY KEY);
+  `);
+  db.close();
+
+  createMemoryKernel({ dbPath }).close();
+  const recovered = new Database(dbPath);
+  expect(recovered.prepare(`SELECT 1 FROM sqlite_master WHERE name='_cogmem_bootstrap_state'`).get()).toBeNull();
+  expect(recovered.prepare(`SELECT COUNT(*) AS count FROM _schema_migrations WHERE version='0032'`).get())
+    .toEqual({ count: 1 });
+  expect(recovered.prepare(`PRAGMA integrity_check`).get()).toEqual({ integrity_check: 'ok' });
+  recovered.close();
+  rmSync(directory, { recursive: true, force: true });
 });

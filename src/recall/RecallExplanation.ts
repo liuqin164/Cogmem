@@ -17,10 +17,17 @@ export interface RecallExplanationOptions {
   query: string;
   projectId?: string;
   agentId?: string;
+  workspaceId?: string;
+  sessionId?: string;
+  threadId?: string;
+  excludeSessionId?: string;
   collection?: string;
   limit?: number;
   startTime?: number;
   endTime?: number;
+  now?: number;
+  localDateNow?: string;
+  timeZone?: string;
 }
 
 export interface RecallExplanationEvidence {
@@ -84,14 +91,24 @@ export function explainRecallWithKernel(
       collection: options.collection,
       query: options.query,
       limit,
+      workspaceId: options.workspaceId,
+      sessionId: options.sessionId,
+      threadId: options.threadId,
+      excludeSessionId: options.excludeSessionId,
       startTime: options.startTime,
       endTime: options.endTime,
+      now: options.now,
+      localDateNow: options.localDateNow,
+      timeZone: options.timeZone,
     });
     const navigated = kernel.navigateMemory(options.query, {
       projectId,
       limit: retrievalLimit,
       startTime: options.startTime,
       endTime: options.endTime,
+      now: options.now,
+      localDateNow: options.localDateNow,
+      timeZone: options.timeZone,
     });
     const agentScoped = navigated.rawEvidence.filter((neuron) => isInAgentScope(neuron, options.agentId!));
     const scoped = agentScoped.filter((neuron) => isInCollectionScope(neuron, options.collection));
@@ -136,6 +153,9 @@ export function explainRecallWithKernel(
     limit: retrievalLimit,
     startTime: options.startTime,
     endTime: options.endTime,
+    now: options.now,
+    localDateNow: options.localDateNow,
+    timeZone: options.timeZone,
   });
   const collectionScoped = navigated.rawEvidence.filter((neuron) => isInCollectionScope(neuron, options.collection));
   const included = collectionScoped.slice(0, limit);

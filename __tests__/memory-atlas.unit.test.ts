@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test';
+import Database from 'bun:sqlite';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
+import { localDateFor, localDateRange } from '../src/utils/LocalDateContext.js';
 
 function createFixture(): { kernel: MemoryKernel; hermesEventId: string; privateEventId: string; hermesEntityId: string; hermesClusterId: string } {
   const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-atlas-')), 'memory.db');
@@ -72,7 +74,7 @@ test('graph reads return stale projection metadata when refresh hits SQLite busy
       throw new Error('database is locked');
     };
     try {
-      const overview = kernel.graphOverview({ projectId: 'cogmem', staleOk: true });
+      const overview = kernel.graphOverview({ projectId: 'cogmem', staleOk: true, refresh: true });
       expect((overview as unknown as { atlasFresh: boolean }).atlasFresh).toBe(false);
       expect((overview as unknown as { refreshError: string }).refreshError).toContain('database is locked');
       expect(overview.nodes.some((node) => node.label === 'Hermes')).toBe(true);
@@ -238,6 +240,10 @@ test('target time and kind facets are intersected exactly like table filters', (
       rawEventType: 'message', projectId: 'cogmem', sessionId: 'session-openclaw', role: 'user',
       occurredAt: Date.UTC(2025, 4, 1), payload: { text: 'OpenClaw deployment decision' },
     });
+    kernel.memoryBindingStore.upsertTopic({
+      projectId: 'cogmem', topicPath: 'cogmem/openclaw', topicType: 'project',
+      summary: 'OpenClaw integration', now: Date.UTC(2025, 5, 1),
+    });
     kernel.memoryBindingStore.upsertCluster({ projectId: 'cogmem', topicPath: 'cogmem/openclaw', clusterType: 'decision',
       title: 'OpenClaw decision', summary: 'unrelated decision', status: 'active', confidence: 0.99,
       claimKey: 'openclaw-decision', eventId: openclawEvent.eventId, now: Date.UTC(2025, 5, 1) });
@@ -279,6 +285,269 @@ test('ActionFrame extraction scans raw events, captures every action, and aggreg
     expect(year?.supportCount).toBeGreaterThanOrEqual(2);
     expect(year?.evidence.map((item) => item.eventId)).toEqual(expect.arrayContaining([hermesEventId, unbound.eventId]));
   } finally { kernel.close(); }
+});
+
+test('ActionFrame time edges use the project civil year across UTC boundary zones', () => {
+  const cases = [
+    { timeZone: 'Asia/Tokyo', occurredAt: Date.UTC(2026, 11, 31, 15, 30) },
+    { timeZone: 'Pacific/Kiritimati', occurredAt: Date.UTC(2026, 11, 31, 10, 30) },
+    { timeZone: 'Pacific/Pago_Pago', occurredAt: Date.UTC(2027, 0, 1, 10, 30) },
+  ];
+  for (const item of cases) {
+    const kernel = createMemoryKernel({ projectTimeZone: item.timeZone });
+    try {
+      kernel.eventStore.append({
+        streamId: `thread-${item.timeZone}`, streamType: 'thread', eventType: 'MESSAGE',
+        projectId: 'p', role: 'user', occurredAt: item.occurredAt,
+        payload: { text: '请更新 Atlas。' },
+      });
+      kernel.rebuildMemoryAtlas({ projectId: 'p' });
+      const year = localDateFor(item.occurredAt, item.timeZone).slice(0, 4);
+      const action = kernel.memoryAtlasStore.listNodes('p', 100).find((node) => node.nodeType === 'action');
+      expect(action).toBeDefined();
+      expect(kernel.memoryAtlasStore.listEdges('p')).toContainEqual(expect.objectContaining({
+        source: action!.id, relation: 'OCCURRED_IN', target: `time:p:${year}`,
+      }));
+      const range = localDateRange(Number(year), 1, 1, Number(year) + 1, 1, 1, item.timeZone);
+      expect(kernel.memoryAtlasStore.listActions('p', { ...range, limit: 30 }).length).toBeGreaterThan(0);
+    } finally {
+      kernel.close();
+    }
+  }
+});
+
+test('Atlas alias matching respects Latin token boundaries and rejects ambiguous action targets', () => {
+  const kernel = createMemoryKernel();
+  try {
+    kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'AI', entityType: 'tool', aliases: ['AI'], now: 1,
+    });
+    kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'Device One', entityType: 'device', aliases: ['device'], now: 1,
+    });
+    kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'Device Two', entityType: 'device', aliases: ['device'], now: 1,
+    });
+    kernel.eventStore.append({
+      streamId: 'said', streamType: 'thread', eventType: 'MESSAGE', projectId: 'p', role: 'user',
+      occurredAt: 2, payload: { text: 'I said update device.' },
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+
+    expect(kernel.memoryAtlasStore.resolveTargetNodeIds('p', 'said').labels).not.toContain('AI');
+    expect(kernel.memoryAtlasStore.resolveTargetNodeIds('p', 'AI').labels).toContain('AI');
+    expect(kernel.memoryAtlasStore.db.prepare(`SELECT target_entity_id FROM memory_action_frames LIMIT 1`).get())
+      .toEqual({ target_entity_id: null });
+  } finally {
+    kernel.close();
+  }
+});
+
+test('Atlas keeps projectless action-only projects and preserves repeated multi-target actions', () => {
+  const kernel = createMemoryKernel();
+  try {
+    const alpha = kernel.memoryBindingStore.upsertEntity({
+      projectId: '', canonicalName: 'Alpha', entityType: 'device', aliases: ['Alpha'], now: 1,
+    });
+    const beta = kernel.memoryBindingStore.upsertEntity({
+      projectId: '', canonicalName: 'Beta', entityType: 'device', aliases: ['Beta'], now: 1,
+    });
+    kernel.eventStore.append({
+      streamId: 'projectless-actions', streamType: 'thread', eventType: 'MESSAGE',
+      projectId: '', role: 'user', occurredAt: 2,
+      payload: { text: '启动 Alpha，然后停止 Beta，再启动 Alpha。' },
+    });
+
+    kernel.rebuildMemoryAtlas();
+
+    const rows = kernel.memoryAtlasStore.db.prepare(`
+      SELECT frame_type,target_entity_id FROM memory_action_frames
+      WHERE project_id='' ORDER BY occurred_at,action_id
+    `).all() as Array<{ frame_type: string; target_entity_id: string | null }>;
+    expect(rows).toHaveLength(3);
+    expect(rows.filter((row) => row.frame_type === 'start' && row.target_entity_id === alpha.entityId)).toHaveLength(2);
+    expect(rows).toContainEqual({ frame_type: 'stop', target_entity_id: beta.entityId });
+    expect(kernel.memoryAtlasStore.listKnownProjectIds()).toContain('');
+    expect(kernel.memoryAtlasStore.listNodes('', 100).some((node) => node.id === 'project:')).toBe(true);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('Atlas action extraction matches omitted project scope to SQL NULL entities', () => {
+  const kernel = createMemoryKernel();
+  try {
+    const alpha = kernel.memoryBindingStore.upsertEntity({
+      canonicalName: 'Alpha', entityType: 'device', aliases: ['Alpha'], now: 1,
+    });
+    kernel.eventStore.append({
+      streamId: 'implicit-projectless-action', streamType: 'thread', eventType: 'MESSAGE',
+      role: 'user', occurredAt: 2, payload: { text: '启动 Alpha。' },
+    });
+    kernel.rebuildMemoryAtlas();
+    expect(kernel.memoryAtlasStore.db.prepare(`
+      SELECT target_entity_id FROM memory_action_frames WHERE project_id=''
+    `).get()).toEqual({ target_entity_id: alpha.entityId });
+  } finally {
+    kernel.close();
+  }
+});
+
+test('Atlas action extraction rejects Latin substrings and preserves preposed CJK targets', () => {
+  const kernel = createMemoryKernel();
+  try {
+    const alpha = kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'Alpha', entityType: 'device', aliases: ['Alpha'], now: 1,
+    });
+    const hermes = kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'Hermes', entityType: 'device', aliases: ['Hermes'], now: 1,
+    });
+    kernel.eventStore.append({
+      streamId: 'latin-substrings', streamType: 'thread', eventType: 'MESSAGE',
+      projectId: 'p', role: 'user', occurredAt: 1,
+      payload: { text: 'runtime prefix connection installation' },
+    });
+    kernel.eventStore.append({
+      streamId: 'preposed-targets', streamType: 'thread', eventType: 'MESSAGE',
+      projectId: 'p', role: 'user', occurredAt: 2,
+      payload: { text: '把 Alpha 启动，请将 Hermes 更新。' },
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const rows = kernel.memoryAtlasStore.db.prepare(`
+      SELECT frame_type,target_entity_id FROM memory_action_frames
+      WHERE project_id='p' ORDER BY action_id
+    `).all() as Array<{ frame_type: string; target_entity_id: string | null }>;
+    expect(rows).toHaveLength(2);
+    expect(rows).toContainEqual({ frame_type: 'start', target_entity_id: alpha.entityId });
+    expect(rows).toContainEqual({ frame_type: 'update', target_entity_id: hermes.entityId });
+  } finally {
+    kernel.close();
+  }
+});
+
+test('Atlas binds adjacent Chinese and Japanese actions to their local targets', () => {
+  const kernel = createMemoryKernel();
+  try {
+    const alpha = kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'Alpha', entityType: 'device', aliases: ['Alpha'], now: 1,
+    });
+    const beta = kernel.memoryBindingStore.upsertEntity({
+      projectId: 'p', canonicalName: 'Beta', entityType: 'device', aliases: ['Beta'], now: 1,
+    });
+    kernel.eventStore.append({
+      streamId: 'zh-actions', streamType: 'thread', eventType: 'MESSAGE',
+      projectId: 'p', role: 'user', occurredAt: 2,
+      payload: { text: '启动 Alpha 并停止 Beta' },
+    });
+    kernel.eventStore.append({
+      streamId: 'ja-actions', streamType: 'thread', eventType: 'MESSAGE',
+      projectId: 'p', role: 'user', occurredAt: 3,
+      payload: { text: 'Alphaを起動してBetaを停止' },
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const rows = kernel.memoryAtlasStore.db.prepare(`
+      SELECT frame_type,target_entity_id FROM memory_action_frames
+      WHERE project_id='p' ORDER BY occurred_at,action_id
+    `).all() as Array<{ frame_type: string; target_entity_id: string | null }>;
+    expect(rows).toHaveLength(4);
+    expect(rows.filter((row) => row.frame_type === 'start' && row.target_entity_id === alpha.entityId)).toHaveLength(2);
+    expect(rows.filter((row) => row.frame_type === 'stop' && row.target_entity_id === beta.entityId)).toHaveLength(2);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('Atlas does not split connector characters inside CJK entity names', () => {
+  const kernel = createMemoryKernel();
+  try {
+    const targets = [
+      ['和歌山服务器', '配置和歌山服务器'],
+      ['和平号', '检查和平号'],
+      ['再生服务', '配置再生服务'],
+      ['及川节点', '更新及川节点'],
+    ] as const;
+    const entityIds = new Map(targets.map(([name], index) => [
+      name,
+      kernel.memoryBindingStore.upsertEntity({
+        projectId: 'p', canonicalName: name, entityType: 'device', aliases: [name], now: index + 1,
+      }).entityId,
+    ]));
+    for (const [name, text] of targets) {
+      kernel.eventStore.append({
+        streamId: `cjk-${name}`, streamType: 'thread', eventType: 'MESSAGE',
+        projectId: 'p', role: 'user', occurredAt: 10,
+        payload: { text },
+      });
+    }
+
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const rows = kernel.memoryAtlasStore.db.prepare(`
+      SELECT target_entity_id FROM memory_action_frames WHERE project_id='p'
+    `).all() as Array<{ target_entity_id: string | null }>;
+    expect(rows).toHaveLength(4);
+    expect(new Set(rows.map((row) => row.target_entity_id))).toEqual(new Set(entityIds.values()));
+  } finally {
+    kernel.close();
+  }
+});
+
+test('Atlas reinstalls a same-name no-op dirty trigger without rerunning the release migration', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-atlas-trigger-'));
+  const dbPath = join(dir, 'memory.db');
+  const seeded = createMemoryKernel({ dbPath });
+  await seeded.ingest({ content: 'seed non-temporal topology', projectId: 'p' });
+  const event = seeded.eventStore.append({
+    streamId: 'seed-action', streamType: 'thread', eventType: 'MESSAGE',
+    projectId: 'p', role: 'user', occurredAt: 1, payload: { text: 'update Atlas' },
+  });
+  const entity = seeded.memoryBindingStore.upsertEntity({
+    entityId: 'entity-trigger-repair', projectId: 'p',
+    canonicalName: 'Atlas', entityType: 'concept',
+  });
+  seeded.memoryBindingStore.upsertTopic({
+    projectId: 'p', topicPath: 'trigger/repair', topicType: 'semantic',
+  });
+  seeded.memoryBindingStore.upsertEdge({
+    projectId: 'p', sourceType: 'entity', sourceId: entity.entityId,
+    relationType: 'belongs_to', targetType: 'topic', targetId: 'trigger/repair',
+    confidence: 1, evidenceEventIds: [event.eventId],
+  });
+  seeded.rebuildMemoryAtlas({ projectId: 'p' });
+  seeded.close();
+  const db = new Database(dbPath);
+  const tables = ['memory_entities', 'memory_edges', 'memory_action_frames', 'project_branches', 'cognitive_nodes', 'cognitive_edges'];
+  const before = Object.fromEntries(tables.map((table) => [
+    table,
+    db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all(),
+  ]));
+  const receipt = db.prepare(`SELECT applied_at FROM _schema_migrations WHERE version='0032'`).get();
+  db.exec(`
+    DROP TRIGGER IF EXISTS trg_memory_atlas_dirty_memory_events_insert;
+    CREATE TRIGGER trg_memory_atlas_dirty_memory_events_insert AFTER INSERT ON memory_events BEGIN SELECT 1; END;
+  `);
+  db.close();
+
+  const kernel = createMemoryKernel({ dbPath });
+  try {
+    for (const table of tables) {
+      expect(kernel.memoryAtlasStore.db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all()).toEqual(before[table]);
+    }
+    expect(kernel.memoryAtlasStore.db.prepare(`SELECT applied_at FROM _schema_migrations WHERE version='0032'`).get())
+      .toEqual(receipt);
+    kernel.eventStore.append({
+      streamId: 'system-noise', streamType: 'system', eventType: 'POLICY_EXECUTION_UPDATED',
+      projectId: 'p', occurredAt: 1, payload: {},
+    });
+    expect(kernel.memoryAtlasStore.getProjectionState('p')?.status).toBe('clean');
+    kernel.eventStore.append({
+      streamId: 'dirty-action', streamType: 'thread', eventType: 'MESSAGE',
+      projectId: 'p', role: 'user', occurredAt: 2, payload: { text: 'update Atlas' },
+    });
+    expect(kernel.memoryAtlasStore.getProjectionState('p')?.status).toBe('dirty');
+    expect(kernel.graphOverview({ projectId: 'p', refresh: true }).nodes.some((node) => node.nodeType === 'action')).toBe(true);
+  } finally {
+    kernel.close();
+  }
 });
 
 test('path and explore return a bounded source-anchored local graph without vectors', () => {

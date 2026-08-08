@@ -72,7 +72,8 @@ describe('ReEmbeddingStatus v1.9.8', () => {
 
   test('MemoryKernel health includes reEmbedding status', () => {
     const kernel = createMemoryKernel({ embeddingProvider: new SlowProvider() });
-    kernel.neuronEmbeddingStore.upsert('n1', 'current-model', new Float32Array([1, 0, 0]), 'p');
+    const neuron = addNeuron(kernel.memoryGraph, 'health');
+    kernel.neuronEmbeddingStore.upsert(neuron.id, 'current-model', new Float32Array([1, 0, 0]), 'p');
 
     const status = kernel.getReEmbeddingStatus();
     const health = kernel.getHealthStatus();

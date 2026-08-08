@@ -2,16 +2,19 @@ import type Database from 'bun:sqlite';
 import type { FacetQueryPlan } from '../atlas/FacetQueryPlanner.js';
 import type { MemoryAtlasAction, MemoryAtlasCard, MemoryAtlasEdge, MemoryAtlasNode, MemoryAtlasRelatedCard } from '../atlas/MemoryAtlasTypes.js';
 export declare const MEMORY_ATLAS_PROJECTION_NAME = "memory_atlas.v2";
-export declare const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = "3.7.2";
+export declare const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = "3.7.4";
 export declare class MemoryAtlasStore {
     readonly db: Database;
-    constructor(db: Database);
+    private readonly projectTimeZone?;
+    constructor(db: Database, projectTimeZone?: string | undefined);
     upsertDocument(input: Omit<MemoryAtlasNode, 'activation' | 'score' | 'evidenceCount' | 'evidenceTotal' | 'evidenceReturned'> & {
         evidenceEventIds?: string[];
         metadata?: Record<string, unknown>;
         updatedAt?: number;
     }): void;
     getNode(nodeId: string, projectId: string): MemoryAtlasNode | null;
+    /** Internal projector/governance read; ordinary recall must use getNode(). */
+    getNodeIncludingInactive(nodeId: string, projectId: string): MemoryAtlasNode | null;
     listNodes(projectId: string, limit: number): MemoryAtlasNode[];
     search(query: string, projectId: string, limit: number): MemoryAtlasNode[];
     searchFaceted(query: string, projectId: string, limit: number, facets: {
@@ -22,6 +25,13 @@ export declare class MemoryAtlasStore {
         targetNodeIds?: string[];
     }): MemoryAtlasNode[];
     searchCanonicalEpisodeCards(projectId: string, plan: FacetQueryPlan, limit: number): MemoryAtlasCard[];
+    findActiveAliasNode(projectId: string, dimension: string, normalizedAlias: string): string | undefined;
+    findAliasNodes(projectId: string, dimension: string, normalizedAlias: string): string[];
+    resolveQueryAliases(projectId: string, query: string): Array<{
+        label: string;
+        dimension: string;
+        nodeId: string;
+    }>;
     relatedEpisodeCards(projectId: string, canonicalId: string, selectedIds: Set<string>, limit: number): MemoryAtlasRelatedCard[];
     private topicRelatedCardsForPlan;
     resolveTargetNodeIds(projectId: string, query: string): {
@@ -31,6 +41,8 @@ export declare class MemoryAtlasStore {
     };
     evidenceIds(nodeId: string, projectId: string, limit: number): string[];
     evidenceTotal(nodeId: string, projectId: string): number;
+    hasEvidenceInRange(nodeId: string, projectId: string, from?: number, to?: number): boolean;
+    hasActiveState(nodeId: string, projectId: string, states: string[]): boolean;
     listEdges(projectId: string): MemoryAtlasEdge[];
     listEdgesForNodes(projectId: string, nodeIds: string[], limit?: number): MemoryAtlasEdge[];
     listEdgesWithinNodes(projectId: string, nodeIds: string[], limit?: number): MemoryAtlasEdge[];

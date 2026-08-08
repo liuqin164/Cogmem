@@ -17,7 +17,7 @@ import { printCliJson } from './CliJson.js';
 
 interface MemoryArgs {
   command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
-    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex';
+    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-plan' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex' | 'rebuild-topology' | 'frame' | 'frame-backfill' | 'frame-review';
   query?: string;
   eventId?: string;
   episodeId?: string;
@@ -35,10 +35,13 @@ interface MemoryArgs {
   replacementCandidateId?: string;
   reviewAfter?: number;
   now?: number;
+  localDateNow?: string;
+  timeZone?: string;
   evidenceLimit?: number;
   agentId?: string;
   intent?: AgentRecallIntent;
   projectId?: string;
+  global: boolean;
   collection?: string;
   workspaceId?: string;
   threadId?: string;
@@ -55,10 +58,13 @@ interface MemoryArgs {
   promoteLimit?: number;
   dbPath?: string;
   configPath?: string;
+  mode?: 'shadow' | 'active';
+  cursor?: string;
   watch: boolean;
   promote: boolean;
   json: boolean;
   includeEvidence: boolean;
+  includeStaged: boolean;
   refresh: boolean;
   staleOk: boolean;
   help: boolean;
@@ -101,10 +107,13 @@ function readArgs(argv: string[]): MemoryArgs {
     replacementCandidateId: stringArg(values, 'replacement'),
     reviewAfter: numberArg(values, 'review-after'),
     now: numberArg(values, 'now'),
+    localDateNow: stringArg(values, 'local-date-now'),
+    timeZone: stringArg(values, 'timezone'),
     evidenceLimit: numberArg(values, 'evidence-limit'),
     agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
     intent: recallIntentArg(values, 'intent'),
     projectId: stringArg(values, 'project') || stringArg(values, 'project-id'),
+    global: values.global === true,
     collection: stringArg(values, 'collection'),
     workspaceId: stringArg(values, 'workspace') || stringArg(values, 'workspace-id'),
     threadId: stringArg(values, 'thread') || stringArg(values, 'thread-id'),
@@ -121,10 +130,13 @@ function readArgs(argv: string[]): MemoryArgs {
     promoteLimit: numberArg(values, 'promote-limit'),
     dbPath: stringArg(values, 'db'),
     configPath: stringArg(values, 'config'),
+    mode: modeArg(values, 'mode'),
+    cursor: stringArg(values, 'cursor'),
     watch: values.watch === true,
     promote: values.promote === true,
     json: values.json === true,
     includeEvidence: values['include-evidence'] === true,
+    includeStaged: values['include-staged'] === true,
     refresh: values.refresh === true,
     staleOk: values['stale-ok'] === true || values['no-refresh'] === true,
     help: values.help === true || values.h === true,
@@ -133,7 +145,7 @@ function readArgs(argv: string[]): MemoryArgs {
 
 function usage(): string {
   return [
-    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|graph...> [args]',
+    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|frame-review|graph...> [args]',
     '',
     'Commands:',
     '  status               summarize raw ledger, vector, and dream backlog state',
@@ -149,17 +161,23 @@ function usage(): string {
     '  map                  print the self-describing memory map for agent/host inspection',
     '  tick                 run one explicit host-owned maintenance tick',
     '  bind                 backfill memory bindings for high-value raw user events',
+    '  frame --episode <id> show one structured MemoryFrame',
+    '  frame-backfill       create deterministic evidence-backed frames for existing episodes',
+    '  frame-review         approve or reject a staged/needs-confirmation MemoryFrame',
     '  graph                show a bounded overview of remembered topics, entities, clusters, actions, and time',
     '  graph-search         locate Atlas nodes by --query without expanding the graph',
     '  graph-explore        return a bounded local graph for a broad --query',
+    '  graph-plan           build a multidimensional query frame and bounded graph result',
     '  graph-node           inspect --id with neighbors and evidence drilldown commands',
     '  graph-neighbors      expand --id by --hops 1..2',
     '  graph-path           find a bounded path from --from to --to',
     '  graph-timeline       reconstruct entity/time/action history for --query',
     '  graph-reindex        reproject one Atlas episode/card by --event or --episode without rebuilding the whole graph',
+    '  rebuild-topology     explicitly rebuild project or global time and cognitive projections',
     '',
     'Common options:',
     '  --project <id>       scope to one project',
+    '  --global             select the projectless/global scope for topology rebuild',
     '  --collection <name>  recall from a named collection; default excludes collection:theseus',
     '  --workspace <id>     scope to one workspace',
     '  --thread <id>        scope to one thread',
@@ -186,9 +204,12 @@ function usage(): string {
     '  --intent <intent>    memory_recall, previous_session_summary, forensic_quote, historical_discussion, or action_history',
     '  --db <memory.db>     open an explicit database path',
     '  --config <toml>      open a cogmem TOML config',
+    '  --mode <shadow|active> frame backfill mode, default shadow',
   '  --include-evidence   include bounded raw excerpts; event ids are always returned',
   '  --evidence-limit <n> bound evidence locators per Atlas node, default 2, maximum 10',
-  '  --now <epoch-ms>     deterministic reference time for relative Atlas time facets',
+    '  --now <epoch-ms>     deterministic reference time for relative Atlas time facets',
+  '  --local-date-now <YYYY-MM-DD>  explicit project-local date for deterministic recall',
+  '  --timezone <IANA>     project timezone for explicit --db recall/import maintenance',
   '  --refresh            force Atlas refresh before graph reads; default returns stale projection on SQLite busy',
   '  --no-refresh         skip Atlas refresh and read the existing projection',
   '  --stale-ok           allow stale graph reads if refresh is blocked by a SQLite lock',
@@ -217,11 +238,23 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'graph'
     || value === 'graph-search'
     || value === 'graph-explore'
+    || value === 'graph-plan'
     || value === 'graph-node'
     || value === 'graph-neighbors'
     || value === 'graph-path'
     || value === 'graph-timeline'
-    || value === 'graph-reindex';
+    || value === 'graph-reindex'
+    || value === 'rebuild-topology'
+    || value === 'frame'
+    || value === 'frame-backfill'
+    || value === 'frame-review';
+}
+
+function modeArg(values: Record<string, string | boolean>, key: string): MemoryArgs['mode'] {
+  const raw = stringArg(values, key);
+  if (!raw) return undefined;
+  if (raw === 'shadow' || raw === 'active') return raw;
+  throw new Error(`--${key} must be shadow or active`);
 }
 
 function reviewActionArg(values: Record<string, string | boolean>, key: string): MemoryArgs['reviewAction'] {
@@ -281,7 +314,7 @@ function candidateStatusArg(
 }
 
 function openKernel(args: MemoryArgs): MemoryKernel {
-  if (args.dbPath) return createMemoryKernel({ dbPath: resolve(args.dbPath) });
+  if (args.dbPath) return createMemoryKernel({ dbPath: resolve(args.dbPath), projectTimeZone: args.timeZone });
   return createMemoryKernelFromConfig({
     configPath: args.configPath ? resolve(args.configPath) : undefined,
     cwd: process.cwd(),
@@ -661,6 +694,9 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
     intent: args.intent,
     query: args.query,
     limit: args.limit || 5,
+    now: args.now,
+    localDateNow: args.localDateNow,
+    timeZone: args.timeZone,
     retrievalPolicy: strategyCapsule.retrievalPolicy,
   });
   return {
@@ -700,13 +736,35 @@ function runBind(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown
   }) as unknown as Record<string, unknown>;
 }
 
+function runTopologyRebuild(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  if (Boolean(args.projectId) === args.global) throw new Error(`rebuild-topology requires exactly one of --project or --global.\n${usage()}`);
+  return kernel.rebuildProjectTimeTopology(args.global ? undefined : args.projectId) as unknown as Record<string, unknown>;
+}
+
+function runFrame(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  if (args.command === 'frame-backfill') {
+    if (!args.projectId) throw new Error(`frame-backfill requires --project.\n${usage()}`);
+    return kernel.backfillMemoryFrames({ projectId: args.projectId, limit: args.limit, cursor: args.cursor, mode: args.mode });
+  }
+  if (args.command === 'frame-review') {
+    if (!args.nodeId || !args.projectId || !args.actor || !args.reason || !['approve', 'reject'].includes(args.reviewAction ?? '')) {
+      throw new Error(`frame-review requires --id, --project, --action approve|reject, --actor, and --reason.\n${usage()}`);
+    }
+    return { frameId: args.nodeId, action: args.reviewAction, applied: kernel.reviewMemoryFrame({ frameId: args.nodeId, projectId: args.projectId, action: args.reviewAction as 'approve' | 'reject', actor: args.actor, reason: args.reason }) };
+  }
+  if (!args.episodeId) throw new Error(`frame requires --episode.\n${usage()}`);
+  const frame = kernel.getMemoryFrame(args.episodeId, args.projectId, { includeStaged: args.includeStaged });
+  if (!frame) throw new Error('memory_frame_not_found');
+  return frame as unknown as Record<string, unknown>;
+}
+
 function runGraphCommand(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
   const projectId = args.projectId;
   if (!projectId) throw new Error(`Memory Atlas commands require --project.\n${usage()}`);
   const options = { projectId, limit: args.limit, includeEvidence: args.includeEvidence,
-    evidenceLimit: args.evidenceLimit, now: args.now,
-    refresh: args.refresh ? true : (args.staleOk ? false : undefined),
-    staleOk: args.staleOk || !args.refresh };
+    evidenceLimit: args.evidenceLimit, now: args.now, localDateNow: args.localDateNow, timeZone: args.timeZone,
+    refresh: args.refresh,
+    staleOk: true };
   if (args.command === 'graph-reindex') {
     if (!args.eventId && !args.episodeId) throw new Error(`graph-reindex requires --event or --episode.\n${usage()}`);
     if (args.eventId && args.episodeId) throw new Error(`graph-reindex accepts exactly one of --event or --episode.\n${usage()}`);
@@ -720,6 +778,10 @@ function runGraphCommand(kernel: MemoryKernel, args: MemoryArgs): Record<string,
   if (args.command === 'graph-explore') {
     if (!args.query) throw new Error(`graph-explore requires --query.\n${usage()}`);
     return kernel.graphExplore(args.query, options) as unknown as Record<string, unknown>;
+  }
+  if (args.command === 'graph-plan') {
+    if (!args.query) throw new Error(`graph-plan requires --query.\n${usage()}`);
+    return kernel.planMemoryQuery(args.query, options) as unknown as Record<string, unknown>;
   }
   if (args.command === 'graph-node') {
     if (!args.nodeId) throw new Error(`graph-node requires --id.\n${usage()}`);
@@ -976,6 +1038,14 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     console.log(`failedEvents: ${payload.failedEvents}`);
     return;
   }
+  if (command === 'rebuild-topology') {
+    console.log(`project: ${payload.projectId || '__global__'}`);
+    console.log(`timeZone: ${payload.timeZone}`);
+    console.log(`neurons: ${payload.neurons}`);
+    console.log(`buckets: ${payload.buckets}`);
+    console.log(`rebuiltAt: ${payload.rebuiltAt}`);
+    return;
+  }
   if (command === 'graph' || command.startsWith('graph-')) {
     console.log(`memoryAtlas: ${payload.version || 'memory_atlas.v2'} project=${payload.projectId || 'unknown'}`);
     const rows = Array.isArray(payload.nodes) ? payload.nodes
@@ -1031,6 +1101,12 @@ async function main(): Promise<void> {
     runReadOnlyInspection(args);
     return;
   }
+  const clockSensitiveCommands = new Set<MemoryArgs['command']>([
+    'recall', 'graph', 'graph-search', 'graph-explore', 'graph-plan', 'graph-timeline', 'rebuild-topology'
+  ]);
+  if (args.dbPath && !args.timeZone && clockSensitiveCommands.has(args.command)) {
+    throw new Error(`${args.command} with --db requires --timezone <IANA> so date recall does not depend on the host environment`);
+  }
   const kernelArgs: MemoryArgs = { ...args };
   const kernel = openKernel(kernelArgs);
   try {
@@ -1058,6 +1134,10 @@ async function main(): Promise<void> {
                         ? runTick(kernel, kernelArgs)
                       : kernelArgs.command === 'bind'
                         ? runBind(kernel, kernelArgs)
+                        : kernelArgs.command === 'rebuild-topology'
+                          ? runTopologyRebuild(kernel, kernelArgs)
+                        : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill' || kernelArgs.command === 'frame-review'
+                          ? runFrame(kernel, kernelArgs)
                         : runGraphCommand(kernel, kernelArgs);
     if (kernelArgs.json) {
       const queue = kernelArgs.command === 'status'

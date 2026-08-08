@@ -145,6 +145,9 @@ export type {
   MemoryEdgeListOptions,
   MemoryEdgeRecord,
   MemoryEdgeRelation,
+  MemoryGraphEdgeStatus,
+  MemoryGraphEndpointType,
+  MemoryGraphRelation,
   MemoryEntityRecord,
   MemoryEntityType,
   MemoryGraphRecallAnchor,
@@ -475,7 +478,15 @@ export type {
 export { callCogmemMcpTool, listCogmemMcpTools } from './mcp/CoreMcpTools.js';
 export type { CogmemMcpCallResult, CogmemMcpRuntime, CogmemMcpTool } from './mcp/CoreMcpTools.js';
 export type { DreamBacklogStatus } from './store/DreamLedgerStore.js';
+export { MemoryFrameStore, frameSourceFingerprint } from './store/MemoryFrameStore.js';
+export type { MemoryFrameSaveInput } from './store/MemoryFrameStore.js';
 export * from './atlas/index.js';
+export * from './semantic/index.js';
+export { createMemoryQueryFrame, queryFacet } from './recall/MemoryQueryFrame.js';
+export type { MemoryQueryFacet, MemoryQueryFrameV1, MemoryQueryIntent } from './recall/MemoryQueryFrame.js';
+export { AtlasPathRetriever, DimensionAwareRanker, MultidimensionalQueryPlanner } from './recall/index.js';
+export { assertLocalDate, localDateFor, localDateRange, resolveProjectClockContext, resolveTimeZone } from './utils/LocalDateContext.js';
+export type { ProjectClockContext, ProjectClockSource } from './utils/LocalDateContext.js';
 
 // ─── @experimental ───────────────────────────────────────────────────────────
 

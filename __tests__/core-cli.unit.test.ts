@@ -672,6 +672,19 @@ test('memory CLI recall lets agents actively query governed memory with source c
   expect(recalled.queryPlan.semanticCuePhrases).toContain('存档 黑盒');
 });
 
+test('memory CLI explicit database recall requires an explicit project timezone', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-explicit-db-timezone-'));
+  const proc = Bun.spawn({
+    cmd: ['bun', memoryBin, 'recall', '--db', join(dir, 'memory.db'), '--project', 'demo', '--query', 'today', '--json'],
+    cwd: coreRoot,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const stderr = await new Response(proc.stderr).text();
+  expect(await proc.exited).toBe(1);
+  expect(stderr).toContain('requires --timezone <IANA>');
+});
+
 test('memory CLI recall falls back to imported Hermes raw ledger when vectors are empty', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-hermes-recall-cli-'));
   const configPath = join(dir, '.cogmem', 'config.toml');

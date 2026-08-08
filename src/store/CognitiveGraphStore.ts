@@ -1,18 +1,29 @@
 import Database from 'bun:sqlite';
-import { randomUUID } from 'crypto';
 import type {
   CognitiveEdgeRecord,
   CognitiveEdgeType,
   CognitiveNodeRecord,
   CognitiveNodeType
 } from '../types/index.js';
+import { cognitiveEdgeId, cognitiveNodeId } from '../engine/CognitiveGraphIdentity.js';
+import { projectQueryValue } from '../topology/ProjectScope.js';
+import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
+import { recallableNeuronSql } from '../recall/RecallGovernance.js';
 
 export class CognitiveGraphStore {
   private db: Database;
+  private readonly ownsDb: boolean;
 
-  constructor(dbPath: string = ':memory:') {
-    this.db = new Database(dbPath);
+  constructor(dbOrPath: Database | string = ':memory:') {
+    if (typeof dbOrPath === 'string') {
+      this.db = new Database(dbOrPath);
+      this.ownsDb = true;
+    } else {
+      this.db = dbOrPath;
+      this.ownsDb = false;
+    }
     this.initializeSchema();
+    installRuntimeProvenanceGuards(this.db);
   }
 
   private initializeSchema(): void {
@@ -22,12 +33,12 @@ export class CognitiveGraphStore {
         node_type TEXT NOT NULL,
         node_key TEXT NOT NULL,
         title TEXT NOT NULL,
-        project_id TEXT,
+        project_id TEXT NOT NULL DEFAULT '',
         source_neuron_id TEXT,
         metadata_json TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        UNIQUE(node_type, node_key)
+        UNIQUE(project_id, node_type, node_key)
       );
 
       CREATE TABLE IF NOT EXISTS cognitive_edges (
@@ -36,10 +47,10 @@ export class CognitiveGraphStore {
         target_node_id TEXT NOT NULL,
         edge_type TEXT NOT NULL,
         weight REAL NOT NULL,
-        project_id TEXT,
+        project_id TEXT NOT NULL DEFAULT '',
         metadata_json TEXT,
         created_at INTEGER NOT NULL,
-        UNIQUE(source_node_id, target_node_id, edge_type)
+        UNIQUE(project_id, source_node_id, target_node_id, edge_type)
       );
 
       CREATE INDEX IF NOT EXISTS idx_cognitive_nodes_type_project
@@ -66,11 +77,17 @@ export class CognitiveGraphStore {
     metadata?: Record<string, unknown>;
     createdAt: number;
   }): CognitiveNodeRecord {
+    const projectScope = input.projectId ?? '';
+    if (input.sourceNeuronId) {
+      const neuron = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0`)
+        .get(input.sourceNeuronId) as { scope: string } | null;
+      if (!neuron || neuron.scope !== projectScope) throw new Error('cognitive_node_project_scope_mismatch');
+    }
     const existing = this.db.prepare(`
-      SELECT * FROM cognitive_nodes WHERE node_type = ? AND node_key = ?
-    `).get(input.nodeType, input.nodeKey) as any;
+      SELECT * FROM cognitive_nodes WHERE project_id = ? AND node_type = ? AND node_key = ?
+    `).get(projectScope, input.nodeType, input.nodeKey) as any;
 
-    const nodeId = existing?.node_id || input.nodeId;
+    const nodeId = existing?.node_id || cognitiveNodeId(input.projectId, input.nodeType, input.nodeKey);
     const createdAt = existing?.created_at || input.createdAt;
     this.db.prepare(`
       INSERT OR REPLACE INTO cognitive_nodes (
@@ -81,7 +98,7 @@ export class CognitiveGraphStore {
       input.nodeType,
       input.nodeKey,
       input.title,
-      input.projectId || null,
+      projectScope,
       input.sourceNeuronId || null,
       input.metadata ? JSON.stringify(input.metadata) : null,
       createdAt,
@@ -110,12 +127,18 @@ export class CognitiveGraphStore {
     metadata?: Record<string, unknown>;
     createdAt: number;
   }): CognitiveEdgeRecord {
+    const projectScope = input.projectId ?? '';
+    const endpoints = this.db.prepare(`SELECT node_id,project_id FROM cognitive_nodes WHERE node_id IN (?,?)`).all(input.sourceNodeId, input.targetNodeId) as Array<{ node_id: string; project_id: string }>;
+    const endpointProjects = new Map(endpoints.map((endpoint) => [endpoint.node_id, endpoint.project_id]));
+    if (endpointProjects.get(input.sourceNodeId) !== projectScope || endpointProjects.get(input.targetNodeId) !== projectScope) {
+      throw new Error('cognitive_edge_project_scope_mismatch');
+    }
     const existing = this.db.prepare(`
       SELECT edge_id, created_at FROM cognitive_edges
-      WHERE source_node_id = ? AND target_node_id = ? AND edge_type = ?
-    `).get(input.sourceNodeId, input.targetNodeId, input.edgeType) as any;
+      WHERE project_id = ? AND source_node_id = ? AND target_node_id = ? AND edge_type = ?
+    `).get(projectScope, input.sourceNodeId, input.targetNodeId, input.edgeType) as any;
 
-    const edgeId = existing?.edge_id || `cgedge-${randomUUID()}`;
+    const edgeId = existing?.edge_id || cognitiveEdgeId(input);
     const createdAt = existing?.created_at || input.createdAt;
 
     this.db.prepare(`
@@ -128,7 +151,7 @@ export class CognitiveGraphStore {
       input.targetNodeId,
       input.edgeType,
       input.weight ?? 1.0,
-      input.projectId || null,
+      projectScope,
       input.metadata ? JSON.stringify(input.metadata) : null,
       createdAt
     );
@@ -145,6 +168,30 @@ export class CognitiveGraphStore {
     };
   }
 
+  findNode(projectId: string | undefined, nodeType: CognitiveNodeType, nodeKey: string): CognitiveNodeRecord | null {
+    const row = this.db.prepare(`
+      SELECT * FROM cognitive_nodes WHERE project_id=? AND node_type=? AND node_key=?
+        AND ${recallableCognitiveNodeSql(this.db, 'cognitive_nodes')}
+    `).get(projectId ?? '', nodeType, nodeKey) as any;
+    if (!row) return null;
+    return {
+      nodeId: row.node_id,
+      nodeType: row.node_type,
+      nodeKey: row.node_key,
+      title: row.title,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
+      sourceNeuronId: row.source_neuron_id || undefined,
+      metadata: row.metadata_json ? JSON.parse(row.metadata_json) : undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  resetProjectTimeProjection(projectId: string): void {
+    this.db.prepare(`DELETE FROM cognitive_edges WHERE project_id=? AND edge_type='occurred_in_time_bucket'`).run(projectId);
+    this.db.prepare(`DELETE FROM cognitive_nodes WHERE project_id=? AND node_type='time_bucket'`).run(projectId);
+  }
+
   collectContext(input: {
     projectId?: string;
     terms?: string[];
@@ -152,6 +199,7 @@ export class CognitiveGraphStore {
     seedNodeIds?: string[];
     limit?: number;
     hopLimit?: number;
+    excludeTemporal?: boolean;
   }): {
     seedNodeIds: string[];
     traversedNodeIds: string[];
@@ -160,7 +208,20 @@ export class CognitiveGraphStore {
   } {
     const limit = input.limit ?? 120;
     const hopLimit = Math.max(1, input.hopLimit ?? 2);
-    const seedNodeIds = new Set<string>(input.seedNodeIds || []);
+    const queryProject = projectQueryValue(input.projectId);
+    const excludeTemporal = Boolean(input.excludeTemporal || !this.hasReadableTimeProjection(input.projectId));
+    const seedNodeIds = new Set<string>();
+    const suppliedSeed = this.db.prepare(`
+      SELECT 1 FROM cognitive_nodes
+      WHERE node_id=?
+        AND (? IS NULL OR project_id=?)
+        AND (?=0 OR node_type<>'time_bucket')
+        AND ${recallableCognitiveNodeSql(this.db, 'cognitive_nodes')}
+      LIMIT 1
+    `);
+    for (const nodeId of input.seedNodeIds ?? []) {
+      if (suppliedSeed.get(nodeId, input.projectId ?? null, input.projectId ?? null, excludeTemporal ? 1 : 0)) seedNodeIds.add(nodeId);
+    }
     const traversedNodeIds = new Set<string>();
     const neuronIds = new Set<string>();
     const terms = (input.terms || []).map((term) => term.trim().toLowerCase()).filter((term) => term.length >= 2);
@@ -171,7 +232,9 @@ export class CognitiveGraphStore {
         FROM cognitive_nodes
         WHERE node_key = ?
           AND (? IS NULL OR project_id = ?)
-      `).all(key, input.projectId || null, input.projectId || null) as Array<{ node_id: string }>;
+          AND (? = 0 OR node_type <> 'time_bucket')
+          AND ${recallableCognitiveNodeSql(this.db, 'cognitive_nodes')}
+      `).all(key, queryProject, queryProject, excludeTemporal ? 1 : 0) as Array<{ node_id: string }>;
       for (const row of rows) seedNodeIds.add(row.node_id);
     }
 
@@ -180,12 +243,15 @@ export class CognitiveGraphStore {
         SELECT node_id
         FROM cognitive_nodes
         WHERE (? IS NULL OR project_id = ?)
+          AND (? = 0 OR node_type <> 'time_bucket')
+          AND ${recallableCognitiveNodeSql(this.db, 'cognitive_nodes')}
           AND (lower(title) LIKE ? OR lower(node_key) LIKE ?)
         ORDER BY updated_at DESC
         LIMIT ?
       `).all(
-        input.projectId || null,
-        input.projectId || null,
+        queryProject,
+        queryProject,
+        excludeTemporal ? 1 : 0,
         `%${term}%`,
         `%${term}%`,
         limit
@@ -211,14 +277,20 @@ export class CognitiveGraphStore {
             END
           WHERE (ce.source_node_id = ? OR ce.target_node_id = ?)
             AND (? IS NULL OR ce.project_id = ?)
+            AND (? IS NULL OR cn.project_id = ?)
+            AND (? = 0 OR (ce.edge_type <> 'occurred_in_time_bucket' AND cn.node_type <> 'time_bucket'))
+            AND ${recallableCognitiveNodeSql(this.db, 'cn')}
           ORDER BY ce.created_at DESC
           LIMIT ?
         `).all(
           nodeId,
           nodeId,
           nodeId,
-          input.projectId || null,
-          input.projectId || null,
+          queryProject,
+          queryProject,
+          queryProject,
+          queryProject,
+          excludeTemporal ? 1 : 0,
           limit
         ) as Array<{
           source_node_id: string;
@@ -245,7 +317,9 @@ export class CognitiveGraphStore {
         SELECT node_id, node_type, source_neuron_id, node_key
         FROM cognitive_nodes
         WHERE node_id IN (${placeholders})
-      `).all(...Array.from(traversedNodeIds)) as Array<{
+          AND (? IS NULL OR project_id = ?)
+          AND ${recallableCognitiveNodeSql(this.db, 'cognitive_nodes')}
+      `).all(...Array.from(traversedNodeIds), queryProject, queryProject) as Array<{
         node_id: string;
         node_type: CognitiveNodeType;
         source_neuron_id?: string | null;
@@ -271,16 +345,67 @@ export class CognitiveGraphStore {
   }
 
   getNodeCount(): number {
-    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM cognitive_nodes`).get() as { count: number } | null;
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM cognitive_nodes
+      WHERE (?=1 OR node_type<>'time_bucket')
+        AND ${recallableCognitiveNodeSql(this.db, 'cognitive_nodes')}
+    `).get(this.hasReadableTimeProjection() ? 1 : 0) as { count: number } | null;
     return row?.count || 0;
   }
 
+  private hasReadableTimeProjection(projectId?: string): boolean {
+    const scope = projectQueryValue(projectId);
+    return !Boolean(scope === null
+      ? this.db.prepare(`SELECT 1 FROM topology_source_revisions r LEFT JOIN topology_projection_state s ON s.project_id=r.project_id WHERE s.project_id IS NULL OR s.status<>'clean' OR s.source_revision<>r.revision LIMIT 1`).get()
+      : this.db.prepare(`SELECT 1 FROM topology_source_revisions r LEFT JOIN topology_projection_state s ON s.project_id=r.project_id WHERE r.project_id=? AND (s.project_id IS NULL OR s.status<>'clean' OR s.source_revision<>r.revision) LIMIT 1`).get(scope));
+  }
+
   getEdgeCount(): number {
-    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM cognitive_edges`).get() as { count: number } | null;
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM cognitive_edges ce
+      JOIN cognitive_nodes src_node ON src_node.node_id=ce.source_node_id
+      JOIN cognitive_nodes dst_node ON dst_node.node_id=ce.target_node_id
+      WHERE (?=1 OR ce.edge_type<>'occurred_in_time_bucket')
+        AND ${recallableCognitiveNodeSql(this.db, 'src_node')}
+        AND ${recallableCognitiveNodeSql(this.db, 'dst_node')}
+    `).get(this.hasReadableTimeProjection() ? 1 : 0) as { count: number } | null;
     return row?.count || 0;
   }
 
   close(): void {
-    this.db.close();
+    if (this.ownsDb) this.db.close();
   }
+}
+
+function recallableCognitiveNodeSql(db: Database, alias: string): string {
+  const neuronColumns = tableColumns(db, 'neurons');
+  const conditions = [neuronColumns.size ? `(${alias}.source_neuron_id IS NULL OR EXISTS (
+      SELECT 1 FROM neurons n WHERE n.id=${alias}.source_neuron_id AND n.is_deleted=0
+        AND COALESCE(n.project_id,'')=${alias}.project_id
+        AND ${recallableNeuronSql('n', neuronColumns)}
+    ))` : '1=1'];
+  if (tableExists(db, 'facts')) conditions.push(`(${alias}.node_type<>'fact' OR EXISTS (
+      SELECT 1 FROM facts f WHERE ('fact:'||f.fact_id)=${alias}.node_key
+        AND f.status IN ('provisional','provisional_enriched','verified')
+    ))`, `(${alias}.node_type<>'entity' OR json_extract(${alias}.metadata_json,'$.sourceFactId') IS NULL OR EXISTS (
+      SELECT 1 FROM facts f WHERE f.fact_id=json_extract(${alias}.metadata_json,'$.sourceFactId')
+        AND f.status IN ('provisional','provisional_enriched','verified')
+    ))`);
+  if (tableExists(db, 'beliefs')) conditions.push(`(${alias}.node_type<>'belief' OR EXISTS (
+      SELECT 1 FROM beliefs b WHERE ('belief:'||b.id)=${alias}.node_key AND b.status='active'
+    ))`);
+  if (tableExists(db, 'compiled_events')) conditions.push(`(${alias}.node_type<>'compiled_event' OR EXISTS (
+      SELECT 1 FROM compiled_events e WHERE ('compiled_event:'||e.event_id)=${alias}.node_key
+        AND e.status IN ('provisional','verified')
+    ))`);
+  return conditions.join(' AND ');
+}
+
+function tableExists(db: Database, name: string): boolean {
+  return Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name));
+}
+
+function tableColumns(db: Database, name: string): Set<string> {
+  if (!tableExists(db, name)) return new Set();
+  return new Set((db.prepare(`PRAGMA table_info("${name.replaceAll('"', '""')}")`).all() as Array<{ name: string }>).map((row) => row.name));
 }

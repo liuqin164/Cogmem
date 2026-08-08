@@ -1,4 +1,10 @@
 import { expect, test } from 'bun:test';
+import packageMetadata from '../package.json';
+import { CORE_VERSION } from '../src/version.js';
+
+test('runtime and MCP version use package metadata', () => {
+  expect(CORE_VERSION).toBe(packageMetadata.version);
+});
 
 test('core public entrypoint exposes backend primitives', async () => {
   const api = await import('../src/public.js');

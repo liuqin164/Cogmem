@@ -40,6 +40,9 @@ export function listCogmemMcpTools() {
                     ingestMode: TURN_INGEST_MODE_SCHEMA,
                     collection: STRING_SCHEMA,
                     timestamp: NUMBER_SCHEMA,
+                    localDate: STRING_SCHEMA,
+                    timeZone: STRING_SCHEMA,
+                    projectTimeZone: STRING_SCHEMA,
                 },
                 required: ['agentId', 'projectId', 'sessionId', 'userText'],
             },
@@ -59,10 +62,17 @@ export function listCogmemMcpTools() {
                     query: STRING_SCHEMA,
                     agentId: STRING_SCHEMA,
                     projectId: STRING_SCHEMA,
+                    workspaceId: STRING_SCHEMA,
+                    sessionId: STRING_SCHEMA,
+                    threadId: STRING_SCHEMA,
+                    excludeSessionId: STRING_SCHEMA,
                     collection: STRING_SCHEMA,
                     limit: NUMBER_SCHEMA,
                     since: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
                     until: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
+                    now: NUMBER_SCHEMA,
+                    localDateNow: STRING_SCHEMA,
+                    timeZone: STRING_SCHEMA,
                 },
                 required: ['query'],
             },
@@ -82,10 +92,17 @@ export function listCogmemMcpTools() {
                     query: STRING_SCHEMA,
                     agentId: STRING_SCHEMA,
                     projectId: STRING_SCHEMA,
+                    workspaceId: STRING_SCHEMA,
+                    sessionId: STRING_SCHEMA,
+                    threadId: STRING_SCHEMA,
+                    excludeSessionId: STRING_SCHEMA,
                     collection: STRING_SCHEMA,
                     limit: NUMBER_SCHEMA,
                     since: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
                     until: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
+                    now: NUMBER_SCHEMA,
+                    localDateNow: STRING_SCHEMA,
+                    timeZone: STRING_SCHEMA,
                 },
                 required: ['query'],
             },
@@ -293,14 +310,26 @@ export function listCogmemMcpTools() {
                 idempotentHint: false,
             },
         },
+        graphTool('cogmem_memory_frame_show', 'Show Memory Frame', 'Show an evidence-backed structured MemoryFrame for one episode.', {
+            projectId: STRING_SCHEMA, episodeId: STRING_SCHEMA,
+        }, ['projectId', 'episodeId']),
+        graphTool('cogmem_memory_frame_review', 'Review Memory Frame', 'Approve or reject a needs-confirmation MemoryFrame with an auditable reason. Internal staged Dream frames cannot be reviewed.', {
+            projectId: STRING_SCHEMA, frameId: STRING_SCHEMA, action: { type: 'string', enum: ['approve', 'reject'] }, actor: STRING_SCHEMA, reason: STRING_SCHEMA,
+        }, ['projectId', 'frameId', 'action', 'actor', 'reason'], { readOnlyHint: false, destructiveHint: true, idempotentHint: false }),
+        graphTool('cogmem_memory_dimensions', 'List Memory Dimensions', 'List bounded Atlas V2 dimension nodes for one project.', {
+            projectId: STRING_SCHEMA, type: STRING_SCHEMA, limit: NUMBER_SCHEMA,
+        }, ['projectId']),
         graphTool('cogmem_graph_overview', 'Overview Memory Atlas', 'List a bounded content map of remembered topics, entities, clusters, episodes, actions, and time nodes.', {
             projectId: STRING_SCHEMA, limit: NUMBER_SCHEMA,
         }, ['projectId']),
         graphTool('cogmem_graph_search', 'Search Memory Atlas', 'Locate matching Memory Atlas nodes without expanding the graph.', {
-            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA,
+            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, now: NUMBER_SCHEMA, localDateNow: STRING_SCHEMA, timeZone: STRING_SCHEMA,
         }, ['projectId', 'query']),
         graphTool('cogmem_graph_explore', 'Explore Memory Atlas', 'Use for broad memory inventory, project-state, or historical questions; returns a bounded local graph and drilldown actions.', {
-            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, evidenceLimit: NUMBER_SCHEMA, now: NUMBER_SCHEMA,
+            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, evidenceLimit: NUMBER_SCHEMA, now: NUMBER_SCHEMA, localDateNow: STRING_SCHEMA, timeZone: STRING_SCHEMA,
+        }, ['projectId', 'query']),
+        graphTool('cogmem_memory_query_plan', 'Plan Multidimensional Memory Query', 'Build a bounded structured query frame and evidence-backed Atlas result across dimensions.', {
+            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, now: NUMBER_SCHEMA, localDateNow: STRING_SCHEMA, timeZone: STRING_SCHEMA,
         }, ['projectId', 'query']),
         graphTool('cogmem_graph_node', 'Inspect Memory Node', 'Inspect one source-anchored node, its neighbors, evidence event ids, and exact raw drilldown commands.', {
             projectId: STRING_SCHEMA, id: STRING_SCHEMA, includeEvidence: { type: 'boolean' }, evidenceLimit: NUMBER_SCHEMA,
@@ -312,7 +341,7 @@ export function listCogmemMcpTools() {
             projectId: STRING_SCHEMA, from: STRING_SCHEMA, to: STRING_SCHEMA, maxHops: NUMBER_SCHEMA,
         }, ['projectId', 'from', 'to']),
         graphTool('cogmem_graph_timeline', 'Reconstruct Memory Timeline', 'Reconstruct timestamped memory with the available query facets; action frames are included when applicable but are not required.', {
-            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, includeEvidence: { type: 'boolean' }, evidenceLimit: NUMBER_SCHEMA, now: NUMBER_SCHEMA,
+            projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, includeEvidence: { type: 'boolean' }, evidenceLimit: NUMBER_SCHEMA, now: NUMBER_SCHEMA, localDateNow: STRING_SCHEMA, timeZone: STRING_SCHEMA,
         }, ['projectId', 'query']),
         {
             name: 'cogmem_graph_touch',
@@ -464,35 +493,57 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
                 }));
             case 'cogmem_graph_overview': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                return jsonResult(opened.kernel.graphOverview({ projectId, limit: optionalNumber(input.limit) }));
+                return jsonResult(opened.kernel.graphOverview({ projectId, limit: optionalNumber(input.limit), refresh: false, staleOk: true }));
+            }
+            case 'cogmem_memory_frame_show': {
+                return jsonResult(opened.kernel.getMemoryFrame(requiredString(input.episodeId, 'episodeId'), requiredString(input.projectId, 'projectId')) ?? { error: 'memory_frame_not_found' });
+            }
+            case 'cogmem_memory_frame_review': {
+                return jsonResult({ applied: opened.kernel.reviewMemoryFrame({
+                        frameId: requiredString(input.frameId, 'frameId'),
+                        projectId: requiredString(input.projectId, 'projectId'),
+                        action: (() => { const action = requiredString(input.action, 'action'); if (action !== 'approve' && action !== 'reject')
+                            throw new Error('action must be approve or reject'); return action; })(),
+                        actor: requiredString(input.actor, 'actor'),
+                        reason: requiredString(input.reason, 'reason'),
+                    }) });
+            }
+            case 'cogmem_memory_dimensions': {
+                return jsonResult(opened.kernel.listMemoryDimensions(requiredString(input.projectId, 'projectId'), optionalString(input.type), optionalNumber(input.limit)));
             }
             case 'cogmem_graph_search': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                return jsonResult(opened.kernel.graphSearch(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit) }));
+                return jsonResult(opened.kernel.graphSearch(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit), now: optionalNumber(input.now), localDateNow: optionalString(input.localDateNow), timeZone: optionalString(input.timeZone), refresh: false, staleOk: true }));
             }
             case 'cogmem_graph_explore': {
                 const projectId = requiredString(input.projectId, 'projectId');
                 return jsonResult(opened.kernel.graphExplore(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit),
-                    evidenceLimit: optionalNumber(input.evidenceLimit), now: optionalNumber(input.now) }));
+                    evidenceLimit: optionalNumber(input.evidenceLimit), now: optionalNumber(input.now), localDateNow: optionalString(input.localDateNow), timeZone: optionalString(input.timeZone), refresh: false, staleOk: true }));
+            }
+            case 'cogmem_memory_query_plan': {
+                const projectId = requiredString(input.projectId, 'projectId');
+                return jsonResult(opened.kernel.planMemoryQuery(requiredString(input.query, 'query'), {
+                    projectId, limit: optionalNumber(input.limit), now: optionalNumber(input.now), localDateNow: optionalString(input.localDateNow), timeZone: optionalString(input.timeZone), refresh: false, staleOk: true,
+                }));
             }
             case 'cogmem_graph_node': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                const result = opened.kernel.graphNode(requiredString(input.id, 'id'), { projectId, includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit) });
+                const result = opened.kernel.graphNode(requiredString(input.id, 'id'), { projectId, includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit), refresh: false, staleOk: true });
                 if (!result)
                     throw new Error('Memory Atlas node not found in the requested project');
                 return jsonResult(result);
             }
             case 'cogmem_graph_neighbors': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                return jsonResult(opened.kernel.graphNeighbors(requiredString(input.id, 'id'), { projectId, hops: optionalNumber(input.hops), limit: optionalNumber(input.limit) }));
+                return jsonResult(opened.kernel.graphNeighbors(requiredString(input.id, 'id'), { projectId, hops: optionalNumber(input.hops), limit: optionalNumber(input.limit), refresh: false, staleOk: true }));
             }
             case 'cogmem_graph_path': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                return jsonResult(opened.kernel.graphPath(requiredString(input.from, 'from'), requiredString(input.to, 'to'), { projectId, maxHops: optionalNumber(input.maxHops) }));
+                return jsonResult(opened.kernel.graphPath(requiredString(input.from, 'from'), requiredString(input.to, 'to'), { projectId, maxHops: optionalNumber(input.maxHops), refresh: false, staleOk: true }));
             }
             case 'cogmem_graph_timeline': {
                 const projectId = requiredString(input.projectId, 'projectId');
-                return jsonResult(opened.kernel.graphTimeline(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit), includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit), now: optionalNumber(input.now) }));
+                return jsonResult(opened.kernel.graphTimeline(requiredString(input.query, 'query'), { projectId, limit: optionalNumber(input.limit), includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit), now: optionalNumber(input.now), localDateNow: optionalString(input.localDateNow), timeZone: optionalString(input.timeZone), refresh: false, staleOk: true }));
             }
             case 'cogmem_graph_touch':
                 return jsonResult(opened.kernel.touchMemoryAtlas({
@@ -516,12 +567,12 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
             opened.kernel.close();
     }
 }
-function graphTool(name, title, description, properties, required) {
+function graphTool(name, title, description, properties, required, annotationOverrides = {}) {
     return {
         name,
         description: `${description} Canonical memory and activation telemetry remain unchanged until cogmem_graph_touch explicitly records selected nodes.`,
         inputSchema: { type: 'object', properties, required },
-        annotations: { title, readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+        annotations: { title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, ...annotationOverrides },
     };
 }
 async function episodeAppend(kernel, input) {
@@ -753,6 +804,9 @@ async function rememberTurn(kernel, input) {
         ingestMode: optionalTurnIngestMode(input.ingestMode),
         collection: optionalString(input.collection),
         timestamp: optionalNumber(input.timestamp),
+        localDate: optionalString(input.localDate),
+        timeZone: optionalString(input.timeZone),
+        projectTimeZone: optionalString(input.projectTimeZone),
     });
     return jsonResult({ ok: true, ...result });
 }
@@ -774,9 +828,16 @@ function recall(kernel, input, includeExplanation) {
             projectId,
             collection: optionalString(input.collection),
             query,
+            workspaceId: optionalString(input.workspaceId),
+            sessionId: optionalString(input.sessionId),
+            threadId: optionalString(input.threadId),
+            excludeSessionId: optionalString(input.excludeSessionId),
             limit,
             startTime,
             endTime,
+            now: optionalNumber(input.now),
+            localDateNow: optionalString(input.localDateNow),
+            timeZone: optionalString(input.timeZone),
             retrievalPolicy: strategyCapsule.retrievalPolicy,
         });
         const episodes = kernel.listEpisodes({ projectId, limit: 20 });
@@ -807,9 +868,16 @@ function recall(kernel, input, includeExplanation) {
         agentId,
         projectId,
         collection: optionalString(input.collection),
+        workspaceId: optionalString(input.workspaceId),
+        sessionId: optionalString(input.sessionId),
+        threadId: optionalString(input.threadId),
+        excludeSessionId: optionalString(input.excludeSessionId),
         limit,
         startTime,
         endTime,
+        now: optionalNumber(input.now),
+        localDateNow: optionalString(input.localDateNow),
+        timeZone: optionalString(input.timeZone),
     });
     return jsonResult(explanation);
 }

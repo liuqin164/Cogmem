@@ -27,7 +27,7 @@ export class PolicyRuntimeEvaluator {
                 stateProgress: []
             };
         if (input.runtimeId && input.runtimeStore) {
-            PlanDslExecutor.persistAnalysis(input.runtimeId, plan, input.runtimeStore);
+            PlanDslExecutor.persistAnalysis(context.projectId, input.runtimeId, plan, input.runtimeStore);
         }
         const failedPolicies = plan.policyCoverage.filter((item) => !item.matched).map((item) => `policy_missing:${item.policy}`);
         const missingExecutors = plan.executorMatches.filter((item) => !item.matched).map((item) => `executor_missing:${item.executor}`);
@@ -77,7 +77,11 @@ export class PolicyRuntimeEvaluator {
             const target = policyRuntime.find((item) => item.policy === policyAction.policy)?.target
                 || decision.executableSteps[0];
             const result = await executor.execute({
+                projectId: context.projectId,
                 runtimeId: decision.runtimeId,
+                stableOperationId: decision.runtimeId
+                    ? `${decision.runtimeId}:${policyAction.policy}:${policyAction.action}:${target ?? ''}`
+                    : undefined,
                 policy: policyAction.policy,
                 action: policyAction.action,
                 target,

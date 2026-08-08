@@ -1,3 +1,4 @@
+import Database from 'bun:sqlite';
 import type { MemoryAnchor, MemoryImportanceLevel, Neuron, NeuronMetadata, NeuronType, Synapse, TopicNode } from '../types/index.js';
 export interface VectorPageRow {
     id: string;
@@ -12,17 +13,26 @@ export interface TopicReclassifiedObservation {
     content: string;
     timestamp: number;
 }
+export interface TimeProjectionNeuron {
+    id: string;
+    projectId: string;
+    createdAt: number;
+    title: string;
+}
 export declare class MemoryGraph {
     private db;
+    private readonly ownsDb;
     private timeIndex;
     private projectIndex;
     private anchorIndex;
     private topicReclassifiedListeners;
-    constructor(dbPath?: string);
+    constructor(dbOrPath?: Database | string);
     private initializeSchema;
     private ensureCompatibilityColumns;
-    addNeuron(neuron: Neuron): void;
-    addNeuronInTransaction(neuron: Neuron): void;
+    addNeuron(neuron: Neuron): number;
+    addNeuronInTransaction(neuron: Neuron, recordSourceMutation?: boolean): number;
+    indexCommittedNeuron(neuron: Neuron): void;
+    private recordTimeProjectionSourceMutation;
     private insertNeuron;
     private insertIntoFTS;
     rebuildIndexes(): void;
@@ -30,6 +40,11 @@ export declare class MemoryGraph {
     addSynapse(sourceId: string, synapse: Synapse): void;
     getNeuron(id: string): Neuron | null;
     getNeuronIdsByProject(projectId: string): string[];
+    listTimeProjectionNeurons(projectId?: string, options?: {
+        afterCreatedAt?: number;
+        afterId?: string;
+        limit?: number;
+    }): TimeProjectionNeuron[];
     getSynapses(sourceId: string): Synapse[];
     getAllNeurons(): Neuron[];
     findNeuronsByType(type: NeuronType, options?: {
@@ -58,7 +73,7 @@ export declare class MemoryGraph {
         synapseCount: number;
         anchorCount: number;
     };
-    findSimilarNeurons(vector: number[], topK: number): Array<{
+    findSimilarNeurons(vector: number[], topK: number, projectId?: string): Array<{
         id: string;
         score: number;
     }>;

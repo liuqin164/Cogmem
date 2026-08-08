@@ -1,4 +1,5 @@
 import type Database from 'bun:sqlite';
+import { projectScope } from '../topology/ProjectScope.js';
 
 export interface StepTiming {
   stepName: string;
@@ -113,7 +114,7 @@ export class PipelineMetrics {
     `).run(
       eventId,
       kind,
-      input.projectId || null,
+      input.projectId === undefined ? null : projectScope(input.projectId),
       input.message || null,
       input.details ? JSON.stringify(input.details) : null,
       occurredAt,
@@ -127,9 +128,9 @@ export class PipelineMetrics {
       clauses.push('kind = ?');
       params.push(kind);
     }
-    if (options.projectId) {
-      clauses.push('project_id = ?');
-      params.push(options.projectId);
+    if (options.projectId !== undefined) {
+      clauses.push("COALESCE(project_id, '') = ?");
+      params.push(projectScope(options.projectId));
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const row = this.db.prepare(`

@@ -80,11 +80,33 @@ describe('entity governance v2', () => {
     entities.close();
   });
 
+  test('keeps projectless governance exact and rejects shared legacy entities', () => {
+    const db = new Database(':memory:');
+    const entities = new EntityStore(db);
+    const target = entities.upsertEntity({ canonicalName: 'Global target', type: 'project', metadata: { projectId: '' } });
+    const source = entities.upsertEntity({ canonicalName: 'Global source', type: 'project', metadata: { projectId: '' } });
+    const named = entities.upsertEntity({ canonicalName: 'Named target', type: 'project', metadata: { projectId: 'a' } });
+    const service = new EntityGovernanceService(db, entities, (eventId) => ({ eventId, projectId: '', role: 'user' }));
+    const projectless = service.proposeMerge({ projectId: '', sourceEntityId: source.entityId, targetEntityId: target.entityId, alias: 'global alias', confidence: 0.99, evidenceEventIds: ['global-event'] });
+    service.proposeMerge({ projectId: 'a', sourceEntityId: named.entityId, targetEntityId: named.entityId, alias: 'named', confidence: 0.99, evidenceEventIds: ['named-event'] });
+    expect(projectless.status).toBe('approved');
+    expect(service.list({ projectId: '' }).map((item) => item.candidateId)).toEqual([projectless.candidateId]);
+
+    db.prepare(`INSERT INTO entity_mentions(
+      mention_id,entity_id,neuron_id,project_id,mention_type,created_at
+    ) VALUES('legacy-shared',?,NULL,'other','referenced',?)`).run(source.entityId, Date.now());
+    expect(() => service.apply(projectless.candidateId)).toThrow('entity_project_scope_changed');
+    expect(entities.getByEntityId(source.entityId)?.status).toBe('active');
+    entities.close();
+  });
+
   test('binding writes EntityStore-owned entity ids into compatibility projections', () => {
     const db = new Database(':memory:');
     const entities = new EntityStore(db);
     const bindings = new MemoryBindingStore(db);
     const service = new MemoryBindingService(bindings, entities);
+    db.exec(`CREATE TABLE memory_events(event_id TEXT PRIMARY KEY,project_id TEXT);
+      INSERT INTO memory_events VALUES('evt-cogmem','brain')`);
 
     const records = service.bindEvent({
       eventId: 'evt-cogmem',
@@ -100,5 +122,16 @@ describe('entity governance v2', () => {
     expect(records[0]?.entityId).toBe(canonicalOwner?.entityId);
     expect(bindings.listBindings({ eventId: 'evt-cogmem' })[0]?.entityId).toBe(canonicalOwner?.entityId);
     entities.close();
+  });
+
+  test('compatibility entity projections fork a reused legacy entity id by project', () => {
+    const store = new MemoryBindingStore();
+    const a = store.upsertEntity({ entityId: 'legacy-shared', projectId: 'a', canonicalName: 'Shared', entityType: 'project' });
+    const b = store.upsertEntity({ entityId: 'legacy-shared', projectId: 'b', canonicalName: 'Shared', entityType: 'project' });
+    expect(a.entityId).toBe('legacy-shared');
+    expect(b.entityId).not.toBe(a.entityId);
+    expect(store.getStats('a').entities).toBe(1);
+    expect(store.getStats('b').entities).toBe(1);
+    store.close();
   });
 });

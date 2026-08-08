@@ -16,6 +16,7 @@ import type { NeuronEmbeddingStore } from '../embedding/NeuronEmbeddingStore.js'
 export type { BrainRecallResult } from '../types/BrainRecallResult.js';
 export interface BrainRecallOptions {
     projectId?: string;
+    now?: number;
     limit?: number;
     includeRawEvidence?: boolean;
     includeUnprocessedFallback?: boolean;
@@ -25,6 +26,8 @@ export interface BrainRecallOptions {
     enableDeepWriteEdges?: boolean;
     /** CPU-controlled topic namespace hint for hierarchical recall. */
     topicPath?: string;
+    localDateNow?: string;
+    timeZone?: string;
 }
 export interface BrainRecallDependencies {
     memoryGraph: MemoryGraph;

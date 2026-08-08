@@ -15,7 +15,8 @@ export declare class NeuronEmbeddingStore {
     private readonly db;
     constructor(db: Database);
     initSchema(): void;
-    upsert(neuronId: string, modelId: string, vector: Float32Array, projectId?: string): void;
+    upsert(neuronId: string, modelId: string, vector: Float32Array, projectId?: string): boolean;
+    private hasTable;
     getProgress(): {
         total: number;
         completed: number;

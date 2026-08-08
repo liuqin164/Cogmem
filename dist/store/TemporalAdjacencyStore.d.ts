@@ -1,3 +1,4 @@
+import Database from 'bun:sqlite';
 import type { TimeBucketRecord } from '../types/index.js';
 export interface TemporalSurfaceSegment {
     bucketId: string;
@@ -9,12 +10,16 @@ export interface TemporalSurfaceSegment {
 }
 export declare class TemporalAdjacencyStore {
     private db;
-    constructor(dbPath?: string);
+    private readonly ownsDb;
+    constructor(dbOrPath?: Database | string);
     private initializeSchema;
     syncBuckets(buckets: TimeBucketRecord[], createdAt: number): void;
-    collectAdjacentNeuronIds(bucketIds: string[], limit?: number): string[];
+    rebuildAll(createdAt: number): void;
+    rebuildProject(projectId: string, timeZone: string, createdAt: number): void;
+    collectAdjacentNeuronIds(bucketIds: string[], limit?: number, projectId?: string): string[];
     collectContinuousTraversal(input: {
         bucketIds: string[];
+        projectId?: string;
         hopLimit?: number;
         limit?: number;
     }): {
@@ -27,6 +32,7 @@ export declare class TemporalAdjacencyStore {
         startTime?: number;
         endTime?: number;
         preferredBucketType?: TimeBucketRecord['bucketType'];
+        projectId?: string;
         hopLimit?: number;
         limit?: number;
     }): {
@@ -37,13 +43,15 @@ export declare class TemporalAdjacencyStore {
         neuronIds: string[];
     };
     close(): void;
+    private hasReadableProjection;
     private getAdjacentBucketIds;
     private listWindowSegments;
     private listNearestSegments;
     private listBucketSegments;
     private listNeuronIdsForBucket;
     private expandContinuousBand;
-    private getBucketStepMs;
-    private normalizeBucketStart;
+    private listAdjacentBucketIds;
+    private filterBucketIdsForProject;
+    private listNeuronIdsForBuckets;
 }
 //# sourceMappingURL=TemporalAdjacencyStore.d.ts.map

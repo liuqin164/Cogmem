@@ -14,7 +14,7 @@ export class UniverseNavigator {
         this.traversalExecutor = traversalExecutor;
     }
     navigate(input) {
-        const compiledQuery = this.queryCompiler.compile(input.query, input.projectId);
+        const compiledQuery = this.queryCompiler.compile(input.query, input.projectId, input.clock);
         const plan = this.retrievalPlanner.plan(compiledQuery.ir);
         const startTime = input.startTime ?? compiledQuery.ir.temporal.start;
         const endTime = input.endTime ?? compiledQuery.ir.temporal.end;
@@ -22,6 +22,8 @@ export class UniverseNavigator {
             projectId: input.projectId,
             startTime,
             endTime,
+            timeZone: input.clock.timeZone,
+            temporalEnabled: input.temporalEnabled,
             temporalBucketIds: input.temporalBucketIds,
             entityNeuronIds: input.entityNeuronIds,
             terms: Array.from(new Set([
@@ -32,13 +34,14 @@ export class UniverseNavigator {
             ]))
         });
         const pulse = this.pulseRetrievalEngine.run({
+            projectId: input.projectId,
             plan,
             ir: compiledQuery.ir,
             entityIds: compiledQuery.entityResolution.resolved.map((entity) => entity.entityId),
             topologyIds: Array.from(new Set([...input.topologyIds, ...branchSearch.neuronIds, ...branchSearch.denseJointNeuronIds])),
             branchIds: Array.from(new Set([...input.branchIds, ...branchSearch.neuronIds])),
-            temporalBucketIds: Array.from(new Set([...input.temporalBucketIds, ...branchSearch.temporalTraversal.bucketIds])),
-            temporalNeuronIds: Array.from(new Set([...input.temporalNeuronIds, ...branchSearch.temporalTraversal.neuronIds])),
+            temporalBucketIds: input.temporalEnabled === false ? [] : Array.from(new Set([...input.temporalBucketIds, ...branchSearch.temporalTraversal.bucketIds])),
+            temporalNeuronIds: input.temporalEnabled === false ? [] : Array.from(new Set([...input.temporalNeuronIds, ...branchSearch.temporalTraversal.neuronIds])),
             graphIds: input.graphIds,
             cognitiveGraphIds: input.cognitiveGraphIds,
             entityNeuronIds: Array.from(new Set([...input.entityNeuronIds, ...branchSearch.denseJointNeuronIds]))

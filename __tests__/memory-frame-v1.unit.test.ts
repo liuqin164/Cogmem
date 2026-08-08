@@ -1,0 +1,549 @@
+import { describe, expect, test } from 'bun:test';
+import { deterministicFrameFallback, memoryFrameJsonSchema, MEMORY_DIMENSIONS, MEMORY_FRAME_JSON_SCHEMA, MEMORY_FRAME_LIMITS, MEMORY_FRAME_REQUIRED_DIMENSIONS, normalizeAlias, validateMemoryFrame } from '../src/semantic/index.js';
+import { MemoryFrameStore } from '../src/store/MemoryFrameStore.js';
+import Database from 'bun:sqlite';
+import { installMultidimensionalMemoryGraph374 } from '../src/migrations/0032_multidimensional_memory_graph_3_7_4.js';
+import { createMemoryKernel } from '../src/factory.js';
+import { MultidimensionalQueryPlanner } from '../src/recall/index.js';
+import { MemoryFrameProjector } from '../src/atlas/MemoryFrameProjector.js';
+import { GraphCurator } from '../src/atlas/GraphCurator.js';
+import { memoryEdgeId } from '../src/binding/MemoryBindingIdentity.js';
+
+describe('MemoryFrame V1 contract', () => {
+  test('normalizes Unicode aliases without changing display labels', () => {
+    expect(normalizeAlias('  CogＭｅｍ  ')).toBe('cogmem');
+    expect(normalizeAlias('记忆  内核')).toBe('记忆 内核');
+  });
+
+  test('fallback contains only deterministic evidence-backed facts', () => {
+    const frame = deterministicFrameFallback({
+      projectId: 'cogmem', episodeId: 'ep-1',
+      events: [{ eventId: 'evt-1', occurredAt: 0 } as never], now: 0,
+    });
+    expect(frame.sourceAuthority).toBe('deterministic_fallback');
+    expect(frame.needsReview).toBe(true);
+    expect(validateMemoryFrame(frame).valid).toBe(true);
+    expect(frame.evidenceEventIds).toEqual(['evt-1']);
+  });
+
+  test('rejects relations whose endpoints are not registered', () => {
+    const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
+    frame.nodes.push({ frameNodeId: 'topic', dimension: 'topic', label: 'topic', confidence: 1, evidenceEventIds: [] });
+    frame.relations.push({ sourceFrameNodeId: 'topic', relationType: 'PARTICIPATED_IN', targetFrameNodeId: 'project', confidence: 1, evidenceEventIds: [] });
+    expect(validateMemoryFrame(frame).valid).toBe(false);
+    expect(validateMemoryFrame(frame).errors.some((error) => error.startsWith('invalid_memory_frame_relation'))).toBe(true);
+  });
+
+  test('returns structured errors for malformed nested model output', () => {
+    const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
+    expect(validateMemoryFrame({ ...frame, nodes: [{}] }).errors).toEqual(['invalid_memory_frame_nested_shape']);
+  });
+
+  test('runtime validation matches revision and nested schema constraints', () => {
+    const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
+    expect(validateMemoryFrame({ ...frame, revisionNumber: 0 }).errors).toEqual(['invalid_memory_frame_shape']);
+    expect(validateMemoryFrame({ ...frame, revisionNumber: 1.5 }).errors).toEqual(['invalid_memory_frame_shape']);
+    expect(validateMemoryFrame({ ...frame, revisionId: '' }).errors).toEqual(['invalid_memory_frame_shape']);
+    expect(validateMemoryFrame({ ...frame, supersedesFrameId: '' }).errors).toEqual(['invalid_memory_frame_shape']);
+    expect(validateMemoryFrame({ ...frame, processor: { ...frame.processor, unknown: true } }).errors).toEqual(['invalid_memory_frame_shape']);
+    expect(validateMemoryFrame({ ...frame, nodes: frame.nodes.map((node, index) => index ? node : { ...node, unknown: true }) }).errors).toEqual(['invalid_memory_frame_shape']);
+  });
+
+  test('public JSON schema shares runtime dimensions, bounds, and required nodes', () => {
+    const schema = MEMORY_FRAME_JSON_SCHEMA as any;
+    expect(schema.properties.nodes.minItems).toBe(1);
+    expect(schema.properties.nodes.maxItems).toBe(MEMORY_FRAME_LIMITS.nodes);
+    expect(schema.properties.nodes.items.properties.dimension.enum).toEqual(MEMORY_DIMENSIONS);
+    expect(schema.properties.evidenceEventIds.minItems).toBe(1);
+    expect(schema.allOf.map((entry: any) => entry.properties.nodes.contains.properties.dimension.const)).toEqual(MEMORY_FRAME_REQUIRED_DIMENSIONS);
+    expect(schema.properties.relations.items.properties.evidenceEventIds.minItems).toBe(1);
+    expect(schema.properties.temporalReferences.items.properties.evidenceEventIds.minItems).toBe(1);
+    expect(schema.properties.stateTransitions.items.properties.evidenceEventIds.minItems).toBe(1);
+    expect(schema.properties.frameId.pattern).toBe('.*\\S.*');
+    expect(schema.properties.nodes.items.properties.label.pattern).toBe('.*\\S.*');
+    const repairSchema = memoryFrameJsonSchema({ allowEmptyEvidence: true }) as any;
+    expect(repairSchema.properties.evidenceEventIds.minItems).toBe(0);
+    expect(repairSchema.properties.nodes.items.properties.evidenceEventIds.minItems).toBe(0);
+  });
+
+  test('immutable frame identities cannot be redirected by canonical hints', () => {
+    const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'episode-b', events: [] });
+    const episode = frame.nodes.find((node) => node.dimension === 'episode');
+    expect(episode).toBeDefined();
+    episode!.canonicalHint = { nodeId: 'episode:episode-a' };
+    expect(validateMemoryFrame(frame, { allowEmptyEvidence: true }).errors).toContain('immutable_identity_hint_mismatch:episode');
+  });
+
+  test('stores frames idempotently and publishes with CAS', () => {
+    const db = new Database(':memory:');
+    installMultidimensionalMemoryGraph374(db);
+    seedMemoryFrameEvidence(db);
+    const store = new MemoryFrameStore(db);
+    const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
+    store.save({ frame, sourceFingerprint: 'source-1', dreamJobLeaseId: 'lease-1', attemptGeneration: 1, now: 0 });
+    store.save({ frame: { ...frame, frameId: 'different-id' }, sourceFingerprint: 'source-1', dreamJobLeaseId: 'lease-1', attemptGeneration: 1, now: 1 });
+    expect(store.list('p', { statuses: ['staged'] })).toHaveLength(1);
+    expect(store.publish(frame.frameId, 'staged', 'needs_confirmation', 2)).toBe(true);
+    expect(() => store.publish(frame.frameId, 'staged', 'active', 3)).toThrow('memory_frame_publish_conflict');
+    expect(store.get(frame.frameId)?.relations).toHaveLength(1);
+    db.close();
+  });
+
+  test('staged revisions preserve the previous active frame until publish', () => {
+    const db = new Database(':memory:');
+    installMultidimensionalMemoryGraph374(db);
+    seedMemoryFrameEvidence(db);
+    const store = new MemoryFrameStore(db);
+    const base = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
+    const frame = { ...base, evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
+      nodes: base.nodes.map((node) => ({ ...node, evidenceEventIds: ['event-1'] })),
+      relations: base.relations.map((relation) => ({ ...relation, evidenceEventIds: ['event-1'] })) };
+    const first = store.save({ frame, sourceFingerprint: 'same', status: 'active', now: 1 });
+    expect(store.publish(first.frameId, 'staged', 'active', 2)).toBe(true);
+    const second = store.save({ frame: { ...frame, title: 'new revision' }, sourceFingerprint: 'same', status: 'active', now: 3 });
+    expect(store.get(first.frameId)?.status).toBe('active');
+    expect(second.frameId).not.toBe(first.frameId);
+    expect(store.get(second.frameId)?.status).toBe('staged');
+    store.failStaged([second.frameId], 4);
+    expect(store.get(first.frameId)?.status).toBe('active');
+    db.close();
+  });
+
+  test('review publication preserves the previous active frame', () => {
+    const db = new Database(':memory:');
+    installMultidimensionalMemoryGraph374(db);
+    seedMemoryFrameEvidence(db);
+    const store = new MemoryFrameStore(db);
+    const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }), evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
+      nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['event-1'] })),
+      relations: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).relations.map((relation) => ({ ...relation, evidenceEventIds: ['event-1'] })) };
+    const first = store.save({ frame, sourceFingerprint: 'a', now: 1 });
+    expect(store.publish(first.frameId, 'staged', 'active', 2)).toBe(true);
+    const second = store.save({ frame: { ...frame, frameId: 'frame-b' }, sourceFingerprint: 'b', publishStatus: 'needs_confirmation', now: 3 });
+    expect(store.publish(second.frameId, 'staged', 'needs_confirmation', 4)).toBe(true);
+    expect(store.get(first.frameId)?.status).toBe('active');
+    expect(store.get(second.frameId)?.status).toBe('needs_confirmation');
+    db.close();
+  });
+
+  test('active revision replacement satisfies the one-active partial index', () => {
+    const db = new Database(':memory:');
+    installMultidimensionalMemoryGraph374(db);
+    seedMemoryFrameEvidence(db);
+    const store = new MemoryFrameStore(db);
+    const base = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
+    const frame = { ...base, evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
+      nodes: base.nodes.map((node) => ({ ...node, evidenceEventIds: ['event-1'] })),
+      relations: base.relations.map((relation) => ({ ...relation, evidenceEventIds: ['event-1'] })) };
+    const first = store.save({ frame, sourceFingerprint: 'first', now: 1 });
+    expect(store.publish(first.frameId, 'staged', 'active', 2)).toBe(true);
+    const second = store.save({ frame: { ...frame, frameId: 'second-frame', title: 'newer' }, sourceFingerprint: 'second', now: 3 });
+    expect(store.publish(second.frameId, 'staged', 'active', 4)).toBe(true);
+    expect(store.get(first.frameId)?.status).toBe('superseded');
+    expect(store.get(second.frameId)?.status).toBe('active');
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM memory_frames WHERE episode_id='e' AND status='active'`).get()).toEqual({ count: 1 });
+    db.close();
+  });
+
+  test('projects active frames into the existing Atlas graph', () => {
+    const kernel = createMemoryKernel();
+    const event = kernel.eventStore.append({
+      eventId: 'event-1', streamId: 'thread-1', streamType: 'thread',
+      eventType: 'MESSAGE', rawEventType: 'message', projectId: 'p',
+      sessionId: 'session-1', threadId: 'thread-1', role: 'user',
+      occurredAt: 0, payload: { text: 'atlas projection evidence' },
+    });
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'p', sessionId: 'session-1', conversationThreadId: 'thread-1',
+      episodeType: 'discussion', importance: 0.5, eventId: event.eventId,
+      globalSeq: event.globalSeq, occurredAt: event.occurredAt,
+    });
+    kernel.episodeStore.appendEvent({
+      episodeId: episode.episodeId, eventId: event.eventId, relation: 'primary',
+      confidence: 1, globalSeq: event.globalSeq, occurredAt: event.occurredAt,
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const canonicalProject = kernel.memoryAtlasStore.getNode('project:p', 'p')!;
+    const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }),
+      evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
+      nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['event-1'] })),
+      relations: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).relations.map((relation) => ({ ...relation, evidenceEventIds: ['event-1'] })) };
+    const storedFrame = { ...frame, episodeId: episode.episodeId };
+    const savedFrame = kernel.memoryFrameStore.save({ frame: storedFrame, sourceFingerprint: 'projection-source', status: 'active', now: 0 });
+    expect(kernel.memoryFrameStore.get(savedFrame.frameId)?.status).toBe('staged');
+    kernel.memoryFrameStore.publish(savedFrame.frameId, 'staged', 'active', 1);
+    const result = kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    expect(result.documents).toBeGreaterThanOrEqual(2);
+    expect(kernel.memoryAtlasStore.getNode(`episode:${episode.episodeId}`, 'p')?.nodeType).toBe('episode');
+    expect(kernel.memoryAtlasStore.getNode('project:p', 'p')?.nodeType).toBe('project');
+    const projectedProject = kernel.memoryAtlasStore.getNode('project:p', 'p')!;
+    const directProjector = new MemoryFrameProjector(kernel.factStore.getDatabase(), kernel.memoryFrameStore, kernel.memoryAtlasStore, 'UTC');
+    for (let index = 0; index < 3; index += 1) directProjector.rebuild('p', 10 + index);
+    const repeatedProject = kernel.memoryAtlasStore.getNode('project:p', 'p')!;
+    expect({ supportCount: repeatedProject.supportCount, evidence: repeatedProject.evidenceEventIds })
+      .toEqual({ supportCount: projectedProject.supportCount, evidence: projectedProject.evidenceEventIds });
+    kernel.factStore.getDatabase().prepare(`UPDATE memory_atlas_documents SET label=?,summary=?,confidence=?,support_count=? WHERE project_id='p' AND node_id='project:p'`)
+      .run('Updated canonical project', 'Updated canonical summary', 0.91, canonicalProject.supportCount + 2);
+    directProjector.rebuild('p', 19, { canonicalDocumentsRebuilt: true });
+    kernel.memoryFrameStore.supersedeEpisodes([episode.episodeId], 2);
+    directProjector.rebuild('p', 20);
+    const restoredProject = kernel.memoryAtlasStore.getNode('project:p', 'p')!;
+    expect({ label: restoredProject.label, summary: restoredProject.summary, confidence: restoredProject.confidence, supportCount: restoredProject.supportCount, evidence: restoredProject.evidenceEventIds })
+      .toEqual({ label: 'Updated canonical project', summary: 'Updated canonical summary', confidence: 0.91, supportCount: canonicalProject.supportCount + 2, evidence: canonicalProject.evidenceEventIds });
+    kernel.close();
+  });
+
+  test('frame authority wins curator collisions and remains stable across rebuilds', () => {
+    const kernel = createMemoryKernel();
+    const event = kernel.eventStore.append({
+      eventId: 'authority-event', streamId: 'authority-thread', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: 'p', sessionId: 'authority-session', threadId: 'authority-thread',
+      localDate: '1970-01-01', role: 'user', occurredAt: 1, payload: { text: 'shared time evidence' },
+    });
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'p', sessionId: 'authority-session', conversationThreadId: 'authority-thread',
+      episodeType: 'discussion', importance: 0.5, eventId: event.eventId, globalSeq: event.globalSeq, occurredAt: 1,
+    });
+    kernel.episodeStore.appendEvent({ episodeId: episode.episodeId, eventId: event.eventId, relation: 'primary', confidence: 1, globalSeq: event.globalSeq, occurredAt: 1 });
+    const db = kernel.factStore.getDatabase();
+    db.prepare(`UPDATE memory_episodes SET status='active' WHERE episode_id=?`).run(episode.episodeId);
+    db.prepare(`INSERT INTO memory_atlas_aliases(alias_id,project_id,node_id,normalized_alias,alias,dimension,status,confidence,evidence_event_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,'active',1,'[]',1,1)`)
+      .run('governed-shared-time', 'p', 'time:p:1970-01-01', '1970-01-01', '1970-01-01', 'time');
+    const base = deterministicFrameFallback({ projectId: 'p', episodeId: episode.episodeId, events: [event] });
+    const episodeNode = base.nodes.find((node) => node.dimension === 'episode')!;
+    const frame = {
+      ...base,
+      needsReview: false,
+      sourceAuthority: 'processor' as const,
+      nodes: [...base.nodes, { frameNodeId: 'shared-time', dimension: 'time' as const, label: '1970-01-01', confidence: 0.97, evidenceEventIds: [event.eventId] }],
+      relations: [...base.relations, { sourceFrameNodeId: episodeNode.frameNodeId, relationType: 'OCCURRED_ON' as const, targetFrameNodeId: 'shared-time', confidence: 0.97, evidenceEventIds: [event.eventId] }],
+    };
+    const saved = kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'authority-collision', status: 'active', now: 1 });
+    kernel.memoryFrameStore.publish(saved.frameId, 'staged', 'active', 2);
+    const edgeId = memoryEdgeId({ projectId: 'p', sourceType: 'episode', sourceId: episode.episodeId, relationType: 'OCCURRED_ON', targetType: 'time', targetId: '1970-01-01' });
+    for (let index = 0; index < 2; index += 1) {
+      kernel.rebuildMemoryAtlas({ projectId: 'p' });
+      expect(db.prepare(`SELECT source_authority,confidence FROM memory_edges WHERE edge_id=?`).get(edgeId))
+        .toEqual({ source_authority: 'memory_frame_projector', confidence: 0.97 });
+    }
+    new GraphCurator(db, kernel.eventStore, kernel.memoryAtlasStore).rebuild('p', 10);
+    expect(db.prepare(`SELECT source_authority,confidence FROM memory_edges WHERE edge_id=?`).get(edgeId))
+      .toEqual({ source_authority: 'memory_frame_projector', confidence: 0.97 });
+    kernel.memoryFrameStore.supersedeEpisodes([episode.episodeId], 11);
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const fallback = db.prepare(`SELECT source_authority,confidence,evidence_event_ids_json,status,valid_from,valid_to FROM memory_edges WHERE edge_id=?`).get(edgeId);
+    expect(fallback).toMatchObject({ source_authority: 'atlas_curator', confidence: 1, status: 'active' });
+    expect(JSON.parse(String((fallback as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual([event.eventId]);
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    expect(db.prepare(`SELECT source_authority,confidence,evidence_event_ids_json,status,valid_from,valid_to FROM memory_edges WHERE edge_id=?`).get(edgeId)).toEqual(fallback);
+    kernel.close();
+  });
+
+  test('episode repair removes stale Curator evidence after one rebuild', () => {
+    const kernel = createMemoryKernel();
+    const events = [1, 2, 3].map((occurredAt, index) => kernel.eventStore.append({
+      eventId: `repair-event-${index + 1}`, streamId: 'repair-thread', streamType: 'thread',
+      eventType: 'MESSAGE', rawEventType: 'message', projectId: 'p', sessionId: 'repair-session',
+      threadId: 'repair-thread', role: 'user', occurredAt, payload: { text: `repair ${index + 1}` },
+    }));
+    const source = kernel.episodeStore.createEpisode({
+      projectId: 'p', sessionId: 'repair-session', conversationThreadId: 'repair-thread',
+      topicPath: 'repair/topic', episodeType: 'discussion', importance: 0.5,
+      eventId: events[0]!.eventId, globalSeq: events[0]!.globalSeq, occurredAt: events[0]!.occurredAt,
+    });
+    for (const event of events.slice(0, 2)) kernel.episodeStore.appendEvent({
+      episodeId: source.episodeId, eventId: event.eventId, relation: 'primary', confidence: 1,
+      globalSeq: event.globalSeq, occurredAt: event.occurredAt,
+    });
+    kernel.episodeStore.sealEpisode(source.episodeId, { mode: 'manual', reason: 'test', reasonCode: 'test', now: 4 });
+    const target = kernel.episodeStore.createEpisode({
+      projectId: 'p', sessionId: 'repair-session', conversationThreadId: 'repair-thread',
+      topicPath: 'repair/topic', episodeType: 'discussion', importance: 0.5,
+      eventId: events[2]!.eventId, globalSeq: events[2]!.globalSeq, occurredAt: events[2]!.occurredAt,
+    });
+    kernel.episodeStore.appendEvent({
+      episodeId: target.episodeId, eventId: events[2]!.eventId, relation: 'primary', confidence: 1,
+      globalSeq: events[2]!.globalSeq, occurredAt: events[2]!.occurredAt,
+    });
+    const db = kernel.factStore.getDatabase();
+    const edgeId = memoryEdgeId({
+      projectId: 'p', sourceType: 'episode', sourceId: source.episodeId,
+      relationType: 'ABOUT_TOPIC', targetType: 'topic', targetId: 'repair/topic',
+    });
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    expect(JSON.parse(String((db.prepare(`SELECT evidence_event_ids_json FROM memory_edge_supports WHERE edge_id=? AND source_authority='atlas_curator'`).get(edgeId) as { evidence_event_ids_json: string }).evidence_event_ids_json)))
+      .toEqual(events.slice(0, 2).map((event) => event.eventId));
+
+    kernel.repairEpisode({ operation: 'move-event', projectId: 'p', eventId: events[0]!.eventId, targetEpisodeId: target.episodeId, now: 10 });
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const support = db.prepare(`SELECT evidence_event_ids_json,confidence,version,updated_at FROM memory_edge_supports WHERE edge_id=? AND source_authority='atlas_curator'`).get(edgeId) as { evidence_event_ids_json: string; confidence: number; version: number; updated_at: number };
+    const edge = db.prepare(`SELECT evidence_event_ids_json,confidence,version,updated_at FROM memory_edges WHERE edge_id=?`).get(edgeId) as { evidence_event_ids_json: string; confidence: number; version: number; updated_at: number };
+    expect(JSON.parse(support.evidence_event_ids_json)).toEqual([events[1]!.eventId]);
+    expect(JSON.parse(edge.evidence_event_ids_json)).toEqual([events[1]!.eventId]);
+
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    expect(db.prepare(`SELECT evidence_event_ids_json,confidence,version,updated_at FROM memory_edge_supports WHERE edge_id=? AND source_authority='atlas_curator'`).get(edgeId)).toEqual(support);
+    expect(db.prepare(`SELECT evidence_event_ids_json,confidence,version,updated_at FROM memory_edges WHERE edge_id=?`).get(edgeId)).toEqual(edge);
+    kernel.close();
+  });
+
+  test('same-frame edge fragments aggregate independent of order, shrink, and rebuild idempotently', () => {
+    const kernel = createMemoryKernel();
+    const timestamps = [Date.UTC(2026, 7, 7, 1), Date.UTC(2026, 7, 7, 1)];
+    const events = timestamps.map((occurredAt, index) => kernel.eventStore.append({
+      eventId: `fragment-event-${index + 1}`, streamId: 'fragment-thread', streamType: 'thread',
+      eventType: 'MESSAGE', rawEventType: 'message', projectId: 'p', sessionId: 'fragment-session',
+      threadId: 'fragment-thread', localDate: '2026-08-07', role: 'user', occurredAt,
+      payload: { text: `fragment ${index + 1}` },
+    }));
+    const episode = kernel.episodeStore.createEpisode({
+      projectId: 'p', sessionId: 'fragment-session', conversationThreadId: 'fragment-thread',
+      episodeType: 'discussion', importance: 0.5, eventId: events[0]!.eventId,
+      globalSeq: events[0]!.globalSeq, occurredAt: events[0]!.occurredAt,
+    });
+    for (const event of events) kernel.episodeStore.appendEvent({
+      episodeId: episode.episodeId, eventId: event.eventId, relation: 'primary', confidence: 1,
+      globalSeq: event.globalSeq, occurredAt: event.occurredAt,
+    });
+    const base = deterministicFrameFallback({ projectId: 'p', episodeId: episode.episodeId, events });
+    const relation = base.relations[0]!;
+    const references = events.map((event, index) => ({
+      label: '2026-08-07', occurredAt: event.occurredAt + index, confidence: index ? 0.6 : 0.9,
+      evidenceEventIds: [event.eventId],
+    }));
+    const taskNodes = events.map((event, index) => ({
+      frameNodeId: `task-${index ? 'b' : 'a'}`, dimension: 'task' as const, label: 'Shared Task',
+      aliases: ['shared task alias'], description: index ? 'lower confidence' : 'higher confidence',
+      confidence: index ? 0.6 : 0.9, evidenceEventIds: [event.eventId],
+    }));
+    const frame = {
+      ...base, frameId: 'fragment-frame', sourceAuthority: 'processor' as const, needsReview: false,
+      nodes: [...base.nodes.map((node) => node.dimension === 'raw_event'
+        ? node
+        : { ...node, evidenceEventIds: events.map((event) => event.eventId) }), ...taskNodes],
+      relations: events.map((event, index) => ({
+        ...relation, confidence: index ? 0.6 : 0.9, evidenceEventIds: [event.eventId],
+      })),
+      temporalReferences: references,
+      stateTransitions: [
+        { subjectFrameNodeId: 'task-a', to: 'completed', confidence: 0.9, evidenceEventIds: [events[0]!.eventId] },
+        { subjectFrameNodeId: 'task-b', to: 'blocked', confidence: 0.6, evidenceEventIds: [events[0]!.eventId] },
+      ],
+    };
+    expect(validateMemoryFrame(frame).errors).toEqual([]);
+    const saved = kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'fragment-source', now: 1 });
+    kernel.memoryFrameStore.publish(saved.frameId, 'staged', 'active', 2);
+    const db = kernel.factStore.getDatabase();
+    const projector = new MemoryFrameProjector(db, kernel.memoryFrameStore, kernel.memoryAtlasStore, 'UTC');
+    const temporalEdgeId = memoryEdgeId({
+      projectId: 'p', sourceType: 'time', sourceId: '2026-08-07',
+      relationType: 'OCCURRED_IN', targetType: 'time', targetId: '2026-08',
+    });
+    const relationEdgeId = memoryEdgeId({
+      projectId: 'p', sourceType: 'episode', sourceId: episode.episodeId,
+      relationType: relation.relationType, targetType: 'project', targetId: 'p',
+    });
+    const readProjection = (edgeId: string, frameId: string) => ({
+      support: db.prepare(`SELECT evidence_event_ids_json,confidence,status,valid_from,valid_to,version,updated_at FROM memory_edge_supports WHERE edge_id=? AND support_source_id=?`).get(edgeId, frameId),
+      edge: db.prepare(`SELECT evidence_event_ids_json,confidence,status,valid_from,valid_to,version,updated_at FROM memory_edges WHERE edge_id=?`).get(edgeId),
+    });
+    const readNodeProjection = (nodeId: string, frameId: string) => ({
+      support: db.prepare(`SELECT evidence_event_ids_json,payload_json,confidence,created_at FROM memory_atlas_supports WHERE node_id=? AND source_id=?`).get(nodeId, frameId),
+      document: db.prepare(`SELECT label,summary,confidence,support_count,occurred_at,evidence_event_ids_json,status,updated_at FROM memory_atlas_documents WHERE node_id=?`).get(nodeId),
+    });
+    const readAliasProjection = (frameId: string) => db.prepare(`SELECT s.evidence_event_ids_json,s.payload_json,s.confidence,s.created_at FROM memory_atlas_alias_supports s JOIN memory_atlas_aliases a ON a.alias_id=s.alias_id WHERE a.normalized_alias='shared task alias' AND s.source_frame_id=?`).get(frameId);
+    const readStateEdges = () => db.prepare(`SELECT target_id,status,evidence_event_ids_json,version,updated_at FROM memory_edges WHERE project_id='p' AND source_type='task' AND relation_type='HAS_STATE' ORDER BY target_id`).all();
+    const firstResult = projector.rebuild('p', 10);
+    const temporal = readProjection(temporalEdgeId, saved.frameId);
+    const related = readProjection(relationEdgeId, saved.frameId);
+    for (const projection of [temporal, related]) {
+      expect(JSON.parse(String((projection.support as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual(events.map((event) => event.eventId));
+      expect(JSON.parse(String((projection.edge as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual(events.map((event) => event.eventId));
+      expect(projection.support).toMatchObject({ confidence: 0.9, valid_to: null });
+    }
+    const taskNodeId = String((db.prepare(`SELECT node_id FROM memory_atlas_documents WHERE project_id='p' AND node_type='task' AND label='Shared Task'`).get() as { node_id: string }).node_id);
+    const timeNodeId = 'time:p:2026-08-07';
+    const taskProjection = readNodeProjection(taskNodeId, saved.frameId);
+    const timeProjection = readNodeProjection(timeNodeId, saved.frameId);
+    const aliasProjection = readAliasProjection(saved.frameId);
+    for (const projection of [taskProjection, timeProjection]) {
+      expect(JSON.parse(String((projection.support as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual(events.map((event) => event.eventId));
+      expect(JSON.parse(String((projection.document as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual(events.map((event) => event.eventId));
+      expect(projection.support).toMatchObject({ confidence: 0.9 });
+      expect(projection.document).toMatchObject({ confidence: 0.9, status: 'active' });
+    }
+    expect(taskProjection.document).toMatchObject({ summary: 'higher confidence' });
+    expect(timeProjection.document).toMatchObject({ occurred_at: references[0]!.occurredAt });
+    expect(JSON.parse(String((aliasProjection as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual(events.map((event) => event.eventId));
+    expect(aliasProjection).toMatchObject({ confidence: 0.9 });
+    const ambiguousStates = readStateEdges();
+    expect(firstResult.needsReview).toBe(1);
+    expect(ambiguousStates).toHaveLength(2);
+    expect(ambiguousStates.every((edge: any) => edge.status === 'needs_confirmation')).toBe(true);
+
+    db.prepare(`UPDATE memory_frames SET temporal_references_json=? WHERE frame_id=?`).run(JSON.stringify([...references].reverse()), saved.frameId);
+    db.prepare(`UPDATE memory_frames SET state_transitions_json=? WHERE frame_id=?`).run(JSON.stringify([...frame.stateTransitions].reverse()), saved.frameId);
+    const relationRows = db.prepare(`SELECT frame_relation_id FROM memory_frame_relations WHERE frame_id=? ORDER BY frame_relation_id`).all(saved.frameId) as Array<{ frame_relation_id: string }>;
+    db.prepare(`UPDATE memory_frame_relations SET frame_relation_id=? WHERE frame_relation_id=?`).run('zz-fragment-relation', relationRows[0]!.frame_relation_id);
+    db.prepare(`UPDATE memory_frame_relations SET frame_relation_id=? WHERE frame_relation_id=?`).run('aa-fragment-relation', relationRows[1]!.frame_relation_id);
+    projector.rebuild('p', 11);
+    expect(readProjection(temporalEdgeId, saved.frameId)).toEqual(temporal);
+    expect(readProjection(relationEdgeId, saved.frameId)).toEqual(related);
+    expect(readNodeProjection(taskNodeId, saved.frameId)).toEqual(taskProjection);
+    expect(readNodeProjection(timeNodeId, saved.frameId)).toEqual(timeProjection);
+    expect(readAliasProjection(saved.frameId)).toEqual(aliasProjection);
+    expect(readStateEdges()).toEqual(ambiguousStates);
+
+    db.prepare(`UPDATE memory_frames SET state_transitions_json=? WHERE frame_id=?`).run(JSON.stringify([
+      { subjectFrameNodeId: 'task-a', to: 'done', confidence: 0.9, evidenceEventIds: [events[0]!.eventId] },
+      { subjectFrameNodeId: 'task-b', to: 'completed', confidence: 0.6, evidenceEventIds: [events[0]!.eventId] },
+    ]), saved.frameId);
+    projector.rebuild('p', 12);
+    expect(readStateEdges()).toHaveLength(1);
+    expect(readStateEdges()[0]).toMatchObject({ status: 'active' });
+
+    db.prepare(`UPDATE memory_frames SET state_transitions_json=? WHERE frame_id=?`).run(JSON.stringify([
+      { subjectFrameNodeId: 'task-a', to: 'completed', confidence: 0.9, evidenceEventIds: [events[0]!.eventId] },
+      { subjectFrameNodeId: 'task-b', to: 'blocked', confidence: 0.6, evidenceEventIds: [events[1]!.eventId] },
+    ]), saved.frameId);
+    projector.rebuild('p', 13);
+    expect(db.prepare(`SELECT d.label,e.status FROM memory_edges e JOIN memory_atlas_documents d ON d.project_id=e.project_id AND d.node_type='state' AND d.source_id=e.target_id WHERE e.project_id='p' AND e.source_type='task' AND e.relation_type='HAS_STATE'`).all())
+      .toEqual([{ label: 'blocked', status: 'active' }]);
+
+    const disjointRows = db.prepare(`SELECT frame_relation_id FROM memory_frame_relations WHERE frame_id=? ORDER BY frame_relation_id`).all(saved.frameId) as Array<{ frame_relation_id: string }>;
+    db.prepare(`UPDATE memory_frame_relations SET valid_from=?,valid_to=? WHERE frame_relation_id=?`).run(10, 20, disjointRows[0]!.frame_relation_id);
+    db.prepare(`UPDATE memory_frame_relations SET valid_from=?,valid_to=? WHERE frame_relation_id=?`).run(30, 40, disjointRows[1]!.frame_relation_id);
+    projector.rebuild('p', 14);
+    const disjoint = readProjection(relationEdgeId, saved.frameId);
+    expect(disjoint.support).toMatchObject({ status: 'needs_confirmation', valid_from: 30, valid_to: 40 });
+    expect(disjoint.edge).toMatchObject({ status: 'needs_confirmation', valid_from: 30, valid_to: 40 });
+    db.prepare(`UPDATE memory_frame_relations SET frame_relation_id='tmp-fragment-relation' WHERE frame_relation_id=?`).run(disjointRows[0]!.frame_relation_id);
+    db.prepare(`UPDATE memory_frame_relations SET frame_relation_id=? WHERE frame_relation_id=?`).run(disjointRows[0]!.frame_relation_id, disjointRows[1]!.frame_relation_id);
+    db.prepare(`UPDATE memory_frame_relations SET frame_relation_id=? WHERE frame_relation_id='tmp-fragment-relation'`).run(disjointRows[1]!.frame_relation_id);
+    projector.rebuild('p', 15);
+    expect(readProjection(relationEdgeId, saved.frameId)).toEqual(disjoint);
+
+    const shrunkFrame = {
+      ...frame, frameId: 'fragment-frame-shrunk', evidenceEventIds: [events[0]!.eventId],
+      nodes: frame.nodes
+        .filter((node) => node.dimension !== 'raw_event' || node.evidenceEventIds.includes(events[0]!.eventId))
+        .map((node) => ({ ...node, evidenceEventIds: [events[0]!.eventId] })),
+      relations: [{ ...relation, confidence: 0.9, evidenceEventIds: [events[0]!.eventId] }],
+      temporalReferences: [references[0]!],
+    };
+    const shrunk = kernel.memoryFrameStore.save({ frame: shrunkFrame, sourceFingerprint: 'fragment-source-shrunk', now: 12 });
+    kernel.memoryFrameStore.publish(shrunk.frameId, 'staged', 'active', 13);
+    projector.rebuild('p', 16);
+    const shrunkTemporal = readProjection(temporalEdgeId, shrunk.frameId);
+    const shrunkRelation = readProjection(relationEdgeId, shrunk.frameId);
+    for (const projection of [shrunkTemporal, shrunkRelation]) {
+      expect(JSON.parse(String((projection.support as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual([events[0]!.eventId]);
+      expect(JSON.parse(String((projection.edge as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual([events[0]!.eventId]);
+    }
+    projector.rebuild('p', 17);
+    expect(readProjection(temporalEdgeId, shrunk.frameId)).toEqual(shrunkTemporal);
+    expect(readProjection(relationEdgeId, shrunk.frameId)).toEqual(shrunkRelation);
+    kernel.close();
+  });
+
+  test('durable event order resolves equal-time states across active frames', () => {
+    const kernel = createMemoryKernel();
+    const events = [0, 1].map((index) => kernel.eventStore.append({
+      eventId: `cross-frame-state-event-${index}`, streamId: `cross-frame-state-${index}`, streamType: 'thread',
+      eventType: 'MESSAGE', rawEventType: 'message', projectId: 'p', sessionId: `state-session-${index}`,
+      threadId: `state-thread-${index}`, role: 'user', occurredAt: 100, payload: { text: `state ${index}` },
+    }));
+    ['completed', 'blocked'].forEach((state, index) => {
+      const event = events[index]!;
+      const episode = kernel.episodeStore.createEpisode({
+        projectId: 'p', sessionId: `state-session-${index}`, conversationThreadId: `state-thread-${index}`,
+        episodeType: 'status_update', importance: 0.5, eventId: event.eventId,
+        globalSeq: event.globalSeq, occurredAt: event.occurredAt,
+      });
+      kernel.episodeStore.appendEvent({
+        episodeId: episode.episodeId, eventId: event.eventId, relation: 'primary', confidence: 1,
+        globalSeq: event.globalSeq, occurredAt: event.occurredAt,
+      });
+      const base = deterministicFrameFallback({ projectId: 'p', episodeId: episode.episodeId, events: [event] });
+      const frame = {
+        ...base, frameId: `cross-frame-${index}`, needsReview: false, sourceAuthority: 'processor' as const,
+        nodes: [...base.nodes, { frameNodeId: 'task', dimension: 'task' as const, label: 'Cross Frame Task', confidence: 0.9, evidenceEventIds: [event.eventId] }],
+        stateTransitions: [{ subjectFrameNodeId: 'task', to: state, confidence: 0.9, evidenceEventIds: [event.eventId] }],
+      };
+      const saved = kernel.memoryFrameStore.save({ frame, sourceFingerprint: `cross-frame-${index}`, now: index + 1 });
+      kernel.memoryFrameStore.publish(saved.frameId, 'staged', 'active', index + 3);
+    });
+    const db = kernel.factStore.getDatabase();
+    const projector = new MemoryFrameProjector(db, kernel.memoryFrameStore, kernel.memoryAtlasStore, 'UTC');
+    const result = projector.rebuild('p', 10);
+    const read = () => db.prepare(`SELECT d.label,e.status,e.version,e.updated_at FROM memory_edges e JOIN memory_atlas_documents d ON d.project_id=e.project_id AND d.node_type='state' AND d.source_id=e.target_id WHERE e.project_id='p' AND e.source_type='task' AND e.relation_type='HAS_STATE' ORDER BY e.target_id`).all();
+    const first = read();
+    expect(result.needsReview).toBe(0);
+    expect(first).toEqual([{ label: 'blocked', status: 'active', version: 1, updated_at: 10 }]);
+    projector.rebuild('p', 11);
+    expect(read()).toEqual(first);
+    kernel.close();
+  });
+
+  test('builds a bounded multilingual query frame', () => {
+    const frame = new MultidimensionalQueryPlanner().plan('谁参与了 2026 年的 database issue？', Date.UTC(2026, 6, 13));
+    expect(frame.schemaVersion).toBe('memory_query_frame.v1');
+    expect(frame.intent).toBe('historical_summary');
+    expect(frame.time?.from).toBe(Date.UTC(2026, 0, 1));
+    expect(frame.issues?.[0]?.label).toBe('issue');
+  });
+
+  test('lease retry creates an independent staged revision without changing the source row', () => {
+    const db = new Database(':memory:');
+    installMultidimensionalMemoryGraph374(db);
+    const store = new MemoryFrameStore(db);
+    const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }),
+      evidenceEventIds: ['evt-1'], nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['evt-1'] })),
+      relations: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).relations.map((relation) => ({ ...relation, evidenceEventIds: ['evt-1'] })) };
+    const first = store.save({ frame, sourceFingerprint: 'stable-source', dreamJobLeaseId: 'lease-a', attemptGeneration: 1, now: 1 });
+    const retry = store.save({ frame: { ...frame, frameId: 'retry-frame' }, sourceFingerprint: 'stable-source', dreamJobLeaseId: 'lease-b', attemptGeneration: 2, now: 2 });
+    expect(retry.frameId).not.toBe(first.frameId);
+    expect(store.get(first.frameId)?.status).toBe('staged');
+    expect(store.get(retry.frameId)?.status).toBe('staged');
+    expect(db.prepare('SELECT COUNT(*) AS count FROM memory_frame_nodes').get()).toEqual({ count: 4 });
+    db.close();
+  });
+
+  test('planner resolves a month before the containing year and accepts Chinese inflection', () => {
+    const frame = new MultidimensionalQueryPlanner().plan('谁参与了 2026年6月的升级？', Date.UTC(2026, 6, 13));
+    expect(frame.actors?.[0]?.label).toBe('谁参与了');
+    expect(frame.time).toEqual({ from: Date.UTC(2026, 5, 1), to: Date.UTC(2026, 6, 1), expressions: ['2026年6月'] });
+  });
+
+  test('planner resolves relative dates using the supplied project timezone', () => {
+    const frame = new MultidimensionalQueryPlanner().plan('今天', { now: Date.UTC(2026, 6, 16, 15, 30), timeZone: 'Asia/Tokyo' });
+    expect(frame.time?.from).toBe(Date.UTC(2026, 6, 16, 15));
+    expect(frame.time?.to).toBe(Date.UTC(2026, 6, 17, 15));
+  });
+
+  test('kernel recomputes the default project-local date for each query', () => {
+    const originalNow = Date.now;
+    const kernel = createMemoryKernel({ projectTimeZone: 'Asia/Tokyo' });
+    try {
+      Date.now = () => Date.UTC(2026, 6, 16, 14, 59);
+      const before = kernel.planMemoryQuery('今天', { projectId: 'clock-project' }).queryFrame.time;
+      Date.now = () => Date.UTC(2026, 6, 16, 15, 1);
+      const after = kernel.planMemoryQuery('今天', { projectId: 'clock-project' }).queryFrame.time;
+      expect(before?.from).not.toBe(after?.from);
+    } finally {
+      Date.now = originalNow;
+      kernel.close();
+    }
+  });
+});
+
+function seedMemoryFrameEvidence(db: Database): void {
+  db.exec(`
+    INSERT INTO memory_events(
+      event_id,global_seq,stream_id,stream_type,event_type,event_version,project_id,project_scope,
+      local_date,role,occurred_at,payload_json,payload_hash
+    ) VALUES('event-1',1,'stream-1','thread','MESSAGE',1,'p','p','1970-01-01','user',1,'{}','hash');
+    INSERT INTO memory_episode_events(episode_id,event_id,position,relation,confidence,created_at)
+    VALUES('e','event-1',0,'primary',1,1);
+  `);
+}

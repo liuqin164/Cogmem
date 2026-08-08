@@ -5,6 +5,7 @@ export interface SchemaMigrationRunOptions {
 }
 export interface SchemaMigrationRunnerOptions {
     readonly?: boolean;
+    backupVerified?: boolean;
 }
 export interface SchemaMigrationResult {
     pending: string[];
@@ -18,8 +19,14 @@ export declare class SchemaMigrationRunner {
     private readonly options;
     constructor(db: Database, migrations: Migration[], options?: SchemaMigrationRunnerOptions);
     plan(): Migration[];
+    preflight(): void;
     run(options?: SchemaMigrationRunOptions): SchemaMigrationResult;
     private ensureMigrationTable;
+    private migrationChecksum;
+    private backfillChecksums;
+    private assertRecordedChecksums;
+    private recordedChecksums;
+    private assertSupportedReleaseSchema;
     currentVersion(): string | undefined;
     private appliedVersions;
     private schemaMigrationsTableExists;
@@ -27,5 +34,8 @@ export declare class SchemaMigrationRunner {
     private legacyCurrentVersion;
     private adoptLegacyVersion;
     private migrationSchemaSatisfied;
+    private repairRecordedRuntimeGuards;
+    private tableExists;
+    private hasColumns;
 }
 //# sourceMappingURL=SchemaMigrationRunner.d.ts.map

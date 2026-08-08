@@ -32,6 +32,7 @@ describe('temporal memory v1', () => {
 
   test('records ordered milestones, decisions, and corrections with evidence', () => {
     const db = new Database(':memory:');
+    db.exec(`CREATE TABLE memory_events(event_id TEXT PRIMARY KEY,project_id TEXT); INSERT INTO memory_events VALUES('evt-old','brain'),('evt-new','brain')`);
     const temporal = new TemporalMemoryService(db);
     temporal.record({
       projectId: 'brain', entryType: 'milestone', title: 'Graph Recall shipped',

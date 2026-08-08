@@ -18,6 +18,9 @@ export interface AgentTurnMemory {
     userText: string;
     assistantText?: string;
     timestamp?: number;
+    localDate?: string;
+    timeZone?: string;
+    projectTimeZone?: string;
     ingestMode?: AgentTurnIngestMode;
     metadata?: Record<string, unknown>;
 }
@@ -261,6 +264,8 @@ export declare class KernelAgentMemoryBackend {
     private facetGraphQuoteItemsForQuery;
     private facetGraphItemsForQuery;
     private toAgentRecallItemFromAtlasCard;
+    private toAgentRecallItemFromAtlasNode;
+    private isAllowedAtlasCollection;
     private recallForensicAnchor;
     private searchRawEventsByQueryPlan;
     private rawEventsForLocalDateCue;
@@ -274,6 +279,8 @@ export declare class KernelAgentMemoryBackend {
     private structuredCueTerms;
     private itemSearchableText;
     private mergeRecallItems;
+    private withAtlasItems;
+    private atlasItemsForAgentQuery;
     private mergeHistoricalRecallItems;
     private compiledItemsForHistoricalQuery;
     private filterCompiledItemsByQueryCues;

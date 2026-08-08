@@ -12,6 +12,21 @@ function createKernel(): MemoryKernel {
   return createMemoryKernel({ dbPath: join(mkdtempSync(join(tmpdir(), 'cogmem-atlas-facet-')), 'memory.db') });
 }
 
+test('Agent global scope executes the multidimensional graph lane instead of treating empty scope as absent', async () => {
+  const kernel = createKernel();
+  try {
+    await kernel.ingest({ projectId: '', content: 'projectless graph lane evidence' });
+    let multidimensionalCalls = 0;
+    const originalRecall = kernel.recall.bind(kernel);
+    (kernel as unknown as { recall: MemoryKernel['recall'] }).recall = ((query, options) => {
+      multidimensionalCalls += 1;
+      return originalRecall(query, options);
+    }) as MemoryKernel['recall'];
+    new KernelAgentMemoryBackend(kernel).recall({ agentId: 'global-agent', sessionId: 's', projectId: '', query: 'graph lane evidence', limit: 3 });
+    expect(multidimensionalCalls).toBeGreaterThan(0);
+  } finally { kernel.close(); }
+});
+
 function addEpisode(kernel: MemoryKernel, input: {
   eventId: string;
   sessionId: string;
@@ -432,7 +447,7 @@ test('targeted graph reindex restores one episode facets by raw event id', () =>
     expect(kernel.graphExplore('启动 Hermes', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3), limit: 10, refresh: false }).cards ?? []).toHaveLength(0);
     const reindexed = kernel.reindexMemoryAtlas({ projectId: 'openclaw', eventId: event.eventId });
     expect(reindexed.episodeIds).toContain(episodeId);
-    expect(kernel.memoryAtlasStore.getProjectionState('openclaw')?.status).toBe('dirty');
+    expect(kernel.memoryAtlasStore.getProjectionState('openclaw')?.status).toBe('clean');
     const result = kernel.graphExplore('启动 Hermes', { projectId: 'openclaw', now: Date.UTC(2026, 6, 3), limit: 10, refresh: false });
     expect(result.cards?.[0]?.displayTitle).toContain('Hermes');
     expect(result.cards?.[0]?.sourceLocator?.eventId).toBe(event.eventId);
@@ -607,7 +622,7 @@ test('3.7 projection ignores stale clean memory_atlas.v1 and writes clean memory
       WHERE project_id='openclaw' AND projection_name='memory_atlas.v2'
     `).get() as { status: string; metadata_json: string } | null;
     expect(row?.status).toBe('clean');
-    expect(JSON.parse(row!.metadata_json).projectionSchemaVersion).toBe('3.7.2');
+    expect(JSON.parse(row!.metadata_json).projectionSchemaVersion).toBe('3.7.4');
   } finally {
     kernel.close();
   }

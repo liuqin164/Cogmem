@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type Database from 'bun:sqlite';
+import { projectQueryValue, projectScope } from '../topology/ProjectScope.js';
 
 export type DeepWriteRunStatus = 'running' | 'staged' | 'succeeded' | 'failed' | 'skipped' | 'abandoned';
 export type DeepWriteCandidateStatus = 'staged' | 'shadow' | 'candidate' | 'promoting' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
@@ -206,7 +207,7 @@ export class DeepWriteCandidateStore {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.runId,
-      record.projectId || null,
+      record.projectId === undefined ? null : projectScope(record.projectId),
       record.sessionId || null,
       JSON.stringify(record.sourceNeuronIds),
       record.modelProvider || null,
@@ -344,9 +345,9 @@ export class DeepWriteCandidateStore {
       conditions.push(`c.candidate_type IN (${options.candidateTypes.map(() => '?').join(', ')})`);
       params.push(...options.candidateTypes);
     }
-    if (options.projectId) {
-      conditions.push('r.project_id = ?');
-      params.push(options.projectId);
+    if (options.projectId !== undefined) {
+      conditions.push("COALESCE(r.project_id, '') = ?");
+      params.push(projectScope(options.projectId));
     }
     if (options.runId) {
       conditions.push('c.run_id = ?');
@@ -381,9 +382,9 @@ export class DeepWriteCandidateStore {
       conditions.push(`c.candidate_type IN (${options.candidateTypes.map(() => '?').join(', ')})`);
       params.push(...options.candidateTypes);
     }
-    if (options.projectId) {
-      conditions.push('r.project_id = ?');
-      params.push(options.projectId);
+    if (options.projectId !== undefined) {
+      conditions.push("COALESCE(r.project_id, '') = ?");
+      params.push(projectScope(options.projectId));
     }
     if (options.runId) {
       conditions.push('c.run_id = ?');
@@ -452,7 +453,7 @@ export class DeepWriteCandidateStore {
         FROM deep_write_runs r
         LEFT JOIN episode_dream_jobs j ON j.episode_id = r.source_episode_id
         WHERE r.status = 'staged' AND r.created_at < ?
-          AND (? IS NULL OR r.project_id = ?)
+          AND (? IS NULL OR COALESCE(r.project_id, '') = ?)
           AND (
             j.episode_id IS NULL
             OR j.state <> 'processing'
@@ -460,7 +461,7 @@ export class DeepWriteCandidateStore {
             OR j.lease_until IS NULL
             OR j.lease_until < ?
           )
-      `).all(before, projectId || null, projectId || null, updatedAt) as Array<{ run_id: string }>;
+      `).all(before, projectQueryValue(projectId), projectQueryValue(projectId), updatedAt) as Array<{ run_id: string }>;
       let abandoned = 0;
       for (const row of candidates) {
         this.db.prepare(`
@@ -515,9 +516,9 @@ export class DeepWriteCandidateStore {
       WHERE c.status = 'needs_confirmation'
         AND COALESCE(c.updated_at, c.created_at) < ?
     `;
-    if (input.projectId) {
-      sql += ' AND r.project_id = ?';
-      params.push(input.projectId);
+    if (input.projectId !== undefined) {
+      sql += " AND COALESCE(r.project_id, '') = ?";
+      params.push(projectScope(input.projectId));
     }
     sql += ' ORDER BY COALESCE(c.updated_at, c.created_at) ASC, c.candidate_id ASC LIMIT ?';
     params.push(input.limit ?? 1000);
@@ -543,7 +544,7 @@ export class DeepWriteCandidateStore {
   private mapRun(row: RunRow): DeepWriteRunRecord {
     return {
       runId: row.run_id,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id ?? undefined,
       sessionId: row.session_id || undefined,
       sourceNeuronIds: JSON.parse(row.source_neuron_ids_json || '[]'),
       modelProvider: row.model_provider || undefined,

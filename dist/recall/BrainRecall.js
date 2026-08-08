@@ -4,6 +4,7 @@ import { normalizeLexiconText } from '../lexicon/coreMemoryLexicon.js';
 import { logger } from '../utils/Logger.js';
 import { config as globalConfig } from '../utils/Config.js';
 import { isRecallableMemoryEvidence } from './RecallGovernance.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 export class BrainRecall {
     deps;
     semanticCompiler = new LocalSemanticCompiler();
@@ -36,8 +37,8 @@ export class BrainRecall {
         const compiledQuery = this.semanticCompiler.compileQuery({ text: query, projectId: options.projectId });
         const resolvedEntityIds = compiledQuery.entities
             .flatMap((entity) => {
-            const direct = this.deps.entityStore.findByCanonicalName(entity.text, entity.type);
-            const alias = direct || this.deps.entityStore.findByAlias(entity.text, entity.type);
+            const direct = this.deps.entityStore.findByCanonicalName(entity.text, entity.type, options.projectId);
+            const alias = direct || this.deps.entityStore.findByAlias(entity.text, entity.type, options.projectId);
             return alias ? [alias.entityId] : [];
         });
         const candidateEntityIds = this.expandEntityIdsViaPersistentGainEdges(Array.from(new Set(resolvedEntityIds)), options.enablePersistentGainEdges !== false, options.enableDeepWriteEdges === true);
@@ -64,22 +65,24 @@ export class BrainRecall {
             query,
             projectId: options.projectId,
             limit
-        });
+        }).filter((belief) => matchesProjectScope(options.projectId, belief.projectId));
         const facts = this.rankFacts(query, [
             ...this.deps.factStore.listFactsByNeuronIds(candidateNeuronIds, limit * 8),
             ...this.deps.factStore.listFactsByEntityIds(candidateEntityIds, { limit: limit * 8 })
-        ]).slice(0, limit);
-        const events = this.rankEvents(query, this.deps.factStore.listEventsByNeuronIds(candidateNeuronIds, limit * 6)).slice(0, limit);
+        ].filter((fact) => matchesProjectScope(options.projectId, this.deps.memoryGraph.getNeuron(fact.neuronId)?.metadata.projectId))).slice(0, limit);
+        const events = this.rankEvents(query, this.deps.factStore.listEventsByNeuronIds(candidateNeuronIds, limit * 6)
+            .filter((event) => matchesProjectScope(options.projectId, this.deps.memoryGraph.getNeuron(event.neuronId)?.metadata.projectId))).slice(0, limit);
         const entityTimeline = this.deps.entityStore.getEntityTimeline({
             projectId: options.projectId,
             entityIds: candidateEntityIds.length > 0 ? candidateEntityIds : undefined,
             limit: limit * 3
-        });
+        }).filter((item) => matchesProjectScope(options.projectId, item.projectId));
         const compiledHitCount = beliefs.length + facts.length + events.length + entityTimeline.length;
         const rawEvidence = options.includeRawEvidence === false
             ? []
-            : this.toRecallableNeurons(candidateNeuronIds, limit);
-        this._expandByCommunity(rawEvidence, limit);
+            : this.toRecallableNeurons(candidateNeuronIds, limit)
+                .filter((neuron) => matchesProjectScope(options.projectId, neuron.metadata.projectId));
+        this._expandByCommunity(rawEvidence, limit, options.projectId);
         if (topicRouteResult && !topicRouteResult.fallbackToGlobal && options.includeRawEvidence !== false) {
             const summaryTopicPath = topicRouteResult.matchedTopicPath ?? options.topicPath ?? rawEvidence[0]?.metadata.topicPath ?? '';
             const summary = this.deps.topicSummaryBoard?.getSummaryNeuron(summaryTopicPath, options.projectId);
@@ -91,6 +94,10 @@ export class BrainRecall {
         }
         this._prependSemanticConsolidations(rawEvidence, options.projectId, topicRouteResult?.matchedTopicPath ?? options.topicPath);
         this._prependCrossDomainPrinciples(rawEvidence, options.projectId);
+        for (let index = rawEvidence.length - 1; index >= 0; index -= 1) {
+            if (!matchesProjectScope(options.projectId, rawEvidence[index]?.metadata.projectId))
+                rawEvidence.splice(index, 1);
+        }
         const profileSignals = this.collectProfileSignals(query, options.projectId, limit);
         const profileSurface = this.collectProfileSurface(query, options.projectId, limit);
         const totalStructuredHits = compiledHitCount + profileSignals.length + profileSurface.userProfile.length + profileSurface.agentPersona.length;
@@ -160,15 +167,15 @@ export class BrainRecall {
             return [];
         return indexedLookup.call(this.deps.memoryGraph, type, options);
     }
-    _expandByCommunity(rawEvidence, limit) {
+    _expandByCommunity(rawEvidence, limit, projectId) {
         const ids = new Set(rawEvidence.map((n) => n.id));
         const communityIds = Array.from(new Set(rawEvidence.map((n) => n.metadata.communityId).filter(Boolean)));
         for (const communityId of communityIds)
-            for (const id of this.deps.graphCommunityEngine?.getCommunityMembers(communityId) || []) {
+            for (const id of this.deps.graphCommunityEngine?.getCommunityMembers(communityId, projectId) || []) {
                 if (ids.has(id) || rawEvidence.length >= limit + 3)
                     continue;
                 const neuron = this.deps.memoryGraph.getNeuron(id);
-                if (this.isRecallableNeuron(neuron)) {
+                if (this.isRecallableNeuron(neuron) && matchesProjectScope(projectId, neuron.metadata.projectId)) {
                     rawEvidence.push(neuron);
                     ids.add(id);
                 }
@@ -324,7 +331,7 @@ export class BrainRecall {
         const tokens = this.extractTokens(query);
         const sources = this.deps.cursorStore
             .listRecentUnprocessedSources(Date.now() - 72 * 60 * 60 * 1000)
-            .filter((source) => !projectId || source.projectId === projectId);
+            .filter((source) => matchesProjectScope(projectId, source.projectId));
         const snippets = [];
         for (const sourceCursor of sources) {
             if (snippets.length >= limit)

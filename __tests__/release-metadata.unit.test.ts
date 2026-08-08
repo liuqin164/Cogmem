@@ -17,13 +17,14 @@ function packageJson(): {
   exports: Record<string, { import: string; types: string }>;
   bin: Record<string, string>;
   files: string[];
+  packageManager?: string;
   repository?: { type: string; url: string };
 } {
   return JSON.parse(readText(packageJsonPath));
 }
 
 describe('core release metadata', () => {
-  test('3.7.3 is released as cogmem through npm with GitHub source mirrors', () => {
+  test('3.7.4 is released as cogmem through npm with GitHub source mirrors', () => {
     const manifest = packageJson();
     const readme = readText(join(coreRoot, 'README.md'));
     const contributing = readText(join(coreRoot, 'CONTRIBUTING.md'));
@@ -31,7 +32,7 @@ describe('core release metadata', () => {
     const checklist = readText(join(coreRoot, 'RELEASE_CHECKLIST.md'));
 
     expect(manifest.name).toBe('cogmem');
-    expect(manifest.version).toBe('3.7.3');
+    expect(manifest.version).toBe('3.7.4');
     expect(manifest.description).toContain('agent-native memory kernel');
     expect(manifest.repository?.url).toBe('git+https://github.com/liuqin164/cogmem.git');
     expect(readme).toContain('curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash');
@@ -41,12 +42,13 @@ describe('core release metadata', () => {
     expect(readme).not.toContain('@CognitiveOS/core');
     expect(contributing).toContain('npm pack --dry-run --json');
     expect(contributing).toContain('npm publish --provenance --access public');
-    expect(changelog).toContain('3.7.3');
-    expect(checklist).toContain('3.7.3');
+    expect(changelog).toContain('3.7.4');
+    expect(checklist).toContain('3.7.4');
     expect(checklist).toContain('npm publish --provenance --access public');
   });
 
   test('GitHub release workflow publishes through npm trusted publishing only on release publication', () => {
+    const manifest = packageJson();
     const workflow = readText(join(coreRoot, '.github', 'workflows', 'publish.yml'));
 
     expect(workflow).toContain('release:');
@@ -55,8 +57,12 @@ describe('core release metadata', () => {
     expect(workflow).not.toContain('tags:');
     expect(workflow).toContain('id-token: write');
     expect(workflow).toContain('environment: npm publish');
-    expect(workflow).toContain('bun install');
-    expect(workflow).not.toContain('bun install --frozen-lockfile');
+    expect(workflow).toContain('node-version: 24.12.0');
+    expect(workflow).toContain('npm@11.6.2');
+    expect(workflow).toContain('bun-version: 1.3.11');
+    expect(workflow).toContain('bun install --frozen-lockfile');
+    expect(workflow).toContain('sha256sum bun.lock');
+    expect(manifest.packageManager).toBe('bun@1.3.11');
     expect(workflow).toContain('bun test __tests__');
     expect(workflow).toContain('npm pack --dry-run --json');
     expect(workflow).toContain('npm publish --provenance --access public');

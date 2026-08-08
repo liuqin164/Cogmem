@@ -23,7 +23,7 @@ async function runRepair(args: string[]): Promise<{ exitCode: number; stdout: st
   return { exitCode, stdout, stderr };
 }
 
-test('repair project-scope previews and applies empty project_id rows conservatively', async () => {
+test('repair project-scope previews but refuses schema-blind writes', async () => {
   const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-repair-project-scope-')), 'memory.db');
   const db = new Database(dbPath);
   db.exec(`
@@ -46,13 +46,12 @@ test('repair project-scope previews and applies empty project_id rows conservati
   afterDryRun.close();
 
   const applied = await runRepair(['project-scope', '--db', dbPath, '--from', '', '--to', 'openclaw', '--apply', '--json']);
-  expect(applied.stderr).toBe('');
-  expect(applied.exitCode).toBe(0);
-  expect(JSON.parse(applied.stdout).changed).toBe(2);
+  expect(applied.exitCode).not.toBe(0);
+  expect(applied.stderr).toContain('generic project_id rewrites are unsafe');
 
   const repaired = new Database(dbPath, { readonly: true });
-  expect(repaired.prepare(`SELECT COUNT(*) AS count FROM memory_events WHERE project_id='openclaw'`).get()).toEqual({ count: 2 });
-  expect(repaired.prepare(`SELECT COUNT(*) AS count FROM memory_atlas_documents WHERE project_id='openclaw'`).get()).toEqual({ count: 1 });
+  expect(repaired.prepare(`SELECT COUNT(*) AS count FROM memory_events WHERE project_id=''`).get()).toEqual({ count: 1 });
+  expect(repaired.prepare(`SELECT COUNT(*) AS count FROM memory_atlas_documents WHERE project_id IS NULL`).get()).toEqual({ count: 1 });
   repaired.close();
 });
 

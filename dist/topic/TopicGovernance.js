@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isMemoryOntologyClass } from '../ontology/MemoryOntology.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 const OPERATIONS = new Set([
     'USER_DEFINED_TOPIC_CREATE', 'USER_DEFINED_TOPIC_RENAME', 'USER_DEFINED_TOPIC_ALIAS', 'USER_DEFINED_TOPIC_MOVE',
     'USER_DEFINED_TOPIC_MERGE', 'USER_DEFINED_TOPIC_SPLIT', 'USER_DEFINED_TOPIC_REASSIGN',
@@ -20,6 +21,13 @@ export class TopicGovernance {
     apply(input) {
         if (!OPERATIONS.has(input.operationType))
             throw new Error(`invalid_topic_operation:${input.operationType}`);
+        for (const eventId of input.evidenceEventIds ?? []) {
+            const evidence = this.db.prepare(`SELECT project_id FROM memory_events WHERE event_id=?`).get(eventId);
+            if (!evidence)
+                throw new Error(`topic_evidence_not_found:${eventId}`);
+            if (!matchesProjectScope(input.projectId, evidence.project_id))
+                throw new Error(`topic_evidence_project_mismatch:${eventId}`);
+        }
         const now = input.now ?? Date.now();
         const operationId = `topic-operation-${randomUUID()}`;
         let targetTopicId = input.targetTopicId;

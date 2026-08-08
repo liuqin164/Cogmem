@@ -111,7 +111,7 @@ export async function runOpenClawImport(argv: string[]): Promise<void> {
     workspaceRoot,
     projectId,
     sources,
-    usage: 'Usage: cogmem-import-openclaw [--workspace <dir>] [--project <id>] [--db <memory.db>|--config <config.toml>] [--date YYYY-MM-DD] [--session <file>...] [--memory <file>...] [--reindex-raw] [--dry-run] [--json] [--progress] [--no-progress]',
+    usage: 'Usage: cogmem-import-openclaw [--workspace <dir>] [--project <id>] [--db <memory.db> --timezone <IANA>|--config <config.toml>] [--date YYYY-MM-DD] [--session <file>...] [--memory <file>...] [--reindex-raw] [--dry-run] [--json] [--progress] [--no-progress]',
   });
 }
 
@@ -134,7 +134,7 @@ export async function runHermesImport(argv: string[]): Promise<void> {
     workspaceRoot,
     projectId,
     sources,
-    usage: 'Usage: cogmem-import-hermes [--workspace <dir>] [--project <id>] [--db <memory.db>|--config <config.toml>] [--state-db <state.db>] [--profile <file>] [--sessions <dir>] [--session <file>...] [--reindex-raw] [--dry-run] [--json] [--progress] [--no-progress]',
+    usage: 'Usage: cogmem-import-hermes [--workspace <dir>] [--project <id>] [--db <memory.db> --timezone <IANA>|--config <config.toml>] [--state-db <state.db>] [--profile <file>] [--sessions <dir>] [--session <file>...] [--reindex-raw] [--dry-run] [--json] [--progress] [--no-progress]',
   });
 }
 
@@ -310,7 +310,7 @@ async function importSources(input: {
       emptyEpisodesSkipped,
       reindexRaw: false,
       processedSourceIds: summary.processedSourceIds,
-      diagnostics: summary.adapterDiagnostics,
+      diagnostics: [...opened.diagnostics, ...summary.adapterDiagnostics],
       sourceResults: summary.sourceResults.map((item) => ({
         sourceId: item.sourceId,
         sourcePath: item.sourcePath,
@@ -339,7 +339,7 @@ async function reindexRawSources(input: {
   const opened = openKernel(input.args, input.workspaceRoot);
   const loader = new MarkdownSourceLoader();
   const adapters = buildAdapterMap();
-  const diagnostics: SourceAdapterDiagnostic[] = [];
+  const diagnostics: SourceAdapterDiagnostic[] = [...opened.diagnostics];
   const sourceResults: AgentImportResult['sourceResults'] = [];
   const processedSourceIds: string[] = [];
   let recordsParsed = 0;
@@ -433,6 +433,8 @@ async function recordRawImportedEvidence(
   const sourceRef = envelope.ingestInput.sourceRefs?.[0];
   const record = envelope.record;
   const metadata = record.metadata || {};
+  const sourceLocalDate = stringRecordField(metadata.localDate);
+  const sourceTimeZone = stringRecordField(metadata.timeZone);
   const role = sourceRef?.role === 'assistant'
     ? 'assistant'
     : sourceRef?.role === 'tool'
@@ -487,13 +489,13 @@ async function recordRawImportedEvidence(
     sessionId,
     turnId: sourceRef?.turnId || record.turnId || record.recordId,
     turnSeq: sourceRef?.turnSeq,
-    localDate: localDateFromTimestamp(record.timestamp),
-    localDateSource: 'generated_utc',
     role,
     rawEventType: 'message',
     content: record.text,
     eventOrdinal,
     occurredAt: record.timestamp,
+    localDate: sourceLocalDate,
+    timeZone: sourceTimeZone,
     sourceId: record.provenance.sourceId,
     sourceOffset: sourceRef?.sourceOffset,
     lineStart: sourceRef?.lineStart,
@@ -546,18 +548,22 @@ function stringRecordField(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-function localDateFromTimestamp(timestamp: number | undefined): string | undefined {
-  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) return undefined;
-  const date = new Date(timestamp);
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString().slice(0, 10);
-}
-
-function openKernel(args: ParsedArgs, workspaceRoot: string): { kernel: MemoryKernel; dbPath: string } {
+function openKernel(args: ParsedArgs, workspaceRoot: string): { kernel: MemoryKernel; dbPath: string; diagnostics: SourceAdapterDiagnostic[] } {
   const explicitDb = stringArg(args, 'db');
   if (explicitDb) {
+    const explicitTimeZone = stringArg(args, 'timezone');
+    const diagnostics: SourceAdapterDiagnostic[] = explicitTimeZone ? [] : [{
+      severity: 'warning',
+      code: 'project_timezone_missing_using_host_environment',
+      message: 'The explicit --db import did not provide --timezone; dates use the host environment timezone.',
+      filePath: explicitDb,
+      adapterKind: 'conversation_markdown',
+      fallbackHint: 'Pass --timezone <IANA> or use --config with project.timezone for reproducible imports.',
+    }];
     return {
-      kernel: createMemoryKernel({ dbPath: explicitDb }),
+      kernel: createMemoryKernel({ dbPath: explicitDb, projectTimeZone: explicitTimeZone }),
       dbPath: explicitDb,
+      diagnostics,
     };
   }
 
@@ -575,6 +581,7 @@ function openKernel(args: ParsedArgs, workspaceRoot: string): { kernel: MemoryKe
     return {
       kernel: createMemoryKernelFromConfig({ configPath: configResolution.path, cwd: workspaceRoot }),
       dbPath: loaded.options.dbPath,
+      diagnostics: [],
     };
   }
 

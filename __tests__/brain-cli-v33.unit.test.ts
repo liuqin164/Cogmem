@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { EventStore } from '../src/store/EventStore.js';
+import { createMemoryKernel } from '../src/factory.js';
 
 async function run(entrypoint: string, args: string[]) {
   const proc = Bun.spawn({ cmd: ['bun', entrypoint, ...args], stdout: 'pipe', stderr: 'pipe' });
@@ -16,16 +16,16 @@ async function run(entrypoint: string, args: string[]) {
 test('prospective CLI creates, confirms, and lists a due candidate without executing it', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-prospective-'));
   const dbPath = join(dir, 'memory.db');
-  const events = new EventStore(dbPath);
-  const evidence = events.append({
+  const kernel = createMemoryKernel({ dbPath });
+  const evidence = kernel.eventStore.append({
     streamId: 'thread', streamType: 'thread', eventType: 'RAW_EVENT_RECORDED',
     rawEventType: 'message', projectId: 'brain', role: 'user', payload: { text: 'Remind me to check CI.' },
   });
-  const confirmation = events.append({
+  const confirmation = kernel.eventStore.append({
     streamId: 'thread', streamType: 'thread', eventType: 'RAW_EVENT_RECORDED',
     rawEventType: 'message', projectId: 'brain', role: 'user', payload: { text: 'Yes, confirm that reminder.' },
   });
-  events.close();
+  kernel.close();
   const cli = join(import.meta.dir, '..', 'src', 'bin', 'prospective.ts');
   const created = await run(cli, [
     'create', '--db', dbPath, '--project', 'brain', '--type', 'reminder', '--key', 'release:ci',

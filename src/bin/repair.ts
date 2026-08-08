@@ -87,15 +87,8 @@ function main(): void {
         }
       }
     }
-    let changed = 0;
-    if (apply) {
-      db.transaction(() => {
-        for (const row of counts) {
-          const result = db.prepare(`UPDATE ${quoteIdent(row.table)} SET project_id=? WHERE COALESCE(project_id,'')=?`).run(to, from);
-          changed += Number(result.changes || 0);
-        }
-      })();
-    }
+    if (apply) throw new Error('Refusing project-scope repair: generic project_id rewrites are unsafe; use a schema migration or restore/import into the intended project.');
+    const changed = 0;
     const payload = {
       schemaVersion: 'cogmem.cli.v1',
       command: 'repair project-scope',

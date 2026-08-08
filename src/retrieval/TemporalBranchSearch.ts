@@ -1,5 +1,6 @@
 import type { TopologyStore } from '../store/TopologyStore.js';
 import type { TemporalAdjacencyStore, TemporalSurfaceSegment } from '../store/TemporalAdjacencyStore.js';
+import { localDateFor } from '../utils/LocalDateContext.js';
 
 export interface TemporalTraversalSegment extends TemporalSurfaceSegment {
   branchIds: string[];
@@ -18,7 +19,7 @@ export interface TemporalBranchSearchResult {
     labels: string[];
     neuronIds: string[];
     segments: TemporalTraversalSegment[];
-    traversalMode: 'surface' | 'adjacent_fallback' | 'nearest_fallback';
+    traversalMode: 'surface' | 'adjacent_fallback' | 'nearest_fallback' | 'disabled';
   };
   denseJointNeuronIds: string[];
   reasons: string[];
@@ -34,16 +35,19 @@ export class TemporalBranchSearch {
     projectId?: string;
     startTime?: number;
     endTime?: number;
+    temporalEnabled?: boolean;
+    timeZone: string;
     terms: string[];
     temporalBucketIds?: string[];
     entityNeuronIds?: string[];
   }): TemporalBranchSearchResult {
     const candidates = this.topologyStore.collectCandidateNeuronIds({
       projectId: input.projectId,
-      startTime: input.startTime,
-      endTime: input.endTime,
+      startTime: input.temporalEnabled === false ? undefined : input.startTime,
+      endTime: input.temporalEnabled === false ? undefined : input.endTime,
       terms: input.terms,
-      limit: 120
+      limit: 120,
+      excludeTemporal: input.temporalEnabled === false,
     });
 
     const branches = this.topologyStore.collectBranchNavigation({
@@ -57,30 +61,41 @@ export class TemporalBranchSearch {
     const aggregatedClusterIds = new Set<string>(branches.clusterIds);
     const aggregatedNeuronIds = new Set<string>([...candidates, ...branches.neuronIds]);
 
-    const temporalSurface = this.temporalAdjacencyStore.collectContinuousSurface({
+    const temporalSurface = input.temporalEnabled === false ? {
+      bucketType: 'day' as const,
+      segments: [],
+      bucketIds: [],
+      labels: [],
+      neuronIds: [],
+    } : this.temporalAdjacencyStore.collectContinuousSurface({
+      projectId: input.projectId,
       bucketIds: input.temporalBucketIds || [],
       startTime: input.startTime,
       endTime: input.endTime,
       preferredBucketType: 'day',
-      hopLimit: input.startTime || input.endTime ? 3 : 2,
+      hopLimit: input.startTime !== undefined || input.endTime !== undefined ? 3 : 2,
       limit: 72
     });
     const fallbackLabels =
       temporalSurface.labels.length > 0
         ? temporalSurface.labels
-        : input.startTime || input.endTime
-          ? [this.formatTemporalWindow(input.startTime, input.endTime)]
+        : input.temporalEnabled !== false && (input.startTime !== undefined || input.endTime !== undefined)
+          ? [this.formatTemporalWindow(input.startTime, input.endTime, input.timeZone)]
           : [];
     const fallbackBucketIds =
       temporalSurface.bucketIds.length > 0
         ? temporalSurface.bucketIds
-        : fallbackLabels.map((_, index) => `derived:${index}:${input.startTime || 0}:${input.endTime || 0}`);
+        : fallbackLabels.map((_, index) => `derived:${index}:${input.startTime ?? 0}:${input.endTime ?? 0}`);
     const fallbackTemporalNeuronIds =
-      temporalSurface.neuronIds.length > 0
+      input.temporalEnabled === false
+        ? []
+        : temporalSurface.neuronIds.length > 0
         ? temporalSurface.neuronIds
         : branches.neuronIds.slice(0, 24);
     const traversalMode: TemporalBranchSearchResult['temporalTraversal']['traversalMode'] =
-      temporalSurface.segments.some((segment) => segment.source === 'window' || segment.source === 'seed')
+      input.temporalEnabled === false
+        ? 'disabled'
+        : temporalSurface.segments.some((segment) => segment.source === 'window' || segment.source === 'seed')
         ? 'surface'
         : temporalSurface.segments.some((segment) => segment.source === 'adjacent')
           ? 'adjacent_fallback'
@@ -132,16 +147,20 @@ export class TemporalBranchSearch {
       denseJointNeuronIds,
       reasons: [
         input.projectId ? 'project branch root constrained traversal' : 'global branch traversal',
-        input.startTime || input.endTime ? 'continuous temporal surface navigation across adjacent windows' : 'term-only branch traversal',
+        input.temporalEnabled === false
+          ? 'temporal projection unavailable; last-known-good non-temporal branches only'
+          : input.startTime !== undefined || input.endTime !== undefined
+            ? 'continuous temporal surface navigation across adjacent windows'
+            : 'term-only branch traversal',
         input.entityNeuronIds?.length ? 'dense time-branch-entity joint search' : 'branch-local dense search'
       ]
     };
   }
 
-  private formatTemporalWindow(startTime?: number, endTime?: number): string {
-    if (!startTime && !endTime) return 'temporal window';
-    const startLabel = startTime ? new Date(startTime).toISOString().slice(0, 10) : 'open';
-    const endLabel = endTime ? new Date(endTime).toISOString().slice(0, 10) : 'open';
+  private formatTemporalWindow(startTime: number | undefined, endTime: number | undefined, timeZone: string): string {
+    if (startTime === undefined && endTime === undefined) return 'temporal window';
+    const startLabel = startTime !== undefined ? localDateFor(startTime, timeZone) : 'open';
+    const endLabel = endTime !== undefined ? localDateFor(endTime - 1, timeZone) : 'open';
     return `${startLabel}..${endLabel}`;
   }
 }

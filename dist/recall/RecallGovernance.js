@@ -81,3 +81,39 @@ export function isOperationalNoiseText(text) {
         /\broutine system ping\b/i,
     ].some((pattern) => pattern.test(normalized));
 }
+export function recallableNeuronSql(alias, columns) {
+    const tagSet = (values) => columns.has('tags')
+        ? `EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(${alias}.tags) THEN ${alias}.tags ELSE '[]' END) WHERE value IN (${values.map(sqlString).join(',')}))`
+        : '0';
+    const rawUser = columns.has('source_type') && columns.has('tags')
+        ? `${alias}.source_type='user_input'
+      AND ${tagSet(['reliability:raw_utterance'])}
+      AND ${tagSet(['role:user'])}
+      AND ${tagSet(['record:raw_utterance', 'record:conversation_message'])}`
+        : '0';
+    const status = columns.has('status')
+        ? `(COALESCE(${alias}.status,'active') IN ('active','cold') OR (COALESCE(${alias}.status,'active')='suspect' AND ${rawUser}))`
+        : '1';
+    const imported = `(${tagSet(['governance:imported_summary_support'])} OR (${tagSet(['source_class:daily_memory'])} AND ${tagSet(['provenance:imported_summary'])}))`;
+    const noiseTags = tagSet(['operational_noise', 'record:heartbeat', 'system:heartbeat', 'routine:heartbeat']);
+    const text = `lower(trim(${alias}.content))`;
+    const noiseText = columns.has('content')
+        ? `(instr(${text},'[openclaw heartbeat poll]')>0
+      OR ${sqlAsciiWordBoundary(text, 'heartbeat_ok')}
+      OR ${sqlAsciiWordBoundary(text, 'heartbeat poll')}
+      OR instr(${text},'please complete your identity setup')>0
+      OR instr(${text},'test your telegram bot by searching for it')>0
+      OR ${sqlAsciiWordBoundary(text, 'routine system ping')})`
+        : '0';
+    return `${status} AND NOT (${noiseTags} OR ${noiseText}) AND NOT ${imported}`;
+}
+function sqlString(value) {
+    return `'${value.replaceAll("'", "''")}'`;
+}
+function sqlAsciiWordBoundary(expression, value) {
+    const escaped = value.replaceAll('[', '[[]').replaceAll('*', '[*]').replaceAll('?', '[?]');
+    return `(${expression}=${sqlString(value)}
+    OR ${expression} GLOB ${sqlString(`${escaped}[^a-z0-9_]*`)}
+    OR ${expression} GLOB ${sqlString(`*[^a-z0-9_]${escaped}`)}
+    OR ${expression} GLOB ${sqlString(`*[^a-z0-9_]${escaped}[^a-z0-9_]*`)})`;
+}

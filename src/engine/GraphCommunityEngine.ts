@@ -1,5 +1,6 @@
 import type { MemoryGraph } from '../core/MemoryGraph.js';
 import type { Neuron } from '../types/index.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 
 export interface GraphCommunityEngineOptions {
   maxIterations?: number;
@@ -18,7 +19,7 @@ export class GraphCommunityEngine {
     const maxIterations = this.options.maxIterations ?? 20;
     const minCommunitySize = this.options.minCommunitySize ?? 3;
     const allProjectNeurons = this.memoryGraph.getAllNeurons()
-      .filter((neuron) => neuron.metadata.projectId === projectId)
+      .filter((neuron) => matchesProjectScope(projectId, neuron.metadata.projectId))
       .filter((neuron) => this.options.excludeArchived === false || neuron.metadata.status !== 'archived');
     const incrementalWindowMs = this.options.incrementalWindowMs ?? 48 * 60 * 60 * 1000;
     const changedIds = incrementalWindowMs === 0
@@ -62,9 +63,10 @@ export class GraphCommunityEngine {
     return { communitiesDetected: new Set(labels.values()).size, neuronsUpdated };
   }
 
-  getCommunityMembers(communityId: string): string[] {
+  getCommunityMembers(communityId: string, projectId?: string): string[] {
     return this.memoryGraph.getAllNeurons()
       .filter((neuron) => neuron.metadata.communityId === communityId)
+      .filter((neuron) => matchesProjectScope(projectId, neuron.metadata.projectId))
       .map((neuron) => neuron.id);
   }
 

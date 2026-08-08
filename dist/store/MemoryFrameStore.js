@@ -1,0 +1,324 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { invalidateMemoryEdgeSupportIds } from '../binding/MemoryEdgeMerge.js';
+import { validateMemoryFrame } from '../semantic/MemoryFrameValidator.js';
+export class MemoryFrameStore {
+    db;
+    constructor(db) {
+        this.db = db;
+        const columns = new Set(this.db.prepare('PRAGMA table_info(memory_frames)').all().map((column) => column.name));
+        const required = ['dream_job_lease_id', 'dream_lease_until', 'attempt_generation', 'revision_id', 'revision_number', 'supersedes_frame_id', 'publish_status'];
+        if (required.some((name) => !columns.has(name)))
+            throw new Error('memory_frame_schema_not_migrated');
+    }
+    getDatabase() { return this.db; }
+    save(input) {
+        const retryAttempt = input.retryAttempt ?? 0;
+        const requestedStatus = input.status ?? input.frame.status ?? 'staged';
+        const validation = validateMemoryFrame(input.frame, { allowEmptyEvidence: requestedStatus !== 'active' && input.frame.sourceAuthority === 'deterministic_fallback' });
+        if (!validation.valid)
+            throw new Error(`invalid_memory_frame:${validation.errors.join(',')}`);
+        const frame = input.frame;
+        const now = input.now ?? Date.now();
+        const status = 'staged';
+        const publishStatus = input.publishStatus ?? frame.publishStatus ?? (frame.needsReview ? 'needs_confirmation' : 'active');
+        const existing = this.db.prepare(`SELECT frame_id,revision_id,revision_number,status,dream_job_lease_id,attempt_generation FROM memory_frames WHERE project_id=? AND episode_id=? AND source_fingerprint=? AND processor_prompt_version=? ORDER BY revision_number DESC, updated_at DESC LIMIT 1`).get(frame.projectId, frame.episodeId, input.sourceFingerprint, frame.processor.promptVersion);
+        const sameOwner = existing?.status === 'staged'
+            && input.dreamJobLeaseId !== undefined
+            && input.attemptGeneration !== undefined
+            && (existing.dream_job_lease_id ?? undefined) === input.dreamJobLeaseId
+            && (existing.attempt_generation ?? undefined) === input.attemptGeneration;
+        const storedFrameId = sameOwner ? existing.frame_id : (existing ? `${frame.frameId}:${randomUUID()}` : frame.frameId);
+        // A different lease must never reuse the old row's primary key. Keep the
+        // old staged revision intact and give the retry its own deterministic row
+        // identity; same-owner retries remain idempotent.
+        const storedFingerprint = input.sourceFingerprint;
+        const revisionId = sameOwner ? (existing.revision_id ?? existing.frame_id) : storedFrameId;
+        const revisionNumber = sameOwner ? (existing.revision_number ?? 1) : (existing ? (existing.revision_number ?? 0) + 1 : 1);
+        const idOwner = this.db.prepare(`SELECT project_id,episode_id,source_fingerprint,processor_prompt_version,status,dream_job_lease_id,attempt_generation FROM memory_frames WHERE frame_id=?`).get(storedFrameId);
+        if (idOwner && !sameOwner)
+            throw new Error(`memory_frame_id_conflict:${storedFrameId}`);
+        try {
+            this.db.transaction(() => {
+                this.db.prepare(`
+        INSERT INTO memory_frames (
+          frame_id, revision_id, revision_number, supersedes_frame_id, project_id, episode_id, schema_version, source_fingerprint, processor_prompt_version,
+          title, summary, episode_kind, confidence, evidence_event_ids_json, processor_json, status,
+          source_authority, semantic_completeness, needs_review, created_at, updated_at,
+          primary_language, temporal_references_json, state_transitions_json, publish_status,
+          dream_job_lease_id, dream_lease_until, attempt_generation
+        ) VALUES (${Array.from({ length: 28 }, () => '?').join(', ')})
+        ON CONFLICT(frame_id) DO UPDATE SET
+          revision_id=excluded.revision_id, revision_number=excluded.revision_number, supersedes_frame_id=excluded.supersedes_frame_id,
+          title=excluded.title, summary=excluded.summary,
+          episode_kind=excluded.episode_kind, confidence=excluded.confidence,
+          evidence_event_ids_json=excluded.evidence_event_ids_json, processor_json=excluded.processor_json,
+          status=excluded.status, source_authority=excluded.source_authority,
+          semantic_completeness=excluded.semantic_completeness, needs_review=excluded.needs_review, updated_at=excluded.updated_at,
+          primary_language=excluded.primary_language, temporal_references_json=excluded.temporal_references_json,
+          state_transitions_json=excluded.state_transitions_json, publish_status=excluded.publish_status,
+          dream_job_lease_id=excluded.dream_job_lease_id, dream_lease_until=excluded.dream_lease_until,
+          attempt_generation=excluded.attempt_generation
+      `).run(storedFrameId, revisionId, revisionNumber, existing && !sameOwner ? (existing.frame_id ?? null) : null, frame.projectId, frame.episodeId, frame.schemaVersion, storedFingerprint, frame.processor.promptVersion, frame.title, frame.summary, frame.episodeKind, frame.confidence, JSON.stringify(frame.evidenceEventIds), JSON.stringify(frame.processor), status, frame.sourceAuthority ?? 'processor', frame.semanticCompleteness ?? 'full', frame.needsReview ? 1 : 0, now, now, frame.primaryLanguage ?? null, JSON.stringify(frame.temporalReferences), JSON.stringify(frame.stateTransitions), publishStatus, input.dreamJobLeaseId ?? null, input.leaseUntil ?? null, input.attemptGeneration ?? null);
+                this.db.prepare(`DELETE FROM memory_frame_nodes WHERE frame_id=?`).run(storedFrameId);
+                this.db.prepare(`DELETE FROM memory_frame_relations WHERE frame_id=?`).run(storedFrameId);
+                const node = this.db.prepare(`INSERT INTO memory_frame_nodes (frame_node_id,frame_id,dimension,label,aliases_json,description,confidence,evidence_event_ids_json,canonical_hint_json) VALUES (?,?,?,?,?,?,?,?,?)`);
+                const nodeIds = new Map(frame.nodes.map((item) => [item.frameNodeId, `${storedFrameId}:${item.frameNodeId}`]));
+                for (const item of frame.nodes)
+                    node.run(nodeIds.get(item.frameNodeId), storedFrameId, item.dimension, item.label, JSON.stringify(item.aliases ?? []), item.description ?? null, item.confidence, JSON.stringify(item.evidenceEventIds), item.canonicalHint ? JSON.stringify(item.canonicalHint) : null);
+                const relation = this.db.prepare(`INSERT INTO memory_frame_relations (frame_relation_id,frame_id,source_frame_node_id,relation_type,target_frame_node_id,confidence,evidence_event_ids_json,valid_from,valid_to) VALUES (?,?,?,?,?,?,?,?,?)`);
+                for (const item of frame.relations) {
+                    const sourceId = nodeIds.get(item.sourceFrameNodeId);
+                    const targetId = nodeIds.get(item.targetFrameNodeId);
+                    if (!sourceId || !targetId)
+                        throw new Error('memory_frame_relation_node_missing');
+                    relation.run(randomUUID(), storedFrameId, sourceId, item.relationType, targetId, item.confidence, JSON.stringify(item.evidenceEventIds), item.validFrom ?? null, item.validTo ?? null);
+                }
+                this.markDirty(frame.projectId, now);
+            })();
+        }
+        catch (error) {
+            if (retryAttempt < 3 && /UNIQUE constraint failed:.*revision_number|idx_memory_frames_revision_number/u.test(error instanceof Error ? error.message : String(error))) {
+                const retryFrame = { ...frame, frameId: `${frame.frameId}:${randomUUID()}` };
+                return this.save({ ...input, frame: retryFrame, retryAttempt: retryAttempt + 1 });
+            }
+            throw error;
+        }
+        return { ...frame, frameId: storedFrameId, status, publishStatus };
+    }
+    get(frameId) {
+        const row = this.db.prepare(`SELECT * FROM memory_frames WHERE frame_id=?`).get(frameId);
+        return row ? this.read(row) : null;
+    }
+    getByEpisode(projectId, episodeId, statuses = ['active', 'needs_confirmation']) {
+        if (statuses.length === 0)
+            return null;
+        const placeholders = statuses.map(() => '?').join(',');
+        const row = this.db.prepare(`SELECT frame_id FROM memory_frames WHERE project_id=? AND episode_id=? AND status IN (${placeholders}) ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'needs_confirmation' THEN 1 ELSE 2 END, updated_at DESC, frame_id DESC LIMIT 1`).get(projectId, episodeId, ...statuses);
+        return row?.frame_id ? this.get(row.frame_id) : null;
+    }
+    list(projectId, options = {}) {
+        const statuses = options.statuses ?? ['active', 'needs_confirmation'];
+        if (statuses.length === 0)
+            return [];
+        const placeholders = statuses.map(() => '?').join(',');
+        const rows = this.db.prepare(`SELECT * FROM memory_frames WHERE project_id=? AND status IN (${placeholders}) ORDER BY updated_at DESC, frame_id DESC LIMIT ? OFFSET ?`).all(projectId, ...statuses, Math.max(1, Math.min(options.limit ?? 100, 1000)), Math.max(0, options.offset ?? 0));
+        return rows.map((row) => this.read(row));
+    }
+    publish(frameId, from, to, now = Date.now()) {
+        return Boolean(this.db.transaction(() => this.publishUnsafe(frameId, from, to, now))());
+    }
+    publishStaged(frameIds, now = Date.now()) {
+        this.db.transaction(() => {
+            for (const id of frameIds)
+                if (!this.publishUnsafe(id, 'staged', undefined, now))
+                    throw new Error(`memory_frame_publish_conflict:${id}`);
+        })();
+    }
+    review(frameId, projectId, action, actor, reason, now = Date.now()) {
+        if (!actor.trim() || !reason.trim())
+            throw new Error('memory_frame_review_actor_reason_required');
+        const row = this.db.prepare(`SELECT project_id,status FROM memory_frames WHERE frame_id=?`).get(frameId);
+        if (!row || row.project_id !== projectId || row.status !== 'needs_confirmation')
+            return false;
+        return Boolean(this.db.transaction(() => {
+            if (action === 'approve') {
+                const frame = this.get(frameId);
+                const validation = validateMemoryFrame(frame);
+                if (!validation.valid || !this.hasPublishableEvidence(frameId, projectId, String(frame?.episodeId ?? ''))) {
+                    throw new Error(`memory_frame_review_evidence_invalid:${frameId}`);
+                }
+                this.db.prepare(`UPDATE memory_frames SET status='superseded',publish_status='needs_confirmation',updated_at=? WHERE project_id=? AND episode_id=(SELECT episode_id FROM memory_frames WHERE frame_id=?) AND frame_id<>? AND status='active'`).run(now, projectId, frameId, frameId);
+                const changed = Number(this.db.prepare(`UPDATE memory_frames SET status='active',publish_status='active',needs_review=0,updated_at=? WHERE frame_id=? AND status='needs_confirmation'`).run(now, frameId).changes ?? 0) === 1;
+                if (!changed)
+                    throw new Error(`memory_frame_review_conflict:${frameId}`);
+                this.db.prepare(`INSERT INTO memory_frame_reviews(review_id,frame_id,project_id,action,actor,reason,created_at) VALUES(?,?,?,?,?,?,?)`).run(randomUUID(), frameId, projectId, action, actor, reason, now);
+                this.markDirty(projectId, now);
+                return true;
+            }
+            const changed = Number(this.db.prepare(`UPDATE memory_frames SET status='superseded',publish_status='needs_confirmation',updated_at=? WHERE frame_id=? AND status IN ('staged','needs_confirmation')`).run(now, frameId).changes ?? 0) === 1;
+            if (!changed)
+                throw new Error(`memory_frame_review_conflict:${frameId}`);
+            this.db.prepare(`INSERT INTO memory_frame_reviews(review_id,frame_id,project_id,action,actor,reason,created_at) VALUES(?,?,?,?,?,?,?)`).run(randomUUID(), frameId, projectId, action, actor, reason, now);
+            this.markDirty(projectId, now);
+            return true;
+        })());
+    }
+    failStaged(frameIds, now = Date.now()) { for (const id of frameIds)
+        this.db.prepare(`UPDATE memory_frames SET status='failed', updated_at=? WHERE frame_id=? AND status='staged'`).run(now, id); }
+    failStagedForEpisode(episodeId, leaseId, now = Date.now()) {
+        if (!leaseId)
+            return;
+        this.db.prepare(`UPDATE memory_frames SET status='failed', updated_at=? WHERE episode_id=? AND dream_job_lease_id=? AND status='staged'`).run(now, episodeId, leaseId);
+    }
+    failStagedOlderThan(_cutoff, now = Date.now(), projectId) {
+        const scoped = projectId !== undefined;
+        return Number(this.db.prepare(`UPDATE memory_frames SET status='failed', updated_at=? WHERE status='staged' AND dream_job_lease_id IS NOT NULL AND dream_lease_until IS NOT NULL AND dream_lease_until<?${scoped ? " AND COALESCE(project_id,'')=?" : ''}`)
+            .run(now, now, ...(scoped ? [projectId] : [])).changes ?? 0);
+    }
+    supersedeEpisodes(episodeIds, now = Date.now()) {
+        return this.db.transaction(() => {
+            let changed = 0;
+            let derivedChanged = false;
+            for (const id of episodeIds) {
+                changed += Number(this.db.prepare(`UPDATE memory_frames SET status='superseded',publish_status='needs_confirmation', updated_at=? WHERE episode_id=? AND status IN ('active','needs_confirmation','staged')`).run(now, id).changes ?? 0);
+                if (this.tableExists('memory_edge_supports')) {
+                    const supportIds = this.db.prepare(`SELECT support_id FROM memory_edge_supports WHERE source_authority='memory_frame_projector' AND support_source_type='frame' AND support_status='active' AND support_source_id IN (SELECT frame_id FROM memory_frames WHERE episode_id=?)`).all(id).map((row) => row.support_id);
+                    derivedChanged = invalidateMemoryEdgeSupportIds(this.db, supportIds, now).length > 0 || derivedChanged;
+                }
+                if (this.tableExists('memory_atlas_supports')) {
+                    derivedChanged = Number(this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE source_type='frame' AND source_episode_id=? AND status='active'`).run(now, id).changes ?? 0) > 0 || derivedChanged;
+                    if (this.tableExists('memory_atlas_alias_supports')) {
+                        derivedChanged = Number(this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE source_episode_id=? AND status='active'`).run(now, id).changes ?? 0) > 0 || derivedChanged;
+                        if (this.tableExists('memory_atlas_aliases'))
+                            derivedChanged = Number(this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE source_frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id=?) AND status='active' AND NOT EXISTS (SELECT 1 FROM memory_atlas_alias_supports s WHERE s.alias_id=memory_atlas_aliases.alias_id AND s.status='active')`).run(now, id).changes ?? 0) > 0 || derivedChanged;
+                    }
+                    else if (this.tableExists('memory_atlas_aliases')) {
+                        derivedChanged = Number(this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE source_frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id=?) AND status='active' AND NOT EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.node_id=memory_atlas_aliases.node_id AND s.source_type='frame' AND s.status='active')`).run(now, id).changes ?? 0) > 0 || derivedChanged;
+                    }
+                    if (this.tableExists('memory_atlas_documents'))
+                        derivedChanged = Number(this.db.prepare(`UPDATE memory_atlas_documents SET status='archived', updated_at=? WHERE project_id IN (SELECT project_id FROM memory_frames WHERE episode_id=?) AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2' AND NOT EXISTS (SELECT 1 FROM memory_atlas_supports s WHERE s.node_id=memory_atlas_documents.node_id AND s.status='active')`).run(now, id).changes ?? 0) > 0 || derivedChanged;
+                }
+            }
+            if (changed || derivedChanged)
+                for (const id of episodeIds) {
+                    const row = this.db.prepare(`SELECT project_id FROM memory_frames WHERE episode_id=? LIMIT 1`).get(id);
+                    if (row?.project_id)
+                        this.markDirty(row.project_id, now);
+                }
+            return changed;
+        })();
+    }
+    deleteByProject(projectId, now = Date.now()) {
+        return this.db.transaction(() => {
+            const countRow = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_frames WHERE project_id=?`).get(projectId);
+            const count = Number(countRow?.count ?? 0);
+            if (this.tableExists('memory_edge_supports')) {
+                const supportIds = this.db.prepare(`SELECT support_id FROM memory_edge_supports WHERE project_id=? AND source_authority='memory_frame_projector' AND support_status='active'`).all(projectId).map((row) => row.support_id);
+                invalidateMemoryEdgeSupportIds(this.db, supportIds, now);
+            }
+            if (this.tableExists('memory_atlas_supports'))
+                this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type='frame' AND status='active'`).run(now, projectId);
+            if (this.tableExists('memory_atlas_alias_supports'))
+                this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
+            if (this.tableExists('memory_atlas_aliases'))
+                this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE project_id=? AND source_frame_id IS NOT NULL AND status='active'`).run(now, projectId);
+            if (this.tableExists('memory_atlas_documents')) {
+                if (this.tableExists('memory_atlas_fts'))
+                    this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2')`).run(projectId, projectId);
+                this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND json_extract(metadata_json,'$.projection')='memory_atlas.frame.v2'`).run(projectId);
+            }
+            const deleted = Number(this.db.prepare(`DELETE FROM memory_frames WHERE project_id=?`).run(projectId).changes ?? 0);
+            if (deleted || count)
+                this.markDirty(projectId, now);
+            return deleted;
+        })();
+    }
+    tableExists(name) { return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name)); }
+    markDirty(projectId, now) {
+        try {
+            this.db.prepare(`INSERT INTO memory_atlas_projection_state(project_id,projection_name,cursor_value,status,last_rebuild_at,last_error,metadata_json) VALUES(?, 'memory_atlas.v2', NULL, 'dirty', ?, NULL, ?) ON CONFLICT(project_id,projection_name) DO UPDATE SET status='dirty', cursor_value=NULL, last_error=NULL, metadata_json=excluded.metadata_json`).run(projectId, now, JSON.stringify({ dirtyBecause: 'memory_frame_changed' }));
+        }
+        catch (error) {
+            if (this.tableExists('memory_atlas_projection_state'))
+                throw error;
+        }
+    }
+    publishUnsafe(frameId, from, to, now) {
+        const row = this.db.prepare(`SELECT project_id, episode_id, status, publish_status, needs_review FROM memory_frames WHERE frame_id=?`).get(frameId);
+        if (!row)
+            return false;
+        if (from !== 'staged' || !['active', 'needs_confirmation'].includes(to ?? row.publish_status ?? 'active'))
+            return false;
+        if (row.status !== from)
+            throw new Error(`memory_frame_publish_conflict:${frameId}`);
+        const next = to ?? row.publish_status ?? 'active';
+        if (next === 'active' && row.needs_review)
+            return false;
+        if (next === 'active') {
+            const frame = this.get(frameId);
+            const validation = validateMemoryFrame(frame);
+            if (!validation.valid || !this.hasPublishableEvidence(frameId, row.project_id, row.episode_id))
+                return false;
+        }
+        const publication = next === 'active' ? 'active' : next === 'needs_confirmation' ? 'needs_confirmation' : row.publish_status;
+        if (next === 'active')
+            this.db.prepare(`UPDATE memory_frames SET status='superseded', publish_status='needs_confirmation', updated_at=? WHERE project_id=? AND episode_id=? AND frame_id<>? AND status='active'`).run(now, row.project_id, row.episode_id, frameId);
+        const changed = Number(this.db.prepare(`UPDATE memory_frames SET status=?, publish_status=?, updated_at=? WHERE frame_id=? AND status=?`).run(next, publication ?? 'active', now, frameId, from).changes ?? 0) === 1;
+        if (!changed)
+            throw new Error(`memory_frame_publish_conflict:${frameId}`);
+        this.markDirty(row.project_id, now);
+        return true;
+    }
+    hasPublishableEvidence(frameId, projectId, episodeId) {
+        const frame = this.get(frameId);
+        if (!frame || frame.sourceAuthority === 'deterministic_fallback' || frame.evidenceEventIds.length === 0)
+            return false;
+        const table = this.db.prepare(`SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='memory_events'`).get();
+        if (!table?.present)
+            return false;
+        const placeholders = frame.evidenceEventIds.map(() => '?').join(',');
+        const row = this.db.prepare(`
+      SELECT COUNT(DISTINCT e.event_id) AS event_count
+      FROM memory_events e
+      JOIN memory_episode_events ee ON ee.event_id=e.event_id AND ee.episode_id=?
+      WHERE e.project_id=? AND e.event_id IN (${placeholders})
+    `).get(episodeId, projectId, ...frame.evidenceEventIds);
+        return Number(row?.event_count ?? 0) === new Set(frame.evidenceEventIds).size;
+    }
+    read(row) {
+        const frameId = String(row.frame_id);
+        const nodes = this.db.prepare(`SELECT * FROM memory_frame_nodes WHERE frame_id=? ORDER BY frame_node_id`).all(frameId).map((item) => ({
+            frameNodeId: String(item.frame_node_id).startsWith(`${frameId}:`) ? String(item.frame_node_id).slice(frameId.length + 1) : String(item.frame_node_id),
+            dimension: item.dimension, label: item.label, aliases: parseJsonArray(item.aliases_json),
+            description: item.description ?? undefined, confidence: Number(item.confidence), evidenceEventIds: parseJsonArray(item.evidence_event_ids_json),
+            canonicalHint: item.canonical_hint_json ? parseJsonObject(item.canonical_hint_json) : undefined,
+        }));
+        const relations = this.db.prepare(`SELECT * FROM memory_frame_relations WHERE frame_id=? ORDER BY frame_relation_id`).all(frameId).map((item) => ({
+            sourceFrameNodeId: stripFrameNodeId(String(item.source_frame_node_id), frameId), relationType: item.relation_type,
+            targetFrameNodeId: stripFrameNodeId(String(item.target_frame_node_id), frameId), confidence: Number(item.confidence),
+            evidenceEventIds: parseJsonArray(item.evidence_event_ids_json), validFrom: item.valid_from == null ? undefined : Number(item.valid_from), validTo: item.valid_to == null ? undefined : Number(item.valid_to),
+        }));
+        const frame = {
+            schemaVersion: row.schema_version,
+            frameId: row.frame_id, projectId: row.project_id, episodeId: row.episode_id,
+            title: row.title, summary: row.summary, episodeKind: row.episode_kind,
+            nodes, relations, confidence: Number(row.confidence),
+            evidenceEventIds: parseJsonArray(row.evidence_event_ids_json),
+            processor: parseJsonObject(row.processor_json), status: row.status, publishStatus: row.publish_status,
+            revisionId: row.revision_id ?? undefined, revisionNumber: row.revision_number == null ? undefined : Number(row.revision_number),
+            supersedesFrameId: row.supersedes_frame_id ?? undefined,
+            primaryLanguage: row.primary_language ?? undefined,
+            temporalReferences: parseJsonArray(row.temporal_references_json),
+            stateTransitions: parseJsonArray(row.state_transitions_json),
+            sourceAuthority: row.source_authority, semanticCompleteness: row.semantic_completeness, needsReview: Boolean(row.needs_review),
+        };
+        const validation = validateMemoryFrame(frame, { allowEmptyEvidence: frame.sourceAuthority === 'deterministic_fallback' && frame.status !== 'active' });
+        if (!validation.valid)
+            throw new Error(`invalid_stored_memory_frame:${frameId}:${validation.errors.join(',')}`);
+        return frame;
+    }
+}
+function parseJsonArray(value) {
+    try {
+        const parsed = JSON.parse(String(value ?? '[]'));
+        return Array.isArray(parsed) ? parsed : [];
+    }
+    catch {
+        return [];
+    }
+}
+function parseJsonObject(value) {
+    try {
+        const parsed = JSON.parse(String(value ?? '{}'));
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    }
+    catch {
+        return {};
+    }
+}
+function stripFrameNodeId(value, frameId) {
+    return value.startsWith(`${frameId}:`) ? value.slice(frameId.length + 1) : value;
+}
+export function frameSourceFingerprint(eventIds, episodeId) {
+    return createHash('sha256').update(`${episodeId}\u0000${eventIds.join('\u0000')}`).digest('hex');
+}

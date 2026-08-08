@@ -35,7 +35,8 @@ export interface EventRecord {
 export declare class FactStore {
     private readonly encryptionProvider?;
     private db;
-    constructor(dbPath?: string, encryptionProvider?: EncryptionProvider | undefined);
+    private readonly ownsDb;
+    constructor(dbOrPath?: Database | string, encryptionProvider?: EncryptionProvider | undefined);
     private initializeSchema;
     insertFacts(facts: Array<Omit<FactRecord, 'factId'>>): FactRecord[];
     insertEvents(events: Array<Omit<EventRecord, 'eventId'>>): EventRecord[];
@@ -49,18 +50,21 @@ export declare class FactStore {
     listFactsByEntityIds(entityIds: string[], options?: {
         predicateFamilies?: string[];
         limit?: number;
+        projectId?: string;
     }): FactRecord[];
     listNeuronIdsByEntityIds(entityIds: string[], limit?: number): string[];
-    listEventsByNeuronIds(neuronIds: string[], limit?: number): EventRecord[];
+    listEventsByNeuronIds(neuronIds: string[], limit?: number, projectId?: string): EventRecord[];
     listEventsByUnitId(unitId: string): EventRecord[];
     listEventsByUnitIds(unitIds: string[], limit?: number): EventRecord[];
     listFactsByTimeRange(startTime: number, endTime: number, options?: {
         statuses?: FactRecord['status'][];
         limit?: number;
+        projectId?: string;
     }): FactRecord[];
     listEventsByTimeRange(startTime: number, endTime: number, options?: {
         statuses?: EventRecord['status'][];
         limit?: number;
+        projectId?: string;
     }): EventRecord[];
     updateFactStatus(factId: string, status: FactRecord['status'], confidence?: number, metadata?: Record<string, unknown>): void;
     bindFactEntity(factId: string, entityId: string, confidence?: number, metadata?: Record<string, unknown>): void;

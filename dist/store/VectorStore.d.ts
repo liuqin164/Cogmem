@@ -10,6 +10,7 @@ export declare class VectorStore implements IVectorStore {
     private tombstones;
     private fallbackVectors;
     private nextLabel;
+    private deletedLabelCount;
     constructor(dimension?: number, maxElements?: number, efConstruction?: number, efSearch?: number);
     addVector(neuronId: string, vector: number[]): void;
     addVectors(vectors: Array<{
@@ -31,5 +32,6 @@ export declare class VectorStore implements IVectorStore {
         vector: number[];
     }>): Promise<void>;
     private ensureCapacity;
+    private compactIfNeeded;
 }
 //# sourceMappingURL=VectorStore.d.ts.map

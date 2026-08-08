@@ -1,6 +1,6 @@
 import type { MemoryEvent } from '../types/index.js';
 import { EventStore } from './EventStore.js';
-import { PlanRuntimeStore } from './PlanRuntimeStore.js';
+import { PlanRuntimeStore, type RuntimeEntityType, type RuntimeStatus } from './PlanRuntimeStore.js';
 import { RuntimeProjectionStore } from './RuntimeProjectionStore.js';
 import { logger } from '../utils/Logger.js';
 
@@ -14,10 +14,7 @@ export class RuntimeProjector {
 
   async bootstrap(): Promise<void> {
     const checkpoint = this.projectionStore.getCheckpoint(this.projectionName);
-    const pendingEvents = this.eventStore.getEventsAfter(checkpoint?.lastEventTime)
-      .filter((event) => this.isRuntimeEvent(event));
-
-    if (!checkpoint) {
+    if (!checkpoint || checkpoint.lastGlobalSeq === undefined) {
       await this.fullRebuild('initial_build');
       return;
     }
@@ -27,13 +24,14 @@ export class RuntimeProjector {
       return;
     }
 
-    if (pendingEvents.length === 0) {
+    const throughGlobalSeq = this.eventStore.getLatestGlobalSeq();
+    if (throughGlobalSeq <= checkpoint.lastGlobalSeq) {
       logger.info(`Runtime projection ready: projection=${this.projectionName}`);
       return;
     }
 
     try {
-      await this.replay(pendingEvents, checkpoint.lastRebuildAt);
+      await this.replayRange(checkpoint.lastGlobalSeq, throughGlobalSeq, false, checkpoint.lastRebuildAt);
     } catch (error) {
       logger.warn('Runtime replay failed, falling back to full rebuild', error);
       await this.fullRebuild('replay_failed');
@@ -42,6 +40,7 @@ export class RuntimeProjector {
 
   async fullRebuild(reason: string): Promise<void> {
     logger.warn(`Rebuilding runtime projection: reason=${reason}`);
+    const throughGlobalSeq = this.eventStore.getLatestGlobalSeq();
     this.projectionStore.upsertCheckpoint({
       projectionName: this.projectionName,
       status: 'building',
@@ -49,76 +48,126 @@ export class RuntimeProjector {
       metadata: { reason }
     });
 
-    this.runtimeStore.clearAll();
-    const runtimeEvents = this.eventStore.getEventsAfter(undefined).filter((event) => this.isRuntimeEvent(event));
-    await this.replay(runtimeEvents);
+    this.runtimeStore.beginProjectionBuild(this.projectionName);
+    try {
+      const rebuilt = await this.replayRange(0, throughGlobalSeq, true, undefined, false);
+      this.runtimeStore.publishProjectionBuild(this.projectionName);
+      this.writeCheckpoint(throughGlobalSeq, rebuilt.lastEvent, rebuilt.replayedEventCount, 'full_rebuild');
+    } catch (error) {
+      this.runtimeStore.discardProjectionBuild(this.projectionName);
+      throw error;
+    }
   }
 
-  async replay(events: MemoryEvent[], previousRebuildAt?: number): Promise<void> {
-    if (events.length === 0) {
-      const latestEvent = this.eventStore.getLatestEvent();
-      this.projectionStore.upsertCheckpoint({
-        projectionName: this.projectionName,
-        lastEventId: latestEvent?.eventId,
-        lastEventTime: latestEvent?.occurredAt,
-        lastRebuildAt: previousRebuildAt ?? Date.now(),
-        lastFullCount: this.runtimeStore.getStateCount(),
-        status: 'ready',
-        metadata: { mode: 'incremental_replay', replayedEventCount: 0 }
+  private async replayRange(
+    afterGlobalSeq: number,
+    throughGlobalSeq: number,
+    staging: boolean,
+    previousRebuildAt?: number,
+    updateCheckpoint = true,
+  ): Promise<{ lastEvent?: MemoryEvent; replayedEventCount: number }> {
+    let cursor = afterGlobalSeq;
+    let replayedEventCount = 0;
+    let lastEvent: MemoryEvent | undefined;
+    for (;;) {
+      const page = this.eventStore.getEventsByGlobalSeqPage({
+        afterGlobalSeq: cursor,
+        throughGlobalSeq,
+        eventTypes: ['RUNTIME_STATE_UPDATED', 'RUNTIME_TRANSITION_RECORDED'],
+        limit: 500,
       });
-      return;
-    }
-
-    logger.info(`Replaying runtime projection events: count=${events.length}`);
-
-    for (const event of events) {
-      this.applyEvent(event);
+      if (page.length === 0) break;
+      for (const event of page) this.applyEvent(event, staging);
+      lastEvent = page[page.length - 1];
+      cursor = lastEvent?.globalSeq ?? cursor;
+      replayedEventCount += page.length;
       await Promise.resolve();
     }
+    if (updateCheckpoint) this.writeCheckpoint(
+      throughGlobalSeq,
+      lastEvent,
+      replayedEventCount,
+      staging ? 'full_rebuild' : 'incremental_replay',
+      previousRebuildAt,
+    );
+    return { lastEvent, replayedEventCount };
+  }
 
-    const lastEvent = events[events.length - 1];
+  private writeCheckpoint(
+    throughGlobalSeq: number,
+    lastEvent: MemoryEvent | undefined,
+    replayedEventCount: number,
+    mode: 'full_rebuild' | 'incremental_replay',
+    previousRebuildAt?: number,
+  ): void {
     this.projectionStore.upsertCheckpoint({
       projectionName: this.projectionName,
       lastEventId: lastEvent?.eventId,
       lastEventTime: lastEvent?.occurredAt,
+      lastGlobalSeq: throughGlobalSeq,
       lastRebuildAt: previousRebuildAt ?? Date.now(),
-      lastFullCount: this.runtimeStore.getStateCount(),
+      lastFullCount: this.runtimeStore.getProjectionStateCount(this.projectionName),
       status: 'ready',
-      metadata: {
-        mode: 'incremental_replay',
-        replayedEventCount: events.length
-      }
+      metadata: { mode, replayedEventCount },
     });
   }
 
-  private applyEvent(event: MemoryEvent): void {
+  private applyEvent(event: MemoryEvent, staging = false): void {
     const payload = (event.payload || {}) as Record<string, unknown>;
+    const projectId = event.projectId;
+    if (projectId === undefined) {
+      this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'legacy_event_scope_unproven');
+      return;
+    }
+    if (payload.projectId !== undefined && payload.projectId !== projectId) {
+      this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'event_payload_scope_mismatch');
+      return;
+    }
 
     switch (event.eventType) {
       case 'RUNTIME_STATE_UPDATED':
-        if (!payload.runtimeId || !payload.entityType || !payload.entityKey || !payload.status) return;
-        this.runtimeStore.upsertState({
-          runtimeId: String(payload.runtimeId),
-          entityType: String(payload.entityType) as any,
-          entityKey: String(payload.entityKey),
-          status: String(payload.status) as any,
-          metadata: (payload.metadata as Record<string, unknown> | undefined) || undefined,
+        if (!isNonEmptyString(payload.runtimeId)
+          || !isRuntimeEntityType(payload.entityType)
+          || !isNonEmptyString(payload.entityKey)
+          || !isRuntimeStatus(payload.status)
+          || !isOptionalRecord(payload.metadata)) {
+          this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'invalid_runtime_event_payload');
+          return;
+        }
+        this.runtimeStore.applyProjectedState(this.projectionName, event.globalSeq ?? 0, {
+          projectId,
+          runtimeId: payload.runtimeId,
+          entityType: payload.entityType,
+          entityKey: payload.entityKey,
+          status: payload.status,
+          metadata: payload.metadata,
           updatedAt: event.occurredAt
-        }, { emitEvent: false });
+        }, staging);
         return;
 
       case 'RUNTIME_TRANSITION_RECORDED':
-        if (!payload.runtimeId || !payload.entityType || !payload.entityKey || !payload.transitionType || !payload.toStatus) return;
-        this.runtimeStore.recordTransition({
-          runtimeId: String(payload.runtimeId),
-          entityType: String(payload.entityType) as any,
-          entityKey: String(payload.entityKey),
-          transitionType: String(payload.transitionType),
-          fromStatus: payload.fromStatus ? String(payload.fromStatus) : undefined,
-          toStatus: String(payload.toStatus),
-          payload: (payload.data as Record<string, unknown> | undefined) || undefined,
+        if (!isNonEmptyString(payload.transitionId)
+          || !isNonEmptyString(payload.runtimeId)
+          || !isRuntimeEntityType(payload.entityType)
+          || !isNonEmptyString(payload.entityKey)
+          || !isNonEmptyString(payload.transitionType)
+          || !isRuntimeTransitionStatus(payload.toStatus)
+          || (payload.fromStatus !== undefined && !isRuntimeTransitionStatus(payload.fromStatus))
+          || !isOptionalRecord(payload.data)) {
+          this.runtimeStore.recordDiscardedProjectionEvent('runtime', event, 'invalid_runtime_event_payload');
+          return;
+        }
+        this.runtimeStore.applyProjectedTransition(this.projectionName, payload.transitionId, event.eventId, event.globalSeq ?? 0, {
+          projectId,
+          runtimeId: payload.runtimeId,
+          entityType: payload.entityType,
+          entityKey: payload.entityKey,
+          transitionType: payload.transitionType,
+          fromStatus: payload.fromStatus,
+          toStatus: payload.toStatus,
+          payload: payload.data,
           occurredAt: event.occurredAt
-        }, { emitEvent: false });
+        }, staging);
         return;
 
       default:
@@ -126,8 +175,27 @@ export class RuntimeProjector {
     }
   }
 
-  private isRuntimeEvent(event: MemoryEvent): boolean {
-    return event.eventType === 'RUNTIME_STATE_UPDATED'
-      || event.eventType === 'RUNTIME_TRANSITION_RECORDED';
-  }
+}
+
+const RUNTIME_ENTITY_TYPES = new Set<RuntimeEntityType>(['step', 'merge', 'validation', 'policy', 'executor', 'state_machine']);
+const RUNTIME_STATUSES = new Set<RuntimeStatus>(['ready', 'blocked', 'pending', 'matched', 'missing']);
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isRuntimeEntityType(value: unknown): value is RuntimeEntityType {
+  return typeof value === 'string' && RUNTIME_ENTITY_TYPES.has(value as RuntimeEntityType);
+}
+
+function isRuntimeStatus(value: unknown): value is RuntimeStatus {
+  return typeof value === 'string' && RUNTIME_STATUSES.has(value as RuntimeStatus);
+}
+
+function isRuntimeTransitionStatus(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256;
+}
+
+function isOptionalRecord(value: unknown): value is Record<string, unknown> | undefined {
+  return value === undefined || (typeof value === 'object' && value !== null && !Array.isArray(value));
 }

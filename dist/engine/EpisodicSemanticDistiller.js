@@ -1,4 +1,5 @@
 import { NeuronFactory } from '../core/Neuron.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 export class EpisodicSemanticDistiller {
     memoryGraph;
     clarifier;
@@ -14,7 +15,7 @@ export class EpisodicSemanticDistiller {
         const sources = input.episodicNeuronIds
             .map((id) => this.memoryGraph.getNeuron(id))
             .filter((neuron) => Boolean(neuron))
-            .filter((neuron) => neuron.metadata.projectId === input.projectId)
+            .filter((neuron) => matchesProjectScope(input.projectId, neuron.metadata.projectId))
             .slice(0, this.maxEpisodicPerBatch);
         if (sources.length < this.minBatchSize)
             return null;

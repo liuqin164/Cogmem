@@ -9,6 +9,7 @@ import {
   isPreviousReference,
   normalizeLexiconText
 } from '../lexicon/coreMemoryLexicon.js';
+import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 
 export interface EntityRecord {
   entityId: string;
@@ -120,6 +121,7 @@ export class EntityStore {
       this.ownsDb = false;
     }
     this.initializeSchema();
+    installRuntimeProvenanceGuards(this.db);
   }
 
   getDatabase(): Database {
@@ -162,11 +164,12 @@ export class EntityStore {
       CREATE TABLE IF NOT EXISTS entity_aliases (
         alias_id TEXT PRIMARY KEY,
         entity_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT '',
         alias_text TEXT NOT NULL,
         normalized_alias TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        UNIQUE(entity_id, normalized_alias)
+        UNIQUE(project_id, entity_id, normalized_alias)
       );
 
       CREATE INDEX IF NOT EXISTS idx_entity_aliases_lookup
@@ -188,12 +191,13 @@ export class EntityStore {
 
       CREATE TABLE IF NOT EXISTS entity_relations (
         relation_id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT '',
         source_entity_id TEXT NOT NULL,
         target_entity_id TEXT NOT NULL,
         relation_type TEXT NOT NULL,
         source_neuron_id TEXT,
         created_at INTEGER NOT NULL,
-        UNIQUE(source_entity_id, target_entity_id, relation_type)
+        UNIQUE(project_id, source_entity_id, target_entity_id, relation_type)
       );
 
       CREATE TABLE IF NOT EXISTS pending_entity_resolution (
@@ -201,6 +205,7 @@ export class EntityStore {
         reference_text TEXT NOT NULL,
         entity_type TEXT,
         context_neuron_id TEXT,
+        project_scope TEXT NOT NULL DEFAULT '',
         resolved_entity_id TEXT,
         status TEXT NOT NULL,
         created_at INTEGER NOT NULL,
@@ -227,6 +232,7 @@ export class EntityStore {
 
       CREATE TABLE IF NOT EXISTS entity_alias_conflicts (
         conflict_id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL DEFAULT '',
         normalized_alias TEXT NOT NULL,
         entity_type TEXT NOT NULL,
         entity_ids_json TEXT NOT NULL,
@@ -234,12 +240,16 @@ export class EntityStore {
         status TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        UNIQUE(normalized_alias, entity_type)
+        UNIQUE(project_id, normalized_alias, entity_type)
       );
 
       CREATE INDEX IF NOT EXISTS idx_entity_alias_conflicts_lookup
         ON entity_alias_conflicts(normalized_alias, entity_type, status);
     `);
+    const pendingColumns = new Set((this.db.prepare(`PRAGMA table_info(pending_entity_resolution)`).all() as Array<{ name: string }>).map((row) => row.name));
+    if (!pendingColumns.has('project_scope')) this.db.exec(`ALTER TABLE pending_entity_resolution ADD COLUMN project_scope TEXT NOT NULL DEFAULT ''`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_pending_entity_resolution_scope
+      ON pending_entity_resolution(project_scope,status,updated_at DESC)`);
   }
 
   upsertEntity(input: {
@@ -253,6 +263,7 @@ export class EntityStore {
     instanceMode?: 'auto' | 'canonical' | 'new_instance';
   }): EntityRecord {
     const now = input.createdAt ?? Date.now();
+    const projectId = typeof input.metadata?.projectId === 'string' ? String(input.metadata.projectId) : '';
     const rawMention = typeof input.metadata?.rawMention === 'string'
       ? String(input.metadata.rawMention)
       : undefined;
@@ -307,7 +318,7 @@ export class EntityStore {
         now,
         existing.entityId
       );
-      this.upsertAliases(existing.entityId, input.type, mergedAliases, now);
+      this.upsertAliases(existing.entityId, input.type, mergedAliases, projectId, now);
       return this.getByEntityId(existing.entityId)!;
     }
 
@@ -341,47 +352,49 @@ export class EntityStore {
       record.updatedAt
     );
 
-    this.upsertAliases(record.entityId, input.type, [record.canonicalName, ...(record.aliases || [])], now);
+    this.upsertAliases(record.entityId, input.type, [record.canonicalName, ...(record.aliases || [])], projectId, now);
 
     return record;
   }
 
-  findByAlias(aliasText: string, type?: string): EntityRecord | null {
-    const matches = this.listByAlias(aliasText, type);
+  findByAlias(aliasText: string, type?: string, projectId?: string): EntityRecord | null {
+    const matches = this.listByAlias(aliasText, type, projectId);
     return matches[0] || null;
   }
 
-  listByAlias(aliasText: string, type?: string): EntityRecord[] {
+  listByAlias(aliasText: string, type?: string, projectId?: string): EntityRecord[] {
     const normalizedAlias = this.normalizeAlias(aliasText);
+    const scopeClause = projectId === undefined ? '' : ` AND ea.project_id = ? AND (json_extract(e.metadata_json,'$.projectId') = ? OR EXISTS (SELECT 1 FROM entity_mentions em WHERE em.entity_id=e.instance_id AND COALESCE(em.project_id,'')=?))`;
     const rows = type
       ? this.db.prepare(`
           SELECT e.*
           FROM entity_aliases ea
           JOIN entity_instances e ON e.instance_id = ea.entity_id
-          WHERE ea.normalized_alias = ? AND e.type = ? AND e.status = 'active'
+          WHERE ea.normalized_alias = ? AND e.type = ? AND e.status = 'active'${scopeClause}
           ORDER BY ea.updated_at DESC
           LIMIT 12
-        `).all(normalizedAlias, type)
+        `).all(normalizedAlias, type, ...(projectId === undefined ? [] : [projectId, projectId, projectId]))
       : this.db.prepare(`
           SELECT e.*
           FROM entity_aliases ea
           JOIN entity_instances e ON e.instance_id = ea.entity_id
-          WHERE ea.normalized_alias = ? AND e.status = 'active'
+          WHERE ea.normalized_alias = ? AND e.status = 'active'${scopeClause}
           ORDER BY ea.updated_at DESC
           LIMIT 12
-        `).all(normalizedAlias);
-    return (rows as any[]).map((row) => this.mapRow(row));
+        `).all(normalizedAlias, ...(projectId === undefined ? [] : [projectId, projectId, projectId]));
+    return (rows as any[]).map((row) => this.mapRowForProject(row, projectId));
   }
 
-  findByCanonicalName(canonicalName: string, type?: string): EntityRecord | null {
+  findByCanonicalName(canonicalName: string, type?: string, projectId?: string): EntityRecord | null {
+    const scopeClause = projectId === undefined ? '' : ` AND (json_extract(metadata_json,'$.projectId') = ? OR EXISTS (SELECT 1 FROM entity_mentions em WHERE em.entity_id=entity_instances.instance_id AND COALESCE(em.project_id,'')=?))`;
     const row = type
       ? this.db.prepare(`
-          SELECT * FROM entity_instances WHERE canonical_name = ? AND type = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1
-        `).get(canonicalName, type)
+          SELECT * FROM entity_instances WHERE canonical_name = ? AND type = ? AND status = 'active'${scopeClause} ORDER BY updated_at DESC LIMIT 1
+        `).get(canonicalName, type, ...(projectId === undefined ? [] : [projectId, projectId]))
       : this.db.prepare(`
-          SELECT * FROM entity_instances WHERE canonical_name = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1
-        `).get(canonicalName);
-    return row ? this.mapRow(row as any) : null;
+          SELECT * FROM entity_instances WHERE canonical_name = ? AND status = 'active'${scopeClause} ORDER BY updated_at DESC LIMIT 1
+        `).get(canonicalName, ...(projectId === undefined ? [] : [projectId, projectId]));
+    return row ? this.mapRowForProject(row as any, projectId) : null;
   }
 
   findByEntityId(entityId: string): EntityRecord | null {
@@ -418,29 +431,37 @@ export class EntityStore {
     return rows.map((row) => this.mapRow(row));
   }
 
-  private listByCreationOrder(type: string, limit: number = 8): EntityRecord[] {
+  private listByCreationOrder(type: string, limit: number = 8, projectId?: string): EntityRecord[] {
+    const scope = projectId === undefined ? '' : ` AND (json_extract(metadata_json,'$.projectId') = ? OR EXISTS (
+      SELECT 1 FROM entity_mentions em WHERE em.entity_id=entity_instances.instance_id AND COALESCE(em.project_id,'')=?
+    ))`;
+    const params: Array<string | number> = [type];
+    if (projectId !== undefined) params.push(projectId, projectId);
+    params.push(limit);
     const rows = this.db.prepare(`
       SELECT * FROM entity_instances
-      WHERE type = ? AND status = 'active'
+      WHERE type = ? AND status = 'active'${scope}
       ORDER BY created_at DESC, updated_at DESC
       LIMIT ?
-    `).all(type, limit) as any[];
-    return rows.map((row) => this.mapRow(row));
+    `).all(...params) as any[];
+    return rows.map((row) => this.mapRowForProject(row, projectId));
   }
 
-  listRelations(entityId: string, relationType?: EntityRelationRecord['relationType']): EntityRelationRecord[] {
+  listRelations(entityId: string, relationType?: EntityRelationRecord['relationType'], projectId?: string): EntityRelationRecord[] {
+    const scope = projectId === undefined ? '' : ` AND project_id = ?`;
+    const params = projectId === undefined ? [] : [projectId];
     const rows = relationType
       ? this.db.prepare(`
           SELECT * FROM entity_relations
           WHERE (source_entity_id = ? OR target_entity_id = ?)
-            AND relation_type = ?
+            AND relation_type = ?${scope}
           ORDER BY created_at DESC
-        `).all(entityId, entityId, relationType)
+        `).all(entityId, entityId, relationType, ...params)
       : this.db.prepare(`
           SELECT * FROM entity_relations
-          WHERE source_entity_id = ? OR target_entity_id = ?
+          WHERE (source_entity_id = ? OR target_entity_id = ?)${scope}
           ORDER BY created_at DESC
-        `).all(entityId, entityId);
+        `).all(entityId, entityId, ...params);
 
     return (rows as any[]).map((row) => ({
       relationId: row.relation_id,
@@ -457,10 +478,10 @@ export class EntityStore {
     if (disambiguation.length > 0) return disambiguation[0]!.entity;
 
     const directMatches = [
-      ...this.listByAlias(referenceText, typeHint),
+      ...this.listByAlias(referenceText, typeHint, options?.projectId),
       ...(typeHint
         ? (() => {
-            const exact = this.findByCanonicalName(referenceText, typeHint);
+            const exact = this.findByCanonicalName(referenceText, typeHint, options?.projectId);
             return exact ? [exact] : [];
           })()
         : [])
@@ -488,10 +509,10 @@ export class EntityStore {
     options?: ResolveEntityReferenceOptions
   ): EntityDisambiguationCandidate[] {
     const directMatches = [
-      ...this.listByAlias(referenceText, typeHint),
+      ...this.listByAlias(referenceText, typeHint, options?.projectId),
       ...(typeHint
         ? (() => {
-            const exact = this.findByCanonicalName(referenceText, typeHint);
+            const exact = this.findByCanonicalName(referenceText, typeHint, options?.projectId);
             return exact ? [exact] : [];
           })()
         : [])
@@ -501,8 +522,8 @@ export class EntityStore {
 
     const normalizedAlias = this.normalizeAlias(referenceText);
     const conflicts = typeHint
-      ? this.listAliasConflicts(typeHint).filter((conflict) => conflict.normalizedAlias === normalizedAlias)
-      : this.listAliasConflicts().filter((conflict) => conflict.normalizedAlias === normalizedAlias);
+      ? this.listAliasConflicts(typeHint, options?.projectId).filter((conflict) => conflict.normalizedAlias === normalizedAlias)
+      : this.listAliasConflicts(undefined, options?.projectId).filter((conflict) => conflict.normalizedAlias === normalizedAlias);
     const conflictPolicy = conflicts[0]?.policy;
 
     const scored = uniqueCandidates.map((entity) => this.scoreDisambiguationCandidate(entity, normalizedAlias, conflictPolicy, options));
@@ -521,7 +542,7 @@ export class EntityStore {
     const normalized = this.normalizeAlias(referenceText);
     const effectiveType = typeHint || inferReferenceType(normalized, referenceText) || 'device';
     const explicitNameHint = this.extractRelativeNameHint(referenceText, effectiveType);
-    const recent = this.listByCreationOrder(effectiveType, 12)
+    const recent = this.listByCreationOrder(effectiveType, 12, options?.projectId)
       .filter((entity) => this.matchesResolutionOptions(entity.entityId, options))
       .filter((entity) => !this.isBareRelativeEntity(entity, effectiveType))
       .filter((entity) => this.matchesExplicitRelativeHint(entity, explicitNameHint))
@@ -536,8 +557,8 @@ export class EntityStore {
           entity,
           score: index === 0 ? 0.72 : 0.42,
           reasons: ['relative_reference_previous'],
-          mentionCount: this.listTimeline({ entityId: entity.entityId, limit: 8 }).length,
-          latestMentionAt: this.listTimeline({ entityId: entity.entityId, limit: 1 })[0]?.createdAt
+          mentionCount: this.listTimeline({ entityId: entity.entityId, projectId: options?.projectId, limit: 8 }).length,
+          latestMentionAt: this.listTimeline({ entityId: entity.entityId, projectId: options?.projectId, limit: 1 })[0]?.createdAt
         }));
     }
     if (relativeReference && isLatestReference(relativeReference) && !isWeakAmbiguousRelativeReference(relativeReference)) {
@@ -547,8 +568,8 @@ export class EntityStore {
           entity,
           score: index === 0 ? 0.74 : 0.38,
           reasons: ['relative_reference_latest'],
-          mentionCount: this.listTimeline({ entityId: entity.entityId, limit: 8 }).length,
-          latestMentionAt: this.listTimeline({ entityId: entity.entityId, limit: 1 })[0]?.createdAt
+          mentionCount: this.listTimeline({ entityId: entity.entityId, projectId: options?.projectId, limit: 8 }).length,
+          latestMentionAt: this.listTimeline({ entityId: entity.entityId, projectId: options?.projectId, limit: 1 })[0]?.createdAt
         }));
     }
 
@@ -564,8 +585,8 @@ export class EntityStore {
         reasons: items.length === 1
           ? ['relative_reference_ambiguous_single_candidate']
           : ['relative_reference_ambiguous_scope_only'],
-        mentionCount: this.listTimeline({ entityId: entity.entityId, limit: 8 }).length,
-        latestMentionAt: this.listTimeline({ entityId: entity.entityId, limit: 1 })[0]?.createdAt
+        mentionCount: this.listTimeline({ entityId: entity.entityId, projectId: options?.projectId, limit: 8 }).length,
+        latestMentionAt: this.listTimeline({ entityId: entity.entityId, projectId: options?.projectId, limit: 1 })[0]?.createdAt
       }));
   }
 
@@ -576,35 +597,41 @@ export class EntityStore {
     mentionType?: EntityMentionRecord['mentionType'];
     createdAt?: number;
   }): EntityMentionRecord {
+    const neuronScope = input.neuronId ? this.requireLiveNeuronScope(input.neuronId) : undefined;
+    const projectId = neuronScope ?? input.projectId;
+    if (projectId === undefined) throw new Error('entity_mention_project_scope_required');
+    if (input.projectId !== undefined && input.projectId !== projectId) throw new Error('entity_mention_project_scope_mismatch');
+    this.assertEntityVisibleInProject(input.entityId, projectId, input.neuronId);
     const record: EntityMentionRecord = {
       mentionId: `ement-${randomUUID()}`,
       entityId: input.entityId,
       neuronId: input.neuronId,
-      projectId: input.projectId,
+      projectId,
       mentionType: input.mentionType || 'referenced',
       createdAt: input.createdAt ?? Date.now()
     };
 
-    this.db.prepare(`
-      INSERT INTO entity_mentions (
-        mention_id, entity_id, neuron_id, project_id, mention_type, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      record.mentionId,
-      record.entityId,
-      record.neuronId || null,
-      record.projectId || null,
-      record.mentionType,
-      record.createdAt
-    );
-
-    this.touchEntity(record.entityId, record.createdAt);
-    const entity = this.getByEntityId(record.entityId);
-    if (entity) {
-      for (const alias of [entity.canonicalName, ...(entity.aliases || [])]) {
-        this.refreshAliasConflict(this.normalizeAlias(alias), entity.type, record.createdAt);
+    this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO entity_mentions (
+          mention_id, entity_id, neuron_id, project_id, mention_type, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        record.mentionId,
+        record.entityId,
+        record.neuronId || null,
+        projectId,
+        record.mentionType,
+        record.createdAt
+      );
+      this.touchEntity(record.entityId, record.createdAt);
+      const entity = this.getByEntityId(record.entityId);
+      if (entity) {
+        for (const alias of [entity.canonicalName, ...(entity.aliases || [])]) {
+          this.refreshAliasConflict(this.normalizeAlias(alias), entity.type, projectId, record.createdAt);
+        }
       }
-    }
+    })();
     return record;
   }
 
@@ -632,8 +659,8 @@ export class EntityStore {
       sql += ` AND e.type = ?`;
       params.push(input.type);
     }
-    if (input.projectId) {
-      sql += ` AND em.project_id = ?`;
+    if (input.projectId !== undefined) {
+      sql += ` AND COALESCE(em.project_id,'') = ?`;
       params.push(input.projectId);
     }
     if (!input.includeInactive) sql += ` AND e.status = 'active'`;
@@ -646,7 +673,7 @@ export class EntityStore {
       mentionId: row.mention_id,
       entityId: row.entity_id,
       neuronId: row.neuron_id || undefined,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       mentionType: row.mention_type,
       createdAt: row.created_at
     }));
@@ -672,8 +699,8 @@ export class EntityStore {
       sql += ` AND e.type = ?`;
       params.push(input.type);
     }
-    if (input.projectId) {
-      sql += ` AND em.project_id = ?`;
+    if (input.projectId !== undefined) {
+      sql += ` AND COALESCE(em.project_id,'') = ?`;
       params.push(input.projectId);
     }
     if (!input.includeInactive) sql += ` AND e.status = 'active'`;
@@ -692,31 +719,44 @@ export class EntityStore {
       type: row.type,
       mentionId: row.mention_id,
       neuronId: row.neuron_id || undefined,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       mentionType: row.mention_type,
       createdAt: row.created_at
     }));
   }
 
-  listEntitiesUpdatedInRange(startTime: number, endTime: number, type?: string): EntityRecord[] {
-    const rows = type
-      ? this.db.prepare(`
-          SELECT *
-          FROM entity_instances
-          WHERE updated_at >= ? AND updated_at < ? AND type = ?
-          ORDER BY updated_at DESC, created_at DESC
-        `).all(startTime, endTime, type)
-      : this.db.prepare(`
-          SELECT *
-          FROM entity_instances
-          WHERE updated_at >= ? AND updated_at < ?
-          ORDER BY updated_at DESC, created_at DESC
-        `).all(startTime, endTime);
+  listEntitiesUpdatedInRange(startTime: number, endTime: number, type?: string, projectId?: string): EntityRecord[] {
+    const clauses = ['updated_at >= ?', 'updated_at < ?'];
+    const params: Array<string | number> = [startTime, endTime];
+    if (type) { clauses.push('type = ?'); params.push(type); }
+    if (projectId !== undefined) {
+      clauses.push(`(json_extract(metadata_json,'$.projectId') = ? OR EXISTS (SELECT 1 FROM entity_mentions em WHERE em.entity_id=entity_instances.instance_id AND COALESCE(em.project_id,'')=?))`);
+      params.push(projectId, projectId);
+    }
+    const rows = this.db.prepare(`SELECT * FROM entity_instances WHERE ${clauses.join(' AND ')} ORDER BY updated_at DESC,created_at DESC`).all(...params);
 
-    return (rows as any[]).map((row) => this.mapRow(row));
+    return (rows as any[]).map((row) => this.mapRowForProject(row, projectId));
   }
 
-  archiveEntity(entityId: string, updatedAt: number = Date.now()): void {
+  listProjectScopes(entityId: string): string[] {
+    const scopes = new Set<string>();
+    const row = this.db.prepare(`SELECT metadata_json FROM entity_instances WHERE instance_id=?`).get(entityId) as { metadata_json?: string | null } | null;
+    if (row?.metadata_json) {
+      const projectId = (JSON.parse(row.metadata_json) as Record<string, unknown>).projectId;
+      if (typeof projectId === 'string') scopes.add(projectId);
+    }
+    const mentions = this.db.prepare(`SELECT DISTINCT COALESCE(project_id,'') AS project_id FROM entity_mentions WHERE entity_id=?`).all(entityId) as Array<{ project_id: string }>;
+    for (const mention of mentions) scopes.add(mention.project_id);
+    return [...scopes].sort();
+  }
+
+  isExclusiveToProject(entityId: string, projectId: string): boolean {
+    const scopes = this.listProjectScopes(entityId);
+    return scopes.length === 1 && scopes[0] === projectId;
+  }
+
+  archiveEntity(entityId: string, updatedAt: number = Date.now(), projectId?: string): void {
+    if (projectId !== undefined && !this.isExclusiveToProject(entityId, projectId)) throw new Error('entity_project_scope_not_exclusive');
     this.db.prepare(`
       UPDATE entity_instances
       SET status = 'archived', updated_at = ?
@@ -728,9 +768,11 @@ export class EntityStore {
     entityId: string;
     attributeKey: string;
     attributeValue: string;
-    sourceNeuronId?: string;
+    sourceNeuronId: string;
     createdAt?: number;
   }): EntityAttributeRecord {
+    const projectId = this.requireLiveNeuronScope(input.sourceNeuronId);
+    this.assertEntityVisibleInProject(input.entityId, projectId, input.sourceNeuronId);
     const now = input.createdAt ?? Date.now();
     const record: EntityAttributeRecord = {
       attributeId: `eattr-${randomUUID()}`,
@@ -743,37 +785,45 @@ export class EntityStore {
       updatedAt: now
     };
 
-    this.db.prepare(`
-      INSERT INTO entity_attributes (
-        attribute_id, entity_id, attribute_key, attribute_value, normalized_value, source_neuron_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      record.attributeId,
-      record.entityId,
-      record.attributeKey,
-      record.attributeValue,
-      record.normalizedValue,
-      record.sourceNeuronId || null,
-      record.createdAt,
-      record.updatedAt
-    );
-
-    this.touchEntity(record.entityId, now);
+    this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO entity_attributes (
+          attribute_id, entity_id, attribute_key, attribute_value, normalized_value, source_neuron_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        record.attributeId,
+        record.entityId,
+        record.attributeKey,
+        record.attributeValue,
+        record.normalizedValue,
+        input.sourceNeuronId,
+        record.createdAt,
+        record.updatedAt
+      );
+      this.touchEntity(record.entityId, now);
+    })();
     return record;
   }
 
-  listAttributes(entityId: string, attributeKey?: string): EntityAttributeRecord[] {
+  listAttributes(entityId: string, attributeKey?: string, projectId?: string): EntityAttributeRecord[] {
+    const hasNeurons = this.hasTable('neurons');
+    const scopeClause = projectId === undefined
+      ? ''
+      : hasNeurons
+        ? ` AND (source_neuron_id IN (SELECT id FROM neurons WHERE COALESCE(project_id,'')=?) OR (source_neuron_id IS NULL AND EXISTS (SELECT 1 FROM entity_instances e WHERE e.instance_id=entity_attributes.entity_id AND json_extract(e.metadata_json,'$.projectId')=?)))`
+        : ` AND source_neuron_id IS NULL AND EXISTS (SELECT 1 FROM entity_instances e WHERE e.instance_id=entity_attributes.entity_id AND json_extract(e.metadata_json,'$.projectId')=?)`;
+    const scopeParams = projectId === undefined ? [] : hasNeurons ? [projectId, projectId] : [projectId];
     const rows = attributeKey
       ? this.db.prepare(`
           SELECT * FROM entity_attributes
-          WHERE entity_id = ? AND attribute_key = ?
+          WHERE entity_id = ? AND attribute_key = ?${scopeClause}
           ORDER BY updated_at DESC
-        `).all(entityId, attributeKey)
+        `).all(entityId, attributeKey, ...scopeParams)
       : this.db.prepare(`
           SELECT * FROM entity_attributes
-          WHERE entity_id = ?
+          WHERE entity_id = ?${scopeClause}
           ORDER BY updated_at DESC
-        `).all(entityId);
+        `).all(entityId, ...scopeParams);
 
     return (rows as any[]).map((row) => ({
       attributeId: row.attribute_id,
@@ -791,23 +841,31 @@ export class EntityStore {
     sourceEntityId: string;
     targetEntityId: string;
     relationType: EntityRelationRecord['relationType'];
+    projectId: string;
     sourceNeuronId?: string;
     createdAt?: number;
   }): EntityRelationRecord {
-    const createdAt = input.createdAt ?? Date.now();
-    const existing = this.db.prepare(`
+    return this.db.transaction(() => {
+      if (!this.isExclusiveToProject(input.sourceEntityId, input.projectId)
+        || !this.isExclusiveToProject(input.targetEntityId, input.projectId)) throw new Error('entity_relation_project_scope_mismatch');
+      if (input.sourceNeuronId && this.requireLiveNeuronScope(input.sourceNeuronId) !== input.projectId) {
+        throw new Error('entity_relation_project_scope_mismatch');
+      }
+      const createdAt = input.createdAt ?? Date.now();
+      const existing = this.db.prepare(`
       SELECT relation_id, created_at
       FROM entity_relations
-      WHERE source_entity_id = ? AND target_entity_id = ? AND relation_type = ?
-    `).get(input.sourceEntityId, input.targetEntityId, input.relationType) as any;
+      WHERE project_id=? AND source_entity_id = ? AND target_entity_id = ? AND relation_type = ?
+    `).get(input.projectId, input.sourceEntityId, input.targetEntityId, input.relationType) as any;
     const relationId = existing?.relation_id || `erel-${randomUUID()}`;
 
     this.db.prepare(`
       INSERT OR REPLACE INTO entity_relations (
-        relation_id, source_entity_id, target_entity_id, relation_type, source_neuron_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
+        relation_id, project_id, source_entity_id, target_entity_id, relation_type, source_neuron_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(
       relationId,
+      input.projectId,
       input.sourceEntityId,
       input.targetEntityId,
       input.relationType,
@@ -815,23 +873,25 @@ export class EntityStore {
       existing?.created_at || createdAt
     );
 
-    return {
-      relationId,
-      sourceEntityId: input.sourceEntityId,
-      targetEntityId: input.targetEntityId,
-      relationType: input.relationType,
-      sourceNeuronId: input.sourceNeuronId,
-      createdAt: existing?.created_at || createdAt
-    };
+      return {
+        relationId,
+        sourceEntityId: input.sourceEntityId,
+        targetEntityId: input.targetEntityId,
+        relationType: input.relationType,
+        sourceNeuronId: input.sourceNeuronId,
+        createdAt: existing?.created_at || createdAt
+      };
+    })();
   }
 
   registerPendingResolution(input: {
     referenceText: string;
     entityType?: string;
-    contextNeuronId?: string;
+    contextNeuronId: string;
     createdAt?: number;
   }): PendingEntityResolutionRecord {
     const now = input.createdAt ?? Date.now();
+    const projectScope = this.requireLiveNeuronScope(input.contextNeuronId);
     const record: PendingEntityResolutionRecord = {
       pendingId: `eper-${randomUUID()}`,
       referenceText: input.referenceText,
@@ -844,13 +904,14 @@ export class EntityStore {
 
     this.db.prepare(`
       INSERT INTO pending_entity_resolution (
-        pending_id, reference_text, entity_type, context_neuron_id, resolved_entity_id, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        pending_id, reference_text, entity_type, context_neuron_id, project_scope, resolved_entity_id, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.pendingId,
       record.referenceText,
       record.entityType || null,
       record.contextNeuronId || null,
+      projectScope,
       null,
       record.status,
       record.createdAt,
@@ -860,17 +921,21 @@ export class EntityStore {
     return record;
   }
 
-  resolvePendingReference(pendingId: string, entityId: string, resolvedAt: number = Date.now()): PendingEntityResolutionRecord | null {
+  resolvePendingReference(pendingId: string, entityId: string, projectId: string, resolvedAt: number = Date.now()): PendingEntityResolutionRecord | null {
     const row = this.db.prepare(`
       SELECT * FROM pending_entity_resolution WHERE pending_id = ?
     `).get(pendingId) as any;
     if (!row) return null;
-
-    this.db.prepare(`
-      UPDATE pending_entity_resolution
-      SET resolved_entity_id = ?, status = 'resolved', updated_at = ?
-      WHERE pending_id = ?
-    `).run(entityId, resolvedAt, pendingId);
+    if (!row.context_neuron_id) throw new Error('pending_entity_context_required');
+    if (row.project_scope !== projectId || this.requireLiveNeuronScope(String(row.context_neuron_id)) !== projectId) throw new Error('pending_entity_project_scope_mismatch');
+    this.assertEntityVisibleInProject(entityId, projectId);
+    this.db.transaction(() => {
+      this.db.prepare(`
+        UPDATE pending_entity_resolution
+        SET resolved_entity_id = ?, status = 'resolved', updated_at = ?
+        WHERE pending_id = ? AND status = 'pending'
+      `).run(entityId, resolvedAt, pendingId);
+    })();
 
     return {
       pendingId,
@@ -887,18 +952,22 @@ export class EntityStore {
   listPendingResolutions(filter?: {
     status?: PendingEntityResolutionRecord['status'];
     entityType?: string;
+    projectId?: string;
   }): PendingEntityResolutionRecord[] {
     const rows = this.db.prepare(`
       SELECT *
       FROM pending_entity_resolution
       WHERE (? IS NULL OR status = ?)
         AND (? IS NULL OR entity_type = ?)
+        AND (? IS NULL OR project_scope=?)
       ORDER BY updated_at DESC, created_at DESC
     `).all(
       filter?.status || null,
       filter?.status || null,
       filter?.entityType || null,
-      filter?.entityType || null
+      filter?.entityType || null,
+      filter?.projectId === undefined ? null : filter.projectId,
+      filter?.projectId === undefined ? null : filter.projectId
     ) as any[];
 
     return rows.map((row) => ({
@@ -913,18 +982,20 @@ export class EntityStore {
     }));
   }
 
-  listAliasConflicts(type?: string): EntityAliasConflictRecord[] {
+  listAliasConflicts(type?: string, projectId?: string): EntityAliasConflictRecord[] {
+    const scope = projectId === undefined ? '' : ` AND project_id = ?`;
+    const params = projectId === undefined ? [] : [projectId];
     const rows = type
       ? this.db.prepare(`
           SELECT * FROM entity_alias_conflicts
-          WHERE entity_type = ? AND status = 'active'
+          WHERE entity_type = ? AND status = 'active'${scope}
           ORDER BY updated_at DESC
-        `).all(type)
+        `).all(type, ...params)
       : this.db.prepare(`
           SELECT * FROM entity_alias_conflicts
-          WHERE status = 'active'
+          WHERE status = 'active'${scope}
           ORDER BY updated_at DESC
-        `).all();
+        `).all(...params);
 
     return (rows as any[]).map((row) => ({
       conflictId: row.conflict_id,
@@ -942,69 +1013,96 @@ export class EntityStore {
     if (this.ownsDb) this.db.close();
   }
 
-  addAlias(entityId: string, alias: string, updatedAt: number = Date.now()): void {
+  addAlias(entityId: string, alias: string, projectId: string, updatedAt: number = Date.now()): void {
     const entity = this.getByEntityId(entityId);
     if (!entity || !alias.trim()) return;
-    const aliases = Array.from(new Set([...entity.aliases, alias.trim()]));
-    this.db.prepare(`UPDATE entity_instances SET aliases_json = ?, updated_at = ? WHERE instance_id = ?`)
-      .run(JSON.stringify(aliases), updatedAt, entityId);
-    this.upsertAliases(entityId, entity.type, [alias], updatedAt);
+    if (!this.isExclusiveToProject(entityId, projectId)) throw new Error('entity_project_scope_not_exclusive');
+    this.touchEntity(entityId, updatedAt);
+    this.upsertAliases(entityId, entity.type, [alias], projectId, updatedAt);
   }
 
-  removeAlias(entityId: string, alias: string, updatedAt: number = Date.now()): void {
+  removeAlias(entityId: string, alias: string, projectId: string, updatedAt: number = Date.now()): void {
     const entity = this.getByEntityId(entityId);
     if (!entity || entity.canonicalName === alias) return;
     const normalized = this.normalizeAlias(alias);
-    const aliases = entity.aliases.filter((item) => this.normalizeAlias(item) !== normalized);
-    this.db.prepare(`UPDATE entity_instances SET aliases_json = ?, updated_at = ? WHERE instance_id = ?`)
-      .run(JSON.stringify(aliases), updatedAt, entityId);
-    this.db.prepare(`DELETE FROM entity_aliases WHERE entity_id = ? AND normalized_alias = ?`).run(entityId, normalized);
-    this.refreshAliasConflict(normalized, entity.type, updatedAt);
+    this.db.prepare(`DELETE FROM entity_aliases WHERE project_id=? AND entity_id = ? AND normalized_alias = ?`).run(projectId, entityId, normalized);
+    this.refreshAliasConflict(normalized, entity.type, projectId, updatedAt);
   }
 
   redirectInstance(input: {
     sourceEntityId: string;
     targetCanonicalEntityId: string;
     status?: EntityRecord['status'];
+    projectId: string;
     updatedAt?: number;
   }): void {
-    this.db.prepare(`
+    this.db.transaction(() => {
+      if (!this.isExclusiveToProject(input.sourceEntityId, input.projectId)) throw new Error('entity_project_scope_not_exclusive');
+      if (!this.db.prepare(`SELECT 1 FROM entities WHERE entity_id=?`).get(input.targetCanonicalEntityId)) throw new Error('canonical_entity_not_found');
+      this.db.prepare(`
       UPDATE entity_instances
       SET canonical_entity_id = ?, status = ?, updated_at = ?
       WHERE instance_id = ?
     `).run(input.targetCanonicalEntityId, input.status || 'archived', input.updatedAt ?? Date.now(), input.sourceEntityId);
+    })();
   }
 
   restoreInstance(input: {
     entityId: string;
     canonicalEntityId: string;
     status: EntityRecord['status'];
+    projectId: string;
     updatedAt?: number;
   }): void {
-    this.db.prepare(`
+    this.db.transaction(() => {
+      if (!this.isExclusiveToProject(input.entityId, input.projectId)) throw new Error('entity_project_scope_not_exclusive');
+      if (!this.db.prepare(`SELECT 1 FROM entities WHERE entity_id=?`).get(input.canonicalEntityId)) throw new Error('canonical_entity_not_found');
+      this.db.prepare(`
       UPDATE entity_instances
       SET canonical_entity_id = ?, status = ?, updated_at = ?
       WHERE instance_id = ?
     `).run(input.canonicalEntityId, input.status, input.updatedAt ?? Date.now(), input.entityId);
+    })();
   }
 
-  private upsertAliases(entityId: string, entityType: string, aliases: string[], timestamp: number): void {
+  private requireLiveNeuronScope(neuronId: string): string {
+    const row = this.db.prepare(`
+      SELECT COALESCE(project_id,'') AS project_id
+      FROM neurons
+      WHERE id=? AND is_deleted=0
+    `).get(neuronId) as { project_id: string } | null;
+    if (!row) throw new Error('entity_provenance_neuron_not_live');
+    return row.project_id;
+  }
+
+  private assertEntityVisibleInProject(entityId: string, projectId: string, sourceNeuronId?: string): void {
+    const scopes = this.listProjectScopes(entityId);
+    if (scopes.includes(projectId)) return;
+    const createdFrom = sourceNeuronId
+      ? this.db.prepare(`SELECT created_from FROM entity_instances WHERE instance_id=?`).get(entityId) as { created_from?: string | null } | null
+      : null;
+    if (scopes.length === 0 && createdFrom?.created_from === sourceNeuronId) return;
+    throw new Error('entity_project_scope_mismatch');
+  }
+
+  private upsertAliases(entityId: string, entityType: string, aliases: string[], projectId: string, timestamp: number): void {
     const stmt = this.db.prepare(`
       INSERT OR IGNORE INTO entity_aliases (
-        alias_id, entity_id, alias_text, normalized_alias, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
+        alias_id, entity_id, project_id, alias_text, normalized_alias, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
 
     for (const alias of Array.from(new Set(aliases.map((item) => item.trim()).filter(Boolean)))) {
       stmt.run(
         `ealias-${randomUUID()}`,
         entityId,
+        projectId,
         alias,
         this.normalizeAlias(alias),
         timestamp,
         timestamp
       );
-      this.refreshAliasConflict(this.normalizeAlias(alias), entityType, timestamp);
+      this.refreshAliasConflict(this.normalizeAlias(alias), entityType, projectId, timestamp);
     }
   }
 
@@ -1076,62 +1174,69 @@ export class EntityStore {
     if (input.instanceMode === 'new_instance') return null;
 
     const projectId = typeof input.metadata?.projectId === 'string' ? String(input.metadata.projectId) : undefined;
+    const scopeSql = projectId === undefined ? '' : ` AND (json_extract(metadata_json,'$.projectId') = ? OR EXISTS (
+      SELECT 1 FROM entity_mentions em WHERE em.entity_id=entity_instances.instance_id AND COALESCE(em.project_id,'')=?
+    ))`;
+    const params: string[] = [input.canonicalName, input.type];
+    if (projectId !== undefined) params.push(projectId, projectId);
     const rows = this.db.prepare(`
       SELECT *
       FROM entity_instances
-      WHERE canonical_name = ? AND type = ?
+      WHERE canonical_name = ? AND type = ?${scopeSql}
       ORDER BY updated_at DESC, created_at DESC
       LIMIT 12
-    `).all(input.canonicalName, input.type) as any[];
-    const candidates = rows.map((row) => this.mapRow(row));
+    `).all(...params) as any[];
+    const allCandidates = rows.map((row) => this.mapRow(row));
+    const candidates = projectId === undefined
+      ? allCandidates
+      : allCandidates.filter((candidate) => candidate.metadata?.projectId === projectId
+        || this.listTimeline({ entityId: candidate.entityId, projectId, limit: 1 }).length > 0);
 
     if (input.instanceMode === 'canonical') return candidates[0] || null;
     if (input.createdFrom) {
       const exact = candidates.find((candidate) => candidate.createdFrom === input.createdFrom);
       if (exact) return exact;
     }
-    if (projectId) {
-      const inProject = candidates.find((candidate) => candidate.metadata?.projectId === projectId);
-      if (inProject) return inProject;
-      return null;
-    }
+    if (projectId !== undefined) return candidates[0] || null;
     return candidates[0] || null;
   }
 
-  private refreshAliasConflict(normalizedAlias: string, entityType: string, timestamp: number): void {
+  private refreshAliasConflict(normalizedAlias: string, entityType: string, projectId: string, timestamp: number): void {
     const rows = this.db.prepare(`
       SELECT DISTINCT ei.instance_id
       FROM entity_aliases ea
       JOIN entity_instances ei ON ei.instance_id = ea.entity_id
       WHERE ea.normalized_alias = ?
+        AND ea.project_id = ?
         AND ei.type = ?
         AND ei.status = 'active'
       ORDER BY ei.updated_at DESC
-    `).all(normalizedAlias, entityType) as Array<{ instance_id: string }>;
+    `).all(normalizedAlias, projectId, entityType) as Array<{ instance_id: string }>;
 
     const entityIds = rows.map((row) => row.instance_id);
     if (entityIds.length <= 1) {
       this.db.prepare(`
         UPDATE entity_alias_conflicts
         SET status = 'resolved', updated_at = ?
-        WHERE normalized_alias = ? AND entity_type = ?
-      `).run(timestamp, normalizedAlias, entityType);
+        WHERE project_id=? AND normalized_alias = ? AND entity_type = ?
+      `).run(timestamp, projectId, normalizedAlias, entityType);
       return;
     }
 
-    const policy = this.inferAliasConflictPolicy(entityIds);
+    const policy = this.inferAliasConflictPolicy(entityIds, projectId);
     const existing = this.db.prepare(`
       SELECT conflict_id, created_at
       FROM entity_alias_conflicts
-      WHERE normalized_alias = ? AND entity_type = ?
-    `).get(normalizedAlias, entityType) as { conflict_id: string; created_at: number } | null;
+      WHERE project_id=? AND normalized_alias = ? AND entity_type = ?
+    `).get(projectId, normalizedAlias, entityType) as { conflict_id: string; created_at: number } | null;
 
     this.db.prepare(`
       INSERT OR REPLACE INTO entity_alias_conflicts (
-        conflict_id, normalized_alias, entity_type, entity_ids_json, policy, status, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+        conflict_id, project_id, normalized_alias, entity_type, entity_ids_json, policy, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
     `).run(
       existing?.conflict_id || `econf-${randomUUID()}`,
+      projectId,
       normalizedAlias,
       entityType,
       JSON.stringify(entityIds),
@@ -1141,12 +1246,12 @@ export class EntityStore {
     );
   }
 
-  private inferAliasConflictPolicy(entityIds: string[]): EntityAliasConflictRecord['policy'] {
+  private inferAliasConflictPolicy(entityIds: string[], projectId: string): EntityAliasConflictRecord['policy'] {
     const projectIds = new Set<string>();
     for (const entityId of entityIds) {
-      const mentions = this.listTimeline({ entityId, limit: 8 });
+      const mentions = this.listTimeline({ entityId, projectId, limit: 8 });
       for (const mention of mentions) {
-        if (mention.projectId) projectIds.add(mention.projectId);
+        projectIds.add(mention.projectId ?? '');
       }
     }
 
@@ -1157,7 +1262,7 @@ export class EntityStore {
 
   private resolveRelativeReference(referenceText: string, type: string, options?: ResolveEntityReferenceOptions): EntityRecord | null {
     const explicitNameHint = this.extractRelativeNameHint(referenceText, type);
-    const recent = this.listByCreationOrder(type, 12)
+    const recent = this.listByCreationOrder(type, 12, options?.projectId)
       .filter((entity) => this.matchesResolutionOptions(entity.entityId, options))
       .filter((entity) => this.matchesExplicitRelativeHint(entity, explicitNameHint))
       .slice(0, 4);
@@ -1178,9 +1283,9 @@ export class EntityStore {
   }
 
   private matchesResolutionOptions(entityId: string, options?: ResolveEntityReferenceOptions): boolean {
-    if (!options?.projectId && !options?.beforeTime) return true;
-    const mentions = this.listTimeline({ entityId, limit: 12 });
-    if (options.projectId && !mentions.some((mention) => mention.projectId === options.projectId)) return false;
+    if (options?.projectId === undefined && !options?.beforeTime) return true;
+    const mentions = this.listTimeline({ entityId, projectId: options?.projectId, limit: 12 });
+    if (options?.projectId !== undefined && mentions.length === 0) return false;
     if (options.beforeTime && !mentions.some((mention) => mention.createdAt <= options.beforeTime!)) return false;
     return true;
   }
@@ -1195,8 +1300,8 @@ export class EntityStore {
     conflictPolicy?: EntityAliasConflictRecord['policy'],
     options?: ResolveEntityReferenceOptions
   ): EntityDisambiguationCandidate {
-    const mentions = this.listTimeline({ entityId: entity.entityId, limit: 12 });
-    const attributes = this.listAttributes(entity.entityId);
+    const mentions = this.listTimeline({ entityId: entity.entityId, projectId: options?.projectId, limit: 12 });
+    const attributes = this.listAttributes(entity.entityId, undefined, options?.projectId);
     const reasons: string[] = [];
     let score = 0.2;
 
@@ -1217,7 +1322,7 @@ export class EntityStore {
       score += latestMention.createdAt / 1e13;
       reasons.push('recent_mention');
     }
-    if (options?.projectId && mentions.some((mention) => mention.projectId === options.projectId)) {
+    if (options?.projectId !== undefined && mentions.length > 0) {
       score += 2.1;
       reasons.push('project_context_match');
     }
@@ -1230,11 +1335,11 @@ export class EntityStore {
       reasons.push('attribute_support');
     }
 
-    if (conflictPolicy === 'prefer_project_context' && options?.projectId && !mentions.some((mention) => mention.projectId === options.projectId)) {
+    if (conflictPolicy === 'prefer_project_context' && options?.projectId !== undefined && mentions.length === 0) {
       score -= 0.6;
       reasons.push('project_conflict_penalty');
     }
-    if (conflictPolicy === 'require_explicit_disambiguation' && !options?.projectId && mentions.length > 1) {
+    if (conflictPolicy === 'require_explicit_disambiguation' && options?.projectId === undefined && mentions.length > 1) {
       score -= 0.25;
       reasons.push('ambiguous_without_context');
     }
@@ -1270,6 +1375,10 @@ export class EntityStore {
     return false;
   }
 
+  private hasTable(table: string): boolean {
+    return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table));
+  }
+
   private mapRow(row: any): EntityRecord {
     return {
       entityId: row.entity_id || row.instance_id,
@@ -1282,6 +1391,18 @@ export class EntityStore {
       metadata: row.metadata_json ? JSON.parse(row.metadata_json) : undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at
+    };
+  }
+
+  private mapRowForProject(row: any, projectId?: string): EntityRecord {
+    const entity = this.mapRow(row);
+    if (projectId === undefined) return entity;
+    const aliases = this.db.prepare(`SELECT alias_text FROM entity_aliases WHERE entity_id=? AND project_id=? ORDER BY updated_at DESC`).all(entity.entityId, projectId) as Array<{ alias_text: string }>;
+    return {
+      ...entity,
+      ...(this.listProjectScopes(entity.entityId).length > 1 ? { canonicalName: aliases[0]?.alias_text ?? `entity-${entity.entityId.slice(-12)}` } : {}),
+      aliases: aliases.map((item) => item.alias_text),
+      ...(this.listProjectScopes(entity.entityId).length > 1 ? { metadata: {} } : {}),
     };
   }
 }

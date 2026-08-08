@@ -1,5 +1,5 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
-import type { MemoryAtlasCard, MemoryAtlasRelatedCard, MemoryAtlasRelaxationStep } from '../atlas/MemoryAtlasTypes.js';
+import type { MemoryAtlasCard, MemoryAtlasNode, MemoryAtlasRelatedCard, MemoryAtlasRelaxationStep } from '../atlas/MemoryAtlasTypes.js';
 import {
   memoryEventCharRange,
   memoryEventLabel,
@@ -19,6 +19,7 @@ import {
 } from './AgentRecallQueryCompiler.js';
 import { extractEntityCues } from '../utils/EntityCueExtractor.js';
 import { inferActionKinds } from '../utils/ActionKindRegistry.js';
+import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
 
 export type AgentTurnIngestMode =
   | 'immediate_compile'
@@ -45,6 +46,9 @@ export interface AgentTurnMemory {
   userText: string;
   assistantText?: string;
   timestamp?: number;
+  localDate?: string;
+  timeZone?: string;
+  projectTimeZone?: string;
   ingestMode?: AgentTurnIngestMode;
   metadata?: Record<string, unknown>;
 }
@@ -307,7 +311,7 @@ export class KernelAgentMemoryBackend {
   async rememberTurnWithResult(turn: AgentTurnMemory): Promise<AgentTurnMemoryResult> {
     const occurredAt = turn.timestamp ?? Date.now();
     const threadId = turn.threadId || turn.sessionId;
-    const turnSeq = turn.turnSeq ?? this.kernel.eventStore.getNextTurnSeq(threadId);
+    const turnSeq = turn.turnSeq ?? this.kernel.eventStore.getNextTurnSeq(threadId, turn.projectId ?? '');
     const turnId = turn.turnId || `${turn.agentId}:${turn.sessionId}:${turnSeq}:${occurredAt}`;
     const sourceId = `${turn.agentId}:${turn.sessionId}`;
     const mode = turn.ingestMode ?? 'immediate_compile';
@@ -322,6 +326,9 @@ export class KernelAgentMemoryBackend {
       content: turn.userText,
       eventOrdinal: 1,
       occurredAt,
+      localDate: turn.localDate,
+      timeZone: turn.timeZone,
+      projectTimeZone: turn.projectTimeZone,
       sourceId,
       metadata: this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
     });
@@ -337,6 +344,9 @@ export class KernelAgentMemoryBackend {
         content: turn.assistantText,
         eventOrdinal: 2,
         occurredAt,
+        localDate: turn.localDate,
+        timeZone: turn.timeZone,
+        projectTimeZone: turn.projectTimeZone,
         parentEventId: userEvent.eventId,
         prevEventId: userEvent.eventId,
         causalityType: 'replies_to',
@@ -553,28 +563,47 @@ export class KernelAgentMemoryBackend {
       intent: query.intent,
       anchorText: query.anchorText,
     });
-    if (queryPlan.intent === 'previous_session_summary') {
-      return this.recallPreviousSession(query, queryPlan);
-    }
-    if (queryPlan.intent === 'forensic_quote') {
-      return this.recallForensicQuote(query, queryPlan);
-    }
-    if (queryPlan.intent === 'historical_discussion' || queryPlan.intent === 'action_history') {
-      return this.recallHistoricalDiscussion(query, queryPlan);
-    }
-
     const limit = query.limit ?? 5;
     const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
     const allowsCompiled = laneAllowed(query.retrievalPolicy, 'compiled');
     const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
-    const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, limit) : [];
+    const earlyAtlasItems = query.projectId !== undefined && allowsGraph
+      ? this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource)
+      : [];
+    if (queryPlan.intent === 'previous_session_summary') {
+      return this.withAtlasItems(this.recallPreviousSession(query, queryPlan), earlyAtlasItems, limit);
+    }
+    if (queryPlan.intent === 'forensic_quote') {
+      return this.withAtlasItems(this.recallForensicQuote(query, queryPlan), earlyAtlasItems, limit);
+    }
+    if (queryPlan.intent === 'historical_discussion' || queryPlan.intent === 'action_history') {
+      return this.withAtlasItems(this.recallHistoricalDiscussion(query, queryPlan), earlyAtlasItems, limit);
+    }
     const retrievalLimit = Math.max(limit * 4, 24);
+    const multidimensionalRecall = query.projectId !== undefined && allowsGraph
+      ? this.kernel.recall(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone })
+      : undefined;
+    const atlasItems = allowsGraph
+      ? [
+        ...(multidimensionalRecall?.atlas?.cards ?? []).map((card) => this.toAgentRecallItemFromAtlasCard(card, query)),
+        ...(multidimensionalRecall?.atlas?.nodes ?? [])
+          .filter((node) => ['actor', 'event', 'task', 'object', 'location', 'state'].includes(node.nodeType))
+          .map((node) => this.toAgentRecallItemFromAtlasNode(node, query)),
+      ]
+        .filter((item): item is AgentRecallItem => Boolean(item))
+        .filter((item) => item.sourceType !== 'raw_ledger' || allowsRawSource)
+        .filter((item) => this.isAllowedAtlasCollection(item, query.collection))
+      : [];
+    const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, limit) : [];
     const result: MemoryKernelNavigationResult = allowsCompiled
       ? this.kernel.navigateMemory(queryPlan.primarySearchText, {
         projectId: query.projectId,
         limit: retrievalLimit,
         startTime: query.startTime,
         endTime: query.endTime,
+        now: query.now,
+        localDateNow: query.localDateNow,
+        timeZone: query.timeZone,
       })
       : {
         query: queryPlan.primarySearchText,
@@ -583,7 +612,7 @@ export class KernelAgentMemoryBackend {
         fallbackUsed: true,
         rawEvidence: [],
       };
-    const scopedItems = this.filterAgentEvidence(result.rawEvidence, query.agentId, query.collection, query.excludeSessionId)
+    const scopedItems = this.filterAgentEvidence([...result.rawEvidence, ...(allowsCompiled ? (multidimensionalRecall?.rawEvidence ?? []) : [])], query.agentId, query.collection, query.excludeSessionId)
       .slice(0, limit)
       .map((neuron) => this.toAgentRecallItem(neuron));
     const rawFallbackItems = allowsRawSource ? this.rawLedgerFallbackItemsForQuery(queryPlan, query, limit) : [];
@@ -596,7 +625,7 @@ export class KernelAgentMemoryBackend {
     };
     if (scopedItems.length > 0) {
       if (this.shouldPreferRawLedgerFallback(scopedItems, rawFallbackItems, queryPlan)) {
-        const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, scopedItems, limit), limit);
+        const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, this.mergeRecallItems(scopedItems, atlasItems, limit), limit), limit);
         return {
           recallMode: 'raw_ledger_fallback',
           items,
@@ -615,7 +644,7 @@ export class KernelAgentMemoryBackend {
           ),
         };
       }
-      const items = this.mergeRecallItems(graphItems, scopedItems, limit);
+      const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(scopedItems, atlasItems, limit), limit);
       return {
         recallMode: result.recallMode,
         items,
@@ -636,10 +665,13 @@ export class KernelAgentMemoryBackend {
     }
 
     const fallbackItems = allowsCompiled
-      ? this.filterAgentEvidence(this.kernel.recall(queryPlan.primarySearchText, {
+      ? this.filterAgentEvidence((multidimensionalRecall ?? this.kernel.recall(queryPlan.primarySearchText, {
         projectId: query.projectId,
         limit: retrievalLimit,
-      }).rawEvidence, query.agentId, query.collection, query.excludeSessionId)
+        now: query.now,
+        localDateNow: query.localDateNow,
+        timeZone: query.timeZone,
+      })).rawEvidence, query.agentId, query.collection, query.excludeSessionId)
         .slice(0, limit)
         .map((neuron) => this.toAgentRecallItem(neuron))
       : [];
@@ -649,7 +681,7 @@ export class KernelAgentMemoryBackend {
     };
     if (fallbackItems.length > 0) {
       if (this.shouldPreferRawLedgerFallback(fallbackItems, rawFallbackItems, queryPlan)) {
-        const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, fallbackItems, limit), limit);
+        const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, this.mergeRecallItems(fallbackItems, atlasItems, limit), limit), limit);
         return {
           recallMode: 'raw_ledger_fallback',
           items,
@@ -668,7 +700,7 @@ export class KernelAgentMemoryBackend {
           ),
         };
       }
-      const items = this.mergeRecallItems(graphItems, fallbackItems, limit);
+      const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(fallbackItems, atlasItems, limit), limit);
       return {
         recallMode: 'brain_recall_fallback',
         items,
@@ -688,7 +720,7 @@ export class KernelAgentMemoryBackend {
       };
     }
 
-    const items = this.mergeRecallItems(graphItems, rawFallbackItems, limit);
+    const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, atlasItems, limit), limit);
 
     return {
       recallMode: 'raw_ledger_fallback',
@@ -907,7 +939,10 @@ export class KernelAgentMemoryBackend {
         limit: Math.max(limit * 2, 6),
         includeEvidence: true,
         evidenceLimit: 2,
-        refresh: true,
+        now: query.now,
+        localDateNow: query.localDateNow,
+        timeZone: query.timeZone,
+        refresh: false,
         staleOk: true,
       } as any);
       const cards = (atlas.cards ?? []).slice(0, Math.max(limit * 2, 6));
@@ -938,27 +973,41 @@ export class KernelAgentMemoryBackend {
     relaxationTrace: MemoryAtlasRelaxationStep[];
   } {
     try {
-      const atlas = this.kernel.graphExplore(query.query, {
+      const recall = this.kernel.recall(query.query, { projectId: query.projectId, limit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
+      const atlas = recall.atlas;
+      const plannedCards = atlas?.cards ?? [];
+      const legacyAtlas = this.kernel.graphExplore(query.query, {
         projectId: query.projectId,
         limit,
         includeEvidence: true,
         evidenceLimit: 2,
-        refresh: true,
+        now: query.now,
+        localDateNow: query.localDateNow,
+        timeZone: query.timeZone,
+        refresh: false,
         staleOk: true,
       } as any);
-      const cards = (atlas.cards ?? []).slice(0, limit);
+      const cards = [...plannedCards, ...(legacyAtlas.cards ?? [])]
+        .filter((card, index, all) => all.findIndex((candidate) => candidate.canonicalId === card.canonicalId) === index)
+        .slice(0, limit);
+      if (cards.length === 0) return { items: [], cards: [], relatedButNotSelected: [], relaxationTrace: [] };
       const items = cards.map((card) => this.toAgentRecallItemFromAtlasCard(card, query)).filter((item): item is AgentRecallItem => Boolean(item));
       const relatedButNotSelected = cards.flatMap((card) => card.relatedButNotSelected ?? []).slice(0, 8);
-      return { items, cards, relatedButNotSelected, relaxationTrace: atlas.relaxationTrace ?? [] };
+      return { items, cards, relatedButNotSelected, relaxationTrace: [...(atlas?.relaxationTrace ?? []), ...(legacyAtlas.relaxationTrace ?? [])] };
     } catch {
       return { items: [], cards: [], relatedButNotSelected: [], relaxationTrace: [] };
     }
   }
 
   private toAgentRecallItemFromAtlasCard(card: MemoryAtlasCard, query: AgentRecallQuery): AgentRecallItem | null {
-    const eventId = card.sourceLocator?.eventId ?? card.evidenceEventIds[0];
-    const sourceContext = eventId ? this.toAgentSourceContext(eventId) : undefined;
+    const eventIds = [...new Set([card.sourceLocator?.eventId, ...card.evidenceEventIds].filter((id): id is string => Boolean(id)))];
+    const scopedAnchor = eventIds.map((id) => this.kernel.eventStore.getEvent(id)).find((event): event is MemoryEvent => Boolean(event && this.isAgentRawEvent(event, query.agentId) && this.isRawEventInRecallScope(event, query, query.intent)));
+    const eventId = scopedAnchor?.eventId;
+    if (!eventId || !scopedAnchor) return null;
+    const sourceContext = this.toAgentSourceContext(eventId, query);
     const anchorEvent = sourceContext?.event;
+    if (!scopedAnchor || !this.isAgentRawEvent(scopedAnchor, query.agentId) || !this.isRawEventInRecallScope(scopedAnchor, query, query.intent)) return null;
+    const allowRaw = laneAllowed(query.retrievalPolicy, 'raw_source');
     return {
       id: `facet:${card.canonicalId}`,
       text: [card.displayTitle, card.oneLineSummary].filter(Boolean).join(': '),
@@ -970,13 +1019,46 @@ export class KernelAgentMemoryBackend {
       matchedPaths: card.matchedPaths,
       tags: ['facet_graph', card.eventKind, card.issueType].filter((tag): tag is string => Boolean(tag)),
       source: 'memory_atlas',
-      sourceType: 'raw_ledger',
-      sourceAnchor: anchorEvent ? this.toAgentSourceAnchorFromContextEvent(anchorEvent) : eventId ? { eventId } : undefined,
-      sourceContext,
+      sourceType: card.origin === 'legacy_facet' ? 'raw_ledger' : 'compiled_memory',
+      sourceAnchor: allowRaw ? (anchorEvent ? this.toAgentSourceAnchorFromContextEvent(anchorEvent) : eventId ? { eventId } : undefined) : undefined,
+      sourceContext: allowRaw ? sourceContext : undefined,
       confidence: Math.min(1, 0.7 + card.matchedFacets.length * 0.08),
       whyMatched: card.whyMatched,
       canAnswerExactQuote: Boolean(sourceContext),
     };
+  }
+
+  private toAgentRecallItemFromAtlasNode(node: MemoryAtlasNode, query: AgentRecallQuery): AgentRecallItem | null {
+    const scopedEvidence = (node.evidence ?? [])
+      .map((evidence) => this.kernel.eventStore.getEvent(evidence.eventId))
+      .filter((event): event is MemoryEvent => Boolean(event))
+      .filter((event) => this.isAgentRawEvent(event, query.agentId) && this.isRawEventInRecallScope(event, query, query.intent));
+    const event = scopedEvidence[0];
+    const eventId = event?.eventId;
+    if (!event || !eventId) return null;
+    const allowRaw = laneAllowed(query.retrievalPolicy, 'raw_source');
+    return {
+      id: `atlas-node:${node.id}`,
+      text: [node.label, node.summary].filter(Boolean).join(': '),
+      projectId: query.projectId,
+      canonicalId: node.id,
+      displayTitle: node.label,
+      tags: ['atlas_node', node.nodeType],
+      source: 'memory_atlas',
+      sourceType: 'compiled_memory',
+      sourceAnchor: allowRaw ? this.toAgentSourceAnchor(event) : undefined,
+      sourceContext: allowRaw ? this.toAgentSourceContext(eventId, query) : undefined,
+      confidence: node.confidence,
+      whyMatched: `atlas_${node.nodeType}`,
+      canAnswerExactQuote: false,
+    };
+  }
+
+  private isAllowedAtlasCollection(item: AgentRecallItem, collection?: string): boolean {
+    const eventId = item.sourceAnchor?.eventId;
+    if (!eventId) return item.sourceType === 'compiled_memory' || item.sourceType === 'imported_summary' || !collection;
+    const event = this.kernel.eventStore.getEvent(eventId);
+    return event ? this.isAllowedRawEventCollection(event, collection) : !collection;
   }
 
   private recallForensicAnchor(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan, limit: number): AgentRecallItem[] {
@@ -1035,21 +1117,21 @@ export class KernelAgentMemoryBackend {
     if (!localDate) return [];
     const [year, month, day] = localDate.split('-').map(Number);
     const byLocalDate = this.kernel.eventStore.queryEvents(1, 1000, {
-      projectId: query.projectId ? [query.projectId] : undefined,
+      projectId: query.projectId !== undefined ? [query.projectId] : undefined,
       workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
     }).records.filter((event) => event.localDate === localDate).slice(0, limit);
     if (byLocalDate.length) return byLocalDate;
     const startTime = Date.UTC(year!, month! - 1, day!);
     const endTime = Date.UTC(year!, month! - 1, day! + 1);
     const byTime = this.kernel.eventStore.queryEvents(1, Math.max(1, Math.min(limit, 200)), {
-      projectId: query.projectId ? [query.projectId] : undefined,
+      projectId: query.projectId !== undefined ? [query.projectId] : undefined,
       workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
       startTime,
       endTime,
     }).records;
     if (byTime.length) return byTime;
     return this.kernel.eventStore.queryEvents(1, 1000, {
-      projectId: query.projectId ? [query.projectId] : undefined,
+      projectId: query.projectId !== undefined ? [query.projectId] : undefined,
       workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
     }).records.filter((event) => event.localDate === localDate).slice(0, limit);
   }
@@ -1197,9 +1279,15 @@ export class KernelAgentMemoryBackend {
   }
 
   private mergeRecallItems(primary: AgentRecallItem[], secondary: AgentRecallItem[], limit: number): AgentRecallItem[] {
+    const semanticAtlas = secondary.find((item) => item.source === 'memory_atlas' && (item.tags.includes('atlas_node') || item.tags.includes('facet_graph') || item.tags.includes('atlas_path')));
+    const hasSemanticAtlas = primary.some((item) => item.source === 'memory_atlas' && (item.tags.includes('atlas_node') || item.tags.includes('facet_graph') || item.tags.includes('atlas_path')));
+    const hasScopedPrimary = primary.some((item) => item.tags.some((tag) => tag.startsWith('agent:')));
+    const prioritizedPrimary = semanticAtlas && !hasSemanticAtlas && !hasScopedPrimary && primary.length >= limit
+      ? [...primary.slice(0, Math.max(0, limit - 1)), semanticAtlas]
+      : primary;
     const out: AgentRecallItem[] = [];
     const seen = new Set<string>();
-    for (const item of [...primary, ...secondary]) {
+    for (const item of [...prioritizedPrimary, ...secondary.filter((candidate) => candidate !== semanticAtlas)]) {
       const keys = [item.canonicalId, item.sourceAnchor?.eventId, item.id].filter((value): value is string => Boolean(value));
       if (keys.some((key) => seen.has(key))) continue;
       for (const key of keys) seen.add(key);
@@ -1207,6 +1295,23 @@ export class KernelAgentMemoryBackend {
       if (out.length >= limit) break;
     }
     return out;
+  }
+
+  private withAtlasItems(result: AgentRecallResult, atlasItems: AgentRecallItem[], limit: number): AgentRecallResult {
+    if (!atlasItems.length) return result;
+    return { ...result, items: this.mergeRecallItems(result.items, atlasItems, limit) };
+  }
+
+  private atlasItemsForAgentQuery(searchText: string, query: AgentRecallQuery, allowsRawSource: boolean): AgentRecallItem[] {
+    const recall = this.kernel.recall(searchText, { projectId: query.projectId, limit: Math.max((query.limit ?? 5) * 4, 24), includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
+    const cards = (recall.atlas?.cards ?? []).map((card) => this.toAgentRecallItemFromAtlasCard(card, query));
+    const nodes = (recall.atlas?.nodes ?? [])
+      .filter((node) => ['actor', 'event', 'task', 'object', 'location', 'state', 'project'].includes(node.nodeType))
+      .map((node) => this.toAgentRecallItemFromAtlasNode(node, query));
+    return [...cards, ...nodes]
+      .filter((item): item is AgentRecallItem => Boolean(item))
+      .filter((item) => item.sourceType !== 'raw_ledger' || allowsRawSource)
+      .filter((item) => this.isAllowedAtlasCollection(item, query.collection));
   }
 
   private mergeHistoricalRecallItems(
@@ -1235,6 +1340,9 @@ export class KernelAgentMemoryBackend {
         limit: retrievalLimit,
         startTime: query.startTime,
         endTime: query.endTime,
+        now: query.now,
+        localDateNow: query.localDateNow,
+        timeZone: query.timeZone,
       }).rawEvidence;
       const items = this.filterAgentEvidence(rawEvidence, query.agentId, query.collection, query.excludeSessionId)
         .map((neuron) => this.toAgentRecallItem(neuron));
@@ -1301,7 +1409,7 @@ export class KernelAgentMemoryBackend {
 
   private findPreviousSessionId(query: AgentRecallQuery): string | undefined {
     const page = this.kernel.eventStore.queryEvents(1, 1000, {
-      projectId: query.projectId ? [query.projectId] : undefined,
+      projectId: query.projectId !== undefined ? [query.projectId] : undefined,
       workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
       startTime: query.startTime,
       endTime: query.endTime,
@@ -1319,7 +1427,7 @@ export class KernelAgentMemoryBackend {
 
   private getSessionEvents(sessionId: string, query: AgentRecallQuery, limit: number): MemoryEvent[] {
     const page = this.kernel.eventStore.queryEvents(1, Math.max(limit, 1), {
-      projectId: query.projectId ? [query.projectId] : undefined,
+      projectId: query.projectId !== undefined ? [query.projectId] : undefined,
       workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
       sessionId: [sessionId],
       startTime: query.startTime,
@@ -1451,7 +1559,7 @@ export class KernelAgentMemoryBackend {
   }
 
   private isRawEventInRecallScope(event: MemoryEvent, query: AgentRecallQuery, effectiveIntent?: AgentRecallIntent): boolean {
-    if (query.projectId && event.projectId !== query.projectId) return false;
+    if (query.projectId !== undefined && (event.projectId ?? '') !== query.projectId) return false;
     if (query.workspaceId && event.workspaceId !== query.workspaceId) return false;
     if (query.threadId && event.threadId !== query.threadId) return false;
     if (!this.isAgentRawEvent(event, query.agentId)) return false;
@@ -1549,7 +1657,7 @@ export class KernelAgentMemoryBackend {
     return userRef?.eventId || refs.find((ref) => ref.eventId)?.eventId;
   }
 
-  private toAgentSourceContext(eventId: string): AgentRecallSourceContext | undefined {
+  private toAgentSourceContext(eventId: string, scope?: AgentRecallQuery): AgentRecallSourceContext | undefined {
     const beforeCount = 2;
     const afterCount = 2;
     const context = this.kernel.getEventContext(eventId, { before: beforeCount, after: afterCount });
@@ -1559,12 +1667,13 @@ export class KernelAgentMemoryBackend {
       after: afterCount,
     });
     const event = this.toAgentSourceContextEvent(context.event);
+    const inScope = (event: MemoryEvent) => !scope || (this.isAgentRawEvent(event, scope.agentId) && this.isRawEventInRecallScope(event, scope, scope.intent));
     return {
       event,
-      before: normalized.before.map((item) => this.toAgentSourceContextEvent(item)),
-      after: normalized.after.map((item) => this.toAgentSourceContextEvent(item)),
-      parent: context.parent ? this.toAgentSourceContextEvent(context.parent) : undefined,
-      children: context.children.map((item) => this.toAgentSourceContextEvent(item)),
+      before: normalized.before.filter(inScope).map((item) => this.toAgentSourceContextEvent(item)),
+      after: normalized.after.filter(inScope).map((item) => this.toAgentSourceContextEvent(item)),
+      parent: context.parent && inScope(context.parent) ? this.toAgentSourceContextEvent(context.parent) : undefined,
+      children: context.children.filter(inScope).map((item) => this.toAgentSourceContextEvent(item)),
       window: normalized.window,
       locator: {
         eventId: event.eventId,
@@ -1713,14 +1822,14 @@ export class KernelAgentMemoryBackend {
   private buildEntityCards(query: AgentRecallQuery): AgentRecallEntityCard[] {
     const cards = new Map<string, AgentRecallEntityCard>();
     for (const candidate of this.entityLookupCandidates(query.query)) {
-      const entity = this.kernel.entityStore.findByAlias(candidate);
+      const entity = this.kernel.entityStore.findByAlias(candidate, undefined, query.projectId);
       if (!entity || cards.has(entity.entityId)) continue;
       const mentions = this.kernel.entityStore.listTimeline({
         entityId: entity.entityId,
         projectId: query.projectId,
         limit: 6,
       });
-      const attributes = this.kernel.entityStore.listAttributes(entity.entityId).slice(0, 8);
+      const attributes = this.kernel.entityStore.listAttributes(entity.entityId, undefined, query.projectId).slice(0, 8);
       cards.set(entity.entityId, {
         entityId: entity.entityId,
         canonicalName: entity.canonicalName,
@@ -1752,7 +1861,7 @@ export class KernelAgentMemoryBackend {
     });
     const history = this.kernel.beliefStore.getBeliefHistoryForCanonicalKeys(
       beliefs.map((belief) => belief.canonicalKey),
-      { limitPerCanonical: 8 },
+      { projectId: query.projectId, limitPerCanonical: 8 },
     );
     return beliefs.map((belief) => {
       const alternatives = history.get(belief.canonicalKey) || [];
@@ -1813,7 +1922,9 @@ export class KernelAgentMemoryBackend {
   }
 
   private isAllowedRawEventCollection(event: MemoryEvent, collection: string | undefined): boolean {
-    const payload = event.payload as { metadata?: Record<string, unknown> };
+    const payload = event.payload && typeof event.payload === 'object'
+      ? event.payload as { metadata?: Record<string, unknown> }
+      : {};
     const tags = Array.isArray(payload.metadata?.tags)
       ? payload.metadata.tags.filter((tag): tag is string => typeof tag === 'string')
       : [];
@@ -1949,18 +2060,7 @@ function localDateCue(query: string, options: Pick<AgentRecallQuery, 'now' | 'lo
 function localYear(options: Pick<AgentRecallQuery, 'now' | 'localDateNow' | 'timeZone'>): number {
   const explicit = options.localDateNow?.match(/^(20\d{2})-\d{2}-\d{2}$/u)?.[1];
   if (explicit) return Number(explicit);
-  const now = options.now ?? Date.now();
-  try {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: options.timeZone || 'Asia/Tokyo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).formatToParts(new Date(now));
-    const year = parts.find((part) => part.type === 'year')?.value;
-    if (year) return Number(year);
-  } catch { /* fall back below */ }
-  return new Date(now).getUTCFullYear();
+  return Number(localDateFor(options.now ?? Date.now(), resolveTimeZone(options.timeZone)).slice(0, 4));
 }
 
 function padDatePart(value: number): string {

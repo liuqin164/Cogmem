@@ -164,8 +164,8 @@ export class SummaryStore {
     const record: SummaryRecord = {
       ...input,
       summaryId: input.summaryId || `sum-${randomUUID()}`,
-      createdAt: input.createdAt || now,
-      updatedAt: input.updatedAt || now
+      createdAt: input.createdAt ?? now,
+      updatedAt: input.updatedAt ?? now
     };
     this.db.prepare(`
       INSERT INTO deep_write_summaries (
@@ -175,11 +175,11 @@ export class SummaryStore {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.summaryId,
-      record.projectId || null,
+      record.projectId ?? null,
       record.sessionId || null,
       record.scope,
-      record.windowStart || null,
-      record.windowEnd || null,
+      record.windowStart ?? null,
+      record.windowEnd ?? null,
       record.text,
       record.confidence,
       record.status,
@@ -199,7 +199,7 @@ export class SummaryStore {
 
   listByProject(projectId: string, options?: { scope?: SummaryScope; limit?: number }): SummaryRecord[] {
     const params: Array<string | number> = [projectId];
-    let sql = `SELECT * FROM deep_write_summaries WHERE project_id = ?`;
+    let sql = `SELECT * FROM deep_write_summaries WHERE COALESCE(project_id,'') = ?`;
     if (options?.scope) {
       sql += ` AND scope = ?`;
       params.push(options.scope);
@@ -209,13 +209,13 @@ export class SummaryStore {
     return (this.db.prepare(sql).all(...params) as SummaryRow[]).map((row) => this.mapRow(row));
   }
 
-  listBySession(sessionId: string, options?: { limit?: number }): SummaryRecord[] {
+  listBySession(sessionId: string, projectId: string, options?: { limit?: number }): SummaryRecord[] {
     const rows = this.db.prepare(`
       SELECT * FROM deep_write_summaries
-      WHERE session_id = ?
+      WHERE session_id = ? AND COALESCE(project_id,'') = ?
       ORDER BY created_at DESC, summary_id DESC
       LIMIT ?
-    `).all(sessionId, options?.limit ?? 20) as SummaryRow[];
+    `).all(sessionId, projectId, options?.limit ?? 20) as SummaryRow[];
     return rows.map((row) => this.mapRow(row));
   }
 
@@ -231,8 +231,8 @@ export class SummaryStore {
       WHERE deep_write_summaries_fts MATCH ?
         AND s.status IN ('provisional', 'verified')
     `;
-    if (projectId) {
-      sql += ` AND (s.project_id = ? OR s.project_id IS NULL)`;
+    if (projectId !== undefined) {
+      sql += ` AND COALESCE(s.project_id, '') = ?`;
       params.push(projectId);
     }
     sql += ` ORDER BY s.confidence DESC, s.updated_at DESC LIMIT ?`;
@@ -260,10 +260,10 @@ export class SummaryStore {
     const rows = this.db.prepare(`
       SELECT * FROM deep_write_summaries
       WHERE status IN ('provisional', 'verified')
-        AND (? IS NULL OR project_id = ? OR project_id IS NULL)
+        AND (? IS NULL OR COALESCE(project_id, '') = ?)
       ORDER BY confidence DESC, updated_at DESC
       LIMIT 100
-    `).all(projectId || null, projectId || null) as SummaryRow[];
+    `).all(projectId === undefined ? null : projectId, projectId === undefined ? null : projectId) as SummaryRow[];
     return rows
       .map((row) => ({ row, score: tokens.filter((token) => row.text.toLowerCase().includes(token)).length }))
       .filter((item) => item.score > 0)
@@ -275,11 +275,11 @@ export class SummaryStore {
   private mapRow(row: SummaryRow): SummaryRecord {
     return {
       summaryId: row.summary_id,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       sessionId: row.session_id || undefined,
       scope: row.scope,
-      windowStart: row.window_start || undefined,
-      windowEnd: row.window_end || undefined,
+      windowStart: row.window_start ?? undefined,
+      windowEnd: row.window_end ?? undefined,
       text: row.text,
       confidence: row.confidence,
       status: row.status,

@@ -15,7 +15,12 @@ export type MemoryAtlasNodeType =
   | 'time'
   | 'event'
   | 'decision'
-  | 'correction';
+  | 'correction'
+  | 'actor'
+  | 'task'
+  | 'object'
+  | 'location'
+  | 'state';
 
 export interface MemoryAtlasEvidence {
   eventId: string;
@@ -60,7 +65,7 @@ export interface MemoryAtlasNode {
 }
 
 export interface MemoryAtlasMatchedFacet {
-  type: 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind';
+  type: 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind' | 'actor' | 'project' | 'event' | 'task' | 'state' | 'object' | 'location';
   value: string;
   label: string;
   nodeId: string;
@@ -82,6 +87,7 @@ export interface MemoryAtlasRelatedCard {
 }
 
 export interface MemoryAtlasCard {
+  origin?: 'legacy_facet' | 'atlas_v2';
   canonicalId: string;
   nodeType: MemoryAtlasNodeType;
   displayTitle: string;
@@ -203,10 +209,13 @@ export interface MemoryAtlasPathResult {
 
 export interface MemoryAtlasQueryOptions {
   projectId: string;
+  seedNodeIds?: string[];
   limit?: number;
   includeEvidence?: boolean;
   evidenceLimit?: number;
   now?: number;
+  localDateNow?: string;
+  timeZone?: string;
   refresh?: boolean;
   staleOk?: boolean;
 }

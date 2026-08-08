@@ -57,7 +57,7 @@ export interface PersistedPlanExecution extends PlanExecutionAnalysis {
 }
 export declare class PlanDslExecutor {
     static analyze(planDsl: unknown, context: PlanExecutionContext): PlanExecutionAnalysis;
-    static persistAnalysis(runtimeId: string, analysis: PlanExecutionAnalysis, store: PlanRuntimeStore): PersistedPlanExecution;
+    static persistAnalysis(projectId: string, runtimeId: string, analysis: PlanExecutionAnalysis, store: PlanRuntimeStore): PersistedPlanExecution;
     private static writeState;
     private static normalizeContext;
     private static hasArtifact;

@@ -1,5 +1,6 @@
 import Database from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 
 export type TimelineEntryType = 'milestone' | 'decision' | 'correction' | 'belief_version';
 
@@ -62,6 +63,11 @@ export class TemporalMemoryService {
   record(input: RecordTimelineEntryInput): TimelineEntryRecord {
     const title = input.title.trim();
     if (!title) throw new Error('timeline_title_required');
+    for (const eventId of input.evidenceEventIds) {
+      const evidence = this.db.prepare(`SELECT project_id FROM memory_events WHERE event_id=?`).get(eventId) as { project_id?: string | null } | null;
+      if (!evidence) throw new Error(`timeline_evidence_not_found:${eventId}`);
+      if (!matchesProjectScope(input.projectId, evidence.project_id)) throw new Error(`timeline_evidence_project_mismatch:${eventId}`);
+    }
     const now = Date.now();
     const occurredAt = input.occurredAt ?? now;
     const entryId = `timeline-${randomUUID()}`;
@@ -86,7 +92,7 @@ export class TemporalMemoryService {
   list(options: TimelineListOptions = {}): TimelineEntryRecord[] {
     const conditions: string[] = [];
     const params: Array<string | number> = [];
-    if (options.projectId) { conditions.push('project_id = ?'); params.push(options.projectId); }
+    if (options.projectId !== undefined) { conditions.push("COALESCE(project_id,'') = ?"); params.push(options.projectId); }
     if (options.canonicalKey) { conditions.push('canonical_key = ?'); params.push(options.canonicalKey.trim().toLowerCase()); }
     if (options.entityId) { conditions.push('entity_id = ?'); params.push(options.entityId); }
     if (options.startTime !== undefined) { conditions.push('occurred_at >= ?'); params.push(options.startTime); }

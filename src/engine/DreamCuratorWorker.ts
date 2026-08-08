@@ -12,6 +12,13 @@ import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeSemanticSummary, EpisodeType } from '../episode/EpisodeTypes.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import type { CorrectionResolver } from '../episode/CorrectionResolver.js';
+import type { MemoryFrameStore } from '../store/MemoryFrameStore.js';
+import { frameSourceFingerprint } from '../store/MemoryFrameStore.js';
+import { deterministicFrameFallback } from '../semantic/DeterministicFrameFallback.js';
+import type { StructuredSemanticProcessor } from '../semantic/StructuredSemanticProcessor.js';
+import { StructuredSemanticProcessor as StructuredSemanticProcessorImpl } from '../semantic/StructuredSemanticProcessor.js';
+import { MEMORY_FRAME_PROMPT_VERSION, MEMORY_FRAME_SYSTEM_PROMPT } from '../semantic/SemanticProcessorPrompt.js';
+import type { MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
 
 export interface DreamCuratorRunOptions {
   projectId?: string;
@@ -45,6 +52,9 @@ export interface DreamCuratorRunResult {
   maxGlobalSeq?: number;
   status: DreamBacklogStatus;
   candidates: DeepWriteCandidateRecord[];
+  frameIds?: string[];
+  semanticProcessorAvailable?: boolean;
+  semanticProcessorReason?: string;
 }
 
 export interface DreamCuratorWorkerDeps {
@@ -54,6 +64,8 @@ export interface DreamCuratorWorkerDeps {
   modelRegistry?: ModelRegistry;
   pipelineMetrics?: PipelineMetrics;
   correctionResolver?: CorrectionResolver;
+  memoryFrameStore?: MemoryFrameStore;
+  semanticProcessor?: StructuredSemanticProcessor;
 }
 
 interface DreamEvidence {
@@ -118,6 +130,74 @@ export class DreamCuratorWorker {
     }
 
     const now = options.now ?? Date.now();
+    const frameIds: string[] = [];
+    let semanticProcessorUnavailable = false;
+    let semanticProcessorReason: string | undefined;
+    if (options.sourceEpisodeId && this.deps.memoryFrameStore) {
+      const frameInput = {
+        projectId: options.projectId || events[0]?.projectId || '', episodeId: options.sourceEpisodeId,
+        episodeType: frameEpisodeKind(options.episodeType), events,
+      };
+      let frame: MemoryFrameV1 | undefined;
+      try {
+        // A rule-only registry has no semantic model. Use the injected local
+        // processor instead of parsing its guaranteed-empty text response.
+        const frameGenerator = this.resolveGenerateText(options);
+        const processor = frameGenerator
+          ? new StructuredSemanticProcessorImpl(async (input) => JSON.parse(await frameGenerator(MEMORY_FRAME_SYSTEM_PROMPT, JSON.stringify({
+            schemaVersion: 'memory_frame.v1', promptVersion: MEMORY_FRAME_PROMPT_VERSION,
+            projectId: input.projectId, episodeId: input.episodeId, episodeType: input.episodeType,
+            events: input.events.map((event) => ({ eventId: event.eventId, role: event.role, occurredAt: event.occurredAt, text: eventTextForMemory(event) })),
+          }))))
+          : this.deps.semanticProcessor;
+        if (!processor) {
+          semanticProcessorUnavailable = true;
+          semanticProcessorReason = 'semantic_processor_unavailable';
+        } else {
+          frame = await processor.process(frameInput);
+        }
+      } catch (error) {
+        semanticProcessorUnavailable = true;
+        semanticProcessorReason = 'semantic_processor_failed';
+        this.deps.pipelineMetrics?.recordNonFatal('memory_frame_processor_fallback', {
+          projectId: options.projectId,
+          message: error instanceof Error ? error.message : String(error),
+          details: { episodeId: options.sourceEpisodeId, source: 'structured_semantic_processor' },
+        });
+        // A provider failure is not a semantic result. Keep the Dream
+        // candidate/run outcome observable without persisting an
+        // unreviewable pseudo-success Frame.
+        frame = undefined;
+      }
+      if (semanticProcessorUnavailable) {
+        this.deps.pipelineMetrics?.recordNonFatal('semantic_processor_unavailable', { projectId: options.projectId, details: { episodeId: options.sourceEpisodeId } });
+      } else {
+      if (!frame) throw new Error('memory_frame_processor_no_output');
+      frame = {
+        ...frame,
+        frameId: `frame:${createHash('sha256').update(`${options.sourceEpisodeId}\0${events.map((event) => event.eventId).join('\0')}`).digest('hex').slice(0, 32)}`,
+        processor: { ...frame.processor, ...this.resolveProviderConfig(options), promptVersion: MEMORY_FRAME_PROMPT_VERSION, generatedAt: now },
+        sourceAuthority: frame.sourceAuthority === 'deterministic_fallback' ? 'deterministic_fallback' : 'processor',
+        needsReview: frame.needsReview || frame.sourceAuthority === 'deterministic_fallback',
+      };
+      if ((options.sourceEpisodeEventIds?.length ?? events.length) > events.length) {
+        frame = { ...frame, semanticCompleteness: 'minimal', needsReview: true, publishStatus: 'needs_confirmation' };
+      }
+      const savedFrame = this.deps.memoryFrameStore.save({
+        frame,
+        sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), options.sourceEpisodeId),
+        status: 'staged',
+        publishStatus: options.mode === 'shadow' || frame.needsReview
+          ? 'needs_confirmation'
+          : (frame.publishStatus ?? 'active'),
+        dreamJobLeaseId: options.dreamJobLeaseId,
+        leaseUntil: options.leaseUntil,
+        attemptGeneration: options.attemptGeneration,
+        now,
+      });
+      frameIds.push(savedFrame.frameId);
+      }
+    }
     const maxGlobalSeq = Math.max(...events.map((event) => event.globalSeq || 0));
     const dreamableEvents = events.filter((event) => this.isDreamableEvent(event));
     const allowedEvidence = new Set(options.sourceEpisodeEventIds || events.map((event) => event.eventId));
@@ -201,6 +281,9 @@ export class DreamCuratorWorker {
         ...candidate,
         status: candidateInputs[index]?.status ?? candidate.status,
       })),
+      frameIds,
+      semanticProcessorAvailable: !semanticProcessorUnavailable && providerConfig.provider !== 'rule_only',
+      semanticProcessorReason: semanticProcessorReason ?? (providerConfig.provider === 'rule_only' ? 'semantic_processor_unavailable' : undefined),
     };
   }
 
@@ -867,6 +950,11 @@ export class DreamCuratorWorker {
     const sessionIds = new Set(events.map((event) => event.sessionId).filter((id): id is string => Boolean(id)));
     return sessionIds.size === 1 ? [...sessionIds][0] : undefined;
   }
+}
+
+function frameEpisodeKind(value: string | undefined): 'discussion' | 'operation' | 'decision' | 'correction' | 'diagnostic' | 'planning' | 'status_update' | 'preference' | 'other' {
+  const allowed = new Set(['discussion', 'operation', 'decision', 'correction', 'diagnostic', 'planning', 'status_update', 'preference', 'other']);
+  return value && allowed.has(value) ? value as ReturnType<typeof frameEpisodeKind> : 'other';
 }
 
 function hasPairedConflictClaims(record: Record<string, unknown>): boolean {

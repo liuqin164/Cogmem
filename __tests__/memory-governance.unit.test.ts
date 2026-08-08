@@ -61,6 +61,14 @@ describe('memory governance foundation', () => {
     expect(result.issues.map((issue) => issue.code)).toContain('user_ownership_requires_user_evidence');
   });
 
+  test('requires plan, operation, and evidence to share one exact scope', () => {
+    const validator = new MemoryGovernanceValidator((eventId) => ({ eventId, projectId: '', role: 'user' }));
+    const operation = { ...plan().operations[0]!, projectId: '' };
+    expect(validator.validate(plan({ projectId: 'brain', operations: [operation] })).issues.map((issue) => issue.code)).toContain('operation_project_mismatch');
+    expect(validator.validate(plan({ projectId: '', operations: [{ ...operation, projectId: 'brain' }] })).issues.map((issue) => issue.code)).toContain('project_boundary_violation');
+    expect(validator.validate(plan({ projectId: '', operations: [operation] })).valid).toBe(true);
+  });
+
   test('executes once and rolls back operations and audit records together', () => {
     const db = new Database(':memory:');
     const store = new MemoryGovernanceStore(db);

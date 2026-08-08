@@ -110,7 +110,7 @@ export class BrainToolDispatcher {
                     if (!call.asset_id || typeof call.chunk_index !== 'number') {
                         return this.error(call.action, callId, 'get_file_context requires asset_id and chunk_index parameters', startedAt);
                     }
-                    const evidence = this.deps.fileChunkStore.listContext(call.asset_id, call.chunk_index, call.radius ?? 1);
+                    const evidence = this.deps.fileChunkStore.listContext(call.asset_id, call.chunk_index, call.radius ?? 1, context.projectId);
                     return {
                         toolName: call.action,
                         callId,

@@ -16,6 +16,8 @@ import type { PolicyExecutionRecord } from '../store/PolicyExecutionStore.js';
 import { ConditionDslEvaluator } from '../retrieval/ConditionDslEvaluator.js';
 import { PlanDslExecutor } from '../retrieval/PlanDslExecutor.js';
 import { PolicyRuntimeEvaluator } from '../retrieval/PolicyRuntimeEvaluator.js';
+import { projectQueryValue } from '../topology/ProjectScope.js';
+import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 
 export class BeliefStore {
   private static readonly SOURCE_TRUST: Record<SourceType, number> = {
@@ -45,6 +47,7 @@ export class BeliefStore {
       this.db = new Database(dbPath);
     }
     this.initializeSchema();
+    installRuntimeProvenanceGuards(this.db);
   }
 
   private initializeSchema(): void {
@@ -91,22 +94,25 @@ export class BeliefStore {
     `);
   }
 
-  findByCanonicalKey(canonicalKey: string): BeliefRecord[] {
+  findByCanonicalKey(canonicalKey: string, projectId?: string): BeliefRecord[] {
+    const queryProject = projectQueryValue(projectId);
     const rows = this.db.prepare(`
       SELECT * FROM beliefs
       WHERE canonical_key = ?
+        AND (? IS NULL OR COALESCE(project_id,'') = ?)
       ORDER BY valid_from DESC, created_at DESC
-    `).all(canonicalKey) as any[];
+    `).all(canonicalKey, queryProject, queryProject) as any[];
     return rows.map((row) => this.mapBelief(row));
   }
 
   countActive(projectId?: string): number {
+    const queryProject = projectQueryValue(projectId);
     const row = this.db.prepare(`
       SELECT COUNT(*) AS count
       FROM beliefs
       WHERE status = 'active'
-        AND (? IS NULL OR project_id = ?)
-    `).get(projectId || null, projectId || null) as { count: number };
+        AND (? IS NULL OR COALESCE(project_id, '') = ?)
+    `).get(queryProject, queryProject) as { count: number };
     return row.count;
   }
 
@@ -120,20 +126,21 @@ export class BeliefStore {
     }
   ): BeliefRecord[] {
     const statuses = options?.statuses ?? ['active', 'superseded', 'suspect', 'expired', 'revoked'];
+    const queryProject = projectQueryValue(options?.projectId);
     const rows = this.db.prepare(`
       SELECT *
       FROM beliefs
       WHERE valid_from >= ?
         AND valid_from < ?
-        AND (? IS NULL OR project_id = ?)
+        AND (? IS NULL OR COALESCE(project_id, '') = ?)
         AND status IN (${statuses.map(() => '?').join(', ')})
       ORDER BY valid_from DESC, updated_at DESC
       LIMIT ?
     `).all(
       startTime,
       endTime,
-      options?.projectId || null,
-      options?.projectId || null,
+      queryProject,
+      queryProject,
       ...statuses,
       options?.limit ?? 200
     ) as any[];
@@ -164,6 +171,7 @@ export class BeliefStore {
   }): BeliefRecord[] {
     const query = input.query.toLowerCase().trim();
     const atTime = input.atTime ?? Date.now();
+    const queryProject = projectQueryValue(input.projectId);
     const tokens = this.extractQueryTokens(query, input.entities, input.mustMatch, input.shouldMatch);
     const structuredTargets = this.extractStructuredTargets(query, input.intent, tokens, input.semantics);
     const rows = this.db.prepare(`
@@ -172,10 +180,10 @@ export class BeliefStore {
       WHERE status = 'active'
         AND valid_from <= ?
         AND (valid_to IS NULL OR valid_to > ?)
-        AND (? IS NULL OR project_id = ? OR scope = 'global')
+        AND (? IS NULL OR COALESCE(project_id, '') = ?)
       ORDER BY updated_at DESC, confidence DESC
       LIMIT 200
-    `).all(atTime, atTime, input.projectId || null, input.projectId || null) as any[];
+    `).all(atTime, atTime, queryProject, queryProject) as any[];
 
     const scored = rows
       .map((row) => this.mapBelief(row))
@@ -200,6 +208,7 @@ export class BeliefStore {
   getBeliefHistoryForCanonicalKeys(
     canonicalKeys: string[],
     options: {
+      projectId?: string;
       includeStatuses?: Array<'active' | 'superseded' | 'revoked' | 'suspect' | 'expired'>;
       limitPerCanonical?: number;
     } = {}
@@ -209,13 +218,15 @@ export class BeliefStore {
     const includeStatuses = options.includeStatuses ?? ['active', 'superseded', 'suspect', 'expired', 'revoked'];
     const keyPlaceholders = canonicalKeys.map(() => '?').join(', ');
     const statusPlaceholders = includeStatuses.map(() => '?').join(', ');
+    const queryProject = projectQueryValue(options.projectId);
     const rows = this.db.prepare(`
       SELECT *
       FROM beliefs
       WHERE canonical_key IN (${keyPlaceholders})
         AND status IN (${statusPlaceholders})
+        AND (? IS NULL OR COALESCE(project_id,'') = ?)
       ORDER BY updated_at DESC, valid_from DESC, created_at DESC
-    `).all(...canonicalKeys, ...includeStatuses) as any[];
+    `).all(...canonicalKeys, ...includeStatuses, queryProject, queryProject) as any[];
 
     const grouped = new Map<string, BeliefRecord[]>();
     for (const row of rows) {
@@ -229,22 +240,25 @@ export class BeliefStore {
     return grouped;
   }
 
-  getExecutionFeedbackNeuronSignals(records: PolicyExecutionRecord[]): Array<{
+  getExecutionFeedbackNeuronSignals(projectId: string, records: PolicyExecutionRecord[]): Array<{
     neuronId: string;
     matchedExecutions: number;
     executed: number;
     failed: number;
     latestUpdatedAt?: number;
   }> {
+    records = records.filter((record) => record.projectId === projectId);
     if (records.length === 0) return [];
 
     const rows = this.db.prepare(`
-      SELECT *
+      SELECT beliefs.*
       FROM beliefs
-      WHERE status = 'active'
-        AND source_neuron_id IS NOT NULL
+      JOIN neurons source ON source.id=beliefs.source_neuron_id AND source.is_deleted=0
+      WHERE beliefs.status = 'active'
+        AND COALESCE(beliefs.project_id,'') = ?
+        AND COALESCE(source.project_id,'') = ?
       ORDER BY updated_at DESC
-    `).all() as any[];
+    `).all(projectId, projectId) as any[];
 
     const signals = new Map<string, {
       neuronId: string;
@@ -281,15 +295,17 @@ export class BeliefStore {
     return Array.from(signals.values());
   }
 
-  applyExecutionFeedbackCalibration(records: PolicyExecutionRecord[], now: number = Date.now()): number {
+  applyExecutionFeedbackCalibration(projectId: string, records: PolicyExecutionRecord[], now: number = Date.now()): number {
+    records = records.filter((record) => record.projectId === projectId);
     if (records.length === 0) return 0;
 
     const rows = this.db.prepare(`
       SELECT *
       FROM beliefs
       WHERE status = 'active'
+        AND COALESCE(project_id,'') = ?
       ORDER BY updated_at DESC
-    `).all() as any[];
+    `).all(projectId) as any[];
 
     let updated = 0;
     for (const row of rows) {
@@ -378,7 +394,8 @@ export class BeliefStore {
     decision: BeliefRevisionDecision;
   } {
     const canonicalKey = this.toCanonicalKey(candidate.subject, candidate.predicate, candidate.scope);
-    const conflicts = this.findByCanonicalKey(canonicalKey).map((existing) => ({
+    const projectId = candidate.projectId ?? '';
+    const conflicts = this.findByCanonicalKey(canonicalKey, projectId).map((existing) => ({
       existing,
       incoming: candidate,
       reason: this.isSameBeliefValue(candidate.objectValue, existing.objectValue) ? 'same_value' : 'contradictory_value'
@@ -425,8 +442,8 @@ export class BeliefStore {
           this.db.prepare(`
             UPDATE beliefs
             SET status = 'superseded', superseded_by_belief_id = ?, valid_to = ?, updated_at = ?
-            WHERE id = ?
-          `).run(belief.id, belief.validFrom, now, supersededId);
+            WHERE id = ? AND COALESCE(project_id,'') = ?
+          `).run(belief.id, belief.validFrom, now, supersededId, projectId);
         }
       }
 
@@ -440,7 +457,7 @@ export class BeliefStore {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         belief.id,
-        belief.projectId || null,
+        belief.projectId ?? null,
         belief.scope,
         belief.subject,
         belief.predicate,
@@ -506,16 +523,25 @@ export class BeliefStore {
       ) VALUES (?, ?, ?, ?, ?, ?)
     `);
 
-    for (const record of records) {
-      stmt.run(
-        record.beliefId,
-        record.neuronId || null,
-        record.eventId || null,
-        record.evidenceType,
-        record.weight,
-        record.createdAt
-      );
-    }
+    this.db.transaction(() => {
+      for (const record of records) {
+        const belief = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM beliefs WHERE id=?`)
+          .get(record.beliefId) as { scope: string } | null;
+        if (!belief) throw new Error('belief_evidence_belief_not_found');
+        if (!record.neuronId && !record.eventId) throw new Error('belief_evidence_source_required');
+        if (record.neuronId) {
+          const neuron = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0`)
+            .get(record.neuronId) as { scope: string } | null;
+          if (!neuron || neuron.scope !== belief.scope) throw new Error('belief_evidence_project_scope_mismatch');
+        }
+        if (record.eventId) {
+          const event = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM memory_events WHERE event_id=?`)
+            .get(record.eventId) as { scope: string } | null;
+          if (!event || event.scope !== belief.scope) throw new Error('belief_evidence_project_scope_mismatch');
+        }
+        stmt.run(record.beliefId, record.neuronId || null, record.eventId || null, record.evidenceType, record.weight, record.createdAt);
+      }
+    })();
   }
 
   resolveConflict(
@@ -720,7 +746,7 @@ export class BeliefStore {
   private mapBelief(row: any): BeliefRecord {
     return {
       id: row.id,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       scope: row.scope,
       subject: row.subject,
       predicate: row.predicate,

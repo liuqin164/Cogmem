@@ -1,18 +1,23 @@
 import { MEMORY_ATLAS_PROJECTION_NAME, MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION } from '../store/MemoryAtlasStore.js';
-import { backfillAtlasDocuments, installAtlasProjectionDirtyTriggers } from '../migrations/0025_memory_atlas.js';
+import { backfillAtlasDocuments } from '../migrations/0025_memory_atlas.js';
+import { installAtlasProjectionDirtyTriggersV3 } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 import { ActionFrameExtractor } from './ActionFrameExtractor.js';
 import { GraphCurator } from './GraphCurator.js';
+import { MemoryFrameProjector } from './MemoryFrameProjector.js';
 export class MemoryAtlasIndexer {
     db;
     store;
     actions;
     curator;
-    constructor(db, eventStore, store) {
+    frameProjector;
+    constructor(db, eventStore, store, frameStore) {
         this.db = db;
         this.store = store;
-        installAtlasProjectionDirtyTriggers(db);
+        installAtlasProjectionDirtyTriggersV3(db);
         this.actions = new ActionFrameExtractor(db, eventStore, store);
         this.curator = new GraphCurator(db, eventStore, store);
+        if (frameStore)
+            this.frameProjector = new MemoryFrameProjector(db, frameStore, store, eventStore.getProjectTimeZone());
     }
     rebuild(options = {}) {
         const projectId = options.projectId;
@@ -22,44 +27,60 @@ export class MemoryAtlasIndexer {
         let reviewNeeded = 0;
         try {
             this.db.transaction(() => {
-                if (projectId) {
+                const ftsExists = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_atlas_fts'`).get());
+                if (ftsExists) {
+                    if (projectId !== undefined)
+                        this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=?)`).run(projectId, projectId);
+                    else
+                        this.db.exec(`DELETE FROM memory_atlas_fts WHERE node_id IN (SELECT node_id FROM memory_atlas_documents);`);
+                }
+                if (projectId !== undefined) {
                     this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time')`).run(projectId);
                 }
                 else {
                     this.db.exec(`DELETE FROM memory_atlas_documents WHERE node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time');`);
                 }
                 backfillAtlasDocuments(this.db, projectId);
-                const projects = projectId
-                    ? [projectId]
-                    : this.db.prepare(`SELECT DISTINCT project_id FROM memory_atlas_documents WHERE project_id<>''`).all().map((row) => row.project_id);
-                for (const id of projects)
-                    this.store.upsertDocument({
-                        id: `project:${id}`, projectId: id, nodeType: 'project', sourceId: id, label: id,
-                        confidence: 1, supportCount: this.store.countDocuments(id), status: 'active', evidenceEventIds: [],
-                        metadata: { projection: MEMORY_ATLAS_PROJECTION_NAME, projectionSchemaVersion: MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION },
-                    });
                 actions = this.actions.rebuild(projectId);
+                const projects = projectId !== undefined
+                    ? [projectId]
+                    : this.store.listKnownProjectIds();
                 for (const id of projects) {
                     const result = this.curator.rebuild(id);
                     curatedEpisodes += result.episodeCount;
                     facetEdges += result.facetEdgeCount;
                     reviewNeeded += result.reviewNeeded;
-                    this.store.aggregateFacetNodeSupport(id);
                 }
-                if (projectId) {
-                    this.store.markProjectionClean(projectId, { actions, curatedEpisodes, facetEdges, reviewNeeded });
+                if (this.frameProjector)
+                    for (const id of projects) {
+                        const result = this.frameProjector.rebuild(id, Date.now(), { canonicalDocumentsRebuilt: true });
+                        facetEdges += result.edges;
+                        reviewNeeded += result.needsReview;
+                    }
+                for (const id of projects)
+                    this.store.aggregateFacetNodeSupport(id);
+                for (const id of projects) {
+                    const nodeId = `project:${id}`;
+                    this.store.upsertDocument({
+                        id: nodeId, projectId: id, nodeType: 'project', sourceId: id, label: id || 'Projectless',
+                        confidence: 1, supportCount: this.store.countDocuments(id) + (this.store.getNodeIncludingInactive(nodeId, id) ? 0 : 1), status: 'active', evidenceEventIds: [],
+                        metadata: { projection: MEMORY_ATLAS_PROJECTION_NAME, projectionSchemaVersion: MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION },
+                    });
+                }
+                if (projectId !== undefined) {
+                    this.store.markProjectionClean(projectId, { actions, curatedEpisodes, facetEdges, reviewNeeded, projectionVersion: 'v2', frameSchemaVersion: 'memory_frame.v1' });
                 }
                 else {
                     for (const id of projects)
-                        this.store.markProjectionClean(id, { actions, curatedEpisodes, facetEdges, reviewNeeded });
+                        this.store.markProjectionClean(id, { actions, curatedEpisodes, facetEdges, reviewNeeded, projectionVersion: 'v2', frameSchemaVersion: 'memory_frame.v1' });
                 }
             })();
         }
         catch (error) {
-            this.store.markProjectionFailed(projectId || '__global__', error instanceof Error ? error.message : String(error));
+            this.store.markProjectionFailed(projectId ?? '__all__', error instanceof Error ? error.message : String(error));
             throw error;
         }
-        return { documents: this.store.countDocuments(projectId), actions, curatedEpisodes };
+        return { documents: this.store.countDocuments(projectId), actions, curatedEpisodes, facetEdges, reviewNeeded };
     }
     ensureFresh(options) {
         if (!this.store.projectionNeedsRefresh(options.projectId)) {
@@ -80,26 +101,17 @@ export class MemoryAtlasIndexer {
         const ids = Array.from(episodeIds);
         if (!ids.length)
             throw new Error('graph_reindex_target_not_found');
-        let result = { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
-        this.db.transaction(() => {
-            result = this.curator.rebuildEpisodes(options.projectId, ids);
-            this.store.markProjectionDirty(options.projectId, {
-                targetedReindex: true,
-                episodeIds: ids,
-                eventId: options.eventId,
-                curatedEpisodes: result.episodeCount,
-                facetEdges: result.facetEdgeCount,
-                reviewNeeded: result.reviewNeeded,
-                reason: 'targeted_reindex_requires_full_consistency_rebuild',
-            });
-        })();
+        // A Frame revision can change shared canonical nodes and edges. A partial
+        // rebuild would leave the project dirty while reporting it as refreshed,
+        // so reindex uses the same clean, transactional path as a full rebuild.
+        const rebuilt = this.rebuild({ projectId: options.projectId });
         return {
             projectId: options.projectId,
             episodeIds: ids,
             refreshed: true,
-            curatedEpisodes: result.episodeCount,
-            facetEdges: result.facetEdgeCount,
-            reviewNeeded: result.reviewNeeded,
+            curatedEpisodes: rebuilt.curatedEpisodes,
+            facetEdges: rebuilt.facetEdges,
+            reviewNeeded: rebuilt.reviewNeeded,
         };
     }
     ensureAllFresh() {

@@ -3,6 +3,7 @@
 // ============================================
 import { config } from '../utils/Config.js';
 import { ResonanceCore } from './ResonanceCore.js';
+import { projectScope } from '../topology/ProjectScope.js';
 export class TwoStagePulseRanker {
     vectorStore;
     topK;
@@ -48,7 +49,7 @@ export class TwoStagePulseRanker {
         return { type: 'range' };
     }
     convertSpatialConstraint(constraint) {
-        if (constraint.projectId) {
+        if (constraint.projectId !== undefined) {
             return { type: 'point', center: [0, 0], radius: 100 };
         }
         return { type: 'point', center: [0, 0], radius: 100 };
@@ -86,23 +87,23 @@ export class TwoStagePulseRanker {
     }
     applyHardConstraints(neurons, ir) {
         let filtered = neurons;
-        if (ir.temporal.start || ir.temporal.end) {
-            const start = ir.temporal.start || 0;
-            const end = ir.temporal.end || Date.now();
+        if (ir.temporal.start !== undefined || ir.temporal.end !== undefined) {
+            const start = ir.temporal.start ?? 0;
+            const end = ir.temporal.end ?? Date.now();
             filtered = filtered.filter(n => {
                 const ts = n.coordinates.T;
-                return ts >= start && ts <= end;
+                return ts >= start && ts < end;
             });
         }
         else if (ir.temporal.relative) {
             const range = this.resolveRelativeTime(ir.temporal.relative);
             filtered = filtered.filter(n => {
                 const ts = n.coordinates.T;
-                return ts >= range.start && ts <= range.end;
+                return ts >= range.start && ts < range.end;
             });
         }
-        if (ir.spatial.projectId) {
-            filtered = filtered.filter(n => n.metadata.projectId === ir.spatial.projectId);
+        if (ir.spatial.projectId !== undefined) {
+            filtered = filtered.filter(n => projectScope(n.metadata.projectId) === projectScope(ir.spatial.projectId));
         }
         if (ir.spatial.fileType) {
             filtered = filtered.filter(n => {

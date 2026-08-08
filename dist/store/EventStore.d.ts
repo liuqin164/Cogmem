@@ -5,6 +5,7 @@ export interface ProjectionCheckpoint {
     projectionName: string;
     lastEventId?: string;
     lastEventTime?: number;
+    lastGlobalSeq?: number;
     lastRebuildAt?: number;
     lastFullCount: number;
     lastChecksum?: string;
@@ -29,7 +30,9 @@ export interface AppendEventInput<TPayload = Record<string, unknown>> {
     threadId?: string;
     sessionId?: string;
     localDate?: string;
-    localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
+    localDateSource?: 'explicit' | 'legacy_unknown';
+    timeZone?: string;
+    projectTimeZone?: string;
     threadSeq?: number;
     turnId?: string;
     turnSeq?: number;
@@ -50,18 +53,35 @@ export interface AppendEventInput<TPayload = Record<string, unknown>> {
 }
 export declare class EventStore {
     private readonly encryptionProvider?;
+    private readonly projectTimeZone?;
+    private readonly validatedLocalDates;
     private db;
     private ownsDb;
-    constructor(dbPath?: string | Database, encryptionProvider?: EncryptionProvider | undefined);
+    constructor(dbPath?: string | Database, encryptionProvider?: EncryptionProvider | undefined, projectTimeZone?: string | undefined);
+    getProjectTimeZone(): string | undefined;
     private initializeSchema;
     private ensureCompatibilityColumns;
     append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>, retry?: number): MemoryEvent<TPayload>;
+    private appendAtomic;
+    private assertExplicitLocalDate;
     private upsertImportAnchor;
     getNextGlobalSeq(): number;
-    getNextEventVersion(streamId: string): number;
-    getNextThreadSeq(threadId: string): number;
-    getNextTurnSeq(threadId: string): number;
+    getNextEventVersion(streamId: string, projectId?: string): number;
+    getNextThreadSeq(threadId: string, projectId?: string): number;
+    getNextTurnSeq(threadId: string, projectId?: string): number;
+    private nextSequence;
+    private advanceSequence;
+    private seedSequenceCounters;
     getEventsAfter(lastEventTime?: number): MemoryEvent[];
+    getEventsAfterGlobalSeq(lastGlobalSeq?: number, throughGlobalSeq?: number): MemoryEvent[];
+    getEventsByGlobalSeqPage(options: {
+        afterGlobalSeq?: number;
+        throughGlobalSeq: number;
+        eventTypes?: string[];
+        projectId?: string;
+        limit?: number;
+    }): MemoryEvent[];
+    getLatestGlobalSeq(): number;
     findImportedEventAnchor(projectId: string, sourceId: string, importAnchor: string): MemoryEvent | null;
     getLatestEvent(): MemoryEvent | null;
     listRawEventsAfterGlobalSeq(options?: {
@@ -72,7 +92,7 @@ export declare class EventStore {
         afterGlobalSeq?: number;
         limit?: number;
     }): MemoryEvent[];
-    getEventsByStreamId(streamId: string): MemoryEvent[];
+    getEventsByStreamId(streamId: string, projectId?: string): MemoryEvent[];
     queryEvents(page?: number, pageSize?: number, filters?: {
         streamId?: string[];
         streamType?: StreamType[];
@@ -111,8 +131,10 @@ export declare class EventStore {
         endTime?: number;
         limit?: number;
     }): MemoryEvent[];
-    getChildEvents(parentEventId: string): MemoryEvent[];
+    getChildEvents(parentEventId: string, projectId?: string): MemoryEvent[];
     updateNextEventId(eventId: string, nextEventId: string | undefined): void;
+    private getEventInScope;
+    private assertLinkedEventScopes;
     getEventCount(): number;
     getProjectionCheckpoint(projectionName: string): ProjectionCheckpoint | null;
     upsertProjectionCheckpoint(checkpoint: ProjectionCheckpoint): void;

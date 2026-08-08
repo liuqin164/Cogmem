@@ -1,6 +1,7 @@
 import type { DreamCuratorWorker } from '../engine/DreamCuratorWorker.js';
 import type { EpisodeStore } from '../episode/EpisodeStore.js';
 import type { DeepWriteCandidateStore } from '../store/DeepWriteCandidateStore.js';
+import type { MemoryFrameStore } from '../store/MemoryFrameStore.js';
 export type DreamTickMode = 'auto' | 'micro' | 'normal' | 'deep';
 export type SelectedDreamMode = 'none' | 'micro' | 'normal' | 'deep';
 export interface DreamTickOptions {
@@ -40,12 +41,16 @@ export interface DreamTickResult {
         failureCategory: string;
         retryAfter?: number;
     }>;
+    semanticProcessorAvailable: boolean;
+    semanticProcessorUnavailableCount: number;
+    semanticProcessorFailedCount: number;
 }
 export declare class DreamScheduler {
     private readonly episodeStore;
     private readonly curator;
     private readonly candidateStore;
-    constructor(episodeStore: EpisodeStore, curator: DreamCuratorWorker, candidateStore: DeepWriteCandidateStore);
+    private readonly frameStore?;
+    constructor(episodeStore: EpisodeStore, curator: DreamCuratorWorker, candidateStore: DeepWriteCandidateStore, frameStore?: MemoryFrameStore | undefined);
     tick(options?: DreamTickOptions): Promise<DreamTickResult>;
     private recordRun;
 }

@@ -22,6 +22,7 @@ export class SnapshotExporter {
         const db = new Database(dbPath, { readonly: true });
         try {
             db.exec(`VACUUM INTO '${tempPath.replace(/'/g, "''")}'`);
+            this.removeForgottenRows(tempPath);
             const dbBytes = readFileSync(tempPath);
             const checksum = createHash('sha256').update(dbBytes).digest('hex');
             const header = {
@@ -47,6 +48,27 @@ export class SnapshotExporter {
         finally {
             db.close();
             rmSync(tempPath, { force: true });
+        }
+    }
+    removeForgottenRows(dbPath) {
+        const snapshotDb = new Database(dbPath);
+        try {
+            snapshotDb.exec(`PRAGMA secure_delete = ON`);
+            snapshotDb.transaction(() => {
+                snapshotDb.exec(`CREATE TEMP TABLE forgotten_snapshot_neurons AS SELECT id FROM neurons WHERE is_deleted <> 0`);
+                snapshotDb.exec(`DELETE FROM neurons_fts WHERE id IN (SELECT id FROM forgotten_snapshot_neurons)`);
+                snapshotDb.exec(`DELETE FROM synapses WHERE source_id IN (SELECT id FROM forgotten_snapshot_neurons) OR target_id IN (SELECT id FROM forgotten_snapshot_neurons)`);
+                snapshotDb.exec(`DELETE FROM neurons WHERE id IN (SELECT id FROM forgotten_snapshot_neurons)`);
+                snapshotDb.exec(`DROP TABLE forgotten_snapshot_neurons`);
+            })();
+            snapshotDb.exec(`VACUUM`);
+        }
+        catch (error) {
+            if (!(error instanceof Error) || !/no such table: neurons/i.test(error.message))
+                throw error;
+        }
+        finally {
+            snapshotDb.close();
         }
     }
     readSchemaVersion(db) {

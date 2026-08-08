@@ -1,3 +1,4 @@
+import { projectScope } from '../topology/ProjectScope.js';
 function asRecord(value) {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value
@@ -33,21 +34,6 @@ function riskOf(record) {
 }
 function evidenceArray(candidate) {
     return Array.isArray(candidate.evidence) ? candidate.evidence : [];
-}
-function firstEvidenceNeuronId(candidate) {
-    for (const item of evidenceArray(candidate)) {
-        if (typeof item === 'string' && item.trim())
-            return item.trim();
-        const record = asRecord(item);
-        const id = stringField(record, ['neuronId', 'neuron_id', 'id', 'sourceNeuronId', 'eventId']);
-        if (id)
-            return id;
-        const sourceAnchor = asRecord(record.sourceAnchor);
-        const anchorId = stringField(sourceAnchor, ['eventId', 'id']);
-        if (anchorId)
-            return anchorId;
-    }
-    return undefined;
 }
 function hasExplicitUserSource(record) {
     const source = sourceOf(record);
@@ -118,17 +104,6 @@ function promotedPreferenceContent(type, content) {
         source: stringField(content, ['source']) || 'deep_write_preference_candidate',
     };
 }
-function sourceNeuronIds(candidate) {
-    return evidenceArray(candidate)
-        .map((item) => {
-        if (typeof item === 'string')
-            return item;
-        const record = asRecord(item);
-        return stringField(record, ['neuronId', 'neuron_id', 'id', 'sourceNeuronId', 'sourceId', 'eventId'])
-            || stringField(asRecord(record.sourceAnchor), ['eventId', 'id']);
-    })
-        .filter((item) => Boolean(item));
-}
 export class DeepWritePromotionPolicy {
     deps;
     constructor(deps) {
@@ -142,7 +117,7 @@ export class DeepWritePromotionPolicy {
         return candidates.map((candidate) => this.atomicEvaluate(candidate));
     }
     promotePending(limit = 100, options = {}) {
-        const candidates = options.projectId
+        const candidates = options.projectId !== undefined
             ? this.deps.candidateStore.listCandidates({ statuses: ['candidate'], projectId: options.projectId, limit })
             : this.deps.candidateStore.listCandidatesByStatus(['candidate'], { limit });
         return candidates.map((candidate) => this.atomicEvaluate(candidate));
@@ -170,6 +145,23 @@ export class DeepWritePromotionPolicy {
             return this.keep(candidate, `status_${candidate.status}_not_promotable`);
         }
         const content = asRecord(candidate.content);
+        const run = this.deps.candidateStore.getRun(candidate.runId);
+        if (!run)
+            return this.mark(candidate, 'rejected', { outcome: 'reject', reason: 'promotion_run_missing' });
+        const claimedProject = stringField(content, ['projectId']);
+        if (claimedProject !== undefined && claimedProject !== projectScope(run.projectId)) {
+            return this.mark(candidate, 'needs_confirmation', {
+                outcome: 'needs_confirmation',
+                reason: 'candidate_project_scope_mismatch'
+            });
+        }
+        const provenance = this.resolveProvenance(candidate);
+        if (provenance.neuronIds.length === 0 && provenance.eventIds.length === 0) {
+            return this.mark(candidate, 'needs_confirmation', {
+                outcome: 'needs_confirmation',
+                reason: 'evidence_provenance_unresolved'
+            });
+        }
         if (evidenceArray(candidate).length === 0) {
             return this.mark(candidate, 'rejected', { outcome: 'reject', reason: 'missing_evidence' });
         }
@@ -267,7 +259,8 @@ export class DeepWritePromotionPolicy {
     promoteFact(candidate, content) {
         if (!this.deps.factStore)
             return this.keep(candidate, 'fact_store_unavailable');
-        const neuronId = firstEvidenceNeuronId(candidate);
+        const provenance = this.resolveProvenance(candidate);
+        const neuronId = provenance.neuronIds[0];
         const subject = stringField(content, ['subject', 'entity', 'topic']);
         const predicateFamily = stringField(content, ['predicateFamily', 'predicate', 'relation', 'kind']) || 'deep_write_fact';
         const object = stringField(content, ['object', 'objectValue', 'value', 'predicateValue', 'statement']);
@@ -318,9 +311,9 @@ export class DeepWritePromotionPolicy {
                 reason: 'summary_requires_user_turn_evidence'
             });
         }
-        const neuronId = firstEvidenceNeuronId(candidate);
+        const provenance = this.resolveProvenance(candidate);
         const summary = stringField(content, ['summary', 'text', 'statement', 'content']);
-        if (!neuronId || !summary) {
+        if (!summary) {
             return this.mark(candidate, 'needs_confirmation', {
                 outcome: 'needs_confirmation',
                 reason: 'summary_missing_required_fields'
@@ -328,7 +321,7 @@ export class DeepWritePromotionPolicy {
         }
         const scope = stringField(content, ['scope']);
         const record = this.deps.summaryStore.insertSummary({
-            projectId: stringField(content, ['projectId']),
+            projectId: provenance.projectId,
             sessionId: stringField(content, ['sessionId']),
             scope: scope && ['turn_window', 'session', 'day', 'project'].includes(scope) ? scope : 'turn_window',
             windowStart: numberField(content, ['windowStart', 'startTime', 'validFrom']),
@@ -336,7 +329,7 @@ export class DeepWritePromotionPolicy {
             text: summary,
             confidence: Math.min(candidate.confidence, 0.9),
             status: 'provisional',
-            sourceNeuronIds: sourceNeuronIds(candidate),
+            sourceNeuronIds: provenance.neuronIds,
             deepWriteRunId: candidate.runId,
             deepWriteCandidateId: candidate.candidateId,
             createdAt: candidate.createdAt,
@@ -380,8 +373,9 @@ export class DeepWritePromotionPolicy {
         }
         const fromName = stringField(content, ['from', 'source', 'subject', 'cause', 'entityA', 'left']);
         const toName = stringField(content, ['to', 'target', 'object', 'effect', 'entityB', 'right']);
-        const fromEntity = this.resolveEntity(fromName, stringField(content, ['fromType', 'sourceType', 'subjectType', 'causeType']));
-        const toEntity = this.resolveEntity(toName, stringField(content, ['toType', 'targetType', 'objectType', 'effectType']));
+        const projectId = this.deps.candidateStore.getRun(candidate.runId)?.projectId;
+        const fromEntity = this.resolveEntity(fromName, stringField(content, ['fromType', 'sourceType', 'subjectType', 'causeType']), projectId);
+        const toEntity = this.resolveEntity(toName, stringField(content, ['toType', 'targetType', 'objectType', 'effectType']), projectId);
         if (!fromEntity || !toEntity) {
             return this.mark(candidate, 'needs_confirmation', {
                 outcome: 'needs_confirmation',
@@ -418,30 +412,32 @@ export class DeepWritePromotionPolicy {
             targetId: edge.edgeRecordId
         });
     }
-    resolveEntity(name, type) {
+    resolveEntity(name, type, projectId) {
         if (!name || !this.deps.entityStore)
             return undefined;
-        return this.deps.entityStore.findByCanonicalName(name, type)
-            || this.deps.entityStore.findByAlias(name, type)
-            || this.deps.entityStore.findByCanonicalName(name)
-            || this.deps.entityStore.findByAlias(name)
+        return this.deps.entityStore.findByCanonicalName(name, type, projectId)
+            || this.deps.entityStore.findByAlias(name, type, projectId)
+            || this.deps.entityStore.findByCanonicalName(name, undefined, projectId)
+            || this.deps.entityStore.findByAlias(name, undefined, projectId)
             || undefined;
     }
     promotePreference(candidate, content) {
         if (!this.deps.beliefStore)
             return this.keep(candidate, 'belief_store_unavailable');
-        const neuronId = firstEvidenceNeuronId(candidate);
+        const provenance = this.resolveProvenance(candidate);
+        const neuronId = provenance.neuronIds[0];
+        const eventId = provenance.eventIds[0];
         const subject = stringField(content, ['subject', 'owner', 'user']) || 'user';
         const predicate = stringField(content, ['predicate', 'preference', 'kind']) || 'preference';
         const value = stringField(content, ['object', 'objectValue', 'value', 'preferenceValue', 'statement', 'summary', 'text']);
-        if (!neuronId || !value) {
+        if ((!neuronId && !eventId) || !value) {
             return this.mark(candidate, 'needs_confirmation', {
                 outcome: 'needs_confirmation',
                 reason: 'preference_missing_required_fields'
             });
         }
         const beliefCandidate = {
-            projectId: stringField(content, ['projectId']),
+            projectId: provenance.projectId,
             scope: 'project',
             subject,
             predicate,
@@ -453,6 +449,7 @@ export class DeepWritePromotionPolicy {
             confidence: candidate.confidence,
             trustScore: Math.max(0.55, candidate.confidence),
             sourceNeuronId: neuronId,
+            sourceEventId: eventId,
             sourceType: 'user_input',
             validityKind: durabilityOf(content).includes('temporary') ? 'time_range' : 'open',
             validFrom: candidate.createdAt,
@@ -493,15 +490,17 @@ export class DeepWritePromotionPolicy {
         const aliases = Array.isArray(content.aliases)
             ? content.aliases.filter((value) => typeof value === 'string')
             : [];
+        const provenance = this.resolveProvenance(candidate);
         const entity = this.deps.entityStore.upsertEntity({
             canonicalName: name,
             type,
             aliases,
             status: 'active',
-            createdFrom: firstEvidenceNeuronId(candidate),
+            createdFrom: provenance.neuronIds[0],
             createdAt: candidate.createdAt,
             metadata: {
                 source: 'deep_write',
+                projectId: provenance.projectId,
                 rawMention: stringField(content, ['rawMention', 'mention']) || name,
                 answerDisplayName: stringField(content, ['displayName']) || name,
                 deep_write_run_id: candidate.runId,
@@ -523,6 +522,53 @@ export class DeepWritePromotionPolicy {
             targetType: candidate.promotionTargetType,
             targetId: candidate.promotionTargetId
         };
+    }
+    resolveProvenance(candidate) {
+        const run = this.deps.candidateStore.getRun(candidate.runId);
+        if (!run)
+            return { projectId: '', neuronIds: [], eventIds: [] };
+        const projectId = projectScope(run.projectId);
+        const db = this.deps.candidateStore.getDatabase();
+        const hasNeurons = Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='neurons'`).get());
+        const hasEvents = Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_events'`).get());
+        const neuronIds = new Set();
+        const eventIds = new Set();
+        const addNeuron = (id) => {
+            if (!id)
+                return;
+            if (!hasNeurons)
+                return;
+            const row = db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0`)
+                .get(id);
+            if (row?.scope === projectId)
+                neuronIds.add(id);
+        };
+        const addEvent = (id) => {
+            if (!id)
+                return;
+            if (!hasEvents)
+                return;
+            const row = db.prepare(`SELECT COALESCE(project_id,'') AS scope,source_neuron_id FROM memory_events WHERE event_id=?`)
+                .get(id);
+            if (!row || row.scope !== projectId)
+                return;
+            eventIds.add(id);
+            addNeuron(row.source_neuron_id || undefined);
+        };
+        for (const id of run.sourceNeuronIds)
+            addNeuron(id);
+        for (const item of evidenceArray(candidate)) {
+            if (typeof item === 'string') {
+                addNeuron(item);
+                addEvent(item);
+                continue;
+            }
+            const record = asRecord(item);
+            addNeuron(stringField(record, ['neuronId', 'neuron_id', 'sourceNeuronId']));
+            addEvent(stringField(record, ['eventId']));
+            addEvent(stringField(asRecord(record.sourceAnchor), ['eventId']));
+        }
+        return { projectId, neuronIds: [...neuronIds], eventIds: [...eventIds] };
     }
     mark(candidate, status, decision) {
         this.deps.candidateStore.updateCandidateStatus(candidate.candidateId, status, {

@@ -19,7 +19,7 @@ test('migration 0028 creates only boundary decision audit metadata and is idempo
     migration_0022.up(db);
     migration_0023.up(db);
     migration_0024.up(db);
-    const store = new EpisodeStore(db, undefined, { initializeSchemaForTests: false });
+    const store = new EpisodeStore(db, (eventId) => ({ eventId, projectId: 'brain' } as never), { initializeSchemaForTests: false });
     const episode = store.createEpisode({
       projectId: 'brain', sessionId: 's1', episodeType: 'discussion', importance: 0.4,
       eventId: 'evt-before', occurredAt: 1,

@@ -123,7 +123,7 @@ export class EpisodeBoundaryPolicy {
 
   evaluate(input: {
     active?: { eventCount: number; startedAt?: number; updatedAt?: number; localDates?: string[]; lastTrustedLocalDate?: string };
-    primaryEvent: Pick<MemoryEvent, 'role' | 'occurredAt' | 'localDate' | 'payload'>;
+    primaryEvent: Pick<MemoryEvent, 'role' | 'occurredAt' | 'localDate' | 'localDateSource' | 'payload'>;
     imported?: boolean;
   }): EpisodeBoundaryGuardResult {
     const warnings: EpisodeBoundaryWarning[] = [];
@@ -222,7 +222,7 @@ export function isTrustedLocalDate(value: string | undefined): value is string {
 }
 
 export function resolveTrustedLocalDate(
-  event: { occurredAt?: number; localDate?: string; localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown'; payload?: unknown } | undefined,
+  event: { occurredAt?: number; localDate?: string; localDateSource?: 'explicit' | 'generated_explicit_timezone' | 'generated_project_timezone' | 'generated_host_timezone' | 'generated_utc_fallback' | 'generated_utc' | 'legacy_unknown'; payload?: unknown } | undefined,
   timezone?: string,
 ): { date?: string; warning?: EpisodeBoundaryWarning } {
   if (!event) return { warning: { code: 'trusted_local_date_unavailable', message: 'No trusted local date source was available.' } };
@@ -232,15 +232,15 @@ export function resolveTrustedLocalDate(
   const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
   const legacyMetadataSource = metadata?.localDateSource === 'event_store_utc_default' ? 'generated_utc' : metadata?.localDateSource;
   const localDateSource = event.localDateSource ?? legacyMetadataSource ?? (event.localDate ? 'explicit' : undefined);
-  if (event.localDate && localDateSource === 'explicit') return { date: event.localDate };
+  if (event.localDate && (localDateSource === 'explicit' || localDateSource === 'generated_explicit_timezone' || localDateSource === 'generated_project_timezone' || localDateSource === 'generated_host_timezone')) return { date: event.localDate };
   if (event.localDate && localDateSource === 'legacy_unknown') {
     return { warning: { code: 'legacy_unknown_local_date_source', message: 'Legacy local date source is not trusted for boundary decisions.' } };
   }
   if (timezone && typeof event.occurredAt === 'number' && Number.isFinite(event.occurredAt)) {
     const utcDate = new Date(event.occurredAt).toISOString().slice(0, 10);
-    if (!event.localDate || (localDateSource === 'generated_utc' && event.localDate === utcDate)) return { date: localDateInTimezone(event.occurredAt, timezone) };
+    if (!event.localDate || localDateSource === 'generated_utc' || localDateSource === 'generated_utc_fallback') return { date: localDateInTimezone(event.occurredAt, timezone) };
   }
-  if (event.localDate && localDateSource === 'generated_utc' && isTrustedLocalDate(event.localDate)) return { date: event.localDate };
+  if (event.localDate && (localDateSource === 'generated_utc' || localDateSource === 'generated_utc_fallback') && isTrustedLocalDate(event.localDate)) return { date: event.localDate };
   return { warning: { code: 'trusted_local_date_unavailable', message: 'No trusted local date source was available.' } };
 }
 
@@ -258,7 +258,7 @@ function localDateInTimezone(occurredAt: number, timezone: string): string {
 }
 
 function trustedLocalDate(
-  event: Pick<MemoryEvent, 'occurredAt' | 'localDate'>,
+  event: Pick<MemoryEvent, 'occurredAt' | 'localDate' | 'localDateSource'>,
   timezone: string | undefined,
   warnings: EpisodeBoundaryWarning[],
 ): string | undefined {

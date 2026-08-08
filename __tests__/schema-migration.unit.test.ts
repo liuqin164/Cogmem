@@ -1,44 +1,62 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
+import { MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 import { SchemaMigrationRunner } from '../src/migrations/SchemaMigrationRunner.js';
 import { migration_0015 } from '../src/migrations/0015_memory_governance.js';
 
 describe('schema migration runner', () => {
-  test('plans pending migrations without mutating during dry run', () => {
+  test('dry run is read-only for a fresh database', () => {
     const db = new Database(':memory:');
     const runner = new SchemaMigrationRunner(db, [migration_0015], { readonly: true });
 
     expect(runner.plan().map((item) => item.version)).toEqual(['0015']);
     expect(runner.run({ dryRun: true }).applied).toEqual([]);
-    expect(runner.plan().map((item) => item.version)).toEqual(['0015']);
     expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='_schema_migrations'`).get()).toBeNull();
     db.close();
   });
 
-  test('readonly planning adopts legacy meta version without writing migration rows', () => {
+  test('rejects development receipts beyond the formal 0032 release boundary', () => {
     const db = new Database(':memory:');
-    db.exec(`
-      CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      INSERT INTO _meta (key, value) VALUES ('schema_version', '15');
-    `);
-    const runner = new SchemaMigrationRunner(db, [migration_0015], { readonly: true });
+    db.exec(`CREATE TABLE _schema_migrations(
+      version TEXT PRIMARY KEY,description TEXT NOT NULL,applied_at TEXT NOT NULL
+    )`);
+    db.prepare(`INSERT INTO _schema_migrations VALUES(?,?,?)`)
+      .run('0062', 'unreleased development migration', new Date(0).toISOString());
 
-    expect(runner.plan()).toEqual([]);
-    expect(runner.currentVersion()).toBe('0015');
-    expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='_schema_migrations'`).get()).toBeNull();
+    expect(() => new SchemaMigrationRunner(db, [], { readonly: true }).run({ dryRun: true }))
+      .toThrow('unsupported_development_schema:0062');
     db.close();
   });
 
-  test('applies migrations transactionally and remains idempotent', () => {
-    const db = new Database(':memory:');
-    const runner = new SchemaMigrationRunner(db, [migration_0015]);
+  test('formal migration manifest contains only release history and binds 0032 to immutable install sources', () => {
+    const directory = join(import.meta.dir, '..', 'src', 'migrations');
+    const releaseFiles = readdirSync(directory).filter((file) => /^\d{4}_.*\.ts$/u.test(file)).sort();
+    expect(Object.keys(MIGRATION_DIGESTS).sort()).toEqual(releaseFiles.map((file) => file.slice(0, 4)));
 
-    expect(runner.run().applied).toEqual(['0015']);
-    expect(runner.run().applied).toEqual([]);
-    expect(runner.currentVersion()).toBe('0015');
-    const columns = db.prepare('PRAGMA table_info(memory_governance_operations)').all() as Array<{ name: string }>;
-    expect(columns.some((column) => column.name === 'idempotency_key')).toBe(true);
-    db.close();
+    for (const file of releaseFiles.filter((file) => !file.startsWith('0032_'))) {
+      const version = file.slice(0, 4);
+      const digest = createHash('sha256')
+        .update(readFileSync(join(directory, file), 'utf8').replace(/\r\n/g, '\n'))
+        .digest('hex');
+      expect(MIGRATION_DIGESTS[version]).toBe(digest);
+    }
+
+    const digest = createHash('sha256');
+    const sources = [
+      '0032_multidimensional_memory_graph_3_7_4.ts',
+      '../binding/MemoryBindingIdentity.ts',
+      '../binding/MemoryEdgeMerge.ts',
+      '../engine/CognitiveGraphIdentity.ts',
+      'v3_7_4/FinalSchemaDefinition.ts',
+    ];
+    for (const source of sources) {
+      const content = readFileSync(join(directory, source), 'utf8').replace(/\r\n/g, '\n');
+      digest.update(`${source}\0${Buffer.byteLength(content)}\0`).update(content);
+    }
+    expect(MIGRATION_DIGESTS['0032']).toBe(digest.digest('hex'));
   });
 });

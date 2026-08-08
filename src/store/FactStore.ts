@@ -38,9 +38,16 @@ export interface EventRecord {
 
 export class FactStore {
   private db: Database;
+  private readonly ownsDb: boolean;
 
-  constructor(dbPath: string = ':memory:', private readonly encryptionProvider?: EncryptionProvider) {
-    this.db = new Database(dbPath);
+  constructor(dbOrPath: Database | string = ':memory:', private readonly encryptionProvider?: EncryptionProvider) {
+    if (typeof dbOrPath === 'string') {
+      this.db = new Database(dbOrPath);
+      this.ownsDb = true;
+    } else {
+      this.db = dbOrPath;
+      this.ownsDb = false;
+    }
     this.initializeSchema();
   }
 
@@ -220,6 +227,7 @@ export class FactStore {
     options?: {
       predicateFamilies?: string[];
       limit?: number;
+      projectId?: string;
     }
   ): FactRecord[] {
     if (entityIds.length === 0) return [];
@@ -227,6 +235,10 @@ export class FactStore {
     const limit = options?.limit ?? 50;
     const entityPlaceholders = entityIds.map(() => '?').join(', ');
     const predicateFamilies = options?.predicateFamilies || [];
+    const scopeSql = options?.projectId === undefined ? '' : ` AND EXISTS (
+      SELECT 1 FROM neurons n WHERE n.id=facts.neuron_id AND n.is_deleted=0 AND COALESCE(n.project_id,'')=?
+    )`;
+    const scopeParams = options?.projectId === undefined ? [] : [options.projectId];
 
     const rows = predicateFamilies.length > 0
       ? this.db.prepare(`
@@ -234,17 +246,19 @@ export class FactStore {
           FROM facts
           WHERE entity_id IN (${entityPlaceholders})
             AND status IN ('provisional', 'provisional_enriched', 'verified')
+            ${scopeSql}
             AND predicate_family IN (${predicateFamilies.map(() => '?').join(', ')})
           ORDER BY valid_from DESC, fact_id DESC
           LIMIT ?
-        `).all(...entityIds, ...predicateFamilies, limit)
+        `).all(...entityIds, ...scopeParams, ...predicateFamilies, limit)
       : this.db.prepare(`
       SELECT *
       FROM facts
       WHERE entity_id IN (${entityPlaceholders}) AND status IN ('provisional', 'provisional_enriched', 'verified')
+          ${scopeSql}
           ORDER BY valid_from DESC, fact_id DESC
           LIMIT ?
-        `).all(...entityIds, limit);
+        `).all(...entityIds, ...scopeParams, limit);
 
     return (rows as any[]).map((row) => this.mapFact(row));
   }
@@ -264,7 +278,7 @@ export class FactStore {
     return rows.map((row) => row.neuron_id);
   }
 
-  listEventsByNeuronIds(neuronIds: string[], limit: number = 50): EventRecord[] {
+  listEventsByNeuronIds(neuronIds: string[], limit: number = 50, projectId?: string): EventRecord[] {
     if (neuronIds.length === 0) return [];
 
     const placeholders = neuronIds.map(() => '?').join(', ');
@@ -272,9 +286,10 @@ export class FactStore {
       SELECT *
       FROM compiled_events
       WHERE neuron_id IN (${placeholders})
+        ${projectId === undefined ? '' : `AND EXISTS (SELECT 1 FROM neurons n WHERE n.id=compiled_events.neuron_id AND n.is_deleted=0 AND COALESCE(n.project_id,'')=?)`}
       ORDER BY valid_from DESC, event_id DESC
       LIMIT ?
-    `).all(...neuronIds, limit) as any[];
+    `).all(...neuronIds, ...(projectId === undefined ? [] : [projectId]), limit) as any[];
 
     return rows.map((row) => this.mapEvent(row));
   }
@@ -311,23 +326,30 @@ export class FactStore {
     options?: {
       statuses?: FactRecord['status'][];
       limit?: number;
+      projectId?: string;
     }
   ): FactRecord[] {
     const statuses = options?.statuses || [];
     const params: Array<string | number> = [startTime, endTime];
     let sql = `
-      SELECT *
-      FROM facts
-      WHERE valid_from >= ?
-        AND valid_from < ?
+      SELECT f.*
+      FROM facts f
+      JOIN neurons n ON n.id=f.neuron_id AND n.is_deleted=0
+      WHERE f.valid_from >= ?
+        AND f.valid_from < ?
     `;
 
+    if (options?.projectId !== undefined) {
+      sql += ` AND COALESCE(n.project_id,'') = ?`;
+      params.push(options.projectId);
+    }
+
     if (statuses.length > 0) {
-      sql += ` AND status IN (${statuses.map(() => '?').join(', ')})`;
+      sql += ` AND f.status IN (${statuses.map(() => '?').join(', ')})`;
       params.push(...statuses);
     }
 
-    sql += ` ORDER BY valid_from DESC, fact_id DESC LIMIT ?`;
+    sql += ` ORDER BY f.valid_from DESC, f.fact_id DESC LIMIT ?`;
     params.push(options?.limit ?? 500);
     const rows = this.db.prepare(sql).all(...params) as any[];
     return rows.map((row) => this.mapFact(row));
@@ -339,23 +361,30 @@ export class FactStore {
     options?: {
       statuses?: EventRecord['status'][];
       limit?: number;
+      projectId?: string;
     }
   ): EventRecord[] {
     const statuses = options?.statuses || [];
     const params: Array<string | number> = [startTime, endTime];
     let sql = `
-      SELECT *
-      FROM compiled_events
-      WHERE valid_from >= ?
-        AND valid_from < ?
+      SELECT e.*
+      FROM compiled_events e
+      JOIN neurons n ON n.id=e.neuron_id AND n.is_deleted=0
+      WHERE e.valid_from >= ?
+        AND e.valid_from < ?
     `;
 
+    if (options?.projectId !== undefined) {
+      sql += ` AND COALESCE(n.project_id,'') = ?`;
+      params.push(options.projectId);
+    }
+
     if (statuses.length > 0) {
-      sql += ` AND status IN (${statuses.map(() => '?').join(', ')})`;
+      sql += ` AND e.status IN (${statuses.map(() => '?').join(', ')})`;
       params.push(...statuses);
     }
 
-    sql += ` ORDER BY valid_from DESC, event_id DESC LIMIT ?`;
+    sql += ` ORDER BY e.valid_from DESC, e.event_id DESC LIMIT ?`;
     params.push(options?.limit ?? 500);
     const rows = this.db.prepare(sql).all(...params) as any[];
     return rows.map((row) => this.mapEvent(row));
@@ -453,7 +482,7 @@ export class FactStore {
   }
 
   close(): void {
-    this.db.close();
+    if (this.ownsDb) this.db.close();
   }
 
   private mapFact(row: any): FactRecord {

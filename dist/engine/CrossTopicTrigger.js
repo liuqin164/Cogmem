@@ -1,3 +1,4 @@
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 export class CrossTopicTrigger {
     memoryGraph;
     options;
@@ -11,7 +12,7 @@ export class CrossTopicTrigger {
         const minDistinctTopics = this.options.minDistinctTopics ?? 3;
         const cooldownMs = this.options.cooldownMs ?? 48 * 60 * 60 * 1000;
         const semantic = this.memoryGraph.getAllNeurons()
-            .filter((neuron) => neuron.metadata.projectId === projectId)
+            .filter((neuron) => matchesProjectScope(projectId, neuron.metadata.projectId))
             .filter((neuron) => neuron.metadata.type === 'semantic_consolidation')
             .sort((a, b) => (b.metadata.createdAt || 0) - (a.metadata.createdAt || 0));
         const topics = Array.from(new Set(semantic.map((neuron) => neuron.metadata.topicPath || topicFromTags(neuron.metadata.tags || [])).filter((topic) => Boolean(topic))));

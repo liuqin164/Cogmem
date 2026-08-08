@@ -1,4 +1,5 @@
 import { isRecallableMemoryEvidence } from './RecallGovernance.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 export class VectorCandidateFilter {
     rules;
     constructor(rules = []) {
@@ -20,9 +21,9 @@ class MemoryGraphVectorFilterRule {
 export class WorkspaceFilter extends MemoryGraphVectorFilterRule {
     name = 'workspace';
     filter(neuronIds, context) {
-        if (!context.projectId)
+        if (context.projectId === undefined)
             return neuronIds;
-        return neuronIds.filter((id) => this.neuron(id)?.metadata.projectId === context.projectId);
+        return neuronIds.filter((id) => matchesProjectScope(context.projectId, this.neuron(id)?.metadata.projectId));
     }
 }
 export class TopicFilter extends MemoryGraphVectorFilterRule {

@@ -1,4 +1,5 @@
 import type { MemoryGraph } from '../core/MemoryGraph.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 
 export interface OrphanCleanerOptions {
   orphanAgeMs?: number;
@@ -15,7 +16,7 @@ export class OrphanCleaner {
     const cutoff = Date.now() - (this.options.orphanAgeMs ?? 72 * 60 * 60 * 1000);
     const batchSize = this.options.batchSize ?? 200;
     const candidates = this.memoryGraph.getAllNeurons()
-      .filter((neuron) => neuron.metadata.projectId === projectId)
+      .filter((neuron) => matchesProjectScope(projectId, neuron.metadata.projectId))
       .filter((neuron) => neuron.metadata.status === 'active')
       .filter((neuron) => (neuron.metadata.createdAt || 0) < cutoff)
       .filter((neuron) => neuron.metadata.importanceLevel === 'low' || neuron.metadata.importanceLevel === 'normal' || !neuron.metadata.importanceLevel)

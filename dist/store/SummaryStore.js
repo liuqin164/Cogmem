@@ -104,8 +104,8 @@ export class SummaryStore {
         const record = {
             ...input,
             summaryId: input.summaryId || `sum-${randomUUID()}`,
-            createdAt: input.createdAt || now,
-            updatedAt: input.updatedAt || now
+            createdAt: input.createdAt ?? now,
+            updatedAt: input.updatedAt ?? now
         };
         this.db.prepare(`
       INSERT INTO deep_write_summaries (
@@ -113,7 +113,7 @@ export class SummaryStore {
         text, confidence, status, source_neuron_ids_json, deep_write_run_id,
         deep_write_candidate_id, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(record.summaryId, record.projectId || null, record.sessionId || null, record.scope, record.windowStart || null, record.windowEnd || null, record.text, record.confidence, record.status, JSON.stringify(record.sourceNeuronIds), record.deepWriteRunId || null, record.deepWriteCandidateId || null, record.createdAt, record.updatedAt);
+    `).run(record.summaryId, record.projectId ?? null, record.sessionId || null, record.scope, record.windowStart ?? null, record.windowEnd ?? null, record.text, record.confidence, record.status, JSON.stringify(record.sourceNeuronIds), record.deepWriteRunId || null, record.deepWriteCandidateId || null, record.createdAt, record.updatedAt);
         return record;
     }
     getById(id) {
@@ -122,7 +122,7 @@ export class SummaryStore {
     }
     listByProject(projectId, options) {
         const params = [projectId];
-        let sql = `SELECT * FROM deep_write_summaries WHERE project_id = ?`;
+        let sql = `SELECT * FROM deep_write_summaries WHERE COALESCE(project_id,'') = ?`;
         if (options?.scope) {
             sql += ` AND scope = ?`;
             params.push(options.scope);
@@ -131,13 +131,13 @@ export class SummaryStore {
         params.push(options?.limit ?? 20);
         return this.db.prepare(sql).all(...params).map((row) => this.mapRow(row));
     }
-    listBySession(sessionId, options) {
+    listBySession(sessionId, projectId, options) {
         const rows = this.db.prepare(`
       SELECT * FROM deep_write_summaries
-      WHERE session_id = ?
+      WHERE session_id = ? AND COALESCE(project_id,'') = ?
       ORDER BY created_at DESC, summary_id DESC
       LIMIT ?
-    `).all(sessionId, options?.limit ?? 20);
+    `).all(sessionId, projectId, options?.limit ?? 20);
         return rows.map((row) => this.mapRow(row));
     }
     findRelevant(query, projectId, limit = 3) {
@@ -153,8 +153,8 @@ export class SummaryStore {
       WHERE deep_write_summaries_fts MATCH ?
         AND s.status IN ('provisional', 'verified')
     `;
-        if (projectId) {
-            sql += ` AND (s.project_id = ? OR s.project_id IS NULL)`;
+        if (projectId !== undefined) {
+            sql += ` AND COALESCE(s.project_id, '') = ?`;
             params.push(projectId);
         }
         sql += ` ORDER BY s.confidence DESC, s.updated_at DESC LIMIT ?`;
@@ -181,10 +181,10 @@ export class SummaryStore {
         const rows = this.db.prepare(`
       SELECT * FROM deep_write_summaries
       WHERE status IN ('provisional', 'verified')
-        AND (? IS NULL OR project_id = ? OR project_id IS NULL)
+        AND (? IS NULL OR COALESCE(project_id, '') = ?)
       ORDER BY confidence DESC, updated_at DESC
       LIMIT 100
-    `).all(projectId || null, projectId || null);
+    `).all(projectId === undefined ? null : projectId, projectId === undefined ? null : projectId);
         return rows
             .map((row) => ({ row, score: tokens.filter((token) => row.text.toLowerCase().includes(token)).length }))
             .filter((item) => item.score > 0)
@@ -195,11 +195,11 @@ export class SummaryStore {
     mapRow(row) {
         return {
             summaryId: row.summary_id,
-            projectId: row.project_id || undefined,
+            projectId: row.project_id == null ? undefined : String(row.project_id),
             sessionId: row.session_id || undefined,
             scope: row.scope,
-            windowStart: row.window_start || undefined,
-            windowEnd: row.window_end || undefined,
+            windowStart: row.window_start ?? undefined,
+            windowEnd: row.window_end ?? undefined,
             text: row.text,
             confidence: row.confidence,
             status: row.status,

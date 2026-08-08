@@ -1,5 +1,7 @@
 import Database from 'bun:sqlite';
 import { existsSync } from 'node:fs';
+import { dreamLedgerProjectKey } from './DreamLedgerStore.js';
+import { projectScope } from '../topology/ProjectScope.js';
 /**
  * A query-only operational view. It deliberately does not initialize or migrate
  * schema, so status/candidate inspection can run beside an MCP process without
@@ -24,8 +26,8 @@ export class MemoryInspectionStore {
             : this.countRawEvents(scope.projectId, dreamState.lastDreamedGlobalSeq);
         const undreamedRawCount = Math.max(0, rawLedgerCount - dreamedRawCount);
         const queue = this.candidateQueue(scope.projectId);
-        const vectorCount = this.countTable('vector_index');
-        const liveEmbeddings = this.countTable('neuron_embeddings');
+        const vectorCount = this.countVectors(scope.projectId);
+        const liveEmbeddings = this.countEmbeddings(scope.projectId);
         const episodeDream = this.episodeDream(scope.projectId);
         const dreamBacklog = {
             projectId: scope.projectId,
@@ -57,6 +59,8 @@ export class MemoryInspectionStore {
             episodeDream,
             dreamCandidateQueue: queue,
             activeBeliefs: this.countBeliefs(scope.projectId),
+            policyAuditOutbox: this.policyAuditOutbox(scope.projectId),
+            runtimeEventOutbox: this.runtimeEventOutbox(scope.projectId),
         };
     }
     listCandidates(options) {
@@ -64,9 +68,9 @@ export class MemoryInspectionStore {
             return [];
         const conditions = ['c.status = ?'];
         const params = [options.status];
-        if (options.projectId) {
-            conditions.push('r.project_id = ?');
-            params.push(options.projectId);
+        if (options.projectId !== undefined) {
+            conditions.push("COALESCE(r.project_id, '') = ?");
+            params.push(projectScope(options.projectId));
         }
         params.push(Math.max(1, Math.min(options.limit, 5000)));
         const rows = this.db.prepare(`
@@ -108,6 +112,24 @@ export class MemoryInspectionStore {
             return 0;
         return Number(this.db.prepare(`SELECT COUNT(*) AS count FROM "${name}"`).get()?.count || 0);
     }
+    countVectors(projectId) {
+        if (!this.tableExists('vector_index'))
+            return 0;
+        if (projectId === undefined || !this.tableExists('neurons'))
+            return this.countTable('vector_index');
+        return Number(this.db.prepare(`SELECT COUNT(*) AS count FROM vector_index v JOIN neurons n ON n.id=v.neuron_id AND n.is_deleted=0 WHERE COALESCE(n.project_id,'')=?`)
+            .get(projectScope(projectId))?.count ?? 0);
+    }
+    countEmbeddings(projectId) {
+        if (!this.tableExists('neuron_embeddings'))
+            return 0;
+        if (projectId === undefined)
+            return this.countTable('neuron_embeddings');
+        if (!this.tableExists('neurons'))
+            return 0;
+        return Number(this.db.prepare(`SELECT COUNT(*) AS count FROM neuron_embeddings e JOIN neurons n ON n.id=e.neuron_id AND n.is_deleted=0 WHERE COALESCE(n.project_id,'')=?`)
+            .get(projectScope(projectId))?.count ?? 0);
+    }
     countScopedEvents(scope) {
         if (!this.tableExists('memory_events'))
             return 0;
@@ -117,10 +139,10 @@ export class MemoryInspectionStore {
             ['project_id', scope.projectId], ['workspace_id', scope.workspaceId],
             ['thread_id', scope.threadId], ['session_id', scope.sessionId],
         ]) {
-            if (!value)
+            if (value === undefined)
                 continue;
-            conditions.push(`${column} = ?`);
-            params.push(value);
+            conditions.push(`COALESCE(${column}, '') = ?`);
+            params.push(projectScope(value));
         }
         const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
         return Number(this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events ${where}`).get(...params)?.count || 0);
@@ -130,9 +152,9 @@ export class MemoryInspectionStore {
             return 0;
         const conditions = [`event_type = 'RAW_EVENT_RECORDED'`];
         const params = [];
-        if (projectId) {
-            conditions.push('project_id = ?');
-            params.push(projectId);
+        if (projectId !== undefined) {
+            conditions.push("COALESCE(project_id, '') = ?");
+            params.push(projectScope(projectId));
         }
         if (maxGlobalSeq !== undefined) {
             conditions.push('global_seq <= ?');
@@ -146,7 +168,7 @@ export class MemoryInspectionStore {
         const row = this.db.prepare(`
       SELECT last_dreamed_global_seq, last_dreamed_at, updated_at
       FROM dream_ledger_state WHERE project_key = ?
-    `).get(projectId || '__global__');
+    `).get(dreamLedgerProjectKey(projectId));
         return row ? {
             lastDreamedGlobalSeq: optionalNumber(row.last_dreamed_global_seq),
             lastDreamedAt: optionalNumber(row.last_dreamed_at),
@@ -160,8 +182,8 @@ export class MemoryInspectionStore {
         };
         if (!this.tableExists('episode_dream_jobs'))
             return result;
-        const rows = (projectId
-            ? this.db.prepare(`SELECT state, COUNT(*) AS count FROM episode_dream_jobs WHERE project_id = ? GROUP BY state`).all(projectId)
+        const rows = (projectId !== undefined
+            ? this.db.prepare(`SELECT state, COUNT(*) AS count FROM episode_dream_jobs WHERE COALESCE(project_id, '') = ? GROUP BY state`).all(projectScope(projectId))
             : this.db.prepare(`SELECT state, COUNT(*) AS count FROM episode_dream_jobs GROUP BY state`).all());
         const keys = {
             pending: 'pending', processing: 'processing', processed: 'processed', skipped: 'skipped',
@@ -177,8 +199,8 @@ export class MemoryInspectionStore {
         const result = { candidate: 0, needsConfirmation: 0, promoted: 0, rejected: 0, superseded: 0, shadow: 0 };
         if (!this.tableExists('deep_write_candidates') || !this.tableExists('deep_write_runs'))
             return result;
-        const rows = (projectId
-            ? this.db.prepare(`SELECT c.status, COUNT(*) AS count FROM deep_write_candidates c JOIN deep_write_runs r ON r.run_id = c.run_id WHERE r.project_id = ? GROUP BY c.status`).all(projectId)
+        const rows = (projectId !== undefined
+            ? this.db.prepare(`SELECT c.status, COUNT(*) AS count FROM deep_write_candidates c JOIN deep_write_runs r ON r.run_id = c.run_id WHERE COALESCE(r.project_id, '') = ? GROUP BY c.status`).all(projectScope(projectId))
             : this.db.prepare(`SELECT status, COUNT(*) AS count FROM deep_write_candidates GROUP BY status`).all());
         for (const row of rows) {
             if (row.status === 'needs_confirmation')
@@ -191,10 +213,43 @@ export class MemoryInspectionStore {
     countBeliefs(projectId) {
         if (!this.tableExists('beliefs'))
             return 0;
-        const row = projectId
-            ? this.db.prepare(`SELECT COUNT(*) AS count FROM beliefs WHERE status = 'active' AND project_id = ?`).get(projectId)
+        const row = projectId !== undefined
+            ? this.db.prepare(`SELECT COUNT(*) AS count FROM beliefs WHERE status = 'active' AND COALESCE(project_id, '') = ?`).get(projectScope(projectId))
             : this.db.prepare(`SELECT COUNT(*) AS count FROM beliefs WHERE status = 'active'`).get();
         return Number(row?.count || 0);
+    }
+    policyAuditOutbox(projectId) {
+        if (!this.tableExists('policy_execution_audit_outbox'))
+            return { pending: 0, deadLetter: 0 };
+        return this.outboxStats('policy_execution_audit_outbox', projectId);
+    }
+    runtimeEventOutbox(projectId) {
+        if (!this.tableExists('runtime_event_outbox'))
+            return { pending: 0, deadLetter: 0 };
+        return this.outboxStats('runtime_event_outbox', projectId);
+    }
+    outboxStats(table, projectId) {
+        const where = projectId === undefined ? '' : 'WHERE project_scope=?';
+        const params = projectId === undefined ? [] : [projectScope(projectId)];
+        const row = (projectId === undefined
+            ? this.db.prepare(`SELECT SUM(dead_lettered_at IS NULL) AS pending,
+          MIN(CASE WHEN dead_lettered_at IS NULL THEN created_at END) AS oldest,
+          SUM(dead_lettered_at IS NOT NULL) AS dead_letter FROM ${table}`).get()
+            : this.db.prepare(`SELECT SUM(dead_lettered_at IS NULL) AS pending,
+          MIN(CASE WHEN dead_lettered_at IS NULL THEN created_at END) AS oldest,
+          SUM(dead_lettered_at IS NOT NULL) AS dead_letter FROM ${table} ${where}`).get(...params));
+        const errorWhere = projectId === undefined
+            ? 'WHERE last_error IS NOT NULL'
+            : 'WHERE project_scope=? AND last_error IS NOT NULL';
+        const error = this.db.prepare(`SELECT last_error FROM ${table} ${errorWhere}
+      ORDER BY COALESCE(dead_lettered_at,next_retry_at,created_at) DESC LIMIT 1`)
+            .get(...params);
+        return {
+            pending: Number(row.pending ?? 0),
+            oldestCreatedAt: row.oldest ?? undefined,
+            deadLetter: Number(row.dead_letter ?? 0),
+            lastError: error?.last_error,
+        };
     }
 }
 function parseJson(value) {

@@ -1,6 +1,7 @@
 import type { MemoryGraph } from '../core/MemoryGraph.js';
 import type { Neuron } from '../types/index.js';
 import { isRecallableMemoryEvidence } from './RecallGovernance.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 
 export interface VectorFilterContext {
   projectId?: string;
@@ -37,8 +38,8 @@ export class WorkspaceFilter extends MemoryGraphVectorFilterRule {
   readonly name = 'workspace';
 
   filter(neuronIds: string[], context: VectorFilterContext): string[] {
-    if (!context.projectId) return neuronIds;
-    return neuronIds.filter((id) => this.neuron(id)?.metadata.projectId === context.projectId);
+    if (context.projectId === undefined) return neuronIds;
+    return neuronIds.filter((id) => matchesProjectScope(context.projectId, this.neuron(id)?.metadata.projectId));
   }
 }
 

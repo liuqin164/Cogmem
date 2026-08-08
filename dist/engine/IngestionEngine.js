@@ -8,6 +8,7 @@ import { aaakGenerator } from '../utils/AAAKGenerator.js';
 import { IMPORTANCE_STABILITY_MAP } from '../core/ImportanceLevels.js';
 import { ImportanceSignalDetector } from './ImportanceSignalDetector.js';
 import { config } from '../utils/Config.js';
+import { projectScope } from '../topology/ProjectScope.js';
 export class IngestionEngine {
     vectorDimension;
     embedder;
@@ -33,7 +34,8 @@ export class IngestionEngine {
         // 1. 计算语义向量
         const V = await this.embedder.embed(input.content);
         // 2. 双重去重检查
-        const dedupResult = await this.checkDuplicate(input.content, V, input.projectId);
+        const effectiveProjectId = input.projectId ?? this.projectId;
+        const dedupResult = await this.checkDuplicate(input.content, V, effectiveProjectId);
         if (dedupResult.isDuplicate && dedupResult.existingNeuronId) {
             // 高度雷同：激活旧神经元，不创建新的
             this.activateNeuronFn?.(dedupResult.existingNeuronId);
@@ -57,7 +59,7 @@ export class IngestionEngine {
         const detectedImportance = input.importanceLevel || ImportanceSignalDetector.detect(input.content);
         const isPinned = input.isPinned ?? detectedImportance !== 'normal';
         const metadata = {
-            projectId: input.projectId || this.projectId,
+            projectId: effectiveProjectId,
             topicPath: input.topicPath,
             filePath: input.filePath,
             type: input.type,
@@ -93,7 +95,7 @@ export class IngestionEngine {
             for (const { id, score } of candidates) {
                 if (score >= SIMILARITY_THRESHOLD) {
                     const existing = this.getNeuronFn(id);
-                    if (existing && (!projectId || existing.metadata.projectId === projectId)) {
+                    if (existing && projectScope(projectId) === projectScope(existing.metadata.projectId)) {
                         return { isDuplicate: true, existingNeuronId: id, similarity: score };
                     }
                 }
@@ -115,7 +117,7 @@ export class IngestionEngine {
         const detectedImportance = input.importanceLevel || ImportanceSignalDetector.detect(input.content);
         const isPinned = input.isPinned ?? detectedImportance !== 'normal';
         const metadata = {
-            projectId: input.projectId || this.projectId,
+            projectId: input.projectId ?? this.projectId,
             topicPath: input.topicPath,
             filePath: input.filePath,
             type: input.type,

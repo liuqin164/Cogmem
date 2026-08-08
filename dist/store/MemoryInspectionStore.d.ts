@@ -32,6 +32,18 @@ export interface MemoryInspectionStatus {
         shadow: number;
     };
     activeBeliefs: number;
+    policyAuditOutbox: {
+        pending: number;
+        oldestCreatedAt?: number;
+        deadLetter: number;
+        lastError?: string;
+    };
+    runtimeEventOutbox: {
+        pending: number;
+        oldestCreatedAt?: number;
+        deadLetter: number;
+        lastError?: string;
+    };
 }
 /**
  * A query-only operational view. It deliberately does not initialize or migrate
@@ -51,11 +63,16 @@ export declare class MemoryInspectionStore {
     close(): void;
     private tableExists;
     private countTable;
+    private countVectors;
+    private countEmbeddings;
     private countScopedEvents;
     private countRawEvents;
     private readDreamState;
     private episodeDream;
     private candidateQueue;
     private countBeliefs;
+    private policyAuditOutbox;
+    private runtimeEventOutbox;
+    private outboxStats;
 }
 //# sourceMappingURL=MemoryInspectionStore.d.ts.map

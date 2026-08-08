@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.7.4
+
+- Added evidence-backed MemoryFrame V1 contracts, controlled relation validation, canonical alias normalization, and bounded MemoryQueryFrame helpers.
+- Added one formal schema migration, 0032, from the released 3.7.3/schema-31 database to the complete 3.7.4 schema. Unreleased development schemas are rejected instead of becoming permanent compatibility history.
+- Added staged MemoryFrame revisions, Atlas aliases/supports, V2 projection provenance, project-scoped graph identities, resumable topology rebuilds, and the final isolation constraints inside that atomic release migration.
+- Wired structured processor output through staged Dream publication, paginated Atlas V2 projection, temporal/state projection, alias resolution, Repair invalidation, and forget-user cleanup.
+- Connected bounded multidimensional Atlas seed/path results to kernel and agent recall while preserving collection, workspace/session/thread scope, and retrieval-lane governance. Rule-only installations now report `semantic_processor_unavailable` instead of silently presenting fallback semantics as complete.
+- Made recall and MCP graph discovery read-only over last-known-good projections, added explicit paginated `cogmem memory rebuild-topology --project <id>`, and rebuilt topology plus cognitive temporal edges through resumable staging and a final atomic project-local swap.
+- Bound the 0032 receipt digest to the release entrypoint and every internal atomic install source, and verified a real `main@b4733454` 3.7.3 database upgrades with one receipt.
+- Hardened import date provenance and explicit `--db` timezone diagnostics, made Frame baseline reduction idempotent across repeated direct rebuilds, and aligned MemoryFrame schema bounds with runtime validation.
+- Scoped topology, entity, event, policy-execution, runtime, Atlas, and projection identities. Unscoped 3.7.3 runtime read-model rows are treated as disposable runtime state: migration requires a backup, reports the discarded count, and retains only hash-based discard receipts.
+- Made policy side effects require a caller-owned operation identity, atomically lease execution, validate terminal outcomes, preserve legacy idempotency tombstones, and recover pending audit events after restart without bypassing retry schedules.
+- Rebuilt policy/runtime projections with filtered global-sequence pages, fixed high-water checkpoints, and shadow tables that atomically replace the live read model without exposing empty or partial rebuilds.
+- Scoped runtime state, transition, outbox, and projection rows by project, included them in privacy erasure, and made standalone stores fail explicitly when opened before the required migration.
+- Restricted Atlas dirtying to user/tool evidence, projected MemoryFrames before aggregate/project counts, merged action evidence into time facets, and tightened multilingual action/target parsing.
+- Extended read-only status with the pending policy-audit outbox count and added migration, isolation, crash-recovery, timezone, parser, and privacy regression coverage.
+- Reduced multi-authority graph edges from project-scoped support rows, so Frame/Curator withdrawal immediately restores the surviving edge without stale evidence or a second rebuild; aligned the public edge contract, binding invariants, and recall-governance SQL with runtime behavior.
+- Split edge-support updates into append, replace, and lifecycle revision semantics so Curator/Frame rebuilds can remove stale evidence and lower projection strength after episode repair while repeated rebuilds remain version-idempotent.
+- Aggregated duplicate relation, temporal, and state fragments inside each MemoryFrame before replacing its edge support, making evidence, confidence, validity, and rebuild versions independent of array order while preserving snapshot shrink.
+
 ## 3.7.3
 
 - Added enforceable Episode Boundary guardrails with configurable max event, duration, idle-gap, and trusted local-date limits, including best-effort decision audit rows that never roll back successful raw event assignment.

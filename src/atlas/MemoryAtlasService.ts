@@ -9,6 +9,18 @@ export class MemoryAtlasService {
   private readonly facetPlanner = new FacetQueryPlanner();
   constructor(private store: MemoryAtlasStore, private eventStore: EventStore) {}
 
+  resolveQueryAliases(query: string, projectId: string): Array<{ label: string; dimension: string; nodeId: string }> {
+    return this.store.resolveQueryAliases(projectId, query);
+  }
+
+  nodeHasEvidenceInRange(nodeId: string, projectId: string, range: { from?: number; to?: number }): boolean {
+    return this.store.hasEvidenceInRange(nodeId, projectId, range.from, range.to);
+  }
+
+  nodeHasActiveState(nodeId: string, projectId: string, states: string[]): boolean {
+    return this.store.hasActiveState(nodeId, projectId, states);
+  }
+
   overview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
     const limit = boundedLimit(options.limit);
     const nodes = this.store.listNodes(requiredProject(options.projectId), limit);
@@ -37,16 +49,35 @@ export class MemoryAtlasService {
     const projectId = requiredProject(options.projectId); const limit = boundedLimit(options.limit);
     const facetResult = this.searchFacetCardsWithRelaxation(query, projectId, limit, options);
     const cards = facetResult.cards;
-    const compiled = compileAtlasQuery(boundedQuery(query), options.now);
+    const compiled = compileAtlasQuery(boundedQuery(query), options);
     const target = this.store.resolveTargetNodeIds(projectId, compiled.text);
+    const seedNodeIds = [...new Set([...(target.nodeIds ?? []), ...(options.seedNodeIds ?? [])])];
+    const hasExplicitSeeds = seedNodeIds.length > 0;
     let nodes = this.store.searchFaceted(query, projectId, limit, {
-      from: compiled.range?.from, to: compiled.range?.to, memoryKinds: compiled.memoryKinds,
-      keywords: target.nodeIds.length ? compiled.keywords : compiled.tokens,
-      targetNodeIds: target.nodeIds.length ? target.nodeIds : undefined,
+      // A canonical seed is an identity anchor, not a temporal fact. Apply
+      // time constraints after traversing to evidence-bearing nodes.
+      from: hasExplicitSeeds ? undefined : compiled.range?.from, to: hasExplicitSeeds ? undefined : compiled.range?.to, memoryKinds: compiled.memoryKinds,
+      keywords: seedNodeIds.length ? [] : compiled.tokens,
+      targetNodeIds: seedNodeIds.length ? seedNodeIds : undefined,
     });
+    const explicitSeedNodeIds = options.seedNodeIds ?? [];
+    if (explicitSeedNodeIds.length) {
+      const selected = new Set(explicitSeedNodeIds);
+      let frontier = [...explicitSeedNodeIds];
+      for (let depth = 0; depth < 3 && frontier.length; depth += 1) {
+        const edges = this.store.listEdgesForNodes(projectId, frontier, Math.max(400, limit * 20));
+        const next: string[] = [];
+        for (const edge of edges) {
+          for (const id of [edge.source, edge.target]) if (!selected.has(id)) { selected.add(id); next.push(id); }
+        }
+        frontier = next.slice(0, Math.min(200, Math.max(1, limit * 8)));
+      }
+      const pathNodes = [...selected].map((id) => this.store.getNode(id, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node));
+      nodes = uniqueNodes([...nodes, ...pathNodes]).slice(0, Math.min(1000, Math.max(limit, explicitSeedNodeIds.length * 100)));
+    }
     if (cards.length) {
       const cardNodes = cards.map((card) => this.store.getNode(card.canonicalId, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node));
-      nodes = uniqueNodes([...cardNodes, ...nodes]).slice(0, limit);
+      nodes = uniqueNodes([...cardNodes, ...nodes]).slice(0, Math.min(1000, Math.max(limit, explicitSeedNodeIds.length * 100)));
     }
     if (compiled.actionIntent) {
       const actions = this.store.listActions(projectId, { target: compiled.target, targetEntityIds: target.entitySourceIds,
@@ -54,7 +85,11 @@ export class MemoryAtlasService {
       nodes = uniqueNodes([...actions.map((action) => this.store.getNode(action.id, projectId)).filter((node): node is MemoryAtlasNode => Boolean(node)), ...nodes]).slice(0, limit);
     }
     const nodesWithEvidence = this.attachEvidence(nodes, projectId, options);
-    const edgeProjection = this.edgeProjection(nodesWithEvidence, projectId, exactMatchedNodeIds(cards, facetResult.plan));
+    const edgeProjection = this.edgeProjection(
+      nodesWithEvidence,
+      projectId,
+      new Set([...exactMatchedNodeIds(cards, facetResult.plan), ...explicitSeedNodeIds]),
+    );
     const result = slice(projectId, nodesWithEvidence, edgeProjection.edges, query);
     result.facets = {
       ...facetsForPlan(facetResult.plan),
@@ -145,7 +180,7 @@ export class MemoryAtlasService {
   }
 
   timeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult {
-    const projectId = requiredProject(options.projectId); const compiled = compileAtlasQuery(boundedQuery(query), options.now);
+    const projectId = requiredProject(options.projectId); const compiled = compileAtlasQuery(boundedQuery(query), options);
     const limit = boundedLimit(options.limit);
     const facetResult = this.searchFacetCardsWithRelaxation(query, projectId, limit, options);
     const cards = this.attachCardEvidence(facetResult.cards, projectId, options)
@@ -178,7 +213,7 @@ export class MemoryAtlasService {
     cards: MemoryAtlasCard[];
     relaxationTrace: MemoryAtlasRelaxationStep[];
   } {
-    let plan = this.facetPlanner.plan(boundedQuery(query), { projectId, now: options.now });
+    let plan = this.facetPlanner.plan(boundedQuery(query), { projectId, now: options.now, localDateNow: options.localDateNow, timeZone: options.timeZone });
     const relaxationTrace: MemoryAtlasRelaxationStep[] = [];
     let cards = plan.facets.length ? this.store.searchCanonicalEpisodeCards(projectId, plan, limit) : [];
     for (let attempt = 0; !cards.length && plan.facets.length && attempt < 3; attempt += 1) {
@@ -212,7 +247,7 @@ export class MemoryAtlasService {
   }
 
   private evidence(nodeId: string, projectId: string, requested?: number, includeExcerpt?: boolean): MemoryAtlasEvidence[] {
-    const limit = Math.max(1, Math.min(requested ?? 2, 10));
+    const limit = Math.max(1, Math.min(requested ?? 2, 1000));
     return this.store.evidenceIds(nodeId, projectId, limit).flatMap((eventId) => {
       const event = this.eventStore.getEvent(eventId);
       if (!event || event.projectId !== projectId) return [];
@@ -235,7 +270,9 @@ export class MemoryAtlasService {
     truncation?: NonNullable<MemoryAtlasSlice['edgeTruncation']>;
   } {
     const ids = new Set(nodes.map((node) => node.id));
-    const limit = 60;
+    // ponytail: seeded traversal needs the complete bounded candidate set for
+    // correctness; unseeded overview/search keeps the small display budget.
+    const limit = priorityIds.size > 0 ? 4000 : 60;
     const candidates = this.safeEdges(this.store.listEdgesWithinNodes(projectId, [...ids], 4000)
       .filter((edge) => ids.has(edge.source) && ids.has(edge.target)), projectId);
     const sorted = uniqueEdges(candidates).sort((left, right) =>

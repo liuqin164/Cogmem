@@ -52,10 +52,11 @@ export class ReEmbeddingPipeline {
                         if (vector.length !== this.embeddingProvider.dimensions) {
                             throw new Error(`Embedding dimension mismatch for ${modelId}: expected ${this.embeddingProvider.dimensions}, got ${vector.length}`);
                         }
-                        this.neuronEmbeddingStore.upsert(live[index].id, modelId, vector, projectId);
-                        this.neuronEmbeddingStore.deleteStaleEmbeddingsForNeuron(live[index].id, modelId);
-                        processed += 1;
-                        batchProcessed += 1;
+                        if (this.neuronEmbeddingStore.upsert(live[index].id, modelId, vector, projectId)) {
+                            this.neuronEmbeddingStore.deleteStaleEmbeddingsForNeuron(live[index].id, modelId);
+                            processed += 1;
+                            batchProcessed += 1;
+                        }
                     }
                     this.recordThroughput(batchProcessed, Date.now() - batchStartedAt);
                 }

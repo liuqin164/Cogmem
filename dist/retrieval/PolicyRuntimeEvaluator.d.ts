@@ -3,6 +3,7 @@ import { type PlanExecutionContext } from './PlanDslExecutor.js';
 import type { PlanRuntimeStore } from '../store/PlanRuntimeStore.js';
 import { type PolicySideEffectExecutor, type PolicySideEffectResult } from './PolicySideEffectExecutor.js';
 export interface PolicyRuntimeContext extends ConditionEvaluationContext, PlanExecutionContext {
+    projectId: string;
 }
 export interface PolicyRuntimeDecision {
     runtimeId?: string;

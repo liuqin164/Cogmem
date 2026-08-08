@@ -18,5 +18,6 @@ export declare class VectorProjector {
     fullRebuild(reason: string): Promise<void>;
     replay(events: MemoryEvent[], previousRebuildAt?: number): Promise<void>;
     private applyEvent;
+    private applyEventToMap;
 }
 //# sourceMappingURL=VectorProjector.d.ts.map

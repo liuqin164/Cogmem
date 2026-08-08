@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type Database from 'bun:sqlite';
+import Database from 'bun:sqlite';
 import type { GraphEdgeStoreLike } from './types/ExtensionPoints.js';
 
 import { BeliefStore } from './belief/BeliefStore.js';
@@ -21,6 +21,7 @@ import { Metabolism } from './core/Metabolism.js';
 import { Reflection } from './core/Reflection.js';
 import { TwoStagePulseRanker } from './core/TwoStagePulseRanker.js';
 import { BrainRecall, type BrainRecallOptions } from './recall/BrainRecall.js';
+import { AtlasPathRetriever, MultidimensionalQueryPlanner } from './recall/index.js';
 import { HierarchicalRecallRouter } from './recall/HierarchicalRecallRouter.js';
 import {
   isRecallableMemoryEvidence,
@@ -32,6 +33,7 @@ import { TopicDecayPolicy } from './recall/TopicDecayPolicy.js';
 import { TopicRegistry } from './recall/TopicRegistry.js';
 import { TopicSummaryBoard } from './recall/TopicSummaryBoard.js';
 import { CognitiveGraphCompiler } from './engine/CognitiveGraphCompiler.js';
+import { cognitiveEdgeId, cognitiveNodeId } from './engine/CognitiveGraphIdentity.js';
 import { ConsolidationPipeline } from './engine/ConsolidationPipeline.js';
 import { ConsolidationTrigger } from './engine/ConsolidationTrigger.js';
 import { CrossTopicSynthesizer } from './engine/CrossTopicSynthesizer.js';
@@ -78,7 +80,9 @@ import {
   type CandidateReviewInput,
   type CandidateReviewResult,
 } from './governance/index.js';
-import { ALL_MIGRATIONS, KERNEL_MIGRATIONS, SchemaMigrationRunner } from './migrations/index.js';
+import { ALL_MIGRATIONS, KERNEL_MIGRATIONS, SchemaMigrationRunner, migration_0032 } from './migrations/index.js';
+import { installRuntimeProvenanceGuards } from './migrations/v3_7_4/FinalRuntimeGuards.js';
+import { backupDatabase } from './migrations/MigrationBackup.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -87,6 +91,7 @@ import { StrategyCortex } from './strategy/index.js';
 import { ContextOutcomeStore, MemoryUseJudge } from './eval/strategy/index.js';
 import { EpisodeAssembler, EpisodeStore, type EpisodeBoundaryDecisionRecord, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from './episode/index.js';
 import { EpisodeBoundaryAuditService, type EpisodeBoundaryAuditResult } from './episode/EpisodeBoundaryAuditService.js';
+import { localDateFor, resolveProjectClockContext, type ProjectClockContext } from './utils/LocalDateContext.js';
 import { EpisodeBoundaryPolicy, normalizeEpisodeBoundaryConfig, type EpisodeBoundaryConfig } from './episode/EpisodeBoundaryPolicy.js';
 import { logicalTurnsFromPairs } from './episode/EpisodeBoundaryReplayEngine.js';
 import { EpisodeSplitPlanner, type EpisodeSplitPlan } from './episode/EpisodeSplitPlanner.js';
@@ -114,6 +119,9 @@ import { FactStore } from './store/FactStore.js';
 import { InteractionUnitStore } from './store/InteractionUnitStore.js';
 import { MemoryBindingStore } from './store/MemoryBindingStore.js';
 import { MemoryAtlasStore } from './store/MemoryAtlasStore.js';
+import { MemoryFrameStore, frameSourceFingerprint } from './store/MemoryFrameStore.js';
+import { deterministicFrameFallback } from './semantic/DeterministicFrameFallback.js';
+import type { MemoryFrameV1 } from './semantic/MemoryFrameTypes.js';
 import {
   MemoryAtlasIndexer,
   MemoryAtlasService,
@@ -127,6 +135,8 @@ import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { SummaryStore } from './store/SummaryStore.js';
 import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
 import { TopologyStore } from './store/TopologyStore.js';
+import { matchesProjectScope, projectScope } from './topology/ProjectScope.js';
+import { deleteRegisteredProjectContent, deleteResidualProjectOwnedContent } from './governance/PrivacyDeletionRegistry.js';
 import type { IVectorStore, VectorBackend } from './store/IVectorStore.js';
 import { SqliteVecStore } from './store/SqliteVecStore.js';
 import { VectorStore } from './store/VectorStore.js';
@@ -149,9 +159,10 @@ import {
   type ImportResult,
   type SnapshotMeta,
 } from './snapshot/index.js';
+import { CORE_VERSION } from './version.js';
 
-const CORE_VERSION = '3.7.3';
 const LATEST_SCHEMA_VERSION = Math.max(...ALL_MIGRATIONS.map((migration) => Number.parseInt(migration.version, 10)));
+const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
@@ -169,6 +180,7 @@ export interface MemoryKernelOptions {
   redactionPolicy?: RedactionPolicy | false;
   turnRelationReviewer?: TurnRelationAdvisoryReviewer;
   episodeBoundary?: Partial<EpisodeBoundaryConfig>;
+  projectTimeZone?: string;
   configDiagnostics?: ConfigDiagnosticLike[];
 }
 
@@ -189,6 +201,9 @@ export interface MemoryKernelNavigationOptions {
   limit?: number;
   startTime?: number;
   endTime?: number;
+  now?: number;
+  localDateNow?: string;
+  timeZone?: string;
 }
 
 export interface RawEventSearchOptions {
@@ -336,8 +351,11 @@ export interface MaintenanceSuggestedAction {
     | 'inspect_hotspots'
     | 'bind_raw_events'
     | 'inspect_binding_failures'
-    | 'repair_episodes';
+    | 'repair_episodes'
+    | 'rebuild_topology';
   command: string;
+  executable: string;
+  args: string[];
   reason: string;
 }
 
@@ -399,7 +417,9 @@ export interface RawMemoryEventInput {
   charEnd?: number;
   orderingConfidence?: OrderingConfidence;
   localDate?: string;
-  localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
+  localDateSource?: 'explicit' | 'legacy_unknown';
+  timeZone?: string;
+  projectTimeZone?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -587,7 +607,9 @@ export class MemoryKernel {
   readonly activationStore: ActivationStore;
   readonly memoryBindingStore: MemoryBindingStore;
   readonly memoryAtlasStore: MemoryAtlasStore;
+  readonly memoryFrameStore: MemoryFrameStore;
   readonly memoryAtlasService: MemoryAtlasService;
+  readonly multidimensionalQueryPlanner: MultidimensionalQueryPlanner;
   readonly memoryGovernanceStore: MemoryGovernanceStore;
   readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;
   readonly pipelineMetrics: PipelineMetrics;
@@ -603,6 +625,7 @@ export class MemoryKernel {
   readonly configDiagnostics: ConfigDiagnosticLike[];
 
   private readonly dbPath: string;
+  private readonly projectClock: ProjectClockContext;
   private readonly embedder: Embedder;
   private readonly embeddingProvider?: EmbeddingProvider;
   private readonly modelRegistry: ModelRegistry;
@@ -619,6 +642,7 @@ export class MemoryKernel {
   private readonly dreamScheduler: DreamScheduler;
   private readonly memoryBindingService: MemoryBindingService;
   private readonly memoryAtlasIndexer: MemoryAtlasIndexer;
+  private readonly atlasPathRetriever: AtlasPathRetriever;
   private readonly topicSummaryBoard: TopicSummaryBoard;
   private readonly topicDecayPolicy: TopicDecayPolicy;
   private readonly localSemanticCompiler: LocalSemanticCompiler;
@@ -644,19 +668,74 @@ export class MemoryKernel {
     this.configDiagnostics = [...(options.configDiagnostics || [])];
     const normalizedBoundary = normalizeEpisodeBoundaryConfig(options.episodeBoundary);
     this.configDiagnostics.push(...normalizedBoundary.diagnostics);
+    if (options.projectTimeZone && normalizedBoundary.config.timezone && options.projectTimeZone !== normalizedBoundary.config.timezone) throw new Error('project_timezone_conflict');
+    this.projectClock = resolveProjectClockContext({ projectTimeZone: options.projectTimeZone ?? normalizedBoundary.config.timezone });
     this.dbPath = options.dbPath ?? ':memory:';
     this.encryptionProvider = options.encryptionProvider;
     this.piiRedactor = options.redactionPolicy === false ? undefined : new PiiRedactor(options.redactionPolicy);
-    this.memoryGraph = new MemoryGraph(this.dbPath);
+
+    // File-backed databases migrate before any Store can inspect an old table.
+    // `:memory:` must migrate on the connection retained by FactStore.
+    const migrateAfterCoreBootstrap = this.dbPath === ':memory:';
+    let existingSchema = false;
+    if (!migrateAfterCoreBootstrap) {
+      const migrationDb = new Database(this.dbPath);
+      try {
+        migrationDb.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+        existingSchema = Boolean(migrationDb.prepare(`
+          SELECT 1 FROM sqlite_master
+          WHERE type='table' AND name NOT LIKE 'sqlite_%'
+          LIMIT 1
+        `).get());
+        if (existingSchema) {
+          const bootstrapRecovery = Boolean(migrationDb.prepare(`
+            SELECT 1 FROM sqlite_master WHERE type='table' AND name='_cogmem_bootstrap_state'
+          `).get());
+          const migrations = bootstrapRecovery ? [migration_0032] : KERNEL_MIGRATIONS;
+          const planner = new SchemaMigrationRunner(migrationDb, migrations);
+          planner.preflight();
+          const needsBackup = planner.plan().some((migration) => migration.requiresBackup);
+          const backupPath = needsBackup && !bootstrapRecovery ? backupDatabase(migrationDb, this.dbPath) : undefined;
+          new SchemaMigrationRunner(migrationDb, migrations, {
+            backupVerified: bootstrapRecovery || !needsBackup || Boolean(backupPath),
+          }).run();
+        } else {
+          migrationDb.exec(`
+            CREATE TABLE _cogmem_bootstrap_state (
+              singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+              started_at INTEGER NOT NULL
+            );
+            INSERT INTO _cogmem_bootstrap_state(singleton,started_at) VALUES(1,unixepoch()*1000);
+          `);
+          new SchemaMigrationRunner(migrationDb, [migration_0032], { backupVerified: true }).run();
+        }
+      } finally {
+        migrationDb.close();
+      }
+    }
+
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
-    this.eventStore = new EventStore(db, this.encryptionProvider);
+    this.memoryGraph = new MemoryGraph(db);
+    this.eventStore = new EventStore(db, this.encryptionProvider, this.projectClock.timeZone);
     db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
     if ((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys?: number } | undefined)?.foreign_keys !== 1) {
       throw new Error('memory_kernel_foreign_keys_disabled');
     }
-    new SchemaMigrationRunner(db, KERNEL_MIGRATIONS).run();
-    this.ensureMetaTable(db);
+    if (migrateAfterCoreBootstrap) {
+      db.exec(`
+        CREATE TABLE _cogmem_bootstrap_state (
+          singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+          started_at INTEGER NOT NULL
+        );
+        INSERT INTO _cogmem_bootstrap_state(singleton,started_at) VALUES(1,unixepoch()*1000);
+      `);
+      new SchemaMigrationRunner(db, [migration_0032], { backupVerified: true }).run();
+    }
+    const rebuildJobColumns = db.prepare(`PRAGMA table_info(topology_time_rebuild_jobs)`).all() as Array<{ name: string }>;
+    if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_token')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_token TEXT`);
+    if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_lease_until')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_lease_until INTEGER`);
+    db.exec(`CREATE TABLE IF NOT EXISTS vector_write_outbox (neuron_id TEXT PRIMARY KEY, vector_json TEXT NOT NULL, created_at INTEGER NOT NULL)`);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
     const vectorDimension = options.vectorDimension ?? config.vector.dimension;
@@ -681,20 +760,26 @@ export class MemoryKernel {
         content: eventPayloadText(event.payload),
       } : undefined;
     });
-    this.cursorStore = new IngestionCursorStore(this.dbPath);
+    this.cursorStore = new IngestionCursorStore(db);
     this.vectorStore = options.vectorBackend === 'hnswlib'
       ? new VectorStore(vectorDimension)
       : new SqliteVecStore(db, vectorDimension);
+    if (!(this.vectorStore instanceof SqliteVecStore)) {
+      for (const page of this.memoryGraph.iterateNeuronVectors(2_000, { includeStatuses: ['active', 'cold'], onlyNotDeleted: true })) {
+        for (const row of page) this.vectorStore.addVector(row.id, row.vector);
+      }
+      this.drainVectorOutbox();
+    }
     this.topicRegistry = new TopicRegistry(this.memoryGraph);
-    this.topologyStore = new TopologyStore(this.dbPath);
-    this.cognitiveGraphStore = new CognitiveGraphStore(this.dbPath);
-    this.temporalAdjacencyStore = new TemporalAdjacencyStore(this.dbPath);
-    this.interactionUnitStore = new InteractionUnitStore(this.dbPath);
-    this.compilerConfidenceStore = new CompilerConfidenceStore(this.dbPath);
+    this.topologyStore = new TopologyStore(db);
+    this.cognitiveGraphStore = new CognitiveGraphStore(db);
+    this.temporalAdjacencyStore = new TemporalAdjacencyStore(db);
+    this.interactionUnitStore = new InteractionUnitStore(db);
+    this.compilerConfidenceStore = new CompilerConfidenceStore(db);
     this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
     this.dreamLedgerStore = new DreamLedgerStore(db);
     this.episodeStore = new EpisodeStore(db, (eventId) => this.eventStore.getEvent(eventId), { initializeSchemaForTests: false });
-    this.episodeBoundaryPolicy = new EpisodeBoundaryPolicy(normalizedBoundary.config);
+    this.episodeBoundaryPolicy = new EpisodeBoundaryPolicy({ ...normalizedBoundary.config, timezone: this.projectClock.timeZone });
     this.episodeBoundaryAuditService = new EpisodeBoundaryAuditService(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config, this.configDiagnostics);
     this.episodeSplitPlanner = new EpisodeSplitPlanner(this.episodeStore, (eventId) => this.eventStore.getEvent(eventId), this.episodeBoundaryPolicy.config, this.configDiagnostics);
     this.userTopicPathRegistry = new UserTopicPathRegistry(db);
@@ -722,10 +807,14 @@ export class MemoryKernel {
     );
     this.activationStore = new ActivationStore(db);
     this.memoryBindingStore = new MemoryBindingStore(db);
+    installRuntimeProvenanceGuards(db);
     this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
-    this.memoryAtlasStore = new MemoryAtlasStore(db);
-    this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore);
+    this.memoryAtlasStore = new MemoryAtlasStore(db, this.projectClock.timeZone);
+    this.memoryFrameStore = new MemoryFrameStore(db);
+    this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore, this.memoryFrameStore);
     this.memoryAtlasService = new MemoryAtlasService(this.memoryAtlasStore, this.eventStore);
+    this.multidimensionalQueryPlanner = new MultidimensionalQueryPlanner();
+    this.atlasPathRetriever = new AtlasPathRetriever(this.memoryAtlasService, this.multidimensionalQueryPlanner);
     this.entityGovernanceService = new EntityGovernanceService(
       db,
       this.entityStore,
@@ -805,8 +894,9 @@ export class MemoryKernel {
           statement: `${belief.subject} ${belief.predicate} ${String(belief.objectValue)}`, projectId: belief.projectId,
         }))
       )),
+      memoryFrameStore: this.memoryFrameStore,
     });
-    this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker, this.deepWriteCandidateStore);
+    this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker, this.deepWriteCandidateStore, this.memoryFrameStore);
     this.topicSummaryBoard = new TopicSummaryBoard(this.memoryGraph, this.summaryStore);
     this.topicDecayPolicy = new TopicDecayPolicy(this.memoryGraph);
     this.localSemanticCompiler = new LocalSemanticCompiler();
@@ -937,6 +1027,7 @@ export class MemoryKernel {
     this.reEmbeddingPipeline = this.embeddingProvider
       ? new ReEmbeddingPipeline(this.neuronEmbeddingStore, this.embeddingProvider, this.memoryGraph, db)
       : undefined;
+    this.ensureMetaTable(db);
   }
 
   async initialize(skipWarmup = true): Promise<void> {
@@ -961,7 +1052,6 @@ export class MemoryKernel {
     this.cursorStore.close();
     this.memoryGraph.close();
     this.eventStore.close();
-    this.factStore.close();
     this.entityStore.close();
     this.topologyStore.close();
     this.cognitiveGraphStore.close();
@@ -969,90 +1059,184 @@ export class MemoryKernel {
     this.activationStore.close();
     this.interactionUnitStore.close();
     this.compilerConfidenceStore.close();
+    this.factStore.close();
+    // bun:sqlite close(false) waits for temporary prepared statements to be
+    // finalized. An explicit Kernel close must release the file before a CLI
+    // process can reopen it, even while the Kernel object remains reachable.
+    Bun.gc(true);
   }
 
   async ingest(input: IngestInput | { content: string; projectId?: string; tags?: string[] }): Promise<Neuron> {
     await this.initialize();
     const normalizedInput = await this.normalizeIngestInput(input);
-    const prevNeuronSelfHash = this.memoryGraph.getLatestNeuronSelfHash(normalizedInput.projectId);
+    const prevNeuronSelfHash = this.memoryGraph.getLatestNeuronSelfHash(projectScope(normalizedInput.projectId));
     const { neuron, isDuplicate } = await this.ingestionEngine.ingest(normalizedInput, { prevNeuronSelfHash });
     if (isDuplicate) {
       this.metabolism.recordActivity();
       return neuron;
     }
 
-    const ingestedEvent = this.eventStore.append({
-      streamId: neuron.id,
-      streamType: 'neuron',
-      eventType: 'INGESTED',
-      projectId: neuron.metadata.projectId,
-      sourceNeuronId: neuron.id,
-      parentEventId: normalizedInput.sourceRefs?.find((ref) => ref.eventId)?.eventId,
-      causalityType: normalizedInput.sourceRefs?.some((ref) => ref.eventId) ? 'derived_from' : undefined,
-      sourceId: normalizedInput.sourceRefs?.[0]?.sourceId,
-      contentHash: normalizedInput.sourceRefs?.[0]?.contentHash,
-      payload: {
-        neuronId: neuron.id,
-        selfHash: neuron.self_hash,
-        prevHash: neuron.prev_hash,
-        type: neuron.metadata.type,
-        createdAt: neuron.metadata.createdAt,
-        source: normalizedInput.source,
-        sourceRefs: normalizedInput.sourceRefs || [],
-      },
-    });
+    let vectorCommitted = false;
+    try {
+      this.factStore.getDatabase().transaction(() => {
+        const ingestedEvent = this.eventStore.append({
+          streamId: neuron.id,
+          streamType: 'neuron',
+          eventType: 'INGESTED',
+          projectId: neuron.metadata.projectId,
+          sourceNeuronId: neuron.id,
+          parentEventId: normalizedInput.sourceRefs?.find((ref) => ref.eventId)?.eventId,
+          causalityType: normalizedInput.sourceRefs?.some((ref) => ref.eventId) ? 'derived_from' : undefined,
+          sourceId: normalizedInput.sourceRefs?.[0]?.sourceId,
+          contentHash: normalizedInput.sourceRefs?.[0]?.contentHash,
+          payload: {
+            neuronId: neuron.id,
+            selfHash: neuron.self_hash,
+            prevHash: neuron.prev_hash,
+            type: neuron.metadata.type,
+            createdAt: neuron.metadata.createdAt,
+            source: normalizedInput.source,
+            sourceRefs: normalizedInput.sourceRefs || [],
+          },
+        });
 
-    neuron.metadata.sourceEventId = ingestedEvent.eventId;
-    neuron.metadata.updatedAt = neuron.metadata.createdAt;
+        neuron.metadata.sourceEventId = ingestedEvent.eventId;
+        neuron.metadata.updatedAt = neuron.metadata.createdAt;
+        const projectionUpdate = this.topologyStore.beginTimeProjectionSourceUpdate(
+          neuron.metadata.projectId,
+          this.projectClock.timeZone,
+          neuron.metadata.createdAt,
+        );
+        const temporalIncremental = projectionUpdate.incremental;
+        const sourceRevision = projectionUpdate.sourceRevision;
+        this.memoryGraph.addNeuronInTransaction(neuron, false);
+        if (this.vectorStore instanceof SqliteVecStore) {
+          this.vectorStore.addVector(neuron.id, neuron.coordinates.V);
+          vectorCommitted = true;
+        } else {
+          this.factStore.getDatabase().prepare(`INSERT OR REPLACE INTO vector_write_outbox(neuron_id,vector_json,created_at) VALUES(?,?,?)`)
+            .run(neuron.id, JSON.stringify(neuron.coordinates.V), neuron.metadata.createdAt);
+        }
+        this.reflection.onNeuronActivated(neuron.id);
+        this.reflection.detectAndCreateOverrides(neuron, (vector, k) => this.vectorStore.search(vector, k));
+        const consolidation = this.consolidationPipeline.consolidate(neuron, ingestedEvent.eventId);
+        const topology = this.topologyCompiler.compile({
+          neuron,
+          consolidation,
+          timeZone: this.projectClock.timeZone,
+          temporalEnabled: temporalIncremental,
+        });
+        if (temporalIncremental) this.temporalAdjacencyStore.syncBuckets(topology.timeBuckets, neuron.metadata.createdAt);
+        const cognitiveGraph = this.cognitiveGraphCompiler.compile({ neuron, consolidation, topology });
+        if (temporalIncremental) {
+          this.topologyStore.markTimeProjectionCleanIfCurrent(
+            projectScope(neuron.metadata.projectId),
+            this.projectClock.timeZone,
+            neuron.metadata.createdAt,
+            sourceRevision,
+          );
+        }
+        this.eventStore.append({
+          streamId: neuron.id,
+          streamType: 'neuron',
+          eventType: 'TOPOLOGY_COMPILED',
+          projectId: neuron.metadata.projectId,
+          sourceNeuronId: neuron.id,
+          occurredAt: neuron.metadata.createdAt,
+          payload: {
+            neuronId: neuron.id,
+            timeBuckets: topology.timeBuckets.map((bucket) => bucket.bucketId),
+            branchIds: topology.branchIds,
+            taskIds: topology.taskIds,
+            clusterIds: topology.clusterIds,
+          },
+        });
+        this.eventStore.append({
+          streamId: neuron.id,
+          streamType: 'neuron',
+          eventType: 'COGNITIVE_GRAPH_COMPILED',
+          projectId: neuron.metadata.projectId,
+          sourceNeuronId: neuron.id,
+          occurredAt: neuron.metadata.createdAt,
+          payload: {
+            neuronId: neuron.id,
+            seedNodeIds: cognitiveGraph.seedNodeIds,
+            edgeCount: cognitiveGraph.edgeCount,
+          },
+        });
+      })();
+    } catch (error) {
+      if (vectorCommitted) this.vectorStore.removePoint(neuron.id);
+      throw error;
+    }
 
-    this.memoryGraph.addNeuron(neuron);
+    if (!(this.vectorStore instanceof SqliteVecStore)) {
+      try { this.drainVectorOutbox(neuron.id); }
+      catch (error) {
+        this.pipelineMetrics.recordNonFatal('vector_outbox_pending', {
+          projectId: neuron.metadata.projectId,
+          message: error instanceof Error ? error.message : String(error),
+          details: { neuronId: neuron.id },
+        });
+      }
+    }
+
+    this.memoryGraph.indexCommittedNeuron(neuron);
     this.topicRegistry.invalidate(neuron.metadata.projectId);
-    this.vectorStore.addVector(neuron.id, neuron.coordinates.V);
     this.queueEmbedding(neuron);
-    this.reflection.onNeuronActivated(neuron.id);
-    this.reflection.detectAndCreateOverrides(neuron, (vector, k) => this.vectorStore.search(vector, k));
-    const consolidation = this.consolidationPipeline.consolidate(neuron, ingestedEvent.eventId);
-    const topology = this.topologyCompiler.compile({ neuron, consolidation });
-    this.temporalAdjacencyStore.syncBuckets(topology.timeBuckets, neuron.metadata.createdAt);
-    const cognitiveGraph = this.cognitiveGraphCompiler.compile({ neuron, consolidation, topology });
-    this.eventStore.append({
-      streamId: neuron.id,
-      streamType: 'neuron',
-      eventType: 'TOPOLOGY_COMPILED',
-      projectId: neuron.metadata.projectId,
-      sourceNeuronId: neuron.id,
-      occurredAt: neuron.metadata.createdAt,
-      payload: {
-        neuronId: neuron.id,
-        timeBuckets: topology.timeBuckets.map((bucket) => bucket.bucketId),
-        branchIds: topology.branchIds,
-        taskIds: topology.taskIds,
-        clusterIds: topology.clusterIds,
-      },
-    });
-    this.eventStore.append({
-      streamId: neuron.id,
-      streamType: 'neuron',
-      eventType: 'COGNITIVE_GRAPH_COMPILED',
-      projectId: neuron.metadata.projectId,
-      sourceNeuronId: neuron.id,
-      occurredAt: neuron.metadata.createdAt,
-      payload: {
-        neuronId: neuron.id,
-        seedNodeIds: cognitiveGraph.seedNodeIds,
-        edgeCount: cognitiveGraph.edgeCount,
-      },
-    });
 
     this.metabolism.recordActivity();
     return neuron;
   }
 
+  private drainVectorOutbox(onlyNeuronId?: string): void {
+    if (this.vectorStore instanceof SqliteVecStore) return;
+    const db = this.factStore.getDatabase();
+    const rows = (onlyNeuronId
+      ? db.prepare(`SELECT o.neuron_id,o.vector_json,n.id AS canonical_id FROM vector_write_outbox o LEFT JOIN neurons n ON n.id=o.neuron_id AND n.is_deleted=0 WHERE o.neuron_id=?`).all(onlyNeuronId)
+      : db.prepare(`SELECT o.neuron_id,o.vector_json,n.id AS canonical_id FROM vector_write_outbox o LEFT JOIN neurons n ON n.id=o.neuron_id AND n.is_deleted=0 ORDER BY o.created_at,o.neuron_id`).all()
+    ) as Array<{ neuron_id: string; vector_json: string; canonical_id: string | null }>;
+    for (const row of rows) {
+      if (!row.canonical_id) { db.prepare(`DELETE FROM vector_write_outbox WHERE neuron_id=?`).run(row.neuron_id); continue; }
+      const vector = JSON.parse(row.vector_json) as number[];
+      this.vectorStore.addVector(row.neuron_id, vector);
+      db.prepare(`DELETE FROM vector_write_outbox WHERE neuron_id=?`).run(row.neuron_id);
+    }
+  }
+
   recall(query: string, options: BrainRecallOptions = {}) {
-    return this.brainRecall.recall(query, options);
+    const recallNow = (options as BrainRecallOptions & { now?: number }).now ?? Date.now();
+    const recallTimeZone = options.timeZone ?? this.projectClock.timeZone;
+    const normalizedOptions: BrainRecallOptions = {
+      ...options,
+      now: recallNow,
+      timeZone: recallTimeZone,
+      localDateNow: options.localDateNow ?? localDateFor(recallNow, recallTimeZone),
+    } as BrainRecallOptions;
+    const result = this.brainRecall.recall(query, normalizedOptions);
+    if (normalizedOptions.projectId === undefined) return result;
+    try {
+      const now = recallNow;
+      const timeZone = recallTimeZone;
+      const planned = this.atlasPathRetriever.retrieve(query, { projectId: normalizedOptions.projectId, limit: normalizedOptions.limit, includeEvidence: true, evidenceLimit: 1000, staleOk: true, localDateNow: normalizedOptions.localDateNow, timeZone, now });
+      return { ...result, queryFrame: planned.queryFrame, atlas: planned.result };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.pipelineMetrics.recordNonFatal('memory_atlas_recall_degraded', { projectId: options.projectId, message, details: { component: 'atlas_path_retriever' } });
+      return { ...result, atlasStatus: 'unavailable', atlasErrorCode: 'atlas_recall_failed' };
+    }
   }
 
   navigateMemory(query: string, options: MemoryKernelNavigationOptions = {}): MemoryKernelNavigationResult {
+    const clock = resolveProjectClockContext({
+      now: options.now,
+      localDateNow: options.localDateNow,
+      timeZone: options.timeZone,
+      projectTimeZone: this.projectClock.timeZone,
+    });
+    const temporalEnabled = options.projectId !== undefined
+      ? this.topologyStore.hasUsableTimeProjection(projectScope(options.projectId), clock.timeZone)
+      : this.topologyStore.hasUsableTimeProjections(clock.timeZone);
     const limit = Math.max(1, options.limit ?? 8);
     const seedLimit = Math.min(Math.max(limit * 4, 24), 120);
     const seedNeuronIds = this.memoryGraph.fullTextSearch(query, options.projectId, seedLimit);
@@ -1061,21 +1245,24 @@ export class MemoryKernel {
       terms: extractNavigationTerms(query),
       limit: seedLimit,
       hopLimit: 2,
+      excludeTemporal: !temporalEnabled,
     });
-    const seedTemporalBucketIds = this.topologyStore.listTimeBucketIdsByNeuronIds(
+    const seedTemporalBucketIds = temporalEnabled ? this.topologyStore.listTimeBucketIdsByNeuronIds(
       seedNeuronIds,
       options.projectId,
       seedLimit
-    );
+    ) : [];
     const navigation = this.universeNavigator.navigate({
       query,
       projectId: options.projectId,
       startTime: options.startTime,
       endTime: options.endTime,
+      temporalEnabled,
+      clock,
       topologyIds: seedNeuronIds,
       branchIds: [],
       temporalBucketIds: seedTemporalBucketIds,
-      temporalNeuronIds: seedNeuronIds,
+      temporalNeuronIds: temporalEnabled ? seedNeuronIds : [],
       graphIds: seedNeuronIds,
       cognitiveGraphIds: cognitiveContext.neuronIds,
       entityNeuronIds: [],
@@ -1090,7 +1277,7 @@ export class MemoryKernel {
     const rawEvidence = candidateIds
       .map((id) => this.memoryGraph.getNeuron(id))
       .filter((item): item is Neuron => Boolean(item))
-      .filter((neuron) => !options.projectId || neuron.metadata.projectId === options.projectId);
+      .filter((neuron) => matchesProjectScope(options.projectId, neuron.metadata.projectId));
     const governedEvidence = selectRecallableEvidence(rawEvidence, limit);
 
     if (governedEvidence.rawEvidence.length > 0) {
@@ -1109,7 +1296,10 @@ export class MemoryKernel {
       projectId: options.projectId,
       limit,
       includeRawEvidence: true,
-    }).rawEvidence.filter((neuron) => !options.projectId || neuron.metadata.projectId === options.projectId);
+      now: clock.now,
+      localDateNow: clock.localDateNow,
+      timeZone: clock.timeZone,
+    }).rawEvidence.filter((neuron) => matchesProjectScope(options.projectId, neuron.metadata.projectId));
     const governedFallbackEvidence = selectRecallableEvidence(fallbackEvidence, limit);
 
     return {
@@ -1124,6 +1314,226 @@ export class MemoryKernel {
         ...governedFallbackEvidence.filteredEvidence,
       ]),
     };
+  }
+
+  rebuildProjectTimeTopology(projectId?: string): { projectId: string; timeZone: string; neurons: number; buckets: number; rebuiltAt: number } {
+    const scope = projectScope(projectId);
+    const timeZone = this.projectClock.timeZone;
+    const now = Date.now();
+    const db = this.factStore.getDatabase();
+    const currentSourceRevision = () => this.topologyStore.getTimeProjectionSourceRevision(scope);
+    let job = db.prepare(`SELECT generation,time_zone,status,cursor_created_at,cursor_neuron_id,neuron_count,source_revision FROM topology_time_rebuild_jobs WHERE project_id=?`).get(scope) as {
+      generation: string; time_zone: string; status: 'building' | 'ready' | 'failed'; cursor_created_at?: number | null; cursor_neuron_id?: string | null; neuron_count: number; source_revision: number;
+    } | null;
+    if (!job || job.status === 'failed' || job.time_zone !== timeZone || job.source_revision !== currentSourceRevision()) {
+      const generation = `topology-${randomUUID()}`;
+      const sourceRevision = currentSourceRevision();
+      db.transaction(() => {
+        db.prepare(`DELETE FROM topology_time_rebuild_jobs WHERE project_id=?`).run(scope);
+        db.prepare(`INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,cursor_created_at,cursor_neuron_id,neuron_count,updated_at,error,source_revision) VALUES(?,?,?,'building',NULL,NULL,0,?,NULL,?)`).run(scope, generation, timeZone, now, sourceRevision);
+        this.topologyStore.markTimeProjection(scope, 'building', timeZone, now, undefined, sourceRevision);
+      })();
+      job = { generation, time_zone: timeZone, status: 'building', neuron_count: 0, source_revision: sourceRevision };
+    }
+    let publishToken: string | undefined;
+    let publishClaimed = false;
+    try {
+      const generation = job.generation;
+      const sourceRevision = job.source_revision;
+      const assertCurrentSource = (): void => {
+        if (currentSourceRevision() !== sourceRevision) throw new Error('topology_source_revision_changed');
+      };
+      let neuronCount = Number(job.neuron_count ?? 0);
+      if (job.status === 'building') {
+        let cursor = job.cursor_created_at !== null && job.cursor_created_at !== undefined && job.cursor_neuron_id
+          ? { createdAt: Number(job.cursor_created_at), id: job.cursor_neuron_id }
+          : undefined;
+        const insertBucket = db.prepare(`INSERT INTO topology_time_rebuild_buckets(generation,bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(generation,bucket_id) DO UPDATE SET label=excluded.label`);
+        const insertEntry = db.prepare(`INSERT OR IGNORE INTO topology_time_rebuild_entries(generation,bucket_id,neuron_id,project_id,created_at) VALUES(?,?,?,?,?)`);
+        for (;;) {
+          assertCurrentSource();
+          const neurons = this.memoryGraph.listTimeProjectionNeurons(projectId, { afterCreatedAt: cursor?.createdAt, afterId: cursor?.id, limit: 500 });
+          if (neurons.length === 0) break;
+          const planned = this.topologyCompiler.planTimeBuckets(neurons, timeZone);
+          const last = neurons[neurons.length - 1]!;
+          db.transaction(() => {
+            for (const neuron of neurons) {
+              for (const bucket of planned.get(neuron.id) ?? []) {
+                insertBucket.run(generation, bucket.bucketId, scope, timeZone, bucket.bucketType, bucket.bucketStart, bucket.bucketEnd, bucket.label);
+                insertEntry.run(generation, bucket.bucketId, neuron.id, scope, neuron.createdAt);
+              }
+            }
+            db.prepare(`UPDATE topology_time_rebuild_jobs SET cursor_created_at=?,cursor_neuron_id=?,neuron_count=neuron_count+?,updated_at=?,error=NULL WHERE project_id=? AND generation=? AND status='building' AND source_revision=?`).run(last.createdAt, last.id, neurons.length, Date.now(), scope, generation, sourceRevision);
+          })();
+          neuronCount += neurons.length;
+          cursor = { createdAt: last.createdAt, id: last.id };
+        }
+
+        assertCurrentSource();
+        db.prepare(`DELETE FROM topology_time_rebuild_active_neurons WHERE generation=?`).run(generation);
+        const insertActive = db.prepare(`INSERT INTO topology_time_rebuild_active_neurons(generation,neuron_id,project_id,created_at,title) VALUES(?,?,?,?,?)`);
+        let snapshotCursor: { createdAt: number; id: string } | undefined;
+        neuronCount = 0;
+        for (;;) {
+          assertCurrentSource();
+          const neurons = this.memoryGraph.listTimeProjectionNeurons(projectId, { afterCreatedAt: snapshotCursor?.createdAt, afterId: snapshotCursor?.id, limit: 500 });
+          if (neurons.length === 0) break;
+          db.transaction(() => {
+            for (const neuron of neurons) insertActive.run(generation, neuron.id, scope, neuron.createdAt, neuron.title);
+          })();
+          neuronCount += neurons.length;
+          const last = neurons[neurons.length - 1]!;
+          snapshotCursor = { createdAt: last.createdAt, id: last.id };
+        }
+        assertCurrentSource();
+        this.stageTimeProjectionGraph(generation, scope, timeZone, now);
+        assertCurrentSource();
+        db.prepare(`UPDATE topology_time_rebuild_jobs SET status='ready',neuron_count=?,updated_at=?,error=NULL WHERE project_id=? AND generation=? AND status='building' AND source_revision=?`).run(neuronCount, Date.now(), scope, generation, sourceRevision);
+      }
+
+      assertCurrentSource();
+      const bucketCount = Number((db.prepare(`SELECT COUNT(*) AS count FROM topology_time_rebuild_buckets b WHERE b.generation=? AND EXISTS (SELECT 1 FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=b.generation AND e.bucket_id=b.bucket_id)`).get(generation) as { count?: number } | null)?.count ?? 0);
+      const claimedToken = `publish-${randomUUID()}`;
+      publishToken = claimedToken;
+      db.transaction(() => {
+        const claimNow = Date.now();
+        const claim = db.prepare(`UPDATE topology_time_rebuild_jobs SET publish_token=?,publish_lease_until=?,updated_at=? WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND (publish_token IS NULL OR publish_lease_until IS NULL OR publish_lease_until<?)`).run(claimedToken, claimNow + TIME_PROJECTION_PUBLISH_LEASE_MS, claimNow, scope, generation, sourceRevision, claimNow);
+        const owned = db.prepare(`SELECT 1 FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).get(scope, generation, sourceRevision, claimedToken);
+        if (claim.changes !== 1 || !owned) throw new Error('time_projection_rebuild_publish_conflict');
+      })();
+      publishClaimed = true;
+      assertCurrentSource();
+      this.publishTimeProjectionAtomically({ generation, scope, publishToken: claimedToken, sourceRevision });
+      db.transaction(() => {
+        assertCurrentSource();
+        const owned = db.prepare(`SELECT 1 FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).get(scope, generation, sourceRevision, claimedToken);
+        if (!owned) throw new Error('time_projection_rebuild_publish_conflict');
+        this.topologyStore.markTimeProjection(scope, 'clean', timeZone, now, undefined, sourceRevision);
+        db.prepare(`DELETE FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND publish_token=?`).run(scope, generation, claimedToken);
+      })();
+      return { projectId: scope, timeZone, neurons: neuronCount, buckets: bucketCount, rebuiltAt: now };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const failed = publishClaimed && publishToken
+        ? db.prepare(`UPDATE topology_time_rebuild_jobs SET status='failed',updated_at=?,error=? WHERE project_id=? AND generation=? AND publish_token=?`).run(Date.now(), message, scope, job.generation, publishToken)
+        : db.prepare(`UPDATE topology_time_rebuild_jobs SET status='failed',updated_at=?,error=? WHERE project_id=? AND generation=? AND publish_token IS NULL`).run(Date.now(), message, scope, job.generation);
+      if (failed.changes === 1) {
+        this.topologyStore.markTimeProjection(scope, 'failed', timeZone, now, message, currentSourceRevision());
+      }
+      throw error;
+    }
+  }
+
+  private publishTimeProjectionAtomically(input: { generation: string; scope: string; publishToken: string; sourceRevision: number }): void {
+    const db = this.factStore.getDatabase();
+    db.transaction(() => {
+      const now = Date.now();
+      const renewed = db.prepare(`UPDATE topology_time_rebuild_jobs SET publish_lease_until=?,updated_at=? WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).run(now + TIME_PROJECTION_PUBLISH_LEASE_MS, now, input.scope, input.generation, input.sourceRevision, input.publishToken);
+      if (renewed.changes !== 1) throw new Error('time_projection_rebuild_publish_conflict');
+      db.prepare(`DELETE FROM time_bucket_entries WHERE COALESCE(project_id,'')=?`).run(input.scope);
+      db.prepare(`DELETE FROM topology_membership WHERE COALESCE(project_id,'')=? AND dimension_type='time_bucket'`).run(input.scope);
+      db.prepare(`DELETE FROM cognitive_edges WHERE project_id=? AND edge_type='occurred_in_time_bucket'`).run(input.scope);
+      db.prepare(`DELETE FROM cognitive_nodes WHERE project_id=? AND node_type='time_bucket'`).run(input.scope);
+      db.prepare(`DELETE FROM temporal_adjacency WHERE project_id=?`).run(input.scope);
+      db.prepare(`DELETE FROM time_buckets WHERE project_id=? AND bucket_id NOT IN (SELECT bucket_id FROM time_bucket_entries)`).run(input.scope);
+      db.prepare(`INSERT OR IGNORE INTO time_buckets(bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label) SELECT b.bucket_id,b.project_id,b.time_zone,b.bucket_type,b.bucket_start,b.bucket_end,b.label FROM topology_time_rebuild_buckets b WHERE b.generation=? AND EXISTS (SELECT 1 FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=b.generation AND e.bucket_id=b.bucket_id)`).run(input.generation);
+      db.prepare(`INSERT OR IGNORE INTO time_bucket_entries(bucket_id,neuron_id,unit_id,belief_id,fact_id,event_id,project_id,created_at) SELECT e.bucket_id,e.neuron_id,NULL,NULL,NULL,NULL,e.project_id,e.created_at FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=?`).run(input.generation);
+      db.prepare(`INSERT OR IGNORE INTO topology_membership(neuron_id,project_id,dimension_type,dimension_key,title,created_at) SELECT e.neuron_id,e.project_id,'time_bucket',e.bucket_id,b.label,e.created_at FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_buckets b ON b.generation=e.generation AND b.bucket_id=e.bucket_id JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=?`).run(input.generation);
+      db.prepare(`INSERT OR IGNORE INTO cognitive_nodes(node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at) SELECT node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at FROM topology_time_rebuild_cognitive_nodes WHERE generation=?`).run(input.generation);
+      db.prepare(`INSERT OR REPLACE INTO cognitive_edges(edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at) SELECT edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at FROM topology_time_rebuild_cognitive_edges WHERE generation=?`).run(input.generation);
+      db.prepare(`INSERT OR IGNORE INTO temporal_adjacency(project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) SELECT project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at FROM topology_time_rebuild_adjacency WHERE generation=?`).run(input.generation);
+    })();
+  }
+
+  private stageTimeProjectionGraph(generation: string, projectId: string, timeZone: string, createdAt: number): void {
+    const db = this.factStore.getDatabase();
+    const insertNode = db.prepare(`INSERT INTO topology_time_rebuild_cognitive_nodes(generation,node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(generation,node_id) DO UPDATE SET title=excluded.title,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`);
+    const insertEdge = db.prepare(`INSERT OR IGNORE INTO topology_time_rebuild_cognitive_edges(generation,edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)`);
+    const insertAdjacent = db.prepare(`INSERT OR IGNORE INTO topology_time_rebuild_adjacency(generation,project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) VALUES(?,?,?,?,?,?,?,?)`);
+    db.transaction(() => {
+      db.prepare(`DELETE FROM topology_time_rebuild_cognitive_edges WHERE generation=?`).run(generation);
+      db.prepare(`DELETE FROM topology_time_rebuild_cognitive_nodes WHERE generation=?`).run(generation);
+      db.prepare(`DELETE FROM topology_time_rebuild_adjacency WHERE generation=?`).run(generation);
+    })();
+
+    let neuronCursor = '';
+    for (;;) {
+      const neurons = db.prepare(`
+        SELECT neuron_id,title,created_at
+        FROM topology_time_rebuild_active_neurons
+        WHERE generation=? AND neuron_id>?
+        ORDER BY neuron_id
+        LIMIT 500
+      `).all(generation, neuronCursor) as Array<{ neuron_id: string; title: string; created_at: number }>;
+      if (neurons.length === 0) break;
+      db.transaction(() => {
+        for (const neuron of neurons) {
+          const key = `neuron:${neuron.neuron_id}`;
+          const nodeId = cognitiveNodeId(projectId, 'neuron', key);
+          insertNode.run(generation, nodeId, 'neuron', key, neuron.title, projectId, neuron.neuron_id, JSON.stringify({ status: 'active' }), neuron.created_at, neuron.created_at);
+        }
+      })();
+      neuronCursor = neurons[neurons.length - 1]!.neuron_id;
+    }
+
+    let bucketCursor: { type: string; start: number; id: string } | undefined;
+    const previousByType = new Map<string, { bucket_id: string }>();
+    for (;;) {
+      const buckets = bucketCursor
+        ? db.prepare(`
+            SELECT bucket_id,bucket_type,bucket_start,bucket_end,label
+            FROM topology_time_rebuild_buckets
+            WHERE generation=? AND (
+              bucket_type>? OR (bucket_type=? AND bucket_start>?) OR (bucket_type=? AND bucket_start=? AND bucket_id>?)
+            )
+            ORDER BY bucket_type,bucket_start,bucket_id
+            LIMIT 500
+          `).all(generation, bucketCursor.type, bucketCursor.type, bucketCursor.start, bucketCursor.type, bucketCursor.start, bucketCursor.id)
+        : db.prepare(`
+            SELECT bucket_id,bucket_type,bucket_start,bucket_end,label
+            FROM topology_time_rebuild_buckets
+            WHERE generation=?
+            ORDER BY bucket_type,bucket_start,bucket_id
+            LIMIT 500
+          `).all(generation);
+      const page = buckets as Array<{ bucket_id: string; bucket_type: string; bucket_start: number; bucket_end: number; label: string }>;
+      if (page.length === 0) break;
+      db.transaction(() => {
+        for (const bucket of page) {
+          const key = `time_bucket:${bucket.bucket_id}`;
+          const nodeId = cognitiveNodeId(projectId, 'time_bucket', key);
+          insertNode.run(generation, nodeId, 'time_bucket', key, bucket.label, projectId, null, JSON.stringify({ bucketType: bucket.bucket_type, timeZone }), bucket.bucket_start, createdAt);
+          const previous = previousByType.get(bucket.bucket_type);
+          if (previous) {
+            insertAdjacent.run(generation, projectId, timeZone, previous.bucket_id, bucket.bucket_id, bucket.bucket_type, 0.72, createdAt);
+            insertAdjacent.run(generation, projectId, timeZone, bucket.bucket_id, previous.bucket_id, bucket.bucket_type, 0.72, createdAt);
+          }
+          previousByType.set(bucket.bucket_type, bucket);
+        }
+      })();
+      const last = page[page.length - 1]!;
+      bucketCursor = { type: last.bucket_type, start: last.bucket_start, id: last.bucket_id };
+    }
+
+    let entryCursor = 0;
+    for (;;) {
+      const entries = db.prepare(`
+        SELECT rowid,bucket_id,neuron_id,created_at
+        FROM topology_time_rebuild_entries
+        WHERE generation=? AND rowid>?
+        ORDER BY rowid
+        LIMIT 500
+      `).all(generation, entryCursor) as Array<{ rowid: number; bucket_id: string; neuron_id: string; created_at: number }>;
+      if (entries.length === 0) break;
+      db.transaction(() => {
+        for (const entry of entries) {
+          const sourceNodeId = cognitiveNodeId(projectId, 'neuron', `neuron:${entry.neuron_id}`);
+          const targetNodeId = cognitiveNodeId(projectId, 'time_bucket', `time_bucket:${entry.bucket_id}`);
+          insertEdge.run(generation, cognitiveEdgeId({ projectId, sourceNodeId, targetNodeId, edgeType: 'occurred_in_time_bucket' }), sourceNodeId, targetNodeId, 'occurred_in_time_bucket', 1, projectId, null, entry.created_at);
+        }
+      })();
+      entryCursor = entries[entries.length - 1]!.rowid;
+    }
   }
 
   recordRawEvent(input: RawMemoryEventInput): MemoryEvent<{ text: string; metadata?: Record<string, unknown> }> {
@@ -1143,7 +1553,9 @@ export class MemoryKernel {
       threadId: input.threadId,
       sessionId: input.sessionId,
       localDate: input.localDate,
-      localDateSource: input.localDateSource ?? (input.localDate ? 'explicit' : 'generated_utc'),
+      localDateSource: input.localDateSource,
+      timeZone: input.timeZone ?? input.projectTimeZone,
+      projectTimeZone: this.projectClock.timeZone,
       turnId: input.turnId,
       turnSeq: input.turnSeq,
       eventOrdinal: input.eventOrdinal,
@@ -1291,17 +1703,44 @@ export class MemoryKernel {
   async consolidate(options: MemoryKernelConsolidationOptions = {}): Promise<OfflineConsolidationOutput> {
     const endTime = options.endTime ?? Date.now() + 1;
     const startTime = options.startTime ?? 0;
+    if (options.projectId === undefined) {
+      const scopes = (this.factStore.getDatabase().prepare(`
+        SELECT DISTINCT COALESCE(project_id, '') AS project_id
+        FROM neurons
+        WHERE is_deleted = 0 AND created_at >= ? AND created_at < ?
+        ORDER BY project_id
+      `).all(startTime, endTime) as Array<{ project_id: string }>).map((row) => row.project_id);
+      const outputs: OfflineConsolidationOutput[] = [];
+      for (const projectId of scopes) outputs.push(await this.consolidate({ ...options, projectId, startTime, endTime }));
+      const seeded = outputs.reduce((sum, output) => sum + Number(output.autoEdgeSeeding?.seededEdgeCount ?? 0), 0);
+      return {
+        verifiedFacts: outputs.flatMap((output) => output.verifiedFacts),
+        verifiedEvents: outputs.flatMap((output) => output.verifiedEvents),
+        correctedEntityBindings: outputs.flatMap((output) => output.correctedEntityBindings),
+        consolidatedBeliefs: outputs.flatMap((output) => output.consolidatedBeliefs),
+        archivedFactIds: outputs.flatMap((output) => output.archivedFactIds),
+        rejectedFactIds: outputs.flatMap((output) => output.rejectedFactIds),
+        archivedEntityIds: outputs.flatMap((output) => output.archivedEntityIds),
+        unresolvedReferenceIds: outputs.flatMap((output) => output.unresolvedReferenceIds),
+        plasticityProposals: outputs.flatMap((output) => output.plasticityProposals),
+        ...(outputs.some((output) => output.autoEdgeSeeding) ? { autoEdgeSeeding: { seededEdgeCount: seeded } } : {}),
+      };
+    }
     const rawEpisodes = this.memoryGraph.listNeuronsByTimeRange(startTime, endTime, options.projectId);
     const provisionalFacts = this.factStore.listFactsByTimeRange(startTime, endTime, {
       statuses: ['provisional', 'provisional_enriched', 'enriched_candidate', 'verified'],
+      projectId: options.projectId,
     });
     const provisionalEvents = this.factStore.listEventsByTimeRange(startTime, endTime, {
       statuses: ['provisional', 'verified'],
+      projectId: options.projectId,
     });
     const interactionUnits = this.interactionUnitStore.listUnitsByNeuronIds(rawEpisodes.map((episode) => episode.id));
-    const provisionalEntities = this.entityStore.listEntitiesUpdatedInRange(startTime, endTime);
+    const provisionalEntities = this.entityStore
+      .listEntitiesUpdatedInRange(startTime, endTime, undefined, options.projectId)
+      .filter((entity) => this.entityStore.isExclusiveToProject(entity.entityId, options.projectId!));
     const unresolvedReferences = this.entityStore
-      .listPendingResolutions()
+      .listPendingResolutions({ projectId: options.projectId })
       .filter((item) => item.updatedAt >= startTime && item.updatedAt < endTime);
     const lowConfidenceItems = [
       ...provisionalFacts
@@ -1829,6 +2268,7 @@ export class MemoryKernel {
     }
 
     if (['move-event', 'split', 'merge', 'reclassify'].includes(input.operation)) {
+      this.memoryFrameStore.supersedeEpisodes([...affected], now);
       for (const episodeId of affected) {
         const episode = this.episodeStore.getEpisode(episodeId);
         if (!episode) continue;
@@ -2056,8 +2496,55 @@ export class MemoryKernel {
     return this.memoryAtlasIndexer.ensureFresh(options);
   }
 
+  getMemoryFrame(episodeId: string, projectId?: string, options: { includeStaged?: boolean } = {}): MemoryFrameV1 | null {
+    const episode = this.episodeStore.getEpisode(episodeId);
+    if (!episode || (projectId !== undefined && episode.projectId !== projectId)) return null;
+    return this.memoryFrameStore.getByEpisode(episode.projectId, episodeId, options.includeStaged ? ['active', 'needs_confirmation', 'staged'] : undefined);
+  }
+
+  reviewMemoryFrame(input: { frameId: string; projectId: string; action: 'approve' | 'reject'; actor: string; reason: string }): boolean {
+    return this.memoryFrameStore.review(input.frameId, input.projectId, input.action, input.actor, input.reason);
+  }
+
+  listMemoryDimensions(projectId: string, nodeType?: string, limit = 100): Array<{ id: string; nodeType: string; label: string; confidence: number; evidenceEventIds: string[] }> {
+    const allowed = new Set(['actor', 'entity', 'project', 'topic', 'issue', 'event', 'task', 'object', 'location', 'state', 'episode', 'time']);
+    if (nodeType && !allowed.has(nodeType)) throw new Error(`invalid_memory_dimension:${nodeType}`);
+    const rows = this.factStore.getDatabase().prepare(`
+      SELECT node_id,node_type,label,confidence,evidence_event_ids_json
+      FROM memory_atlas_documents
+      WHERE project_id=? AND status NOT IN ('archived','rejected','needs_confirmation') ${nodeType ? 'AND node_type=?' : ''}
+      ORDER BY confidence DESC, updated_at DESC, node_id ASC LIMIT ?
+    `).all(projectId, ...(nodeType ? [nodeType] : []), Math.max(1, Math.min(limit, 500))) as Array<{ node_id: string; node_type: string; label: string; confidence: number; evidence_event_ids_json: string }>;
+    return rows.map((row) => ({ id: row.node_id, nodeType: row.node_type, label: row.label, confidence: Number(row.confidence), evidenceEventIds: JSON.parse(row.evidence_event_ids_json || '[]') as string[] }));
+  }
+
+  backfillMemoryFrames(options: { projectId: string; limit?: number; cursor?: string; mode?: 'shadow' | 'active' }): { projectId: string; processed: number; created: number; needsReview: number; nextCursor?: string; hasMore: boolean } {
+    const page = this.episodeStore.listEpisodesForFrameBackfill({ projectId: options.projectId, cursor: options.cursor, limit: options.limit });
+    const selected = page.episodes;
+    let created = 0; let needsReview = 0;
+    for (const episode of selected) {
+      const events = this.episodeStore.listEventLinks(episode.episodeId).map((link) => this.eventStore.getEvent(link.eventId)).filter((event): event is MemoryEvent => Boolean(event));
+      if (!events.length) continue;
+      const frame = deterministicFrameFallback({ projectId: options.projectId, episodeId: episode.episodeId, episodeType: episode.episodeType as MemoryFrameV1['episodeKind'], events });
+      const saved = this.memoryFrameStore.save({
+        frame,
+        sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), episode.episodeId),
+        status: 'staged',
+        publishStatus: 'needs_confirmation',
+      });
+      // Backfill active is an explicit publication request, but deterministic
+      // fallback frames remain review-only and can never become active here.
+      if (options.mode === 'active') {
+        const published = this.memoryFrameStore.publish(saved.frameId, 'staged', frame.needsReview ? 'needs_confirmation' : 'active');
+        if (!published) throw new Error(`memory_frame_backfill_publish_conflict:${saved.frameId}`);
+      }
+      created += 1; needsReview += frame.needsReview ? 1 : 0;
+    }
+    return { projectId: options.projectId, processed: selected.length, created, needsReview, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}), hasMore: page.hasMore };
+  }
+
   private prepareMemoryAtlasRead(options: MemoryAtlasQueryOptions): { atlasFresh: boolean; refreshError?: string } {
-    if (options.refresh === false) {
+    if (options.refresh !== true) {
       const state = this.memoryAtlasStore.getProjectionState(options.projectId);
       return { atlasFresh: state?.status === 'clean' };
     }
@@ -2073,6 +2560,12 @@ export class MemoryKernel {
     }
   }
 
+  private withProjectClock(options: MemoryAtlasQueryOptions): MemoryAtlasQueryOptions {
+    const now = options.now ?? Date.now();
+    const timeZone = options.timeZone ?? this.projectClock.timeZone;
+    return { ...options, now, timeZone, localDateNow: options.localDateNow ?? localDateFor(now, timeZone) };
+  }
+
   private withAtlasFreshness<T extends object>(result: T, freshness: { atlasFresh: boolean; refreshError?: string }): T {
     return Object.assign(result, {
       atlasFresh: freshness.atlasFresh,
@@ -2086,13 +2579,22 @@ export class MemoryKernel {
   }
 
   graphSearch(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
+    options = this.withProjectClock(options);
     const freshness = this.prepareMemoryAtlasRead(options);
     return this.withAtlasFreshness(this.memoryAtlasService.search(query, options), freshness);
   }
 
   graphExplore(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
+    options = this.withProjectClock(options);
     const freshness = this.prepareMemoryAtlasRead(options);
     return this.withAtlasFreshness(this.memoryAtlasService.explore(query, options), freshness);
+  }
+
+  planMemoryQuery(query: string, options: MemoryAtlasQueryOptions): { queryFrame: ReturnType<MultidimensionalQueryPlanner['plan']>; result: MemoryAtlasSlice } {
+    options = this.withProjectClock(options);
+    const freshness = this.prepareMemoryAtlasRead(options);
+    const planned = this.atlasPathRetriever.retrieve(query, options);
+    return { queryFrame: planned.queryFrame, result: this.withAtlasFreshness(planned.result, freshness) };
   }
 
   graphNode(nodeId: string, options: MemoryAtlasQueryOptions): MemoryAtlasNodeDetail | null {
@@ -2112,6 +2614,7 @@ export class MemoryKernel {
   }
 
   graphTimeline(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasTimelineResult {
+    options = this.withProjectClock(options);
     const freshness = this.prepareMemoryAtlasRead(options);
     return this.withAtlasFreshness(this.memoryAtlasService.timeline(query, options), freshness);
   }
@@ -2173,9 +2676,9 @@ export class MemoryKernel {
   buildMemoryMap(options: MemoryMapOptions = {}): MemorySelfMap {
     const projectId = options.projectId;
     const rawPage = this.eventStore.queryEvents(1, 1, {
-      projectId: projectId ? [projectId] : undefined,
+      projectId: projectId !== undefined ? [projectId] : undefined,
     });
-    const projectNeurons = projectId
+    const projectNeurons = projectId !== undefined
       ? this.memoryGraph.getNeuronIdsByProject(projectId).length
       : this.memoryGraph.getStats().neuronCount;
     const dreamBacklog = this.getDreamBacklogStatus(projectId);
@@ -2350,12 +2853,12 @@ export class MemoryKernel {
     });
     let memoryAtlasRefresh: MaintenanceTickResult['executed']['memoryAtlasRefresh'];
     try {
-      memoryAtlasRefresh = projectId
+      memoryAtlasRefresh = projectId !== undefined
         ? { ...this.ensureMemoryAtlas({ projectId }), errors: [] }
         : this.memoryAtlasIndexer.ensureAllFresh();
     } catch (error) {
       memoryAtlasRefresh = { documents: this.memoryAtlasStore.countDocuments(projectId), actions: 0, refreshed: false,
-        errors: [{ projectId: projectId || '__global__', error: error instanceof Error ? error.message : String(error) }] };
+        errors: [{ projectId: projectId ?? '__all__', error: error instanceof Error ? error.message : String(error) }] };
     }
     const memoryAtlasActivationDecay = this.memoryAtlasStore.decay(projectId, options.activationDecayFactor ?? 0.85, ranAt);
     const memoryAtlasAccessPruned = this.memoryAtlasStore.cleanupAccess({
@@ -2372,7 +2875,7 @@ export class MemoryKernel {
     const unassignedEpisodeRawEvents = this.episodeStore.countUnassignedRawEvents(projectId);
     const queue = this.getDreamCandidateQueue(projectId);
     const entityConflicts = this.entityStore.listAliasConflicts().filter((conflict) => {
-      if (!projectId) return true;
+      if (projectId === undefined) return true;
       return conflict.entityIds.some((entityId) => {
         const entity = this.entityStore.getByEntityId(entityId);
         return entity?.metadata?.projectId === projectId
@@ -2386,62 +2889,63 @@ export class MemoryKernel {
     const unboundRawEvents = this.countUnboundBindableRawEvents(projectId);
     const bindingFailures = this.pipelineMetrics.getNonFatalCount('memory_binding_failed', { projectId });
     const suggestedActions: MaintenanceSuggestedAction[] = [];
+    const suggestedAction = (
+      kind: MaintenanceSuggestedAction['kind'],
+      executable: string,
+      args: string[],
+      reason: string,
+    ): MaintenanceSuggestedAction => ({
+      kind,
+      executable,
+      args,
+      command: [executable, ...args.map(cliArg)].join(' '),
+      reason,
+    });
+
+    if (projectId !== undefined && !this.topologyStore.hasUsableTimeProjection(projectScope(projectId), this.projectClock.timeZone)) {
+      suggestedActions.push(suggestedAction(
+        'rebuild_topology', 'cogmem', ['memory', 'rebuild-topology', '--project', projectId, '--json'],
+        'The project time projection is dirty or uses a different timezone; recall remains on non-temporal lanes until explicit rebuild.',
+      ));
+    }
 
     if (episodeDream.pending + episodeDream.failed > 0) {
-      suggestedActions.push({
-        kind: 'dream_curator',
-        command: `cogmem dream tick${projectId ? ` --project ${projectId}` : ''} --mode auto`,
-        reason: `${episodeDream.pending + episodeDream.failed} sealed episodes are waiting for candidate-only Dream processing.`,
-      });
+      suggestedActions.push(suggestedAction('dream_curator', 'cogmem', [
+        'dream', 'tick', ...(projectId !== undefined ? ['--project', projectId] : []), '--mode', 'auto'
+      ], `${episodeDream.pending + episodeDream.failed} sealed episodes are waiting for candidate-only Dream processing.`));
     }
     if (unassignedEpisodeRawEvents > 0) {
-      suggestedActions.push({
-        kind: 'repair_episodes',
-        command: `cogmem episode repair${projectId ? ` --project ${projectId}` : ''} --json`,
-        reason: `${unassignedEpisodeRawEvents} raw events are not assigned to an episode; the raw evidence remains intact.`,
-      });
+      suggestedActions.push(suggestedAction('repair_episodes', 'cogmem', [
+        'episode', 'repair', ...(projectId !== undefined ? ['--project', projectId] : []), '--json'
+      ], `${unassignedEpisodeRawEvents} raw events are not assigned to an episode; the raw evidence remains intact.`));
     }
     if (candidateQueue > 0) {
-      suggestedActions.push({
-        kind: 'govern_candidates',
-        command: `cogmem memory govern${projectId ? ` --project ${projectId}` : ''}`,
-        reason: `${candidateQueue} dream/deep-write candidates need CPU governance.`,
-      });
+      suggestedActions.push(suggestedAction('govern_candidates', 'cogmem', [
+        'memory', 'govern', ...(projectId !== undefined ? ['--project', projectId] : [])
+      ], `${candidateQueue} dream/deep-write candidates need CPU governance.`));
     }
     if (entityConflicts > 0) {
-      suggestedActions.push({
-        kind: 'resolve_entities',
-        command: 'cogmem memory map --json',
-        reason: `${entityConflicts} active entity alias conflicts need host or agent review.`,
-      });
+      suggestedActions.push(suggestedAction('resolve_entities', 'cogmem', ['memory', 'map', '--json'], `${entityConflicts} active entity alias conflicts need host or agent review.`));
     }
     if (staleVectors > 0) {
-      suggestedActions.push({
-        kind: 're_embed',
-        command: `cogmem-re-embed run${projectId ? ` --project ${projectId}` : ''}`,
-        reason: `${staleVectors} embeddings are stale for the configured embedding model.`,
-      });
+      suggestedActions.push(suggestedAction('re_embed', 'cogmem-re-embed', [
+        'run', ...(projectId !== undefined ? ['--project', projectId] : [])
+      ], `${staleVectors} embeddings are stale for the configured embedding model.`));
     }
     if (unboundRawEvents > 0) {
-      suggestedActions.push({
-        kind: 'bind_raw_events',
-        command: `cogmem memory bind${projectId ? ` --project ${projectId}` : ''} --json`,
-        reason: `${unboundRawEvents} high-value raw user events are not attached to memory binding clusters yet.`,
-      });
+      suggestedActions.push(suggestedAction('bind_raw_events', 'cogmem', [
+        'memory', 'bind', ...(projectId !== undefined ? ['--project', projectId] : []), '--json'
+      ], `${unboundRawEvents} high-value raw user events are not attached to memory binding clusters yet.`));
     }
     if (bindingFailures > 0) {
-      suggestedActions.push({
-        kind: 'inspect_binding_failures',
-        command: `cogmem memory tick${projectId ? ` --project ${projectId}` : ''} --json`,
-        reason: `${bindingFailures} non-fatal memory binding failures were recorded; raw ledger writes were preserved.`,
-      });
+      suggestedActions.push(suggestedAction('inspect_binding_failures', 'cogmem', [
+        'memory', 'tick', ...(projectId !== undefined ? ['--project', projectId] : []), '--json'
+      ], `${bindingFailures} non-fatal memory binding failures were recorded; raw ledger writes were preserved.`));
     }
     if (hotspots.length > 0) {
-      suggestedActions.push({
-        kind: 'inspect_hotspots',
-        command: `cogmem memory map${projectId ? ` --project ${projectId}` : ''} --json`,
-        reason: `${hotspots.length} activation hotspots remain after decay.`,
-      });
+      suggestedActions.push(suggestedAction('inspect_hotspots', 'cogmem', [
+        'memory', 'map', ...(projectId !== undefined ? ['--project', projectId] : []), '--json'
+      ], `${hotspots.length} activation hotspots remain after decay.`));
     }
 
     return {
@@ -2566,10 +3070,12 @@ export class MemoryKernel {
     return this.metabolism.getHotMemories();
   }
 
-  async forgetUser(projectId: string, reason = 'unspecified'): Promise<ForgetUserResult> {
+  async forgetUser(projectId: string, _reason = 'unspecified'): Promise<ForgetUserResult> {
     const db = this.factStore.getDatabase();
-    const neuronIds = this.memoryGraph.getNeuronIdsByProject(projectId);
+    const scope = projectScope(projectId);
+    const neuronIds = this.memoryGraph.getNeuronIdsByProject(scope);
     const auditId = `audit-${randomUUID()}`;
+    const auditScope = `sha256:${createHash('sha256').update(scope).digest('hex')}`;
     const deleted = {
       neurons: neuronIds.length,
       synapses: 0,
@@ -2588,33 +3094,63 @@ export class MemoryKernel {
     const projectMentionRows = (neuronIds.length > 0
       ? db.prepare(`
           SELECT DISTINCT entity_id FROM entity_mentions
-          WHERE project_id = ? OR neuron_id IN (${neuronIds.map(() => '?').join(', ')})
-        `).all(projectId, ...neuronIds)
-      : db.prepare(`SELECT DISTINCT entity_id FROM entity_mentions WHERE project_id = ?`).all(projectId)
+          WHERE COALESCE(project_id, '') = ? OR neuron_id IN (${neuronIds.map(() => '?').join(', ')})
+        `).all(scope, ...neuronIds)
+      : db.prepare(`SELECT DISTINCT entity_id FROM entity_mentions WHERE COALESCE(project_id, '') = ?`).all(scope)
     ) as Array<{ entity_id: string }>;
     const projectMentionEntityIds = new Set(projectMentionRows.map((row) => row.entity_id));
+    const mentionScopes = new Map<string, Set<string>>();
+    for (const row of db.prepare(`SELECT entity_id,COALESCE(project_id,'') AS scope FROM entity_mentions`).all() as Array<{ entity_id: string; scope: string }>) {
+      const scopes = mentionScopes.get(row.entity_id) ?? new Set<string>();
+      scopes.add(row.scope);
+      mentionScopes.set(row.entity_id, scopes);
+    }
     const projectEntityInstances = (db.prepare(`
       SELECT instance_id, canonical_entity_id, aliases_json, metadata_json
       FROM entity_instances
     `).all() as Array<{ instance_id: string; canonical_entity_id: string; aliases_json: string; metadata_json: string | null }>)
       .filter((row) => {
         const ownerProjectId = parseJsonObject(row.metadata_json).projectId;
-        return ownerProjectId === projectId || (!ownerProjectId && projectMentionEntityIds.has(row.instance_id));
+        if (typeof ownerProjectId === 'string') return projectScope(ownerProjectId) === scope;
+        const scopes = mentionScopes.get(row.instance_id) ?? new Set<string>();
+        return projectMentionEntityIds.has(row.instance_id) && scopes.size > 0 && [...scopes].every((value) => value === scope);
       });
     const projectEntityIds = projectEntityInstances.map((row) => row.instance_id);
-    const affectedCanonicalEntityIds = uniqueStrings(projectEntityInstances.map((row) => row.canonical_entity_id));
+    const affectedCanonicalEntityIds = uniqueStrings([
+      ...projectEntityInstances.map((row) => row.canonical_entity_id),
+      ...(projectMentionEntityIds.size === 0 ? [] : (db.prepare(`
+        SELECT DISTINCT canonical_entity_id FROM entity_instances
+        WHERE instance_id IN (${[...projectMentionEntityIds].map(() => '?').join(',')})
+      `).all(...projectMentionEntityIds) as Array<{ canonical_entity_id: string }>).map((row) => row.canonical_entity_id)),
+    ]);
 
     const placeholders = neuronIds.map(() => '?').join(', ');
     const runDelete = (sql: string, params: Array<string | number> = []): number => {
       try {
         return Number(db.prepare(sql).run(...params).changes ?? 0);
       } catch (error) {
-        if (error instanceof Error && /no such table/i.test(error.message)) return 0;
+        if (error instanceof Error) {
+          const missing = /no such table:\s*(?:main\.)?([\w]+)/i.exec(error.message)?.[1];
+          const target = /^\s*DELETE\s+FROM\s+([\w]+)/i.exec(sql)?.[1];
+          if (missing && target && missing.toLowerCase() === target.toLowerCase()) return 0;
+        }
         throw error;
       }
     };
+    const deleteScoped = (table: string): number => runDelete(
+      `DELETE FROM ${table} WHERE COALESCE(project_id, '') = ?`,
+      [scope]
+    );
 
+    db.exec(`PRAGMA secure_delete = ON`);
     db.transaction(() => {
+      Object.assign(deleted, { privacyTables: deleteRegisteredProjectContent({
+        scope,
+        neuronIds,
+        runDelete,
+        listPersistentTables: () => (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name),
+        hasColumn: (table, column) => Boolean(db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name=?`).get(table, column)),
+      }) });
       if (neuronIds.length > 0) {
         deleted.synapses += runDelete(`DELETE FROM synapses WHERE source_id IN (${placeholders}) OR target_id IN (${placeholders})`, [...neuronIds, ...neuronIds]);
         deleted.facts += runDelete(`DELETE FROM facts WHERE neuron_id IN (${placeholders})`, neuronIds);
@@ -2622,40 +3158,74 @@ export class MemoryKernel {
         deleted.embeddings += runDelete(`DELETE FROM neuron_embeddings WHERE neuron_id IN (${placeholders})`, neuronIds);
         deleted.vectors += runDelete(`DELETE FROM vector_index WHERE neuron_id IN (${placeholders})`, neuronIds);
         runDelete(`DELETE FROM neurons_fts WHERE id IN (${placeholders})`, neuronIds);
-        runDelete(`UPDATE neurons SET is_deleted = 1, status = 'archived', updated_at = ? WHERE id IN (${placeholders})`, [Date.now(), ...neuronIds]);
       }
-      deleted.episodes += this.episodeStore.deleteByProject(projectId);
-      deleted.events += runDelete(`DELETE FROM memory_events WHERE project_id = ?`, [projectId]);
-      deleted.activations += this.activationStore.deleteByProject(projectId);
-      deleted.memoryBindings += this.memoryBindingStore.deleteByProject(projectId);
-      runDelete(`DELETE FROM time_bucket_entries WHERE project_id = ?`, [projectId]);
-      runDelete(`DELETE FROM branch_links WHERE parent_branch_id IN (SELECT branch_id FROM project_branches WHERE project_id = ?) OR child_branch_id IN (SELECT branch_id FROM project_branches WHERE project_id = ?)`, [projectId, projectId]);
-      runDelete(`DELETE FROM branch_entries WHERE branch_id IN (SELECT branch_id FROM project_branches WHERE project_id = ?)`, [projectId]);
-      runDelete(`DELETE FROM project_branches WHERE project_id = ?`, [projectId]);
-      runDelete(`DELETE FROM task_branch_entries WHERE task_id IN (SELECT task_id FROM task_branches WHERE project_id = ?)`, [projectId]);
-      runDelete(`DELETE FROM task_branches WHERE project_id = ?`, [projectId]);
-      runDelete(`DELETE FROM event_cluster_entries WHERE cluster_id IN (SELECT cluster_id FROM event_clusters WHERE project_id = ?)`, [projectId]);
-      runDelete(`DELETE FROM event_clusters WHERE project_id = ?`, [projectId]);
-      runDelete(`DELETE FROM topology_membership WHERE project_id = ?`, [projectId]);
-      runDelete(`DELETE FROM cognitive_nodes WHERE project_id = ?`, [projectId]);
-      runDelete(`DELETE FROM cognitive_edges WHERE project_id = ?`, [projectId]);
+      deleted.episodes += this.episodeStore.deleteByProject(scope);
+      for (const table of [
+        'memory_atlas_supports', 'memory_atlas_aliases', 'memory_edge_supports', 'memory_edges', 'memory_atlas_fts',
+        'memory_atlas_documents', 'memory_action_frame_evidence', 'memory_action_frames',
+        'memory_atlas_access', 'memory_atlas_activation', 'memory_atlas_projection_state',
+        'memory_frames'
+      ]) deleteScoped(table);
+      runDelete(`DELETE FROM memory_events_fts WHERE event_id IN (SELECT event_id FROM memory_events WHERE COALESCE(project_id, '') = ?)`, [scope]);
+      deleted.events += deleteScoped('memory_events');
+      deleteScoped('compiler_confidence_runs');
+      if (neuronIds.length > 0) {
+        runDelete(`DELETE FROM pending_bindings WHERE unit_id IN (
+          SELECT unit_id FROM interaction_units
+          WHERE EXISTS (
+            SELECT 1 FROM json_each(interaction_units.message_neuron_ids_json)
+            WHERE json_each.value IN (${placeholders})
+          )
+        )`, neuronIds);
+        runDelete(`DELETE FROM interaction_units WHERE EXISTS (
+          SELECT 1 FROM json_each(interaction_units.message_neuron_ids_json)
+          WHERE json_each.value IN (${placeholders})
+        )`, neuronIds);
+      }
+      deleted.activations += this.activationStore.deleteByProject(scope);
+      deleted.memoryBindings += this.memoryBindingStore.deleteByProject(scope);
+      for (const table of [
+        'time_bucket_entries', 'temporal_adjacency', 'time_buckets', 'topology_time_rebuild_jobs',
+        'topology_projection_state', 'topology_source_revisions'
+      ]) deleteScoped(table);
+      runDelete(`DELETE FROM branch_links WHERE parent_branch_id IN (SELECT branch_id FROM project_branches WHERE COALESCE(project_id, '') = ?) OR child_branch_id IN (SELECT branch_id FROM project_branches WHERE COALESCE(project_id, '') = ?)`, [scope, scope]);
+      runDelete(`DELETE FROM branch_entries WHERE branch_id IN (SELECT branch_id FROM project_branches WHERE COALESCE(project_id, '') = ?)`, [scope]);
+      deleteScoped('project_branches');
+      runDelete(`DELETE FROM task_branch_entries WHERE task_id IN (SELECT task_id FROM task_branches WHERE COALESCE(project_id, '') = ?)`, [scope]);
+      deleteScoped('task_branches');
+      runDelete(`DELETE FROM event_cluster_entries WHERE cluster_id IN (SELECT cluster_id FROM event_clusters WHERE COALESCE(project_id, '') = ?)`, [scope]);
+      deleteScoped('event_clusters');
+      deleteScoped('topology_membership');
+      deleteScoped('cognitive_edges');
+      deleteScoped('cognitive_nodes');
 
-      deleted.brainProjections += runDelete(`DELETE FROM prospective_memory_transitions WHERE candidate_id IN (SELECT candidate_id FROM prospective_memories WHERE project_id = ?)`, [projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM prospective_memories WHERE project_id = ?`, [projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM context_strategy_outcomes WHERE project_id = ?`, [projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM context_activation_receipts WHERE project_id = ?`, [projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM memory_timeline_entries WHERE project_id = ?`, [projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM belief_graph_evidence WHERE belief_id IN (SELECT belief_id FROM belief_graph_nodes WHERE project_id = ?)`, [projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM belief_graph_versions WHERE belief_id IN (SELECT belief_id FROM belief_graph_nodes WHERE project_id = ?)`, [projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM belief_graph_conflicts WHERE project_id = ?`, [projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM belief_graph_nodes WHERE project_id = ?`, [projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM entity_resolution_log WHERE candidate_id IN (SELECT candidate_id FROM entity_merge_candidates WHERE project_id = ?)`, [projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM entity_merge_candidates WHERE project_id = ?`, [projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM memory_governance_audit WHERE project_id = ?`, [projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM memory_governance_plans WHERE project_id = ? OR plan_id IN (SELECT plan_id FROM memory_governance_operations WHERE project_id = ?)`, [projectId, projectId]);
-      deleted.brainProjections += runDelete(`DELETE FROM memory_governance_operations WHERE project_id = ?`, [projectId]);
+      deleted.brainProjections += runDelete(`DELETE FROM prospective_memory_transitions WHERE candidate_id IN (SELECT candidate_id FROM prospective_memories WHERE COALESCE(project_id, '') = ?)`, [scope]);
+      for (const table of ['prospective_memories', 'context_strategy_outcomes', 'context_activation_receipts', 'memory_timeline_entries']) {
+        deleted.brainProjections += deleteScoped(table);
+      }
+      deleted.brainProjections += runDelete(`DELETE FROM belief_graph_evidence WHERE belief_id IN (SELECT belief_id FROM belief_graph_nodes WHERE COALESCE(project_id, '') = ?)`, [scope]);
+      deleted.brainProjections += runDelete(`DELETE FROM belief_graph_versions WHERE belief_id IN (SELECT belief_id FROM belief_graph_nodes WHERE COALESCE(project_id, '') = ?)`, [scope]);
+      for (const table of ['belief_graph_conflicts', 'belief_graph_nodes']) deleted.brainProjections += deleteScoped(table);
+      deleted.brainProjections += runDelete(`DELETE FROM entity_resolution_log WHERE candidate_id IN (SELECT candidate_id FROM entity_merge_candidates WHERE COALESCE(project_id, '') = ?)`, [scope]);
+      for (const table of ['entity_merge_candidates', 'memory_governance_audit']) deleted.brainProjections += deleteScoped(table);
+      deleted.brainProjections += runDelete(`DELETE FROM memory_governance_plans WHERE COALESCE(project_id, '') = ? OR plan_id IN (SELECT plan_id FROM memory_governance_operations WHERE COALESCE(project_id, '') = ?)`, [scope, scope]);
+      deleted.brainProjections += deleteScoped('memory_governance_operations');
 
-      deleted.entityRecords += runDelete(`DELETE FROM entity_mentions WHERE project_id = ?`, [projectId]);
+      const sharedEntityIds = (db.prepare(`
+        SELECT DISTINCT entity_id FROM entity_mentions target
+        WHERE COALESCE(target.project_id,'')=?
+          AND EXISTS (SELECT 1 FROM entity_mentions other WHERE other.entity_id=target.entity_id AND COALESCE(other.project_id,'')<>?)
+      `).all(scope, scope) as Array<{ entity_id: string }>).map((row) => row.entity_id);
+      for (const entityId of sharedEntityIds) {
+        const survivingAlias = db.prepare(`SELECT alias_text FROM entity_aliases WHERE entity_id=? AND COALESCE(project_id,'')<>? ORDER BY updated_at DESC,alias_id LIMIT 1`)
+          .get(entityId, scope) as { alias_text?: string } | null;
+        db.prepare(`UPDATE entity_instances SET canonical_name=?,aliases_json='[]',metadata_json='{}',created_from=NULL WHERE instance_id=?`)
+          .run(survivingAlias?.alias_text || `entity-${entityId.slice(-12)}`, entityId);
+      }
+      deleted.entityRecords += deleteScoped('entity_aliases');
+      deleted.entityRecords += deleteScoped('entity_relations');
+      deleted.entityRecords += deleteScoped('entity_alias_conflicts');
+      deleted.entityRecords += deleteScoped('entity_mentions');
       if (projectEntityIds.length > 0) {
         const entityPlaceholders = projectEntityIds.map(() => '?').join(', ');
         deleted.entityRecords += runDelete(`DELETE FROM entity_resolution_log WHERE source_entity_id IN (${entityPlaceholders}) OR target_entity_id IN (${entityPlaceholders})`, [...projectEntityIds, ...projectEntityIds]);
@@ -2675,31 +3245,46 @@ export class MemoryKernel {
       for (const canonicalEntityId of affectedCanonicalEntityIds) {
         rebuildCanonicalEntityAfterForget(db, canonicalEntityId, runDelete);
       }
+      const residualPrivacyTables = deleteResidualProjectOwnedContent({
+        scope,
+        neuronIds,
+        runDelete,
+        listPersistentTables: () => (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name),
+        hasColumn: (table, column) => Boolean(db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name=?`).get(table, column)),
+      });
+      Object.assign((deleted as typeof deleted & { privacyTables?: Record<string, number> }).privacyTables ??= {}, residualPrivacyTables);
+      if (neuronIds.length > 0) {
+        runDelete(`DELETE FROM neurons WHERE id IN (${placeholders})`, neuronIds);
+      }
+      runDelete(`DELETE FROM governance_audit_log WHERE COALESCE(project_id,'') IN (?,?)`, [scope, auditScope]);
       db.prepare(`
         INSERT INTO governance_audit_log (
           audit_id, action, project_id, reason, details_json, created_at
         ) VALUES (?, ?, ?, ?, ?, ?)
-      `).run(auditId, 'forgetUser', projectId, reason, JSON.stringify({ deleted }), Date.now());
+      `).run(auditId, 'forgetUser', auditScope, 'privacy_erasure_requested', JSON.stringify({ deleted }), Date.now());
     })();
+
+    db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
+    db.exec(`VACUUM`);
 
     for (const neuronId of neuronIds) {
       this.vectorStore.removePoint(neuronId);
     }
     this.memoryGraph.rebuildIndexes();
-    this.topicRegistry.invalidate(projectId);
-    return { projectId, auditId, deleted };
+    this.topicRegistry.invalidate(scope);
+    return { projectId: scope, auditId, deleted };
   }
 
   getGovernanceAudit(projectId?: string): GovernanceAuditRecord[] {
     const db = this.factStore.getDatabase();
     this.ensureGovernanceAuditTable(db);
-    const rows = projectId
+    const rows = projectId !== undefined
       ? db.prepare(`
           SELECT *
           FROM governance_audit_log
-          WHERE project_id = ?
+          WHERE COALESCE(project_id, '') = ?
           ORDER BY created_at DESC, audit_id DESC
-        `).all(projectId)
+        `).all(`sha256:${createHash('sha256').update(projectId).digest('hex')}`)
       : db.prepare(`
           SELECT *
           FROM governance_audit_log
@@ -2715,7 +3300,7 @@ export class MemoryKernel {
     }>).map((row) => ({
       auditId: row.audit_id,
       action: row.action,
-      projectId: row.project_id || undefined,
+      projectId: projectId ?? row.project_id ?? undefined,
       reason: row.reason || undefined,
       details: row.details_json ? JSON.parse(row.details_json) : undefined,
       createdAt: Number(row.created_at),
@@ -2723,7 +3308,7 @@ export class MemoryKernel {
   }
 
   getProjectMemories(projectId: string): Neuron[] {
-    return this.memoryGraph.getAllNeurons().filter((neuron) => neuron.metadata.projectId === projectId);
+    return this.memoryGraph.getAllNeurons().filter((neuron) => matchesProjectScope(projectId, neuron.metadata.projectId));
   }
 
   registerExtension(name: string, implementation: unknown): void {
@@ -2998,21 +3583,24 @@ function rebuildCanonicalEntityAfterForget(
   runDelete: (sql: string, params?: Array<string | number>) => number,
 ): void {
   const remaining = db.prepare(`
-    SELECT aliases_json FROM entity_instances WHERE canonical_entity_id = ?
-  `).all(canonicalEntityId) as Array<{ aliases_json: string }>;
+    SELECT instance_id,aliases_json,canonical_name FROM entity_instances WHERE canonical_entity_id = ?
+    ORDER BY updated_at DESC,instance_id
+  `).all(canonicalEntityId) as Array<{ instance_id: string; aliases_json: string; canonical_name: string }>;
   if (remaining.length === 0) {
     runDelete(`DELETE FROM entities WHERE entity_id = ?`, [canonicalEntityId]);
     return;
   }
 
-  const aliases = uniqueStrings(remaining.flatMap((row) => parseJsonStringArray(row.aliases_json)));
-  const canonical = db.prepare(`SELECT metadata_json FROM entities WHERE entity_id = ?`).get(canonicalEntityId) as { metadata_json: string | null } | null;
-  const metadata = parseJsonObject(canonical?.metadata_json);
-  for (const key of ['projectId', 'rawMention', 'answerDisplayName', 'ens1RawMention', 'ens1RawMentions', 'ens1AnswerDisplayName']) {
-    delete metadata[key];
-  }
-  db.prepare(`UPDATE entities SET aliases_json = ?, metadata_json = ?, updated_at = ? WHERE entity_id = ?`)
-    .run(JSON.stringify(aliases), JSON.stringify(metadata), Date.now(), canonicalEntityId);
+  const scopedAliases = db.prepare(`SELECT alias_text FROM entity_aliases WHERE entity_id IN (
+    SELECT instance_id FROM entity_instances WHERE canonical_entity_id=?
+  ) ORDER BY updated_at DESC,alias_id`).all(canonicalEntityId) as Array<{ alias_text: string }>;
+  const aliases = uniqueStrings([
+    ...scopedAliases.map((row) => row.alias_text),
+    ...remaining.flatMap((row) => parseJsonStringArray(row.aliases_json)),
+  ]);
+  const canonicalName = scopedAliases[0]?.alias_text || remaining[0]?.canonical_name || `entity-${canonicalEntityId.slice(-12)}`;
+  db.prepare(`UPDATE entities SET canonical_name = ?, aliases_json = ?, metadata_json = '{}', updated_at = ? WHERE entity_id = ?`)
+    .run(canonicalName, JSON.stringify(aliases), Date.now(), canonicalEntityId);
 }
 
 function optionalGovernancePayloadString(payload: Record<string, unknown>, field: string): string | undefined {
@@ -3093,4 +3681,8 @@ function stringifyToolPayload(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function cliArg(value: string): string {
+  return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 }

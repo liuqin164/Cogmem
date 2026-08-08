@@ -3,7 +3,9 @@ import { PlanDslExecutor, type PlanExecutionContext } from './PlanDslExecutor.js
 import type { PlanRuntimeStore } from '../store/PlanRuntimeStore.js';
 import { NoopPolicySideEffectExecutor, type PolicySideEffectExecutor, type PolicySideEffectResult } from './PolicySideEffectExecutor.js';
 
-export interface PolicyRuntimeContext extends ConditionEvaluationContext, PlanExecutionContext {}
+export interface PolicyRuntimeContext extends ConditionEvaluationContext, PlanExecutionContext {
+  projectId: string;
+}
 
 export interface PolicyRuntimeDecision {
   runtimeId?: string;
@@ -54,7 +56,7 @@ export class PolicyRuntimeEvaluator {
         };
 
     if (input.runtimeId && input.runtimeStore) {
-      PlanDslExecutor.persistAnalysis(input.runtimeId, plan, input.runtimeStore);
+      PlanDslExecutor.persistAnalysis(context.projectId, input.runtimeId, plan, input.runtimeStore);
     }
 
     const failedPolicies = plan.policyCoverage.filter((item) => !item.matched).map((item) => `policy_missing:${item.policy}`);
@@ -122,7 +124,11 @@ export class PolicyRuntimeEvaluator {
         || decision.executableSteps[0];
 
       const result = await executor.execute({
+        projectId: context.projectId,
         runtimeId: decision.runtimeId,
+        stableOperationId: decision.runtimeId
+          ? `${decision.runtimeId}:${policyAction.policy}:${policyAction.action}:${target ?? ''}`
+          : undefined,
         policy: policyAction.policy,
         action: policyAction.action,
         target,

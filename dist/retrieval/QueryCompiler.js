@@ -1,5 +1,6 @@
 import { IntentParser } from '../core/IntentParser.js';
 import { NativeQueryParser } from './NativeQueryParser.js';
+import { assertLocalDate, localDateRange, nextCivilDate, resolveProjectClockContext } from '../utils/LocalDateContext.js';
 export class QueryCompiler {
     semanticCompiler;
     entityResolutionEngine;
@@ -8,7 +9,8 @@ export class QueryCompiler {
         this.semanticCompiler = semanticCompiler;
         this.entityResolutionEngine = entityResolutionEngine;
     }
-    compile(query, projectId) {
+    compile(query, projectId, clock) {
+        const resolvedClock = clock ?? resolveProjectClockContext();
         const nativeQuery = this.nativeQueryParser.parse(query);
         const effectiveQuery = nativeQuery.residualQuery || query;
         const baseIr = IntentParser.parse(effectiveQuery);
@@ -52,23 +54,28 @@ export class QueryCompiler {
         if (!ir.temporal.relative && nativeDirectives?.time) {
             ir.temporal.relative = this.mapNativeTime(nativeDirectives.time);
         }
-        if (!ir.temporal.start && nativeDirectives?.from) {
-            const start = this.parseNativeDate(nativeDirectives.from);
+        if (ir.temporal.start === undefined && nativeDirectives?.from) {
+            const start = this.parseNativeDate(nativeDirectives.from, resolvedClock.timeZone);
             if (start !== undefined)
                 ir.temporal.start = start;
         }
-        if (!ir.temporal.end && nativeDirectives?.to) {
-            const end = this.parseNativeDate(nativeDirectives.to, true);
+        if (ir.temporal.end === undefined && nativeDirectives?.to) {
+            const end = this.parseNativeDate(nativeDirectives.to, resolvedClock.timeZone, true);
             if (end !== undefined)
                 ir.temporal.end = end;
         }
-        if (!ir.temporal.relative && !ir.temporal.start && !ir.temporal.end && nativeDirectives?.around) {
-            const center = this.parseNativeDate(nativeDirectives.around);
+        if (!ir.temporal.relative && ir.temporal.start === undefined && ir.temporal.end === undefined && nativeDirectives?.around) {
+            const center = this.parseNativeDate(nativeDirectives.around, resolvedClock.timeZone);
             if (center !== undefined) {
-                ir.temporal.start = center - 7 * 86400000;
-                ir.temporal.end = center + 7 * 86400000;
+                const [year, month, day] = this.civilParts(nativeDirectives.around);
+                const start = nextCivilDate(year, month, day, -7, resolvedClock.timeZone);
+                const end = nextCivilDate(year, month, day, 8, resolvedClock.timeZone);
+                const range = localDateRange(...start, ...end, resolvedClock.timeZone);
+                ir.temporal.start = range.from;
+                ir.temporal.end = range.to;
             }
         }
+        this.resolveProjectTemporalWindow(ir, effectiveQuery, resolvedClock, Boolean(nativeDirectives?.from || nativeDirectives?.to || nativeDirectives?.around));
         const entityResolution = this.entityResolutionEngine.resolve({ query: effectiveQuery, ir, projectId });
         return { ir, semanticCompilation, entityResolution };
     }
@@ -86,12 +93,108 @@ export class QueryCompiler {
             return 'today';
         return undefined;
     }
-    parseNativeDate(value, endOfDay = false) {
+    parseNativeDate(value, timeZone, endExclusive = false) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(value))
             return undefined;
-        const ts = new Date(value).getTime();
-        if (Number.isNaN(ts))
+        try {
+            assertLocalDate(value, timeZone);
+            const [year, month, day] = this.civilParts(value);
+            const end = nextCivilDate(year, month, day, 1, timeZone);
+            const range = localDateRange(year, month, day, ...end, timeZone);
+            return endExclusive ? range.to : range.from;
+        }
+        catch {
             return undefined;
-        return endOfDay ? ts + 86400000 - 1 : ts;
+        }
+    }
+    resolveProjectTemporalWindow(ir, query, clock, hasNativeDateRange) {
+        if (hasNativeDateRange)
+            return;
+        const explicit = query.match(/\b(\d{4}-\d{2}-\d{2})\b/)?.[1];
+        if (explicit) {
+            const start = this.parseNativeDate(explicit, clock.timeZone);
+            const end = this.parseNativeDate(explicit, clock.timeZone, true);
+            if (start !== undefined && end !== undefined)
+                ir.temporal = { start, end };
+            return;
+        }
+        if (!ir.temporal.relative)
+            return;
+        const [year, month, day] = this.civilParts(clock.localDateNow);
+        const range = (start, end) => localDateRange(...start, ...end, clock.timeZone);
+        const today = [year, month, day];
+        const tomorrow = nextCivilDate(year, month, day, 1, clock.timeZone);
+        let resolved;
+        switch (ir.temporal.relative) {
+            case 'today':
+                resolved = range(today, tomorrow);
+                break;
+            case 'yesterday':
+                resolved = range(nextCivilDate(year, month, day, -1, clock.timeZone), today);
+                break;
+            case 'this_week': {
+                const monday = nextCivilDate(year, month, day, -((new Date(Date.UTC(year, month - 1, day)).getUTCDay() + 6) % 7), clock.timeZone);
+                resolved = range(monday, nextCivilDate(...monday, 7, clock.timeZone));
+                break;
+            }
+            case 'last_week': {
+                const monday = nextCivilDate(year, month, day, -((new Date(Date.UTC(year, month - 1, day)).getUTCDay() + 6) % 7), clock.timeZone);
+                const previous = nextCivilDate(...monday, -7, clock.timeZone);
+                resolved = range(previous, monday);
+                break;
+            }
+            case 'this_month':
+                resolved = range([year, month, 1], this.shiftMonth(year, month, 1));
+                break;
+            case 'last_month': {
+                const previous = this.shiftMonth(year, month, -1);
+                resolved = range(previous, [year, month, 1]);
+                break;
+            }
+            case 'this_year':
+                resolved = range([year, 1, 1], [year + 1, 1, 1]);
+                break;
+            case 'last_year':
+                resolved = range([year - 1, 1, 1], [year, 1, 1]);
+                break;
+            case 'past_six_months':
+                resolved = range(this.shiftMonth(year, month, -6, day), tomorrow);
+                break;
+            case 'past_year':
+                resolved = range(this.validPriorYearDate(year, month, day, clock.timeZone), tomorrow);
+                break;
+            case 'around_half_year_ago': {
+                const center = this.shiftMonth(year, month, -6, day);
+                resolved = range(nextCivilDate(...center, -7, clock.timeZone), nextCivilDate(...center, 8, clock.timeZone));
+                break;
+            }
+        }
+        if (resolved)
+            ir.temporal = { start: resolved.from, end: resolved.to, relative: ir.temporal.relative };
+    }
+    civilParts(value) {
+        return value.split('-').map(Number);
+    }
+    shiftMonth(year, month, offset, preferredDay = 1) {
+        const shifted = new Date(Date.UTC(year, month - 1 + offset, 1));
+        const targetYear = shifted.getUTCFullYear();
+        const targetMonth = shifted.getUTCMonth() + 1;
+        const lastDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+        return [targetYear, targetMonth, Math.min(preferredDay, lastDay)];
+    }
+    validPriorYearDate(year, month, day, timeZone) {
+        let cursor = new Date(Date.UTC(year - 1, month - 1, day));
+        for (let attempts = 0; attempts < 370; attempts += 1) {
+            const candidate = [cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, cursor.getUTCDate()];
+            const value = candidate.map((part, index) => String(part).padStart(index === 0 ? 4 : 2, '0')).join('-');
+            try {
+                assertLocalDate(value, timeZone);
+                return candidate;
+            }
+            catch {
+                cursor = new Date(Date.UTC(candidate[0], candidate[1] - 1, candidate[2] - 1));
+            }
+        }
+        throw new Error(`unable_to_resolve_prior_year_date:${timeZone}`);
     }
 }

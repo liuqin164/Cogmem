@@ -7,6 +7,8 @@ import type { TextGenerateFn } from '../models/ModelRole.js';
 import type { PipelineMetrics } from './PipelineMetrics.js';
 import type { EpisodeSemanticSummary, EpisodeType } from '../episode/EpisodeTypes.js';
 import type { CorrectionResolver } from '../episode/CorrectionResolver.js';
+import type { MemoryFrameStore } from '../store/MemoryFrameStore.js';
+import type { StructuredSemanticProcessor } from '../semantic/StructuredSemanticProcessor.js';
 export interface DreamCuratorRunOptions {
     projectId?: string;
     limit?: number;
@@ -41,6 +43,9 @@ export interface DreamCuratorRunResult {
     maxGlobalSeq?: number;
     status: DreamBacklogStatus;
     candidates: DeepWriteCandidateRecord[];
+    frameIds?: string[];
+    semanticProcessorAvailable?: boolean;
+    semanticProcessorReason?: string;
 }
 export interface DreamCuratorWorkerDeps {
     eventStore: EventStore;
@@ -49,6 +54,8 @@ export interface DreamCuratorWorkerDeps {
     modelRegistry?: ModelRegistry;
     pipelineMetrics?: PipelineMetrics;
     correctionResolver?: CorrectionResolver;
+    memoryFrameStore?: MemoryFrameStore;
+    semanticProcessor?: StructuredSemanticProcessor;
 }
 export declare class DreamCuratorWorker {
     private readonly deps;

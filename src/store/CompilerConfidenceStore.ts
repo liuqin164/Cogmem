@@ -13,9 +13,16 @@ export interface CompilerConfidenceRecord {
 
 export class CompilerConfidenceStore {
   private db: Database;
+  private readonly ownsDb: boolean;
 
-  constructor(dbPath: string = ':memory:') {
-    this.db = new Database(dbPath);
+  constructor(dbOrPath: Database | string = ':memory:') {
+    if (typeof dbOrPath === 'string') {
+      this.db = new Database(dbOrPath);
+      this.ownsDb = true;
+    } else {
+      this.db = dbOrPath;
+      this.ownsDb = false;
+    }
     this.initializeSchema();
   }
 
@@ -49,7 +56,7 @@ export class CompilerConfidenceStore {
       record.runId,
       record.targetType,
       record.targetId || null,
-      record.projectId || null,
+      record.projectId ?? null,
       record.compilerName,
       record.confidence,
       record.metadata ? JSON.stringify(record.metadata) : null,
@@ -69,7 +76,7 @@ export class CompilerConfidenceStore {
       runId: row.run_id,
       targetType: row.target_type,
       targetId: row.target_id || undefined,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       compilerName: row.compiler_name,
       confidence: row.confidence,
       metadata: row.metadata_json ? JSON.parse(row.metadata_json) : undefined,
@@ -95,7 +102,7 @@ export class CompilerConfidenceStore {
       runId: row.run_id,
       targetType: row.target_type,
       targetId: row.target_id || undefined,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       compilerName: row.compiler_name,
       confidence: row.confidence,
       metadata: row.metadata_json ? JSON.parse(row.metadata_json) : undefined,
@@ -104,6 +111,6 @@ export class CompilerConfidenceStore {
   }
 
   close(): void {
-    this.db.close();
+    if (this.ownsDb) this.db.close();
   }
 }

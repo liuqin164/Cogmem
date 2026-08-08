@@ -3,9 +3,17 @@ import { randomUUID } from 'crypto';
 export class FactStore {
     encryptionProvider;
     db;
-    constructor(dbPath = ':memory:', encryptionProvider) {
+    ownsDb;
+    constructor(dbOrPath = ':memory:', encryptionProvider) {
         this.encryptionProvider = encryptionProvider;
-        this.db = new Database(dbPath);
+        if (typeof dbOrPath === 'string') {
+            this.db = new Database(dbOrPath);
+            this.ownsDb = true;
+        }
+        else {
+            this.db = dbOrPath;
+            this.ownsDb = false;
+        }
         this.initializeSchema();
     }
     initializeSchema() {
@@ -134,23 +142,29 @@ export class FactStore {
         const limit = options?.limit ?? 50;
         const entityPlaceholders = entityIds.map(() => '?').join(', ');
         const predicateFamilies = options?.predicateFamilies || [];
+        const scopeSql = options?.projectId === undefined ? '' : ` AND EXISTS (
+      SELECT 1 FROM neurons n WHERE n.id=facts.neuron_id AND n.is_deleted=0 AND COALESCE(n.project_id,'')=?
+    )`;
+        const scopeParams = options?.projectId === undefined ? [] : [options.projectId];
         const rows = predicateFamilies.length > 0
             ? this.db.prepare(`
           SELECT *
           FROM facts
           WHERE entity_id IN (${entityPlaceholders})
             AND status IN ('provisional', 'provisional_enriched', 'verified')
+            ${scopeSql}
             AND predicate_family IN (${predicateFamilies.map(() => '?').join(', ')})
           ORDER BY valid_from DESC, fact_id DESC
           LIMIT ?
-        `).all(...entityIds, ...predicateFamilies, limit)
+        `).all(...entityIds, ...scopeParams, ...predicateFamilies, limit)
             : this.db.prepare(`
       SELECT *
       FROM facts
       WHERE entity_id IN (${entityPlaceholders}) AND status IN ('provisional', 'provisional_enriched', 'verified')
+          ${scopeSql}
           ORDER BY valid_from DESC, fact_id DESC
           LIMIT ?
-        `).all(...entityIds, limit);
+        `).all(...entityIds, ...scopeParams, limit);
         return rows.map((row) => this.mapFact(row));
     }
     listNeuronIdsByEntityIds(entityIds, limit = 50) {
@@ -166,7 +180,7 @@ export class FactStore {
     `).all(...entityIds, limit);
         return rows.map((row) => row.neuron_id);
     }
-    listEventsByNeuronIds(neuronIds, limit = 50) {
+    listEventsByNeuronIds(neuronIds, limit = 50, projectId) {
         if (neuronIds.length === 0)
             return [];
         const placeholders = neuronIds.map(() => '?').join(', ');
@@ -174,9 +188,10 @@ export class FactStore {
       SELECT *
       FROM compiled_events
       WHERE neuron_id IN (${placeholders})
+        ${projectId === undefined ? '' : `AND EXISTS (SELECT 1 FROM neurons n WHERE n.id=compiled_events.neuron_id AND n.is_deleted=0 AND COALESCE(n.project_id,'')=?)`}
       ORDER BY valid_from DESC, event_id DESC
       LIMIT ?
-    `).all(...neuronIds, limit);
+    `).all(...neuronIds, ...(projectId === undefined ? [] : [projectId]), limit);
         return rows.map((row) => this.mapEvent(row));
     }
     listEventsByUnitId(unitId) {
@@ -205,16 +220,21 @@ export class FactStore {
         const statuses = options?.statuses || [];
         const params = [startTime, endTime];
         let sql = `
-      SELECT *
-      FROM facts
-      WHERE valid_from >= ?
-        AND valid_from < ?
+      SELECT f.*
+      FROM facts f
+      JOIN neurons n ON n.id=f.neuron_id AND n.is_deleted=0
+      WHERE f.valid_from >= ?
+        AND f.valid_from < ?
     `;
+        if (options?.projectId !== undefined) {
+            sql += ` AND COALESCE(n.project_id,'') = ?`;
+            params.push(options.projectId);
+        }
         if (statuses.length > 0) {
-            sql += ` AND status IN (${statuses.map(() => '?').join(', ')})`;
+            sql += ` AND f.status IN (${statuses.map(() => '?').join(', ')})`;
             params.push(...statuses);
         }
-        sql += ` ORDER BY valid_from DESC, fact_id DESC LIMIT ?`;
+        sql += ` ORDER BY f.valid_from DESC, f.fact_id DESC LIMIT ?`;
         params.push(options?.limit ?? 500);
         const rows = this.db.prepare(sql).all(...params);
         return rows.map((row) => this.mapFact(row));
@@ -223,16 +243,21 @@ export class FactStore {
         const statuses = options?.statuses || [];
         const params = [startTime, endTime];
         let sql = `
-      SELECT *
-      FROM compiled_events
-      WHERE valid_from >= ?
-        AND valid_from < ?
+      SELECT e.*
+      FROM compiled_events e
+      JOIN neurons n ON n.id=e.neuron_id AND n.is_deleted=0
+      WHERE e.valid_from >= ?
+        AND e.valid_from < ?
     `;
+        if (options?.projectId !== undefined) {
+            sql += ` AND COALESCE(n.project_id,'') = ?`;
+            params.push(options.projectId);
+        }
         if (statuses.length > 0) {
-            sql += ` AND status IN (${statuses.map(() => '?').join(', ')})`;
+            sql += ` AND e.status IN (${statuses.map(() => '?').join(', ')})`;
             params.push(...statuses);
         }
-        sql += ` ORDER BY valid_from DESC, event_id DESC LIMIT ?`;
+        sql += ` ORDER BY e.valid_from DESC, e.event_id DESC LIMIT ?`;
         params.push(options?.limit ?? 500);
         const rows = this.db.prepare(sql).all(...params);
         return rows.map((row) => this.mapEvent(row));
@@ -310,7 +335,8 @@ export class FactStore {
     `).run(status, confidence ?? null, status, Date.now(), eventId);
     }
     close() {
-        this.db.close();
+        if (this.ownsDb)
+            this.db.close();
     }
     mapFact(row) {
         return {

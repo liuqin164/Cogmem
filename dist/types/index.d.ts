@@ -194,6 +194,7 @@ export type TimeBucketType = 'day' | 'week' | 'month';
 export type ProjectBranchKind = 'project_root' | 'interaction' | 'belief' | 'fact' | 'event' | 'task';
 export type EventClusterType = 'approval' | 'rejection' | 'issue' | 'project' | 'fact' | 'generic';
 export interface TopologyReference {
+    projectId: string | undefined;
     neuronId?: string;
     unitId?: string;
     beliefId?: string;
@@ -203,6 +204,8 @@ export interface TopologyReference {
 }
 export interface TimeBucketRecord {
     bucketId: string;
+    projectId?: string;
+    timeZone?: string;
     bucketType: TimeBucketType;
     bucketStart: number;
     bucketEnd: number;
@@ -277,7 +280,7 @@ export interface MemoryEvent<TPayload = Record<string, unknown>> {
     threadId?: string;
     sessionId?: string;
     localDate?: string;
-    localDateSource?: 'explicit' | 'generated_utc' | 'legacy_unknown';
+    localDateSource?: 'explicit' | 'generated_explicit_timezone' | 'generated_project_timezone' | 'generated_host_timezone' | 'generated_utc_fallback' | 'generated_utc' | 'legacy_unknown';
     threadSeq?: number;
     turnId?: string;
     turnSeq?: number;
@@ -707,6 +710,7 @@ export interface PolicyExecutionAuditPage {
     total: number;
     records: Array<{
         executionId: string;
+        projectId: string;
         idempotencyKey: string;
         runtimeId?: string;
         policy: string;
@@ -729,6 +733,7 @@ export interface PolicyExecutionAuditPage {
         updatedAt: number;
     }>;
     appliedFilters?: {
+        projectId?: string;
         runtimeId?: string;
         actorId?: string[];
         causationId?: string[];

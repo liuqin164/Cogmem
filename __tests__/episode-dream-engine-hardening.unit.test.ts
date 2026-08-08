@@ -168,7 +168,7 @@ test('streaming import resume preserves occurrence identity across checkpoint', 
 
 test('Dream retry distinguishes retryable and terminal failures and exposes episode dream status', async () => {
   const db = new Database(':memory:');
-  const store = new EpisodeStore(db);
+  const store = testEpisodeStore(db);
   let error = new Error('provider_rate_limited');
   const scheduler = new DreamScheduler(store, { run: async () => { throw error; } } as never);
   try {
@@ -199,7 +199,7 @@ test('Dream retry distinguishes retryable and terminal failures and exposes epis
 
 test('Dream tick skips empty mature soft seals and still processes valid sealed episodes', async () => {
   const db = new Database(':memory:');
-  const store = new EpisodeStore(db);
+  const store = testEpisodeStore(db);
   const processed: string[] = [];
   const scheduler = new DreamScheduler(store, {
     run: async (options: { sourceEpisodeId: string }) => {
@@ -237,7 +237,7 @@ test('Dream tick skips empty mature soft seals and still processes valid sealed 
 
 test('Dream claim skips legacy empty jobs without consuming the batch slot', () => {
   const db = new Database(':memory:');
-  const store = new EpisodeStore(db);
+  const store = testEpisodeStore(db);
   try {
     const empty = store.createEpisode({
       projectId: 'brain', sessionId: 'empty-job', episodeType: 'discussion', importance: 1,
@@ -271,6 +271,27 @@ test('Dream claim skips legacy empty jobs without consuming the batch slot', () 
   }
 });
 
+test('projectless Dream maintenance cannot claim or expire named-project jobs', () => {
+  const db = new Database(':memory:');
+  const store = testEpisodeStore(db, (eventId) => eventId === 'eg' ? '' : eventId === 'ea' ? 'a' : 'b');
+  const create = (projectId: string, eventId: string) => {
+    const episode = store.createEpisode({ projectId, sessionId: `s-${projectId || 'global'}`, episodeType: 'conversation', importance: 0.5, eventId, occurredAt: 1 });
+    store.appendEvent({ episodeId: episode.episodeId, eventId, relation: 'continues_previous', confidence: 1, occurredAt: 1 });
+    store.sealEpisode(episode.episodeId, { mode: 'hard', reason: 'test', now: 2 });
+    return episode.episodeId;
+  };
+  const globalId = create('', 'eg');
+  const aId = create('a', 'ea');
+  const bId = create('b', 'eb');
+  db.prepare(`UPDATE episode_dream_jobs SET state='processing',attempts=3,lease_id='a',lease_until=1 WHERE episode_id=?`).run(aId);
+  const claimed = store.claimDreamJobs({ projectId: '', limit: 10, now: 10, leaseMs: 5000, maxAttempts: 3 });
+  expect(claimed.map((job) => job.episodeId)).toEqual([globalId]);
+  expect(store.getDreamJobState(aId)).toBe('processing');
+  expect(store.getDreamJobState(bId)).toBe('pending');
+  expect(store.listEpisodes({ projectId: '' }).map((episode) => episode.episodeId)).toEqual([globalId]);
+  db.close();
+});
+
 test('migration 23 backfills episode Dream state from existing 3.5.0 jobs', () => {
   const db = new Database(':memory:');
   try {
@@ -302,7 +323,7 @@ test('migration 23 backfills episode Dream state from existing 3.5.0 jobs', () =
 
 test('Dream mode is passed to curator and changes the candidate limit', async () => {
   const db = new Database(':memory:');
-  const store = new EpisodeStore(db);
+  const store = testEpisodeStore(db);
   const calls: Array<Record<string, unknown>> = [];
   const scheduler = new DreamScheduler(store, {
     run: async (options: Record<string, unknown>) => {
@@ -527,3 +548,6 @@ test('orphan correction candidates cannot be promoted without a target', async (
     rmSync(dir, { recursive: true, force: true });
   }
 });
+function testEpisodeStore(db: Database, projectForEvent: (eventId: string) => string = () => 'brain'): EpisodeStore {
+  return new EpisodeStore(db, (eventId) => ({ eventId, projectId: projectForEvent(eventId) } as never));
+}

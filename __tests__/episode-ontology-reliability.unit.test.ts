@@ -15,6 +15,7 @@ import { TopicRelationGraph } from '../src/topic/TopicRelationGraph.js';
 function topicDb() {
   const db = new Database(':memory:');
   migration_0024.up(db);
+  db.exec(`CREATE TABLE memory_events(event_id TEXT PRIMARY KEY,project_id TEXT); INSERT INTO memory_events VALUES('evt-name','brain'),('evt-alias','brain'),('evt-rename','brain')`);
   return db;
 }
 
@@ -164,7 +165,7 @@ test('classifier defaults unknown turns to review and distinguishes question ans
 
 test('background assembler invokes hybrid review while foreground remains synchronous', async () => {
   const db = new Database(':memory:');
-  const store = new EpisodeStore(db);
+  const store = new EpisodeStore(db, (eventId) => ({ eventId, projectId: 'brain' } as never));
   let reviews = 0;
   const assembler = new EpisodeAssembler(store, undefined, 30 * 60_000, {
     review: async () => { reviews += 1; return { relation: 'starts_new_topic', confidence: 0.9, switchKind: 'hard' }; },
@@ -195,7 +196,7 @@ test('Cogmem block stripping handles case, nesting, unclosed blocks, and payload
 
 test('manual reseal creates an audit receipt and empty normal seals fail', () => {
   const db = new Database(':memory:');
-  const store = new EpisodeStore(db);
+  const store = new EpisodeStore(db, (eventId) => ({ eventId, projectId: 'brain' } as never));
   try {
     const empty = store.createEpisode({
       projectId: 'brain', sessionId: 'empty', episodeType: 'discussion', importance: 0.2,

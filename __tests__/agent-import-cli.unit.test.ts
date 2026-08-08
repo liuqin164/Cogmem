@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMemoryKernel } from '../src/factory.js';
-import { parseArgs } from '../src/bin/import-support.js';
+import { parseArgs, runOpenClawImport } from '../src/bin/import-support.js';
 import { KernelAgentMemoryBackend } from '../src/agent/index.js';
 import { explainRecallWithKernel } from '../src/recall/RecallExplanation.js';
 
@@ -34,24 +34,12 @@ async function runCli(
     },
   });
 
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
   return { exitCode, stdout, stderr };
-}
-
-function serveWithRetry(options: Parameters<typeof Bun.serve>[0]): ReturnType<typeof Bun.serve> {
-  let lastError: unknown;
-  const startPort = 30_000 + Math.floor(Math.random() * 20_000);
-  for (let attempt = 0; attempt < 25; attempt += 1) {
-    try {
-      return Bun.serve({ ...options, port: startPort + attempt });
-    } catch (error) {
-      lastError = error;
-      if ((error as { code?: string }).code !== 'EADDRINUSE') throw error;
-    }
-  }
-  throw lastError;
 }
 
 test('OpenClaw import dry-run scans workspace sources without creating a memory database', async () => {
@@ -116,6 +104,9 @@ test('OpenClaw import writes memory once and skips already imported records on r
   expect(first.exitCode).toBe(0);
   const firstParsed = JSON.parse(first.stdout);
   expect(firstParsed.recordsIngested).toBeGreaterThanOrEqual(2);
+  expect(firstParsed.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({ code: 'project_timezone_missing_using_host_environment', severity: 'warning' }),
+  ]));
 
   const second = await runCli([
     'bun',
@@ -229,6 +220,7 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
   expect(JSON.parse(again.stdout).rawRecordsAnchored).toBe(0);
 
   const kernel = createMemoryKernel({ dbPath });
+  kernel.rebuildMemoryAtlas({ projectId: 'openclaw-test' });
   const memory = new KernelAgentMemoryBackend(kernel);
   const recalled = memory.recall({
     agentId: 'openclaw',
@@ -611,24 +603,22 @@ test('agent import uses configured local OpenAI-compatible embedding endpoint du
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(workspace, 'memory', '2026-05-07.md'), 'User: local quantized embedding import remembered release notes.');
 
+  const endpoint = 'http://127.0.0.1:1/v1/embeddings';
+  const originalFetch = globalThis.fetch;
   let embedCalls = 0;
-  const server = serveWithRetry({
-    fetch: async (request) => {
-      if (new URL(request.url).pathname !== '/v1/embeddings') {
-        return new Response('not found', { status: 404 });
-      }
-      embedCalls += 1;
-      const body = await request.json() as { input?: string | string[] };
-      const count = Array.isArray(body.input) ? body.input.length : 1;
-      return Response.json({
-        data: Array.from({ length: count }, () => ({
-          embedding: Array.from({ length: 16 }, (_, index) => index / 16),
-        })),
-      });
-    },
-  });
 
   try {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== endpoint) return originalFetch(input, init);
+      embedCalls += 1;
+      expect(init?.method).toBe('POST');
+      const body = JSON.parse(String(init?.body)) as { input: string; model: string };
+      expect(body.model).toBe('qwen3-embedding:0.6b');
+      return Response.json({
+        data: [{ embedding: Array.from({ length: 16 }, (_, index) => index / 16) }],
+      });
+    }) as typeof globalThis.fetch;
     writeFileSync(join(configDir, 'config.toml'), [
       '[core]',
       'db_path = "memory.db"',
@@ -637,27 +627,28 @@ test('agent import uses configured local OpenAI-compatible embedding endpoint du
       '',
       '[embedding]',
       'provider = "openai_compatible"',
-      `base_url = "http://127.0.0.1:${server.port}/v1"`,
+      'base_url = "http://127.0.0.1:1/v1"',
       'model = "qwen3-embedding:0.6b"',
     ].join('\n'));
 
-    const result = await runCli([
-      'bun',
-      openClawImportBin,
+    await runOpenClawImport([
       '--workspace',
       workspace,
       '--project',
       'openclaw-quantized-test',
-      '--json',
+      '--no-progress',
     ]);
 
-    expect(result.stderr).toBe('');
-    expect(result.exitCode).toBe(0);
-    const parsed = JSON.parse(result.stdout);
-    expect(parsed.recordsIngested).toBeGreaterThanOrEqual(1);
     expect(embedCalls).toBeGreaterThanOrEqual(1);
+    const db = new Database(join(configDir, 'memory.db'), { readonly: true });
+    try {
+      const row = db.query('SELECT COUNT(*) AS count FROM neurons').get() as { count: number };
+      expect(row.count).toBeGreaterThanOrEqual(1);
+    } finally {
+      db.close();
+    }
   } finally {
-    server.stop(true);
+    globalThis.fetch = originalFetch;
   }
 });
 

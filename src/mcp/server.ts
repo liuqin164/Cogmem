@@ -12,11 +12,12 @@ import {
   listCogmemMcpTools,
   type CogmemMcpRuntime,
 } from './CoreMcpTools.js';
+import { CORE_VERSION } from '../version.js';
 
 export function createCogmemMcpServer(runtime: CogmemMcpRuntime = {}): Server {
   const server = new Server({
     name: 'cogmem-core',
-    version: '3.7.2',
+    version: CORE_VERSION,
   }, {
     capabilities: {
       tools: {},

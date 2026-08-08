@@ -9,11 +9,17 @@ import type {
   MemoryClusterRecord,
   MemoryEdgeListOptions,
   MemoryEdgeRecord,
-  MemoryEdgeRelation,
+  MemoryGraphRelation,
   MemoryEntityRecord,
   MemoryEntityType,
   MemoryTopicRecord,
 } from '../binding/MemoryBindingTypes.js';
+import {
+  memoryEdgeId,
+  memoryEntityId,
+} from '../binding/MemoryBindingIdentity.js';
+import { mergeMemoryEdge, reduceMemoryEdges } from '../binding/MemoryEdgeMerge.js';
+import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 
 export interface UpsertMemoryEntityInput {
   entityId?: string;
@@ -52,7 +58,7 @@ export interface UpsertMemoryEdgeInput {
   projectId?: string;
   sourceType: MemoryEdgeRecord['sourceType'];
   sourceId: string;
-  relationType: MemoryEdgeRelation;
+  relationType: MemoryGraphRelation;
   targetType: MemoryEdgeRecord['targetType'];
   targetId: string;
   confidence: number;
@@ -65,6 +71,9 @@ export interface UpsertMemoryEdgeInput {
   validFrom?: number;
   validTo?: number;
   sourceAuthority?: MemoryEdgeRecord['sourceAuthority'];
+  supportSourceType?: string;
+  supportSourceId?: string;
+  operation?: 'append' | 'replace' | 'revision';
 }
 
 export interface DecayMemoryEdgeActivationOptions {
@@ -87,24 +96,57 @@ export class MemoryBindingStore {
       this.ownsDb = false;
     }
     this.initializeSchema();
+    installRuntimeProvenanceGuards(this.db);
   }
 
   upsertEntity(input: UpsertMemoryEntityInput): MemoryEntityRecord {
     const now = input.now ?? Date.now();
-    const entityId = input.entityId || entityIdFor(input.projectId, input.entityType, input.canonicalName);
-    const aliases = Array.from(new Set([input.canonicalName, ...(input.aliases || [])]))
-      .filter(Boolean);
+    const scope = input.projectId ?? '';
+    const mapped = input.entityId
+      ? this.db.prepare(`
+          SELECT scoped_entity_id FROM memory_entity_scope_identity
+          WHERE root_entity_id=? AND project_id=?
+        `).get(input.entityId, scope) as { scoped_entity_id: string } | null
+      : null;
+    const existingOwner = input.entityId
+      ? this.db.prepare(`SELECT COALESCE(project_id,'') AS project_id FROM memory_entities WHERE entity_id=?`).get(input.entityId) as { project_id: string } | null
+      : null;
+    const derivedId = memoryEntityId(input.projectId, input.entityType, input.entityId || input.canonicalName);
+    const derivedExists = Boolean(this.db.prepare(`
+      SELECT 1 FROM memory_entities WHERE entity_id=? AND COALESCE(project_id,'')=?
+    `).get(derivedId, scope));
+    const entityId = mapped?.scoped_entity_id
+      ?? (input.entityId && existingOwner?.project_id === scope
+        ? input.entityId
+        : input.entityId && (existingOwner || derivedExists)
+          ? derivedId
+          : input.entityId || derivedId);
+    const existing = this.db.prepare(`SELECT * FROM memory_entities WHERE entity_id=?`).get(entityId) as {
+      project_id: string | null; canonical_name: string; entity_type: MemoryEntityType;
+    } | null;
+    if (existing && (
+      (existing.project_id ?? '') !== scope
+      || existing.canonical_name !== input.canonicalName
+      || existing.entity_type !== input.entityType
+    )) throw new Error('memory_entity_immutable_identity_mismatch');
+    const aliases = Array.from(new Set([input.canonicalName, ...(input.aliases || [])])).filter(Boolean);
     this.db.prepare(`
       INSERT INTO memory_entities (
         entity_id, project_id, canonical_name, entity_type, aliases_json, stable_path, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(entity_id) DO UPDATE SET
-        aliases_json = excluded.aliases_json,
+        aliases_json = (SELECT json_group_array(value) FROM (
+          SELECT value,MIN(position) AS position FROM (
+            SELECT value,CAST(key AS INTEGER) AS position FROM json_each(memory_entities.aliases_json)
+            UNION ALL
+            SELECT value,1000000+CAST(key AS INTEGER) FROM json_each(excluded.aliases_json)
+          ) GROUP BY value ORDER BY position
+        )),
         stable_path = COALESCE(excluded.stable_path, memory_entities.stable_path),
         updated_at = excluded.updated_at
     `).run(
       entityId,
-      input.projectId || null,
+      input.projectId ?? null,
       input.canonicalName,
       input.entityType,
       JSON.stringify(aliases),
@@ -112,15 +154,24 @@ export class MemoryBindingStore {
       now,
       now,
     );
+    if (input.entityId) this.db.prepare(`
+      INSERT OR IGNORE INTO memory_entity_scope_identity(
+        root_entity_id,project_id,scoped_entity_id,entity_type,created_at
+      ) VALUES(?,?,?,?,?)
+    `).run(input.entityId, scope, entityId, input.entityType, now);
+    const row = this.db.prepare(`SELECT * FROM memory_entities WHERE entity_id=?`).get(entityId) as {
+      entity_id: string; project_id: string | null; canonical_name: string; entity_type: MemoryEntityType;
+      aliases_json: string; stable_path: string | null; created_at: number; updated_at: number;
+    };
     return {
-      entityId,
-      projectId: input.projectId,
-      canonicalName: input.canonicalName,
-      entityType: input.entityType,
-      aliases,
-      stablePath: input.stablePath,
-      createdAt: now,
-      updatedAt: now,
+      entityId: row.entity_id,
+      projectId: row.project_id ?? undefined,
+      canonicalName: row.canonical_name,
+      entityType: row.entity_type,
+      aliases: JSON.parse(row.aliases_json) as string[],
+      stablePath: row.stable_path ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
     };
   }
 
@@ -136,27 +187,26 @@ export class MemoryBindingStore {
         updated_at = excluded.updated_at
     `).run(
       input.topicPath,
-      input.projectId || null,
-      input.projectId || '',
+      input.projectId ?? null,
+      input.projectId ?? '',
       input.parentPath || parentPathFor(input.topicPath) || null,
       input.topicType,
       input.summary || null,
       now,
       now,
     );
-    return {
-      topicPath: input.topicPath,
-      projectId: input.projectId,
-      parentPath: input.parentPath || parentPathFor(input.topicPath),
-      topicType: input.topicType,
-      summary: input.summary,
-      createdAt: now,
-      updatedAt: now,
-    };
+    return mapTopicRow(this.db.prepare(`
+      SELECT * FROM memory_topics WHERE topic_path=? AND project_id_key=?
+    `).get(input.topicPath, input.projectId ?? '') as MemoryTopicRow);
   }
 
   insertBinding(input: MemoryBindingInput): MemoryBindingRecord {
     const now = input.createdAt ?? Date.now();
+    const scope = input.projectId ?? '';
+    this.assertEventScopes([input.eventId, ...(input.relatedEventIds || [])], scope);
+    if (input.entityId) this.assertNodeScope('entity', input.entityId, scope);
+    this.assertNodeScope('topic', input.topicPath, scope);
+    if (input.clusterId) this.assertClusterTopic(input.clusterId, input.topicPath, scope);
     const bindingId = bindingIdFor(input);
     this.db.prepare(`
       INSERT INTO memory_bindings (
@@ -173,7 +223,7 @@ export class MemoryBindingStore {
     `).run(
       bindingId,
       input.eventId,
-      input.projectId || null,
+      input.projectId ?? null,
       input.role || null,
       input.rawEventType || null,
       input.entityId || null,
@@ -190,30 +240,13 @@ export class MemoryBindingStore {
       JSON.stringify(input.relatedEventIds || []),
       now,
     );
-    return {
-      bindingId,
-      eventId: input.eventId,
-      projectId: input.projectId,
-      role: input.role,
-      rawEventType: input.rawEventType,
-      entityId: input.entityId,
-      entityName: input.entityName,
-      entityType: input.entityType,
-      topicPath: input.topicPath,
-      bindingType: input.bindingType,
-      confidence: input.confidence,
-      source: input.source,
-      signal: input.signal,
-      claimKey: input.claimKey,
-      bindingAction: input.bindingAction || 'create_new_cluster',
-      clusterId: input.clusterId,
-      relatedEventIds: input.relatedEventIds || [],
-      createdAt: now,
-    };
+    return mapBindingRow(this.db.prepare(`SELECT * FROM memory_bindings WHERE binding_id=?`).get(bindingId) as MemoryBindingRow);
   }
 
   upsertCluster(input: UpsertMemoryClusterInput): MemoryClusterRecord {
     const now = input.now ?? Date.now();
+    this.assertNodeScope('topic', input.topicPath, input.projectId ?? '');
+    this.assertEventScopes([input.eventId], input.projectId ?? '');
     const clusterId = clusterIdFor(input.projectId, input.topicPath, input.clusterType, input.claimKey);
     const existing = this.getCluster(clusterId);
     const evidenceEventIds = existing
@@ -246,7 +279,7 @@ export class MemoryBindingStore {
         updated_at = excluded.updated_at
     `).run(
       clusterId,
-      input.projectId || null,
+      input.projectId ?? null,
       input.topicPath,
       input.clusterType,
       input.title,
@@ -291,8 +324,8 @@ export class MemoryBindingStore {
   listClusters(options: MemoryClusterListOptions = {}): MemoryClusterRecord[] {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
-    if (options.projectId) {
-      clauses.push('project_id = ?');
+    if (options.projectId !== undefined) {
+      clauses.push("COALESCE(project_id, '') = ?");
       params.push(options.projectId);
     }
     if (options.topicPath) {
@@ -321,89 +354,39 @@ export class MemoryBindingStore {
 
   upsertEdge(input: UpsertMemoryEdgeInput): MemoryEdgeRecord {
     const now = input.createdAt ?? Date.now();
-    const edgeId = edgeIdFor(input);
-    const evidenceEventIds = Array.from(new Set(input.evidenceEventIds.filter(Boolean)));
-    this.db.prepare(`
-      INSERT INTO memory_edges (
-        edge_id, project_id, source_type, source_id, relation_type, target_type, target_id,
-        confidence, base_weight, stability, activation, evidence_event_ids_json, status,
-        valid_from, valid_to, version, source_authority, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(edge_id) DO UPDATE SET
-        confidence = MAX(memory_edges.confidence, excluded.confidence),
-        base_weight = excluded.base_weight,
-        stability = MAX(memory_edges.stability, excluded.stability),
-        activation = MAX(memory_edges.activation, excluded.activation),
-        evidence_event_ids_json = excluded.evidence_event_ids_json,
-        status = excluded.status,
-        valid_to = excluded.valid_to,
-        version = memory_edges.version + 1,
-        source_authority = excluded.source_authority,
-        updated_at = excluded.updated_at
-    `).run(
-      edgeId,
-      input.projectId || null,
-      input.sourceType,
-      input.sourceId,
-      input.relationType,
-      input.targetType,
-      input.targetId,
-      input.confidence,
-      clamp(input.baseWeight ?? 1, 0, 10),
-      clamp(input.stability ?? 1, 0, 1),
-      clamp(input.activation ?? 1, 0, 10),
-      JSON.stringify(evidenceEventIds),
-      input.status || 'active',
-      input.validFrom ?? now,
-      input.validTo ?? null,
-      1,
-      input.sourceAuthority || 'raw_evidence',
-      now,
-      now,
-    );
-    return {
-      edgeId,
-      projectId: input.projectId,
-      sourceType: input.sourceType,
-      sourceId: input.sourceId,
-      relationType: input.relationType,
-      targetType: input.targetType,
-      targetId: input.targetId,
-      confidence: input.confidence,
-      baseWeight: clamp(input.baseWeight ?? 1, 0, 10),
-      stability: clamp(input.stability ?? 1, 0, 1),
-      activation: clamp(input.activation ?? 1, 0, 10),
-      evidenceEventIds,
-      status: input.status || 'active',
-      createdAt: now,
-      updatedAt: now,
-      validFrom: input.validFrom ?? now,
-      validTo: input.validTo,
-      version: 1,
-      sourceAuthority: input.sourceAuthority || 'raw_evidence',
-    };
+    const scope = input.projectId ?? '';
+    this.assertEventScopes(input.evidenceEventIds, scope);
+    this.assertNodeScope(input.sourceType, input.sourceId, scope);
+    this.assertNodeScope(input.targetType, input.targetId, scope);
+    const edgeId = mergeMemoryEdge(this.db, { ...input, createdAt: now, updatedAt: now });
+    return mapEdgeRow(this.db.prepare(`SELECT * FROM memory_edges WHERE edge_id=?`).get(edgeId) as MemoryEdgeRow);
   }
 
   decayEdgeActivation(options: DecayMemoryEdgeActivationOptions = {}): number {
     const factor = clamp(options.factor ?? 0.85, 0, 1);
     const floor = Math.max(0, options.floor ?? 0.01);
     const now = options.now ?? Date.now();
-    const where = options.projectId ? 'WHERE project_id = ?' : '';
-    const params = options.projectId ? [options.projectId] : [];
+    const where = options.projectId !== undefined ? "WHERE COALESCE(project_id, '') = ?" : '';
+    const params = options.projectId !== undefined ? [options.projectId] : [];
+    const activeWhere = `${where} ${where ? 'AND' : 'WHERE'} support_status='active'`;
+    const edgeIds = (this.db.prepare(`
+      SELECT DISTINCT edge_id FROM memory_edge_supports ${activeWhere}
+    `).all(...params) as Array<{ edge_id: string }>).map((row) => row.edge_id);
     const result = this.db.prepare(`
-      UPDATE memory_edges
+      UPDATE memory_edge_supports
       SET activation = CASE WHEN activation * ? < ? THEN 0 ELSE activation * ? END,
           updated_at = ?
-      ${where}
+      ${activeWhere}
     `).run(factor, floor, factor, now, ...params);
+    reduceMemoryEdges(this.db, edgeIds, now);
     return Number(result.changes ?? 0);
   }
 
   listEdges(options: MemoryEdgeListOptions = {}): MemoryEdgeRecord[] {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
-    if (options.projectId) {
-      clauses.push('project_id = ?');
+    if (options.projectId !== undefined) {
+      clauses.push("COALESCE(project_id, '') = ?");
       params.push(options.projectId);
     }
     if (options.sourceId) {
@@ -433,8 +416,8 @@ export class MemoryBindingStore {
   listBindings(options: MemoryBindingListOptions = {}): MemoryBindingRecord[] {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
-    if (options.projectId) {
-      clauses.push('project_id = ?');
+    if (options.projectId !== undefined) {
+      clauses.push("COALESCE(project_id, '') = ?");
       params.push(options.projectId);
     }
     if (options.eventId) {
@@ -470,8 +453,8 @@ export class MemoryBindingStore {
   }
 
   getStats(projectId?: string): MemoryBindingStats {
-    const params = projectId ? [projectId] : [];
-    const where = projectId ? 'WHERE project_id = ?' : '';
+    const params = projectId !== undefined ? [projectId] : [];
+    const where = projectId !== undefined ? "WHERE COALESCE(project_id, '') = ?" : '';
     const bindings = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_bindings ${where}`).get(...params) as CountRow;
     const topics = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_topics ${where}`).get(...params) as CountRow;
     const entities = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_entities ${where}`).get(...params) as CountRow;
@@ -487,12 +470,49 @@ export class MemoryBindingStore {
   }
 
   deleteByProject(projectId: string): number {
-    const bindings = this.db.prepare(`DELETE FROM memory_bindings WHERE project_id = ?`).run(projectId);
-    this.db.prepare(`DELETE FROM memory_clusters WHERE project_id = ?`).run(projectId);
-    this.db.prepare(`DELETE FROM memory_edges WHERE project_id = ?`).run(projectId);
-    this.db.prepare(`DELETE FROM memory_topics WHERE project_id = ?`).run(projectId);
-    this.db.prepare(`DELETE FROM memory_entities WHERE project_id = ?`).run(projectId);
+    const bindings = this.db.prepare(`DELETE FROM memory_bindings WHERE COALESCE(project_id, '') = ?`).run(projectId);
+    this.db.prepare(`DELETE FROM memory_clusters WHERE COALESCE(project_id, '') = ?`).run(projectId);
+    this.db.prepare(`DELETE FROM memory_edge_supports WHERE COALESCE(project_id, '') = ?`).run(projectId);
+    this.db.prepare(`DELETE FROM memory_edges WHERE COALESCE(project_id, '') = ?`).run(projectId);
+    this.db.prepare(`DELETE FROM memory_topics WHERE COALESCE(project_id, '') = ?`).run(projectId);
+    this.db.prepare(`DELETE FROM memory_entities WHERE COALESCE(project_id, '') = ?`).run(projectId);
+    this.db.prepare(`DELETE FROM memory_entity_scope_identity WHERE project_id = ?`).run(projectId);
     return Number(bindings.changes ?? 0);
+  }
+
+  private assertEventScopes(eventIds: string[], projectId: string): void {
+    for (const eventId of new Set(eventIds.filter(Boolean))) {
+      const row = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM memory_events WHERE event_id=?`)
+        .get(eventId) as { scope: string } | null;
+      if (!row || row.scope !== projectId) throw new Error('memory_binding_event_project_scope_mismatch');
+    }
+  }
+
+  private assertNodeScope(type: MemoryEdgeRecord['sourceType'], id: string, projectId: string): void {
+    const query = type === 'event'
+      ? [`memory_events`, `event_id`]
+      : type === 'entity'
+        ? [`memory_entities`, `entity_id`]
+        : type === 'topic'
+          ? [`memory_topics`, `topic_path`]
+          : type === 'cluster'
+            ? [`memory_clusters`, `cluster_id`]
+            : [`memory_atlas_documents`, `source_id`];
+    const row = query[0] === 'memory_atlas_documents'
+      ? this.db.prepare(`SELECT 1 FROM memory_atlas_documents WHERE node_type=? AND source_id=? AND project_id=?`)
+        .get(type, id, projectId)
+      : this.db.prepare(`SELECT 1 FROM ${query[0]} WHERE ${query[1]}=? AND COALESCE(project_id,'')=?`)
+        .get(id, projectId);
+    if (!row) throw new Error('memory_binding_endpoint_project_scope_mismatch');
+  }
+
+  private assertClusterTopic(clusterId: string, topicPath: string, projectId: string): void {
+    const row = this.db.prepare(`
+      SELECT topic_path FROM memory_clusters
+      WHERE cluster_id=? AND COALESCE(project_id,'')=?
+    `).get(clusterId, projectId) as { topic_path: string } | null;
+    if (!row) throw new Error('memory_binding_endpoint_project_scope_mismatch');
+    if (row.topic_path !== topicPath) throw new Error('memory_binding_cluster_topic_mismatch');
   }
 
   close(): void {
@@ -510,6 +530,15 @@ export class MemoryBindingStore {
         stable_path TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_entity_scope_identity (
+        root_entity_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT '',
+        scoped_entity_id TEXT NOT NULL UNIQUE,
+        entity_type TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (root_entity_id, project_id)
       );
 
       CREATE INDEX IF NOT EXISTS idx_memory_entities_project_name
@@ -602,11 +631,45 @@ export class MemoryBindingStore {
         updated_at INTEGER NOT NULL DEFAULT 0
       );
 
+      CREATE TABLE IF NOT EXISTS memory_edge_supports (
+        support_id TEXT PRIMARY KEY,
+        edge_id TEXT NOT NULL,
+        project_id TEXT,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        relation_type TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        support_source_type TEXT NOT NULL,
+        support_source_id TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        base_weight REAL NOT NULL DEFAULT 1,
+        stability REAL NOT NULL DEFAULT 1,
+        activation REAL NOT NULL DEFAULT 1,
+        evidence_event_ids_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        valid_from INTEGER NOT NULL,
+        valid_to INTEGER,
+        version INTEGER NOT NULL DEFAULT 1,
+        source_authority TEXT NOT NULL,
+        support_status TEXT NOT NULL DEFAULT 'active' CHECK (support_status IN ('active','invalidated')),
+        invalidated_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(edge_id,source_authority,support_source_type,support_source_id)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_memory_edges_project_source
         ON memory_edges(project_id, source_type, source_id);
 
       CREATE INDEX IF NOT EXISTS idx_memory_edges_project_target
         ON memory_edges(project_id, target_type, target_id);
+
+      CREATE INDEX IF NOT EXISTS idx_memory_edge_supports_edge_status
+        ON memory_edge_supports(edge_id, support_status);
+
+      CREATE INDEX IF NOT EXISTS idx_memory_edge_supports_project_authority
+        ON memory_edge_supports(project_id, source_authority, support_status);
     `);
     this.ensureCompatibilityColumns();
   }
@@ -684,6 +747,16 @@ interface MemoryBindingRow {
   created_at: number;
 }
 
+interface MemoryTopicRow {
+  topic_path: string;
+  project_id?: string | null;
+  parent_path?: string | null;
+  topic_type: MemoryTopicRecord['topicType'];
+  summary?: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 interface MemoryClusterRow {
   cluster_id: string;
   project_id?: string | null;
@@ -731,7 +804,7 @@ function mapBindingRow(row: MemoryBindingRow): MemoryBindingRecord {
   return {
     bindingId: row.binding_id,
     eventId: row.event_id,
-    projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
     role: row.role || undefined,
     rawEventType: row.raw_event_type || undefined,
     entityId: row.entity_id || undefined,
@@ -750,10 +823,22 @@ function mapBindingRow(row: MemoryBindingRow): MemoryBindingRecord {
   };
 }
 
+function mapTopicRow(row: MemoryTopicRow): MemoryTopicRecord {
+  return {
+    topicPath: row.topic_path,
+    projectId: row.project_id == null ? undefined : String(row.project_id),
+    parentPath: row.parent_path || undefined,
+    topicType: row.topic_type,
+    summary: row.summary || undefined,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
 function mapClusterRow(row: MemoryClusterRow): MemoryClusterRecord {
   return {
     clusterId: row.cluster_id,
-    projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
     topicPath: row.topic_path,
     clusterType: row.cluster_type,
     title: row.title,
@@ -772,7 +857,7 @@ function mapClusterRow(row: MemoryClusterRow): MemoryClusterRecord {
 function mapEdgeRow(row: MemoryEdgeRow): MemoryEdgeRecord {
   return {
     edgeId: row.edge_id,
-    projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
     sourceType: row.source_type,
     sourceId: row.source_id,
     relationType: row.relation_type,
@@ -793,10 +878,6 @@ function mapEdgeRow(row: MemoryEdgeRow): MemoryEdgeRecord {
   };
 }
 
-function entityIdFor(projectId: string | undefined, entityType: MemoryEntityType, canonicalName: string): string {
-  return `entity-${hash([projectId || '', entityType, canonicalName.toLowerCase()].join('\0'))}`;
-}
-
 function bindingIdFor(input: MemoryBindingInput): string {
   return `binding-${hash([
     input.eventId,
@@ -813,17 +894,6 @@ function clusterIdFor(
   claimKey: string,
 ): string {
   return `cluster-${hash([projectId || '', topicPath, clusterType, claimKey].join('\0'))}`;
-}
-
-function edgeIdFor(input: UpsertMemoryEdgeInput): string {
-  return `edge-${hash([
-    input.projectId || '',
-    input.sourceType,
-    input.sourceId,
-    input.relationType,
-    input.targetType,
-    input.targetId,
-  ].join('\0'))}`;
 }
 
 function hash(value: string): string {

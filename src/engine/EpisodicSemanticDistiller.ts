@@ -1,5 +1,6 @@
 import { NeuronFactory } from '../core/Neuron.js';
 import type { MemoryGraph } from '../core/MemoryGraph.js';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 import type { BrainRecallResult } from '../types/BrainRecallResult.js';
 import type { IterativeLLMClarifier } from '../routing/IterativeLLMClarifier.js';
 
@@ -33,7 +34,7 @@ export class EpisodicSemanticDistiller {
     const sources = input.episodicNeuronIds
       .map((id) => this.memoryGraph.getNeuron(id))
       .filter((neuron): neuron is NonNullable<typeof neuron> => Boolean(neuron))
-      .filter((neuron) => neuron.metadata.projectId === input.projectId)
+      .filter((neuron) => matchesProjectScope(input.projectId, neuron.metadata.projectId))
       .slice(0, this.maxEpisodicPerBatch);
     if (sources.length < this.minBatchSize) return null;
 

@@ -40,7 +40,7 @@ function parseArgs(argv: string[]): Args {
     dbPath: dbPath || undefined,
     configPath: configPath || undefined,
     dimension,
-    projectId: projectId || undefined,
+    projectId,
     statuses,
     dryRun,
     json,

@@ -7,10 +7,17 @@ export interface RecallExplanationOptions {
     query: string;
     projectId?: string;
     agentId?: string;
+    workspaceId?: string;
+    sessionId?: string;
+    threadId?: string;
+    excludeSessionId?: string;
     collection?: string;
     limit?: number;
     startTime?: number;
     endTime?: number;
+    now?: number;
+    localDateNow?: string;
+    timeZone?: string;
 }
 export interface RecallExplanationEvidence {
     id: string;

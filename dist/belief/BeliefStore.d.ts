@@ -11,7 +11,7 @@ export declare class BeliefStore {
     private closed;
     constructor(dbPath?: string | Database, eventStore?: EventStore | undefined);
     private initializeSchema;
-    findByCanonicalKey(canonicalKey: string): BeliefRecord[];
+    findByCanonicalKey(canonicalKey: string, projectId?: string): BeliefRecord[];
     countActive(projectId?: string): number;
     listByTimeRange(startTime: number, endTime: number, options?: {
         projectId?: string;
@@ -40,17 +40,18 @@ export declare class BeliefStore {
         };
     }): BeliefRecord[];
     getBeliefHistoryForCanonicalKeys(canonicalKeys: string[], options?: {
+        projectId?: string;
         includeStatuses?: Array<'active' | 'superseded' | 'revoked' | 'suspect' | 'expired'>;
         limitPerCanonical?: number;
     }): Map<string, BeliefRecord[]>;
-    getExecutionFeedbackNeuronSignals(records: PolicyExecutionRecord[]): Array<{
+    getExecutionFeedbackNeuronSignals(projectId: string, records: PolicyExecutionRecord[]): Array<{
         neuronId: string;
         matchedExecutions: number;
         executed: number;
         failed: number;
         latestUpdatedAt?: number;
     }>;
-    applyExecutionFeedbackCalibration(records: PolicyExecutionRecord[], now?: number): number;
+    applyExecutionFeedbackCalibration(projectId: string, records: PolicyExecutionRecord[], now?: number): number;
     getEvidenceNeuronIds(beliefIds: string[], limitPerBelief?: number): string[];
     upsert(candidate: BeliefCandidate, now?: number): {
         belief: BeliefRecord | null;

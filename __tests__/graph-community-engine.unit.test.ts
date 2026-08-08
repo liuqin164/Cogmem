@@ -47,6 +47,13 @@ describe('GraphCommunityEngine', () => {
     const engine = new GraphCommunityEngine(g); await engine.run('p');
     expect(new BrainRecall(deps(g, engine)).recall('needle', { projectId: 'p', limit: 1 }).rawEvidence.map((n) => n.id)).toContain(b.id);
   });
+  test('BrainRecall never expands a shared community id across project scope', () => {
+    const g = new MemoryGraph(); const a = add(g, 'needle scoped', 'p'); const b = add(g, 'foreign neighbor', 'q');
+    g.updateNeuronMetadata(a.id, { communityId: 'legacy-shared' }); g.updateNeuronMetadata(b.id, { communityId: 'legacy-shared' });
+    const evidence = new BrainRecall(deps(g, new GraphCommunityEngine(g))).recall('needle', { projectId: 'p', limit: 2 }).rawEvidence;
+    expect(evidence.map((neuron) => neuron.id)).toContain(a.id);
+    expect(evidence.map((neuron) => neuron.id)).not.toContain(b.id);
+  });
   test('missing communityId does not expand', () => {
     const g = new MemoryGraph(); add(g, 'needle'); add(g, 'neighbor');
     expect(new BrainRecall(deps(g, new GraphCommunityEngine(g))).recall('needle', { projectId: 'p', limit: 1 }).rawEvidence).toHaveLength(1);

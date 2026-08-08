@@ -184,6 +184,7 @@ export class OfflineConsolidationPipeline {
     input: OfflineConsolidationInput,
     reviewBackend?: AlgorithmReviewBackend
   ): Promise<OfflineConsolidationOutput> {
+    this.assertInputProjectScope(input);
     const algorithmReviewBackend = reviewBackend || this.algorithmReviewBackend;
     const correctedEntityBindings: OfflineConsolidationOutput['correctedEntityBindings'] = [];
     const archivedFactIds: string[] = [];
@@ -193,7 +194,7 @@ export class OfflineConsolidationPipeline {
     const consolidatedBeliefs: BeliefRecord[] = [];
     const verifiedFacts: FactRecord[] = [];
     const verifiedEvents: EventRecord[] = [];
-    this.deps.deepWritePromotionPolicy?.promotePending(100);
+    this.deps.deepWritePromotionPolicy?.promotePending(100, { projectId: input.window.projectId });
 
     const episodeById = new Map(input.rawEpisodes.map((episode) => [episode.id, episode]));
     const lowConfidenceIndex = new Set(input.lowConfidenceItems.map((item) => `${item.targetType}:${item.targetId}`));
@@ -217,9 +218,9 @@ export class OfflineConsolidationPipeline {
           canonicalName: entity.canonicalName,
           type: entity.type,
           aliases: entity.aliases,
-          metadata: entity.metadata,
+          metadata: { ...(entity.metadata || {}), ...(input.window.projectId !== undefined ? { projectId: input.window.projectId } : {}) },
           instanceMode: entity.instanceMode,
-          createdAt: input.window.endTime || Date.now()
+          createdAt: input.window.endTime ?? Date.now()
         });
         workingEntities.push(record);
         inserted.push(record);
@@ -326,7 +327,7 @@ export class OfflineConsolidationPipeline {
           winner.object,
           this.inferEntityTypeFromFact(winner),
           {
-            projectId: input.window.projectId || winnerEpisode?.metadata.projectId,
+            projectId: input.window.projectId ?? winnerEpisode?.metadata.projectId,
             beforeTime: input.window.endTime
           }
         );
@@ -417,7 +418,7 @@ export class OfflineConsolidationPipeline {
         beforeTime: input.window.endTime
       });
       if (resolved) {
-        this.deps.entityStore?.resolvePendingReference(pending.pendingId, resolved.entityId, Date.now());
+        this.deps.entityStore?.resolvePendingReference(pending.pendingId, resolved.entityId, input.window.projectId ?? '', Date.now());
         correctedEntityBindings.push({
           targetId: pending.pendingId,
           targetType: 'reference',
@@ -447,9 +448,10 @@ export class OfflineConsolidationPipeline {
             sourceEntityId: duplicate.entityId,
             targetEntityId: primary.entityId,
             relationType: 'same_as',
+            projectId: input.window.projectId!,
             createdAt: Date.now()
           });
-          this.deps.entityStore.archiveEntity(duplicate.entityId, Date.now());
+          this.deps.entityStore.archiveEntity(duplicate.entityId, Date.now(), input.window.projectId);
           archivedEntityIds.push(duplicate.entityId);
           correctedEntityBindings.push({
             targetId: duplicate.entityId,
@@ -477,9 +479,10 @@ export class OfflineConsolidationPipeline {
         sourceEntityId: duplicate.entityId,
         targetEntityId: primary.entityId,
         relationType: 'same_as',
+        projectId: input.window.projectId!,
         createdAt: Date.now()
       });
-      this.deps.entityStore?.archiveEntity(duplicate.entityId, Date.now());
+      this.deps.entityStore?.archiveEntity(duplicate.entityId, Date.now(), input.window.projectId);
       archivedEntityIds.push(duplicate.entityId);
       correctedEntityBindings.push({
         targetId: duplicate.entityId,
@@ -577,7 +580,7 @@ export class OfflineConsolidationPipeline {
     const topicPaths = Array.from(new Set(input.rawEpisodes.map((episode) => episode.metadata.topicPath).filter((path): path is string => Boolean(path))));
     const steps: Array<[PipelineStep, () => void | Promise<void>, boolean?]> = [
       ['MemoryConsolidationEngine', async () => {
-        if (!projectId) return;
+        if (projectId === undefined) return;
         if (this.deps.topicSummaryBoard) {
           for (const topicPath of topicPaths) this.deps.topicSummaryBoard.refresh(topicPath, projectId);
         }
@@ -585,17 +588,17 @@ export class OfflineConsolidationPipeline {
         await this.deps.memoryConsolidationEngine?.run(projectId);
         this.deps.userModelManager?.refresh(projectId);
       }],
-      ['ProceduralLearningBridge', async () => { if (projectId) await this.deps.proceduralLearningBridge?.scan(projectId); }],
-      ['CrossTopicSynthesizer', async () => { if (projectId) await this.deps.crossTopicSynthesizer?.run(projectId); }],
-      ['PrincipleDecayPolicy', async () => { if (projectId) await this.deps.principleDecayPolicy?.run(projectId); }],
+      ['ProceduralLearningBridge', async () => { if (projectId !== undefined) await this.deps.proceduralLearningBridge?.scan(projectId); }],
+      ['CrossTopicSynthesizer', async () => { if (projectId !== undefined) await this.deps.crossTopicSynthesizer?.run(projectId); }],
+      ['PrincipleDecayPolicy', async () => { if (projectId !== undefined) await this.deps.principleDecayPolicy?.run(projectId); }],
       ['GraphCommunityEngine', async () => {
-        if (!projectId) return;
+        if (projectId === undefined) return;
         await this.deps.graphCommunityEngine?.run(projectId);
         this.deps.orphanCleaner?.run(projectId);
       }],
       ['WorkingMemoryDeltaCleanup', () => { this.deps.workingMemoryDelta?.cleanup(); }, false]
     ];
-    let startIndex = projectId ? this.readCheckpointIndex(projectId, steps.map(([name]) => name)) : 0;
+    let startIndex = projectId !== undefined ? this.readCheckpointIndex(projectId, steps.map(([name]) => name)) : 0;
     for (let index = startIndex; index < steps.length; index += 1) {
       const [stepName, fn, budgeted] = steps[index];
       await runStep(stepName, fn, budgeted !== false);
@@ -607,7 +610,7 @@ export class OfflineConsolidationPipeline {
             Date.now() - startedAt,
             true,
             projectId,
-            projectId ? steps[Math.min(index + 1, steps.length - 1)][0] : undefined
+            projectId !== undefined ? steps[Math.min(index + 1, steps.length - 1)][0] : undefined
           );
         }
         break;
@@ -624,6 +627,24 @@ export class OfflineConsolidationPipeline {
         savedAt INTEGER NOT NULL
       );
     `);
+  }
+
+  private assertInputProjectScope(input: OfflineConsolidationInput): void {
+    if (input.window.projectId === undefined) return;
+    const scope = input.window.projectId;
+    const db = this.deps.factStore?.getDatabase();
+    const neuronMatches = (neuronId: string | undefined): boolean => {
+      if (!neuronId || !db) return false;
+      const row = db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0`).get(neuronId) as { scope: string } | null;
+      return row?.scope === scope;
+    };
+    const invalid = input.rawEpisodes.some((neuron) => (neuron.metadata.projectId ?? '') !== scope)
+      || input.provisionalFacts.some((fact) => !neuronMatches(fact.neuronId))
+      || input.provisionalEvents.some((event) => !neuronMatches(event.neuronId))
+      || input.recentBeliefs.some((belief) => (belief.projectId ?? '') !== scope)
+      || input.provisionalEntities.some((entity) => !this.deps.entityStore?.isExclusiveToProject(entity.entityId, scope))
+      || input.unresolvedReferences.some((pending) => !neuronMatches(pending.contextNeuronId));
+    if (invalid) throw new Error('offline_consolidation_project_scope_mismatch');
   }
 
   private readCheckpointIndex(projectId: string, steps: PipelineStep[]): number {
@@ -649,7 +670,7 @@ export class OfflineConsolidationPipeline {
   ): void {
     const write = () => {
       this.deps.pipelineMetrics?.record(runId, timings, totalMs, aborted);
-      if (!projectId || !this.deps.db) return;
+      if (projectId === undefined || !this.deps.db) return;
       if (aborted && nextStep) {
         this.deps.db.prepare(`
           INSERT INTO pipeline_checkpoints (projectId, nextStep, savedAt)

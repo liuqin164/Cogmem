@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import Database from 'bun:sqlite';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,6 +32,19 @@ function makeSnapshot(source: SourceDefinition, content: string): SourceFileSnap
     content,
   };
 }
+
+test('EventStore allocates sequence values atomically across connections', () => {
+  const path = tempDbPath('cogmem-event-counter-');
+  const a = new EventStore(path);
+  const b = new EventStore(path);
+  const first = a.append({ streamId: 'shared', streamType: 'thread', eventType: 'message', projectId: 'a', payload: { text: 'one' } });
+  const second = b.append({ streamId: 'shared', streamType: 'thread', eventType: 'message', projectId: 'a', payload: { text: 'two' } });
+  expect([first.globalSeq, second.globalSeq]).toEqual([1, 2]);
+  expect([first.eventVersion, second.eventVersion]).toEqual([1, 2]);
+  expect([first.threadSeq, second.threadSeq]).toEqual([1, 2]);
+  a.close();
+  b.close();
+});
 
 test('EventStore replays same-timestamp thread events by threadSeq and eventOrdinal', () => {
   const store = new EventStore(tempDbPath('cogmem-ledger-store-'));
@@ -71,6 +85,30 @@ test('EventStore replays same-timestamp thread events by threadSeq and eventOrdi
   expect(replay.map((event: any) => event.threadSeq)).toEqual([1, 2]);
   expect(replay.every((event: any) => event.orderingConfidence === 'high')).toBe(true);
 
+  store.close();
+});
+
+test('EventStore rejects and hides cross-project parent and child links', () => {
+  const dbPath = tempDbPath('cogmem-ledger-project-links-');
+  const store = new EventStore(dbPath);
+  const parent = store.append({
+    streamId: 'stream-a', streamType: 'thread', eventType: 'MESSAGE',
+    projectId: 'a', occurredAt: 1, payload: { text: 'a' },
+  });
+  expect(() => store.append({
+    streamId: 'stream-b', streamType: 'thread', eventType: 'MESSAGE',
+    projectId: 'b', parentEventId: parent.eventId, occurredAt: 2, payload: { text: 'b' },
+  })).toThrow('event_link_project_scope_mismatch');
+  const child = store.append({
+    streamId: 'stream-b', streamType: 'thread', eventType: 'MESSAGE',
+    projectId: 'b', occurredAt: 3, payload: { text: 'b' },
+  });
+  const db = new Database(dbPath);
+  db.prepare(`UPDATE memory_events SET parent_event_id=? WHERE event_id=?`).run(parent.eventId, child.eventId);
+  db.close();
+
+  expect(store.getEventContext(child.eventId)?.parent).toBeUndefined();
+  expect(store.getChildEvents(parent.eventId, 'a')).toEqual([]);
   store.close();
 });
 

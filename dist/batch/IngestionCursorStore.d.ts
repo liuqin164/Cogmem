@@ -1,3 +1,4 @@
+import Database from 'bun:sqlite';
 import type { SourceAdapterKind, SourceDefinition } from '../adapters/types.js';
 export interface IngestionSourceCursor {
     sourceId: string;
@@ -17,6 +18,7 @@ export interface ProcessedSourceRecord {
     sourceId: string;
     sourcePath: string;
     sourceType: SourceAdapterKind;
+    projectId: string;
     contentHash: string;
     contentWindowStart: number;
     contentWindowEnd: number;
@@ -25,13 +27,14 @@ export interface ProcessedSourceRecord {
 }
 export declare class IngestionCursorStore {
     private db;
+    private readonly ownsDb;
     private closed;
-    constructor(dbPath?: string);
+    constructor(dbOrPath?: Database | string);
     private initializeSchema;
     registerSource(source: SourceDefinition): void;
     listRegisteredSources(): IngestionSourceCursor[];
-    getCursor(sourceId: string): IngestionSourceCursor | null;
-    hasProcessedRecord(recordHash: string): boolean;
+    getCursor(sourceId: string, projectId: string): IngestionSourceCursor | null;
+    hasProcessedRecord(recordHash: string, sourceId: string, projectId: string): boolean;
     markRecordProcessed(record: ProcessedSourceRecord): void;
     updateCursor(input: {
         sourceId: string;
@@ -44,7 +47,7 @@ export declare class IngestionCursorStore {
         contentWindowStart: number;
         contentWindowEnd: number;
     }): void;
-    listProcessedRecordHashes(sourceId: string, windowStart: number, windowEnd: number): Set<string>;
+    listProcessedRecordHashes(sourceId: string, windowStart: number, windowEnd: number, projectId: string): Set<string>;
     listRecentUnprocessedSources(since: number): IngestionSourceCursor[];
     close(): void;
     private mapCursor;

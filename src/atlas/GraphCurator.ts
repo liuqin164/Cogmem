@@ -7,6 +7,12 @@ import type { MemoryEvent } from '../types/index.js';
 import { EpisodeTitleGenerator } from './EpisodeTitleGenerator.js';
 import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
 import { inferActionKinds } from '../utils/ActionKindRegistry.js';
+import { localDateFor } from '../utils/LocalDateContext.js';
+import {
+  invalidateMemoryEdgeSupportIds,
+  mergeMemoryEdge,
+  reduceMemoryEdges,
+} from '../binding/MemoryEdgeMerge.js';
 
 interface EpisodeRow {
   episode_id: string;
@@ -80,7 +86,7 @@ export class GraphCurator {
   ) {}
 
   rebuild(projectId: string, now = Date.now()): GraphCuratorResult {
-    this.deleteFacetEdges(projectId);
+    const staleEdgeIds = this.deleteFacetEdges(projectId, now);
     const rows = this.db.prepare(`
       SELECT episode_id,project_id,session_id,conversation_thread_id,topic_path,episode_type,status,
         importance,summary,start_event_id,end_event_id,event_count,started_at,updated_at
@@ -170,6 +176,7 @@ export class GraphCurator {
           evidenceEventIds,
           status: 'active',
           sourceAuthority: 'atlas_curator',
+          validFrom: row.started_at,
           now,
         });
         facetEdgeCount += 1;
@@ -177,13 +184,14 @@ export class GraphCurator {
     }
 
     facetEdgeCount += this.projectEpisodeRelations(projectId, projections, now);
+    reduceMemoryEdges(this.db, staleEdgeIds, now);
     return { episodeCount: rows.length, facetNodeCount, facetEdgeCount, reviewNeeded };
   }
 
   rebuildEpisodes(projectId: string, episodeIds: string[], now = Date.now()): GraphCuratorResult {
     const bounded = Array.from(new Set(episodeIds.filter(Boolean))).slice(0, 100);
     if (!bounded.length) return { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
-    this.deleteFacetEdgesForEpisodes(projectId, bounded);
+    const staleEdgeIds = this.deleteFacetEdgesForEpisodes(projectId, bounded, now);
     const rows = this.db.prepare(`
       SELECT episode_id,project_id,session_id,conversation_thread_id,topic_path,episode_type,status,
         importance,summary,start_event_id,end_event_id,event_count,started_at,updated_at
@@ -202,6 +210,7 @@ export class GraphCurator {
       facetEdgeCount += projection.facetEdgeCount;
       reviewNeeded += projection.reviewNeeded;
     }
+    reduceMemoryEdges(this.db, staleEdgeIds, now);
     return { episodeCount: rows.length, facetNodeCount, facetEdgeCount, reviewNeeded };
   }
 
@@ -266,6 +275,7 @@ export class GraphCurator {
         evidenceEventIds,
         status: 'active',
         sourceAuthority: 'atlas_curator',
+        validFrom: row.started_at,
         now,
       });
       facetEdgeCount += 1;
@@ -280,7 +290,7 @@ export class GraphCurator {
 
   private facetTargetsFor(projection: EpisodeProjection): FacetTarget[] {
     const targets: FacetTarget[] = [];
-    const date = projection.localDate ?? dateFromTimestamp(projection.row.started_at);
+    const date = projection.localDate ?? dateFromTimestamp(projection.row.started_at, this.eventStore.getProjectTimeZone());
     if (date) {
       const [year, month] = [date.slice(0, 4), date.slice(0, 7)];
       targets.push({ type: 'time', id: date, nodeId: `time:${projection.row.project_id}:${date}`, label: date, relation: 'OCCURRED_ON', confidence: 1 });
@@ -350,7 +360,7 @@ export class GraphCurator {
       projectId,
       nodeType: 'raw_event',
       sourceId: event.eventId,
-      label: `${event.role || 'event'} ${new Date(event.occurredAt).toISOString().slice(0, 10)}`,
+      label: `${event.role || 'event'} ${event.localDate ?? localDateFor(event.occurredAt, this.eventStore.getProjectTimeZone())}`,
       summary: text.slice(0, 220),
       confidence: 1,
       supportCount: 1,
@@ -412,6 +422,7 @@ export class GraphCurator {
       evidenceEventIds: Array.from(new Set([...left.eventIds.slice(0, 3), ...right.eventIds.slice(0, 3)])),
       status,
       sourceAuthority: 'atlas_curator',
+      validFrom: Math.min(left.row.started_at, right.row.started_at),
       now,
     });
   }
@@ -430,22 +441,29 @@ export class GraphCurator {
     return Array.from(hints);
   }
 
-  private deleteFacetEdges(projectId: string): void {
+  private deleteFacetEdges(projectId: string, now: number): string[] {
     const relations = Array.from(FACET_EDGE_RELATIONS);
-    this.db.prepare(`DELETE FROM memory_edges WHERE project_id=? AND source_authority='atlas_curator' AND relation_type IN (${relations.map(() => '?').join(',')})`).run(projectId, ...relations);
+    const supportIds = (this.db.prepare(`
+      SELECT support_id FROM memory_edge_supports
+      WHERE project_id=? AND source_authority='atlas_curator' AND support_status='active'
+        AND relation_type IN (${relations.map(() => '?').join(',')})
+    `).all(projectId, ...relations) as Array<{ support_id: string }>).map((row) => row.support_id);
+    return invalidateMemoryEdgeSupportIds(this.db, supportIds, now, false);
   }
 
-  private deleteFacetEdgesForEpisodes(projectId: string, episodeIds: string[]): void {
+  private deleteFacetEdgesForEpisodes(projectId: string, episodeIds: string[], now: number): string[] {
     const relations = Array.from(FACET_EDGE_RELATIONS);
-    this.db.prepare(`
-      DELETE FROM memory_edges
+    const supportIds = (this.db.prepare(`
+      SELECT support_id FROM memory_edge_supports
       WHERE project_id=? AND source_authority='atlas_curator'
+        AND support_status='active'
         AND relation_type IN (${relations.map(() => '?').join(',')})
         AND (
           (source_type='episode' AND source_id IN (${episodeIds.map(() => '?').join(',')}))
           OR (target_type='episode' AND target_id IN (${episodeIds.map(() => '?').join(',')}))
         )
-    `).run(projectId, ...relations, ...episodeIds, ...episodeIds);
+    `).all(projectId, ...relations, ...episodeIds, ...episodeIds) as Array<{ support_id: string }>).map((row) => row.support_id);
+    return invalidateMemoryEdgeSupportIds(this.db, supportIds, now, false);
   }
 
   private upsertEdge(input: {
@@ -459,50 +477,24 @@ export class GraphCurator {
     evidenceEventIds: string[];
     status: string;
     sourceAuthority: string;
+    validFrom: number;
     now: number;
   }): void {
-    const edgeId = createHash('sha256')
-      .update([input.projectId, input.sourceType, input.sourceId, input.relationType, input.targetType, input.targetId].join('\0'))
-      .digest('hex');
-    this.db.prepare(`
-      INSERT INTO memory_edges (
-        edge_id, project_id, source_type, source_id, relation_type, target_type, target_id,
-        confidence, base_weight, stability, activation, evidence_event_ids_json, status,
-        valid_from, valid_to, version, source_authority, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(edge_id) DO UPDATE SET
-        confidence=excluded.confidence,
-        evidence_event_ids_json=excluded.evidence_event_ids_json,
-        status=excluded.status,
-        source_authority=excluded.source_authority,
-        updated_at=excluded.updated_at
-    `).run(
-      edgeId,
-      input.projectId,
-      input.sourceType,
-      input.sourceId,
-      input.relationType,
-      input.targetType,
-      input.targetId,
-      input.confidence,
-      1,
-      input.status === 'weak' ? 0.35 : 0.85,
-      1,
-      JSON.stringify(Array.from(new Set(input.evidenceEventIds)).slice(0, 30)),
-      input.status,
-      input.now,
-      null,
-      1,
-      input.sourceAuthority,
-      input.now,
-      input.now,
-    );
+    mergeMemoryEdge(this.db, {
+      ...input,
+      stability: input.status === 'weak' ? 0.35 : 0.85,
+      evidenceEventIds: input.evidenceEventIds.slice(0, 30),
+      operation: 'replace',
+      validFrom: input.validFrom,
+      createdAt: input.now,
+      updatedAt: input.now,
+    });
   }
 }
 
-function dateFromTimestamp(timestamp: number): string | undefined {
+function dateFromTimestamp(timestamp: number, timeZone?: string): string | undefined {
   if (!Number.isFinite(timestamp)) return undefined;
-  return new Date(timestamp).toISOString().slice(0, 10);
+  return localDateFor(timestamp, timeZone);
 }
 
 function normalizedHints(values: string[]): string[] {

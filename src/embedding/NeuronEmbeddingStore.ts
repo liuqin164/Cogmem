@@ -39,9 +39,21 @@ export class NeuronEmbeddingStore {
     this.ensureProgressColumns();
   }
 
-  upsert(neuronId: string, modelId: string, vector: Float32Array, projectId?: string): void {
+  upsert(neuronId: string, modelId: string, vector: Float32Array, projectId?: string): boolean {
     const resolvedProjectId = projectId ?? this.lookupProjectId(neuronId);
-    this.db.prepare(`
+    const bytes = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
+    if (this.hasTable('neurons')) {
+      const result = this.db.prepare(`
+        INSERT OR REPLACE INTO neuron_embeddings (
+          neuron_id, project_id, model_id, dimensions, vector_blob, status, retry_count, updated_at
+        )
+        SELECT id, COALESCE(project_id,''), ?, ?, ?, 'done', 0, ?
+        FROM neurons
+        WHERE id=? AND is_deleted=0 AND COALESCE(project_id,'')=?
+      `).run(modelId, vector.length, bytes, Date.now(), neuronId, resolvedProjectId ?? '');
+      return Number(result.changes) > 0;
+    }
+    const result = this.db.prepare(`
       INSERT OR REPLACE INTO neuron_embeddings (
         neuron_id, project_id, model_id, dimensions, vector_blob, status, retry_count, updated_at
       ) VALUES (?, ?, ?, ?, ?, 'done', 0, ?)
@@ -50,9 +62,14 @@ export class NeuronEmbeddingStore {
       resolvedProjectId ?? null,
       modelId,
       vector.length,
-      Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength),
+      bytes,
       Date.now()
     );
+    return Number(result.changes) > 0;
+  }
+
+  private hasTable(name: string): boolean {
+    return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name));
   }
 
   getProgress(): { total: number; completed: number; failed: number; lastUpdatedAt: string } {
@@ -90,10 +107,10 @@ export class NeuronEmbeddingStore {
   }
 
   countStaleVectors(currentModelId: string, projectId?: string): number {
-    const row = projectId
+    const row = projectId !== undefined
       ? this.db.prepare(`
           SELECT COUNT(*) AS count FROM neuron_embeddings
-          WHERE project_id = ? AND model_id <> ?
+          WHERE COALESCE(project_id,'') = ? AND model_id <> ?
         `).get(projectId, currentModelId)
       : this.db.prepare(`
           SELECT COUNT(*) AS count FROM neuron_embeddings
@@ -158,7 +175,7 @@ export class NeuronEmbeddingStore {
     }>;
     return rows.map((row) => ({
       neuronId: row.neuron_id,
-      projectId: row.project_id || undefined,
+      projectId: row.project_id == null ? undefined : String(row.project_id),
       modelId: row.model_id,
       dimensions: Number(row.dimensions),
       vector: decodeVector(row.vector_blob),
@@ -167,16 +184,16 @@ export class NeuronEmbeddingStore {
   }
 
   private readRows(projectId?: string, modelId?: string): Array<{ neuron_id: string; vector_blob: Uint8Array }> {
-    if (projectId && modelId) {
+    if (projectId !== undefined && modelId) {
       return this.db.prepare(`
         SELECT neuron_id, vector_blob FROM neuron_embeddings
-        WHERE project_id = ? AND model_id = ?
+        WHERE COALESCE(project_id, '') = ? AND model_id = ?
       `).all(projectId, modelId) as Array<{ neuron_id: string; vector_blob: Uint8Array }>;
     }
-    if (projectId) {
+    if (projectId !== undefined) {
       return this.db.prepare(`
         SELECT neuron_id, vector_blob FROM neuron_embeddings
-        WHERE project_id = ?
+        WHERE COALESCE(project_id, '') = ?
       `).all(projectId) as Array<{ neuron_id: string; vector_blob: Uint8Array }>;
     }
     if (modelId) {
@@ -191,7 +208,7 @@ export class NeuronEmbeddingStore {
   private lookupProjectId(neuronId: string): string | undefined {
     try {
       const row = this.db.prepare(`SELECT project_id FROM neurons WHERE id = ?`).get(neuronId) as { project_id?: string | null } | undefined;
-      return row?.project_id || undefined;
+      return row?.project_id == null ? undefined : String(row.project_id);
     } catch {
       return undefined;
     }

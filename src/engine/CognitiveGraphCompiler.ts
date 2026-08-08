@@ -89,10 +89,12 @@ export class CognitiveGraphCompiler {
     }
 
     for (const belief of consolidation.beliefs) {
+      if (belief.status !== 'active') continue;
       edgeCount += this.attachBeliefNode(neuronNode.nodeId, belief, projectId, createdAt, seedNodeIds);
     }
 
     for (const fact of consolidation.compiledFacts) {
+      if (!['provisional', 'provisional_enriched', 'verified'].includes(fact.status)) continue;
       const factNode = this.store.upsertNode({
         nodeId: `cgnode-${randomUUID()}`,
         nodeType: 'fact',
@@ -101,6 +103,7 @@ export class CognitiveGraphCompiler {
         projectId,
         sourceNeuronId: neuron.id,
         metadata: {
+          status: fact.status,
           predicateFamily: fact.predicateFamily,
           predicateValue: fact.predicateValue,
           object: fact.object
@@ -129,7 +132,8 @@ export class CognitiveGraphCompiler {
             sourceNeuronId: neuron.id,
             metadata: {
               type: entity.type,
-              aliases: entity.aliases
+              aliases: entity.aliases,
+              sourceFactId: fact.factId
             },
             createdAt
           });
@@ -147,6 +151,7 @@ export class CognitiveGraphCompiler {
     }
 
     for (const event of consolidation.compiledEvents) {
+      if (!['provisional', 'verified'].includes(event.status)) continue;
       const eventNode = this.store.upsertNode({
         nodeId: `cgnode-${randomUUID()}`,
         nodeType: 'compiled_event',
@@ -155,6 +160,7 @@ export class CognitiveGraphCompiler {
         projectId,
         sourceNeuronId: neuron.id,
         metadata: {
+          status: event.status,
           eventType: event.eventType,
           actor: event.actor,
           target: event.target
@@ -242,6 +248,45 @@ export class CognitiveGraphCompiler {
       seedNodeIds: Array.from(new Set(seedNodeIds)),
       edgeCount
     };
+  }
+
+  rebuildTimeBuckets(input: {
+    projectId: string;
+    neurons: Array<{ id: string; title: string; createdAt: number }>;
+    bucketsByNeuronId: Map<string, TimeBucketRecord[]>;
+  }): void {
+    for (const neuron of input.neurons) {
+      const neuronKey = `neuron:${neuron.id}`;
+      const neuronNode = this.store.findNode(input.projectId, 'neuron', neuronKey) ?? this.store.upsertNode({
+        nodeId: `cgnode-${randomUUID()}`,
+        nodeType: 'neuron',
+        nodeKey: neuronKey,
+        title: neuron.title,
+        projectId: input.projectId,
+        sourceNeuronId: neuron.id,
+        metadata: { status: 'active' },
+        createdAt: neuron.createdAt,
+      });
+      for (const bucket of input.bucketsByNeuronId.get(neuron.id) ?? []) {
+        const bucketNode = this.store.upsertNode({
+          nodeId: `cgnode-${randomUUID()}`,
+          nodeType: 'time_bucket',
+          nodeKey: `time_bucket:${bucket.bucketId}`,
+          title: bucket.label,
+          projectId: input.projectId,
+          sourceNeuronId: neuron.id,
+          metadata: { bucketType: bucket.bucketType, timeZone: bucket.timeZone },
+          createdAt: neuron.createdAt,
+        });
+        this.store.linkNodes({
+          sourceNodeId: neuronNode.nodeId,
+          targetNodeId: bucketNode.nodeId,
+          edgeType: 'occurred_in_time_bucket',
+          projectId: input.projectId,
+          createdAt: neuron.createdAt,
+        });
+      }
+    }
   }
 
   private attachBeliefNode(

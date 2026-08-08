@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { matchesProjectScope } from '../topology/ProjectScope.js';
 const INTENT_LAYERS = {
     greeting: [],
     short_followup: ['session_state', 'turn_bridge'],
@@ -114,7 +115,7 @@ export class ContextCortex {
         return row ? JSON.parse(row.receipt_json) : null;
     }
     hardSuppressionReason(candidate, input, intent) {
-        if (input.projectId && candidate.projectId && candidate.projectId !== input.projectId)
+        if (!matchesProjectScope(input.projectId, candidate.projectId))
             return 'project_boundary';
         if (candidate.superseded)
             return 'superseded';
