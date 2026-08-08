@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 
 const PLUGIN_ID = 'cogmem-auto-memory';
-const PLUGIN_VERSION = '0.7.1';
+const PLUGIN_VERSION = '0.7.2';
 
 function defaultPublicEntrypoint(): string {
   return join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), 'public.js');
@@ -607,8 +607,8 @@ function listLines(values) {
 function serializeUntrustedMemory(input, limit) {
   const clean = stripCogmemRecallBlocks(String(input || '')).text
     .replace(new RegExp('</?COGMEM_[A-Z0-9_:-]+[^>]*>', 'gi'), '')
-    .replace(new RegExp('[\\\\u0000-\\\\u0008\\\\u000b\\\\u000c\\\\u000e-\\\\u001f\\\\u007f]', 'g'), ' ')
-    .replace(new RegExp('\\\\s+', 'g'), ' ')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim()
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -1320,6 +1320,7 @@ module.exports = plugin;
 module.exports.default = plugin;
 module.exports.__testing = {
   stripCogmemRecallBlocks,
+  serializeUntrustedMemory,
   shouldInjectTurnBridge,
   formatMemoryUsageBridge,
   formatSessionWorkingState,

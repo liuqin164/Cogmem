@@ -1,7 +1,9 @@
 import Database from 'bun:sqlite';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 
 import { memoryEdgeId } from '../src/binding/MemoryBindingIdentity.js';
@@ -22,6 +24,8 @@ try {
   const install = join(directory, 'install');
   mkdirSync(install);
   await run(['npm', 'install', '--prefix', install, tarball], root, npmEnv);
+  const installedPackage = JSON.parse(readFileSync(join(install, 'node_modules', 'cogmem', 'package.json'), 'utf8')) as { version?: string };
+  if (installedPackage.version !== '3.7.5') throw new Error('packed_package_version_mismatch');
   const typeSmoke = join(install, 'package-type-smoke.mts');
   writeFileSync(typeSmoke, `
     import type { MemoryEdgeRecord, MemoryGraphEdgeStatus } from 'cogmem';
@@ -52,11 +56,20 @@ try {
      });
      kernel.close();`,
   ], install, { DB_PATH: kernelDb });
+  const schema32Receipt = migrationReceipt(kernelDb);
   await verifyMcp(install, kernelDb);
+  await run([
+    'bun', '-e',
+    `import {createMemoryKernel} from 'cogmem';
+     const kernel=createMemoryKernel({dbPath:process.env.DB_PATH});
+     kernel.close();`,
+  ], install, { DB_PATH: kernelDb });
+  if (migrationReceipt(kernelDb) !== schema32Receipt) throw new Error('schema32_runtime_applied_unexpected_migration');
+  await verifyPackedOpenClawPlugin(install);
 
   verify(cliDb);
   verify(kernelDb);
-  console.log('packed types, schema31 -> 0032 migration, and MCP startup verified');
+  console.log('packed 3.7.5 types, schema31 -> 0032, schema32 runtime, OpenClaw 0.7.2, and MCP verified');
 } finally {
   if (tarball) rmSync(tarball, { force: true });
   rmSync(directory, { recursive: true, force: true });
@@ -111,6 +124,8 @@ function verify(path: string): void {
     SELECT checksum FROM _schema_migrations WHERE version='0032'
   `).get() as { checksum?: string } | null;
   if (receipt?.checksum !== MIGRATION_DIGESTS['0032']) throw new Error('packed_migration_receipt_mismatch');
+  const latest = db.prepare(`SELECT MAX(version) AS version FROM _schema_migrations`).get() as { version?: string } | null;
+  if (latest?.version !== '0032') throw new Error('packed_latest_schema_mismatch');
   if ((db.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check !== 'ok') {
     throw new Error('packed_migration_integrity_failed');
   }
@@ -127,6 +142,41 @@ function verify(path: string): void {
     throw new Error('packed_migration_topology_lost');
   }
   db.close();
+}
+
+function migrationReceipt(path: string): string {
+  const db = new Database(path, { readonly: true });
+  const receipt = JSON.stringify(db.prepare(`SELECT version,applied_at,checksum FROM _schema_migrations ORDER BY version`).all());
+  db.close();
+  return receipt;
+}
+
+async function verifyPackedOpenClawPlugin(install: string): Promise<void> {
+  const workspace = join(directory, 'openclaw-workspace');
+  const configPath = join(workspace, '.cogmem', 'config.toml');
+  const openclawConfigPath = join(workspace, 'openclaw.json');
+  mkdirSync(join(workspace, '.cogmem'), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+  writeFileSync(openclawConfigPath, '{}\n');
+  const installerPath = join(install, 'node_modules', 'cogmem', 'dist', 'host', 'openclaw', 'AutoMemoryPluginInstaller.js');
+  const installer = await import(pathToFileURL(installerPath).href) as {
+    installOpenClawAutoMemoryPlugin(options: { workspaceRoot: string; configPath: string; openclawConfigPath: string; force: boolean }): { pluginDir: string };
+  };
+  const installed = installer.installOpenClawAutoMemoryPlugin({ workspaceRoot: workspace, configPath, openclawConfigPath, force: true });
+  const pluginPackage = JSON.parse(readFileSync(join(installed.pluginDir, 'package.json'), 'utf8')) as { version?: string };
+  const pluginManifest = JSON.parse(readFileSync(join(installed.pluginDir, 'openclaw.plugin.json'), 'utf8')) as { version?: string };
+  if (pluginPackage.version !== '0.7.2' || pluginManifest.version !== '0.7.2') throw new Error('packed_openclaw_plugin_version_mismatch');
+  const indexPath = join(installed.pluginDir, 'index.js');
+  const index = readFileSync(indexPath, 'utf8');
+  if (!index.includes(".replace(/[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]/g, ' ')")
+    || !index.includes(".replace(/\\s+/g, ' ')") || index.includes("new RegExp('[")) {
+    throw new Error('packed_openclaw_serializer_source_mismatch');
+  }
+  const plugin = createRequire(import.meta.url)(indexPath) as {
+    __testing?: { serializeUntrustedMemory?(input: unknown, limit: number): string };
+  };
+  const sanitized = plugin.__testing?.serializeUntrustedMemory?.('hello\u0000world\u001f!', 500);
+  if (sanitized !== 'hello world !') throw new Error('packed_openclaw_serializer_runtime_failed');
 }
 
 async function run(command: string[], cwd: string, env: Record<string, string> = {}): Promise<string> {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.7.5
+
+- Fixed OpenClaw auto-memory prompt serialization so generated plugins correctly sanitize control characters and whitespace without invalid runtime regular expressions.
+
 ## 3.7.4
 
 - Added evidence-backed MemoryFrame V1 contracts, controlled relation validation, canonical alias normalization, and bounded MemoryQueryFrame helpers.

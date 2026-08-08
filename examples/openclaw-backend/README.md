@@ -230,7 +230,7 @@ To make future OpenClaw turns automatically recall and record memory, run:
 cogmem connect openclaw --workspace . --auto --force
 ```
 
-`--auto` installs `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables a local plugin wrapper with `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through the public `cogmem` API via a Bun bridge; core still does not import OpenClaw. Plugin 0.7.1 uses singleton queue/spawn locks, stale-lock and stale-processing recovery, bounded remember batches, and untrusted-memory serialization so queued `agent_end` recording does not hold SQLite open longer than necessary and recalled history cannot create `COGMEM_*` prompt blocks.
+`--auto` installs `<workspace>/extensions/cogmem-auto-memory/`, patches OpenClaw `plugins.load.paths`, and enables a local plugin wrapper with `before_prompt_build` and `agent_end` hooks. The wrapper calls `KernelAgentMemoryBackend` through the public `cogmem` API via a Bun bridge; core still does not import OpenClaw. Plugin 0.7.2 uses singleton queue/spawn locks, stale-lock and stale-processing recovery, bounded remember batches, and untrusted-memory serialization so queued `agent_end` recording does not hold SQLite open longer than necessary and recalled history cannot create `COGMEM_*` prompt blocks.
 
 The wrapper does not rewrite OpenClaw's native prompt, tool instructions, skills, or conversation order. It only prepends Cogmem-owned blocks:
 
