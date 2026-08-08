@@ -6,7 +6,7 @@ export type MemoryClusterStatus = 'active' | 'possible_conflict' | 'superseded';
 export type MemoryEdgeRelation = 'ABOUT' | 'MENTIONS' | 'SUPPORTS' | 'BELONGS_TO' | 'SAME_TOPIC_AS' | 'CORRECTS' | 'CONTRADICTS' | 'REFINES' | 'SUPERSEDES';
 export type MemoryGraphEndpointType = MemoryAtlasNodeType;
 export type MemoryGraphRelation = MemoryEdgeRelation | MemoryRelationType | 'PART_OF_ISSUE' | 'INVOLVES_ENTITY' | 'IN_SESSION' | 'IN_THREAD' | 'HAS_EVIDENCE' | 'HAS_MEMORY_KIND' | 'HAS_ACTION_KIND' | 'SAME_ISSUE' | 'TARGETS' | 'belongs_to';
-export type MemoryGraphEdgeStatus = 'active' | 'weak' | 'rejected' | 'superseded' | 'archived';
+export type MemoryGraphEdgeStatus = 'active' | 'weak' | 'needs_confirmation' | 'rejected' | 'superseded' | 'archived';
 export interface MemoryEntityRecord {
     entityId: string;
     projectId?: string;

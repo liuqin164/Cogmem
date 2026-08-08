@@ -57,7 +57,7 @@ export type MemoryGraphRelation =
   | 'TARGETS'
   | 'belongs_to';
 
-export type MemoryGraphEdgeStatus = 'active' | 'weak' | 'rejected' | 'superseded' | 'archived';
+export type MemoryGraphEdgeStatus = 'active' | 'weak' | 'needs_confirmation' | 'rejected' | 'superseded' | 'archived';
 
 export interface MemoryEntityRecord {
   entityId: string;

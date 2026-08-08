@@ -22,6 +22,17 @@ try {
   const install = join(directory, 'install');
   mkdirSync(install);
   await run(['npm', 'install', '--prefix', install, tarball], root, npmEnv);
+  const typeSmoke = join(install, 'package-type-smoke.mts');
+  writeFileSync(typeSmoke, `
+    import type { MemoryEdgeRecord, MemoryGraphEdgeStatus } from 'cogmem';
+    const status: MemoryGraphEdgeStatus = 'needs_confirmation';
+    declare const edge: MemoryEdgeRecord;
+    if (edge.status === 'needs_confirmation') void status;
+  `);
+  await run([
+    'bun', join(root, 'node_modules', 'typescript', 'bin', 'tsc'), typeSmoke,
+    '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022', '--module', 'Node16', '--moduleResolution', 'Node16',
+  ], install);
 
   const cliDb = materialize('cli.db');
   const kernelDb = materialize('kernel.db');
@@ -45,7 +56,7 @@ try {
 
   verify(cliDb);
   verify(kernelDb);
-  console.log('packed install, schema31 -> 0032 migration, and MCP startup verified');
+  console.log('packed types, schema31 -> 0032 migration, and MCP startup verified');
 } finally {
   if (tarball) rmSync(tarball, { force: true });
   rmSync(directory, { recursive: true, force: true });
