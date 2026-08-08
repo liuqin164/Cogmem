@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { inspectOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemoryPluginInstaller.js';
+import { ALL_MIGRATIONS } from '../src/migrations/index.js';
+import { MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const packageJsonPath = join(coreRoot, 'package.json');
@@ -24,7 +28,7 @@ function packageJson(): {
 }
 
 describe('core release metadata', () => {
-  test('3.7.4 is released as cogmem through npm with GitHub source mirrors', () => {
+  test('3.7.5 release metadata keeps schema 32 and OpenClaw plugin 0.7.2', () => {
     const manifest = packageJson();
     const readme = readText(join(coreRoot, 'README.md'));
     const contributing = readText(join(coreRoot, 'CONTRIBUTING.md'));
@@ -32,7 +36,7 @@ describe('core release metadata', () => {
     const checklist = readText(join(coreRoot, 'RELEASE_CHECKLIST.md'));
 
     expect(manifest.name).toBe('cogmem');
-    expect(manifest.version).toBe('3.7.4');
+    expect(manifest.version).toBe('3.7.5');
     expect(manifest.description).toContain('agent-native memory kernel');
     expect(manifest.repository?.url).toBe('git+https://github.com/liuqin164/cogmem.git');
     expect(readme).toContain('curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash');
@@ -42,8 +46,16 @@ describe('core release metadata', () => {
     expect(readme).not.toContain('@CognitiveOS/core');
     expect(contributing).toContain('npm pack --dry-run --json');
     expect(contributing).toContain('npm publish --provenance --access public');
-    expect(changelog).toContain('3.7.4');
-    expect(checklist).toContain('3.7.4');
+    expect(readme).toContain('Current version: `3.7.5`');
+    expect(changelog).toContain('## 3.7.5');
+    expect(checklist).toContain('# cogmem 3.7.5 Release Checklist');
+    expect(ALL_MIGRATIONS.at(-1)?.version).toBe('0032');
+    expect(Number.parseInt(ALL_MIGRATIONS.at(-1)!.version, 10)).toBe(32);
+    expect(ALL_MIGRATIONS.some((migration) => migration.version === '0033')).toBe(false);
+    expect(readdirSync(join(coreRoot, 'src', 'migrations')).some((file) => file.startsWith('0033_'))).toBe(false);
+    expect(Object.keys(MIGRATION_DIGESTS).sort().at(-1)).toBe('0032');
+    expect(MIGRATION_DIGESTS['0032']).toBe('a49bc9069fdd9270eb9108fce707076d3daf83a31a4ced583469a7f8ece8c5f1');
+    expect(inspectOpenClawAutoMemoryPlugin({ workspaceRoot: coreRoot }).expectedVersion).toBe('0.7.2');
     expect(checklist).toContain('npm publish --provenance --access public');
   });
 
