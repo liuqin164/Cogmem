@@ -54,6 +54,7 @@ export interface AppendEventInput<TPayload = Record<string, unknown>> {
 export declare class EventStore {
     private readonly encryptionProvider?;
     private readonly projectTimeZone?;
+    private ftsRebuilds;
     private readonly validatedLocalDates;
     private db;
     private ownsDb;
@@ -143,6 +144,14 @@ export declare class EventStore {
     private mapRow;
     private upsertRawEventFts;
     private rebuildRawEventFtsIfNeeded;
+    getRawEventFtsState(): {
+        watermark: number | null;
+        maxRowid: number;
+        ftsRows: number;
+        rebuilds: number;
+    };
+    private readFtsState;
+    private writeFtsState;
     private extractIndexText;
     private toRawEventFtsQuery;
     private fallbackRawTextSearch;
