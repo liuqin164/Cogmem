@@ -294,7 +294,8 @@ describe('documented tool profile counts match the shipped registry', () => {
     expect(hosts).toContain('npm install -g cogmem');
     expect(hosts).toContain('dist/bin/mcp.js');
 
-    // The server never creates the --db parent directory.
+    // A missing --db parent used to fail the server outright. It now creates
+    // the directory, so the error string is only the post-3.7.5 fallback.
     expect(hosts).toContain('unable to open database file');
 
     // `%h/.local/bin/cogmem` is not where npm installs, and a bare `cogmem`
@@ -316,5 +317,27 @@ describe('documented tool profile counts match the shipped registry', () => {
 
     expect(source).not.toContain('new SqliteSharedMemory(new Database');
     expect(built).not.toContain('new SqliteSharedMemory(new Database');
+  });
+
+  test('the build swaps dist in only after tsc succeeds', () => {
+    // dist is tracked in git. The old build ran `rmSync('dist')` before `tsc`,
+    // so an interrupted or failing compile left the working tree with every
+    // built file deleted: a killed `npm publish --dry-run` (which runs
+    // prepublishOnly -> build) wiped all 1314 tracked dist files mid-release.
+    const manifest = packageJson();
+    expect(manifest.scripts.build).toBe('node scripts/build.mjs');
+    expect(manifest.scripts.prepare).toBe('node scripts/build.mjs');
+
+    const build = readText(join(coreRoot, 'scripts', 'build.mjs'));
+    expect(build).toContain("const staging = 'dist.next'");
+    expect(build).toContain('--outDir');
+
+    // The failure branch must exit before anything is renamed into place.
+    const failureExit = build.indexOf('tsc.status !== 0');
+    const swap = build.indexOf("renameSync(staging, 'dist')");
+    expect(failureExit).toBeGreaterThan(-1);
+    expect(swap).toBeGreaterThan(failureExit);
+
+    expect(readText(join(coreRoot, '.gitignore'))).toContain('dist.next/');
   });
 });

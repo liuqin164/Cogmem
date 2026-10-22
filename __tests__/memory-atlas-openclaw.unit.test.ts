@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -23,6 +23,12 @@ test('installed OpenClaw plugin sanitizes generated prompt context and routes At
     expect(syntax.exitCode).toBe(0);
     expect(syntax.stderr.toString()).toBe('');
   }
+  // The plugin records the package entry it will import at hook time. Running the
+  // installer from a checkout used to write src/public.js, which is never built.
+  const patched = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
+  const installed = patched.plugins.entries['cogmem-auto-memory'];
+  expect(existsSync(installed.config.publicEntrypoint)).toBe(true);
+  expect(installed.config.publicEntrypoint.endsWith('public.js')).toBe(true);
   expect(index).toContain('function classifyMemoryNavigationIntent(query)');
   expect(index).toContain("runBridge(navigationIntent === 'atlas_explore' && config.autoAtlas !== false ? 'context' : 'recall'");
   expect(index).not.toContain("runBridge('graph-explore'");

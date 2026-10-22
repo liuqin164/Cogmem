@@ -10,7 +10,16 @@ const PLUGIN_ID = 'cogmem-auto-memory';
 const PLUGIN_VERSION = '0.7.2';
 
 function defaultPublicEntrypoint(): string {
-  return join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'), 'public.js');
+  const here = resolve(dirname(fileURLToPath(import.meta.url)));
+  // Running from dist/host/openclaw, the package entry is two levels up. Running
+  // from src/host/openclaw (a checkout, no build step), it lives under dist/,
+  // and recording src/public.js would leave the plugin pointing at a file that
+  // was never built.
+  const candidates = [
+    join(here, '../..', 'public.js'),
+    join(here, '../../..', 'dist', 'public.js'),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
 }
 
 export interface OpenClawAutoMemoryInstallOptions {

@@ -1,20 +1,22 @@
 # Cogmem 连续开发进度
 
 > 唯一进度源。每轮开始读这里，每轮结束更新这里。
-> 最后更新：2026-10-23 07:40 JST
+> 最后更新：2026-10-23 07:36 JST
 
 ## 当前状态
 
 - 仓库：`~/projects/Cogmem`
 - 分支：`main`
-- HEAD：`ac61f93` feat: cogmem 4.0.0（本地提交，未推送、未打 tag）
-- 上一个：`c52508c`（Merge PR #27, 3.7.4）
-- 版本：`4.0.0`（已改元数据，未提交）
-- 工作区：干净（`docs/overnight.lock` 为运行期文件，未跟踪）
-- 测试：`1524 pass / 0 fail / 1524 tests / 163 files`（**全绿，基线失败已清零**）
+- HEAD：`c7362d1` docs: check every host section against its vendor reference（本地提交，未推送、未打 tag）
+- 上一个：`46ba0a5`（docs: record tool execution）、`d50cec5`（fix: migration write lock）、`5ee3312`（feat: 4.0.0）
+- 版本：`4.0.0`，`publishConfig.access=public`，23 个 bin
+- 工作区：4 项未提交（`.gitignore`、`package.json`、`__tests__/release-metadata.unit.test.ts`、新文件 `scripts/build.mjs`），均为本轮构建安全改造
+- 测试：`1525 pass / 0 fail / 1525 tests / 163 files / 5654 expect`（**全绿**，169.84s）
 - 类型检查：干净
-- dist：已用 `bun run build` 重建（2026-10-23 06:55），含本轮 `--no-probe`；旧 dist 备份在 scratch `dist-pre-noprobe-*.tgz`
-- 常驻服务：无（MCP 服务按需启动）
+- dist：与 HEAD 逐字节一致（`git status dist` 0 项），1315 文件（含 `.tsbuildinfo`，未跟踪）
+- 发布门禁：pack 898 文件 / 910.6 kB / 4.2 MB unpacked，`verify:packed-migration` 通过，`npm publish --dry-run` exit 0
+- npm 登录：**未登录**（`npm whoami` → need auth），publish 需要用户 `npm login`
+- 常驻服务：无（MCP 服务按需启动；但发现一个 45 分钟未退出的测试子进程，见下轮任务）
 
 ## 一条基线失败已清零（2026-10-23 06:10）
 
@@ -65,17 +67,34 @@ CI 上没 Ollama 就绿，本机就红。
 
 ## 下一项任务（按优先级）
 
-### P4 — 发布前收尾（下一项）
+### P4 — 发布前收尾（剩余＝需要用户授权）
 
-4.0 内容与测试已就绪（1521 pass / 0 fail），剩下的是发布动作。不需要授权的部分先做：
+原 3 项已完成（2026-10-23 07:36 在当前 HEAD `c7362d1` 上复跑）：
 
-1. `npm pack` 后检查包内文件清单：`docs/mcp-hosts.md`、`dist/bin/mcp.js`、`src/ports` 是否齐全，
-   有没有把 `__tests__`、`evals`、`.bak-*` 打进去
-2. 用打包产物跑一遍 `verify:packed-migration`，确认 `packed 4.0.0 ... and MCP verified`
-3. 生成一份发布摘要：43+ 项改动按「新功能 / 修复 / 文档 / dist」分组，供 commit message 使用
+1. ✅ pack 清单：898 文件 / 910.6 kB / 4.2 MB unpacked；`dist/bin/mcp.js`、`dist/bin/init.js`、
+   `dist/ports/index.js`、`docs/mcp-hosts.md`、`install.sh` 齐全；**无** `__tests__`、`evals`、`.bak-*`。
+   `src/` 本来就不发包（`files` 只列 `dist/**/*.js` 与 `.d.ts`，设计如此）。
+2. ✅ `bun run verify:packed-migration` → `packed 4.0.0 types, schema31 -> 0032, schema32 runtime, OpenClaw 0.7.2, and MCP verified`
+3. ✅ 发布摘要不再需要单独文档：CHANGELOG 4.0.0 已覆盖，`npm publish --dry-run` exit 0，
+   阻塞点只剩 **npm 未登录**（`npm whoami` → `need auth`）
 
-**需要用户决定**：commit、tag `v4.0.0`、是否 `npm publish`。工作区 58 项未提交，
-一次 `git checkout` 就全没，建议尽快落一个本地 commit。
+**需要用户决定（三条，agent 不能代做）**：
+- `npm login`（本机未登录，publish 与带鉴权的 dry-run 都卡在这）
+- tag `v4.0.0` + GitHub Release
+- `npm publish`（`prepublishOnly` 会自动跑 typecheck + 全量测试 + build + pack + verify，约 4 分钟）
+
+**待落提交**：本轮 4 项改动（`.gitignore`、`package.json`、`scripts/build.mjs`、`release-metadata` 测试）
+＋ `RELEASE_CHECKLIST.md` 说明。按 cron 规则不自行 commit。
+
+### P6 — 测试是否泄漏 MCP 子进程（下一条自主任务）
+
+2026-10-23 07:23 观察到：`bun src/bin/mcp.ts --transport http --port 7351 --bind 127.0.0.1
+--db /tmp/dbg-deep/x/y/memory.db --profile core` 已存活 45 分钟未退出，路径正是
+P2d 的 `--db path handling` 测试用的 `<scratch>/deep/...` 形态，高度怀疑
+`__tests__/mcp-execution.unit.test.ts` spawn 子进程后没在结束时 kill。
+
+范围：只在测试侧查（不要改产品行为），确认泄漏点 → 加 `afterAll`/`try/finally` kill →
+非空验证（跑完该测试后 `ss -ltnp | grep <port>` 无残留）。注意 `pkill -f` 会匹配执行它的 shell，用精确 PID。
 
 ### P5 — OpenClaw 真实工具执行（需要窗口）
 
@@ -281,6 +300,16 @@ bun test __tests__
   ① Claude Code 的 `.mcp.json` 里 `type` 不是可选：只写 `url` 不写 `type` 会被当成 stdio 直接跳过，报 `has a "url" but no "type"`；补上正确 JSON 与 `${VAR}` / `${VAR:-default}` 语法，以及 `--transport http` 的 SSE 回退要 v2.1.265+
   ② Codex 参考链接原指向 GitHub `docs/config.md`，该文件已只剩 726 字节的存根，改指 `developers.openai.com/codex/mcp`；顺带补 `default_tools_approval_mode`（auto/prompt/writes/approve），解决交互式下每次调用都要批准的问题
   Cursor 的 `mcpServers` + `url` + `headers` 与 `${env:NAME}` 插值经核对与官方一致，未改；补了一句 `envFile` 仅限 stdio。文末新增「Official documentation」表，五个宿主 + MCP 规范链接，未测的两个标注为"对照文档、非实测"。新增 1 个守卫测试锁住五条链接与 `type` 要求。全量 **1524 pass / 0 fail / 163 files**
+- 2026-10-23 07:36 — **P4 发布门禁在当前 HEAD 复跑 + 修掉门禁自身毁 dist 的缺陷**（cron 轮；07:23 接手时锁的最后写入是 06:34，已过期 2473s）
+  ① 门禁真实输出：`npm pack --dry-run --json` → **898 文件 / 910.6 kB / 4.2 MB unpacked**，`__tests__`/`evals`/`.bak-*` **0 命中**，`dist/bin/mcp.js`、`dist/bin/init.js`、`dist/ports/index.js`、`docs/mcp-hosts.md`、`install.sh` 全在包内（`src/` 不发包是 `files` 的设计）；
+  `verify:packed-migration` → `packed 4.0.0 types, schema31 -> 0032, schema32 runtime, OpenClaw 0.7.2, and MCP verified`；
+  `npm publish --dry-run --access public --ignore-scripts` → exit 0、898 文件，唯一告警是未登录。元数据机械核对 9 项全 PASS（`publishConfig.access=public`、`exports .` → `dist/public.js`、23 bin、无 `.db`/`.sqlite`/`.DS_Store`/`.tsbuildinfo` 被跟踪）
+  ② **撞上的真缺陷**：`npm publish --dry-run` 会先跑 `prepublishOnly`，而 `build` 是 `rmSync('dist') && tsc -p`。180s 超时杀掉进程后 dist 已删、tsc 未跑完 → 工作区出现 **1314 个已跟踪 dist 文件被删**（只剩 `dist/.tsbuildinfo`）。不是网络（`npm ping` PONG 164ms），是门禁自身的破坏性前置删除
+  ③ 修法：新增 `scripts/build.mjs`，先编译到 `dist.next`（`--outDir`/`--tsBuildInfoFile` 覆盖），**只有 `tsc.status === 0` 才** `rmSync('dist')` + `renameSync('dist.next','dist')`；失败分支清暂存后退出。`package.json` 的 `build`/`prepare` 都指向它，`.gitignore` 加 `dist.next/`
+  ④ **非空已验证**：注入 `src/__build_failure_probe.ts`（`const probe: number = 'not a number'`）后 `bun run build` → `error TS2322` + `build failed; the previous dist/ was left untouched`，**exit 2**，dist 前后均 1315 文件、`git status dist` **0 项**、`dist.next` 已清；删探针后重建 exit 0、dist 仍 0 项差异。新增守卫测试 `the build swaps dist in only after tsc succeeds`，**非空已验证**：把 `scripts.build` 改回旧形式后该测试 `1 fail`，还原后通过
+  ⑤ 真实数字：`bun run build` 16.2s（与旧的整删重建同耗时）；`bun run typecheck` exit 0；`bun test __tests__/release-metadata.unit.test.ts` **15 pass / 0 fail / 160 expect**；全量 **1525 pass / 0 fail / 163 files / 5654 expect / 169.84s**
+  ⑥ 文档：`RELEASE_CHECKLIST.md` 补两条——`npm publish --dry-run` 会连带跑 `prepublishOnly`（约 4 分钟，只查打包用 `--ignore-scripts`）；`build` 已改为暂存+交换，旧的先删 dist 在编译被打断时会删掉 1314 个文件
+  ⑦ **并发告警**：接手后另一会话仍在同一 worktree 工作（07:20:12 提交 `c7362d1`，07:33 后继续改 `src/host/openclaw/AutoMemoryPluginInstaller.ts` 与 `__tests__/memory-atlas-openclaw.unit.test.ts`）。**锁协议失效：它从不刷新 `docs/overnight.lock`**。我因此只做读操作与门禁，未在对方改 src 后再跑构建（避免把半成品烘进已跟踪的 dist）
 - 2026-10-23 06:55 — **多写者实测，修掉一个启动崩溃**。探针 `evals/concurrency/writer.ts`（4 进程 × 20 turn，`immediate_compile`）：
   ① 空库 4 个并发启动，修前 3 个死在 schema migration（`table already exists`），只有 1 个活下来；修后 4 个全起、schema 只应用一次、`integrity_check` ok。
      修法：`SchemaMigrationRunner.run()` 在事务内重读 `plan()`（`remaining`），并用 `transaction.immediate()` 一开始就拿写锁。

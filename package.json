@@ -50,8 +50,8 @@
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
-    "prepare": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "build": "node scripts/build.mjs",
+    "prepare": "node scripts/build.mjs",
     "prepublishOnly": "bun run typecheck && bun test __tests__ && bun run build && npm pack --dry-run --json && bun run verify:packed-migration",
     "type": "tsc -p tsconfig.json --noEmit",
     "test": "bun test __tests__",

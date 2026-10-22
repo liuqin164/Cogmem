@@ -95,6 +95,10 @@ npm publish --dry-run --access public
 
 The pack dry-run must include built public API files, CLI files, examples, docs, and `install.sh`. It must not include local databases or machine-specific files.
 
+`npm publish --dry-run` runs `prepublishOnly` first, so it repeats typecheck, the full test suite, the build, the pack listing, and `verify:packed-migration` (about four minutes). To inspect only the packing path, add `--ignore-scripts`.
+
+`build` compiles into `dist.next` and renames it over `dist` only after `tsc` exits 0. `dist` is tracked in git, so deleting it before compiling turned any interrupted build into 1314 deleted files; a killed `npm publish --dry-run` did exactly that mid-release.
+
 After verification, create a GitHub Release from the matching version tag, for example `v4.0.0`. The release workflow publishes through npm Trusted Publishing when the release is published. It must not publish on tag push alone.
 
 Emergency manual fallback:
