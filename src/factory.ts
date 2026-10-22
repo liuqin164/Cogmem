@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import Database from 'bun:sqlite';
 import type { GraphEdgeStoreLike } from './types/ExtensionPoints.js';
 
@@ -3406,7 +3408,18 @@ export class MemoryKernel {
   }
 }
 
+/**
+ * SQLite creates the database file but not its parent directories, so a
+ * `--db` pointing at a fresh path failed with `unable to open database file`
+ * on any machine that had not run `cogmem init` against that path yet.
+ */
+function ensureDatabaseDirectory(dbPath?: string): void {
+  if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return;
+  mkdirSync(dirname(resolve(dbPath)), { recursive: true });
+}
+
 export function createMemoryKernel(options: MemoryKernelOptions = {}): MemoryKernel {
+  ensureDatabaseDirectory(options.dbPath);
   return new MemoryKernel(options);
 }
 

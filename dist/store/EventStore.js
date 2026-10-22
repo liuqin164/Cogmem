@@ -28,6 +28,7 @@ export class EventStore {
         this.initializeSchema();
     }
     getProjectTimeZone() { return this.projectTimeZone; }
+    getDatabase() { return this.db; }
     initializeSchema() {
         this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_events (

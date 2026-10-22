@@ -1,4 +1,5 @@
 import { type MemoryKernel } from '../factory.js';
+import type { SharedMemoryPort } from '../ports/index.js';
 export interface CogmemMcpTool {
     name: string;
     description: string;
@@ -27,6 +28,10 @@ export interface CogmemMcpRuntime {
     dbPath?: string;
     configPath?: string;
     cwd?: string;
+    /** Shared memory region. Absent when the server was started without a database path. */
+    shared?: SharedMemoryPort;
+    /** Host identity, used as the publisher/retractor of shared items. */
+    hostId?: string;
 }
 export declare function listCogmemMcpTools(): CogmemMcpTool[];
 export declare function callCogmemMcpTool(name: string, args: Record<string, unknown> | undefined, runtime?: CogmemMcpRuntime): Promise<CogmemMcpCallResult>;

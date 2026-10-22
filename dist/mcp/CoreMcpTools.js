@@ -2,6 +2,7 @@ import { KernelAgentMemoryBackend } from '../agent/index.js';
 import { createStableImportIdentityFactory } from '../episode/EpisodeImportIdentity.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, } from '../factory.js';
 import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
+import { SqliteSharedMemory } from '../adapters/sqlite/SqliteSharedMemory.js';
 const STRING_SCHEMA = { type: 'string' };
 const NUMBER_SCHEMA = { type: 'number' };
 const STRING_ARRAY_SCHEMA = { type: 'array', items: STRING_SCHEMA };
@@ -397,12 +398,97 @@ export function listCogmemMcpTools() {
                 idempotentHint: false,
             },
         },
+        {
+            name: 'cogmem_shared_subscribe',
+            description: 'Read items other hosts published to the shared region. Retracted items are excluded; use cogmem_shared_explain to inspect a retracted item and its history.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    collections: STRING_ARRAY_SCHEMA,
+                    limit: NUMBER_SCHEMA,
+                },
+                required: ['collections'],
+            },
+            annotations: {
+                title: 'Read Shared Memory',
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+            },
+        },
+        {
+            name: 'cogmem_shared_explain',
+            description: 'Inspect one shared item, including its retraction time and author when it has been retracted.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    itemHash: STRING_SCHEMA,
+                },
+                required: ['itemHash'],
+            },
+            annotations: {
+                title: 'Explain Shared Item',
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+            },
+        },
+        {
+            name: 'cogmem_shared_publish',
+            description: 'Publish memory items to the shared region. Idempotent on itemHash: republishing the same hash inserts nothing and returns 0.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    items: {
+                        type: 'array',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                itemHash: STRING_SCHEMA,
+                                sourceItem: STRING_SCHEMA,
+                                collection: STRING_SCHEMA,
+                                payload: { type: 'object' },
+                                publishedAt: NUMBER_SCHEMA,
+                            },
+                            required: ['itemHash', 'collection'],
+                        },
+                    },
+                },
+                required: ['items'],
+            },
+            annotations: {
+                title: 'Publish to Shared Memory',
+                readOnlyHint: false,
+                destructiveHint: false,
+                idempotentHint: true,
+            },
+        },
+        {
+            name: 'cogmem_shared_retract',
+            description: 'Soft-retract one of this host\'s published items. It leaves subscriptions but stays explainable; only the publishing host may retract.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    itemHash: STRING_SCHEMA,
+                },
+                required: ['itemHash'],
+            },
+            annotations: {
+                title: 'Retract Shared Item',
+                readOnlyHint: false,
+                destructiveHint: true,
+                idempotentHint: true,
+            },
+        },
     ];
 }
 export async function callCogmemMcpTool(name, args, runtime = {}) {
     const input = args || {};
     let opened;
     try {
+        if (name.startsWith('cogmem_shared_')) {
+            return await handleSharedTool(name, input, runtime);
+        }
         opened = openRuntimeKernel(runtime);
         switch (name) {
             case 'cogmem_remember_turn':
@@ -894,6 +980,76 @@ function openRuntimeKernel(runtime) {
         }),
         shouldClose: true,
     };
+}
+function attachSharedFromKernel(runtime) {
+    const opened = openRuntimeKernel(runtime);
+    // Keep the kernel for the life of the server: the shared port holds its handle.
+    runtime.kernel = opened.kernel;
+    const shared = new SqliteSharedMemory(opened.kernel.eventStore.getDatabase());
+    runtime.shared = shared;
+    return shared;
+}
+async function handleSharedTool(name, input, runtime) {
+    const shared = runtime.shared ?? attachSharedFromKernel(runtime);
+    const host = runtime.hostId ?? 'unknown';
+    switch (name) {
+        case 'cogmem_shared_subscribe': {
+            const collections = stringArray(input.collections, 'collections');
+            const items = await shared.subscribe(collections, { limit: optionalNumber(input.limit) });
+            return jsonResult({ collections, count: items.length, items });
+        }
+        case 'cogmem_shared_explain': {
+            const itemHash = requiredString(input.itemHash, 'itemHash');
+            const explained = await shared.explain(itemHash);
+            if (!explained)
+                throw new Error(`shared_item_not_found:${itemHash}`);
+            return jsonResult({
+                item: explained.item,
+                retractedAt: explained.retractedAt,
+                retracted: explained.retractedAt !== null,
+            });
+        }
+        case 'cogmem_shared_publish': {
+            const rawItems = Array.isArray(input.items) ? input.items : [];
+            if (rawItems.length === 0)
+                throw new Error('items must be a non-empty array');
+            const now = Date.now();
+            const items = rawItems.map((raw, index) => {
+                const entry = (raw ?? {});
+                return {
+                    itemHash: requiredString(entry.itemHash, `items[${index}].itemHash`),
+                    collection: requiredString(entry.collection, `items[${index}].collection`),
+                    sourceItem: optionalString(entry.sourceItem) ?? '',
+                    sourceHost: host,
+                    payload: (entry.payload && typeof entry.payload === 'object')
+                        ? entry.payload
+                        : {},
+                    publishedAt: optionalNumber(entry.publishedAt) ?? now,
+                };
+            });
+            const inserted = await shared.publish(items);
+            return jsonResult({ host, submitted: items.length, inserted, idempotent: inserted < items.length });
+        }
+        case 'cogmem_shared_retract': {
+            const itemHash = requiredString(input.itemHash, 'itemHash');
+            await shared.retract({ itemHash, retractedAt: Date.now(), retractedBy: host });
+            const explained = await shared.explain(itemHash);
+            return jsonResult({ itemHash, retractedBy: host, retractedAt: explained?.retractedAt ?? null });
+        }
+        default:
+            return jsonResult({ error: `Unknown cogmem shared tool: ${name}` }, true);
+    }
+}
+function stringArray(value, field) {
+    if (!Array.isArray(value) || value.length === 0) {
+        throw new Error(`${field} must be a non-empty array of strings`);
+    }
+    for (const entry of value) {
+        if (typeof entry !== 'string' || !entry.trim()) {
+            throw new Error(`${field} must contain only non-empty strings`);
+        }
+    }
+    return value;
 }
 function jsonResult(payload, isError = false) {
     return {

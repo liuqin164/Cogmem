@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.0.0
+
+- Added domain-level persistence ports (`src/ports/index.ts`) with SQLite adapters for the raw ledger, episodes, memory graph, recall, governance, and the shared region. Upper layers can depend on memory operations instead of a SQL driver.
+- Added a shared memory region: idempotent publish on `itemHash`, soft retraction that stays explainable, and publisher-only retraction.
+- Added Streamable HTTP transport for the MCP server. One kernel per process preserves the single-writer rule; one transport per MCP session follows the SDK's stateless-transport constraint.
+- Added server-side tool profiles: `core` (8), `admin` (23), `full` (37), enforced on both `tools/list` and `tools/call`.
+- Added `--project` connection binding: a connection is scoped to one project, and a call naming a different project is rejected with `project_scope_violation`.
+- Added `cogmem init --no-probe`, which skips the `localhost:11434` Ollama probe so the generated `vector_dimension` depends only on the arguments and not on whichever embedding model the local daemon happens to expose.
+- Added four shared-memory MCP tools: `cogmem_shared_publish`, `cogmem_shared_retract`, `cogmem_shared_subscribe`, `cogmem_shared_explain`.
+- Added host configuration for Claude Code, Cursor, Codex, and Hermes in `docs/mcp-hosts.md`.
+- Breaking: the MCP server now defaults to the `core` profile. A host that expects every tool must start with `--profile full`.
+- Storage note: 4.0.0 ships on SQLite. The seekdb backend was evaluated in `docs/superpowers/specs/2026-10-22-cogmem-seekdb-evaluation.md` and is conditionally approved pending x86_64 and macOS verification; it lands behind the same ports in a later release.
+
 ## 3.7.5
 
 - Fixed OpenClaw auto-memory prompt serialization so generated plugins correctly sanitize control characters and whitespace without invalid runtime regular expressions.

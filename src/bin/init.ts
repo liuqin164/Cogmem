@@ -92,6 +92,7 @@ interface InitArgs {
   yes: boolean;
   agent: 'auto' | 'openclaw' | 'hermes' | 'none';
   vectorDimension?: number;
+  probeOllama: boolean;
 }
 
 function readArgs(argv: string[]): InitArgs {
@@ -114,6 +115,7 @@ function readArgs(argv: string[]): InitArgs {
     yes: argv.includes('--yes') || argv.includes('-y'),
     agent: agent === 'openclaw' || agent === 'hermes' || agent === 'none' ? agent : 'auto',
     vectorDimension,
+    probeOllama: !argv.includes('--no-probe'),
   };
 }
 
@@ -138,27 +140,29 @@ async function confirm(question: string, defaultYes = false): Promise<boolean> {
 
 // ─── Backend detection ────────────────────────────────────────────────────────
 
-async function detectBackends(): Promise<DetectionResult> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2500);
+async function detectBackends(probeOllama = true): Promise<DetectionResult> {
   let ollamaAvailable = false;
   let ollamaModels: string[] = [];
 
-  try {
-    const res = await fetch('http://localhost:11434/api/tags', {
-      signal: controller.signal,
-    });
-    if (res.ok) {
-      const payload = await res.json() as { models?: Array<{ name?: string }> };
-      ollamaModels = (payload.models ?? [])
-        .map((m) => m.name ?? '')
-        .filter((n) => n.length > 0);
-      ollamaAvailable = true;
+  if (probeOllama) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    try {
+      const res = await fetch('http://localhost:11434/api/tags', {
+        signal: controller.signal,
+      });
+      if (res.ok) {
+        const payload = await res.json() as { models?: Array<{ name?: string }> };
+        ollamaModels = (payload.models ?? [])
+          .map((m) => m.name ?? '')
+          .filter((n) => n.length > 0);
+        ollamaAvailable = true;
+      }
+    } catch {
+      // Ollama not running — fine
+    } finally {
+      clearTimeout(timer);
     }
-  } catch {
-    // Ollama not running — fine
-  } finally {
-    clearTimeout(timer);
   }
 
   return {
@@ -311,10 +315,12 @@ function suggestReasoningModel(det: DetectionResult): {
 
 function tick(ok: boolean): string { return ok ? '✓' : '✗'; }
 
-function printDetection(det: DetectionResult): void {
+function printDetection(det: DetectionResult, probed = true): void {
   console.log('');
   console.log('  Detection results:');
-  if (det.ollamaAvailable) {
+  if (!probed) {
+    console.log('    Ollama    – skipped (--no-probe)');
+  } else if (det.ollamaAvailable) {
     console.log(`    Ollama    ${tick(true)} running — ${det.ollamaModels.length} model(s): ${det.ollamaModels.slice(0, 4).join(', ')}${det.ollamaModels.length > 4 ? ' …' : ''}`);
   } else {
     console.log(`    Ollama    ${tick(false)} not running (install: https://ollama.com)`);
@@ -782,9 +788,9 @@ async function main(): Promise<void> {
 
   // Detect backends
   process.stdout.write('\n  Detecting available backends …');
-  const det = await detectBackends();
+  const det = await detectBackends(args.probeOllama);
   process.stdout.write(' done.\n');
-  printDetection(det);
+  printDetection(det, args.probeOllama);
 
   const hasAnyBackend = det.ollamaAvailable || det.openaiAvailable || det.anthropicAvailable || det.qwenAvailable;
   if (!hasAnyBackend && !args.yes) {

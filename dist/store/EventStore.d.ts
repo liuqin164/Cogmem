@@ -59,6 +59,7 @@ export declare class EventStore {
     private ownsDb;
     constructor(dbPath?: string | Database, encryptionProvider?: EncryptionProvider | undefined, projectTimeZone?: string | undefined);
     getProjectTimeZone(): string | undefined;
+    getDatabase(): Database;
     private initializeSchema;
     private ensureCompatibilityColumns;
     append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>, retry?: number): MemoryEvent<TPayload>;

@@ -12,11 +12,29 @@ import {
   listCogmemMcpTools,
   type CogmemMcpRuntime,
 } from './CoreMcpTools.js';
+import { filterToolsByProfile, isToolAllowed, resolveProfile, type McpToolProfile } from './profiles.js';
 import { CORE_VERSION } from '../version.js';
 
-export function createCogmemMcpServer(runtime: CogmemMcpRuntime = {}): Server {
+export interface CogmemMcpServerOptions {
+  /** Tool surface exposed to this client. Defaults to `core`. */
+  profile?: McpToolProfile;
+  /** Host this connection belongs to, e.g. `claude`, `cursor`, `codex`, `hermes`. */
+  hostId?: string;
+  /**
+   * When set, this connection is bound to one project. Calls that omit
+   * `projectId` are stamped with it; calls that name a different project are
+   * rejected instead of silently reading someone else's memory.
+   */
+  projectId?: string;
+}
+
+export function createCogmemMcpServer(
+  runtime: CogmemMcpRuntime = {},
+  options: CogmemMcpServerOptions = {},
+): Server {
+  const profile = options.profile ?? 'core';
   const server = new Server({
-    name: 'cogmem-core',
+    name: options.hostId ? `cogmem-${options.hostId}` : 'cogmem-core',
     version: CORE_VERSION,
   }, {
     capabilities: {
@@ -26,13 +44,40 @@ export function createCogmemMcpServer(runtime: CogmemMcpRuntime = {}): Server {
   });
 
   server.setRequestHandler(ListToolsRequestSchema, async (): Promise<ListToolsResult> => ({
-    tools: listCogmemMcpTools(),
+    tools: filterToolsByProfile(profile, listCogmemMcpTools()),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+    if (!isToolAllowed(profile, request.params.name)) {
+      return {
+        isError: true,
+        content: [{
+          type: 'text',
+          text: `tool_not_in_profile: ${request.params.name} is not exposed by profile "${profile}". Start the server with --profile admin or --profile full to use it.`,
+        }],
+      };
+    }
+
+    const rawArgs = (request.params.arguments ?? {}) as Record<string, unknown>;
+    let args = rawArgs;
+
+    if (options.projectId) {
+      const requested = typeof rawArgs.projectId === 'string' ? rawArgs.projectId : undefined;
+      if (requested && requested !== options.projectId) {
+        return {
+          isError: true,
+          content: [{
+            type: 'text',
+            text: `project_scope_violation: this connection is bound to project "${options.projectId}" but the call asked for "${requested}".`,
+          }],
+        };
+      }
+      args = { ...rawArgs, projectId: options.projectId };
+    }
+
     const result = await callCogmemMcpTool(
       request.params.name,
-      request.params.arguments,
+      args,
       runtime,
     );
     return result as CallToolResult;
@@ -41,9 +86,14 @@ export function createCogmemMcpServer(runtime: CogmemMcpRuntime = {}): Server {
   return server;
 }
 
-export async function startCogmemMcpServer(runtime: CogmemMcpRuntime = {}): Promise<Server> {
-  const server = createCogmemMcpServer(runtime);
+export async function startCogmemMcpServer(
+  runtime: CogmemMcpRuntime = {},
+  options: CogmemMcpServerOptions = {},
+): Promise<Server> {
+  const server = createCogmemMcpServer(runtime, options);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   return server;
 }
+
+export { resolveProfile };

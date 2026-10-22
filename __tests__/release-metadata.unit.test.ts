@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { inspectOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemoryPluginInstaller.js';
+import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
+import { filterToolsByProfile } from '../src/mcp/profiles.js';
 import { ALL_MIGRATIONS } from '../src/migrations/index.js';
 import { MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
@@ -28,7 +30,7 @@ function packageJson(): {
 }
 
 describe('core release metadata', () => {
-  test('3.7.5 release metadata keeps schema 32 and OpenClaw plugin 0.7.2', () => {
+  test('4.0.0 release metadata keeps schema 32 and OpenClaw plugin 0.7.2', () => {
     const manifest = packageJson();
     const readme = readText(join(coreRoot, 'README.md'));
     const contributing = readText(join(coreRoot, 'CONTRIBUTING.md'));
@@ -36,7 +38,7 @@ describe('core release metadata', () => {
     const checklist = readText(join(coreRoot, 'RELEASE_CHECKLIST.md'));
 
     expect(manifest.name).toBe('cogmem');
-    expect(manifest.version).toBe('3.7.5');
+    expect(manifest.version).toBe('4.0.0');
     expect(manifest.description).toContain('agent-native memory kernel');
     expect(manifest.repository?.url).toBe('git+https://github.com/liuqin164/cogmem.git');
     expect(readme).toContain('curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash');
@@ -46,9 +48,9 @@ describe('core release metadata', () => {
     expect(readme).not.toContain('@CognitiveOS/core');
     expect(contributing).toContain('npm pack --dry-run --json');
     expect(contributing).toContain('npm publish --provenance --access public');
-    expect(readme).toContain('Current version: `3.7.5`');
-    expect(changelog).toContain('## 3.7.5');
-    expect(checklist).toContain('# cogmem 3.7.5 Release Checklist');
+    expect(readme).toContain('Current version: `4.0.0`');
+    expect(changelog).toContain('## 4.0.0');
+    expect(checklist).toContain('# cogmem 4.0.0 Release Checklist');
     expect(ALL_MIGRATIONS.at(-1)?.version).toBe('0032');
     expect(Number.parseInt(ALL_MIGRATIONS.at(-1)!.version, 10)).toBe(32);
     expect(ALL_MIGRATIONS.some((migration) => migration.version === '0033')).toBe(false);
@@ -216,5 +218,84 @@ describe('core release metadata', () => {
     expect(benchmarks).toContain('memory_natural_emergence');
     expect(benchmarks).toContain('critical_memory_recall_rate');
     expect(benchmarks).toContain('inhibition_correctness_rate');
+  });
+});
+
+describe('documented tool profile counts match the shipped registry', () => {
+  test('mcp-hosts.md, README, and CHANGELOG state the real core / admin / full counts', () => {
+    const all = listCogmemMcpTools();
+    const core = filterToolsByProfile('core', all).length;
+    const admin = filterToolsByProfile('admin', all).length;
+    const full = filterToolsByProfile('full', all).length;
+
+    const hosts = readText(join(coreRoot, 'docs', 'mcp-hosts.md'));
+    const readme = readText(join(coreRoot, 'README.md'));
+    const changelog = readText(join(coreRoot, 'CHANGELOG.md'));
+
+    expect(core).toBe(8);
+    expect(admin).toBe(23);
+    expect(full).toBe(37);
+
+    expect(hosts).toContain(`The server exposes ${full} tools.`);
+    expect(hosts).toContain('| `core` | ' + core + ' |');
+    expect(hosts).toContain('| `admin` | ' + admin + ' |');
+    expect(hosts).toContain('| `full` | ' + full + ' |');
+    expect(hosts).toContain(`sees ${core} tools`);
+    expect(hosts).toContain(`8 means the\n\`core\` profile, 37 means \`full\``);
+    expect(readme).toContain(`bounds the tool surface to ${core}, ${admin}, or ${full} tools`);
+    expect(changelog).toContain('`core` (' + core + '), `admin` (' + admin + '), `full` (' + full + ')');
+  });
+
+  test('mcp-hosts.md names the commands that actually exist in each host CLI', () => {
+    const hosts = readText(join(coreRoot, 'docs', 'mcp-hosts.md'));
+
+    // OpenClaw 2026.10.5: there is `mcp unset`, not `mcp remove`, and a bare
+    // `mcp probe` spanning all servers. `openclaw mcp remove` exits with
+    // `OpenClaw mcp has no command "remove"`.
+    expect(hosts).toContain('openclaw mcp unset <name>');
+    expect(hosts).toContain('openclaw mcp probe');
+    expect(hosts).not.toMatch(/openclaw mcp remove(?!\s*` does not exist)/);
+
+    // Hermes v0.22.2: stdin only works when both answers are given.
+    expect(hosts).toContain('hermes mcp test cogmem');
+    expect(hosts).toContain('hermes mcp remove <name>');
+    expect(hosts).not.toContain('piping the answers in does not work');
+
+    // The bare initialize curl gets a 400 without a session header on the
+    // follow-up call, so the doc has to teach the session id.
+    expect(hosts).toContain("mcp-session-id: $SID");
+    expect(hosts).toContain('notifications/initialized');
+  });
+
+  test('mcp-hosts.md documents the stdio and systemd paths that actually run', () => {
+    const hosts = readText(join(coreRoot, 'docs', 'mcp-hosts.md'));
+
+    // `cogmem-mcp` is a bin entry, so it only exists after a global install.
+    // A source checkout has to point at the entrypoint instead.
+    expect(hosts).toContain('npm install -g cogmem');
+    expect(hosts).toContain('dist/bin/mcp.js');
+
+    // The server never creates the --db parent directory.
+    expect(hosts).toContain('unable to open database file');
+
+    // `%h/.local/bin/cogmem` is not where npm installs, and a bare `cogmem`
+    // is not on the systemd user manager's PATH. Both exit 203/EXEC.
+    expect(hosts).not.toContain('ExecStart=%h/.local/bin/cogmem');
+    expect(hosts).toContain('203/EXEC');
+    expect(hosts).toContain('npm config get prefix');
+    expect(hosts).toContain('systemctl --user show-environment');
+  });
+
+  test('the dist entrypoint agrees with its source', () => {
+    // dist is checked in, so a stale build ships. A stale dist/bin/mcp.js once
+    // opened a bare Database before the kernel existed, which created
+    // shared_items first and made a fresh DB fail schema detection with
+    // `unsupported_database_identity`. Each entrypoint must resolve shared
+    // memory from the kernel, never from a second Database handle.
+    const source = readText(join(coreRoot, 'src', 'bin', 'mcp.ts'));
+    const built = readText(join(coreRoot, 'dist', 'bin', 'mcp.js'));
+
+    expect(source).not.toContain('new SqliteSharedMemory(new Database');
+    expect(built).not.toContain('new SqliteSharedMemory(new Database');
   });
 });

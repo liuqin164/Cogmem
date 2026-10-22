@@ -11,7 +11,7 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.7.5`
+Current version: `4.0.0`
 
 Distribution: npm registry. GitHub remains the source mirror and hosts this installer, but package install and upgrade resolve `cogmem` from npm by default.
 
@@ -164,6 +164,14 @@ Vector dimensions must match the embedding model:
 - `qwen3-embedding:8b`: `4096`
 
 High-dimensional vectors grow quickly. Prefer `raw_then_dream` or `selective_compile` for long-running agents.
+
+`cogmem init` probes `localhost:11434` for a local Ollama daemon and picks the embedding model (and therefore the vector dimension) it finds there. For scripted or reproducible setups, pass the choices explicitly:
+
+```bash
+cogmem init --yes --dry-run --agent none --no-probe --vector-dimension 384
+```
+
+`--no-probe` skips the Ollama detection, so the generated config depends only on the flags you pass and not on what the machine happens to have pulled. Without either flag, an `--agent none` dry run on a machine with `qwen3-embedding-4b` installed writes `vector_dimension = 2560`, not the `384` default.
 
 ## Quick Start
 
@@ -798,6 +806,22 @@ cogmem dream
 cogmem mcp
 ```
 
+## MCP transport and profiles
+
+`cogmem mcp` speaks stdio by default. To run one resident server shared by several hosts:
+
+```bash
+cogmem mcp --transport http --port 7337 --host claude --profile core \
+  --project my-project --db ~/.cogmem/memory.db
+```
+
+- `--profile core|admin|full` bounds the tool surface to 8, 23, or 37 tools. The default is `core`.
+- `--project <id>` binds the connection to one project; a call naming a different project is rejected.
+- `--token <value>` requires `Authorization: Bearer <value>` on every request.
+
+Per-host configuration for Claude Code, Cursor, Codex, and Hermes is in
+[docs/mcp-hosts.md](./docs/mcp-hosts.md).
+
 ## Release Checks
 
 ```bash
@@ -808,7 +832,7 @@ npm pack --dry-run --json
 npm publish --dry-run --access public
 ```
 
-Create a GitHub Release from the matching version tag, for example `v3.7.5`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
+Create a GitHub Release from the matching version tag, for example `v4.0.0`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
 
 Publish manually only for emergency fallback:
 

@@ -92,6 +92,8 @@ export class EventStore {
 
   getProjectTimeZone(): string | undefined { return this.projectTimeZone; }
 
+  getDatabase(): Database { return this.db; }
+
   private initializeSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_events (

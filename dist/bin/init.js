@@ -40,6 +40,7 @@ function readArgs(argv) {
         yes: argv.includes('--yes') || argv.includes('-y'),
         agent: agent === 'openclaw' || agent === 'hermes' || agent === 'none' ? agent : 'auto',
         vectorDimension,
+        probeOllama: !argv.includes('--no-probe'),
     };
 }
 // ─── Readline helpers ─────────────────────────────────────────────────────────
@@ -60,28 +61,30 @@ async function confirm(question, defaultYes = false) {
     return raw.toLowerCase() === 'y';
 }
 // ─── Backend detection ────────────────────────────────────────────────────────
-async function detectBackends() {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2500);
+async function detectBackends(probeOllama = true) {
     let ollamaAvailable = false;
     let ollamaModels = [];
-    try {
-        const res = await fetch('http://localhost:11434/api/tags', {
-            signal: controller.signal,
-        });
-        if (res.ok) {
-            const payload = await res.json();
-            ollamaModels = (payload.models ?? [])
-                .map((m) => m.name ?? '')
-                .filter((n) => n.length > 0);
-            ollamaAvailable = true;
+    if (probeOllama) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2500);
+        try {
+            const res = await fetch('http://localhost:11434/api/tags', {
+                signal: controller.signal,
+            });
+            if (res.ok) {
+                const payload = await res.json();
+                ollamaModels = (payload.models ?? [])
+                    .map((m) => m.name ?? '')
+                    .filter((n) => n.length > 0);
+                ollamaAvailable = true;
+            }
         }
-    }
-    catch {
-        // Ollama not running — fine
-    }
-    finally {
-        clearTimeout(timer);
+        catch {
+            // Ollama not running — fine
+        }
+        finally {
+            clearTimeout(timer);
+        }
     }
     return {
         ollamaAvailable,
@@ -197,10 +200,13 @@ function suggestReasoningModel(det) {
 }
 // ─── Display helpers ──────────────────────────────────────────────────────────
 function tick(ok) { return ok ? '✓' : '✗'; }
-function printDetection(det) {
+function printDetection(det, probed = true) {
     console.log('');
     console.log('  Detection results:');
-    if (det.ollamaAvailable) {
+    if (!probed) {
+        console.log('    Ollama    – skipped (--no-probe)');
+    }
+    else if (det.ollamaAvailable) {
         console.log(`    Ollama    ${tick(true)} running — ${det.ollamaModels.length} model(s): ${det.ollamaModels.slice(0, 4).join(', ')}${det.ollamaModels.length > 4 ? ' …' : ''}`);
     }
     else {
@@ -623,9 +629,9 @@ async function main() {
     console.log(`  Cogmem home: ${target.homeDir}`);
     // Detect backends
     process.stdout.write('\n  Detecting available backends …');
-    const det = await detectBackends();
+    const det = await detectBackends(args.probeOllama);
     process.stdout.write(' done.\n');
-    printDetection(det);
+    printDetection(det, args.probeOllama);
     const hasAnyBackend = det.ollamaAvailable || det.openaiAvailable || det.anthropicAvailable || det.qwenAvailable;
     if (!hasAnyBackend && !args.yes) {
         noBackendQuickstart();
