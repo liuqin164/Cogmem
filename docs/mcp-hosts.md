@@ -14,10 +14,11 @@ Verification status: the OpenClaw 2026.10.5, Hermes v0.22.2, and codex-cli
 0.163.0 sections were run end to end against this repository: connect, discover
 tools, execute `cogmem_remember_turn` and `cogmem_recall`, then remove the entry
 and confirm the host config is back to its original bytes. The Claude Code and
-Cursor sections follow those vendors' published configuration formats and have
-not been exercised against a live client: both need credentials this machine
-does not have (an Anthropic key or a Cursor account), and Cursor's client is a
-desktop app.
+Cursor sections follow those vendors' published configuration formats, checked
+line by line against the vendor reference on 2026-10-23 (links at the end), and
+have not been exercised against a live client: both need credentials this
+machine does not have (an Anthropic key or a Cursor account), and Cursor's
+client is a desktop app.
 
 Bind the connection to one project with `--project <id>`. Every call is then
 stamped with that project, and a call that names a different one is rejected
@@ -89,7 +90,31 @@ claude mcp add --transport http cogmem http://127.0.0.1:7337/mcp --scope user \
 
 Verify inside Claude Code with `/mcp`; the server should show `connected`.
 `--scope user` makes it available across projects; `--scope project` writes it
-into `.mcp.json` for the repo instead.
+into `.mcp.json` for the repo instead; no `--scope` means local scope.
+
+The same server as a `.mcp.json` entry, for a repo that should carry the config:
+
+```json
+{
+  "mcpServers": {
+    "cogmem": {
+      "type": "http",
+      "url": "http://127.0.0.1:7337/mcp",
+      "headers": { "Authorization": "Bearer ${COGMEM_TOKEN}" }
+    }
+  }
+}
+```
+
+`type` is not optional. Claude Code reads an entry with no `type` as a stdio
+server, so a `url` without one is skipped with
+`MCP server "cogmem" has a "url" but no "type"; add "type": "http"`. The value
+`streamable-http` is accepted as an alias for `http`. `${VAR}` expands from the
+environment, and `${VAR:-default}` supplies a fallback.
+
+`--transport http` tries Streamable HTTP first and falls back to SSE when the
+server refuses it; that fallback needs Claude Code v2.1.265 or later. Pass
+`--transport sse` to force SSE on an older build.
 
 ## Cursor
 
@@ -109,7 +134,8 @@ Write `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project):
 ```
 
 Omit `headers` when no token is configured. Cursor interpolates
-`${env:NAME}` inside `url` and `headers`.
+`${env:NAME}` in any string field, `auth` included. `envFile` exists but only for
+stdio entries; remote HTTP and SSE entries take `headers` instead.
 
 ## Codex
 
@@ -146,8 +172,9 @@ Two things that bite on this version:
   back Codex at all; it needs a `/v1/responses` endpoint.
 - `codex exec` runs tool calls through its sandbox. Against a loopback MCP server
   the default sandbox blocked the connection, and `--dangerously-bypass-approvals-and-sandbox`
-  was needed for the run to complete. For an interactive session, approve the
-  MCP tools instead of bypassing the sandbox.
+  was needed for the run to complete. For an interactive session, set
+  `default_tools_approval_mode = "auto"` on the server entry (documented values:
+  `auto`, `prompt`, `writes`, `approve`) or approve each call.
 
 ## Hermes
 
@@ -391,3 +418,21 @@ curl -s -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
   http://127.0.0.1:7337/mcp
 ```
+
+## Official documentation
+
+Every configuration shape above is checked against the vendor's own reference.
+Where a section is marked unverified, this is what it was checked against
+instead of a live client.
+
+| Host | Reference | Checked |
+|---|---|---|
+| Claude Code | https://code.claude.com/docs/en/mcp | 2026-10-23 |
+| Cursor | https://cursor.com/docs/mcp | 2026-10-23 |
+| Codex | https://developers.openai.com/codex/mcp | 2026-10-23 |
+| Hermes | https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference | 2026-10-23 |
+| OpenClaw | https://docs.openclaw.ai/tools/mcp | 2026-10-23 |
+
+The protocol itself is specified at
+https://modelcontextprotocol.io/specification. Cogmem advertises only the
+`tools` capability, which is the part every one of these hosts implements.

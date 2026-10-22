@@ -1,7 +1,7 @@
 # Cogmem 连续开发进度
 
 > 唯一进度源。每轮开始读这里，每轮结束更新这里。
-> 最后更新：2026-10-23 07:25 JST
+> 最后更新：2026-10-23 07:40 JST
 
 ## 当前状态
 
@@ -11,7 +11,7 @@
 - 上一个：`c52508c`（Merge PR #27, 3.7.4）
 - 版本：`4.0.0`（已改元数据，未提交）
 - 工作区：干净（`docs/overnight.lock` 为运行期文件，未跟踪）
-- 测试：`1523 pass / 0 fail / 1523 tests / 163 files`（**全绿，基线失败已清零**）
+- 测试：`1524 pass / 0 fail / 1524 tests / 163 files`（**全绿，基线失败已清零**）
 - 类型检查：干净
 - dist：已用 `bun run build` 重建（2026-10-23 06:55），含本轮 `--no-probe`；旧 dist 备份在 scratch `dist-pre-noprobe-*.tgz`
 - 常驻服务：无（MCP 服务按需启动）
@@ -277,6 +277,10 @@ bun test __tests__
 
 ## 本轮记录
 
+- 2026-10-23 07:40 — **五家官方文档对照完成**。逐条核对 Claude Code / Cursor / Codex / Hermes / OpenClaw 的官方 MCP 文档，改掉两处不准确：
+  ① Claude Code 的 `.mcp.json` 里 `type` 不是可选：只写 `url` 不写 `type` 会被当成 stdio 直接跳过，报 `has a "url" but no "type"`；补上正确 JSON 与 `${VAR}` / `${VAR:-default}` 语法，以及 `--transport http` 的 SSE 回退要 v2.1.265+
+  ② Codex 参考链接原指向 GitHub `docs/config.md`，该文件已只剩 726 字节的存根，改指 `developers.openai.com/codex/mcp`；顺带补 `default_tools_approval_mode`（auto/prompt/writes/approve），解决交互式下每次调用都要批准的问题
+  Cursor 的 `mcpServers` + `url` + `headers` 与 `${env:NAME}` 插值经核对与官方一致，未改；补了一句 `envFile` 仅限 stdio。文末新增「Official documentation」表，五个宿主 + MCP 规范链接，未测的两个标注为"对照文档、非实测"。新增 1 个守卫测试锁住五条链接与 `type` 要求。全量 **1524 pass / 0 fail / 163 files**
 - 2026-10-23 06:55 — **多写者实测，修掉一个启动崩溃**。探针 `evals/concurrency/writer.ts`（4 进程 × 20 turn，`immediate_compile`）：
   ① 空库 4 个并发启动，修前 3 个死在 schema migration（`table already exists`），只有 1 个活下来；修后 4 个全起、schema 只应用一次、`integrity_check` ok。
      修法：`SchemaMigrationRunner.run()` 在事务内重读 `plan()`（`remaining`），并用 `transaction.immediate()` 一开始就拿写锁。

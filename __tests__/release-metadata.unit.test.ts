@@ -246,6 +246,25 @@ describe('documented tool profile counts match the shipped registry', () => {
     expect(changelog).toContain('`core` (' + core + '), `admin` (' + admin + '), `full` (' + full + ')');
   });
 
+  test('every host section cites a vendor reference, and the unverified ones say so', () => {
+    const hosts = readText(join(coreRoot, 'docs', 'mcp-hosts.md'));
+
+    for (const url of [
+      'https://code.claude.com/docs/en/mcp',
+      'https://cursor.com/docs/mcp',
+      'https://developers.openai.com/codex/mcp',
+      'https://hermes-agent.nousresearch.com/docs/reference/mcp-config-reference',
+      'https://docs.openclaw.ai/tools/mcp',
+    ]) {
+      expect(hosts).toContain(url);
+    }
+
+    // Claude Code skips a remote entry that has a url but no type. The doc has
+    // to show the field, not just the CLI form.
+    expect(hosts).toContain('"type": "http"');
+    expect(hosts).toContain('has a "url" but no "type"');
+  });
+
   test('mcp-hosts.md names the commands that actually exist in each host CLI', () => {
     const hosts = readText(join(coreRoot, 'docs', 'mcp-hosts.md'));
 
