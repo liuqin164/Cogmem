@@ -1,7 +1,7 @@
 # Cogmem 连续开发进度
 
 > 唯一进度源。每轮开始读这里，每轮结束更新这里。
-> 最后更新：2026-10-23 06:56 JST
+> 最后更新：2026-10-23 07:25 JST
 
 ## 当前状态
 
@@ -207,7 +207,23 @@ shared: args.dbPath ? new SqliteSharedMemory(new Database(resolve(args.dbPath)))
 
 先读 `src/bin/init.ts` 的探测与回落逻辑再决定改哪边。
 
-### P1 — 宿主真实调用
+### P1 — 宿主真实调用（2026-10-23 07:25 更新：3/5 完成）
+
+| 宿主 | 连接 | 枚举 | 真实执行 | 配置还原 |
+|---|---|---|---|---|
+| Hermes v0.22.2 | ✅ | ✅ 23 | ✅ remember+recall，DB 确认 | diff 0 行 |
+| OpenClaw 2026.10.5 | ✅ | ✅ 23 | ✅ remember+recall，DB 确认 | diff 0 行 |
+| codex-cli 0.163.0 | ✅ | ✅ 23 | ✅ remember+recall，DB 确认 | 已 remove |
+| Claude Code | ❌ 未装 | - | - | - |
+| Cursor | ❌ 未装 | - | - | - |
+
+- Codex 真机：`codex mcp add` → `codex mcp list`（enabled）→ `codex exec` 触发
+  `mcp: cogmem/cogmem_remember_turn (completed)`，库中 `evt-3916a69c-...` 与 neuron 投影均在背
+- Codex 两个坑：0.163 只接受 `wire_api = "responses"`（chat 直接被拒）；`codex exec`
+  默认 sandbox 挡住 loopback 连接，测试用了 `--dangerously-bypass-approvals-and-sandbox`
+- OpenClaw 真机：`openclaw agent --local` 在有 gateway 时拒绝启动；改用
+  `openclaw agent -m ... --session-key exec-test-1`（不投递）跑通，`evt-946ce6be-...` 入库
+- Claude Code / Cursor：本机无 Anthropic key、无 Cursor 账号，Cursor 还是桌面客户端，**未测，不标通过**
 
 - Hermes v0.22.2：**已通过真实工具执行**（2026-10-23 02:10）
   `hermes -m magpie/auto/deepseek-v4.1-flash -z "<prompt>"` 让 Hermes 主动调用

@@ -10,10 +10,14 @@ cogmem mcp --transport http --host <host-id> --profile core --port 7337
 
 The endpoint is `http://127.0.0.1:7337/mcp`. It binds to loopback by default.
 
-Verification status: the OpenClaw 2026.10.5 and Hermes v0.22.2 sections below
-were run end to end on this repository (connect, discover, then remove). The
-Claude Code, Cursor, and Codex sections follow those vendors' published
-configuration formats and have not been exercised against a live client.
+Verification status: the OpenClaw 2026.10.5, Hermes v0.22.2, and codex-cli
+0.163.0 sections were run end to end against this repository: connect, discover
+tools, execute `cogmem_remember_turn` and `cogmem_recall`, then remove the entry
+and confirm the host config is back to its original bytes. The Claude Code and
+Cursor sections follow those vendors' published configuration formats and have
+not been exercised against a live client: both need credentials this machine
+does not have (an Anthropic key or a Cursor account), and Cursor's client is a
+desktop app.
 
 Bind the connection to one project with `--project <id>`. Every call is then
 stamped with that project, and a call that names a different one is rejected
@@ -130,6 +134,21 @@ To bound the tool surface on the Codex side as well, list names explicitly:
 enabled_tools = ["cogmem_recall", "cogmem_remember_turn", "cogmem_episode_append"]
 ```
 
+Verified with codex-cli 0.163.0: `codex mcp add cogmem --url ...` registers the
+server, `codex mcp list` shows it `enabled`, and `codex exec` calls
+`cogmem_remember_turn` and `cogmem_recall` for real (the transcript prints
+`mcp: cogmem/cogmem_remember_turn (completed)`).
+
+Two things that bite on this version:
+
+- `wire_api = "chat"` is rejected outright: "no longer supported, set
+  `wire_api = "responses"`". A provider that only speaks chat completions cannot
+  back Codex at all; it needs a `/v1/responses` endpoint.
+- `codex exec` runs tool calls through its sandbox. Against a loopback MCP server
+  the default sandbox blocked the connection, and `--dangerously-bypass-approvals-and-sandbox`
+  was needed for the run to complete. For an interactive session, approve the
+  MCP tools instead of bypassing the sandbox.
+
 ## Hermes
 
 Add to `~/.hermes/config.yaml`:
@@ -193,6 +212,20 @@ count comes from `openclaw mcp probe`. To remove a server, run
 `openclaw mcp reload` so the next turn picks up the new config. Editing
 `mcp.servers` in `~/.openclaw/openclaw.json` by hand also works, but `unset` is
 the supported path and keeps the file well formed.
+
+Tool execution was verified end to end on 2026.10.5: an agent turn called
+`cogmem_remember_turn` and `cogmem_recall`, and the marker text landed in
+`memory_events` plus its neuron projection.
+
+One gotcha when you want an agent turn that is not the live gateway session:
+
+- `openclaw agent --local` refuses to start while a gateway owns the state
+  directory: `A Gateway is running for this state directory (pid ..., port ...).
+  Run without --local to use it`. Either stop the gateway or take the normal
+  path, which is to send the turn through it.
+- `openclaw agent -m "..." --session-key <key>` runs one isolated session through
+  the running gateway and, without `--deliver`, sends the reply nowhere. That is
+  enough to exercise MCP tools without touching any chat channel.
 
 ---
 
