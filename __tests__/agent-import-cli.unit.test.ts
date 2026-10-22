@@ -1069,7 +1069,9 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(bridgeBody).toContain('staleLockRecovered');
   expect(bridgeBody).toContain('rememberDrainBatchSize');
   expect(bridgeBody).toContain('rememberPayload(job.payload || {}, job.payload?.config || bridgeConfig, kernel, memory)');
-  expect(bridgeBody.indexOf("if (command === 'drain-remember-queue')")).toBeLessThan(bridgeBody.indexOf('await loadCogmemApi(config)'));
+  // The drain lock is taken before the kernel is acquired, so a locked queue
+  // never pays for opening the database.
+  expect(bridgeBody.indexOf("if (command === 'drain-remember-queue')")).toBeLessThan(bridgeBody.indexOf('await acquireRuntime(config, keepAlive)'));
   expect(bridgeBody).toContain('ingestToolCall');
   expect(bridgeBody).toContain('ingestToolObservation');
   expect(bridgeBody).toContain('ingestTaskEvent');

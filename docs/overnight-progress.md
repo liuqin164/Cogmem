@@ -1,22 +1,22 @@
 # Cogmem 连续开发进度
 
 > 唯一进度源。每轮开始读这里，每轮结束更新这里。
-> 最后更新：2026-10-23 07:36 JST
+> 最后更新：2026-10-23 08:27 JST
 
 ## 当前状态
 
 - 仓库：`~/projects/Cogmem`
 - 分支：`main`
-- HEAD：`c7362d1` docs: check every host section against its vendor reference（本地提交，未推送、未打 tag）
-- 上一个：`46ba0a5`（docs: record tool execution）、`d50cec5`（fix: migration write lock）、`5ee3312`（feat: 4.0.0）
+- HEAD：`470aaa2` perf: stop rebuilding the raw-event FTS index on every open（本地提交，未推送、未打 tag）
+- 上一个：`0d6fbf3`（fix: OpenClaw 插件指向存在的 package entry）、`c7362d1`（docs: 五家官方文档对照）
 - 版本：`4.0.0`，`publishConfig.access=public`，23 个 bin
-- 工作区：4 项未提交（`.gitignore`、`package.json`、`__tests__/release-metadata.unit.test.ts`、新文件 `scripts/build.mjs`），均为本轮构建安全改造
-- 测试：`1525 pass / 0 fail / 1525 tests / 163 files / 5654 expect`（**全绿**，169.84s）
-- 类型检查：干净
-- dist：与 HEAD 逐字节一致（`git status dist` 0 项），1315 文件（含 `.tsbuildinfo`，未跟踪）
+- 工作区：另一会话在改 `src/host/openclaw/AutoMemoryPluginInstaller.ts` + 同名 `dist/*.js` + `__tests__/agent-import-cli.unit.test.ts`，并新增 `__tests__/openclaw-bridge-daemon.unit.test.ts`、`docs/openclaw-runtime.md`；本轮新增 `__tests__/process-hygiene.unit.test.ts`、`evals/mcp/leak-check.sh`
+- 测试：`1533 pass / 0 fail / 1533 tests / 166 files / 5691 expect`（**全绿**，174.57s）
+- 类型检查：干净（`tsc -p tsconfig.json --noEmit` exit 0）
+- dist：与 HEAD 仅差另一会话在改的 `AutoMemoryPluginInstaller.js`
 - 发布门禁：pack 898 文件 / 910.6 kB / 4.2 MB unpacked，`verify:packed-migration` 通过，`npm publish --dry-run` exit 0
 - npm 登录：**未登录**（`npm whoami` → need auth），publish 需要用户 `npm login`
-- 常驻服务：无（MCP 服务按需启动；但发现一个 45 分钟未退出的测试子进程，见下轮任务）
+- 常驻服务：无。08:19 已清掉最后一个孤儿（见 P6）
 
 ## 一条基线失败已清零（2026-10-23 06:10）
 
@@ -86,15 +86,57 @@ CI 上没 Ollama 就绿，本机就红。
 **待落提交**：本轮 4 项改动（`.gitignore`、`package.json`、`scripts/build.mjs`、`release-metadata` 测试）
 ＋ `RELEASE_CHECKLIST.md` 说明。按 cron 规则不自行 commit。
 
-### P6 — 测试是否泄漏 MCP 子进程（下一条自主任务）
+### P6 — 已完成（2026-10-23 08:19）：测试不泄漏 MCP 子进程；孤儿来自手工命令
 
-2026-10-23 07:23 观察到：`bun src/bin/mcp.ts --transport http --port 7351 --bind 127.0.0.1
---db /tmp/dbg-deep/x/y/memory.db --profile core` 已存活 45 分钟未退出，路径正是
-P2d 的 `--db path handling` 测试用的 `<scratch>/deep/...` 形态，高度怀疑
-`__tests__/mcp-execution.unit.test.ts` spawn 子进程后没在结束时 kill。
+上一轮怀疑 `__tests__/mcp-execution.unit.test.ts` spawn 子进程后不 kill，**查证为假**：
+该文件从不 spawn，全程 `startCogmemMcpHttpServer({...}, { port: 0 })` 在同一进程内起服务，
+`afterAll` 里 `handle.stop()`。
 
-范围：只在测试侧查（不要改产品行为），确认泄漏点 → 加 `afterAll`/`try/finally` kill →
-非空验证（跑完该测试后 `ss -ltnp | grep <port>` 无残留）。注意 `pkill -f` 会匹配执行它的 shell，用精确 PID。
+那个存活 97 分钟的进程另有来源，证据链：
+
+| 证据 | 值 |
+|---|---|
+| PID / 启动时间 | `3615853` / `Fri Oct 23 06:39:03 2026`（不是测试跑的时间） |
+| 父进程 | `1160 systemd --user`（启动它的 shell 已退出，被 reparent = 孤儿） |
+| 命令 | `bun src/bin/mcp.ts --transport http --port 7351 --bind 127.0.0.1 --db /tmp/dbg-deep/x/y/memory.db --profile core` |
+| `--db` 指向 | `/tmp/dbg-deep` 已不存在（手工 `rm -rf` 后进程仍持有已删 inode） |
+| 仓库内引用 | 全仓库只有 `docs/overnight-progress.md` 提到 `7351`/`dbg-deep`，`__tests__` 与 `evals` 中 **0 命中** |
+
+即：某轮手工验证 `--db` 深层目录时用 `&`/后台方式起了一个真服务，没记 PID 也没 trap，
+shell 一退就成了孤儿。唯一会后台起真服务的脚本 `evals/mcp/http-smoke.sh` 本来就有
+`trap 'kill $SERVER_PID' EXIT`，所以不是脚本缺陷。
+
+实测否证「测试泄漏」（两次快照对比，非推断）：
+
+- 6 个 MCP 测试文件：43 pass / 0 fail / 251 expect，跑前 `bin/mcp` 进程集 = 跑后（仅那个孤儿），
+  监听端口数 18 → 18
+- 19 个 spawn 型测试文件（core-cli / memory-binding / episode-dream / agent-import 等）：
+  166 pass / 1 fail（`memory-atlas-openclaw` 的 installer 测试，另一会话 08:11 正在改
+  `AutoMemoryPluginInstaller.ts`，单独重跑即过，非本轮改动引起）/ 1286 expect，
+  跑后进程集与端口数不变
+
+**已做**：
+
+1. 精确 `kill 3615853`（不是 `pkill -f`），确认 `ps` 退出、`ss` 的 7351 释放、全机 `bin/mcp` 归零
+2. 新增 `evals/mcp/leak-check.sh`（可执行）：跑前/跑后比对 `bin/mcp` 进程集，有新增就打印
+   pid + `lstart` + 监听端口并 **exit 2**，测试红也照样报，避免「测试全绿但进程漏了」这类不可见故障
+3. 新增 `__tests__/process-hygiene.unit.test.ts` 3 个测试锁住两条泄漏路径：
+   传输层测试必须在进程内起服务且 `stop()`（不得 `Bun.spawn`）；`evals/**/*.sh` 里凡后台起
+   `bin/mcp` 必须有 `trap` + `kill`；leak-check 必须可执行且覆盖四个 MCP 测试文件
+4. **非空已验证**：① 造一个后台服务再跑 leak-check → `LEAK: ... 3677482` + 端口 7361 + **exit 2**，
+   杀掉后复跑 exit 0；② 临时放一个无 trap 的 `evals/mcp/untrapped-probe.sh` →
+   守卫测试 `1 fail`（offenders 命中该文件），删除后 3 pass
+
+### P7 — 打包后的 OpenClaw 插件入口是否真的存在（下一条自主任务）
+
+`0d6fbf3` 修的是 `defaultPublicEntrypoint()` 在 checkout 下记录 `src/public.js` 这个不存在路径的缺陷，
+但**只验证了仓库内**（单测断言记录值 `existsSync`）。装着走的路径没验过：全局安装后
+`here = <prefix>/node_modules/cogmem/dist/host/openclaw`，两个候选分别是
+`<pkg>/dist/public.js` 与 `<pkg>/../dist/public.js`，后者会落到 `node_modules/dist/`，
+一旦前者不存在就会记录一个包外路径。范围：`npm pack` → 临时 prefix 安装 → 读插件记录的
+`publicEntrypoint`，断言它存在**且位于安装前缀内**；顺手确认 `dist/public.js` 在 pack 清单里。
+只读 + 临时目录，不改产品行为。**注意**：当前 `dist/host/openclaw/AutoMemoryPluginInstaller.js`
+是另一会话未提交的改动，跑之前先确认它已落提交，否则验的是半成品。
 
 ### P5 — OpenClaw 真实工具执行（需要窗口）
 
@@ -296,6 +338,18 @@ bun test __tests__
 
 ## 本轮记录
 
+- 2026-10-23 08:45 — **常驻内核模式落地**（`docs/openclaw-runtime.md`）。OpenClaw 插件不再每轮 spawn 进程：bridge 增加 `serve` 模式，kernel 只开一次，hook 走 `<pluginDir>/run/bridge.sock`（0600）。实测同一库（1083 事件 / 91 神经元）：一次性路径 p50 **1008ms**，常驻路径 p50 **55ms**。插件 register 时启动并预热 kernel（约 1.2s，一次），daemon 挂掉自动重启，版本不符自动替换，锁文件防止同库双实例。连不上时回退一次性进程，保证正确性。新增 2 个测试；全量 **1533 pass / 0 fail / 166 files**
+  - 期间修掉三个真问题：`PLUGIN_VERSION` 在插件模板里未定义导致自动启动静默失败；`Bun.connect` 在 Node（OpenClaw 运行时）不存在，改为 Node 用 `net`、Bun 用 `Bun.connect` 的双路径；socket 目录不存在导致 daemon 起不来
+  - 清理了测试遗留的 13 个孤儿 daemon
+- 2026-10-23 08:27 — **P6 完成：否证「测试泄漏 MCP 子进程」，孤儿来自手工命令，并已清掉**（cron 轮；接手时无 `docs/overnight.lock`，HEAD 已被另一会话推到 `470aaa2`）
+  ① 上一轮的怀疑是错的：`__tests__/mcp-execution.unit.test.ts` 全 286 行没有一处 `Bun.spawn`，服务用 `startCogmemMcpHttpServer({...}, { port: 0 })` 在进程内起，`afterAll` 里 `handle.stop()`。`grep -rn "7351\|dbg-deep" __tests__/ evals/` → **0 命中**，全仓库只有进度文件自己提到过
+  ② 孤儿取证：PID `3615853`，`lstart` = `Fri Oct 23 06:39:03 2026`（不是任何一次测试的时间），父进程 `1160 systemd --user` 即启动它的 shell 已退出被 reparent，`--db /tmp/dbg-deep/x/y/memory.db` 且 `/tmp/dbg-deep` **已不存在**（手工 `rm -rf` 后进程还握着已删 inode），`ss` 确认它独占 `127.0.0.1:7351`。唯一会后台起真服务的 `evals/mcp/http-smoke.sh` 自带 `trap 'kill $SERVER_PID' EXIT`，不是脚本缺陷
+  ③ 两次快照对比实测（不是推断）：6 个 MCP 测试文件 `43 pass / 0 fail / 251 expect`，跑前跑后 `bin/mcp` 进程集完全相同、监听端口数 18 → 18；再跑 19 个 spawn 型测试 `166 pass / 1 fail / 1286 expect`，进程集与端口数仍不变。那 1 fail 是 `memory-atlas-openclaw` 的 installer 测试，另一会话 08:11:05 正在改 `src/host/openclaw/AutoMemoryPluginInstaller.ts`，单独重跑即过，不是本轮改动引起
+  ④ 清理：`kill 3615853` 精确 PID（不用 `pkill -f`），`ps` 已退出、7351 released、全机 `bin/mcp` 归零
+  ⑤ 防复发：新增 `evals/mcp/leak-check.sh`（可执行）跑前跑后比对 `bin/mcp` 进程集，有新增就打印 pid + `lstart` + 监听端口并 exit 2，专门抓「测试全绿但进程漏了」这种不可见故障；新增 `__tests__/process-hygiene.unit.test.ts` 3 个测试（传输层测试必须进程内起服务且有 `stop()`、`evals/**/*.sh` 后台起 `bin/mcp` 必须有 `trap`+`kill`、leak-check 必须可执行且覆盖四个 MCP 测试文件）
+  ⑥ **非空已验证**：造一个后台服务（`--port 7361`）再跑 leak-check → `LEAK: ... 3677482` + 端口 7361 + **exit 2**，杀掉复跑 exit 0；临时放一个无 trap 的 `evals/mcp/untrapped-probe.sh` → 守卫测试 `1 fail`（offenders 命中该文件 `Expected - 1 / Received + 3`），删除后 3 pass
+  ⑦ 真实数字：`bun run typecheck` exit 0；全量 `bun test __tests__` **1533 pass / 0 fail / 166 files / 5691 expect / 174.57s**
+  ⑧ 并发告警：另一会话仍在同一 worktree 工作（07:35 提交 `0d6fbf3`、之后 `470aaa2`，08:11 起继续改 `AutoMemoryPluginInstaller.ts` 与其 dist 产物、`agent-import-cli` 测试，另加 `openclaw-bridge-daemon.unit.test.ts`、`docs/openclaw-runtime.md`）。它依旧从不刷新 `docs/overnight.lock`，锁协议事实上失效；本轮只碰 `__tests__/` 与 `evals/`，不碰它的 src/dist
 - 2026-10-23 07:40 — **五家官方文档对照完成**。逐条核对 Claude Code / Cursor / Codex / Hermes / OpenClaw 的官方 MCP 文档，改掉两处不准确：
   ① Claude Code 的 `.mcp.json` 里 `type` 不是可选：只写 `url` 不写 `type` 会被当成 stdio 直接跳过，报 `has a "url" but no "type"`；补上正确 JSON 与 `${VAR}` / `${VAR:-default}` 语法，以及 `--transport http` 的 SSE 回退要 v2.1.265+
   ② Codex 参考链接原指向 GitHub `docs/config.md`，该文件已只剩 726 字节的存根，改指 `developers.openai.com/codex/mcp`；顺带补 `default_tools_approval_mode`（auto/prompt/writes/approve），解决交互式下每次调用都要批准的问题

@@ -174,6 +174,9 @@ function buildPatchedOpenClawConfig(input) {
             cwd: input.workspaceRoot,
             bunPath: input.bunPath,
             publicEntrypoint: defaultPublicEntrypoint(),
+            bridgeDaemon: true,
+            bridgeSocket: join(input.pluginDir || defaultOpenClawAutoMemoryPluginDir(input.workspaceRoot), 'run', 'bridge.sock'),
+            bridgeTimeoutMs: 5000,
             agentId: input.agentId,
             projectId: input.projectId,
             autoRecall: true,
@@ -241,6 +244,9 @@ function buildPluginFiles() {
                     cwd: { type: 'string' },
                     bunPath: { type: 'string' },
                     publicEntrypoint: { type: 'string' },
+                    bridgeDaemon: { type: 'boolean' },
+                    bridgeSocket: { type: 'string' },
+                    bridgeTimeoutMs: { type: 'number' },
                     agentId: { type: 'string' },
                     projectId: { type: 'string' },
                     autoRecall: { type: 'boolean' },
@@ -301,16 +307,21 @@ function pluginIndexJs() {
     return String.raw `'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
+const net = require('node:net');
 const { createHash } = require('node:crypto');
 const { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
 const PLUGIN_ID = 'cogmem-auto-memory';
+const PLUGIN_VERSION = '${PLUGIN_VERSION}';
 const DEFAULTS = {
   configPath: '',
   cwd: process.cwd(),
   bunPath: 'bun',
   publicEntrypoint: '',
+  bridgeDaemon: true,
+  bridgeSocket: '',
+  bridgeTimeoutMs: 5000,
   agentId: 'openclaw',
   projectId: 'openclaw',
   autoRecall: true,
@@ -709,7 +720,123 @@ function classifyMemoryNavigationIntent(query) {
   return 'direct_fact';
 }
 
-function runBridge(command, payload, config, timeoutMs) {
+function bridgeRequest(socketPath, request, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let buffer = '';
+    let socketRef = null;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { if (socketRef) socketRef.end(); } catch {}
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+
+    // OpenClaw runs on Node, where net.createConnection is the only option. Bun
+    // is used by the tests and by the bridge itself; there, net emits socket
+    // errors in a way the test runner reports as uncaught, and Bun.connect
+    // rejects cleanly instead.
+    if (typeof Bun !== 'undefined' && typeof Bun.connect === 'function') {
+      Promise.resolve(Bun.connect({
+        unix: socketPath,
+        socket: {
+          open(socket) {
+            socketRef = socket;
+            socket.write(JSON.stringify(request) + '\n');
+          },
+          data(socket, chunk) {
+            buffer += chunk.toString();
+            const index = buffer.indexOf('\n');
+            if (index >= 0) {
+              try { finish(JSON.parse(buffer.slice(0, index))); } catch { finish(null); }
+            }
+          },
+          close() { finish(null); },
+          error() { finish(null); },
+        },
+      })).catch(() => finish(null));
+      return;
+    }
+
+    const socket = net.createConnection(socketPath);
+    socketRef = socket;
+    socket.setTimeout(timeoutMs, () => finish(null));
+    socket.on('connect', () => socket.write(JSON.stringify(request) + '\n'));
+    socket.on('data', (chunk) => {
+      buffer += chunk.toString();
+      const index = buffer.indexOf('\n');
+      if (index >= 0) {
+        try { finish(JSON.parse(buffer.slice(0, index))); } catch { finish(null); }
+      }
+    });
+    socket.on('error', () => finish(null));
+    socket.on('close', () => finish(null));
+  });
+}
+
+async function bridgeDaemonHealth(config) {
+  if (!config.bridgeSocket) return null;
+  const response = await bridgeRequest(config.bridgeSocket, { command: 'health' }, 500).catch(() => null);
+  return response && response.ok ? response.result : null;
+}
+
+let daemonStart = null;
+
+async function ensureBridgeDaemon(config) {
+  if (config.bridgeDaemon === false || !config.bridgeSocket) return false;
+  const health = await bridgeDaemonHealth(config);
+  if (health && health.version === PLUGIN_VERSION) return true;
+  if (daemonStart) return await daemonStart;
+  daemonStart = (async () => {
+    if (health && health.pid) {
+      // A daemon left over from an older build keeps the old kernel and the old
+      // payload shape. Replace it rather than serving stale behaviour.
+      try { process.kill(health.pid); } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    try {
+      mkdirSync(path.dirname(config.bridgeSocket), { recursive: true });
+      const child = spawn(config.bunPath || 'bun', [path.join(__dirname, 'bridge.mjs'), 'serve', config.bridgeSocket, config.configPath], {
+        cwd: config.cwd || process.cwd(),
+        detached: true,
+        stdio: 'ignore',
+        env: Object.assign({}, process.env, { COGMEM_BRIDGE_VERSION: PLUGIN_VERSION }),
+      });
+      child.unref();
+    } catch {
+      return false;
+    }
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const ready = await bridgeDaemonHealth(config);
+      if (ready) return ready.version === PLUGIN_VERSION;
+    }
+    return false;
+  })();
+  try {
+    return await daemonStart;
+  } finally {
+    daemonStart = null;
+  }
+}
+
+async function runBridge(command, payload, config, timeoutMs) {
+  if (config.bridgeDaemon !== false && config.bridgeSocket) {
+    const ready = await ensureBridgeDaemon(config);
+    if (ready) {
+      const response = await bridgeRequest(
+        config.bridgeSocket,
+        { command, payload },
+        Number(config.bridgeTimeoutMs || timeoutMs || 5000),
+      );
+      if (response && response.ok) return response.result;
+      // An error reply means the daemon saw the request. Retrying in a fresh
+      // process could double-write a turn, so surface it instead.
+      if (response && response.ok === false) throw new Error(response.error || 'cogmem bridge daemon error');
+    }
+  }
   const bridgePath = path.join(__dirname, 'bridge.mjs');
   const child = spawnSync(config.bunPath || 'bun', [bridgePath, command], {
     cwd: config.cwd || process.cwd(),
@@ -1024,6 +1151,15 @@ const plugin = {
       throw new Error('OpenClaw plugin API missing api.on');
     }
 
+    // Start the kernel while the host is idle instead of paying for it inside
+    // the first prompt of the session.
+    try {
+      const warmConfig = pluginConfig(api, null, null);
+      if (warmConfig.bridgeDaemon !== false && warmConfig.bridgeSocket) {
+        ensureBridgeDaemon(warmConfig).catch(() => {});
+      }
+    } catch {}
+
     api.on('before_prompt_build', async (event, ctx) => {
       const config = pluginConfig(api, event, ctx);
       if (config.autoRecall === false) return {};
@@ -1071,7 +1207,7 @@ const plugin = {
         let atlasInjected = false;
         const recalled = config.contextCortexEnabled !== false && contextIntent === 'short_followup'
           ? { context: '', items: [], itemCount: 0, intent, recallMode: 'context_cortex_short_followup', fallbackUsed: false }
-          : runBridge(navigationIntent === 'atlas_explore' && config.autoAtlas !== false ? 'context' : 'recall', {
+          : await runBridge(navigationIntent === 'atlas_explore' && config.autoAtlas !== false ? 'context' : 'recall', {
             query,
             sessionId,
             threadId,
@@ -1257,80 +1393,284 @@ module.exports.__testing = {
   formatMemoryUsageBridge,
   formatSessionWorkingState,
   classifyMemoryNavigationIntent,
+  ensureBridgeDaemon,
+  bridgeDaemonHealth,
+  runBridge,
 };
 `;
 }
 function pluginBridgeMjs() {
     return String.raw `#!/usr/bin/env bun
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const command = process.argv[2];
-const input = JSON.parse(readFileSync(0, 'utf8') || process.env.COGMEM_BRIDGE_STDIN || '{}');
-const config = input.config || {};
-if (!config.configPath) {
-  throw new Error('missing cogmem configPath');
+const invokedCommand = process.argv[2];
+
+let cachedRuntime = null;
+
+async function acquireRuntime(config, keepAlive) {
+  if (cachedRuntime && cachedRuntime.configPath === config.configPath) return cachedRuntime;
+  if (cachedRuntime) {
+    try { cachedRuntime.kernel.close(); } catch {}
+    cachedRuntime = null;
+  }
+  const api = await loadCogmemApi(config);
+  const kernel = api.createMemoryKernelFromConfig({ configPath: config.configPath });
+  const runtime = {
+    configPath: config.configPath,
+    kernel,
+    memory: new api.KernelAgentMemoryBackend(kernel),
+    formatStrategyContext: api.formatStrategyContext,
+  };
+  if (keepAlive) cachedRuntime = runtime;
+  return runtime;
 }
 
-let drainQueueLock;
-if (command === 'drain-remember-queue') {
-  drainQueueLock = acquireRememberQueueLock(config);
-  if (!drainQueueLock.acquired) {
-    console.log(JSON.stringify({ drained: 0, failed: 0, locked: drainQueueLock.locked, empty: drainQueueLock.empty === true }));
+function releaseRuntime(runtime) {
+  if (!runtime || runtime === cachedRuntime) return;
+  try { runtime.kernel.close(); } catch {}
+}
+
+async function execute(command, input, keepAlive) {
+  const config = input.config || {};
+  if (!config.configPath) {
+    throw new Error('missing cogmem configPath');
+  }
+
+  let drainQueueLock;
+  if (command === 'drain-remember-queue') {
+    drainQueueLock = acquireRememberQueueLock(config);
+    if (!drainQueueLock.acquired) {
+      return { drained: 0, failed: 0, locked: drainQueueLock.locked, empty: drainQueueLock.empty === true };
+    }
+  }
+
+  const runtime = await acquireRuntime(config, keepAlive);
+  const kernel = runtime.kernel;
+  const memory = runtime.memory;
+  const formatStrategyContext = runtime.formatStrategyContext;
+  try {
+    if (command === 'context') {
+      const projectId = config.projectId || 'openclaw';
+      const atlas = kernel.graphExplore(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) });
+      const nodeDetails = atlas.nodes.slice(0, 4).map((node) => kernel.graphNode(node.id, {
+        projectId, evidenceLimit: 2, includeEvidence: false,
+      })).filter(Boolean);
+      const timeline = kernel.graphTimeline(input.query || '', { projectId, limit: Math.min(6, Number(config.atlasLimit || 8)) });
+      const atlasResult = { ...atlas, nodeDetails, timeline };
+      const recalled = await recallPayload(input, config, kernel, memory, formatStrategyContext);
+      return {
+        ...recalled,
+        atlasContext: formatAtlasContext(atlasResult, Number(config.atlasMaxChars || 3000)),
+        atlasResult,
+      };
+    } else if (command === 'graph-explore') {
+      const projectId = config.projectId || 'openclaw';
+      const result = kernel.graphExplore(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) });
+      return { context: formatAtlasContext(result, Number(config.atlasMaxChars || 3000)), result };
+    } else if (command === 'graph-node') {
+      const projectId = config.projectId || 'openclaw';
+      return kernel.graphNode(input.id, { projectId, includeEvidence: input.includeEvidence === true });
+    } else if (command === 'graph-path') {
+      const projectId = config.projectId || 'openclaw';
+      return kernel.graphPath(input.from, input.to, { projectId });
+    } else if (command === 'graph-timeline') {
+      const projectId = config.projectId || 'openclaw';
+      return kernel.graphTimeline(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) });
+    } else if (command === 'recall') {
+      return await recallPayload(input, config, kernel, memory, formatStrategyContext);
+    } else if (command === 'remember') {
+      const result = await rememberPayload(input, config, kernel, memory);
+      return { remembered: true, ...result };
+    } else if (command === 'drain-remember-queue') {
+      return await drainRememberQueueWithLock(config, drainQueueLock, kernel, memory);
+    }
+    throw new Error('unknown cogmem bridge command: ' + command);
+  } finally {
+    releaseRuntime(runtime);
+    if (drainQueueLock && drainQueueLock.acquired) {
+      rmSync(drainQueueLock.lockPath, { recursive: true, force: true });
+    }
+  }
+}
+
+function acquireDaemonLock(socketPath) {
+  const lockPath = socketPath + '.lock';
+  try {
+    writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+    return { lockPath, acquired: true, running: false };
+  } catch {
+    let pid = 0;
+    try { pid = Number(readFileSync(lockPath, 'utf8')); } catch {}
+    if (pid > 0 && pid !== process.pid) {
+      try {
+        process.kill(pid, 0);
+        return { lockPath, acquired: false, running: true, pid };
+      } catch {}
+    }
+    try { writeFileSync(lockPath, String(process.pid)); } catch {}
+    return { lockPath, acquired: true, running: false };
+  }
+}
+
+function daemonResponsive(socketPath) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let socketRef = null;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { if (socketRef) socketRef.end(); } catch {}
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(false), 400);
+    Promise.resolve(Bun.connect({
+      unix: socketPath,
+      socket: {
+        open(socket) { socketRef = socket; socket.write('{"command":"health"}\n'); },
+        data() { finish(true); },
+        close() { finish(false); },
+        error() { finish(false); },
+      },
+    })).catch(() => finish(false));
+  });
+}
+
+async function startSocketServer(socketPath) {
+  mkdirSync(dirname(socketPath), { recursive: true });
+  const lock = acquireDaemonLock(socketPath);
+  // A pid that is merely alive is not proof of a working daemon: the process may
+  // be an orphan whose socket was unlinked, or a recycled pid. Only a socket
+  // that answers keeps this instance out.
+  if (!lock.acquired && lock.running && await daemonResponsive(socketPath)) {
+    console.error('[cogmem-bridge] already running pid ' + lock.pid);
     process.exit(0);
   }
+  try { writeFileSync(lock.lockPath, String(process.pid)); } catch {}
+  process.on('exit', () => {
+    try { rmSync(lock.lockPath, { force: true }); } catch {}
+  });
+  if (existsSync(socketPath)) {
+    try { rmSync(socketPath, { force: true }); } catch {}
+  }
+  const server = createServer((socket) => {
+    let buffer = '';
+    let chain = Promise.resolve();
+    socket.setEncoding('utf8');
+    socket.on('error', () => {});
+    socket.on('data', (chunk) => {
+      buffer += chunk;
+      let index;
+      while ((index = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, index);
+        buffer = buffer.slice(index + 1);
+        if (!line.trim()) continue;
+        chain = chain.then(async () => {
+          let request;
+          try {
+            request = JSON.parse(line);
+          } catch {
+            socket.write(JSON.stringify({ ok: false, error: 'bad_json' }) + '\n');
+            return;
+          }
+          try {
+            if (request.command === 'health') {
+              socket.write(JSON.stringify({
+                ok: true,
+                result: { version: process.env.COGMEM_BRIDGE_VERSION || null, pid: process.pid, uptimeMs: Math.round(process.uptime() * 1000) },
+              }) + '\n');
+              return;
+            }
+            const result = await execute(request.command, request.payload || {}, true);
+            socket.write(JSON.stringify({ ok: true, result }) + '\n');
+          } catch (error) {
+            socket.write(JSON.stringify({ ok: false, error: String(error && error.message || error) }) + '\n');
+          }
+        });
+      }
+    });
+  });
+  server.listen(socketPath, () => {
+    try { chmodSync(socketPath, 0o600); } catch {}
+    console.error('[cogmem-bridge] listening ' + socketPath);
+  });
+  server.on('error', (error) => {
+    console.error('[cogmem-bridge] ' + String(error && error.message || error));
+    process.exit(1);
+  });
+  return server;
 }
 
-let kernel;
-try {
-  const { createMemoryKernelFromConfig, KernelAgentMemoryBackend, formatStrategyContext } = await loadCogmemApi(config);
-  kernel = createMemoryKernelFromConfig({ configPath: config.configPath });
-  const memory = new KernelAgentMemoryBackend(kernel);
-  if (command === 'context') {
-    const projectId = config.projectId || 'openclaw';
-    const atlas = kernel.graphExplore(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) });
-    const nodeDetails = atlas.nodes.slice(0, 4).map((node) => kernel.graphNode(node.id, {
-      projectId, evidenceLimit: 2, includeEvidence: false,
-    })).filter(Boolean);
-    const timeline = kernel.graphTimeline(input.query || '', { projectId, limit: Math.min(6, Number(config.atlasLimit || 8)) });
-    const atlasResult = { ...atlas, nodeDetails, timeline };
-    const recalled = await recallPayload(input, config, kernel, memory, formatStrategyContext);
-    console.log(JSON.stringify({
-      ...recalled,
-      atlasContext: formatAtlasContext(atlasResult, Number(config.atlasMaxChars || 3000)),
-      atlasResult,
-    }));
-  } else if (command === 'graph-explore') {
-    const projectId = config.projectId || 'openclaw';
-    const result = kernel.graphExplore(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) });
-    console.log(JSON.stringify({ context: formatAtlasContext(result, Number(config.atlasMaxChars || 3000)), result }));
-  } else if (command === 'graph-node') {
-    const projectId = config.projectId || 'openclaw';
-    console.log(JSON.stringify(kernel.graphNode(input.id, { projectId, includeEvidence: input.includeEvidence === true })));
-  } else if (command === 'graph-path') {
-    const projectId = config.projectId || 'openclaw';
-    console.log(JSON.stringify(kernel.graphPath(input.from, input.to, { projectId })));
-  } else if (command === 'graph-timeline') {
-    const projectId = config.projectId || 'openclaw';
-    console.log(JSON.stringify(kernel.graphTimeline(input.query || '', { projectId, limit: Number(config.atlasLimit || 8) })));
-  } else if (command === 'recall') {
-    console.log(JSON.stringify(await recallPayload(input, config, kernel, memory, formatStrategyContext)));
-  } else if (command === 'remember') {
-    const result = await rememberPayload(input, config, kernel, memory);
-    console.log(JSON.stringify({ remembered: true, ...result }));
-  } else if (command === 'drain-remember-queue') {
-    const result = await drainRememberQueueWithLock(config, drainQueueLock, kernel, memory);
-    console.log(JSON.stringify(result));
-  } else {
-    throw new Error('unknown cogmem bridge command: ' + command);
-  }
-} finally {
-  if (kernel) kernel.close();
-  if (drainQueueLock && drainQueueLock.acquired) {
-    rmSync(drainQueueLock.lockPath, { recursive: true, force: true });
-  }
+function callBridgeSocket(socketPath, request, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let buffer = '';
+    let socketRef = null;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { if (socketRef) socketRef.end(); } catch {}
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    Promise.resolve(Bun.connect({
+      unix: socketPath,
+      socket: {
+        open(socket) {
+          socketRef = socket;
+          socket.write(JSON.stringify(request) + '\n');
+        },
+        data(socket, chunk) {
+          buffer += chunk.toString();
+          const index = buffer.indexOf('\n');
+          if (index >= 0) {
+            try { finish(JSON.parse(buffer.slice(0, index))); } catch { finish(null); }
+          }
+        },
+        close() { finish(null); },
+        error() { finish(null); },
+      },
+    })).catch(() => finish(null));
+  });
 }
+
+async function main() {
+  if (invokedCommand === 'serve') {
+    const socketPath = process.argv[3];
+    if (!socketPath) throw new Error('missing bridge socket path');
+    await startSocketServer(socketPath);
+    // Build the kernel while the host is idle so the first prompt is not the one
+    // that pays for it.
+    const warmConfigPath = process.argv[4];
+    if (warmConfigPath) {
+      acquireRuntime({ configPath: warmConfigPath }, true).catch(() => {});
+    }
+    return;
+  }
+  const input = JSON.parse(readFileSync(0, 'utf8') || process.env.COGMEM_BRIDGE_STDIN || '{}');
+  const config = input.config || {};
+  if (config.bridgeSocket) {
+    const response = await callBridgeSocket(
+      config.bridgeSocket,
+      { command: invokedCommand, payload: input },
+      Number(config.bridgeTimeoutMs || 5000),
+    );
+    if (response && response.ok) {
+      console.log(JSON.stringify(response.result));
+      return;
+    }
+    if (response && response.ok === false) {
+      throw new Error(response.error || 'cogmem bridge daemon error');
+    }
+  }
+  console.log(JSON.stringify(await execute(invokedCommand, input, false)));
+}
+
+await main();
 
 async function recallPayload(input, config, kernel, memory, formatStrategyContext) {
   const recallStartedAt = Date.now();
