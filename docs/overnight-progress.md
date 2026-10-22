@@ -1,7 +1,7 @@
 # Cogmem 连续开发进度
 
 > 唯一进度源。每轮开始读这里，每轮结束更新这里。
-> 最后更新：2026-10-23 07:12 JST
+> 最后更新：2026-10-23 06:56 JST
 
 ## 当前状态
 
@@ -11,7 +11,7 @@
 - 上一个：`c52508c`（Merge PR #27, 3.7.4）
 - 版本：`4.0.0`（已改元数据，未提交）
 - 工作区：干净（`docs/overnight.lock` 为运行期文件，未跟踪）
-- 测试：`1521 pass / 0 fail / 1521 tests / 163 files`（**全绿，基线失败已清零**）
+- 测试：`1523 pass / 0 fail / 1523 tests / 163 files`（**全绿，基线失败已清零**）
 - 类型检查：干净
 - dist：已用 `bun run build` 重建（2026-10-23 06:55），含本轮 `--no-probe`；旧 dist 备份在 scratch `dist-pre-noprobe-*.tgz`
 - 常驻服务：无（MCP 服务按需启动）
@@ -261,7 +261,14 @@ bun test __tests__
 
 ## 本轮记录
 
-- 2026-10-23 07:12 — **发布前收尾完成并落本地提交** `ac61f93`（74 文件，+5106/−90）：`npm pack` 898 文件无 tests/evals/bak，关键文件齐全；`verify:packed-migration` 输出 `packed 4.0.0 ... and MCP verified`；敏感模式扫描只命中测试 canary。未推送、未打 tag、未 publish
+- 2026-10-23 06:55 — **多写者实测，修掉一个启动崩溃**。探针 `evals/concurrency/writer.ts`（4 进程 × 20 turn，`immediate_compile`）：
+  ① 空库 4 个并发启动，修前 3 个死在 schema migration（`table already exists`），只有 1 个活下来；修后 4 个全起、schema 只应用一次、`integrity_check` ok。
+     修法：`SchemaMigrationRunner.run()` 在事务内重读 `plan()`（`remaining`），并用 `transaction.immediate()` 一开始就拿写锁。
+  ② 已初始化库 4 个并发写：80 条里 12 条 `database is locked`（busy_timeout 5000ms），无重复、无损坏；失败调用可能已提交 raw event，宿主盲目重试会产生第二条 turn。
+  实测结论写进 `CONCURRENT_ACCESS.md` 新增的「Measured behaviour」一节，明确四进程是对抗性负载、单 HTTP 服务仍是多宿主唯一支持形态。
+  新增 2 个测试（stale plan 重读、双连接只应用一次），**非空已验证**：把 `remaining` 改回 `pending` 后 stale plan 测试立即失败。
+  测试：`bun test __tests__/schema-migration.unit.test.ts` 5 pass；全量 **1523 pass / 0 fail / 163 files**
+- 2026-10-23 06:50 — **发布前收尾完成并落本地提交** `5ee3312`（74 文件，+5106/−90）：`npm pack` 898 文件无 tests/evals/bak，关键文件齐全；`verify:packed-migration` 输出 `packed 4.0.0 ... and MCP verified`；敏感模式扫描只命中测试 canary。未推送、未打 tag、未 publish
 - 2026-10-23 06:58 — **P2d 完成**：`--db` 父目录不存在时自动创建（`createMemoryKernel` 里加 `ensureDatabaseDirectory`，跳过 `:memory:`/`file:`）。复现测试非空已验证（注释掉修复后 3.3ms 失败）；dist 重建后真实 CLI 用 `/tmp/dbg-final/a/b/c/memory.db` 起监听、`initialize` 200。文档三处同步。全量 1521 pass / 0 fail
 - 2026-10-23 06:10 — **P2c 完成，基线失败清零**（`1520 pass / 0 fail`）。原失败 `init supports non-interactive dry-run config generation` 不是产品缺陷而是测试不可复现：`cogmem init` 无条件 `fetch('http://localhost:11434/api/tags')`，本机装了 `qwen3-embedding-4b:latest`（`curl /api/tags` 实测两个模型 `qwen2.5:7b`、`qwen3-embedding-4b:latest`），`inferEmbeddingVectorDimension` 对 4b 返回 2560，于是 `--agent none --dry-run` 的输出取决于跑测试的机器装了什么模型。**没有把断言改成 2560**，而是实现 `--no-probe`：`InitArgs` 加 `probeOllama`，`readArgs` 里 `probeOllama: !argv.includes('--no-probe')`，`detectBackends(probeOllama = true)` 跳过 fetch 并把 `AbortController`/`setTimeout` 移进探测分支（避免为不跑的探测挂 2.5s 定时器），`printDetection(det, probed = true)` 在跳过时打印 `Ollama    – skipped (--no-probe)` 而非谎称 not running。测试加 `--no-probe`，断言仍是 384（`DEFAULT_VECTOR_DIMENSION`），现在锁的是"探测不到→回落 384"这条真实分支
 - 2026-10-23 06:10 — 实测对照（同一命令只差一个 flag）：无 flag → `✓ running — 2 model(s): qwen2.5:7b, qwen3-embedding-4b:latest` + `vector_dimension = 2560`；`--no-probe` → `– skipped (--no-probe)` + `vector_dimension = 384` + `provider = "deterministic_local"`；`--no-probe --vector-dimension 384` → 384。三种都 exit 0、stderr 空

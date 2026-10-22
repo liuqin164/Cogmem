@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 import { SchemaMigrationRunner } from '../src/migrations/SchemaMigrationRunner.js';
 import { migration_0015 } from '../src/migrations/0015_memory_governance.js';
+import { KERNEL_MIGRATIONS } from '../src/migrations/index.js';
 
 describe('schema migration runner', () => {
   test('dry run is read-only for a fresh database', () => {
@@ -58,5 +60,53 @@ describe('schema migration runner', () => {
       digest.update(`${source}\0${Buffer.byteLength(content)}\0`).update(content);
     }
     expect(MIGRATION_DIGESTS['0032']).toBe(digest.digest('hex'));
+  });
+});
+
+describe('concurrent startup', () => {
+  test('a plan that went stale while waiting for the lock is re-read, not replayed', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-mig-stale-'));
+    const path = join(dir, 'memory.db');
+    const other = new Database(path);
+    // Another process finishes the migration first.
+    expect(new SchemaMigrationRunner(other, KERNEL_MIGRATIONS, { backupVerified: true }).run().applied.length).toBeGreaterThan(0);
+
+    const db = new Database(path);
+    const runner = new SchemaMigrationRunner(db, KERNEL_MIGRATIONS, { backupVerified: true });
+    const realPlan = runner.plan.bind(runner);
+    let planCalls = 0;
+    (runner as unknown as { plan: () => ReturnType<typeof realPlan> }).plan = () => {
+      planCalls += 1;
+      // The first read is what run() captured before the lock: it still shows
+      // 0015 as pending. The second read happens inside the transaction.
+      return planCalls === 1 ? KERNEL_MIGRATIONS : realPlan();
+    };
+
+    const result = runner.run();
+    expect(planCalls).toBeGreaterThanOrEqual(2);
+    expect(result.applied).toEqual([]);
+    expect(result.currentVersion).toBe(KERNEL_MIGRATIONS[KERNEL_MIGRATIONS.length - 1].version);
+
+    db.close();
+    other.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('two connections to one file apply a migration exactly once', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-mig-once-'));
+    const path = join(dir, 'memory.db');
+    const a = new Database(path);
+    const b = new Database(path);
+
+    const first = new SchemaMigrationRunner(a, KERNEL_MIGRATIONS, { backupVerified: true }).run();
+    const second = new SchemaMigrationRunner(b, KERNEL_MIGRATIONS, { backupVerified: true }).run();
+
+    expect(first.applied.length).toBeGreaterThan(0);
+    expect(second.applied).toEqual([]);
+    expect(second.currentVersion).toBe(KERNEL_MIGRATIONS[KERNEL_MIGRATIONS.length - 1].version);
+
+    a.close();
+    b.close();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

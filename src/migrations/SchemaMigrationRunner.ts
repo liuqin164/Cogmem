@@ -63,9 +63,14 @@ export class SchemaMigrationRunner {
       throw new Error('migration_backup_required');
     }
     const applied: string[] = [];
-    const recorded = new Set((this.db.prepare(`SELECT version FROM _schema_migrations`).all() as Array<{ version: string }>).map((row) => row.version));
     const transaction = this.db.transaction(() => {
-      for (const migration of pending) {
+      // Re-plan under the write lock. Between plan() and this point another
+      // process may have applied the same migrations, and re-running their DDL
+      // threw mid-transaction: a second host starting against a fresh database
+      // died instead of finding the schema already current.
+      const remaining = this.plan();
+      const recorded = new Set((this.db.prepare(`SELECT version FROM _schema_migrations`).all() as Array<{ version: string }>).map((row) => row.version));
+      for (const migration of remaining) {
         migration.up(this.db);
         if (!this.migrationSchemaSatisfied(migration.version)) throw new Error(`migration_postcondition_failed:${migration.version}`);
         const appliedAt = new Date().toISOString();
@@ -76,8 +81,10 @@ export class SchemaMigrationRunner {
           else this.db.prepare(`UPDATE _schema_migrations SET description=?, applied_at=? WHERE version=?`).run(migration.description, appliedAt, migration.version);
         } else if (hasChecksum) {
           this.db.prepare(`INSERT INTO _schema_migrations (version, description, applied_at, checksum) VALUES (?, ?, ?, ?)`).run(migration.version, migration.description, appliedAt, checksum);
+          recorded.add(migration.version);
         } else {
           this.db.prepare(`INSERT INTO _schema_migrations (version, description, applied_at) VALUES (?, ?, ?)`).run(migration.version, migration.description, appliedAt);
+          recorded.add(migration.version);
         }
         if (hasChecksum) {
           this.backfillChecksums();
@@ -86,7 +93,10 @@ export class SchemaMigrationRunner {
         applied.push(migration.version);
       }
     });
-    transaction();
+    // IMMEDIATE takes the write lock up front instead of upgrading a deferred
+    // read transaction, so concurrent starters queue on busy_timeout rather
+    // than failing halfway through the migration body.
+    transaction.immediate();
     return { pending: pending.map((item) => item.version), applied, currentVersion: this.currentVersion(), dryRun: false };
   }
 
