@@ -37,6 +37,23 @@ const HERMES_COGMEM_TOOLS = [
     'cogmem_maintenance_tick',
     'cogmem_prospective',
 ];
+const CONNECT_FLAGS = new Set([
+    'workspace',
+    'config',
+    'openclaw-config',
+    'hermes-config',
+    'plugin-dir',
+    'bun',
+    'project',
+    'agent-id',
+    'output',
+    'auto',
+    'dry-run',
+    'force',
+    'json',
+    'help',
+    'h',
+]);
 function readArgs(argv) {
     const values = {};
     const positionals = [];
@@ -48,6 +65,10 @@ function readArgs(argv) {
         }
         const next = argv[index + 1];
         const key = item.slice(2);
+        // A silently ignored flag is how `--bun-path` left the recorded bunPath unset.
+        if (!CONNECT_FLAGS.has(key)) {
+            throw new Error(`Unknown option --${key}. Known options: ${Array.from(CONNECT_FLAGS).map((flag) => `--${flag}`).join(', ')}.`);
+        }
         if (!next || next.startsWith('--')) {
             values[key] = true;
             continue;
@@ -183,7 +204,7 @@ function nextSteps(agent) {
 }
 function usage() {
     return [
-        'Usage: cogmem-connect <openclaw|hermes> [--workspace <dir>] [--output <SKILL.md>] [--auto] [--config <config.toml>] [--openclaw-config <openclaw.json>] [--hermes-config <config.yaml>] [--dry-run] [--force] [--json]',
+        'Usage: cogmem-connect <openclaw|hermes> [--workspace <dir>] [--output <SKILL.md>] [--auto] [--config <config.toml>] [--openclaw-config <openclaw.json>] [--hermes-config <config.yaml>] [--plugin-dir <dir>] [--bun <path>] [--project <id>] [--agent-id <id>] [--dry-run] [--force] [--json]',
         '',
         'Installs the agent-facing cogmem memory skill bundle into:',
         '  OpenClaw: <workspace>/skills/cogmem-memory/',
@@ -192,6 +213,7 @@ function usage() {
         'The bundle includes SKILL.md plus references/operations.md with migration, import, recall, Atlas, governance, repair, and backup commands.',
         'For OpenClaw, pass --auto to install the local automatic recall/remember plugin wrapper and patch OpenClaw plugin config.',
         'For Hermes, pass --auto to patch ~/.hermes/config.yaml with a cogmem MCP server entry.',
+        '--bun must be a real Bun binary (the plugin bridge imports bun:sqlite); defaults to the runtime that invoked this CLI.',
     ].join('\n');
 }
 function hostConfigSnippet(agent, workspaceRoot, auto) {

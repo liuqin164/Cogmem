@@ -13,7 +13,16 @@ export interface CogmemMcpServerOptions {
      */
     projectId?: string;
 }
+export interface SessionIdentity {
+    hostId?: string;
+    projectId?: string;
+    profile?: string;
+}
 export declare function createCogmemMcpServer(runtime?: CogmemMcpRuntime, options?: CogmemMcpServerOptions): Server;
-export declare function startCogmemMcpServer(runtime?: CogmemMcpRuntime, options?: CogmemMcpServerOptions): Promise<Server>;
+export interface CogmemMcpStdioHandle {
+    server: Server;
+    stop(): void;
+}
+export declare function startCogmemMcpServer(runtime?: CogmemMcpRuntime, options?: CogmemMcpServerOptions): Promise<CogmemMcpStdioHandle>;
 export { resolveProfile };
 //# sourceMappingURL=server.d.ts.map

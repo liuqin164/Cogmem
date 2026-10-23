@@ -233,15 +233,15 @@ describe('documented tool profile counts match the shipped registry', () => {
     const changelog = readText(join(coreRoot, 'CHANGELOG.md'));
 
     expect(core).toBe(8);
-    expect(admin).toBe(23);
-    expect(full).toBe(37);
+    expect(admin).toBe(26);
+    expect(full).toBe(40);
 
     expect(hosts).toContain(`The server exposes ${full} tools.`);
     expect(hosts).toContain('| `core` | ' + core + ' |');
     expect(hosts).toContain('| `admin` | ' + admin + ' |');
     expect(hosts).toContain('| `full` | ' + full + ' |');
     expect(hosts).toContain(`sees ${core} tools`);
-    expect(hosts).toContain(`8 means the\n\`core\` profile, 37 means \`full\``);
+    expect(hosts).toContain(`8 means the\n\`core\` profile, 40 means \`full\``);
     expect(readme).toContain(`bounds the tool surface to ${core}, ${admin}, or ${full} tools`);
     expect(changelog).toContain('`core` (' + core + '), `admin` (' + admin + '), `full` (' + full + ')');
   });

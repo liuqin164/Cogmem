@@ -3,6 +3,11 @@ import { createStableImportIdentityFactory } from '../episode/EpisodeImportIdent
 import { createMemoryKernel, createMemoryKernelFromConfig, } from '../factory.js';
 import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
 import { SqliteSharedMemory } from '../adapters/sqlite/SqliteSharedMemory.js';
+import { OpenClawWorkspaceProfile, HermesWorkspaceProfile, MarkdownSourceLoader, ConversationMarkdownAdapter, HermesStateDbAdapter, SoulMarkdownAdapter, OpenClawDailyMemoryAdapter, OpenClawSessionAdapter, OpenClawMemoryIndexAdapter, OpenClawUserProfileAdapter, OpenClawPersonaAdapter, buildEpisodeEnvelope, } from '../adapters/index.js';
+import { InstalledBatchProcessor } from '../batch/InstalledBatchProcessor.js';
+import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
+import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 const STRING_SCHEMA = { type: 'string' };
 const NUMBER_SCHEMA = { type: 'number' };
 const STRING_ARRAY_SCHEMA = { type: 'array', items: STRING_SCHEMA };
@@ -480,6 +485,87 @@ export function listCogmemMcpTools() {
                 idempotentHint: true,
             },
         },
+        {
+            name: 'cogmem_import_preview',
+            description: 'Dry-run scan agent memory sources (OpenClaw/Hermes) and return estimated record counts without ingesting. Use before import to verify source discovery.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    agent: { type: 'string', enum: ['openclaw', 'hermes'] },
+                    workspaceRoot: STRING_SCHEMA,
+                    projectId: STRING_SCHEMA,
+                    configPath: STRING_SCHEMA,
+                    date: STRING_SCHEMA,
+                    sessionPaths: { type: 'array', items: STRING_SCHEMA },
+                    memoryPaths: { type: 'array', items: STRING_SCHEMA },
+                    stateDbPath: STRING_SCHEMA,
+                    profilePath: STRING_SCHEMA,
+                    sessionsDir: STRING_SCHEMA,
+                    since: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
+                    until: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
+                    now: NUMBER_SCHEMA,
+                    localDateNow: STRING_SCHEMA,
+                    timeZone: STRING_SCHEMA,
+                },
+                required: ['agent', 'workspaceRoot'],
+            },
+            annotations: {
+                title: 'Import Preview',
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+            },
+        },
+        {
+            name: 'cogmem_import_apply',
+            description: 'Execute idempotent import of agent memory sources into cogmem. Runs the full pipeline: recordRawEvent -> ingest (vectorize+graph) -> consolidate -> rebuildMemoryAtlas. Returns ingested/skipped counts per source.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    agent: { type: 'string', enum: ['openclaw', 'hermes'] },
+                    workspaceRoot: STRING_SCHEMA,
+                    projectId: STRING_SCHEMA,
+                    configPath: STRING_SCHEMA,
+                    date: STRING_SCHEMA,
+                    sessionPaths: { type: 'array', items: STRING_SCHEMA },
+                    memoryPaths: { type: 'array', items: STRING_SCHEMA },
+                    stateDbPath: STRING_SCHEMA,
+                    profilePath: STRING_SCHEMA,
+                    sessionsDir: STRING_SCHEMA,
+                    since: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
+                    until: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
+                    now: NUMBER_SCHEMA,
+                    localDateNow: STRING_SCHEMA,
+                    timeZone: STRING_SCHEMA,
+                    reindexRaw: { type: 'boolean', default: false },
+                },
+                required: ['agent', 'workspaceRoot'],
+            },
+            annotations: {
+                title: 'Import Apply',
+                readOnlyHint: false,
+                destructiveHint: false,
+                idempotentHint: true,
+            },
+        },
+        {
+            name: 'cogmem_import_status',
+            description: 'Get the import state of a project: every registered source with its path, adapter kind, last processed timestamp and how many records it has already ingested. Sources are ordered most recently processed first; limit truncates the list while totalSources still reports the full count.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    projectId: STRING_SCHEMA,
+                    limit: NUMBER_SCHEMA,
+                },
+                required: ['projectId'],
+            },
+            annotations: {
+                title: 'Import Status',
+                readOnlyHint: true,
+                destructiveHint: false,
+                idempotentHint: true,
+            },
+        },
     ];
 }
 export async function callCogmemMcpTool(name, args, runtime = {}) {
@@ -565,6 +651,12 @@ export async function callCogmemMcpTool(name, args, runtime = {}) {
                 return jsonResult(opened.kernel.getEpisodeDreamStatus(optionalString(input.projectId)));
             case 'cogmem_memory_map':
                 return jsonResult(opened.kernel.buildMemoryMap({ projectId: optionalString(input.projectId) }));
+            case 'cogmem_import_preview':
+                return await handleImportPreview(opened.kernel, input);
+            case 'cogmem_import_apply':
+                return await handleImportApply(opened.kernel, input);
+            case 'cogmem_import_status':
+                return handleImportStatus(opened.kernel, input);
             case 'cogmem_candidate_review':
                 return jsonResult(opened.kernel.reviewDreamCandidate({
                     candidateId: requiredString(input.candidateId, 'candidateId'),
@@ -1039,6 +1131,530 @@ async function handleSharedTool(name, input, runtime) {
         default:
             return jsonResult({ error: `Unknown cogmem shared tool: ${name}` }, true);
     }
+}
+function parseArgs(argv) {
+    const values = {};
+    const lists = {};
+    for (let index = 0; index < argv.length; index += 1) {
+        const item = argv[index];
+        if (!item.startsWith('--'))
+            continue;
+        const key = item.slice(2);
+        const next = argv[index + 1];
+        if (!next || next.startsWith('--')) {
+            values[key] = true;
+            continue;
+        }
+        if (values[key] !== undefined) {
+            lists[key] = [...(lists[key] || []), next];
+        }
+        else {
+            values[key] = next;
+        }
+        index += 1;
+    }
+    return { values, lists };
+}
+function stringArg(args, key) {
+    const value = args.values[key];
+    return typeof value === 'string' ? value : undefined;
+}
+function listArgs(args, key) {
+    const value = args.values[key];
+    const first = typeof value === 'string' ? [value] : [];
+    return [...first, ...(args.lists[key] || [])];
+}
+function buildWindow(args) {
+    const start = parseTime(stringArg(args, 'since'), 0, '--since');
+    const end = parseTime(stringArg(args, 'until'), Number.MAX_SAFE_INTEGER, '--until');
+    if (end <= start)
+        throw new Error('--until must be later than --since');
+    return {
+        start,
+        end,
+        label: stringArg(args, 'date') || 'full-history',
+    };
+}
+function parseTime(value, fallback, flag) {
+    if (!value)
+        return fallback;
+    if (/^\d+$/.test(value))
+        return Number(value);
+    const parsed = Date.parse(value);
+    if (Number.isNaN(parsed))
+        throw new Error(`Invalid ${flag}: ${value}`);
+    return parsed;
+}
+function buildAdapterMap() {
+    return new Map([
+        ['conversation_markdown', new ConversationMarkdownAdapter()],
+        ['hermes_state_db', new HermesStateDbAdapter()],
+        ['soul_markdown', new SoulMarkdownAdapter()],
+        ['openclaw_daily_memory', new OpenClawDailyMemoryAdapter()],
+        ['openclaw_session', new OpenClawSessionAdapter()],
+        ['openclaw_memory_index', new OpenClawMemoryIndexAdapter()],
+        ['openclaw_user_profile', new OpenClawUserProfileAdapter()],
+        ['openclaw_persona', new OpenClawPersonaAdapter()],
+    ]);
+}
+function openKernel(args, workspaceRoot) {
+    const explicitDb = stringArg(args, 'db');
+    if (explicitDb) {
+        const explicitTimeZone = stringArg(args, 'timezone');
+        const diagnostics = explicitTimeZone ? [] : [{
+                severity: 'warning',
+                code: 'project_timezone_missing_using_host_environment',
+                message: 'The explicit --db import did not provide --timezone; dates use the host environment timezone.',
+                filePath: explicitDb,
+                adapterKind: 'conversation_markdown',
+                fallbackHint: 'Pass --timezone <IANA> or use --config with project.timezone for reproducible imports.',
+            }];
+        return {
+            kernel: createMemoryKernel({ dbPath: explicitDb, projectTimeZone: explicitTimeZone }),
+            dbPath: explicitDb,
+            diagnostics,
+        };
+    }
+    const explicitConfig = stringArg(args, 'config');
+    const configResolution = explicitConfig
+        ? resolveCogmemConfigPath({ configPath: resolve(explicitConfig) })
+        : resolveCogmemConfigPath({ cwd: workspaceRoot });
+    if (configResolution.kind === 'toml') {
+        const loaded = loadCogmemConfig({ configPath: configResolution.path, cwd: workspaceRoot });
+        const error = loaded.diagnostics.find((item) => item.severity === 'error');
+        if (error)
+            throw new Error(`${error.code}: ${error.message}`);
+        if (!loaded.options.dbPath) {
+            throw new Error(`Missing core.db_path in ${configResolution.path}. Run cogmem-init again or pass --db <memory.db>.`);
+        }
+        return {
+            kernel: createMemoryKernelFromConfig({ configPath: configResolution.path, cwd: workspaceRoot }),
+            dbPath: loaded.options.dbPath,
+            diagnostics: [],
+        };
+    }
+    throw new Error(`Missing cogmem config at ${configResolution.path}. Run cogmem-init first or pass --db <memory.db> / --config <config.toml>.`);
+}
+function buildSources(agent, workspaceRoot, args, projectId) {
+    if (agent === 'openclaw') {
+        const profile = new OpenClawWorkspaceProfile(workspaceRoot);
+        return profile.buildInstalledBatchSources({
+            projectId,
+            date: stringArg(args, 'date'),
+            sessionPaths: listArgs(args, 'session').map((item) => resolve(workspaceRoot, item)),
+            optionalMemoryPaths: listArgs(args, 'memory').map((item) => resolve(workspaceRoot, item)),
+        });
+    }
+    const profile = new HermesWorkspaceProfile(workspaceRoot);
+    return profile.buildSourceDefinitions({
+        projectId,
+        profilePath: stringArg(args, 'profile'),
+        sessionDir: stringArg(args, 'sessions'),
+        sessionPaths: listArgs(args, 'session').map((item) => resolve(workspaceRoot, item)),
+        stateDbPath: stringArg(args, 'state-db') ? resolve(workspaceRoot, stringArg(args, 'state-db')) : undefined,
+    });
+}
+async function handleImportPreview(kernel, input) {
+    const agent = requiredString(input.agent, 'agent');
+    const workspaceRoot = requiredString(input.workspaceRoot, 'workspaceRoot');
+    const projectId = requiredString(input.projectId, 'projectId');
+    const configPath = optionalString(input.configPath);
+    const date = optionalString(input.date);
+    const sessionPaths = input.sessionPaths || [];
+    const memoryPaths = input.memoryPaths || [];
+    const stateDbPath = optionalString(input.stateDbPath);
+    const profilePath = optionalString(input.profilePath);
+    const sessionsDir = optionalString(input.sessionsDir);
+    const since = optionalString(input.since) || optionalNumber(input.since)?.toString();
+    const until = optionalString(input.until) || optionalNumber(input.until)?.toString();
+    const now = optionalNumber(input.now);
+    const localDateNow = optionalString(input.localDateNow);
+    const timeZone = optionalString(input.timeZone);
+    const args = parseArgs([
+        ...(configPath ? ['--config', configPath] : []),
+        ...(date ? ['--date', date] : []),
+        ...sessionPaths.flatMap((p) => ['--session', p]),
+        ...memoryPaths.flatMap((p) => ['--memory', p]),
+        ...(stateDbPath ? ['--state-db', stateDbPath] : []),
+        ...(profilePath ? ['--profile', profilePath] : []),
+        ...(sessionsDir ? ['--sessions', sessionsDir] : []),
+        ...(since ? ['--since', since] : []),
+        ...(until ? ['--until', until] : []),
+        ...(now ? ['--now', String(now)] : []),
+        ...(localDateNow ? ['--localDateNow', localDateNow] : []),
+        ...(timeZone ? ['--timeZone', timeZone] : []),
+    ]);
+    const sources = buildSources(agent, workspaceRoot, args, projectId);
+    if (sources.length === 0) {
+        throw new Error(`No ${agent} memory sources found in ${workspaceRoot}.`);
+    }
+    const window = buildWindow(args);
+    const loader = new MarkdownSourceLoader();
+    const adapters = buildAdapterMap();
+    const diagnostics = [];
+    const sourceResults = [];
+    let recordsParsed = 0;
+    for (const source of sources) {
+        const adapter = adapters.get(source.adapterKind);
+        if (!adapter)
+            continue;
+        const snapshot = loader.read(source);
+        const adapted = adapter.adapt(source, snapshot, { start: window.start, end: window.end });
+        diagnostics.push(...(adapted.diagnostics || []));
+        recordsParsed += adapted.records.length;
+        sourceResults.push({
+            sourceId: source.sourceId,
+            sourcePath: source.sourcePath,
+            adapterKind: source.adapterKind,
+            recordsParsed: adapted.records.length,
+            recordsWouldIngest: adapted.records.length,
+            recordsIngested: 0,
+            skippedRecords: 0,
+            diagnostics: adapted.diagnostics || [],
+        });
+    }
+    return jsonResult({
+        agent,
+        workspaceRoot,
+        projectId,
+        dryRun: true,
+        window,
+        sourcesScanned: sources.length,
+        sourcesChanged: sources.length,
+        recordsParsed,
+        recordsWouldIngest: recordsParsed,
+        recordsIngested: 0,
+        skippedRecords: 0,
+        rawRecordsAnchored: 0,
+        emptyEpisodesSkipped: 0,
+        reindexRaw: false,
+        processedSourceIds: [],
+        diagnostics,
+        sourceResults,
+    });
+}
+async function handleImportApply(kernel, input) {
+    const agent = requiredString(input.agent, 'agent');
+    const workspaceRoot = requiredString(input.workspaceRoot, 'workspaceRoot');
+    const projectId = requiredString(input.projectId, 'projectId');
+    const configPath = optionalString(input.configPath);
+    const date = optionalString(input.date);
+    const sessionPaths = input.sessionPaths || [];
+    const memoryPaths = input.memoryPaths || [];
+    const stateDbPath = optionalString(input.stateDbPath);
+    const profilePath = optionalString(input.profilePath);
+    const sessionsDir = optionalString(input.sessionsDir);
+    const since = optionalString(input.since) || optionalNumber(input.since)?.toString();
+    const until = optionalString(input.until) || optionalNumber(input.until)?.toString();
+    const now = optionalNumber(input.now);
+    const localDateNow = optionalString(input.localDateNow);
+    const timeZone = optionalString(input.timeZone);
+    const reindexRaw = Boolean(input.reindexRaw);
+    const args = parseArgs([
+        ...(configPath ? ['--config', configPath] : []),
+        ...(date ? ['--date', date] : []),
+        ...sessionPaths.flatMap((p) => ['--session', p]),
+        ...memoryPaths.flatMap((p) => ['--memory', p]),
+        ...(stateDbPath ? ['--state-db', stateDbPath] : []),
+        ...(profilePath ? ['--profile', profilePath] : []),
+        ...(sessionsDir ? ['--sessions', sessionsDir] : []),
+        ...(since ? ['--since', since] : []),
+        ...(until ? ['--until', until] : []),
+        ...(now ? ['--now', String(now)] : []),
+        ...(localDateNow ? ['--localDateNow', localDateNow] : []),
+        ...(timeZone ? ['--timeZone', timeZone] : []),
+        ...(reindexRaw ? ['--reindex-raw'] : []),
+    ]);
+    const sources = buildSources(agent, workspaceRoot, args, projectId);
+    if (sources.length === 0) {
+        throw new Error(`No ${agent} memory sources found in ${workspaceRoot}.`);
+    }
+    const window = buildWindow(args);
+    if (reindexRaw) {
+        return await reindexRawSources({ agent, args, workspaceRoot, projectId, sources, window, kernel });
+    }
+    return await importSources({ agent, args, workspaceRoot, projectId, sources, window, kernel });
+}
+async function importSources(input) {
+    const importedEpisodeIds = new Set();
+    let emptyEpisodesSkipped = 0;
+    const processor = new InstalledBatchProcessor({
+        cursorStore: input.kernel.cursorStore,
+        ingestBatch: async (items) => {
+            const neurons = [];
+            for (const item of items)
+                neurons.push(await input.kernel.ingest(item));
+            return neurons;
+        },
+        recordRawEvidence: async (envelope) => {
+            const anchored = await recordRawImportedEvidence(input.kernel, input.projectId, envelope);
+            if (anchored.episodeId)
+                importedEpisodeIds.add(anchored.episodeId);
+            return anchored.event;
+        },
+        runOfflineWindow: (window) => input.kernel.consolidate({
+            projectId: input.projectId,
+            startTime: window.start,
+            endTime: window.end,
+        }),
+        onProgress: undefined,
+    });
+    const summary = await processor.runOnce({
+        window: input.window,
+        sources: input.sources,
+    });
+    for (const episodeId of importedEpisodeIds) {
+        const episode = input.kernel.getEpisode(episodeId);
+        if (episode?.status !== 'sealed') {
+            emptyEpisodesSkipped += sealImportedEpisodeIfReady(input.kernel, episodeId, `${input.agent}_import_batch_boundary`) ? 0 : 1;
+        }
+    }
+    return jsonResult({
+        agent: input.agent,
+        workspaceRoot: input.workspaceRoot,
+        projectId: input.projectId,
+        dryRun: false,
+        window: input.window,
+        sourcesScanned: summary.sourcesScanned,
+        sourcesChanged: summary.sourcesChanged,
+        recordsParsed: summary.recordsParsed,
+        recordsWouldIngest: summary.recordsIngested,
+        recordsIngested: summary.recordsIngested,
+        skippedRecords: summary.skippedRecords,
+        rawRecordsAnchored: summary.recordsIngested,
+        emptyEpisodesSkipped,
+        reindexRaw: false,
+        processedSourceIds: summary.processedSourceIds,
+        diagnostics: summary.adapterDiagnostics,
+        sourceResults: summary.sourceResults.map((item) => ({
+            sourceId: item.sourceId,
+            sourcePath: item.sourcePath,
+            adapterKind: item.adapterKind,
+            recordsParsed: item.recordsParsed,
+            recordsWouldIngest: item.recordsIngested,
+            recordsIngested: item.recordsIngested,
+            skippedRecords: item.skippedRecords,
+            diagnostics: item.diagnostics,
+        })),
+    });
+}
+async function reindexRawSources(input) {
+    const loader = new MarkdownSourceLoader();
+    const adapters = buildAdapterMap();
+    const diagnostics = [];
+    const sourceResults = [];
+    const processedSourceIds = [];
+    let recordsParsed = 0;
+    let rawRecordsAnchored = 0;
+    let skippedRecords = 0;
+    const importedEpisodeIds = new Set();
+    let emptyEpisodesSkipped = 0;
+    for (const source of input.sources) {
+        const adapter = adapters.get(source.adapterKind);
+        if (!adapter)
+            continue;
+        const snapshot = loader.read(source);
+        const adapted = adapter.adapt(source, snapshot, { start: input.window.start, end: input.window.end });
+        diagnostics.push(...(adapted.diagnostics || []));
+        recordsParsed += adapted.records.length;
+        let sourceAnchored = 0;
+        let sourceSkipped = 0;
+        for (const record of adapted.records) {
+            const envelope = buildEpisodeEnvelope(source, record);
+            const anchored = await recordRawImportedEvidence(input.kernel, input.projectId, envelope);
+            if (anchored.episodeId)
+                importedEpisodeIds.add(anchored.episodeId);
+            if (anchored.created) {
+                sourceAnchored += 1;
+            }
+            else {
+                sourceSkipped += 1;
+            }
+        }
+        rawRecordsAnchored += sourceAnchored;
+        skippedRecords += sourceSkipped;
+        if (adapted.records.length > 0)
+            processedSourceIds.push(source.sourceId);
+        sourceResults.push({
+            sourceId: source.sourceId,
+            sourcePath: source.sourcePath,
+            adapterKind: source.adapterKind,
+            recordsParsed: adapted.records.length,
+            recordsWouldIngest: adapted.records.length,
+            recordsIngested: sourceAnchored,
+            skippedRecords: sourceSkipped,
+            diagnostics: adapted.diagnostics || [],
+        });
+    }
+    for (const episodeId of importedEpisodeIds) {
+        const episode = input.kernel.getEpisode(episodeId);
+        if (episode?.status !== 'sealed') {
+            emptyEpisodesSkipped += sealImportedEpisodeIfReady(input.kernel, episodeId, `${input.agent}_reindex_batch_boundary`) ? 0 : 1;
+        }
+    }
+    return jsonResult({
+        agent: input.agent,
+        workspaceRoot: input.workspaceRoot,
+        projectId: input.projectId,
+        dryRun: false,
+        reindexRaw: true,
+        window: input.window,
+        sourcesScanned: input.sources.length,
+        sourcesChanged: processedSourceIds.length,
+        recordsParsed,
+        recordsWouldIngest: recordsParsed,
+        recordsIngested: rawRecordsAnchored,
+        skippedRecords,
+        rawRecordsAnchored,
+        emptyEpisodesSkipped,
+        processedSourceIds,
+        diagnostics,
+        sourceResults,
+    });
+}
+function sealImportedEpisodeIfReady(kernel, episodeId, reason) {
+    if (kernel.listEpisodeEventLinks(episodeId).length === 0)
+        return false;
+    kernel.sealImportedEpisode(episodeId, { reason });
+    return true;
+}
+async function recordRawImportedEvidence(kernel, projectId, envelope) {
+    const sourceRef = envelope.ingestInput.sourceRefs?.[0];
+    const record = envelope.record;
+    const metadata = record.metadata || {};
+    const sourceLocalDate = typeof metadata.localDate === 'string' ? metadata.localDate : undefined;
+    const sourceTimeZone = typeof metadata.timeZone === 'string' ? metadata.timeZone : undefined;
+    const role = sourceRef?.role === 'assistant'
+        ? 'assistant'
+        : sourceRef?.role === 'tool'
+            ? 'tool'
+            : sourceRef?.role === 'system'
+                ? 'system'
+                : record.role === 'agent'
+                    ? 'assistant'
+                    : record.role === 'user'
+                        ? 'user'
+                        : 'system';
+    const threadId = sourceRef?.threadId || (typeof metadata.threadId === 'string' ? metadata.threadId : undefined) || record.provenance.sourceId;
+    const sessionId = sourceRef?.sessionId || (typeof metadata.sessionId === 'string' ? metadata.sessionId : undefined) || record.provenance.sourceId;
+    const eventOrdinal = sourceRef?.eventOrdinal ?? sourceRef?.sourceOffset;
+    const allowNonUserEpisodeStart = metadata.importedSummarySupport === true || record.provenance.reliabilityClass === 'imported_summary';
+    const importAnchor = createHash('sha256').update(JSON.stringify({
+        sourceId: record.provenance.sourceId,
+        recordId: record.recordId ?? null,
+        sourcePath: sourceRef?.sourcePath ?? null,
+        lineStart: sourceRef?.lineStart ?? null,
+        lineEnd: sourceRef?.lineEnd ?? null,
+        eventOrdinal: eventOrdinal ?? null,
+    })).digest('hex');
+    const contentHash = createHash('sha256').update(record.text).digest('hex');
+    const existing = findImportedRawAnchor(kernel, {
+        projectId,
+        threadId,
+        sourceId: record.provenance.sourceId,
+        importAnchor,
+        contentHash,
+    });
+    if (existing) {
+        if (existing.contentHash !== contentHash)
+            throw new Error(`import_anchor_content_conflict:${importAnchor}`);
+        let link = kernel.episodeStore.getEventLink(existing.eventId);
+        if (!link && !kernel.episodeStore.hasEventDisposition(existing.eventId)) {
+            await kernel.assembleEpisodeTurnAsync([existing], {
+                projectId,
+                sessionId,
+                sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
+                now: record.timestamp,
+                allowNonUserEpisodeStart,
+            });
+            link = kernel.episodeStore.getEventLink(existing.eventId);
+        }
+        return { event: existing, created: false, episodeId: link?.episodeId };
+    }
+    const event = kernel.recordRawEvent({
+        projectId,
+        workspaceId: projectId,
+        threadId,
+        sessionId,
+        turnId: sourceRef?.turnId || record.turnId || record.recordId,
+        turnSeq: sourceRef?.turnSeq,
+        role,
+        rawEventType: 'message',
+        content: record.text,
+        eventOrdinal,
+        occurredAt: record.timestamp,
+        localDate: sourceLocalDate,
+        timeZone: sourceTimeZone,
+        sourceId: record.provenance.sourceId,
+        sourceOffset: sourceRef?.sourceOffset,
+        lineStart: sourceRef?.lineStart,
+        lineEnd: sourceRef?.lineEnd,
+        charStart: sourceRef?.charStart,
+        charEnd: sourceRef?.charEnd,
+        metadata: {
+            ...metadata,
+            imported: true,
+            importAnchor,
+            sourcePath: record.provenance.sourcePath,
+            sourceType: record.provenance.sourceType,
+            sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
+            adapterVersion: record.provenance.adapterVersion,
+            reliabilityClass: record.provenance.reliabilityClass,
+            sourceRef,
+            tags: envelope.ingestInput.tags || [],
+        },
+    });
+    const assembly = await kernel.assembleEpisodeTurnAsync([event], {
+        projectId,
+        sessionId,
+        sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
+        now: record.timestamp,
+        allowNonUserEpisodeStart,
+    });
+    return { event, created: true, episodeId: assembly.episode?.episodeId };
+}
+function findImportedRawAnchor(kernel, input) {
+    const indexed = kernel.eventStore.findImportedEventAnchor(input.projectId, input.sourceId, input.importAnchor);
+    if (indexed)
+        return indexed;
+    return kernel.getThreadEvents(input.threadId, { projectId: input.projectId, limit: 10_000 }).find((event) => {
+        const payload = event.payload;
+        return event.sourceId === input.sourceId
+            && payload.metadata?.importAnchor === input.importAnchor;
+    });
+}
+function handleImportStatus(kernel, input) {
+    const projectId = requiredString(input.projectId, 'projectId');
+    const requested = optionalNumber(input.limit);
+    if (requested !== undefined && (!Number.isInteger(requested) || requested < 1)) {
+        throw new Error('limit must be a positive integer');
+    }
+    const limit = requested ?? 50;
+    const cursors = kernel.cursorStore.listRegisteredSources().filter((c) => c.projectId === projectId);
+    const processedRecords = cursors.map((cursor) => {
+        const hashes = kernel.cursorStore.listProcessedRecordHashes(cursor.sourceId, cursor.contentWindowStart || 0, cursor.contentWindowEnd || 0, projectId);
+        return {
+            sourceId: cursor.sourceId,
+            sourcePath: cursor.sourcePath,
+            sourceType: cursor.sourceType,
+            lastProcessedAt: cursor.lastProcessedAt,
+            lastSeenHash: cursor.lastSeenHash,
+            lastSeenMtime: cursor.lastSeenMtime,
+            contentWindowStart: cursor.contentWindowStart,
+            contentWindowEnd: cursor.contentWindowEnd,
+            processedRecordCount: hashes.size,
+        };
+    });
+    // listRegisteredSources() is ordered updated_at DESC, source_id ASC, so slicing is stable
+    // and the newest sources are the ones a caller with a small limit sees.
+    const sources = processedRecords.slice(0, limit);
+    return jsonResult({
+        projectId,
+        sources,
+        totalSources: cursors.length,
+        returnedSources: sources.length,
+        limit,
+    });
 }
 function stringArray(value, field) {
     if (!Array.isArray(value) || value.length === 0) {

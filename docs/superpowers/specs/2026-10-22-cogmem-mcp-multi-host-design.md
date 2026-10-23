@@ -13,7 +13,7 @@ Shipped on the SQLite backend, behind the domain ports:
 - Six persistence ports (`src/ports/index.ts`) and SQLite adapters, including the
   shared region with idempotent publish and soft retraction.
 - Streamable HTTP transport, one kernel per process, one transport per MCP session.
-- Tool profiles `core` (6) / `admin` (19) / `full` (33), enforced on both
+- Tool profiles `core` (8) / `admin` (26) / `full` (40), enforced on both
   `tools/list` and `tools/call`.
 - Host configuration for Claude Code, Cursor, Codex, and Hermes in `docs/mcp-hosts.md`.
 
@@ -133,7 +133,7 @@ never end up writing two different `mem_shared` databases.
 | D3 | Shared region is `mem_shared` in the same instance | Cross-database publish is atomic |
 | D4 | stdio is the default transport; Streamable HTTP is opt-in | All four hosts speak both; stdio stays zero-config |
 | D5 | A connection binds exactly one project; conflicting `projectId` arguments are rejected | Removes the current "any caller reads any project" hole |
-| D6 | Server-side tool profiles: `core` (6), `admin` (19 = core + every write tool), `full` (33). Default `core` | 33 tools cost context at list time in every host |
+|| D6 | Server-side tool profiles: `core` (8), `admin` (26 = core + write tools + import), `full` (40). Default `core` | 40 tools cost context at list time in every host |
 | D7 | Shared items are written by their publisher only; subscribers are read-only | Preserves "raw evidence is not rewritten by a third party" |
 | D8 | Retraction is soft: hidden from recall, visible in explain/show with `retracted_at` | A subscriber's earlier reasoning must stay explainable |
 | D9 | No outbox. Publish is one transaction inside the instance | v1's outbox existed only for WAL cross-file writes, which no longer exist |
@@ -143,9 +143,7 @@ never end up writing two different `mem_shared` databases.
 | D13 | Dream curation keeps application-level staging; no FORK/MERGE | Measured: a database with triggers cannot be forked, and Cogmem has 57 |
 | D14 | Fresh schema, no migration chain | No users; one `schema.sql` replaces 33 migrations |
 
-Shipped tool counts differ from D6: the implementation landed `core` 8, `admin` 23,
-`full` 37, because several read-only graph and episode tools were added after that
-decision. `docs/mcp-hosts.md` and the release metadata test carry the shipped numbers.
+Shipped tool counts match D6: `core` 8, `admin` 26, `full` 40. `docs/mcp-hosts.md` and the release metadata test carry the shipped numbers.
 
 ## 6. SQL dialect migration
 

@@ -30,11 +30,8 @@ export declare class SchemaMigrationRunner {
     currentVersion(): string | undefined;
     private appliedVersions;
     private schemaMigrationsTableExists;
-    private legacySchemaVersion;
-    private legacyCurrentVersion;
-    private adoptLegacyVersion;
-    private migrationSchemaSatisfied;
     private repairRecordedRuntimeGuards;
+    private migrationSchemaSatisfied;
     private tableExists;
     private hasColumns;
 }

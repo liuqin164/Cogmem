@@ -1,5 +1,5 @@
 import { dreamLedgerProjectKey } from '../store/DreamLedgerStore.js';
-import { V0_5_BASELINE_TABLES } from '../migrations/0001_init.js';
+import { V0_5_BASELINE_TABLES } from '../migrations/MigrationUtils.js';
 function explicitClassification(tables, groups) {
     const expected = new Set(tables);
     const result = {};

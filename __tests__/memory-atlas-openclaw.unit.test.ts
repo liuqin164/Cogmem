@@ -26,7 +26,9 @@ test('installed OpenClaw plugin sanitizes generated prompt context and routes At
   // The plugin records the package entry it will import at hook time. Running the
   // installer from a checkout used to write src/public.js, which is never built.
   const patched = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
-  const installed = patched.plugins.entries['cogmem-auto-memory'];
+  const pluginEntryKey = Object.keys(patched.plugins.entries).find((k) => k.startsWith('cogmem-auto-memory-'));
+  expect(pluginEntryKey).toBeDefined();
+  const installed = patched.plugins.entries[pluginEntryKey!];
   expect(existsSync(installed.config.publicEntrypoint)).toBe(true);
   expect(installed.config.publicEntrypoint.endsWith('public.js')).toBe(true);
   expect(index).toContain('function classifyMemoryNavigationIntent(query)');

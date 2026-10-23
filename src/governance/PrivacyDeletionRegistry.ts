@@ -1,5 +1,5 @@
 import { dreamLedgerProjectKey } from '../store/DreamLedgerStore.js';
-import { V0_5_BASELINE_TABLES } from '../migrations/0001_init.js';
+import { V0_5_BASELINE_TABLES } from '../migrations/MigrationUtils.js';
 
 export type PrivacyTableClassification = 'project_owned' | 'provenance_owned' | 'shared_canonical' | 'operational_non_personal' | 'immutable_audit';
 

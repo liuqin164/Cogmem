@@ -9,6 +9,7 @@
  *    single writer (CONCURRENT_ACCESS.md forbids two writer kernels on one path);
  *  - one transport per MCP session, because the SDK's stateless transport may
  *    not be reused across requests.
+ *  - per-session identity: each authenticated session gets bound hostId, projectId, profile
  */
 import { randomUUID } from 'node:crypto';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -28,16 +29,45 @@ function resolveKernel(runtime) {
 export async function startCogmemMcpHttpServer(runtime = {}, options) {
     const hostname = options.hostname ?? '127.0.0.1';
     const path = options.path ?? '/mcp';
+    const identityHeader = (options.identityHeader ?? 'x-cogmem-identity').toLowerCase();
+    const isLoopback = hostname === '127.0.0.1' || hostname === '::1' || hostname === 'localhost';
+    // Default: only allow loopback origins. If binding non-loopback, require explicit allowedOrigins.
+    const allowedOrigins = options.allowedOrigins ?? (isLoopback
+        ? ['http://127.0.0.1:*', 'http://localhost:*', 'http://[::1]:*']
+        : []);
     const kernel = resolveKernel(runtime);
-    const sharedRuntime = {
+    const baseRuntime = {
         ...runtime,
         kernel,
         hostId: options.hostId ?? runtime.hostId,
         shared: runtime.shared ?? new SqliteSharedMemory(kernel.eventStore.getDatabase()),
     };
     const transports = new Map();
+    const sessionIdentities = new Map();
     const maxSessions = options.maxSessions ?? 32;
     const ownsKernel = !runtime.kernel;
+    function checkOrigin(request) {
+        const origin = request.headers.get('origin');
+        const host = request.headers.get('host');
+        // No Origin header (e.g., direct curl, server-to-server) - allow but log
+        if (!origin)
+            return true;
+        // Validate against allowedOrigins
+        if (allowedOrigins.includes('*'))
+            return true;
+        const expectedHost = host ?? `${hostname}:${options.port}`;
+        for (const allowed of allowedOrigins) {
+            if (allowed === origin)
+                return true;
+            // Support wildcard port: http://127.0.0.1:* matches any port on 127.0.0.1
+            if (allowed.endsWith(':*')) {
+                const prefix = allowed.slice(0, -1); // "http://127.0.0.1:"
+                if (origin.startsWith(prefix))
+                    return true;
+            }
+        }
+        return false;
+    }
     const httpServer = Bun.serve({
         port: options.port,
         hostname,
@@ -45,6 +75,14 @@ export async function startCogmemMcpHttpServer(runtime = {}, options) {
             const url = new URL(request.url);
             if (url.pathname !== path) {
                 return new Response('not_found', { status: 404 });
+            }
+            // Origin/Host validation (MCP Streamable HTTP spec requirement)
+            if (!checkOrigin(request)) {
+                return new Response('forbidden: invalid origin', { status: 403 });
+            }
+            // Require authentication when not on loopback
+            if (!isLoopback && !options.token) {
+                return new Response('forbidden: authentication required for non-loopback binding', { status: 403 });
             }
             if (options.token) {
                 const header = request.headers.get('authorization');
@@ -66,26 +104,55 @@ export async function startCogmemMcpHttpServer(runtime = {}, options) {
                         if (transports.size >= maxSessions) {
                             // Safety valve: a client that never terminates its session must
                             // not grow this map without bound.
-                            const oldestId = transports.keys().next().value;
-                            const oldest = oldestId ? transports.get(oldestId) : undefined;
-                            if (oldestId)
+                            const oldestEntry = transports.keys().next();
+                            if (!oldestEntry.done && oldestEntry.value) {
+                                const oldestId = oldestEntry.value;
+                                const oldest = transports.get(oldestId);
                                 transports.delete(oldestId);
-                            void oldest?.close();
+                                void oldest?.close();
+                                sessionIdentities.delete(oldestId);
+                            }
                         }
                         transports.set(id, created);
+                        // Bind identity from header if present
+                        const identityHeaderValue = request.headers.get(identityHeader);
+                        if (identityHeaderValue) {
+                            try {
+                                const parsed = JSON.parse(identityHeaderValue);
+                                if (parsed && typeof parsed === 'object') {
+                                    sessionIdentities.set(id, {
+                                        hostId: typeof parsed.hostId === 'string' ? parsed.hostId : undefined,
+                                        projectId: typeof parsed.projectId === 'string' ? parsed.projectId : undefined,
+                                        profile: typeof parsed.profile === 'string' ? parsed.profile : undefined,
+                                    });
+                                }
+                            }
+                            catch {
+                                // Ignore malformed identity header
+                            }
+                        }
                     },
                 });
                 created.onclose = () => {
-                    if (created.sessionId)
+                    if (created.sessionId) {
                         transports.delete(created.sessionId);
+                        sessionIdentities.delete(created.sessionId);
+                    }
                 };
-                const server = createCogmemMcpServer(sharedRuntime, {
+                // Create server with base runtime; per-session identity applied in tool handler
+                const server = createCogmemMcpServer(baseRuntime, {
                     profile: options.profile,
                     hostId: options.hostId,
                     projectId: options.projectId,
                 });
                 await server.connect(created);
                 transport = created;
+            }
+            // Apply per-session identity for this request
+            const sessionIdentity = sessionId ? sessionIdentities.get(sessionId) : undefined;
+            if (sessionIdentity) {
+                // Attach identity to request for tool handler to use
+                request.cogmemIdentity = sessionIdentity;
             }
             return transport.handleRequest(request);
         },
@@ -100,6 +167,7 @@ export async function startCogmemMcpHttpServer(runtime = {}, options) {
                 void transport.close();
             }
             transports.clear();
+            sessionIdentities.clear();
             httpServer.stop(true);
             // Only close what this server opened: an injected kernel belongs to the caller.
             if (ownsKernel)

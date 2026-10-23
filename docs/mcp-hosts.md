@@ -27,13 +27,13 @@ Without `--project`, each call's `projectId` argument decides.
 
 ## Profiles
 
-The server exposes 37 tools. A host does not need all of them.
+The server exposes 40 tools. A host does not need all of them.
 
 | Profile | Tools | Use for |
 |---|---|---|
 | `core` | 8 | Everyday agent work: recall, record a turn, inspect evidence, read shared memory |
-| `admin` | 23 | Operators: sealing episodes, dream ticks, governance review, publishing to the shared region |
-| `full` | 37 | Debugging and tool discovery |
+| `admin` | 26 | Operators: sealing episodes, dream ticks, governance review, publishing to the shared region, importing host history |
+| `full` | 40 | Debugging and tool discovery |
 
 `core` is: `cogmem_recall`, `cogmem_remember_turn`, `cogmem_episode_append`,
 `cogmem_graph_explore`, `cogmem_graph_node`, `cogmem_explain_recall`,
@@ -60,6 +60,28 @@ stays auditable.
 Shared memory works in every start mode. With `--db` the server opens the port
 from that path; in config mode it attaches to the kernel it already resolved,
 so the first shared call reuses the same database handle.
+
+## Importing host history
+
+Three admin-profile tools wrap the `cogmem import-hermes` / `import-openclaw`
+pipeline so a host can pull its own prior transcripts into the ledger without
+shelling out.
+
+| Tool | Profile | Behaviour |
+|---|---|---|
+| `cogmem_import_preview` | admin | Dry-run: discovers sources, parses them, returns `recordsWouldIngest` per source. Writes nothing |
+| `cogmem_import_apply` | admin | Runs the pipeline: `recordRawEvent` → ingest → consolidate → rebuild Memory Atlas. Idempotent per source |
+| `cogmem_import_status` | admin | Reports every registered source for a project with its path, adapter kind, last processed timestamp and already-ingested record count |
+
+`agent` is `openclaw` or `hermes`; `workspaceRoot` is where the host keeps its
+sessions. `since` / `until` bound the window. `cogmem_import_preview` carries
+`readOnlyHint: true`, so a client that gates destructive calls will run it
+without a prompt.
+
+`cogmem_import_status` orders sources most recently processed first and takes
+`limit` (default 50, must be a positive integer). `sources` is truncated to
+`limit` while `totalSources` always reports the full count, so a caller can tell
+"there are more" from "that is all".
 
 ## Security
 
@@ -230,7 +252,7 @@ legacy SSE transport, sends a GET to the endpoint, and fails with
 `SSE error: Non-200 status code (400)`.
 
 `openclaw mcp probe` reports the discovered tool count per server; 8 means the
-`core` profile, 37 means `full`.
+`core` profile, 40 means `full`.
 
 `openclaw mcp add` prints only `Saved MCP server "cogmem" to <path>`; the tool
 count comes from `openclaw mcp probe`. To remove a server, run

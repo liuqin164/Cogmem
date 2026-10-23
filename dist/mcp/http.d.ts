@@ -9,6 +9,7 @@
  *    single writer (CONCURRENT_ACCESS.md forbids two writer kernels on one path);
  *  - one transport per MCP session, because the SDK's stateless transport may
  *    not be reused across requests.
+ *  - per-session identity: each authenticated session gets bound hostId, projectId, profile
  */
 import { type CogmemMcpServerOptions } from './server.js';
 import type { CogmemMcpRuntime } from './CoreMcpTools.js';
@@ -20,6 +21,10 @@ export interface CogmemMcpHttpOptions extends CogmemMcpServerOptions {
     path?: string;
     /** When set, every request must carry the matching bearer credential. */
     token?: string;
+    /** Header name that carries the session identity (JSON: {hostId, projectId, profile}). Defaults to `x-cogmem-identity`. */
+    identityHeader?: string;
+    /** Allowed Origin values. Defaults to loopback origins only. Use `['*']` to allow all (not recommended for non-loopback). */
+    allowedOrigins?: string[];
     /** Upper bound on live MCP sessions. The oldest is closed first. Defaults to 32. */
     maxSessions?: number;
 }

@@ -41,6 +41,12 @@ export interface OpenClawAutoMemoryPluginInspection {
 }
 export declare function defaultOpenClawConfigPath(workspaceRoot: string, env?: NodeJS.ProcessEnv): string;
 export declare function defaultOpenClawAutoMemoryPluginDir(workspaceRoot: string): string;
+/**
+ * The plugin spawns this binary to load the package entry, and that entry imports
+ * `bun:sqlite`. A Node binary therefore installs cleanly and only fails later, on
+ * every hook, inside the OpenClaw gateway log. Reject it before the config is written.
+ */
+export declare function assertBunRuntime(bunPath: string): void;
 export declare function installOpenClawAutoMemoryPlugin(options: OpenClawAutoMemoryInstallOptions): OpenClawAutoMemoryInstallResult;
 export declare function inspectOpenClawAutoMemoryPlugin(options: Pick<OpenClawAutoMemoryInstallOptions, 'workspaceRoot' | 'pluginDir'>): OpenClawAutoMemoryPluginInspection;
 //# sourceMappingURL=AutoMemoryPluginInstaller.d.ts.map

@@ -1,5 +1,5 @@
 import { MEMORY_ATLAS_PROJECTION_NAME, MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION } from '../store/MemoryAtlasStore.js';
-import { backfillAtlasDocuments } from '../migrations/0025_memory_atlas.js';
+import { backfillAtlasDocuments } from '../migrations/MigrationUtils.js';
 import { installAtlasProjectionDirtyTriggersV3 } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 import { ActionFrameExtractor } from './ActionFrameExtractor.js';
 import { GraphCurator } from './GraphCurator.js';

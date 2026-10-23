@@ -68,11 +68,10 @@ cogmem intentionally does not provide:
 - Shell, deploy, or tool runtime.
 - App store, skill runtime, approval queue, or channel gateway.
 - Telegram, Discord, browser, or web UI integrations.
-- Multi-agent shared team memory.
 - A human PKM/wiki/Obsidian replacement.
 - A default “embed every sentence forever” vector store.
 
-The current release is designed as the memory backend for one agent brain. Multiple agents can each have their own cogmem database and project scope, but this version does not implement conflict-safe shared memory for an agent team.
+The current release is designed as the memory backend for one agent brain. Multiple agents can each have their own cogmem database and project scope, and **shared memory is available via the MCP `cogmem_shared_*` tools** for explicit cross-agent publishing and subscription.
 
 ## Architecture
 
@@ -815,7 +814,7 @@ cogmem mcp --transport http --port 7337 --host claude --profile core \
   --project my-project --db ~/.cogmem/memory.db
 ```
 
-- `--profile core|admin|full` bounds the tool surface to 8, 23, or 37 tools. The default is `core`.
+- `--profile core|admin|full` bounds the tool surface to 8, 26, or 40 tools. The default is `core`.
 - `--project <id>` binds the connection to one project; a call naming a different project is rejected.
 - `--token <value>` requires `Authorization: Bearer <value>` on every request.
 

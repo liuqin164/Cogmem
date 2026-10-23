@@ -34,6 +34,9 @@ export const ADMIN_TOOLS = [
     'cogmem_prospective',
     'cogmem_shared_publish',
     'cogmem_shared_retract',
+    'cogmem_import_preview',
+    'cogmem_import_apply',
+    'cogmem_import_status',
 ];
 export function isToolAllowed(profile, toolName) {
     if (profile === 'full')

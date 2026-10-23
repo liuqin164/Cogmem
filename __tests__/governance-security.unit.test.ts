@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 import { AesGcmEncryptionProvider, PiiRedactor, createMemoryKernel } from '../src/public.js';
 import { PRIVACY_BASELINE_CLASSIFICATION, PRIVACY_SCHEMA_CLASSIFICATION } from '../src/governance/PrivacyDeletionRegistry.js';
-import { V0_5_BASELINE_TABLES } from '../src/migrations/0001_init.js';
+import { V0_5_BASELINE_TABLES } from '../src/migrations/MigrationUtils.js';
 import type { EmbeddingProvider } from '../src/embedding/EmbeddingProvider.js';
 import { FileAssetStore } from '../src/assets/FileAssetStore.js';
 import { FileBlockStore } from '../src/assets/FileBlockStore.js';

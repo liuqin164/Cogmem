@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -7,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 
 function makePluginId(workspaceRoot: string): string {
-  const hash = createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 8);
+  const hash = createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
   return `cogmem-auto-memory-${hash}`;
 }
 
@@ -91,6 +92,28 @@ export function defaultOpenClawAutoMemoryPluginDir(workspaceRoot: string): strin
   return join(resolve(workspaceRoot), 'extensions', makePluginId(workspaceRoot));
 }
 
+/**
+ * The plugin spawns this binary to load the package entry, and that entry imports
+ * `bun:sqlite`. A Node binary therefore installs cleanly and only fails later, on
+ * every hook, inside the OpenClaw gateway log. Reject it before the config is written.
+ */
+export function assertBunRuntime(bunPath: string): void {
+  const probe = spawnSync(bunPath, ['--version'], { encoding: 'utf8', timeout: 10_000 });
+  const reported = `${probe.stdout ?? ''}${probe.stderr ?? ''}`.trim().split('\n')[0] ?? '';
+  if (probe.error || probe.status !== 0) {
+    const reason = probe.error ? probe.error.message : `exit ${probe.status}`;
+    throw new Error(
+      `--bun ${bunPath} is not runnable (${reason}). Pass the Bun binary that should run the Cogmem bridge, e.g. --bun "$(command -v bun)".`,
+    );
+  }
+  // `bun --version` prints `1.3.14`; `node --version` prints `v24.16.0`.
+  if (!/^\d+\.\d+\.\d+/.test(reported)) {
+    throw new Error(
+      `--bun ${bunPath} reported "${reported}", which is not Bun. The Cogmem bridge loads a bundle that imports bun:sqlite, so a Node runtime installs fine and then fails on every hook. Pass a real Bun binary, e.g. --bun "$(command -v bun)".`,
+    );
+  }
+}
+
 export function installOpenClawAutoMemoryPlugin(
   options: OpenClawAutoMemoryInstallOptions,
 ): OpenClawAutoMemoryInstallResult {
@@ -107,8 +130,9 @@ export function installOpenClawAutoMemoryPlugin(
   const pluginDir = resolve(options.pluginDir || join(resolve(workspaceRoot), 'extensions', pluginId));
   const openclawConfigPath = resolve(options.openclawConfigPath || defaultOpenClawConfigPath(workspaceRoot));
   const bunPath = options.bunPath || process.execPath || 'bun';
-  const projectId = options.projectId || 'openclaw';
-  const agentId = options.agentId || 'openclaw';
+  assertBunRuntime(bunPath);
+  const projectId = options.projectId || `openclaw-${createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 8)}`;
+  const agentId = options.agentId || `openclaw-${createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 8)}`;
   const files = buildPluginFiles(pluginId);
 
   const desiredFiles = new Map<string, string>([
@@ -239,11 +263,27 @@ function buildPatchedOpenClawConfig(input: {
     plugins.allow = appendUniqueArray(plugins.allow, input.pluginId);
   }
   const entries = ensureObject(plugins, 'entries');
+
+  // Find migration source: prefer existing entry for this pluginId, then legacy entry
+  // that matches this workspace (by configPath/projectId), then empty object.
+  let migrationSource: Record<string, unknown> = {};
+  if (isRecord(entries[input.pluginId])) {
+    migrationSource = entries[input.pluginId] as Record<string, unknown>;
+  } else if (isRecord(entries[PLUGIN_ID])) {
+    const legacy = entries[PLUGIN_ID];
+    const legacyConfig = isRecord(legacy.config) ? legacy.config : {};
+    // Only migrate if legacy entry belongs to this workspace
+    if (legacyConfig.configPath === input.configPath && legacyConfig.projectId === input.projectId) {
+      migrationSource = legacy as Record<string, unknown>;
+    }
+  }
+
+  // Build new entry with migration source as base
   entries[input.pluginId] = {
-    ...(isRecord(entries[PLUGIN_ID]) ? entries[PLUGIN_ID] : {}),
+    ...migrationSource,
     enabled: true,
     hooks: {
-      ...(isRecord(entries[PLUGIN_ID]) && isRecord(entries[PLUGIN_ID].hooks) ? entries[PLUGIN_ID].hooks : {}),
+      ...(isRecord(migrationSource.hooks) ? migrationSource.hooks : {}),
       allowConversationAccess: true,
       allowPromptInjection: true,
       timeoutMs: 30000,
@@ -253,7 +293,7 @@ function buildPatchedOpenClawConfig(input: {
       },
     },
     config: {
-      ...(isRecord(entries[PLUGIN_ID]) && isRecord(entries[PLUGIN_ID].config) ? entries[PLUGIN_ID].config : {}),
+      ...(isRecord(migrationSource.config) ? migrationSource.config : {}),
       configPath: input.configPath,
       cwd: input.workspaceRoot,
       bunPath: input.bunPath,
@@ -299,6 +339,19 @@ function buildPatchedOpenClawConfig(input: {
       auditLog: true,
     },
   };
+
+  // Clean up legacy entry if it belonged to this workspace (prevents duplicate enabled plugins)
+  if (isRecord(entries[PLUGIN_ID])) {
+    const legacy = entries[PLUGIN_ID];
+    const legacyConfig = isRecord(legacy.config) ? legacy.config : {};
+    if (legacyConfig.configPath === input.configPath && legacyConfig.projectId === input.projectId) {
+      delete entries[PLUGIN_ID];
+      // Also remove from allow list if present
+      if (Array.isArray(plugins.allow)) {
+        plugins.allow = plugins.allow.filter((id: unknown) => id !== PLUGIN_ID);
+      }
+    }
+  }
 
   const after = JSON.stringify(root);
   return {

@@ -47,15 +47,40 @@ export class SqliteSharedMemory {
                 throw new Error('shared_source_host_required');
         }
         const insert = this.db.prepare(`
-      INSERT OR IGNORE INTO shared_items
+      INSERT INTO shared_items
         (item_hash, source_host, source_item, collection, payload_json, published_at)
       VALUES (?, ?, ?, ?, ?, ?)
+    `);
+        const selectExisting = this.db.prepare(`
+      SELECT source_host, source_item, collection, payload_json
+      FROM shared_items WHERE item_hash = ?
     `);
         return this.db.transaction(() => {
             let inserted = 0;
             for (const item of items) {
-                const result = insert.run(item.itemHash, item.sourceHost, item.sourceItem, item.collection, JSON.stringify(item.payload), item.publishedAt);
-                inserted += result.changes;
+                try {
+                    const result = insert.run(item.itemHash, item.sourceHost, item.sourceItem, item.collection, JSON.stringify(item.payload), item.publishedAt);
+                    inserted += result.changes;
+                }
+                catch (err) {
+                    // SQLite constraint violation (UNIQUE constraint on item_hash)
+                    const existing = selectExisting.get(item.itemHash);
+                    if (!existing) {
+                        // Race condition: row disappeared? Re-throw original error
+                        throw err;
+                    }
+                    // Compare immutable fields - if identical, treat as idempotent success
+                    const existingPayload = JSON.parse(existing.payload_json);
+                    const payloadMatches = JSON.stringify(existingPayload) === JSON.stringify(item.payload);
+                    const fieldsMatch = existing.source_host === item.sourceHost &&
+                        existing.source_item === item.sourceItem &&
+                        existing.collection === item.collection &&
+                        payloadMatches;
+                    if (!fieldsMatch) {
+                        throw new Error(`shared_item_hash_conflict:${item.itemHash}`);
+                    }
+                    // Identical - idempotent, don't count as inserted
+                }
             }
             return inserted;
         })();

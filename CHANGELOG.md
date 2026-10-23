@@ -5,7 +5,8 @@
 - Added domain-level persistence ports (`src/ports/index.ts`) with SQLite adapters for the raw ledger, episodes, memory graph, recall, governance, and the shared region. Upper layers can depend on memory operations instead of a SQL driver.
 - Added a shared memory region: idempotent publish on `itemHash`, soft retraction that stays explainable, and publisher-only retraction.
 - Added Streamable HTTP transport for the MCP server. One kernel per process preserves the single-writer rule; one transport per MCP session follows the SDK's stateless-transport constraint.
-- Added server-side tool profiles: `core` (8), `admin` (23), `full` (37), enforced on both `tools/list` and `tools/call`.
+- Added server-side tool profiles: `core` (8), `admin` (26), `full` (40), enforced on both `tools/list` and `tools/call`.
+- Added three import MCP tools over the existing `import-hermes` / `import-openclaw` pipeline: `cogmem_import_preview` (dry-run source discovery and record counts), `cogmem_import_apply` (idempotent ingest through `recordRawEvent` → vectorize → consolidate → Atlas rebuild), and `cogmem_import_status` (per-project processed source IDs and diagnostics).
 - Added `--project` connection binding: a connection is scoped to one project, and a call naming a different project is rejected with `project_scope_violation`.
 - Added `cogmem init --no-probe`, which skips the `localhost:11434` Ollama probe so the generated `vector_dimension` depends only on the arguments and not on whichever embedding model the local daemon happens to expose.
 - Added four shared-memory MCP tools: `cogmem_shared_publish`, `cogmem_shared_retract`, `cogmem_shared_subscribe`, `cogmem_shared_explain`.

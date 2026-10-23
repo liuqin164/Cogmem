@@ -26,7 +26,10 @@ function setup() {
   writeFileSync(configPath, CONFIG_TOML);
   writeFileSync(openclawConfigPath, '{}');
   const result = installOpenClawAutoMemoryPlugin({ workspaceRoot: root, configPath, openclawConfigPath, projectId: 'bridge-test', agentId: 'bridge-test', force: true });
-  const config = JSON.parse(readFileSync(openclawConfigPath, 'utf8')).plugins.entries['cogmem-auto-memory'].config;
+  const openclawConfig = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
+  const pluginEntryKey = Object.keys(openclawConfig.plugins.entries).find((k) => k.startsWith('cogmem-auto-memory-'));
+  expect(pluginEntryKey).toBeDefined();
+  const config = openclawConfig.plugins.entries[pluginEntryKey!].config;
   mkdirSync(dirname(config.bridgeSocket), { recursive: true });
   const plugin = createRequire(import.meta.url)(join(result.pluginDir, 'index.js'));
   return { config, testing: plugin.__testing };

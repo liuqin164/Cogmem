@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -923,7 +923,6 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-openclaw-auto-'));
   const configPath = join(dir, '.cogmem', 'config.toml');
   const openclawConfigPath = join(dir, 'openclaw.json');
-  const pluginDir = join(dir, 'extensions', 'cogmem-auto-memory');
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
   writeFileSync(openclawConfigPath, JSON.stringify({ plugins: { enabled: true } }, null, 2));
@@ -948,6 +947,11 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   const parsed = JSON.parse(installed.stdout);
   expect(parsed.autoMemory.enabled).toBe(true);
   expect(parsed.autoMemory.installed).toBe(true);
+  // Plugin ID is now workspace-hash based; find the actual plugin dir
+  const extensionsDir = join(dir, 'extensions');
+  const pluginDirs = readdirSync(extensionsDir).filter((d) => d.startsWith('cogmem-auto-memory-'));
+  expect(pluginDirs.length).toBe(1);
+  const pluginDir = join(extensionsDir, pluginDirs[0]);
   expect(parsed.autoMemory.pluginDir).toBe(pluginDir);
   expect(existsSync(join(pluginDir, 'index.js'))).toBe(true);
   expect(existsSync(join(pluginDir, 'bridge.mjs'))).toBe(true);
@@ -1016,34 +1020,38 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
 
   const openclawConfig = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
   expect(openclawConfig.plugins.load.paths).toContain(pluginDir);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].enabled).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].hooks.allowConversationAccess).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].hooks.allowPromptInjection).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.configPath).toBe(configPath);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.ingestMode).toBe('selective_compile');
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.rememberStrategy).toBe('queued');
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.rememberDrainBatchSize).toBe(20);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.auditLog).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.publicEntrypoint).toContain('public.js');
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.limit).toBe(3);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.maxQueryChars).toBe(1200);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.maxAssistantChars).toBe(6000);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.stripRecallBlocksBeforeRemember).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.compileSignalSource).toBe('user_only');
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.excludeCurrentSessionCompiledMemory).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.memoryContextMaxChars).toBe(3500);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.memoryContextMaxItems).toBe(3);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.sourceWindowMaxChars).toBe(1200);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.includeSourceWindowByDefault).toBe(false);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.contextCortexEnabled).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.contextMemoryMaxRatio).toBe(0.25);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.strategyCortexEnabled).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeEnabled).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeMaxTurns).toBe(3);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeMaxChars).toBe(1200);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeInjectPolicy).toBe('same_topic_only');
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.sessionStateEnabled).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.sessionStateMaxChars).toBe(1800);
+  // Plugin ID is workspace-hash based; find the actual entry
+  const pluginEntryKey = Object.keys(openclawConfig.plugins.entries).find((k) => k.startsWith('cogmem-auto-memory-'));
+  expect(pluginEntryKey).toBeDefined();
+  const pluginEntry = openclawConfig.plugins.entries[pluginEntryKey!];
+  expect(pluginEntry.enabled).toBe(true);
+  expect(pluginEntry.hooks.allowConversationAccess).toBe(true);
+  expect(pluginEntry.hooks.allowPromptInjection).toBe(true);
+  expect(pluginEntry.config.configPath).toBe(configPath);
+  expect(pluginEntry.config.ingestMode).toBe('selective_compile');
+  expect(pluginEntry.config.rememberStrategy).toBe('queued');
+  expect(pluginEntry.config.rememberDrainBatchSize).toBe(20);
+  expect(pluginEntry.config.auditLog).toBe(true);
+  expect(pluginEntry.config.publicEntrypoint).toContain('public.js');
+  expect(pluginEntry.config.limit).toBe(3);
+  expect(pluginEntry.config.maxQueryChars).toBe(1200);
+  expect(pluginEntry.config.maxAssistantChars).toBe(6000);
+  expect(pluginEntry.config.stripRecallBlocksBeforeRemember).toBe(true);
+  expect(pluginEntry.config.compileSignalSource).toBe('user_only');
+  expect(pluginEntry.config.excludeCurrentSessionCompiledMemory).toBe(true);
+  expect(pluginEntry.config.memoryContextMaxChars).toBe(3500);
+  expect(pluginEntry.config.memoryContextMaxItems).toBe(3);
+  expect(pluginEntry.config.sourceWindowMaxChars).toBe(1200);
+  expect(pluginEntry.config.includeSourceWindowByDefault).toBe(false);
+  expect(pluginEntry.config.contextCortexEnabled).toBe(true);
+  expect(pluginEntry.config.contextMemoryMaxRatio).toBe(0.25);
+  expect(pluginEntry.config.strategyCortexEnabled).toBe(true);
+  expect(pluginEntry.config.turnBridgeEnabled).toBe(true);
+  expect(pluginEntry.config.turnBridgeMaxTurns).toBe(3);
+  expect(pluginEntry.config.turnBridgeMaxChars).toBe(1200);
+  expect(pluginEntry.config.turnBridgeInjectPolicy).toBe('same_topic_only');
+  expect(pluginEntry.config.sessionStateEnabled).toBe(true);
+  expect(pluginEntry.config.sessionStateMaxChars).toBe(1800);
   expect(indexBody).toContain("openclaw-auto-memory.jsonl");
   expect(indexBody).toContain("action: context ? 'inject' : 'skip'");
   expect(indexBody).toContain('function enqueueRememberJob(config, payload)');
@@ -1115,7 +1123,6 @@ test('OpenClaw generated bridge drains remember queue with stale lock recovery',
   const dbPath = join(dir, 'memory.db');
   const configPath = join(dir, '.cogmem', 'config.toml');
   const openclawConfigPath = join(dir, 'openclaw.json');
-  const pluginDir = join(dir, 'extensions', 'cogmem-auto-memory');
   const queuePath = join(dir, '.cogmem', 'queue', 'openclaw-remember.jsonl');
   mkdirSync(dirname(configPath), { recursive: true });
   mkdirSync(dirname(queuePath), { recursive: true });
@@ -1187,6 +1194,12 @@ test('OpenClaw generated bridge drains remember queue with stale lock recovery',
     stripRecallBlocksBeforeRemember: true,
   };
 
+  // Find the actual plugin dir
+  const extensionsDir = join(dir, 'extensions');
+  const pluginDirs = readdirSync(extensionsDir).filter((d) => d.startsWith('cogmem-auto-memory-'));
+  expect(pluginDirs.length).toBe(1);
+  const pluginDir = join(extensionsDir, pluginDirs[0]);
+  
   const first = await runCli(
     ['bun', join(pluginDir, 'bridge.mjs'), 'drain-remember-queue'],
     dir,
@@ -1250,7 +1263,11 @@ test('doctor --fix can repair OpenClaw automatic memory wiring', async () => {
   expect(fixed.stdout).toContain('OK configuration parsed');
   expect(fixed.stdout).toContain('OK openclaw auto memory integration fixed');
   const openclawConfig = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].enabled).toBe(true);
+  // Plugin ID is workspace-hash based; find the actual entry
+  const pluginEntryKey = Object.keys(openclawConfig.plugins.entries).find((k) => k.startsWith('cogmem-auto-memory-'));
+  expect(pluginEntryKey).toBeDefined();
+  const pluginEntry = openclawConfig.plugins.entries[pluginEntryKey!];
+  expect(pluginEntry.enabled).toBe(true);
 });
 
 test('doctor plugin-only and openclaw diagnose inspect stale plugin without opening kernel', async () => {
@@ -1406,8 +1423,9 @@ test('cogmem update targets the one-line installer home when cwd has no package 
   expect(parsed.packageSpec).toBe('3.6.5');
   expect(parsed.nextCommand).toContain('cogmem@3.6.5');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
-  expect(parsed.migrationCommand).toBeUndefined();
-  expect(parsed.migrationSkippedReason).toContain('missing_config');
+  // 4.0 baseline includes migration from 3.x schema to 0032
+  expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
+  // migration runs because config exists (mocked via COGMEM_INSTALL_HOME)
 });
 
 test('cogmem update targets npm global installs without writing a local package dependency', async () => {
@@ -1429,7 +1447,8 @@ test('cogmem update targets npm global installs without writing a local package 
   expect(parsed.installKind).toBe('npm_global');
   expect(parsed.currentSpec).toBe('npm:global');
   expect(parsed.nextCommand).toBe('npm install -g cogmem@3.6.5');
-  expect(parsed.migrationCommand).toBeUndefined();
+  // 4.0 baseline includes migration from 3.x schema to 0032
+  expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
 });
 
 test('cogmem-connect installs Hermes skill into the real Hermes skills directory by default', async () => {

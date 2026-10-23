@@ -3,7 +3,8 @@
  *
  * Sends one minimal call per tool and classifies the outcome. A tool that
  * answers with a validation or precondition error is reachable; a tool that
- * answers `unknown tool`, throws a TypeError, or never answers is a defect.
+ * answers `unknown tool`, throws a TypeError or ReferenceError, or never
+ * answers is a defect.
  *
  * Usage: bun evals/mcp/tool-audit.ts [--json]
  */
@@ -64,16 +65,16 @@ function buildArgs(tool: { inputSchema?: { properties?: Record<string, Record<st
   return args;
 }
 
-type Verdict = 'ok' | 'reachable' | 'defect';
+export type Verdict = 'ok' | 'reachable' | 'defect';
 
-interface Row {
+export interface Row {
   tool: string;
   verdict: Verdict;
   detail: string;
   ms: number;
 }
 
-function classify(result: { isError?: boolean; structuredContent?: unknown; content?: Array<{ text?: string }> }): { verdict: Verdict; detail: string } {
+export function classify(result: { isError?: boolean; structuredContent?: unknown; content?: Array<{ text?: string }> }): { verdict: Verdict; detail: string } {
   const text = result.content?.[0]?.text ?? '';
   const error = (result.structuredContent as { error?: string } | undefined)?.error ?? '';
   const message = `${error} ${text}`.trim();
@@ -85,52 +86,61 @@ function classify(result: { isError?: boolean; structuredContent?: unknown; cont
   if (/TypeError|Cannot read|is not a function/i.test(message)) {
     return { verdict: 'defect', detail: message.slice(0, 160) };
   }
+  if (/ReferenceError|is not defined/i.test(message)) {
+    return { verdict: 'defect', detail: message.slice(0, 160) };
+  }
   return { verdict: 'reachable', detail: message.slice(0, 120) };
 }
 
-const json = process.argv.includes('--json');
-const dir = mkdtempSync(join(tmpdir(), 'cogmem-tool-audit-'));
-const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db') });
-const tools = listCogmemMcpTools();
-const rows: Row[] = [];
+async function run(): Promise<void> {
+  const json = process.argv.includes('--json');
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-tool-audit-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db') });
+  const tools = listCogmemMcpTools();
+  const rows: Row[] = [];
 
-for (const tool of tools) {
-  const started = performance.now();
-  let result;
-  try {
-    result = await callCogmemMcpTool(tool.name, buildArgs(tool), { kernel, hostId: 'audit-host' });
-  } catch (error) {
-    rows.push({
-      tool: tool.name,
-      verdict: 'defect',
-      detail: `threw: ${error instanceof Error ? error.message : String(error)}`.slice(0, 160),
-      ms: Math.round(performance.now() - started),
-    });
-    continue;
+  for (const tool of tools) {
+    const started = performance.now();
+    let result;
+    try {
+      result = await callCogmemMcpTool(tool.name, buildArgs(tool), { kernel, hostId: 'audit-host' });
+    } catch (error) {
+      rows.push({
+        tool: tool.name,
+        verdict: 'defect',
+        detail: `threw: ${error instanceof Error ? error.message : String(error)}`.slice(0, 160),
+        ms: Math.round(performance.now() - started),
+      });
+      continue;
+    }
+    const { verdict, detail } = classify(result);
+    rows.push({ tool: tool.name, verdict, detail, ms: Math.round(performance.now() - started) });
   }
-  const { verdict, detail } = classify(result);
-  rows.push({ tool: tool.name, verdict, detail, ms: Math.round(performance.now() - started) });
+
+  kernel.close();
+  rmSync(dir, { recursive: true, force: true });
+
+  if (json) {
+    console.log(JSON.stringify({ total: rows.length, rows }, null, 2));
+  } else {
+    const width = Math.max(...rows.map((row) => row.tool.length));
+    for (const row of rows) {
+      console.log(`${row.tool.padEnd(width)}  ${row.verdict.padEnd(9)}  ${String(row.ms).padStart(4)}ms  ${row.detail}`);
+    }
+  }
+
+  const defects = rows.filter((row) => row.verdict === 'defect');
+  const summary = {
+    total: rows.length,
+    ok: rows.filter((row) => row.verdict === 'ok').length,
+    reachable: rows.filter((row) => row.verdict === 'reachable').length,
+    defect: defects.length,
+    slowest: rows.slice().sort((a, b) => b.ms - a.ms)[0]?.tool,
+  };
+  console.log(`\n${JSON.stringify(summary)}`);
+  process.exitCode = defects.length > 0 ? 1 : 0;
 }
 
-kernel.close();
-rmSync(dir, { recursive: true, force: true });
-
-if (json) {
-  console.log(JSON.stringify({ total: rows.length, rows }, null, 2));
-} else {
-  const width = Math.max(...rows.map((row) => row.tool.length));
-  for (const row of rows) {
-    console.log(`${row.tool.padEnd(width)}  ${row.verdict.padEnd(9)}  ${String(row.ms).padStart(4)}ms  ${row.detail}`);
-  }
-}
-
-const defects = rows.filter((row) => row.verdict === 'defect');
-const summary = {
-  total: rows.length,
-  ok: rows.filter((row) => row.verdict === 'ok').length,
-  reachable: rows.filter((row) => row.verdict === 'reachable').length,
-  defect: defects.length,
-  slowest: rows.slice().sort((a, b) => b.ms - a.ms)[0]?.tool,
-};
-console.log(`\n${JSON.stringify(summary)}`);
-process.exitCode = defects.length > 0 ? 1 : 0;
+// Only run when executed directly; importing this module must not start a kernel
+// or overwrite process.exitCode for the importing test process.
+if (import.meta.main) await run();

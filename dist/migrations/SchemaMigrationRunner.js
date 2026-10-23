@@ -1,6 +1,8 @@
 import { MIGRATION_DIGESTS } from './MigrationDigestManifest.js';
-import { multidimensionalMemoryGraph374Issue, multidimensionalMemoryGraph374Satisfied, } from './0032_multidimensional_memory_graph_3_7_4.js';
+import { multidimensionalMemoryGraph374Issue, multidimensionalMemoryGraph374Satisfied } from './0032_multidimensional_memory_graph_3_7_4.js';
 import { installAtlasProjectionDirtyTriggersV3 } from './v3_7_4/FinalRuntimeGuards.js';
+/** Latest release schema version. Update when adding a new migration. */
+const LATEST_RELEASE_VERSION = '0032';
 export class SchemaMigrationRunner {
     db;
     migrations;
@@ -17,7 +19,7 @@ export class SchemaMigrationRunner {
         return [...this.migrations]
             .sort((a, b) => a.version.localeCompare(b.version))
             .filter((migration) => !applied.has(migration.version)
-            || (migration.version !== '0032' && !this.migrationSchemaSatisfied(migration.version)));
+            || (migration.version !== LATEST_RELEASE_VERSION && !this.migrationSchemaSatisfied(migration.version)));
     }
     preflight() {
         this.assertSupportedReleaseSchema();
@@ -30,7 +32,6 @@ export class SchemaMigrationRunner {
             return { pending: pending.map((item) => item.version), applied: [], currentVersion: this.currentVersion(), dryRun: true };
         }
         this.ensureMigrationTable();
-        this.adoptLegacyVersion();
         this.assertRecordedChecksums();
         this.repairRecordedRuntimeGuards();
         const pending = this.plan();
@@ -119,7 +120,6 @@ export class SchemaMigrationRunner {
         return this.db.prepare(`SELECT version, description, checksum FROM _schema_migrations ORDER BY version`).all();
     }
     assertSupportedReleaseSchema() {
-        const legacyVersion = this.legacySchemaVersion();
         const userTables = this.db.prepare(`
       SELECT name FROM sqlite_master
       WHERE type='table' AND name NOT LIKE 'sqlite_%'
@@ -127,25 +127,18 @@ export class SchemaMigrationRunner {
         if (userTables.length === 0 || userTables.includes('_cogmem_bootstrap_state'))
             return;
         if (!this.schemaMigrationsTableExists()) {
-            if (legacyVersion === 32)
-                throw new Error('unsupported_development_schema:32');
-            if (legacyVersion === 31
-                && (this.migrationSchemaSatisfied('0031') || !this.migrations.some((migration) => migration.version === '0032')))
-                return;
-            throw new Error(legacyVersion === undefined
-                ? 'unsupported_database_identity'
-                : `unsupported_release_schema:${legacyVersion}`);
+            throw new Error('unsupported_database_identity');
         }
         const rows = this.db.prepare(`SELECT version FROM _schema_migrations ORDER BY version`).all();
-        const unsupported = rows.find((row) => row.version > '0032');
+        const unsupported = rows.find((row) => row.version > LATEST_RELEASE_VERSION);
         if (unsupported)
             throw new Error(`unsupported_development_schema:${unsupported.version}`);
-        const release0032 = rows.some((row) => row.version === '0032');
-        if (release0032) {
+        const releaseLatest = rows.some((row) => row.version === LATEST_RELEASE_VERSION);
+        if (releaseLatest) {
             if (!this.hasColumns('_schema_migrations', ['checksum']))
                 throw new Error('unsupported_development_schema:0032');
-            const row = this.db.prepare(`SELECT checksum FROM _schema_migrations WHERE version='0032'`).get();
-            if (row?.checksum !== MIGRATION_DIGESTS['0032'])
+            const row = this.db.prepare(`SELECT checksum FROM _schema_migrations WHERE version=?`).get(LATEST_RELEASE_VERSION);
+            if (row?.checksum !== MIGRATION_DIGESTS[LATEST_RELEASE_VERSION])
                 throw new Error('unsupported_development_schema:0032');
             const issue = multidimensionalMemoryGraph374Issue(this.db);
             if (!issue)
@@ -155,44 +148,24 @@ export class SchemaMigrationRunner {
                 return;
             throw new Error(`final_schema_postcondition_failed:0032:${issue}`);
         }
-        const latest = rows[rows.length - 1]?.version;
-        if (latest !== '0031' || !this.migrationSchemaSatisfied('0031')) {
-            throw new Error(latest ? `unsupported_release_schema:${latest}` : 'unsupported_database_identity');
-        }
-        if (legacyVersion !== undefined && legacyVersion !== 31) {
-            throw new Error(legacyVersion > 31
-                ? `unsupported_development_schema:${legacyVersion}`
-                : `unsupported_release_schema:${legacyVersion}`);
-        }
+        throw new Error('unsupported_database_identity');
     }
     currentVersion() {
-        const legacyCurrent = this.legacyCurrentVersion();
         if (!this.schemaMigrationsTableExists()) {
-            return legacyCurrent;
+            return undefined;
         }
         const row = this.db.prepare(`
       SELECT version FROM _schema_migrations ORDER BY version DESC LIMIT 1
     `).get();
-        return [row?.version, legacyCurrent].filter((version) => Boolean(version)).sort((a, b) => b.localeCompare(a))[0];
+        return row?.version;
     }
     appliedVersions() {
         const applied = new Set();
-        const legacyVersion = this.legacySchemaVersion();
-        for (const migration of this.migrations) {
-            // `_meta.schema_version` was written by older kernels without a durable
-            // migration receipt. It is a hint only: adopting a high legacy version
-            // must not hide a partially applied integrity migration.
-            if (legacyVersion !== undefined
-                && Number.parseInt(migration.version, 10) <= legacyVersion
-                && this.migrationSchemaSatisfied(migration.version)) {
-                applied.add(migration.version);
-            }
-        }
         if (!this.schemaMigrationsTableExists()) {
             return applied;
         }
         for (const row of this.db.prepare(`SELECT version FROM _schema_migrations`).all()) {
-            if (row.version === '0032' || this.migrationSchemaSatisfied(row.version))
+            if (row.version === LATEST_RELEASE_VERSION || this.migrationSchemaSatisfied(row.version))
                 applied.add(row.version);
         }
         return applied;
@@ -202,67 +175,10 @@ export class SchemaMigrationRunner {
       SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_schema_migrations'
     `).get());
     }
-    legacySchemaVersion() {
-        const metaExists = this.db.prepare(`
-      SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_meta'
-    `).get();
-        if (!metaExists)
-            return undefined;
-        const row = this.db.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get();
-        const legacyVersion = Number.parseInt(row?.value || '', 10);
-        return Number.isFinite(legacyVersion) ? legacyVersion : undefined;
-    }
-    legacyCurrentVersion() {
-        const legacyVersion = this.legacySchemaVersion();
-        if (legacyVersion === undefined)
-            return undefined;
-        return [...this.migrations]
-            .filter((migration) => Number.parseInt(migration.version, 10) <= legacyVersion)
-            .sort((a, b) => b.version.localeCompare(a.version))[0]?.version;
-    }
-    adoptLegacyVersion() {
-        const legacyVersion = this.legacySchemaVersion();
-        if (legacyVersion === undefined)
-            return;
-        const hasChecksum = this.hasColumns('_schema_migrations', ['checksum']);
-        const insert = this.db.prepare(hasChecksum
-            ? `INSERT OR IGNORE INTO _schema_migrations (version,description,applied_at,checksum) VALUES (?,?,?,?)`
-            : `INSERT OR IGNORE INTO _schema_migrations (version,description,applied_at) VALUES (?,?,?)`);
-        for (const migration of this.migrations) {
-            if (Number.parseInt(migration.version, 10) <= legacyVersion && this.migrationSchemaSatisfied(migration.version)) {
-                const values = [migration.version, `adopted: ${migration.description}`, new Date(0).toISOString()];
-                insert.run(...values, ...(hasChecksum ? [this.migrationChecksum(migration)] : []));
-            }
-        }
-    }
-    migrationSchemaSatisfied(version) {
-        if (version === '0029') {
-            return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episodes_one_active_scope'`).get());
-        }
-        if (version === '0030') {
-            const eventTable = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_events'`).get());
-            const eventColumns = eventTable
-                ? new Set(this.db.prepare(`PRAGMA table_info(memory_events)`).all().map((row) => row.name))
-                : new Set();
-            const positionIndex = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_episode_events_episode_position_unique'`).get());
-            return (!eventTable || eventColumns.has('local_date_source')) && positionIndex;
-        }
-        if (version === '0031') {
-            return Boolean(this.db.prepare(`
-        SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_episode_integrity_markers'
-      `).get()) && Boolean(this.db.prepare(`
-        SELECT 1 FROM _episode_integrity_markers WHERE marker = 'episode_boundary_integrity_0031'
-      `).get());
-        }
-        if (version === '0032') {
-            return multidimensionalMemoryGraph374Satisfied(this.db);
-        }
-        return true;
-    }
     repairRecordedRuntimeGuards() {
         if (!this.schemaMigrationsTableExists())
             return;
-        const recorded = this.db.prepare(`SELECT 1 FROM _schema_migrations WHERE version='0032'`).get();
+        const recorded = this.db.prepare(`SELECT 1 FROM _schema_migrations WHERE version=?`).get(LATEST_RELEASE_VERSION);
         if (!recorded)
             return;
         const issue = multidimensionalMemoryGraph374Issue(this.db);
@@ -270,6 +186,12 @@ export class SchemaMigrationRunner {
             || issue?.startsWith('trigger_missing:trg_memory_atlas_dirty_')) {
             installAtlasProjectionDirtyTriggersV3(this.db);
         }
+    }
+    migrationSchemaSatisfied(version) {
+        if (version === LATEST_RELEASE_VERSION) {
+            return multidimensionalMemoryGraph374Satisfied(this.db);
+        }
+        return true;
     }
     tableExists(name) {
         return Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name));

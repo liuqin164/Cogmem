@@ -63,6 +63,9 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
     'cogmem_shared_explain',
     'cogmem_shared_publish',
     'cogmem_shared_retract',
+    'cogmem_import_preview',
+    'cogmem_import_apply',
+    'cogmem_import_status',
   ]);
   const recall = tools.find((tool) => tool.name === 'cogmem_recall');
   const explain = tools.find((tool) => tool.name === 'cogmem_explain_recall');
