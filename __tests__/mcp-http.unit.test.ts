@@ -348,48 +348,92 @@ describe('session identity binding', () => {
     expect(recalled.body.projectId).toBe('project-b');
   });
 
-  test('session identity header overrides server profile for tools/list', async () => {
+  test('an identity header cannot widen the profile without a token', async () => {
     const handle = await start({ profile: 'core' });
     const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-c', projectId: 'project-c', profile: 'admin' }) });
 
-    // With identity header specifying admin profile - should get admin profile
-    const adminListed = await rpc(handle.url, { jsonrpc: '2.0', id: 103, method: 'tools/list', params: {} }, { sessionId });
-    expect(adminListed.json.result.tools).toHaveLength(ADMIN_TOOLS.length);
+    // The server profile is a ceiling: an unauthenticated header may narrow it,
+    // never escalate beyond it.
+    const listed = await rpc(handle.url, { jsonrpc: '2.0', id: 103, method: 'tools/list', params: {} }, { sessionId });
+    expect(listed.json.result.tools).toHaveLength(CORE_TOOLS.length);
   });
 
-  test('forged identity header cannot escalate profile beyond server default without token', async () => {
-    // Server with core profile, no token
-    const handle = await start({ profile: 'core' });
-    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'attacker', projectId: 'project-x', profile: 'admin' }) });
+  test('an identity header may narrow the profile without a token', async () => {
+    const handle = await start({ profile: 'admin' });
+    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-n', profile: 'core' }) });
 
-    // Try to forge admin profile via identity header
     const listed = await rpc(handle.url, { jsonrpc: '2.0', id: 104, method: 'tools/list', params: {} }, { sessionId });
-    // Current behavior: identity header profile overrides server default
-    // This documents current behavior; we may want to restrict in future
-    expect(listed.json.result.tools.length).toBeGreaterThanOrEqual(CORE_TOOLS.length);
+    expect(listed.json.result.tools).toHaveLength(CORE_TOOLS.length);
+  });
+
+  test('a tampered profile header cannot escalate past the server default', async () => {
+    const handle = await start({ profile: 'core' });
+    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'attacker', projectId: 'project-x', profile: 'full' }) });
+
+    const listed = await rpc(handle.url, { jsonrpc: '2.0', id: 105, method: 'tools/list', params: {} }, { sessionId });
+    expect(listed.json.result.tools).toHaveLength(CORE_TOOLS.length);
+
+    const blocked = await call(handle.url, sessionId, 'cogmem_maintenance_tick', {});
+    expect(blocked.isError).toBe(true);
+    expect(blocked.body).toContain('tool_not_in_profile');
+  });
+
+  test('a token-authenticated identity header may widen the profile', async () => {
+    const handle = await start({ profile: 'core', token: 's3cret' });
+    const sessionId = await connect(handle.url, 's3cret', { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-t', profile: 'admin' }) });
+
+    const listed = await rpc(handle.url, { jsonrpc: '2.0', id: 1051, method: 'tools/list', params: {} }, { sessionId, token: 's3cret' });
+    expect(listed.json.result.tools).toHaveLength(ADMIN_TOOLS.length);
+  });
+
+  test('an unknown profile in the identity header is rejected', async () => {
+    const handle = await start({ profile: 'admin' });
+    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ profile: 'bogus' }) });
+
+    const called = await call(handle.url, sessionId, 'cogmem_maintenance_tick', {});
+    expect(called.isError).toBe(true);
+    expect(called.body).toContain('unknown_tool_profile:bogus');
+  });
+
+  test('a per-call identity header cannot silently rewrite the project binding', async () => {
+    const handle = await start({ profile: 'admin' });
+    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-p', projectId: 'project-a' }) });
+
+    const overridden = await call(handle.url, sessionId, 'cogmem_recall', { query: 'x' }, { 'x-cogmem-identity': JSON.stringify({ projectId: 'project-b' }) });
+    expect(overridden.isError).toBe(true);
+    expect(overridden.body).toContain('project_scope_violation');
+  });
+
+  test('an empty identity header keeps the session binding', async () => {
+    const handle = await start({ profile: 'admin' });
+    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-e', projectId: 'project-e' }) });
+
+    const recalled = await call(handle.url, sessionId, 'cogmem_recall', { query: 'x' }, { 'x-cogmem-identity': '{}' });
+    expect(recalled.isError).toBe(false);
+    expect(recalled.body.projectId).toBe('project-e');
   });
 
   test('two sessions with different identities get isolated tool surfaces', async () => {
-    const handle = await start({ profile: 'core' });
-    const session1 = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-1', projectId: 'project-1', profile: 'admin' }) });
+    const handle = await start({ profile: 'admin' });
+    const session1 = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-1', projectId: 'project-1', profile: 'core' }) });
     const session2 = await connect(handle.url);
 
-    // Session 1 gets admin via identity header on connect
+    // Session 1 narrows itself to core through the identity header
     const listed1 = await rpc(handle.url, { jsonrpc: '2.0', id: 105, method: 'tools/list', params: {} }, { sessionId: session1 });
-    expect(listed1.json.result.tools).toHaveLength(ADMIN_TOOLS.length);
+    expect(listed1.json.result.tools).toHaveLength(CORE_TOOLS.length);
 
-    // Session 2 gets core (no identity header)
+    // Session 2 keeps the server default
     const listed2 = await rpc(handle.url, { jsonrpc: '2.0', id: 106, method: 'tools/list', params: {} }, { sessionId: session2 });
-    expect(listed2.json.result.tools).toHaveLength(CORE_TOOLS.length);
+    expect(listed2.json.result.tools).toHaveLength(ADMIN_TOOLS.length);
 
-    // Session 1 can call admin tool
+    // Session 1 is narrowed to core, so an admin tool is denied
     const callResult1 = await call(handle.url, session1, 'cogmem_maintenance_tick', {});
-    expect(callResult1.isError).toBe(false);
+    expect(callResult1.isError).toBe(true);
+    expect(callResult1.body).toContain('tool_not_in_profile');
 
-    // Session 2 cannot call admin tool
+    // Session 2 keeps the server default, so the admin tool is reachable
     const callResult2 = await call(handle.url, session2, 'cogmem_maintenance_tick', {});
-    expect(callResult2.isError).toBe(true);
-    expect(callResult2.body).toContain('tool_not_in_profile');
+    expect(callResult2.isError).toBe(false);
   });
 
   test('shared memory retract uses session hostId', async () => {
@@ -400,7 +444,7 @@ describe('session identity binding', () => {
     await call(handle.url, sessionId, 'cogmem_shared_publish', { items: [{ itemHash: 'h-retract-1', collection: 'test', payload: { text: 'x' } }] });
 
     // Try to retract as bot-y (different hostId) - should fail
-    const retractResult = await call(handle.url, sessionId, 'cogmem_shared_retract', { itemHash: 'h-retract-1' }, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-y', projectId: 'project-y', profile: 'admin' }) });
+    const retractResult = await call(handle.url, sessionId, 'cogmem_shared_retract', { itemHash: 'h-retract-1' }, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-y' }) });
     expect(retractResult.isError).toBe(true);
     expect(JSON.stringify(retractResult.body)).toContain('shared_item_not_owned');
 

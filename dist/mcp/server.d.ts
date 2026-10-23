@@ -13,8 +13,10 @@ export interface CogmemMcpServerOptions {
      */
     projectId?: string;
     /**
-     * Header that carries a per-request identity JSON blob. A request that
-     * presents one overrides the session-bound identity for that call only.
+     * Header that carries a per-request identity JSON blob (`hostId`,
+     * `projectId`, `profile`). A request that presents one overrides the
+     * session-bound identity for that call only. It may narrow the profile but
+     * never widen it unless the transport authenticated the request.
      */
     identityHeader?: string;
     /**
@@ -22,12 +24,30 @@ export interface CogmemMcpServerOptions {
      * opened with an identity header. Used when a request carries none of its own.
      */
     identityForSession?: (sessionId?: string) => SessionIdentity | undefined;
+    /**
+     * Whether the transport authenticated the request. Only a trusted request may
+     * widen the profile through the identity header; an untrusted one can narrow
+     * it but never escalate. Defaults to false.
+     */
+    identityTrusted?: boolean;
 }
 export interface SessionIdentity {
     hostId?: string;
     projectId?: string;
     profile?: string;
 }
+/**
+ * Identity a call runs under, plus the transport-supplied request context.
+ * `trusted` means the transport already authenticated the request (a bearer
+ * token was configured and presented), so a header may widen the profile.
+ */
+export interface ResolvedIdentity {
+    identity: SessionIdentity;
+    /** The project this connection is bound to, if any. */
+    boundProjectId?: string;
+}
+/** Parse the identity JSON blob. Unknown fields are ignored; a non-string value is dropped. */
+export declare function parseSessionIdentity(raw: unknown): SessionIdentity | undefined;
 export declare function createCogmemMcpServer(runtime?: CogmemMcpRuntime, options?: CogmemMcpServerOptions): Server;
 export interface CogmemMcpStdioHandle {
     server: Server;

@@ -13,7 +13,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { createCogmemMcpServer } from './server.js';
+import { createCogmemMcpServer, parseSessionIdentity } from './server.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 import { SqliteSharedMemory } from '../adapters/sqlite/SqliteSharedMemory.js';
 function resolveKernel(runtime) {
@@ -43,7 +43,6 @@ export async function startCogmemMcpHttpServer(runtime = {}, options) {
         shared: runtime.shared ?? new SqliteSharedMemory(kernel.eventStore.getDatabase()),
     };
     const sessionIdentities = new Map();
-    const sessionRuntimes = new Map();
     const transports = new Map();
     const maxSessions = options.maxSessions ?? 32;
     const ownsKernel = !runtime.kernel;
@@ -116,22 +115,9 @@ export async function startCogmemMcpHttpServer(runtime = {}, options) {
                         }
                         transports.set(id, created);
                         // Bind identity from header if present
-                        const identityHeaderValue = request.headers.get(identityHeader);
-                        if (identityHeaderValue) {
-                            try {
-                                const parsed = JSON.parse(identityHeaderValue);
-                                if (parsed && typeof parsed === 'object') {
-                                    sessionIdentities.set(id, {
-                                        hostId: typeof parsed.hostId === 'string' ? parsed.hostId : undefined,
-                                        projectId: typeof parsed.projectId === 'string' ? parsed.projectId : undefined,
-                                        profile: typeof parsed.profile === 'string' ? parsed.profile : undefined,
-                                    });
-                                }
-                            }
-                            catch {
-                                // Ignore malformed identity header
-                            }
-                        }
+                        const bound = parseSessionIdentity(request.headers.get(identityHeader));
+                        if (bound)
+                            sessionIdentities.set(id, bound);
                     },
                 });
                 created.onclose = () => {
@@ -148,6 +134,9 @@ export async function startCogmemMcpHttpServer(runtime = {}, options) {
                     projectId: options.projectId,
                     identityHeader,
                     identityForSession: (id) => (id ? sessionIdentities.get(id) : undefined),
+                    // Only a token-authenticated transport may widen the profile through
+                    // the identity header; otherwise it may narrow it at most.
+                    identityTrusted: options.token !== undefined,
                 });
                 await server.connect(created);
                 transport = created;
