@@ -11,6 +11,7 @@
 - Added `cogmem init --no-probe`, which skips the `localhost:11434` Ollama probe so the generated `vector_dimension` depends only on the arguments and not on whichever embedding model the local daemon happens to expose.
 - Added four shared-memory MCP tools: `cogmem_shared_publish`, `cogmem_shared_retract`, `cogmem_shared_subscribe`, `cogmem_shared_explain`.
 - Added host configuration for Claude Code, Cursor, Codex, and Hermes in `docs/mcp-hosts.md`.
+- Schema migration history: 4.0.0 ships migration 0032 only and no longer replays 0001-0031. A released 3.7.3/schema-31 database (latest receipt 0031 plus the `episode_boundary_integrity_0031` marker) upgrades in one `cogmem migrate --yes --backup` run; the inherited receipts stay in `_schema_migrations` without digests and are not re-validated, because 4.0.0 no longer ships those migration sources. The 0032 receipt digest is still checked on every later start, and the upgraded database opens again.
 - Breaking: the MCP server now defaults to the `core` profile. A host that expects every tool must start with `--profile full`.
 - Storage note: 4.0.0 ships on SQLite. The seekdb backend was evaluated in `docs/superpowers/specs/2026-10-22-cogmem-seekdb-evaluation.md` and is conditionally approved pending x86_64 and macOS verification; it lands behind the same ports in a later release.
 

@@ -194,6 +194,20 @@ describe('core release metadata', () => {
     expect(manifest.files).toContain('RELEASE_CHECKLIST.md');
   });
 
+  test('release checklist rehearses the 3.7.3 upgrade and the second start it enables', () => {
+    const checklist = readText(join(coreRoot, 'RELEASE_CHECKLIST.md'));
+    const changelog = readText(join(coreRoot, 'CHANGELOG.md'));
+
+    expect(checklist).toContain('## Upgrade Rehearsal');
+    expect(checklist).toContain('__tests__/fixtures/migrations/main-3.7.3-schema31.sqlite.gz');
+    expect(checklist).toContain('cogmem migrate --db /tmp/schema31.db --yes --backup --json');
+    expect(checklist).toContain('"applied": ["0032"]');
+    expect(checklist).toContain('| cogmem mcp --db /tmp/schema31.db --profile core');
+    expect(checklist).toContain('`tools/list` with 8 tools under `core`');
+    expect(checklist).toContain('migration_checksum_unknown:0015');
+    expect(changelog).toContain('no longer replays 0001-0031');
+  });
+
   test('agent-facing docs describe chronological ledger, source anchors, and natural emergence metrics', () => {
     const memoryModel = readText(join(coreRoot, 'MEMORY_MODEL.md'));
     const explainability = readText(join(coreRoot, 'RECALL_EXPLAINABILITY.md'));
