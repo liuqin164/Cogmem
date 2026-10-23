@@ -55,13 +55,15 @@ test('the bridge daemon answers recalls in-process and survives a restart', asyn
     assistantText: '记下了：Orion，林。',
   }, config, 30000);
 
-  // Recall from a different session: memory from the session already in context
-  // is deliberately not re-injected.
-  const payload = { config, query: '发布代号是什么', sessionId: 'bridge-test-2' };
+  // Recall from a different session and thread: memory from the session already
+  // in context is deliberately not re-injected, and a thread with no evidence of
+  // its own must still reach the rest of the ledger.
+  const payload = { config, query: '发布代号是什么', sessionId: 'bridge-test-2', threadId: 'bridge-test-2' };
 
   const warm = await testing.runBridge('recall', payload, config, 30000);
   expect(warm.itemCount).toBeGreaterThan(0);
   expect(warm.context).toContain('<COGMEM_RECALL_CONTEXT');
+  expect(warm.context).toContain('Orion');
 
   // Same daemon, same kernel: no second process, no second startup.
   expect((await testing.bridgeDaemonHealth(config)).pid).toBe(first.pid);

@@ -798,7 +798,7 @@ async function ensureBridgeDaemon(config) {
     }
     try {
       mkdirSync(path.dirname(config.bridgeSocket), { recursive: true });
-      const child = spawn(config.bunPath || 'bun', [path.join(__dirname, 'bridge.mjs'), 'serve', config.bridgeSocket, config.configPath], {
+      const child = spawn(config.bunPath || 'bun', [path.join(__dirname, 'bridge.mjs'), 'serve', config.bridgeSocket, config.configPath, config.publicEntrypoint || ''], {
         cwd: config.cwd || process.cwd(),
         detached: true,
         stdio: 'ignore',
@@ -1647,7 +1647,11 @@ async function main() {
     // that pays for it.
     const warmConfigPath = process.argv[4];
     if (warmConfigPath) {
-      acquireRuntime({ configPath: warmConfigPath }, true).catch(() => {});
+      // The entrypoint must travel with the warm-up: without it the bridge
+      // resolves the installed package instead of the build the host configured,
+      // and every later request reuses that stale module from the cache.
+      const warmEntrypoint = process.argv[5];
+      acquireRuntime({ configPath: warmConfigPath, publicEntrypoint: warmEntrypoint }, true).catch(() => {});
     }
     return;
   }
@@ -1748,10 +1752,14 @@ async function recallPayload(input, config, kernel, memory, formatStrategyContex
 
 async function loadCogmemApi(bridgeConfig) {
   const candidates = [];
-  if (bridgeConfig.publicEntrypoint) {
-    candidates.push(pathToFileURL(bridgeConfig.publicEntrypoint).href);
+  const entrypoint = bridgeConfig.publicEntrypoint || process.env.COGMEM_PUBLIC_ENTRYPOINT;
+  if (entrypoint) {
+    // No package-name fallback here: resolving a different Cogmem version than
+    // the one the host configured is worse than failing loudly.
+    candidates.push(pathToFileURL(entrypoint).href);
+  } else {
+    candidates.push('cogmem');
   }
-  candidates.push('cogmem');
   const errors = [];
   for (const candidate of candidates) {
     try {

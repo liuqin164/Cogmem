@@ -338,6 +338,7 @@ bun test __tests__
 
 ## 本轮记录
 
+- 2026-10-23 09:20 — **插件真机链路验证，抓到两个静默错误**。用 Node 直接加载插件、走 `register` 的 `before_prompt_build` / `agent_end`，发现注入块为空：①`isRawEventInRecallScope` 把 `threadId` 当硬过滤，跨会话的低信号轮次永远召回不到；②daemon 预热时没收到 `publicEntrypoint`，`loadCogmemApi` 回退到已安装的 cogmem 包并缓存，宿主实际跑的是旧模块。修法：线程内无证据时回退到全项目检索并打 `cross_thread` 标签；入口随预热传递，设了入口就不再回退包名。验证：注入 2206 字符、含 `Orion`，首轮 461ms、次轮 24ms。全量 **1535 pass / 0 fail / 167 files**
 - 2026-10-23 08:45 — **常驻内核模式落地**（`docs/openclaw-runtime.md`）。OpenClaw 插件不再每轮 spawn 进程：bridge 增加 `serve` 模式，kernel 只开一次，hook 走 `<pluginDir>/run/bridge.sock`（0600）。实测同一库（1083 事件 / 91 神经元）：一次性路径 p50 **1008ms**，常驻路径 p50 **55ms**。插件 register 时启动并预热 kernel（约 1.2s，一次），daemon 挂掉自动重启，版本不符自动替换，锁文件防止同库双实例。连不上时回退一次性进程，保证正确性。新增 2 个测试；全量 **1533 pass / 0 fail / 166 files**
   - 期间修掉三个真问题：`PLUGIN_VERSION` 在插件模板里未定义导致自动启动静默失败；`Bun.connect` 在 Node（OpenClaw 运行时）不存在，改为 Node 用 `net`、Bun 用 `Bun.connect` 的双路径；socket 目录不存在导致 daemon 起不来
   - 清理了测试遗留的 13 个孤儿 daemon

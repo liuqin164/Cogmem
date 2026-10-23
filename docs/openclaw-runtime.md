@@ -51,6 +51,11 @@ every prompt slower as the memory grew.
 - If the daemon cannot be reached at all, the bridge falls back to a one-shot
   process. Correct, just slow. This is also the path when `bridgeDaemon` is
   `false`.
+- The entrypoint travels with the warm-up. A bridge that warmed without it
+  resolved whatever `cogmem` was installed and cached that module for every
+  later request, so the host ran a different build than the one it configured.
+  When an entrypoint is set, the bridge refuses to fall back to a package name:
+  a stale Cogmem is worse than a loud error.
 
 ### Socket
 
