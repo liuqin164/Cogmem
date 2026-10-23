@@ -2237,7 +2237,7 @@ function formatRecallContext(result, config) {
     const why = item.whyMatched ? '; whyMatched=' + serializeUntrustedMemory(item.whyMatched, 180) : '';
     const canonical = item.canonicalId ? '; canonicalId=' + serializeUntrustedMemory(item.canonicalId, 180) : '';
     const matchedFacets = Array.isArray(item.matchedFacets) && item.matchedFacets.length
-      ? '; matchedFacets=' + item.matchedFacets.map((facet) => serializeUntrustedMemory(facet.type, 80) + ':' + serializeUntrustedMemory(facet.value, 160)).join(',')
+      ? '; matchedFacets=' + item.matchedFacets.map((facet) => serializeUntrustedMemory(facet.productFacet || facet.type, 80) + ':' + serializeUntrustedMemory(facet.value, 160)).join(',')
       : '';
     lines.push('  sourceType=' + serializeUntrustedMemory(sourceType, 120) + '; confidence=' + confidence + '; canAnswerExactQuote=' + quote + canonical + matchedFacets + anchor + why);
     if (item.sourceContext && item.sourceContext.event) {
@@ -2294,7 +2294,7 @@ function formatRecallDecision(trace) {
 
 function formatAtlasCard(card) {
   const facets = Array.isArray(card && card.matchedFacets)
-    ? card.matchedFacets.map((facet) => serializeUntrustedMemory(facet.type, 80) + ':' + serializeUntrustedMemory(facet.value, 160)).join(',')
+    ? card.matchedFacets.map((facet) => serializeUntrustedMemory(facet.productFacet || facet.type, 80) + ':' + serializeUntrustedMemory(facet.value, 160)).join(',')
     : '';
   const paths = Array.isArray(card && card.matchedPaths)
     ? card.matchedPaths.map((path) => serializeUntrustedMemory(path.relation, 80) + '@' + serializeUntrustedMemory(path.facet && path.facet.nodeId || 'facet', 180)).slice(0, 6).join(',')

@@ -960,7 +960,7 @@ function facetFromEdge(edge, projectId) {
         label: facetLabel(edge.target_type, edge.target_id),
         nodeId: nodeId(edge.target_type, edge.target_id, projectId),
         relation: edge.relation_type,
-        ...(productFacet ? { productFacet } : {}),
+        ...(productFacet ? { productFacet } : { internal: true }),
     };
 }
 function facetLabel(type, value) {

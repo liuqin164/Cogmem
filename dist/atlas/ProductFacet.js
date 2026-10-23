@@ -2,6 +2,8 @@ const PRODUCT_FACETS = {
     time: 'time',
     topic: 'topic',
     entity: 'person',
+    actor: 'person',
+    event: 'event',
     location: 'place',
     state: 'state',
 };

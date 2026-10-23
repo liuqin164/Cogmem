@@ -80,9 +80,10 @@ Exact constraints may bypass the visibility floor. They never bypass `projectId`
 
 `productFacet` is present only when the entrance stands for one of the six Facets a
 person can name: `entity` → `person`, `location` → `place`, `state` → `state`,
-`memoryKind: event` → `event`, plus `time` and `topic` unchanged. Internal
-entrances (`session`, `thread`, `project`, other memory kinds, `actionKind`,
-`issue`) carry no `productFacet`. The field also rides along when a recall item
+`memoryKind: event` → `event`, `actor` → `person`, plus `time` and `topic`
+unchanged. Internal entrances (`session`, `thread`, `project`, other memory
+kinds, `actionKind`, `issue`) carry `"internal": true` instead — they are still
+returned, but never presented as one of the six. The field also rides along when a recall item
 copies `matchedFacets`.
 
 Agents should prefer `cards` over raw node labels for historical discussion because cards preserve the canonical episode, match reason, and drilldown command.

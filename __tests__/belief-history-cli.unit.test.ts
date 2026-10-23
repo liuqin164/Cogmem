@@ -38,28 +38,33 @@ test('belief history returns the superseded version and names its replacement', 
     rawEventType: 'message', projectId: 'cogmem', role: 'user',
     occurredAt: Date.UTC(2026, 3, 1), payload: { text: '存储用 SQLite，后来改成 Postgres。' },
   });
-  kernel.beliefGovernanceService.apply({
-    projectId: 'cogmem', ownership: 'user', beliefType: 'decision', canonicalKey: 'storage',
-    statement: 'We use SQLite', evidenceEventIds: [event.eventId],
+  const candidate = {
+    projectId: 'cogmem', scope: 'project' as const, subject: 'storage', predicate: 'uses',
+    confidence: 0.5, sourceType: 'user' as const, extractionReason: 'explicit_user_statement' as const,
+    sourceEventId: event.eventId,
+  };
+  const first = kernel.beliefStore.upsert({ ...candidate, objectValue: { raw: 'SQLite', type: 'string' }, validFrom: 1000 });
+  const replacement = kernel.beliefStore.upsert({
+    ...candidate, confidence: 0.99, objectValue: { raw: 'Postgres', type: 'string' }, validFrom: 2000,
   });
-  const replacement = kernel.beliefGovernanceService.apply({
-    projectId: 'cogmem', ownership: 'user', beliefType: 'decision', canonicalKey: 'storage',
-    statement: 'We use Postgres', evidenceEventIds: [event.eventId], relation: 'correct',
-  });
+  expect(replacement.decision.action).toBe('supersede_existing');
+  const canonicalKey = first.belief!.canonicalKey;
   kernel.close();
 
-  const out = await run(['belief-history', '--key', 'storage', '--project', 'cogmem', '--db', dbPath, '--json']);
+  const out = await run(['belief-history', '--key', canonicalKey, '--project', 'cogmem', '--db', dbPath, '--json']);
   const versions = out.versions as Array<Record<string, unknown>>;
   expect(versions.length).toBe(2);
-  expect(versions[0]!.statement).toBe('We use SQLite');
-  expect(versions[0]!.supersededByBeliefId).toBe(replacement.beliefId);
-  expect(versions[1]!.statement).toBe('We use Postgres');
+  expect(versions[0]!.value).toBe('SQLite');
+  expect(versions[0]!.status).toBe('superseded');
+  expect(versions[0]!.supersededByBeliefId).toBe(replacement.belief!.id);
+  expect(versions[0]!.validFrom).toBe(1000);
+  expect(versions[1]!.value).toBe('Postgres');
 
-  const empty = await run(['belief-history', '--key', 'never-heard-of-it', '--project', 'cogmem', '--db', dbPath, '--json']);
+  const empty = await run(['belief-history', '--key', 'no-such-key', '--project', 'cogmem', '--db', dbPath, '--json']);
   expect(empty.versions).toEqual([]);
 
-  const human = await runHuman(['belief-history', '--key', 'storage', '--project', 'cogmem', '--db', dbPath]);
+  const human = await runHuman(['belief-history', '--key', canonicalKey, '--project', 'cogmem', '--db', dbPath]);
   expect(human).toContain('versions=2');
-  expect(human).toContain('We use SQLite');
-  expect(human).toContain(`supersededBy=${replacement.beliefId}`);
+  expect(human).toContain('SQLite');
+  expect(human).toContain(`supersededBy=${replacement.belief!.id}`);
 });

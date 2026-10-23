@@ -8,6 +8,8 @@ const PRODUCT_FACETS: Readonly<Record<string, ProductFacet>> = {
   time: 'time',
   topic: 'topic',
   entity: 'person',
+  actor: 'person',
+  event: 'event',
   location: 'place',
   state: 'state',
 };

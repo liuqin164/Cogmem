@@ -25,6 +25,12 @@ test('an entity match on a real episode is reported as the person facet', () => 
     for (const facet of entityFacets) expect(facet.productFacet).toBe('person');
     // The schema field is unchanged: consumers keying on `type` keep working.
     expect(entityFacets[0]!.type).toBe('entity');
+    // An internal entrance is labelled as such instead of being dressed up.
+    const internal = (result.matchedFacets ?? []).filter((facet) => facet.type === 'session' || facet.type === 'thread');
+    for (const facet of internal) {
+      expect(facet.productFacet).toBeUndefined();
+      expect(facet.internal).toBe(true);
+    }
     // The human-readable explanation uses the product word.
     const cards = ((result as unknown as { cards?: Array<{ whyMatched?: string }> }).cards) ?? [];
     expect(cards[0]?.whyMatched).toContain('person:');
@@ -35,6 +41,8 @@ test('an entity match on a real episode is reported as the person facet', () => 
 
 test('internal entrances map to nothing, and event is the only memory kind that is a facet', () => {
   expect(productFacetFor('entity', 'facet:hermes')).toBe('person');
+  expect(productFacetFor('actor', 'zhang')).toBe('person');
+  expect(productFacetFor('event', 'deploy')).toBe('event');
   expect(productFacetFor('location', 'tokyo')).toBe('place');
   expect(productFacetFor('state', 'sqlite')).toBe('state');
   expect(productFacetFor('time', '2026-06')).toBe('time');

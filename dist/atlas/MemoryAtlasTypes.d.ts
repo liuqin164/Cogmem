@@ -48,6 +48,8 @@ export interface MemoryAtlasMatchedFacet {
     relation: string;
     /** Present only when this entrance is one of the six product facets. */
     productFacet?: ProductFacet;
+    /** True for an entrance that is not one of the six: storage-only vocabulary. */
+    internal?: boolean;
 }
 export interface MemoryAtlasMatchedPath {
     facet: MemoryAtlasMatchedFacet;

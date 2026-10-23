@@ -660,10 +660,26 @@ function runBeliefHistory(kernel, args) {
     const key = args.key?.trim();
     if (!key)
         throw new Error(`belief-history requires --key <canonicalKey>.\n${usage()}`);
+    // Read the live belief table: that is what recall and belief touches use.
+    const history = kernel.beliefStore.getBeliefHistoryForCanonicalKeys([key], {
+        projectId: args.projectId,
+        includeStatuses: ['active', 'superseded', 'suspect', 'expired', 'revoked'],
+        limitPerCanonical: 50,
+    });
+    const rows = [...(history.get(key) ?? [])].sort((a, b) => a.validFrom - b.validFrom || a.createdAt - b.createdAt);
     return {
         projectId: args.projectId,
         key,
-        versions: kernel.temporalMemoryService.getBeliefHistory(args.projectId, key),
+        versions: rows.map((row) => ({
+            beliefId: row.id,
+            canonicalKey: row.canonicalKey,
+            value: row.objectValue.raw,
+            status: row.status,
+            validFrom: row.validFrom,
+            validTo: row.validTo,
+            supersedesBeliefId: row.supersedesBeliefId,
+            supersededByBeliefId: row.supersededByBeliefId,
+        })),
     };
 }
 function runGraphCommand(kernel, args) {
@@ -731,6 +747,11 @@ function runShow(kernel, args) {
     });
     if (!context)
         throw new Error(`No raw ledger event found for ${args.eventId}`);
+    // A project-bound drill-down must not reach into another project, and the
+    // failure must not confirm that the event exists somewhere else.
+    if (args.projectId && context.event.projectId !== args.projectId) {
+        throw new Error(`No raw ledger event found for ${args.eventId}`);
+    }
     const normalized = normalizeSourceContextWindow(context.event, context.before, context.after, {
         before: beforeCount,
         after: afterCount,
@@ -979,7 +1000,7 @@ function printHuman(command, payload) {
         console.log(`key: ${payload.key} project=${payload.projectId || '__global__'} versions=${versions.length}`);
         for (const row of versions) {
             const replaced = row.supersededByBeliefId ? ` supersededBy=${row.supersededByBeliefId}` : '';
-            console.log(`- v${row.version} ${row.status} ${row.statement}${replaced}`);
+            console.log(`- ${row.status} ${row.value} validFrom=${row.validFrom}${replaced}`);
         }
         return;
     }
