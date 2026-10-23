@@ -16,3 +16,11 @@ dist/.tsbuildinfo
 .cogmem/
 *.log
 dist.next/
+
+# Local agent skills (installed via .dsh/vendor, not tracked)
+.dsh/vendor/
+.agents/
+
+# Local runtime artifacts (untracked by design)
+/docs/overnight.lock
+/docs/overnight-progress.md

@@ -521,6 +521,8 @@ The wrapper registers:
 - `before_prompt_build`: governed recall and prompt context injection.
 - `agent_end`: queued turn recording so slow embedding/database writes do not block responses.
 
+How the plugin keeps those hooks fast — one resident kernel behind a Unix socket, its protocol and configuration, and the measured per-turn cost — is in [docs/openclaw-runtime.md](./docs/openclaw-runtime.md).
+
 The automatic wrapper keeps OpenClaw's native prompt untouched. Cogmem only prepends its own bounded memory layer:
 
 - `<COGMEM_SESSION_STATE>` is compact current-session working state stored under `.cogmem/session_state/openclaw/`.
@@ -775,6 +777,7 @@ This also updates existing Hermes MCP blocks with missing strategy, episode, Dre
 - [Security](./SECURITY.md)
 - [Contributing](./CONTRIBUTING.md)
 - [Release checklist](./RELEASE_CHECKLIST.md)
+- [OpenClaw runtime and resident kernel](./docs/openclaw-runtime.md)
 - [Changelog](./CHANGELOG.md)
 
 Installed OpenClaw and Hermes skills include their own `references/operations.md` command handbook.
