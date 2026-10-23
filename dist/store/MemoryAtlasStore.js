@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { productFacetFor } from '../atlas/MemoryAtlasTypes.js';
+import { productFacetFor } from '../atlas/ProductFacet.js';
 import { decodeAtlasNodeId, encodeAtlasNodeId, fromAtlasEdgeEndpoint } from '../atlas/AtlasNodeIdCodec.js';
 import { containsCanonicalAlias, normalizeAlias } from '../semantic/CanonicalMemoryResolver.js';
 import { localDateFor, localDateRange } from '../utils/LocalDateContext.js';

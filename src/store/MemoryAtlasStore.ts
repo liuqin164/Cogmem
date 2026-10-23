@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
-import { productFacetFor } from '../atlas/MemoryAtlasTypes.js';
+import { productFacetFor } from '../atlas/ProductFacet.js';
 import type { PlannedFacet, FacetQueryPlan } from '../atlas/FacetQueryPlanner.js';
 import type {
   MemoryAtlasAction,

@@ -64,24 +64,7 @@ export interface MemoryAtlasNode {
   evidence?: MemoryAtlasEvidence[];
 }
 
-/**
- * The six ways a person locates a memory (GLOSSARY.md). A schema entrance may
- * carry one of these labels; internal entrances carry none.
- */
-export type ProductFacet = 'time' | 'person' | 'place' | 'event' | 'topic' | 'state';
-
-/** Translate a schema entrance into the product facet it stands for, if any. */
-export function productFacetFor(type: string, value: string): ProductFacet | undefined {
-  switch (type) {
-    case 'time': return 'time';
-    case 'topic': return 'topic';
-    case 'entity': return 'person';
-    case 'location': return 'place';
-    case 'state': return 'state';
-    case 'memoryKind': return value === 'event' ? 'event' : undefined;
-    default: return undefined;
-  }
-}
+import type { ProductFacet } from './ProductFacet.js';
 
 export interface MemoryAtlasMatchedFacet {
   type: 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind' | 'actor' | 'project' | 'event' | 'task' | 'state' | 'object' | 'location';

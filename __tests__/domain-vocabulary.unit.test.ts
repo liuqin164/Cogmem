@@ -39,6 +39,7 @@ describe('domain vocabulary in the main documents', () => {
     expect(atlas, 'the six facets must be named').toContain('person, place, event, topic, state');
     expect(atlas, 'the gap must stay visible').toContain('not projected yet');
     expect(atlas, 'the API field keeps its name').toContain('matchedFacets');
+    expect(atlas, 'the product facet field must be documented').toContain('productFacet');
   });
 
   test('README names both waves', () => {

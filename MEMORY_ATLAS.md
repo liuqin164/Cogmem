@@ -67,8 +67,8 @@ Exact constraints may bypass the visibility floor. They never bypass `projectId`
   "displayTitle": "CogMem Memory Context 黑盒与原文下钻",
   "oneLineSummary": "用户指出注入的 CogMem Memory Context 像黑盒，需要能从摘要下钻到原始对话。",
   "matchedFacets": [
-    { "type": "time", "value": "2026-06-06" },
-    { "type": "topic", "value": "PROJECT/Cogmem/memory-blackbox" }
+    { "type": "time", "value": "2026-06-06", "productFacet": "time" },
+    { "type": "topic", "value": "PROJECT/Cogmem/memory-blackbox", "productFacet": "topic" }
   ],
   "matchedPaths": [],
   "relatedButNotSelected": [],
@@ -77,6 +77,13 @@ Exact constraints may bypass the visibility floor. They never bypass `projectId`
   }
 }
 ```
+
+`productFacet` is present only when the entrance stands for one of the six Facets a
+person can name: `entity` → `person`, `location` → `place`, `state` → `state`,
+`memoryKind: event` → `event`, plus `time` and `topic` unchanged. Internal
+entrances (`session`, `thread`, `project`, other memory kinds, `actionKind`,
+`issue`) carry no `productFacet`. The field also rides along when a recall item
+copies `matchedFacets`.
 
 Agents should prefer `cards` over raw node labels for historical discussion because cards preserve the canonical episode, match reason, and drilldown command.
 

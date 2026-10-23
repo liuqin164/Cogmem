@@ -18,6 +18,18 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
   return JSON.parse(stdout) as Record<string, unknown>;
 }
 
+async function runHuman(args: string[]): Promise<string> {
+  const proc = Bun.spawn({ cmd: ['bun', memoryBin, ...args], stdout: 'pipe', stderr: 'pipe' });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  expect(stderr).toBe('');
+  expect(exitCode).toBe(0);
+  return stdout;
+}
+
 test('belief history returns the superseded version and names its replacement', async () => {
   const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-belief-history-')), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
@@ -45,4 +57,9 @@ test('belief history returns the superseded version and names its replacement', 
 
   const empty = await run(['belief-history', '--key', 'never-heard-of-it', '--project', 'cogmem', '--db', dbPath, '--json']);
   expect(empty.versions).toEqual([]);
+
+  const human = await runHuman(['belief-history', '--key', 'storage', '--project', 'cogmem', '--db', dbPath]);
+  expect(human).toContain('versions=2');
+  expect(human).toContain('We use SQLite');
+  expect(human).toContain(`supersededBy=${replacement.beliefId}`);
 });

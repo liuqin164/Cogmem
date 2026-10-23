@@ -7,7 +7,7 @@ Agent-facing recall is governed by default. `KernelAgentMemoryBackend.recall()` 
 `explainRecallWithKernel()` reports why evidence entered the recall result:
 
 - `activationPath`: the recall path, such as pulse, temporal traversal, or fallback.
-- `whyMatched`: agent scope, provenance, pulse fusion, temporal branch, and governance reasons.
+- `whyMatched`: agent scope, provenance, pulse fusion, temporal branch, and governance reasons. When an Atlas entrance matched, it names the product facet the entrance stands for (`person:`, `place:`), falling back to the schema type for internal entrances.
 - `sourceAnchor`: the drill-down anchor for the semantic memory source event.
 
 `sourceAnchor` contains:

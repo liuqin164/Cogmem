@@ -763,6 +763,16 @@ function runFrame(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknow
   return frame as unknown as Record<string, unknown>;
 }
 
+function runBeliefHistory(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  const key = args.key?.trim();
+  if (!key) throw new Error(`belief-history requires --key <canonicalKey>.\n${usage()}`);
+  return {
+    projectId: args.projectId,
+    key,
+    versions: kernel.temporalMemoryService.getBeliefHistory(args.projectId, key),
+  };
+}
+
 function runGraphCommand(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
   const projectId = args.projectId;
   if (!projectId) throw new Error(`Memory Atlas commands require --project.\n${usage()}`);
@@ -774,15 +784,6 @@ function runGraphCommand(kernel: MemoryKernel, args: MemoryArgs): Record<string,
     if (!args.eventId && !args.episodeId) throw new Error(`graph-reindex requires --event or --episode.\n${usage()}`);
     if (args.eventId && args.episodeId) throw new Error(`graph-reindex accepts exactly one of --event or --episode.\n${usage()}`);
     return kernel.reindexMemoryAtlas({ projectId, eventId: args.eventId, episodeId: args.episodeId }) as unknown as Record<string, unknown>;
-  }
-  if (args.command === 'belief-history') {
-    const key = args.key?.trim();
-    if (!key) throw new Error(`belief-history requires --key <canonicalKey>.\n${usage()}`);
-    return {
-      projectId: projectId,
-      key,
-      versions: kernel.temporalMemoryService.getBeliefHistory(projectId, key),
-    };
   }
   if (args.command === 'graph') return kernel.graphOverview(options) as unknown as Record<string, unknown>;
   if (args.command === 'graph-search') {
@@ -1161,6 +1162,8 @@ async function main(): Promise<void> {
                           ? runTopologyRebuild(kernel, kernelArgs)
                         : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill' || kernelArgs.command === 'frame-review'
                           ? runFrame(kernel, kernelArgs)
+                        : kernelArgs.command === 'belief-history'
+                          ? runBeliefHistory(kernel, kernelArgs)
                         : runGraphCommand(kernel, kernelArgs);
     if (kernelArgs.json) {
       const queue = kernelArgs.command === 'status'

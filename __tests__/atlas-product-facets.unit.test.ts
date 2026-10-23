@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
-import { productFacetFor } from '../src/atlas/MemoryAtlasTypes.js';
+import { productFacetFor } from '../src/atlas/ProductFacet.js';
 
 // Q10: the product speaks six Facets. A schema `entity` match is a person to the
 // reader, and an internal entrance must not be dressed up as one of the six.
@@ -25,6 +25,9 @@ test('an entity match on a real episode is reported as the person facet', () => 
     for (const facet of entityFacets) expect(facet.productFacet).toBe('person');
     // The schema field is unchanged: consumers keying on `type` keep working.
     expect(entityFacets[0]!.type).toBe('entity');
+    // The human-readable explanation uses the product word.
+    const cards = ((result as unknown as { cards?: Array<{ whyMatched?: string }> }).cards) ?? [];
+    expect(cards[0]?.whyMatched).toContain('person:');
   } finally {
     kernel.close();
   }
