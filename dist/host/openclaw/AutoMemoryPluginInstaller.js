@@ -4,7 +4,11 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
-const PLUGIN_ID = 'cogmem-auto-memory';
+function makePluginId(workspaceRoot) {
+    const hash = createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 8);
+    return `cogmem-auto-memory-${hash}`;
+}
+const PLUGIN_ID = 'cogmem-auto-memory'; // legacy default, not used for multi-workspace
 const PLUGIN_VERSION = '0.7.2';
 function defaultPublicEntrypoint() {
     const here = resolve(dirname(fileURLToPath(import.meta.url)));
@@ -27,7 +31,7 @@ export function defaultOpenClawConfigPath(workspaceRoot, env = process.env) {
     return join(env.HOME || homedir(), '.openclaw', 'openclaw.json');
 }
 export function defaultOpenClawAutoMemoryPluginDir(workspaceRoot) {
-    return join(resolve(workspaceRoot), 'extensions', PLUGIN_ID);
+    return join(resolve(workspaceRoot), 'extensions', makePluginId(workspaceRoot));
 }
 export function installOpenClawAutoMemoryPlugin(options) {
     const workspaceRoot = resolve(options.workspaceRoot);
@@ -38,12 +42,13 @@ export function installOpenClawAutoMemoryPlugin(options) {
         throw new Error(`Missing cogmem config at ${configResolution.path}. Ask an operator to run the interactive setup: cogmem init --agent openclaw --scope project.`);
     }
     const configPath = configResolution.path;
-    const pluginDir = resolve(options.pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot));
+    const pluginId = options.pluginId || makePluginId(workspaceRoot);
+    const pluginDir = resolve(options.pluginDir || join(resolve(workspaceRoot), 'extensions', pluginId));
     const openclawConfigPath = resolve(options.openclawConfigPath || defaultOpenClawConfigPath(workspaceRoot));
     const bunPath = options.bunPath || process.execPath || 'bun';
     const projectId = options.projectId || 'openclaw';
     const agentId = options.agentId || 'openclaw';
-    const files = buildPluginFiles();
+    const files = buildPluginFiles(pluginId);
     const desiredFiles = new Map([
         [join(pluginDir, 'package.json'), files.packageJson],
         [join(pluginDir, 'openclaw.plugin.json'), files.manifestJson],
@@ -60,6 +65,7 @@ export function installOpenClawAutoMemoryPlugin(options) {
         bunPath,
         agentId,
         projectId,
+        pluginId,
     });
     const alreadyCurrent = filesAlreadyCurrent && !patchedConfig.changed;
     let backupPath;
@@ -81,7 +87,7 @@ export function installOpenClawAutoMemoryPlugin(options) {
     }
     return {
         enabled: true,
-        pluginId: PLUGIN_ID,
+        pluginId,
         pluginDir,
         openclawConfigPath,
         configPath,
@@ -92,15 +98,16 @@ export function installOpenClawAutoMemoryPlugin(options) {
         backupPath,
         hookNames: ['before_prompt_build', 'agent_end'],
         nextCommands: [
-            `openclaw plugins inspect ${PLUGIN_ID} --runtime --json`,
+            `openclaw plugins inspect ${pluginId} --runtime --json`,
             'openclaw gateway restart',
         ],
     };
 }
 export function inspectOpenClawAutoMemoryPlugin(options) {
     const workspaceRoot = resolve(options.workspaceRoot);
+    const pluginId = makePluginId(workspaceRoot);
     const pluginDir = resolve(options.pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot));
-    const files = buildPluginFiles();
+    const files = buildPluginFiles(pluginId);
     const desiredFiles = new Map([
         [join(pluginDir, 'package.json'), files.packageJson],
         [join(pluginDir, 'openclaw.plugin.json'), files.manifestJson],
@@ -129,7 +136,7 @@ export function inspectOpenClawAutoMemoryPlugin(options) {
         }
     }
     return {
-        pluginId: PLUGIN_ID,
+        pluginId,
         pluginDir,
         installed: fileResults.some((file) => file.exists),
         current: fileResults.every((file) => file.current),
@@ -152,10 +159,10 @@ function buildPatchedOpenClawConfig(input) {
     const load = ensureObject(plugins, 'load');
     load.paths = appendUniqueArray(load.paths, input.pluginDir);
     if (Array.isArray(plugins.allow)) {
-        plugins.allow = appendUniqueArray(plugins.allow, PLUGIN_ID);
+        plugins.allow = appendUniqueArray(plugins.allow, input.pluginId);
     }
     const entries = ensureObject(plugins, 'entries');
-    entries[PLUGIN_ID] = {
+    entries[input.pluginId] = {
         ...(isRecord(entries[PLUGIN_ID]) ? entries[PLUGIN_ID] : {}),
         enabled: true,
         hooks: {
@@ -221,17 +228,18 @@ function buildPatchedOpenClawConfig(input) {
         changed: before !== after,
     };
 }
-function buildPluginFiles() {
+function buildPluginFiles(pluginId) {
+    const pid = pluginId || PLUGIN_ID;
     return {
         packageJson: `${JSON.stringify({
-            name: PLUGIN_ID,
+            name: pid,
             version: PLUGIN_VERSION,
             private: true,
             type: 'commonjs',
             main: 'index.js',
         }, null, 2)}\n`,
         manifestJson: `${JSON.stringify({
-            id: PLUGIN_ID,
+            id: pid,
             name: 'CogMem Auto Memory',
             version: PLUGIN_VERSION,
             main: 'index.js',
@@ -312,7 +320,8 @@ const { createHash } = require('node:crypto');
 const { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
 
-const PLUGIN_ID = 'cogmem-auto-memory';
+// PLUGIN_ID is injected at install time from the workspace hash
+const PLUGIN_ID = '${PLUGIN_ID}';
 const PLUGIN_VERSION = '${PLUGIN_VERSION}';
 const DEFAULTS = {
   configPath: '',
@@ -1134,7 +1143,7 @@ function audit(config, record) {
     mkdirSync(path.dirname(logPath), { recursive: true });
     appendFileSync(logPath, JSON.stringify({
       ts: new Date().toISOString(),
-      pluginId: PLUGIN_ID,
+      pluginId: '${PLUGIN_ID}',
       ...record,
     }) + '\n');
   } catch {

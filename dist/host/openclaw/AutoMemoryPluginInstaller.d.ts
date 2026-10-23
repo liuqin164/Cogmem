@@ -6,6 +6,7 @@ export interface OpenClawAutoMemoryInstallOptions {
     bunPath?: string;
     agentId?: string;
     projectId?: string;
+    pluginId?: string;
     dryRun?: boolean;
     force?: boolean;
 }
