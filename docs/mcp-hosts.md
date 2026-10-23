@@ -57,7 +57,7 @@ answers, so the model has to call `cogmem_recall` itself. The server's
 documentation. It only names tools the profile the server started with exposes —
 a per-call identity that narrows the profile does not rewrite it.
 
-| Host | Path | What "automatic" means there |
+| Host | Path | What happens before the model answers |
 |---|---|---|
 | OpenClaw + the Cogmem plugin | push | Recall is already in the prompt |
 | OpenClaw via `openclaw mcp add` | pull | The model must call `cogmem_recall` |
@@ -67,7 +67,8 @@ a per-call identity that narrows the profile does not rewrite it.
 | Codex | pull | Same |
 
 Do not describe a pull-only host as automatic. Its agent then looks for a memory
-that was never injected, finds none, and concludes Cogmem does not work.
+that never surfaced, finds none, and concludes Cogmem does not work. Emergence
+is the property only the push path can claim.
 
 ## Shared memory
 

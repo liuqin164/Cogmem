@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import {
   buildMcpInstructions,
+  CORE_TOOLS,
   filterToolsByProfile,
   type McpToolProfile,
 } from '../src/mcp/profiles.js';
@@ -103,7 +104,7 @@ describe('mcp instructions follow the serving profile', () => {
       const instructions = String(init?.result?.instructions ?? '');
       const tools = (list?.result?.tools ?? []).map((tool: { name: string }) => tool.name) as string[];
 
-      expect(tools).toHaveLength(8);
+      expect(tools).toHaveLength(CORE_TOOLS.length);
       expect(instructions.length).toBeGreaterThan(0);
       expect(referencedTools(instructions).filter((name) => !tools.includes(name))).toEqual([]);
     } finally {

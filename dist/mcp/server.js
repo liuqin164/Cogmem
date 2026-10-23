@@ -2,7 +2,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import { callCogmemMcpTool, listCogmemMcpTools, } from './CoreMcpTools.js';
-import { buildMcpInstructions, filterToolsByProfile, isToolAllowed, resolveProfile } from './profiles.js';
+import { buildMcpInstructions, DEFAULT_TOOL_PROFILE, filterToolsByProfile, isToolAllowed, resolveProfile } from './profiles.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 import { SqliteSharedMemory } from '../adapters/sqlite/SqliteSharedMemory.js';
 import { CORE_VERSION } from '../version.js';
@@ -101,7 +101,7 @@ export function createCogmemMcpServer(runtime = {}, options = {}) {
         capabilities: {
             tools: {},
         },
-        instructions: buildMcpInstructions(options.profile ?? 'core'),
+        instructions: buildMcpInstructions(options.profile ?? DEFAULT_TOOL_PROFILE),
     });
     // A request is trusted when the transport authenticated it (a bearer token was
     // configured and presented), so only then may an identity header widen the

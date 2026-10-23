@@ -49,8 +49,10 @@ export function isToolAllowed(profile: McpToolProfile, toolName: string): boolea
   return (set as readonly string[]).includes(toolName);
 }
 
+export const DEFAULT_TOOL_PROFILE: McpToolProfile = 'core';
+
 export function resolveProfile(value: string | undefined): McpToolProfile {
-  if (!value) return 'core';
+  if (!value) return DEFAULT_TOOL_PROFILE;
   if (value === 'core' || value === 'admin' || value === 'full') return value;
   throw new Error(`unknown_tool_profile:${value}`);
 }
@@ -69,6 +71,10 @@ export function filterToolsByProfile<T extends { name: string }>(
  * therefore may only name tools the serving profile can call — an instruction
  * that points at a filtered tool costs the model a turn on
  * `tool_not_in_profile` and teaches it to stop trusting the string.
+ *
+ * The string is built once, from the profile the server starts with. MCP has no
+ * per-call instructions channel, so a session that narrows its profile through
+ * the identity header still reads the startup profile's copy.
  */
 export function buildMcpInstructions(profile: McpToolProfile): string {
   const sentences: string[] = [];

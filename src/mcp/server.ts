@@ -12,7 +12,7 @@ import {
   listCogmemMcpTools,
   type CogmemMcpRuntime,
 } from './CoreMcpTools.js';
-import { buildMcpInstructions, filterToolsByProfile, isToolAllowed, resolveProfile, type McpToolProfile } from './profiles.js';
+import { buildMcpInstructions, DEFAULT_TOOL_PROFILE, filterToolsByProfile, isToolAllowed, resolveProfile, type McpToolProfile } from './profiles.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 import { SqliteSharedMemory } from '../adapters/sqlite/SqliteSharedMemory.js';
 import { CORE_VERSION } from '../version.js';
@@ -175,7 +175,7 @@ export function createCogmemMcpServer(
       capabilities: {
         tools: {},
       },
-      instructions: buildMcpInstructions(options.profile ?? 'core'),
+      instructions: buildMcpInstructions(options.profile ?? DEFAULT_TOOL_PROFILE),
     },
   );
 
