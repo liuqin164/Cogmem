@@ -140,7 +140,7 @@ Use the local audit CLI when the user needs to inspect memory directly:
 - `cogmem memory map --project <project> --json`
 - `cogmem memory tick --project <project> --json`
 
-Ledger replay can show raw evidence. It must not replace governed recall, pulse activation, inhibition, or ContextPack budgeting.
+Ledger replay can show raw evidence. It must not replace governed recall, Pulse 1 then Pulse 2 activation, inhibition, or ContextPack budgeting.
 ## Memory Atlas versus direct recall
 
 Use Memory Atlas before direct recall when the user asks what is remembered, asks a broad project/history question, or needs relationships between multiple memory areas. Use direct recall for a concrete factual question. Atlas narrows the search space; it does not answer from summaries alone.

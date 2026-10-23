@@ -59,4 +59,4 @@ Use external benchmark ideas only as baselines or measurements:
 - selective-compile storage baseline
 - raw-then-dream coverage baseline
 
-These baselines must not become the default agent-facing memory path. The default path remains structure-first universe navigation with pulse activation, temporal traversal, governance suppression, and bounded context.
+These baselines must not become the default agent-facing memory path. The default path remains structure-first universe navigation with Pulse 1 and Pulse 2 activation, temporal traversal, governance suppression, and bounded context.

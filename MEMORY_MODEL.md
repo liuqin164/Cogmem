@@ -1,12 +1,12 @@
 # Memory Model
 
-`cogmem` is an agent-native memory kernel. It stores agent experience, compiles durable memory at write time, recalls in two pulses — a direct hit, then an associative spread — and keeps active context governed and bounded.
+`cogmem` is an agent-native memory kernel. It stores agent experience, compiles durable memory at write time, recalls in one Pulse of two waves — a direct hit, then an associative spread — and keeps active context governed and bounded.
 
 It is not a vector RAG store, a knowledge-base application, a wiki, an Obsidian replacement, or an agent runtime.
 
 ## Language
 
-A person locates a memory by one of six **Facets**: time, person, place, event, topic, state. The thirteen **Dimensions** below are the axes a node is stored on; they are storage vocabulary and are never named to a user. Surfacing happens in two **Pulses**: Pulse 1 is the direct hit, Pulse 2 the associative spread that brings back context the cue never mentioned. [GLOSSARY.md](./GLOSSARY.md) holds the authoritative definitions.
+A person locates a memory by one of six **Facets**: time, person, place, event, topic, state. The thirteen **Dimensions** are the fixed keys a stored node carries; they are storage vocabulary and never reach a user. Recall is one **Pulse** in two waves: **Pulse 1** is the direct hit, **Pulse 2** the associative spread that brings back context the cue never mentioned. [GLOSSARY.md](./GLOSSARY.md) holds the authoritative definitions.
 
 ## Memory Tiers
 
@@ -30,7 +30,7 @@ A person locates a memory by one of six **Facets**: time, person, place, event, 
 - Dream Candidates: curator output such as user preference candidates, project memories, long-term goals, boundaries, failure lessons, diagnostic conclusions, session/topic summaries, corrections, causal/tool-observation links, temporal invalidation suggestions, and conflict candidates. These remain candidates with source refs, confidence, and governance status; an LLM helper must not directly rewrite verified memory.
 - Active Core: a very small current operating context maintained by the host agent or adapter, not all history.
 - Collection Routing: `collection:<name>` tags split operational anchor memory from specialized lanes such as `collection:theseus` creative artifacts.
-- Associative Graph: pulse-activated local graph, topic, entity, temporal, and cognitive adjacency candidates.
+- Associative Graph: local graph, topic, entity, temporal, and cognitive adjacency candidates activated by Pulse 2.
 - Activation Store: persistent, decaying hot-memory traces touched by recall packs and inspected by host-owned maintenance ticks.
 - Recall Pack / ContextPack: the limited governed context returned for the current agent task. `KernelAgentMemoryBackend.recallPack()` adds direct memory, associative neighbors, entity cards, belief touches, and a charge vector.
 - Filtered Evidence: same-project candidates that were considered but suppressed by status, trust, scope, or budget.
@@ -101,7 +101,7 @@ The worker can be run manually or by a host-owned schedule, but the schedule onl
 
 chronological order is not recall ranking.
 
-Chronological order is for replay and audit. Recall ranking is for selecting useful current context. Agent-facing recall still uses governed universe navigation: query compilation, pulse activation, temporal traversal, graph expansion, inhibition, and evidence budgeting.
+Chronological order is for replay and audit. Recall ranking is for selecting useful current context. Agent-facing recall still uses governed universe navigation: query compilation, Pulse 1 then Pulse 2 activation, temporal traversal, graph expansion, inhibition, and evidence budgeting.
 
 Do not use vector topK to reconstruct conversation order. Do not use ledger replay to bypass governed recall. Do not inject an entire thread, day, or transcript into prompt context unless a forensic/audit tool explicitly requests replay.
 
