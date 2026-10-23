@@ -27,6 +27,8 @@ export declare class SchemaMigrationRunner {
     private assertRecordedChecksums;
     private recordedChecksums;
     private assertSupportedReleaseSchema;
+    /** True when the inherited receipt versions form one unbroken run. */
+    private hasContiguousReceipts;
     private releaseSchema31Satisfied;
     /** `_meta.schema_version` from pre-4.0 kernels. A hint only, never a receipt. */
     private legacySchemaVersion;

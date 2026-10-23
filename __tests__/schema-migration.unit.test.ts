@@ -155,6 +155,15 @@ describe('3.7.3 release database upgrade path', () => {
     });
   });
 
+  test('a released history with deleted receipts is rejected instead of upgraded', () => {
+    withFixture((db) => {
+      db.exec(`DELETE FROM _schema_migrations WHERE version IN ('0016','0020','0025')`);
+
+      expect(() => new SchemaMigrationRunner(db, KERNEL_MIGRATIONS, { backupVerified: true }).run())
+        .toThrow('unsupported_release_schema:gap');
+    });
+  });
+
   test('an upgraded schema31 database reopens without demanding pre-4.0 digests', () => {
     withFixture((db) => {
       new SchemaMigrationRunner(db, KERNEL_MIGRATIONS, { backupVerified: true }).run();

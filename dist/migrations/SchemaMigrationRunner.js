@@ -113,7 +113,7 @@ export class SchemaMigrationRunner {
                 // ships those migrations, so their digests cannot be verified here; the
                 // release-boundary check in assertSupportedReleaseSchema still rejects
                 // anything newer than the baseline.
-                if (row.version < LATEST_RELEASE_VERSION)
+                if (Number(row.version) < Number(LATEST_RELEASE_VERSION))
                     continue;
                 throw new Error(`migration_checksum_unknown:${row.version}`);
             }
@@ -162,13 +162,28 @@ export class SchemaMigrationRunner {
         const latest = rows[rows.length - 1]?.version;
         if (latest === '0031' && this.releaseSchema31Satisfied()) {
             const legacyVersion = this.legacySchemaVersion();
-            if (legacyVersion === undefined || legacyVersion === 31)
-                return;
-            throw new Error(legacyVersion > 31
-                ? `unsupported_development_schema:${legacyVersion}`
-                : `unsupported_release_schema:${legacyVersion}`);
+            if (legacyVersion !== undefined && legacyVersion !== 31) {
+                throw new Error(legacyVersion > 31
+                    ? `unsupported_development_schema:${String(legacyVersion).padStart(4, '0')}`
+                    : `unsupported_release_schema:${String(legacyVersion).padStart(4, '0')}`);
+            }
+            // A released database records every migration it applied. A hole means
+            // receipts were deleted, so the schema cannot be trusted as the released
+            // shape even though the latest receipt and marker look right.
+            if (!this.hasContiguousReceipts(rows.map((row) => row.version))) {
+                throw new Error('unsupported_release_schema:gap');
+            }
+            return;
         }
         throw new Error(latest ? `unsupported_release_schema:${latest}` : 'unsupported_database_identity');
+    }
+    /** True when the inherited receipt versions form one unbroken run. */
+    hasContiguousReceipts(versions) {
+        for (let index = 1; index < versions.length; index += 1) {
+            if (Number(versions[index]) !== Number(versions[index - 1]) + 1)
+                return false;
+        }
+        return true;
     }
     releaseSchema31Satisfied() {
         if (!this.tableExists('_episode_integrity_markers'))
