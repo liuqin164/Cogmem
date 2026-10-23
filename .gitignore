@@ -24,3 +24,8 @@ dist.next/
 # Local runtime artifacts (untracked by design)
 /docs/overnight.lock
 /docs/overnight-progress.md
+
+# Test temp roots (a suite run with TMPDIR=.tmp-test lands 300 MB here)
+.tmp-test/
+
+.cogmem/tmp/
