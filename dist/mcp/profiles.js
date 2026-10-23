@@ -72,6 +72,7 @@ export function buildMcpInstructions(profile) {
         sentences.push("For broad questions about what is remembered, project history, or relationships, start with cogmem_graph_explore. Use cogmem_graph_node to inspect a node's evidence, and only then drill down with returned raw event ids.");
     }
     sentences.push('Use cogmem_recall for a direct factual memory question and cogmem_explain_recall to audit selection.');
+    sentences.push('When the user asks about something that happened earlier and this prompt contains no recall evidence, call cogmem_recall before answering.');
     sentences.push('Atlas summaries are navigation hints, not evidence.');
     sentences.push('Cogmem cannot observe a hookless conversation automatically: record what matters with cogmem_remember_turn or cogmem_episode_append, then recall it explicitly.');
     if (isToolAllowed(profile, 'cogmem_dream_tick')) {

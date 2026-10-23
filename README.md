@@ -542,7 +542,7 @@ openclaw gateway restart
 
 ## Hermes
 
-Hermes integration is MCP-based in this release. cogmem does not claim to be a native Hermes memory provider.
+Hermes integration is MCP-based in this release. cogmem does not claim to be a native Hermes memory provider. There is no pre-prompt hook here, so this is the pull path: the agent calls `cogmem_recall` when the installed skill tells it to.
 
 Install the skill and patch Hermes MCP config:
 
@@ -810,7 +810,9 @@ cogmem mcp
 
 ## MCP transport and profiles
 
-`cogmem mcp` speaks stdio by default. To run one resident server shared by several hosts:
+`cogmem mcp` speaks stdio by default. A host attached this way has no pre-prompt hook:
+memory is recalled explicitly, guided by the server's `instructions` string, not injected.
+To run one resident server shared by several hosts:
 
 ```bash
 cogmem mcp --transport http --port 7337 --host claude --profile core \

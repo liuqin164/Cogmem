@@ -84,6 +84,9 @@ export function buildMcpInstructions(profile: McpToolProfile): string {
   sentences.push(
     'Use cogmem_recall for a direct factual memory question and cogmem_explain_recall to audit selection.',
   );
+  sentences.push(
+    'When the user asks about something that happened earlier and this prompt contains no recall evidence, call cogmem_recall before answering.',
+  );
   sentences.push('Atlas summaries are navigation hints, not evidence.');
   sentences.push(
     'Cogmem cannot observe a hookless conversation automatically: record what matters with cogmem_remember_turn or cogmem_episode_append, then recall it explicitly.',

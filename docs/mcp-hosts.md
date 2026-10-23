@@ -47,19 +47,21 @@ Two paths exist, and they promise different things.
 
 **Push — automatic.** The host exposes a pre-prompt hook, so recalled memory is
 already in the prompt before the model answers. The model never asks. Only the
-Cogmem plugin for OpenClaw provides this, through `before_prompt_build` and
-`agent_end`.
+Cogmem plugin for OpenClaw provides this: `before_prompt_build` injects the
+recall block. `agent_end` records the finished turn; it does not make memory
+emerge.
 
 **Pull — explicit.** The host speaks MCP only. Nothing runs before the model
 answers, so the model has to call `cogmem_recall` itself. The server's
 `instructions` string is what tells it to; that string is product surface, not
-documentation, and it only names tools the active profile exposes.
+documentation. It only names tools the profile the server started with exposes —
+a per-call identity that narrows the profile does not rewrite it.
 
 | Host | Path | What "automatic" means there |
 |---|---|---|
 | OpenClaw + the Cogmem plugin | push | Recall is already in the prompt |
 | OpenClaw via `openclaw mcp add` | pull | The model must call `cogmem_recall` |
-| Hermes | pull | The installed `cogmem-memory` skill tells the agent to recall first |
+| Hermes | pull | The installed `cogmem-memory` skill documents when to call `cogmem_recall` |
 | Claude Code | pull | Same contract, delivered by `instructions` |
 | Cursor | pull | Same |
 | Codex | pull | Same |

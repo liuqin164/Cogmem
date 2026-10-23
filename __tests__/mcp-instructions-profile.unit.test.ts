@@ -42,6 +42,8 @@ describe('mcp instructions follow the serving profile', () => {
     expect(text).toContain('cogmem_remember_turn');
     expect(text).toContain('cogmem_episode_append');
     expect(text).toContain('hookless');
+    // The sequencing is the contract: recall must come before answering.
+    expect(text).toContain('call cogmem_recall before answering');
   });
 
   test('full keeps the graph navigation guidance, admin keeps the dream-tick guidance', () => {
