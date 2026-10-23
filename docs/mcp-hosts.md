@@ -41,6 +41,32 @@ The server exposes 40 tools. A host does not need all of them.
 
 A tool outside the profile returns `tool_not_in_profile` instead of running.
 
+## How memory reaches the model
+
+Two paths exist, and they promise different things.
+
+**Push — automatic.** The host exposes a pre-prompt hook, so recalled memory is
+already in the prompt before the model answers. The model never asks. Only the
+Cogmem plugin for OpenClaw provides this, through `before_prompt_build` and
+`agent_end`.
+
+**Pull — explicit.** The host speaks MCP only. Nothing runs before the model
+answers, so the model has to call `cogmem_recall` itself. The server's
+`instructions` string is what tells it to; that string is product surface, not
+documentation, and it only names tools the active profile exposes.
+
+| Host | Path | What "automatic" means there |
+|---|---|---|
+| OpenClaw + the Cogmem plugin | push | Recall is already in the prompt |
+| OpenClaw via `openclaw mcp add` | pull | The model must call `cogmem_recall` |
+| Hermes | pull | The installed `cogmem-memory` skill tells the agent to recall first |
+| Claude Code | pull | Same contract, delivered by `instructions` |
+| Cursor | pull | Same |
+| Codex | pull | Same |
+
+Do not describe a pull-only host as automatic. Its agent then looks for a memory
+that was never injected, finds none, and concludes Cogmem does not work.
+
 ## Shared memory
 
 Hosts can publish memory items to a shared region and subscribe to collections

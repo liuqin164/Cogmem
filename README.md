@@ -486,7 +486,7 @@ Normalization writes Markdown with `cogmem-source-ref` markers for raw offset, l
 
 ## OpenClaw
 
-OpenClaw is the most complete host integration in this release.
+OpenClaw is the most complete host integration in this release. It is also the only place where memory can emerge on its own: the plugin hooks `before_prompt_build`, so recall is already in the prompt before the model speaks. Attaching over plain MCP (`openclaw mcp add`) gives the pull path only — the model has to call `cogmem_recall`.
 
 From the OpenClaw workspace:
 

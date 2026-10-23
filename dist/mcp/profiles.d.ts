@@ -15,4 +15,12 @@ export declare function resolveProfile(value: string | undefined): McpToolProfil
 export declare function filterToolsByProfile<T extends {
     name: string;
 }>(profile: McpToolProfile, tools: T[]): T[];
+/**
+ * The MCP `instructions` string is product surface, not documentation: a host
+ * with no pre-prompt hook has nowhere else to learn when to pull a memory. It
+ * therefore may only name tools the serving profile can call — an instruction
+ * that points at a filtered tool costs the model a turn on
+ * `tool_not_in_profile` and teaches it to stop trusting the string.
+ */
+export declare function buildMcpInstructions(profile: McpToolProfile): string;
 //# sourceMappingURL=profiles.d.ts.map
