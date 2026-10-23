@@ -93,6 +93,14 @@ bun run verify:packed-migration
 npm publish --dry-run --access public
 ```
 
+Gates added in this release, all inside `bun test`:
+
+- `mcp-instructions-profile` — each profile's `instructions` only name tools that profile exposes, and `core` keeps the recall-before-answering contract.
+- `identity-docs` — the documented identity trust boundary matches the shipped rule.
+- `drilldown-project-isolation` — a project-bound `memory show` cannot read another project's event.
+- `memory-atlas-cold-resurrection` — decay never makes a memory unreachable (ADR 0001).
+- `belief-history-cli` — a superseded belief reports the version that replaced it.
+
 The pack dry-run must include built public API files, CLI files, examples, docs, and `install.sh`. It must not include local databases or machine-specific files.
 
 `npm publish --dry-run` runs `prepublishOnly` first, so it repeats typecheck, the full test suite, the build, the pack listing, and `verify:packed-migration` (about four minutes). To inspect only the packing path, add `--ignore-scripts`.
