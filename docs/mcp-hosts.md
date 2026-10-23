@@ -126,31 +126,32 @@ Without it, requests get `401`.
 
 ### Per-session identity
 
-A host that serves several bots over one resident server can bind each session
-with a header:
+A host that serves several bots over one resident server can bind a session with
+a header:
 
 ```
-x-cogmem-identity: {"hostId":"reviewer","projectId":"project-a","profile":"core"}
+x-cogmem-identity: {"hostId":"cursor","projectId":"project-a","profile":"core"}
 ```
 
-Every field is optional. The header binds the session to a host and a project,
-and may narrow the tool profile. Three rules keep it from becoming an
-escalation path:
+Every field is optional. Four rules bound what it can do:
 
-- **Without a token, the header may narrow the profile but never widen it.** A
-  server started with `--profile core` that receives `"profile":"full"` keeps
-  serving `core`.
-- **A token-authenticated request may set any valid profile.** The token is the
-  trust boundary; the header is not.
-- **A `projectId` that differs from the session binding is rejected** with
-  `project_scope_violation`, never silently applied. An unknown profile is
-  rejected with `unknown_tool_profile:<value>`.
+- **The profile is a default, not a lock.** The profile the server *launched*
+  with is the ceiling: a call may narrow it and may raise it back up to that
+  ceiling, but a header can never exceed it.
+- **A token removes the ceiling.** An authenticated request may set any valid
+  profile; the token is the trust boundary, not the header.
+- **A bound project cannot be switched.** A `projectId` that differs from the
+  binding — or from `--project` — is rejected with `project_scope_violation`.
+- **An unknown profile is rejected** with `unknown_tool_profile:<value>`.
 
-The header is meant for a host process that already runs on this machine. With
-no token configured, any process that can reach the loopback port can claim a
-`hostId` and `projectId`; it still cannot widen the profile.
-
----
+The header is read on **every call**, not only when the session opens: one
+request can override a field for that call without changing the binding. A
+malformed header is ignored rather than rejected, which leaves the session
+unbound and lets call arguments choose the project — so a deployment that needs
+project isolation should set `--project`. With no token configured, any process
+that can reach the loopback port can claim a `hostId`, and can claim a
+`projectId` only if the server has no `--project` binding; it still cannot
+exceed the launch profile.
 
 ## Claude Code
 

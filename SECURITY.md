@@ -19,15 +19,20 @@
 ## Session identity
 
 The HTTP transport accepts an `x-cogmem-identity` header that binds a session to
-a host, a project, and a tool profile. It is not an authentication mechanism.
+a host and a project, and sets a default tool profile. It is not an
+authentication mechanism.
 
 - Without a configured token, an unauthenticated client that can reach the
-  loopback port may claim any `hostId` and `projectId`, and may narrow the tool
-  profile but never widen it.
+  loopback port may claim any `hostId`, and any `projectId` when the server was
+  started without `--project`. It may choose a profile up to the profile the
+  server launched with, never beyond it.
 - With a token, the request is trusted and may set any valid profile. The token,
   not the header, is the boundary.
-- A call that names a different `projectId` than the session binding is rejected
-  with `project_scope_violation` instead of reading another project's memory.
+- A bound project cannot be switched: a differing `projectId` is rejected with
+  `project_scope_violation` instead of reading another project's memory.
+- The header is read per call, and a malformed header is ignored rather than
+  rejected. Set `--project` when project isolation must not depend on what the
+  client sends.
 
 ## Reporting
 
