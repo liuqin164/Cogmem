@@ -88,7 +88,7 @@ Memory Binding
   CPU-canonicalized raw-event bindings to stable entity/topic paths, claim-key clusters, and activation-aware graph edges for source-anchored organization before fact promotion.
 
 Memory Atlas
-  A bounded, project-scoped, multi-dimensional memory navigation graph. Canonical episodes and raw evidence exist once; time, topic, issue, entity, session, memory-kind, and action-kind facets connect to them with typed edges. Agents use it to intersect facets, dedupe by canonicalId, explain why a memory matched, and then drill down to Raw Ledger evidence.
+  A bounded, project-scoped navigation graph over the six Facets a person can name: time, person, place, event, topic, and state. Internal connectors (project, session, thread, memory kind, action kind) never appear in product language. Canonical episodes and raw evidence exist once; facets connect to them with typed edges. Agents intersect facets, dedupe by canonicalId, explain why a memory matched, and drill down to Raw Ledger evidence. Facets are retrieval vocabulary; the thirteen Dimensions are storage axes.
 
 User-Shaped Topic Ontology
   A stable memory-class skeleton plus project-scoped topic names, aliases, parent paths, relations, and reversible audit operations learned from explicit user language.
@@ -109,7 +109,7 @@ CPU Governance
   Rule-based promotion, suppression, supersession, and confirmation policy.
 
 Active Recall
-  Bounded context pack assembled with binding graph anchors, pulse activation, temporal routing, source anchors, and inhibition.
+  Bounded context pack assembled with binding graph anchors, Pulse 1 then Pulse 2 activation, temporal routing, source anchors, and inhibition.
 
 Strategy Cortex
   CPU-owned current-turn policy that selects retrieval lanes, layer order, source requirements, and memory budget before recall.

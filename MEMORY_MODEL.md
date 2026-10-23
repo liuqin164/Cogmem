@@ -1,8 +1,12 @@
 # Memory Model
 
-`cogmem` is an agent-native memory kernel. It stores agent experience, compiles durable memory at write time, recalls with structure-first pulse navigation, and keeps active context governed and bounded.
+`cogmem` is an agent-native memory kernel. It stores agent experience, compiles durable memory at write time, recalls in two pulses — a direct hit, then an associative spread — and keeps active context governed and bounded.
 
 It is not a vector RAG store, a knowledge-base application, a wiki, an Obsidian replacement, or an agent runtime.
+
+## Language
+
+A person locates a memory by one of six **Facets**: time, person, place, event, topic, state. The thirteen **Dimensions** below are the axes a node is stored on; they are storage vocabulary and are never named to a user. Surfacing happens in two **Pulses**: Pulse 1 is the direct hit, Pulse 2 the associative spread that brings back context the cue never mentioned. [GLOSSARY.md](./GLOSSARY.md) holds the authoritative definitions.
 
 ## Memory Tiers
 
