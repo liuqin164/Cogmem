@@ -22,5 +22,6 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/d
 - **The resident MCP server does not hot-reload.** A long-running `cogmem mcp --transport http`
   keeps the `src/`/`dist/` it started with. Restart it after a build, and check
   `ss -ltnp | grep 7337` before assuming it is current.
-- **In-flight work is recorded in `docs/overnight-progress.md`** (untracked, kept on disk). Read it
+- **In-flight work, if present, is recorded in `docs/overnight-progress.md`** — untracked and kept on
+  disk by the owner's overnight loop, so a fresh clone will not have it. When it exists, read it
   first: it carries the round's real gate numbers, not the plan.
