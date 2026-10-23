@@ -39,12 +39,21 @@ export interface MemoryAtlasNode {
     /** Bounded first-hop raw evidence locators for agent-facing graph search/explore responses. */
     evidence?: MemoryAtlasEvidence[];
 }
+/**
+ * The six ways a person locates a memory (GLOSSARY.md). A schema entrance may
+ * carry one of these labels; internal entrances carry none.
+ */
+export type ProductFacet = 'time' | 'person' | 'place' | 'event' | 'topic' | 'state';
+/** Translate a schema entrance into the product facet it stands for, if any. */
+export declare function productFacetFor(type: string, value: string): ProductFacet | undefined;
 export interface MemoryAtlasMatchedFacet {
     type: 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind' | 'actor' | 'project' | 'event' | 'task' | 'state' | 'object' | 'location';
     value: string;
     label: string;
     nodeId: string;
     relation: string;
+    /** Present only when this entrance is one of the six product facets. */
+    productFacet?: ProductFacet;
 }
 export interface MemoryAtlasMatchedPath {
     facet: MemoryAtlasMatchedFacet;

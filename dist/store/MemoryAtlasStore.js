@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { productFacetFor } from '../atlas/MemoryAtlasTypes.js';
 import { decodeAtlasNodeId, encodeAtlasNodeId, fromAtlasEdgeEndpoint } from '../atlas/AtlasNodeIdCodec.js';
 import { containsCanonicalAlias, normalizeAlias } from '../semantic/CanonicalMemoryResolver.js';
 import { localDateFor, localDateRange } from '../utils/LocalDateContext.js';
@@ -842,7 +843,7 @@ export class MemoryAtlasStore {
             issueType: issueHints[0],
             eventKind: optionalMetadataString(metadata.eventKind),
             localDate: optionalMetadataString(metadata.localDate) ?? (row.occurred_at ? localDateFor(row.occurred_at, this.projectTimeZone) : undefined),
-            whyMatched: matchedFacets.length ? `matched ${matchedFacets.map((facet) => `${facet.type}:${facet.value}`).join(', ')}` : 'matched canonical episode',
+            whyMatched: matchedFacets.length ? `matched ${matchedFacets.map((facet) => `${facet.productFacet ?? facet.type}:${facet.value}`).join(', ')}` : 'matched canonical episode',
             relatedButNotSelected: [],
             evidenceEventIds,
             evidenceTotal: evidenceEventIds.length,
@@ -952,12 +953,14 @@ function chunked(values, size) {
     return chunks;
 }
 function facetFromEdge(edge, projectId) {
+    const productFacet = productFacetFor(edge.target_type, edge.target_id);
     return {
         type: edge.target_type,
         value: edge.target_id,
         label: facetLabel(edge.target_type, edge.target_id),
         nodeId: nodeId(edge.target_type, edge.target_id, projectId),
         relation: edge.relation_type,
+        ...(productFacet ? { productFacet } : {}),
     };
 }
 function facetLabel(type, value) {
