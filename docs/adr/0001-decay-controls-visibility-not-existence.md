@@ -4,7 +4,7 @@ A memory nothing has touched for months must still be recallable — that is the
 promise of a bionic memory backend — yet the activation store decays on purpose so that
 recently used memories surface first. We decided the two concerns stay separate:
 activation decides *how readily* a memory surfaces, never *whether it exists*, and any
-query whose facets match a cold node can resurrect it. Retrieval therefore never treats a
+query whose entrances match a cold node can resurrect it. Retrieval therefore never treats a
 low activation score as a reason to exclude a candidate; it only orders it later.
 
 ## Consequences

@@ -33,6 +33,14 @@ describe('domain vocabulary in the main documents', () => {
     }
   });
 
+  test('MEMORY_ATLAS reserves Facet for the six and marks place/state as unprojected', () => {
+    const atlas = read('MEMORY_ATLAS.md');
+    expect(atlas, 'the stored entrance list must not be called facets').not.toMatch(/Facet nodes: `time`/);
+    expect(atlas, 'the six facets must be named').toContain('person, place, event, topic, state');
+    expect(atlas, 'the gap must stay visible').toContain('not projected yet');
+    expect(atlas, 'the API field keeps its name').toContain('matchedFacets');
+  });
+
   test('README names both waves', () => {
     const readme = read('README.md');
     expect(readme, 'README must name Pulse 1').toContain('Pulse 1');
