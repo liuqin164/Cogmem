@@ -15,8 +15,9 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/d
 ## Local development facts
 
 - **Tests need a writable temp dir.** Under the DSH sandbox `/tmp` is read-restricted, so
-  `bun test __tests__` fails ~20 `mcp-http` cases with `SQLITE_CANTOPEN`. Run it as
-  `TMPDIR="$PWD/.cogmem/tmp" bun test __tests__`; `.cogmem/` is gitignored, so this leaves no trace.
+  `bun test __tests__` fails ~20 `mcp-http` cases with `SQLITE_CANTOPEN`, and
+  `bun run verify:packed-migration` fails the same way. Run both as
+  `TMPDIR="$PWD/.cogmem/tmp" …`; `.cogmem/` is gitignored, so this leaves no trace.
 - **The active branch is `feat/cogmem-4.0-multi-bot`, not `main`.** 4.0.0 is unreleased; do not tag
   or publish without the owner's explicit go-ahead.
 - **The resident MCP server does not hot-reload.** A long-running `cogmem mcp --transport http`
