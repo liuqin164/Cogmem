@@ -52,4 +52,4 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 
 ## Repo note
 
-Design specs and plans live under `docs/superpowers/specs/` (current work); completed 3.x specs and plans moved to `docs/archive/superpowers/`. Neither location holds ADRs. `GLOSSARY.md`, `GLOSSARY-MAP.md`, and `docs/adr/` do not exist yet.
+Design specs and plans live under `docs/superpowers/specs/` (current work); completed 3.x specs and plans moved to `docs/archive/superpowers/`. Neither location holds ADRs. `GLOSSARY.md` and `docs/adr/` now exist; `GLOSSARY-MAP.md` does not (single context).
