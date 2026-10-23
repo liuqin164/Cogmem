@@ -17,11 +17,13 @@ import { printCliJson } from './CliJson.js';
 
 interface MemoryArgs {
   command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
-    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-plan' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex' | 'rebuild-topology' | 'frame' | 'frame-backfill' | 'frame-review';
+    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-plan' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex' | 'rebuild-topology' | 'frame' | 'frame-backfill' | 'frame-review'
+    | 'belief-history';
   query?: string;
   eventId?: string;
   episodeId?: string;
   nodeId?: string;
+  key?: string;
   fromId?: string;
   toId?: string;
   hops?: number;
@@ -94,6 +96,7 @@ function readArgs(argv: string[]): MemoryArgs {
     eventId: stringArg(values, 'event') || stringArg(values, 'event-id'),
     episodeId: stringArg(values, 'episode') || stringArg(values, 'episode-id'),
     nodeId: stringArg(values, 'id') || stringArg(values, 'node-id'),
+    key: stringArg(values, 'key'),
     fromId: stringArg(values, 'from'),
     toId: stringArg(values, 'to'),
     hops: numberArg(values, 'hops'),
@@ -145,7 +148,7 @@ function readArgs(argv: string[]): MemoryArgs {
 
 function usage(): string {
   return [
-    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|frame-review|graph...> [args]',
+    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|frame-review|belief-history|graph...> [args]',
     '',
     'Commands:',
     '  status               summarize raw ledger, vector, and dream backlog state',
@@ -164,6 +167,7 @@ function usage(): string {
     '  frame --episode <id> show one structured MemoryFrame',
     '  frame-backfill       create deterministic evidence-backed frames for existing episodes',
     '  frame-review         approve or reject a staged/needs-confirmation MemoryFrame',
+    '  belief-history --key <canonicalKey>  show every version of one belief, superseded ones included',
     '  graph                show a bounded overview of remembered topics, entities, clusters, actions, and time',
     '  graph-search         locate Atlas nodes by --query without expanding the graph',
     '  graph-explore        return a bounded local graph for a broad --query',
@@ -247,7 +251,8 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'rebuild-topology'
     || value === 'frame'
     || value === 'frame-backfill'
-    || value === 'frame-review';
+    || value === 'frame-review'
+    || value === 'belief-history';
 }
 
 function modeArg(values: Record<string, string | boolean>, key: string): MemoryArgs['mode'] {
@@ -770,6 +775,15 @@ function runGraphCommand(kernel: MemoryKernel, args: MemoryArgs): Record<string,
     if (args.eventId && args.episodeId) throw new Error(`graph-reindex accepts exactly one of --event or --episode.\n${usage()}`);
     return kernel.reindexMemoryAtlas({ projectId, eventId: args.eventId, episodeId: args.episodeId }) as unknown as Record<string, unknown>;
   }
+  if (args.command === 'belief-history') {
+    const key = args.key?.trim();
+    if (!key) throw new Error(`belief-history requires --key <canonicalKey>.\n${usage()}`);
+    return {
+      projectId: projectId,
+      key,
+      versions: kernel.temporalMemoryService.getBeliefHistory(projectId, key),
+    };
+  }
   if (args.command === 'graph') return kernel.graphOverview(options) as unknown as Record<string, unknown>;
   if (args.command === 'graph-search') {
     if (!args.query) throw new Error(`graph-search requires --query.\n${usage()}`);
@@ -1044,6 +1058,15 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     console.log(`neurons: ${payload.neurons}`);
     console.log(`buckets: ${payload.buckets}`);
     console.log(`rebuiltAt: ${payload.rebuiltAt}`);
+    return;
+  }
+  if (command === 'belief-history') {
+    const versions = Array.isArray(payload.versions) ? payload.versions : [];
+    console.log(`key: ${payload.key} project=${payload.projectId || '__global__'} versions=${versions.length}`);
+    for (const row of versions as Array<Record<string, unknown>>) {
+      const replaced = row.supersededByBeliefId ? ` supersededBy=${row.supersededByBeliefId}` : '';
+      console.log(`- v${row.version} ${row.status} ${row.statement}${replaced}`);
+    }
     return;
   }
   if (command === 'graph' || command.startsWith('graph-')) {

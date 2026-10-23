@@ -790,7 +790,7 @@ cogmem doctor
 cogmem connect openclaw|hermes
 cogmem mcp
 cogmem update
-cogmem memory recall|search|show|dream|govern|candidates|review|status|map|tick|bind
+cogmem memory recall|search|show|belief-history|dream|govern|candidates|review|status|map|tick|bind
 cogmem memory graph|graph-search|graph-explore|graph-node|graph-neighbors|graph-path|graph-timeline
 cogmem import-openclaw
 cogmem import-hermes
