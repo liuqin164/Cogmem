@@ -124,6 +124,32 @@ cogmem mcp --transport http --port 7337 --token "$(openssl rand -hex 24)"
 With `--token`, every request must send `Authorization: Bearer <token>`.
 Without it, requests get `401`.
 
+### Per-session identity
+
+A host that serves several bots over one resident server can bind each session
+with a header:
+
+```
+x-cogmem-identity: {"hostId":"reviewer","projectId":"project-a","profile":"core"}
+```
+
+Every field is optional. The header binds the session to a host and a project,
+and may narrow the tool profile. Three rules keep it from becoming an
+escalation path:
+
+- **Without a token, the header may narrow the profile but never widen it.** A
+  server started with `--profile core` that receives `"profile":"full"` keeps
+  serving `core`.
+- **A token-authenticated request may set any valid profile.** The token is the
+  trust boundary; the header is not.
+- **A `projectId` that differs from the session binding is rejected** with
+  `project_scope_violation`, never silently applied. An unknown profile is
+  rejected with `unknown_tool_profile:<value>`.
+
+The header is meant for a host process that already runs on this machine. With
+no token configured, any process that can reach the loopback port can claim a
+`hostId` and `projectId`; it still cannot widen the profile.
+
 ---
 
 ## Claude Code
