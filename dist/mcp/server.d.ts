@@ -12,6 +12,16 @@ export interface CogmemMcpServerOptions {
      * rejected instead of silently reading someone else's memory.
      */
     projectId?: string;
+    /**
+     * Header that carries a per-request identity JSON blob. A request that
+     * presents one overrides the session-bound identity for that call only.
+     */
+    identityHeader?: string;
+    /**
+     * Session-bound identity, looked up by the transport for sessions that were
+     * opened with an identity header. Used when a request carries none of its own.
+     */
+    identityForSession?: (sessionId?: string) => SessionIdentity | undefined;
 }
 export interface SessionIdentity {
     hostId?: string;

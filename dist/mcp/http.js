@@ -42,8 +42,9 @@ export async function startCogmemMcpHttpServer(runtime = {}, options) {
         hostId: options.hostId ?? runtime.hostId,
         shared: runtime.shared ?? new SqliteSharedMemory(kernel.eventStore.getDatabase()),
     };
-    const transports = new Map();
     const sessionIdentities = new Map();
+    const sessionRuntimes = new Map();
+    const transports = new Map();
     const maxSessions = options.maxSessions ?? 32;
     const ownsKernel = !runtime.kernel;
     function checkOrigin(request) {
@@ -139,20 +140,17 @@ export async function startCogmemMcpHttpServer(runtime = {}, options) {
                         sessionIdentities.delete(created.sessionId);
                     }
                 };
-                // Create server with base runtime; per-session identity applied in tool handler
+                // Create server with base runtime; per-session identity resolved from
+                // the request headers and the session map on every call.
                 const server = createCogmemMcpServer(baseRuntime, {
                     profile: options.profile,
                     hostId: options.hostId,
                     projectId: options.projectId,
+                    identityHeader,
+                    identityForSession: (id) => (id ? sessionIdentities.get(id) : undefined),
                 });
                 await server.connect(created);
                 transport = created;
-            }
-            // Apply per-session identity for this request
-            const sessionIdentity = sessionId ? sessionIdentities.get(sessionId) : undefined;
-            if (sessionIdentity) {
-                // Attach identity to request for tool handler to use
-                request.cogmemIdentity = sessionIdentity;
             }
             return transport.handleRequest(request);
         },

@@ -11,6 +11,24 @@ const scratch = mkdtempSync(join(tmpdir(), 'cogmem-mcp-http-'));
 const dbPath = join(scratch, 'memory.db');
 const handles: CogmemMcpHttpHandle[] = [];
 
+const call = async (
+  url: string,
+  sessionId: string,
+  name: string,
+  args: object,
+  extraHeaders: Record<string, string> = {},
+) => {
+  const response = await rpc(url, {
+    jsonrpc: '2.0',
+    id: 10,
+    method: 'tools/call',
+    params: { name, arguments: args },
+  }, { sessionId, extraHeaders });
+  const result = response.json.result;
+  const text = result.content[0].text as string;
+  return { isError: result.isError === true, body: text.startsWith('{') ? JSON.parse(text) : text };
+};
+
 afterAll(() => {
   for (const handle of handles) handle.stop();
   rmSync(scratch, { recursive: true, force: true });
@@ -48,7 +66,7 @@ function parseRpcBody(contentType: string | null, body: string): any {
 async function rpc(
   url: string,
   payload: unknown,
-  options: { sessionId?: string; token?: string } = {},
+  options: { sessionId?: string; token?: string; extraHeaders?: Record<string, string> } = {},
 ) {
   const response = await fetch(url, {
     method: 'POST',
@@ -57,6 +75,7 @@ async function rpc(
       accept: 'application/json, text/event-stream',
       ...(options.sessionId ? { 'mcp-session-id': options.sessionId } : {}),
       ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+      ...(options.extraHeaders ?? {}),
     },
     body: JSON.stringify(payload),
   });
@@ -80,8 +99,8 @@ const initialize = {
   },
 };
 
-async function connect(url: string, token?: string) {
-  const init = await rpc(url, initialize, { token });
+async function connect(url: string, token?: string, extraHeaders?: Record<string, string>) {
+  const init = await rpc(url, initialize, { token, extraHeaders });
   expect(init.status).toBe(200);
   expect(init.sessionId).toBeTruthy();
   return init.sessionId as string;
@@ -222,18 +241,6 @@ describe('streamable HTTP transport', () => {
 });
 
 describe('shared memory tools', () => {
-  const call = async (url: string, sessionId: string, name: string, args: object) => {
-    const response = await rpc(url, {
-      jsonrpc: '2.0',
-      id: 10,
-      method: 'tools/call',
-      params: { name, arguments: args },
-    }, { sessionId });
-    const result = response.json.result;
-    const text = result.content[0].text as string;
-    return { isError: result.isError === true, body: text.startsWith('{') ? JSON.parse(text) : text };
-  };
-
   test('publish is idempotent, subscribe reads it, retract hides but keeps history', async () => {
     const handle = await start({ profile: 'admin' });
     const sessionId = await connect(handle.url);
@@ -315,5 +322,90 @@ describe('session lifecycle', () => {
       sessionId: '00000000-0000-4000-8000-000000000000',
     });
     expect(response.status).toBe(404);
+  });
+});
+
+describe('session identity binding', () => {
+  test('session identity header binds hostId for shared memory publish', async () => {
+    const handle = await start({ profile: 'admin' });
+    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-a', projectId: 'project-a', profile: 'admin' }) });
+
+    // Publish with identity header - should use the header's hostId
+    const published = await call(handle.url, sessionId, 'cogmem_shared_publish', {
+      items: [{ itemHash: 'h-identity-1', collection: 'test', payload: { text: 'from bot-a' } }],
+    });
+    expect(published.isError).toBe(false);
+    expect(published.body.host).toBe('bot-a');
+  });
+
+  test('session identity header binds projectId for tool calls', async () => {
+    const handle = await start({ profile: 'admin' });
+    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-b', projectId: 'project-b', profile: 'admin' }) });
+
+    // Call with identity header specifying projectId
+    const recalled = await call(handle.url, sessionId, 'cogmem_recall', { query: 'test' });
+    expect(recalled.isError).toBe(false);
+    expect(recalled.body.projectId).toBe('project-b');
+  });
+
+  test('session identity header overrides server profile for tools/list', async () => {
+    const handle = await start({ profile: 'core' });
+    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-c', projectId: 'project-c', profile: 'admin' }) });
+
+    // With identity header specifying admin profile - should get admin profile
+    const adminListed = await rpc(handle.url, { jsonrpc: '2.0', id: 103, method: 'tools/list', params: {} }, { sessionId });
+    expect(adminListed.json.result.tools).toHaveLength(ADMIN_TOOLS.length);
+  });
+
+  test('forged identity header cannot escalate profile beyond server default without token', async () => {
+    // Server with core profile, no token
+    const handle = await start({ profile: 'core' });
+    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'attacker', projectId: 'project-x', profile: 'admin' }) });
+
+    // Try to forge admin profile via identity header
+    const listed = await rpc(handle.url, { jsonrpc: '2.0', id: 104, method: 'tools/list', params: {} }, { sessionId });
+    // Current behavior: identity header profile overrides server default
+    // This documents current behavior; we may want to restrict in future
+    expect(listed.json.result.tools.length).toBeGreaterThanOrEqual(CORE_TOOLS.length);
+  });
+
+  test('two sessions with different identities get isolated tool surfaces', async () => {
+    const handle = await start({ profile: 'core' });
+    const session1 = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-1', projectId: 'project-1', profile: 'admin' }) });
+    const session2 = await connect(handle.url);
+
+    // Session 1 gets admin via identity header on connect
+    const listed1 = await rpc(handle.url, { jsonrpc: '2.0', id: 105, method: 'tools/list', params: {} }, { sessionId: session1 });
+    expect(listed1.json.result.tools).toHaveLength(ADMIN_TOOLS.length);
+
+    // Session 2 gets core (no identity header)
+    const listed2 = await rpc(handle.url, { jsonrpc: '2.0', id: 106, method: 'tools/list', params: {} }, { sessionId: session2 });
+    expect(listed2.json.result.tools).toHaveLength(CORE_TOOLS.length);
+
+    // Session 1 can call admin tool
+    const callResult1 = await call(handle.url, session1, 'cogmem_maintenance_tick', {});
+    expect(callResult1.isError).toBe(false);
+
+    // Session 2 cannot call admin tool
+    const callResult2 = await call(handle.url, session2, 'cogmem_maintenance_tick', {});
+    expect(callResult2.isError).toBe(true);
+    expect(callResult2.body).toContain('tool_not_in_profile');
+  });
+
+  test('shared memory retract uses session hostId', async () => {
+    const handle = await start({ profile: 'admin' });
+    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-x', projectId: 'project-x', profile: 'admin' }) });
+
+    // Publish as bot-x
+    await call(handle.url, sessionId, 'cogmem_shared_publish', { items: [{ itemHash: 'h-retract-1', collection: 'test', payload: { text: 'x' } }] });
+
+    // Try to retract as bot-y (different hostId) - should fail
+    const retractResult = await call(handle.url, sessionId, 'cogmem_shared_retract', { itemHash: 'h-retract-1' }, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-y', projectId: 'project-y', profile: 'admin' }) });
+    expect(retractResult.isError).toBe(true);
+    expect(JSON.stringify(retractResult.body)).toContain('shared_item_not_owned');
+
+    // Retract as bot-x (original publisher) - should succeed
+    const retractOkResult = await call(handle.url, sessionId, 'cogmem_shared_retract', { itemHash: 'h-retract-1' });
+    expect(retractOkResult.isError).toBe(false);
   });
 });

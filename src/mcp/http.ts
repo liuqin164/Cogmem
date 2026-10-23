@@ -18,6 +18,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 
 import { createCogmemMcpServer, type CogmemMcpServerOptions } from './server.js';
 import type { CogmemMcpRuntime } from './CoreMcpTools.js';
+import type { McpToolProfile } from './profiles.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 import { SqliteSharedMemory } from '../adapters/sqlite/SqliteSharedMemory.js';
 
@@ -79,8 +80,9 @@ export async function startCogmemMcpHttpServer(
     hostId: options.hostId ?? runtime.hostId,
     shared: runtime.shared ?? new SqliteSharedMemory(kernel.eventStore.getDatabase()),
   };
-  const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
   const sessionIdentities = new Map<string, SessionIdentity>();
+  const sessionRuntimes = new Map<string, CogmemMcpRuntime>();
+  const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
   const maxSessions = options.maxSessions ?? 32;
   const ownsKernel = !runtime.kernel;
 
@@ -181,21 +183,17 @@ export async function startCogmemMcpHttpServer(
           }
         };
 
-        // Create server with base runtime; per-session identity applied in tool handler
+        // Create server with base runtime; per-session identity resolved from
+        // the request headers and the session map on every call.
         const server = createCogmemMcpServer(baseRuntime, {
           profile: options.profile,
           hostId: options.hostId,
           projectId: options.projectId,
+          identityHeader,
+          identityForSession: (id) => (id ? sessionIdentities.get(id) : undefined),
         });
         await server.connect(created);
         transport = created;
-      }
-
-      // Apply per-session identity for this request
-      const sessionIdentity = sessionId ? sessionIdentities.get(sessionId) : undefined;
-      if (sessionIdentity) {
-        // Attach identity to request for tool handler to use
-        (request as Request & { cogmemIdentity?: SessionIdentity }).cogmemIdentity = sessionIdentity;
       }
 
       return transport.handleRequest(request);
