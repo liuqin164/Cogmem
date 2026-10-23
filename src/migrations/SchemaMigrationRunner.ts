@@ -125,7 +125,14 @@ export class SchemaMigrationRunner {
     const rows = this.recordedChecksums();
     for (const row of rows) {
       const digest = MIGRATION_DIGESTS[row.version];
-      if (!digest) throw new Error(`migration_checksum_unknown:${row.version}`);
+      if (!digest) {
+        // Receipts inherited from a pre-4.0 database (0015..0031). 4.0 no longer
+        // ships those migrations, so their digests cannot be verified here; the
+        // release-boundary check in assertSupportedReleaseSchema still rejects
+        // anything newer than the baseline.
+        if (row.version < LATEST_RELEASE_VERSION) continue;
+        throw new Error(`migration_checksum_unknown:${row.version}`);
+      }
       if (!row.checksum) throw new Error(`migration_checksum_missing:${row.version}`);
       if (row.checksum !== digest) throw new Error(`migration_checksum_mismatch:${row.version}`);
     }
@@ -159,7 +166,34 @@ export class SchemaMigrationRunner {
         || issue.startsWith('trigger_missing:trg_memory_atlas_dirty_')) return;
       throw new Error(`final_schema_postcondition_failed:0032:${issue}`);
     }
-    throw new Error('unsupported_database_identity');
+    // A 3.7.3 release database records 0015..0031 and has 0032 pending: that is
+    // the supported upgrade path into the 4.0 baseline. Accept it once the 0031
+    // integrity marker proves that migration finished, so a half-applied 0031
+    // cannot be laundered into a clean 0032.
+    const latest = rows[rows.length - 1]?.version;
+    if (latest === '0031' && this.releaseSchema31Satisfied()) {
+      const legacyVersion = this.legacySchemaVersion();
+      if (legacyVersion === undefined || legacyVersion === 31) return;
+      throw new Error(legacyVersion > 31
+        ? `unsupported_development_schema:${legacyVersion}`
+        : `unsupported_release_schema:${legacyVersion}`);
+    }
+    throw new Error(latest ? `unsupported_release_schema:${latest}` : 'unsupported_database_identity');
+  }
+
+  private releaseSchema31Satisfied(): boolean {
+    if (!this.tableExists('_episode_integrity_markers')) return false;
+    return Boolean(this.db.prepare(`
+      SELECT 1 FROM _episode_integrity_markers WHERE marker = 'episode_boundary_integrity_0031'
+    `).get());
+  }
+
+  /** `_meta.schema_version` from pre-4.0 kernels. A hint only, never a receipt. */
+  private legacySchemaVersion(): number | undefined {
+    if (!this.tableExists('_meta')) return undefined;
+    const row = this.db.prepare(`SELECT value FROM _meta WHERE key = 'schema_version'`).get() as { value?: string } | null;
+    const legacyVersion = Number.parseInt(row?.value || '', 10);
+    return Number.isFinite(legacyVersion) ? legacyVersion : undefined;
   }
 
   currentVersion(): string | undefined {

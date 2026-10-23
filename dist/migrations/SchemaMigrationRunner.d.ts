@@ -27,6 +27,9 @@ export declare class SchemaMigrationRunner {
     private assertRecordedChecksums;
     private recordedChecksums;
     private assertSupportedReleaseSchema;
+    private releaseSchema31Satisfied;
+    /** `_meta.schema_version` from pre-4.0 kernels. A hint only, never a receipt. */
+    private legacySchemaVersion;
     currentVersion(): string | undefined;
     private appliedVersions;
     private schemaMigrationsTableExists;

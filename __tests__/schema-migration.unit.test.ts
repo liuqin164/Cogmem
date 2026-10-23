@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 
 import { MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 import { SchemaMigrationRunner } from '../src/migrations/SchemaMigrationRunner.js';
@@ -100,5 +101,77 @@ describe('concurrent startup', () => {
     a.close();
     b.close();
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('3.7.3 release database upgrade path', () => {
+  const fixture = join(import.meta.dir, 'fixtures', 'migrations', 'main-3.7.3-schema31.sqlite.gz');
+
+  function materialize(dir: string): string {
+    const path = join(dir, 'schema31.db');
+    writeFileSync(path, gunzipSync(readFileSync(fixture)));
+    return path;
+  }
+
+  function withFixture(fn: (db: Database) => void): void {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-mig-schema31-'));
+    const db = new Database(materialize(dir));
+    try {
+      fn(db);
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('a schema31 release database is accepted and upgraded to 0032', () => {
+    withFixture((db) => {
+      const result = new SchemaMigrationRunner(db, KERNEL_MIGRATIONS, { backupVerified: true }).run();
+
+      expect(result.pending).toEqual(['0032']);
+      expect(result.applied).toEqual(['0032']);
+      expect(result.currentVersion).toBe('0032');
+      const receipt = db.prepare(`SELECT checksum FROM _schema_migrations WHERE version='0032'`).get() as { checksum?: string } | null;
+      expect(receipt?.checksum).toBe(MIGRATION_DIGESTS['0032']);
+      expect((db.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check).toBe('ok');
+    });
+  });
+
+  test('a schema31 database without the 0031 integrity marker is rejected instead of upgraded', () => {
+    withFixture((db) => {
+      db.exec(`DELETE FROM _episode_integrity_markers WHERE marker='episode_boundary_integrity_0031'`);
+
+      expect(() => new SchemaMigrationRunner(db, KERNEL_MIGRATIONS, { backupVerified: true }).run())
+        .toThrow('unsupported_release_schema:0031');
+    });
+  });
+
+  test('a release database whose latest receipt stops before 0031 is rejected', () => {
+    withFixture((db) => {
+      db.exec(`DELETE FROM _schema_migrations WHERE version='0031'`);
+
+      expect(() => new SchemaMigrationRunner(db, KERNEL_MIGRATIONS, { backupVerified: true }).run())
+        .toThrow('unsupported_release_schema:0030');
+    });
+  });
+
+  test('an upgraded schema31 database reopens without demanding pre-4.0 digests', () => {
+    withFixture((db) => {
+      new SchemaMigrationRunner(db, KERNEL_MIGRATIONS, { backupVerified: true }).run();
+
+      const again = new SchemaMigrationRunner(db, KERNEL_MIGRATIONS, { backupVerified: true }).run();
+      expect(again.applied).toEqual([]);
+      expect(again.currentVersion).toBe('0032');
+    });
+  });
+
+  test('skipping inherited digests still catches a tampered 0032 receipt', () => {
+    withFixture((db) => {
+      new SchemaMigrationRunner(db, KERNEL_MIGRATIONS, { backupVerified: true }).run();
+      db.prepare(`UPDATE _schema_migrations SET checksum='tampered' WHERE version='0032'`).run();
+
+      expect(() => new SchemaMigrationRunner(db, KERNEL_MIGRATIONS, { backupVerified: true }).run())
+        .toThrow('unsupported_development_schema:0032');
+    });
   });
 });
