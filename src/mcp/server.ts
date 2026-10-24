@@ -126,10 +126,15 @@ function resolveRequestIdentity(
 
 /**
  * Apply the identity to the server options, enforcing the security boundary:
- * the configured profile is a ceiling unless the request is trusted, and a
- * project binding may not be silently overridden.
+ * the configured profile is a ceiling unless the request is trusted, a project
+ * binding may not be silently overridden, and a hostId may only be asserted by
+ * an authenticated connection.
+ *
+ * Exported because "who is this call running as" is the security boundary of
+ * this module, and it is decided by a pure function rather than by the
+ * transport that happens to be in front of it.
  */
-function applyIdentity(
+export function applyIdentity(
   baseOptions: CogmemMcpServerOptions,
   resolved: ResolvedIdentity,
   trusted: boolean,
@@ -154,10 +159,17 @@ function applyIdentity(
     profile = trusted || PROFILE_RANK[requested] <= PROFILE_RANK[configured] ? requested : configured;
   }
 
+  // A hostId says *which agent* a call runs as, so an unauthenticated
+  // connection may not assert one: on loopback a header that names a host is
+  // ignored and the call runs as the server, never as the name in the header.
+  // The project and profile fields stay usable without a credential because
+  // they narrow what the connection may do instead of inventing who it is.
+  const hostId = trusted && identity.hostId !== undefined ? identity.hostId : baseOptions.hostId;
+
   return {
     ...baseOptions,
     profile,
-    hostId: identity.hostId ?? baseOptions.hostId,
+    hostId,
     projectId: identity.projectId ?? boundProjectId ?? baseOptions.projectId,
   };
 }

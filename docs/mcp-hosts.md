@@ -156,13 +156,17 @@ a header:
 x-cogmem-identity: {"hostId":"cursor","projectId":"project-a","profile":"core"}
 ```
 
-Every field is optional. Four rules bound what it can do:
+Every field is optional. Five rules bound what it can do:
 
 - **The profile is a default, not a lock.** The profile the server *launched*
   with is the ceiling: a call may narrow it and may raise it back up to that
   ceiling, but a header can never exceed it.
 - **A token removes the ceiling.** An authenticated request may set any valid
   profile; the token is the trust boundary, not the header.
+- **A `hostId` needs a credential.** A `hostId` says *which agent* the call runs
+  as, so it is honoured only on an authenticated connection. Without a token it
+  is ignored: the call runs as the server, never as the name in the header. A
+  local process cannot promote itself to another agent by asking.
 - **A bound project cannot be switched.** A `projectId` that differs from the
   binding — or from `--project` — is rejected with `project_scope_violation`.
 - **An unknown profile is rejected** with `unknown_tool_profile:<value>`.
@@ -172,8 +176,8 @@ request can override a field for that call without changing the binding. A
 malformed header is ignored rather than rejected, which leaves the session
 unbound and lets call arguments choose the project — so a deployment that needs
 project isolation should set `--project`. With no token configured, any process
-that can reach the loopback port can claim a `hostId`, and can claim a
-`projectId` only if the server has no `--project` binding; it still cannot
+that can reach the loopback port can claim a `projectId` when the server has no
+`--project` binding, but it cannot claim a `hostId` at all; it still cannot
 exceed the launch profile.
 
 ## Claude Code

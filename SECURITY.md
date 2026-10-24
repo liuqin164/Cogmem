@@ -23,9 +23,12 @@ a host and a project, and sets a default tool profile. It is not an
 authentication mechanism.
 
 - Without a configured token, an unauthenticated client that can reach the
-  loopback port may claim any `hostId`, and any `projectId` when the server was
-  started without `--project`. It may choose a profile up to the profile the
-  server launched with, never beyond it.
+  loopback port may claim any `projectId` when the server was started without
+  `--project`, and may choose a profile up to the profile the server launched with,
+  never beyond it. It may **not** claim a `hostId`: a `hostId` says which agent
+  the call runs as, so it is honoured only on an authenticated connection and is
+  otherwise ignored, leaving the call running as the server rather than as the
+  name in the header.
 - With a token, the request is trusted and may set any valid profile. The token,
   not the header, is the boundary.
 - A bound project cannot be switched: a differing `projectId` is rejected with

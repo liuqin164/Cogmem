@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
-import { parseSessionIdentity } from '../src/mcp/server.js';
+import { applyIdentity, parseSessionIdentity } from '../src/mcp/server.js';
 import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { ADMIN_TOOLS, CORE_TOOLS, filterToolsByProfile, resolveProfile } from '../src/mcp/profiles.js';
 
@@ -282,6 +282,32 @@ describe('session identity binding', () => {
       .toEqual({ hostId: 'bot-a', projectId: 'project-a', profile: undefined });
     expect(parseSessionIdentity('not json')).toBeUndefined();
     expect(parseSessionIdentity(JSON.stringify({}))).toBeUndefined();
+  });
+
+  test('an unauthenticated connection cannot obtain a hostId by claiming one', () => {
+    // #65: a hostId says *which agent* a call runs as, so only an authenticated
+    // connection may assert one. On loopback with no credential configured the
+    // claim is ignored rather than honoured — the connection runs as the server,
+    // not as the name in the header. The documented project and profile
+    // bindings keep working, because those narrow what the connection may do
+    // instead of inventing who it is.
+    const pretender = applyIdentity({ profile: 'core' }, { identity: { hostId: 'bot-b' } }, false);
+    expect(pretender.hostId).toBeUndefined();
+
+    // A credential is what makes the claim meaningful, and then it is honoured.
+    const authenticated = applyIdentity({ profile: 'core' }, { identity: { hostId: 'bot-a' } }, true);
+    expect(authenticated.hostId).toBe('bot-a');
+
+    // The connection's own hostId still wins over nothing, and no credential is
+    // needed for the narrowing fields.
+    const configured = applyIdentity({ profile: 'core', hostId: 'server-host' }, { identity: { hostId: 'bot-b' } }, false);
+    expect(configured.hostId).toBe('server-host');
+    const bound = applyIdentity(
+      { profile: 'core', projectId: 'project-a' },
+      { identity: { projectId: 'project-a', profile: 'core' } },
+      false,
+    );
+    expect({ hostId: bound.hostId, projectId: bound.projectId }).toEqual({ hostId: undefined, projectId: 'project-a' });
   });
 
   test('session identity header binds projectId for tool calls', async () => {

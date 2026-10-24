@@ -48,6 +48,19 @@ export interface ResolvedIdentity {
 }
 /** Parse the identity JSON blob. Unknown fields are ignored; a non-string value is dropped. */
 export declare function parseSessionIdentity(raw: unknown): SessionIdentity | undefined;
+/**
+ * Apply the identity to the server options, enforcing the security boundary:
+ * the configured profile is a ceiling unless the request is trusted, a project
+ * binding may not be silently overridden, and a hostId may only be asserted by
+ * an authenticated connection.
+ *
+ * Exported because "who is this call running as" is the security boundary of
+ * this module, and it is decided by a pure function rather than by the
+ * transport that happens to be in front of it.
+ */
+export declare function applyIdentity(baseOptions: CogmemMcpServerOptions, resolved: ResolvedIdentity, trusted: boolean): CogmemMcpServerOptions & {
+    profile: McpToolProfile;
+};
 export declare function createCogmemMcpServer(runtime?: CogmemMcpRuntime, options?: CogmemMcpServerOptions): Server;
 export interface CogmemMcpStdioHandle {
     server: Server;
