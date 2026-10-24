@@ -1395,9 +1395,11 @@ test('cogmem update targets the one-line installer home when cwd has no package 
   const installHome = join(dir, 'pkg');
   const randomCwd = join(dir, 'work');
   const home = join(dir, 'home');
+  const configPath = join(home, '.cogmem', 'config.toml');
   mkdirSync(installHome, { recursive: true });
   mkdirSync(randomCwd, { recursive: true });
-  mkdirSync(home, { recursive: true });
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
   writeFileSync(join(installHome, 'package.json'), JSON.stringify({
     private: true,
     dependencies: {
@@ -1423,14 +1425,16 @@ test('cogmem update targets the one-line installer home when cwd has no package 
   expect(parsed.packageSpec).toBe('3.6.5');
   expect(parsed.nextCommand).toContain('cogmem@3.6.5');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
-  // 4.0 baseline includes migration from 3.x schema to 0032
+  // The user config lives beside the installer home, not inside the package root.
   expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
-  // migration runs because config exists (mocked via COGMEM_INSTALL_HOME)
+  expect(parsed.migrationCommand).toContain(configPath);
 });
 
 test('cogmem update targets npm global installs without writing a local package dependency', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-update-global-'));
-  mkdirSync(dir, { recursive: true });
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
 
   const update = await runCli(
     ['bun', cogmemBin, 'update', '--dry-run', '--json'],
@@ -1447,8 +1451,8 @@ test('cogmem update targets npm global installs without writing a local package 
   expect(parsed.installKind).toBe('npm_global');
   expect(parsed.currentSpec).toBe('npm:global');
   expect(parsed.nextCommand).toBe('npm install -g cogmem@3.6.5');
-  // 4.0 baseline includes migration from 3.x schema to 0032
   expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
+  expect(parsed.migrationCommand).toContain(configPath);
 });
 
 test('cogmem-connect installs Hermes skill into the real Hermes skills directory by default', async () => {

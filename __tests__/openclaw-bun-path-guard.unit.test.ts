@@ -12,6 +12,14 @@ import {
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const connectBin = join(coreRoot, 'src/bin/connect.ts');
 
+function writeNodeLikeRuntime(root: string): string {
+  const nodePath = join(root, 'node');
+  // Stable stand-in for `node --version`; not every runner installs Node at
+  // /usr/bin/node, and some deliberately have no file at that path.
+  writeFileSync(nodePath, '#!/bin/sh\nprintf \"v24.12.0\\n\"\n', { mode: 0o755 });
+  return nodePath;
+}
+
 function makeWorkspace(): { root: string; configPath: string; openclawConfigPath: string } {
   const root = mkdtempSync(join(tmpdir(), 'cogmem-bun-guard-'));
   const configPath = join(root, '.cogmem', 'config.toml');
@@ -43,13 +51,14 @@ async function runCli(
 
 test('a --bun value that is not Bun is rejected before any config is written', () => {
   const { root, configPath, openclawConfigPath } = makeWorkspace();
+  const nodePath = writeNodeLikeRuntime(root);
   // The bridge imports bun:sqlite, so a Node binary installs cleanly and then fails
   // on every hook inside the gateway log. The installer must refuse it up front.
   expect(() => installOpenClawAutoMemoryPlugin({
     workspaceRoot: root,
     configPath,
     openclawConfigPath,
-    bunPath: '/usr/bin/node',
+    bunPath: nodePath,
     force: true,
   })).toThrow(/which is not Bun/);
 
@@ -87,6 +96,7 @@ test('connect rejects a mistyped flag instead of silently ignoring it', async ()
 
 test('connect openclaw --auto --bun <node> fails loudly and leaves the host config untouched', async () => {
   const { root, configPath, openclawConfigPath } = makeWorkspace();
+  const nodePath = writeNodeLikeRuntime(root);
   const result = await runCli(
     [
       'bun',
@@ -100,7 +110,7 @@ test('connect openclaw --auto --bun <node> fails loudly and leaves the host conf
       '--openclaw-config',
       openclawConfigPath,
       '--bun',
-      '/usr/bin/node',
+      nodePath,
     ],
     root,
   );
