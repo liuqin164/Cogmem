@@ -180,12 +180,37 @@ that can reach the loopback port can claim a `projectId` when the server has no
 `--project` binding, but it cannot claim a `hostId` at all; it still cannot
 exceed the launch profile.
 
+### Registering several agents
+
+One resident server can serve several agents, each with private memory. Each
+agent is registered with its own credential in `~/.cogmem/agents.json`:
+
+```json
+{
+  "agents": [
+    { "hostId": "bot-a", "token": "<secret>", "projectId": "project-a", "profile": "admin" },
+    { "hostId": "bot-b", "token": "<secret>", "projectId": "project-b" }
+  ]
+}
+```
+
+`cogmem mcp --transport http` loads that file when it exists; `--agents <path>`
+points somewhere else. With a registry loaded the credential decides the
+identity: a request that presents no registered credential is refused with `401`
+even on loopback, `projectId` is the project that agent is confined to, and
+`profile` is that agent's ceiling. A header may narrow those fields but never
+change them — a `hostId` that disagrees is rejected with
+`host_identity_mismatch`.
+
+A missing file is the single-agent case and is not an error. A file that exists
+and cannot be read is an error, because serving every agent as anonymous while
+the operator believes they are registered is the failure the file prevents.
+
 ## Claude Code
 
 ```bash
 claude mcp add --transport http cogmem http://127.0.0.1:7337/mcp --scope user
 ```
-
 With a token:
 
 ```bash

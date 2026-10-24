@@ -31,6 +31,12 @@ authentication mechanism.
   name in the header.
 - With a token, the request is trusted and may set any valid profile. The token,
   not the header, is the boundary.
+- With an agent registry (`~/.cogmem/agents.json`, or `--agents <path>`), the
+  presented credential authenticates *which agent* the connection is: it decides
+  `hostId`, the project that agent is confined to, and its profile ceiling. A
+  request presenting no registered credential is refused with `401`, including on
+  loopback. The header keeps its role — narrowing those fields — and a `hostId`
+  that disagrees with the credential is rejected with `host_identity_mismatch`.
 - A bound project cannot be switched: a differing `projectId` is rejected with
   `project_scope_violation` instead of reading another project's memory.
 - The header is read per call, and a malformed header is ignored rather than
