@@ -268,12 +268,12 @@ cogmem memory candidates --project openclaw --status needs_confirmation --json
 cogmem memory review --project openclaw --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <distinct-user-event-id> --json
 cogmem memory review --project openclaw --id <candidate-id> --action reject --actor <operator> --reason "unsupported claim" --json
 cogmem memory review --project openclaw --id <candidate-id> --action defer --actor <operator> --reason "wait for evidence" --review-after <epoch-ms> --json
-cogmem memory review --project openclaw --id <candidate-id> --action supersede --actor <operator> --reason "replaced" --replacement <candidate-id> --json
+cogmem memory review --project openclaw --id <candidate-id> --action supersede --actor <operator> --reason "replaced" --replacement <replacement-candidate-id> --json
 cogmem memory review --project openclaw --id <correction-id> --action relink --actor <operator> --reason "bind correction target" --target-belief <belief-id> --confirmation-event <distinct-user-event-id> --json
 ```
 
-Approve/relink require distinct same-project user evidence. Correction relink also requires an active same-project belief. Never patch candidate or belief rows directly.
-Defer keeps the candidate in `needs_confirmation` and records `reviewAfter` plus a status reason for the next operator pass.
+Approve/relink require distinct same-project user evidence. Correction relink also requires an active same-project belief. Relink is a binding, not a validation: it rewrites `correctedClaimKey`, `correctedBeliefCandidateIds`, and `targetBeliefId` to the named belief, marks the resolution `manual_relink`, and keeps any previous target as `relinkedFromBeliefId`. Never patch candidate or belief rows directly.
+Defer keeps the candidate in `needs_confirmation` and records `reviewAfter` plus a status reason for the next operator pass. Supersede requires a replacement candidate: "superseded" without one names no successor, so retiring a candidate with no successor is a `reject`. Each action consumes only its own inputs (confirmationEventId for approve/relink, targetBeliefId for relink, replacementCandidateId for supersede, reviewAfter for defer, none for reject); omitting the one an action requires fails (`confirmation_event_required`, `review_after_must_be_in_the_future`, `replacement_candidate_required`), and an input the chosen action does not consume is rejected with `review_input_not_applicable:<field>` instead of being recorded in the audit row.
 
 ## Episode and Dream maintenance
 

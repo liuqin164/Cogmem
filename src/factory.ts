@@ -2930,9 +2930,8 @@ export class MemoryKernel {
       suggestedActions.push(suggestedAction('resolve_entities', 'cogmem', ['memory', 'map', '--json'], `${entityConflicts} active entity alias conflicts need host or agent review.`));
     }
     if (staleVectors > 0) {
-      suggestedActions.push(suggestedAction('re_embed', 'cogmem-re-embed', [
-        'run', ...(projectId !== undefined ? ['--project', projectId] : [])
-      ], `${staleVectors} embeddings are stale for the configured embedding model.`));
+      suggestedActions.push(suggestedAction('re_embed', 'cogmem-re-embed', ['status'],
+        `${staleVectors} embeddings are stale for the configured embedding model; re-embedding runs in the host through ReEmbeddingPipeline.run(), and this command reports backfill progress.`));
     }
     if (unboundRawEvents > 0) {
       suggestedActions.push(suggestedAction('bind_raw_events', 'cogmem', [

@@ -50,7 +50,9 @@ test('govern status is enforced and points needs-confirmation users to review', 
   expect(payload.candidates[0].candidateId).toBe('cand-govern');
   expect(payload.decisions).toEqual([]);
   expect(payload.warning).toContain('memory review');
-  expect(payload.reviewCommand).toContain('--action <approve|reject|defer|supersede|relink>');
+  const reviewCommands = payload.reviewCommands as Array<{ action: string; command: string }>;
+  expect(reviewCommands.map((entry) => entry.action)).toEqual(['approve', 'reject', 'defer', 'supersede', 'relink']);
+  for (const { action, command } of reviewCommands) expect(command).toContain(`--action ${action}`);
 });
 
 test('MCP exposes and executes candidate review with explicit confirmation evidence', async () => {

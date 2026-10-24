@@ -130,8 +130,9 @@ function usage() {
         '  --reason <text>      required audited review reason',
         '  --confirmation-event <id>  distinct same-project raw user evidence for approve/relink',
         '  --target-belief <id>       active same-project belief for correction relink',
-        '  --replacement <id>         replacement candidate for supersede',
+        '  --replacement <id>         required for supersede: distinct same-project candidate that replaces this one',
         '  --review-after <ms>         future epoch milliseconds for defer',
+        '                       review inputs are per action: an input the chosen action does not consume is rejected, not recorded',
         '  --promote            after dream, run CPU governance over pending candidates',
         '  --promote-limit <n>  governance candidate limit, default follows --limit or 100',
         '  --watch              keep issuing conditional Dream ticks as a host-owned worker',
@@ -506,10 +507,30 @@ function candidateNextActions(queueSummary, projectId) {
             safeForAutomation: false,
             reason: `${queueSummary.activeNeedsConfirmation} candidates need explicit operator/user confirmation`,
             command: `cogmem memory candidates${projectArg} --status needs_confirmation --json`,
-            reviewCommand: `cogmem memory review${projectArg} --id <candidate-id> --action <approve|reject|defer|supersede|relink> --actor <operator> --reason <reason> --json`,
+            reviewCommands: reviewCommandsFor(projectArg),
         });
     }
     return actions;
+}
+/**
+ * One runnable shape per review action. A single shape cannot serve all five:
+ * approve and relink require --confirmation-event, relink also requires an active
+ * --target-belief, defer requires a future --review-after, and supersede requires the
+ * candidate that replaces this one. Every flag printed here is required by the service;
+ * a shape that omits one is not a shorter command, it is a rejection.
+ * reject needs nothing beyond the audited reason.
+ *
+ * The replacement gets its own placeholder: reusing <candidate-id> for both --id and
+ * --replacement made the printed line a self-supersede, which the service now rejects.
+ */
+function reviewCommandsFor(projectArg) {
+    return [
+        { action: 'approve', command: `cogmem memory review${projectArg} --id <candidate-id> --action approve --actor <operator> --reason <reason> --confirmation-event <user-event-id> --json` },
+        { action: 'reject', command: `cogmem memory review${projectArg} --id <candidate-id> --action reject --actor <operator> --reason <reason> --json` },
+        { action: 'defer', command: `cogmem memory review${projectArg} --id <candidate-id> --action defer --actor <operator> --reason <reason> --review-after <epoch-ms> --json` },
+        { action: 'supersede', command: `cogmem memory review${projectArg} --id <candidate-id> --action supersede --actor <operator> --reason <reason> --replacement <replacement-candidate-id> --json` },
+        { action: 'relink', command: `cogmem memory review${projectArg} --id <candidate-id> --action relink --actor <operator> --reason <reason> --confirmation-event <user-event-id> --target-belief <belief-id> --json` },
+    ];
 }
 function asCount(value) {
     return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
@@ -780,7 +801,7 @@ function runGovern(kernel, args) {
                 decisions: [],
                 queue: kernel.getDreamCandidateQueue(args.projectId),
                 warning: 'memory govern does not process needs_confirmation candidates. Use memory review for approve, reject, defer, supersede, or relink.',
-                reviewCommand: 'cogmem memory review --project <projectId> --id <candidateId> --action <approve|reject|defer|supersede|relink> --actor <operator> --reason <reason>',
+                reviewCommands: reviewCommandsFor(args.projectId ? ` --project ${cliArg(args.projectId)}` : ' --project <projectId>'),
             };
         }
         throw new Error(`memory govern processes only candidate status; ${args.status} requires "cogmem memory review --id <candidateId> --action <action>"`);
@@ -927,8 +948,11 @@ function printHuman(command, payload) {
         const decisions = Array.isArray(payload.decisions) ? payload.decisions : [];
         if (payload.warning)
             console.log(`warning: ${payload.warning}`);
-        if (payload.reviewCommand)
-            console.log(`reviewCommand: ${payload.reviewCommand}`);
+        const reviewCommands = payload.reviewCommands;
+        if (reviewCommands) {
+            for (const { action, command } of reviewCommands)
+                console.log(`review ${action}: ${command}`);
+        }
         console.log(`decisions: ${decisions.length}`);
         console.log(`queue: ${JSON.stringify(payload.queue)}`);
         const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];

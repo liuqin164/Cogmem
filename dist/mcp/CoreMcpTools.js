@@ -293,7 +293,7 @@ export function listCogmemMcpTools() {
         },
         {
             name: 'cogmem_candidate_review',
-            description: 'Apply one audited human review action to a needs-confirmation Dream candidate. Approve and correction relink require a distinct same-project raw user confirmation event; review never bypasses missing evidence or project scope.',
+            description: 'Apply one audited human review action to a needs-confirmation Dream candidate. approve and relink require confirmationEventId, a distinct same-project raw user event; relink additionally requires a correction candidate and an active same-project targetBeliefId, and it rebinds that correction to the named belief (correctedClaimKey, correctedBeliefCandidateIds, and targetBeliefId move together, and a previous target is kept as relinkedFromBeliefId); defer requires a future reviewAfter in epoch milliseconds; supersede requires a replacementCandidateId, which must be a different candidate in the same project, and omitting it fails with replacement_candidate_required. Each action consumes only its own inputs: confirmationEventId for approve and relink, targetBeliefId for relink, replacementCandidateId for supersede, reviewAfter for defer, and nothing for reject. Any of those four the chosen action does not consume is rejected with review_input_not_applicable and is never written into the audit row. Review never bypasses missing evidence or project scope.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -359,7 +359,7 @@ export function listCogmemMcpTools() {
         },
         {
             name: 'cogmem_maintenance_tick',
-            description: 'Run one explicit host-owned maintenance tick. This decays activation and returns suggested upkeep commands such as dream, govern, re-embed, or cogmem memory bind for unbound raw events; it never starts a hidden daemon.',
+            description: 'Run one explicit host-owned maintenance tick. This decays activation and returns suggested upkeep commands such as dream, govern, embedding backfill status, or cogmem memory bind for unbound raw events; it never starts a hidden daemon.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -845,10 +845,12 @@ function episodeStatus(kernel, input) {
     const failedDreamAvailable = dream.failedRetryable + dream.failedTerminal > 0;
     const recentRawAvailable = episodes.length > 0 || kernel.episodeStore.countUnassignedRawEvents(projectId) > 0;
     const recommendedActions = [];
-    if (dreamBacklogAvailable)
-        recommendedActions.push('cogmem_dream_tick_with_maintenance_mode');
-    if (dream.failedRetryable > 0)
-        recommendedActions.push('cogmem_dream_retry');
+    // Callers read this list as "call these", so every `cogmem_*` value has to be a
+    // registered tool. One tick drains pending backlog, retry-scheduled work, and
+    // retryable failures alike (DreamScheduler counts all three), so both
+    // conditions name the same tool once.
+    if (dreamBacklogAvailable || dream.failedRetryable > 0)
+        recommendedActions.push('cogmem_dream_tick');
     if (dream.failedTerminal > 0)
         recommendedActions.push('inspect_terminal_dream_failure');
     if (kernel.episodeStore.countUnassignedRawEvents(projectId) > 0)
@@ -1038,7 +1040,7 @@ function recall(kernel, input, includeExplanation) {
             items: result.items,
             warnings,
             semanticMemoryMayLag,
-            suggestedTool: recentEpisodeIngestion ? undefined : 'cogmem_episode_append_or_import',
+            suggestedTool: recentEpisodeIngestion ? undefined : 'cogmem_episode_append',
         });
     }
     const explanation = explainRecallWithKernel(kernel, {

@@ -46,7 +46,7 @@ function usage(): string {
     '  mcp                  start stdio MCP server',
     '  repair               conservative upgrade repair commands such as project-scope',
     '  snapshot             export/import snapshots',
-    '  re-embed             inspect or run re-embedding',
+    '  re-embed             inspect re-embedding progress; re-embedding itself is a host pipeline call',
     '  migrate-vectors      migrate vector backend data',
     '  migrate              plan or apply schema migrations with optional backup',
     '  prospective          manage confirmed-only future-memory candidates; never executes tasks',

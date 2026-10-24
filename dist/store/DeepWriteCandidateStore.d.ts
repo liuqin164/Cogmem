@@ -74,6 +74,14 @@ export declare class DeepWriteCandidateStore {
     }): DeepWriteCandidateRecord[];
     listCandidates(options?: DeepWriteCandidateListOptions): DeepWriteCandidateRecord[];
     countCandidates(options?: Omit<DeepWriteCandidateListOptions, 'limit'>): number;
+    /**
+     * `promotionTarget.type` names either the referent this candidate became or was replaced by
+     * (`fact`, `belief`, `entity`, `graph_edge`, `replacement_candidate`) or, for a candidate retired
+     * without a successor, the reason class (`review_queue_expiry`, `diagnostic_conclusion`).
+     * `promotionTarget.id` is only written when there is a real referent; a row is never its own
+     * promotion target. Omitted fields keep their previous value (COALESCE below), which is what an
+     * automatic closure wants: it is not replacing anything.
+     */
     updateCandidateStatus(candidateId: string, status: DeepWriteCandidateStatus, promotionTarget?: {
         type?: string;
         id?: string;

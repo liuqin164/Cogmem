@@ -24,7 +24,7 @@ function parseArgs(argv) {
 const [command, ...rest] = process.argv.slice(2);
 const args = parseArgs(rest);
 if (command !== 'status') {
-    console.error('Usage: re-embed.ts status --db <cogmem.db>');
+    console.error('Usage: cogmem-re-embed status [--db <memory.db>|--config <config.toml>]');
     process.exit(1);
 }
 const configPath = typeof args.config === 'string' ? args.config : undefined;

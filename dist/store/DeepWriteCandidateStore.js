@@ -242,6 +242,14 @@ export class DeepWriteCandidateStore {
         const row = this.db.prepare(sql).get(...params);
         return row?.count || 0;
     }
+    /**
+     * `promotionTarget.type` names either the referent this candidate became or was replaced by
+     * (`fact`, `belief`, `entity`, `graph_edge`, `replacement_candidate`) or, for a candidate retired
+     * without a successor, the reason class (`review_queue_expiry`, `diagnostic_conclusion`).
+     * `promotionTarget.id` is only written when there is a real referent; a row is never its own
+     * promotion target. Omitted fields keep their previous value (COALESCE below), which is what an
+     * automatic closure wants: it is not replacing anything.
+     */
     updateCandidateStatus(candidateId, status, promotionTarget, expectedStatus) {
         this.db.prepare(`
       UPDATE deep_write_candidates
@@ -336,9 +344,11 @@ export class DeepWriteCandidateStore {
         const now = input.now ?? Date.now();
         this.db.transaction(() => {
             for (const row of rows) {
+                // A candidate that aged out of the review queue was not replaced by anything, so it names
+                // no promotion target: `type` carries the reason class, and `id` stays NULL. Writing its own
+                // id here would answer "what replaced this?" with the row that just closed.
                 this.updateCandidateStatus(row.candidate_id, 'superseded', {
                     type: 'review_queue_expiry',
-                    id: row.candidate_id,
                     reason: 'needs_confirmation_ttl_expired',
                     updatedAt: now,
                 });

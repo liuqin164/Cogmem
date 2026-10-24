@@ -193,11 +193,11 @@ cogmem memory candidates --project hermes --status needs_confirmation --json
 cogmem memory review --project hermes --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <distinct-user-event-id> --json
 cogmem memory review --project hermes --id <candidate-id> --action reject --actor <operator> --reason "unsupported claim" --json
 cogmem memory review --project hermes --id <candidate-id> --action defer --actor <operator> --reason "wait for evidence" --review-after <epoch-ms> --json
-cogmem memory review --project hermes --id <candidate-id> --action supersede --actor <operator> --reason "replaced" --replacement <candidate-id> --json
+cogmem memory review --project hermes --id <candidate-id> --action supersede --actor <operator> --reason "replaced" --replacement <replacement-candidate-id> --json
 cogmem memory review --project hermes --id <correction-id> --action relink --actor <operator> --reason "bind correction target" --target-belief <belief-id> --confirmation-event <distinct-user-event-id> --json
 ```
 
-Hermes may use `cogmem_candidate_review` with the same fields. Approval/relink require distinct same-project user evidence; relink also requires an active same-project belief. Defer keeps the candidate in `needs_confirmation` and records `reviewAfter` plus a status reason.
+Hermes may use `cogmem_candidate_review` with the same fields. Approval/relink require distinct same-project user evidence; relink also requires an active same-project belief. Relink is a binding, not a validation: it rewrites the correction's `correctedClaimKey`, `correctedBeliefCandidateIds`, and `targetBeliefId` to the named belief, marks the resolution `manual_relink`, and keeps any previous target as `relinkedFromBeliefId`. Defer keeps the candidate in `needs_confirmation` and records `reviewAfter` plus a status reason. Supersede requires a replacement candidate, because "superseded" without one names no successor; to retire a candidate with no successor use `reject`. Each action consumes only its own inputs: confirmationEventId for approve and relink, targetBeliefId for relink, replacementCandidateId for supersede, reviewAfter for defer, and nothing for reject. Omitting the input an action requires fails (`confirmation_event_required`, `review_after_must_be_in_the_future`, `replacement_candidate_required`), and passing one it does not consume (for example `--target-belief` with `approve`) is rejected with `review_input_not_applicable:<field>` rather than written into the audit row, because that row is evidence of what happened.
 
 ## Episode, Dream, and repair
 
