@@ -36,7 +36,7 @@ plugin (OpenClaw)  --unix socket-->  bridge.mjs serve  ->  one kernel, one DB ha
 ```
 
 Why: opening the kernel costs 500ms to 2s depending on graph size (schema
-checks, migration postconditions, atlas hydration). Paying it per turn made
+checks, schema postconditions, atlas hydration). Paying it per turn made
 every prompt slower as the memory grew.
 
 ### Lifecycle

@@ -905,7 +905,6 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   expect(body).toContain('OpenClaw');
   expect(body).toContain('references/operations.md');
   for (const command of [
-    'cogmem migrate --dry-run --json',
     'cogmem import-openclaw',
     'cogmem memory review',
     'cogmem memory graph-explore',
@@ -1390,8 +1389,9 @@ test('unified cogmem CLI dispatches doctor and update commands', async () => {
   expect(parsed.nextCommand).toContain('cogmem@3.6.5');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
   expect(parsed.nextCommand).not.toContain('@CognitiveOS/core');
-  expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
-  expect(parsed.migrationCommand).toContain(configPath);
+  // #59: update has no migration step at all, so the field is gone rather than
+  // pointing at a command that no longer exists.
+  expect(parsed.migrationCommand).toBeUndefined();
 });
 
 test('cogmem update targets the one-line installer home when cwd has no package dependency', async () => {
@@ -1430,8 +1430,9 @@ test('cogmem update targets the one-line installer home when cwd has no package 
   expect(parsed.nextCommand).toContain('cogmem@3.6.5');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
   // The user config lives beside the installer home, not inside the package root.
-  expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
-  expect(parsed.migrationCommand).toContain(configPath);
+  // #59: update has no migration step at all, so the field is gone rather than
+  // pointing at a command that no longer exists.
+  expect(parsed.migrationCommand).toBeUndefined();
 });
 
 test('cogmem update targets npm global installs without writing a local package dependency', async () => {
@@ -1455,8 +1456,9 @@ test('cogmem update targets npm global installs without writing a local package 
   expect(parsed.installKind).toBe('npm_global');
   expect(parsed.currentSpec).toBe('npm:global');
   expect(parsed.nextCommand).toBe('npm install -g cogmem@3.6.5');
-  expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
-  expect(parsed.migrationCommand).toContain(configPath);
+  // #59: update has no migration step at all, so the field is gone rather than
+  // pointing at a command that no longer exists.
+  expect(parsed.migrationCommand).toBeUndefined();
 });
 
 test('cogmem-connect installs Hermes skill into the real Hermes skills directory by default', async () => {

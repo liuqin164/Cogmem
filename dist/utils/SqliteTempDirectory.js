@@ -48,11 +48,11 @@ const TEMP_FILE_FAILURE = /unable to open database file|SQLITE_CANTOPEN|disk I\/
  * problem must keep its own message, and relabelling it would be the same
  * misattribution in the other direction.
  */
-export function describeSqliteTempDirectoryFailure(operation, error) {
+export function describeSqliteTempDirectoryFailure(operation, error, env = process.env) {
     const message = error instanceof Error ? error.message : String(error);
     if (!TEMP_FILE_FAILURE.test(message))
         return undefined;
-    const directory = resolveSqliteTempDirectory();
+    const directory = resolveSqliteTempDirectory(env);
     if (directory !== undefined && sqliteTempDirectoryIsWritable(directory))
         return undefined;
     return new Error(`sqlite_temp_directory_unusable: ${operation} needs a writable SQLite temporary directory, and `

@@ -17,7 +17,6 @@ const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
 const initBin = join(coreRoot, 'src/bin/init.ts');
 const snapshotBin = join(coreRoot, 'src/bin/snapshot.ts');
 const reEmbedBin = join(coreRoot, 'src/bin/re-embed.ts');
-const migrateVectorsBin = join(coreRoot, 'src/bin/migrate-vectors.ts');
 const compactBin = join(coreRoot, 'src/bin/compact.ts');
 const memoryBin = join(coreRoot, 'src/bin/memory.ts');
 
@@ -491,38 +490,6 @@ test('re-embed status can read the configured database without --db', async () =
   expect(parsed.percentComplete).toBe(100);
 });
 
-test('vector migration dry-run can read the configured database without --db', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-vector-config-'));
-  const configPath = join(dir, '.cogmem', 'config.toml');
-  mkdirSync(join(dir, '.cogmem'), { recursive: true });
-  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
-
-  const seed = Bun.spawn({
-    cmd: ['bun', doctorBin, '--config', configPath],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  await new Response(seed.stdout).text();
-  await new Response(seed.stderr).text();
-  expect(await seed.exited).toBe(0);
-
-  const proc = Bun.spawn({
-    cmd: ['bun', migrateVectorsBin, '--config', configPath, '--dry-run'],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const output = await new Response(proc.stdout).text();
-  const errorOutput = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  expect(errorOutput).toBe('');
-  expect(exitCode).toBe(0);
-  const parsed = JSON.parse(output);
-  expect(parsed.dryRun).toBe(true);
-  expect(parsed.eligible).toBe(0);
-});
 
 test('compact dry-run reports eligible vector pruning without deleting raw events', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-compact-cli-'));
@@ -1022,61 +989,7 @@ test('unified cogmem CLI exposes memory audit commands', async () => {
   expect(memoryOutput).toContain('--promote');
 });
 
-test('vector migration dry-run uses configured vector_dimension by default', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-vector-dimension-config-'));
-  const configPath = join(dir, '.cogmem', 'config.toml');
-  mkdirSync(join(dir, '.cogmem'), { recursive: true });
-  writeFileSync(configPath, [
-    '[core]',
-    'db_path = "memory.db"',
-    'vector_dimension = 4096',
-  ].join('\n'));
 
-  const seed = Bun.spawn({
-    cmd: ['bun', doctorBin, '--config', configPath],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  await new Response(seed.stdout).text();
-  await new Response(seed.stderr).text();
-  expect(await seed.exited).toBe(0);
-
-  const proc = Bun.spawn({
-    cmd: ['bun', migrateVectorsBin, '--config', configPath, '--dry-run'],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const output = await new Response(proc.stdout).text();
-  const errorOutput = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  expect(errorOutput).toBe('');
-  expect(exitCode).toBe(0);
-  const parsed = JSON.parse(output);
-  expect(parsed.dimension).toBe(4096);
-  expect(parsed.dryRun).toBe(true);
-});
-
-test('vector migration rejects invalid explicit dimensions', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-vector-invalid-dimension-'));
-  const dbPath = join(dir, 'memory.db');
-
-  const proc = Bun.spawn({
-    cmd: ['bun', migrateVectorsBin, '--db', dbPath, '--dimension', '4096px', '--dry-run'],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const output = await new Response(proc.stdout).text();
-  const errorOutput = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  expect(output).toBe('');
-  expect(exitCode).toBe(1);
-  expect(errorOutput).toContain('--dimension must be a positive integer');
-});
 
 test('snapshot import rejects invalid explicit dimensions before importing', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cogmem-snapshot-invalid-dimension-'));

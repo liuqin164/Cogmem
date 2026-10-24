@@ -130,7 +130,7 @@ function usage() {
         '  OpenClaw: <workspace>/skills/cogmem-memory/',
         '  Hermes:   ~/.hermes/skills/cogmem-memory/',
         '',
-        'The bundle includes SKILL.md plus references/operations.md with migration, import, recall, Atlas, governance, repair, and backup commands.',
+        'The bundle includes SKILL.md plus references/operations.md with import, recall, Atlas, governance, repair, and backup commands.',
         'For OpenClaw, pass --auto to install the local automatic recall/remember plugin wrapper and patch OpenClaw plugin config.',
         'For Hermes, pass --auto to patch ~/.hermes/config.yaml with a cogmem MCP server entry.',
         '--bun must be a real Bun binary (the plugin bridge imports bun:sqlite); defaults to the runtime that invoked this CLI.',

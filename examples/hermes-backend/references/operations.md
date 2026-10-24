@@ -7,8 +7,7 @@ Read this file when installing, upgrading, importing, repairing, or operating Co
 | Need | Use |
 |---|---|
 | Verify installation or config | `cogmem doctor` |
-| Upgrade package and migrate DB | `cogmem update --yes` |
-| Upgrade an existing database | `cogmem migrate` |
+| Update package and refresh host wiring | `cogmem update --yes` |
 | Import Hermes state/profile/sessions | `cogmem import-hermes` |
 | Import generic message JSONL | `cogmem episode import` |
 | Decide the next safe agent operation | `cogmem memory plan` |
@@ -53,30 +52,32 @@ Use `npm install -g cogmem@latest` only when the operator wants a global CLI. Th
 
 Then run `/reload-mcp` inside Hermes. `connect --auto` installs this skill bundle and updates the Hermes MCP allow-list; it does not claim a native `memory.provider` integration. New configs start the bridge as `cogmem mcp`; `cogmem-mcp` remains a compatibility bin for older host configs.
 
-## Upgrade and migrate
+## Update and database policy
 
-For normal upgrades, use one command:
+For normal package updates, use one command:
 
 ```bash
 cogmem update --yes
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, then runs post-install work through the newly installed CLI. For npm global installs it uses `npm install -g cogmem@latest`; for the one-line installer it updates `~/.cogmem/pkg`; for a workspace dependency it updates that workspace. With a valid config it runs `cogmem migrate --yes --backup --config <config>` and reports that the Hermes MCP server or agent host must be reloaded.
+`cogmem update --yes` installs `cogmem@latest` from npm, then runs post-install work through the newly installed CLI. For npm global installs it uses `npm install -g cogmem@latest`; for the one-line installer it updates `~/.cogmem/pkg`; for a workspace dependency it updates that workspace. It refreshes the Hermes MCP wiring when the integration is configured and reports that the Hermes MCP server or agent host must be reloaded. It runs no migration step.
 
-Preview the package and migration plan without writing:
+Preview the package and wiring plan without writing:
 
 ```bash
 cogmem update --dry-run --json
 ```
 
+Cogmem 4.0 does not migrate or upgrade a pre-4.0 database. Opening a Cogmem 3.x database is refused with an error code beginning `no_upgrade_path:`, and the file is left exactly as it was — no backup, no partial rewrite. Keep that file for Cogmem 3.x, or point 4.0 at a new database path (a new `db_path` in the config, or `--db` for one command) and move history across from the 3.x install. Creating a new database is the supported path.
+
+Re-check the install and refresh the host wiring after an update:
+
 ```bash
-cogmem migrate --dry-run --json
-cogmem migrate --yes --backup --json
 cogmem doctor
 cogmem connect hermes --workspace . --auto --force --json
 ```
 
-The backed-up command upgrades 3.5.2 schema 24, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.2 schema/projection state in one run and preserves Raw Ledger evidence. `--dry-run` is read-only and does not create `_schema_migrations`. Reload MCP after reconnecting.
+Reload MCP after reconnecting.
 
 ## Import Hermes memory
 

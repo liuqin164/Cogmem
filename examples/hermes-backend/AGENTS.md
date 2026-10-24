@@ -69,9 +69,11 @@ model = "qwen3-embedding:0.6b"
 
 Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2560`; `qwen3-embedding:8b` uses `4096`. Run `cogmem doctor` after editing. Imported records are embedded through the configured kernel embedder during `cogmem import-hermes`.
 
-## Migrate Existing Hermes Memory
+## Import Existing Hermes Memory
 
-For package upgrades, run `cogmem update --yes`; it installs `cogmem@latest` from npm, runs the newly installed backed-up migration with the resolved config, and then reports that the Hermes MCP server or agent host must be reloaded. Use `cogmem update --dry-run --json` or `cogmem migrate --dry-run --json` to preview pending work. Never delete or rewrite Raw Ledger events during migration.
+For package updates, run `cogmem update --yes`; it installs `cogmem@latest` from npm, refreshes the Hermes MCP wiring when configured, and ends on the same `cogmem doctor` install gate a fresh install ends on. It runs no migration step. Use `cogmem update --dry-run --json` to preview pending work. Never delete or rewrite Raw Ledger events.
+
+Cogmem 4.0 does not migrate or upgrade a pre-4.0 database: opening a Cogmem 3.x file is refused with an error code beginning `no_upgrade_path:`, and the file is left unchanged. Keep it for Cogmem 3.x, or point 4.0 at a new database path and move history across from the 3.x install.
 
 Default Hermes memory contract:
 
@@ -94,7 +96,7 @@ cogmem import-hermes --workspace . --project hermes --state-db ./state.db
 
 The SQLite importer prefers message-level `occurredAt`, `timestamp`, or `createdAt`; numeric `timestamp` values below millisecond range are epoch seconds. It can read WAL-mode `state.db` through SQLite immutable mode. `InsertTime` is only a fallback. Do not use `InsertTime` as proof of the original conversation date when better message timestamps exist.
 
-Then migrate:
+Then import:
 
 ```bash
 cogmem import-hermes --workspace . --project hermes
@@ -217,7 +219,7 @@ Recall behavior:
 - Use `recall.temporalTraversal?.labels` when the user refers to a day, session, or adjacent work period.
 - Do not run a separate vector search before calling `memory.recall()`. The backend is the first-class memory retrieval path.
 
-The migration command is idempotent. Re-running it skips records already imported into the same memory database.
+The import command is idempotent. Re-running it skips records already imported into the same memory database.
 
 Hermes integration is currently a skill plus MCP bridge. It does not replace a native Hermes memory provider and it does not patch Hermes runtime internals. `cogmem connect hermes --workspace . --auto` writes or updates the `mcp_servers.cogmem` entry in the Hermes config. Restart or reload Hermes after patching MCP config.
 

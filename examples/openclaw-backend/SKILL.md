@@ -1,13 +1,13 @@
 ---
 name: cogmem-memory-backend
-description: Install, connect, migrate, inspect, and navigate cogmem as OpenClaw's durable memory backend. Use for broad memory inventory, historical or relationship questions, exact source drill-down, Memory Atlas graph exploration, episode/Dream maintenance, or OpenClaw plugin repair.
+description: Install, connect, import, inspect, and navigate cogmem as OpenClaw's durable memory backend. Use for broad memory inventory, historical or relationship questions, exact source drill-down, Memory Atlas graph exploration, episode/Dream maintenance, or OpenClaw plugin repair.
 ---
 
 # cogmem Memory Backend for OpenClaw
 
 Use this skill when an OpenClaw workspace needs `cogmem` as its durable memory backend.
 
-For the complete command matrix, migration/import recipes, governance actions, Atlas filters, repair commands, backup flow, and scheduler guidance, read [references/operations.md](references/operations.md).
+For the complete command matrix, import recipes, governance actions, Atlas filters, repair commands, backup flow, and scheduler guidance, read [references/operations.md](references/operations.md).
 
 ## Ground Rules
 
@@ -112,24 +112,20 @@ api_key = ""
 timeout_ms = 60000
 ```
 
-## Migrate Existing OpenClaw Memory
+## Import Existing OpenClaw Memory
 
-Upgrade a 3.5.2 database, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.2 schema/projection set in one backed-up command:
+Cogmem 4.0 is a clean start and does not migrate or upgrade a pre-4.0 database. Opening a Cogmem 3.x database is refused with an error code beginning `no_upgrade_path:`, and the file is left exactly as it was — no backup, no partial rewrite. Keep that file for Cogmem 3.x, or point 4.0 at a new database path (a new `db_path` in the config, or `--db` for one command) and move history across from the 3.x install. There is no upgrade command; creating a new database is the supported path.
 
-```bash
-cogmem migrate --yes --backup --json
-```
-
-After upgrading Cogmem itself, migrate its database schema before importing or recalling:
+After updating the package, refresh the host integration before importing or recalling:
 
 ```bash
 cogmem update --yes
-# Manual equivalent: cogmem migrate --yes --backup && cogmem doctor --fix --agent openclaw --workspace . --plugin-only
+cogmem doctor --fix --agent openclaw --workspace . --plugin-only
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration with the resolved config, refreshes OpenClaw's generated plugin files when the integration is configured, and then reports that the OpenClaw gateway or agent host must be restarted. For npm global installs, `cogmem update --yes` resolves to `npm install -g cogmem@latest` instead of writing into the current directory. Agents should inspect `cogmem update --dry-run --json` or `cogmem migrate --dry-run --json` when an operator wants a preview. Schema migration preserves Raw Ledger events; dry-run is read-only and updates governed projections and indexes only during apply.
+`cogmem update --yes` installs `cogmem@latest` from npm, refreshes OpenClaw's generated plugin files when the integration is configured, and ends on the same `cogmem doctor` install gate a fresh install ends on. It runs no migration step. For npm global installs, `cogmem update --yes` resolves to `npm install -g cogmem@latest` instead of writing into the current directory. Agents should inspect `cogmem update --dry-run --json` when an operator wants a preview.
 
-After any 3.5.2 -> 3.6.x OpenClaw upgrade, refresh the generated OpenClaw plugin files. Use the plugin-only path first when OpenClaw is misbehaving, because it does not open the Cogmem database:
+After a package update, refresh the generated OpenClaw plugin files. Use the plugin-only path first when OpenClaw is misbehaving, because it does not open the Cogmem database:
 
 ```bash
 cogmem doctor --fix --agent openclaw --workspace . --plugin-only --json
@@ -162,7 +158,7 @@ Always preview first:
 cogmem import-openclaw --workspace . --project openclaw --dry-run
 ```
 
-Then migrate:
+Then import:
 
 ```bash
 cogmem import-openclaw --workspace . --project openclaw

@@ -151,10 +151,6 @@ OpenClaw uses the same core service through its direct plugin bridge. Broad ques
 
 ## Migration and repair
 
-Upgrade an existing 3.5.2 database with:
+Cogmem 4.0 is a clean start and does not migrate or upgrade a pre-4.0 database. Opening a 3.x file is refused with an error code beginning `no_upgrade_path:`, and the file is not changed, so point 4.0 at a new database path (a new `db_path` in the config, or `--db` for one command) and move history across from the 3.x install. Creating a new database still works and is the supported path.
 
-```bash
-cogmem migrate --yes --backup --json
-```
-
-Migration 0025 creates and backfills the disposable projection. Migration 0026 adds exact memory-kind metadata, projection health, and candidate-review audit state. Migration 0027 corrects 3.6.0-upgraded databases by marking Atlas projections dirty until the real action/time rebuild runs. Cogmem 3.7.2 keeps the projection-first schema and adds entrance nodes, canonical cards, issue hints, and episode relation edges during Atlas rebuild/maintenance. Projection metadata schema `3.7.2` invalidates earlier 3.7.x Atlas v2 projections so project-scoped entity entrances are rebuilt. `cogmem memory tick` refreshes only dirty projects, records rebuild errors, prunes old access telemetry, and decays navigation activation without starting a daemon.
+For historical reference, the Atlas projection's schema lineage comes from the 3.x line: migration 0025 created and backfilled the disposable projection, migration 0026 added exact memory-kind metadata, projection health, and candidate-review audit state, and migration 0027 corrected 3.6.0-upgraded databases by marking Atlas projections dirty until the real action/time rebuild ran. Cogmem 3.7.2 kept the projection-first schema and added entrance nodes, canonical cards, issue hints, and episode relation edges during Atlas rebuild/maintenance, and projection metadata schema `3.7.2` invalidated earlier 3.7.x Atlas v2 projections so project-scoped entity entrances were rebuilt. In 4.0, `cogmem memory tick` refreshes only dirty projects, records rebuild errors, prunes old access telemetry, and decays navigation activation without starting a daemon.

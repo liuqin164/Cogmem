@@ -50,15 +50,18 @@ model = "qwen3-embedding:0.6b"
 
 Use the matching vector dimension for the selected model. `qwen3-embedding:4b` uses 2560 dimensions and `qwen3-embedding:8b` uses 4096 dimensions.
 
-## Migrate
+## Update and import
 
-Upgrade and migrate the Cogmem database itself before importing host memory:
+Cogmem 4.0 is a clean start and does not migrate or upgrade a pre-4.0 database. Opening a Cogmem 3.x file is refused with an error code beginning `no_upgrade_path:`, and the file is left exactly as it was — no backup, no partial rewrite. Keep that file for Cogmem 3.x, or point 4.0 at a new database path (a new `db_path` in the config, or `--db` for one command) and move history across from the 3.x install. Creating a new database is the supported path.
+
+Update the package and refresh the host wiring before importing host memory:
 
 ```bash
 cogmem update --yes
+cogmem connect hermes --workspace . --auto --force --json
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration, and then tells the operator to reload the Hermes MCP server or restart the agent host. Use `cogmem update --dry-run --json` to see the install and migration commands first.
+`cogmem update --yes` installs `cogmem@latest` from npm, refreshes the Hermes MCP wiring when configured, and ends on the same `cogmem doctor` install gate a fresh install ends on. It runs no migration step. Use `cogmem update --dry-run --json` to see the install and wiring plan first.
 
 Preview:
 
@@ -107,7 +110,7 @@ MCP recall JSON includes `decisionTrace`. Check its selected lane, reason, and c
 
 Dream stores explicit user clarification as organizational correction evidence rather than an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Resolve `needs_confirmation` with `cogmem_candidate_review` or `cogmem memory review`; maintenance only supersedes entries left stale past the default 30-day TTL.
 
-After upgrades, reload MCP. Rerun `cogmem connect hermes --workspace . --auto --force --json` when MCP wiring, allow-listed tools, or the installed skill bundle changed. Follow only JSON `nextCommands` for unattended agent work; operator/host actions are in `nextSteps` with `safeForAutomation=false`.
+After a package update, reload MCP. Rerun `cogmem connect hermes --workspace . --auto --force --json` when MCP wiring, allow-listed tools, or the installed skill bundle changed. Follow only JSON `nextCommands` for unattended agent work; operator/host actions are in `nextSteps` with `safeForAutomation=false`.
 
 Cogmem 3.7.2 exposes read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`, installs from npm by default, prevents empty imported episodes from blocking Dream, and adds an agent-safe operations protocol. Use `memory plan` for the next safe command, grouped `memory candidates --json` for queue state, `historical_discussion` recall for old-discussion questions, and returned `sourceLocator` commands for exact evidence. Only run `dream_tick` when it appears in `memory plan.nextActions`; `raw_dream_ledger_lag` in `nonBlocking` has `resolvableByDreamTick:false` and is not fixed by looping `dream tick`. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, day/month/year, topic, issue, entity/target, session/thread, memory-kind, action-kind, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Unicode entity cues are supported, but alias merges still require governed evidence. Prefer returned `cards[]` for historical discussion: `canonicalId` dedupes the episode, `matchedFacets` explains why it matched, `relatedButNotSelected` is only side context, `relaxationTrace` marks day/month/year or issue/topic fallback, and `sourceLocator` opens raw evidence. Touch only nodes actually used, and follow returned event IDs or `sourceLocator` commands before quoting exact wording.
 
@@ -150,7 +153,7 @@ console.log(recalled.items);
 
 If a Hermes workspace uses different paths, pass explicit `profilePath` and `sessionDir` values instead of changing core.
 
-For agent-facing instructions, run `cogmem connect hermes --workspace .`. It installs `SKILL.md` plus `references/operations.md`, a complete command-selection, migration, import, recall, Atlas, review, repair, backup, and maintenance handbook.
+For agent-facing instructions, run `cogmem connect hermes --workspace .`. It installs `SKILL.md` plus `references/operations.md`, a complete command-selection, update, import, recall, Atlas, review, repair, backup, and maintenance handbook.
 
 `cogmem connect hermes --workspace . --auto` patches the Hermes MCP config with a `cogmem` server command. Re-running it after an upgrade updates existing allow-lists with strategy, topic, episode repair, candidate review, graph touch, conditional Dream, memory-map, maintenance, and prospective tools. Cogmem cannot observe Hermes conversations unless Hermes calls append/import. Episode append/import never run Dream; MCP Dream tick mutates only with `maintenanceMode: true`, never executes tools, and durable semantic changes still require governance. After running it, restart or reload Hermes so the MCP server list is re-read.
 

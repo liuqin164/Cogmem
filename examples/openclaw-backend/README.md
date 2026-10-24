@@ -105,15 +105,18 @@ Recall JSON includes `decisionTrace`; the automatic prompt wrapper renders its c
 
 Dream treats explicit user clarification as organizational correction evidence, not an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Review `needs_confirmation` with `cogmem memory review`; `memory tick` only supersedes entries left stale past the default 30-day TTL.
 
-## Migrate
+## Update and import
 
-Upgrade and migrate the Cogmem database itself before importing host memory:
+Cogmem 4.0 is a clean start and does not migrate or upgrade a pre-4.0 database. Opening a Cogmem 3.x file is refused with an error code beginning `no_upgrade_path:`, and the file is left exactly as it was — no backup, no partial rewrite. Keep that file for Cogmem 3.x, or point 4.0 at a new database path (a new `db_path` in the config, or `--db` for one command) and move history across from the 3.x install. Creating a new database is the supported path.
+
+Update the package and refresh the host integration before importing host memory:
 
 ```bash
 cogmem update --yes
+cogmem doctor --fix --agent openclaw --workspace . --plugin-only
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration, refreshes configured OpenClaw plugin files, and then tells the operator to restart the OpenClaw gateway or agent host. Use `cogmem update --dry-run --json` to see the install, migration, and plugin-refresh commands first.
+`cogmem update --yes` installs `cogmem@latest` from npm, refreshes configured OpenClaw plugin files, and ends on the same `cogmem doctor` install gate a fresh install ends on. It runs no migration step. Use `cogmem update --dry-run --json` to see the install and plugin-refresh plan first.
 
 Preview:
 
@@ -214,7 +217,7 @@ cogmem memory recall --query "<artifact query>" --project openclaw --agent openc
 
 Default recall includes untagged and `collection:anchor` memory only.
 
-After upgrading an existing OpenClaw workspace that imported old memory before raw ledger anchors were available, run:
+If an existing OpenClaw workspace imported old memory before raw ledger anchors were available, run:
 
 ```bash
 cogmem import-openclaw --workspace . --project openclaw --config .cogmem/config.toml --reindex-raw --json
@@ -222,7 +225,7 @@ cogmem import-openclaw --workspace . --project openclaw --config .cogmem/config.
 
 This backfills searchable raw anchors for old imported memories without duplicating compiled memory or vectors.
 
-For agent-facing instructions, run `cogmem connect openclaw --workspace .`. It installs `SKILL.md` plus `references/operations.md`, a complete command-selection, migration, import, recall, Atlas, governance, repair, backup, and maintenance handbook.
+For agent-facing instructions, run `cogmem connect openclaw --workspace .`. It installs `SKILL.md` plus `references/operations.md`, a complete command-selection, update, import, recall, Atlas, governance, repair, backup, and maintenance handbook.
 
 To make future OpenClaw turns automatically recall and record memory, run:
 

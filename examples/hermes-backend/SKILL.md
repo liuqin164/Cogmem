@@ -1,13 +1,13 @@
 ---
 name: cogmem-memory-backend
-description: Install, connect, migrate, inspect, and navigate cogmem as Hermes's durable MCP memory backend. Use for broad memory inventory, historical or relationship questions, exact source drill-down, Memory Atlas graph exploration, episode/Dream maintenance, or MCP wiring repair.
+description: Install, connect, import, inspect, and navigate cogmem as Hermes's durable MCP memory backend. Use for broad memory inventory, historical or relationship questions, exact source drill-down, Memory Atlas graph exploration, episode/Dream maintenance, or MCP wiring repair.
 ---
 
 # cogmem Memory Backend for Hermes
 
 Use this skill when a Hermes workspace needs `cogmem` as its durable memory backend.
 
-For the complete command matrix, migration/import recipes, governance actions, Atlas filters, repair commands, backup flow, and scheduler guidance, read [references/operations.md](references/operations.md).
+For the complete command matrix, import recipes, governance actions, Atlas filters, repair commands, backup flow, and scheduler guidance, read [references/operations.md](references/operations.md).
 
 ## Ground Rules
 
@@ -112,22 +112,18 @@ api_key = ""
 timeout_ms = 60000
 ```
 
-## Migrate Existing Hermes Memory
+## Import Existing Hermes Memory
 
-Upgrade a 3.5.2 database, an existing 3.6.x database, or a pre-release schema-25 test database to the current 3.7.2 schema/projection set in one backed-up command:
+Cogmem 4.0 is a clean start and does not migrate or upgrade a pre-4.0 database. Opening a Cogmem 3.x database is refused with an error code beginning `no_upgrade_path:`, and the file is left exactly as it was — no backup, no partial rewrite. Keep that file for Cogmem 3.x, or point 4.0 at a new database path (a new `db_path` in the config, or `--db` for one command) and move history across from the 3.x install. There is no upgrade command; creating a new database is the supported path.
 
-```bash
-cogmem migrate --yes --backup --json
-```
-
-After upgrading Cogmem itself, migrate its database schema before importing or recalling:
+After updating the package, refresh the host integration before importing or recalling:
 
 ```bash
 cogmem update --yes
-# Manual equivalent: cogmem migrate --yes --backup
+cogmem connect hermes --workspace . --auto --force --json
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration with the resolved config, and then reports that the Hermes MCP server or agent host must be reloaded. For npm global installs, `cogmem update --yes` resolves to `npm install -g cogmem@latest` instead of writing into the current directory. Agents should inspect `cogmem update --dry-run --json` or `cogmem migrate --dry-run --json` when an operator wants a preview. Schema migration preserves Raw Ledger events; dry-run is read-only and updates governed projections and indexes only during apply.
+`cogmem update --yes` installs `cogmem@latest` from npm, refreshes the Hermes MCP wiring when the integration is configured, and ends on the same `cogmem doctor` install gate a fresh install ends on. It runs no migration step. For npm global installs, `cogmem update --yes` resolves to `npm install -g cogmem@latest` instead of writing into the current directory. Agents should inspect `cogmem update --dry-run --json` when an operator wants a preview.
 
 Default Hermes memory contract:
 
@@ -150,7 +146,7 @@ cogmem import-hermes --workspace . --project hermes --state-db ./state.db
 
 The SQLite importer reads the `messages` table, preserves row/message order, supports WAL-mode read-only databases through SQLite immutable mode, and prefers message-level `occurredAt`, `timestamp`, or `createdAt`. Numeric `timestamp` values below millisecond range are epoch seconds. `InsertTime` is only a fallback and must not be treated as the original conversation time.
 
-Then migrate:
+Then import:
 
 ```bash
 cogmem import-hermes --workspace . --project hermes

@@ -220,30 +220,19 @@ If you already have a JavaScript project, install `cogmem` as a dependency inste
 
 Finish with `cogmem doctor` in every case. `cogmem update --yes` recognises all of these install shapes plus the one-line installer home.
 
-Upgrade from npm and migrate an existing database:
+Upgrade from npm:
 
 ```bash
 cogmem update --yes
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, then runs the newly installed `cogmem migrate --yes --backup --config <resolved-config>`. It updates npm-global installs with `npm install -g`, the one-line installer home under `~/.cogmem/pkg`, or the current workspace dependency when Cogmem is a project dependency. If OpenClaw is configured, the updater also runs the newly installed plugin-only repair command so stale `index.js` and `bridge.mjs` files are refreshed before you restart the agent. To inspect changes without writing:
+`cogmem update --yes` installs `cogmem@latest` from npm, then refreshes host integration files when they are configured. It runs no migration step and ends on the same `cogmem doctor` install gate a fresh install ends on, inheriting its exit code. It updates npm-global installs with `npm install -g`, the one-line installer home under `~/.cogmem/pkg`, or the current workspace dependency when Cogmem is a project dependency. If OpenClaw is configured, the updater also runs the newly installed plugin-only repair command so stale `index.js` and `bridge.mjs` files are refreshed before you restart the agent. To inspect changes without writing:
 
 ```bash
 cogmem update --dry-run --json
-cogmem migrate --dry-run --json
 ```
 
-For a manual migration, run `cogmem migrate --yes --backup`. The 4.0.0 migration accepts the released 3.7.3/schema-31 database, preserves canonical Raw Ledger and memory evidence, and creates a timestamped, transaction-consistent standalone backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
-
-Upgrade a 3.7.3/schema-31 database into schema 32 — the schema this release ships — with one command:
-
-```bash
-cogmem migrate --yes --backup --json
-```
-
-The release records a single 0032 receipt. 4.0.0 ships migration `0032` only and no longer replays migrations 0001-0031: the inherited receipts stay in `_schema_migrations` without digests and are not re-validated, while the 0032 receipt digest is checked on every later start. Unreleased 3.7.4 development builds recorded their own 0032-0062 receipts without that digest, so those databases are rejected as `unsupported_development_schema`; restore a schema-31 backup or recreate a development database. Older released databases must first be upgraded with Cogmem 3.7.3.
-
-The 3.7.3 runtime state tables did not contain project scope and cannot be safely attributed. They are disposable read models in the 4.0.0 contract: migration backs up the database, reports `runtimeDiscardedThisRun` and `runtimeDiscardedTotal`, stores hash-only discard receipts, and leaves canonical Raw Ledger evidence unchanged. The command is idempotent.
+Cogmem 4.0 is a clean start and does not upgrade an old database. Opening a pre-4.0 database is refused with an error code beginning `no_upgrade_path:`, and the file is left exactly as it was — not backed up, not partially rewritten. Keep that file for Cogmem 3.x, or point 4.0 at a new database path — a new `db_path` in the config, or `--db` for one command — and move history across from the 3.x install. There is no upgrade command. Creating a new database still works and is the supported path: configure a fresh 4.0 database with `cogmem init` or `cogmem init --yes` at a new path.
 
 For OpenClaw upgrades, `cogmem update --yes` now runs this refresh automatically when the config has `[integrations.openclaw] enabled = true`. You can also run it manually; this path does not open the Cogmem database, so it still works while an old drainer has the DB busy:
 
@@ -330,7 +319,7 @@ cogmem memory graph-reindex --project openclaw --event <event-id> --json
 cogmem memory rebuild-topology --project openclaw --json
 ```
 
-Graph and recall reads never rebuild projections inline. If an upgrade marks a project's civil-time topology dirty, reads continue on last-known-good non-temporal lanes; run `rebuild-topology` explicitly (or follow the maintenance-tick suggestion). The command pages lightweight neuron metadata into generation-scoped staging tables, persists its cursor, resumes after interruption, and atomically swaps the completed project topology and cognitive time graph into service.
+Graph and recall reads never rebuild projections inline. If a project's civil-time topology is marked dirty, reads continue on last-known-good non-temporal lanes; run `rebuild-topology` explicitly (or follow the maintenance-tick suggestion). The command pages lightweight neuron metadata into generation-scoped staging tables, persists its cursor, resumes after interruption, and atomically swaps the completed project topology and cognitive time graph into service.
 
 Atlas filtering is not limited to entity + time + action. The planner combines whichever entrances are actually present — project, day/month/year, topic, issue, entity/person, session/thread, memory kind, action kind, and ordinary keywords. Entity cue extraction supports Unicode letter/number names in ordinary historical and action-history questions, but it is still deterministic cue extraction, not full named-entity recognition or an automatic alias merge graph. Strict multi-facet matches may surface cold nodes even when their activation has decayed. If strict intersection is empty, JSON includes `relaxationTrace` for explicit fallbacks such as day → month → year or issue → parent topic instead of silently pretending an exact match existed. Project scope and raw evidence validation are never bypassed.
 
@@ -373,7 +362,7 @@ Operational cost classes:
 
 - Interactive/read-only: `memory status`, `memory candidates`, Atlas query commands, `strategy plan`, and direct source `memory show`.
 - Interactive/bounded: `memory recall`; every call reports `performance.totalMs`.
-- Maintenance/write: import, Dream, governance, review, repair, binding, migration, re-embedding, compaction, and `memory tick`.
+- Maintenance/write: import, Dream, governance, review, repair, binding, re-embedding, compaction, and `memory tick`.
 
 Never overlap maintenance writers against one database. Wait for each command to exit, use returned `durationMs`, backlog, and failure details to set the next interval, and keep routine status/candidate inspection on the read-only path. A `vectors` count of zero is not by itself a failure: `memory status --json` includes `vectorState.recallAvailableWithoutVectors` and the active fallback status.
 
@@ -557,7 +546,7 @@ This installs the agent-facing skill bundle at:
 ~/.hermes/skills/cogmem-memory/references/operations.md
 ```
 
-The reference file is the complete agent command handbook for setup, migration, imports, recall, Atlas, governance review, repair, backup, and maintenance scheduling.
+The reference file is the complete agent command handbook for setup, package updates, imports, recall, Atlas, governance review, repair, backup, and maintenance scheduling.
 
 With `--auto`, it adds or updates a `cogmem` MCP server entry in:
 
@@ -749,7 +738,7 @@ cogmem update --yes
 npm:cogmem@latest
 ```
 
-The updater resolves `latest` to npm by default, installs into the current package or the one-line installer home, then runs post-install work through the newly installed local `node_modules/.bin/cogmem`. That post-install path runs a backed-up schema migration with the resolved config, refreshes the OpenClaw plugin when OpenClaw is configured, and reports which agent hosts must be restarted. Use `--from <version|tag|tarball>` only when you intentionally want another package spec.
+The updater resolves `latest` to npm by default, installs into the current package or the one-line installer home, then runs post-install work through the newly installed local `node_modules/.bin/cogmem`. That post-install path refreshes host integration files when they are configured — for OpenClaw, the plugin-only repair — and reports which agent hosts must be restarted. It runs no migration step. Use `--from <version|tag|tarball>` only when you intentionally want another package spec.
 
 The update ends on the same install gate as a fresh install, and inherits its exit code: OK and WARN exit 0, FAIL exits non-zero, and a missing config is reported as *not installed* rather than as a failed update. `--json` returns `installGate` and `nextSteps` beside the existing install-kind fields, so an agent reads one shape before and after an update.
 
@@ -803,8 +792,6 @@ cogmem normalize-transcript
 cogmem snapshot export|import
 cogmem compact
 cogmem re-embed
-cogmem migrate-vectors
-cogmem migrate
 cogmem prospective
 cogmem strategy
 cogmem brain-eval

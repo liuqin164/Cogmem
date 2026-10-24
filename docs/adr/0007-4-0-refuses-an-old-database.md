@@ -124,15 +124,24 @@ them changes how the change should be made.
 
 ## Deliberate deviations from the issue's deletion list
 
-- **The 3.7.3 fixture stays** (`__tests__/fixtures/migrations/main-3.7.3-schema31.sqlite.gz`).
-  The issue lists the fixtures for deletion, but this is the only artifact that
-  proves the refusal against a *real* released database rather than a synthetic
-  one, and after this decision that is its whole purpose. Deleting it would leave
-  the refusal tested only against databases this repository made up.
+- **The 3.7.3 fixture goes, and the refusal is tested against a synthetic
+  database instead** (`__tests__/fixtures/migrations/` is deleted, as the issue
+  lists). An earlier draft of this ADR argued for keeping it, because a real
+  released database is stronger evidence than one the repository makes up. It was
+  overruled by the acceptance, which asks for the fixtures to be gone, and the
+  test builds the shape it needs explicitly: `_meta` at version 31 plus receipts
+  `0015`-`0031`. That is honest about what is being tested — the *shape* 4.0 must
+  refuse — and it does not leave a 1 MB gzip in the tree for one assertion.
 - **`MigrationUtils.ts` and the `v3_7_4` guards stay** (the issue names the
   migration module generally). They are runtime dependencies of the stores, not
   upgrade machinery; deleting them would break belief, entity, binding, and Atlas
   stores on a fresh database.
+- **The fixture-based rehearsal moved into `RELEASE_CHECKLIST.md`.** With the
+  fixture gone, the checklist builds a 3.x-shaped database with `bun -e` and
+  checksums it before and after the refusal, which is the same evidence a person
+  can reproduce. The recorded measurements of the deleted upgrade (18 receipts,
+  the 1,458,512 B backup) were removed rather than restated: they describe a path
+  that no longer exists.
 - **The test files are edited per case, not deleted whole.** The issue scopes
   this to "the cases for upgrading an old database"; `schema-migration.unit.test.ts`
   also covers the 4.0 identity and digest checks, which are still the guards on a

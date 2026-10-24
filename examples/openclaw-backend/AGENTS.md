@@ -68,9 +68,11 @@ model = "qwen3-embedding:0.6b"
 
 Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2560`; `qwen3-embedding:8b` uses `4096`. Run `cogmem doctor` after editing. Imported records are embedded through the configured kernel embedder during `cogmem import-openclaw`.
 
-## Migrate Existing OpenClaw Memory
+## Import Existing OpenClaw Memory
 
-For package upgrades, run `cogmem update --yes`; it installs `cogmem@latest` from npm, runs the newly installed backed-up migration with the resolved config, refreshes the generated OpenClaw plugin when configured, and then reports that the OpenClaw gateway or agent host must be restarted. Use `cogmem update --dry-run --json` or `cogmem migrate --dry-run --json` to preview pending work. Never delete or rewrite Raw Ledger events during migration.
+For package updates, run `cogmem update --yes`; it installs `cogmem@latest` from npm, refreshes the generated OpenClaw plugin when configured, and ends on the same `cogmem doctor` install gate a fresh install ends on. It runs no migration step. Use `cogmem update --dry-run --json` to preview pending work. Never delete or rewrite Raw Ledger events.
+
+Cogmem 4.0 does not migrate or upgrade a pre-4.0 database: opening a Cogmem 3.x file is refused with an error code beginning `no_upgrade_path:`, and the file is left unchanged. Keep it for Cogmem 3.x, or point 4.0 at a new database path and move history across from the 3.x install.
 
 Episode Dream is not part of the answer path. `agent_end` only queues Raw Ledger and episode assembly. Treat semantic episode summaries as routing hints, never evidence; durable candidates must cite raw event IDs. Retry `failed_retryable` Dream jobs only during maintenance, and inspect `failed_terminal` jobs instead of repeatedly ticking them.
 
@@ -84,7 +86,7 @@ Preview first:
 cogmem import-openclaw --workspace . --project openclaw --dry-run
 ```
 
-Then migrate:
+Then import:
 
 ```bash
 cogmem import-openclaw --workspace . --project openclaw
@@ -213,7 +215,7 @@ openclaw gateway restart
 cogmem openclaw diagnose --workspace . --json
 ```
 
-The migration command is idempotent. Re-running it skips records already imported into the same memory database.
+The import command is idempotent. Re-running it skips records already imported into the same memory database.
 
 ## Memory Atlas navigation
 

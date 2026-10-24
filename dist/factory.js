@@ -54,9 +54,8 @@ import { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
 import { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPathRegistry, TopicRelationGraph } from './topic/index.js';
 import { CorrectionResolver } from './episode/CorrectionResolver.js';
 import { CandidateReviewService, MemoryGovernanceExecutor, MemoryGovernanceValidator, PiiRedactor, } from './governance/index.js';
-import { ALL_MIGRATIONS, KERNEL_MIGRATIONS, SchemaMigrationRunner, migration_0032 } from './migrations/index.js';
 import { installRuntimeProvenanceGuards } from './migrations/v3_7_4/FinalRuntimeGuards.js';
-import { backupDatabase } from './migrations/MigrationBackup.js';
+import { LATEST_SCHEMA_VERSION, assertSupportedDatabase, createFinalSchema, hasUserSchema, } from './migrations/v3_7_4/FinalSchema.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -101,7 +100,6 @@ import { VectorStore } from './store/VectorStore.js';
 import { config } from './utils/Config.js';
 import { KernelRunningError, SnapshotExporter, SnapshotImporter, } from './snapshot/index.js';
 import { CORE_VERSION } from './version.js';
-const LATEST_SCHEMA_VERSION = Math.max(...ALL_MIGRATIONS.map((migration) => Number.parseInt(migration.version, 10)));
 const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 export class MemoryKernel {
     options;
@@ -198,38 +196,28 @@ export class MemoryKernel {
         // File-backed databases migrate before any Store can inspect an old table.
         // `:memory:` must migrate on the connection retained by FactStore.
         const migrateAfterCoreBootstrap = this.dbPath === ':memory:';
-        let existingSchema = false;
         if (!migrateAfterCoreBootstrap) {
             const migrationDb = new Database(this.dbPath);
             try {
                 migrationDb.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-                existingSchema = Boolean(migrationDb.prepare(`
-          SELECT 1 FROM sqlite_master
-          WHERE type='table' AND name NOT LIKE 'sqlite_%'
-          LIMIT 1
-        `).get());
-                if (existingSchema) {
-                    const bootstrapRecovery = Boolean(migrationDb.prepare(`
-            SELECT 1 FROM sqlite_master WHERE type='table' AND name='_cogmem_bootstrap_state'
-          `).get());
-                    const migrations = bootstrapRecovery ? [migration_0032] : KERNEL_MIGRATIONS;
-                    const planner = new SchemaMigrationRunner(migrationDb, migrations);
-                    planner.preflight();
-                    const needsBackup = planner.plan().some((migration) => migration.requiresBackup);
-                    const backupPath = needsBackup && !bootstrapRecovery ? backupDatabase(migrationDb, this.dbPath) : undefined;
-                    new SchemaMigrationRunner(migrationDb, migrations, {
-                        backupVerified: bootstrapRecovery || !needsBackup || Boolean(backupPath),
-                    }).run();
+                if (hasUserSchema(migrationDb)) {
+                    // 4.0 creates this file or refuses it; it never upgrades one. See
+                    // ADR-0007, and `assertSupportedDatabase` for what a refusal says.
+                    assertSupportedDatabase(migrationDb);
                 }
                 else {
+                    // Dropped first because a creation that was interrupted leaves this
+                    // marker behind, and `hasUserSchema` deliberately treats that as a new
+                    // database rather than as someone else's file.
                     migrationDb.exec(`
+            DROP TABLE IF EXISTS _cogmem_bootstrap_state;
             CREATE TABLE _cogmem_bootstrap_state (
               singleton INTEGER PRIMARY KEY CHECK(singleton=1),
               started_at INTEGER NOT NULL
             );
             INSERT INTO _cogmem_bootstrap_state(singleton,started_at) VALUES(1,unixepoch()*1000);
           `);
-                    new SchemaMigrationRunner(migrationDb, [migration_0032], { backupVerified: true }).run();
+                    createFinalSchema(migrationDb);
                 }
             }
             finally {
@@ -252,7 +240,7 @@ export class MemoryKernel {
         );
         INSERT INTO _cogmem_bootstrap_state(singleton,started_at) VALUES(1,unixepoch()*1000);
       `);
-            new SchemaMigrationRunner(db, [migration_0032], { backupVerified: true }).run();
+            createFinalSchema(db);
         }
         const rebuildJobColumns = db.prepare(`PRAGMA table_info(topology_time_rebuild_jobs)`).all();
         if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_token'))

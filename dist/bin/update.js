@@ -35,7 +35,6 @@ function readArgs(argv) {
         localDev: values['local-dev'] === true,
         manager,
         configPath: typeof values.config === 'string' ? values.config : undefined,
-        skipMigrate: values['skip-migrate'] === true,
         skipAgentRefresh: values['skip-agent-refresh'] === true,
     };
 }
@@ -58,15 +57,6 @@ function buildCommand(target, spec) {
 }
 function localCogmemBin(cwd) {
     return join(cwd, 'node_modules', '.bin', 'cogmem');
-}
-function buildMigrationExecForTarget(target, configPath) {
-    return [
-        target.bin,
-        'migrate',
-        '--yes',
-        '--backup',
-        ...(configPath ? ['--config', configPath] : []),
-    ];
 }
 function buildOpenClawRepairExecForTarget(target, configPath, workspaceRoot) {
     return [
@@ -211,9 +201,6 @@ async function main() {
     const manager = target.manager;
     const command = buildCommand(target, resolvedSpec);
     const config = loadConfigForUpdate(args, target.cwd);
-    const migrationExec = !args.skipMigrate && config.configPath
-        ? buildMigrationExecForTarget(target, config.configPath)
-        : undefined;
     const openclawWorkspace = config.loaded?.integrations.openclaw.enabled
         ? config.loaded.integrations.openclaw.workspaceDir || process.cwd()
         : undefined;
@@ -238,8 +225,6 @@ async function main() {
         nextCommand: command.join(' '),
         updateWarning: target.warning,
         configPath: config.configPath,
-        migrationCommand: migrationExec?.join(' '),
-        migrationSkippedReason: migrationExec ? undefined : (args.skipMigrate ? 'skip_migrate_flag' : config.skippedReason),
         openclawRepairCommand: openclawRepairExec?.join(' '),
         openclawRepairSkippedReason: openclawRepairExec
             ? undefined
@@ -290,8 +275,6 @@ async function main() {
             console.log(`warning: ${result.updateWarning}`);
         console.log(`current: ${result.currentSpec || 'not listed in package.json'}`);
         console.log(`command: ${result.nextCommand}`);
-        if (result.migrationCommand)
-            console.log(`migrate: ${result.migrationCommand}`);
         if (result.openclawRepairCommand)
             console.log(`openclaw: ${result.openclawRepairCommand}`);
         console.log(result.followUp);
@@ -302,11 +285,6 @@ async function main() {
         const updateExitCode = await runCommand(command, target.cwd);
         if (updateExitCode !== 0)
             process.exit(updateExitCode);
-        if (migrationExec) {
-            const migrationExitCode = await runCommand(migrationExec, process.cwd());
-            if (migrationExitCode !== 0)
-                process.exit(migrationExitCode);
-        }
         if (openclawRepairExec) {
             const repairExitCode = await runCommand(openclawRepairExec, process.cwd());
             if (repairExitCode !== 0)

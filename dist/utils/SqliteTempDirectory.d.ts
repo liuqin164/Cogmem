@@ -29,5 +29,5 @@ export declare function sqliteTempDirectoryIsWritable(directory: string): boolea
  * problem must keep its own message, and relabelling it would be the same
  * misattribution in the other direction.
  */
-export declare function describeSqliteTempDirectoryFailure(operation: string, error: unknown): Error | undefined;
+export declare function describeSqliteTempDirectoryFailure(operation: string, error: unknown, env?: NodeJS.ProcessEnv): Error | undefined;
 //# sourceMappingURL=SqliteTempDirectory.d.ts.map

@@ -123,7 +123,7 @@ describe('#62 the update gate checks the target install', () => {
     // caller's directory, which is the same defect class for the same reason.
     // #59 deletes that step, so it is deliberately not fixed here.
     expect(calls.filter((call) => call.cwd === f.elsewhere).map((call) => call.args.split(' ')[0]))
-      .toEqual(['migrate']);
+      .toEqual([]);
   });
 
   test('an explicit --config is the config the gate checks', async () => {

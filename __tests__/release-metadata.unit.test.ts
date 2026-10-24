@@ -7,7 +7,6 @@ import { inspectOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemory
 import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { filterToolsByProfile } from '../src/mcp/profiles.js';
 import { ALL_MIGRATIONS } from '../src/migrations/index.js';
-import { MIGRATION_DIGESTS } from '../src/migrations/MigrationDigestManifest.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const packageJsonPath = join(coreRoot, 'package.json');
@@ -55,8 +54,6 @@ describe('core release metadata', () => {
     expect(Number.parseInt(ALL_MIGRATIONS.at(-1)!.version, 10)).toBe(32);
     expect(ALL_MIGRATIONS.some((migration) => migration.version === '0033')).toBe(false);
     expect(readdirSync(join(coreRoot, 'src', 'migrations')).some((file) => file.startsWith('0033_'))).toBe(false);
-    expect(Object.keys(MIGRATION_DIGESTS).sort().at(-1)).toBe('0032');
-    expect(MIGRATION_DIGESTS['0032']).toBe('a49bc9069fdd9270eb9108fce707076d3daf83a31a4ced583469a7f8ece8c5f1');
     expect(inspectOpenClawAutoMemoryPlugin({ workspaceRoot: coreRoot }).expectedVersion).toBe('0.7.2');
     expect(checklist).toContain('npm publish --provenance --access public');
   });
@@ -172,8 +169,6 @@ describe('core release metadata', () => {
       'cogmem-init',
       'cogmem-mcp',
       'cogmem-memory',
-      'cogmem-migrate',
-      'cogmem-migrate-vectors',
       'cogmem-normalize-transcript',
       'cogmem-openclaw',
       'cogmem-prospective',
@@ -207,18 +202,22 @@ describe('core release metadata', () => {
     expect(manifest.files).toContain('RELEASE_CHECKLIST.md');
   });
 
-  test('release checklist rehearses the 3.7.3 upgrade and the second start it enables', () => {
-    const checklist = readText(join(coreRoot, 'RELEASE_CHECKLIST.md'));
+  test('no current document promises an upgrade path from an old database', () => {
+    // #59: the upgrade path is gone, so a document that still tells a reader to
+    // migrate is a promise this release cannot keep. The check stops at the
+    // 4.0.0 section for the CHANGELOG: entries for 3.x releases describe what
+    // those releases did, and rewriting them would be a different kind of lie.
     const changelog = readText(join(coreRoot, 'CHANGELOG.md'));
-
-    expect(checklist).toContain('## Upgrade Rehearsal');
-    expect(checklist).toContain('__tests__/fixtures/migrations/main-3.7.3-schema31.sqlite.gz');
-    expect(checklist).toContain('cogmem migrate --db /tmp/schema31.db --yes --backup --json');
-    expect(checklist).toContain('"applied": ["0032"]');
-    expect(checklist).toContain('| cogmem mcp --db /tmp/schema31.db --profile core');
-    expect(checklist).toContain('`tools/list` with 8 tools under `core`');
-    expect(checklist).toContain('migration_checksum_unknown:0015');
-    expect(changelog).toContain('no longer replays 0001-0031');
+    const released = changelog.slice(changelog.indexOf('## 4.0.0'));
+    const current: Array<[string, string]> = [
+      ['CHANGELOG.md (4.0.0)', released.slice(0, released.indexOf('\n## ', 1))],
+      ['README.md', readText(join(coreRoot, 'README.md'))],
+      ['RELEASE_CHECKLIST.md', readText(join(coreRoot, 'RELEASE_CHECKLIST.md'))],
+    ];
+    for (const [file, text] of current) {
+      const promised = ['cogmem migrate', 'migrate-vectors', 'verify:packed-migration'].filter((token) => text.includes(token));
+      expect({ file, promised }).toEqual({ file, promised: [] });
+    }
   });
 
   test('agent-facing docs describe chronological ledger, source anchors, and natural emergence metrics', () => {
