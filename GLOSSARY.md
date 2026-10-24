@@ -45,3 +45,22 @@ _Avoid_: trace, lookup, citation
 **First-class memory backend**（一等记忆后端）:
 A memory subsystem the host takes as its default path rather than an optional tool: recall goes there first, and anything it surfaces can be traced back to the original words.
 _Avoid_: memory plugin, vector store, RAG add-on
+
+### Installing
+
+**Install actor**（安装执行者）:
+Who carries out one install step: an **Agent** (runs unattended), an **Operator** (a person at the keyboard), or the **Host** (the agent runtime itself, reloading its own gateway or MCP entry). Every install step names exactly one.
+_Avoid_: user, runner, executor, role
+
+**Install path**（安装路径）:
+One of exactly two routes to a working install: the **Operator path** (installer, then the wizard) and the **Agent path** (installer, then a non-interactive setup).
+_Avoid_: method, option, flavor, mode
+
+**Setting tier**（设置档位）:
+Who may decide one setup setting: **Agent-decidable** (a safe default exists and a wrong choice destroys nothing), **Human-required** (a key, a passphrase, or money), or **Settle-later** (changeable afterwards with no data loss).
+_Avoid_: required/optional, basic/advanced
+
+**Install gate**（安装收口）:
+The single check install, update and connect all end on. It answers not installed, OK, WARN (installed but degraded) or FAIL, and always names the next step.
+_Avoid_: health check, smoke test, verification
+

@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# The Cogmem installer.
+#
+# It installs the package, links the CLI and stops. It never runs the setup
+# wizard and never writes config: setup is `cogmem init`, verification is
+# `cogmem doctor`. Both are named at the end, one per Install path, so a person
+# and an agent each get the command they should run next. See ADR-0003.
 set -euo pipefail
 
 INSTALL_HOME="${COGMEM_INSTALL_HOME:-$HOME/.cogmem/pkg}"
@@ -50,15 +56,53 @@ link_cli() {
     fi
   done
   log "Installed CLI: $BIN_DIR/cogmem"
+}
+
+on_path() {
   case ":$PATH:" in
-    *":$BIN_DIR:"*) ;;
-    *)
-      log "Warning: $BIN_DIR is not on PATH. Add it to PATH or run $BIN_DIR/cogmem directly."
-      ;;
+    *":$1:"*) return 0 ;;
+    *) return 1 ;;
   esac
 }
 
+# Print the two Install paths and the gate.
+#
+# The step list lives in the CLI, not here: the installer asks the install gate
+# rather than keeping a second copy of the wording. The fallback only runs when
+# the freshly installed CLI cannot start, which is itself a broken install.
+print_next_steps() {
+  local cli="$BIN_DIR/cogmem"
+
+  if ! on_path "$BIN_DIR"; then
+    log "Warning: $BIN_DIR is not on PATH, so 'cogmem' will not resolve yet."
+    log "  Fix it for this shell:  export PATH=\"$BIN_DIR:\$PATH\""
+    log "  Or call the CLI by absolute path:  $cli"
+    log "  The install gate reports this as a WARN, not a failure."
+    printf '\n'
+  fi
+
+  printf '\n'
+  if "$cli" doctor; then
+    return
+  fi
+
+  log "The installed CLI did not start, so its step list could not be printed."
+  log "Try:  $cli doctor"
+  printf '\n'
+  printf 'Cogmem is installed. Setup is a separate step:\n'
+  printf '  [operator] %s init             interactive, asks for provider and key\n' "$cli"
+  printf '  [agent]    %s init --yes --json  non-interactive, conservative defaults\n' "$cli"
+  printf '  [agent]    %s doctor --json      the install gate\n' "$cli"
+  printf '\n'
+}
+
 main() {
+  # Accepted and ignored, so existing scripts that set it keep running. The
+  # installer no longer runs the wizard, so there is nothing left to skip.
+  if [ "${COGMEM_SKIP_INIT:-}" != "" ]; then
+    log "COGMEM_SKIP_INIT is set and ignored: setup is always a separate step now."
+  fi
+
   ensure_bun
   ensure_install_home
 
@@ -70,21 +114,7 @@ main() {
   link_cli
 
   log "Installed package home: $INSTALL_HOME"
-  log "Run this later to update: cogmem update --yes"
-
-  if [ "${COGMEM_SKIP_INIT:-0}" = "1" ]; then
-    log "Skipping init because COGMEM_SKIP_INIT=1."
-    exit 0
-  fi
-
-  log "Starting interactive setup. Configure an embedding model and a memory-model LLM for Dream Curator."
-  # shellcheck disable=SC2086
-  if [ -r /dev/tty ]; then
-    "$BIN_DIR/cogmem" init ${COGMEM_INIT_ARGS:-} < /dev/tty
-  else
-    log "No interactive terminal is available. Run cogmem init manually after this installer exits."
-    "$BIN_DIR/cogmem" init --yes ${COGMEM_INIT_ARGS:-}
-  fi
+  print_next_steps
 }
 
 main "$@"

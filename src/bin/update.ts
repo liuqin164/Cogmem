@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
 import { printCliJson } from './CliJson.js';
 import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
+import { buildGate, postInstallSteps, type InstallGate, type InstallStep } from '../install/InstallSteps.js';
 
 interface UpdateArgs {
   dryRun: boolean;
@@ -204,6 +205,21 @@ function loadConfigForUpdate(args: UpdateArgs): { configPath?: string; loaded?: 
   return { configPath: resolution.path, loaded };
 }
 
+function printGate(gate: InstallGate | undefined): void {
+  if (!gate) return;
+  console.log('');
+  console.log(`Install gate: ${gate.level.toUpperCase()} — ${gate.summary}`);
+  for (const diagnostic of gate.diagnostics) {
+    console.log(`  WARN ${diagnostic.code}: ${diagnostic.message}`);
+  }
+  if (gate.nextSteps.length === 0) return;
+  console.log('Next steps:');
+  for (const step of gate.nextSteps) {
+    console.log(`  [${step.actor}] ${step.command}`);
+    console.log(`      ${step.when} — ${step.purpose}`);
+  }
+}
+
 async function runCommand(cmd: string[], cwd: string): Promise<number> {
   const proc = Bun.spawn({
     cmd,
@@ -266,7 +282,40 @@ async function main(): Promise<void> {
     followUp: restartRequired.length > 0
       ? `After update finishes, ${restartRequired.join('; ')}.`
       : 'After update finishes, restart any running agent host so it loads the new Cogmem CLI.',
+    installGate: undefined as InstallGate | undefined,
+    nextSteps: [] as InstallStep[],
   };
+
+  // The gate runs last, so post-update verification is the same contract as a
+  // fresh install rather than a second one with its own wording. A missing
+  // config is "not installed", not a failure: an updater may run before setup.
+  const gateBin = target.kind === 'npm_global' ? 'cogmem' : target.bin;
+  const gateSteps = config.configPath
+    ? postInstallSteps(gateBin)
+    : [
+        {
+          id: 'init',
+          actor: 'operator' as const,
+          safeForAutomation: false,
+          command: `${gateBin} init`,
+          when: 'now',
+          purpose: 'no config exists yet, so the update had nothing to migrate',
+        },
+        {
+          id: 'agent_init',
+          actor: 'agent' as const,
+          safeForAutomation: true,
+          command: `${gateBin} init --yes --json`,
+          when: 'now, with no human present',
+          purpose: 'non-interactive config; Human-required settings fall back to conservative defaults',
+        },
+      ];
+  result.nextSteps = gateSteps;
+  result.installGate = buildGate(
+    config.configPath ? 'ok' : 'not_installed',
+    config.configPath ? [] : [{ code: 'missing_config', message: 'no cogmem config found, so no migration ran' }],
+    gateSteps,
+  );
 
   if (args.json) {
     printCliJson('update', result);
@@ -279,6 +328,7 @@ async function main(): Promise<void> {
     if (result.migrationCommand) console.log(`migrate: ${result.migrationCommand}`);
     if (result.openclawRepairCommand) console.log(`openclaw: ${result.openclawRepairCommand}`);
     console.log(result.followUp);
+    printGate(result.installGate);
   }
 
   if (!args.dryRun) {
@@ -292,7 +342,10 @@ async function main(): Promise<void> {
       const repairExitCode = await runCommand(openclawRepairExec, process.cwd());
       if (repairExitCode !== 0) process.exit(repairExitCode);
     }
-    if (!args.json) console.log(result.followUp);
+    if (!args.json) {
+      console.log(result.followUp);
+      printGate(result.installGate);
+    }
     process.exit(0);
   }
 }
