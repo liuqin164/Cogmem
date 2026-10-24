@@ -1,3 +1,4 @@
+import { describeSqliteTempDirectoryFailure } from './utils/SqliteTempDirectory.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -2624,7 +2625,14 @@ export class MemoryKernel {
       `).run(auditId, 'forgetUser', auditScope, 'privacy_erasure_requested', JSON.stringify({ deleted }), Date.now());
         })();
         db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
-        db.exec(`VACUUM`);
+        try {
+            db.exec(`VACUUM`);
+        }
+        catch (error) {
+            // #64: as in snapshot export, a temp-file failure here is reported by
+            // SQLite as a database problem. Name it.
+            throw describeSqliteTempDirectoryFailure('forgetting a user', error) ?? error;
+        }
         for (const neuronId of neuronIds) {
             this.vectorStore.removePoint(neuronId);
         }
