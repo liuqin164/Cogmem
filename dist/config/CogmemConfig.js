@@ -9,6 +9,34 @@ import { resolveTimeZone } from '../utils/LocalDateContext.js';
 export function defaultCogmemHome(env = process.env) {
     return join(env.HOME || homedir(), '.cogmem');
 }
+/**
+ * The home of the account running this process, ignoring `$HOME`.
+ *
+ * Both `os.homedir()` and `os.userInfo()` honour `$HOME` on POSIX, so neither
+ * can tell a test with an overridden HOME from the real user. The password
+ * database can, which is what makes it usable as a boundary for the
+ * project-config walk: a config under the account's home is a global config.
+ */
+function osUserHome() {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+    if (uid === undefined)
+        return undefined;
+    try {
+        const passwd = readFileSync('/etc/passwd', 'utf8');
+        for (const line of passwd.split('\n')) {
+            const fields = line.split(':');
+            if (fields.length < 6)
+                continue;
+            if (Number(fields[2]) !== uid)
+                continue;
+            return fields[5] || undefined;
+        }
+    }
+    catch {
+        // No passwd database (or not readable): fall back to no extra boundary.
+    }
+    return undefined;
+}
 export function defaultCogmemConfigPath(env = process.env) {
     return join(defaultCogmemHome(env), 'config.toml');
 }
@@ -19,10 +47,14 @@ export function resolveCogmemConfigPath(options = {}) {
     if (explicit?.trim()) {
         return { kind: 'toml', path: resolvePath(explicit.trim(), cwd, env) };
     }
-    const projectConfig = findUp(cwd, join('.cogmem', 'config.toml'));
+    const globalConfig = defaultCogmemConfigPath(env);
+    // The walk up for a project config stops at every home it could reach:
+    // `<home>/.cogmem/config.toml` is that home's *global* config, never a project
+    // one. Without the stop, a run with an overridden HOME adopts another user's
+    // config, and any test that meant to isolate itself inherits the developer's.
+    const projectConfig = findUp(cwd, join('.cogmem', 'config.toml'), [dirname(globalConfig), osUserHome()]);
     if (projectConfig)
         return { kind: 'toml', path: projectConfig };
-    const globalConfig = defaultCogmemConfigPath(env);
     if (existsSync(globalConfig))
         return { kind: 'toml', path: globalConfig };
     return { kind: 'missing', path: globalConfig };
@@ -254,9 +286,12 @@ function expandHome(value, env) {
         return join(env.HOME || homedir(), value.slice(2));
     return value;
 }
-function findUp(start, relativePath) {
+function findUp(start, relativePath, stopAt = []) {
+    const stops = new Set(stopAt.filter((entry) => Boolean(entry)).map((entry) => resolve(entry)));
     let current = resolve(start);
     while (true) {
+        if (stops.has(current))
+            return undefined;
         const candidate = join(current, relativePath);
         if (existsSync(candidate))
             return candidate;
