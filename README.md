@@ -13,35 +13,9 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 Current version: `4.0.0`
 
-Distribution: npm registry. GitHub remains the source mirror and hosts this installer, but package install and upgrade resolve `cogmem` from npm by default.
+Distribution: npm registry. GitHub remains the source mirror and hosts the installer, but package install and upgrade resolve `cogmem` from npm by default.
 
-Default workspace install:
-
-```bash
-npm install cogmem@latest --save
-./node_modules/.bin/cogmem doctor
-```
-
-One-line installer for machines that need Bun bootstrapping:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-```
-
-The one-line installer:
-
-1. Ensures Bun is available.
-2. Installs `cogmem@latest` from the npm registry into `~/.cogmem/pkg`.
-3. Links the `cogmem` CLI into `~/.bun/bin`.
-4. Starts the interactive setup wizard from `/dev/tty`, so `curl | bash` installs still receive real keyboard input.
-
-If no interactive terminal is available, the installer writes a conservative non-interactive config and tells you to rerun `cogmem init`.
-
-To skip the wizard:
-
-```bash
-COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-```
+See [Quick Start](#quick-start) for the two install paths.
 
 ## What cogmem Is For
 
@@ -174,52 +148,60 @@ cogmem init --yes --dry-run --agent none --no-probe --vector-dimension 384
 
 ## Quick Start
 
-Install into an agent workspace with npm:
+There are two install paths. They install the same thing and end on the same check; they differ only in who answers the setup questions.
 
-```bash
-npm install cogmem@latest --save
-./node_modules/.bin/cogmem doctor
-```
-
-Or install into an existing Bun workspace:
-
-```bash
-bun add cogmem@latest
-bunx cogmem init
-```
-
-Or install with npm in a Node workspace that already uses Bun to run the Cogmem CLI:
-
-```bash
-npm install cogmem@latest
-./node_modules/.bin/cogmem init
-```
-
-Or install globally with npm when Bun is already on PATH:
-
-```bash
-npm install -g cogmem@latest
-cogmem init
-```
-
-Or use the one-line installer for machines that do not already have Bun:
+**Operator path** — you are at the keyboard:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
+cogmem init
+cogmem doctor
 ```
 
-For agent-run installs, skip the interactive wizard and connect the host explicitly:
+**Agent path** — an agent is installing for you:
 
 ```bash
 COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-cogmem doctor
+cogmem init --yes --json
+cogmem doctor --json
 ```
 
-Validate configuration:
+The installer installs the package and links the CLI, then stops. It never runs the wizard and never writes config, so `curl | bash` cannot ask questions on one machine and invent answers on another. `COGMEM_SKIP_INIT` is still accepted and now does nothing.
 
-```bash
-cogmem doctor
-```
+`cogmem init` writes the config. `cogmem doctor` is the install gate: it answers **not installed**, **OK**, **WARN**, or **FAIL**, and always names the next step. `not installed` exits 0 — a fresh install with no config yet is not a failure. `rule_only` and a CLI directory outside `PATH` are WARNs: they work, but degraded.
+
+### What each path decides
+
+Settings are tiered by who may decide them.
+
+| Setting | Tier | What an unattended run does |
+| --- | --- | --- |
+| Database path, vector backend | Agent-decidable | Uses the default |
+| PII redaction (email, phone, SSN) | Agent-decidable | All on |
+| Model names, vector dimension | Settle-later | Uses the default; change it later |
+| Embedding / memory / reasoning provider | Human-required | `deterministic_local` / `rule_only`, reported as a WARN |
+| Any API key | Human-required | Writes none, even when a key is in the environment |
+| AES encryption passphrase | Human-required | Leaves encryption off |
+| OpenClaw / Hermes integration | Human-required | Enables neither; suggests the flag |
+
+An unattended run therefore never spends money, never writes a secret, and never invents a passphrase whose loss would destroy the database. It ends in `rule_only` and says so.
+
+Host detection (`~/.hermes`, an OpenClaw workspace) is advice: `cogmem init` prints `--agent <host>` as a suggestion and changes nothing on disk. Pass the flag to accept it.
+
+The Agent path defaults to project scope, so the config lands in the workspace it was pointed at. The Operator path defaults to global scope. `--scope` overrides either, and one install serves many workspaces: the package lives in one place while each workspace resolves its own `.cogmem/config.toml`, falling back to `~/.cogmem/config.toml`.
+
+### Installing into an existing project
+
+If you already have a JavaScript project, install `cogmem` as a dependency instead and skip the installer. These are the same package; only the resolution differs.
+
+| Situation | Command |
+| --- | --- |
+| npm project | `npm install cogmem@latest --save` then `./node_modules/.bin/cogmem init` |
+| Bun workspace | `bun add cogmem@latest` then `bunx cogmem init` |
+| Node project already running the CLI with Bun | `npm install cogmem@latest` then `./node_modules/.bin/cogmem init` |
+| Global npm, Bun already on `PATH` | `npm install -g cogmem@latest` then `cogmem init` |
+
+Finish with `cogmem doctor` in every case. `cogmem update --yes` recognises all of these install shapes plus the one-line installer home.
 
 Upgrade from npm and migrate an existing database:
 
@@ -751,6 +733,8 @@ npm:cogmem@latest
 ```
 
 The updater resolves `latest` to npm by default, installs into the current package or the one-line installer home, then runs post-install work through the newly installed local `node_modules/.bin/cogmem`. That post-install path runs a backed-up schema migration with the resolved config, refreshes the OpenClaw plugin when OpenClaw is configured, and reports which agent hosts must be restarted. Use `--from <version|tag|tarball>` only when you intentionally want another package spec.
+
+The update ends on the same install gate as a fresh install, and inherits its exit code: OK and WARN exit 0, FAIL exits non-zero, and a missing config is reported as *not installed* rather than as a failed update. `--json` returns `installGate` and `nextSteps` beside the existing install-kind fields, so an agent reads one shape before and after an update.
 
 For OpenClaw after an update, restart the gateway or host after `cogmem update --yes` finishes. To repair only the plugin without opening SQLite:
 
