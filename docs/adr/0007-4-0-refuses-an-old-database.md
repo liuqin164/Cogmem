@@ -87,6 +87,41 @@ there is nothing for it to verify, so it goes, and `prepublishOnly` ends at
 `npm pack --dry-run`. A release check that asserts a withdrawn behaviour is worse
 than no check.
 
+## What the first implementation attempt found
+
+Written down because each of these cost real time to discover, and every one of
+them changes how the change should be made.
+
+- **A fresh 4.0 database has an empty `_schema_migrations` table.** The schema
+  installer creates it; the migration runner used to fill it, and the runner is
+  going away. So "the receipts table exists" is not evidence of an old database —
+  reading a non-empty table as the signal is required, or the check refuses the
+  databases this build just created. (First attempt: four test failures from
+  exactly this.)
+- **`_meta.schema_version = '32'` is the cheap 4.0 marker.** The kernel writes it
+  once a database is set up. It is what separates "created by this release" from
+  "a SQLite file someone pointed us at" without touching the schema.
+- **Do not run the schema scan on the open path.** The existing gate accepted a
+  4.0 database *without* walking the schema, because a recorded receipt made the
+  plan empty. Adding the walk to every open made each kernel start slow enough
+  that `snapshot.integration.test.ts` went from about half a second per test to
+  nearly three, and one test crossed the suite's five-second budget. Accept on
+  the `_meta` marker; run `finalSchemaIssue` only when the marker is absent, or
+  from an explicit verify command.
+- **`PRAGMA temp_store = MEMORY` has to move with the work it protects.** The
+  runner set it before installing, which is the #61 fix for a temp directory that
+  cannot be written. `createFinalSchema` must set it too — this trap was called
+  out here when the decision was written, and was still walked into.
+- **The refusal cannot land alone.** While `cogmem migrate` exists and the README
+  documents it, a kernel that refuses an old database contradicts a command that
+  upgrades one. The kernel change, the command/script deletions, and the document
+  changes are one commit, not three.
+- **`unsupported_release_schema:*` collapses into the refusal.** Health and gap
+  checks existed to decide whether an upgrade was safe; with no upgrade there is
+  nothing to be safe for, so any non-empty pre-4.0 history is refused the same
+  way. That is why the issue lists those codes for deletion, and it is a
+  simplification rather than a loss.
+
 ## Deliberate deviations from the issue's deletion list
 
 - **The 3.7.3 fixture stays** (`__tests__/fixtures/migrations/main-3.7.3-schema31.sqlite.gz`).
