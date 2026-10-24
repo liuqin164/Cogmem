@@ -126,6 +126,25 @@ describe('#62 the update gate checks the target install', () => {
       .toEqual(['migrate']);
   });
 
+  test('an explicit --config is the config the gate checks', async () => {
+    const f = makeFixture({ withConfig: false });
+    // A config that is nowhere near the install home: only the flag can point at
+    // it, so if the gate checks anything else the assertion below fails.
+    const explicit = join(f.root, 'elsewhere', 'explicit-config.toml');
+    writeFileSync(explicit, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n[memory_model]\nprovider = "rule_only"\nmodel = "rule_only"\n');
+
+    const result = await run([...baseArgs(f), '--config', explicit], {
+      cwd: f.elsewhere,
+      env: { HOME: f.scratchHome, PATH: [join(f.root, 'bin'), process.env.PATH].join(':') },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(invocations(f.invocation).find((call) => call.args.startsWith('doctor '))).toEqual({
+      cwd: f.installHome,
+      args: `doctor --json --config ${explicit}`,
+    });
+  });
+
   test('the named gate command carries the same config it will check', async () => {
     const f = makeFixture({ withConfig: true });
 
