@@ -26,6 +26,7 @@ import { KernelAgentMemoryBackend } from '../agent/AgentMemoryBackend.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
 import { recallForHost, rememberForHost } from '../host/bridge/HostBridge.js';
 import { formatStrategyContext } from '../strategy/StrategyContextFormatter.js';
+import { defaultAgentRegistryPath, loadAgentRegistry } from '../mcp/AgentRegistry.js';
 function readArg(name) {
     const index = process.argv.indexOf(name);
     if (index < 0)
@@ -41,14 +42,51 @@ const command = process.argv[2];
 if (command !== 'recall' && command !== 'remember') {
     fail(`expected "recall" or "remember", got ${command === undefined ? 'nothing' : JSON.stringify(command)}`);
 }
-// A host that does not name itself would have its turns recorded under whatever
-// default we picked, and the store would lie about where memory came from.
-const hostId = readArg('--host');
-if (!hostId)
-    fail('--host <id> is required: the adapter names itself, this tool never guesses');
+/**
+ * Who this turn belongs to.
+ *
+ * With an agent registry the credential answers that, and `--host` may only
+ * agree with it: a local process that starts this binary is otherwise free to
+ * name itself any agent and write into that agent's memory, which is the same
+ * self-declaration the MCP path stopped accepting (ADR-0006). Without a registry
+ * there is one agent and the operator names it, so `--host` stays required —
+ * a host that does not name itself would have its turns recorded under whatever
+ * default we picked, and the store would lie about where memory came from.
+ */
+const registry = loadAgentRegistry(readArg('--agents') ?? defaultAgentRegistryPath());
+const credential = readArg('--token') ?? process.env.COGMEM_AGENT_TOKEN;
+const claimedHostId = readArg('--host');
+let hostId;
+let registeredProjectId;
+if (registry) {
+    const agent = registry.resolve(credential);
+    if (!agent) {
+        fail('this machine has a registered agent list, so a credential is required: pass --token <credential> or set COGMEM_AGENT_TOKEN');
+    }
+    if (claimedHostId && claimedHostId !== agent.hostId) {
+        fail(`--host ${claimedHostId} disagrees with the credential, which speaks for ${agent.hostId}`);
+    }
+    const claimedAgentId = readArg('--agent');
+    if (claimedAgentId && claimedAgentId !== agent.hostId) {
+        fail(`--agent ${claimedAgentId} disagrees with the credential, which speaks for ${agent.hostId}`);
+    }
+    hostId = agent.hostId;
+    registeredProjectId = agent.projectId;
+}
+else {
+    if (!claimedHostId)
+        fail('--host <id> is required: the adapter names itself, this tool never guesses');
+    hostId = claimedHostId;
+}
+// A registration confines the agent to one project, so `--project` may confirm
+// it but never point somewhere else.
+const claimedProjectId = readArg('--project');
+if (registeredProjectId && claimedProjectId && claimedProjectId !== registeredProjectId) {
+    fail(`--project ${claimedProjectId} is outside the registered scope of ${registeredProjectId}`);
+}
 const identity = {
     agentId: readArg('--agent') ?? hostId,
-    projectId: readArg('--project') ?? 'default',
+    projectId: claimedProjectId ?? registeredProjectId ?? 'default',
     sessionId: readArg('--session') ?? `${hostId}-session`,
     memorySource: readArg('--source') ?? `${hostId}-plugin`,
     pluginId: readArg('--plugin-id'),
