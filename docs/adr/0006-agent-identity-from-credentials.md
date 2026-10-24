@@ -86,12 +86,16 @@ loads `~/.cogmem/agents.json` when it exists.
 
 ## Consequences
 
-- **The bridge path is not converted yet.** `cogmem-host-bridge` still takes a
-  required `--host` argument, which is the same self-declaration this decision
-  removes from the HTTP path. The resolver (`AgentRegistry`) is shared code, so
-  the bridge's conversion is wiring rather than a second design — but until it
-  lands, the plugin path is isolated only by the fact that the operator starts
-  that process. Issue #65 tracks it.
+- **The bridge path uses the same resolver.** `cogmem-host-bridge` takes
+  `--token` (or `COGMEM_AGENT_TOKEN`) and resolves it through this same
+  `AgentRegistry`; `--host` and `--project` may only agree with the registration.
+  Without a registry nothing changes, so a single-agent install and its generated
+  plugin are untouched. **What is still not converted is the in-process OpenClaw
+  plugin**, which pins its identity from install-time configuration rather than a
+  credential. That is a different question and left open: the plugin opens the
+  kernel itself, so there is no transport to authenticate, and the answer there is
+  about what a host may write into its own pinned scope rather than about who it
+  claims to be.
 - **`init` does not generate credentials yet.** The registration file is
   currently written by hand or by an operator; the issue asks for `init` and the
   installer to produce one entry per agent. That is the next piece, and it must
