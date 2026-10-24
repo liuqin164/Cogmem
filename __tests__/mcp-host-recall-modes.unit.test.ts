@@ -3,19 +3,31 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildMcpInstructions, type McpToolProfile } from '../src/mcp/profiles.js';
 
-// ADR 0002 reserves "automatic / emergent" for hosts that expose a pre-prompt
-// hook. A host that speaks only MCP has to pull explicitly, and the docs are the
-// place that distinction is promised or lost: a Cursor user who reads OpenClaw's
-// behaviour into their own setup looks for a memory that never surfaced and
-// concludes Cogmem does not work. The table in docs/mcp-hosts.md is therefore
-// product surface, and every row in it is checked against something real below
-// rather than against the prose next to it.
+// ADR 0002 reserves emergence for a host that exposes a pre-prompt hook *and*
+// has a Cogmem adapter using it; ADR 0004 names the adapters and the order they
+// land in. The docs are where that distinction is promised or lost: a Hermes
+// user who reads OpenClaw's behaviour into their own setup looks for a memory
+// that never surfaced and concludes Cogmem does not work.
+//
+// The tables in docs/mcp-hosts.md and README.md are therefore product surface.
+// Every hook name in them is checked against the document that recorded it from
+// the vendor, every "shipped" claim against the source that ships the adapter,
+// and every pull row against the contract that carries explicit recall. A claim
+// may not be rounded up anywhere: "has a hook" is not "adapter shipped", and
+// "adapter planned" is not emergence.
 
 const root = join(import.meta.dir, '..');
 const read = (path: string) => readFileSync(join(root, path), 'utf8');
 
+/** Collapse whitespace so a prose assertion does not depend on line wrapping. */
+const flat = (doc: string) => doc.replace(/\s+/g, ' ');
+
 const hosts = read(join('docs', 'mcp-hosts.md'));
 const readme = read('README.md');
+const recordHooks = read(join('docs', 'host-plugin-record-hooks.md'));
+const adr = (name: string) => read(join('docs', 'adr', name));
+const adr0002 = adr('0002-automatic-only-where-a-hook-exists.md');
+const adr0004 = adr('0004-one-bridge-thin-host-adapters.md');
 
 /** Body of a `## Heading` section, up to the next level-2 heading. */
 function section(doc: string, heading: string): string {
@@ -25,61 +37,151 @@ function section(doc: string, heading: string): string {
   return doc.slice(start, end < 0 ? doc.length : end);
 }
 
-/** Rows of the recall-mode table: `| Host | Path | What happens ... |`. */
-function recallRows(doc: string): Map<string, string> {
-  const rows = new Map<string, string>();
-  for (const line of doc.split('\n')) {
-    const match = line.match(/^\|\s*(.+?)\s*\|\s*(push|pull)\s*\|/);
-    if (match) rows.set(match[1], match[2]);
+/**
+ * Rows of the recall-mode table, which is the one table headed by a cell naming
+ * the host's push hook. Each row comes back as its trimmed cells, so a column can
+ * be asserted by position instead of by matching prose.
+ */
+function recallTable(doc: string): string[][] {
+  const lines = doc.split('\n');
+  const headerIndex = lines.findIndex((line) => line.startsWith('|') && line.includes('Push hook'));
+  if (headerIndex < 0) throw new Error('missing the recall-mode table header');
+  const rows: string[][] = [];
+  for (let index = headerIndex + 2; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.startsWith('|')) break;
+    rows.push(line.split('|').slice(1, -1).map((cell) => cell.trim()));
   }
   return rows;
 }
 
+/** One row by its first cell, so a missing host fails by name. */
+function rowFor(rows: string[][], host: string): string[] {
+  const row = rows.find((cells) => cells[0] === host);
+  if (!row) throw new Error(`missing recall row: ${host}`);
+  return row;
+}
+
 const PROFILES: McpToolProfile[] = ['core', 'admin', 'full'];
 
-describe('docs/mcp-hosts.md states the recall mode per host', () => {
-  test('the mode table covers every shipping host, with exactly one push path', () => {
-    const rows = recallRows(hosts);
+describe('docs/mcp-hosts.md states the recall mode and the adapter status per host', () => {
+  const rows = recallTable(hosts);
 
-    expect([...rows.keys()]).toEqual([
+  test('the table covers every host this release talks about, in a fixed order', () => {
+    expect(rows.map((cells) => cells[0])).toEqual([
       'OpenClaw + the Cogmem plugin',
       'OpenClaw via `openclaw mcp add`',
       'Hermes',
+      'pi',
+      'DSH',
       'Claude Code',
       'Cursor',
       'Codex',
     ]);
-    expect(rows.get('OpenClaw + the Cogmem plugin')).toBe('push');
-    // The same product on the MCP-only path loses the hook, so it is a pull
-    // host. Documenting it as push is the conflation ADR 0002 forbids.
-    expect(rows.get('OpenClaw via `openclaw mcp add`')).toBe('pull');
-    for (const host of ['Hermes', 'Claude Code', 'Cursor', 'Codex']) {
-      expect(rows.get(host)).toBe('pull');
+  });
+
+  test('exactly one row is a push path, and it is the adapter that ships', () => {
+    const push = rows.filter((cells) => cells[1] === 'push');
+    expect(push).toHaveLength(1);
+    expect(push[0][0]).toBe('OpenClaw + the Cogmem plugin');
+    expect(push[0][3]).toContain('shipped and verified');
+    // Every other row is explicit recall, including the hosts that do expose a
+    // hook: a hook without a shipped adapter is not emergence.
+    for (const row of rows.filter((cells) => cells !== push[0])) {
+      expect(row[1]).toBe('pull');
     }
-    expect([...rows.values()].filter((mode) => mode === 'push')).toHaveLength(1);
   });
 
-  test('the section forbids calling a pull-only host automatic', () => {
-    expect(hosts).toContain('## How memory reaches the model');
-    expect(hosts).toContain('Do not describe a pull-only host as automatic.');
+  test('a host with a hook and no adapter is pull, and says so', () => {
+    // The corrected ADR 0002: Hermes, pi, DSH and Claude Code all expose a
+    // pre-prompt hook, and none of them has a Cogmem adapter yet. Documenting
+    // them as push is the conflation the ADR forbids.
+    const planned: Array<[string, string, string]> = [
+      ['Hermes', '`pre_llm_call`', 'planned, first in the roadmap (ADR-0004)'],
+      ['pi', '`before_agent_start`', 'planned'],
+      ['DSH', 'prompt section', 'planned'],
+      ['Claude Code', '`UserPromptSubmit`', 'planned'],
+    ];
+    for (const [host, hook, adapter] of planned) {
+      const row = rowFor(rows, host);
+      expect(row[1]).toBe('pull');
+      expect(row[2]).toBe(hook);
+      expect(row[3]).toContain(adapter);
+    }
+    // ADR 0004 requires the unverified label wherever that adapter is described.
+    expect(rowFor(rows, 'Claude Code')[3]).toContain('unverified against a real client');
+  });
+
+  test('a host attached only over MCP has no adapter even when it has the hook', () => {
+    const plugin = rowFor(rows, 'OpenClaw + the Cogmem plugin');
+    const mcp = rowFor(rows, 'OpenClaw via `openclaw mcp add`');
+    // Same product, same hook name in the host — but the adapter is what makes
+    // it push, so the MCP attachment is documented as pull.
+    expect(mcp[2]).toBe(plugin[2]);
+    expect(mcp[1]).toBe('pull');
+    expect(mcp[3]).toContain('not installed on this path');
+
+    for (const host of ['Cursor', 'Codex']) {
+      const row = rowFor(rows, host);
+      expect(row[2]).toContain('none');
+      expect(row[3]).toContain('none');
+    }
+  });
+
+  test('every hook name in the table was recorded from a vendor source, not invented', () => {
+    // The push-hook names are the ones ADR 0002 records from vendor docs; the
+    // adapter order is the one ADR 0004 fixes, and OpenClaw's own hook is the
+    // one the shipped plugin registers. A new hook name cannot appear in the
+    // table without appearing in one of those records.
+    const hookFacts = flat(adr0002);
+    const roadmap = flat(adr0004);
+    for (const hook of ['Hermes fires `pre_llm_call`', 'pi fires `before_agent_start`', 'Claude Code exposes `UserPromptSubmit`']) {
+      expect(hookFacts, 'ADR 0002 is the vendor-sourced record of the push hooks').toContain(hook);
+    }
+    for (const [host, hook] of [
+      ['Hermes', 'pre_llm_call'],
+      ['pi', 'before_agent_start'],
+      ['Claude Code', 'UserPromptSubmit'],
+    ] as Array<[string, string]>) {
+      expect(roadmap, `ADR 0004 must name ${host}'s hook`).toContain(hook);
+    }
+    expect(hookFacts).toContain('DSH contributes a prompt section');
+    expect(roadmap).toContain('DSH** next, through its prompt section');
+
+    // OpenClaw is not in ADR 0004's ordering: it is the adapter that already
+    // ships, and its hooks are the ones the plugin registers.
+    const plugin = read(join('src', 'host', 'openclaw', 'AutoMemoryPluginInstaller.ts'));
+    expect(plugin).toContain("hookNames: ['before_prompt_build', 'agent_end']");
+    expect(read(join('docs', 'openclaw-runtime.md'))).toContain('before_prompt_build (30s budget)');
+
+    // The record-side hook names the README carries come from the vendor record.
+    for (const hook of ['`post_llm_call`', '`turn_end`', '`Stop`']) {
+      expect(recordHooks).toContain(hook);
+    }
+  });
+
+  test('the section states the capability/delivery split instead of one adjective', () => {
+    const prose = flat(hosts);
+    expect(prose).toContain('Having a hook makes emergence possible; only a shipped adapter makes it true.');
+    expect(prose).toContain('ADR-0002 requires capability and delivery to be stated separately');
+    expect(prose).toContain('Do not describe a pull-only host as automatic.');
     // The stated failure mode, so the rule is not just an adjective.
-    expect(hosts).toContain('Emergence\nis the property only the push path can claim.');
+    expect(prose).toContain('Emergence is the property only the push path can claim');
   });
 
-  test('the push row is backed by a real pre-prompt hook', () => {
-    // The plugin template is the only thing that injects recall before the
-    // model answers. If the hook registration goes away, the push claim in the
-    // table becomes false, so it is checked against the source that ships it.
+  test('the push row is backed by a real pre-prompt hook in the shipped plugin', () => {
+    // If the hook registration goes away, the push claim in the table becomes
+    // false, so it is checked against the source that ships it.
     const plugin = read(join('src', 'host', 'openclaw', 'AutoMemoryPluginInstaller.ts'));
     expect(plugin).toContain("api.on('before_prompt_build'");
     expect(plugin).toContain("hookNames: ['before_prompt_build', 'agent_end']");
-    expect(hosts).toContain('`before_prompt_build` injects the\nrecall block');
+    expect(flat(hosts)).toContain('`before_prompt_build` injects the recall block');
     // Recording a turn is not emergence, and the doc says so.
-    expect(hosts).toContain('`agent_end` records the finished turn; it does not make memory\nemerge.');
+    expect(flat(hosts)).toContain('`agent_end` records the finished turn; it does not make memory emerge.');
   });
 
   test('every pull row points at a contract that exists', () => {
-    // Pull hosts have no hook, so the instruction to recall before answering
+    // A pull host has no adapter, so the instruction to recall before answering
     // has to travel in the MCP `instructions` string. All three profiles must
     // carry it or a host on that profile is documented as pull with no channel.
     for (const profile of PROFILES) {
@@ -88,7 +190,7 @@ describe('docs/mcp-hosts.md states the recall mode per host', () => {
     }
 
     // Hermes is pull because the installed skill routes questions to recall,
-    // not because the plugin injects. Check the shipped skill and the install
+    // not because an adapter injects. Check the shipped skill and the install
     // path the doc names.
     const skill = read(join('examples', 'hermes-backend', 'SKILL.md'));
     expect(skill).toContain('Direct factual question: `cogmem_recall`.');
@@ -101,39 +203,85 @@ describe('docs/mcp-hosts.md states the recall mode per host', () => {
     // The doc promises the string tracks the launch profile, not a per-call
     // identity header. buildMcpInstructions takes one profile and has no
     // per-call input, which is what makes that sentence true.
-    expect(hosts).toContain('It only names tools the profile the server started with exposes');
-    expect(hosts).toContain('a per-call identity that narrows the profile does not rewrite it');
+    expect(flat(hosts)).toContain('It only names tools the profile the server started with exposes');
+    expect(flat(hosts)).toContain('a per-call identity that narrows the profile does not rewrite it');
     expect(buildMcpInstructions.length).toBe(1);
   });
 
-  test('ADR 0002 is the requirement this table satisfies', () => {
-    const adr = read(join('docs', 'adr', '0002-automatic-only-where-a-hook-exists.md'));
-    expect(adr).toContain('Documentation must state the mode per host.');
-    expect(adr).toContain('"emergent / automatic" is reserved for hook-capable hosts');
+  test('ADR 0002 and ADR 0004 are the requirements this table satisfies', () => {
+    expect(adr0002).toContain('Documentation must state the mode per host.');
+    expect(adr0002).toContain('"emergent / automatic" is reserved for hook-capable hosts');
+    expect(flat(adr0002)).toContain('State capability and delivery separately, per host.');
+    expect(flat(adr0002)).toContain('That was wrong.');
+    expect(flat(hosts)).toContain('ADR-0004 fixes the order the adapters land in');
   });
 });
 
-// The README makes the same promise in prose, in three places that no test
-// watched: the OpenClaw section, the Hermes section, and the stdio transport
-// note. Prose is the copy a user reads before installing, so a sentence drifting
-// from pull to automatic costs more than the table doing it.
+// The README makes the same promise in prose and in its own roadmap table. Prose
+// is the copy a user reads before installing, so a sentence drifting from pull to
+// automatic costs more than the table doing it.
 
-describe('README promises the same recall modes as the host table', () => {
-  test('the "only place memory can emerge on its own" claim matches the single push row', () => {
-    const push = [...recallRows(hosts)].filter(([, mode]) => mode === 'push');
-    expect(push).toHaveLength(1);
-    expect(push[0][0]).toContain('OpenClaw');
+describe('README carries the same recall modes and adapter status as the host table', () => {
+  const roadmap = section(readme, 'How memory reaches the model');
+  const rows = recallTable(roadmap);
 
-    // The table states the mode; the README states the exclusivity. Whichever
-    // changes first leaves the other one wrong, so both are checked together.
-    expect(readme).toContain('the only place where memory can emerge on its own');
+  test('the roadmap table lists the hook and the adapter status per host', () => {
+    expect(rows.map((cells) => cells[0])).toEqual([
+      'OpenClaw',
+      'Hermes',
+      'pi',
+      'DSH',
+      'Claude Code',
+      'Cursor, Codex, or any host attached with `mcp add`',
+    ]);
+
+    const openclaw = rowFor(rows, 'OpenClaw');
+    expect(openclaw[1]).toBe('`before_prompt_build`');
+    expect(openclaw[2]).toContain('Implemented and verified');
+
+    for (const host of ['Hermes', 'pi', 'DSH', 'Claude Code']) {
+      const row = rowFor(rows, host);
+      expect(row[2], `${host} must be marked planned`).toContain('Planned');
+      // A planned adapter means explicit recall today; no planned row may read
+      // as if the memory were already arriving on its own.
+      expect(row[4], `${host} must be documented as explicit recall`).toContain('Explicit recall');
+    }
+    expect(rowFor(rows, 'Claude Code')[2]).toContain('unverified against a real client');
+
+    const mcpOnly = rowFor(rows, 'Cursor, Codex, or any host attached with `mcp add`');
+    expect(mcpOnly[1]).toContain('none');
+    expect(mcpOnly[2]).toContain('none');
+  });
+
+  test('the record hook the roadmap names is the one the vendor record or the source has', () => {
+    // Recording a turn never makes memory emerge, but the column is still a
+    // factual claim: each name comes from the file that recorded it.
+    const plugin = read(join('src', 'host', 'openclaw', 'AutoMemoryPluginInstaller.ts'));
+    expect(rowFor(rows, 'OpenClaw')[3]).toBe('`agent_end`');
+    expect(plugin).toContain("'before_prompt_build', 'agent_end'");
+    expect(rowFor(rows, 'Hermes')[3]).toBe('`post_llm_call`');
+    expect(rowFor(rows, 'pi')[3]).toContain('`turn_end`');
+    expect(rowFor(rows, 'Claude Code')[3]).toBe('`Stop`');
+    // DSH's record hook is not in the vendor record, and the table must not
+    // invent one.
+    expect(rowFor(rows, 'DSH')[3]).toContain('not recorded yet');
+  });
+
+  test('the old exclusivity sentence is gone; the claim is scoped to the shipped adapter', () => {
+    // "the only place where memory can emerge on its own" was false once ADR
+    // 0002 was corrected: the hook is not unique to OpenClaw. The true claim is
+    // about the adapter that shipped and was verified.
+    expect(readme).not.toContain('the only place where memory can emerge on its own');
+    expect(readme).not.toContain('There is no pre-prompt hook here');
+    expect(readme).toContain('the only host whose Cogmem adapter has shipped and been verified');
     expect(readme).toContain('the plugin hooks `before_prompt_build`');
-    expect(hosts).toContain('`before_prompt_build` injects the');
+    // The table in mcp-hosts.md says the same thing about the same host.
+    expect(rowFor(recallTable(hosts), 'OpenClaw + the Cogmem plugin')[3]).toContain('shipped and verified');
   });
 
   test('plain MCP under OpenClaw is documented as pull, not automatic', () => {
     const openclaw = section(readme, 'OpenClaw');
-    expect(openclaw).toContain('Attaching over plain MCP (`openclaw mcp add`) gives the pull path only');
+    expect(openclaw).toContain('Attaching OpenClaw over plain MCP (`openclaw mcp add`) gives the pull path only');
     expect(openclaw).toContain('the model has to call `cogmem_recall`');
 
     // The push sentence and the `openclaw mcp add` sentence share a paragraph,
@@ -146,14 +294,27 @@ describe('README promises the same recall modes as the host table', () => {
     expect(mcpSentences[0]).toContain('pull path only');
   });
 
-  test('the Hermes section states the pull path and never claims injection', () => {
+  test('the Hermes section states the hook, the missing adapter, and the pull path', () => {
     const hermes = section(readme, 'Hermes');
-    expect(hermes).toContain('There is no pre-prompt hook here, so this is the pull path');
+    // The hook exists — the old "there is no pre-prompt hook here" was wrong.
+    expect(hermes).toContain('Hermes exposes a push hook');
+    expect(hermes).toContain('`pre_llm_call`');
+    // It is not delivered: no adapter ships, so the path stays explicit.
+    expect(hermes).toContain('no Cogmem Hermes adapter ships in this release');
+    expect(hermes).toContain('this is the explicit-recall path');
     expect(hermes).toContain('the agent calls `cogmem_recall` when the installed skill tells it to');
 
-    // This release ships no Hermes plugin. One "automatically" in this section
-    // turns the pull row above into a false promise the user only finds at use.
-    expect(hermes).not.toMatch(/automatic|emerge|inject/i);
+    // No sentence in this section may claim that injection happens today.
+    for (const phrase of [
+      'Hermes injects',
+      'injected automatically',
+      'automatically injects',
+      'Hermes automatically',
+      'Hermes auto-inject',
+      'no pre-prompt hook',
+    ]) {
+      expect(hermes, `Hermes section must not say "${phrase}"`).not.toContain(phrase);
+    }
 
     // The skill the section points at is the one the installer writes.
     expect(hermes).toContain('~/.hermes/skills/cogmem-memory/SKILL.md');
@@ -161,10 +322,12 @@ describe('README promises the same recall modes as the host table', () => {
   });
 
   test('the stdio transport caveat keeps memory explicit rather than injected', () => {
-    expect(readme).toContain('A host attached this way has no pre-prompt hook:');
-    expect(readme).toContain(
-      "memory is recalled explicitly, guided by the server's `instructions` string, not injected.",
-    );
+    const transport = section(readme, 'MCP transport and profiles');
+    const prose = flat(transport);
+    expect(prose).toContain('A host attached this way gets no injection');
+    // The hook is the host's; on the MCP path Cogmem has no adapter to use it.
+    expect(prose).toContain("on the MCP path the host's own push hook, if it has one, is not used");
+    expect(prose).toContain("memory is recalled explicitly, guided by the server's `instructions` string");
     // That instructions string is real on every profile, not a documentation
     // promise: this is the channel the pull rows depend on.
     for (const profile of PROFILES) {
@@ -172,7 +335,7 @@ describe('README promises the same recall modes as the host table', () => {
     }
   });
 
-  test('no README sentence sells a hookless host as automatic', () => {
+  test('no README sentence sells a hookless or unadapted host as automatic', () => {
     for (const phrase of [
       'Hermes automatically',
       'Hermes injects',
@@ -180,9 +343,40 @@ describe('README promises the same recall modes as the host table', () => {
       'automatically injects recall',
       'Hermes pre-prompt',
       'Hermes auto-inject',
+      'has no pre-prompt hook',
+      'the only place where memory can emerge',
     ]) {
-      expect(readme).not.toContain(phrase);
+      expect(readme, `README must not say "${phrase}"`).not.toContain(phrase);
     }
+  });
+
+  test('the README speaks the glossary vocabulary for hosts and installing', () => {
+    const glossary = read('GLOSSARY.md');
+    // The terms the host and install sections rely on are the glossary's, not
+    // private synonyms, so a reader can look each one up.
+    for (const term of ['Emergence', 'Push hook', 'Host hook', 'Host adapter', 'Memory bridge', 'Install gate', 'Install path']) {
+      expect(glossary, `GLOSSARY.md must define ${term}`).toContain(`**${term}**`);
+      // Sentence case and plurals differ between the two documents; the word is
+      // what has to be the glossary's.
+      expect(readme.toLowerCase(), `README must use the glossary term ${term}`).toContain(term.toLowerCase());
+    }
+    expect(flat(glossary)).toContain('A memory being present before it is asked for.');
+    expect(flat(glossary)).toContain('A **Host hook** that runs before the model answers');
+  });
+
+  test('the headline does not decide the single-agent versus shared-memory question', () => {
+    // Issue #50 is the owner's call, and the headline is one of the lines that
+    // would answer it. Until that decision lands, the headline stays neutral:
+    // this guard fails loudly rather than letting a rewrite pick a side.
+    const headline = readme.split('\n').slice(2).find((line) => line.trim() !== '') ?? '';
+    expect(headline).toContain('Agent-native memory kernel');
+    // The patterns have to catch the phrasings this question actually gets
+    // argued in, including the wording the README carried before this rewrite
+    // ("for a single AI agent") — a guard that misses it is a guard that lets
+    // the next rewrite answer #50 by accident.
+    expect(headline).not.toMatch(
+      /single[-\s]+(ai\s+)?agents?|one[-\s]+(ai\s+)?agents?|team of (ai )?agents|multi[-\s]?agents?|shared memor|personal ai agents/i,
+    );
   });
 });
 

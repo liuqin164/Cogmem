@@ -1,11 +1,10 @@
 # cogmem
 
-Agent-native memory kernel for a single AI agent.
+Agent-native memory kernel for AI agents and the hosts that run them.
 
-`cogmem` is a local-first memory backend for agents and agent frameworks. It stores raw experience, preserves provenance, curates long-term memory candidates, governs what becomes active memory, and recalls bounded context with source anchors.
+`cogmem` is a local-first memory backend for agents and agent frameworks. It stores raw experience, preserves provenance, curates long-term memory candidates, governs what becomes active memory, and recalls bounded context with source anchors. An agent gets relevant, source-anchored memory back without reading memory files by hand.
 
-Cogmem is a lightweight, local-first memory kernel for personal AI agents.
-It lets agents recall and inject relevant source-anchored memory without manually reading memory files.
+A **Host** is an agent runtime Cogmem is attached to: it owns the model, the prompt, and the turn, and Cogmem owns none of those. Whether a memory can arrive before the agent asks for it depends on that host, not on intent — [How memory reaches the model](#how-memory-reaches-the-model) states it per host, with the adapter status.
 
 It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsidian replacement, an agent runtime, or a task scheduler.
 
@@ -31,8 +30,9 @@ The intended integration surface is:
 
 - `KernelAgentMemoryBackend` for agent/framework code.
 - `cogmem` CLI for setup, import, recall, audit, curation, and repair.
-- MCP tools for hosts such as Hermes.
-- A host plugin wrapper for OpenClaw automatic recall and turn recording.
+- One **Memory bridge**: a single resident process holding the only connection to a memory database, so a second host costs a socket rather than a second database handle (ADR-0004).
+- A thin **Host adapter** per host. It turns one **Host hook** into a single bridge request, puts the returned block into the prompt, and records the finished turn when the host says one ended. It does not open the database, decide relevance, or own retrieval.
+- MCP for a host that exposes no **Push hook**, and as the fallback when the bridge is unreachable: an explicit-recall path carried by the server `instructions` string, not by injection.
 
 ## What cogmem Is Not
 
@@ -45,7 +45,24 @@ cogmem intentionally does not provide:
 - A human PKM/wiki/Obsidian replacement.
 - A default “embed every sentence forever” vector store.
 
-The current release is designed as the memory backend for one agent brain. Multiple agents can each have their own cogmem database and project scope, and **shared memory is available via the MCP `cogmem_shared_*` tools** for explicit cross-agent publishing and subscription.
+One Cogmem database backs one memory kernel: several hosts can attach to it, and each agent keeps its own project scope. Cross-agent memory is explicit rather than automatic — the MCP `cogmem_shared_*` tools publish to and subscribe from a shared region, and a host that never publishes shares nothing.
+
+## How memory reaches the model
+
+A memory arriving before the agent asks for it is **Emergence**, and it takes two things: the host exposes a **Push hook** — a **Host hook** that runs before the model answers — *and* a Cogmem **Host adapter** uses it. A hook alone is not enough. Which hooks exist is a property of the host; only a shipped adapter makes the injection real (ADR-0002, ADR-0004).
+
+| Host | Push hook | Adapter | Records the finished turn | What the agent gets today |
+| --- | --- | --- | --- | --- |
+| OpenClaw | `before_prompt_build` | Implemented and verified (plugin 0.7.2) | `agent_end` | Recall is already in the prompt |
+| Hermes | `pre_llm_call` | Planned — first on the roadmap | `post_llm_call` | Explicit recall: the installed skill says when to call `cogmem_recall` |
+| pi | `before_agent_start` | Planned | `turn_end`, `agent_settled` | Explicit recall over MCP |
+| DSH | prompt section | Planned | not recorded yet | Explicit recall over MCP |
+| Claude Code | `UserPromptSubmit` | Planned; unverified against a real client when it lands | `Stop` | Explicit recall over MCP |
+| Cursor, Codex, or any host attached with `mcp add` | none | none | none | Explicit recall over MCP |
+
+Hook names, packaging shape, and how each host reads its config come from vendor sources in [docs/host-plugin-record-hooks.md](./docs/host-plugin-record-hooks.md), which covers Hermes, pi, and Claude Code; OpenClaw's own hooks are recorded with the [OpenClaw runtime](./docs/openclaw-runtime.md), and DSH's prompt section is stated in ADR-0004. Per-host MCP configuration is in [docs/mcp-hosts.md](./docs/mcp-hosts.md). A record hook does not make memory emerge: it writes the finished turn *after* the answer.
+
+Read the row before promising emergence. A host with a push hook and a planned adapter is on the explicit-recall path today, and calling it automatic sends the agent looking for a memory that never surfaced. Only OpenClaw's adapter has shipped and been verified in this release.
 
 ## Architecture
 
@@ -216,17 +233,17 @@ cogmem update --dry-run --json
 cogmem migrate --dry-run --json
 ```
 
-For a manual migration, run `cogmem migrate --yes --backup`. The 3.7.4 migration accepts the released 3.7.3/schema-31 database, preserves canonical Raw Ledger and memory evidence, and creates a timestamped, transaction-consistent standalone backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
+For a manual migration, run `cogmem migrate --yes --backup`. The 4.0.0 migration accepts the released 3.7.3/schema-31 database, preserves canonical Raw Ledger and memory evidence, and creates a timestamped, transaction-consistent standalone backup before changing an on-disk database. The backup includes committed SQLite WAL pages instead of copying only the main database file.
 
-Upgrade a 3.7.3/schema-31 database into schema 32, introduced by 3.7.4 and retained by 3.7.5, with one command:
+Upgrade a 3.7.3/schema-31 database into schema 32 — the schema this release ships — with one command:
 
 ```bash
 cogmem migrate --yes --backup --json
 ```
 
-The release records a single 0032 receipt. Schemas 0032-0062 produced by unreleased 3.7.4 development builds are intentionally unsupported; restore a schema-31 backup or recreate a development database. Older released databases must first be upgraded with Cogmem 3.7.3.
+The release records a single 0032 receipt. 4.0.0 ships migration `0032` only and no longer replays migrations 0001-0031: the inherited receipts stay in `_schema_migrations` without digests and are not re-validated, while the 0032 receipt digest is checked on every later start. Unreleased 3.7.4 development builds recorded their own 0032-0062 receipts without that digest, so those databases are rejected as `unsupported_development_schema`; restore a schema-31 backup or recreate a development database. Older released databases must first be upgraded with Cogmem 3.7.3.
 
-The 3.7.3 runtime state tables did not contain project scope and cannot be safely attributed. They are disposable read models in the 3.7.4 contract: migration backs up the database, reports `runtimeDiscardedThisRun` and `runtimeDiscardedTotal`, stores hash-only discard receipts, and leaves canonical Raw Ledger evidence unchanged. The command is idempotent.
+The 3.7.3 runtime state tables did not contain project scope and cannot be safely attributed. They are disposable read models in the 4.0.0 contract: migration backs up the database, reports `runtimeDiscardedThisRun` and `runtimeDiscardedTotal`, stores hash-only discard receipts, and leaves canonical Raw Ledger evidence unchanged. The command is idempotent.
 
 For OpenClaw upgrades, `cogmem update --yes` now runs this refresh automatically when the config has `[integrations.openclaw] enabled = true`. You can also run it manually; this path does not open the Cogmem database, so it still works while an old drainer has the DB busy:
 
@@ -267,14 +284,14 @@ For a host timer, call `dream tick`; the timer only wakes the sealed-episode sch
 cogmem dream tick --project my-agent --mode auto --max-episodes 10 --json
 ```
 
-Raw events are always written first. `KernelAgentMemoryBackend` and OpenClaw plugin 0.7.2 assemble live turns automatically. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
+Raw events are always written first. `KernelAgentMemoryBackend` and the OpenClaw host adapter (plugin 0.7.2) record live turns from the host's own hooks. The foreground hook uses deterministic rules and previous assistant/user context; background import and repair paths may use the advisory hybrid classifier. Advisory output is allow-listed and cannot directly mutate durable memory. Unknown turns now fail closed as ambiguous. Continuation requires explicit continuation language or project/topic/entity/semantic overlap; Cogmem does not route domains with an expanding hard-coded keyword dictionary.
 
 Hookless MCP agents can call `cogmem_episode_append` or bounded `cogmem_episode_import`. Existing OpenClaw/Hermes import commands use stable content identities and the same episode schema. Low-confidence imported groups soft-seal for review unless an operator explicitly forces sealing. Episode boundary guardrails can enforce configurable max-event, duration, idle-gap, and trusted local-date limits before advisory review, while decision audit writes remain best-effort. Cogmem skips import batch sealing for empty episode boundaries and skips legacy empty Dream jobs so one bad imported episode cannot block the queue. Episode semantic summaries and closure receipts are control hints, never durable evidence; every Dream candidate must cite a non-empty subset of the episode's raw event IDs and still pass CPU governance.
 
 User-shaped topic state is project-scoped. Explicit user operations become active and auditable; model-proposed topics, aliases, and relations remain candidates. Use MCP `cogmem_topic_list` to inspect nodes, `cogmem_topic_operate` to create, rename, alias, move, merge, split, or relate topics, and `cogmem_topic_rollback` to reverse an audited operation. Alias collisions fail closed as `needs_review`; applications can also call `TopicGovernance.rollback()` through the public API.
 
 Episode surgery is available through `cogmem episode split|merge|move-event|reclassify|requeue-dream` or MCP `cogmem_episode_repair`. Structural repair recomputes closure receipts, invalidates candidates derived from the old episode boundary, preserves cross-references, requeues eligible sealed episodes, and writes an audit record.
-Use `cogmem episode audit-boundaries` for read-only boundary diagnostics and `cogmem episode split-plan` for deterministic read-only split previews. The split preview does not call repair, does not move events, and returns no executable apply command in 3.7.4.
+Use `cogmem episode audit-boundaries` for read-only boundary diagnostics and `cogmem episode split-plan` for deterministic read-only split previews. The split preview does not call repair, does not move events, and returns no executable apply command.
 
 Inspect queue state:
 
@@ -296,7 +313,7 @@ cogmem memory review --project my-agent --id <candidate-id> --action approve --a
 
 `cogmem memory map` remains the system anatomy map. Memory Atlas is the content map. It does not replace recall or create a second fact store; it projects existing topics, entities, clusters, episodes, beliefs, action frames, time buckets, bindings, and evidence into a bounded navigation surface.
 
-In 3.7.2, Atlas is a multi-dimensional navigation graph rather than a folder tree. A remembered episode has one canonical node such as `episode:<id>`. Typed edges connect it to internal entrances for time, topic, issue, entity, session/thread, memory-kind, and action-kind. Only the six Facets are product vocabulary; place and state are not projected yet. Results dedupe by `canonicalId` and explain `matchedFacets` plus `matchedPaths`.
+Atlas is a multi-dimensional navigation graph rather than a folder tree. A remembered episode has one canonical node such as `episode:<id>`. Typed edges connect it to internal entrances for time, topic, issue, entity, session/thread, memory-kind, and action-kind. Only the six Facets are product vocabulary; place and state are not projected yet. Results dedupe by `canonicalId` and explain `matchedFacets` plus `matchedPaths`.
 
 ```bash
 cogmem memory graph --project my-agent --json
@@ -329,7 +346,7 @@ Agents should use Atlas for broad inventory, history, and relationship questions
 
 ## CLI JSON contract
 
-Every documented `--json` command emits `schemaVersion: "cogmem.cli.v1"` and a stable `command` identifier without hiding the command payload under a generic wrapper. Array results use `items`. Queue-bearing commands expose `candidate`, `promoted`, `needs_confirmation`, and `beliefs` at the top level. Existing nested queue objects remain available during 3.6.x for compatibility.
+Every documented `--json` command emits `schemaVersion: "cogmem.cli.v1"` and a stable `command` identifier without hiding the command payload under a generic wrapper. Array results use `items`. Queue-bearing commands expose `candidate`, `promoted`, `needs_confirmation`, and `beliefs` at the top level, and keep the nested `queueSummary` object (including its per-status `groups` rows) for callers that read the queue in detail.
 
 ```json
 {
@@ -468,7 +485,7 @@ Normalization writes Markdown with `cogmem-source-ref` markers for raw offset, l
 
 ## OpenClaw
 
-OpenClaw is the most complete host integration in this release. It is also the only place where memory can emerge on its own: the plugin hooks `before_prompt_build`, so recall is already in the prompt before the model speaks. Attaching over plain MCP (`openclaw mcp add`) gives the pull path only — the model has to call `cogmem_recall`.
+OpenClaw is the most complete host integration in this release, and the only host whose Cogmem adapter has shipped and been verified — so it is the only place where memory emerges today: the plugin hooks `before_prompt_build`, so recall is already in the prompt before the model speaks. Other hosts expose a push hook too (see [How memory reaches the model](#how-memory-reaches-the-model)), but no adapter ships for them yet, so they stay on the explicit-recall path. Attaching OpenClaw over plain MCP (`openclaw mcp add`) gives the pull path only — the model has to call `cogmem_recall`.
 
 From the OpenClaw workspace:
 
@@ -524,7 +541,7 @@ openclaw gateway restart
 
 ## Hermes
 
-Hermes integration is MCP-based in this release. cogmem does not claim to be a native Hermes memory provider. There is no pre-prompt hook here, so this is the pull path: the agent calls `cogmem_recall` when the installed skill tells it to.
+Hermes exposes a push hook — `pre_llm_call`, recorded from the vendor source in [docs/host-plugin-record-hooks.md](./docs/host-plugin-record-hooks.md) — but no Cogmem Hermes adapter ships in this release. The adapter that would use that hook is planned and first on the roadmap (ADR-0004); until it ships, this is the explicit-recall path: the agent calls `cogmem_recall` when the installed skill tells it to. cogmem does not claim to be a native Hermes memory provider yet.
 
 Install the skill and patch Hermes MCP config:
 
@@ -762,6 +779,10 @@ This also updates existing Hermes MCP blocks with missing strategy, episode, Dre
 - [Contributing](./CONTRIBUTING.md)
 - [Release checklist](./RELEASE_CHECKLIST.md)
 - [OpenClaw runtime and resident kernel](./docs/openclaw-runtime.md)
+- [Hosts and how memory reaches the model](./docs/mcp-hosts.md)
+- [Host plugin record hooks, from vendor sources](./docs/host-plugin-record-hooks.md)
+- [Architecture decisions](./docs/adr)
+- [Domain glossary](./GLOSSARY.md)
 - [Changelog](./CHANGELOG.md)
 
 Installed OpenClaw and Hermes skills include their own `references/operations.md` command handbook.
@@ -794,8 +815,8 @@ cogmem mcp
 
 ## MCP transport and profiles
 
-`cogmem mcp` speaks stdio by default. A host attached this way has no pre-prompt hook:
-memory is recalled explicitly, guided by the server's `instructions` string, not injected.
+`cogmem mcp` speaks stdio by default. A host attached this way gets no injection: on the MCP path the host's own push hook, if it has one, is not used, so
+memory is recalled explicitly, guided by the server's `instructions` string.
 To run one resident server shared by several hosts:
 
 ```bash

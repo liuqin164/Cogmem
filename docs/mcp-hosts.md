@@ -10,6 +10,11 @@ cogmem mcp --transport http --host <host-id> --profile core --port 7337
 
 The endpoint is `http://127.0.0.1:7337/mcp`. It binds to loopback by default.
 
+This page covers the MCP path in full. It is the fallback path for a host with no
+Cogmem adapter: the push path, the **Memory bridge** behind it, and the per-host
+adapter roadmap are in ADR-0004 and in the
+[README](../README.md#how-memory-reaches-the-model).
+
 Verification status: the OpenClaw 2026.10.5, Hermes v0.22.2, and codex-cli
 0.163.0 sections were run end to end against this repository: connect, discover
 tools, execute `cogmem_remember_turn` and `cogmem_recall`, then remove the entry
@@ -43,32 +48,50 @@ A tool outside the profile returns `tool_not_in_profile` instead of running.
 
 ## How memory reaches the model
 
-Two paths exist, and they promise different things.
+Two paths exist, and they promise different things. Keep two questions apart on
+every host: **what the host exposes** (a **Push hook** — a **Host hook** that runs
+before the model answers) and **what Cogmem ships for it** (a **Host adapter** that
+uses that hook). Having a hook makes emergence possible; only a shipped adapter
+makes it true.
 
-**Push — automatic.** The host exposes a pre-prompt hook, so recalled memory is
-already in the prompt before the model answers. The model never asks. Only the
-Cogmem plugin for OpenClaw provides this: `before_prompt_build` injects the
+**Push — Emergence.** The host exposes a push hook and a Cogmem adapter uses it,
+so recalled memory is already in the prompt before the model answers. The model
+never asks. Today exactly one adapter ships, the Cogmem plugin for OpenClaw:
+`before_prompt_build` injects the
 recall block. `agent_end` records the finished turn; it does not make memory
 emerge.
 
-**Pull — explicit.** The host speaks MCP only. Nothing runs before the model
-answers, so the model has to call `cogmem_recall` itself. The server's
+**Pull — explicit.** No adapter runs before the model answers on this path:
+either the host speaks MCP only, or it exposes a hook that no Cogmem adapter uses
+yet. The model has to call `cogmem_recall` itself. The server's
 `instructions` string is what tells it to; that string is product surface, not
 documentation. It only names tools the profile the server started with exposes —
 a per-call identity that narrows the profile does not rewrite it.
 
-| Host | Path | What happens before the model answers |
-|---|---|---|
-| OpenClaw + the Cogmem plugin | push | Recall is already in the prompt |
-| OpenClaw via `openclaw mcp add` | pull | The model must call `cogmem_recall` |
-| Hermes | pull | The installed `cogmem-memory` skill documents when to call `cogmem_recall` |
-| Claude Code | pull | Same contract, delivered by `instructions` |
-| Cursor | pull | Same |
-| Codex | pull | Same |
+| Host | Path | Push hook the host exposes | Cogmem adapter | What happens before the model answers |
+|---|---|---|---|---|
+| OpenClaw + the Cogmem plugin | push | `before_prompt_build` | shipped and verified | Recall is already in the prompt |
+| OpenClaw via `openclaw mcp add` | pull | `before_prompt_build` | not installed on this path | The model must call `cogmem_recall` |
+| Hermes | pull | `pre_llm_call` | planned, first in the roadmap (ADR-0004) | The installed `cogmem-memory` skill documents when to call `cogmem_recall` |
+| pi | pull | `before_agent_start` | planned | The model must call `cogmem_recall` |
+| DSH | pull | prompt section | planned | The model must call `cogmem_recall` |
+| Claude Code | pull | `UserPromptSubmit` | planned; unverified against a real client when it lands | Same contract, delivered by `instructions` |
+| Cursor | pull | none, MCP only | none | Same |
+| Codex | pull | none, MCP only | none | Same |
+
+The hook names come from the vendor sources recorded in
+[host-plugin-record-hooks.md](./host-plugin-record-hooks.md). `Path` is what
+Cogmem does today, so a host that has a hook and a planned adapter is `pull`
+here, and stays `pull` until its adapter ships: ADR-0002 requires capability and
+delivery to be stated separately, and ADR-0004 fixes the order the adapters land
+in — Hermes, then pi, DSH, and Claude Code last, written against the documented
+hook and **not verified against a real client**, which is the label it carries
+wherever it is described.
 
 Do not describe a pull-only host as automatic. Its agent then looks for a memory
 that never surfaced, finds none, and concludes Cogmem does not work. Emergence
-is the property only the push path can claim.
+is the property only the push path can claim, and today the OpenClaw adapter is
+the only adapter on it.
 
 ## Shared memory
 
