@@ -982,14 +982,20 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(indexBody).toContain('recallItems.length > 0 || recall.context');
   const cortexBridgeBody = readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8');
   expect(cortexBridgeBody).toContain('KernelAgentMemoryBackend');
-  expect(cortexBridgeBody).toContain('kernel.contextCortex.plan');
-  expect(cortexBridgeBody).toContain('kernel.strategyCortex.plan');
-  expect(cortexBridgeBody).toContain('kernel.strategyCortex.replan');
-  expect(cortexBridgeBody).toContain('retrievalPolicy');
   expect(cortexBridgeBody).toContain('formatStrategyContext');
-  expect(cortexBridgeBody).toContain('kernel.memoryUseJudge.judge');
-  expect(cortexBridgeBody).toContain('kernel.contextOutcomeStore.record');
-  expect(cortexBridgeBody).toContain('activationReceipt');
+  // Planning, replanning, the context budget, the strict-facet retention rule and
+  // the memory-use judge are the kernel's shared orchestration (ADR-0004). They
+  // are executed against a real database in `__tests__/host-bridge.unit.test.ts`;
+  // what this generated file has to show is that it is wired to them.
+  expect(cortexBridgeBody).toContain('recallForHost: api.recallForHost');
+  expect(cortexBridgeBody).toContain('render.recallForHost(');
+  expect(cortexBridgeBody).toContain('cachedApi.rememberForHost(');
+  expect(cortexBridgeBody).not.toContain('kernel.contextCortex.plan');
+  expect(cortexBridgeBody).not.toContain('kernel.strategyCortex.plan');
+  expect(cortexBridgeBody).not.toContain('kernel.strategyCortex.replan');
+  expect(cortexBridgeBody).not.toContain('kernel.memoryUseJudge.judge');
+  expect(cortexBridgeBody).not.toContain('kernel.contextOutcomeStore.record');
+  expect(cortexBridgeBody).not.toContain('activationReceipt');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
   expect(manifest.version).toBe('0.7.2');
   expect(manifest.configSchema.type).toBe('object');
@@ -1070,8 +1076,8 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   const bridgeBody = readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8');
   expect(bridgeBody).toContain('loadCogmemApi');
   expect(bridgeBody).toContain('publicEntrypoint');
-  expect(bridgeBody).toContain('rememberTurnWithResult');
-  expect(bridgeBody).toContain("ingestMode: bridgeConfig.ingestMode || 'selective_compile'");
+  expect(bridgeBody).not.toContain('rememberTurnWithResult');
+  expect(bridgeBody).not.toContain("ingestMode: bridgeConfig.ingestMode || 'selective_compile'");
   expect(bridgeBody).toContain("command === 'drain-remember-queue'");
   expect(bridgeBody).toContain('function acquireRememberQueueLock(bridgeConfig)');
   expect(bridgeBody).toContain('staleLockRecovered');
@@ -1080,28 +1086,33 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   // The drain lock is taken before the kernel is acquired, so a locked queue
   // never pays for opening the database.
   expect(bridgeBody.indexOf("if (command === 'drain-remember-queue')")).toBeLessThan(bridgeBody.indexOf('await acquireRuntime(config, keepAlive)'));
-  expect(bridgeBody).toContain('ingestToolCall');
-  expect(bridgeBody).toContain('ingestToolObservation');
-  expect(bridgeBody).toContain('ingestTaskEvent');
+  // Writing a turn — the assistant event, its tool calls, their observations —
+  // is the kernel's shared orchestration now (`rememberForHost`, ADR-0004). The
+  // bridge delegates, and `__tests__/host-bridge.unit.test.ts` records a real
+  // turn through it against a real database.
+  expect(bridgeBody).toContain('cachedApi.rememberForHost(');
+  expect(bridgeBody).not.toContain('ingestToolCall');
+  expect(bridgeBody).not.toContain('ingestToolObservation');
+  expect(bridgeBody).not.toContain('ingestTaskEvent');
   expect(bridgeBody).toContain('function stripCogmemRecallBlocks(text)');
   expect(bridgeBody).toContain('COGMEM_TURN_BRIDGE');
   expect(bridgeBody).toContain('COGMEM_SESSION_STATE');
   expect(bridgeBody).toContain('COGMEM_STRATEGY_CONTEXT');
-  expect(bridgeBody).toContain('hygiene');
+  expect(bridgeBody).not.toContain('strippedRecallBlocks');
   // The recall block itself is rendered by the kernel now (ADR-0004): the bridge
   // asks for it rather than carrying the block's text, so the tags, the rules,
   // the escaping and the window lines are asserted where they actually run, in
   // `__tests__/recall-block.unit.test.ts`. What belongs here is that this
   // generated file delegates and no longer holds a copy.
   expect(bridgeBody).toContain('formatRecallContext: api.formatRecallContext');
-  expect(bridgeBody).toContain('sourceType');
+  expect(bridgeBody).not.toContain('sourceType');
   expect(bridgeBody).not.toContain('<COGMEM_RECALL_CONTEXT');
   expect(bridgeBody).not.toContain('function serializeUntrustedMemory');
   expect(bridgeBody).not.toContain("replace(/&/g, '&amp;')");
   expect(indexBody).toContain('function serializeUntrustedMemory');
   expect(indexBody).toContain("serializeUntrustedMemory(receipt.workingConclusion");
   expect(indexBody).toContain("serializeUntrustedMemory(state.currentTopic");
-  expect(bridgeBody).toContain('intent: input.intent || undefined');
+  expect(bridgeBody).not.toContain('intent: input.intent || undefined');
 
   const indexCheck = await runCli(['node', '--check', join(pluginDir, 'index.js')]);
   expect(indexCheck.stderr).toBe('');

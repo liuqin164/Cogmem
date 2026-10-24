@@ -46,11 +46,17 @@ test('installed OpenClaw plugin sanitizes generated prompt context and routes At
   expect(bridge).toContain('kernel.graphPath');
   expect(bridge).toContain('kernel.graphTimeline');
   expect(bridge).toContain("command === 'context'");
-  expect(bridge).toContain('selectedEpisodeCards');
-  expect(bridge).toContain("result.decisionTrace.selectedLane === 'facet_graph_raw_ledger'");
-  expect(bridge).toContain('Array.isArray(item.matchedFacets) && item.matchedFacets.length > 0');
-  expect(bridge).toContain('retainedCanonicalId');
   expect(bridge).toContain('nodeDetails');
+  // Selecting the episodes, retaining a strict facet match and assembling the
+  // result are the kernel's shared orchestration now (`recallForHost`, ADR-0004);
+  // the bridge hands over and passes back. Those rules are executed in
+  // `__tests__/host-bridge.unit.test.ts`; here the point is that the bridge no
+  // longer holds its own copy of them.
+  expect(bridge).toContain('render.recallForHost(');
+  expect(bridge).toContain('recallForHost: api.recallForHost');
+  expect(bridge).not.toContain('selectedEpisodeCards');
+  expect(bridge).not.toContain('retainedCanonicalId');
+  expect(bridge).not.toContain("result.decisionTrace.selectedLane === 'facet_graph_raw_ledger'");
   // The Atlas/recall text itself is rendered by the kernel now (ADR-0004), so
   // the bridge must delegate rather than carry a second copy of it. Its own
   // test executes those renderers; here the point is that they are not here.

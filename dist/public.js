@@ -46,6 +46,14 @@ export { compileAgentRecallQuery, COGMEM_RECALL_BLOCK_RE, createMemoryUsageRecei
  */
 export { clampRecallContext, classifyMemoryNavigationIntent, compactRecallItems, contextCandidateFromRecallItem, contextEventLabel, formatAtlasCard, formatAtlasContext, formatContextEvent, formatRecallContext, formatRecallDecision, formatSourceRange, formatSourceWindow, truncateLineWithMeta, uniqueWindowEvents, } from './host/RecallBlock.js';
 /**
+ * The host-neutral half of a host adapter: recall into one injectable block, and
+ * record a finished turn. An adapter supplies its own identity; nothing here
+ * invents a host name. See ADR-0004.
+ *
+ * @stable @since 4.0.0
+ */
+export { recallForHost, rememberForHost, } from './host/bridge/HostBridge.js';
+/**
  * Core recall pipeline.
  * @stable @since 1.0.0
  */

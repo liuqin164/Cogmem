@@ -1551,7 +1551,19 @@ import { pathToFileURL } from 'node:url';
 
 const invokedCommand = process.argv[2];
 
+// What this adapter calls itself. The shared orchestration in the kernel takes
+// these as parameters rather than defaulting to a host name, so a second adapter
+// cannot silently record its turns as OpenClaw's (ADR-0004).
+const HOST_IDENTITY = {
+  agentId: 'openclaw',
+  projectId: 'openclaw',
+  sessionId: 'openclaw-session',
+  memorySource: 'openclaw-plugin',
+  pluginId: 'cogmem-auto-memory',
+};
+
 let cachedRuntime = null;
+let cachedApi = null;
 
 async function acquireRuntime(config, keepAlive) {
   if (cachedRuntime && cachedRuntime.configPath === config.configPath) return cachedRuntime;
@@ -1560,6 +1572,7 @@ async function acquireRuntime(config, keepAlive) {
     cachedRuntime = null;
   }
   const api = await loadCogmemApi(config);
+  cachedApi = api;
   const kernel = api.createMemoryKernelFromConfig({ configPath: config.configPath });
   const runtime = {
     configPath: config.configPath,
@@ -1573,6 +1586,7 @@ async function acquireRuntime(config, keepAlive) {
     formatAtlasContext: api.formatAtlasContext,
     compactRecallItems: api.compactRecallItems,
     contextCandidateFromRecallItem: api.contextCandidateFromRecallItem,
+    recallForHost: api.recallForHost,
   };
   if (keepAlive) cachedRuntime = runtime;
   return runtime;
@@ -1827,81 +1841,14 @@ async function main() {
 await main();
 
 async function recallPayload(input, config, kernel, memory, render) {
-  const formatStrategyContext = render.formatStrategyContext;
-  const formatRecallContext = render.formatRecallContext;
-  const compactRecallItems = render.compactRecallItems;
-  const contextCandidateFromRecallItem = render.contextCandidateFromRecallItem;
-  const recallStartedAt = Date.now();
-  const contextIntent = kernel.contextCortex.classifyIntent(input.query || '');
-  let strategyCapsule = config.strategyCortexEnabled === false ? undefined : kernel.strategyCortex.plan({
-    query: input.query || '', intent: contextIntent, projectId: config.projectId || 'openclaw',
-  });
-  let result = await memory.recall({
-    agentId: config.agentId || 'openclaw', projectId: config.projectId || 'openclaw',
-    query: input.query || '', sessionId: input.sessionId, threadId: input.threadId,
-    excludeSessionId: input.excludeSessionId, intent: input.intent || undefined,
-    anchorEventId: input.anchorEventId, anchorText: input.anchorText,
-    limit: Number(config.limit || 3), retrievalPolicy: strategyCapsule && strategyCapsule.retrievalPolicy,
-  });
-  const sourceRequirementSatisfied = result.items.some((item) => item && item.sourceType && String(item.sourceType).startsWith('raw_ledger'));
-  const replan = strategyCapsule ? kernel.strategyCortex.replan(strategyCapsule, {
-    intent: contextIntent, projectId: config.projectId || 'openclaw', sourceRequirementSatisfied,
-  }) : { replanned: false, capsule: undefined };
-  if (replan.replanned) {
-    strategyCapsule = replan.capsule;
-    result = await memory.recall({
-      agentId: config.agentId || 'openclaw', projectId: config.projectId || 'openclaw',
-      query: input.query || '', sessionId: input.sessionId, threadId: input.threadId,
-      excludeSessionId: input.excludeSessionId, intent: input.intent || undefined,
-      anchorEventId: input.anchorEventId, anchorText: input.anchorText,
-      limit: Number(config.limit || 3), retrievalPolicy: strategyCapsule && strategyCapsule.retrievalPolicy,
-    });
-  }
-  const activationPlan = config.contextCortexEnabled === false ? undefined : kernel.contextCortex.plan({
-    query: input.query || '', projectId: config.projectId || 'openclaw', currentSessionId: input.sessionId,
-    availableTokens: Number(config.contextAvailableTokens || 16000),
-    maxMemoryRatio: Number(config.contextMemoryMaxRatio || 0.25), strategy: strategyCapsule,
-    candidates: result.items.map(contextCandidateFromRecallItem),
-  });
-  let plannedResult = activationPlan
-    ? { ...result, items: activationPlan.selected.map((candidate) => candidate.recallItem) }
-    : result;
-  let activationReceipt = activationPlan && activationPlan.receipt;
-  if (activationPlan && Array.isArray(result.items)) {
-    const selectedIds = new Set(plannedResult.items.map((item) => item && item.id).filter(Boolean));
-    const strictFacetItem = (result.decisionTrace && result.decisionTrace.selectedLane === 'facet_graph_raw_ledger')
-      ? result.items.find((item) => item && item.canonicalId && Array.isArray(item.matchedFacets) && item.matchedFacets.length > 0)
-      : undefined;
-    if (strictFacetItem && !selectedIds.has(strictFacetItem.id)) {
-      plannedResult = { ...plannedResult, items: [strictFacetItem, ...plannedResult.items].slice(0, Number(config.limit || 3)) };
-      activationReceipt = {
-        ...(activationReceipt || {}),
-        facetGraphRetained: true,
-        retainedCanonicalId: strictFacetItem.canonicalId,
-        matchedFacets: strictFacetItem.matchedFacets,
-        reason: 'strict_facet_match_must_not_be_silently_dropped',
-      };
-    }
-  }
-  const anchorItem = plannedResult.items.find((item) => item && item.sourceAnchor && item.sourceAnchor.eventId);
-  const selectedCanonicalIds = new Set(plannedResult.items.map((item) => item && item.canonicalId).filter(Boolean));
-  const selectedEpisodeCards = Array.isArray(result.atlasCards)
-    ? result.atlasCards.filter((card) => card && selectedCanonicalIds.has(card.canonicalId))
-    : [];
-  plannedResult = { ...plannedResult, atlasCards: selectedEpisodeCards };
-  const recallContext = formatRecallContext(plannedResult, config);
-  return {
-    context: recallContext ? (strategyCapsule ? formatStrategyContext(strategyCapsule) + '\n\n' : '') + recallContext : '',
-    items: compactRecallItems(plannedResult.items, config), itemCount: plannedResult.items.length,
-    recallMode: result.recallMode, fallbackUsed: result.fallbackUsed, intent: (result.queryPlan && result.queryPlan.intent) || input.intent || 'memory_recall',
-    anchorEventId: anchorItem && anchorItem.sourceAnchor && anchorItem.sourceAnchor.eventId,
-    anchorText: anchorItem && anchorItem.text, queryPlan: result.queryPlan, decisionTrace: result.decisionTrace,
-    atlasCards: result.atlasCards, selectedEpisodeCards,
-    relatedButNotSelected: result.relatedButNotSelected, relaxationTrace: result.relaxationTrace,
-    activationReceipt, strategyCapsule,
-    strategyReplanned: replan.replanned, strategyReplanReason: replan.reason,
-    recallLatencyMs: Date.now() - recallStartedAt,
-  };
+  // The orchestration — strategy cortex, context cortex, the strict-facet
+  // retention rule — lives in the kernel so every adapter shares one copy
+  // (ADR-0004). This function and rememberPayload below are all that is left
+  // of the OpenClaw-specific read and write paths.
+  return render.recallForHost(
+    { kernel, memory, formatStrategyContext: render.formatStrategyContext },
+    input, config, HOST_IDENTITY,
+  );
 }
 
 async function loadCogmemApi(bridgeConfig) {
@@ -1947,134 +1894,13 @@ function stripCogmemRecallBlocks(text) {
 
 
 async function rememberPayload(payload, bridgeConfig, kernel, memory) {
-  const cleanUser = bridgeConfig.stripRecallBlocksBeforeRemember === false
-    ? { text: payload.userText || '', stripped: false, strippedChars: 0, blockCount: 0 }
-    : stripCogmemRecallBlocks(payload.userText || '');
-  const cleanAssistant = bridgeConfig.stripRecallBlocksBeforeRemember === false
-    ? { text: payload.assistantText || '', stripped: false, strippedChars: 0, blockCount: 0 }
-    : stripCogmemRecallBlocks(payload.assistantText || '');
-  const hygiene = {
-    ...(payload.hygiene || {}),
-    strippedRecallBlocks: Boolean(payload.hygiene && payload.hygiene.strippedRecallBlocks) || cleanUser.stripped || cleanAssistant.stripped,
-    strippedBlockCount: Number(payload.hygiene && payload.hygiene.strippedBlockCount || 0) + cleanUser.blockCount + cleanAssistant.blockCount,
-    strippedChars: Number(payload.hygiene && payload.hygiene.strippedChars || 0) + cleanUser.strippedChars + cleanAssistant.strippedChars,
-  };
-  const result = await memory.rememberTurnWithResult({
-    agentId: bridgeConfig.agentId || 'openclaw',
-    projectId: bridgeConfig.projectId || 'openclaw',
-    workspaceId: bridgeConfig.projectId || 'openclaw',
-    sessionId: payload.sessionId || 'openclaw-session',
-    userText: cleanUser.text,
-    assistantText: cleanAssistant.text,
-    ingestMode: bridgeConfig.ingestMode || 'selective_compile',
-    timestamp: Date.now(),
-    metadata: {
-      source: 'openclaw-plugin',
-      pluginId: 'cogmem-auto-memory',
-      lifecycle: 'turn',
-      hygiene,
-    },
-  });
-  const assistantEventId = result.rawEventIds[1];
-  const toolCallEventIds = new Map();
-  let toolCallCount = 0;
-  let toolResultCount = 0;
-  let taskEventCount = 0;
-
-  for (const call of Array.isArray(payload.toolCalls) ? payload.toolCalls : []) {
-    const event = await memory.ingestToolCall({
-      agentId: bridgeConfig.agentId || 'openclaw',
-      projectId: bridgeConfig.projectId || 'openclaw',
-      workspaceId: bridgeConfig.projectId || 'openclaw',
-      sessionId: payload.sessionId || 'openclaw-session',
-      assistantEventId,
-      toolCallId: call.toolCallId || undefined,
-      toolName: call.toolName || 'unknown_tool',
-      input: call.input,
-      eventOrdinal: call.eventOrdinal,
-      timestamp: call.timestamp,
-      metadata: call.metadata,
-    });
-    if (call.toolCallId) toolCallEventIds.set(call.toolCallId, event.eventId);
-    toolCallCount += 1;
-  }
-
-  for (const observation of Array.isArray(payload.toolResults) ? payload.toolResults : []) {
-    const toolCallEventId = observation.toolCallId ? toolCallEventIds.get(observation.toolCallId) : undefined;
-    if (toolCallEventId) {
-      await memory.ingestToolObservation({
-        agentId: bridgeConfig.agentId || 'openclaw',
-        projectId: bridgeConfig.projectId || 'openclaw',
-        workspaceId: bridgeConfig.projectId || 'openclaw',
-        sessionId: payload.sessionId || 'openclaw-session',
-        toolCallEventId,
-        toolCallId: observation.toolCallId || undefined,
-        toolName: observation.toolName || 'unknown_tool',
-        output: observation.output || '',
-        eventOrdinal: observation.eventOrdinal,
-        timestamp: observation.timestamp,
-        metadata: observation.metadata,
-      });
-      toolResultCount += 1;
-    } else {
-      await memory.ingestTaskEvent({
-        agentId: bridgeConfig.agentId || 'openclaw',
-        projectId: bridgeConfig.projectId || 'openclaw',
-        workspaceId: bridgeConfig.projectId || 'openclaw',
-        sessionId: payload.sessionId || 'openclaw-session',
-        parentEventId: assistantEventId,
-        title: 'Tool result without matching tool call',
-        content: observation.output || '',
-        eventOrdinal: observation.eventOrdinal,
-        timestamp: observation.timestamp,
-        metadata: {
-          ...(observation.metadata || {}),
-          toolCallId: observation.toolCallId,
-          toolName: observation.toolName,
-          causality: 'partial',
-          reason: 'missing_tool_call_event',
-        },
-      });
-      taskEventCount += 1;
-    }
-  }
-
-  for (const task of Array.isArray(payload.taskEvents) ? payload.taskEvents : []) {
-    await memory.ingestTaskEvent({
-      agentId: bridgeConfig.agentId || 'openclaw',
-      projectId: bridgeConfig.projectId || 'openclaw',
-      workspaceId: bridgeConfig.projectId || 'openclaw',
-      sessionId: payload.sessionId || 'openclaw-session',
-      parentEventId: assistantEventId,
-      taskId: task.taskId,
-      title: task.title,
-      content: task.content || '',
-      eventOrdinal: task.eventOrdinal,
-      timestamp: task.timestamp,
-      metadata: task.metadata,
-    });
-    taskEventCount += 1;
-  }
-
-  let contextOutcomeId;
-  if (payload.contextOutcome) {
-    const outcome = kernel.memoryUseJudge.judge(payload.contextOutcome);
-    kernel.contextOutcomeStore.record(outcome);
-    contextOutcomeId = outcome.outcomeId;
-  }
-
-  return {
-    ...result,
-    hygiene,
-    toolCallCount,
-    toolResultCount,
-    taskEventCount,
-    contextOutcomeId,
-  };
+  return cachedApi.rememberForHost({ kernel, memory }, payload, bridgeConfig, HOST_IDENTITY);
 }
 
 async function drainRememberQueue(bridgeConfig) {
-  const { createMemoryKernelFromConfig, KernelAgentMemoryBackend } = await loadCogmemApi(bridgeConfig);
+  const api = await loadCogmemApi(bridgeConfig);
+  cachedApi = api;
+  const { createMemoryKernelFromConfig, KernelAgentMemoryBackend } = api;
   const kernel = createMemoryKernelFromConfig({ configPath: bridgeConfig.configPath });
   try {
     const memory = new KernelAgentMemoryBackend(kernel);
