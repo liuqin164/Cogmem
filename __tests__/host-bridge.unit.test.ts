@@ -177,6 +177,24 @@ describe('a host recalls into one injectable block', () => {
     });
   });
 
+  test('a request cannot move the read into another project', async () => {
+    // #65: the scope comes from the adapter's identity, never from the request.
+    // The field is not part of the request type — that is the first line of
+    // defence — so this proves the runtime agrees for a payload that carries it
+    // anyway, which is what a hostile host would send.
+    await withKernel(async (runtime) => {
+      await rememberForHost(runtime, {
+        sessionId: 'a', userText: 'secret of project A: alpha', assistantText: 'ok',
+      }, {}, { ...HERMES, projectId: 'proj-a' });
+
+      const smuggled = await recallForHost(runtime, {
+        query: 'secret of project A alpha', sessionId: 'c', projectId: 'proj-a',
+      } as Parameters<typeof recallForHost>[1], {}, { ...HERMES, projectId: 'proj-b' });
+
+      expect(smuggled.context).not.toContain('secret of project A');
+    });
+  });
+
   test('the strategy capsule is rendered in front of the block when there is one', async () => {
     await withKernel(async (runtime) => {
       await rememberForHost(runtime, {
