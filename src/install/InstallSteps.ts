@@ -81,7 +81,7 @@ export function installPathSteps(bin: string): InstallStep[] {
       actor: 'operator',
       safeForAutomation: false,
       command: `${bin} init`,
-      when: 'after the installer finishes, with a terminal available',
+      when: 'with a terminal available',
       purpose: 'interactive first-time config; asks for provider, key and passphrase',
     },
     {
@@ -89,7 +89,7 @@ export function installPathSteps(bin: string): InstallStep[] {
       actor: 'agent',
       safeForAutomation: true,
       command: `${bin} init --yes --json`,
-      when: 'after the installer finishes, with no human present',
+      when: 'with no human present',
       purpose: 'non-interactive config; Human-required settings fall back to conservative defaults',
     },
     {

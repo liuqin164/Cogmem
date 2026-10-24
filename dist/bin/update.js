@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { printCliJson } from './CliJson.js';
 import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
-import { buildGate, postInstallSteps } from '../install/InstallSteps.js';
+import { buildGate, installPathSteps, postInstallSteps } from '../install/InstallSteps.js';
 function readArgs(argv) {
     const values = {};
     for (let index = 0; index < argv.length; index += 1) {
@@ -158,8 +158,16 @@ function resolveUpdateTarget(args, env) {
         warning: 'no_install_home_or_project_dependency_detected',
     };
 }
-function loadConfigForUpdate(args) {
-    const resolution = resolveCogmemConfigPath({ configPath: args.configPath, cwd: process.cwd() });
+/**
+ * Resolve the config this update is about.
+ *
+ * The search starts at the *target* install, not at the caller's directory: an
+ * operator who runs `cogmem update --install-home <dir>` from somewhere else is
+ * asking about that install, and resolving from the caller's cwd finds another
+ * project's config, or the developer machine's, or none at all (#62).
+ */
+function loadConfigForUpdate(args, targetCwd) {
+    const resolution = resolveCogmemConfigPath({ configPath: args.configPath, cwd: targetCwd });
     if (resolution.kind === 'missing') {
         return { configPath: undefined, skippedReason: `missing_config:${resolution.path}` };
     }
@@ -202,7 +210,7 @@ async function main() {
     }
     const manager = target.manager;
     const command = buildCommand(target, resolvedSpec);
-    const config = loadConfigForUpdate(args);
+    const config = loadConfigForUpdate(args, target.cwd);
     const migrationExec = !args.skipMigrate && config.configPath
         ? buildMigrationExecForTarget(target, config.configPath)
         : undefined;
@@ -249,28 +257,27 @@ async function main() {
     // fresh install rather than a second one with its own wording. A missing
     // config is "not installed", not a failure: an updater may run before setup.
     const gateBin = target.kind === 'npm_global' ? 'cogmem' : target.bin;
-    const gateSteps = config.configPath
+    // The gate has to check the install this update touched, not whatever the
+    // caller's directory happens to hold. `--config` names the config this update
+    // resolved, and the working directory is the target install: without both,
+    // `cogmem update --install-home <dir>` run from somewhere else asked doctor
+    // about a different project's config — or the developer machine's — and
+    // reported OK or NOT_INSTALLED for it (#62).
+    const gateCwd = target.cwd;
+    const gateArgs = (...extra) => [
+        gateBin,
+        'doctor',
+        ...extra,
+        ...(config.configPath ? ['--config', config.configPath] : []),
+    ];
+    // Reused, not retyped: ADR-0003 says the step list is defined once. The copy
+    // that used to live here had already drifted from the shared list — it named
+    // the first step `init` where the shared definition says `operator_init`, and
+    // its wording still assumed an update could migrate something.
+    result.nextSteps = config.configPath
         ? postInstallSteps(gateBin)
-        : [
-            {
-                id: 'init',
-                actor: 'operator',
-                safeForAutomation: false,
-                command: `${gateBin} init`,
-                when: 'now',
-                purpose: 'no config exists yet, so the update had nothing to migrate',
-            },
-            {
-                id: 'agent_init',
-                actor: 'agent',
-                safeForAutomation: true,
-                command: `${gateBin} init --yes --json`,
-                when: 'now, with no human present',
-                purpose: 'non-interactive config; Human-required settings fall back to conservative defaults',
-            },
-        ];
-    result.nextSteps = gateSteps;
-    result.postUpdateGateCommand = `${gateBin} doctor${args.json ? ' --json' : ''}`;
+        : installPathSteps(gateBin).filter((step) => step.id !== 'install_gate');
+    result.postUpdateGateCommand = gateArgs(...(args.json ? ['--json'] : [])).join(' ');
     if (args.dryRun && args.json) {
         // A dry run has not checked the updated install, so do not publish a
         // fabricated OK/NOT_INSTALLED gate. Name the command that will check it.
@@ -306,7 +313,7 @@ async function main() {
                 process.exit(repairExitCode);
         }
         if (args.json) {
-            const gateRun = await runCommandCapture([gateBin, 'doctor', '--json'], process.cwd());
+            const gateRun = await runCommandCapture(gateArgs('--json'), gateCwd);
             try {
                 const gatePayload = JSON.parse(gateRun.stdout);
                 if (!gatePayload.installGate)
@@ -324,7 +331,7 @@ async function main() {
             printCliJson('update', result);
             process.exit(Math.max(gateRun.exitCode, result.installGate?.exitCode ?? 1));
         }
-        process.exit(await runCommand([gateBin, 'doctor'], process.cwd()));
+        process.exit(await runCommand(gateArgs(), gateCwd));
     }
 }
 main().catch((error) => {

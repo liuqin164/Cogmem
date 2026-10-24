@@ -73,6 +73,8 @@ describe('update post-install gate', () => {
     expect(dryRun.exitCode).toBe(0);
     const dryParsed = JSON.parse(dryRun.stdout);
     expect(dryParsed.installGate).toBeUndefined();
-    expect(dryParsed.postUpdateGateCommand).toBe(`${cliBin} doctor --json`);
+    // #62: the gate names the config it will check, so the command can be run by
+    // hand and checks the same install this update touched.
+    expect(dryParsed.postUpdateGateCommand).toBe(`${cliBin} doctor --json --config ${configPath}`);
   });
 });
