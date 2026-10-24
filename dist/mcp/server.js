@@ -90,12 +90,18 @@ export function applyIdentity(baseOptions, resolved, trusted) {
         }
         profile = trusted || PROFILE_RANK[requested] <= PROFILE_RANK[configured] ? requested : configured;
     }
-    // A hostId says *which agent* a call runs as, so an unauthenticated
-    // connection may not assert one: on loopback a header that names a host is
-    // ignored and the call runs as the server, never as the name in the header.
-    // The project and profile fields stay usable without a credential because
-    // they narrow what the connection may do instead of inventing who it is.
-    const hostId = trusted && identity.hostId !== undefined ? identity.hostId : baseOptions.hostId;
+    // A hostId says *which agent* a call runs as, so it comes from the connection
+    // and never from the request. A credential establishes one; a header may only
+    // agree with it. Disagreement is rejected rather than ignored: a caller asking
+    // to be someone else is either misconfigured or hostile, and both deserve to
+    // hear about it. With no credential there is no identity to change, so a
+    // claimed hostId is ignored and the call runs as the server — never as the
+    // name in the header.
+    const authenticatedHostId = baseOptions.authenticatedHostId;
+    if (identity.hostId !== undefined && authenticatedHostId !== undefined && identity.hostId !== authenticatedHostId) {
+        throw new IdentityError(`host_identity_mismatch: this connection is authenticated as "${authenticatedHostId}" but the call claimed "${identity.hostId}".`);
+    }
+    const hostId = authenticatedHostId ?? baseOptions.hostId;
     return {
         ...baseOptions,
         profile,

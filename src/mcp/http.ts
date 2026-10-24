@@ -18,6 +18,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 
 import { createCogmemMcpServer, parseSessionIdentity, type CogmemMcpServerOptions } from './server.js';
 import type { CogmemMcpRuntime } from './CoreMcpTools.js';
+import type { AgentRegistry } from './AgentRegistry.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 
 export interface CogmemMcpHttpOptions extends CogmemMcpServerOptions {
@@ -28,6 +29,13 @@ export interface CogmemMcpHttpOptions extends CogmemMcpServerOptions {
   path?: string;
   /** When set, every request must carry the matching bearer credential. */
   token?: string;
+  /**
+   * Registered agents and their credentials. When set, the presented credential
+   * *is* the identity: a request with no registered credential is refused even
+   * on loopback, and the agent's registration is the ceiling for its hostId,
+   * project scope, and tool profile.
+   */
+  agents?: AgentRegistry;
   /** Header name that carries the session identity (JSON: {hostId, projectId, profile}). Defaults to `x-cogmem-identity`. */
   identityHeader?: string;
   /** Allowed Origin values. Defaults to loopback origins only. Use `['*']` to allow all (not recommended for non-loopback). */
@@ -56,6 +64,18 @@ function resolveKernel(runtime: CogmemMcpRuntime) {
     configPath: runtime.configPath,
     cwd: runtime.cwd,
   });
+}
+
+/**
+ * The bearer credential a request presents, if any. Matched case-insensitively
+ * and tolerant of surrounding whitespace, because hosts differ and a credential
+ * check must not depend on how the header was spelled.
+ */
+function bearerToken(request: Request): string | undefined {
+  const header = request.headers.get('authorization');
+  if (!header) return undefined;
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  return match ? match[1].trim() : undefined;
 }
 
 export async function startCogmemMcpHttpServer(
@@ -128,6 +148,15 @@ export async function startCogmemMcpHttpServer(
         }
       }
 
+      // With a registry the credential *is* the identity, so an unregistered one
+      // is refused even on loopback: a local client that presents no registered
+      // credential has no agent to be, and letting it through as anonymous is
+      // how one agent ends up reading another's memory.
+      const agent = options.agents?.resolve(bearerToken(request));
+      if (options.agents && !agent) {
+        return new Response('unauthorized', { status: 401 });
+      }
+
       const sessionId = request.headers.get('mcp-session-id');
       let transport = sessionId ? transports.get(sessionId) : undefined;
 
@@ -169,14 +198,17 @@ export async function startCogmemMcpHttpServer(
         // Create server with base runtime; per-session identity resolved from
         // the request headers and the session map on every call.
         const server = createCogmemMcpServer(baseRuntime, {
-          profile: options.profile,
-          hostId: options.hostId,
-          projectId: options.projectId,
+          // A registered credential is the ceiling for that agent: it may narrow
+          // its own profile but never widen past what it was registered with, so
+          // the header is not trusted to escalate even on an authenticated
+          // request. Without a registry, a global token keeps its old meaning.
+          profile: agent?.profile ?? options.profile,
+          hostId: agent?.hostId ?? options.hostId,
+          authenticatedHostId: agent?.hostId,
+          projectId: agent?.projectId ?? options.projectId,
           identityHeader,
           identityForSession: (id) => (id ? sessionIdentities.get(id) : undefined),
-          // Only a token-authenticated transport may widen the profile through
-          // the identity header; otherwise it may narrow it at most.
-          identityTrusted: options.token !== undefined,
+          identityTrusted: agent ? false : options.token !== undefined,
         });
         await server.connect(created);
         transport = created;

@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 import { startCogmemMcpServer } from '../mcp/server.js';
 import { startCogmemMcpHttpServer } from '../mcp/http.js';
+import { defaultAgentRegistryPath, loadAgentRegistry } from '../mcp/AgentRegistry.js';
 import { resolveProfile, type McpToolProfile } from '../mcp/profiles.js';
 
 interface McpArgs {
@@ -17,6 +18,7 @@ interface McpArgs {
   projectId?: string;
   profile: McpToolProfile;
   token?: string;
+  agentsPath?: string;
   help: boolean;
 }
 
@@ -52,6 +54,7 @@ function readArgs(argv: string[]): McpArgs {
     projectId: stringArg(values, 'project'),
     profile: resolveProfile(stringArg(values, 'profile')),
     token: stringArg(values, 'token'),
+    agentsPath: stringArg(values, 'agents'),
     help: values.help === true || values.h === true,
   };
 }
@@ -87,6 +90,7 @@ function usage(): string {
     '  --project <id>          Bind this connection to one project; conflicting projectId calls are rejected',
     '  --profile <core|admin|full>  Tool surface (default: core)',
     '  --token <value>         Require Authorization: Bearer <value> over HTTP',
+    '  --agents <agents.json>  Registered agents and credentials (default: ~/.cogmem/agents.json when present)',
     '',
     'Examples:',
     '  cogmem mcp --db ~/.cogmem/memory.db',
@@ -108,6 +112,12 @@ async function main(): Promise<void> {
     hostId: args.hostId,
   };
 
+  // An absent registry is the single-agent case, not an error; a malformed one
+  // throws, because serving every agent as anonymous while the operator believes
+  // they are registered is the failure this file exists to prevent.
+  const agentsPath = args.agentsPath ? resolve(args.agentsPath) : defaultAgentRegistryPath();
+  const agents = loadAgentRegistry(agentsPath);
+
   if (args.transport === 'stdio') {
     await startCogmemMcpServer(runtime, {
       profile: args.profile,
@@ -122,12 +132,14 @@ async function main(): Promise<void> {
     hostname: args.bind,
     path: args.path,
     token: args.token,
+    agents,
     profile: args.profile,
     hostId: args.hostId,
     projectId: args.projectId,
   });
 
-  console.error(`cogmem mcp listening on ${handle.url} (profile=${args.profile}${args.hostId ? `, host=${args.hostId}` : ''})`);
+  const registered = agents ? `, agents=${agents.list().length}` : '';
+  console.error(`cogmem mcp listening on ${handle.url} (profile=${args.profile}${args.hostId ? `, host=${args.hostId}` : ''}${registered})`);
 
   const shutdown = (): void => {
     handle.stop();

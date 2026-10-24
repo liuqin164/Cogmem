@@ -13,6 +13,7 @@
  */
 import { type CogmemMcpServerOptions } from './server.js';
 import type { CogmemMcpRuntime } from './CoreMcpTools.js';
+import type { AgentRegistry } from './AgentRegistry.js';
 export interface CogmemMcpHttpOptions extends CogmemMcpServerOptions {
     port: number;
     /** Bind address. Defaults to loopback. */
@@ -21,6 +22,13 @@ export interface CogmemMcpHttpOptions extends CogmemMcpServerOptions {
     path?: string;
     /** When set, every request must carry the matching bearer credential. */
     token?: string;
+    /**
+     * Registered agents and their credentials. When set, the presented credential
+     * *is* the identity: a request with no registered credential is refused even
+     * on loopback, and the agent's registration is the ceiling for its hostId,
+     * project scope, and tool profile.
+     */
+    agents?: AgentRegistry;
     /** Header name that carries the session identity (JSON: {hostId, projectId, profile}). Defaults to `x-cogmem-identity`. */
     identityHeader?: string;
     /** Allowed Origin values. Defaults to loopback origins only. Use `['*']` to allow all (not recommended for non-loopback). */

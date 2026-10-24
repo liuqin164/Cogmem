@@ -13,6 +13,13 @@ export interface CogmemMcpServerOptions {
      */
     projectId?: string;
     /**
+     * The hostId a credential established for this connection (see
+     * `AgentRegistry`). Only this may be asserted by a request: the plain
+     * `hostId` is a server label — what the process calls itself — and
+     * authenticates nothing.
+     */
+    authenticatedHostId?: string;
+    /**
      * Header that carries a per-request identity JSON blob (`hostId`,
      * `projectId`, `profile`). A request that presents one overrides the
      * session-bound identity for that call only. It may narrow the profile but

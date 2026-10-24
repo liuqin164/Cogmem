@@ -294,9 +294,16 @@ describe('session identity binding', () => {
     const pretender = applyIdentity({ profile: 'core' }, { identity: { hostId: 'bot-b' } }, false);
     expect(pretender.hostId).toBeUndefined();
 
-    // A credential is what makes the claim meaningful, and then it is honoured.
-    const authenticated = applyIdentity({ profile: 'core' }, { identity: { hostId: 'bot-a' } }, true);
-    expect(authenticated.hostId).toBe('bot-a');
+    // A header may not introduce a hostId even on an authenticated request: the
+    // identity comes from the credential, and a claim can only agree with it.
+    const claimedWithoutIdentity = applyIdentity({ profile: 'core' }, { identity: { hostId: 'bot-a' } }, true);
+    expect(claimedWithoutIdentity.hostId).toBeUndefined();
+    const agreeing = applyIdentity(
+      { profile: 'core', authenticatedHostId: 'bot-a' },
+      { identity: { hostId: 'bot-a' } },
+      true,
+    );
+    expect(agreeing.hostId).toBe('bot-a');
 
     // The connection's own hostId still wins over nothing, and no credential is
     // needed for the narrowing fields.
