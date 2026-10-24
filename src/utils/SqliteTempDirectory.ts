@@ -51,11 +51,15 @@ const TEMP_FILE_FAILURE = /unable to open database file|SQLITE_CANTOPEN|disk I\/
  * problem must keep its own message, and relabelling it would be the same
  * misattribution in the other direction.
  */
-export function describeSqliteTempDirectoryFailure(operation: string, error: unknown): Error | undefined {
+export function describeSqliteTempDirectoryFailure(
+  operation: string,
+  error: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): Error | undefined {
   const message = error instanceof Error ? error.message : String(error);
   if (!TEMP_FILE_FAILURE.test(message)) return undefined;
 
-  const directory = resolveSqliteTempDirectory();
+  const directory = resolveSqliteTempDirectory(env);
   if (directory !== undefined && sqliteTempDirectoryIsWritable(directory)) return undefined;
 
   return new Error(

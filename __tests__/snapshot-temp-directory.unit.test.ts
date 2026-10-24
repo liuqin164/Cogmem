@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { resolveSqliteTempDirectory, sqliteTempDirectoryIsWritable } from '../src/utils/SqliteTempDirectory.js';
+import {
+  describeSqliteTempDirectoryFailure,
+  resolveSqliteTempDirectory,
+  sqliteTempDirectoryIsWritable,
+} from '../src/utils/SqliteTempDirectory.js';
 
 /**
  * #64: when SQLite has no usable temporary directory, the operation that needed
@@ -22,6 +26,17 @@ import { resolveSqliteTempDirectory, sqliteTempDirectoryIsWritable } from '../sr
  */
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * Whether this machine can express "a temp directory that exists and cannot be
+ * written". Under a container that runs tests as root, `chmod 500` does not stop
+ * the owner from writing, so the end-to-end case is skipped there instead of
+ * failing — the classification itself is covered without needing the permission
+ * bit to bite, below.
+ */
+const probeDirectory = mkdtempSync(join(tmpdir(), 'cogmem-temp-probe-'));
+chmodSync(probeDirectory, 0o500);
+const canExpressUnwritableDirectory = !sqliteTempDirectoryIsWritable(probeDirectory);
 
 function makeDirs(): { root: string; unusable: string; writable: string; dbDir: string } {
   const root = mkdtempSync(join(tmpdir(), 'cogmem-snapshot-temp-'));
@@ -65,7 +80,42 @@ async function exportSnapshotInChild(dirs: { root: string; dbDir: string }, temp
 }
 
 describe('#64 an unusable SQLite temp directory is named, not blamed on the database', () => {
-  test('exporting a snapshot on an unwritable temp directory says which directory', async () => {
+  test('a database error keeps its own message when the temp directory is usable', () => {
+    const dirs = makeDirs();
+    // The other direction matters as much: relabelling a real database problem
+    // as a temp-directory one would be the same misattribution again.
+    expect(describeSqliteTempDirectoryFailure(
+      'exporting a snapshot',
+      new Error('unable to open database file'),
+      { TMPDIR: dirs.writable } as NodeJS.ProcessEnv,
+    )).toBeUndefined();
+
+    // A non-error, or an unrelated failure, is never relabelled.
+    expect(describeSqliteTempDirectoryFailure('exporting a snapshot', new Error('no such table: neurons'), { TMPDIR: dirs.writable } as NodeJS.ProcessEnv)).toBeUndefined();
+  });
+
+  test('a temp directory that cannot hold a file is named in the error', () => {
+    const dirs = makeDirs();
+    // A regular file where a directory is expected: writing a probe inside it
+    // fails for every user, root included, so this does not depend on the
+    // permission bit doing the work.
+    const notADirectory = join(dirs.root, 'not-a-directory');
+    writeFileSync(notADirectory, '');
+
+    const described = describeSqliteTempDirectoryFailure(
+      'exporting a snapshot',
+      new Error('unable to open database file'),
+      { TMPDIR: notADirectory } as NodeJS.ProcessEnv,
+    );
+
+    expect(described?.message).toContain('sqlite_temp_directory_unusable');
+    expect(described?.message).toContain('exporting a snapshot');
+    expect(described?.message).toContain(notADirectory);
+    expect(described?.message).toContain('TMPDIR');
+    expect(described?.message).toContain('unable to open database file');
+  });
+
+  test.skipIf(!canExpressUnwritableDirectory)('exporting a snapshot on an unwritable temp directory says which directory', async () => {
     const dirs = makeDirs();
 
     // The scenario has to actually hold, or the test proves nothing.
