@@ -1088,23 +1088,16 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(bridgeBody).toContain('COGMEM_SESSION_STATE');
   expect(bridgeBody).toContain('COGMEM_STRATEGY_CONTEXT');
   expect(bridgeBody).toContain('hygiene');
-  expect(bridgeBody).toContain('<COGMEM_RECALL_CONTEXT');
-  expect(bridgeBody).toContain('persistence="forbidden"');
-  expect(bridgeBody).toContain('lifecycle="current_turn_only"');
-  expect(bridgeBody).toContain('This block must not be persisted or re-ingested as new memory.');
+  // The recall block itself is rendered by the kernel now (ADR-0004): the bridge
+  // asks for it rather than carrying the block's text, so the tags, the rules,
+  // the escaping and the window lines are asserted where they actually run, in
+  // `__tests__/recall-block.unit.test.ts`. What belongs here is that this
+  // generated file delegates and no longer holds a copy.
+  expect(bridgeBody).toContain('formatRecallContext: api.formatRecallContext');
   expect(bridgeBody).toContain('sourceType');
-  expect(bridgeBody).toContain('canAnswerExactQuote=false');
-  expect(bridgeBody).toContain('sourceContext');
-  expect(bridgeBody).toContain('recallDecision=');
-  expect(bridgeBody).toContain('sourceWindow');
-  expect(bridgeBody).toContain('formatContextEvent');
-  expect(bridgeBody).toContain('truncatedAtChar');
-  expect(bridgeBody).toContain('overlapHandling');
-  expect(bridgeBody).toContain('uniqueWindowEvents');
-  expect(bridgeBody).toContain('cogmem memory show --event');
-  expect(bridgeBody).toContain('Use it only as current-turn background memory.');
-  expect(bridgeBody).toContain('function serializeUntrustedMemory');
-  expect(bridgeBody).toContain("replace(/&/g, '&amp;')");
+  expect(bridgeBody).not.toContain('<COGMEM_RECALL_CONTEXT');
+  expect(bridgeBody).not.toContain('function serializeUntrustedMemory');
+  expect(bridgeBody).not.toContain("replace(/&/g, '&amp;')");
   expect(indexBody).toContain('function serializeUntrustedMemory');
   expect(indexBody).toContain("serializeUntrustedMemory(receipt.workingConclusion");
   expect(indexBody).toContain("serializeUntrustedMemory(state.currentTopic");

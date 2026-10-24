@@ -46,19 +46,25 @@ test('installed OpenClaw plugin sanitizes generated prompt context and routes At
   expect(bridge).toContain('kernel.graphPath');
   expect(bridge).toContain('kernel.graphTimeline');
   expect(bridge).toContain("command === 'context'");
-  expect(bridge).toContain('Selected memory cards:');
-  expect(bridge).toContain('memory_atlas.v2');
-  expect(bridge).toContain('matchedPaths=');
-  expect(bridge).toContain('whyMatched=');
   expect(bridge).toContain('selectedEpisodeCards');
   expect(bridge).toContain("result.decisionTrace.selectedLane === 'facet_graph_raw_ledger'");
   expect(bridge).toContain('Array.isArray(item.matchedFacets) && item.matchedFacets.length > 0');
   expect(bridge).toContain('retainedCanonicalId');
-  expect(bridge).toContain('evidenceEventIds');
   expect(bridge).toContain('nodeDetails');
-  expect(bridge).toContain('function safeAtlasText');
-  expect(bridge).toContain('function serializeUntrustedMemory');
-  expect(bridge).toContain("replace(/</g, '&lt;')");
+  // The Atlas/recall text itself is rendered by the kernel now (ADR-0004), so
+  // the bridge must delegate rather than carry a second copy of it. Its own
+  // test executes those renderers; here the point is that they are not here.
+  expect(bridge).toContain('formatAtlasContext: api.formatAtlasContext');
+  expect(bridge).toContain('formatRecallContext: api.formatRecallContext');
+  expect(bridge).not.toContain('memory_atlas.v2');
+  expect(bridge).not.toContain('Selected memory cards:');
+  expect(bridge).not.toContain('function safeAtlasText');
+  expect(bridge).not.toContain('function serializeUntrustedMemory');
+  expect(bridge).not.toContain('evidenceEventIds');
+  // Escaping untrusted memory into the block is the renderer's job, so it moved
+  // with the renderer; `__tests__/recall-block.unit.test.ts` asserts that a
+  // hostile item cannot escape the block it is rendered into.
+  expect(bridge).not.toContain("replace(/</g, '&lt;')");
   expect(index).not.toContain('cogmem_graph_explore');
 
   const plugin = createRequire(import.meta.url)(indexPath) as {

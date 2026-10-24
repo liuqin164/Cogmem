@@ -40,6 +40,14 @@ export { ContextOutcomeStore, ContextPolicyScorer, MemoryUseJudge, StrategyDiver
  */
 export { compileAgentRecallQuery, COGMEM_RECALL_BLOCK_RE, createMemoryUsageReceipt, formatMemoryUsageBridge, formatSessionWorkingState, inferAgentRecallIntent, KernelAgentMemoryBackend, shouldInjectMemoryUsageBridge, stripCogmemRecallBlocks, updateSessionWorkingState, type AgentRecallBeliefTouch, type AgentRecallEntityCard, type AgentRecallIntent, type AgentRecallItem, type AgentRecallPackResult, type AgentRecallPackSlots, type AgentRecallQuery, type AgentRecallQueryPlan, type AgentRecallResult, type AgentRecallSourceAnchor, type AgentRecallSourceContext, type AgentRecallSourceContextEvent, type AgentTaskEventMemory, type AgentToolCallMemory, type AgentToolObservationMemory, type AgentTurnCompileReason, type AgentTurnIngestMode, type AgentTurnMemory, type AgentTurnMemoryResult, type CreateMemoryUsageReceiptInput, type MemoryUsageReceipt, type MemoryUsageReceiptSourceAnchor, type SessionWorkingState, type StripCogmemRecallBlocksResult, type UpdateSessionWorkingStateInput, } from './agent/index.js';
 /**
+ * The prompt-block renderers a host adapter injects: `<COGMEM_RECALL_CONTEXT>`
+ * and `<COGMEM_MEMORY_ATLAS>`. Host-neutral, so every adapter shares one
+ * implementation instead of carrying a copy that no test executes.
+ *
+ * @stable @since 4.0.0
+ */
+export { clampRecallContext, classifyMemoryNavigationIntent, compactRecallItems, contextCandidateFromRecallItem, contextEventLabel, formatAtlasCard, formatAtlasContext, formatContextEvent, formatRecallContext, formatRecallDecision, formatSourceRange, formatSourceWindow, truncateLineWithMeta, uniqueWindowEvents, type FormattedContextEvent, type TruncationMeta, } from './host/RecallBlock.js';
+/**
  * Core recall pipeline.
  * @stable @since 1.0.0
  */
