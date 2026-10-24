@@ -31,6 +31,7 @@ export class SchemaMigrationRunner {
             const pending = this.plan();
             return { pending: pending.map((item) => item.version), applied: [], currentVersion: this.currentVersion(), dryRun: true };
         }
+        this.keepTemporaryDataInMemory();
         this.ensureMigrationTable();
         this.assertRecordedChecksums();
         this.repairRecordedRuntimeGuards();
@@ -81,6 +82,20 @@ export class SchemaMigrationRunner {
         // than failing halfway through the migration body.
         transaction.immediate();
         return { pending: pending.map((item) => item.version), applied, currentVersion: this.currentVersion(), dryRun: false };
+    }
+    /**
+     * Migration DDL spills to a SQLite temporary file — dropping the FTS5 virtual
+     * table `memory_atlas_fts` in 0032 does — and SQLite picks its temp directory
+     * from `SQLITE_TMPDIR`, then `TMPDIR`, and finally `/var/tmp`. Where that last
+     * fallback is not writable, the spill fails and surfaces as the generic
+     * `unable to open database file`, so creating a kernel against a brand-new
+     * file path died inside `dropRebuildableProjections`. Keeping temporary data
+     * in memory removes the temp file from the first-run path entirely, and it
+     * cannot be fixed from JavaScript: SQLite resolves and caches the directory
+     * before any user code can set the environment.
+     */
+    keepTemporaryDataInMemory() {
+        this.db.exec('PRAGMA temp_store = MEMORY');
     }
     ensureMigrationTable() {
         this.db.exec(`
