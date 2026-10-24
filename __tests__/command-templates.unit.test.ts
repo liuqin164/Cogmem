@@ -93,6 +93,7 @@ const EXPECTED_TEMPLATES = [
   ['src/bin/memory.ts', 'cogmem memory list${projectArg} --order asc --limit 20 --json'],
   ['src/bin/memory.ts', 'cogmem memory candidates${projectArg} --status needs_confirmation --json'],
   ['src/bin/memory.ts', 'cogmem memory candidates${projectArg} --json'],
+  ['src/bin/init.ts', 'cogmem init --agent ${suggestedHost}'],
   ['src/bin/memory.ts', 'cogmem memory govern${projectArg} --limit 100 --json'],
   ['src/bin/memory.ts', 'cogmem memory candidates${projectArg} --status needs_confirmation --json'],
   ['src/bin/memory.ts', 'cogmem memory review${projectArg} --id <candidate-id> --action approve --actor <operator> --reason <reason> --confirmation-event <user-event-id> --json'],
@@ -113,6 +114,7 @@ const INTERPOLATIONS: Record<string, string> = {
   after: '2',
   'shellQuote(input.projectId)': 'probe-project',
   'shellQuote(episodeId)': 'ep-1',
+  suggestedHost: 'openclaw',
   base: '', // filled per template below
 };
 
@@ -165,7 +167,7 @@ function expandPlaceholders(command: string): string[] {
   return variants;
 }
 
-type Parsed = { group: string; sub: string; pairs: Array<{ flag: string; value?: string }> };
+type Parsed = { group: string; sub?: string; pairs: Array<{ flag: string; value?: string }> };
 
 /** Quote-aware tokenizer: `--query '<query>'` is one flag with one value. */
 function tokenize(raw: string): string[] {
@@ -190,15 +192,20 @@ function tokenize(raw: string): string[] {
 function parse(raw: string): Parsed {
   const tokens = tokenize(raw);
   expect(tokens[0]).toBe('cogmem');
+  // `cogmem memory review …` names a group and a subcommand, so its flags start
+  // at index 3. `cogmem init --agent …` is a single-word command whose flags
+  // start at index 2. Reading the second word as a subcommand only when it is
+  // not already a flag covers both.
+  const hasSub = tokens[2] !== undefined && !tokens[2].startsWith('--');
   const pairs: Array<{ flag: string; value?: string }> = [];
-  for (let index = 3; index < tokens.length; index += 1) {
+  for (let index = hasSub ? 3 : 2; index < tokens.length; index += 1) {
     const token = tokens[index];
     if (!token.startsWith('--')) continue;
     const next = tokens[index + 1];
     if (next === undefined || next.startsWith('--')) pairs.push({ flag: token.slice(2) });
     else { pairs.push({ flag: token.slice(2), value: next }); index += 1; }
   }
-  return { group: tokens[1], sub: tokens[2], pairs };
+  return { group: tokens[1], sub: hasSub ? tokens[2] : undefined, pairs };
 }
 
 const cliSource = read(join('src', 'bin', 'cogmem.ts'));
@@ -266,7 +273,9 @@ function commandProblems(raw: string): string[] {
   const entry = groups.get(group);
   if (!entry) return [`${raw}: unknown cogmem group '${group}'`];
   const code = binSource(entry);
-  if (!moduleCommands(entry).has(sub)) problems.push(`${raw}: src/bin/${entry}.ts does not dispatch '${sub}'`);
+  // A single-word command (`cogmem init`) has no subcommand to dispatch, so the
+  // check applies only when the command line actually names one.
+  if (sub !== undefined && !moduleCommands(entry).has(sub)) problems.push(`${raw}: src/bin/${entry}.ts does not dispatch '${sub}'`);
   for (const { flag, value } of pairs) {
     const read_ = code.includes(`'${flag}'`) || code.includes(`"${flag}"`);
     if (!read_ && !code.includes(`--${flag}`)) problems.push(`${raw}: src/bin/${entry}.ts never reads or documents --${flag}`);
@@ -306,7 +315,7 @@ describe('runtime-built command lines are executable, not aspirational', () => {
 
   test('the inventory of runtime-built command templates is unchanged', () => {
     expect(sites).toEqual(EXPECTED_TEMPLATES);
-    expect(sites).toHaveLength(21);
+    expect(sites).toHaveLength(22);
   });
 
   test('every rendered command line resolves through the real CLI dispatch tables', () => {
