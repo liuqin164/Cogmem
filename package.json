@@ -27,6 +27,7 @@
     "cogmem": "dist/bin/cogmem.js",
     "cogmem-init": "dist/bin/init.js",
     "cogmem-doctor": "dist/bin/doctor.js",
+    "cogmem-host-bridge": "dist/bin/host-bridge.js",
     "cogmem-connect": "dist/bin/connect.js",
     "cogmem-update": "dist/bin/update.js",
     "cogmem-openclaw": "dist/bin/openclaw.js",

@@ -166,6 +166,7 @@ describe('core release metadata', () => {
       'cogmem-dream',
       'cogmem-episode',
       'cogmem-explain-recall',
+      'cogmem-host-bridge',
       'cogmem-import-hermes',
       'cogmem-import-openclaw',
       'cogmem-init',
