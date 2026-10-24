@@ -274,6 +274,32 @@ export {
 } from './agent/index.js';
 
 /**
+ * The prompt-block renderers a host adapter injects: `<COGMEM_RECALL_CONTEXT>`
+ * and `<COGMEM_MEMORY_ATLAS>`. Host-neutral, so every adapter shares one
+ * implementation instead of carrying a copy that no test executes.
+ *
+ * @stable @since 4.0.0
+ */
+export {
+  clampRecallContext,
+  classifyMemoryNavigationIntent,
+  compactRecallItems,
+  contextCandidateFromRecallItem,
+  contextEventLabel,
+  formatAtlasCard,
+  formatAtlasContext,
+  formatContextEvent,
+  formatRecallContext,
+  formatRecallDecision,
+  formatSourceRange,
+  formatSourceWindow,
+  truncateLineWithMeta,
+  uniqueWindowEvents,
+  type FormattedContextEvent,
+  type TruncationMeta,
+} from './host/RecallBlock.js';
+
+/**
  * Core recall pipeline.
  * @stable @since 1.0.0
  */

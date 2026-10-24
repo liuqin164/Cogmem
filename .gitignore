@@ -15,3 +15,17 @@ dist/.tsbuildinfo
 # Local runtime state
 .cogmem/
 *.log
+dist.next/
+
+# Local agent skills (installed via .dsh/vendor, not tracked)
+.dsh/vendor/
+.agents/
+
+# Local runtime artifacts (untracked by design)
+/docs/overnight.lock
+/docs/overnight-progress.md
+
+# Test temp roots (a suite run with TMPDIR=.tmp-test lands 300 MB here)
+.tmp-test/
+
+.cogmem/tmp/

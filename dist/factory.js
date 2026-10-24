@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import Database from 'bun:sqlite';
 import { BeliefStore } from './belief/BeliefStore.js';
 import { BeliefGovernanceService } from './belief/BeliefGovernanceService.js';
@@ -2302,9 +2304,7 @@ export class MemoryKernel {
             suggestedActions.push(suggestedAction('resolve_entities', 'cogmem', ['memory', 'map', '--json'], `${entityConflicts} active entity alias conflicts need host or agent review.`));
         }
         if (staleVectors > 0) {
-            suggestedActions.push(suggestedAction('re_embed', 'cogmem-re-embed', [
-                'run', ...(projectId !== undefined ? ['--project', projectId] : [])
-            ], `${staleVectors} embeddings are stale for the configured embedding model.`));
+            suggestedActions.push(suggestedAction('re_embed', 'cogmem-re-embed', ['status'], `${staleVectors} embeddings are stale for the configured embedding model; re-embedding runs in the host through ReEmbeddingPipeline.run(), and this command reports backfill progress.`));
         }
         if (unboundRawEvents > 0) {
             suggestedActions.push(suggestedAction('bind_raw_events', 'cogmem', [
@@ -2739,7 +2739,18 @@ export class MemoryKernel {
     `);
     }
 }
+/**
+ * SQLite creates the database file but not its parent directories, so a
+ * `--db` pointing at a fresh path failed with `unable to open database file`
+ * on any machine that had not run `cogmem init` against that path yet.
+ */
+function ensureDatabaseDirectory(dbPath) {
+    if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:'))
+        return;
+    mkdirSync(dirname(resolve(dbPath)), { recursive: true });
+}
 export function createMemoryKernel(options = {}) {
+    ensureDatabaseDirectory(options.dbPath);
     return new MemoryKernel(options);
 }
 export function createMemoryKernelFromConfig(input = {}) {

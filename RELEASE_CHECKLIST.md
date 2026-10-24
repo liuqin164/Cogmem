@@ -1,11 +1,11 @@
-# cogmem 3.7.5 Release Checklist
+# cogmem 4.0.0 Release Checklist
 
 This release is distributed through the npm registry. GitHub remains the source and review mirror.
 
 ## Required Metadata
 
 - `package.json` name is `cogmem`.
-- `package.json` version is `3.7.5`.
+- `package.json` version is `4.0.0`.
 - `package.json` has `publishConfig.access = public`.
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
@@ -93,9 +93,41 @@ bun run verify:packed-migration
 npm publish --dry-run --access public
 ```
 
+Gates added in this release, all inside `bun test`:
+
+- `mcp-instructions-profile` — each profile's `instructions` only name tools that profile exposes, and `core` keeps the recall-before-answering contract.
+- `identity-docs` — the documented identity trust boundary matches the shipped rule.
+- `drilldown-project-isolation` — a project-bound `memory show` cannot read another project's event.
+- `memory-atlas-cold-resurrection` — decay never makes a memory unreachable (ADR 0001).
+- `belief-history-cli` — a superseded belief reports the version that replaced it.
+
 The pack dry-run must include built public API files, CLI files, examples, docs, and `install.sh`. It must not include local databases or machine-specific files.
 
-After verification, create a GitHub Release from the matching version tag, for example `v3.7.5`. The release workflow publishes through npm Trusted Publishing when the release is published. It must not publish on tag push alone.
+`npm publish --dry-run` runs `prepublishOnly` first, so it repeats typecheck, the full test suite, the build, the pack listing, and `verify:packed-migration` (about four minutes). To inspect only the packing path, add `--ignore-scripts`.
+
+`build` compiles into `dist.next` and renames it over `dist` only after `tsc` exits 0. `dist` is tracked in git, so deleting it before compiling turned any interrupted build into 1314 deleted files; a killed `npm publish --dry-run` did exactly that mid-release.
+
+## Upgrade Rehearsal
+
+Run this against a copy of a released 3.7.3 database before tagging. It is the only check that exercises the upgrade path instead of a fresh install, and it catches a release that cannot open the database it just upgraded.
+
+```bash
+gunzip -c __tests__/fixtures/migrations/main-3.7.3-schema31.sqlite.gz > /tmp/schema31.db
+cogmem migrate --db /tmp/schema31.db --yes --backup --json
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"checklist","version":"1"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+  | cogmem mcp --db /tmp/schema31.db --profile core
+```
+
+The first command must exit 0 with `"pending": ["0032"]`, `"applied": ["0032"]`, `"currentVersion": "0032"`, and a `backupPath`. Afterwards the database holds 18 receipts (0015-0032): 0015-0031 keep their rows with a NULL checksum, 0032 carries `a49bc906…c5f1`, and `PRAGMA integrity_check` returns `ok`.
+
+The second command is the one that matters. Starting the kernel again on the upgraded file must answer `initialize` with `serverInfo` 4.0.0 and `tools/list` with 8 tools under `core`. A release that validates every historical receipt fails here with `migration_checksum_unknown:0015`, after `migrate` has already reported success. Running `cogmem migrate` a second time also exercises the digest check, but it reports `"applied": []` and writes another backup even when nothing is pending, so prefer the kernel start for this step.
+
+Measured on 4.0.0: `migrate` exit 0 with `applied ["0032"]` and a 1,458,512 B backup; second start exit 0 with `serverInfo` `cogmem-core` 4.0.0 and `tools/list` 8; 18 receipts, integrity `ok`.
+
+After verification, create a GitHub Release from the matching version tag, for example `v4.0.0`. The release workflow publishes through npm Trusted Publishing when the release is published. It must not publish on tag push alone.
 
 Emergency manual fallback:
 

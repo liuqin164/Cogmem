@@ -3,7 +3,7 @@ import type { MemoryEvent } from '../types/index.js';
 import type { EpisodeClosureMode, EpisodeClosureReasonCode, EpisodeClosureReceipt, EpisodeDreamState, EpisodeDreamStatus, EpisodeEventLink, EpisodeListOptions, EpisodeStatus, EpisodeType, MemoryEpisode, TurnRelation } from './EpisodeTypes.js';
 import { type EpisodeBoundaryGuardResult } from './EpisodeBoundaryPolicy.js';
 import type { TurnRelationDecision } from './TurnRelationClassifier.js';
-interface CreateEpisodeInput {
+export interface CreateEpisodeInput {
     projectId: string;
     sessionId: string;
     sourceAgent?: string;
@@ -266,5 +266,4 @@ export declare class EpisodeStore {
     private initializeSchemaUnsafe;
     private ensureEpisodeCompatibilityColumns;
 }
-export {};
 //# sourceMappingURL=EpisodeStore.d.ts.map

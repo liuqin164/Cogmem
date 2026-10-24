@@ -270,6 +270,7 @@ export declare class KernelAgentMemoryBackend {
     private searchRawEventsByQueryPlan;
     private rawEventsForLocalDateCue;
     private rawLedgerFallbackItemsForQuery;
+    private collectRawLedgerItems;
     private memoryBindingGraphItemsForQuery;
     private graphRecallTextScore;
     private shouldPreferRawLedgerFallback;

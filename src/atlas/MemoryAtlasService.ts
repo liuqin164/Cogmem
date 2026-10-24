@@ -1,4 +1,5 @@
 import type { EventStore } from '../store/EventStore.js';
+import { productFacetFor } from './ProductFacet.js';
 import { MEMORY_ATLAS_PROJECTION_NAME, type MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { FacetQueryPlanner, type FacetQueryPlan } from './FacetQueryPlanner.js';
@@ -350,6 +351,10 @@ function chunked<T>(values: T[], size: number): T[][] {
 }
 function slice(projectId: string, nodes: MemoryAtlasNode[], edges: MemoryAtlasEdge[], query?: string): MemoryAtlasSlice { return { version: MEMORY_ATLAS_PROJECTION_NAME, projectId, query, nodes, edges, nextActions: nodes.slice(0, 5).map((node) => ({ label: `Inspect ${node.label}`, tool: 'cogmem_graph_node', args: { id: node.id, projectId } })), warnings: [] }; }
 function facetsForPlan(plan: FacetQueryPlan): NonNullable<MemoryAtlasSlice['facets']> {
+  const labelled = plan.facets.map((facet) => {
+    const productFacet = productFacetFor(facet.type, facet.value);
+    return productFacet ? { ...facet, productFacet } : { ...facet, internal: true };
+  });
   return {
     planner: {
       intent: plan.intent,

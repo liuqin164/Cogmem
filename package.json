@@ -1,7 +1,7 @@
 {
   "name": "cogmem",
 
-  "version": "3.7.5",
+  "version": "4.0.0",
 
   "packageManager": "bun@1.3.11",
 
@@ -50,8 +50,8 @@
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
-    "prepare": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "build": "node scripts/build.mjs",
+    "prepare": "node scripts/build.mjs",
     "prepublishOnly": "bun run typecheck && bun test __tests__ && bun run build && npm pack --dry-run --json && bun run verify:packed-migration",
     "type": "tsc -p tsconfig.json --noEmit",
     "test": "bun test __tests__",
@@ -90,6 +90,8 @@
     "CONCURRENT_ACCESS.md",
     "CONTRIBUTING.md",
     "RELEASE_CHECKLIST.md",
+    "docs/mcp-hosts.md",
+    "docs/openclaw-runtime.md",
     "SECURITY.md",
     "LICENSE"
   ],

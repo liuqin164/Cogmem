@@ -39,12 +39,17 @@ export interface MemoryAtlasNode {
     /** Bounded first-hop raw evidence locators for agent-facing graph search/explore responses. */
     evidence?: MemoryAtlasEvidence[];
 }
+import type { ProductFacet } from './ProductFacet.js';
 export interface MemoryAtlasMatchedFacet {
     type: 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind' | 'actor' | 'project' | 'event' | 'task' | 'state' | 'object' | 'location';
     value: string;
     label: string;
     nodeId: string;
     relation: string;
+    /** Present only when this entrance is one of the six product facets. */
+    productFacet?: ProductFacet;
+    /** True for an entrance that is not one of the six: storage-only vocabulary. */
+    internal?: boolean;
 }
 export interface MemoryAtlasMatchedPath {
     facet: MemoryAtlasMatchedFacet;

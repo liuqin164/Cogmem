@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
+import { productFacetFor } from '../atlas/ProductFacet.js';
 import type { PlannedFacet, FacetQueryPlan } from '../atlas/FacetQueryPlanner.js';
 import type {
   MemoryAtlasAction,
@@ -863,7 +864,7 @@ export class MemoryAtlasStore {
       issueType: issueHints[0],
       eventKind: optionalMetadataString(metadata.eventKind),
       localDate: optionalMetadataString(metadata.localDate) ?? (row.occurred_at ? localDateFor(row.occurred_at, this.projectTimeZone) : undefined),
-      whyMatched: matchedFacets.length ? `matched ${matchedFacets.map((facet) => `${facet.type}:${facet.value}`).join(', ')}` : 'matched canonical episode',
+      whyMatched: matchedFacets.length ? `matched ${matchedFacets.map((facet) => `${facet.productFacet ?? facet.type}:${facet.value}`).join(', ')}` : 'matched canonical episode',
       relatedButNotSelected: [],
       evidenceEventIds,
       evidenceTotal: evidenceEventIds.length,
@@ -963,12 +964,14 @@ function chunked<T>(values: T[], size: number): T[][] {
 }
 
 function facetFromEdge(edge: FacetEdgeRow, projectId: string): MemoryAtlasMatchedFacet {
+  const productFacet = productFacetFor(edge.target_type, edge.target_id);
   return {
     type: edge.target_type as MemoryAtlasMatchedFacet['type'],
     value: edge.target_id,
     label: facetLabel(edge.target_type, edge.target_id),
     nodeId: nodeId(edge.target_type, edge.target_id, projectId),
     relation: edge.relation_type,
+    ...(productFacet ? { productFacet } : { internal: true }),
   };
 }
 

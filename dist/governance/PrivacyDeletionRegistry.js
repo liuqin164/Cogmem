@@ -1,5 +1,5 @@
 import { dreamLedgerProjectKey } from '../store/DreamLedgerStore.js';
-import { V0_5_BASELINE_TABLES } from '../migrations/0001_init.js';
+import { V0_5_BASELINE_TABLES } from '../migrations/MigrationUtils.js';
 function explicitClassification(tables, groups) {
     const expected = new Set(tables);
     const result = {};
@@ -49,6 +49,7 @@ const MIGRATION_TABLES = [
     'belief_graph_conflicts', 'belief_graph_evidence', 'belief_graph_nodes', 'belief_graph_versions', 'context_activation_receipts', 'context_strategy_outcomes',
     'chat_sessions', 'chat_turns', 'deep_write_candidate_reviews', 'deep_write_candidates', 'deep_write_runs', 'deep_write_summaries', 'dream_ledger_state', 'entity_merge_candidates', 'entity_resolution_log', 'event_sequence_counters',
     'episode_boundary_decisions', 'episode_closure_receipts', 'episode_cross_refs', 'episode_dream_attempts', 'episode_dream_jobs', 'episode_dream_runs', 'episode_event_dispositions', 'episode_ingest_keys', 'episode_repair_audit',
+    'memory_event_fts_state',
     'governance_audit_log', 'import_source_anchors', 'memory_action_frame_evidence', 'memory_action_frames', 'memory_atlas_access', 'memory_atlas_activation', 'memory_atlas_alias_ambiguities',
     'memory_atlas_alias_supports', 'memory_atlas_aliases', 'memory_atlas_documents', 'memory_atlas_projection_state', 'memory_atlas_supports', 'memory_bindings', 'memory_clusters', 'memory_edge_supports', 'memory_edges', 'memory_entities', 'memory_entity_scope_identity',
     'memory_episode_events', 'memory_episodes', 'memory_frame_nodes', 'memory_frame_relations', 'memory_frame_reviews', 'memory_frames', 'memory_governance_audit', 'memory_governance_operations',
@@ -89,6 +90,7 @@ const MIGRATION_PROVENANCE_OWNED = [
 const MIGRATION_OPERATIONAL_NON_PERSONAL = [
     '_episode_integrity_markers', '_memory_frame_integrity_markers', '_meta', 'agent_brain_health_checks', 'pipeline_runs',
     'pipeline_step_timings', 'policy_execution_quarantine', 'policy_execution_legacy_tombstones', 'event_sequence_counters', 'runtime_scope_discard_receipts', 'projection_event_discard_receipts',
+    'memory_event_fts_state',
 ];
 const MIGRATION_IMMUTABLE_AUDIT = ['_schema_migrations', 'migration_repair_receipts', 'governance_audit_log'];
 const MIGRATION_CLASSIFICATION = explicitClassification(MIGRATION_TABLES, {

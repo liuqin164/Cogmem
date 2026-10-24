@@ -7,12 +7,15 @@ Memory Atlas lets an agent inspect what Cogmem remembers before it chooses a pre
 Atlas projects existing project-scoped records into these node kinds:
 
 - Canonical content nodes: `episode`, `raw_event`, `cluster`, `belief`, `action`, `decision`, and `correction`.
-- Facet nodes: `time`, `topic`, `issue`, `entity`, `session`, `thread`, `memoryKind`, and `actionKind`.
+- Entrance nodes: `time`, `topic`, `issue`, `entity`, `session`, `thread`, `memoryKind`, and `actionKind`.
+  A **Facet** is the narrower, product-level word: the six a person can name — time,
+  person, place, event, topic, state. Only time, topic and person are projected today;
+  place and state are not projected yet.
 - Action frames are extracted deterministically from raw user evidence and link actor, target, action kind, time, topic, project, and evidence.
 
-Existing memory edges remain canonical. Atlas adds derived navigation edges such as `OCCURRED_ON`, `OCCURRED_IN`, `ABOUT_TOPIC`, `PART_OF_ISSUE`, `INVOLVES_ENTITY`, `IN_SESSION`, `IN_THREAD`, and `HAS_EVIDENCE` without changing the underlying belief or binding graph. The 3.7.2 offline curator automatically proposes only bounded `SAME_ISSUE`, `FOLLOWS_UP`, and weak `RELATED_TO` episode relations; stronger relations such as `REFINES`, `CORRECTS`, `CONTRADICTS`, and `SUPERSEDES` remain reserved for explicit evidence-bearing governance/binding flows. Entity facet node IDs are project-scoped; same-name tools or people in different projects do not share Atlas nodes.
+Existing memory edges remain canonical. Atlas adds derived navigation edges such as `OCCURRED_ON`, `OCCURRED_IN`, `ABOUT_TOPIC`, `PART_OF_ISSUE`, `INVOLVES_ENTITY`, `IN_SESSION`, `IN_THREAD`, and `HAS_EVIDENCE` without changing the underlying belief or binding graph. The 3.7.2 offline curator automatically proposes only bounded `SAME_ISSUE`, `FOLLOWS_UP`, and weak `RELATED_TO` episode relations; stronger relations such as `REFINES`, `CORRECTS`, `CONTRADICTS`, and `SUPERSEDES` remain reserved for explicit evidence-bearing governance/binding flows. Entity entrance node IDs are project-scoped; same-name tools or people in different projects do not share Atlas nodes.
 
-This is not a copied tree. One episode exists once as `episode:<id>`. A day, topic, issue, entity, session, memory kind, or action kind is only a facet entrance:
+This is not a copied tree. One episode exists once as `episode:<id>`. A day, topic, issue, entity, session, memory kind, or action kind is only an entrance:
 
 ```text
 time:2026-06-06 ───────┐
@@ -21,24 +24,25 @@ issue:memory-context-blackbox ─┘
 episode:<id> ──HAS_EVIDENCE──> raw_event:<eventId>
 ```
 
-Search and explore output dedupe by `canonicalId`. When a canonical episode is reached through several facet paths, the result appears once with all `matchedFacets` and `matchedPaths`.
+Search and explore output dedupe by `canonicalId`. When a canonical episode is reached through several entrance paths, the result appears once with all `matchedFacets` and `matchedPaths`. The field name is API:
+  it reports every entrance that matched, including the internal ones.
 
 ## Agent workflow
 
 1. Use `graph_overview` when the user asks what is remembered.
 2. Use `graph_explore` for broad history, project-state, relationship, or multi-facet questions.
 3. Use `graph_search` when a topic/entity/cluster is already known and no expansion is needed.
-4. Use `graph_node`, `graph_neighbors`, `graph_path`, or `graph_timeline` to narrow the graph. Timeline applies the available facets to any timestamped Atlas nodes; action frames are an optional richer result, not a requirement.
+4. Use `graph_node`, `graph_neighbors`, `graph_path`, or `graph_timeline` to narrow the graph. Timeline applies whichever entrances are available to any timestamped Atlas nodes; action frames are an optional richer result, not a requirement.
 5. Use returned `sourceLocator.command` or event IDs with `cogmem memory show` before quoting exact source text.
 6. Use normal `cogmem_recall` for a direct factual memory question.
 
-Atlas summaries are `hint_only_not_evidence` in effect. Project scope, raw evidence ownership, and governance still decide what may be claimed as durable memory. If two projected episodes share the same primary raw evidence with the same date/entity/action facets, Atlas returns one selected card and moves the duplicate episode identity into `relatedButNotSelected`.
+Atlas summaries are `hint_only_not_evidence` in effect. Project scope, raw evidence ownership, and governance still decide what may be claimed as durable memory. If two projected episodes share the same primary raw evidence with the same date/entity/action entrances, Atlas returns one selected card and moves the duplicate episode identity into `relatedButNotSelected`.
 
-## Faceted cold-memory resurrection
+## Cold-memory resurrection by matching entrances
 
-Activation controls default visibility, not existence. Maintenance decays Atlas activation deterministically; an explicit `cogmem_graph_touch` raises nodes that the agent actually used. Read-only overview/search/explore calls do not change ranking. A query can still surface a cold node when its available facets match.
+Activation controls default visibility, not existence. Maintenance decays Atlas activation deterministically; an explicit `cogmem_graph_touch` raises nodes that the agent actually used. Read-only overview/search/explore calls do not change ranking. A query can still surface a cold node when the entrances it carries match the query.
 
-Facets include project, day/month/year, topic, issue, entity/person/project, session/thread, memory kind, action kind, and ordinary keywords. The engine combines the facets actually present in the message, similar to filtering multiple columns in a table. It does not require the fixed combination entity + time + action. Entity cues are deterministic text cues and support Unicode letter/number names such as ordinary Chinese, Japanese, Korean, Cyrillic, and Latin labels; alias merging and person identity remain governed memory operations rather than automatic Atlas projection behavior.
+Entrances include project, day/month/year, topic, issue, entity/person, session/thread, memory kind, action kind, and ordinary keywords. The engine combines the entrances actually present in the message, similar to filtering multiple columns in a table. It does not require the fixed combination entity + time + action. Entity cues are deterministic text cues and support Unicode letter/number names such as ordinary Chinese, Japanese, Korean, Cyrillic, and Latin labels; alias merging and person identity remain governed memory operations rather than automatic Atlas projection behavior.
 
 For example, all of these can revive cold memory:
 
@@ -63,8 +67,8 @@ Exact constraints may bypass the visibility floor. They never bypass `projectId`
   "displayTitle": "CogMem Memory Context 黑盒与原文下钻",
   "oneLineSummary": "用户指出注入的 CogMem Memory Context 像黑盒，需要能从摘要下钻到原始对话。",
   "matchedFacets": [
-    { "type": "time", "value": "2026-06-06" },
-    { "type": "topic", "value": "PROJECT/Cogmem/memory-blackbox" }
+    { "type": "time", "value": "2026-06-06", "productFacet": "time" },
+    { "type": "topic", "value": "PROJECT/Cogmem/memory-blackbox", "productFacet": "topic" }
   ],
   "matchedPaths": [],
   "relatedButNotSelected": [],
@@ -73,6 +77,14 @@ Exact constraints may bypass the visibility floor. They never bypass `projectId`
   }
 }
 ```
+
+`productFacet` is present only when the entrance stands for one of the six Facets a
+person can name: `entity` → `person`, `location` → `place`, `state` → `state`,
+`memoryKind: event` → `event`, `actor` → `person`, plus `time` and `topic`
+unchanged. Internal entrances (`session`, `thread`, `project`, other memory
+kinds, `actionKind`, `issue`) carry `"internal": true` instead — they are still
+returned, but never presented as one of the six. The field also rides along when a recall item
+copies `matchedFacets`.
 
 Agents should prefer `cards` over raw node labels for historical discussion because cards preserve the canonical episode, match reason, and drilldown command.
 
@@ -90,7 +102,7 @@ Action-history queries use the same card model. Entity cues such as a project, t
 
 Atlas works without vectors and without an LLM. Dream may later improve organization, but it cannot manufacture evidence.
 
-BrainEval release fixtures fail closed on Atlas project isolation, node/hop bounds, evidence locators, path reconstruction, multi-facet cold-memory resurrection, and canonical-source immutability.
+BrainEval release fixtures fail closed on Atlas project isolation, node/hop bounds, evidence locators, path reconstruction, multi-entrance cold-memory resurrection, and canonical-source immutability.
 
 ## CLI
 
@@ -113,7 +125,7 @@ cogmem memory graph-reindex --project <id> --episode <episode-id> --json
 
 Graph reads try to refresh dirty Atlas state, but they default to stale-safe operation for diagnostics. If refresh is blocked by SQLite busy, JSON includes `atlasFresh: false` and `refreshError` while returning the existing projection. Use `--refresh` to force a fresh rebuild or `--no-refresh` to inspect the current projection only.
 
-Use `graph-reindex` after an audited episode repair or binding repair when one event/episode needs fresh card/facet projection. It updates the targeted episode card, raw-event node, source locator, and episode facet edges without rebuilding the whole project graph. Because episode-to-episode relations and action-frame consistency are global, targeted reindex marks the project projection dirty; run `cogmem memory tick --project <id> --json` or the next maintenance tick for the full consistency rebuild.
+Use `graph-reindex` after an audited episode repair or binding repair when one event/episode needs fresh card/entrance projection. It updates the targeted episode card, raw-event node, source locator, and episode entrance edges without rebuilding the whole project graph. Because episode-to-episode relations and action-frame consistency are global, targeted reindex marks the project projection dirty; run `cogmem memory tick --project <id> --json` or the next maintenance tick for the full consistency rebuild.
 
 ## MCP
 
@@ -145,4 +157,4 @@ Upgrade an existing 3.5.2 database with:
 cogmem migrate --yes --backup --json
 ```
 
-Migration 0025 creates and backfills the disposable projection. Migration 0026 adds exact memory-kind metadata, projection health, and candidate-review audit state. Migration 0027 corrects 3.6.0-upgraded databases by marking Atlas projections dirty until the real action/time rebuild runs. Cogmem 3.7.2 keeps the projection-first schema and adds facet nodes, canonical cards, issue hints, and episode relation edges during Atlas rebuild/maintenance. Projection metadata schema `3.7.2` invalidates earlier 3.7.x Atlas v2 projections so project-scoped entity facets are rebuilt. `cogmem memory tick` refreshes only dirty projects, records rebuild errors, prunes old access telemetry, and decays navigation activation without starting a daemon.
+Migration 0025 creates and backfills the disposable projection. Migration 0026 adds exact memory-kind metadata, projection health, and candidate-review audit state. Migration 0027 corrects 3.6.0-upgraded databases by marking Atlas projections dirty until the real action/time rebuild runs. Cogmem 3.7.2 keeps the projection-first schema and adds entrance nodes, canonical cards, issue hints, and episode relation edges during Atlas rebuild/maintenance. Projection metadata schema `3.7.2` invalidates earlier 3.7.x Atlas v2 projections so project-scoped entity entrances are rebuilt. `cogmem memory tick` refreshes only dirty projects, records rebuild errors, prunes old access telemetry, and decays navigation activation without starting a daemon.

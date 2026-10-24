@@ -59,6 +59,13 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
     'cogmem_graph_touch',
     'cogmem_maintenance_tick',
     'cogmem_prospective',
+    'cogmem_shared_subscribe',
+    'cogmem_shared_explain',
+    'cogmem_shared_publish',
+    'cogmem_shared_retract',
+    'cogmem_import_preview',
+    'cogmem_import_apply',
+    'cogmem_import_status',
   ]);
   const recall = tools.find((tool) => tool.name === 'cogmem_recall');
   const explain = tools.find((tool) => tool.name === 'cogmem_explain_recall');
@@ -275,4 +282,23 @@ test('core MCP explain tool returns pulse and temporal recall details', async ()
   expect((explained.structuredContent?.evidence as Array<{ text: string }>).some((item) => (
     item.text.includes('sqlite-vec')
   ))).toBe(true);
+});
+
+test('shared tools attach to the kernel when the runtime has no shared port', async () => {
+  const kernel = makeKernel();
+
+  const published = await callCogmemMcpTool('cogmem_shared_publish', {
+    items: [{ itemHash: 'attach-1', collection: 'standards', payload: { text: 'kernel-backed' } }],
+  }, { kernel, hostId: 'unit-host' });
+
+  expect(published.isError).toBeFalsy();
+  expect(published.structuredContent?.inserted).toBe(1);
+
+  const subscribed = await callCogmemMcpTool('cogmem_shared_subscribe', {
+    collections: ['standards'],
+  }, { kernel, hostId: 'unit-host' });
+
+  expect(subscribed.structuredContent?.count).toBe(1);
+  expect((subscribed.structuredContent?.items as Array<{ payload: { text: string } }>)[0].payload.text)
+    .toBe('kernel-backed');
 });

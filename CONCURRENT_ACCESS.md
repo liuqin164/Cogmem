@@ -25,3 +25,22 @@
 - Use snapshot export/import for backups and promotion between environments.
 - Run `cogmem migrate-vectors --db <memory.db> --dry-run` before migrating persisted embeddings into `vector_index`.
 - Prefer `vectorBackend: 'sqlite-vec'` for durable local deployments. Use `vectorBackend: 'hnswlib'` only when you explicitly need the legacy in-memory index behavior.
+
+## Measured behaviour (2026-10-23)
+
+Probe: `evals/concurrency/writer.ts`, four processes writing 20 turns each with
+`immediate_compile`, all against one file.
+
+- **Fresh database, four writers starting together.** Before the migration runner
+  re-read its plan under the write lock, three of four processes died during schema
+  migration (`table already exists`) and only one wrote turns. After the fix all four
+  start, the schema is applied once, and the file still passes `PRAGMA integrity_check`.
+- **Initialized database, four writers.** 12 of 80 turns failed with
+  `database is locked` (`busy_timeout` is 5000 ms). No duplicates, no corruption.
+  A failed call can leave its raw event committed, so a host that retries blindly
+  creates a second turn for the same content. Treat `database is locked` as a signal
+  to serialize, not to retry.
+
+Four processes hammering one file is adversarial, not typical: two hosts exchanging
+occasional turns stay well inside the budget. The contract above still holds, and one
+HTTP server per database remains the supported multi-host shape.

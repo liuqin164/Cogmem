@@ -11,37 +11,11 @@ It is not a knowledge-base app, a note-taking app, a vector RAG wrapper, an Obsi
 
 ## Status
 
-Current version: `3.7.5`
+Current version: `4.0.0`
 
-Distribution: npm registry. GitHub remains the source mirror and hosts this installer, but package install and upgrade resolve `cogmem` from npm by default.
+Distribution: npm registry. GitHub remains the source mirror and hosts the installer, but package install and upgrade resolve `cogmem` from npm by default.
 
-Default workspace install:
-
-```bash
-npm install cogmem@latest --save
-./node_modules/.bin/cogmem doctor
-```
-
-One-line installer for machines that need Bun bootstrapping:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-```
-
-The one-line installer:
-
-1. Ensures Bun is available.
-2. Installs `cogmem@latest` from the npm registry into `~/.cogmem/pkg`.
-3. Links the `cogmem` CLI into `~/.bun/bin`.
-4. Starts the interactive setup wizard from `/dev/tty`, so `curl | bash` installs still receive real keyboard input.
-
-If no interactive terminal is available, the installer writes a conservative non-interactive config and tells you to rerun `cogmem init`.
-
-To skip the wizard:
-
-```bash
-COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-```
+See [Quick Start](#quick-start) for the two install paths.
 
 ## What cogmem Is For
 
@@ -68,11 +42,10 @@ cogmem intentionally does not provide:
 - Shell, deploy, or tool runtime.
 - App store, skill runtime, approval queue, or channel gateway.
 - Telegram, Discord, browser, or web UI integrations.
-- Multi-agent shared team memory.
 - A human PKM/wiki/Obsidian replacement.
 - A default “embed every sentence forever” vector store.
 
-The current release is designed as the memory backend for one agent brain. Multiple agents can each have their own cogmem database and project scope, but this version does not implement conflict-safe shared memory for an agent team.
+The current release is designed as the memory backend for one agent brain. Multiple agents can each have their own cogmem database and project scope, and **shared memory is available via the MCP `cogmem_shared_*` tools** for explicit cross-agent publishing and subscription.
 
 ## Architecture
 
@@ -89,7 +62,7 @@ Memory Binding
   CPU-canonicalized raw-event bindings to stable entity/topic paths, claim-key clusters, and activation-aware graph edges for source-anchored organization before fact promotion.
 
 Memory Atlas
-  A bounded, project-scoped, multi-dimensional memory navigation graph. Canonical episodes and raw evidence exist once; time, topic, issue, entity, session, memory-kind, and action-kind facets connect to them with typed edges. Agents use it to intersect facets, dedupe by canonicalId, explain why a memory matched, and then drill down to Raw Ledger evidence.
+  A bounded, project-scoped navigation graph. Canonical episodes and raw evidence exist once; typed edges connect them to the six Facets a person can name — time, person, place, event, topic, state — and to internal entrances such as project, session, thread, memory kind, and action kind. Agents intersect facets, dedupe by canonicalId, explain why a memory matched, and drill down to Raw Ledger evidence. Facets are how a memory is located; Dimensions are how it is stored. Place and state are not projected yet.
 
 User-Shaped Topic Ontology
   A stable memory-class skeleton plus project-scoped topic names, aliases, parent paths, relations, and reversible audit operations learned from explicit user language.
@@ -110,7 +83,7 @@ CPU Governance
   Rule-based promotion, suppression, supersession, and confirmation policy.
 
 Active Recall
-  Bounded context pack assembled with binding graph anchors, pulse activation, temporal routing, source anchors, and inhibition.
+  Bounded context pack assembled with binding graph anchors, Pulse 1 then Pulse 2 activation, temporal routing, source anchors, and inhibition.
 
 Strategy Cortex
   CPU-owned current-turn policy that selects retrieval lanes, layer order, source requirements, and memory budget before recall.
@@ -165,54 +138,70 @@ Vector dimensions must match the embedding model:
 
 High-dimensional vectors grow quickly. Prefer `raw_then_dream` or `selective_compile` for long-running agents.
 
+`cogmem init` probes `localhost:11434` for a local Ollama daemon and picks the embedding model (and therefore the vector dimension) it finds there. For scripted or reproducible setups, pass the choices explicitly:
+
+```bash
+cogmem init --yes --dry-run --agent none --no-probe --vector-dimension 384
+```
+
+`--no-probe` skips the Ollama detection, so the generated config depends only on the flags you pass and not on what the machine happens to have pulled. Without either flag, an `--agent none` dry run on a machine with `qwen3-embedding-4b` installed writes `vector_dimension = 2560`, not the `384` default.
+
 ## Quick Start
 
-Install into an agent workspace with npm:
+There are two install paths. They install the same thing and end on the same check; they differ only in who answers the setup questions.
 
-```bash
-npm install cogmem@latest --save
-./node_modules/.bin/cogmem doctor
-```
-
-Or install into an existing Bun workspace:
-
-```bash
-bun add cogmem@latest
-bunx cogmem init
-```
-
-Or install with npm in a Node workspace that already uses Bun to run the Cogmem CLI:
-
-```bash
-npm install cogmem@latest
-./node_modules/.bin/cogmem init
-```
-
-Or install globally with npm when Bun is already on PATH:
-
-```bash
-npm install -g cogmem@latest
-cogmem init
-```
-
-Or use the one-line installer for machines that do not already have Bun:
+**Operator path** — you are at the keyboard:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
+cogmem init
+cogmem doctor
 ```
 
-For agent-run installs, skip the interactive wizard and connect the host explicitly:
+**Agent path** — an agent is installing for you:
 
 ```bash
 COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-cogmem doctor
+cogmem init --yes --json
+cogmem doctor --json
 ```
 
-Validate configuration:
+The installer installs the package and links the CLI, then stops. It never runs the wizard and never writes config, so `curl | bash` cannot ask questions on one machine and invent answers on another. `COGMEM_SKIP_INIT` is still accepted and now does nothing.
 
-```bash
-cogmem doctor
-```
+`cogmem init` writes the config. `cogmem doctor` is the install gate: it answers **not installed**, **OK**, **WARN**, or **FAIL**, and always names the next step. `not installed` exits 0 — a fresh install with no config yet is not a failure. `rule_only` and a CLI directory outside `PATH` are WARNs: they work, but degraded.
+
+### What each path decides
+
+Settings are tiered by who may decide them.
+
+| Setting | Tier | What an unattended run does |
+| --- | --- | --- |
+| Database path, vector backend | Agent-decidable | Uses the default |
+| PII redaction (email, phone, SSN) | Agent-decidable | All on |
+| Model names, vector dimension | Settle-later | Uses the default; change it later |
+| Embedding / memory / reasoning provider | Human-required | `deterministic_local` / `rule_only`, reported as a WARN |
+| Any API key | Human-required | Writes none, even when a key is in the environment |
+| AES encryption passphrase | Human-required | Leaves encryption off |
+| OpenClaw / Hermes integration | Human-required | Enables neither; suggests the flag |
+
+An unattended run therefore never spends money, never writes a secret, and never invents a passphrase whose loss would destroy the database. It ends in `rule_only` and says so.
+
+Host detection (`~/.hermes`, an OpenClaw workspace) is advice: `cogmem init` prints `--agent <host>` as a suggestion and changes nothing on disk. Pass the flag to accept it.
+
+The Agent path defaults to project scope, so the config lands in the workspace it was pointed at. The Operator path defaults to global scope. `--scope` overrides either, and one install serves many workspaces: the package lives in one place while each workspace resolves its own `.cogmem/config.toml`, falling back to `~/.cogmem/config.toml`.
+
+### Installing into an existing project
+
+If you already have a JavaScript project, install `cogmem` as a dependency instead and skip the installer. These are the same package; only the resolution differs.
+
+| Situation | Command |
+| --- | --- |
+| npm project | `npm install cogmem@latest --save` then `./node_modules/.bin/cogmem init` |
+| Bun workspace | `bun add cogmem@latest` then `bunx cogmem init` |
+| Node project already running the CLI with Bun | `npm install cogmem@latest` then `./node_modules/.bin/cogmem init` |
+| Global npm, Bun already on `PATH` | `npm install -g cogmem@latest` then `cogmem init` |
+
+Finish with `cogmem doctor` in every case. `cogmem update --yes` recognises all of these install shapes plus the one-line installer home.
 
 Upgrade from npm and migrate an existing database:
 
@@ -307,7 +296,7 @@ cogmem memory review --project my-agent --id <candidate-id> --action approve --a
 
 `cogmem memory map` remains the system anatomy map. Memory Atlas is the content map. It does not replace recall or create a second fact store; it projects existing topics, entities, clusters, episodes, beliefs, action frames, time buckets, bindings, and evidence into a bounded navigation surface.
 
-In 3.7.2, Atlas is a multi-dimensional navigation graph rather than a folder tree. A remembered episode has one canonical node such as `episode:<id>`. Time, topic, issue, entity, session/thread, memory-kind, and action-kind nodes are facet entrances connected to that canonical episode with typed edges. Results dedupe by `canonicalId` and explain `matchedFacets` plus `matchedPaths`.
+In 3.7.2, Atlas is a multi-dimensional navigation graph rather than a folder tree. A remembered episode has one canonical node such as `episode:<id>`. Typed edges connect it to internal entrances for time, topic, issue, entity, session/thread, memory-kind, and action-kind. Only the six Facets are product vocabulary; place and state are not projected yet. Results dedupe by `canonicalId` and explain `matchedFacets` plus `matchedPaths`.
 
 ```bash
 cogmem memory graph --project my-agent --json
@@ -326,7 +315,7 @@ cogmem memory rebuild-topology --project openclaw --json
 
 Graph and recall reads never rebuild projections inline. If an upgrade marks a project's civil-time topology dirty, reads continue on last-known-good non-temporal lanes; run `rebuild-topology` explicitly (or follow the maintenance-tick suggestion). The command pages lightweight neuron metadata into generation-scoped staging tables, persists its cursor, resumes after interruption, and atomically swaps the completed project topology and cognitive time graph into service.
 
-Atlas filtering is not limited to entity + time + action. The facet planner combines whichever facets are actually present, such as project, day/month/year, topic, issue, entity/person/project, session/thread, memory kind, action kind, and ordinary keywords. Entity cue extraction supports Unicode letter/number names in ordinary historical and action-history questions, but it is still deterministic cue extraction, not full named-entity recognition or an automatic alias merge graph. Strict multi-facet matches may surface cold nodes even when their activation has decayed. If strict intersection is empty, JSON includes `relaxationTrace` for explicit fallbacks such as day → month → year or issue → parent topic instead of silently pretending an exact match existed. Project scope and raw evidence validation are never bypassed.
+Atlas filtering is not limited to entity + time + action. The planner combines whichever entrances are actually present — project, day/month/year, topic, issue, entity/person, session/thread, memory kind, action kind, and ordinary keywords. Entity cue extraction supports Unicode letter/number names in ordinary historical and action-history questions, but it is still deterministic cue extraction, not full named-entity recognition or an automatic alias merge graph. Strict multi-facet matches may surface cold nodes even when their activation has decayed. If strict intersection is empty, JSON includes `relaxationTrace` for explicit fallbacks such as day → month → year or issue → parent topic instead of silently pretending an exact match existed. Project scope and raw evidence validation are never bypassed.
 
 Defaults are 8 nodes, one hop, and two evidence IDs per node. Hard limits are 30 nodes, two hops, ten evidence IDs, six path hops, and 2,000 visited nodes. Raw excerpts are omitted unless `--include-evidence` or `includeEvidence: true` is explicit. `evidenceTotal` reports all known evidence while `evidenceReturned` reports the bounded payload. Every returned evidence item carries an `eventId` and a `cogmem memory show` drilldown command.
 
@@ -479,7 +468,7 @@ Normalization writes Markdown with `cogmem-source-ref` markers for raw offset, l
 
 ## OpenClaw
 
-OpenClaw is the most complete host integration in this release.
+OpenClaw is the most complete host integration in this release. It is also the only place where memory can emerge on its own: the plugin hooks `before_prompt_build`, so recall is already in the prompt before the model speaks. Attaching over plain MCP (`openclaw mcp add`) gives the pull path only — the model has to call `cogmem_recall`.
 
 From the OpenClaw workspace:
 
@@ -514,6 +503,8 @@ The wrapper registers:
 - `before_prompt_build`: governed recall and prompt context injection.
 - `agent_end`: queued turn recording so slow embedding/database writes do not block responses.
 
+How the plugin keeps those hooks fast — one resident kernel behind a Unix socket, its protocol and configuration, and the measured per-turn cost — is in [docs/openclaw-runtime.md](./docs/openclaw-runtime.md).
+
 The automatic wrapper keeps OpenClaw's native prompt untouched. Cogmem only prepends its own bounded memory layer:
 
 - `<COGMEM_SESSION_STATE>` is compact current-session working state stored under `.cogmem/session_state/openclaw/`.
@@ -533,7 +524,7 @@ openclaw gateway restart
 
 ## Hermes
 
-Hermes integration is MCP-based in this release. cogmem does not claim to be a native Hermes memory provider.
+Hermes integration is MCP-based in this release. cogmem does not claim to be a native Hermes memory provider. There is no pre-prompt hook here, so this is the pull path: the agent calls `cogmem_recall` when the installed skill tells it to.
 
 Install the skill and patch Hermes MCP config:
 
@@ -743,6 +734,8 @@ npm:cogmem@latest
 
 The updater resolves `latest` to npm by default, installs into the current package or the one-line installer home, then runs post-install work through the newly installed local `node_modules/.bin/cogmem`. That post-install path runs a backed-up schema migration with the resolved config, refreshes the OpenClaw plugin when OpenClaw is configured, and reports which agent hosts must be restarted. Use `--from <version|tag|tarball>` only when you intentionally want another package spec.
 
+The update ends on the same install gate as a fresh install, and inherits its exit code: OK and WARN exit 0, FAIL exits non-zero, and a missing config is reported as *not installed* rather than as a failed update. `--json` returns `installGate` and `nextSteps` beside the existing install-kind fields, so an agent reads one shape before and after an update.
+
 For OpenClaw after an update, restart the gateway or host after `cogmem update --yes` finishes. To repair only the plugin without opening SQLite:
 
 ```bash
@@ -768,6 +761,7 @@ This also updates existing Hermes MCP blocks with missing strategy, episode, Dre
 - [Security](./SECURITY.md)
 - [Contributing](./CONTRIBUTING.md)
 - [Release checklist](./RELEASE_CHECKLIST.md)
+- [OpenClaw runtime and resident kernel](./docs/openclaw-runtime.md)
 - [Changelog](./CHANGELOG.md)
 
 Installed OpenClaw and Hermes skills include their own `references/operations.md` command handbook.
@@ -780,7 +774,7 @@ cogmem doctor
 cogmem connect openclaw|hermes
 cogmem mcp
 cogmem update
-cogmem memory recall|search|show|dream|govern|candidates|review|status|map|tick|bind
+cogmem memory recall|search|show|belief-history|dream|govern|candidates|review|status|map|tick|bind
 cogmem memory graph|graph-search|graph-explore|graph-node|graph-neighbors|graph-path|graph-timeline
 cogmem import-openclaw
 cogmem import-hermes
@@ -798,6 +792,24 @@ cogmem dream
 cogmem mcp
 ```
 
+## MCP transport and profiles
+
+`cogmem mcp` speaks stdio by default. A host attached this way has no pre-prompt hook:
+memory is recalled explicitly, guided by the server's `instructions` string, not injected.
+To run one resident server shared by several hosts:
+
+```bash
+cogmem mcp --transport http --port 7337 --host claude --profile core \
+  --project my-project --db ~/.cogmem/memory.db
+```
+
+- `--profile core|admin|full` bounds the tool surface to 8, 26, or 40 tools. The default is `core`.
+- `--project <id>` binds the connection to one project; a call naming a different project is rejected.
+- `--token <value>` requires `Authorization: Bearer <value>` on every request.
+
+Per-host configuration for Claude Code, Cursor, Codex, and Hermes is in
+[docs/mcp-hosts.md](./docs/mcp-hosts.md).
+
 ## Release Checks
 
 ```bash
@@ -808,7 +820,7 @@ npm pack --dry-run --json
 npm publish --dry-run --access public
 ```
 
-Create a GitHub Release from the matching version tag, for example `v3.7.5`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
+Create a GitHub Release from the matching version tag, for example `v4.0.0`. The `.github/workflows/publish.yml` workflow publishes to npm only when the release is published, not when a tag is pushed. The npm Trusted Publisher entry must match repository `liuqin164/cogmem`, workflow file `publish.yml`, and environment `npm publish`.
 
 Publish manually only for emergency fallback:
 

@@ -10,6 +10,8 @@ export class PlanRuntimeStore {
         this.flushEventOutbox();
     }
     initializeSchema() {
+        this.db.exec('PRAGMA journal_mode=WAL');
+        this.db.exec('PRAGMA synchronous=NORMAL');
         for (const table of [
             'runtime_states',
             'runtime_transitions',

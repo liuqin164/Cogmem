@@ -54,11 +54,13 @@ export interface AppendEventInput<TPayload = Record<string, unknown>> {
 export declare class EventStore {
     private readonly encryptionProvider?;
     private readonly projectTimeZone?;
+    private ftsRebuilds;
     private readonly validatedLocalDates;
     private db;
     private ownsDb;
     constructor(dbPath?: string | Database, encryptionProvider?: EncryptionProvider | undefined, projectTimeZone?: string | undefined);
     getProjectTimeZone(): string | undefined;
+    getDatabase(): Database;
     private initializeSchema;
     private ensureCompatibilityColumns;
     append<TPayload = Record<string, unknown>>(input: AppendEventInput<TPayload>, retry?: number): MemoryEvent<TPayload>;
@@ -142,6 +144,14 @@ export declare class EventStore {
     private mapRow;
     private upsertRawEventFts;
     private rebuildRawEventFtsIfNeeded;
+    getRawEventFtsState(): {
+        watermark: number | null;
+        maxRowid: number;
+        ftsRows: number;
+        rebuilds: number;
+    };
+    private readFtsState;
+    private writeFtsState;
     private extractIndexText;
     private toRawEventFtsQuery;
     private fallbackRawTextSearch;

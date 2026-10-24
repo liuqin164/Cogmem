@@ -30,6 +30,7 @@ function readArgs(argv) {
         eventId: stringArg(values, 'event') || stringArg(values, 'event-id'),
         episodeId: stringArg(values, 'episode') || stringArg(values, 'episode-id'),
         nodeId: stringArg(values, 'id') || stringArg(values, 'node-id'),
+        key: stringArg(values, 'key'),
         fromId: stringArg(values, 'from'),
         toId: stringArg(values, 'to'),
         hops: numberArg(values, 'hops'),
@@ -80,7 +81,7 @@ function readArgs(argv) {
 }
 function usage() {
     return [
-        'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|frame-review|graph...> [args]',
+        'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|frame-review|belief-history|graph...> [args]',
         '',
         'Commands:',
         '  status               summarize raw ledger, vector, and dream backlog state',
@@ -99,6 +100,7 @@ function usage() {
         '  frame --episode <id> show one structured MemoryFrame',
         '  frame-backfill       create deterministic evidence-backed frames for existing episodes',
         '  frame-review         approve or reject a staged/needs-confirmation MemoryFrame',
+        '  belief-history --key <canonicalKey>  show every version of one belief, superseded ones included',
         '  graph                show a bounded overview of remembered topics, entities, clusters, actions, and time',
         '  graph-search         locate Atlas nodes by --query without expanding the graph',
         '  graph-explore        return a bounded local graph for a broad --query',
@@ -128,8 +130,9 @@ function usage() {
         '  --reason <text>      required audited review reason',
         '  --confirmation-event <id>  distinct same-project raw user evidence for approve/relink',
         '  --target-belief <id>       active same-project belief for correction relink',
-        '  --replacement <id>         replacement candidate for supersede',
+        '  --replacement <id>         required for supersede: distinct same-project candidate that replaces this one',
         '  --review-after <ms>         future epoch milliseconds for defer',
+        '                       review inputs are per action: an input the chosen action does not consume is rejected, not recorded',
         '  --promote            after dream, run CPU governance over pending candidates',
         '  --promote-limit <n>  governance candidate limit, default follows --limit or 100',
         '  --watch              keep issuing conditional Dream ticks as a host-owned worker',
@@ -181,7 +184,8 @@ function isMemoryCommand(value) {
         || value === 'rebuild-topology'
         || value === 'frame'
         || value === 'frame-backfill'
-        || value === 'frame-review';
+        || value === 'frame-review'
+        || value === 'belief-history';
 }
 function modeArg(values, key) {
     const raw = stringArg(values, key);
@@ -503,10 +507,30 @@ function candidateNextActions(queueSummary, projectId) {
             safeForAutomation: false,
             reason: `${queueSummary.activeNeedsConfirmation} candidates need explicit operator/user confirmation`,
             command: `cogmem memory candidates${projectArg} --status needs_confirmation --json`,
-            reviewCommand: `cogmem memory review${projectArg} --id <candidate-id> --action <approve|reject|defer|supersede|relink> --actor <operator> --reason <reason> --json`,
+            reviewCommands: reviewCommandsFor(projectArg),
         });
     }
     return actions;
+}
+/**
+ * One runnable shape per review action. A single shape cannot serve all five:
+ * approve and relink require --confirmation-event, relink also requires an active
+ * --target-belief, defer requires a future --review-after, and supersede requires the
+ * candidate that replaces this one. Every flag printed here is required by the service;
+ * a shape that omits one is not a shorter command, it is a rejection.
+ * reject needs nothing beyond the audited reason.
+ *
+ * The replacement gets its own placeholder: reusing <candidate-id> for both --id and
+ * --replacement made the printed line a self-supersede, which the service now rejects.
+ */
+function reviewCommandsFor(projectArg) {
+    return [
+        { action: 'approve', command: `cogmem memory review${projectArg} --id <candidate-id> --action approve --actor <operator> --reason <reason> --confirmation-event <user-event-id> --json` },
+        { action: 'reject', command: `cogmem memory review${projectArg} --id <candidate-id> --action reject --actor <operator> --reason <reason> --json` },
+        { action: 'defer', command: `cogmem memory review${projectArg} --id <candidate-id> --action defer --actor <operator> --reason <reason> --review-after <epoch-ms> --json` },
+        { action: 'supersede', command: `cogmem memory review${projectArg} --id <candidate-id> --action supersede --actor <operator> --reason <reason> --replacement <replacement-candidate-id> --json` },
+        { action: 'relink', command: `cogmem memory review${projectArg} --id <candidate-id> --action relink --actor <operator> --reason <reason> --confirmation-event <user-event-id> --target-belief <belief-id> --json` },
+    ];
 }
 function asCount(value) {
     return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
@@ -653,6 +677,32 @@ function runFrame(kernel, args) {
         throw new Error('memory_frame_not_found');
     return frame;
 }
+function runBeliefHistory(kernel, args) {
+    const key = args.key?.trim();
+    if (!key)
+        throw new Error(`belief-history requires --key <canonicalKey>.\n${usage()}`);
+    // Read the live belief table: that is what recall and belief touches use.
+    const history = kernel.beliefStore.getBeliefHistoryForCanonicalKeys([key], {
+        projectId: args.projectId,
+        includeStatuses: ['active', 'superseded', 'suspect', 'expired', 'revoked'],
+        limitPerCanonical: 50,
+    });
+    const rows = [...(history.get(key) ?? [])].sort((a, b) => a.validFrom - b.validFrom || a.createdAt - b.createdAt);
+    return {
+        projectId: args.projectId,
+        key,
+        versions: rows.map((row) => ({
+            beliefId: row.id,
+            canonicalKey: row.canonicalKey,
+            value: row.objectValue.raw,
+            status: row.status,
+            validFrom: row.validFrom,
+            validTo: row.validTo,
+            supersedesBeliefId: row.supersedesBeliefId,
+            supersededByBeliefId: row.supersededByBeliefId,
+        })),
+    };
+}
 function runGraphCommand(kernel, args) {
     const projectId = args.projectId;
     if (!projectId)
@@ -718,6 +768,11 @@ function runShow(kernel, args) {
     });
     if (!context)
         throw new Error(`No raw ledger event found for ${args.eventId}`);
+    // A project-bound drill-down must not reach into another project, and the
+    // failure must not confirm that the event exists somewhere else.
+    if (args.projectId && context.event.projectId !== args.projectId) {
+        throw new Error(`No raw ledger event found for ${args.eventId}`);
+    }
     const normalized = normalizeSourceContextWindow(context.event, context.before, context.after, {
         before: beforeCount,
         after: afterCount,
@@ -746,7 +801,7 @@ function runGovern(kernel, args) {
                 decisions: [],
                 queue: kernel.getDreamCandidateQueue(args.projectId),
                 warning: 'memory govern does not process needs_confirmation candidates. Use memory review for approve, reject, defer, supersede, or relink.',
-                reviewCommand: 'cogmem memory review --project <projectId> --id <candidateId> --action <approve|reject|defer|supersede|relink> --actor <operator> --reason <reason>',
+                reviewCommands: reviewCommandsFor(args.projectId ? ` --project ${cliArg(args.projectId)}` : ' --project <projectId>'),
             };
         }
         throw new Error(`memory govern processes only candidate status; ${args.status} requires "cogmem memory review --id <candidateId> --action <action>"`);
@@ -893,8 +948,11 @@ function printHuman(command, payload) {
         const decisions = Array.isArray(payload.decisions) ? payload.decisions : [];
         if (payload.warning)
             console.log(`warning: ${payload.warning}`);
-        if (payload.reviewCommand)
-            console.log(`reviewCommand: ${payload.reviewCommand}`);
+        const reviewCommands = payload.reviewCommands;
+        if (reviewCommands) {
+            for (const { action, command } of reviewCommands)
+                console.log(`review ${action}: ${command}`);
+        }
         console.log(`decisions: ${decisions.length}`);
         console.log(`queue: ${JSON.stringify(payload.queue)}`);
         const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
@@ -959,6 +1017,15 @@ function printHuman(command, payload) {
         console.log(`neurons: ${payload.neurons}`);
         console.log(`buckets: ${payload.buckets}`);
         console.log(`rebuiltAt: ${payload.rebuiltAt}`);
+        return;
+    }
+    if (command === 'belief-history') {
+        const versions = Array.isArray(payload.versions) ? payload.versions : [];
+        console.log(`key: ${payload.key} project=${payload.projectId || '__global__'} versions=${versions.length}`);
+        for (const row of versions) {
+            const replaced = row.supersededByBeliefId ? ` supersededBy=${row.supersededByBeliefId}` : '';
+            console.log(`- ${row.status} ${row.value} validFrom=${row.validFrom}${replaced}`);
+        }
         return;
     }
     if (command === 'graph' || command.startsWith('graph-')) {
@@ -1060,7 +1127,9 @@ async function main() {
                                                             ? runTopologyRebuild(kernel, kernelArgs)
                                                             : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill' || kernelArgs.command === 'frame-review'
                                                                 ? runFrame(kernel, kernelArgs)
-                                                                : runGraphCommand(kernel, kernelArgs);
+                                                                : kernelArgs.command === 'belief-history'
+                                                                    ? runBeliefHistory(kernel, kernelArgs)
+                                                                    : runGraphCommand(kernel, kernelArgs);
         if (kernelArgs.json) {
             const queue = kernelArgs.command === 'status'
                 ? payload.dreamCandidateQueue

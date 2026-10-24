@@ -25,7 +25,7 @@ try {
   mkdirSync(install);
   await run(['npm', 'install', '--prefix', install, tarball], root, npmEnv);
   const installedPackage = JSON.parse(readFileSync(join(install, 'node_modules', 'cogmem', 'package.json'), 'utf8')) as { version?: string };
-  if (installedPackage.version !== '3.7.5') throw new Error('packed_package_version_mismatch');
+  if (installedPackage.version !== '4.0.0') throw new Error('packed_package_version_mismatch');
   const typeSmoke = join(install, 'package-type-smoke.mts');
   writeFileSync(typeSmoke, `
     import type { MemoryEdgeRecord, MemoryGraphEdgeStatus } from 'cogmem';
@@ -69,7 +69,7 @@ try {
 
   verify(cliDb);
   verify(kernelDb);
-  console.log('packed 3.7.5 types, schema31 -> 0032, schema32 runtime, OpenClaw 0.7.2, and MCP verified');
+  console.log('packed 4.0.0 types, schema31 -> 0032, schema32 runtime, OpenClaw 0.7.2, and MCP verified');
 } finally {
   if (tarball) rmSync(tarball, { force: true });
   rmSync(directory, { recursive: true, force: true });

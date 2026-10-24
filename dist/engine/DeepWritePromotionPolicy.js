@@ -253,7 +253,12 @@ export class DeepWritePromotionPolicy {
             outcome: 'promote_provisional',
             reason: 'semantic_organization_candidate_accepted',
             targetType: candidate.promotionTargetType || candidate.candidateType,
-            targetId: candidate.promotionTargetId || stringField(content, ['sourceEventId', 'targetEventId', 'topicPath']) || candidate.candidateId
+            // The id answers "what is this candidate about?"; it is written only when the candidate names
+            // a real target (an event id, a topic path, or a target an earlier pass recorded). Falling
+            // back to the candidate's own id would make a promoted row claim a target that is itself.
+            // Such an id is a locator, not the id of a stored row; see `GLOSSARY.md` for the three
+            // classes a promotion target can belong to.
+            targetId: candidate.promotionTargetId || stringField(content, ['sourceEventId', 'targetEventId', 'topicPath'])
         });
     }
     promoteFact(candidate, content) {

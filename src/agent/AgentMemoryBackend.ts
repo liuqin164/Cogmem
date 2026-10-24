@@ -1141,6 +1141,20 @@ export class KernelAgentMemoryBackend {
     query: AgentRecallQuery,
     limit: number
   ): AgentRecallItem[] {
+    const scoped = this.collectRawLedgerItems(queryPlan, query, limit);
+    if (scoped.length > 0 || !query.threadId) return scoped;
+    // A thread is one conversation, and recall exists to reach across them. A
+    // thread with no evidence of its own falls back to the whole project
+    // instead of answering nothing.
+    return this.collectRawLedgerItems(queryPlan, { ...query, threadId: undefined }, limit)
+      .map((item) => ({ ...item, tags: [...(item.tags ?? []), 'cross_thread'] }));
+  }
+
+  private collectRawLedgerItems(
+    queryPlan: AgentRecallQueryPlan,
+    query: AgentRecallQuery,
+    limit: number
+  ): AgentRecallItem[] {
     const searchedEvents = this.searchRawEventsByQueryPlan(queryPlan, query, Math.max(limit * 2, 10));
     const rawEvents = queryPlan.intent === 'forensic_quote'
       ? this.dedupeRawEventsByTurnPreferUser(searchedEvents)

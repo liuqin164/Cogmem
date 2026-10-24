@@ -1,3 +1,21 @@
+/**
+ * The inputs each action actually consumes. The audit row is append-only evidence, so writing a
+ * field the action never read turns the row into a claim that never happened: `approve` would
+ * record a bound belief, `reject` a deferral date, `supersede` a user confirmation. Anything
+ * outside this table is rejected instead of recorded.
+ *
+ * Consumed and required are the same thing here: an action that consumes `replacementCandidateId`
+ * has no meaning without one, and an optional consumed input would only reintroduce a shape the
+ * action cannot express.
+ */
+const CONSUMED_INPUTS = {
+    approve: ['confirmationEventId'],
+    reject: [],
+    defer: ['reviewAfter'],
+    supersede: ['replacementCandidateId'],
+    relink: ['confirmationEventId', 'targetBeliefId'],
+};
+const OPTIONAL_INPUT_FIELDS = ['confirmationEventId', 'targetBeliefId', 'replacementCandidateId', 'reviewAfter'];
 export class CandidateReviewService {
     db;
     candidates;
@@ -15,6 +33,7 @@ export class CandidateReviewService {
         return this.db.transaction(() => {
             const actor = required(input.actor, 'actor');
             const reason = required(input.reason, 'reason');
+            assertConsumedInputs(input);
             const candidate = this.candidates.getCandidate(required(input.candidateId, 'candidateId'));
             if (!candidate)
                 throw new Error('candidate_not_found');
@@ -38,11 +57,17 @@ export class CandidateReviewService {
                 });
             }
             else if (input.action === 'supersede') {
-                if (input.replacementCandidateId)
-                    this.requireReplacement(input.replacementCandidateId, input.projectId);
+                // Supersede means "another candidate replaced this one", so the replacement is the whole
+                // content of the action. Without it the row used to fall back to type `manual_review` with
+                // its own id as the target, which answers "what replaced this?" with the row it just closed.
+                // Retiring a candidate without a successor is what `reject` is for.
+                const replacementCandidateId = input.replacementCandidateId?.trim();
+                if (!replacementCandidateId)
+                    throw new Error('replacement_candidate_required');
+                this.requireReplacement(replacementCandidateId, input.projectId, candidate.candidateId);
                 this.candidates.updateCandidateStatus(candidate.candidateId, 'superseded', {
-                    type: input.replacementCandidateId ? 'replacement_candidate' : 'manual_review',
-                    id: input.replacementCandidateId || candidate.candidateId,
+                    type: 'replacement_candidate',
+                    id: replacementCandidateId,
                     reason: `manual_review_superseded:${reason}`,
                 });
             }
@@ -58,7 +83,26 @@ export class CandidateReviewService {
                     if (!belief || belief.project_id !== input.projectId || belief.status !== 'active') {
                         throw new Error('target_belief_not_active_in_project');
                     }
-                    content = { ...content, targetBeliefId: belief.id, correctedClaimKey: belief.canonical_key };
+                    // Relink is an operator assertion about which belief this correction corrects, so every
+                    // target-bearing field has to move together. The curator writes correctedClaimKey and
+                    // correctedBeliefCandidateIds as a pair; rewriting one of them leaves the record naming two
+                    // different beliefs, and the resolver verdict would then describe a match that never happened.
+                    const previousTargets = [
+                        typeof content.targetBeliefId === 'string' ? content.targetBeliefId : null,
+                        ...(Array.isArray(content.correctedBeliefCandidateIds)
+                            ? content.correctedBeliefCandidateIds.filter((value) => typeof value === 'string' && value.length > 0)
+                            : []),
+                    ];
+                    const relinkedFrom = previousTargets.find((id) => id !== null && id !== belief.id);
+                    content = {
+                        ...content,
+                        targetBeliefId: belief.id,
+                        correctedClaimKey: belief.canonical_key,
+                        correctedBeliefCandidateIds: [belief.id],
+                        correctionResolution: 'manual_relink',
+                        correctionResolutionReason: 'operator_target_belief',
+                        ...(relinkedFrom ? { relinkedFromBeliefId: relinkedFrom } : {}),
+                    };
                     targetType = 'belief';
                     targetId = belief.id;
                 }
@@ -103,11 +147,24 @@ export class CandidateReviewService {
             throw new Error('confirmation_event_must_be_user');
         return event;
     }
-    requireReplacement(candidateId, projectId) {
+    requireReplacement(candidateId, projectId, reviewedCandidateId) {
+        // A candidate cannot replace itself: the record would point back at the row it just closed,
+        // so anything following "what replaced this?" would land on a superseded candidate.
+        if (candidateId === reviewedCandidateId)
+            throw new Error('replacement_candidate_must_differ');
         const replacement = this.candidates.getCandidate(candidateId);
         const run = replacement ? this.candidates.getRun(replacement.runId) : null;
         if (!replacement || run?.projectId !== projectId)
             throw new Error('replacement_candidate_project_mismatch');
+    }
+}
+function assertConsumedInputs(input) {
+    const consumed = new Set(CONSUMED_INPUTS[input.action]);
+    for (const field of OPTIONAL_INPUT_FIELDS) {
+        const value = input[field];
+        if (consumed.has(field) || value === undefined || value === null)
+            continue;
+        throw new Error(`review_input_not_applicable:${field}`);
     }
 }
 function appendConfirmationEvidence(value, eventId) {

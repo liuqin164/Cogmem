@@ -744,9 +744,10 @@ export class DreamCuratorWorker {
                 : {};
             if (content.source !== 'dream_curator_provider_warning')
                 continue;
+            // Same rule as review-queue expiry: the warning was retired because the provider recovered,
+            // not because something replaced it, so no promotion target is named.
             this.deps.candidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
                 type: 'diagnostic_conclusion',
-                id: candidate.candidateId,
                 reason: 'provider_recovered',
             });
         }

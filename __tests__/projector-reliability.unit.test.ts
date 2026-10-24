@@ -488,3 +488,21 @@ test('vector rebuild swaps atomically and preserves the live index when staging 
   expect(sqlite.search([1, 0], 1)[0]?.id).toBe('old');
   db.close();
 });
+
+test('policy and runtime stores open in WAL so outbox drains do not fsync per statement', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-store-wal-'));
+  const path = join(dir, 'memory.db');
+
+  const policy = new PolicyExecutionStore(path);
+  policy.close();
+  const runtime = new PlanRuntimeStore(path);
+  runtime.close();
+
+  const verify = new Database(path);
+  // journal_mode persists in the file header; synchronous does not (it is
+  // per-connection), so the drain budget above is what covers synchronous=NORMAL.
+  expect(verify.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'wal' });
+  verify.close();
+
+  rmSync(dir, { recursive: true, force: true });
+});

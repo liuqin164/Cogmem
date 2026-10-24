@@ -16,6 +16,24 @@
 - Raw user utterances can be recalled as provenance evidence when explicitly tagged as raw user evidence; this does not promote them into verified facts.
 - Recall explanations expose same-project `filteredEvidence` with `reason` and optional `governanceReason`. Scoped explanations must not expose filtered evidence from other projects.
 
+## Session identity
+
+The HTTP transport accepts an `x-cogmem-identity` header that binds a session to
+a host and a project, and sets a default tool profile. It is not an
+authentication mechanism.
+
+- Without a configured token, an unauthenticated client that can reach the
+  loopback port may claim any `hostId`, and any `projectId` when the server was
+  started without `--project`. It may choose a profile up to the profile the
+  server launched with, never beyond it.
+- With a token, the request is trusted and may set any valid profile. The token,
+  not the header, is the boundary.
+- A bound project cannot be switched: a differing `projectId` is rejected with
+  `project_scope_violation` instead of reading another project's memory.
+- The header is read per call, and a malformed header is ignored rather than
+  rejected. Set `--project` when project isolation must not depend on what the
+  client sends.
+
 ## Reporting
 
 Report vulnerabilities privately through the repository security advisory flow. Do not open public issues for exploitable security bugs.

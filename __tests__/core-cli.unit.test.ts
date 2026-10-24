@@ -62,6 +62,9 @@ test('init supports non-interactive dry-run config generation', async () => {
       'none',
       '--home',
       homePath,
+      // Hermetic: without --no-probe the wizard reads localhost:11434 and would
+      // write whatever dimension this machine's Ollama happens to expose.
+      '--no-probe',
     ],
     cwd: coreRoot,
     stdout: 'pipe',
@@ -84,6 +87,36 @@ test('init supports non-interactive dry-run config generation', async () => {
   expect(output).toContain('[integrations.openclaw]');
   expect(output).toContain('[integrations.hermes]');
   expect(existsSync(join(homePath, 'config.toml'))).toBe(false);
+});
+
+test('init --no-probe skips the Ollama probe so dry-run output is machine-independent', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-no-probe-'));
+  const homePath = join(dir, '.cogmem');
+
+  const run = async (extra: string[]) => {
+    const proc = Bun.spawn({
+      cmd: ['bun', initBin, '--yes', '--dry-run', '--agent', 'none', '--home', homePath, ...extra],
+      cwd: coreRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { ...process.env, NO_COLOR: '1' },
+    });
+    const output = await new Response(proc.stdout).text();
+    const errorOutput = await new Response(proc.stderr).text();
+    return { output, errorOutput, exitCode: await proc.exited };
+  };
+
+  const disabled = await run(['--no-probe']);
+  expect(disabled.errorOutput).toBe('');
+  expect(disabled.exitCode).toBe(0);
+  expect(disabled.output).toContain('Ollama    – skipped (--no-probe)');
+  expect(disabled.output).toContain('vector_dimension = 384');
+  expect(disabled.output).toContain('provider = "deterministic_local"');
+
+  // An explicit --vector-dimension still wins over the skipped probe.
+  const explicit = await run(['--no-probe', '--vector-dimension', '1024']);
+  expect(explicit.exitCode).toBe(0);
+  expect(explicit.output).toContain('vector_dimension = 1024');
 });
 
 test('init recognizes Qwen3 embedding GGUF model names exposed by Ollama', () => {

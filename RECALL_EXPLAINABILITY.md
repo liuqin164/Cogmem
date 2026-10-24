@@ -7,7 +7,7 @@ Agent-facing recall is governed by default. `KernelAgentMemoryBackend.recall()` 
 `explainRecallWithKernel()` reports why evidence entered the recall result:
 
 - `activationPath`: the recall path, such as pulse, temporal traversal, or fallback.
-- `whyMatched`: agent scope, provenance, pulse fusion, temporal branch, and governance reasons.
+- `whyMatched`: agent scope, provenance, pulse fusion, temporal branch, and governance reasons. When an Atlas entrance matched, it names the product facet the entrance stands for (`person:`, `place:`), falling back to the schema type for internal entrances.
 - `sourceAnchor`: the drill-down anchor for the semantic memory source event.
 
 `sourceAnchor` contains:
@@ -140,7 +140,7 @@ Use the local audit CLI when the user needs to inspect memory directly:
 - `cogmem memory map --project <project> --json`
 - `cogmem memory tick --project <project> --json`
 
-Ledger replay can show raw evidence. It must not replace governed recall, pulse activation, inhibition, or ContextPack budgeting.
+Ledger replay can show raw evidence. It must not replace governed recall, Pulse 1 then Pulse 2 activation, inhibition, or ContextPack budgeting.
 ## Memory Atlas versus direct recall
 
 Use Memory Atlas before direct recall when the user asks what is remembered, asks a broad project/history question, or needs relationships between multiple memory areas. Use direct recall for a concrete factual question. Atlas narrows the search space; it does not answer from summaries alone.

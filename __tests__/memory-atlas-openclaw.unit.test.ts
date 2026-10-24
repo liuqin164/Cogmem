@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -23,6 +23,14 @@ test('installed OpenClaw plugin sanitizes generated prompt context and routes At
     expect(syntax.exitCode).toBe(0);
     expect(syntax.stderr.toString()).toBe('');
   }
+  // The plugin records the package entry it will import at hook time. Running the
+  // installer from a checkout used to write src/public.js, which is never built.
+  const patched = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
+  const pluginEntryKey = Object.keys(patched.plugins.entries).find((k) => k.startsWith('cogmem-auto-memory-'));
+  expect(pluginEntryKey).toBeDefined();
+  const installed = patched.plugins.entries[pluginEntryKey!];
+  expect(existsSync(installed.config.publicEntrypoint)).toBe(true);
+  expect(installed.config.publicEntrypoint.endsWith('public.js')).toBe(true);
   expect(index).toContain('function classifyMemoryNavigationIntent(query)');
   expect(index).toContain("runBridge(navigationIntent === 'atlas_explore' && config.autoAtlas !== false ? 'context' : 'recall'");
   expect(index).not.toContain("runBridge('graph-explore'");
@@ -38,19 +46,25 @@ test('installed OpenClaw plugin sanitizes generated prompt context and routes At
   expect(bridge).toContain('kernel.graphPath');
   expect(bridge).toContain('kernel.graphTimeline');
   expect(bridge).toContain("command === 'context'");
-  expect(bridge).toContain('Selected memory cards:');
-  expect(bridge).toContain('memory_atlas.v2');
-  expect(bridge).toContain('matchedPaths=');
-  expect(bridge).toContain('whyMatched=');
   expect(bridge).toContain('selectedEpisodeCards');
   expect(bridge).toContain("result.decisionTrace.selectedLane === 'facet_graph_raw_ledger'");
   expect(bridge).toContain('Array.isArray(item.matchedFacets) && item.matchedFacets.length > 0');
   expect(bridge).toContain('retainedCanonicalId');
-  expect(bridge).toContain('evidenceEventIds');
   expect(bridge).toContain('nodeDetails');
-  expect(bridge).toContain('function safeAtlasText');
-  expect(bridge).toContain('function serializeUntrustedMemory');
-  expect(bridge).toContain("replace(/</g, '&lt;')");
+  // The Atlas/recall text itself is rendered by the kernel now (ADR-0004), so
+  // the bridge must delegate rather than carry a second copy of it. Its own
+  // test executes those renderers; here the point is that they are not here.
+  expect(bridge).toContain('formatAtlasContext: api.formatAtlasContext');
+  expect(bridge).toContain('formatRecallContext: api.formatRecallContext');
+  expect(bridge).not.toContain('memory_atlas.v2');
+  expect(bridge).not.toContain('Selected memory cards:');
+  expect(bridge).not.toContain('function safeAtlasText');
+  expect(bridge).not.toContain('function serializeUntrustedMemory');
+  expect(bridge).not.toContain('evidenceEventIds');
+  // Escaping untrusted memory into the block is the renderer's job, so it moved
+  // with the renderer; `__tests__/recall-block.unit.test.ts` asserts that a
+  // hostile item cannot escape the block it is rendered into.
+  expect(bridge).not.toContain("replace(/</g, '&lt;')");
   expect(index).not.toContain('cogmem_graph_explore');
 
   const plugin = createRequire(import.meta.url)(indexPath) as {

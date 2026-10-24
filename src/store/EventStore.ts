@@ -76,6 +76,7 @@ const MEMORY_EVENT_COLUMNS = `
 `;
 
 export class EventStore {
+  private ftsRebuilds = 0;
   private readonly validatedLocalDates = new Set<string>();
   private db: Database;
   private ownsDb = true;
@@ -91,6 +92,8 @@ export class EventStore {
   }
 
   getProjectTimeZone(): string | undefined { return this.projectTimeZone; }
+
+  getDatabase(): Database { return this.db; }
 
   private initializeSchema(): void {
     this.db.exec(`
@@ -244,6 +247,12 @@ export class EventStore {
         role UNINDEXED,
         raw_event_type UNINDEXED,
         tokenize='unicode61'
+      );
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_event_fts_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
       );
     `);
     this.rebuildRawEventFtsIfNeeded();
@@ -1043,21 +1052,72 @@ export class EventStore {
   private rebuildRawEventFtsIfNeeded(): void {
     if (this.encryptionProvider) {
       this.db.prepare(`DELETE FROM memory_events_fts`).run();
+      this.writeFtsState(null, 0);
       return;
     }
-    const ftsRow = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events_fts`).get() as { count: number } | null;
-    const eventRow = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events`).get() as { count: number } | null;
-    if ((ftsRow?.count || 0) >= (eventRow?.count || 0)) return;
+    const ftsCount = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events_fts`).get() as { count: number } | null)?.count || 0);
+    const eventCount = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events`).get() as { count: number } | null)?.count || 0);
+    const maxRowid = Number((this.db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS maxRowid FROM memory_events`).get() as { maxRowid: number } | null)?.maxRowid || 0);
+    const state = this.readFtsState();
 
-    this.db.prepare(`DELETE FROM memory_events_fts`).run();
+    if (ftsCount >= eventCount) {
+      this.writeFtsState(maxRowid, ftsCount);
+      return;
+    }
+    // A short index is expected and permanent: events with no indexable text
+    // (state transitions, boundaries) never get a row, so counting rows against
+    // events can never converge and would re-index the whole database on every
+    // open. The recorded row count is what separates "short by design" from
+    // "truncated", which still has to be repaired.
+    if (state !== null && state.rowid === maxRowid && state.ftsRows === ftsCount) return;
+
+    const truncated = ftsCount === 0 && eventCount > 0;
+    const startRowid = !truncated && state !== null && state.rowid <= maxRowid && ftsCount >= state.ftsRows ? state.rowid : -1;
+    if (startRowid < 0) {
+      this.db.prepare(`DELETE FROM memory_events_fts`).run();
+      this.ftsRebuilds += 1;
+    }
     const rows = this.db.prepare(`
-      SELECT ${MEMORY_EVENT_COLUMNS}
+      SELECT rowid AS index_rowid, ${MEMORY_EVENT_COLUMNS}
       FROM memory_events
-      ORDER BY COALESCE(global_seq, 0) ASC, event_id ASC
-    `).all() as any[];
+      WHERE rowid > ?
+      ORDER BY rowid ASC
+    `).all(startRowid) as any[];
     for (const row of rows) {
       this.upsertRawEventFts(this.mapRow(row));
     }
+    const indexedCount = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events_fts`).get() as { count: number } | null)?.count || 0);
+    this.writeFtsState(maxRowid, indexedCount);
+  }
+
+  getRawEventFtsState(): { watermark: number | null; maxRowid: number; ftsRows: number; rebuilds: number } {
+    const maxRowid = Number((this.db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS maxRowid FROM memory_events`).get() as { maxRowid: number } | null)?.maxRowid || 0);
+    const ftsRows = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events_fts`).get() as { count: number } | null)?.count || 0);
+    return { watermark: this.readFtsState()?.rowid ?? null, maxRowid, ftsRows, rebuilds: this.ftsRebuilds };
+  }
+
+  private readFtsState(): { rowid: number; ftsRows: number } | null {
+    const rows = this.db.prepare(`SELECT key, value FROM memory_event_fts_state WHERE key IN ('indexed_rowid', 'indexed_fts_rows')`).all() as Array<{ key: string; value: string }>;
+    const map = new Map(rows.map((row) => [row.key, Number(row.value)]));
+    const rowid = map.get('indexed_rowid');
+    const ftsRows = map.get('indexed_fts_rows');
+    if (!Number.isFinite(rowid) || !Number.isFinite(ftsRows)) return null;
+    return { rowid: rowid as number, ftsRows: ftsRows as number };
+  }
+
+  private writeFtsState(rowid: number | null, ftsRows: number): void {
+    if (rowid === null) {
+      this.db.prepare(`DELETE FROM memory_event_fts_state`).run();
+      return;
+    }
+    const upsert = this.db.prepare(`
+      INSERT INTO memory_event_fts_state (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `);
+    this.db.transaction(() => {
+      upsert.run('indexed_rowid', String(rowid));
+      upsert.run('indexed_fts_rows', String(ftsRows));
+    })();
   }
 
   private extractIndexText(payload: unknown): string {

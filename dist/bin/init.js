@@ -29,17 +29,27 @@ function readArgs(argv) {
             return fallback;
         return argv[index + 1] || fallback;
     };
-    const agent = readValue('--agent', 'auto');
-    const scope = readValue('--scope', 'global');
+    const yes = argv.includes('--yes') || argv.includes('-y');
+    const agentExplicit = argv.includes('--agent');
+    // Host detection is advice, not a decision. An unattended run configures no
+    // host unless one was named; the interactive wizard may still offer a
+    // detected host, because a human confirms it. ADR-0003.
+    const agent = readValue('--agent', yes ? 'none' : 'auto');
+    // The Operator path serves a machine (global); the Agent path serves the
+    // workspace it was pointed at (project). --scope overrides either.
+    const scope = readValue('--scope', yes ? 'project' : 'global');
     const vectorDimension = parseOptionalPositiveInteger(readValue('--vector-dimension', ''), '--vector-dimension');
     return {
         configPath: readValue('--config', ''),
         homePath: readValue('--home', ''),
         scope: scope === 'project' ? 'project' : 'global',
         dryRun: argv.includes('--dry-run'),
-        yes: argv.includes('--yes') || argv.includes('-y'),
+        yes,
+        json: argv.includes('--json'),
         agent: agent === 'openclaw' || agent === 'hermes' || agent === 'none' ? agent : 'auto',
+        agentExplicit,
         vectorDimension,
+        probeOllama: !argv.includes('--no-probe'),
     };
 }
 // ─── Readline helpers ─────────────────────────────────────────────────────────
@@ -60,28 +70,30 @@ async function confirm(question, defaultYes = false) {
     return raw.toLowerCase() === 'y';
 }
 // ─── Backend detection ────────────────────────────────────────────────────────
-async function detectBackends() {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2500);
+async function detectBackends(probeOllama = true) {
     let ollamaAvailable = false;
     let ollamaModels = [];
-    try {
-        const res = await fetch('http://localhost:11434/api/tags', {
-            signal: controller.signal,
-        });
-        if (res.ok) {
-            const payload = await res.json();
-            ollamaModels = (payload.models ?? [])
-                .map((m) => m.name ?? '')
-                .filter((n) => n.length > 0);
-            ollamaAvailable = true;
+    if (probeOllama) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2500);
+        try {
+            const res = await fetch('http://localhost:11434/api/tags', {
+                signal: controller.signal,
+            });
+            if (res.ok) {
+                const payload = await res.json();
+                ollamaModels = (payload.models ?? [])
+                    .map((m) => m.name ?? '')
+                    .filter((n) => n.length > 0);
+                ollamaAvailable = true;
+            }
         }
-    }
-    catch {
-        // Ollama not running — fine
-    }
-    finally {
-        clearTimeout(timer);
+        catch {
+            // Ollama not running — fine
+        }
+        finally {
+            clearTimeout(timer);
+        }
     }
     return {
         ollamaAvailable,
@@ -197,10 +209,13 @@ function suggestReasoningModel(det) {
 }
 // ─── Display helpers ──────────────────────────────────────────────────────────
 function tick(ok) { return ok ? '✓' : '✗'; }
-function printDetection(det) {
+function printDetection(det, probed = true) {
     console.log('');
     console.log('  Detection results:');
-    if (det.ollamaAvailable) {
+    if (!probed) {
+        console.log('    Ollama    – skipped (--no-probe)');
+    }
+    else if (det.ollamaAvailable) {
         console.log(`    Ollama    ${tick(true)} running — ${det.ollamaModels.length} model(s): ${det.ollamaModels.slice(0, 4).join(', ')}${det.ollamaModels.length > 4 ? ' …' : ''}`);
     }
     else {
@@ -608,24 +623,174 @@ function printUsageSnippet(cfg) {
         console.log('  │  const sources = profile.buildSourceDefinitions({ projectId: "hermes" });');
     }
 }
+// ─── Unattended configuration (the Agent path) ────────────────────────────────
+/**
+ * Build the config an unattended run may write, plus the warnings for every
+ * Human-required setting it had to settle without a human.
+ *
+ * Agent-decidable settings keep real defaults: database path, vector backend,
+ * all three PII redaction switches on.
+ *
+ * Human-required settings fall back to conservative values: no key is written,
+ * no passphrase is invented, no provider that could spend money is selected,
+ * and no host is enabled. Detection still runs, but only to suggest.
+ */
+function buildUnattendedConfig(args, det, oclawDet, hermesDet) {
+    const warnings = [];
+    const rerun = 'cogmem init';
+    const embedding = suggestEmbeddingModel(det);
+    warnings.push({
+        code: 'embedding_provider_defaulted',
+        setting: 'embedding provider',
+        message: embedding.provider === 'deterministic_local'
+            ? 'deterministic_local embedding is written; semantic recall stays off until an embedding model is chosen.'
+            : `${embedding.model} was detected via Ollama, but an unattended run does not choose a provider; deterministic_local is written instead.`,
+        command: rerun,
+    });
+    const memory = suggestMemoryModel(det);
+    const reasoning = suggestReasoningModel(det);
+    const detectedModels = memory.provider !== 'rule_only' || reasoning.provider !== 'rule_only';
+    warnings.push({
+        code: 'model_provider_defaulted',
+        setting: 'memory and reasoning provider',
+        message: detectedModels
+            ? `${memory.model} / ${reasoning.model} were detected, but an unattended run does not choose a provider; rule_only is written.`
+            : 'rule_only is written; Dream curation and model-backed consolidation stay off until a provider is chosen.',
+        command: rerun,
+    });
+    warnings.push({
+        code: 'encryption_defaulted',
+        setting: 'encryption passphrase',
+        message: 'field encryption is off; an unattended run never invents a passphrase, because losing it loses the database.',
+        command: rerun,
+    });
+    const openClawEnabled = args.agent === 'openclaw' || (args.agent === 'auto' && oclawDet.detected);
+    const hermesEnabled = args.agent === 'hermes' || (args.agent === 'auto' && !oclawDet.detected && hermesDet.detected);
+    // Detection is advice in every mode: it names the flag, and changes nothing.
+    const detectedHost = oclawDet.detected ? 'openclaw' : hermesDet.detected ? 'hermes' : undefined;
+    const suggestedHost = detectedHost
+        && !(detectedHost === 'openclaw' ? openClawEnabled : hermesEnabled)
+        ? detectedHost
+        : undefined;
+    if (suggestedHost) {
+        warnings.push({
+            code: 'host_integration_suggested',
+            setting: 'host integration',
+            message: `a ${suggestedHost} workspace was detected here; pass --agent ${suggestedHost} to enable the integration.`,
+            command: `cogmem init --agent ${suggestedHost}`,
+        });
+    }
+    if (!openClawEnabled && !hermesEnabled && !suggestedHost) {
+        warnings.push({
+            code: 'host_integration_defaulted',
+            setting: 'host integration',
+            message: 'no host integration is enabled; automatic recall needs one.',
+            command: 'cogmem connect openclaw --auto --force',
+        });
+    }
+    const cfg = {
+        dbPath: 'memory.db',
+        vectorBackend: 'sqlite-vec',
+        vectorDimension: args.vectorDimension ?? DEFAULT_VECTOR_DIMENSION,
+        embeddingProvider: 'deterministic_local',
+        embeddingBaseUrl: '',
+        embeddingModel: 'deterministic_local',
+        memoryProvider: 'rule_only',
+        memoryBaseUrl: '',
+        memoryApiKey: '',
+        memoryModel: 'rule_only',
+        reasoningProvider: 'rule_only',
+        reasoningBaseUrl: '',
+        reasoningApiKey: '',
+        reasoningModel: 'rule_only',
+        piiEmail: true,
+        piiPhone: true,
+        piiSsn: true,
+        encryptionPassphrase: '',
+        openClawEnabled,
+        hermesEnabled,
+    };
+    return { cfg, warnings };
+}
+function printSettingWarnings(warnings) {
+    if (warnings.length === 0)
+        return;
+    console.log('');
+    console.log('  Warnings — settings this unattended run settled conservatively:');
+    for (const warning of warnings) {
+        console.log(`    WARN ${warning.code}: ${warning.setting}`);
+        console.log(`         ${warning.message}`);
+        console.log(`         set it with: ${warning.command}`);
+    }
+}
+function emitInitJson(input) {
+    const bin = process.env.COGMEM_BIN_DIR?.trim() || 'cogmem';
+    console.log(JSON.stringify({
+        schemaVersion: 'cogmem.cli.v1',
+        command: 'init',
+        dryRun: input.dryRun,
+        written: input.written,
+        configPath: input.configPath,
+        homeDir: input.homeDir,
+        config: {
+            dbPath: input.config.dbPath,
+            vectorBackend: input.config.vectorBackend,
+            vectorDimension: input.config.vectorDimension,
+            embedding: { provider: input.config.embeddingProvider, model: input.config.embeddingModel },
+            memoryModel: { provider: input.config.memoryProvider, model: input.config.memoryModel },
+            reasoningModel: { provider: input.config.reasoningProvider, model: input.config.reasoningModel },
+            piiRedaction: {
+                email: input.config.piiEmail,
+                phone: input.config.piiPhone,
+                ssn: input.config.piiSsn,
+            },
+            encryption: Boolean(input.config.encryptionPassphrase),
+            integrations: {
+                openclaw: input.config.openClawEnabled,
+                hermes: input.config.hermesEnabled,
+            },
+        },
+        warnings: input.warnings,
+        nextSteps: [
+            {
+                id: 'install_gate',
+                actor: 'agent',
+                safeForAutomation: true,
+                command: `${bin} doctor --json`,
+                when: 'now',
+                purpose: 'the Install gate: not installed, OK, WARN or FAIL, plus the next step',
+            },
+        ],
+    }, null, 2));
+}
 // ─── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
     const args = readArgs(process.argv.slice(2));
-    console.log('');
-    console.log('╔═══════════════════════════════════════════════════════════════╗');
-    console.log('║                  cogmem — Memory Kernel Init                 ║');
-    console.log('║                   Interactive Setup Wizard                    ║');
-    console.log('╚═══════════════════════════════════════════════════════════════╝');
-    console.log('');
+    // In --json mode stdout carries one JSON document and nothing else, and the
+    // progress chatter is suppressed rather than moved to stderr: the JSON already
+    // reports every setting and warning, so the human rendering has nothing to add.
+    const say = (line = '') => {
+        if (!args.json)
+            console.log(line);
+    };
+    say('');
+    say('╔═══════════════════════════════════════════════════════════════╗');
+    say('║                  cogmem — Memory Kernel Init                 ║');
+    say('║                   Interactive Setup Wizard                    ║');
+    say('╚═══════════════════════════════════════════════════════════════╝');
+    say('');
     const target = resolveInstallTarget(args);
-    console.log(`  This wizard writes ${args.scope === 'project' ? '.cogmem/config.toml in the current project' : '~/.cogmem/config.toml by default'}.`);
-    console.log('  Run cogmem-init again at any time to reconfigure.');
-    console.log(`  Cogmem home: ${target.homeDir}`);
+    say(`  This wizard writes ${args.scope === 'project' ? '.cogmem/config.toml in the current project' : '~/.cogmem/config.toml by default'}.`);
+    say('  Run cogmem-init again at any time to reconfigure.');
+    say(`  Cogmem home: ${target.homeDir}`);
     // Detect backends
-    process.stdout.write('\n  Detecting available backends …');
-    const det = await detectBackends();
-    process.stdout.write(' done.\n');
-    printDetection(det);
+    if (!args.json)
+        process.stdout.write('\n  Detecting available backends …');
+    const det = await detectBackends(args.probeOllama);
+    if (!args.json) {
+        process.stdout.write(' done.\n');
+        printDetection(det, args.probeOllama);
+    }
     const hasAnyBackend = det.ollamaAvailable || det.openaiAvailable || det.anthropicAvailable || det.qwenAvailable;
     if (!hasAnyBackend && !args.yes) {
         noBackendQuickstart();
@@ -639,52 +804,65 @@ async function main() {
     const oclawDet = detectOpenClaw(process.cwd());
     const hermesDet = detectHermes(process.cwd());
     if (args.yes) {
-        const embedding = suggestEmbeddingModel(det);
-        const memory = suggestMemoryModel(det);
-        const reasoning = suggestReasoningModel(det);
-        const cfg = {
-            dbPath: 'memory.db',
-            vectorBackend: 'sqlite-vec',
-            vectorDimension: args.vectorDimension ?? embedding.vectorDimension,
-            embeddingProvider: embedding.provider,
-            embeddingBaseUrl: embedding.baseUrl,
-            embeddingModel: embedding.model,
-            memoryProvider: memory.provider,
-            memoryBaseUrl: memory.baseUrl,
-            memoryApiKey: memory.apiKey,
-            memoryModel: memory.model,
-            reasoningProvider: reasoning.provider,
-            reasoningBaseUrl: reasoning.baseUrl,
-            reasoningApiKey: reasoning.apiKey,
-            reasoningModel: reasoning.model,
-            piiEmail: true,
-            piiPhone: true,
-            piiSsn: true,
-            encryptionPassphrase: '',
-            openClawEnabled: args.agent === 'openclaw' || (args.agent === 'auto' && oclawDet.detected),
-            hermesEnabled: args.agent === 'hermes' || (args.agent === 'auto' && !oclawDet.detected && hermesDet.detected),
-        };
+        const { cfg, warnings } = buildUnattendedConfig(args, det, oclawDet, hermesDet);
         const lines = buildTomlLines(cfg);
         const outputPath = target.configPath;
         if (args.dryRun) {
+            if (args.json) {
+                emitInitJson({
+                    dryRun: true,
+                    configPath: outputPath,
+                    homeDir: target.homeDir,
+                    config: cfg,
+                    warnings,
+                    written: false,
+                });
+                return;
+            }
             console.log('');
             console.log(`  Dry run config for ${outputPath}:`);
             console.log(lines.join('\n'));
             printVectorDimensionWarning(cfg.vectorDimension);
+            printSettingWarnings(warnings);
             console.log('');
             return;
         }
         if (existsSync(outputPath)) {
-            console.log(`  Aborted — config already exists at ${outputPath}. Use interactive mode to overwrite.`);
+            const message = `Aborted — config already exists at ${outputPath}. Use interactive mode to overwrite.`;
+            if (args.json) {
+                console.error(JSON.stringify({
+                    schemaVersion: 'cogmem.cli.v1',
+                    command: 'init',
+                    status: 'refused',
+                    reason: 'config_exists',
+                    configPath: outputPath,
+                    message,
+                }, null, 2));
+            }
+            else {
+                console.log(`  ${message}`);
+            }
             process.exit(1);
         }
         ensureInstallDirs(target.homeDir);
         writeFileSync(outputPath, lines.join('\n') + '\n', 'utf8');
+        if (args.json) {
+            emitInitJson({
+                dryRun: false,
+                configPath: outputPath,
+                homeDir: target.homeDir,
+                config: cfg,
+                warnings,
+                written: true,
+            });
+            return;
+        }
         console.log(`  Configuration written to ${outputPath}`);
         console.log(`  Cogmem home ${target.homeDir}`);
         console.log(`  Database    ${join(target.homeDir, cfg.dbPath)}`);
         console.log(`  Snapshots   ${join(target.homeDir, 'snapshots')}`);
         printVectorDimensionWarning(cfg.vectorDimension);
+        printSettingWarnings(warnings);
         printUsageSnippet(cfg);
         return;
     }
