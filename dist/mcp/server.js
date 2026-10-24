@@ -1,10 +1,9 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
-import { callCogmemMcpTool, listCogmemMcpTools, } from './CoreMcpTools.js';
+import { callCogmemMcpTool, isCogmemMcpTool, listCogmemMcpTools, } from './CoreMcpTools.js';
 import { buildMcpInstructions, DEFAULT_TOOL_PROFILE, filterToolsByProfile, isToolAllowed, resolveProfile } from './profiles.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
-import { SqliteSharedMemory } from '../adapters/sqlite/SqliteSharedMemory.js';
 import { CORE_VERSION } from '../version.js';
 /** Narrower surfaces rank lower; a header may narrow but never widen. */
 const PROFILE_RANK = { core: 0, admin: 1, full: 2 };
@@ -134,6 +133,19 @@ export function createCogmemMcpServer(runtime = {}, options = {}) {
             };
         }
         const effectiveOptions = resolved.effective;
+        // Registration is checked before the profile: a name no profile can reach
+        // has to say so, because "not in this profile" implies widening reveals it.
+        if (!isCogmemMcpTool(request.params.name)) {
+            return {
+                isError: true,
+                content: [
+                    {
+                        type: 'text',
+                        text: `tool_not_found: ${request.params.name} is not a cogmem MCP tool.`,
+                    },
+                ],
+            };
+        }
         if (!isToolAllowed(effectiveOptions.profile, request.params.name)) {
             return {
                 isError: true,
@@ -184,13 +196,12 @@ export async function startCogmemMcpServer(runtime = {}, options = {}) {
             cwd: runtime.cwd,
         });
     })();
-    const sharedRuntime = {
+    const serverRuntime = {
         ...runtime,
         kernel,
         hostId: options.hostId ?? runtime.hostId,
-        shared: runtime.shared ?? new SqliteSharedMemory(kernel.eventStore.getDatabase()),
     };
-    const server = createCogmemMcpServer(sharedRuntime, options);
+    const server = createCogmemMcpServer(serverRuntime, options);
     const transport = new StdioServerTransport();
     await server.connect(transport);
     return {

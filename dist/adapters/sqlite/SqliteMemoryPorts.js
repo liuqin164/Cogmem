@@ -10,7 +10,6 @@ import { EventStore } from '../../store/EventStore.js';
 import { EpisodeStore } from '../../episode/EpisodeStore.js';
 import { MemoryBindingStore } from '../../store/MemoryBindingStore.js';
 import { MemoryBindingService } from '../../binding/MemoryBindingService.js';
-import { SqliteSharedMemory } from './SqliteSharedMemory.js';
 class SqliteRawLedger {
     store;
     db;
@@ -119,6 +118,6 @@ export function createSqlitePorts(options) {
         graph: new SqliteGraph(bindings),
         recall: options.recall ? new SqliteRecall(options.recall) : null,
         governance: options.governance ? new SqliteGovernance(options.governance) : null,
-        shared: options.shared ?? new SqliteSharedMemory(db),
+        shared: options.shared ?? null,
     };
 }

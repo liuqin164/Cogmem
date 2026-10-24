@@ -15,7 +15,6 @@ import { randomUUID } from 'node:crypto';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { createCogmemMcpServer, parseSessionIdentity } from './server.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
-import { SqliteSharedMemory } from '../adapters/sqlite/SqliteSharedMemory.js';
 function resolveKernel(runtime) {
     if (runtime.kernel)
         return runtime.kernel;
@@ -40,7 +39,6 @@ export async function startCogmemMcpHttpServer(runtime = {}, options) {
         ...runtime,
         kernel,
         hostId: options.hostId ?? runtime.hostId,
-        shared: runtime.shared ?? new SqliteSharedMemory(kernel.eventStore.getDatabase()),
     };
     const sessionIdentities = new Map();
     const transports = new Map();

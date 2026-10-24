@@ -16,7 +16,12 @@ export interface SqlitePortsOptions {
     recall?: BrainRecall;
     /** Required only if `governance` is used. */
     governance?: MemoryGovernanceExecutor;
-    /** Shared region is not implemented on SQLite; lands with the seekdb backend. */
+    /**
+     * Shared region, when the caller wants one. 4.0 does not create it by
+     * default: constructing a region makes its table exist, and no 4.0 entry
+     * point offers sharing, so an unused table is storage nobody asked for.
+     * See ADR-0005.
+     */
     shared?: SharedMemoryPort;
 }
 export interface SqlitePorts {

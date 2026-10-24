@@ -32,19 +32,20 @@ Without `--project`, each call's `projectId` argument decides.
 
 ## Profiles
 
-The server exposes 40 tools. A host does not need all of them.
+The server exposes 36 tools. A host does not need all of them.
 
 | Profile | Tools | Use for |
 |---|---|---|
-| `core` | 8 | Everyday agent work: recall, record a turn, inspect evidence, read shared memory |
-| `admin` | 26 | Operators: sealing episodes, dream ticks, governance review, publishing to the shared region, importing host history |
-| `full` | 40 | Debugging and tool discovery |
+| `core` | 6 | Everyday agent work: recall, record a turn, inspect evidence |
+| `admin` | 22 | Operators: sealing episodes, dream ticks, governance review, importing host history |
+| `full` | 36 | Debugging and tool discovery |
 
 `core` is: `cogmem_recall`, `cogmem_remember_turn`, `cogmem_episode_append`,
-`cogmem_graph_explore`, `cogmem_graph_node`, `cogmem_explain_recall`,
-`cogmem_shared_subscribe`, `cogmem_shared_explain`.
+`cogmem_graph_explore`, `cogmem_graph_node`, `cogmem_explain_recall`.
 
-A tool outside the profile returns `tool_not_in_profile` instead of running.
+A tool outside the profile returns `tool_not_in_profile` instead of running. A
+name that is in **no** profile returns `tool_not_found`: there is no profile to
+widen to, so the two answers stay distinct.
 
 ## How memory reaches the model
 
@@ -93,25 +94,24 @@ that never surfaced, finds none, and concludes Cogmem does not work. Emergence
 is the property only the push path can claim, and today the OpenClaw adapter is
 the only adapter on it.
 
-## Shared memory
+## Shared memory — planned for 4.1, not in 4.0
 
-Hosts can publish memory items to a shared region and subscribe to collections
-other hosts published. Four tools:
+4.0 does not expose shared memory. No profile registers a shared-memory tool, so
+a call to one is answered `tool_not_found`, and starting a server no longer
+creates the shared region's storage.
 
-| Tool | Profile | Behaviour |
-|---|---|---|
-| `cogmem_shared_publish` | admin | Idempotent on `itemHash`; returns how many rows were new |
-| `cogmem_shared_retract` | admin | Soft retraction; only the publishing host may retract |
-| `cogmem_shared_subscribe` | core | Reads live items from the named collections |
-| `cogmem_shared_explain` | core | Inspects one item, including a retracted one and when |
+The reason is that the three things shared memory needs are not in 4.0: a
+trusted identity for each connected agent
+([#65](https://github.com/liuqin164/cogmem/issues/65)), per-collection read
+permission ([#66](https://github.com/liuqin164/cogmem/issues/66)), and
+provenance labelling that keeps another agent's memory at lower trust
+([#67](https://github.com/liuqin164/cogmem/issues/67)). Shipping
+publish/subscribe without them would hand every connected bot one shared
+namespace with no way to say who wrote what.
 
-The publisher is the connection's `--host` value. Retraction hides an item from
-subscriptions but keeps it explainable, so a subscriber's earlier reasoning
-stays auditable.
-
-Shared memory works in every start mode. With `--db` the server opens the port
-from that path; in config mode it attaches to the kernel it already resolved,
-so the first shared call reuses the same database handle.
+The port and its SQLite adapter stay in the tree for 4.1, reachable from neither
+the MCP surface nor a package entry point. When the three issues above land, the
+tools come back as an opt-in feature rather than a default region.
 
 ## Importing host history
 
@@ -303,11 +303,13 @@ hermes mcp test cogmem
 `hermes mcp add` is verified against Hermes v0.22.2 on an HTTP endpoint with no
 token. It prompts twice: whether the server needs authentication, then whether
 to enable all discovered tools. Both answers can be piped on stdin
-(`printf 'n\nY\n' | hermes mcp add ...` saves the server as
-`(8/8 tools enabled)`). What does *not* work is leaving stdin empty: the
-authentication prompt falls back to `getpass` and reads an empty API key, and
-the enable prompt then reads EOF and cancels without saving. Give both answers
-explicitly when scripting it.
+(`printf 'n\nY\n' | hermes mcp add ...` saves the server, and Hermes prints how
+many discovered tools it enabled — that line read `(8/8 tools enabled)` when this
+was checked, against the 8-tool `core` profile shipping at the time; 4.0's
+`core` profile serves 6, so expect `(6/6 ...)` today). What does *not* work is
+leaving stdin empty: the authentication prompt falls back to `getpass` and reads
+an empty API key, and the enable prompt then reads EOF and cancels without
+saving. Give both answers explicitly when scripting it.
 
 `hermes mcp test <name>` reconnects and lists the discovered tools, so it is the
 non-interactive way to confirm the entry. Remove one with
@@ -330,8 +332,8 @@ openclaw mcp probe
 legacy SSE transport, sends a GET to the endpoint, and fails with
 `SSE error: Non-200 status code (400)`.
 
-`openclaw mcp probe` reports the discovered tool count per server; 8 means the
-`core` profile, 40 means `full`.
+`openclaw mcp probe` reports the discovered tool count per server; 6 means the
+`core` profile, 36 means `full`.
 
 `openclaw mcp add` prints only `Saved MCP server "cogmem" to <path>`; the tool
 count comes from `openclaw mcp probe`. To remove a server, run
@@ -486,7 +488,8 @@ Restarting loses live MCP sessions; hosts reconnect on the next call.
 | `session_not_found` (HTTP 404) | The MCP session expired or the server restarted; reconnect the host |
 | `Bad Request: Server not initialized` (HTTP 400) | A request arrived without `mcp-session-id`, or before `initialize`. Send the session header |
 | `Failed to start server. Is port 7337 in use?` | Another process holds the port; check with `ss -ltnp` |
-| Host connects but sees 8 tools | Expected: `core` profile |
+| Host connects but sees 6 tools | Expected: `core` profile |
+| `tool_not_found` | The name is not a Cogmem tool at all, in any profile. Check the name; on 4.0 this is the answer for the shared-memory tools that shipped before 4.0 and return in 4.1 |
 
 Check the endpoint by hand. The first call has no session; take the
 `mcp-session-id` response header and send it on every later call:

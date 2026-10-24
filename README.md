@@ -45,7 +45,7 @@ cogmem intentionally does not provide:
 - A human PKM/wiki/Obsidian replacement.
 - A default “embed every sentence forever” vector store.
 
-One Cogmem database backs one memory kernel: several hosts can attach to it, and each agent keeps its own project scope. Cross-agent memory is explicit rather than automatic — the MCP `cogmem_shared_*` tools publish to and subscribe from a shared region, and a host that never publishes shares nothing.
+One Cogmem database backs one memory kernel: several hosts can attach to it, and each agent keeps its own project scope. Cross-agent memory is not a 4.0 feature: sharing items from one agent to another is planned for 4.1, and no tool profile exposes it in this release. An agent reads only the memory inside its own project scope.
 
 ## How memory reaches the model
 
@@ -824,7 +824,7 @@ cogmem mcp --transport http --port 7337 --host claude --profile core \
   --project my-project --db ~/.cogmem/memory.db
 ```
 
-- `--profile core|admin|full` bounds the tool surface to 8, 26, or 40 tools. The default is `core`.
+- `--profile core|admin|full` bounds the tool surface to 6, 22, or 36 tools. The default is `core`.
 - `--project <id>` binds the connection to one project; a call naming a different project is rejected.
 - `--token <value>` requires `Authorization: Bearer <value>` on every request.
 

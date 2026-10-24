@@ -59,10 +59,6 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
     'cogmem_graph_touch',
     'cogmem_maintenance_tick',
     'cogmem_prospective',
-    'cogmem_shared_subscribe',
-    'cogmem_shared_explain',
-    'cogmem_shared_publish',
-    'cogmem_shared_retract',
     'cogmem_import_preview',
     'cogmem_import_apply',
     'cogmem_import_status',
@@ -284,21 +280,21 @@ test('core MCP explain tool returns pulse and temporal recall details', async ()
   ))).toBe(true);
 });
 
-test('shared tools attach to the kernel when the runtime has no shared port', async () => {
+test('a removed tool name is answered without touching the runtime kernel', async () => {
+  // #68: 4.0 ships no shared-memory tools, so the dispatcher entry that used to
+  // attach a shared region to the caller's kernel is gone. The name now falls
+  // out as unknown, and — because the registry check runs before the runtime is
+  // opened — it does not reach the kernel at all.
   const kernel = makeKernel();
 
-  const published = await callCogmemMcpTool('cogmem_shared_publish', {
+  const result = await callCogmemMcpTool('cogmem_shared_publish', {
     items: [{ itemHash: 'attach-1', collection: 'standards', payload: { text: 'kernel-backed' } }],
   }, { kernel, hostId: 'unit-host' });
 
-  expect(published.isError).toBeFalsy();
-  expect(published.structuredContent?.inserted).toBe(1);
-
-  const subscribed = await callCogmemMcpTool('cogmem_shared_subscribe', {
-    collections: ['standards'],
-  }, { kernel, hostId: 'unit-host' });
-
-  expect(subscribed.structuredContent?.count).toBe(1);
-  expect((subscribed.structuredContent?.items as Array<{ payload: { text: string } }>)[0].payload.text)
-    .toBe('kernel-backed');
+  expect(result.isError).toBe(true);
+  expect(String(result.structuredContent?.error)).toContain('Unknown cogmem MCP tool');
+  const tables = kernel.eventStore.getDatabase()
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%shared%'")
+    .all() as Array<{ name: string }>;
+  expect(tables).toEqual([]);
 });

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
+import { parseSessionIdentity } from '../src/mcp/server.js';
 import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { ADMIN_TOOLS, CORE_TOOLS, filterToolsByProfile, resolveProfile } from '../src/mcp/profiles.js';
 
@@ -240,65 +241,12 @@ describe('streamable HTTP transport', () => {
   });
 });
 
-describe('shared memory tools', () => {
-  test('publish is idempotent, subscribe reads it, retract hides but keeps history', async () => {
-    const handle = await start({ profile: 'admin' });
-    const sessionId = await connect(handle.url);
-
-    const first = await call(handle.url, sessionId, 'cogmem_shared_publish', {
-      items: [{ itemHash: 'h-1', collection: 'team-standards', payload: { text: 'run typecheck first' } }],
-    });
-    expect(first.isError).toBe(false);
-    expect(first.body.inserted).toBe(1);
-    expect(first.body.host).toBe('test');
-
-    const second = await call(handle.url, sessionId, 'cogmem_shared_publish', {
-      items: [{ itemHash: 'h-1', collection: 'team-standards', payload: { text: 'run typecheck first' } }],
-    });
-    expect(second.body.inserted).toBe(0);
-    expect(second.body.idempotent).toBe(true);
-
-    const subscribed = await call(handle.url, sessionId, 'cogmem_shared_subscribe', {
-      collections: ['team-standards'],
-    });
-    expect(subscribed.body.count).toBe(1);
-    expect(subscribed.body.items[0].payload.text).toBe('run typecheck first');
-
-    const retracted = await call(handle.url, sessionId, 'cogmem_shared_retract', { itemHash: 'h-1' });
-    expect(retracted.isError).toBe(false);
-    expect(retracted.body.retractedBy).toBe('test');
-
-    const afterRetract = await call(handle.url, sessionId, 'cogmem_shared_subscribe', {
-      collections: ['team-standards'],
-    });
-    expect(afterRetract.body.count).toBe(0);
-
-    const explained = await call(handle.url, sessionId, 'cogmem_shared_explain', { itemHash: 'h-1' });
-    expect(explained.body.retracted).toBe(true);
-    expect(explained.body.retractedAt).toBeGreaterThan(0);
-    expect(explained.body.item.itemHash).toBe('h-1');
-  });
-
-  test('explaining an unknown item fails with a named error', async () => {
-    const handle = await start({ profile: 'admin' });
-    const sessionId = await connect(handle.url);
-
-    const explained = await call(handle.url, sessionId, 'cogmem_shared_explain', { itemHash: 'missing' });
-    expect(explained.isError).toBe(true);
-    expect(String(explained.body.error)).toContain('shared_item_not_found');
-  });
-
-  test('publishing is refused on the core profile', async () => {
-    const handle = await start({ profile: 'core' });
-    const sessionId = await connect(handle.url);
-
-    const published = await call(handle.url, sessionId, 'cogmem_shared_publish', {
-      items: [{ itemHash: 'h-2', collection: 'team-standards' }],
-    });
-    expect(published.isError).toBe(true);
-    expect(String(published.body)).toContain('tool_not_in_profile');
-  });
-});
+// #68 removed the shared-memory tools from every profile, so the publish /
+// subscribe / retract / explain round trips that used to live here have no
+// subject. The 4.0 contract that replaced them — no profile offers a shared
+// tool, a call to one is answered as a missing tool rather than a profile
+// restriction, and a fresh served database carries no shared storage — is
+// asserted in `mcp-shared-memory-not-exposed.unit.test.ts`.
 
 describe('session lifecycle', () => {
   test('the session map is capped and evicts the oldest session', async () => {
@@ -326,16 +274,14 @@ describe('session lifecycle', () => {
 });
 
 describe('session identity binding', () => {
-  test('session identity header binds hostId for shared memory publish', async () => {
-    const handle = await start({ profile: 'admin' });
-    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-a', projectId: 'project-a', profile: 'admin' }) });
-
-    // Publish with identity header - should use the header's hostId
-    const published = await call(handle.url, sessionId, 'cogmem_shared_publish', {
-      items: [{ itemHash: 'h-identity-1', collection: 'test', payload: { text: 'from bot-a' } }],
-    });
-    expect(published.isError).toBe(false);
-    expect(published.body.host).toBe('bot-a');
+  // The header's hostId used to be observable only through the shared-memory
+  // tools, which #68 removed. #65 will build on this field, so the parse itself
+  // is pinned here rather than left to the first consumer.
+  test('the identity header parses hostId even when no 4.0 tool spends it', () => {
+    expect(parseSessionIdentity(JSON.stringify({ hostId: 'bot-a', projectId: 'project-a' })))
+      .toEqual({ hostId: 'bot-a', projectId: 'project-a', profile: undefined });
+    expect(parseSessionIdentity('not json')).toBeUndefined();
+    expect(parseSessionIdentity(JSON.stringify({}))).toBeUndefined();
   });
 
   test('session identity header binds projectId for tool calls', async () => {
@@ -434,22 +380,5 @@ describe('session identity binding', () => {
     // Session 2 keeps the server default, so the admin tool is reachable
     const callResult2 = await call(handle.url, session2, 'cogmem_maintenance_tick', {});
     expect(callResult2.isError).toBe(false);
-  });
-
-  test('shared memory retract uses session hostId', async () => {
-    const handle = await start({ profile: 'admin' });
-    const sessionId = await connect(handle.url, undefined, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-x', projectId: 'project-x', profile: 'admin' }) });
-
-    // Publish as bot-x
-    await call(handle.url, sessionId, 'cogmem_shared_publish', { items: [{ itemHash: 'h-retract-1', collection: 'test', payload: { text: 'x' } }] });
-
-    // Try to retract as bot-y (different hostId) - should fail
-    const retractResult = await call(handle.url, sessionId, 'cogmem_shared_retract', { itemHash: 'h-retract-1' }, { 'x-cogmem-identity': JSON.stringify({ hostId: 'bot-y' }) });
-    expect(retractResult.isError).toBe(true);
-    expect(JSON.stringify(retractResult.body)).toContain('shared_item_not_owned');
-
-    // Retract as bot-x (original publisher) - should succeed
-    const retractOkResult = await call(handle.url, sessionId, 'cogmem_shared_retract', { itemHash: 'h-retract-1' });
-    expect(retractOkResult.isError).toBe(false);
   });
 });

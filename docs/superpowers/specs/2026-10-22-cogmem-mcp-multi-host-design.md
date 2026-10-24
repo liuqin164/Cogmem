@@ -6,6 +6,15 @@ Supersedes: v1 (SQLite base)
 Scope: storage engine replacement, MCP integration surface, shared memory region,
 tool profiles, host packaging
 
+> **4.0 status update (2026-10-25):** the shared-memory region this document
+> designs is **out of scope for 4.0** and deferred to 4.1
+> ([ADR-0005](../../adr/0005-no-shared-memory-in-4-0.md),
+> [issue #68](https://github.com/liuqin164/cogmem/issues/68)). No tool profile
+> registers a shared-memory tool and starting a server no longer creates its
+> storage. Tool counts are now `core` 6 / `admin` 22 / `full` 36. Everything
+> below the line is the 2026-10-22 record and is left as written; where it and
+> ADR-0005 disagree, ADR-0005 governs.
+
 ## Implementation status (2026-10-22)
 
 Shipped on the SQLite backend, behind the domain ports:

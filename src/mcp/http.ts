@@ -19,7 +19,6 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { createCogmemMcpServer, parseSessionIdentity, type CogmemMcpServerOptions } from './server.js';
 import type { CogmemMcpRuntime } from './CoreMcpTools.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
-import { SqliteSharedMemory } from '../adapters/sqlite/SqliteSharedMemory.js';
 
 export interface CogmemMcpHttpOptions extends CogmemMcpServerOptions {
   port: number;
@@ -77,7 +76,6 @@ export async function startCogmemMcpHttpServer(
     ...runtime,
     kernel,
     hostId: options.hostId ?? runtime.hostId,
-    shared: runtime.shared ?? new SqliteSharedMemory(kernel.eventStore.getDatabase()),
   };
   const sessionIdentities = new Map<string, SessionIdentity>();
   const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();

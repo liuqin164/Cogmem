@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
+import { CORE_TOOLS } from '../src/mcp/profiles.js';
 
 const scratch = mkdtempSync(join(tmpdir(), 'cogmem-mcp-exec-'));
 const dbPath = join(scratch, 'memory.db');
@@ -112,48 +113,6 @@ describe('tool execution semantics', () => {
     expect(recalled.raw).toContain(marker);
   });
 
-  test('a second session sees items published by the first', async () => {
-    const handle = await start();
-    const publisher = await connect(handle.url);
-    const reader = await connect(handle.url);
-
-    const published = await call(handle.url, publisher, 'cogmem_shared_publish', {
-      items: [{ itemHash: 'cross-session-1', collection: 'team', payload: { text: 'linters run before tests' } }],
-    });
-    expect(published.isError).toBe(false);
-    expect(published.body.inserted).toBe(1);
-    expect(published.body.host).toBe('exec-host');
-
-    const subscribed = await call(handle.url, reader, 'cogmem_shared_subscribe', { collections: ['team'] });
-    expect(subscribed.isError).toBe(false);
-    expect(subscribed.body.count).toBe(1);
-    expect(subscribed.body.items[0].payload.text).toBe('linters run before tests');
-    expect(subscribed.body.items[0].sourceHost).toBe('exec-host');
-  });
-
-  test('retraction hides an item from subscribers but keeps it explainable', async () => {
-    const handle = await start();
-    const publisher = await connect(handle.url);
-    const reader = await connect(handle.url);
-
-    await call(handle.url, publisher, 'cogmem_shared_publish', {
-      items: [{ itemHash: 'retract-me', collection: 'retract-collection', payload: { text: 'temporary note' } }],
-    });
-
-    const retracted = await call(handle.url, publisher, 'cogmem_shared_retract', { itemHash: 'retract-me' });
-    expect(retracted.isError).toBe(false);
-    expect(retracted.body.retractedBy).toBe('exec-host');
-
-    const subscribed = await call(handle.url, reader, 'cogmem_shared_subscribe', { collections: ['retract-collection'] });
-    expect(subscribed.body.count).toBe(0);
-
-    const explained = await call(handle.url, reader, 'cogmem_shared_explain', { itemHash: 'retract-me' });
-    expect(explained.isError).toBe(false);
-    expect(explained.body.retracted).toBe(true);
-    expect(explained.body.retractedAt).toBeGreaterThan(0);
-    expect(explained.body.item.itemHash).toBe('retract-me');
-  });
-
   test('unknown tools are rejected by name', async () => {
     const handle = await start();
     const session = await connect(handle.url);
@@ -162,12 +121,26 @@ describe('tool execution semantics', () => {
     expect(called.raw).toContain('cogmem_does_not_exist');
   });
 
+  test('a removed shared-memory tool is rejected as missing, not as profile-restricted', async () => {
+    // #68: this server runs the admin profile, which is the widest surface a
+    // caller can reach without a token. The old answer here was
+    // `tool_not_in_profile`, which reads as "widen the profile and it appears".
+    const handle = await start();
+    const session = await connect(handle.url);
+    const called = await call(handle.url, session, 'cogmem_shared_publish', {
+      items: [{ itemHash: 'no-such-tool', collection: 'team' }],
+    });
+    expect(called.isError).toBe(true);
+    expect(called.raw).toContain('tool_not_found');
+    expect(called.raw).not.toContain('tool_not_in_profile');
+  });
+
   test('a missing required argument is reported with the field name', async () => {
     const handle = await start();
     const session = await connect(handle.url);
-    const called = await call(handle.url, session, 'cogmem_shared_retract', {});
+    const called = await call(handle.url, session, 'cogmem_episode_seal', {});
     expect(called.isError).toBe(true);
-    expect(called.raw).toContain('itemHash');
+    expect(called.raw).toContain('projectId');
   });
 
   test('recall on an empty project answers instead of throwing', async () => {
@@ -239,30 +212,32 @@ describe('project isolation', () => {
 });
 
 describe('durability', () => {
-  test('shared items and retractions survive a server restart', async () => {
+  test('remembered turns survive a server restart', async () => {
     const first = await start();
     const before = await connect(first.url);
+    const marker = 'durable-quartz-77';
 
-    await call(first.url, before, 'cogmem_shared_publish', {
-      items: [{ itemHash: 'durable-keep', collection: 'durable', payload: { text: 'survives' } }],
+    const written = await call(first.url, before, 'cogmem_remember_turn', {
+      userText: `The restart check keeps ${marker} in the raw ledger.`,
+      assistantText: 'Recorded.',
+      sessionId: 'durable-session',
+      agentId: 'durable-agent',
+      projectId: 'durable-project',
+      ingestMode: 'raw_archive_only',
     });
-    await call(first.url, before, 'cogmem_shared_publish', {
-      items: [{ itemHash: 'durable-drop', collection: 'durable', payload: { text: 'retracted' } }],
-    });
-    const retracted = await call(first.url, before, 'cogmem_shared_retract', { itemHash: 'durable-drop' });
-    expect(retracted.isError).toBe(false);
+    expect(written.isError).toBe(false);
     first.stop();
 
     const second = await start();
     const after = await connect(second.url);
 
-    const subscribed = await call(second.url, after, 'cogmem_shared_subscribe', { collections: ['durable'] });
-    expect(subscribed.isError).toBe(false);
-    expect(subscribed.body.count).toBe(1);
-    expect(subscribed.body.items[0].itemHash).toBe('durable-keep');
-
-    const explained = await call(second.url, after, 'cogmem_shared_explain', { itemHash: 'durable-drop' });
-    expect(explained.body.retracted).toBe(true);
+    const recalled = await call(second.url, after, 'cogmem_recall', {
+      query: `what is kept as ${marker}`,
+      agentId: 'durable-agent',
+      projectId: 'durable-project',
+    });
+    expect(recalled.isError).toBe(false);
+    expect(recalled.raw).toContain(marker);
   });
 });
 
@@ -281,6 +256,6 @@ describe('--db path handling', () => {
     const session = await connect(handle.url);
     const listed = await rpc(handle.url, { jsonrpc: '2.0', id: 30, method: 'tools/list' }, session);
     expect(listed.status).toBe(200);
-    expect(listed.json.result.tools.length).toBe(8);
+    expect(listed.json.result.tools.length).toBe(CORE_TOOLS.length);
   });
 });

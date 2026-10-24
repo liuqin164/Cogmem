@@ -16,7 +16,6 @@ import type { CreateEpisodeInput } from '../../episode/EpisodeStore.js';
 import type { EpisodeListOptions, MemoryEpisode } from '../../episode/EpisodeTypes.js';
 import { MemoryBindingStore } from '../../store/MemoryBindingStore.js';
 import { MemoryBindingService } from '../../binding/MemoryBindingService.js';
-import { SqliteSharedMemory } from './SqliteSharedMemory.js';
 import type { MemoryBindingEventInput } from '../../binding/MemoryBindingService.js';
 import type { MemoryBindingRecord, MemoryGraphRecallAnchor } from '../../binding/MemoryBindingTypes.js';
 import type { MemoryEvent } from '../../types/index.js';
@@ -144,7 +143,12 @@ export interface SqlitePortsOptions {
   recall?: BrainRecall;
   /** Required only if `governance` is used. */
   governance?: MemoryGovernanceExecutor;
-  /** Shared region is not implemented on SQLite; lands with the seekdb backend. */
+  /**
+   * Shared region, when the caller wants one. 4.0 does not create it by
+   * default: constructing a region makes its table exist, and no 4.0 entry
+   * point offers sharing, so an unused table is storage nobody asked for.
+   * See ADR-0005.
+   */
   shared?: SharedMemoryPort;
 }
 
@@ -170,6 +174,6 @@ export function createSqlitePorts(options: SqlitePortsOptions): SqlitePorts {
     graph: new SqliteGraph(bindings),
     recall: options.recall ? new SqliteRecall(options.recall) : null,
     governance: options.governance ? new SqliteGovernance(options.governance) : null,
-    shared: options.shared ?? new SqliteSharedMemory(db),
+    shared: options.shared ?? null,
   };
 }

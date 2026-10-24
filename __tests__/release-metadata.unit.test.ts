@@ -259,18 +259,34 @@ describe('documented tool profile counts match the shipped registry', () => {
     const readme = readText(join(coreRoot, 'README.md'));
     const changelog = readText(join(coreRoot, 'CHANGELOG.md'));
 
-    expect(core).toBe(8);
-    expect(admin).toBe(26);
-    expect(full).toBe(40);
+    expect(core).toBe(6);
+    expect(admin).toBe(22);
+    expect(full).toBe(36);
 
     expect(hosts).toContain(`The server exposes ${full} tools.`);
     expect(hosts).toContain('| `core` | ' + core + ' |');
     expect(hosts).toContain('| `admin` | ' + admin + ' |');
     expect(hosts).toContain('| `full` | ' + full + ' |');
     expect(hosts).toContain(`sees ${core} tools`);
-    expect(hosts).toContain(`8 means the\n\`core\` profile, 40 means \`full\``);
+    expect(hosts).toContain(`${core} means the\n\`core\` profile, ${full} means \`full\``);
     expect(readme).toContain(`bounds the tool surface to ${core}, ${admin}, or ${full} tools`);
     expect(changelog).toContain('`core` (' + core + '), `admin` (' + admin + '), `full` (' + full + ')');
+  });
+
+  test('no shipped document promises a shared-memory tool in 4.0', () => {
+    // #68: 4.0 does not expose shared memory; it is planned for 4.1. A document
+    // that still names one of the four removed tools is a promise a 4.0 host
+    // would follow into `tool_not_found`.
+    for (const file of ['docs/mcp-hosts.md', 'README.md', 'CHANGELOG.md']) {
+      const text = readText(join(coreRoot, file));
+      const named = [
+        'cogmem_shared_publish',
+        'cogmem_shared_retract',
+        'cogmem_shared_subscribe',
+        'cogmem_shared_explain',
+      ].filter((tool) => text.includes(tool));
+      expect({ file, named }).toEqual({ file, named: [] });
+    }
   });
 
   test('every host section cites a vendor reference, and the unverified ones say so', () => {

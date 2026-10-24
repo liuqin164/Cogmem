@@ -5,7 +5,7 @@
  * most of which are maintenance or governance operations it will never call.
  * Profiles bound the surface; `full` remains available for admin clients.
  */
-/** Everyday memory work: recall, record, inspect evidence, read shared items. */
+/** Everyday memory work: recall, record, inspect evidence. */
 export const CORE_TOOLS = [
     'cogmem_recall',
     'cogmem_remember_turn',
@@ -13,8 +13,6 @@ export const CORE_TOOLS = [
     'cogmem_graph_explore',
     'cogmem_graph_node',
     'cogmem_explain_recall',
-    'cogmem_shared_subscribe',
-    'cogmem_shared_explain',
 ];
 /** Core plus the writes and maintenance operations an operator runs on purpose. */
 export const ADMIN_TOOLS = [
@@ -32,8 +30,6 @@ export const ADMIN_TOOLS = [
     'cogmem_memory_frame_review',
     'cogmem_graph_touch',
     'cogmem_prospective',
-    'cogmem_shared_publish',
-    'cogmem_shared_retract',
     'cogmem_import_preview',
     'cogmem_import_apply',
     'cogmem_import_status',

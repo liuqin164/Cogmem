@@ -7,8 +7,6 @@ import {
   type MemoryKernel,
 } from '../factory.js';
 import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
-import type { SharedMemoryPort, SharedItem } from '../ports/index.js';
-import { SqliteSharedMemory } from '../adapters/sqlite/SqliteSharedMemory.js';
 import {
   OpenClawWorkspaceProfile,
   HermesWorkspaceProfile,
@@ -60,9 +58,7 @@ export interface CogmemMcpRuntime {
   dbPath?: string;
   configPath?: string;
   cwd?: string;
-  /** Shared memory region. Absent when the server was started without a database path. */
-  shared?: SharedMemoryPort;
-  /** Host identity, used as the publisher/retractor of shared items. */
+  /** Host identity this connection resolved to, e.g. `claude`, `cursor`, `codex`. */
   hostId?: string;
 }
 
@@ -463,88 +459,6 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
       },
     },
     {
-      name: 'cogmem_shared_subscribe',
-      description: 'Read items other hosts published to the shared region. Retracted items are excluded; use cogmem_shared_explain to inspect a retracted item and its history.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          collections: STRING_ARRAY_SCHEMA,
-          limit: NUMBER_SCHEMA,
-        },
-        required: ['collections'],
-      },
-      annotations: {
-        title: 'Read Shared Memory',
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
-    },
-    {
-      name: 'cogmem_shared_explain',
-      description: 'Inspect one shared item, including its retraction time and author when it has been retracted.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          itemHash: STRING_SCHEMA,
-        },
-        required: ['itemHash'],
-      },
-      annotations: {
-        title: 'Explain Shared Item',
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
-    },
-    {
-      name: 'cogmem_shared_publish',
-      description: 'Publish memory items to the shared region. Idempotent on itemHash: republishing the same hash inserts nothing and returns 0.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          items: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                itemHash: STRING_SCHEMA,
-                sourceItem: STRING_SCHEMA,
-                collection: STRING_SCHEMA,
-                payload: { type: 'object' },
-                publishedAt: NUMBER_SCHEMA,
-              },
-              required: ['itemHash', 'collection'],
-            },
-          },
-        },
-        required: ['items'],
-      },
-      annotations: {
-        title: 'Publish to Shared Memory',
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-      },
-    },
-    {
-      name: 'cogmem_shared_retract',
-      description: 'Soft-retract one of this host\'s published items. It leaves subscriptions but stays explainable; only the publishing host may retract.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          itemHash: STRING_SCHEMA,
-        },
-        required: ['itemHash'],
-      },
-      annotations: {
-        title: 'Retract Shared Item',
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-      },
-    },
-    {
       name: 'cogmem_import_preview',
       description: 'Dry-run scan agent memory sources (OpenClaw/Hermes) and return estimated record counts without ingesting. Use before import to verify source discovery.',
       inputSchema: {
@@ -628,6 +542,22 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
   ];
 }
 
+const COGMEM_TOOL_NAMES = new Set(listCogmemMcpTools().map((tool) => tool.name));
+
+/**
+ * Whether `name` is a tool this build ships, independent of any profile.
+ *
+ * Both entry points need this question answered before they answer a
+ * profile question, and they must not disagree about the answer, so the set
+ * lives here and the protocol handler asks for it rather than rebuilding it.
+ * A name outside this set is answered as missing before a runtime kernel is
+ * opened: a host config that still names a tool this release does not ship
+ * must not touch (or create) a database to be told the tool does not exist.
+ */
+export function isCogmemMcpTool(name: string): boolean {
+  return COGMEM_TOOL_NAMES.has(name);
+}
+
 export async function callCogmemMcpTool(
   name: string,
   args: Record<string, unknown> | undefined,
@@ -636,8 +566,8 @@ export async function callCogmemMcpTool(
   const input = args || {};
   let opened: { kernel: MemoryKernel; shouldClose: boolean } | undefined;
   try {
-    if (name.startsWith('cogmem_shared_')) {
-      return await handleSharedTool(name, input, runtime);
+    if (!isCogmemMcpTool(name)) {
+      return jsonResult({ error: `Unknown cogmem MCP tool: ${name}` }, true);
     }
     opened = openRuntimeKernel(runtime);
     switch (name) {
@@ -1145,70 +1075,6 @@ function openRuntimeKernel(runtime: CogmemMcpRuntime): { kernel: MemoryKernel; s
     }),
     shouldClose: true,
   };
-}
-
-function attachSharedFromKernel(runtime: CogmemMcpRuntime): SharedMemoryPort {
-  const opened = openRuntimeKernel(runtime);
-  // Keep the kernel for the life of the server: the shared port holds its handle.
-  runtime.kernel = opened.kernel;
-  const shared = new SqliteSharedMemory(opened.kernel.eventStore.getDatabase());
-  runtime.shared = shared;
-  return shared;
-}
-
-async function handleSharedTool(
-  name: string,
-  input: Record<string, unknown>,
-  runtime: CogmemMcpRuntime,
-): Promise<CogmemMcpCallResult> {
-  const shared = runtime.shared ?? attachSharedFromKernel(runtime);
-  const host = runtime.hostId ?? 'unknown';
-
-  switch (name) {
-    case 'cogmem_shared_subscribe': {
-      const collections = stringArray(input.collections, 'collections');
-      const items = await shared.subscribe(collections, { limit: optionalNumber(input.limit) });
-      return jsonResult({ collections, count: items.length, items });
-    }
-    case 'cogmem_shared_explain': {
-      const itemHash = requiredString(input.itemHash, 'itemHash');
-      const explained = await shared.explain(itemHash);
-      if (!explained) throw new Error(`shared_item_not_found:${itemHash}`);
-      return jsonResult({
-        item: explained.item,
-        retractedAt: explained.retractedAt,
-        retracted: explained.retractedAt !== null,
-      });
-    }
-    case 'cogmem_shared_publish': {
-      const rawItems = Array.isArray(input.items) ? input.items : [];
-      if (rawItems.length === 0) throw new Error('items must be a non-empty array');
-      const now = Date.now();
-      const items: SharedItem[] = rawItems.map((raw, index) => {
-        const entry = (raw ?? {}) as Record<string, unknown>;
-        return {
-          itemHash: requiredString(entry.itemHash, `items[${index}].itemHash`),
-          collection: requiredString(entry.collection, `items[${index}].collection`),
-          sourceItem: optionalString(entry.sourceItem) ?? '',
-          sourceHost: host,
-          payload: (entry.payload && typeof entry.payload === 'object')
-            ? entry.payload as Record<string, unknown>
-            : {},
-          publishedAt: optionalNumber(entry.publishedAt) ?? now,
-        };
-      });
-      const inserted = await shared.publish(items);
-      return jsonResult({ host, submitted: items.length, inserted, idempotent: inserted < items.length });
-    }
-    case 'cogmem_shared_retract': {
-      const itemHash = requiredString(input.itemHash, 'itemHash');
-      await shared.retract({ itemHash, retractedAt: Date.now(), retractedBy: host });
-      const explained = await shared.explain(itemHash);
-      return jsonResult({ itemHash, retractedBy: host, retractedAt: explained?.retractedAt ?? null });
-    }
-    default:
-      return jsonResult({ error: `Unknown cogmem shared tool: ${name}` }, true);
-  }
 }
 
 type AgentKind = 'openclaw' | 'hermes';
@@ -1846,18 +1712,6 @@ function handleImportStatus(
     returnedSources: sources.length,
     limit,
   });
-}
-
-function stringArray(value: unknown, field: string): string[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`${field} must be a non-empty array of strings`);
-  }
-  for (const entry of value) {
-    if (typeof entry !== 'string' || !entry.trim()) {
-      throw new Error(`${field} must contain only non-empty strings`);
-    }
-  }
-  return value as string[];
 }
 
 function jsonResult(payload: object, isError = false): CogmemMcpCallResult {

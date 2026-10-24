@@ -9,12 +9,12 @@ import {
 
 import {
   callCogmemMcpTool,
+  isCogmemMcpTool,
   listCogmemMcpTools,
   type CogmemMcpRuntime,
 } from './CoreMcpTools.js';
 import { buildMcpInstructions, DEFAULT_TOOL_PROFILE, filterToolsByProfile, isToolAllowed, resolveProfile, type McpToolProfile } from './profiles.js';
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
-import { SqliteSharedMemory } from '../adapters/sqlite/SqliteSharedMemory.js';
 import { CORE_VERSION } from '../version.js';
 
 export interface CogmemMcpServerOptions {
@@ -213,6 +213,20 @@ export function createCogmemMcpServer(
     }
     const effectiveOptions = resolved.effective;
 
+    // Registration is checked before the profile: a name no profile can reach
+    // has to say so, because "not in this profile" implies widening reveals it.
+    if (!isCogmemMcpTool(request.params.name)) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text: `tool_not_found: ${request.params.name} is not a cogmem MCP tool.`,
+          },
+        ],
+      };
+    }
+
     if (!isToolAllowed(effectiveOptions.profile, request.params.name)) {
       return {
         isError: true,
@@ -276,14 +290,13 @@ export async function startCogmemMcpServer(
     });
   })();
 
-  const sharedRuntime: CogmemMcpRuntime = {
+  const serverRuntime: CogmemMcpRuntime = {
     ...runtime,
     kernel,
     hostId: options.hostId ?? runtime.hostId,
-    shared: runtime.shared ?? new SqliteSharedMemory(kernel.eventStore.getDatabase()),
   };
 
-  const server = createCogmemMcpServer(sharedRuntime, options);
+  const server = createCogmemMcpServer(serverRuntime, options);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 

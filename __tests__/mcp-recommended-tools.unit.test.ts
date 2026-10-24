@@ -25,7 +25,6 @@ const NOT_TOOL_NAMES: Record<string, string> = {
   cogmem_bootstrap_state: 'the _cogmem_bootstrap_state migration bookkeeping table',
   cogmem_config: 'the missing_cogmem_config error code, which names a config file',
   cogmem_memory_dream: 'the operator_runs_cogmem_memory_dream schedule-mode token',
-  cogmem_shared_: 'the cogmem_shared_ prefix test in the dispatcher',
 };
 
 /** Every profile that can call `toolName` at all. */
