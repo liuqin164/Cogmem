@@ -12,9 +12,9 @@
  * and a lookup miss cannot be timed to reveal a prefix.
  */
 
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import { defaultCogmemHome } from '../config/CogmemConfig.js';
 import type { McpToolProfile } from './profiles.js';
@@ -118,6 +118,12 @@ export function parseAgentRegistry(raw: unknown): RegisteredAgent[] {
  * every agent as anonymous while the operator believed they were registered.
  */
 export function loadAgentRegistry(path: string): AgentRegistry | undefined {
+  const agents = loadRegisteredAgents(path);
+  return agents === undefined ? undefined : createAgentRegistry(agents);
+}
+
+/** The registered entries themselves, or undefined when the file does not exist. */
+export function loadRegisteredAgents(path: string): RegisteredAgent[] | undefined {
   if (!existsSync(path)) return undefined;
   let parsed: unknown;
   try {
@@ -125,7 +131,60 @@ export function loadAgentRegistry(path: string): AgentRegistry | undefined {
   } catch {
     throw new Error(`agents file is not valid JSON: ${path}`);
   }
-  return createAgentRegistry(parseAgentRegistry(parsed));
+  return parseAgentRegistry(parsed);
+}
+
+export interface RegisterAgentInput {
+  path: string;
+  hostId: string;
+  projectId?: string;
+  profile?: McpToolProfile;
+  /** Replace an existing credential instead of refusing. */
+  rotate?: boolean;
+}
+
+export interface RegisteredAgentCredential extends RegisteredAgent {
+  /** True when an existing entry was replaced. */
+  replaced: boolean;
+}
+
+/**
+ * Mint a credential for one agent and write it into the registry file.
+ *
+ * The credential is generated here and returned exactly once. It is never
+ * recoverable from the file — only its digest is used for comparison, and the
+ * file is written so that only the owner can read it, because a credential that
+ * can be read back later is a credential that leaks out of a backup.
+ *
+ * Replacing an existing entry is refused unless `rotate` is set: silently
+ * swapping a credential breaks the host already using it, and that host's failure
+ * would surface as an authentication error somewhere else entirely.
+ */
+export function registerAgent(input: RegisterAgentInput): RegisteredAgentCredential {
+  const hostId = input.hostId.trim();
+  if (!hostId) throw new Error('hostId must be a non-empty string');
+
+  const existing = loadRegisteredAgents(input.path) ?? [];
+  const current = existing.find((agent) => agent.hostId === hostId);
+  if (current && !input.rotate) {
+    throw new Error(`agent_already_registered:${hostId} — pass --rotate to replace its credential`);
+  }
+
+  const entry: RegisteredAgent = {
+    hostId,
+    token: randomBytes(32).toString('hex'),
+    projectId: input.projectId ?? current?.projectId ?? hostId,
+    profile: input.profile ?? current?.profile,
+  };
+  const next = [...existing.filter((agent) => agent.hostId !== hostId), entry];
+
+  mkdirSync(dirname(input.path), { recursive: true });
+  writeFileSync(input.path, `${JSON.stringify({ agents: next }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  // `mode` on write only applies when the file is created, so an existing file
+  // with looser permissions would keep them.
+  chmodSync(input.path, 0o600);
+
+  return { ...entry, replaced: Boolean(current) };
 }
 
 /** `~/.cogmem/agents.json` — next to the config, and not inside it. */

@@ -15,6 +15,7 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { registerAgent } from '../mcp/AgentRegistry.js';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, resolve, join } from 'node:path';
@@ -96,6 +97,12 @@ interface InitArgs {
   agentExplicit: boolean;
   vectorDimension?: number;
   probeOllama: boolean;
+  /** `--register-agent <hostId>`, repeatable. Registration is not the wizard. */
+  registerAgents: string[];
+  /** `--rotate`: replace an existing agent's credential instead of refusing. */
+  rotateAgents: boolean;
+  /** `--project` for the registered agents; defaults to each agent's hostId. */
+  registerProjectId: string;
 }
 
 /**
@@ -129,6 +136,15 @@ function readArgs(argv: string[]): InitArgs {
   // workspace it was pointed at (project). --scope overrides either.
   const scope = readValue('--scope', yes ? 'project' : 'global');
   const vectorDimension = parseOptionalPositiveInteger(readValue('--vector-dimension', ''), '--vector-dimension');
+  const registerAgents: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] !== '--register-agent') continue;
+    const value = argv[index + 1];
+    if (!value || value.startsWith('--')) {
+      throw new Error('--register-agent needs a hostId, for example --register-agent bot-a');
+    }
+    registerAgents.push(value);
+  }
   return {
     configPath: readValue('--config', ''),
     homePath: readValue('--home', ''),
@@ -140,6 +156,9 @@ function readArgs(argv: string[]): InitArgs {
     agentExplicit,
     vectorDimension,
     probeOllama: !argv.includes('--no-probe'),
+    registerAgents,
+    rotateAgents: argv.includes('--rotate'),
+    registerProjectId: readValue('--project', ''),
   };
 }
 
@@ -955,6 +974,91 @@ function emitInitJson(input: {
   }, null, 2));
 }
 
+// ─── Agent registration (#65) ─────────────────────────────────────────────────
+
+/**
+ * `--register-agent` is not a configuration action.
+ *
+ * It mints a credential and writes the agent registry, and deliberately does not
+ * touch `config.toml`: the second agent on a machine is onboarded long after the
+ * config exists, and this command refuses to overwrite an existing config, so
+ * folding the two together would mean hand-editing a file to add an agent.
+ */
+function runAgentRegistration(args: InitArgs, homeDir: string): void {
+  const agentsPath = join(homeDir, 'agents.json');
+  const registered: Array<Record<string, unknown>> = [];
+  try {
+    for (const hostId of args.registerAgents) {
+      if (args.dryRun) {
+        registered.push({
+          hostId,
+          token: null,
+          projectId: args.registerProjectId || hostId,
+          replaced: false,
+          dryRun: true,
+        });
+        continue;
+      }
+      const agent = registerAgent({
+        path: agentsPath,
+        hostId,
+        projectId: args.registerProjectId || undefined,
+        rotate: args.rotateAgents,
+      });
+      registered.push({
+        hostId: agent.hostId,
+        token: agent.token,
+        projectId: agent.projectId,
+        replaced: agent.replaced,
+        dryRun: false,
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (args.json) {
+      console.error(JSON.stringify({
+        schemaVersion: 'cogmem.cli.v1',
+        command: 'init',
+        status: 'refused',
+        reason: 'agent_registration_failed',
+        agentsPath,
+        message,
+      }, null, 2));
+    } else {
+      console.error(`  ${message}`);
+    }
+    process.exit(1);
+  }
+
+  if (args.json) {
+    console.log(JSON.stringify({
+      schemaVersion: 'cogmem.cli.v1',
+      command: 'init',
+      status: args.dryRun ? 'dry_run' : 'registered',
+      dryRun: args.dryRun,
+      written: !args.dryRun,
+      agentsPath,
+      registeredAgents: registered,
+    }, null, 2));
+    return;
+  }
+
+  console.log('');
+  console.log(args.dryRun
+    ? `  Dry run: would register ${registered.length} agent(s) in ${agentsPath}`
+    : `  Registered ${registered.length} agent(s) in ${agentsPath}`);
+  for (const entry of registered) {
+    console.log(`    ${String(entry.hostId)}   project=${String(entry.projectId)}`);
+    console.log(`      credential: ${args.dryRun ? '(dry run — nothing generated)' : String(entry.token)}`);
+  }
+  if (!args.dryRun) {
+    console.log('');
+    console.log('  Store each credential now. The registry keeps only a digest, so it cannot');
+    console.log('  be read back: a lost credential is replaced with --rotate.');
+  }
+  console.log('');
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -965,6 +1069,10 @@ async function main(): Promise<void> {
   const say = (line = ''): void => {
     if (!args.json) console.log(line);
   };
+  if (args.registerAgents.length > 0) {
+    runAgentRegistration(args, resolveInstallTarget(args).homeDir);
+    return;
+  }
   say('');
   say('╔═══════════════════════════════════════════════════════════════╗');
   say('║                  cogmem — Memory Kernel Init                 ║');

@@ -206,6 +206,21 @@ A missing file is the single-agent case and is not an error. A file that exists
 and cannot be read is an error, because serving every agent as anonymous while
 the operator believes they are registered is the failure the file prevents.
 
+Register an agent with `init`, which mints the credential for you:
+
+```bash
+cogmem init --register-agent bot-a                    # prints the credential once
+cogmem init --register-agent bot-b                    # add a second agent later
+cogmem init --register-agent bot-a --rotate           # replace a lost credential
+cogmem init --register-agent bot-c --dry-run --json   # see what it would write
+```
+
+Each run writes `agents.json` and prints the credential exactly once — the file
+keeps only a digest, so it cannot be read back. `--rotate` is required to replace
+an existing credential, because silently swapping one breaks the host already
+using it. This mode never writes `config.toml`: that is what lets the second
+agent be onboarded on a machine whose config already exists.
+
 ## Claude Code
 
 ```bash

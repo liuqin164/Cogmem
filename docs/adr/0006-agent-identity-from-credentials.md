@@ -67,11 +67,16 @@ another is not registered, it is a shared secret.
 **`--agents <path>` overrides the location**, and `cogmem mcp --transport http`
 loads `~/.cogmem/agents.json` when it exists.
 
-## How `init` generates credentials (decided; not built yet)
+## How `init` generates credentials
 
-The registration file is hand-written today. The mechanism that will produce it
-is fixed here, so the CLI has one shape to implement rather than a direction to
-guess:
+Registration is a mode of `init`, not part of its configuration flow:
+`--register-agent` writes the registry and returns without touching
+`config.toml`. That is forced by the order things happen in — the second agent on
+a machine is onboarded long after the config exists, and `init` refuses to
+overwrite an existing config — so folding registration into configuration would
+mean hand-editing a file to add an agent.
+
+The shape, all of it implemented:
 
 - **`cogmem init --register-agent <hostId>`**, repeatable, generates a credential
   for that agent and writes or updates its entry. The credential is 32 bytes from

@@ -44,6 +44,33 @@ export declare function parseAgentRegistry(raw: unknown): RegisteredAgent[];
  * every agent as anonymous while the operator believed they were registered.
  */
 export declare function loadAgentRegistry(path: string): AgentRegistry | undefined;
+/** The registered entries themselves, or undefined when the file does not exist. */
+export declare function loadRegisteredAgents(path: string): RegisteredAgent[] | undefined;
+export interface RegisterAgentInput {
+    path: string;
+    hostId: string;
+    projectId?: string;
+    profile?: McpToolProfile;
+    /** Replace an existing credential instead of refusing. */
+    rotate?: boolean;
+}
+export interface RegisteredAgentCredential extends RegisteredAgent {
+    /** True when an existing entry was replaced. */
+    replaced: boolean;
+}
+/**
+ * Mint a credential for one agent and write it into the registry file.
+ *
+ * The credential is generated here and returned exactly once. It is never
+ * recoverable from the file — only its digest is used for comparison, and the
+ * file is written so that only the owner can read it, because a credential that
+ * can be read back later is a credential that leaks out of a backup.
+ *
+ * Replacing an existing entry is refused unless `rotate` is set: silently
+ * swapping a credential breaks the host already using it, and that host's failure
+ * would surface as an authentication error somewhere else entirely.
+ */
+export declare function registerAgent(input: RegisterAgentInput): RegisteredAgentCredential;
 /** `~/.cogmem/agents.json` — next to the config, and not inside it. */
 export declare function defaultAgentRegistryPath(env?: NodeJS.ProcessEnv): string;
 //# sourceMappingURL=AgentRegistry.d.ts.map
