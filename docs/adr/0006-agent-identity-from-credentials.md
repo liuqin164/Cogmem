@@ -67,6 +67,31 @@ another is not registered, it is a shared secret.
 **`--agents <path>` overrides the location**, and `cogmem mcp --transport http`
 loads `~/.cogmem/agents.json` when it exists.
 
+## How `init` generates credentials (decided; not built yet)
+
+The registration file is hand-written today. The mechanism that will produce it
+is fixed here, so the CLI has one shape to implement rather than a direction to
+guess:
+
+- **`cogmem init --register-agent <hostId>`**, repeatable, generates a credential
+  for that agent and writes or updates its entry. The credential is 32 bytes from
+  a CSPRNG, hex-encoded, and is printed **once**, at creation, because the stored
+  form is not reversible and a credential that can be read back later is a
+  credential that leaks out of backups.
+- **Defaults follow the existing convention:** `projectId` is the `hostId` unless
+  `--project` says otherwise, matching the way one agent has meant one project
+  everywhere else in the product; the profile ceiling is the profile the server
+  was launched with, because registering an agent should not silently grant more
+  than the operator already gave the server.
+- **Re-running for an existing `hostId` refuses to overwrite** unless `--rotate`
+  is passed. Silently replacing a credential breaks the host already using it, and
+  that failure would surface as an authentication error in someone else's logs.
+- **`init --yes` does the same unattended**, with those defaults, and reports the
+  registered agents as steps the way it reports every other unattended decision.
+- **The one-line installer still installs and stops** (ADR-0003) and registers
+  nothing. Registration is configuration, and that installer does not write
+  configuration.
+
 ## Alternatives rejected
 
 - **Keep the single global `--token` and let the header name the agent.** This is
