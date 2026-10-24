@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -85,6 +85,17 @@ describe('install step shape', () => {
     expect(resolveCliBinDir('/home/u/proj/src/bin/doctor.ts', {})).toBeUndefined();
     expect(resolveCliBinDir(undefined, {})).toBeUndefined();
     expect(resolveCliBinDir('/home/u/proj/src/bin/doctor.ts', { COGMEM_BIN_DIR: '/opt/bin' })).toBe('/opt/bin');
+  });
+
+  test('finds the installed launcher when argv1 is the symlink target', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cogmem-launcher-path-'));
+    const binDir = join(dir, 'bin');
+    const launcher = join(dir, 'package', 'dist', 'bin', 'cogmem.js');
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(dirname(launcher), { recursive: true });
+    writeFileSync(launcher, '#!/usr/bin/env bun\n');
+    symlinkSync(launcher, join(binDir, 'cogmem'));
+    expect(resolveCliBinDir(launcher, { PATH: binDir })).toBe(binDir);
   });
 
   test('PATH membership compares resolved directories', () => {
@@ -178,7 +189,7 @@ describe('the install gate answers four outcomes', () => {
     expect(absolute.command).toContain(binDir);
   });
 
-  test('a broken config reports FAIL and exits 1', async () => {
+  test('a broken config reports FAIL and exits 1 in text and JSON modes', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cogmem-gate-fail-'));
     const configPath = join(dir, '.cogmem', 'config.toml');
     mkdirSync(dirname(configPath), { recursive: true });
@@ -188,9 +199,17 @@ describe('the install gate answers four outcomes', () => {
       '[memory_model]',
       'provider = "not_a_provider"',
     ].join('\n'));
-    const { stderr, exitCode } = await run(['bun', doctorBin, '--config', configPath], {});
-    expect(exitCode).toBe(1);
-    expect(stderr).toContain('FAIL');
+    const text = await run(['bun', doctorBin, '--config', configPath], {});
+    expect(text.exitCode).toBe(1);
+    expect(text.stderr).toContain('FAIL');
+
+    const json = await run(['bun', doctorBin, '--config', configPath, '--json'], {});
+    expect(json.exitCode).toBe(1);
+    expect(json.stderr).toBe('');
+    const parsed = JSON.parse(json.stdout);
+    expect(parsed.installGate.level).toBe('fail');
+    expect(parsed.installGate.exitCode).toBe(1);
+    expect(parsed.installGate.diagnostics[0].code).toBe('invalid_model_provider');
   });
 });
 

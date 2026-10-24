@@ -51,7 +51,11 @@ function printWarnings(diagnostics: Array<{ severity: string; code: string; mess
   }
 }
 
-function fail(message: string): never {
+function fail(message: string, code = 'doctor_failed'): never {
+  if (json) {
+    emitGate(buildGate('fail', [{ code, message }], []));
+    process.exit(1);
+  }
   console.error(`FAIL ${message}`);
   process.exit(1);
 }
@@ -136,7 +140,7 @@ if (envPath) {
 
   const loaded = loadCogmemConfig({ configPath: resolution.path });
   const error = loaded.diagnostics.find((diagnostic) => diagnostic.severity === 'error');
-  if (error) fail(`${error.code}: ${error.message}`);
+  if (error) fail(`${error.code}: ${error.message}`, error.code);
 
   if (pluginOnly) {
     if (agent && agent !== 'openclaw') fail('doctor --plugin-only currently supports --agent openclaw.');

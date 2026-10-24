@@ -49,8 +49,9 @@ export type HostIntegration = 'openclaw' | 'hermes';
 export declare function connectSteps(host: HostIntegration, bin: string): InstallStep[];
 /**
  * The directory the CLI is installed into, when it can be told apart from a
- * source checkout. `COGMEM_BIN_DIR` wins; otherwise a CLI whose parent
- * directory is named `bin` or `.bin` is an installed one.
+ * source checkout. `COGMEM_BIN_DIR` wins. The dispatcher may be invoked via a
+ * symlink that Bun/Node resolves in `process.argv[1]`, so also match the
+ * launched file against `cogmem` entries on PATH.
  */
 export declare function resolveCliBinDir(argv1: string | undefined, env?: Record<string, string | undefined>): string | undefined;
 export declare function isOnPath(dir: string, env?: Record<string, string | undefined>): boolean;

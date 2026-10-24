@@ -1,4 +1,5 @@
-import { basename, dirname, resolve } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { basename, delimiter, dirname, join, resolve } from 'node:path';
 
 /**
  * The Install actor vocabulary: who carries out one install step.
@@ -217,8 +218,9 @@ export function connectSteps(host: HostIntegration, bin: string): InstallStep[] 
 
 /**
  * The directory the CLI is installed into, when it can be told apart from a
- * source checkout. `COGMEM_BIN_DIR` wins; otherwise a CLI whose parent
- * directory is named `bin` or `.bin` is an installed one.
+ * source checkout. `COGMEM_BIN_DIR` wins. The dispatcher may be invoked via a
+ * symlink that Bun/Node resolves in `process.argv[1]`, so also match the
+ * launched file against `cogmem` entries on PATH.
  */
 export function resolveCliBinDir(
   argv1: string | undefined,
@@ -228,13 +230,30 @@ export function resolveCliBinDir(
   if (override) return resolve(override);
   if (!argv1) return undefined;
   const script = resolve(argv1);
+  const leaf = basename(script);
   // Only a launcher named for the CLI counts: a source checkout runs
   // `src/bin/doctor.ts`, which is not an installed layout.
-  const leaf = basename(script);
   if (leaf !== 'cogmem' && !/^cogmem\.[cm]?js$/.test(leaf)) return undefined;
   const dir = dirname(script);
   const base = basename(dir);
-  return base === 'bin' || base === '.bin' ? dir : undefined;
+  if ((base === 'bin' || base === '.bin') && leaf === 'cogmem') return dir;
+
+  let launchedFile: string;
+  try {
+    launchedFile = realpathSync(script);
+  } catch {
+    return undefined;
+  }
+  for (const entry of (env.PATH ?? '').split(delimiter).filter(Boolean)) {
+    const candidate = join(resolve(entry), 'cogmem');
+    if (!existsSync(candidate)) continue;
+    try {
+      if (realpathSync(candidate) === launchedFile) return resolve(entry);
+    } catch {
+      // Ignore an invalid PATH entry and continue looking for the launcher.
+    }
+  }
+  return undefined;
 }
 
 export function isOnPath(dir: string, env: Record<string, string | undefined> = process.env): boolean {
