@@ -64,9 +64,32 @@ _Avoid_: required/optional, basic/advanced
 The single check install, update and connect all end on. It answers not installed, OK, WARN (installed but degraded) or FAIL, and always names the next step.
 _Avoid_: health check, smoke test, verification
 
+### Hosts
+
+**Host**（宿主）:
+An agent runtime Cogmem is attached to. It owns the model, the prompt, and the turn; Cogmem owns none of those.
+_Avoid_: client, integration, platform, backend
+
+**Host hook**（宿主钩子）:
+A point where a runtime lets outside code run inside its own turn. Which hooks exist is a property of the host, not of Cogmem.
+_Avoid_: callback, event, extension point, plugin API
+
+**Push hook**（推送钩子）:
+A **Host hook** that runs before the model answers, so memory can be in the prompt without the model asking. A host may expose one and still have no Cogmem adapter using it.
+_Avoid_: pre-prompt hook, injection point, auto-recall, preload
+
+**Host adapter**（宿主适配器）:
+The per-host piece that turns one host's hook into a request to the **Memory bridge** and puts the answer into the prompt.
+_Avoid_: plugin, connector, driver, shim
+
+**Memory bridge**（记忆桥）:
+The single resident process holding the only connection to a memory database, which every **Host adapter** talks to.
+_Avoid_: daemon, server, backend service, gateway
+
 ### Candidates
 
 **Promotion target**（提升目标）:
-What a candidate became or was replaced by. Its type names either the referent (`fact`, `belief`, `entity`, `graph_edge`, `replacement_candidate`) or, for a candidate retired without a successor, the reason class (`review_queue_expiry`, `diagnostic_conclusion`); its id exists only when there is a real referent, and never points at the row itself.
+What a candidate became, was replaced by, or is about. Its type names one of three classes: the referent (`fact`, `belief`, `summary`, `entity`, `graph_edge`, `replacement_candidate`), the locator the candidate is about (`semantic_tags`, `indexing_decision`, `semantic_relation`, `edge_adjustment`), or, for a candidate retired without a successor, the reason class (`review_queue_expiry`, `diagnostic_conclusion`).
+A referent id is the id of a stored row; a locator id is an event id (`evt-…`) or a topic path (`memory/auditability`), never a row id; a reason class carries no id. The id is empty when the candidate names none of those, and it never points at the row itself.
 _Avoid_: parent, source, status reason
 
