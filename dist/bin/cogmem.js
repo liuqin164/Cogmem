@@ -2,6 +2,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveCliBinDir } from '../install/InstallSteps.js';
 const COMMANDS = {
     init: 'init',
     doctor: 'doctor',
@@ -76,13 +77,17 @@ async function main() {
         console.error(usage());
         process.exit(1);
     }
+    const env = { ...process.env };
+    const binDir = resolveCliBinDir(process.argv[1], env);
+    if (binDir)
+        env.COGMEM_BIN_DIR = binDir;
     const proc = Bun.spawn({
         cmd: [process.execPath || 'bun', siblingEntrypoint(entrypoint), ...rest],
         cwd: process.cwd(),
         stdin: 'inherit',
         stdout: 'pipe',
         stderr: 'pipe',
-        env: process.env,
+        env,
     });
     const stdout = await new Response(proc.stdout).text();
     const stderr = await new Response(proc.stderr).text();

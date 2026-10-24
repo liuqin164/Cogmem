@@ -89,11 +89,23 @@ describe('core release metadata', () => {
     expect(installer).toContain('PACKAGE_SPEC');
     expect(installer).toContain('cogmem@$PACKAGE_SPEC');
     expect(installer).toContain('bun add');
-    expect(installer).toContain('"$BIN_DIR/cogmem" init');
-    expect(installer).toContain('/dev/tty');
     expect(installer).not.toContain('/releases/latest');
     expect(installer).not.toContain('CognitiveOS-core');
     expect(installer).not.toContain('@CognitiveOS/core');
+  });
+
+  test('the installer installs and stops: it never runs the wizard', () => {
+    const installer = readText(join(coreRoot, 'install.sh'));
+
+    // The installer installs and links. Setup is a separate, visible step.
+    expect(installer).not.toContain('/dev/tty');
+    expect(installer).not.toContain('COGMEM_INIT_ARGS');
+    expect(installer).not.toMatch(/cogmem"?\s+init\s*[<"]/);
+    // Both Install paths are named, each with its actor.
+    expect(installer).toContain('init --yes');
+    expect(installer).toContain('doctor');
+    // The old switch still works, and does nothing.
+    expect(installer).toContain('COGMEM_SKIP_INIT');
   });
 
   test('local databases and desktop metadata are not tracked as release files', async () => {

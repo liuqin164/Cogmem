@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { printCliJson } from './CliJson.js';
 import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
+import { buildGate, postInstallSteps } from '../install/InstallSteps.js';
 function readArgs(argv) {
     const values = {};
     for (let index = 0; index < argv.length; index += 1) {
@@ -178,6 +179,15 @@ async function runCommand(cmd, cwd) {
     });
     return proc.exited;
 }
+async function runCommandCapture(cmd, cwd) {
+    const proc = Bun.spawn({ cmd, cwd, stdout: 'pipe', stderr: 'pipe' });
+    const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+    ]);
+    return { stdout, stderr, exitCode };
+}
 async function main() {
     const args = readArgs(process.argv.slice(2));
     const resolvedSpec = args.from === 'latest'
@@ -230,11 +240,43 @@ async function main() {
         followUp: restartRequired.length > 0
             ? `After update finishes, ${restartRequired.join('; ')}.`
             : 'After update finishes, restart any running agent host so it loads the new Cogmem CLI.',
+        installGate: undefined,
+        nextSteps: [],
+        postUpdateGateCommand: undefined,
+        gateError: undefined,
     };
-    if (args.json) {
+    // The gate runs last, so post-update verification is the same contract as a
+    // fresh install rather than a second one with its own wording. A missing
+    // config is "not installed", not a failure: an updater may run before setup.
+    const gateBin = target.kind === 'npm_global' ? 'cogmem' : target.bin;
+    const gateSteps = config.configPath
+        ? postInstallSteps(gateBin)
+        : [
+            {
+                id: 'init',
+                actor: 'operator',
+                safeForAutomation: false,
+                command: `${gateBin} init`,
+                when: 'now',
+                purpose: 'no config exists yet, so the update had nothing to migrate',
+            },
+            {
+                id: 'agent_init',
+                actor: 'agent',
+                safeForAutomation: true,
+                command: `${gateBin} init --yes --json`,
+                when: 'now, with no human present',
+                purpose: 'non-interactive config; Human-required settings fall back to conservative defaults',
+            },
+        ];
+    result.nextSteps = gateSteps;
+    result.postUpdateGateCommand = `${gateBin} doctor${args.json ? ' --json' : ''}`;
+    if (args.dryRun && args.json) {
+        // A dry run has not checked the updated install, so do not publish a
+        // fabricated OK/NOT_INSTALLED gate. Name the command that will check it.
         printCliJson('update', result);
     }
-    else {
+    else if (!args.json) {
         console.log(`cogmem update ${args.dryRun ? 'dry-run' : 'running'}`);
         console.log(`target: ${result.targetCwd}`);
         if (result.updateWarning)
@@ -246,6 +288,8 @@ async function main() {
         if (result.openclawRepairCommand)
             console.log(`openclaw: ${result.openclawRepairCommand}`);
         console.log(result.followUp);
+        if (args.dryRun)
+            console.log(`Post-update gate: ${result.postUpdateGateCommand}`);
     }
     if (!args.dryRun) {
         const updateExitCode = await runCommand(command, target.cwd);
@@ -261,9 +305,26 @@ async function main() {
             if (repairExitCode !== 0)
                 process.exit(repairExitCode);
         }
-        if (!args.json)
-            console.log(result.followUp);
-        process.exit(0);
+        if (args.json) {
+            const gateRun = await runCommandCapture([gateBin, 'doctor', '--json'], process.cwd());
+            try {
+                const gatePayload = JSON.parse(gateRun.stdout);
+                if (!gatePayload.installGate)
+                    throw new Error('doctor JSON did not include installGate');
+                result.installGate = gatePayload.installGate;
+                result.nextSteps = gatePayload.nextSteps || [];
+            }
+            catch (error) {
+                result.installGate = buildGate('fail', [{
+                        code: 'post_update_gate_unreadable',
+                        message: error instanceof Error ? error.message : String(error),
+                    }], []);
+                result.gateError = gateRun.stderr || gateRun.stdout;
+            }
+            printCliJson('update', result);
+            process.exit(Math.max(gateRun.exitCode, result.installGate?.exitCode ?? 1));
+        }
+        process.exit(await runCommand([gateBin, 'doctor'], process.cwd()));
     }
 }
 main().catch((error) => {

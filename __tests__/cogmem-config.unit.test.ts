@@ -145,13 +145,10 @@ test('resolveCogmemConfigPath prefers TOML configs and ignores legacy env files'
   expect(rootResult.path).toContain('.cogmem/config.toml');
   expect(rootResult.path).not.toContain('.cogmem.env');
 
-  // With a HOME that has an empty .cogmem dir (no config.toml), findUp won't find one
-  // and it will return missing with the default path for that HOME.
-  // But if the real global config exists, findUp will find it.
-  // So we just check it returns a valid toml config path (either the mock or real one).
+  // An isolated HOME with no config must stay missing; don't make this test depend
+  // on whether the machine running it has its own global Cogmem config.
   const emptyResult = resolveCogmemConfigPath({ cwd: root, env: { HOME: emptyHome } });
-  expect(emptyResult.kind).toBe('toml');
-  expect(emptyResult.path).toContain('.cogmem/config.toml');
+  expect(emptyResult).toEqual({ kind: 'missing', path: emptyConfig });
 });
 
 test('loadCogmemConfig builds model registry directly from TOML', () => {
