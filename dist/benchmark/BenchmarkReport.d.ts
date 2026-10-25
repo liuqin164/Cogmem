@@ -2,6 +2,8 @@ import type { BenchmarkBaselineResult, BenchmarkGroupResult } from './BenchmarkR
 export interface PersistedBenchmarkGroup {
     name: string;
     passed: boolean;
+    /** False when the suite behind this group measured nothing (#71). */
+    measured: boolean;
     baselines: BenchmarkBaselineResult[];
 }
 export interface PersistedBenchmarkReport {

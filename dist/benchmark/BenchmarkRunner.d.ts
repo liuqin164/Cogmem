@@ -15,6 +15,8 @@ export interface BenchmarkGroupResult {
     suiteResult: EvalSuiteResult;
     baselineResults: BenchmarkBaselineResult[];
     passed: boolean;
+    /** False when the suite measured nothing, in which case nothing passed (#71). */
+    measured: boolean;
 }
 export declare class BenchmarkRunner {
     private evalRunner;

@@ -55,16 +55,22 @@ must not be published as evidence that cogmem recalls better or worse than a vec
 index; it is evidence about this fixture.** Widening the fixture is the useful next
 step, and the ablations in #51 (Dream Curator off, Atlas off) belong with it.
 
-### The benchmark groups measure constants, not measurements
+### The benchmark groups have no numbers to publish
 
-`BenchmarkRunner.runGroup` reads its values from `EvalRunner.runSuite`, which returns a
-fixed `CORE_EVAL_METRICS` table and reads no data
-(`src/eval/runners/EvalRunner.ts`). The group results, their thresholds and their
-pass/fail are therefore comparisons between constants, which is why this file publishes
-no numbers for them. `BrainEval` is honest in a different way — it scores samples that
-are supplied to it — but the group machinery in between does neither, and anything
-citing those groups as evidence should be read with that in mind. The scorecard above
-runs the kernel and measures it.
+**No suite is implemented.** `EvalRunner.runSuite` used to return a fixed table of
+plausible values — 100% delivery, 0% leakage, a 0.05 token ratio — so `BenchmarkRunner`
+compared constants against thresholds and the groups passed, and the proposal verdicts
+that read those groups were decided by numbers that never depended on the proposal. That
+is fixed: a suite reports `measured: false` and **no metrics**, a group whose suite
+measured nothing has no baselines and cannot pass, and a proposal is not accepted on
+unmeasured groups. The report says `not measured` in words rather than printing zeroes,
+because a group that vanishes from a report reads like a group that passed.
+
+`__tests__/eval-suites-unmeasured.unit.test.ts` holds that line: it fails if any suite
+reports a metric, if any group passes without a measurement, and if the report stops
+saying so. `BrainEval` is honest in a different way — it scores samples supplied to it —
+and the scorecard above runs the kernel and measures it. The group machinery is the
+placeholder, and it now says so instead of inventing numbers.
 ## BrainEval 3.6.0
 
 `cogmem brain-eval --input samples.json` is the end-to-end memory-brain gate. It fails on recall below 90%, precision below 80%, provenance below 95%, binding purity below 90%, temporal current-truth accuracy below 95%, or any false entity merge, invalid user-belief ownership, context pollution, source mismatch, stale/cross-project leakage, context-budget violation, or prospective activation without confirmation. Input samples can include domain checks for canonical topic paths, entity merge decisions, user evidence ownership, temporal versions, context pollution, and exact source event identity.

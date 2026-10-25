@@ -3,6 +3,14 @@ import { join } from 'node:path';
 function formatPercent(value) {
     return `${(value * 100).toFixed(1)}%`;
 }
+/**
+ * A suite that measured nothing is reported as such (#71). Printing `0.0%` for a
+ * metric nobody took reads as a result — and a flattering one, since several of
+ * these thresholds are "must be below".
+ */
+function describe(result, text) {
+    return result?.measured ? text : 'not measured';
+}
 function formatNumber(value) {
     return Number.isInteger(value) ? `${value}` : value.toFixed(3);
 }
@@ -22,15 +30,15 @@ export class ReportFormatter {
             '',
             '| Suite | Passed | Key metrics |',
             '| --- | --- | --- |',
-            `| memory_recall | ${memory?.passed ? 'yes' : 'no'} | brain stale leakage ${formatPercent(memory?.metrics.brain_stale_leakage ?? 0)}, dump-all ${formatPercent(memory?.metrics.dump_all_stale_leakage ?? 0)}, ratio ${formatPercent(memory?.metrics.brain_vs_dump_stale_leakage_ratio ?? 0)} |`,
-            `| context_pack | ${context?.passed ? 'yes' : 'no'} | brain avg tokens ${formatNumber(context?.metrics.brain_avg_tokens ?? 0)}, dump-all ${formatNumber(context?.metrics.dump_all_avg_tokens ?? 0)}, ratio ${formatPercent(context?.metrics.brain_vs_dump_token_ratio ?? 0)} |`,
-            `| long_horizon | ${horizon?.passed ? 'yes' : 'no'} | resume 200-turn ${formatPercent(horizon?.metrics.resume_success_rate_200_turns ?? 0)}, decision consistency ${formatPercent(horizon?.metrics.decision_consistency ?? 0)}, critical recall ${formatPercent(horizon?.metrics.critical_memory_recall_rate ?? 0)} |`,
+            `| memory_recall | ${memory?.measured ? (memory.passed ? 'yes' : 'no') : 'not measured'} | ${describe(memory, `brain stale leakage ${formatPercent(memory?.metrics.brain_stale_leakage ?? 0)}, dump-all ${formatPercent(memory?.metrics.dump_all_stale_leakage ?? 0)}, ratio ${formatPercent(memory?.metrics.brain_vs_dump_stale_leakage_ratio ?? 0)}`)} |`,
+            `| context_pack | ${context?.measured ? (context.passed ? 'yes' : 'no') : 'not measured'} | ${describe(context, `brain avg tokens ${formatNumber(context?.metrics.brain_avg_tokens ?? 0)}, dump-all ${formatNumber(context?.metrics.dump_all_avg_tokens ?? 0)}, ratio ${formatPercent(context?.metrics.brain_vs_dump_token_ratio ?? 0)}`)} |`,
+            `| long_horizon | ${horizon?.measured ? (horizon.passed ? 'yes' : 'no') : 'not measured'} | ${describe(horizon, `resume 200-turn ${formatPercent(horizon?.metrics.resume_success_rate_200_turns ?? 0)}, decision consistency ${formatPercent(horizon?.metrics.decision_consistency ?? 0)}, critical recall ${formatPercent(horizon?.metrics.critical_memory_recall_rate ?? 0)}`)} |`,
             '',
             '## Acceptance',
             '',
-            `- BrainRecall stale leakage vs DumpAllHistory: ${formatPercent(memory?.metrics.brain_vs_dump_stale_leakage_ratio ?? 0)}`,
-            `- ContextPack token ratio vs DumpAllHistory: ${formatPercent(context?.metrics.brain_vs_dump_token_ratio ?? 0)}`,
-            `- Long-horizon 200-turn resume success: ${formatPercent(horizon?.metrics.resume_success_rate_200_turns ?? 0)}`,
+            `- BrainRecall stale leakage vs DumpAllHistory: ${describe(memory, formatPercent(memory?.metrics.brain_vs_dump_stale_leakage_ratio ?? 0))}`,
+            `- ContextPack token ratio vs DumpAllHistory: ${describe(context, formatPercent(context?.metrics.brain_vs_dump_token_ratio ?? 0))}`,
+            `- Long-horizon 200-turn resume success: ${describe(horizon, formatPercent(horizon?.metrics.resume_success_rate_200_turns ?? 0))}`,
         ].join('\n');
     }
     writeReports(results, rootDir = 'eval/reports') {

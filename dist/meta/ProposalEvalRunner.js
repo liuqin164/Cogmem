@@ -35,7 +35,11 @@ export class ProposalEvalRunner {
             threshold: baseline.threshold,
             operator: baseline.operator
         })));
-        const passed = regressions.length === 0;
+        // A proposal is not accepted on unmeasured groups (#71): with no
+        // measurement there are no regressions either, and "no regressions" used to be
+        // enough to pass.
+        const measured = benchmarkResults.every((result) => result.measured);
+        const passed = measured && regressions.length === 0;
         const reportText = this.report.formatConsole(benchmarkResults);
         const ranAt = Math.max(...evalResults.map((result) => result.runAt));
         this.ledger.updateStatus(proposalId, passed ? 'passed_eval' : 'failed_eval', {

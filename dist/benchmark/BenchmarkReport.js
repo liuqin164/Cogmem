@@ -8,6 +8,12 @@ export class BenchmarkReport {
             '=================================='
         ];
         for (const result of report.groups) {
+            if (!result.measured) {
+                // Said in words rather than skipped: a group that vanishes from the report
+                // looks like a group that passed, and this one did not run.
+                lines.push(`${result.name.padEnd(26)} not measured — no suite is implemented`);
+                continue;
+            }
             const firstBaseline = result.baselines[0];
             if (!firstBaseline) {
                 continue;
@@ -22,9 +28,12 @@ export class BenchmarkReport {
             }
         }
         lines.push('');
-        lines.push(report.passed
-            ? `All ${report.groups.length} benchmark suites passed. ✓`
-            : `${report.groups.filter((group) => !group.passed).length} suite(s) FAILED. ✗`);
+        const measured = report.groups.filter((group) => group.measured);
+        lines.push(measured.length === 0
+            ? `No benchmark suite is implemented, so nothing was measured (${report.groups.length} group(s)).`
+            : measured.every((group) => group.passed)
+                ? `All ${measured.length} measured benchmark suite(s) passed. ✓`
+                : `${measured.filter((group) => !group.passed).length} suite(s) FAILED. ✗`);
         return lines.join('\n');
     }
     formatJson(results) {
@@ -45,6 +54,7 @@ export class BenchmarkReport {
             groups: results.map((result) => ({
                 name: result.group.name,
                 passed: result.passed,
+                measured: result.measured,
                 baselines: result.baselineResults
             }))
         };
