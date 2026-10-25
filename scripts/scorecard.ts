@@ -33,7 +33,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
+import { contextCandidateFromRecallItem } from '../src/host/RecallBlock.js';
 
 const TOPICS = [
   'deployment window', 'backup vault rotation', 'certificate renewal', 'index rebuild',
@@ -112,6 +114,11 @@ export function buildScenarios(items: number, seed: number): Scenario[] {
  * only thing that can keep the stale value out of the context is suppression.
  */
 export function buildSupersessionScenarios(items: number, seed: number, options: { markStale?: boolean } = {}): Scenario[] {
+  // Each family gets its own projects: two families that ingest the same content into
+  // the same project leave two neurons per turn, and a recall that finds the untagged
+  // one reports leakage that the marked neuron would have been suppressed for. That is
+  // a measurement artifact, and it looked exactly like a product defect.
+  const prefix = options.markStale ? 'scorecard-m' : 'scorecard-s';
   const random = makeRandom(seed + 977);
   const scenarios: Scenario[] = [];
   for (let index = 0; index < items; index += 1) {
@@ -150,7 +157,7 @@ export function buildSupersessionScenarios(items: number, seed: number, options:
       });
     }
     scenarios.push({
-      projectId: `scorecard-s${index}`,
+      projectId: `${prefix}${index}`,
       query: `When is the ${topic} for ${team} now scheduled?`,
       turns,
       answer: current,
@@ -290,10 +297,62 @@ function measure(context: ContextItem[], latencyMs: number, scenario: Scenario):
   };
 }
 
+/**
+ * Family C: the path a host actually takes, which is not `kernel.recall`.
+ *
+ * The agent backend returns recall items, `contextCandidateFromRecallItem` turns them
+ * into context candidates, and `ContextCortex.plan` decides what reaches the model —
+ * including `hardSuppressionReason`, which is where `status:superseded` is honoured
+ * (`src/context/ContextCortex.ts`). Measuring `kernel.recall` alone describes the
+ * evidence list, not the prompt, and those are different artifacts.
+ */
+async function runHostPath(kernel: ReturnType<typeof createMemoryKernel>, scenarios: Scenario[], now: number): Promise<ArmResult[]> {
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const rawItems: PerItem[] = [];
+  const planned: PerItem[] = [];
+
+  for (const [scenarioIndex, scenario] of scenarios.entries()) {
+    // The turns are already in the store from the family that ingested them, tags and
+    // all: this family measures the *read* path, and `rememberTurn` has no way to
+    // carry `status:superseded`, so ingesting here would silently mark nothing.
+    const before = performance.now();
+    const result = backend.recall({ agentId: 'scorecard', projectId: scenario.projectId, query: scenario.query, limit: 8, now });
+    const latencyMs = performance.now() - before;
+    rawItems.push(measure(result.items.map((item) => ({ text: String((item as { text?: string }).text ?? ''), hasProvenance: Boolean((item as { id?: string }).id) })), latencyMs, scenario));
+
+    if (process.env.COGMEM_SCORECARD_DEBUG === '1' && scenarioIndex === 0) {
+      const first = result.items.find((item) => String(item.text).includes(scenario.superseded ?? '\u0000'));
+      console.error(`[debug] item carrying the stale value: ${first ? 'found' : 'absent'} | tags=${JSON.stringify(first?.tags ?? [])} | candidate.superseded=${JSON.stringify(contextCandidateFromRecallItem(first as never).superseded)}`);
+    }
+    const plan = kernel.contextCortex.plan({
+      query: scenario.query,
+      projectId: scenario.projectId,
+      currentSessionId: `${scenario.projectId}-s`,
+      availableTokens: 16000,
+      maxMemoryRatio: 0.25,
+      candidates: result.items.map((item) => contextCandidateFromRecallItem(item as never)),
+    }) as { selected?: Array<{ recallItem?: { text?: string; id?: string } }>; suppressed?: Array<{ id: string; reason: string }> } | undefined;
+    if (process.env.COGMEM_SCORECARD_DEBUG === '1' && scenarioIndex === 0) {
+      console.error(`[debug] plan selected=${plan?.selected?.length ?? 0} suppressed=${JSON.stringify((plan?.suppressed ?? []).map((entry) => entry.reason))}`);
+    }
+    const selected = plan?.selected?.map((candidate) => ({
+      text: String(candidate.recallItem?.text ?? ''),
+      hasProvenance: Boolean(candidate.recallItem?.id),
+    })) ?? result.items.map((item) => ({ text: String((item as { text?: string }).text ?? ''), hasProvenance: true }));
+    planned.push(measure(selected, latencyMs, scenario));
+  }
+
+  return [
+    score('agent_backend_items', rawItems, scenarios.length),
+    score('agent_backend_context_plan', planned, scenarios.length),
+  ];
+}
+
 export async function runScorecard(options: { items: number; seed: number }): Promise<{
   recall: ArmResult[];
   currentTruth: ArmResult[];
   currentTruthMarked: ArmResult[];
+  hostPath: ArmResult[];
   scenarios: number;
   seed: number;
 }> {
@@ -307,10 +366,11 @@ export async function runScorecard(options: { items: number; seed: number }): Pr
   const recall = await runFamily(kernel, recallScenarios, now);
   const currentTruth = await runFamily(kernel, supersessionScenarios, now + 1);
   const currentTruthMarked = await runFamily(kernel, markedScenarios, now + 2);
+  const hostPath = await runHostPath(kernel, markedScenarios, now + 3);
   kernel.close();
   rmSync(dir, { recursive: true, force: true });
 
-  return { recall, currentTruth, currentTruthMarked, scenarios: recallScenarios.length, seed: options.seed };
+  return { recall, currentTruth, currentTruthMarked, hostPath, scenarios: recallScenarios.length, seed: options.seed };
 }
 
 function table(results: ArmResult[], withStale: boolean): string[] {
@@ -351,7 +411,11 @@ async function main(): Promise<void> {
   console.log('');
   for (const line of table(result.currentTruthMarked, true)) console.log(line);
   console.log('');
-  for (const arm of [...result.recall, ...result.currentTruth, ...result.currentTruthMarked]) {
+  console.log('### Family C — the host path (agent backend → context candidates → cortex plan)');
+  console.log('');
+  for (const line of table(result.hostPath, true)) console.log(line);
+  console.log('');
+  for (const arm of [...result.recall, ...result.currentTruth, ...result.currentTruthMarked, ...result.hostPath]) {
     if (arm.misses.length > 0) console.log(`${arm.arm}: missed ${arm.misses.length} of ${items}`);
     if (arm.staleItems.length > 0) console.log(`${arm.arm}: leaked the superseded value in ${arm.staleItems.length} of ${items}`);
   }

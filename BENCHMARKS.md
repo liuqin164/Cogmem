@@ -52,52 +52,58 @@ once as written and once with the stale statement carrying the marker the host p
 
 ### Family B′ — the same fact, with the stale statement marked
 
-`status:superseded` is the marker the **host** recall block honours when it decides what
-reaches the model. Nothing in `src/` writes it — it comes from curation or review — so the
-two cases have to be measured apart: a run that marks nothing measures a system that was
-never told.
+`status:superseded` is the marker the context planner honours when it decides what reaches
+the model (`ContextCortex.hardSuppressionReason`). Nothing in `src/` writes it — it comes
+from curation or review — so a run that marks nothing measures a system that was never
+told, and the two cases are measured apart.
 
 | arm | current truth found | stale value leaked | provenance | context tokens/turn | p95 latency |
 | --- | --- | --- | --- | --- | --- |
-| `cogmem_default` | 75.0% | **95.8%** | 100% | 109 | 14.1 ms |
+| `cogmem_default` | 75.0% | 95.8% | 100% | 109 | 14.4 ms |
 | `fixed_recent_window_4` | 87.5% | 0.0% | 100% | 74 | 0.0 ms |
 | `vector_topk_3_hashing` | 100.0% | 100.0% | 100% | 59 | 0.1 ms |
 
-**Identical to Family B.** Marking the stale statement changes nothing on this path, which
-is the finding of the three tables taken together, and it is two findings rather than one:
+### Family C — the host path, which is the one that matters
 
-1. **Nothing marks a raw turn stale.** In a `rule_only` run the kernel serves raw
-   evidence, and raw evidence arrives unmarked. A leakage figure from Family B is a
-   statement about a system that was never told, not about governance failing.
-2. **When it *is* told, this path still returns the item.** The host recall block excludes
-   `status:superseded` from the block it renders; `kernel.recall` returns it anyway, with
-   the tag visible on the returned item. Measured: 23 of 24 scenarios in both families.
+`kernel.recall` returns the *evidence list*; a host injects the *context plan*. They are
+different artifacts, and they behave differently: the backend's recall items are mapped
+into context candidates by `contextCandidateFromRecallItem`, which sets `superseded` from
+the tag, and the cortex then decides what is selected.
 
-The second is a concrete inconsistency between two paths in the same codebase, and it does
-not need a model to reproduce — `bun run scorecard` shows it, and a one-item version of it
-is in the issue. Which of the two behaviours is right is a decision (evidence is arguably
-evidence, and the tag is visible to callers), but the two paths disagreeing is not.
+| arm | current truth found | stale value leaked | provenance | context tokens/turn | p95 latency |
+| --- | --- | --- | --- | --- | --- |
+| `agent_backend_items` | 95.8% | 95.8% | 100% | 140 | 91.0 ms |
+| `agent_backend_context_plan` | 95.8% | **0.0%** | 100% | 122 | 91.0 ms |
+
+**The marked statement is excluded from the plan and kept in the evidence list.** That is
+the designed behaviour, not a leak: the evidence list is evidence, with the tag visible on
+the returned item for any caller that wants it, while the plan is what the model sees, and
+there the superseded value is gone — for eighteen fewer tokens per turn.
+
+**Two fixture flaws produced earlier readings of this, and both are worth stating** because
+each looked like a product defect. In a run where nothing marks anything, the plan has
+nothing to suppress, so Family B leaks for the honest reason that nothing knew. And two
+families sharing project ids ingest the same turns twice, one marked and one not, after
+which a recall can find the untagged twin and report leakage the marked neuron would have
+been suppressed for. Each family now has its own projects.
 
 ### Where the default path loses
 
 - **Recall, family A: 87.5% against the lexical baseline's 100%** — three misses of 24 — and
   it beats the recent-window baseline's 45.8%.
-- **Context size: it loses, 105 tokens per turn against 53** in family A. Roughly twice the
-  context for less recall.
-- **Latency: it loses, 16.9 ms against 0.2 ms.** It does work the baselines do not: a SQLite
-  round trip, graph traversal, scope filtering.
-- **Provenance: a three-way tie at 100%**, and the tie carries little information, because
-  every arm returns items that identify themselves.
-- **Supersession: it does not beat a plain window.** 23 of 24 scenarios carry the superseded
-  value, marked or not, against 0% for the recent window and 100% for the vector ranker. The
-  window's 0% is not quality — it cannot reach far enough back to see the stale turn, which
-  is also why it misses the current truth in 3 scenarios.
+- **Context size**: 105 tokens per turn against 53 in family A, and 122 against 59 in family
+  C. Roughly twice the context for less recall on lexical queries.
+- **Latency**: 16.9 ms against 0.2 ms in family A. It does work the baselines do not.
+- **Provenance: a three-way tie at 100%**, which carries little information, because every
+  arm returns items that identify themselves.
+- **Supersession**: with nothing marked, the default path carries the superseded value in 23
+  of 24 scenarios, against 0% for the recent window and 100% for the vector ranker — and the
+  window's 0% is not quality, since it cannot reach far enough back to see the stale turn.
 
-**The `rule_only` qualifier still applies to all of it.** With no provider configured the
-kernel runs `rule_only`, and every recall in all three families was served from
-`raw_evidence` — none from compiled memory. Whether compilation would suppress a superseded
-statement is not what these tables measured. A number from this fixture must not be
-published as a property of cogmem's governance.
+**The `rule_only` qualifier applies to all of it**: with no provider configured, every
+recall in these families was served from `raw_evidence`, so nothing here says what compiled
+memory or the curation that marks a statement stale would do. It says what the paths do with
+what they are given.
 
 ### The benchmark groups have no numbers to publish
 
