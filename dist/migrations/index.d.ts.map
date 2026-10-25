@@ -1,1 +1,1 @@
-{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../src/migrations/index.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,uBAAuB,CAAC;AACvD,OAAO,EAAE,cAAc,EAAE,MAAM,+CAA+C,CAAC;AAE/E;;;;;;;;GAQG;AACH,OAAO,EAAE,cAAc,EAAE,CAAC;AAC1B,YAAY,EAAE,SAAS,EAAE,CAAC"}
+{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../src/migrations/index.ts"],"names":[],"mappings":"AAAA;;;;;;;;GAQG;AACH,OAAO,EAAE,CAAC"}

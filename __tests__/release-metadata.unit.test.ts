@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import { inspectOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemoryPluginInstaller.js';
 import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { filterToolsByProfile } from '../src/mcp/profiles.js';
-import { migration_0032 } from '../src/migrations/index.js';
 import { LATEST_SCHEMA_VERSION } from '../src/migrations/v3_7_4/FinalSchema.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -54,7 +53,6 @@ describe('core release metadata', () => {
     // 4.0 ships no ordered migration list (ADR-0007): one schema, created
     // directly. What is worth pinning is that the schema is 0032 and that the
     // number the identity check writes agrees with it.
-    expect(migration_0032.version).toBe('0032');
     expect(LATEST_SCHEMA_VERSION).toBe(32);
     expect(readdirSync(join(coreRoot, 'src', 'migrations')).some((file) => file.startsWith('0033_'))).toBe(false);
     expect(inspectOpenClawAutoMemoryPlugin({ workspaceRoot: coreRoot }).expectedVersion).toBe('0.7.2');

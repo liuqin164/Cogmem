@@ -12,9 +12,9 @@
 import type Database from 'bun:sqlite';
 
 import {
-  installMultidimensionalMemoryGraph374,
+  installFinalSchema,
   multidimensionalMemoryGraph374Issue,
-} from '../0032_multidimensional_memory_graph_3_7_4.js';
+} from './FinalSchemaInstall.js';
 
 /** The release schema version this build creates and accepts. */
 export const LATEST_SCHEMA_VERSION = 32;
@@ -34,7 +34,7 @@ export function createFinalSchema(db: Database): void {
   // installation issues hundreds of DDL statements, and committing each one
   // separately costs about five times as much (2.8s against 0.5s on a fresh
   // file, measured) — enough to push whole tests past their budgets.
-  db.transaction(() => installMultidimensionalMemoryGraph374(db))();
+  db.transaction(() => installFinalSchema(db))();
 }
 
 /** What is wrong with this database's schema, or undefined when nothing is. */

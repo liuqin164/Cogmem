@@ -10,7 +10,7 @@ import { EventStore } from '../src/store/EventStore.js';
 import { PolicyExecutionProjector } from '../src/store/PolicyExecutionProjector.js';
 import { PolicyExecutionStore, type PolicyExecutionRecord } from '../src/store/PolicyExecutionStore.js';
 import { PolicyProjectionStore } from '../src/store/PolicyProjectionStore.js';
-import { installMultidimensionalMemoryGraph374 } from '../src/migrations/0032_multidimensional_memory_graph_3_7_4.js';
+import { installFinalSchema } from '../src/migrations/v3_7_4/FinalSchemaInstall.js';
 
 describe('policy execution project isolation', () => {
   test('the same effect executes independently in each exact project scope', async () => {
@@ -470,30 +470,4 @@ describe('policy execution project isolation', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test('legacy executed keys become fail-closed tombstones after migration', async () => {
-    const db = new Database(':memory:');
-    db.exec(`CREATE TABLE policy_executions(
-      execution_id TEXT PRIMARY KEY,idempotency_key TEXT UNIQUE,policy TEXT,action TEXT,status TEXT,
-      attempt_count INTEGER,detail TEXT,created_at INTEGER,updated_at INTEGER
-    );
-    INSERT INTO policy_executions VALUES('legacy','already-ran','p','allow','executed',1,NULL,1,1)`);
-    installMultidimensionalMemoryGraph374(db);
-    const store = new PolicyExecutionStore(db);
-    let calls = 0;
-    const executor = new ReliablePolicySideEffectExecutor({
-      execute(effect) {
-        calls += 1;
-        return { policy: effect.policy, action: effect.action, status: 'executed', outcome: 'executed' };
-      },
-    }, store);
-
-    const result = await executor.execute({
-      projectId: 'a', policy: 'p', action: 'allow', idempotencyKey: 'already-ran',
-    });
-
-    expect(calls).toBe(0);
-    expect(result).toMatchObject({ status: 'failed', detail: 'legacy_execution_scope_ambiguous' });
-    store.close();
-    db.close();
-  });
 });

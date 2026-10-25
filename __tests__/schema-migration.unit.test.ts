@@ -67,6 +67,31 @@ describe('a database 4.0 creates', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test('the created schema matches the pinned 4.0 baseline, object for object', () => {
+    const dir = tempDir();
+    const path = join(dir, 'memory.db');
+    createMemoryKernel({ dbPath: path }).close();
+
+    const db = new Database(path, { readonly: true });
+    const rows = db.prepare("SELECT type, name, IFNULL(sql,'') AS sql FROM sqlite_master ORDER BY type, name")
+      .all() as Array<{ type: string; name: string; sql: string }>;
+    db.close();
+
+    const digest = createHash('sha256')
+      .update(rows.map((row) => `${row.type}|${row.name}|${String(row.sql).replace(/\s+/g, ' ').trim()}`).join('\n'))
+      .digest('hex');
+
+    // The final schema, as installed by the part of the old migration 0032 that a
+    // new database actually needed. The extraction was verified by comparing this
+    // digest and per-table row counts against the original installer's output, so
+    // this line is what keeps that equivalence from silently drifting: a
+    // legitimate schema change updates it, and a projection or auxiliary object
+    // that stopped installing fails here.
+    expect(rows.length).toBe(501);
+    expect(digest).toBe('28c9722a43abae280475855feb710fef423f07eb819bab568cef3314fadcaecf');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test('an interrupted creation is treated as new, not as someone else\'s file', () => {
     const dir = tempDir();
     const path = join(dir, 'half-created.db');

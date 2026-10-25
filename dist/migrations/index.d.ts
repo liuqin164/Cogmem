@@ -1,14 +1,11 @@
-import type { Migration } from '../types/Migration.js';
-import { migration_0032 } from './0032_multidimensional_memory_graph_3_7_4.js';
 /**
  * 4.0 ships one schema and no upgrade path (ADR-0007).
  *
- * There is no ordered migration list and no runner to replay one: a new database
- * is created from the final schema by `createFinalSchema`, and a database this
- * release did not create is refused. `migration_0032` remains because it owns
- * that final schema and its postcondition, and it is exported so the schema
- * definition has one home.
+ * There is no ordered migration list, no runner to replay one, and no migration
+ * object. A new database is created from the final schema by `createFinalSchema`
+ * in `./v3_7_4/FinalSchema.js`, and a database this release did not create is
+ * refused. `./v3_7_4/FinalSchemaDefinition.js` holds the schema itself, and
+ * `./v3_7_4/FinalSchemaInstall.ts` installs it.
  */
-export { migration_0032 };
-export type { Migration };
+export {};
 //# sourceMappingURL=index.d.ts.map

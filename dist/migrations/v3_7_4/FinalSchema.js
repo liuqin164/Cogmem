@@ -8,7 +8,7 @@
  * without either paying for a walk over every table and projection. That walk is
  * what made the first version of this file slow enough to matter.
  */
-import { installMultidimensionalMemoryGraph374, multidimensionalMemoryGraph374Issue, } from '../0032_multidimensional_memory_graph_3_7_4.js';
+import { installFinalSchema, multidimensionalMemoryGraph374Issue, } from './FinalSchemaInstall.js';
 /** The release schema version this build creates and accepts. */
 export const LATEST_SCHEMA_VERSION = 32;
 /**
@@ -26,7 +26,7 @@ export function createFinalSchema(db) {
     // installation issues hundreds of DDL statements, and committing each one
     // separately costs about five times as much (2.8s against 0.5s on a fresh
     // file, measured) — enough to push whole tests past their budgets.
-    db.transaction(() => installMultidimensionalMemoryGraph374(db))();
+    db.transaction(() => installFinalSchema(db))();
 }
 /** What is wrong with this database's schema, or undefined when nothing is. */
 export function finalSchemaIssue(db) {

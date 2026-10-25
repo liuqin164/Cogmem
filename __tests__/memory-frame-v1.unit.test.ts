@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { deterministicFrameFallback, memoryFrameJsonSchema, MEMORY_DIMENSIONS, MEMORY_FRAME_JSON_SCHEMA, MEMORY_FRAME_LIMITS, MEMORY_FRAME_REQUIRED_DIMENSIONS, normalizeAlias, validateMemoryFrame } from '../src/semantic/index.js';
 import { MemoryFrameStore } from '../src/store/MemoryFrameStore.js';
 import Database from 'bun:sqlite';
-import { installMultidimensionalMemoryGraph374 } from '../src/migrations/0032_multidimensional_memory_graph_3_7_4.js';
+import { installFinalSchema } from '../src/migrations/v3_7_4/FinalSchemaInstall.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { MultidimensionalQueryPlanner } from '../src/recall/index.js';
 import { MemoryFrameProjector } from '../src/atlas/MemoryFrameProjector.js';
@@ -76,7 +76,7 @@ describe('MemoryFrame V1 contract', () => {
 
   test('stores frames idempotently and publishes with CAS', () => {
     const db = new Database(':memory:');
-    installMultidimensionalMemoryGraph374(db);
+    installFinalSchema(db);
     seedMemoryFrameEvidence(db);
     const store = new MemoryFrameStore(db);
     const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
@@ -91,7 +91,7 @@ describe('MemoryFrame V1 contract', () => {
 
   test('staged revisions preserve the previous active frame until publish', () => {
     const db = new Database(':memory:');
-    installMultidimensionalMemoryGraph374(db);
+    installFinalSchema(db);
     seedMemoryFrameEvidence(db);
     const store = new MemoryFrameStore(db);
     const base = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
@@ -111,7 +111,7 @@ describe('MemoryFrame V1 contract', () => {
 
   test('review publication preserves the previous active frame', () => {
     const db = new Database(':memory:');
-    installMultidimensionalMemoryGraph374(db);
+    installFinalSchema(db);
     seedMemoryFrameEvidence(db);
     const store = new MemoryFrameStore(db);
     const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }), evidenceEventIds: ['event-1'], needsReview: false, sourceAuthority: 'processor' as const,
@@ -128,7 +128,7 @@ describe('MemoryFrame V1 contract', () => {
 
   test('active revision replacement satisfies the one-active partial index', () => {
     const db = new Database(':memory:');
-    installMultidimensionalMemoryGraph374(db);
+    installFinalSchema(db);
     seedMemoryFrameEvidence(db);
     const store = new MemoryFrameStore(db);
     const base = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
@@ -495,7 +495,7 @@ describe('MemoryFrame V1 contract', () => {
 
   test('lease retry creates an independent staged revision without changing the source row', () => {
     const db = new Database(':memory:');
-    installMultidimensionalMemoryGraph374(db);
+    installFinalSchema(db);
     const store = new MemoryFrameStore(db);
     const frame = { ...deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }),
       evidenceEventIds: ['evt-1'], nodes: deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] }).nodes.map((node) => ({ ...node, evidenceEventIds: ['evt-1'] })),
