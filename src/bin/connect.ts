@@ -5,7 +5,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printCliJson } from './CliJson.js';
 import { automationSafeCommands, connectSteps, type InstallStep } from '../install/InstallSteps.js';
-import { enableHostIntegration, resolveCogmemConfigPath, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
+import {
+  enableHostIntegration,
+  hostWorkspaceFor,
+  loadCogmemConfig,
+  resolveCogmemConfigPath,
+  resolveWorkspaceRoot,
+} from '../config/CogmemConfig.js';
 
 import {
   type OpenClawAutoMemoryInstallResult,
@@ -50,6 +56,8 @@ const HERMES_COGMEM_TOOLS = [
 interface ConnectArgs {
   agent?: AgentKind;
   workspaceRoot: string;
+  /** True when the operator named `--workspace`; then nothing may override it. */
+  workspaceGiven: boolean;
   configPath?: string;
   openclawConfigPath?: string;
   hermesConfigPath?: string;
@@ -68,6 +76,8 @@ interface ConnectArgs {
 interface ConnectResult {
   agent: AgentKind;
   workspaceRoot: string;
+  /** The host's own workspace: the Workspace unless the config moved it (ADR-0010). */
+  hostWorkspaceRoot: string;
   skillPath: string;
   skillFiles: string[];
   templatePath: string;
@@ -148,12 +158,12 @@ function readArgs(argv: string[]): ConnectArgs {
   // directory that contains `.cogmem/`, derived here exactly as `init`, `doctor`
   // and `update` derive it — the plugin id is a hash of this path, so a second
   // derivation is a second identity nobody can inspect (ADR-0010).
-  const workspaceRoot = resolve(
-    stringValue(values.workspace) || resolveWorkspaceRoot({ cwd: process.cwd(), configPath }),
-  );
+  const givenWorkspace = stringValue(values.workspace);
+  const workspaceRoot = resolve(givenWorkspace || resolveWorkspaceRoot({ cwd: process.cwd(), configPath }));
   return {
     agent,
     workspaceRoot,
+    workspaceGiven: givenWorkspace !== undefined,
     configPath,
     openclawConfigPath: stringValue(values['openclaw-config']),
     hermesConfigPath: stringValue(values['hermes-config']),
@@ -283,7 +293,18 @@ function installSkill(args: ConnectArgs): ConnectResult {
 
   const template = readFileSync(templatePath, 'utf8');
   const operationsTemplate = readFileSync(operationsTemplatePath, 'utf8');
-  const skillPath = resolve(args.outputPath || defaultSkillPath(args.agent, args.workspaceRoot));
+  // Resolved once, so what `connect` installs into and what it records cannot be
+  // two different configs.
+  const cogmemConfig = resolveCogmemConfigPath({ configPath: args.configPath, cwd: args.workspaceRoot });
+  // The host's own workspace: the Workspace unless the config moved it for this
+  // host. `doctor` and `update` ask the same function, because the plugin id is a
+  // hash of this path and two answers are two identities (ADR-0010).
+  // `--workspace` wins: the operator named the directory, so a config value must
+  // not silently retarget the plugin to somewhere else.
+  const hostWorkspaceRoot = args.workspaceGiven || cogmemConfig.kind !== 'toml'
+    ? args.workspaceRoot
+    : hostWorkspaceFor(loadCogmemConfig({ configPath: cogmemConfig.path }), args.agent);
+  const skillPath = resolve(args.outputPath || defaultSkillPath(args.agent, hostWorkspaceRoot));
   const operationsPath = join(dirname(skillPath), 'references', 'operations.md');
   const skillFiles = [skillPath, operationsPath];
   const alreadyCurrent = existsSync(skillPath)
@@ -292,9 +313,6 @@ function installSkill(args: ConnectArgs): ConnectResult {
     && readFileSync(operationsPath, 'utf8') === operationsTemplate;
   let autoMemory: OpenClawAutoMemoryInstallResult | undefined;
   let hermesMcp: HermesMcpInstallResult | undefined;
-  // Resolved once, so what `connect` installs into and what it records cannot be
-  // two different configs.
-  const cogmemConfig = resolveCogmemConfigPath({ configPath: args.configPath, cwd: args.workspaceRoot });
 
   if (!args.dryRun && !alreadyCurrent) {
     if (existsSync(skillPath) && !args.force) {
@@ -308,8 +326,10 @@ function installSkill(args: ConnectArgs): ConnectResult {
 
   if (args.agent === 'openclaw' && args.auto) {
     autoMemory = installOpenClawAutoMemoryPlugin({
-      workspaceRoot: args.workspaceRoot,
-      configPath: cogmemConfig.kind === 'toml' ? cogmemConfig.path : args.configPath,
+      workspaceRoot: hostWorkspaceRoot,
+      // Left unset when no config exists, so the installer refuses with its own
+      // message instead of recording a path nothing will ever find.
+      configPath: cogmemConfig.kind === 'toml' ? cogmemConfig.path : undefined,
       openclawConfigPath: args.openclawConfigPath,
       pluginDir: args.pluginDir,
       bunPath: args.bunPath,
@@ -320,7 +340,7 @@ function installSkill(args: ConnectArgs): ConnectResult {
     });
   } else if (args.agent === 'hermes' && args.auto) {
     hermesMcp = installHermesMcpConfig({
-      workspaceRoot: args.workspaceRoot,
+      workspaceRoot: hostWorkspaceRoot,
       configPath: args.hermesConfigPath,
       dryRun: args.dryRun,
       force: args.force,
@@ -332,13 +352,17 @@ function installSkill(args: ConnectArgs): ConnectResult {
   // `connect` wrote instead of declining because the switch still says otherwise.
   // Not a tier change — the switch stays Human-required (ADR-0003); what changes
   // is which human step records it (ADR-0010).
-  const integrationEnabled = !args.dryRun && args.auto && cogmemConfig.kind === 'toml'
-    ? { ...enableHostIntegration(cogmemConfig.path, args.agent), configPath: cogmemConfig.path }
+  // `existsSync` because an explicit `--config` is reported as `toml` whether or
+  // not the file is there; recording into an absent one would throw *after* the
+  // plugin and the host config were already written.
+  const integrationEnabled = !args.dryRun && args.auto && cogmemConfig.kind === 'toml' && existsSync(cogmemConfig.path)
+    ? enableHostIntegration(cogmemConfig.path, args.agent)
     : null;
 
   return {
     agent: args.agent,
     workspaceRoot: args.workspaceRoot,
+    hostWorkspaceRoot,
     skillPath,
     skillFiles,
     templatePath,
@@ -347,7 +371,7 @@ function installSkill(args: ConnectArgs): ConnectResult {
     alreadyCurrent,
     nextCommands: nextCommands(args.agent),
     nextSteps: nextSteps(args.agent),
-    hostConfigSnippet: hostConfigSnippet(args.agent, args.workspaceRoot, args.auto),
+    hostConfigSnippet: hostConfigSnippet(args.agent, hostWorkspaceRoot, args.auto),
     autoMemory,
     hermesMcp,
     integrationEnabled,
@@ -486,6 +510,7 @@ function leadingSpaces(line: string): number {
 function printHuman(result: ConnectResult): void {
   console.log(`cogmem ${result.agent} skill ${result.dryRun ? 'dry-run' : result.installed ? 'installed' : 'already current'}`);
   console.log(`workspace: ${result.workspaceRoot}`);
+  if (result.hostWorkspaceRoot !== result.workspaceRoot) console.log(`host workspace: ${result.hostWorkspaceRoot}`);
   console.log(`skill: ${result.skillPath}`);
   console.log(`reference: ${result.skillFiles[1]}`);
   console.log('');

@@ -128,23 +128,28 @@ export function resolveCogmemConfigPath(options: CogmemConfigResolutionOptions =
  *
  * `--config` decides it when given: the Workspace is the directory whose
  * `.cogmem/` holds that config. Otherwise it is the nearest ancestor with a
- * `.cogmem/config.toml`, then the account's global one. Only when neither exists
- * is it the current directory — which is where `init` will create `.cogmem/`.
+ * `.cogmem/config.toml`, then the account's global one — which is the same walk
+ * `resolveCogmemConfigPath` performs, deliberately not a second copy of it. Only
+ * when no config exists anywhere is it the current directory, where `init` will
+ * create one.
  */
 export function resolveWorkspaceRoot(options: CogmemConfigResolutionOptions = {}): string {
-  const env = options.env || process.env;
-  const cwd = resolve(options.cwd || process.cwd());
-  const explicit = options.configPath;
-  if (explicit?.trim()) return workspaceOfConfigPath(resolvePath(explicit.trim(), cwd, env));
+  const resolution = resolveCogmemConfigPath(options);
+  if (resolution.kind === 'toml') return workspaceOfConfigPath(resolution.path);
+  return resolve(options.cwd || process.cwd());
+}
 
-  const globalConfig = defaultCogmemConfigPath(env);
-  const projectConfig = findUp(cwd, join('.cogmem', 'config.toml'), [dirname(globalConfig), osUserHome()]);
-  if (projectConfig) return workspaceOfConfigPath(projectConfig);
-  // A global config names a Workspace too: `<home>` is the directory whose
-  // `.cogmem/` holds it. Reading that as "no Workspace" is what made `doctor`
-  // hash the config directory while `connect` hashed the project.
-  if (existsSync(globalConfig)) return workspaceOfConfigPath(globalConfig);
-  return cwd;
+/**
+ * The workspace a host's own files belong to.
+ *
+ * The Workspace, unless the config overrides it for that host — which is only
+ * for a host whose files are genuinely elsewhere (Hermes' `~/.hermes`), and is
+ * resolved relative to the Workspace rather than to the config directory. It is
+ * one function because `connect`, `doctor` and `update` must agree: the plugin id
+ * is a hash of this path, so two answers are two identities.
+ */
+export function hostWorkspaceFor(loaded: LoadedCogmemConfig, host: 'openclaw' | 'hermes'): string {
+  return loaded.integrations[host].workspaceDir || loaded.workspaceRoot;
 }
 
 function workspaceOfConfigPath(configPath: string): string {
@@ -161,29 +166,32 @@ function workspaceOfConfigPath(configPath: string): string {
  * boolean of (ADR-0010). A file that already says `true` is not rewritten, so a
  * repeated `connect` leaves the config byte-identical.
  */
-export function enableHostIntegration(configPath: string, host: 'openclaw' | 'hermes'): { path: string; changed: boolean } {
+export function enableHostIntegration(configPath: string, host: 'openclaw' | 'hermes'): { configPath: string; changed: boolean } {
   const path = resolve(configPath);
   const original = readFileSync(path, 'utf8');
   const lines = original.replace(/\r\n/g, '\n').split('\n');
-  const header = lines.findIndex((line) => line.trim() === `[integrations.${host}]`);
+  // Whitespace inside the brackets is legal TOML, and a padded header that read
+  // as "no section" would get a second one appended — a file that no longer
+  // parses, in the config every later command reads.
+  const header = lines.findIndex((line) => line.replace(/\s*#.*$/, '').replace(/\s+/g, '') === `[integrations.${host}]`);
 
   if (header === -1) {
     const prefix = original.trimEnd();
     writeFileSync(path, `${prefix}${prefix ? '\n\n' : ''}[integrations.${host}]\nenabled = true\n`, 'utf8');
-    return { path, changed: true };
+    return { configPath: path, changed: true };
   }
 
   let end = header + 1;
   while (end < lines.length && !/^\s*\[/.test(lines[end])) end += 1;
   const enabled = lines.findIndex((line, index) => index > header && index < end && /^\s*enabled\s*=/.test(line));
   if (enabled !== -1) {
-    if (/^\s*enabled\s*=\s*true\s*$/.test(lines[enabled])) return { path, changed: false };
+    if (/^\s*enabled\s*=\s*true\s*$/.test(lines[enabled])) return { configPath: path, changed: false };
     lines[enabled] = 'enabled = true';
   } else {
     lines.splice(header + 1, 0, 'enabled = true');
   }
   writeFileSync(path, `${lines.join('\n').replace(/\n+$/u, '')}\n`, 'utf8');
-  return { path, changed: true };
+  return { configPath: path, changed: true };
 }
 
 export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedCogmemConfig {

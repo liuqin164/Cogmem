@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
+import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
 import { inspectOpenClawAutoMemoryPlugin } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { printCliJson } from './CliJson.js';
 import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
@@ -214,7 +214,7 @@ function loadConfigForUpdate(args: UpdateArgs, targetCwd: string): { configPath?
  */
 function openClawWorkspaceForUpdate(loaded: LoadedCogmemConfig | undefined): string | undefined {
   if (!loaded) return undefined;
-  const workspaceRoot = loaded.integrations.openclaw.workspaceDir || loaded.workspaceRoot;
+  const workspaceRoot = hostWorkspaceFor(loaded, 'openclaw');
   if (loaded.integrations.openclaw.enabled) return workspaceRoot;
   return inspectOpenClawAutoMemoryPlugin({ workspaceRoot }).installed ? workspaceRoot : undefined;
 }

@@ -119,8 +119,6 @@ export async function runOpenClawImport(argv: string[]): Promise<void> {
 
 export async function runHermesImport(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
-  // Same derivation as `init`/`doctor`/`connect`: the source workspace is the
-  // Workspace unless the operator names another one (ADR-0010).
   const workspaceRoot = resolve(stringArg(args, 'workspace') || resolveWorkspaceRoot({ configPath: stringArg(args, 'config') }));
   const profile = new HermesWorkspaceProfile(workspaceRoot);
   const projectId = stringArg(args, 'project') || basename(workspaceRoot) || 'hermes';

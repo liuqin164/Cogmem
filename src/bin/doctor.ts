@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
+import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
 import {
   defaultOpenClawAutoMemoryPluginDir,
@@ -144,10 +144,11 @@ if (envPath) {
   if (error) fail(`${error.code}: ${error.message}`, error.code);
 
   // One Workspace for this config: the directory that contains `.cogmem/`
-  // (ADR-0010). `--workspace` is the operator's override; the per-Host field is
-  // only for a host whose own workspace is genuinely elsewhere, and the config
-  // layer has already resolved it relative to this same Workspace.
-  const workspaceRoot = workspace || loaded.integrations.openclaw.workspaceDir || loaded.workspaceRoot;
+  // (ADR-0010). `--workspace` is the operator's override; otherwise it is the
+  // host's own workspace, which is the Workspace unless the config moved it for
+  // this host — resolved by the config layer, and by `connect` and `update`
+  // through the same function, because the plugin id is a hash of this path.
+  const workspaceRoot = workspace || hostWorkspaceFor(loaded, 'openclaw');
 
   if (pluginOnly) {
     if (agent && agent !== 'openclaw') fail('doctor --plugin-only currently supports --agent openclaw.');
@@ -294,7 +295,19 @@ if (envPath) {
   const level = gateDiagnostics.length > 0 ? 'warn' : 'ok';
   emitGate(
     buildGate(level, gateDiagnostics, [...pathSteps, ...postInstallSteps(resolveBinCommand())]),
-    { configPath: resolution.path, workspaceRoot, dbPath: kernelDbPath, integrations: loaded.integrations, openclaw: plugin ? { plugin } : undefined },
+    {
+      configPath: resolution.path,
+      workspaceRoot,
+      // `workspaceDir` leaves the output: there is one Workspace per config, and
+      // it is named `workspaceRoot` (ADR-0010). A second spelling of it was how
+      // two commands came to disagree about where they were.
+      integrations: {
+        openclaw: { enabled: loaded.integrations.openclaw.enabled },
+        hermes: { enabled: loaded.integrations.hermes.enabled },
+      },
+      dbPath: kernelDbPath,
+      openclaw: plugin ? { plugin } : undefined,
+    },
   );
 }
 

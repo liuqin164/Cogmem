@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -122,7 +123,7 @@ describe('the install journey', () => {
       const connect = parseJson('connect', await cli.run(connectArgs, { cwd: workspace }));
       expect(connect.workspaceRoot).toBe(workspace);
       const cogmemConfigPath = join(workspace, '.cogmem', 'config.toml');
-      expect(connect.integrationEnabled.path).toBe(cogmemConfigPath);
+      expect(connect.integrationEnabled.configPath).toBe(cogmemConfigPath);
       expect(connect.integrationEnabled.changed).toBe(true);
       expect(readFileSync(cogmemConfigPath, 'utf8')).toContain('[integrations.openclaw]\nenabled = true');
 
@@ -159,6 +160,37 @@ describe('the install journey', () => {
       expect(hostAgain.plugins.load.paths).toEqual([connect.autoMemory.pluginDir]);
       const repaired = parseJson('doctor after repair', await cli.run(['doctor', '--json'], { cwd: workspace }));
       expect(repaired.openclaw.plugin.current).toBe(true);
+
+      // 7b. One config, one entry — including the entry an *earlier* update left
+      //     behind. Before ADR-0010 `update` passed `<ws>/.cogmem` as the
+      //     workspace, so it wrote a second entry hashing that directory while
+      //     naming the same configPath. The repair must converge on one, not add
+      //     a third; the entry for another Workspace must survive.
+      const staleRoot = join(workspace, '.cogmem');
+      const staleId = `cogmem-auto-memory-${createHash('sha256').update(staleRoot).digest('hex').slice(0, 16)}`;
+      const staleDir = join(staleRoot, 'extensions', staleId);
+      const withStale = JSON.parse(readFileSync(openclawConfig, 'utf8'));
+      withStale.plugins.entries[staleId] = {
+        enabled: true,
+        config: { configPath: cogmemConfigPath, cwd: staleRoot, projectId: 'openclaw' },
+      };
+      withStale.plugins.load.paths.push(staleDir);
+      writeFileSync(openclawConfig, `${JSON.stringify(withStale, null, 2)}\n`);
+
+      await cli.run(connectArgs, { cwd: workspace });
+      const converged = JSON.parse(readFileSync(openclawConfig, 'utf8'));
+      expect(Object.keys(converged.plugins.entries)).toEqual([connect.autoMemory.pluginId]);
+      expect(converged.plugins.load.paths).toEqual([connect.autoMemory.pluginDir]);
+
+      // 7c. `update` maintains what `connect` wired. Before the fix `connect` left
+      //     `enabled = false`, so the repair path declined with
+      //     `openclaw_not_configured` and nothing refreshed the integration.
+      const update = parseJson(
+        'update --dry-run',
+        await cli.run(['update', '--dry-run', '--json', '--config', cogmemConfigPath], { cwd: workspace }),
+      );
+      expect(update.openclawRepairSkippedReason).toBeUndefined();
+      expect(update.openclawRepairCommand).toContain(`--workspace ${workspace}`);
 
       // 8. import — into the project the Host integration itself uses, which is
       //    the only project its automatic recall will ask about.

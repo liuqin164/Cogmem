@@ -359,6 +359,26 @@ function buildPatchedOpenClawConfig(input: {
     },
   };
 
+  // One config, one entry, one load path.
+  //
+  // An earlier `update` passed the config's own directory as the workspace, so it
+  // wrote a second entry whose id hashes that directory but whose `configPath` is
+  // this same file: double injection, and a history split in half. Cleaning only
+  // the fixed legacy id leaves that entry and its load path behind forever, so
+  // the repair adds a third instead of converging. Entries belonging to a
+  // *different* config are different Workspaces and stay.
+  for (const [id, entry] of Object.entries(entries)) {
+    if (id === input.pluginId || !isRecord(entry)) continue;
+    const staleConfig = isRecord(entry.config) ? entry.config : {};
+    if (staleConfig.configPath !== input.configPath || staleConfig.cwd === input.workspaceRoot) continue;
+    delete entries[id];
+    load.paths = (Array.isArray(load.paths) ? load.paths : [])
+      .filter((candidate: unknown) => id !== basename(String(candidate)));
+    if (Array.isArray(plugins.allow)) {
+      plugins.allow = plugins.allow.filter((candidate: unknown) => candidate !== id);
+    }
+  }
+
   // Clean up legacy entry if it belonged to this workspace (prevents duplicate enabled plugins)
   if (isRecord(entries[PLUGIN_ID])) {
     const legacy = entries[PLUGIN_ID];

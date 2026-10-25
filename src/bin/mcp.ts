@@ -5,6 +5,7 @@ import { startCogmemMcpServer } from '../mcp/server.js';
 import { startCogmemMcpHttpServer } from '../mcp/http.js';
 import { defaultAgentRegistryPath, loadAgentRegistry } from '../mcp/AgentRegistry.js';
 import { resolveProfile, type McpToolProfile } from '../mcp/profiles.js';
+import { resolveWorkspaceRoot } from '../config/CogmemConfig.js';
 
 interface McpArgs {
   dbPath?: string;
@@ -108,7 +109,11 @@ async function main(): Promise<void> {
   const runtime = {
     dbPath: args.dbPath ? resolve(args.dbPath) : undefined,
     configPath: args.configPath ? resolve(args.configPath) : undefined,
-    cwd: args.cwd ? resolve(args.cwd) : process.cwd(),
+    // The same Workspace every other command derives: `cwd` is what the kernel's
+    // config walk starts from, so defaulting it to `process.cwd()` let the MCP
+    // server answer from a different directory than `doctor` was talking about
+    // (ADR-0010). `--cwd` still overrides.
+    cwd: args.cwd ? resolve(args.cwd) : resolveWorkspaceRoot({ configPath: args.configPath }),
     hostId: args.hostId,
   };
 
