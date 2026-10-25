@@ -63,3 +63,28 @@ have to rediscover what `unable to open database file` means here.
 - **Pin a writable temporary directory in the test suite.** Not a fix for users;
   and an in-process assignment is too late, because SQLite has already resolved and
   cached the directory. Recorded on #64 so the next person does not retry it.
+
+## Amendment: a third path, and why the fallback is conditional
+
+A third operation in the same class surfaced after this decision: an ordinary **event
+append**. A run of 520 appends on a machine whose temporary directory cannot be written
+failed with `unable to open database file` — the same message, blaming the database, from
+a path this ADR had not considered. It is not a compaction; it is the write path.
+
+Rather than a third per-operation fix, the kernel's connection now asks one question at
+setup: **is the temporary directory this process would use actually writable?** If it is,
+nothing changes — a large sort belongs on disk, and this is what keeps the earlier
+decision from becoming a blanket policy. If it is not, the connection keeps its temporary
+space in memory, because the alternative on that machine is failing with a message that
+misattributes the cause.
+
+**This is not the startup check this ADR rejected.** That alternative refused to run; this
+one adapts, and it cannot stop a deployment or change one whose temporary directory works.
+The probe writes and removes one file in the directory SQLite would choose, in the same
+order SQLite chooses it (`SQLITE_TMPDIR`, `TMPDIR`, `/var/tmp`, `/tmp`), which is also how
+the error-naming helper decides whether a failure is really about the temporary directory.
+
+`__tests__/temp-space-fallback.unit.test.ts` pins both branches — a usable directory
+leaves the connection untouched, an unusable one sets `temp_store = MEMORY` — and drives
+520 appends in a child whose `TMPDIR` is a regular file, which is unusable for every user.
+

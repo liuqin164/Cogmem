@@ -39,6 +39,27 @@ export function sqliteTempDirectoryIsWritable(directory) {
         return false;
     }
 }
+/**
+ * Keep a connection's temporary space in memory, but only where the default would
+ * fail (#61, #64, and the event-store append that surfaced the third case).
+ *
+ * This is deliberately conditional. Several operations need temporary space — a
+ * `VACUUM`, an index build during an event append, a sort — and on a machine with a
+ * usable temporary directory they should use it, because a large one belongs on disk
+ * rather than in RAM. Where the directory is provably unusable, the choice is between
+ * working in memory and failing with a message that blames the database, and the
+ * second is what sent two investigations after the wrong thing.
+ *
+ * Not a startup refusal: nothing is stopped, and a deployment whose temporary
+ * directory is fine is not touched at all.
+ */
+export function ensureUsableTempSpace(db, env = process.env) {
+    const directory = resolveSqliteTempDirectory(env);
+    if (directory !== undefined && sqliteTempDirectoryIsWritable(directory))
+        return false;
+    db.exec('PRAGMA temp_store = MEMORY');
+    return true;
+}
 const TEMP_FILE_FAILURE = /unable to open database file|SQLITE_CANTOPEN|disk I\/O error/i;
 /**
  * A named error when a SQLite failure is really about the temporary directory,

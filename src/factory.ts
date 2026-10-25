@@ -91,6 +91,7 @@ import {
   createFinalSchema,
   hasUserSchema,
 } from './migrations/v3_7_4/FinalSchema.js';
+import { ensureUsableTempSpace } from './utils/SqliteTempDirectory.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -714,12 +715,18 @@ export class MemoryKernel {
 
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
+    ensureUsableTempSpace(db);
     this.memoryGraph = new MemoryGraph(db);
     this.eventStore = new EventStore(db, this.encryptionProvider, this.projectClock.timeZone);
     db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
     if ((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys?: number } | undefined)?.foreign_keys !== 1) {
       throw new Error('memory_kernel_foreign_keys_disabled');
     }
+    // A read-only temporary directory makes an ordinary append fail with a message
+    // that blames the database; where the directory is unusable, this connection
+    // keeps its temporary space in memory instead. Where it is usable, nothing
+    // changes.
+    ensureUsableTempSpace(db);
     if (migrateAfterCoreBootstrap) {
       db.exec(`
         CREATE TABLE _cogmem_bootstrap_state (
