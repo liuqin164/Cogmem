@@ -750,7 +750,7 @@ The updater resolves `latest` to npm by default, installs into the current packa
 
 The update ends on the same install gate as a fresh install, and inherits its exit code: OK and WARN exit 0, FAIL exits non-zero, and a missing config is reported as *not installed* rather than as a failed update. `--json` returns `installGate` and `nextSteps` beside the existing install-kind fields, so an agent reads one shape before and after an update.
 
-`nextSteps` is outstanding work, not advice: a `connect` step appears only while a host integration is missing, and it names the host it is for — a Hermes-only Workspace is told to `connect hermes`, and once a host is wired the gate recommends no `connect` at all. Running the steps and re-running the command therefore converges instead of repeating itself. When nothing is outstanding, `doctor` prints `Next steps: none`.
+`nextSteps` is outstanding work, not advice: a `connect` step appears only while the host integration you asked for is missing, and it names the host it is for — a Hermes-only Workspace is told to `connect hermes`, and once that host is wired the gate stops recommending it. Running the steps and re-running the command therefore converges instead of repeating itself. When nothing is outstanding the human-readable output says so (`Next steps: none — nothing is outstanding.`); `--json` reports it as `nextSteps: []` and `nextConnectHost` absent.
 
 For OpenClaw after an update, restart the gateway or host after `cogmem update --yes` finishes. To repair only the plugin without opening SQLite:
 

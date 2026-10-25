@@ -41,21 +41,25 @@ MCP `tools/list` includes strategy, episode append/import/status/audit-boundarie
 
 ## Required Journey Guarantees
 
-These are pinned by one process-boundary check (`__tests__/install-journey.integration.test.ts`), which
-walks `install → init → doctor → connect → import → recall` in a scratch `HOME` and Workspace:
+`__tests__/install-journey.integration.test.ts` walks `install → init → doctor → connect → import → recall`
+through the CLI process boundary and over a shell in a scratch `HOME` and Workspace, in the OpenClaw layout
+the docs describe (`…/openclaw/workspace` with the host config beside it). Pinned there:
 
-- One Workspace derivation: every command derives it as the directory containing `.cogmem/`, `doctor`
-  reports the one it decided on, and `--workspace` is what a script uses to be explicit.
-- Printed commands run as printed: they carry the Workspace they were given rather than a `.`, and the
+- One Workspace derivation: every command derives it as the directory containing `.cogmem/`, and `doctor`
+  reports the one it decided on.
+- The printed import and diagnose steps carry the Workspace they were given rather than a `.`, and the
   import step names the integration's project rather than a literal.
-- `connect <host> --auto` records the integration it wired, and the gate converges: `nextSteps` lists only
-  unsatisfied work, names the Host it is for, and yields no repeats on a second pass.
-- An agent registry is read Workspace-first and then beside the home directory; a credential that cannot be
-  identified is refused on every transport, and no registry *and* no credential stays the single-agent case.
+- `connect <host> --auto` records the integration it wired, and the step it recommended is gone on the next
+  run — the gate converges rather than repeating itself indefinitely.
 - Imported memory is recalled under the Host integration's project.
-- After an `update` repair there is exactly one Host integration: one entry, one load path, one identity.
+- Running the repair command `update` prints restores both the plugin files and the Host config entry, in
+  the file `connect` wrote, leaving exactly one entry, one load path and one identity.
 - The gate's exact level and diagnostic set are asserted, not the exit code — every defect this cycle
   repaired exited 0.
+
+The registry guarantees under "Required Documentation" are pinned by
+`__tests__/agent-registry-lookup.unit.test.ts`, and the Host the gate names by
+`__tests__/install-gate-convergence.unit.test.ts`.
 
 ## Required Documentation
 

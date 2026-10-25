@@ -106,7 +106,12 @@ describe('the install journey', () => {
     async () => {
       const scratch = makeTempDir('cogmem-journey-');
       const home = join(scratch, 'home');
-      const workspace = join(scratch, 'ws');
+      // The layout the OpenClaw docs describe: `~/.openclaw/workspace` with the host
+      // config beside it. It matters here beyond fidelity — the repair command
+      // `update` prints carries no `--openclaw-config`, so it can only reach the file
+      // `connect` wrote if the file is where the default discovery looks.
+      const openclawHome = join(scratch, 'openclaw');
+      const workspace = join(openclawHome, 'workspace');
       mkdirSync(workspace, { recursive: true });
       const cli = installInto(scratch, home);
 
@@ -128,11 +133,10 @@ describe('the install journey', () => {
       expect(before.installGate.diagnostics.map((entry: { code: string }) => entry.code)).toEqual(['rule_only']);
 
       // 4. connect — installs the host integration and records that it did.
-      const openclawConfig = join(scratch, 'openclaw.json');
+      const openclawConfig = join(openclawHome, 'openclaw.json');
       writeFileSync(openclawConfig, '{}\n');
       const connectArgs = [
         'connect', 'openclaw', '--auto', '--force', '--json',
-        '--openclaw-config', openclawConfig,
         '--bun', process.execPath,
       ];
       const connect = parseJson('connect', await cli.run(connectArgs, { cwd: workspace }));
@@ -230,19 +234,33 @@ describe('the install journey', () => {
 
       // 7d. Run the repair `update` would run, as printed, and end with exactly one
       //     integration: one entry, one load path, one identity.
+      // Give the repair visible work first — stale files *and* a config that lost the
+      // integration. Without both, the assertions below would hold on a file the
+      // printed command never touched, which is how this criterion was vacuously
+      // asserted before: the repair carries no `--openclaw-config`, so it can only
+      // reach the file `connect` wrote if the default discovery finds it.
+      writeFileSync(join(connect.autoMemory.pluginDir, 'index.js'), '// tampered again\n');
+      writeFileSync(openclawConfig, `${JSON.stringify({ plugins: { entries: {}, load: { paths: [] } } }, null, 2)}\n`);
       const ranRepair = await cli.runShell(update.openclawRepairCommand as string, { cwd: workspace });
-      expect(`${ranRepair.exitCode} ${ranRepair.stderr}`).toContain('0 ');
+      expect(ranRepair.exitCode).toBe(0);
       const afterUpdate = JSON.parse(readFileSync(openclawConfig, 'utf8'));
+      // The file `connect` wrote, not a default somewhere else: one entry, one load
+      // path, one identity.
       expect(Object.keys(afterUpdate.plugins.entries)).toEqual([connect.autoMemory.pluginId]);
       expect(afterUpdate.plugins.load.paths).toEqual([connect.autoMemory.pluginDir]);
+      expect(afterUpdate.plugins.entries[connect.autoMemory.pluginId].config.cwd).toBe(workspace);
+      const repairedByUpdate = parseJson('doctor after the update repair', await cli.run(['doctor', '--json'], { cwd: workspace }));
+      expect(repairedByUpdate.openclaw.plugin.current).toBe(true);
 
-      // 7e. A second pass repeats nothing: the gate has converged, so two runs of the
-      //     same command produce the same steps.
+      // 7e. And a repeat run is idempotent: nothing left to do, and the same
+      //     diagnostics, so re-running the gate is not a new state each time. The
+      //     convergence claim itself is step 5 (the recommended step was taken and
+      //     is gone); this pins that repeating it does not reintroduce work.
       const secondPass = parseJson('doctor, second pass', await cli.run(['doctor', '--json'], { cwd: workspace }));
       const thirdPass = parseJson('doctor, third pass', await cli.run(['doctor', '--json'], { cwd: workspace }));
-      expect(secondPass.nextSteps).toEqual(thirdPass.nextSteps);
       expect(secondPass.nextSteps).toEqual([]);
-      expect(secondPass.installGate.diagnostics).toEqual(thirdPass.installGate.diagnostics);
+      expect(thirdPass.nextSteps).toEqual([]);
+      expect(thirdPass.installGate.diagnostics).toEqual(secondPass.installGate.diagnostics);
 
       // 8. import — into the project the Host integration itself uses, which is
       //    the only project its automatic recall will ask about.
@@ -256,9 +274,12 @@ describe('the install journey', () => {
       //     import step is deliberately left to the assertion below, which pins
       //     what it ingested; running it twice would make that count zero.
       for (const command of connect.nextCommands as string[]) {
-        if (/import-(openclaw|hermes)/.test(command) && !command.includes('--dry-run')) continue;
+        // Matched by the command itself, not a pattern that would silently skip a
+        // future second ingest step.
+        if (command === printed('import_apply')) continue;
         const ran = await cli.runShell(command, { cwd: workspace });
         expect(`${command} => ${ran.exitCode} ${ran.stderr}`).toContain('=> 0 ');
+        expect(`${command} exit ${ran.exitCode}`).toBe(`${command} exit 0`);
       }
       // The project `connect` writes into the plugin entry and the project its
       // printed step names have to be one value (#79).

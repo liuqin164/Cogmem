@@ -91,6 +91,11 @@ describe('the gate recommends only what is outstanding', () => {
     expect(after.nextSteps.some((step) => step.id === 'connect_host')).toBe(false);
     // Nothing changed host-side, so there is nothing to restart either.
     expect(after.nextSteps.some((step) => step.id === 'restart_host')).toBe(false);
+
+    // And the human-readable run says so: an empty `nextSteps` with no line at all
+    // reads as "the gate forgot", so the README quotes this sentence.
+    const human = await run(['bun', doctorBin, '--config', configPath], { cwd: dir, env: { HOME: join(dir, 'home') } });
+    expect(human.stdout).toContain('Next steps: none — nothing is outstanding.');
   });
 
   test('an integration that exists is enough, even when no switch was set', async () => {
