@@ -61,12 +61,43 @@ install_package() {
     # this cannot swallow one. `*` stays in the registry branch, where `cogmem@*` is
     # a valid range.
     *:* | /* | ./* | ../* | *.tgz | *.tar.gz)
-      bun add "$spec"
+      install_from_location "$spec"
       ;;
     *)
       bun add "cogmem@$spec"
       ;;
   esac
+}
+
+# A location is not always a built package.
+#
+# A git spec is source: this package declares `prepare`, but bun does not install a
+# git dependency's devDependencies before running it, so the build finds no `tsc`,
+# fails, and bun rolls the whole install back — installing from GitHub did not work
+# at all. Install with scripts off, build the package where it landed, then relink,
+# because the bins cannot be linked while their target does not exist yet.
+install_from_location() {
+  local spec="$1"
+  bun add --ignore-scripts "$spec"
+  if [ -x "$INSTALL_HOME/node_modules/.bin/cogmem" ]; then
+    return
+  fi
+
+  local built=0
+  local dir
+  for dir in "$INSTALL_HOME"/node_modules/*/; do
+    [ -f "$dir/package.json" ] || continue
+    [ -e "${dir}dist" ] && continue
+    grep -q '"prepare"[[:space:]]*:' "$dir/package.json" || continue
+    log "Building the source package at ${dir%/}."
+    if ! ( cd "$dir" && bun install && bun run prepare ); then
+      log "Building ${dir%/} failed, so no CLI was created."
+      exit 1
+    fi
+    built=1
+  done
+  [ "$built" = "1" ] || return 0
+  ( cd "$INSTALL_HOME" && bun install )
 }
 
 link_cli() {
