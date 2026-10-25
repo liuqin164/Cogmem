@@ -131,9 +131,15 @@ test('the temp-root clear refuses anything that is not inside the repository', (
   // And the repository root itself is not a temp root.
   expect(clearProjectTempRoot(repo, repo)).toEqual({ cleared: false, entries: 0 });
 
-  const inside = join(makeTempDir('clear-inside-'), 'nested');
+  // Built inside the repository explicitly rather than from `makeTempDir()`: on CI
+  // TMPDIR is /tmp, so a directory from the helper is *outside* the repository and
+  // this assertion would be testing the refusal instead of the clear. That is
+  // exactly how this test first failed on CI while passing locally — the local
+  // TMPDIR is the project's own root, which hid the difference.
+  const inside = join(repo, '.cogmem', 'tmp', `clear-inside-${process.pid}`, 'nested');
   mkdirSync(inside, { recursive: true });
   writeFileSync(join(inside, 'drop-me'), '');
   expect(clearProjectTempRoot(repo, inside)).toEqual({ cleared: true, entries: 1 });
   expect(readdirSync(inside)).toEqual([]);
+  rmSync(join(repo, '.cogmem', 'tmp', `clear-inside-${process.pid}`), { recursive: true, force: true });
 });
