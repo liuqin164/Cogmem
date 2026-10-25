@@ -21,7 +21,13 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/d
   `bun test __tests__` fails ~20 `mcp-http` cases with `SQLITE_CANTOPEN`. Run it as
   `TMPDIR="$PWD/.cogmem/tmp" bun test __tests__`; `.cogmem/` is gitignored, so this leaves no trace.
 - **The active branch is `feat/cogmem-4.0-multi-bot`, not `main`.** 4.0.0 is unreleased; do not tag
-  or publish without the owner's explicit go-ahead.
+  or publish without the owner's explicit go-ahead. A tag is not a free label here: the owner's
+  release flow creates the GitHub Release through the tag, and `release: published` runs
+  `.github/workflows/publish.yml`, which publishes to npm. 4.0 must be settled before that happens.
+- **README Quick Start installs from npm, not from this checkout.** `install.sh` resolves
+  `cogmem@latest`, and npm's `latest` is the last *released* version. So no merge of this branch
+  makes those three lines run 4.0 — only publishing does. Any doc claim that "Quick Start works
+  once this lands on `main`" is wrong; issue #44 is blocked on the release, not on the merge.
 - **The resident MCP server does not hot-reload.** A long-running `cogmem mcp --transport http`
   keeps the `src/`/`dist/` it started with. Restart it after a build, and check
   `ss -ltnp | grep 7337` before assuming it is current.
