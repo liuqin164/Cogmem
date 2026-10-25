@@ -21,6 +21,7 @@ import { createInterface } from 'node:readline';
 import { dirname, resolve, join } from 'node:path';
 
 import { defaultCogmemHome } from '../config/CogmemConfig.js';
+import { installGateStep } from '../install/InstallSteps.js';
 import {
   DEFAULT_VECTOR_DIMENSION,
   HIGH_VECTOR_DIMENSION_THRESHOLD,
@@ -961,16 +962,9 @@ function emitInitJson(input: {
       },
     },
     warnings: input.warnings,
-    nextSteps: [
-      {
-        id: 'install_gate',
-        actor: 'agent',
-        safeForAutomation: true,
-        command: `${bin} doctor --json`,
-        when: 'now',
-        purpose: 'the Install gate: not installed, OK, WARN or FAIL, plus the next step',
-      },
-    ],
+    // Read from the shared module rather than restated here: a second copy of
+    // this step is how the two versions drifted apart before.
+    nextSteps: [installGateStep(bin, 'now')],
   }, null, 2));
 }
 

@@ -29,6 +29,24 @@ export function automationSafeCommands(steps) {
  * The two Install paths, as the steps that follow a finished install.
  * The installer prints these and stops; it never runs them.
  */
+/**
+ * The step that runs the Install gate.
+ *
+ * Defined once because it appears in more than one list, and the two copies had
+ * already drifted apart in the one field that legitimately differs — when it is
+ * run — while the rest must never diverge. `init` reports it as the step to take
+ * now; the install-path list reports it as the step after setup.
+ */
+export function installGateStep(bin, when = 'after either setup step') {
+    return {
+        id: 'install_gate',
+        actor: 'agent',
+        safeForAutomation: true,
+        command: `${bin} doctor --json`,
+        when,
+        purpose: 'the Install gate: not installed, OK, WARN or FAIL, plus the next step',
+    };
+}
 export function installPathSteps(bin) {
     return [
         {
@@ -47,14 +65,7 @@ export function installPathSteps(bin) {
             when: 'with no human present',
             purpose: 'non-interactive config; Human-required settings fall back to conservative defaults',
         },
-        {
-            id: 'install_gate',
-            actor: 'agent',
-            safeForAutomation: true,
-            command: `${bin} doctor --json`,
-            when: 'after either setup step',
-            purpose: 'the Install gate: not installed, OK, WARN or FAIL, plus the next step',
-        },
+        installGateStep(bin),
     ];
 }
 /** What the gate says to do once a config exists and the kernel opened. */

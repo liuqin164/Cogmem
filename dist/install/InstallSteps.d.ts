@@ -36,6 +36,15 @@ export declare function automationSafeCommands(steps: InstallStep[]): string[];
  * The two Install paths, as the steps that follow a finished install.
  * The installer prints these and stops; it never runs them.
  */
+/**
+ * The step that runs the Install gate.
+ *
+ * Defined once because it appears in more than one list, and the two copies had
+ * already drifted apart in the one field that legitimately differs — when it is
+ * run — while the rest must never diverge. `init` reports it as the step to take
+ * now; the install-path list reports it as the step after setup.
+ */
+export declare function installGateStep(bin: string, when?: string): InstallStep;
 export declare function installPathSteps(bin: string): InstallStep[];
 /** What the gate says to do once a config exists and the kernel opened. */
 export declare function postInstallSteps(bin: string): InstallStep[];
