@@ -250,6 +250,18 @@ export function resolveCliBinDir(
   const base = basename(dir);
   if ((base === 'bin' || base === '.bin') && leaf === 'cogmem') return dir;
 
+  // The package's own dispatcher, `<pkg>/dist/bin/cogmem.js`. A user who ran the
+  // one-line installer has the launcher in `<pkg parent>/.bin`, and that
+  // directory is often not on PATH yet: Bun resolves the shim, so `argv[1]` is
+  // this file rather than the launcher. Without this, the gate answered `ok` on a
+  // machine where `cogmem` did not resolve at all — the silent success ADR-0003
+  // forbids. A global npm install puts its launcher on PATH and the scan below
+  // still handles it.
+  if (base === 'bin') {
+    const shimDir = join(dirname(dirname(dirname(dir))), '.bin');
+    if (existsSync(join(shimDir, 'cogmem'))) return shimDir;
+  }
+
   let launchedFile: string;
   try {
     launchedFile = realpathSync(script);

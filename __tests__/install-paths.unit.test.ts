@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,6 +38,24 @@ function run(cmd: string[], options: { cwd?: string; env?: Record<string, string
     proc.exited,
   ]).then(([stdout, stderr, exitCode]) => ({ stdout, stderr, exitCode }));
 }
+
+test('the installed layout is recognised, so the gate cannot report OK off PATH', () => {
+  const home = mkdtempSync(join(tmpdir(), 'cogmem-bin-dir-'));
+  const shimDir = join(home, 'node_modules', '.bin');
+  const pkgBin = join(home, 'node_modules', 'cogmem', 'dist', 'bin');
+  mkdirSync(shimDir, { recursive: true });
+  mkdirSync(pkgBin, { recursive: true });
+  writeFileSync(join(shimDir, 'cogmem'), '#!/bin/sh\n');
+  writeFileSync(join(pkgBin, 'cogmem.js'), '// dispatcher\n');
+
+  // What Bun actually reports as argv[1] when the launcher resolves the shim.
+  // Reporting `ok` here would be a silent success on a machine where `cogmem`
+  // does not resolve at all, which is the failure this covers.
+  expect(resolveCliBinDir(join(pkgBin, 'cogmem.js'), { PATH: '/usr/bin:/bin' })).toBe(shimDir);
+  // A source checkout is still not an installed layout.
+  expect(resolveCliBinDir('src/bin/doctor.ts', { PATH: '/usr/bin:/bin' })).toBeUndefined();
+  rmSync(home, { recursive: true, force: true });
+});
 
 describe('install step shape', () => {
   test('every step names exactly one actor and only agent steps are automation-safe', () => {

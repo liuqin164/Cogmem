@@ -177,6 +177,21 @@ async function runCommand(cmd, cwd) {
     });
     return proc.exited;
 }
+/**
+ * Run a step whose own chatter must not land inside a JSON document.
+ *
+ * `--json` promises one object on stdout. A step that inherits stdout writes its
+ * progress in front of it — the OpenClaw repair prints `OK configuration parsed`
+ * — and the result is unparseable for the agent that asked for JSON.
+ */
+async function runCommandViaStderr(cmd, cwd) {
+    const captured = await runCommandCapture(cmd, cwd);
+    if (captured.stdout)
+        process.stderr.write(captured.stdout);
+    if (captured.stderr)
+        process.stderr.write(captured.stderr);
+    return captured.exitCode;
+}
 async function runCommandCapture(cmd, cwd) {
     const proc = Bun.spawn({ cmd, cwd, stdout: 'pipe', stderr: 'pipe' });
     const [stdout, stderr, exitCode] = await Promise.all([
@@ -282,11 +297,12 @@ async function main() {
             console.log(`Post-update gate: ${result.postUpdateGateCommand}`);
     }
     if (!args.dryRun) {
-        const updateExitCode = await runCommand(command, target.cwd);
+        const runStep = args.json ? runCommandViaStderr : runCommand;
+        const updateExitCode = await runStep(command, target.cwd);
         if (updateExitCode !== 0)
             process.exit(updateExitCode);
         if (openclawRepairExec) {
-            const repairExitCode = await runCommand(openclawRepairExec, process.cwd());
+            const repairExitCode = await runStep(openclawRepairExec, process.cwd());
             if (repairExitCode !== 0)
                 process.exit(repairExitCode);
         }

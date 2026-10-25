@@ -99,9 +99,13 @@ describe('core release metadata', () => {
     expect(installer).not.toContain('/dev/tty');
     expect(installer).not.toContain('COGMEM_INIT_ARGS');
     expect(installer).not.toMatch(/cogmem"?\s+init\s*[<"]/);
-    // Both Install paths are named, each with its actor.
-    expect(installer).toContain('init --yes');
+    // Both Install paths are named with their actors — by the gate, which the
+    // installer runs and which reads them from the shared step list. The shell
+    // must not restate them: that copy is what #40 item 7 forbids, and it had
+    // already drifted from the shared version.
     expect(installer).toContain('doctor');
+    expect(installer).not.toMatch(/\[operator\] +%s init/);
+    expect(installer).not.toMatch(/\[agent\] +%s init/);
     // The old switch still works, and does nothing.
     expect(installer).toContain('COGMEM_SKIP_INIT');
   });

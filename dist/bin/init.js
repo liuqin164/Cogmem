@@ -674,6 +674,12 @@ function buildUnattendedConfig(args, det, oclawDet, hermesDet) {
         command: rerun,
     });
     warnings.push({
+        code: 'api_key_defaulted',
+        setting: 'API key',
+        message: 'no API key is written; an unattended run never copies one from the environment, so no provider can be called and no cost can be incurred.',
+        command: rerun,
+    });
+    warnings.push({
         code: 'encryption_defaulted',
         setting: 'encryption passphrase',
         message: 'field encryption is off; an unattended run never invents a passphrase, because losing it loses the database.',
@@ -699,8 +705,8 @@ function buildUnattendedConfig(args, det, oclawDet, hermesDet) {
         warnings.push({
             code: 'host_integration_defaulted',
             setting: 'host integration',
-            message: 'no host integration is enabled; automatic recall needs one.',
-            command: 'cogmem connect openclaw --auto --force',
+            message: 'no host integration is enabled; automatic recall needs one. Pass --agent openclaw (or --agent hermes); `cogmem connect` installs the host-side files but does not change this switch.',
+            command: 'cogmem init --agent openclaw',
         });
     }
     const cfg = {
@@ -739,7 +745,9 @@ function printSettingWarnings(warnings) {
     }
 }
 function emitInitJson(input) {
-    const bin = process.env.COGMEM_BIN_DIR?.trim() || 'cogmem';
+    // Resolved, not used verbatim: a relative COGMEM_BIN_DIR would otherwise be
+    // pasted into the next step's command, where it means something else entirely.
+    const bin = process.env.COGMEM_BIN_DIR ? resolve(process.env.COGMEM_BIN_DIR.trim()) : 'cogmem';
     console.log(JSON.stringify({
         schemaVersion: 'cogmem.cli.v1',
         command: 'init',

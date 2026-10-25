@@ -89,10 +89,8 @@ print_next_steps() {
   log "The installed CLI did not start, so its step list could not be printed."
   log "Try:  $cli doctor"
   printf '\n'
-  printf 'Cogmem is installed. Setup is a separate step:\n'
-  printf '  [operator] %s init             interactive, asks for provider and key\n' "$cli"
-  printf '  [agent]    %s init --yes --json  non-interactive, conservative defaults\n' "$cli"
-  printf '  [agent]    %s doctor --json      the install gate\n' "$cli"
+  log "Cogmem is installed. Setup is a separate step; run the CLI to see its steps:"
+  log "  $cli doctor"
   printf '\n'
 }
 
