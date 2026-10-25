@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, unlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const explainBin = join(coreRoot, 'src/bin/explain-recall.ts');
@@ -28,7 +28,7 @@ async function runCli(cmd: string[]): Promise<{ exitCode: number; stdout: string
 }
 
 test('cogmem-explain-recall prints universe navigation details as json', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-explain-cli-'));
+  const dir = makeTempDir('cogmem-explain-cli-');
   const dbPath = join(dir, 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   await kernel.ingest({

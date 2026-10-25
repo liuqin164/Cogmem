@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,6 +7,7 @@ import {
   assertBunRuntime,
   installOpenClawAutoMemoryPlugin,
 } from '../src/host/openclaw/AutoMemoryPluginInstaller.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const connectBin = join(coreRoot, 'src/bin/connect.ts');
@@ -21,7 +21,7 @@ function writeNodeLikeRuntime(root: string): string {
 }
 
 function makeWorkspace(): { root: string; configPath: string; openclawConfigPath: string } {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-bun-guard-'));
+  const root = makeTempDir('cogmem-bun-guard-');
   const configPath = join(root, '.cogmem', 'config.toml');
   const openclawConfigPath = join(root, 'openclaw.json');
   mkdirSync(dirname(configPath), { recursive: true });

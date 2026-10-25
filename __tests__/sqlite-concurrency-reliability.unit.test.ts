@@ -1,12 +1,11 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('MemoryKernel closes every owned SQLite connection and close is idempotent', () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-close-owned-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-close-owned-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   kernel.close();
   expect(() => kernel.beliefStore.countActive('demo')).toThrow();
@@ -15,7 +14,7 @@ test('MemoryKernel closes every owned SQLite connection and close is idempotent'
 });
 
 test('a live Kernel reader and an independent WAL writer complete without lock timeout', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-concurrent-wal-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-concurrent-wal-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   try {
     const writer = new Database(dbPath);

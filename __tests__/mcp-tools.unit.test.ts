@@ -1,15 +1,15 @@
 import { afterEach, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, unlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
 import { callCogmemMcpTool, listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const opened: Array<{ kernel: MemoryKernel; dbPath: string }> = [];
 
 function makeKernel(): MemoryKernel {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-mcp-tools-'));
+  const dir = makeTempDir('cogmem-mcp-tools-');
   const dbPath = join(dir, 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   opened.push({ kernel, dbPath });

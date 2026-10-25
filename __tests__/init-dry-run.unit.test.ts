@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -18,7 +18,7 @@ const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
  * pass for the wrong reason.
  */
 test('init --dry-run without --yes writes no config', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'cogmem-init-dry-run-'));
+  const home = makeTempDir('cogmem-init-dry-run-');
   const proc = Bun.spawn({
     cmd: ['bash', '-c', `yes '' | bun ${JSON.stringify(join(coreRoot, 'src/bin/cogmem.ts'))} init --dry-run`],
     cwd: home,

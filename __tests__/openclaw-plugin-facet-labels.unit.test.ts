@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { formatAtlasCard, formatRecallContext } from '../src/host/RecallBlock.js';
 import { installOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemoryPluginInstaller.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * The plugin used to carry its own copy of the renderer, and this file used to
@@ -36,7 +36,7 @@ test('the injected block prints the product facet word when there is one', () =>
 });
 
 test('the generated plugin delegates the renderers instead of embedding a copy', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-plugin-labels-'));
+  const root = makeTempDir('cogmem-plugin-labels-');
   const configPath = join(root, '.cogmem', 'config.toml');
   const openclawConfigPath = join(root, 'openclaw.json');
   mkdirSync(join(root, '.cogmem'), { recursive: true });

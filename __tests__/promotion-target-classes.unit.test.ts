@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const glossaryPath = join(coreRoot, 'GLOSSARY.md');
@@ -37,7 +37,7 @@ interface Observed {
 }
 
 test('every promotion target a real curator writes falls in a class the docs name', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-promotion-classes-'));
+  const dir = makeTempDir('cogmem-promotion-classes-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 

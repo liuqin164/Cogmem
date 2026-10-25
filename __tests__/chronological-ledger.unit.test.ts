@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { buildEpisodeEnvelope, ConversationMarkdownAdapter, type SourceDefinition, type SourceFileSnapshot } from '../src/adapters/index.js';
@@ -14,9 +13,10 @@ import {
   normalizeJsonArrayRecords,
   writeNormalizedConversationMarkdown,
 } from '../src/utils/ConversationMarkdownNormalization.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function tempDbPath(prefix: string): string {
-  return join(mkdtempSync(join(tmpdir(), prefix)), 'memory.db');
+  return join(makeTempDir(prefix), 'memory.db');
 }
 
 function makeSnapshot(source: SourceDefinition, content: string): SourceFileSnapshot {
@@ -298,7 +298,7 @@ test('markdown conversation import preserves line order and sourceRef anchors', 
 });
 
 test('json array normalization preserves original array order in sourceRefs', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ledger-json-normalize-'));
+  const dir = makeTempDir('ledger-json-normalize-');
   const inputPath = join(dir, 'memory.json');
   const outputPath = join(dir, 'memory.normalized.md');
   writeFileSync(inputPath, JSON.stringify([
@@ -326,7 +326,7 @@ test('json array normalization preserves original array order in sourceRefs', ()
 });
 
 test('csv normalization preserves original row line anchors in sourceRefs', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'ledger-csv-normalize-'));
+  const dir = makeTempDir('ledger-csv-normalize-');
   const inputPath = join(dir, 'memory.csv');
   const outputPath = join(dir, 'memory.normalized.md');
   writeFileSync(inputPath, [

@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { BeliefStore } from '../src/belief/BeliefStore.js';
@@ -11,10 +10,11 @@ import { PolicyExecutionProjector } from '../src/store/PolicyExecutionProjector.
 import { PolicyExecutionStore, type PolicyExecutionRecord } from '../src/store/PolicyExecutionStore.js';
 import { PolicyProjectionStore } from '../src/store/PolicyProjectionStore.js';
 import { installFinalSchema } from '../src/migrations/v3_7_4/FinalSchemaInstall.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 describe('policy execution project isolation', () => {
   test('the same effect executes independently in each exact project scope', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-scope-'));
+    const dir = makeTempDir('cogmem-policy-scope-');
     const path = join(dir, 'policy.db');
     const store = new PolicyExecutionStore(path);
     const calls: string[] = [];
@@ -66,7 +66,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('event projection replays only the requested named or projectless scope', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-projector-'));
+    const dir = makeTempDir('cogmem-policy-projector-');
     const path = join(dir, 'policy.db');
     const events = new EventStore(path);
     const executions = new PolicyExecutionStore(path);
@@ -96,7 +96,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('concurrent callers atomically claim one side effect', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-concurrent-'));
+    const dir = makeTempDir('cogmem-policy-concurrent-');
     const path = join(dir, 'policy.db');
     const stores = Array.from({ length: 20 }, () => new PolicyExecutionStore(path));
     let calls = 0;
@@ -120,7 +120,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('lease heartbeat prevents a second worker from taking a long-running side effect', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-heartbeat-'));
+    const dir = makeTempDir('cogmem-policy-heartbeat-');
     const path = join(dir, 'policy.db');
     const firstStore = new PolicyExecutionStore(path);
     const secondStore = new PolicyExecutionStore(path);
@@ -295,7 +295,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('restart respects audit retry schedule and a later due drain succeeds', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-audit-restart-'));
+    const dir = makeTempDir('cogmem-policy-audit-restart-');
     const path = join(dir, 'policy.db');
     const bootstrap = new EventStore(path);
     bootstrap.close();
@@ -328,7 +328,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('one audit drain attempts each due row once and dead-letters on the fifth due cycle', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-audit-cycles-'));
+    const dir = makeTempDir('cogmem-policy-audit-cycles-');
     const path = join(dir, 'policy.db');
     const bootstrap = new EventStore(path);
     bootstrap.close();
@@ -409,7 +409,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('failure outcomes survive reopen and in-progress replay omits outcome', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-outcome-'));
+    const dir = makeTempDir('cogmem-policy-outcome-');
     const path = join(dir, 'policy.db');
     const first = new PolicyExecutionStore(path);
     const executor = new ReliablePolicySideEffectExecutor({
@@ -452,7 +452,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('same-millisecond policy updates keep distinct audit events', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-audit-id-'));
+    const dir = makeTempDir('cogmem-policy-audit-id-');
     const path = join(dir, 'policy.db');
     const events = new EventStore(path);
     const store = new PolicyExecutionStore(path, events);

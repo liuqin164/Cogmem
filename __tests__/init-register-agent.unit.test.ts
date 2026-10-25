@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadAgentRegistry } from '../src/mcp/AgentRegistry.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * #65 acceptance item 4: the onboarding flows, extended to two agents.
@@ -35,7 +35,7 @@ function run(args: string[]) {
 }
 
 function makeHome(): string {
-  return mkdtempSync(join(tmpdir(), 'cogmem-init-register-'));
+  return makeTempDir('cogmem-init-register-');
 }
 
 describe('cogmem init --register-agent', () => {

@@ -1,14 +1,13 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
 import { productFacetFor } from '../src/atlas/ProductFacet.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 // Q10: the product speaks six Facets. A schema `entity` match is a person to the
 // reader, and an internal entrance must not be dressed up as one of the six.
 test('an entity match on a real episode is reported as the person facet', () => {
-  const kernel = createMemoryKernel({ dbPath: join(mkdtempSync(join(tmpdir(), 'cogmem-product-facets-')), 'memory.db') });
+  const kernel = createMemoryKernel({ dbPath: join(makeTempDir('cogmem-product-facets-'), 'memory.db') });
   try {
     kernel.memoryBindingStore.upsertEntity({ projectId: 'cogmem', canonicalName: 'Hermes', entityType: 'project' });
     const event = kernel.eventStore.append({

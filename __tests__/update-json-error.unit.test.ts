@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -16,7 +16,7 @@ const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
  * shim makes sure of that rather than assuming it.
  */
 test('update --json still answers with JSON when the config cannot be read', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'cogmem-update-json-'));
+  const home = makeTempDir('cogmem-update-json-');
   const binDir = join(home, 'shim-bin');
   mkdirSync(binDir);
   const npmShim = join(binDir, 'npm');

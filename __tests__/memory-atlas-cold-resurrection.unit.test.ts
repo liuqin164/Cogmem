@@ -1,13 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 // ADR 0001: activation decay controls visibility, never existence. A memory that
 // nothing has touched for a year must still come back when its facet matches.
 test('a memory whose activation has decayed to nothing is still found by its facet', () => {
-  const kernel = createMemoryKernel({ dbPath: join(mkdtempSync(join(tmpdir(), 'cogmem-cold-resurrection-')), 'memory.db') });
+  const kernel = createMemoryKernel({ dbPath: join(makeTempDir('cogmem-cold-resurrection-'), 'memory.db') });
   try {
     kernel.memoryBindingStore.upsertEntity({ projectId: 'cogmem', canonicalName: 'Hermes', entityType: 'project' });
     kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });

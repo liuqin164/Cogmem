@@ -1,8 +1,7 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const memoryBin = join(import.meta.dir, '..', 'src', 'bin', 'memory.ts');
 
@@ -31,7 +30,7 @@ async function runHuman(args: string[]): Promise<string> {
 }
 
 test('belief history returns the superseded version and names its replacement', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-belief-history-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-belief-history-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   const event = kernel.eventStore.append({
     eventId: 'evt-belief-history', streamId: 't', streamType: 'thread', eventType: 'MESSAGE',

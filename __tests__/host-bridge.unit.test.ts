@@ -1,11 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { recallForHost, rememberForHost, type HostIdentity } from '../src/host/bridge/HostBridge.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * The orchestration a host adapter runs: recall into one injectable block, and
@@ -21,7 +20,7 @@ function withKernel<T>(run: (runtime: {
   memory: KernelAgentMemoryBackend;
   formatStrategyContext: (capsule: unknown) => string;
 }) => Promise<T>): Promise<T> {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-host-bridge-'));
+  const dir = makeTempDir('cogmem-host-bridge-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const runtime = {
     kernel,

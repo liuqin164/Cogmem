@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,6 +8,7 @@ import {
   resolveSqliteTempDirectory,
   sqliteTempDirectoryIsWritable,
 } from '../src/utils/SqliteTempDirectory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * #64: when SQLite has no usable temporary directory, the operation that needed
@@ -36,7 +36,7 @@ import {
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 function makeDirs(): { root: string; writable: string; dbDir: string } {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-snapshot-temp-'));
+  const root = makeTempDir('cogmem-snapshot-temp-');
   const writable = join(root, 'writable-temp');
   const dbDir = join(root, 'db');
   for (const dir of [writable, dbDir]) mkdirSync(dir, { recursive: true });

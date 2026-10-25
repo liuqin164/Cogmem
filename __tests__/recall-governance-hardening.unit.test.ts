@@ -1,11 +1,10 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/index.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { explainRecallWithKernel } from '../src/recall/RecallExplanation.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function leakageRate(suppressedIds: string[], rawIds: Set<string>): number {
   if (suppressedIds.length === 0) return 0;
@@ -13,7 +12,7 @@ function leakageRate(suppressedIds: string[], rawIds: Set<string>): number {
 }
 
 test('recall governance hardening metrics stay within fixed leakage thresholds', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'recall-governance-hardening-'));
+  const dir = makeTempDir('recall-governance-hardening-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const query = 'governance hardening sentinel';
 

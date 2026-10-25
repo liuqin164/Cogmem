@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
 import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * `memory plan` and `memory govern --status needs_confirmation` both hand the caller the
@@ -80,7 +80,7 @@ async function run(args: string[]): Promise<{ exitCode: number; stdout: string; 
 }
 
 function withSeeded<T>(actions: string[], body: (dbPath: string) => Promise<T>): Promise<T> {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-review-shapes-'));
+  const dir = makeTempDir('cogmem-review-shapes-');
   const dbPath = join(dir, 'memory.db');
   return (async () => {
     try {

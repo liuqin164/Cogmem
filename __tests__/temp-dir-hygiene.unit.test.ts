@@ -4,7 +4,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
 import { clearProjectTempRoot, makeTempDir } from './helpers/tmp.js';
 
 const testsRoot = dirname(fileURLToPath(import.meta.url));
@@ -22,58 +21,7 @@ const testsRoot = dirname(fileURLToPath(import.meta.url));
  * the helper cannot be used.
  */
 const NOT_YET_MIGRATED = [
-    './agent-import-cli.unit.test.ts',
-    './agent-memory-backend.unit.test.ts',
-    './agent-nerve-system.unit.test.ts',
-    './atlas-product-facets.unit.test.ts',
-    './auto-supersede-target.unit.test.ts',
-    './belief-history-cli.unit.test.ts',
-    './brain-cli-v33.unit.test.ts',
-    './candidate-review-cli-mcp.unit.test.ts',
-    './candidate-review.unit.test.ts',
-    './chronological-ledger.unit.test.ts',
-    './cli-json-contract.unit.test.ts',
-    './cogmem-config.unit.test.ts',
-    './core-cli.unit.test.ts',
-    './dream-ledger.unit.test.ts',
-    './drilldown-project-isolation.unit.test.ts',
-    './event-store-fts-watermark.unit.test.ts',
-    './hermes-workspace-profile.unit.test.ts',
-    './host-bridge-cli.unit.test.ts',
-    './host-bridge.unit.test.ts',
-    './init-register-agent.unit.test.ts',
-    './installed-batch-progress.unit.test.ts',
-    './maintenance-suggested-actions.unit.test.ts',
-    './mcp-cli.unit.test.ts',
-    './mcp-tools.unit.test.ts',
-    './memory-atlas-cli.unit.test.ts',
-    './memory-atlas-cold-resurrection.unit.test.ts',
-    './memory-atlas-maintenance.unit.test.ts',
-    './memory-atlas-multifacet.unit.test.ts',
-    './memory-atlas-openclaw.unit.test.ts',
-    './memory-atlas.unit.test.ts',
-    './memory-inspection-cli.unit.test.ts',
-    './normalize-transcript-cli.unit.test.ts',
-    './openclaw-bridge-daemon.unit.test.ts',
-    './openclaw-bun-path-guard.unit.test.ts',
-    './openclaw-plugin-facet-labels.unit.test.ts',
-    './openclaw-workspace-profile.unit.test.ts',
-    './pipeline-hardening.unit.test.ts',
-    './promotion-target-classes.unit.test.ts',
-    './promotion-target-referent.unit.test.ts',
-    './re-embedding-pipeline.unit.test.ts',
-    './recall-explain-cli.unit.test.ts',
-    './recall-explanation.unit.test.ts',
-    './recall-governance-hardening.unit.test.ts',
-    './recall-thread-scope.unit.test.ts',
-    './repair-cli.unit.test.ts',
-    './snapshot-temp-directory.unit.test.ts',
-    './sqlite-concurrency-reliability.unit.test.ts',
-    './storage-compactor.unit.test.ts',
-    './strategy-cli-v34.unit.test.ts',
-    './strategy-cortex-v1.unit.test.ts',
-    './update-gate-target.unit.test.ts',
-    './update-install-gate.unit.test.ts'
+
 ];
 
 function testFiles(dir: string): string[] {
@@ -91,8 +39,9 @@ test('tests create temporary directories through the shared helper', () => {
   const offenders: string[] = [];
   for (const file of testFiles(testsRoot)) {
     const source = readFileSync(file, 'utf8');
-    if (!source.includes('mkdtempSync') && !source.includes('mkdtemp(')) continue;
-    if (source.includes("helpers/tmp.js")) continue;
+    // A call, not the word: an import that survived a migration is untidy but it
+    // does not leak a directory, and treating it as one makes this guard lie.
+    if (!/\bmkdtemp(Sync)?\s*\(/.test(source)) continue;
     // The issue's wording is "without the shared helper **or** without cleanup",
     // so a file that removes what it creates is not an offender — it is just not
     // migrated yet. This is a string check and therefore a heuristic; the helper
@@ -112,7 +61,7 @@ test('tests create temporary directories through the shared helper', () => {
 test('the not-yet-migrated list only shrinks', () => {
   const stillOffending = NOT_YET_MIGRATED.filter((relative) => {
     const source = readFileSync(join(testsRoot, relative.replace('./', '')), 'utf8');
-    return !source.includes('mkdtempSync') && !source.includes('mkdtemp(');
+    return !/\bmkdtemp(Sync)?\s*\(/.test(source);
   });
   // A file that no longer creates temporary directories, or that now cleans up,
   // must not keep its exemption: the list is debt, not a permanent settlement.

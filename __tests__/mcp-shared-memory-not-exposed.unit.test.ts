@@ -1,7 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { createSqlitePorts } from '../src/adapters/sqlite/SqliteMemoryPorts.js';
@@ -13,6 +12,7 @@ import {
   type McpToolProfile,
 } from '../src/mcp/profiles.js';
 import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * #68: 4.0 does not ship shared memory.
@@ -39,7 +39,7 @@ import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/h
 const SHARED_PREFIX = 'cogmem_shared_';
 const PROFILES: McpToolProfile[] = ['core', 'admin', 'full'];
 
-const scratch = mkdtempSync(join(tmpdir(), 'cogmem-mcp-shared-removed-'));
+const scratch = makeTempDir('cogmem-mcp-shared-removed-');
 const handles: CogmemMcpHttpHandle[] = [];
 
 afterAll(() => {

@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const updateBin = join(coreRoot, 'src/bin/update.ts');
@@ -27,7 +27,7 @@ function run(cmd: string[], options: { cwd?: string; env?: Record<string, string
 
 describe('update post-install gate', () => {
   test('reports the real doctor result after update, not a config-derived OK', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-update-gate-'));
+    const dir = makeTempDir('cogmem-update-gate-');
     const home = join(dir, 'home');
     const installHome = join(dir, 'install');
     const binDir = join(dir, 'bin');

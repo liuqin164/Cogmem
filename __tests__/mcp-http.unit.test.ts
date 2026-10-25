@@ -1,14 +1,14 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
 import { applyIdentity, parseSessionIdentity } from '../src/mcp/server.js';
 import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { ADMIN_TOOLS, CORE_TOOLS, filterToolsByProfile, resolveProfile } from '../src/mcp/profiles.js';
+import { makeTempDir } from './helpers/tmp.js';
 
-const scratch = mkdtempSync(join(tmpdir(), 'cogmem-mcp-http-'));
+const scratch = makeTempDir('cogmem-mcp-http-');
 const dbPath = join(scratch, 'memory.db');
 const handles: CogmemMcpHttpHandle[] = [];
 

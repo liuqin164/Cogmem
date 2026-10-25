@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { readFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const reEmbedBin = join(coreRoot, 'src/bin/re-embed.ts');
@@ -24,7 +24,7 @@ class FakeEmbeddingProvider {
 // The tick only reports stale embeddings when the host supplied a provider, because
 // only then does a different model id mean "the vectors are behind".
 function staleVectorFixture() {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-suggested-actions-'));
+  const dir = makeTempDir('cogmem-suggested-actions-');
   const dbPath = join(dir, 'memory.db');
   const kernel = createMemoryKernel({
     dbPath,
@@ -70,7 +70,7 @@ describe('maintenance tick suggested actions point at commands that run', () => 
   });
 
   test('cogmem-re-embed rejects the retired run subcommand and names the one it supports', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-reembed-usage-'));
+    const dir = makeTempDir('cogmem-reembed-usage-');
     const dbPath = join(dir, 'memory.db');
     const run = Bun.spawnSync({
       cmd: ['bun', reEmbedBin, 'run', '--project', 'p', '--db', dbPath],

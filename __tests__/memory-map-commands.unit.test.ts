@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend, createMemoryKernel } from '../src/public.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 // `memory_map.v1` is the self-description a host reads to learn how to operate
 // Cogmem (the `cogmem_memory_map` tool returns it verbatim, and `cogmem memory
@@ -98,7 +98,7 @@ function routeCommandRefs(route: string): Array<{ group: string; subs: string[] 
 const DATA_SHAPE_ROUTES = ['collection:<name>', 'sourceContext.locator.command'];
 
 function withKernel<T>(run: (kernel: ReturnType<typeof createMemoryKernel>) => T): T {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-map-'));
+  const dir = makeTempDir('cogmem-memory-map-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   try {
     return run(kernel);
@@ -136,7 +136,7 @@ describe('memory_map.v1 manual commands are executable, not aspirational', () =>
   });
 
   test('the two command lines an agent runs first really execute', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-map-cli-'));
+    const dir = makeTempDir('cogmem-memory-map-cli-');
     const db = join(dir, 'memory.db');
     try {
       const run = async (args: string[]) => {

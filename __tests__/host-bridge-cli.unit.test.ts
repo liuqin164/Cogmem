@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const bridgeBin = join(coreRoot, 'src/bin/host-bridge.ts');
@@ -16,7 +16,7 @@ const bridgeBin = join(coreRoot, 'src/bin/host-bridge.ts');
  */
 
 function makeHome(): { dir: string; configPath: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-host-bridge-bin-'));
+  const dir = makeTempDir('cogmem-host-bridge-bin-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, `[core]\ndb_path = ${JSON.stringify(join(dir, 'memory.db'))}\nvector_backend = "sqlite-vec"\n`);

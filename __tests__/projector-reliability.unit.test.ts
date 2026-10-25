@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { EventStore } from '../src/store/EventStore.js';
@@ -13,6 +12,7 @@ import { RuntimeProjectionStore } from '../src/store/RuntimeProjectionStore.js';
 import { RuntimeProjector } from '../src/store/RuntimeProjector.js';
 import { SqliteVecStore } from '../src/store/SqliteVecStore.js';
 import { VectorStore } from '../src/store/VectorStore.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function appendPolicyEvent(events: EventStore, projectId: string, executionId: string, occurredAt: number): void {
   events.append({
@@ -27,7 +27,7 @@ function appendPolicyEvent(events: EventStore, projectId: string, executionId: s
 }
 
 test('policy projector uses global sequence and never clears the authoritative execution ledger', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-seq-'));
+  const dir = makeTempDir('cogmem-policy-seq-');
   const path = join(dir, 'memory.db');
   const events = new EventStore(path);
   const executions = new PolicyExecutionStore(path);
@@ -57,7 +57,7 @@ test('policy projector uses global sequence and never clears the authoritative e
 });
 
 test('runtime replay is read-model-only and consumes backdated events by global sequence', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-runtime-seq-'));
+  const dir = makeTempDir('cogmem-runtime-seq-');
   const path = join(dir, 'memory.db');
   const events = new EventStore(path);
   const runtime = new PlanRuntimeStore(path, events);
@@ -85,7 +85,7 @@ test('runtime replay is read-model-only and consumes backdated events by global 
 });
 
 test('runtime replay preserves transition identity and accepts bounded public transition statuses', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-runtime-transition-id-'));
+  const dir = makeTempDir('cogmem-runtime-transition-id-');
   const path = join(dir, 'memory.db');
   const events = new EventStore(path);
   const runtime = new PlanRuntimeStore(path, events);
@@ -121,7 +121,7 @@ test('runtime replay preserves transition identity and accepts bounded public tr
 });
 
 test('legacy unscoped runtime and policy events are discarded instead of becoming projectless', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-projector-unscoped-'));
+  const dir = makeTempDir('cogmem-projector-unscoped-');
   const path = join(dir, 'memory.db');
   const events = new EventStore(path);
   events.append({
@@ -179,7 +179,7 @@ test('legacy unscoped runtime and policy events are discarded instead of becomin
 });
 
 test('policy projector and SQLite reject contradictory terminal outcomes', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-outcome-contract-'));
+  const dir = makeTempDir('cogmem-policy-outcome-contract-');
   const path = join(dir, 'memory.db');
   const events = new EventStore(path);
   events.append({
@@ -218,7 +218,7 @@ test('policy projector and SQLite reject contradictory terminal outcomes', async
 });
 
 test('projectors reject scope conflicts and invalid payload enums', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-projector-invalid-'));
+  const dir = makeTempDir('cogmem-projector-invalid-');
   const path = join(dir, 'memory.db');
   const events = new EventStore(path);
   events.append({
@@ -277,7 +277,7 @@ test('projectors reject scope conflicts and invalid payload enums', async () => 
 });
 
 test('runtime command and outbox commit together, respect retry time, and later recover', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-runtime-outbox-'));
+  const dir = makeTempDir('cogmem-runtime-outbox-');
   const path = join(dir, 'memory.db');
   const bootstrap = new EventStore(path);
   bootstrap.close();
@@ -315,7 +315,7 @@ test('runtime command and outbox commit together, respect retry time, and later 
 });
 
 test('policy and runtime outboxes drain multiple pages and dead-letter malformed rows', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-outbox-pages-'));
+  const dir = makeTempDir('cogmem-outbox-pages-');
   const path = join(dir, 'memory.db');
   const policy = new PolicyExecutionStore(path);
   for (let index = 0; index < 250; index++) {
@@ -368,7 +368,7 @@ test('policy and runtime outboxes drain multiple pages and dead-letter malformed
 }, 10_000);
 
 test('empty rebuilds checkpoint a fixed high-water and consume the first concurrent target event next', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-projector-high-water-'));
+  const dir = makeTempDir('cogmem-projector-high-water-');
   const path = join(dir, 'memory.db');
   const events = new EventStore(path);
   events.append({
@@ -422,7 +422,7 @@ test('empty rebuilds checkpoint a fixed high-water and consume the first concurr
 });
 
 test('failed full rebuild preserves the published policy read model', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-projector-shadow-'));
+  const dir = makeTempDir('cogmem-projector-shadow-');
   const path = join(dir, 'memory.db');
   const events = new EventStore(path);
   appendPolicyEvent(events, 'p', 'published', 1);
@@ -446,7 +446,7 @@ test('failed full rebuild preserves the published policy read model', async () =
 });
 
 test('runtime identity is project scoped and standalone legacy schemas fail explicitly', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-runtime-scope-'));
+  const dir = makeTempDir('cogmem-runtime-scope-');
   const path = join(dir, 'memory.db');
   const runtime = new PlanRuntimeStore(path);
   runtime.upsertState({ projectId: 'a', runtimeId: 'same', entityType: 'step', entityKey: 'one', status: 'ready' });
@@ -490,7 +490,7 @@ test('vector rebuild swaps atomically and preserves the live index when staging 
 });
 
 test('policy and runtime stores open in WAL so outbox drains do not fsync per statement', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-store-wal-'));
+  const dir = makeTempDir('cogmem-store-wal-');
   const path = join(dir, 'memory.db');
 
   const policy = new PolicyExecutionStore(path);

@@ -1,9 +1,8 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
 import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function seedCandidate(kernel: ReturnType<typeof createMemoryKernel>, input: {
   candidateId: string;
@@ -35,7 +34,7 @@ function seedCandidate(kernel: ReturnType<typeof createMemoryKernel>, input: {
 }
 
 test('candidate review closes approve reject defer and supersede with immutable audit', () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-candidate-review-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-candidate-review-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   try {
     const confirmation = kernel.eventStore.append({
@@ -79,7 +78,7 @@ test('candidate review closes approve reject defer and supersede with immutable 
 });
 
 test('candidate review is atomic when the audit insert fails', () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-candidate-review-atomic-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-candidate-review-atomic-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   try {
     const confirmation = kernel.eventStore.append({
@@ -112,7 +111,7 @@ test('candidate review is atomic when the audit insert fails', () => {
 });
 
 test('candidate review rejects cross-project confirmation and relinks orphan correction to an active belief', () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-candidate-relink-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-candidate-relink-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   try {
     const original = kernel.eventStore.append({

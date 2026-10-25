@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import { KernelAgentMemoryBackend, createMemoryKernel } from '../src/public.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 // Cogmem hands command lines to agents in more than one place. `memory_map.v1`
 // is the static one and has its own guard. This file covers the other kind:
@@ -300,7 +300,7 @@ function renderedCommands(): Array<{ site: string; command: string }> {
 }
 
 function withKernel<T>(run: (kernel: ReturnType<typeof createMemoryKernel>) => T): T {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-command-templates-'));
+  const dir = makeTempDir('cogmem-command-templates-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   try {
     return run(kernel);
@@ -350,7 +350,7 @@ describe('runtime-built command lines are executable, not aspirational', () => {
   });
 
   test('the plan suggestions an operator is told to run really run', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-command-run-'));
+    const dir = makeTempDir('cogmem-command-run-');
     const db = join(dir, 'memory.db');
     try {
       const run = async (args: string[]) => {
@@ -394,7 +394,7 @@ describe('runtime-built command lines are executable, not aspirational', () => {
   });
 
   test('the memory show locator the CLI prints is itself an executable command', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-command-locator-'));
+    const dir = makeTempDir('cogmem-command-locator-');
     const db = join(dir, 'memory.db');
     try {
       const kernel = createMemoryKernel({ dbPath: db, vectorBackend: 'sqlite-vec' });

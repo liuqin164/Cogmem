@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { DeepWriteCandidateStore, type DeepWriteCandidateRecord } from '../src/store/DeepWriteCandidateStore.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const memoryBin = join(coreRoot, 'src/bin/memory.ts');
@@ -113,7 +113,7 @@ async function seedOrganizationCandidates(dbPath: string): Promise<{
 }
 
 test('an organization candidate with no referent promotes without naming itself', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-promotion-target-'));
+  const dir = makeTempDir('cogmem-promotion-target-');
   const dbPath = join(dir, 'memory.db');
   const { eventId, rows } = await seedOrganizationCandidates(dbPath);
 

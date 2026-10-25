@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
 import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
 import type { BeliefRecord } from '../src/types/index.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * `relink` is the operator saying "this correction corrects that belief instead". The curator writes
@@ -53,7 +53,7 @@ const orphan: Record<string, unknown> = {
 };
 
 function seed(contentFor: (beliefA: BeliefRecord) => Record<string, unknown>): Seeded {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-relink-targets-'));
+  const dir = makeTempDir('cogmem-relink-targets-');
   const dbPath = join(dir, 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   kernel.eventStore.append({

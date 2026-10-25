@@ -1,13 +1,13 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
 import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
+import { makeTempDir } from './helpers/tmp.js';
 
-const scratch = mkdtempSync(join(tmpdir(), 'cogmem-import-status-'));
+const scratch = makeTempDir('cogmem-import-status-');
 const projectId = 'import-status';
 
 afterAll(() => {

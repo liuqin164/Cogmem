@@ -1,14 +1,13 @@
 import { expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { mkdtempSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { installOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemoryPluginInstaller.js';
 import { stripCogmemRecallBlocks } from '../src/agent/ContextHygiene.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('installed OpenClaw plugin sanitizes generated prompt context and routes Atlas without MCP', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-atlas-openclaw-'));
+  const root = makeTempDir('cogmem-atlas-openclaw-');
   const configPath = join(root, '.cogmem', 'config.toml');
   const openclawConfigPath = join(root, 'openclaw.json');
   mkdirSync(dirname(configPath), { recursive: true });

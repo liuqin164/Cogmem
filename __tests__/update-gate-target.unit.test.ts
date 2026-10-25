@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { installPathSteps } from '../src/install/InstallSteps.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * #62: the post-update gate must check the install this update touched.
@@ -45,7 +45,7 @@ interface Fixture {
 }
 
 function makeFixture(options: { withConfig: boolean }): Fixture {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-update-gate-'));
+  const root = makeTempDir('cogmem-update-gate-');
   const installHome = join(root, 'install');
   const elsewhere = join(root, 'elsewhere');
   const scratchHome = join(root, 'home');

@@ -1,13 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function setup() {
-  const dir = mkdtempSync(join(tmpdir(), 'recall-thread-scope-'));
+  const dir = makeTempDir('recall-thread-scope-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
   return { kernel, backend };

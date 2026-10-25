@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
 import { LATEST_SCHEMA_VERSION } from '../src/migrations/v3_7_4/FinalSchema.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * #59: 4.0 creates a database or refuses one. It never upgrades one.
@@ -19,7 +19,7 @@ import { LATEST_SCHEMA_VERSION } from '../src/migrations/v3_7_4/FinalSchema.js';
  */
 
 function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'cogmem-schema-gate-'));
+  return makeTempDir('cogmem-schema-gate-');
 }
 
 function fileDigest(path: string): string {

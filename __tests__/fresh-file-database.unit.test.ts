@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -49,7 +49,7 @@ async function createFreshFileKernel(dbPath: string, env: Record<string, string 
 }
 
 test('createMemoryKernel creates a new file-backed database and migrates it', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-fresh-db-'));
+  const dir = makeTempDir('cogmem-fresh-db-');
   try {
     const dbPath = join(dir, 'memory.db');
     const result = await createFreshFileKernel(dbPath, { SQLITE_TMPDIR: join(dir, 'not-a-temp-dir') });
@@ -63,7 +63,7 @@ test('createMemoryKernel creates a new file-backed database and migrates it', as
 });
 
 test('a second kernel reopens the database the first one created', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-fresh-reopen-'));
+  const dir = makeTempDir('cogmem-fresh-reopen-');
   try {
     const dbPath = join(dir, 'memory.db');
     const first = await createFreshFileKernel(dbPath, { SQLITE_TMPDIR: join(dir, 'not-a-temp-dir') });

@@ -1,10 +1,9 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
 import { callCogmemMcpTool, listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const memoryBin = join(import.meta.dir, '..', 'src', 'bin', 'memory.ts');
 
@@ -25,7 +24,7 @@ async function run(args: string[]): Promise<{ exitCode: number; stdout: string; 
 }
 
 test('memory review approves a needs-confirmation candidate with an audited JSON receipt', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-review-cli-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-review-cli-'), 'memory.db');
   seed(dbPath, 'cand-cli');
   const result = await run([
     'review', '--db', dbPath, '--project', 'cogmem', '--id', 'cand-cli', '--action', 'approve',
@@ -39,7 +38,7 @@ test('memory review approves a needs-confirmation candidate with an audited JSON
 });
 
 test('govern status is enforced and points needs-confirmation users to review', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-review-govern-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-review-govern-'), 'memory.db');
   seed(dbPath, 'cand-govern');
   const result = await run(['govern', '--db', dbPath, '--project', 'cogmem', '--status', 'needs_confirmation', '--json']);
   expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: '' });
@@ -56,7 +55,7 @@ test('govern status is enforced and points needs-confirmation users to review', 
 });
 
 test('MCP exposes and executes candidate review with explicit confirmation evidence', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-review-mcp-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-review-mcp-'), 'memory.db');
   seed(dbPath, 'cand-mcp');
   const tool = listCogmemMcpTools().find((item) => item.name === 'cogmem_candidate_review');
   expect(tool?.annotations?.readOnlyHint).toBe(false);

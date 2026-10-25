@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import {
@@ -9,6 +8,7 @@ import {
   filterToolsByProfile,
   type McpToolProfile,
 } from '../src/mcp/profiles.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 // A hookless host has no channel other than `instructions` to learn when to pull
 // a memory, so the string must not name a tool the serving profile filters out:
@@ -69,7 +69,7 @@ describe('mcp instructions follow the serving profile', () => {
   });
 
   test('a live core server advertises instructions its own tools/list can satisfy', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-instructions-'));
+    const dir = makeTempDir('cogmem-instructions-');
     try {
       const input = [
         JSON.stringify({

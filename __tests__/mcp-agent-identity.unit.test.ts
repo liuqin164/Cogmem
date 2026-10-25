@@ -1,10 +1,10 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
 import { createAgentRegistry, loadAgentRegistry, parseAgentRegistry } from '../src/mcp/AgentRegistry.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * #65: several agents behind one resident process, each with private memory.
@@ -20,7 +20,7 @@ import { createAgentRegistry, loadAgentRegistry, parseAgentRegistry } from '../s
  * pinned here is the decision both paths have to share.
  */
 
-const scratch = mkdtempSync(join(tmpdir(), 'cogmem-agent-identity-'));
+const scratch = makeTempDir('cogmem-agent-identity-');
 const handles: CogmemMcpHttpHandle[] = [];
 
 const AGENT_A = { hostId: 'bot-a', token: 'token-for-bot-a-0123456789', projectId: 'project-a', profile: 'admin' as const };

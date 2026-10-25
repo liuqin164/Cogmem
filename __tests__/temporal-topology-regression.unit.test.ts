@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
@@ -16,6 +15,7 @@ import { CognitiveGraphStore } from '../src/store/CognitiveGraphStore.js';
 import { localDateRange, nextCivilDate } from '../src/utils/LocalDateContext.js';
 import { timeBucketId } from '../src/topology/TimeBucketIdentity.js';
 import type { TimeBucketRecord } from '../src/types/index.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const bucket = (id: string, start: number, end: number, type: TimeBucketRecord['bucketType'] = 'day'): TimeBucketRecord => ({
   bucketId: id,
@@ -159,7 +159,7 @@ describe('project-local temporal topology regressions', () => {
   });
 
   test('ingest preserves a dirty projection until timezone rebuild removes stale memberships', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-timezone-rebuild-'));
+    const dir = makeTempDir('cogmem-timezone-rebuild-');
     const dbPath = join(dir, 'memory.db');
     let kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
     await kernel.ingest({ projectId: 'p', content: 'old timezone evidence', createdAt: Date.UTC(2026, 6, 16, 15, 30) });
@@ -189,7 +189,7 @@ describe('project-local temporal topology regressions', () => {
   });
 
   test('explicit timezone rebuilds never expose another project through temporal traversal', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-project-time-scope-'));
+    const dir = makeTempDir('cogmem-project-time-scope-');
     const dbPath = join(dir, 'memory.db');
     let kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
     const projectA = await kernel.ingest({
@@ -404,7 +404,7 @@ describe('project-local temporal topology regressions', () => {
   });
 
   test('a stale writer cannot mark a newer source revision clean', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-projection-cas-'));
+    const dir = makeTempDir('cogmem-projection-cas-');
     const dbPath = join(dir, 'memory.db');
     const writerA = new TopologyStore(dbPath);
     const writerB = new TopologyStore(dbPath);
@@ -424,7 +424,7 @@ describe('project-local temporal topology regressions', () => {
   });
 
   test('two Kernel connections with different timezones cannot restore a partial projection to clean', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-timezone-writers-'));
+    const dir = makeTempDir('cogmem-timezone-writers-');
     const dbPath = join(dir, 'memory.db');
     const utc = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
     await utc.ingest({ projectId: 'p', content: 'utc baseline', createdAt: 1000 });
@@ -615,7 +615,7 @@ describe('project-local temporal topology regressions', () => {
   });
 
   test('a clean projection becomes unavailable when the Kernel timezone changes', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-timezone-validity-'));
+    const dir = makeTempDir('cogmem-timezone-validity-');
     const dbPath = join(dir, 'memory.db');
     let kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
     await kernel.ingest({ projectId: 'p', content: 'timezone-sensitive projection', createdAt: Date.UTC(2026, 6, 17, 0) });

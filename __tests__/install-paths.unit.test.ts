@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,6 +12,7 @@ import {
   resolveCliBinDir,
   type InstallStep,
 } from '../src/install/InstallSteps.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
@@ -40,7 +40,7 @@ function run(cmd: string[], options: { cwd?: string; env?: Record<string, string
 }
 
 test('the installed layout is recognised, so the gate cannot report OK off PATH', () => {
-  const home = mkdtempSync(join(tmpdir(), 'cogmem-bin-dir-'));
+  const home = makeTempDir('cogmem-bin-dir-');
   const shimDir = join(home, 'node_modules', '.bin');
   const pkgBin = join(home, 'node_modules', 'cogmem', 'dist', 'bin');
   mkdirSync(shimDir, { recursive: true });
@@ -106,7 +106,7 @@ describe('install step shape', () => {
   });
 
   test('finds the installed launcher when argv1 is the symlink target', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-launcher-path-'));
+    const dir = makeTempDir('cogmem-launcher-path-');
     const binDir = join(dir, 'bin');
     const launcher = join(dir, 'package', 'dist', 'bin', 'cogmem.js');
     mkdirSync(binDir, { recursive: true });
@@ -125,8 +125,8 @@ describe('install step shape', () => {
 
 describe('the install gate answers four outcomes', () => {
   test('with no config anywhere it reports not installed and exits 0', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'cogmem-gate-missing-'));
-    const cwd = mkdtempSync(join(tmpdir(), 'cogmem-gate-cwd-'));
+    const home = makeTempDir('cogmem-gate-missing-');
+    const cwd = makeTempDir('cogmem-gate-cwd-');
     // An explicit path that does not exist yet: the state every fresh install is
     // in. Naming it keeps the case independent of any config on this machine.
     const configPath = join(home, '.cogmem', 'config.toml');
@@ -146,8 +146,8 @@ describe('the install gate answers four outcomes', () => {
   });
 
   test('text mode lists the same commands as JSON, in the same order', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'cogmem-gate-text-'));
-    const cwd = mkdtempSync(join(tmpdir(), 'cogmem-gate-text-cwd-'));
+    const home = makeTempDir('cogmem-gate-text-');
+    const cwd = makeTempDir('cogmem-gate-text-cwd-');
     const configPath = join(home, '.cogmem', 'config.toml');
     const env = { HOME: home, COGMEM_BIN_DIR: join(home, 'bin') };
     const asJson = await run(['bun', doctorBin, '--config', configPath, '--json'], { cwd, env });
@@ -163,7 +163,7 @@ describe('the install gate answers four outcomes', () => {
   });
 
   test('a rule_only config reports WARN and exits 0', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-gate-ruleonly-'));
+    const dir = makeTempDir('cogmem-gate-ruleonly-');
     const configPath = join(dir, '.cogmem', 'config.toml');
     mkdirSync(dirname(configPath), { recursive: true });
     writeFileSync(configPath, [
@@ -185,7 +185,7 @@ describe('the install gate answers four outcomes', () => {
   });
 
   test('a CLI directory outside PATH is a WARN with the exact export line', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-gate-path-'));
+    const dir = makeTempDir('cogmem-gate-path-');
     const configPath = join(dir, '.cogmem', 'config.toml');
     const binDir = join(dir, 'bin');
     mkdirSync(dirname(configPath), { recursive: true });
@@ -208,7 +208,7 @@ describe('the install gate answers four outcomes', () => {
   });
 
   test('a broken config reports FAIL and exits 1 in text and JSON modes', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-gate-fail-'));
+    const dir = makeTempDir('cogmem-gate-fail-');
     const configPath = join(dir, '.cogmem', 'config.toml');
     mkdirSync(dirname(configPath), { recursive: true });
     writeFileSync(configPath, [
@@ -233,7 +233,7 @@ describe('the install gate answers four outcomes', () => {
 
 describe('init --yes settles Human-required settings conservatively', () => {
   test('an unattended run enables no host, even where one is detected', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-unattended-'));
+    const dir = makeTempDir('cogmem-init-unattended-');
     const home = join(dir, 'home');
     const workspace = join(dir, 'workspace');
     mkdirSync(join(workspace, 'memory'), { recursive: true });
@@ -260,7 +260,7 @@ describe('init --yes settles Human-required settings conservatively', () => {
   });
 
   test('no key and no passphrase are written, and the install lands in rule_only', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-conservative-'));
+    const dir = makeTempDir('cogmem-init-conservative-');
     const home = join(dir, 'home');
     mkdirSync(home, { recursive: true });
     const { stdout, exitCode } = await run(
@@ -282,7 +282,7 @@ describe('init --yes settles Human-required settings conservatively', () => {
   });
 
   test('every Human-required fallback names the setting and the command that sets it', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-warnings-'));
+    const dir = makeTempDir('cogmem-init-warnings-');
     const home = join(dir, 'home');
     mkdirSync(home, { recursive: true });
     const { stdout } = await run(
@@ -302,7 +302,7 @@ describe('init --yes settles Human-required settings conservatively', () => {
   });
 
   test('Agent-decidable settings keep their defaults', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-decidable-'));
+    const dir = makeTempDir('cogmem-init-decidable-');
     const home = join(dir, 'home');
     mkdirSync(home, { recursive: true });
     const { stdout } = await run(
@@ -316,7 +316,7 @@ describe('init --yes settles Human-required settings conservatively', () => {
   });
 
   test('--dry-run shows the same values and the same warnings as the real write', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-dryrun-'));
+    const dir = makeTempDir('cogmem-init-dryrun-');
     const home = join(dir, 'home');
     mkdirSync(home, { recursive: true });
     const args = ['bun', initBin, '--yes', '--json', '--no-probe', '--home', join(home, '.cogmem')];
@@ -333,7 +333,7 @@ describe('init --yes settles Human-required settings conservatively', () => {
   });
 
   test('--yes defaults to project scope and --scope overrides it', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-scope-'));
+    const dir = makeTempDir('cogmem-init-scope-');
     const home = join(dir, 'home');
     const workspace = join(dir, 'workspace');
     mkdirSync(home, { recursive: true });
@@ -356,7 +356,7 @@ describe('init --yes settles Human-required settings conservatively', () => {
   });
 
   test('an existing config is refused without touching it', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-exists-'));
+    const dir = makeTempDir('cogmem-init-exists-');
     const home = join(dir, 'home');
     const configPath = join(home, '.cogmem', 'config.toml');
     mkdirSync(dirname(configPath), { recursive: true });
@@ -371,7 +371,7 @@ describe('init --yes settles Human-required settings conservatively', () => {
   });
 
   test('an explicit --agent still enables that host', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-explicit-'));
+    const dir = makeTempDir('cogmem-init-explicit-');
     const home = join(dir, 'home');
     mkdirSync(home, { recursive: true });
     const { stdout } = await run(

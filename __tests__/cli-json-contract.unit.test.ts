@@ -1,10 +1,9 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
 import { formatCliJson } from '../src/bin/CliJson.js';
 import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('shared CLI JSON metadata cannot be overridden by command payloads', () => {
   expect(formatCliJson('memory.status', { command: 'spoofed', schemaVersion: 'old', value: 1 })).toEqual({
@@ -41,7 +40,7 @@ test('top-level help documents the machine-readable JSON shape', async () => {
 });
 
 test('memory status --json exposes stable top-level queue counters', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-cli-json-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-cli-json-'), 'memory.db');
   const output = await runMemory(['status', '--db', dbPath, '--project', 'demo', '--json']);
 
   expect(output.schemaVersion).toBe('cogmem.cli.v1');
@@ -54,7 +53,7 @@ test('memory status --json exposes stable top-level queue counters', async () =>
 });
 
 test('memory list --since and --order expose exact source locators', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-cli-list-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-cli-list-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   const first = kernel.eventStore.append({
     eventId: 'evt-list-1', streamId: 'thread-list', streamType: 'thread',
@@ -87,7 +86,7 @@ test('memory list --since and --order expose exact source locators', async () =>
 });
 
 test('memory candidates default groups actionable and deferred queues and memory plan returns next actions', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-cli-plan-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-cli-plan-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   const store = new DeepWriteCandidateStore(kernel.factStore.getDatabase());
   store.insertRun({
@@ -124,7 +123,7 @@ test('memory candidates default groups actionable and deferred queues and memory
 });
 
 test('memory plan does not suggest dream tick for raw-only dream ledger lag', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-cli-plan-raw-lag-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-cli-plan-raw-lag-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   kernel.recordRawEvent({
     eventId: 'evt-raw-lag-1',
@@ -152,7 +151,7 @@ test('memory plan does not suggest dream tick for raw-only dream ledger lag', as
 });
 
 test('memory dream --promote --json exposes queue counters without requiring governance.queue paths', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-cli-json-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-cli-json-'), 'memory.db');
   const output = await runMemory(['dream', '--promote', '--db', dbPath, '--project', 'demo', '--json']);
 
   expect(output.schemaVersion).toBe('cogmem.cli.v1');

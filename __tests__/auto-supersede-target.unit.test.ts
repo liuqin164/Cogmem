@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -16,7 +16,7 @@ const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 // the row that just closed makes a retired candidate claim a successor that is itself.
 
 test('review-queue expiry retires a stale candidate without naming a promotion target', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-auto-supersede-ttl-'));
+  const dir = makeTempDir('cogmem-auto-supersede-ttl-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const store = new DeepWriteCandidateStore(kernel.factStore.getDatabase());
   const now = Date.now();
@@ -66,7 +66,7 @@ test('review-queue expiry retires a stale candidate without naming a promotion t
 });
 
 test('provider recovery supersedes the stale warning without naming a promotion target', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-auto-supersede-diagnostic-'));
+  const dir = makeTempDir('cogmem-auto-supersede-diagnostic-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 

@@ -1,12 +1,12 @@
 import { afterAll, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
 import { CORE_TOOLS } from '../src/mcp/profiles.js';
+import { makeTempDir } from './helpers/tmp.js';
 
-const scratch = mkdtempSync(join(tmpdir(), 'cogmem-mcp-exec-'));
+const scratch = makeTempDir('cogmem-mcp-exec-');
 const dbPath = join(scratch, 'memory.db');
 const handles: CogmemMcpHttpHandle[] = [];
 

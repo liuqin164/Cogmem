@@ -1,8 +1,7 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const memoryBin = join(import.meta.dir, '..', 'src', 'bin', 'memory.ts');
 const SECRET = 'project-b secret words';
@@ -16,7 +15,7 @@ function show(dbPath: string, projectId: string) {
 }
 
 test('a project-bound drill-down cannot read another project\'s event', () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-drilldown-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-drilldown-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   kernel.eventStore.append({
     eventId: 'evt-secret-b', streamId: 's', streamType: 'thread', eventType: 'MESSAGE',

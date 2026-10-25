@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { installOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemoryPluginInstaller.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const CONFIG_TOML = `[core]
 db_path = "memory.db"
@@ -19,7 +19,7 @@ provider = "rule_only"
 `;
 
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-bridge-'));
+  const root = makeTempDir('cogmem-bridge-');
   const configPath = join(root, '.cogmem', 'config.toml');
   const openclawConfigPath = join(root, 'openclaw.json');
   mkdirSync(dirname(configPath), { recursive: true });

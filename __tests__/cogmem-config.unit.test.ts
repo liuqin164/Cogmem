@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -8,9 +7,10 @@ import {
   resolveCogmemConfigPath,
 } from '../src/config/CogmemConfig.js';
 import { createMemoryKernelFromConfig } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('loadCogmemConfig parses TOML and resolves paths relative to the config file', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-config-'));
+  const root = makeTempDir('cogmem-config-');
   const configPath = join(root, '.cogmem', 'config.toml');
   mkdirSync(join(root, '.cogmem'), { recursive: true });
   writeFileSync(configPath, [
@@ -60,7 +60,7 @@ test('loadCogmemConfig parses TOML and resolves paths relative to the config fil
 });
 
 test('loadCogmemConfig maps vector_dimension to kernel options only', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-vector-dimension-'));
+  const root = makeTempDir('cogmem-vector-dimension-');
   const configPath = join(root, '.cogmem', 'config.toml');
   mkdirSync(join(root, '.cogmem'), { recursive: true });
   writeFileSync(configPath, [
@@ -80,7 +80,7 @@ test('loadCogmemConfig maps vector_dimension to kernel options only', () => {
 });
 
 test('loadCogmemConfig rejects invalid vector dimensions without imposing a hard upper bound', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-invalid-vector-dimension-'));
+  const root = makeTempDir('cogmem-invalid-vector-dimension-');
   const configPath = join(root, 'config.toml');
   writeFileSync(configPath, [
     '[core]',
@@ -98,7 +98,7 @@ test('loadCogmemConfig rejects invalid vector dimensions without imposing a hard
 });
 
 test('loadCogmemConfig rejects partially numeric vector dimensions', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-partial-vector-dimension-'));
+  const root = makeTempDir('cogmem-partial-vector-dimension-');
   const configPath = join(root, 'config.toml');
   writeFileSync(configPath, [
     '[core]',
@@ -116,7 +116,7 @@ test('loadCogmemConfig rejects partially numeric vector dimensions', () => {
 });
 
 test('resolveCogmemConfigPath prefers TOML configs and ignores legacy env files', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-discovery-'));
+  const root = makeTempDir('cogmem-discovery-');
   const nested = join(root, 'packages', 'demo');
   const home = join(root, 'home');
   const emptyHome = join(root, 'empty-home');
@@ -152,7 +152,7 @@ test('resolveCogmemConfigPath prefers TOML configs and ignores legacy env files'
 });
 
 test('loadCogmemConfig builds model registry directly from TOML', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-model-registry-'));
+  const root = makeTempDir('cogmem-model-registry-');
   const configPath = join(root, 'config.toml');
   writeFileSync(configPath, [
     '[core]',
@@ -188,7 +188,7 @@ test('loadCogmemConfig builds model registry directly from TOML', () => {
 });
 
 test('createMemoryKernelFromConfig ignores stale process env without mutating it', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-kernel-default-env-'));
+  const root = makeTempDir('cogmem-kernel-default-env-');
   const configPath = join(root, '.cogmem', 'config.toml');
   mkdirSync(join(root, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
@@ -217,7 +217,7 @@ test('createMemoryKernelFromConfig ignores stale process env without mutating it
 });
 
 test('loadCogmemConfig does not expose env projection output', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-no-env-projection-'));
+  const root = makeTempDir('cogmem-no-env-projection-');
   const configPath = join(root, 'config.toml');
   writeFileSync(configPath, [
     '[core]',
@@ -237,7 +237,7 @@ test('loadCogmemConfig does not expose env projection output', () => {
 });
 
 test('loadCogmemConfig reports invalid model providers', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-invalid-provider-'));
+  const root = makeTempDir('cogmem-invalid-provider-');
   const configPath = join(root, 'config.toml');
   writeFileSync(configPath, [
     '[core]',
@@ -257,7 +257,7 @@ test('loadCogmemConfig reports invalid model providers', () => {
 });
 
 test('createMemoryKernelFromConfig opens the TOML configured database', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-kernel-config-'));
+  const root = makeTempDir('cogmem-kernel-config-');
   const configPath = join(root, '.cogmem', 'config.toml');
   const dbPath = join(root, '.cogmem', 'memory.db');
   mkdirSync(join(root, '.cogmem'), { recursive: true });
@@ -274,7 +274,7 @@ test('createMemoryKernelFromConfig opens the TOML configured database', () => {
 });
 
 test('createMemoryKernelFromConfig applies vector_dimension to the active vector store', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-kernel-vector-dimension-'));
+  const root = makeTempDir('cogmem-kernel-vector-dimension-');
   const configPath = join(root, '.cogmem', 'config.toml');
   mkdirSync(join(root, '.cogmem'), { recursive: true });
   writeFileSync(configPath, [

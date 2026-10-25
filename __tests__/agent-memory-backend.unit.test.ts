@@ -1,13 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('agent backend can record a raw-only turn without creating compiled vectors', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-raw-only-'));
+  const dir = makeTempDir('agent-backend-raw-only-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -32,7 +31,7 @@ test('agent backend can record a raw-only turn without creating compiled vectors
 });
 
 test('agent backend recall falls back to bounded raw ledger search for raw-only memories', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-raw-fallback-'));
+  const dir = makeTempDir('agent-backend-raw-fallback-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -64,7 +63,7 @@ test('agent backend recall falls back to bounded raw ledger search for raw-only 
 });
 
 test('agent backend raw fallback finds multilingual Hermes terms without hot vectors', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-raw-fallback-multilingual-'));
+  const dir = makeTempDir('agent-backend-raw-fallback-multilingual-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -98,7 +97,7 @@ test('agent backend raw fallback finds multilingual Hermes terms without hot vec
 });
 
 test('agent backend prefers raw ledger cue matches over unrelated compiled recall', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-raw-fallback-cue-'));
+  const dir = makeTempDir('agent-backend-raw-fallback-cue-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -136,7 +135,7 @@ test('agent backend prefers raw ledger cue matches over unrelated compiled recal
 });
 
 test('agent backend selective mode compiles durable instructions but skips low-signal chatter', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-selective-'));
+  const dir = makeTempDir('agent-backend-selective-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -179,7 +178,7 @@ test('agent backend selective mode compiles durable instructions but skips low-s
 });
 
 test('agent backend selective mode uses only user text as the durable compile signal', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-user-only-compile-'));
+  const dir = makeTempDir('agent-backend-user-only-compile-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -212,7 +211,7 @@ test('agent backend selective mode uses only user text as the durable compile si
 });
 
 test('agent backend excludes current-session compiled evidence when excludeSessionId is set', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-compiled-exclude-session-'));
+  const dir = makeTempDir('agent-backend-compiled-exclude-session-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -252,7 +251,7 @@ test('agent backend excludes current-session compiled evidence when excludeSessi
 });
 
 test('agent backend can recall the previous session from the raw ledger without semantic guessing', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-previous-session-'));
+  const dir = makeTempDir('agent-backend-previous-session-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -306,7 +305,7 @@ test('agent backend can recall the previous session from the raw ledger without 
 });
 
 test('agent backend forensic quote recall returns raw user events with source anchors', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-forensic-quote-'));
+  const dir = makeTempDir('agent-backend-forensic-quote-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -351,7 +350,7 @@ test('agent backend forensic quote recall returns raw user events with source an
 });
 
 test('agent backend forensic quote recall distills long follow-up queries before raw ledger search', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-forensic-long-query-'));
+  const dir = makeTempDir('agent-backend-forensic-long-query-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -384,7 +383,7 @@ test('agent backend forensic quote recall distills long follow-up queries before
 });
 
 test('agent backend cue recall finds old black-box archive wording and returns drill-down context', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-cue-source-context-'));
+  const dir = makeTempDir('agent-backend-cue-source-context-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -421,7 +420,7 @@ test('agent backend cue recall finds old black-box archive wording and returns d
 });
 
 test('agent backend historical discussion recall prefers original memory-context black box source over later graph runtime issue', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-historical-discussion-'));
+  const dir = makeTempDir('agent-backend-historical-discussion-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -467,7 +466,7 @@ test('agent backend historical discussion recall prefers original memory-context
 });
 
 test('agent backend compiled memory recall includes source locator and bounded surrounding raw context', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-compiled-source-context-'));
+  const dir = makeTempDir('agent-backend-compiled-source-context-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -502,7 +501,7 @@ test('agent backend compiled memory recall includes source locator and bounded s
 });
 
 test('agent backend source context annotates labels, source positions, and strict window semantics', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-source-window-'));
+  const dir = makeTempDir('agent-backend-source-window-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -574,7 +573,7 @@ test('agent backend source context annotates labels, source positions, and stric
 });
 
 test('agent backend forensic quote recall can use a prior raw source anchor for vague follow-up questions', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-followup-anchor-'));
+  const dir = makeTempDir('agent-backend-followup-anchor-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -609,7 +608,7 @@ test('agent backend forensic quote recall can use a prior raw source anchor for 
 });
 
 test('agent backend remembers and recalls a project-scoped turn', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-'));
+  const dir = makeTempDir('agent-backend-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -636,7 +635,7 @@ test('agent backend remembers and recalls a project-scoped turn', async () => {
 });
 
 test('agent backend recall uses universe navigation as the default first path', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-universe-'));
+  const dir = makeTempDir('agent-backend-universe-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
   const day = Date.parse('2026-05-07T09:00:00+09:00');
@@ -676,7 +675,7 @@ test('agent backend recall uses universe navigation as the default first path', 
 });
 
 test('agent backend recall overfetches before agent tag filtering', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-scope-'));
+  const dir = makeTempDir('agent-backend-scope-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
   const day = Date.parse('2026-05-07T10:00:00+09:00');
@@ -713,7 +712,7 @@ test('agent backend recall overfetches before agent tag filtering', async () => 
 });
 
 test('agent backend recalls project-scoped imported evidence without requiring an agent tag', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-project-evidence-'));
+  const dir = makeTempDir('agent-backend-project-evidence-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -740,7 +739,7 @@ test('agent backend recalls project-scoped imported evidence without requiring a
 });
 
 test('agent backend suppresses archived and suspect memory from recall context', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-status-filter-'));
+  const dir = makeTempDir('agent-backend-status-filter-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 

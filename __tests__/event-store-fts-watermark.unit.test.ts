@@ -1,12 +1,11 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventStore } from '../src/store/EventStore.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function tempDbPath(prefix: string): string {
-  return join(mkdtempSync(join(tmpdir(), prefix)), 'memory.db');
+  return join(makeTempDir(prefix), 'memory.db');
 }
 
 function seed(store: EventStore): void {
