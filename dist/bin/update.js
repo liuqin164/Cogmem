@@ -329,6 +329,14 @@ async function main() {
     }
 }
 main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    // `--json` promises one JSON document on stdout, and that includes the runs
+    // that stop before the gate: a config that cannot be parsed used to produce no
+    // stdout at all, so the agent that asked for JSON had to parse stderr to find
+    // out what happened. The message still goes to stderr for a human watching.
+    if (process.argv.includes('--json')) {
+        printCliJson('update', { status: 'error', error: { message } });
+    }
+    console.error(message);
     process.exit(1);
 });

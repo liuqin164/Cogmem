@@ -1219,13 +1219,20 @@ async function main(): Promise<void> {
   }
 
   const lines = buildTomlLines(cfg);
-  ensureInstallDirs(target.homeDir);
-  writeFileSync(outputPath, lines.join('\n') + '\n', 'utf8');
+  // A dry run is a promise not to touch the machine — no file, and no directories
+  // either. The summary below is printed the same way in both cases, so what a
+  // dry run shows is exactly what the real run would have written.
+  if (!args.dryRun) {
+    ensureInstallDirs(target.homeDir);
+    writeFileSync(outputPath, lines.join('\n') + '\n', 'utf8');
+  }
 
   // Summary
   console.log('');
   console.log('  ─────────────────────────────────────────────────────────────');
-  console.log(`  Configuration written to ${outputPath}`);
+  console.log(args.dryRun
+    ? `  Dry run — nothing written. Would write ${outputPath}`
+    : `  Configuration written to ${outputPath}`);
   console.log(`  Cogmem home    ${target.homeDir}`);
   console.log(`  Config         ${target.configPath}`);
   console.log(`  Database       ${join(target.homeDir, cfg.dbPath)}`);
