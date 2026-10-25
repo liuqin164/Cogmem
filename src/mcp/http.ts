@@ -91,6 +91,17 @@ export async function startCogmemMcpHttpServer(
     ? ['http://127.0.0.1:*', 'http://localhost:*', 'http://[::1]:*']
     : []);
 
+  // Validate auth configuration: --token and --agents are mutually exclusive in practice
+  // because they both gate the same Authorization header. If both are provided,
+  // agents registry takes precedence (it provides per-agent identity) and the global
+  // token is ignored with a warning. This avoids 401 loops when they differ.
+  const hasGlobalToken = typeof options.token === 'string' && options.token.length > 0;
+  const hasAgentRegistry = options.agents !== undefined;
+  if (hasGlobalToken && hasAgentRegistry) {
+    console.warn('[cogmem-mcp] Both --token and --agents configured; --agents takes precedence. Global token will be ignored for request authentication.');
+  }
+  const useGlobalToken = hasGlobalToken && !hasAgentRegistry;
+
   const kernel = resolveKernel(runtime);
   const baseRuntime: CogmemMcpRuntime = {
     ...runtime,
@@ -137,11 +148,11 @@ export async function startCogmemMcpHttpServer(
       }
 
       // Require authentication when not on loopback
-      if (!isLoopback && !options.token) {
+      if (!isLoopback && !useGlobalToken && !hasAgentRegistry) {
         return new Response('forbidden: authentication required for non-loopback binding', { status: 403 });
       }
 
-      if (options.token) {
+      if (useGlobalToken) {
         const header = request.headers.get('authorization');
         if (header !== `Bearer ${options.token}`) {
           return new Response('unauthorized', { status: 401 });
@@ -208,7 +219,7 @@ export async function startCogmemMcpHttpServer(
           projectId: agent?.projectId ?? options.projectId,
           identityHeader,
           identityForSession: (id) => (id ? sessionIdentities.get(id) : undefined),
-          identityTrusted: agent ? false : options.token !== undefined,
+          identityTrusted: agent ? false : useGlobalToken,
         });
         await server.connect(created);
         transport = created;

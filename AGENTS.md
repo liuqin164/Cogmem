@@ -14,6 +14,9 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/d
 
 ## Local development facts
 
+- **`dist/` is not tracked (#53).** A source checkout must run `bun run build` before anything that
+  reads build output (the OpenClaw plugin installer falls back to `dist/public.js`, and `prepublishOnly`
+  now builds *before* the test suite). `git ls-files dist` is 0 by design; `npm pack` still ships it.
 - **Tests need a writable temp dir.** Under the DSH sandbox `/tmp` is read-restricted, so
   `bun test __tests__` fails ~20 `mcp-http` cases with `SQLITE_CANTOPEN`. Run it as
   `TMPDIR="$PWD/.cogmem/tmp" bun test __tests__`; `.cogmem/` is gitignored, so this leaves no trace.

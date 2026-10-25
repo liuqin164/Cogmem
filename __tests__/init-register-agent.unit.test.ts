@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, statSync, writeFileSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -60,6 +60,11 @@ describe('cogmem init --register-agent', () => {
     expect(loadAgentRegistry(path)?.resolve(token)?.hostId).toBe('bot-a');
     // A credential file nobody else can read.
     expect(statSync(path).mode & 0o077).toBe(0);
+    // The file stores only the digest, never the plaintext token.
+    const fileContent = JSON.parse(readFileSync(path, 'utf8'));
+    expect(fileContent.agents[0]).toHaveProperty('tokenDigest');
+    expect(fileContent.agents[0]).not.toHaveProperty('token');
+    expect(fileContent.agents[0].tokenDigest).toMatch(/^[a-f0-9]{64}$/);
     // Registration is not a configuration action.
     expect(existsSync(join(home, 'config.toml'))).toBe(false);
   });

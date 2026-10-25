@@ -3,7 +3,7 @@
   "version": "4.0.0",
   "packageManager": "bun@1.3.11",
   "type": "module",
-  "description": "cogmem — agent-native memory kernel for a single local-first AI agent",
+  "description": "cogmem — agent-native memory kernel for plugin-style agents on a local device",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/liuqin164/cogmem.git"
@@ -48,7 +48,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "node scripts/build.mjs",
     "prepare": "node scripts/build.mjs",
-    "prepublishOnly": "bun run typecheck && bun test __tests__ && bun run build && npm pack --dry-run --json",
+    "prepublishOnly": "bun run typecheck && bun run build && bun test __tests__ && npm pack --dry-run --json",
     "type": "tsc -p tsconfig.json --noEmit",
     "test": "bun test __tests__",
     "typecheck": "tsc -p tsconfig.json --noEmit",

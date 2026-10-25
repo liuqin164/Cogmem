@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
-import { createAgentRegistry, loadAgentRegistry, parseAgentRegistry } from '../src/mcp/AgentRegistry.js';
+import { createAgentRegistry, loadAgentRegistry, parseAgentRegistry, digest } from '../src/mcp/AgentRegistry.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 /**
@@ -23,8 +24,13 @@ import { makeTempDir } from './helpers/tmp.js';
 const scratch = makeTempDir('cogmem-agent-identity-');
 const handles: CogmemMcpHttpHandle[] = [];
 
-const AGENT_A = { hostId: 'bot-a', token: 'token-for-bot-a-0123456789', projectId: 'project-a', profile: 'admin' as const };
-const AGENT_B = { hostId: 'bot-b', token: 'token-for-bot-b-9876543210', projectId: 'project-b', profile: 'admin' as const };
+// Plaintext credentials used for HTTP authentication
+const AGENT_A_TOKEN = 'token-for-bot-a-0123456789';
+const AGENT_B_TOKEN = 'token-for-bot-b-9876543210';
+
+// Stored form: hostId + tokenDigest (sha256 hex)
+const AGENT_A = { hostId: 'bot-a', tokenDigest: digest(AGENT_A_TOKEN), projectId: 'project-a', profile: 'admin' as const };
+const AGENT_B = { hostId: 'bot-b', tokenDigest: digest(AGENT_B_TOKEN), projectId: 'project-b', profile: 'admin' as const };
 
 afterAll(() => {
   for (const handle of handles) handle.stop();
@@ -112,19 +118,22 @@ async function callTool(
 describe('#65 the credential registry', () => {
   test('resolves a registered token to its agent and rejects anything else', () => {
     const registry = createAgentRegistry([AGENT_A, AGENT_B]);
-    expect(registry.resolve(AGENT_A.token)?.hostId).toBe('bot-a');
-    expect(registry.resolve(AGENT_B.token)?.hostId).toBe('bot-b');
+    expect(registry.resolve(AGENT_A_TOKEN)?.hostId).toBe('bot-a');
+    expect(registry.resolve(AGENT_B_TOKEN)?.hostId).toBe('bot-b');
     expect(registry.resolve('not-a-token')).toBeUndefined();
     expect(registry.resolve('')).toBeUndefined();
     // A token that is a prefix of a real one must not resolve: the comparison is
     // over the whole credential, not a prefix match.
-    expect(registry.resolve(AGENT_A.token.slice(0, 10))).toBeUndefined();
+    expect(registry.resolve(AGENT_A_TOKEN.slice(0, 10))).toBeUndefined();
   });
 
   test('refuses a registration without a hostId or a usable credential', () => {
-    expect(() => parseAgentRegistry({ agents: [{ hostId: '', token: 'x' }] })).toThrow(/hostId/);
-    expect(() => parseAgentRegistry({ agents: [{ hostId: 'a', token: '' }] })).toThrow(/token/);
-    expect(() => parseAgentRegistry({ agents: [{ hostId: 'a', token: 'x' }, { hostId: 'a', token: 'y' }] })).toThrow(/duplicate/);
+    expect(() => parseAgentRegistry({ agents: [{ hostId: '', tokenDigest: 'x' }] })).toThrow(/hostId/);
+    expect(() => parseAgentRegistry({ agents: [{ hostId: 'a', tokenDigest: '' }] })).toThrow(/tokenDigest/);
+    // Use valid sha256 hex digests for the duplicate test
+    const digest1 = 'a'.repeat(64);
+    const digest2 = 'b'.repeat(64);
+    expect(() => parseAgentRegistry({ agents: [{ hostId: 'a', tokenDigest: digest1 }, { hostId: 'a', tokenDigest: digest2 }] })).toThrow(/duplicate/);
     expect(() => parseAgentRegistry({ agents: 'nope' })).toThrow(/agents/);
   });
 
@@ -134,11 +143,11 @@ describe('#65 the credential registry', () => {
     const bad = join(scratch, 'bad-agents.json');
     mkdirSync(scratch, { recursive: true });
     writeFileSync(bad, '{"agents": [{"hostId": "bot-a"}]}');
-    expect(() => loadAgentRegistry(bad)).toThrow(/token/);
+    expect(() => loadAgentRegistry(bad)).toThrow(/tokenDigest/);
 
     const good = join(scratch, 'good-agents.json');
     writeFileSync(good, JSON.stringify({ agents: [AGENT_A] }));
-    expect(loadAgentRegistry(good)?.resolve(AGENT_A.token)?.hostId).toBe('bot-a');
+    expect(loadAgentRegistry(good)?.resolve(AGENT_A_TOKEN)?.hostId).toBe('bot-a');
   });
 });
 
@@ -156,10 +165,10 @@ describe('#65 a credential decides the identity, and a header cannot change it',
 
   test('agent A cannot claim to be agent B through the identity header', async () => {
     const handle = await startServer();
-    const session = await connect(handle.url, { token: AGENT_A.token });
+    const session = await connect(handle.url, { token: AGENT_A_TOKEN });
 
     const claimed = await callTool(handle.url, session, 'cogmem_recall', { query: 'anything' }, {
-      token: AGENT_A.token,
+      token: AGENT_A_TOKEN,
       identity: { hostId: 'bot-b' },
     });
     expect(claimed.isError).toBe(true);
@@ -170,29 +179,29 @@ describe('#65 a credential decides the identity, and a header cannot change it',
     const handle = await startServer();
 
     // B writes inside its own project.
-    const sessionB = await connect(handle.url, { token: AGENT_B.token });
+    const sessionB = await connect(handle.url, { token: AGENT_B_TOKEN });
     const written = await callTool(handle.url, sessionB, 'cogmem_remember_turn', {
       userText: 'bot-b private note about {{SECRET_9f2ka7}}',
       assistantText: 'noted',
       sessionId: 'b-session',
       agentId: 'bot-b',
       ingestMode: 'raw_archive_only',
-    }, { token: AGENT_B.token });
+    }, { token: AGENT_B_TOKEN });
     expect(written.isError).toBe(false);
 
     // B can read it back, so the memory exists. Without this the "A sees
     // nothing" assertions below would also pass if the write had simply failed.
-    const bRead = await callTool(handle.url, sessionB, 'cogmem_recall', { query: 'bot-b private note', agentId: 'bot-b' }, { token: AGENT_B.token });
+    const bRead = await callTool(handle.url, sessionB, 'cogmem_recall', { query: 'bot-b private note', agentId: 'bot-b' }, { token: AGENT_B_TOKEN });
     expect(bRead.isError).toBe(false);
     expect(JSON.stringify(bRead.body.items)).toContain('{{SECRET_9f2ka7}}');
 
     // A cannot reach it: its connection is bound to project-a, so naming
     // project-b is refused rather than served.
-    const sessionA = await connect(handle.url, { token: AGENT_A.token });
+    const sessionA = await connect(handle.url, { token: AGENT_A_TOKEN });
     const crossRead = await callTool(handle.url, sessionA, 'cogmem_recall', {
       query: 'bot-b private note',
       projectId: 'project-b',
-    }, { token: AGENT_A.token });
+    }, { token: AGENT_A_TOKEN });
     expect(crossRead.isError).toBe(true);
     expect(crossRead.raw).toContain('project_scope_violation');
 
@@ -200,21 +209,21 @@ describe('#65 a credential decides the identity, and a header cannot change it',
     // B's agent id explicitly, because the project scope is what bounds the
     // lookup. The query text is echoed in the response, so the assertion is on
     // the recalled items, which is where a leak would show.
-    const ownRead = await callTool(handle.url, sessionA, 'cogmem_recall', { query: 'bot-b private note', agentId: 'bot-b' }, { token: AGENT_A.token });
+    const ownRead = await callTool(handle.url, sessionA, 'cogmem_recall', { query: 'bot-b private note', agentId: 'bot-b' }, { token: AGENT_A_TOKEN });
     expect(ownRead.isError).toBe(false);
     expect((ownRead.body as { items: unknown[] }).items).toEqual([]);
   });
 
   test('agent A cannot write into agent B project', async () => {
     const handle = await startServer();
-    const sessionA = await connect(handle.url, { token: AGENT_A.token });
+    const sessionA = await connect(handle.url, { token: AGENT_A_TOKEN });
 
     const crossWrite = await callTool(handle.url, sessionA, 'cogmem_remember_turn', {
       userText: 'A writing into B project',
       sessionId: 'a-session',
       agentId: 'bot-a',
       projectId: 'project-b',
-    }, { token: AGENT_A.token });
+    }, { token: AGENT_A_TOKEN });
     expect(crossWrite.isError).toBe(true);
     expect(crossWrite.raw).toContain('project_scope_violation');
   });
@@ -222,14 +231,14 @@ describe('#65 a credential decides the identity, and a header cannot change it',
   test('a credential is a ceiling: the header may narrow the profile but never widen it', async () => {
     const handle = await startServer();
     // AGENT_A is registered with profile "admin"; the server launches at "admin".
-    const narrowed = await connect(handle.url, { token: AGENT_A.token, identity: { profile: 'core' } });
+    const narrowed = await connect(handle.url, { token: AGENT_A_TOKEN, identity: { profile: 'core' } });
     const listedNarrow = await rpc(handle.url, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
-      { sessionId: narrowed, token: AGENT_A.token, identity: { profile: 'core' } });
+      { sessionId: narrowed, token: AGENT_A_TOKEN, identity: { profile: 'core' } });
     expect(listedNarrow.json.result.tools.length).toBe(6);
 
-    const widened = await connect(handle.url, { token: AGENT_A.token, identity: { profile: 'full' } });
+    const widened = await connect(handle.url, { token: AGENT_A_TOKEN, identity: { profile: 'full' } });
     const listedWide = await rpc(handle.url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} },
-      { sessionId: widened, token: AGENT_A.token, identity: { profile: 'full' } });
+      { sessionId: widened, token: AGENT_A_TOKEN, identity: { profile: 'full' } });
     // "full" is wider than the credential's admin ceiling, so it is refused down
     // to the ceiling rather than granted.
     expect(listedWide.json.result.tools.length).toBe(22);

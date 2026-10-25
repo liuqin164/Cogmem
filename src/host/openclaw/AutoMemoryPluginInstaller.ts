@@ -15,8 +15,19 @@ function makePluginId(workspaceRoot: string): string {
 const PLUGIN_ID = 'cogmem-auto-memory'; // legacy default, not used for multi-workspace
 const PLUGIN_VERSION = '0.7.2';
 
-function defaultPublicEntrypoint(): string {
-  const here = resolve(dirname(fileURLToPath(import.meta.url)));
+/**
+ * The package entry the generated plugin imports at hook time.
+ *
+ * `dist/` is not tracked in git (#53), so a source checkout that has not been
+ * built has no entry to record. Falling back to a path that does not exist would
+ * install a plugin that fails on every hook inside the host's log; refuse here
+ * instead, where the operator can read the reason.
+ *
+ * Exported for the test that pins the refusal; `baseDir` exists only so that test
+ * can point at a directory with no build output.
+ */
+export function defaultPublicEntrypoint(baseDir?: string): string {
+  const here = baseDir ? resolve(baseDir) : resolve(dirname(fileURLToPath(import.meta.url)));
   // Running from dist/host/openclaw, the package entry is two levels up. Running
   // from src/host/openclaw (a checkout, no build step), it lives under dist/,
   // and recording src/public.js would leave the plugin pointing at a file that
@@ -25,7 +36,15 @@ function defaultPublicEntrypoint(): string {
     join(here, '../..', 'public.js'),
     join(here, '../../..', 'dist', 'public.js'),
   ];
-  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (!found) {
+    throw new Error(
+      'Cogmem build output not found: dist/public.js is missing. A source checkout must be built '
+      + 'before the OpenClaw plugin can point at it — run `bun run build`, or install cogmem from '
+      + 'npm, whose package includes dist/.',
+    );
+  }
+  return found;
 }
 
 export interface OpenClawAutoMemoryInstallOptions {

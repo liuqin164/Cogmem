@@ -132,6 +132,8 @@ describe('core release metadata', () => {
     expect(files).not.toContain('cogmem.db-shm');
     expect(files).not.toContain('cogmem.db-wal');
     expect(files).not.toContain('dist/.tsbuildinfo');
+    // #53: dist/ is generated and must not be tracked. A fresh clone builds it.
+    expect(files.filter((file) => file.startsWith('dist/'))).toEqual([]);
   });
 
   test('package exposes stable public exports and keeps internal on explicit subpath only', () => {
@@ -367,10 +369,10 @@ describe('documented tool profile counts match the shipped registry', () => {
   });
 
   test('the build swaps dist in only after tsc succeeds', () => {
-    // dist is tracked in git. The old build ran `rmSync('dist')` before `tsc`,
-    // so an interrupted or failing compile left the working tree with every
-    // built file deleted: a killed `npm publish --dry-run` (which runs
-    // prepublishOnly -> build) wiped all 1314 tracked dist files mid-release.
+    // `dist/` is not tracked (#53), so a failed compile can no longer delete
+    // tracked files. The staging-then-swap is kept anyway: it keeps a failing
+    // build from leaving a half-written dist/ behind, and prepublishOnly builds
+    // before the tests, so a broken build must not destroy the last good output.
     const manifest = packageJson();
     expect(manifest.scripts.build).toBe('node scripts/build.mjs');
     expect(manifest.scripts.prepare).toBe('node scripts/build.mjs');
@@ -386,5 +388,17 @@ describe('documented tool profile counts match the shipped registry', () => {
     expect(swap).toBeGreaterThan(failureExit);
 
     expect(readText(join(coreRoot, '.gitignore'))).toContain('dist.next/');
+  });
+
+  test('the test gate builds before it tests, because dist/ is not tracked', () => {
+    // A fresh clone has no dist/. Anything that reads build output during the
+    // suite (the OpenClaw plugin entry, the built mcp.js assertions) needs the
+    // build to have run first, so the order is part of the contract, not a taste.
+    const manifest = packageJson();
+    const gate = manifest.scripts.prepublishOnly as string;
+    const build = gate.indexOf('bun run build');
+    const test = gate.indexOf('bun test __tests__');
+    expect(build).toBeGreaterThan(-1);
+    expect(test).toBeGreaterThan(build);
   });
 });

@@ -143,7 +143,9 @@ Core benchmarks must prove natural memory emergence, not only recall@k.
 
 ## Natural Emergence Group
 
-The `memory_natural_emergence` benchmark group runs on the `memory_recall` eval suite and tracks:
+**Status: Not yet implemented.** The `memory_natural_emergence` benchmark group is designed to run on the `memory_recall` eval suite and track the metrics below, but no suite currently implements them. See lines 108–123: the group machinery reports `measured: false` and has no baselines.
+
+The following metrics are the design targets for this group:
 
 - `critical_memory_recall_rate`
 - `old_but_important_recall_rate`
@@ -162,7 +164,7 @@ The `memory_natural_emergence` benchmark group runs on the `memory_recall` eval 
 - `undreamed_raw_backlog_count`
 - `cold_recall_rehydration_success_rate`
 
-This group checks both activation and inhibition: the kernel should surface old but important memories while suppressing stale, superseded, suspect, and cross-project evidence.
+These are **design targets**, not currently measured. The eval suite (`memory_recall`) and the runner machinery exist but the group has no implementation that produces numbers. When implemented, the group will check both activation and inhibition: the kernel should surface old but important memories while suppressing stale, superseded, suspect, and cross-project evidence.
 
 Storage metrics are quality gates, not standalone wins. A run only passes if vector bytes drop while critical recall, old-but-important recall, provenance completeness, and leakage metrics stay within the accepted threshold.
 

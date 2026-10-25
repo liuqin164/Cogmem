@@ -1,6 +1,5 @@
 // Compile into a staging directory and swap it in only after tsc exits clean.
-// `dist` is tracked in git, so a build that deletes it up front loses 1314
-// files whenever the compile is interrupted or fails.
+// `dist/` is generated and not tracked in git; a fresh checkout must run `bun run build` first.
 import { rmSync, renameSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 

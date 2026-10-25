@@ -10,7 +10,7 @@ This release is distributed through the npm registry. GitHub remains the source 
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
 - `install.sh` is tracked and installs `cogmem@latest` from npm by default.
-- Local databases, SQLite sidecars, `.DS_Store`, and `dist/.tsbuildinfo` are not tracked.
+- Local databases, SQLite sidecars, `.DS_Store`, `dist/.tsbuildinfo`, and `dist/` are not tracked.
 
 ## Required Binaries
 
@@ -44,7 +44,7 @@ MCP `tools/list` includes strategy, episode append/import/status/audit-boundarie
 - README explains the vision, architecture, limits, and one-line install command.
 - README and skills document npm as the default install path: workspace-local `npm install cogmem@latest --save` for OpenClaw/Hermes projects, global npm only when the operator wants one shared CLI, and the one-line installer as compatibility.
 - README and skills state that `cogmem init` is an interactive operator wizard and must not be scripted by an unattended agent; agents should use resolved `cogmem` commands, `cogmem doctor`, and `cogmem connect <agent>`.
-- README says this is a single-agent memory kernel, not an agent team shared brain.
+- README says this is a local memory kernel for plugin-style agents (OpenClaw, Hermes, pi) on one device, each with private memory and project scope; no cross-agent sharing in 4.0.
 - README distinguishes embedding models from Dream Curator memory-model LLMs.
 - README and integration docs explain labeled `sourceContext`, strict before/after window metadata, `charRange` / `sourceRange`, and OpenClaw `sourceWindow` / `sourceTruncation` injection.
 - README and skills explain collection routing, `cogmem memory map`, and `cogmem memory tick` as host-owned inspection and maintenance surfaces.
@@ -102,7 +102,7 @@ The pack dry-run must include built public API files, CLI files, examples, docs,
 
 `npm publish --dry-run` runs `prepublishOnly` first, so it repeats typecheck, the full test suite, the build, and the pack listing. To inspect only the packing path, add `--ignore-scripts`.
 
-`build` compiles into `dist.next` and renames it over `dist` only after `tsc` exits 0. `dist` is tracked in git, so deleting it before compiling turned any interrupted build into 1314 deleted files; a killed `npm publish --dry-run` did exactly that mid-release.
+`build` compiles into `dist.next` and renames it over `dist` only after `tsc` exits 0. `dist/` is generated and not tracked in git, so a fresh checkout must run `bun run build` before publishing.
 
 ## Old-Database Refusal Rehearsal
 

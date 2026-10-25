@@ -208,6 +208,8 @@ export class BrainRecall {
     for (let index = rawEvidence.length - 1; index >= 0; index -= 1) {
       if (!matchesProjectScope(options.projectId, rawEvidence[index]?.metadata.projectId)) rawEvidence.splice(index, 1);
     }
+    // Filter superseded statements: same hostId + projectId, newer statement takes precedence
+    this._filterSuperseded(rawEvidence, options.projectId);
     const profileSignals = this.collectProfileSignals(query, options.projectId, limit);
     const profileSurface = this.collectProfileSurface(query, options.projectId, limit);
 
@@ -272,6 +274,121 @@ export class BrainRecall {
       if (index >= 0) rawEvidence.splice(index, 1);
     }
     rawEvidence.unshift(...principles);
+  }
+
+  /**
+   * Filter out superseded statements from raw evidence.
+   *
+   * Rule: within the same project, statements from the same hostId about the
+   * same canonical topic are compared by recency. A newer statement that
+   * explicitly corrects or replaces an older one causes the older to be
+   * excluded from recall results. Different hostIds never supersede each other
+   * (agent isolation per #65).
+   *
+   * Detection is conservative: we group neurons by extracting key entities/topics
+   * from their content. Neurons in the same group from the same hostId are
+   * sorted by timestamp; the most recent is kept, older ones are filtered out.
+   */
+  private _filterSuperseded(rawEvidence: Neuron[], projectId?: string): void {
+    if (rawEvidence.length <= 1) return;
+
+    // Group neurons by (hostId, topicKey) where topicKey is derived from content
+    const groups = new Map<string, Neuron[]>();
+
+    for (const neuron of rawEvidence) {
+      const hostId = this.extractHostId(neuron);
+      const topicKey = this.extractTopicKey(neuron);
+      if (!hostId || !topicKey) continue;
+
+      const key = `${hostId}|${topicKey}`;
+      const group = groups.get(key) ?? [];
+      group.push(neuron);
+      groups.set(key, group);
+    }
+
+    // For each group, keep only the most recent neuron
+    const toRemove = new Set<string>();
+    for (const group of groups.values()) {
+      if (group.length <= 1) continue;
+
+      // Sort by createdAt descending (newest first)
+      group.sort((a, b) => (b.metadata.createdAt ?? 0) - (a.metadata.createdAt ?? 0));
+
+      // Check if the newest is a correction/supersession of the older ones
+      const newest = group[0];
+      const newestContent = newest.content.toLowerCase();
+      const isCorrection = this.looksLikeCorrection(newestContent);
+
+      if (isCorrection) {
+        // Mark older ones for removal
+        for (let i = 1; i < group.length; i++) {
+          toRemove.add(group[i].id);
+        }
+      }
+    }
+
+    // Remove superseded neurons
+    for (let i = rawEvidence.length - 1; i >= 0; i--) {
+      if (toRemove.has(rawEvidence[i].id)) {
+        rawEvidence.splice(i, 1);
+      }
+    }
+  }
+
+  private extractHostId(neuron: Neuron): string | undefined {
+    const tags = neuron.metadata.tags || [];
+    for (const tag of tags) {
+      if (tag.startsWith('agent:')) return tag.slice(6);
+      if (tag.startsWith('sourceAgent:')) return tag.slice(12);
+    }
+    return undefined;
+  }
+
+  private extractTopicKey(neuron: Neuron): string | undefined {
+    // Use explicit topicPath if available
+    if (neuron.metadata.topicPath) return neuron.metadata.topicPath;
+
+    // Fall back to extracting from tags
+    const tags = neuron.metadata.tags || [];
+    for (const tag of tags) {
+      if (tag.startsWith('topic:')) return tag.slice(6);
+      if (tag.startsWith('canonicalKey:')) return tag.slice(13);
+    }
+
+    // Fall back to content-based key, normalized to remove correction prefixes
+    const normalizedContent = this.normalizeContentForTopicKey(neuron.content);
+    const words = normalizedContent
+      .toLowerCase()
+      .match(/[a-z0-9\u4e00-\u9fff]{3,}/g) ?? [];
+    if (words.length >= 2) {
+      return words.slice(0, 4).join(' ');
+    }
+    return undefined;
+  }
+
+  private normalizeContentForTopicKey(content: string): string {
+    // Remove common correction prefixes to group superseded/superseding statements together
+    return content
+      .replace(/^(correction|更正|纠正|update|updated):\s*/i, '')
+      .replace(/^correction[:：]\s*/i, '')
+      .trim();
+  }
+
+  private looksLikeCorrection(content: string): boolean {
+    // Detect correction language patterns
+    const correctionPatterns = [
+      /correction:/i,
+      /更正[:：]/,
+      /纠正[:：]/,
+      /now\s+(?:is|scheduled|on)/i,
+      /现在[:：]\s*(?:是|安排在|为)/,
+      /已更新[:：]/,
+      /updated:|update:/i,
+      /supersede/i,
+      /取代/,
+      /替换/,
+    ];
+    return correctionPatterns.some((pattern) => pattern.test(content));
   }
 
   private findDurableNeuronsByType(

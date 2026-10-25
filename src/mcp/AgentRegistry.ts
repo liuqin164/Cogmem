@@ -22,8 +22,8 @@ import type { McpToolProfile } from './profiles.js';
 export interface RegisteredAgent {
   /** The identity this credential speaks for. */
   hostId: string;
-  /** Bearer credential presented by the agent. */
-  token: string;
+  /** SHA-256 digest of the bearer credential. The plaintext credential is never stored. */
+  tokenDigest: string;
   /**
    * Project this agent is confined to. A call naming another project is
    * rejected; a call naming none is stamped with this one.
@@ -41,7 +41,7 @@ export interface AgentRegistry {
 
 const TOOL_PROFILES: McpToolProfile[] = ['core', 'admin', 'full'];
 
-function digest(value: string): string {
+export function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
@@ -49,7 +49,7 @@ export function createAgentRegistry(agents: RegisteredAgent[]): AgentRegistry {
   const byDigest = new Map<string, RegisteredAgent>();
   const ordered: RegisteredAgent[] = [];
   for (const agent of agents) {
-    byDigest.set(digest(agent.token), agent);
+    byDigest.set(agent.tokenDigest, agent);
     ordered.push(agent);
   }
   return {
@@ -77,7 +77,7 @@ export function parseAgentRegistry(raw: unknown): RegisteredAgent[] {
 
   const agents: RegisteredAgent[] = [];
   const hostIds = new Set<string>();
-  const tokens = new Set<string>();
+  const digests = new Set<string>();
   for (const [index, entry] of list.entries()) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
       throw new Error(`agents[${index}] must be an object`);
@@ -89,11 +89,21 @@ export function parseAgentRegistry(raw: unknown): RegisteredAgent[] {
     if (hostIds.has(hostId)) throw new Error(`duplicate agent hostId: ${hostId}`);
     hostIds.add(hostId);
 
-    const token = typeof record.token === 'string' ? record.token : '';
-    if (!token.trim()) throw new Error(`agents[${index}].token must be a non-empty string`);
-    const tokenDigest = digest(token);
-    if (tokens.has(tokenDigest)) throw new Error(`duplicate agent credential for hostId: ${hostId}`);
-    tokens.add(tokenDigest);
+    // Support both new format (tokenDigest) and legacy format (token) for backward compatibility
+    let tokenDigest: string;
+    if (typeof record.tokenDigest === 'string' && record.tokenDigest.trim()) {
+      tokenDigest = record.tokenDigest.trim();
+    } else if (typeof record.token === 'string' && record.token.trim()) {
+      // Legacy: plaintext token in file — compute digest for comparison
+      tokenDigest = digest(record.token.trim());
+    } else {
+      throw new Error(`agents[${index}].tokenDigest (or legacy token) must be a non-empty string`);
+    }
+    if (!/^[a-f0-9]{64}$/.test(tokenDigest)) {
+      throw new Error(`agents[${index}].tokenDigest must be a valid sha256 hex digest`);
+    }
+    if (digests.has(tokenDigest)) throw new Error(`duplicate agent credential for hostId: ${hostId}`);
+    digests.add(tokenDigest);
 
     const projectId = typeof record.projectId === 'string' && record.projectId.trim() ? record.projectId : undefined;
 
@@ -106,7 +116,7 @@ export function parseAgentRegistry(raw: unknown): RegisteredAgent[] {
       profile = requested as McpToolProfile;
     }
 
-    agents.push({ hostId, token, projectId, profile });
+    agents.push({ hostId, tokenDigest, projectId, profile });
   }
   return agents;
 }
@@ -143,7 +153,15 @@ export interface RegisterAgentInput {
   rotate?: boolean;
 }
 
-export interface RegisteredAgentCredential extends RegisteredAgent {
+export interface RegisteredAgentCredential {
+  /** The identity this credential speaks for. */
+  hostId: string;
+  /** The plaintext bearer credential. Returned exactly once at registration; never stored. */
+  token: string;
+  /** Project this agent is confined to. */
+  projectId?: string;
+  /** Ceiling for this agent's tool profile. */
+  profile?: McpToolProfile;
   /** True when an existing entry was replaced. */
   replaced: boolean;
 }
@@ -152,7 +170,7 @@ export interface RegisteredAgentCredential extends RegisteredAgent {
  * Mint a credential for one agent and write it into the registry file.
  *
  * The credential is generated here and returned exactly once. It is never
- * recoverable from the file — only its digest is used for comparison, and the
+ * recoverable from the file — only its digest is stored, and the
  * file is written so that only the owner can read it, because a credential that
  * can be read back later is a credential that leaks out of a backup.
  *
@@ -170,9 +188,12 @@ export function registerAgent(input: RegisterAgentInput): RegisteredAgentCredent
     throw new Error(`agent_already_registered:${hostId} — pass --rotate to replace its credential`);
   }
 
+  const plaintextToken = randomBytes(32).toString('hex');
+  const tokenDigest = digest(plaintextToken);
+
   const entry: RegisteredAgent = {
     hostId,
-    token: randomBytes(32).toString('hex'),
+    tokenDigest,
     projectId: input.projectId ?? current?.projectId ?? hostId,
     profile: input.profile ?? current?.profile,
   };
@@ -184,7 +205,7 @@ export function registerAgent(input: RegisterAgentInput): RegisteredAgentCredent
   // with looser permissions would keep them.
   chmodSync(input.path, 0o600);
 
-  return { ...entry, replaced: Boolean(current) };
+  return { hostId, token: plaintextToken, projectId: entry.projectId, profile: entry.profile, replaced: Boolean(current) };
 }
 
 /** `~/.cogmem/agents.json` — next to the config, and not inside it. */
