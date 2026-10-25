@@ -110,6 +110,22 @@ describe('#64 an unusable SQLite temp directory is named, not blamed on the data
     expect(described?.message).toContain('unable to open database file');
   });
 
+  test('a snapshot exports even when no temporary directory can be used', async () => {
+    const dirs = makeDirs();
+    // A regular file where a directory is expected: SQLite cannot create a
+    // temporary file inside it for any user, root included, which is what makes
+    // this portable. The point of keeping the temporary data in memory is that
+    // this stops mattering.
+    const notADirectory = join(dirs.root, 'not-a-directory');
+    writeFileSync(notADirectory, '');
+
+    const run = await exportSnapshotInChild(dirs, notADirectory);
+
+    expect(run.exitCode).toBe(0);
+    expect(run.result).toBe('ok');
+    expect(statSync(join(dirs.root, 'snapshot.bin')).size).toBeGreaterThan(0);
+  });
+
   test('a writable temp directory still exports the snapshot', async () => {
     const dirs = makeDirs();
     const run = await exportSnapshotInChild(dirs, dirs.writable);

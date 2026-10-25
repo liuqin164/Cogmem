@@ -61,6 +61,13 @@ export class SnapshotExporter {
     const snapshotDb = new Database(dbPath);
     try {
       snapshotDb.exec(`PRAGMA secure_delete = ON`);
+      // #64: the TEMP TABLE below and the VACUUM after the deletes both need
+      // temporary space, and SQLite's default is a file in a directory this
+      // process may not be able to write — a read-only /tmp, or a container.
+      // Keeping it in memory means exporting a snapshot does not depend on that
+      // at all. The connection is thrown away with this call, so nothing else
+      // inherits the setting.
+      snapshotDb.exec(`PRAGMA temp_store = MEMORY`);
       snapshotDb.transaction(() => {
         snapshotDb.exec(`CREATE TEMP TABLE forgotten_snapshot_neurons AS SELECT id FROM neurons WHERE is_deleted <> 0`);
         snapshotDb.exec(`DELETE FROM neurons_fts WHERE id IN (SELECT id FROM forgotten_snapshot_neurons)`);

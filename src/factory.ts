@@ -3262,12 +3262,22 @@ export class MemoryKernel {
     })();
 
     db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
+    // #64: VACUUM needs temporary space, and the default is a file in a directory
+    // the process may not be able to write, which surfaces as `unable to open
+    // database file` and blames the database. In memory for the duration of the
+    // rebuild, so forgetting a user works on a read-only temp filesystem; the
+    // previous setting is restored afterwards, because this is the kernel's own
+    // connection and an in-memory temp store is the wrong default for large sorts.
+    const previousTempStore = (db.prepare('PRAGMA temp_store').get() as { temp_store?: number } | undefined)?.temp_store ?? 0;
+    db.exec('PRAGMA temp_store = MEMORY');
     try {
       db.exec(`VACUUM`);
     } catch (error) {
       // #64: as in snapshot export, a temp-file failure here is reported by
       // SQLite as a database problem. Name it.
       throw describeSqliteTempDirectoryFailure('forgetting a user', error) ?? error;
+    } finally {
+      db.exec(`PRAGMA temp_store = ${previousTempStore}`);
     }
 
     for (const neuronId of neuronIds) {
