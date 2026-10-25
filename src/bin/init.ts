@@ -833,6 +833,12 @@ function buildUnattendedConfig(
   hermesDet: HermesDetection,
 ): { cfg: WizardConfig; warnings: SettingWarning[] } {
   const warnings: SettingWarning[] = [];
+  // Deliberately the literal `cogmem init`, not a resolved path: these are the
+  // runtime-built command templates `__tests__/command-templates.unit.test.ts`
+  // renders and resolves against the real dispatch tables, and a template built
+  // from the resolver is outside what that guard can render. Changing this means
+  // changing that guard's coverage too — a decision of its own, not a side effect
+  // of #78. Recorded as an open boundary in the ledger.
   const rerun = 'cogmem init';
 
   const embedding = suggestEmbeddingModel(det);

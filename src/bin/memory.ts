@@ -14,6 +14,7 @@ import type { DeepWriteCandidateRecord, DeepWriteCandidateStatus } from '../stor
 import { MemoryInspectionStore } from '../store/MemoryInspectionStore.js';
 import type { MemoryEvent } from '../types/index.js';
 import { printCliJson } from './CliJson.js';
+import { cliArg } from '../utils/CliArgument.js';
 
 interface MemoryArgs {
   command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
@@ -1240,6 +1241,3 @@ main().catch((error) => {
   process.exit(1);
 });
 
-function cliArg(value: string): string {
-  return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
-}

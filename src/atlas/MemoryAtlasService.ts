@@ -5,6 +5,7 @@ import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { FacetQueryPlanner, type FacetQueryPlan } from './FacetQueryPlanner.js';
 import { compileAtlasQuery } from './MemoryAtlasQueryCompiler.js';
 import type { MemoryAtlasCard, MemoryAtlasEdge, MemoryAtlasEvidence, MemoryAtlasNode, MemoryAtlasNodeDetail, MemoryAtlasPathResult, MemoryAtlasQueryOptions, MemoryAtlasRelaxationStep, MemoryAtlasSlice, MemoryAtlasTimelineResult } from './MemoryAtlasTypes.js';
+import { cliArg } from '../utils/CliArgument.js';
 
 export class MemoryAtlasService {
   private readonly facetPlanner = new FacetQueryPlanner();
@@ -455,7 +456,4 @@ function atlasSourceLocator(event: { eventId: string; globalSeq?: number; projec
     command: `${base} --before 2 --after 2 --json`,
     contextCommand: `${base} --before 3 --after 3 --json`,
   };
-}
-function cliArg(value: string): string {
-  return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 }

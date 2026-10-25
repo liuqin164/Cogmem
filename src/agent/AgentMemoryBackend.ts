@@ -20,6 +20,7 @@ import {
 import { extractEntityCues } from '../utils/EntityCueExtractor.js';
 import { inferActionKinds } from '../utils/ActionKindRegistry.js';
 import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
+import { cliArg } from '../utils/CliArgument.js';
 
 export type AgentTurnIngestMode =
   | 'immediate_compile'
@@ -2081,6 +2082,3 @@ function padDatePart(value: number): string {
   return String(value).padStart(2, '0');
 }
 
-function cliArg(value: string): string {
-  return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
-}

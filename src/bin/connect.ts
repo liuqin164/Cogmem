@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printCliJson } from './CliJson.js';
 import { automationSafeCommands, connectSteps, resolveCogmemInvocation, type InstallStep } from '../install/InstallSteps.js';
@@ -276,15 +276,17 @@ function resolveCogmemMcpServer(workspaceRoot: string): { command: string; args:
   const workspaceCli = join(workspaceRoot, 'node_modules', '.bin', 'cogmem');
   if (existsSync(workspaceCli)) return { command: workspaceCli, args: ['mcp'] };
   const resolved = resolveCogmemInvocation();
-  if (resolved !== 'cogmem') return { command: resolved, args: ['mcp'] };
+  if (isAbsolute(resolved)) return { command: resolved, args: ['mcp'] };
+  // Compatibility entry points, in the order they have always been tried: a
+  // workspace-local `cogmem-mcp` first, then one on `PATH`.
+  const workspaceMcp = join(workspaceRoot, 'node_modules', '.bin', 'cogmem-mcp');
+  if (existsSync(workspaceMcp)) return { command: workspaceMcp, args: [] };
   const pathValue = process.env.PATH || '';
   for (const segment of pathValue.split(':')) {
     if (!segment) continue;
     const candidate = join(segment, 'cogmem-mcp');
     if (existsSync(candidate)) return { command: candidate, args: [] };
   }
-  const workspaceMcp = join(workspaceRoot, 'node_modules', '.bin', 'cogmem-mcp');
-  if (existsSync(workspaceMcp)) return { command: workspaceMcp, args: [] };
   return { command: 'cogmem', args: ['mcp'] };
 }
 

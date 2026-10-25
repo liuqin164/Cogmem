@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { expectRunnableCommands } from './helpers/cli-invocation.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 /**
@@ -130,10 +131,7 @@ describe('the install journey', () => {
       // 4b. Every step `connect` prints runs as printed: its first word resolves
       //     here, and the steps that take a directory carry the workspace this
       //     command was given rather than a `.` of their own (#78).
-      for (const command of connect.nextCommands as string[]) {
-        const [head] = command.split(' ');
-        expect(head === 'cogmem' || (isAbsolute(head!) && existsSync(head!))).toBe(true);
-      }
+      expectRunnableCommands(connect.nextCommands as string[]);
       const printed = (id: string): string => (connect.nextSteps as Array<{ id: string; command: string }>)
         .find((step) => step.id === id)!.command;
       expect(printed('import_apply')).toContain(`--workspace ${workspace} `);

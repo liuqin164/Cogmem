@@ -328,9 +328,11 @@ async function main(): Promise<void> {
   // that used to live here had already drifted from the shared list — it named
   // the first step `init` where the shared definition says `operator_init`, and
   // its wording still assumed an update could migrate something.
-  result.nextSteps = config.configPath
-    ? postInstallSteps(gateBin, openclawWorkspace ?? config.loaded?.workspaceRoot)
-    : installPathSteps(gateBin).filter((step) => step.id !== 'install_gate');
+  if (config.configPath && config.loaded) {
+    result.nextSteps = postInstallSteps(gateBin, openclawWorkspace ?? config.loaded.workspaceRoot);
+  } else {
+    result.nextSteps = installPathSteps(gateBin).filter((step) => step.id !== 'install_gate');
+  }
   result.postUpdateGateCommand = gateArgs(...(args.json ? ['--json'] : [])).join(' ');
 
   if (args.dryRun && args.json) {

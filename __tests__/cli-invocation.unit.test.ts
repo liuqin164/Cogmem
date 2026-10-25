@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveCogmemInvocation, type InstallStep } from '../src/install/InstallSteps.js';
+import { expectRunnableCommand } from './helpers/cli-invocation.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 /**
@@ -53,16 +54,6 @@ function writeConfig(dir: string, body: string): string {
   return configPath;
 }
 
-/**
- * "Runs as printed" at the level that actually broke: the first word resolves on
- * this machine. The sibling assertion — that the whole command does its job — is
- * the journey check, which executes real steps.
- */
-function expectRunnable(command: string): void {
-  const [head] = command.split(' ');
-  expect(head === 'cogmem' || (head!.startsWith('/') && existsSync(head!))).toBe(true);
-}
-
 describe('the invocation resolver', () => {
   test('absolute off PATH, bare on it, and never the bin directory', () => {
     const dir = makeTempDir('cogmem-invocation-unit-');
@@ -102,7 +93,7 @@ describe('printed steps run as printed', () => {
     // invokes the CLI has to run. `fix_path` is a shell export, not an invocation.
     for (const step of parsed.nextSteps) {
       if (step.actor === 'host' || step.id === 'fix_path') continue;
-      expectRunnable(step.command);
+      expectRunnableCommand(step.command);
     }
 
     // And the absolute command the gate printed actually executes, as printed.
@@ -113,6 +104,22 @@ describe('printed steps run as printed', () => {
     expect(executed.stderr).toBe('');
     expect(executed.exitCode).toBe(0);
     expect(JSON.parse(executed.stdout).installGate.level).toBe('warn');
+  });
+
+  test('the not-installed state carries the export line as well', async () => {
+    const dir = makeTempDir('cogmem-invocation-freshinstall-');
+    const binDir = installedLauncher(dir);
+
+    const { stdout, exitCode } = await run(['bun', doctorBin, '--config', join(dir, 'missing', 'config.toml'), '--json'], {
+      env: { COGMEM_BIN_DIR: binDir, PATH: '/usr/bin:/bin', HOME: dir },
+    });
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout) as { nextSteps: InstallStep[]; installGate: { level: string } };
+    // The state a fresh one-line install is in first: it must not be the one state
+    // where a CLI that does not resolve is reported without the fix.
+    expect(parsed.installGate.level).toBe('not_installed');
+    expect(parsed.nextSteps.find((step) => step.id === 'fix_path')!.command).toBe(`export PATH="${binDir}:$PATH"`);
+    expect(parsed.nextSteps.find((step) => step.id === 'use_absolute_bin')!.command).toContain(binDir);
   });
 
   test('on PATH the same step is the bare command', async () => {
@@ -156,7 +163,7 @@ describe('printed steps run as printed', () => {
     // `/path/to/bin doctor --json` is exit 126 — the step an agent follows has to
     // be the command, not the directory it lives in.
     expect(parsed.nextSteps[0]!.command).toBe(`${join(binDir, 'cogmem')} doctor --json`);
-    expectRunnable(parsed.nextSteps[0]!.command);
+    expectRunnableCommand(parsed.nextSteps[0]!.command);
   });
 
   test('connect hermes writes an MCP command that resolves on this machine', async () => {
@@ -186,6 +193,27 @@ describe('printed steps run as printed', () => {
     expect(written).toContain('args: ["mcp"]');
   });
 
+  test('a workspace with a space is quoted, so the step still runs', async () => {
+    const dir = makeTempDir('cogmem-invocation-spaces-');
+    const binDir = installedLauncher(dir);
+    const workspace = join(dir, 'My Project');
+    mkdirSync(workspace, { recursive: true });
+
+    const { stdout, exitCode } = await run(
+      ['bun', connectBin, 'openclaw', '--workspace', workspace, '--dry-run', '--json'],
+      { cwd: dir, env: { COGMEM_BIN_DIR: binDir, PATH: `${binDir}:/usr/bin:/bin`, HOME: dir } },
+    );
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout) as { nextSteps: InstallStep[]; nextCommands: string[] };
+    const stepOf = (id: string): InstallStep => parsed.nextSteps.find((step) => step.id === id)!;
+    // Unquoted, the shell splits it and the step fails with a file it cannot
+    // find — "runs as printed" is exactly the promise.
+    for (const id of ['openclaw_diagnose', 'import_dry_run', 'import_apply']) {
+      expect(stepOf(id).command).toContain(`--workspace '${workspace}' `);
+    }
+    for (const command of parsed.nextCommands) expectRunnableCommand(command);
+  });
+
   test('connect prints the workspace it was given, not a `.` of its own', async () => {
     const dir = makeTempDir('cogmem-invocation-connect-');
     const binDir = installedLauncher(dir);
@@ -204,7 +232,7 @@ describe('printed steps run as printed', () => {
       expect(stepOf(id).command).toContain(`--workspace ${workspace} `);
       expect(stepOf(id).command).not.toContain('--workspace . ');
     }
-    for (const command of parsed.nextCommands) expectRunnable(command);
+    for (const command of parsed.nextCommands) expectRunnableCommand(command);
   });
 });
 

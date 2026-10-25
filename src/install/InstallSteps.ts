@@ -1,6 +1,8 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 
+import { cliArg } from '../utils/CliArgument.js';
+
 /**
  * The Install actor vocabulary: who carries out one install step.
  * Defined once here so the installer, `init`, `doctor`, `connect` and `update`
@@ -116,7 +118,7 @@ export function installPathSteps(bin: string): InstallStep[] {
 }
 
 /** What the gate says to do once a config exists and the kernel opened. */
-export function postInstallSteps(bin: string, workspace?: string): InstallStep[] {
+export function postInstallSteps(bin: string, workspace: string): InstallStep[] {
   return [
     {
       id: 'connect_host',
@@ -125,7 +127,7 @@ export function postInstallSteps(bin: string, workspace?: string): InstallStep[]
       // The workspace is carried, not left to the caller's directory: `connect`
       // derives it by walking up, so the same step run one directory away writes a
       // second integration under a second identity (ADR-0010).
-      command: `${bin} connect openclaw --auto --force${workspace ? ` --workspace ${workspace}` : ''}`,
+      command: `${bin} connect openclaw --auto --force --workspace ${cliArg(workspace)}`,
       when: 'when an OpenClaw workspace should receive automatic recall (or `connect hermes` for Hermes)',
       purpose: 'install the host integration files; names the workspace it will write into',
     },
@@ -154,13 +156,13 @@ export function connectSteps(host: HostIntegration, bin: string, workspace?: str
   // The value the command was given, not a `.` of its own: a step that resolves
   // the workspace from wherever it happens to be run is the same defect the
   // resolver above exists to remove, one level down.
-  const workspaceArg = workspace ? ` --workspace ${workspace}` : '';
+  const workspaceArg = workspace ? ` --workspace ${cliArg(workspace)}` : '';
   const steps: InstallStep[] = [
     {
       id: 'doctor',
       actor: 'agent',
       safeForAutomation: true,
-      command: `${bin} doctor`,
+      command: `${bin} doctor${workspaceArg}`,
       when: 'after installation or update',
       purpose: 'verify package, config, and database access',
     },
@@ -307,11 +309,22 @@ export function resolveCogmemInvocation(
   env: Record<string, string | undefined> = process.env,
   argv1: string | undefined = process.argv[1],
 ): string {
+  // An operator who names the binary means it, for the printed steps as much as
+  // for a host's MCP entry. Honouring it here is what makes this *the* answer
+  // rather than a fifth one that agrees only when nothing is set.
+  const explicit = env.COGMEM_BIN?.trim();
+  if (explicit) return explicit;
   const binDir = resolveCliBinDir(argv1, env);
-  if (!binDir) return 'cogmem';
-  const launcher = join(binDir, 'cogmem');
-  if (!existsSync(launcher)) return 'cogmem';
-  return isOnPath(binDir, env) ? 'cogmem' : launcher;
+  if (!hasInstalledLauncher(binDir)) return 'cogmem';
+  return isOnPath(binDir, env) ? 'cogmem' : join(binDir, 'cogmem');
+}
+
+/**
+ * Whether a directory actually holds the CLI launcher. One predicate because
+ * "is this an installation" was being spelled out wherever it was asked.
+ */
+export function hasInstalledLauncher(binDir: string | undefined): binDir is string {
+  return Boolean(binDir && existsSync(join(binDir, 'cogmem')));
 }
 
 export function isOnPath(dir: string, env: Record<string, string | undefined> = process.env): boolean {

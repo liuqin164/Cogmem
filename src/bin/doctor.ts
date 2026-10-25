@@ -13,6 +13,7 @@ import {
 import { compactStorage } from '../storage/StorageCompactor.js';
 import {
   buildGate,
+  hasInstalledLauncher,
   installPathSteps,
   isOnPath,
   pathWarningSteps,
@@ -110,6 +111,14 @@ if (envPath) {
   fail('--env-path is no longer supported. Use cogmem-init to create .cogmem/config.toml, then run cogmem-doctor --config <config.toml>.');
 } else {
   const resolution = resolveCogmemConfigPath({ configPath });
+  // The PATH question is asked before the branch, not inside it: a fresh
+  // one-line install is in the not-installed state first, and "the CLI is off
+  // PATH" is exactly as true there — the `export` line has to reach the reader of
+  // that state too, not only the one after setup (ADR-0010, #78).
+  const binDir = resolveCliBinDir(process.argv[1], process.env);
+  const cliOffPath = hasInstalledLauncher(binDir) && !isOnPath(binDir, process.env);
+  const pathSteps: InstallStep[] = cliOffPath ? pathWarningSteps(binDir) : [];
+
   // A named config that is not on disk yet is the same state as no config:
   // the install exists, the setup does not.
   if (resolution.kind === 'missing' || !existsSync(resolution.path)) {
@@ -123,7 +132,7 @@ if (envPath) {
       buildGate(
         'not_installed',
         [{ code: 'missing_config', message: `no cogmem config at ${resolution.path}` }],
-        installPathSteps(bin),
+        [...pathSteps, ...installPathSteps(bin)],
       ),
       { configPath: null, resolvedConfigPath: resolution.path },
     );
@@ -271,15 +280,12 @@ if (envPath) {
   }
 
   // A CLI nobody can invoke is not a success, even though the install worked.
-  const binDir = resolveCliBinDir(process.argv[1], process.env);
-  let pathSteps: InstallStep[] = [];
-  if (binDir && existsSync(join(binDir, 'cogmem')) && !isOnPath(binDir, process.env)) {
+  if (cliOffPath) {
     warn('cli_not_on_path', `${binDir} is not on PATH. Run: export PATH="${binDir}:$PATH"`);
     gateDiagnostics.push({
       code: 'cli_not_on_path',
       message: `the cogmem CLI at ${binDir} is not reachable as cogmem`,
     });
-    pathSteps = pathWarningSteps(binDir);
   }
 
   const level = gateDiagnostics.length > 0 ? 'warn' : 'ok';

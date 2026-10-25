@@ -1,3 +1,4 @@
+import { cliArg } from './utils/CliArgument.js';
 import { describeSqliteTempDirectoryFailure } from './utils/SqliteTempDirectory.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
@@ -169,7 +170,6 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 import { CORE_VERSION } from './version.js';
-
 
 const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 
@@ -3714,6 +3714,3 @@ function stringifyToolPayload(value: unknown): string {
   }
 }
 
-function cliArg(value: string): string {
-  return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
-}
