@@ -5,6 +5,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
+import { hostWiringFor, pendingHostIntegration } from '../host/HostWiring.js';
 import { inspectOpenClawAutoMemoryPlugin } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { printCliJson } from './CliJson.js';
 import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
@@ -329,7 +330,11 @@ async function main(): Promise<void> {
   // the first step `init` where the shared definition says `operator_init`, and
   // its wording still assumed an update could migrate something.
   if (config.configPath && config.loaded) {
-    result.nextSteps = postInstallSteps(gateBin, openclawWorkspace ?? config.loaded.workspaceRoot);
+    // Only what is outstanding, and only the Host it belongs to: `update` runs on a
+    // machine whose integration already exists, so recommending `connect` again
+    // would be the gate repeating itself (#81).
+    const connectHost = pendingHostIntegration(hostWiringFor(config.loaded, process.env));
+    result.nextSteps = postInstallSteps(gateBin, openclawWorkspace ?? config.loaded.workspaceRoot, connectHost);
   } else {
     result.nextSteps = installPathSteps(gateBin).filter((step) => step.id !== 'install_gate');
   }

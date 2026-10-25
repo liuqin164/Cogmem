@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printCliJson } from './CliJson.js';
 import { automationSafeCommands, connectSteps, resolveCogmemInvocation, type InstallStep } from '../install/InstallSteps.js';
+import { defaultHermesConfigPath } from '../host/HostWiring.js';
 import { integrationScope } from '../host/IntegrationScope.js';
 import {
   enableHostIntegration,
@@ -402,10 +403,6 @@ function installSkill(args: ConnectArgs): ConnectResult {
     hermesMcp,
     integrationEnabled,
   };
-}
-
-function defaultHermesConfigPath(env = process.env): string {
-  return join(env.HOME || homedir(), '.hermes', 'config.yaml');
 }
 
 function installHermesMcpConfig(input: {

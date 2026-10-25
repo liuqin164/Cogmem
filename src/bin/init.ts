@@ -897,7 +897,7 @@ function buildUnattendedConfig(
     warnings.push({
       code: 'host_integration_defaulted',
       setting: 'host integration',
-      message: 'no host integration is enabled; automatic recall needs one. Pass --agent openclaw (or --agent hermes); `cogmem connect` installs the host-side files but does not change this switch.',
+      message: 'no host integration is enabled; automatic recall needs one. Pass --agent openclaw (or --agent hermes) now, or run `cogmem connect <host> --auto`, which installs the host-side files and records the integration it wired.',
       command: 'cogmem init --agent openclaw',
     });
   }

@@ -122,6 +122,7 @@ describe('the install journey', () => {
 
       // 3. doctor — the gate, and the Workspace it says it is in.
       const before = parseJson('doctor', await cli.run(['doctor', '--json'], { cwd: workspace }));
+      expect(before.nextConnectHost).toBe('openclaw');
       expect(before.workspaceRoot).toBe(workspace);
       expect(before.installGate.level).toBe('warn');
       expect(before.installGate.diagnostics.map((entry: { code: string }) => entry.code)).toEqual(['rule_only']);
@@ -165,6 +166,10 @@ describe('the install journey', () => {
       expect(after.openclaw.plugin.pluginDir).toBe(connect.autoMemory.pluginDir);
       expect(after.openclaw.plugin.installed).toBe(true);
       expect(after.openclaw.plugin.current).toBe(true);
+      // And the gate converges: the step it recommended is the step that was just
+      // taken, so it is not recommended again (#81).
+      expect(after.nextConnectHost).toBeUndefined();
+      expect(after.nextSteps.some((step: { id: string }) => step.id === 'connect_host')).toBe(false);
 
       // 6. and it reports `stale` when the files no longer match, rather than
       //    claiming a healthy integration it did not check.

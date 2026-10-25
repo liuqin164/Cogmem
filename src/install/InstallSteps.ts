@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 
+import type { HostIntegration } from '../host/HostWiring.js';
 import { cliArg } from '../utils/CliArgument.js';
 
 /**
@@ -117,33 +118,45 @@ export function installPathSteps(bin: string): InstallStep[] {
   ];
 }
 
-/** What the gate says to do once a config exists and the kernel opened. */
-export function postInstallSteps(bin: string, workspace: string): InstallStep[] {
-  return [
-    {
+/**
+ * What the gate says to do once a config exists and the kernel opened.
+ *
+ * `connectHost` is the Host whose integration is still outstanding, or `undefined`
+ * when every Host the operator asked for is already wired — in which case the gate
+ * recommends nothing, because a step list that names finished work never converges
+ * (#81). The Host is a parameter rather than the literal `openclaw` so a
+ * Hermes-only Workspace is told to connect Hermes.
+ */
+export function postInstallSteps(bin: string, workspace: string, connectHost?: HostIntegration): InstallStep[] {
+  const steps: InstallStep[] = [];
+  if (connectHost) {
+    steps.push({
       id: 'connect_host',
       actor: 'operator',
       safeForAutomation: false,
       // The workspace is carried, not left to the caller's directory: `connect`
       // derives it by walking up, so the same step run one directory away writes a
       // second integration under a second identity (ADR-0010).
-      command: `${bin} connect openclaw --auto --force --workspace ${cliArg(workspace)}`,
-      when: 'when an OpenClaw workspace should receive automatic recall (or `connect hermes` for Hermes)',
-      purpose: 'install the host integration files; names the workspace it will write into',
-    },
-    {
+      command: `${bin} connect ${connectHost} --auto --force --workspace ${cliArg(workspace)}`,
+      when: `when this ${connectHost} workspace should receive automatic recall`,
+      purpose: 'install the host integration files; names the host it wires and the workspace it will write into',
+    });
+  }
+  if (steps.length > 0) {
+    steps.push({
       id: 'restart_host',
       actor: 'host',
       safeForAutomation: false,
       command: 'restart the agent host',
-      when: 'after connect or update changed host files',
-      purpose: 'reload the host so it picks up the refreshed Cogmem integration',
-    },
-  ];
+      when: 'after connect changed host files',
+      purpose: 'reload the host so it picks up the Cogmem integration it just gained',
+    });
+  }
+  return steps;
 }
 
-/** Host integration kinds that `connect` knows about. */
-export type HostIntegration = 'openclaw' | 'hermes';
+/** Host integration kinds that `connect` knows about. Defined by the Host layer. */
+export type { HostIntegration } from '../host/HostWiring.js';
 
 /**
  * The steps that follow `connect`, shared rather than redefined in `connect.ts`.

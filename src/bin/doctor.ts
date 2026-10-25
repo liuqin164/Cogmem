@@ -10,6 +10,7 @@ import {
   installOpenClawAutoMemoryPlugin,
   type OpenClawAutoMemoryPluginInspection,
 } from '../host/openclaw/AutoMemoryPluginInstaller.js';
+import { hostWiringFor, pendingHostIntegration } from '../host/HostWiring.js';
 import { compactStorage } from '../storage/StorageCompactor.js';
 import {
   buildGate,
@@ -64,7 +65,13 @@ function fail(message: string, code = 'doctor_failed'): never {
 }
 
 function printSteps(steps: InstallStep[]): void {
-  if (steps.length === 0) return;
+  if (steps.length === 0) {
+    // Convergence, said out loud: nothing is outstanding, so there is nothing to
+    // recommend. Silence here reads as "the gate forgot to tell me".
+    console.log('');
+    console.log('Next steps: none — nothing is outstanding.');
+    return;
+  }
   console.log('');
   console.log('Next steps:');
   for (const step of steps) {
@@ -247,15 +254,15 @@ if (envPath) {
     ok(`openclaw config patched at ${result.openclawConfigPath}`);
   }
 
-  // Inspect the plugin when the host is configured, not only when the caller
-  // named it: `connect` records the integration it wired, so a plain `doctor`
-  // after `connect` is exactly the run that must report it installed (ADR-0010).
-  let plugin: OpenClawAutoMemoryPluginInspection | undefined;
+  // Inspected always, because the gate's answer depends on it: a Host whose
+  // integration is on disk must not be recommended again (#81). What is *reported*
+  // still depends on the Host being configured, so an unconfigured machine is not
+  // told about a plugin it never asked for.
+  const plugin = inspectOpenClawAutoMemoryPlugin({
+    workspaceRoot,
+    pluginDir: pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot),
+  });
   if (agent === 'openclaw' || workspace || loaded.integrations.openclaw.enabled) {
-    plugin = inspectOpenClawAutoMemoryPlugin({
-      workspaceRoot,
-      pluginDir: pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot),
-    });
     const inspection = plugin;
     if (inspection.installed) {
       ok(`openclaw plugin ${inspection.current ? 'current' : 'stale'} at ${inspection.pluginDir}`);
@@ -293,8 +300,12 @@ if (envPath) {
   }
 
   const level = gateDiagnostics.length > 0 ? 'warn' : 'ok';
+  // Only the Host that is still outstanding, named: recommending a finished step is
+  // what made the gate never converge, and recommending OpenClaw in a Hermes-only
+  // Workspace is what made it name the wrong Host (#81).
+  const connectHost = pendingHostIntegration(hostWiringFor(loaded, process.env));
   emitGate(
-    buildGate(level, gateDiagnostics, [...pathSteps, ...postInstallSteps(resolveCogmemInvocation(), workspaceRoot)]),
+    buildGate(level, gateDiagnostics, [...pathSteps, ...postInstallSteps(resolveCogmemInvocation(), workspaceRoot, connectHost)]),
     {
       configPath: resolution.path,
       workspaceRoot,
@@ -306,7 +317,8 @@ if (envPath) {
         hermes: { enabled: loaded.integrations.hermes.enabled },
       },
       dbPath: kernelDbPath,
-      openclaw: plugin ? { plugin } : undefined,
+      nextConnectHost: connectHost,
+      openclaw: { plugin },
     },
   );
 }
