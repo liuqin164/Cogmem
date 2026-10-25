@@ -1,7 +1,7 @@
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 
-import type { HostIntegration } from '../host/HostWiring.js';
 import { cliArg } from '../utils/CliArgument.js';
 
 /**
@@ -155,8 +155,73 @@ export function postInstallSteps(bin: string, workspace: string, connectHost?: H
   return steps;
 }
 
-/** Host integration kinds that `connect` knows about. Defined by the Host layer. */
-export type { HostIntegration } from '../host/HostWiring.js';
+/** Host integration kinds that `connect` knows about. */
+export type HostIntegration = 'openclaw' | 'hermes';
+
+/**
+ * Whether one Host's integration exists.
+ *
+ * A fact about files, not a preference (ADR-0010): `connect <host> --auto` is what
+ * makes it true, and a Host that has been wired does not read back as unwired.
+ */
+export interface HostWiring {
+  host: HostIntegration;
+  /** The operator asked for this Host — `integrations.<host>.enabled`. */
+  wanted: boolean;
+  /** The integration is on disk. */
+  established: boolean;
+}
+
+/** The Host a fresh machine is told about when nothing is wired anywhere. */
+const PRIMARY_HOST: HostIntegration = 'openclaw';
+
+/** The Hermes config `connect` patches. One function, so writer and reader agree. */
+export function defaultHermesConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(env.HOME || homedir(), '.hermes', 'config.yaml');
+}
+
+/**
+ * Whether a Hermes config carries a Cogmem MCP entry.
+ *
+ * The same predicate `connect` uses to decide whether to patch an existing entry or
+ * write one: two spellings of "is this wired" is how a config becomes wired to the
+ * writer and unwired to the gate, which recommends the step forever.
+ */
+export function hasHermesCogmemEntry(configText: string): boolean {
+  return /^\s+cogmem\s*:/m.test(configText);
+}
+
+/** Whether the Hermes integration is on disk at `configPath`. */
+export function hermesIntegrationEstablished(configPath: string): boolean {
+  if (!existsSync(configPath)) return false;
+  try {
+    return hasHermesCogmemEntry(readFileSync(configPath, 'utf8'));
+  } catch {
+    // Unreadable is not "wired": recommending the step again is recoverable, while a
+    // false positive hides a broken install.
+    return false;
+  }
+}
+
+/**
+ * The Host the gate still has work for, or `undefined` when there is none.
+ *
+ * Only unsatisfied work is named (#81):
+ *
+ * 1. a Host the operator asked for and did not get, so a Hermes-only Workspace is
+ *    told to connect Hermes rather than OpenClaw;
+ * 2. otherwise, **nothing** if any Host is already wired — an integration exists on
+ *    this machine, and naming another one is how the gate never converged for the
+ *    operator who already has what they asked for;
+ * 3. otherwise the primary Host, so a fresh machine is still told what to do.
+ */
+export function pendingHostIntegration(wiring: HostWiring[]): HostIntegration | undefined {
+  const wanted = wiring.find((entry) => entry.wanted && !entry.established);
+  if (wanted) return wanted.host;
+  if (wiring.some((entry) => entry.established)) return undefined;
+  const primary = wiring.find((entry) => entry.host === PRIMARY_HOST);
+  return primary && !primary.established ? PRIMARY_HOST : undefined;
+}
 
 /**
  * The steps that follow `connect`, shared rather than redefined in `connect.ts`.

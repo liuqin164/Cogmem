@@ -5,11 +5,20 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
-import { hostWiringFor, pendingHostIntegration } from '../host/HostWiring.js';
 import { inspectOpenClawAutoMemoryPlugin } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { printCliJson } from './CliJson.js';
 import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
-import { buildGate, installPathSteps, postInstallSteps, resolveCogmemInvocation, type InstallGate, type InstallStep } from '../install/InstallSteps.js';
+import {
+  buildGate,
+  defaultHermesConfigPath,
+  hermesIntegrationEstablished,
+  installPathSteps,
+  pendingHostIntegration,
+  postInstallSteps,
+  resolveCogmemInvocation,
+  type InstallGate,
+  type InstallStep,
+} from '../install/InstallSteps.js';
 
 interface UpdateArgs {
   dryRun: boolean;
@@ -298,6 +307,12 @@ async function main(): Promise<void> {
     openclawRepairSkippedReason: openclawRepairExec
       ? undefined
       : (args.skipAgentRefresh ? 'skip_agent_refresh_flag' : (openclawWorkspace ? undefined : 'openclaw_not_configured')),
+    // The other Host, reported rather than silently absent: `update` has no repair
+    // path for Hermes because it generates nothing there, and "we did not touch it"
+    // is a reason a reader is entitled to (#81).
+    hermesMaintenanceSkippedReason: config.loaded?.integrations.hermes.enabled
+      ? (args.skipAgentRefresh ? 'skip_agent_refresh_flag' : 'hermes_has_no_generated_artifacts')
+      : undefined,
     restartRequired,
     followUp: restartRequired.length > 0
       ? `After update finishes, ${restartRequired.join('; ')}.`
@@ -333,8 +348,16 @@ async function main(): Promise<void> {
     // Only what is outstanding, and only the Host it belongs to: `update` runs on a
     // machine whose integration already exists, so recommending `connect` again
     // would be the gate repeating itself (#81).
-    const connectHost = pendingHostIntegration(hostWiringFor(config.loaded, process.env));
-    result.nextSteps = postInstallSteps(gateBin, openclawWorkspace ?? config.loaded.workspaceRoot, connectHost);
+    const connectHost = pendingHostIntegration([
+      { host: 'openclaw', wanted: config.loaded.integrations.openclaw.enabled, established: Boolean(openclawWorkspace) },
+      {
+        host: 'hermes',
+        wanted: config.loaded.integrations.hermes.enabled,
+        established: hermesIntegrationEstablished(defaultHermesConfigPath(process.env)),
+      },
+    ]);
+    const connectWorkspace = connectHost ? hostWorkspaceFor(config.loaded, connectHost) : (openclawWorkspace ?? config.loaded.workspaceRoot);
+    result.nextSteps = postInstallSteps(gateBin, connectWorkspace, connectHost);
   } else {
     result.nextSteps = installPathSteps(gateBin).filter((step) => step.id !== 'install_gate');
   }

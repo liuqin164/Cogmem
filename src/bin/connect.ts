@@ -4,8 +4,14 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printCliJson } from './CliJson.js';
-import { automationSafeCommands, connectSteps, resolveCogmemInvocation, type InstallStep } from '../install/InstallSteps.js';
-import { defaultHermesConfigPath } from '../host/HostWiring.js';
+import {
+  automationSafeCommands,
+  connectSteps,
+  defaultHermesConfigPath,
+  hasHermesCogmemEntry,
+  resolveCogmemInvocation,
+  type InstallStep,
+} from '../install/InstallSteps.js';
 import { integrationScope } from '../host/IntegrationScope.js';
 import {
   enableHostIntegration,
@@ -440,7 +446,7 @@ function installHermesMcpConfig(input: {
 }
 
 function patchHermesMcpConfig(original: string, serverCommand: string, serverArgs: string[], project: string): string {
-  if (/^\s+cogmem\s*:/m.test(original)) {
+  if (hasHermesCogmemEntry(original)) {
     return patchExistingHermesCogmemConfig(original, project);
   }
 

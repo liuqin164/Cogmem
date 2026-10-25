@@ -10,12 +10,14 @@ import {
   installOpenClawAutoMemoryPlugin,
   type OpenClawAutoMemoryPluginInspection,
 } from '../host/openclaw/AutoMemoryPluginInstaller.js';
-import { hostWiringFor, pendingHostIntegration } from '../host/HostWiring.js';
 import { compactStorage } from '../storage/StorageCompactor.js';
 import {
   buildGate,
+  defaultHermesConfigPath,
   hasInstalledLauncher,
+  hermesIntegrationEstablished,
   installPathSteps,
+  pendingHostIntegration,
   isOnPath,
   pathWarningSteps,
   postInstallSteps,
@@ -113,6 +115,10 @@ const workspaceArg = readArg('--workspace');
 const workspace = workspaceArg ? resolve(workspaceArg) : undefined;
 const openclawConfigPath = readArg('--openclaw-config');
 const pluginDir = readArg('--plugin-dir');
+// The reader's counterpart to `connect hermes --hermes-config`: without it the gate
+// cannot see an integration written somewhere other than the default, and would
+// recommend the step it just did.
+const hermesConfigPath = readArg('--hermes-config');
 const bunPath = readArg('--bun');
 const storage = hasFlag('--storage');
 const pluginOnly = hasFlag('--plugin-only');
@@ -258,11 +264,12 @@ if (envPath) {
   // integration is on disk must not be recommended again (#81). What is *reported*
   // still depends on the Host being configured, so an unconfigured machine is not
   // told about a plugin it never asked for.
+  const reportPlugin = Boolean(agent === 'openclaw' || workspace || loaded.integrations.openclaw.enabled);
   const plugin = inspectOpenClawAutoMemoryPlugin({
     workspaceRoot,
     pluginDir: pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot),
   });
-  if (agent === 'openclaw' || workspace || loaded.integrations.openclaw.enabled) {
+  if (reportPlugin) {
     const inspection = plugin;
     if (inspection.installed) {
       ok(`openclaw plugin ${inspection.current ? 'current' : 'stale'} at ${inspection.pluginDir}`);
@@ -302,10 +309,23 @@ if (envPath) {
   const level = gateDiagnostics.length > 0 ? 'warn' : 'ok';
   // Only the Host that is still outstanding, named: recommending a finished step is
   // what made the gate never converge, and recommending OpenClaw in a Hermes-only
-  // Workspace is what made it name the wrong Host (#81).
-  const connectHost = pendingHostIntegration(hostWiringFor(loaded, process.env));
+  // Workspace is what made it name the wrong Host (#81). Availability is read from
+  // the same inspection the report uses — the effective plugin dir and workspace —
+  // so one run cannot print "installed" and "connect it" at the same time.
+  const connectHost = pendingHostIntegration([
+    { host: 'openclaw', wanted: loaded.integrations.openclaw.enabled, established: plugin.installed },
+    {
+      host: 'hermes',
+      wanted: loaded.integrations.hermes.enabled,
+      established: hermesIntegrationEstablished(hermesConfigPath ? resolve(hermesConfigPath) : defaultHermesConfigPath(process.env)),
+    },
+  ]);
+  // The step carries the workspace of the Host it names, not the OpenClaw one by
+  // default: a pending Hermes in a Workspace whose OpenClaw dir is elsewhere would
+  // otherwise be told to write into the wrong tree.
+  const connectWorkspace = workspace || (connectHost ? hostWorkspaceFor(loaded, connectHost) : workspaceRoot);
   emitGate(
-    buildGate(level, gateDiagnostics, [...pathSteps, ...postInstallSteps(resolveCogmemInvocation(), workspaceRoot, connectHost)]),
+    buildGate(level, gateDiagnostics, [...pathSteps, ...postInstallSteps(resolveCogmemInvocation(), connectWorkspace, connectHost)]),
     {
       configPath: resolution.path,
       workspaceRoot,
@@ -318,7 +338,7 @@ if (envPath) {
       },
       dbPath: kernelDbPath,
       nextConnectHost: connectHost,
-      openclaw: { plugin },
+      openclaw: reportPlugin ? { plugin } : undefined,
     },
   );
 }
