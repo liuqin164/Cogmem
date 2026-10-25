@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { inspectOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemoryPluginInstaller.js';
 import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { filterToolsByProfile } from '../src/mcp/profiles.js';
-import { ALL_MIGRATIONS } from '../src/migrations/index.js';
+import { migration_0032 } from '../src/migrations/index.js';
+import { LATEST_SCHEMA_VERSION } from '../src/migrations/v3_7_4/FinalSchema.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const packageJsonPath = join(coreRoot, 'package.json');
@@ -50,9 +51,11 @@ describe('core release metadata', () => {
     expect(readme).toContain('Current version: `4.0.0`');
     expect(changelog).toContain('## 4.0.0');
     expect(checklist).toContain('# cogmem 4.0.0 Release Checklist');
-    expect(ALL_MIGRATIONS.at(-1)?.version).toBe('0032');
-    expect(Number.parseInt(ALL_MIGRATIONS.at(-1)!.version, 10)).toBe(32);
-    expect(ALL_MIGRATIONS.some((migration) => migration.version === '0033')).toBe(false);
+    // 4.0 ships no ordered migration list (ADR-0007): one schema, created
+    // directly. What is worth pinning is that the schema is 0032 and that the
+    // number the identity check writes agrees with it.
+    expect(migration_0032.version).toBe('0032');
+    expect(LATEST_SCHEMA_VERSION).toBe(32);
     expect(readdirSync(join(coreRoot, 'src', 'migrations')).some((file) => file.startsWith('0033_'))).toBe(false);
     expect(inspectOpenClawAutoMemoryPlugin({ workspaceRoot: coreRoot }).expectedVersion).toBe('0.7.2');
     expect(checklist).toContain('npm publish --provenance --access public');

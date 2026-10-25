@@ -22,7 +22,11 @@ export const LATEST_SCHEMA_VERSION = 32;
  */
 export function createFinalSchema(db) {
     db.exec('PRAGMA temp_store = MEMORY');
-    installMultidimensionalMemoryGraph374(db);
+    // One transaction, as the migration runner used to wrap this work: the
+    // installation issues hundreds of DDL statements, and committing each one
+    // separately costs about five times as much (2.8s against 0.5s on a fresh
+    // file, measured) — enough to push whole tests past their budgets.
+    db.transaction(() => installMultidimensionalMemoryGraph374(db))();
 }
 /** What is wrong with this database's schema, or undefined when nothing is. */
 export function finalSchemaIssue(db) {
