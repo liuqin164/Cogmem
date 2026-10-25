@@ -162,6 +162,8 @@ describe('the install journey', () => {
       //    wrote is the one `doctor` inspects, for the same Workspace.
       const after = parseJson('doctor after connect', await cli.run(['doctor', '--json'], { cwd: workspace }));
       expect(after.workspaceRoot).toBe(workspace);
+      expect(after.installGate.level).toBe('warn');
+      expect(after.installGate.diagnostics.map((entry: { code: string }) => entry.code)).toEqual(['rule_only']);
       expect(after.openclaw.plugin.pluginId).toBe(connect.autoMemory.pluginId);
       expect(after.openclaw.plugin.pluginDir).toBe(connect.autoMemory.pluginDir);
       expect(after.openclaw.plugin.installed).toBe(true);
@@ -177,7 +179,10 @@ describe('the install journey', () => {
       const stale = parseJson('doctor after tampering', await cli.run(['doctor', '--json'], { cwd: workspace }));
       expect(stale.openclaw.plugin.installed).toBe(true);
       expect(stale.openclaw.plugin.current).toBe(false);
-      expect(stale.installGate.diagnostics.map((entry: { code: string }) => entry.code)).toContain('openclaw_plugin_stale');
+      // The exact set, not "contains": a gate that also reports something else has
+      // changed state, and an exit-code or substring check would not notice.
+      expect(stale.installGate.level).toBe('warn');
+      expect(stale.installGate.diagnostics.map((entry: { code: string }) => entry.code)).toEqual(['openclaw_plugin_stale', 'rule_only']);
 
       // 7. a repeated connect repairs in place: still exactly one entry, one
       //    load path, and the recorded config is unchanged.
@@ -188,6 +193,8 @@ describe('the install journey', () => {
       expect(hostAgain.plugins.load.paths).toEqual([connect.autoMemory.pluginDir]);
       const repaired = parseJson('doctor after repair', await cli.run(['doctor', '--json'], { cwd: workspace }));
       expect(repaired.openclaw.plugin.current).toBe(true);
+      expect(repaired.installGate.level).toBe('warn');
+      expect(repaired.installGate.diagnostics.map((entry: { code: string }) => entry.code)).toEqual(['rule_only']);
 
       // 7b. One config, one entry — including the entry an *earlier* update left
       //     behind. Before ADR-0010 `update` passed `<ws>/.cogmem` as the
@@ -219,6 +226,23 @@ describe('the install journey', () => {
       );
       expect(update.openclawRepairSkippedReason).toBeUndefined();
       expect(update.openclawRepairCommand).toContain(`--workspace ${workspace}`);
+      expect(update.nextSteps).toEqual([]);
+
+      // 7d. Run the repair `update` would run, as printed, and end with exactly one
+      //     integration: one entry, one load path, one identity.
+      const ranRepair = await cli.runShell(update.openclawRepairCommand as string, { cwd: workspace });
+      expect(`${ranRepair.exitCode} ${ranRepair.stderr}`).toContain('0 ');
+      const afterUpdate = JSON.parse(readFileSync(openclawConfig, 'utf8'));
+      expect(Object.keys(afterUpdate.plugins.entries)).toEqual([connect.autoMemory.pluginId]);
+      expect(afterUpdate.plugins.load.paths).toEqual([connect.autoMemory.pluginDir]);
+
+      // 7e. A second pass repeats nothing: the gate has converged, so two runs of the
+      //     same command produce the same steps.
+      const secondPass = parseJson('doctor, second pass', await cli.run(['doctor', '--json'], { cwd: workspace }));
+      const thirdPass = parseJson('doctor, third pass', await cli.run(['doctor', '--json'], { cwd: workspace }));
+      expect(secondPass.nextSteps).toEqual(thirdPass.nextSteps);
+      expect(secondPass.nextSteps).toEqual([]);
+      expect(secondPass.installGate.diagnostics).toEqual(thirdPass.installGate.diagnostics);
 
       // 8. import — into the project the Host integration itself uses, which is
       //    the only project its automatic recall will ask about.
@@ -227,6 +251,15 @@ describe('the install journey', () => {
       writeFileSync(join(workspace, 'memory', '2026-10-01.md'), `# 2026-10-01\n\nThe ${marker} rollout ships on Fridays.\n`);
       writeFileSync(join(workspace, 'USER.md'), '# user\n');
       writeFileSync(join(workspace, 'SOUL.md'), '# soul\n');
+
+      // 8b. Every command `connect` printed for an agent, run as printed. The
+      //     import step is deliberately left to the assertion below, which pins
+      //     what it ingested; running it twice would make that count zero.
+      for (const command of connect.nextCommands as string[]) {
+        if (/import-(openclaw|hermes)/.test(command) && !command.includes('--dry-run')) continue;
+        const ran = await cli.runShell(command, { cwd: workspace });
+        expect(`${command} => ${ran.exitCode} ${ran.stderr}`).toContain('=> 0 ');
+      }
       // The project `connect` writes into the plugin entry and the project its
       // printed step names have to be one value (#79).
       // Asserted on the printed command first, so the failure a reader sees is the

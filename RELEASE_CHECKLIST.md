@@ -39,6 +39,24 @@ This release is distributed through the npm registry. GitHub remains the source 
 
 MCP `tools/list` includes strategy, episode append/import/status/audit-boundaries/split-plan/seal/repair, topic list/operate/rollback, candidate review, conditional Dream tick/status, prospective tools, all seven read-only Memory Atlas queries, and explicit `cogmem_graph_touch`. Atlas queries declare read-only/idempotent semantics and never change activation; only touch records selected-node use. Episode append/import never run Dream. Episode audit-boundaries and split-plan are read-only and never repair, split, Dream, Atlas, bind, or update activation. MCP Dream tick requires `maintenanceMode: true` to process work; otherwise it is recommendation-only.
 
+## Required Journey Guarantees
+
+These are pinned by one process-boundary check (`__tests__/install-journey.integration.test.ts`), which
+walks `install → init → doctor → connect → import → recall` in a scratch `HOME` and Workspace:
+
+- One Workspace derivation: every command derives it as the directory containing `.cogmem/`, `doctor`
+  reports the one it decided on, and `--workspace` is what a script uses to be explicit.
+- Printed commands run as printed: they carry the Workspace they were given rather than a `.`, and the
+  import step names the integration's project rather than a literal.
+- `connect <host> --auto` records the integration it wired, and the gate converges: `nextSteps` lists only
+  unsatisfied work, names the Host it is for, and yields no repeats on a second pass.
+- An agent registry is read Workspace-first and then beside the home directory; a credential that cannot be
+  identified is refused on every transport, and no registry *and* no credential stays the single-agent case.
+- Imported memory is recalled under the Host integration's project.
+- After an `update` repair there is exactly one Host integration: one entry, one load path, one identity.
+- The gate's exact level and diagnostic set are asserted, not the exit code — every defect this cycle
+  repaired exited 0.
+
 ## Required Documentation
 
 - README explains the vision, architecture, limits, and one-line install command.
