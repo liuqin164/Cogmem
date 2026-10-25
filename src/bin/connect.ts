@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printCliJson } from './CliJson.js';
 import { automationSafeCommands, connectSteps, resolveCogmemInvocation, type InstallStep } from '../install/InstallSteps.js';
+import { integrationScope } from '../host/IntegrationScope.js';
 import {
   enableHostIntegration,
   hostWorkspaceFor,
@@ -78,6 +79,8 @@ interface ConnectResult {
   workspaceRoot: string;
   /** The host's own workspace: the Workspace unless the config moved it (ADR-0010). */
   hostWorkspaceRoot: string;
+  /** The private memory scope this integration writes and its printed steps name. */
+  integrationProject: string;
   skillPath: string;
   skillFiles: string[];
   templatePath: string;
@@ -203,12 +206,12 @@ function defaultSkillPath(agent: AgentKind, workspaceRoot: string): string {
   return join(process.env.HOME || homedir(), '.hermes', 'skills', 'cogmem-memory', 'SKILL.md');
 }
 
-function nextCommands(agent: AgentKind, workspace: string): string[] {
-  return automationSafeCommands(nextSteps(agent, workspace));
+function nextCommands(agent: AgentKind, workspace: string, project: string): string[] {
+  return automationSafeCommands(nextSteps(agent, workspace, project));
 }
 
-function nextSteps(agent: AgentKind, workspace: string): ConnectNextStep[] {
-  return connectSteps(agent, resolveCogmemInvocation(), workspace);
+function nextSteps(agent: AgentKind, workspace: string, project: string): ConnectNextStep[] {
+  return connectSteps(agent, resolveCogmemInvocation(), workspace, project);
 }
 
 function usage(): string {
@@ -226,7 +229,7 @@ function usage(): string {
   ].join('\n');
 }
 
-function hostConfigSnippet(agent: AgentKind, workspaceRoot: string, auto: boolean): string {
+function hostConfigSnippet(agent: AgentKind, workspaceRoot: string, auto: boolean, project: string): string {
   if (agent === 'openclaw') {
     if (auto) {
       return [
@@ -245,7 +248,7 @@ function hostConfigSnippet(agent: AgentKind, workspaceRoot: string, auto: boolea
     ].join('\n');
   }
 
-  const mcpServer = resolveCogmemMcpServer(workspaceRoot);
+  const mcpServer = resolveCogmemMcpServer(workspaceRoot, project);
   return [
     'mcp_servers:',
     '  cogmem:',
@@ -267,27 +270,31 @@ function hostConfigSnippet(agent: AgentKind, workspaceRoot: string, auto: boolea
  * there is one, still wins — that is the version the workspace actually depends
  * on, so host and Cogmem upgrade together.
  */
-function resolveCogmemMcpServer(workspaceRoot: string): { command: string; args: string[] } {
-  if (process.env.COGMEM_MCP_BIN) return { command: process.env.COGMEM_MCP_BIN, args: [] };
-  if (process.env.COGMEM_BIN) return { command: process.env.COGMEM_BIN, args: ['mcp'] };
+function resolveCogmemMcpServer(workspaceRoot: string, project: string): { command: string; args: string[] } {
+  // The server is bound to the integration's own scope: one Workspace is one
+  // private memory scope, so a server that answers whatever project a caller
+  // names is a Hermes integration with no scope at all (ADR-0010, #79).
+  const bound = ['mcp', '--project', project];
+  if (process.env.COGMEM_MCP_BIN) return { command: process.env.COGMEM_MCP_BIN, args: bound };
+  if (process.env.COGMEM_BIN) return { command: process.env.COGMEM_BIN, args: bound };
   // The documented order: an explicit override, then the workspace-local
   // launcher, then whatever this machine resolves. `cogmem-mcp` stays last as the
   // compatibility entry point for host configs written before the dispatcher.
   const workspaceCli = join(workspaceRoot, 'node_modules', '.bin', 'cogmem');
-  if (existsSync(workspaceCli)) return { command: workspaceCli, args: ['mcp'] };
+  if (existsSync(workspaceCli)) return { command: workspaceCli, args: bound };
   const resolved = resolveCogmemInvocation();
-  if (isAbsolute(resolved)) return { command: resolved, args: ['mcp'] };
+  if (isAbsolute(resolved)) return { command: resolved, args: bound };
   // Compatibility entry points, in the order they have always been tried: a
   // workspace-local `cogmem-mcp` first, then one on `PATH`.
   const workspaceMcp = join(workspaceRoot, 'node_modules', '.bin', 'cogmem-mcp');
-  if (existsSync(workspaceMcp)) return { command: workspaceMcp, args: [] };
+  if (existsSync(workspaceMcp)) return { command: workspaceMcp, args: bound };
   const pathValue = process.env.PATH || '';
   for (const segment of pathValue.split(':')) {
     if (!segment) continue;
     const candidate = join(segment, 'cogmem-mcp');
-    if (existsSync(candidate)) return { command: candidate, args: [] };
+    if (existsSync(candidate)) return { command: candidate, args: bound };
   }
-  return { command: 'cogmem', args: ['mcp'] };
+  return { command: 'cogmem', args: bound };
 }
 
 function installSkill(args: ConnectArgs): ConnectResult {
@@ -313,6 +320,10 @@ function installSkill(args: ConnectArgs): ConnectResult {
   const hostWorkspaceRoot = args.workspaceGiven || cogmemConfig.kind !== 'toml'
     ? args.workspaceRoot
     : hostWorkspaceFor(loadCogmemConfig({ configPath: cogmemConfig.path }), args.agent);
+  // The one project this integration writes and reads. `--project` overrides it;
+  // otherwise it is derived from the Workspace, so the plugin entry and the
+  // printed import step cannot name two different scopes (#79).
+  const integrationProject = args.projectId || integrationScope(args.agent, hostWorkspaceRoot);
   const skillPath = resolve(args.outputPath || defaultSkillPath(args.agent, hostWorkspaceRoot));
   const operationsPath = join(dirname(skillPath), 'references', 'operations.md');
   const skillFiles = [skillPath, operationsPath];
@@ -342,7 +353,7 @@ function installSkill(args: ConnectArgs): ConnectResult {
       openclawConfigPath: args.openclawConfigPath,
       pluginDir: args.pluginDir,
       bunPath: args.bunPath,
-      projectId: args.projectId,
+      projectId: integrationProject,
       agentId: args.agentId,
       dryRun: args.dryRun,
       force: args.force,
@@ -351,6 +362,7 @@ function installSkill(args: ConnectArgs): ConnectResult {
     hermesMcp = installHermesMcpConfig({
       workspaceRoot: hostWorkspaceRoot,
       configPath: args.hermesConfigPath,
+      project: integrationProject,
       dryRun: args.dryRun,
       force: args.force,
     });
@@ -372,15 +384,16 @@ function installSkill(args: ConnectArgs): ConnectResult {
     agent: args.agent,
     workspaceRoot: args.workspaceRoot,
     hostWorkspaceRoot,
+    integrationProject,
     skillPath,
     skillFiles,
     templatePath,
     dryRun: args.dryRun,
     installed: !args.dryRun && !alreadyCurrent,
     alreadyCurrent,
-    nextCommands: nextCommands(args.agent, hostWorkspaceRoot),
-    nextSteps: nextSteps(args.agent, hostWorkspaceRoot),
-    hostConfigSnippet: hostConfigSnippet(args.agent, hostWorkspaceRoot, args.auto),
+    nextCommands: nextCommands(args.agent, hostWorkspaceRoot, integrationProject),
+    nextSteps: nextSteps(args.agent, hostWorkspaceRoot, integrationProject),
+    hostConfigSnippet: hostConfigSnippet(args.agent, hostWorkspaceRoot, args.auto, integrationProject),
     autoMemory,
     hermesMcp,
     integrationEnabled,
@@ -393,14 +406,15 @@ function defaultHermesConfigPath(env = process.env): string {
 
 function installHermesMcpConfig(input: {
   workspaceRoot: string;
+  project: string;
   configPath?: string;
   dryRun: boolean;
   force: boolean;
 }): HermesMcpInstallResult {
   const configPath = resolve(input.configPath || defaultHermesConfigPath());
-  const server = resolveCogmemMcpServer(resolve(input.workspaceRoot));
+  const server = resolveCogmemMcpServer(resolve(input.workspaceRoot), input.project);
   const original = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
-  const patched = patchHermesMcpConfig(original, server.command, server.args);
+  const patched = patchHermesMcpConfig(original, server.command, server.args, input.project);
   const changed = patched !== original;
   let backupPath: string | undefined;
 
@@ -424,9 +438,9 @@ function installHermesMcpConfig(input: {
   };
 }
 
-function patchHermesMcpConfig(original: string, serverCommand: string, serverArgs: string[]): string {
+function patchHermesMcpConfig(original: string, serverCommand: string, serverArgs: string[], project: string): string {
   if (/^\s+cogmem\s*:/m.test(original)) {
-    return patchExistingHermesCogmemConfig(original);
+    return patchExistingHermesCogmemConfig(original, serverArgs, project);
   }
 
   const lines = original.replace(/\r\n/g, '\n').split('\n');
@@ -457,7 +471,7 @@ function patchHermesMcpConfig(original: string, serverCommand: string, serverArg
   return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
 }
 
-function patchExistingHermesCogmemConfig(original: string): string {
+function patchExistingHermesCogmemConfig(original: string, serverArgs: string[], project: string): string {
   const lines = original.replace(/\r\n/g, '\n').split('\n');
   const cogmemIndex = lines.findIndex((line) => /^\s+cogmem\s*:\s*$/.test(line));
   if (cogmemIndex === -1) return original.endsWith('\n') ? original : `${original}\n`;
@@ -477,6 +491,23 @@ function patchExistingHermesCogmemConfig(original: string): string {
   }
 
   const block = lines.slice(cogmemIndex, blockEnd);
+  // An entry an earlier `connect` wrote names no project — the server then answers
+  // whatever scope a caller asks for, which is the defect this fix closes. Its own
+  // `args` line is rewritten in place; a line this command did not write
+  // (unparseable, or carrying flags it does not know) is left alone.
+  for (let index = cogmemIndex + 1; index < blockEnd; index += 1) {
+    const match = lines[index].match(/^(\s*)args\s*:\s*(\[.*\])\s*$/);
+    if (!match) continue;
+    try {
+      const parsed = JSON.parse(match[2]!) as unknown;
+      if (Array.isArray(parsed) && !parsed.includes('--project')) {
+        lines[index] = `${match[1]}args: ${JSON.stringify([...parsed, '--project', project])}`;
+      }
+    } catch {
+      // Leave a hand-written args line alone.
+    }
+    break;
+  }
   const existingTools = new Set<string>();
   for (const line of block) {
     const match = line.match(/^\s*-\s*(cogmem_[\w-]+)\s*$/);

@@ -6,6 +6,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
+import { integrationScope } from '../IntegrationScope.js';
 
 function makePluginId(workspaceRoot: string): string {
   const hash = createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
@@ -150,8 +151,11 @@ export function installOpenClawAutoMemoryPlugin(
   const openclawConfigPath = resolve(options.openclawConfigPath || defaultOpenClawConfigPath(workspaceRoot));
   const bunPath = options.bunPath || process.execPath || 'bun';
   assertBunRuntime(bunPath);
-  const projectId = options.projectId || `openclaw-${createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 8)}`;
-  const agentId = options.agentId || `openclaw-${createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 8)}`;
+  // The same value the printed import step will name: both come from
+  // `integrationScope`, so they cannot drift apart (#79).
+  const scope = integrationScope('openclaw', workspaceRoot);
+  const projectId = options.projectId || scope;
+  const agentId = options.agentId || scope;
   const files = buildPluginFiles(pluginId);
 
   const desiredFiles = new Map<string, string>([

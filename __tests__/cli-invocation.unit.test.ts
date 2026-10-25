@@ -190,7 +190,9 @@ describe('printed steps run as printed', () => {
     const written = readFileSync(hermesConfig, 'utf8');
     // A bare `cogmem` here is an MCP server entry that never starts.
     expect(written).toContain(`command: "${join(binDir, 'cogmem')}"`);
-    expect(written).toContain('args: ["mcp"]');
+    // Bound to the integration's own scope: an unbound server answers whatever
+    // project a caller names (#79).
+    expect(written).toMatch(/args: \["mcp","--project","hermes-[0-9a-f]{8}"\]/);
   });
 
   test('a workspace with a space is quoted, so the step still runs', async () => {

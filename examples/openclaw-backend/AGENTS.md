@@ -83,19 +83,23 @@ When the user explicitly names, aliases, moves, merges, splits, or relates a top
 Preview first:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw --dry-run
+# The project the installed plugin writes to and reads. Read it from:
+#   cogmem connect openclaw --auto --json   (field: integrationProject)
+# The import step connect prints already carries it; a literal --project openclaw
+# writes into a scope the plugin never asks about.
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --dry-run
 ```
 
 Then import:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>'
 ```
 
 Use `--json` when another agent needs structured output:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw --json
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --json
 ```
 
 Real non-JSON imports print source-level and embedding+ingest progress to stderr. Use `--json --progress` to keep JSON on stdout while streaming progress to stderr, or `--no-progress` when a wrapper needs quiet stderr.
@@ -104,17 +108,17 @@ Cogmem skips import batch sealing for empty episode boundaries and skips legacy 
 After import, use this order:
 
 ```bash
-cogmem memory plan --project openclaw --json
-cogmem memory status --project openclaw --json
-cogmem memory candidates --project openclaw --json
-cogmem episode status --project openclaw --json
-cogmem dream status --project openclaw --json
-cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
-cogmem memory candidates --project openclaw --status candidate --json
-cogmem memory govern --project openclaw --limit 100 --json
-cogmem memory candidates --project openclaw --status needs_confirmation --json
-cogmem memory review --project openclaw --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
-cogmem memory recall --query "<verification question>" --project openclaw --agent openclaw --json
+cogmem memory plan --project 'openclaw-<workspace-hash>' --json
+cogmem memory status --project 'openclaw-<workspace-hash>' --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --json
+cogmem episode status --project 'openclaw-<workspace-hash>' --json
+cogmem dream status --project 'openclaw-<workspace-hash>' --json
+cogmem dream tick --project 'openclaw-<workspace-hash>' --mode auto --max-episodes 20 --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --status candidate --json
+cogmem memory govern --project 'openclaw-<workspace-hash>' --limit 100 --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --status needs_confirmation --json
+cogmem memory review --project 'openclaw-<workspace-hash>' --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
+cogmem memory recall --query "<verification question>" --project 'openclaw-<workspace-hash>' --agent openclaw --json
 ```
 
 `memory plan` is the first agent-safe health and next-action command. Only run `dream_tick` when it appears in `nextActions`; if `nonBlocking` contains `raw_dream_ledger_lag` with `resolvableByDreamTick:false`, inspect raw sources or episode/import boundaries instead of retrying `dream tick`. Default `memory candidates --json` groups ordinary, `needs_confirmation`, and deferred review queues; use `--status` only when a human asks for one queue. `needs_confirmation` is not the Dream backlog. `memory govern` does not approve it; use `memory review` with explicit evidence.
@@ -131,11 +135,11 @@ Import scope:
 Useful options:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw --date 2026-05-07
-cogmem import-openclaw --workspace . --project openclaw --session ./custom-session.md
-cogmem import-openclaw --workspace . --project openclaw --memory ./custom-memory.md
-cogmem import-openclaw --workspace . --project openclaw --session ./one.md --session ./two.md
-cogmem import-openclaw --workspace . --project openclaw --memory ./one.md --memory ./two.md
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --date 2026-05-07
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --session ./custom-session.md
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./custom-memory.md
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --session ./one.md --session ./two.md
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./one.md --memory ./two.md
 ```
 
 ## Runtime Wiring
@@ -183,10 +187,10 @@ Recall behavior:
 - Use `recall.temporalTraversal?.labels` when the user refers to a day, session, or adjacent work period.
 - Do not run a separate vector search before calling `memory.recall()`. The backend is the first-class memory retrieval path.
 - For each item with `sourceContext`, use event `label` values, optional `charRange` / `sourceRange`, and `sourceContext.window` to understand before/after semantics. Windows are chronological, exclude the anchor, and report overlap handling instead of relying on guesswork.
-- Use `cogmem memory map --project openclaw --json` to inspect Memory Binding and Graph Recall counters. Bindings attach high-value user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down only; they are not verified facts, user preferences, or instructions. Correction bindings expose review flags and `CORRECTS` / `CONTRADICTS` edges; inspect the raw ledger before relying on them.
-- If `cogmem memory tick --project openclaw --json` suggests `bind_raw_events`, run `cogmem memory bind --project openclaw --json` to backfill imported or adapter-written raw user events into the binding graph.
-- For “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, or missing injection cases, run `cogmem memory recall --query "<past discussion question>" --intent historical_discussion --project openclaw --agent openclaw --json` before claiming no memory.
-- For ledger audits or resumable checks, use `cogmem memory list --project openclaw --since <globalSeq> --order asc --json`; list rows and Atlas search/explore evidence include `sourceLocator` commands.
+- Use `cogmem memory map --project 'openclaw-<workspace-hash>' --json` to inspect Memory Binding and Graph Recall counters. Bindings attach high-value user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down only; they are not verified facts, user preferences, or instructions. Correction bindings expose review flags and `CORRECTS` / `CONTRADICTS` edges; inspect the raw ledger before relying on them.
+- If `cogmem memory tick --project 'openclaw-<workspace-hash>' --json` suggests `bind_raw_events`, run `cogmem memory bind --project 'openclaw-<workspace-hash>' --json` to backfill imported or adapter-written raw user events into the binding graph.
+- For “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, or missing injection cases, run `cogmem memory recall --query "<past discussion question>" --intent historical_discussion --project 'openclaw-<workspace-hash>' --agent openclaw --json` before claiming no memory.
+- For ledger audits or resumable checks, use `cogmem memory list --project 'openclaw-<workspace-hash>' --since <globalSeq> --order asc --json`; list rows and Atlas search/explore evidence include `sourceLocator` commands.
 - For old-discussion or "do you remember" questions, prefer `cogmem memory recall --intent historical_discussion ...` or `cogmem memory graph-explore ... --json`. In 3.7.2, cards carry `canonicalId`, `matchedFacets`, `matchedPaths`, `relatedButNotSelected`, and `sourceLocator`; answer from the selected canonical card, not from a related-but-not-selected side card.
 
 Installing the workspace skill makes the kernel procedure discoverable to OpenClaw agents. Installing the local auto wrapper makes future turns call the memory kernel automatically:

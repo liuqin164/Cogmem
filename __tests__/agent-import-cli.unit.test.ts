@@ -752,8 +752,8 @@ test('agent-facing runbooks tell OpenClaw and Hermes agents how to self-install 
   expect(openclaw).toContain('COGMEM="./node_modules/.bin/cogmem"');
   expect(openclaw).toContain('Do not run `cogmem init` as an unattended agent action');
   expect(openclaw).toContain('cogmem import-openclaw');
-  expect(openclaw).toContain('cogmem memory candidates --project openclaw --status needs_confirmation --json');
-  expect(openclaw).toContain('cogmem memory review --project openclaw');
+  expect(openclaw).toContain("cogmem memory candidates --project 'openclaw-<workspace-hash>' --status needs_confirmation --json");
+  expect(openclaw).toContain("cogmem memory review --project 'openclaw-<workspace-hash>'");
   expect(openclaw).toContain('KernelAgentMemoryBackend');
   expect(openclaw).toContain('Do not import AGENTS.md');
 
@@ -761,8 +761,8 @@ test('agent-facing runbooks tell OpenClaw and Hermes agents how to self-install 
   expect(hermes).toContain('COGMEM="./node_modules/.bin/cogmem"');
   expect(hermes).toContain('Do not run `cogmem init` as an unattended agent action');
   expect(hermes).toContain('cogmem import-hermes');
-  expect(hermes).toContain('cogmem memory candidates --project hermes --status needs_confirmation --json');
-  expect(hermes).toContain('cogmem memory review --project hermes');
+  expect(hermes).toContain("cogmem memory candidates --project 'hermes-<workspace-hash>' --status needs_confirmation --json");
+  expect(hermes).toContain("cogmem memory review --project 'hermes-<workspace-hash>'");
   expect(hermes).toContain('KernelAgentMemoryBackend');
   expect(hermes).toContain('profile.md');
 });
@@ -837,10 +837,10 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
   expect(hermes).toContain('memory.provider');
   expect(hermes).toContain('--state-db ./state.db');
   expect(hermes).toContain('--family jsonl');
-  expect(hermes).toContain('cogmem dream tick --project hermes --mode auto --max-episodes 20 --json');
-  expect(hermes).toContain('cogmem episode status --project hermes --json');
-  expect(hermes).toContain('cogmem memory map --project hermes --json');
-  expect(hermes).toContain('cogmem memory tick --project hermes --json');
+  expect(hermes).toContain("cogmem dream tick --project 'hermes-<workspace-hash>' --mode auto --max-episodes 20 --json");
+  expect(hermes).toContain("cogmem episode status --project 'hermes-<workspace-hash>' --json");
+  expect(hermes).toContain("cogmem memory map --project 'hermes-<workspace-hash>' --json");
+  expect(hermes).toContain("cogmem memory tick --project 'hermes-<workspace-hash>' --json");
   expect(hermes).toContain('cogmem_candidate_review');
   expect(hermes).toContain('cogmem_graph_touch');
   expect(hermes).toContain('--session ./one.md --session ./two.md');
@@ -892,12 +892,17 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   const stepOf = (id: string): string => openclawSteps.find((step) => step.id === id)!.command;
   // Every argument, pinned exactly — the workspace the command was given rather
   // than a `.` of its own, and not a `.` anywhere else either.
+  const project = installedParsed.integrationProject as string;
+  // The project the integration itself writes, not a literal: the printed step and
+  // the plugin entry have to name one scope, or the import "succeeds" into a
+  // project the agent never asks about (#79).
+  expect(project).toMatch(/^openclaw-[0-9a-f]{8}$/);
   expect(commandArguments(stepOf('doctor'))).toBe(`doctor --workspace ${dir}`);
-  expect(commandArguments(stepOf('import_dry_run'))).toBe(`import-openclaw --workspace ${dir} --project openclaw --dry-run --json`);
-  expect(commandArguments(stepOf('import_apply'))).toBe(`import-openclaw --workspace ${dir} --project openclaw --json`);
+  expect(commandArguments(stepOf('import_dry_run'))).toBe(`import-openclaw --workspace ${dir} --project ${project} --dry-run --json`);
+  expect(commandArguments(stepOf('import_apply'))).toBe(`import-openclaw --workspace ${dir} --project ${project} --json`);
   expect(commandArguments(stepOf('openclaw_diagnose'))).toBe(`openclaw diagnose --workspace ${dir} --json`);
-  expect(commandArguments(stepOf('memory_plan'))).toBe('memory plan --project openclaw --json');
-  expect(commandArguments(stepOf('memory_status'))).toBe('memory status --project openclaw --json');
+  expect(commandArguments(stepOf('memory_plan'))).toBe(`memory plan --project ${project} --json`);
+  expect(commandArguments(stepOf('memory_status'))).toBe(`memory status --project ${project} --json`);
   expect(installedParsed.nextSteps).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: 'interactive_init', safeForAutomation: false, actor: 'operator' }),
     expect.objectContaining({ id: 'restart_gateway', safeForAutomation: false, actor: 'host' }),
@@ -1495,17 +1500,19 @@ test('cogmem-connect installs Hermes skill into the real Hermes skills directory
   expectRunnableCommands(parsed.nextCommands);
   const hermesSteps = parsed.nextSteps as Array<{ id: string; command: string }>;
   const hermesStep = (id: string): string => hermesSteps.find((step) => step.id === id)!.command;
+  const project = parsed.integrationProject as string;
+  expect(project).toMatch(/^hermes-[0-9a-f]{8}$/);
   expect(commandArguments(hermesStep('doctor'))).toBe(`doctor --workspace ${workspace}`);
-  expect(commandArguments(hermesStep('import_dry_run'))).toBe(`import-hermes --workspace ${workspace} --project hermes --dry-run --json`);
-  expect(commandArguments(hermesStep('import_apply'))).toBe(`import-hermes --workspace ${workspace} --project hermes --json`);
-  expect(commandArguments(hermesStep('memory_plan'))).toBe('memory plan --project hermes --json');
+  expect(commandArguments(hermesStep('import_dry_run'))).toBe(`import-hermes --workspace ${workspace} --project ${project} --dry-run --json`);
+  expect(commandArguments(hermesStep('import_apply'))).toBe(`import-hermes --workspace ${workspace} --project ${project} --json`);
+  expect(commandArguments(hermesStep('memory_plan'))).toBe(`memory plan --project ${project} --json`);
   expect(parsed.nextSteps).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: 'interactive_init', safeForAutomation: false, actor: 'operator' }),
     expect.objectContaining({ id: 'reload_hermes', safeForAutomation: false, actor: 'host' }),
   ]));
   expect(parsed.hostConfigSnippet).toContain('mcp_servers:');
   expect(parsed.hostConfigSnippet).toContain('command: "cogmem"');
-  expect(parsed.hostConfigSnippet).toContain('args: ["mcp"]');
+  expect(parsed.hostConfigSnippet).toContain(`args: ["mcp","--project","${parsed.integrationProject}"]`);
   expect(parsed.hostConfigSnippet).toContain('cogmem_candidate_review');
   expect(parsed.hostConfigSnippet).toContain('cogmem_graph_touch');
   expect(existsSync(skillPath)).toBe(true);
@@ -1546,7 +1553,7 @@ test('cogmem-connect hermes --auto patches Hermes MCP config without claiming na
   expect(config).toContain('mcp_servers:');
   expect(config).toContain('cogmem:');
   expect(config).toContain('command: "cogmem"');
-  expect(config).toContain('args: ["mcp"]');
+  expect(config).toContain(`args: ["mcp","--project","${JSON.parse(installed.stdout).integrationProject}"]`);
   expect(config).toContain('cogmem_memory_map');
   expect(config).toContain('cogmem_maintenance_tick');
   expect(config).toContain('cogmem_prospective');
@@ -1637,7 +1644,9 @@ test('cogmem-connect hermes --auto does not duplicate existing cogmem mcp server
   const config = readFileSync(hermesConfig, 'utf8');
   expect(config.match(/^  cogmem:/gm)?.length).toBe(1);
   expect(config.match(/command: "cogmem"/g)?.length).toBe(1);
-  expect(config).toContain('args: ["mcp"]');
+  // An entry an earlier connect wrote names no project; the server would then
+  // answer whatever scope a caller asks for, which is no scope at all.
+  expect(config).toContain(`args: ["mcp","--project","${JSON.parse(installed.stdout).integrationProject}"]`);
   expect(config).toContain('cogmem_memory_map');
   expect(config.match(/cogmem_recall/g)?.length).toBe(1);
 });

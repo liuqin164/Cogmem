@@ -150,13 +150,21 @@ export type HostIntegration = 'openclaw' | 'hermes';
  * Ids and commands are the contract: the JSON field `nextSteps` and the derived
  * `nextCommands` both read this list.
  */
-export function connectSteps(host: HostIntegration, bin: string, workspace?: string): InstallStep[] {
-  const project = host === 'openclaw' ? 'openclaw' : 'hermes';
+export function connectSteps(
+  host: HostIntegration,
+  bin: string,
+  workspace: string,
+  // The project the Host integration itself writes and reads. Passed in rather
+  // than named here: a literal `openclaw` in this list is what made the printed
+  // import step write into a scope the installed plugin never asks about
+  // (#79, ADR-0010).
+  project: string,
+): InstallStep[] {
   const importCommand = host === 'openclaw' ? 'import-openclaw' : 'import-hermes';
   // The value the command was given, not a `.` of its own: a step that resolves
   // the workspace from wherever it happens to be run is the same defect the
   // resolver above exists to remove, one level down.
-  const workspaceArg = workspace ? ` --workspace ${cliArg(workspace)}` : '';
+  const workspaceArg = ` --workspace ${cliArg(workspace)}`;
   const steps: InstallStep[] = [
     {
       id: 'doctor',

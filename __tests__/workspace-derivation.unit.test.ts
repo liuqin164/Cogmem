@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   enableHostIntegration,
@@ -10,7 +11,10 @@ import {
   resolveWorkspaceRoot,
 } from '../src/config/CogmemConfig.js';
 import { installOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemoryPluginInstaller.js';
+import { integrationScope } from '../src/host/IntegrationScope.js';
 import { makeTempDir } from './helpers/tmp.js';
+
+const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
  * The Workspace derivation, and the two commands that must agree about it.
@@ -199,5 +203,52 @@ describe('one config, one plugin entry', () => {
     // Another Workspace's entry and load path are another integration: untouched.
     expect(patched.plugins.load.paths).toContain(join(workspace, 'other', 'extensions', otherId));
     expect(patched.plugins.allow).not.toContain(staleId);
+  });
+});
+
+describe('one Workspace is one private scope', () => {
+  test('two Workspaces are two scopes, and one Workspace is one', () => {
+    const scratch = makeTempDir('cogmem-scope-');
+    const first = join(scratch, 'ws-one');
+    const second = join(scratch, 'ws-two');
+
+    expect(integrationScope('openclaw', first)).toMatch(/^openclaw-[0-9a-f]{8}$/);
+    // Same Workspace, same scope — that is what makes the plugin entry and the
+    // printed import step the same value (#79).
+    expect(integrationScope('openclaw', first)).toBe(integrationScope('openclaw', first));
+    // Two Workspaces on one machine stay two scopes: importing into one cannot
+    // surface in the other (ADR-0009).
+    expect(integrationScope('openclaw', first)).not.toBe(integrationScope('openclaw', second));
+    expect(integrationScope('hermes', first)).not.toBe(integrationScope('openclaw', first));
+  });
+});
+
+describe('the documented project is the one the integration uses', () => {
+  test('no runbook tells a reader to import into the literal project', () => {
+    const docs = [
+      'README.md',
+      ...(readdirSync(join(coreRoot, 'examples'), { recursive: true }) as string[])
+        .filter((entry) => entry.endsWith('.md'))
+        .map((entry) => join('examples', entry)),
+      // The decision records and the round ledger quote the defect on purpose
+      // (the literal and the recall that returned nothing), so they are evidence
+      // rather than instructions; the runbooks are what a reader follows.
+      ...(readdirSync(join(coreRoot, 'docs'), { recursive: true }) as string[])
+        .filter((entry) => entry.endsWith('.md'))
+        .filter((entry) => !entry.startsWith('engineering/') && !entry.startsWith('adr/'))
+        .map((entry) => join('docs', entry)),
+    ];
+    const offenders: string[] = [];
+    for (const doc of docs) {
+      for (const [index, line] of readFileSync(join(coreRoot, doc), 'utf8').split('\n').entries()) {
+        if (/^\s*#/.test(line)) continue;
+        if (!/--project\s+(openclaw|hermes)(?![\w-])/.test(line)) continue;
+        offenders.push(`${doc}:${index + 1}: ${line.trim()}`);
+      }
+    }
+    // A literal here is the defect #79 fixes: the import reports success into a
+    // scope the installed integration never reads. The runbooks name the derived
+    // value as a quoted placeholder instead.
+    expect(offenders).toEqual([]);
   });
 });

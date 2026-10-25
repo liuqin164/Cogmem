@@ -30,6 +30,7 @@ const BUN_DIR = dirname(process.execPath);
 interface Cli {
   binDir: string;
   run: (args: string[], options?: { cwd?: string; stdin?: string }) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  runShell: (command: string, options?: { cwd?: string }) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
 }
 
 /**
@@ -49,8 +50,26 @@ function installInto(scratch: string, home: string): Cli {
   writeFileSync(launcher, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(pkgDir, 'dist', 'bin', 'cogmem.js'))} "$@"\n`);
   chmodSync(launcher, 0o755);
 
+  const env = () => ({
+    ...process.env,
+    NO_COLOR: '1',
+    HOME: home,
+    COGMEM_BIN_DIR: binDir,
+    PATH: [binDir, BUN_DIR, process.env.PATH].filter(Boolean).join(':'),
+  });
+
   return {
     binDir,
+    async runShell(command, options = {}) {
+      // Exactly what a reader does with a printed step: paste it into a shell.
+      const proc = Bun.spawn({ cmd: ['sh', '-c', command], cwd: options.cwd ?? scratch, stdout: 'pipe', stderr: 'pipe', env: env() });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      return { stdout, stderr, exitCode };
+    },
     async run(args, options = {}) {
       const proc = Bun.spawn({
         cmd: [launcher, ...args],
@@ -58,13 +77,7 @@ function installInto(scratch: string, home: string): Cli {
         stdin: options.stdin === undefined ? 'ignore' : 'pipe',
         stdout: 'pipe',
         stderr: 'pipe',
-        env: {
-          ...process.env,
-          NO_COLOR: '1',
-          HOME: home,
-          COGMEM_BIN_DIR: binDir,
-          PATH: [binDir, BUN_DIR, process.env.PATH].filter(Boolean).join(':'),
-        },
+        env: env(),
       });
       if (options.stdin !== undefined && proc.stdin) {
         proc.stdin.write(options.stdin);
@@ -209,14 +222,25 @@ describe('the install journey', () => {
       writeFileSync(join(workspace, 'memory', '2026-10-01.md'), `# 2026-10-01\n\nThe ${marker} rollout ships on Fridays.\n`);
       writeFileSync(join(workspace, 'USER.md'), '# user\n');
       writeFileSync(join(workspace, 'SOUL.md'), '# soul\n');
-      const imported = parseJson(
-        'import-openclaw',
-        await cli.run(['import-openclaw', '--workspace', workspace, '--project', pluginProject, '--json'], { cwd: workspace }),
-      );
+      // The project `connect` writes into the plugin entry and the project its
+      // printed step names have to be one value (#79).
+      // Asserted on the printed command first, so the failure a reader sees is the
+      // behaviour (a step that names another scope) rather than a missing field.
+      expect(printed('import_apply')).toContain(`--project ${pluginProject}`);
+      expect(connect.integrationProject).toBe(pluginProject);
+
+      // Run the printed step itself, through a shell: pasting it is the claim.
+      const imported = parseJson('printed import step', await cli.runShell(printed('import_apply'), { cwd: workspace }));
       expect(imported.workspaceRoot).toBe(workspace);
       expect(imported.projectId).toBe(pluginProject);
       expect(imported.sourcesScanned).toBeGreaterThan(0);
       expect(imported.recordsIngested).toBeGreaterThan(0);
+
+      // Re-running it does not duplicate what is already in (#79): the imported
+      // records are skipped rather than ingested a second time.
+      const again = parseJson('printed import step, again', await cli.runShell(printed('import_apply'), { cwd: workspace }));
+      expect(again.recordsIngested).toBe(0);
+      expect(again.skippedRecords).toBeGreaterThan(0);
 
       // 9. recall — the memory the import put in comes back under that project,
       //    through the same CLI a host step would call.

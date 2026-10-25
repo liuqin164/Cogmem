@@ -66,47 +66,51 @@ cogmem connect hermes --workspace . --auto --force --json
 Preview:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes --dry-run
+# The project the installed integration writes to and reads. Read it from:
+#   cogmem connect hermes --auto --json   (field: integrationProject)
+# The import step connect prints already carries it; a literal --project hermes
+# writes into a scope the MCP server is not bound to.
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --dry-run
 ```
 
 Import:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>'
 ```
 
 After import:
 
 ```bash
-cogmem memory plan --project hermes --json
-cogmem memory status --project hermes --json
-cogmem memory candidates --project hermes --json
-cogmem episode status --project hermes --json
-cogmem dream status --project hermes --json
-cogmem dream tick --project hermes --mode auto --max-episodes 20 --json
-cogmem memory candidates --project hermes --status candidate --json
-cogmem memory govern --project hermes --limit 100 --json
-cogmem memory candidates --project hermes --status needs_confirmation --json
-cogmem memory review --project hermes --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
+cogmem memory plan --project 'hermes-<workspace-hash>' --json
+cogmem memory status --project 'hermes-<workspace-hash>' --json
+cogmem memory candidates --project 'hermes-<workspace-hash>' --json
+cogmem episode status --project 'hermes-<workspace-hash>' --json
+cogmem dream status --project 'hermes-<workspace-hash>' --json
+cogmem dream tick --project 'hermes-<workspace-hash>' --mode auto --max-episodes 20 --json
+cogmem memory candidates --project 'hermes-<workspace-hash>' --status candidate --json
+cogmem memory govern --project 'hermes-<workspace-hash>' --limit 100 --json
+cogmem memory candidates --project 'hermes-<workspace-hash>' --status needs_confirmation --json
+cogmem memory review --project 'hermes-<workspace-hash>' --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
 ```
 
 If Hermes stores memory somewhere else:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --profile ./memory/profile.md --sessions ./memory/sessions
 ```
 
 Single session files and batches can be imported explicitly:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes --session ./one.md
-cogmem import-hermes --workspace . --project hermes --session ./one.md --session ./two.md
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md --session ./two.md
 ```
 
 The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store. Imported raw records enter the same Episode Assembler used by live turns and are sealed at the explicit import batch boundary.
 Imported records are embedded through the configured kernel embedder during import.
 
-MCP recall JSON includes `decisionTrace`. Check its selected lane, reason, and candidate counts before concluding that a memory is absent, and use `sourceContext.locator.command` for exact wording. Raw text fallback searches the fully scoped ledger and prefers original user anchors over later assistant retellings when cue scores tie. For old-discussion questions, run `cogmem memory recall --query "<past discussion>" --intent historical_discussion --project hermes --agent hermes --json`, then follow `sourceLocator` or inspect `cogmem memory list --project hermes --since <globalSeq> --order asc --json`.
+MCP recall JSON includes `decisionTrace`. Check its selected lane, reason, and candidate counts before concluding that a memory is absent, and use `sourceContext.locator.command` for exact wording. Raw text fallback searches the fully scoped ledger and prefers original user anchors over later assistant retellings when cue scores tie. For old-discussion questions, run `cogmem memory recall --query "<past discussion>" --intent historical_discussion --project 'hermes-<workspace-hash>' --agent hermes --json`, then follow `sourceLocator` or inspect `cogmem memory list --project 'hermes-<workspace-hash>' --since <globalSeq> --order asc --json`.
 
 Dream stores explicit user clarification as organizational correction evidence rather than an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Resolve `needs_confirmation` with `cogmem_candidate_review` or `cogmem memory review`; maintenance only supersedes entries left stale past the default 30-day TTL.
 
@@ -166,11 +170,11 @@ The MCP `cogmem_recall` tool uses the same backend as `cogmem memory recall`. A 
 Useful host-owned inspection commands:
 
 ```bash
-cogmem memory map --project hermes --json
-cogmem memory tick --project hermes --json
-cogmem memory bind --project hermes --json
-cogmem episode status --project hermes --json
-cogmem dream tick --project hermes --mode auto --max-episodes 20 --json
+cogmem memory map --project 'hermes-<workspace-hash>' --json
+cogmem memory tick --project 'hermes-<workspace-hash>' --json
+cogmem memory bind --project 'hermes-<workspace-hash>' --json
+cogmem episode status --project 'hermes-<workspace-hash>' --json
+cogmem dream tick --project 'hermes-<workspace-hash>' --mode auto --max-episodes 20 --json
 ```
 
 `memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for raw-ledger drill-down; they are not verified long-term facts. If `memory tick` suggests `bind_raw_events`, run `memory bind` to backfill imported Hermes raw user events into the binding graph.

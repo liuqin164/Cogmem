@@ -84,14 +84,18 @@ Default Hermes memory contract:
 Preview first:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes --dry-run
+# The project the installed integration writes to and reads. Read it from:
+#   cogmem connect hermes --auto --json   (field: integrationProject)
+# The import step connect prints already carries it; a literal --project hermes
+# writes into a scope the MCP server is not bound to.
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --dry-run
 ```
 
 If `state.db` exists, default import scans it automatically. If the database is elsewhere:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes --state-db ./state.db --dry-run
-cogmem import-hermes --workspace . --project hermes --state-db ./state.db
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --state-db ./state.db --dry-run
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --state-db ./state.db
 ```
 
 The SQLite importer prefers message-level `occurredAt`, `timestamp`, or `createdAt`; numeric `timestamp` values below millisecond range are epoch seconds. It can read WAL-mode `state.db` through SQLite immutable mode. `InsertTime` is only a fallback. Do not use `InsertTime` as proof of the original conversation date when better message timestamps exist.
@@ -99,21 +103,21 @@ The SQLite importer prefers message-level `occurredAt`, `timestamp`, or `created
 Then import:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>'
 ```
 
 Use `--json` when another agent needs structured output:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes --json
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --json
 ```
 
 If Hermes stores memory somewhere else, pass explicit paths:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes --profile ./memory/profile.md --sessions ./memory/sessions
-cogmem import-hermes --workspace . --project hermes --session ./one.md
-cogmem import-hermes --workspace . --project hermes --session ./one.md --session ./two.md
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md --session ./two.md
 ```
 
 For Hermes JSONL session exports where each line has a `messages[]` array:
@@ -121,7 +125,7 @@ For Hermes JSONL session exports where each line has a `messages[]` array:
 ```bash
 cogmem normalize-transcript --input ./hermes-sessions.jsonl --output ./hermes.normalized.md --family jsonl --dry-run --json
 cogmem normalize-transcript --input ./hermes-sessions.jsonl --output ./hermes.normalized.md --family jsonl
-cogmem import-hermes --workspace . --project hermes --session ./hermes.normalized.md
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./hermes.normalized.md
 ```
 
 Cogmem skips import batch sealing for empty episode boundaries and skips legacy empty Dream jobs so one bad imported episode cannot block the queue.
@@ -129,17 +133,17 @@ Cogmem skips import batch sealing for empty episode boundaries and skips legacy 
 After import, use this order:
 
 ```bash
-cogmem memory plan --project hermes --json
-cogmem memory status --project hermes --json
-cogmem memory candidates --project hermes --json
-cogmem episode status --project hermes --json
-cogmem dream status --project hermes --json
-cogmem dream tick --project hermes --mode auto --max-episodes 20 --json
-cogmem memory candidates --project hermes --status candidate --json
-cogmem memory govern --project hermes --limit 100 --json
-cogmem memory candidates --project hermes --status needs_confirmation --json
-cogmem memory review --project hermes --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
-cogmem memory recall --query "<verification question>" --project hermes --agent hermes --json
+cogmem memory plan --project 'hermes-<workspace-hash>' --json
+cogmem memory status --project 'hermes-<workspace-hash>' --json
+cogmem memory candidates --project 'hermes-<workspace-hash>' --json
+cogmem episode status --project 'hermes-<workspace-hash>' --json
+cogmem dream status --project 'hermes-<workspace-hash>' --json
+cogmem dream tick --project 'hermes-<workspace-hash>' --mode auto --max-episodes 20 --json
+cogmem memory candidates --project 'hermes-<workspace-hash>' --status candidate --json
+cogmem memory govern --project 'hermes-<workspace-hash>' --limit 100 --json
+cogmem memory candidates --project 'hermes-<workspace-hash>' --status needs_confirmation --json
+cogmem memory review --project 'hermes-<workspace-hash>' --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
+cogmem memory recall --query "<verification question>" --project 'hermes-<workspace-hash>' --agent hermes --json
 ```
 
 `memory plan` is the first agent-safe health and next-action command. Only run `dream_tick` when it appears in `nextActions`; if `nonBlocking` contains `raw_dream_ledger_lag` with `resolvableByDreamTick:false`, inspect raw sources or episode/import boundaries instead of retrying `dream tick`. Default `memory candidates --json` groups ordinary, `needs_confirmation`, and deferred review queues; use `--status` only when a human asks for one queue. `needs_confirmation` is not the Dream backlog. `memory govern` does not approve it; use `memory review` with explicit evidence.
@@ -149,17 +153,17 @@ cogmem memory recall --query "<verification question>" --project hermes --agent 
 If the current prompt does not include enough Cogmem memory context, query Cogmem directly before searching legacy files:
 
 ```bash
-cogmem memory recall --query "<user question>" --project hermes --agent hermes --json
+cogmem memory recall --query "<user question>" --project 'hermes-<workspace-hash>' --agent hermes --json
 ```
 
 For inventory or product questions, use recall first and raw search as a forensic fallback:
 
 ```bash
-cogmem memory recall --query "我们记录过哪些库存" --project hermes --agent hermes --json
-cogmem memory search --query "エルビ 库存" --project hermes --json
+cogmem memory recall --query "我们记录过哪些库存" --project 'hermes-<workspace-hash>' --agent hermes --json
+cogmem memory search --query "エルビ 库存" --project 'hermes-<workspace-hash>' --json
 cogmem memory show --event <event-id> --before 2 --after 2 --json
-cogmem memory recall --query "几个月前我们是不是讨论过 Cogmem 的记忆黑盒" --intent historical_discussion --project hermes --agent hermes --json
-cogmem memory list --project hermes --since <globalSeq> --order asc --json
+cogmem memory recall --query "几个月前我们是不是讨论过 Cogmem 的记忆黑盒" --intent historical_discussion --project 'hermes-<workspace-hash>' --agent hermes --json
+cogmem memory list --project 'hermes-<workspace-hash>' --since <globalSeq> --order asc --json
 ```
 
 `vectors: 0` does not mean Cogmem has no memory. It means the dense vector index has no hot vectors yet. `memory recall` still falls back to governed raw ledger search and returns `sourceContext` locators. Broad inventory questions are expanded into structured cues such as `库存管理`, `在库`, `产品コード`, and `数量`; if compiled-memory candidates miss those cues, raw ledger evidence is preferred.
@@ -169,8 +173,8 @@ cogmem memory list --project hermes --since <globalSeq> --order asc --json
 Check status with:
 
 ```bash
-cogmem memory plan --project hermes --json
-cogmem memory status --project hermes --json
+cogmem memory plan --project 'hermes-<workspace-hash>' --json
+cogmem memory status --project 'hermes-<workspace-hash>' --json
 ```
 
 For automation, read the top-level fields `rawEvents`, `vectors`, `dreamedRawCount`, `undreamedRawCount`, and `dreamCoverageRate`.
@@ -229,7 +233,7 @@ Hermes has no automatic observation path in this integration. Use `cogmem_episod
 
 Use `cogmem_topic_operate` with actor `user_explicit` only for explicit user naming/organization instructions. Model suggestions use `model_candidate` and remain reviewable; alias collisions fail closed. Use `cogmem_episode_repair` for split/merge/move/reclassify/requeue work so receipts, stale candidates, cross-references, Dream jobs, and audit records stay synchronized. Do not hand-edit the database.
 
-Use `cogmem memory map --project hermes --json` or MCP `cogmem_memory_map` to inspect Memory Binding and Graph Recall counters. Bindings attach high-value user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down only; they are not verified facts, user preferences, or instructions. Correction bindings expose review flags and correction edges. If `cogmem memory tick --project hermes --json` suggests `bind_raw_events`, run `cogmem memory bind --project hermes --json`; it scans the historical ledger by cursor and can resume with `--since <globalSeq>`. For old-discussion questions, use `cogmem memory recall --intent historical_discussion ...` or `cogmem_graph_explore`; in 3.7.2 cards carry `canonicalId`, `matchedFacets`, `matchedPaths`, `relatedButNotSelected`, and `sourceLocator`. Answer from the selected canonical card, not from a side card. Re-run `cogmem connect hermes --workspace . --auto --force --json` after upgrades to patch existing MCP allow-lists with new Cogmem tools. Follow only `nextCommands` for unattended agent work; operator/host actions are in `nextSteps` with `safeForAutomation=false`.
+Use `cogmem memory map --project 'hermes-<workspace-hash>' --json` or MCP `cogmem_memory_map` to inspect Memory Binding and Graph Recall counters. Bindings attach high-value user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for source drill-down only; they are not verified facts, user preferences, or instructions. Correction bindings expose review flags and correction edges. If `cogmem memory tick --project 'hermes-<workspace-hash>' --json` suggests `bind_raw_events`, run `cogmem memory bind --project 'hermes-<workspace-hash>' --json`; it scans the historical ledger by cursor and can resume with `--since <globalSeq>`. For old-discussion questions, use `cogmem memory recall --intent historical_discussion ...` or `cogmem_graph_explore`; in 3.7.2 cards carry `canonicalId`, `matchedFacets`, `matchedPaths`, `relatedButNotSelected`, and `sourceLocator`. Answer from the selected canonical card, not from a side card. Re-run `cogmem connect hermes --workspace . --auto --force --json` after upgrades to patch existing MCP allow-lists with new Cogmem tools. Follow only `nextCommands` for unattended agent work; operator/host actions are in `nextSteps` with `safeForAutomation=false`.
 
 Dream correction records require explicit user clarification; assistant self-correction and questions containing `是不是` are not user-owned contradictions. Invalid provider output is a rejected diagnostic. Maintenance ticks supersede `needs_confirmation` entries older than the default 30-day TTL and retain their evidence rows.
 

@@ -130,24 +130,28 @@ The repair refuses an empty-to-OpenClaw merge when another non-OpenClaw project 
 Preview OpenClaw discovery, then import idempotently:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw --dry-run --json
-cogmem import-openclaw --workspace . --project openclaw --json
+# The project the installed plugin writes to and reads. Read it from:
+#   cogmem connect openclaw --auto --json   (field: integrationProject)
+# The import step connect prints already carries it; a literal --project openclaw
+# writes into a scope the plugin never asks about.
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --dry-run --json
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --json
 ```
 
 After import, verify semantic maintenance in this exact order:
 
 ```bash
-cogmem memory plan --project openclaw --json
-cogmem memory status --project openclaw --json
-cogmem memory candidates --project openclaw --json
-cogmem episode status --project openclaw --json
-cogmem dream status --project openclaw --json
-cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
-cogmem memory candidates --project openclaw --status candidate --json
-cogmem memory govern --project openclaw --limit 100 --json
-cogmem memory candidates --project openclaw --status needs_confirmation --json
-cogmem memory review --project openclaw --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <distinct-user-event-id> --json
-cogmem memory recall --query "<verification question>" --project openclaw --agent openclaw --json
+cogmem memory plan --project 'openclaw-<workspace-hash>' --json
+cogmem memory status --project 'openclaw-<workspace-hash>' --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --json
+cogmem episode status --project 'openclaw-<workspace-hash>' --json
+cogmem dream status --project 'openclaw-<workspace-hash>' --json
+cogmem dream tick --project 'openclaw-<workspace-hash>' --mode auto --max-episodes 20 --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --status candidate --json
+cogmem memory govern --project 'openclaw-<workspace-hash>' --limit 100 --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --status needs_confirmation --json
+cogmem memory review --project 'openclaw-<workspace-hash>' --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <distinct-user-event-id> --json
+cogmem memory recall --query "<verification question>" --project 'openclaw-<workspace-hash>' --agent openclaw --json
 ```
 
 `memory plan` is the first agent-safe health and next-action command. It reports queue state, blocking and non-blocking actions, Dream backlog hints, vector fallback state, and safe commands. Only run `dream_tick` when it appears in `nextActions`; if `nonBlocking` contains `raw_dream_ledger_lag` with `resolvableByDreamTick:false`, inspect raw sources or episode/import boundaries instead of retrying `dream tick`. Default `memory candidates --json` groups ordinary candidates, `needs_confirmation`, and deferred review entries; use `--status` only for one explicit queue. `needs_confirmation` is not a Dream backlog. `memory govern` does not approve it. Use `memory review` with explicit evidence. Cogmem skips import batch sealing for empty episode boundaries and marks legacy empty Dream jobs as skipped so one bad imported episode cannot block the queue. If `episode status` reports `episode_empty_*`, inspect the episode and repair boundaries with the audited episode repair commands.
@@ -155,15 +159,15 @@ cogmem memory recall --query "<verification question>" --project openclaw --agen
 Pass explicit sources when discovery is not enough:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw --memory ./MEMORY.md --session ./session.md --json
-cogmem import-openclaw --workspace . --project openclaw --memory ./one.md --memory ./two.md --session ./one.jsonl --session ./two.jsonl --json
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./MEMORY.md --session ./session.md --json
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./one.md --memory ./two.md --session ./one.jsonl --session ./two.jsonl --json
 ```
 
 For large generic JSONL, use checkpoints and bounded error handling:
 
 ```bash
-cogmem episode import --project openclaw --session import-2026 --source-agent openclaw --format jsonl --file ./history.jsonl --chunk-size 500 --checkpoint-file ./history.checkpoint.json --skip-errors --max-errors 20 --json
-cogmem episode import --project openclaw --session import-2026 --source-agent openclaw --format jsonl --file ./history.jsonl --resume --checkpoint-file ./history.checkpoint.json --json
+cogmem episode import --project 'openclaw-<workspace-hash>' --session import-2026 --source-agent openclaw --format jsonl --file ./history.jsonl --chunk-size 500 --checkpoint-file ./history.checkpoint.json --skip-errors --max-errors 20 --json
+cogmem episode import --project 'openclaw-<workspace-hash>' --session import-2026 --source-agent openclaw --format jsonl --file ./history.jsonl --resume --checkpoint-file ./history.checkpoint.json --json
 ```
 
 Use `--start-line`, `--end-line`, or `--max-lines` to split controlled runs. Preserve stable external message IDs across retries.
@@ -171,12 +175,12 @@ Use `--start-line`, `--end-line`, or `--max-lines` to split controlled runs. Pre
 ## Read-only inspection and JSON
 
 ```bash
-cogmem memory plan --project openclaw --json
-cogmem memory status --project openclaw --json
-cogmem memory candidates --project openclaw --json
-cogmem memory candidates --project openclaw --status needs_confirmation --json
-cogmem episode status --project openclaw --json
-cogmem dream status --project openclaw --json
+cogmem memory plan --project 'openclaw-<workspace-hash>' --json
+cogmem memory status --project 'openclaw-<workspace-hash>' --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --status needs_confirmation --json
+cogmem episode status --project 'openclaw-<workspace-hash>' --json
+cogmem dream status --project 'openclaw-<workspace-hash>' --json
 ```
 
 All documented JSON commands emit `schemaVersion: "cogmem.cli.v1"`. Object payload fields are top-level; arrays use `items`. Queue counters `candidate`, `promoted`, `needs_confirmation`, and `beliefs` are top-level. `memory status` explains whether recall remains available when `vectors` is zero.
@@ -188,17 +192,17 @@ All documented JSON commands emit `schemaVersion: "cogmem.cli.v1"`. Object paylo
 Use recall for a direct factual question:
 
 ```bash
-cogmem memory recall --query "<question>" --project openclaw --agent openclaw --json
-cogmem memory recall --query "<past discussion question>" --intent historical_discussion --project openclaw --agent openclaw --json
-cogmem explain-recall --query "<question>" --project openclaw --agent openclaw --json
+cogmem memory recall --query "<question>" --project 'openclaw-<workspace-hash>' --agent openclaw --json
+cogmem memory recall --query "<past discussion question>" --intent historical_discussion --project 'openclaw-<workspace-hash>' --agent openclaw --json
+cogmem explain-recall --query "<question>" --project 'openclaw-<workspace-hash>' --agent openclaw --json
 ```
 
 Follow returned evidence, never a summary alone:
 
 ```bash
 cogmem memory show --event <event-id> --before 2 --after 2 --json
-cogmem memory list --project openclaw --since <globalSeq> --order asc --json
-cogmem memory list --project openclaw --since <globalSeq> --until <globalSeq> --order asc --json
+cogmem memory list --project 'openclaw-<workspace-hash>' --since <globalSeq> --order asc --json
+cogmem memory list --project 'openclaw-<workspace-hash>' --since <globalSeq> --until <globalSeq> --order asc --json
 ```
 
 Use `historical_discussion` for “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, and missing prompt-injection cases. Use `action_history` or the inferred action-history path for “what did I ask you to do to <entity>?”, “启动 <tool>”, or “对 <entity> 做过什么操作”. Action-history fallback requires both the entity cue and an operational action cue; do not use a compiled memory only because it mentions the entity. Raw list rows include `sourceLocator`; run the locator before quoting exact words or saying the event cannot be found.
@@ -206,8 +210,8 @@ Use `historical_discussion` for “did we discuss this before?”, “几个月�
 Exact quote requests such as “我的原话”, “精确到6月5日的原文”, “exact quote”, or “verbatim” must use Raw Ledger/sourceLocator evidence:
 
 ```bash
-cogmem memory recall --query "能精确到6月5日的原文吗？我的原话" --intent forensic_quote --project openclaw --agent openclaw --json
-cogmem memory show --event <event-id> --project openclaw --before 3 --after 5 --json
+cogmem memory recall --query "能精确到6月5日的原文吗？我的原话" --intent forensic_quote --project 'openclaw-<workspace-hash>' --agent openclaw --json
+cogmem memory show --event <event-id> --project 'openclaw-<workspace-hash>' --before 3 --after 5 --json
 ```
 
 Do not use `memory/*.md`, imported summaries, or compiled memories as the primary source for exact user wording.
@@ -217,26 +221,26 @@ Do not use `memory/*.md`, imported summaries, or compiled memories as the primar
 Atlas combines whichever facets the question supplies, like table filters. Supported constraints include project, day/month/year, topic, issue, entity/target, session/thread, memory kind, action kind, and ordinary text cues. Unicode letter/number entity cues are supported, but Atlas does not automatically prove aliases or merge identities. Do not require a fixed entity + time + action tuple. A canonical episode appears once even if it is reached through several facets.
 
 ```bash
-cogmem memory graph --project openclaw --json
-cogmem memory graph-search --project openclaw --query "<实体或工具名>" --json
-cogmem memory graph-explore --project openclaw --query "启动 <工具名>" --json
-cogmem memory graph-explore --project openclaw --query "2025 年 <实体或工具名> 的决策" --now 1782057600000 --evidence-limit 2 --json
-cogmem memory graph-explore --project openclaw --query "6月6号关于记忆黑盒聊过什么" --json
-cogmem memory graph-explore --project openclaw --query "记忆黑盒后来有没有继续讨论" --json
-cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --evidence-limit 4 --json
-cogmem memory graph-neighbors --project openclaw --id <node-id> --hops 2 --json
-cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
-cogmem memory graph-timeline --project openclaw --query "去年与 <实体或工具名> 有关的修复" --now 1782057600000 --evidence-limit 4 --json
-cogmem memory graph-timeline --project openclaw --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
-cogmem memory graph-reindex --project openclaw --event <event-id> --json
-cogmem memory graph-reindex --project openclaw --episode <episode-id> --json
+cogmem memory graph --project 'openclaw-<workspace-hash>' --json
+cogmem memory graph-search --project 'openclaw-<workspace-hash>' --query "<实体或工具名>" --json
+cogmem memory graph-explore --project 'openclaw-<workspace-hash>' --query "启动 <工具名>" --json
+cogmem memory graph-explore --project 'openclaw-<workspace-hash>' --query "2025 年 <实体或工具名> 的决策" --now 1782057600000 --evidence-limit 2 --json
+cogmem memory graph-explore --project 'openclaw-<workspace-hash>' --query "6月6号关于记忆黑盒聊过什么" --json
+cogmem memory graph-explore --project 'openclaw-<workspace-hash>' --query "记忆黑盒后来有没有继续讨论" --json
+cogmem memory graph-node --project 'openclaw-<workspace-hash>' --id <node-id> --include-evidence --evidence-limit 4 --json
+cogmem memory graph-neighbors --project 'openclaw-<workspace-hash>' --id <node-id> --hops 2 --json
+cogmem memory graph-path --project 'openclaw-<workspace-hash>' --from <node-id> --to <node-id> --json
+cogmem memory graph-timeline --project 'openclaw-<workspace-hash>' --query "去年与 <实体或工具名> 有关的修复" --now 1782057600000 --evidence-limit 4 --json
+cogmem memory graph-timeline --project 'openclaw-<workspace-hash>' --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
+cogmem memory graph-reindex --project 'openclaw-<workspace-hash>' --event <event-id> --json
+cogmem memory graph-reindex --project 'openclaw-<workspace-hash>' --episode <episode-id> --json
 ```
 
 Graph commands default to stale-safe diagnostics. If refresh hits `SQLITE_BUSY`, JSON includes `atlasFresh: false` and `refreshError` while returning the existing projection. Use:
 
 ```bash
-cogmem memory graph-explore --project openclaw --query "OpenClaw 去年做过什么" --no-refresh --json
-cogmem memory graph-explore --project openclaw --query "OpenClaw 去年做过什么" --refresh --json
+cogmem memory graph-explore --project 'openclaw-<workspace-hash>' --query "OpenClaw 去年做过什么" --no-refresh --json
+cogmem memory graph-explore --project 'openclaw-<workspace-hash>' --query "OpenClaw 去年做过什么" --refresh --json
 ```
 
 Use `--no-refresh` during lock incidents and `--refresh` when the operator wants rebuild-or-fail behavior.
@@ -245,15 +249,15 @@ Graph reads are pure: overview/search/explore do not brighten what they display.
 
 Search/explore may return `cards[]` for canonical episodes. Use `cards[].displayTitle` for UI/readability, `oneLineSummary` as a hint, `matchedFacets` and `matchedPaths` to explain why it matched, and `canonicalId` to dedupe. `relatedButNotSelected` is context only; do not substitute it as the answer. If `relaxationTrace` exists, say the match was relaxed; supported relaxations are day → month → year and issue → parent topic. Every evidence result distinguishes `evidenceTotal` from `evidenceReturned` and includes an event ID plus `sourceLocator.command` and `sourceLocator.contextCommand` drill-down commands. Use those locators before treating an Atlas summary as evidence.
 
-If an audited episode repair changes boundaries or classification, the JSON repair result contains `repairId`, `applied`, `affectedEpisodeIds`, `changedFields`, `requeuedDream`, `graphRefreshNeeded`, and `nextCommands`. `repairId` is an audit id, not a candidate id. Do not run `memory dream --promote` just because a repair returned a `repairId`. When `graphRefreshNeeded=true`, run the returned `graph-reindex` command, then verify with `graph-explore` or `graph-timeline`. Targeted reindex intentionally leaves Atlas dirty; run `cogmem memory tick --project openclaw --json` when full relation/action-frame consistency matters. Full Atlas rebuild still uses the normal SQLite writer path; schedule it outside latency-sensitive OpenClaw turns for large databases.
+If an audited episode repair changes boundaries or classification, the JSON repair result contains `repairId`, `applied`, `affectedEpisodeIds`, `changedFields`, `requeuedDream`, `graphRefreshNeeded`, and `nextCommands`. `repairId` is an audit id, not a candidate id. Do not run `memory dream --promote` just because a repair returned a `repairId`. When `graphRefreshNeeded=true`, run the returned `graph-reindex` command, then verify with `graph-explore` or `graph-timeline`. Targeted reindex intentionally leaves Atlas dirty; run `cogmem memory tick --project 'openclaw-<workspace-hash>' --json` when full relation/action-frame consistency matters. Full Atlas rebuild still uses the normal SQLite writer path; schedule it outside latency-sensitive OpenClaw turns for large databases.
 
 ## Candidate governance and review
 
 Ordinary candidates:
 
 ```bash
-cogmem memory candidates --project openclaw --status candidate --json
-cogmem memory govern --project openclaw --limit 100 --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --status candidate --json
+cogmem memory govern --project 'openclaw-<workspace-hash>' --limit 100 --json
 ```
 
 `govern` promotes only `candidate`. With `--status needs_confirmation`, it lists the queue and directs the operator to review.
@@ -261,12 +265,12 @@ cogmem memory govern --project openclaw --limit 100 --json
 Review uncertain candidates with an audited actor and reason:
 
 ```bash
-cogmem memory candidates --project openclaw --status needs_confirmation --json
-cogmem memory review --project openclaw --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <distinct-user-event-id> --json
-cogmem memory review --project openclaw --id <candidate-id> --action reject --actor <operator> --reason "unsupported claim" --json
-cogmem memory review --project openclaw --id <candidate-id> --action defer --actor <operator> --reason "wait for evidence" --review-after <epoch-ms> --json
-cogmem memory review --project openclaw --id <candidate-id> --action supersede --actor <operator> --reason "replaced" --replacement <replacement-candidate-id> --json
-cogmem memory review --project openclaw --id <correction-id> --action relink --actor <operator> --reason "bind correction target" --target-belief <belief-id> --confirmation-event <distinct-user-event-id> --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --status needs_confirmation --json
+cogmem memory review --project 'openclaw-<workspace-hash>' --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <distinct-user-event-id> --json
+cogmem memory review --project 'openclaw-<workspace-hash>' --id <candidate-id> --action reject --actor <operator> --reason "unsupported claim" --json
+cogmem memory review --project 'openclaw-<workspace-hash>' --id <candidate-id> --action defer --actor <operator> --reason "wait for evidence" --review-after <epoch-ms> --json
+cogmem memory review --project 'openclaw-<workspace-hash>' --id <candidate-id> --action supersede --actor <operator> --reason "replaced" --replacement <replacement-candidate-id> --json
+cogmem memory review --project 'openclaw-<workspace-hash>' --id <correction-id> --action relink --actor <operator> --reason "bind correction target" --target-belief <belief-id> --confirmation-event <distinct-user-event-id> --json
 ```
 
 Approve/relink require distinct same-project user evidence. Correction relink also requires an active same-project belief. Relink is a binding, not a validation: it rewrites `correctedClaimKey`, `correctedBeliefCandidateIds`, and `targetBeliefId` to the named belief, marks the resolution `manual_relink`, and keeps any previous target as `relinkedFromBeliefId`. Never patch candidate or belief rows directly.
@@ -275,13 +279,13 @@ Defer keeps the candidate in `needs_confirmation` and records `reviewAfter` plus
 ## Episode and Dream maintenance
 
 ```bash
-cogmem episode list --project openclaw --json
+cogmem episode list --project 'openclaw-<workspace-hash>' --json
 cogmem episode get --episode <episode-id> --json
 cogmem episode seal --episode <episode-id> --mode manual --reason "operator closure" --json
-cogmem dream status --project openclaw --json
-cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
-cogmem dream retry --project openclaw --json
-cogmem memory tick --project openclaw --json
+cogmem dream status --project 'openclaw-<workspace-hash>' --json
+cogmem dream tick --project 'openclaw-<workspace-hash>' --mode auto --max-episodes 20 --json
+cogmem dream retry --project 'openclaw-<workspace-hash>' --json
+cogmem memory tick --project 'openclaw-<workspace-hash>' --json
 ```
 
 Dream and governance are maintenance commands. Do not overlap cron jobs. Schedule the next run after the previous process exits, and size the interval from returned `durationMs` and backlog.
@@ -289,12 +293,12 @@ Dream and governance are maintenance commands. Do not overlap cron jobs. Schedul
 Repair through audited surgery:
 
 ```bash
-cogmem episode repair --project openclaw --limit 100 --json
-cogmem episode split --project openclaw --episode <episode-id> --events <event-id,event-id> --json
-cogmem episode merge --project openclaw --source-episode <id> --target-episode <id> --json
-cogmem episode move-event --project openclaw --event <event-id> --target-episode <id> --json
-cogmem episode reclassify --project openclaw --episode <id> --episode-type decision --topic-path cogmem/runtime --importance 0.9 --json
-cogmem episode requeue-dream --project openclaw --episode <id> --mode deep --json
+cogmem episode repair --project 'openclaw-<workspace-hash>' --limit 100 --json
+cogmem episode split --project 'openclaw-<workspace-hash>' --episode <episode-id> --events <event-id,event-id> --json
+cogmem episode merge --project 'openclaw-<workspace-hash>' --source-episode <id> --target-episode <id> --json
+cogmem episode move-event --project 'openclaw-<workspace-hash>' --event <event-id> --target-episode <id> --json
+cogmem episode reclassify --project 'openclaw-<workspace-hash>' --episode <id> --episode-type decision --topic-path cogmem/runtime --importance 0.9 --json
+cogmem episode requeue-dream --project 'openclaw-<workspace-hash>' --episode <id> --mode deep --json
 ```
 
 ## Backup, storage, and evaluation
@@ -306,16 +310,16 @@ cogmem compact --dry-run --json
 cogmem compact --apply --json
 cogmem re-embed status --json
 cogmem brain-eval --input ./samples.json --json
-cogmem strategy plan --query "<question>" --project openclaw --json
-cogmem strategy outcomes --project openclaw --limit 100 --json
+cogmem strategy plan --query "<question>" --project 'openclaw-<workspace-hash>' --json
+cogmem strategy outcomes --project 'openclaw-<workspace-hash>' --limit 100 --json
 ```
 
 Snapshot before destructive maintenance. `prospective` only manages candidate state and never executes work:
 
 ```bash
-cogmem prospective list --project openclaw --json
-cogmem prospective due --project openclaw --json
-cogmem prospective confirm --project openclaw --id <candidate-id> --evidence <user-event-id> --json
+cogmem prospective list --project 'openclaw-<workspace-hash>' --json
+cogmem prospective due --project 'openclaw-<workspace-hash>' --json
+cogmem prospective confirm --project 'openclaw-<workspace-hash>' --id <candidate-id> --evidence <user-event-id> --json
 ```
 
 ## MCP and direct-plugin choice

@@ -61,8 +61,8 @@ describe('install step shape', () => {
   test('every step names exactly one actor and only agent steps are automation-safe', () => {
     const steps: InstallStep[] = [
       ...installPathSteps('cogmem'),
-      ...connectSteps('openclaw', 'cogmem'),
-      ...connectSteps('hermes', 'cogmem'),
+      ...connectSteps('openclaw', 'cogmem', '/tmp/ws', 'openclaw-abc12345'),
+      ...connectSteps('hermes', 'cogmem', '/tmp/ws', 'hermes-abc12345'),
       ...pathWarningSteps('/opt/bin'),
     ];
     for (const step of steps) {
@@ -76,7 +76,7 @@ describe('install step shape', () => {
   });
 
   test('the automation-safe subset is the agent steps, in declaration order', () => {
-    const steps = connectSteps('openclaw', 'cogmem');
+    const steps = connectSteps('openclaw', 'cogmem', '/tmp/ws', 'openclaw-abc12345');
     const commands = automationSafeCommands(steps);
     expect(commands.length).toBeGreaterThan(0);
     expect(commands.length).toBeLessThan(steps.length);

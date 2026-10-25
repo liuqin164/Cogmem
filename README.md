@@ -308,15 +308,15 @@ Atlas is a multi-dimensional navigation graph rather than a folder tree. A remem
 cogmem memory graph --project my-agent --json
 cogmem memory graph-search --project my-agent --query "<实体或工具名>" --json
 cogmem memory graph-explore --project my-agent --query "去年我让你对 <实体或工具名> 做过什么" --json
-cogmem memory graph-explore --project openclaw --query "启动 <工具名>" --json
-cogmem memory graph-explore --project openclaw --query "6月6号关于记忆黑盒聊过什么" --json
+cogmem memory graph-explore --project 'openclaw-<workspace-hash>' --query "启动 <工具名>" --json
+cogmem memory graph-explore --project 'openclaw-<workspace-hash>' --query "6月6号关于记忆黑盒聊过什么" --json
 cogmem memory graph-node --project my-agent --id "entity:<id>" --json
 cogmem memory graph-neighbors --project my-agent --id "entity:<id>" --hops 2 --json
 cogmem memory graph-path --project my-agent --from "entity:<id>" --to "action:<id>" --json
 cogmem memory graph-timeline --project my-agent --query "2025 <实体或工具名> 的决策和修复" --json
-cogmem memory graph-timeline --project openclaw --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
-cogmem memory graph-reindex --project openclaw --event <event-id> --json
-cogmem memory rebuild-topology --project openclaw --json
+cogmem memory graph-timeline --project 'openclaw-<workspace-hash>' --query "对 <实体或工具名> 做过什么操作" --include-evidence --json
+cogmem memory graph-reindex --project 'openclaw-<workspace-hash>' --event <event-id> --json
+cogmem memory rebuild-topology --project 'openclaw-<workspace-hash>' --json
 ```
 
 Graph and recall reads never rebuild projections inline. If a project's civil-time topology is marked dirty, reads continue on last-known-good non-temporal lanes; run `rebuild-topology` explicitly (or follow the maintenance-tick suggestion). The command pages lightweight neuron metadata into generation-scoped staging tables, persists its cursor, resumes after interruption, and atomically swaps the completed project topology and cognitive time graph into service.
@@ -383,8 +383,8 @@ Entity identity is owned by `EntityStore`; Memory Binding only writes those cano
 Inspect this policy and its read-only outcome telemetry with:
 
 ```bash
-cogmem strategy plan --project hermes --query "我当时的原话是什么？" --json
-cogmem strategy outcomes --project hermes --json
+cogmem strategy plan --project 'hermes-<workspace-hash>' --query "我当时的原话是什么？" --json
+cogmem strategy outcomes --project 'hermes-<workspace-hash>' --json
 ```
 
 OpenClaw plugin 0.7.2 skips Cogmem entirely for greetings, uses only session state/turn bridge for short continuations, and applies Strategy Cortex before full recall. Navigation turns use one bridge/kernel lifecycle for Atlas exploration, evidence-bearing node/timeline drill-down, and recall. The bounded volatile `<COGMEM_MEMORY_ATLAS>` block includes selected memory cards, matched facets, matched paths, related-but-not-selected cards, evidence event IDs, and drill-down commands; OpenClaw does not need MCP for this path. Historical text, source windows, short-term bridge conclusions, and session-state strings are serialized as untrusted data before injection so stored memories cannot create or close `COGMEM_*` blocks.
@@ -394,9 +394,9 @@ OpenClaw plugin 0.7.2 skips Cogmem entirely for greetings, uses only session sta
 `ProspectiveMemoryService` stores future intentions, commitments, reminders, open loops, and plans as candidates only. A candidate is not actionable until an explicit user event confirms it. Rejected candidates stay suppressed unless genuinely new evidence creates a new version. The service and `cogmem prospective` CLI manage state only; they expose no task or tool execution capability.
 
 ```bash
-cogmem prospective create --project hermes --type reminder --key release:check-ci --title "Check CI" --evidence <request-event-id> --due <epoch-ms>
-cogmem prospective confirm --project hermes --id <candidate-id> --evidence <distinct-user-confirmation-event-id>
-cogmem prospective due --project hermes
+cogmem prospective create --project 'hermes-<workspace-hash>' --type reminder --key release:check-ci --title "Check CI" --evidence <request-event-id> --due <epoch-ms>
+cogmem prospective confirm --project 'hermes-<workspace-hash>' --id <candidate-id> --evidence <distinct-user-confirmation-event-id>
+cogmem prospective due --project 'hermes-<workspace-hash>'
 ```
 
 Every mutation requires the candidate project. Confirmation evidence must be a distinct Raw Ledger user event in that project. A due result is memory state, not permission to run a tool.
@@ -433,26 +433,34 @@ Always preview an import with `--dry-run` first.
 OpenClaw:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw --dry-run
-cogmem import-openclaw --workspace . --project openclaw
-cogmem import-openclaw --workspace . --project openclaw --session ./one.md
-cogmem import-openclaw --workspace . --project openclaw --session ./one.md --session ./two.md
-cogmem import-openclaw --workspace . --project openclaw --memory ./one.md
-cogmem import-openclaw --workspace . --project openclaw --memory ./one.md --memory ./two.md
-cogmem import-openclaw --workspace . --project openclaw --db ./memory.db --timezone Asia/Tokyo
+# The project the installed plugin writes to and reads. Read it from:
+#   cogmem connect openclaw --auto --json   (field: integrationProject)
+# The import step connect prints already carries it; a literal --project openclaw
+# writes into a scope the plugin never asks about.
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --dry-run
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>'
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --session ./one.md
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --session ./one.md --session ./two.md
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./one.md
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./one.md --memory ./two.md
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --db ./memory.db --timezone Asia/Tokyo
 ```
 
 Hermes:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes --dry-run
-cogmem import-hermes --workspace . --project hermes
-cogmem import-hermes --workspace . --project hermes --state-db ./state.db --dry-run
-cogmem import-hermes --workspace . --project hermes --state-db ./state.db
-cogmem import-hermes --workspace . --project hermes --profile ./memory/profile.md --sessions ./memory/sessions
-cogmem import-hermes --workspace . --project hermes --session ./one.md
-cogmem import-hermes --workspace . --project hermes --session ./one.md --session ./two.md
-cogmem import-hermes --workspace . --project hermes --db ./memory.db --timezone Asia/Tokyo
+# The project the installed integration writes to and reads. Read it from:
+#   cogmem connect hermes --auto --json   (field: integrationProject)
+# The import step connect prints already carries it; a literal --project hermes
+# writes into a scope the MCP server is not bound to.
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --dry-run
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>'
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --state-db ./state.db --dry-run
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --state-db ./state.db
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md --session ./two.md
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --db ./memory.db --timezone Asia/Tokyo
 ```
 
 When importing through an explicit `--db`, pass the project's IANA `--timezone`. If it is omitted, Cogmem records a `project_timezone_missing_using_host_environment` warning so host-local calendar behavior is never silent.
@@ -488,14 +496,14 @@ cogmem doctor
 Import existing OpenClaw memory:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw --dry-run
-cogmem import-openclaw --workspace . --project openclaw
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --dry-run
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>'
 ```
 
 If you imported old memory before raw ledger anchors existed:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw --config .cogmem/config.toml --reindex-raw --json
+cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --config .cogmem/config.toml --reindex-raw --json
 ```
 
 `cogmem connect openclaw --auto` installs a local OpenClaw plugin wrapper under:
@@ -590,22 +598,22 @@ If recall reports `no_recent_episode_ingestion_detected` or `semantic_memory_may
 Import existing Hermes memory:
 
 ```bash
-cogmem import-hermes --workspace /path/to/hermes/workspace --project hermes --dry-run
-cogmem import-hermes --workspace /path/to/hermes/workspace --project hermes
+cogmem import-hermes --workspace /path/to/hermes/workspace --project 'hermes-<workspace-hash>' --dry-run
+cogmem import-hermes --workspace /path/to/hermes/workspace --project 'hermes-<workspace-hash>'
 ```
 
 If Hermes stores conversations in SQLite:
 
 ```bash
-cogmem import-hermes --workspace /path/to/hermes/workspace --project hermes --state-db /path/to/hermes/workspace/state.db --dry-run
-cogmem import-hermes --workspace /path/to/hermes/workspace --project hermes --state-db /path/to/hermes/workspace/state.db
+cogmem import-hermes --workspace /path/to/hermes/workspace --project 'hermes-<workspace-hash>' --state-db /path/to/hermes/workspace/state.db --dry-run
+cogmem import-hermes --workspace /path/to/hermes/workspace --project 'hermes-<workspace-hash>' --state-db /path/to/hermes/workspace/state.db
 ```
 
 If Hermes stores memory in non-default paths, pass explicit files:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes --profile ./memory/profile.md --sessions ./memory/sessions
-cogmem import-hermes --workspace . --project hermes --session ./sessions/one.md
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./sessions/one.md
 ```
 
 ## Agent-Facing Recall
@@ -613,14 +621,14 @@ cogmem import-hermes --workspace . --project hermes --session ./sessions/one.md
 Agents should not search legacy Markdown files first. They should ask cogmem:
 
 ```bash
-cogmem memory recall --query "what did we discuss about memory black boxes?" --project openclaw --agent openclaw --json
+cogmem memory recall --query "what did we discuss about memory black boxes?" --project 'openclaw-<workspace-hash>' --agent openclaw --json
 ```
 
 Hermes recall should use the Hermes project and agent identifiers:
 
 ```bash
-cogmem memory recall --query "我们记录过哪些库存" --project hermes --agent hermes --json
-cogmem memory search --query "エルビ 库存" --project hermes --json
+cogmem memory recall --query "我们记录过哪些库存" --project 'hermes-<workspace-hash>' --agent hermes --json
+cogmem memory search --query "エルビ 库存" --project 'hermes-<workspace-hash>' --json
 cogmem memory show --event <event-id> --before 2 --after 2 --json
 ```
 
@@ -629,7 +637,7 @@ cogmem memory show --event <event-id> --before 2 --after 2 --json
 Use collection routing for non-operational artifacts:
 
 ```bash
-cogmem memory recall --query "MoneyPrinterTurbo storyboard" --project openclaw --agent openclaw --collection theseus --json
+cogmem memory recall --query "MoneyPrinterTurbo storyboard" --project 'openclaw-<workspace-hash>' --agent openclaw --collection theseus --json
 ```
 
 Default recall includes untagged and `collection:anchor` memory only. `collection:theseus` is for creative artifacts and must be requested explicitly so drafts do not pollute the normal agent memory path.
@@ -645,9 +653,9 @@ rawEvents, vectors, dreamedRawCount, undreamedRawCount, dreamCoverageRate
 Useful intents:
 
 ```bash
-cogmem memory recall --query "上个会话我们聊了什么" --intent previous_session_summary --project openclaw --agent openclaw --json
-cogmem memory recall --query "我当时关于记忆黑盒的原话是什么" --intent forensic_quote --project openclaw --agent openclaw --json
-cogmem memory recall --query "几个月前我们是不是讨论过 Cogmem 的记忆黑盒" --intent historical_discussion --project openclaw --agent openclaw --json
+cogmem memory recall --query "上个会话我们聊了什么" --intent previous_session_summary --project 'openclaw-<workspace-hash>' --agent openclaw --json
+cogmem memory recall --query "我当时关于记忆黑盒的原话是什么" --intent forensic_quote --project 'openclaw-<workspace-hash>' --agent openclaw --json
+cogmem memory recall --query "几个月前我们是不是讨论过 Cogmem 的记忆黑盒" --intent historical_discussion --project 'openclaw-<workspace-hash>' --agent openclaw --json
 ```
 
 Recall results include:
@@ -676,8 +684,8 @@ Raw-ledger fallback is not limited to the latest fixed event window. When Chines
 For ledger audits or resumable import/binding checks, use global sequence cursors:
 
 ```bash
-cogmem memory list --project openclaw --since <global-seq> --order asc --json
-cogmem memory list --project openclaw --since <global-seq> --until <global-seq> --order asc --json
+cogmem memory list --project 'openclaw-<workspace-hash>' --since <global-seq> --order asc --json
+cogmem memory list --project 'openclaw-<workspace-hash>' --since <global-seq> --until <global-seq> --order asc --json
 ```
 
 Each listed event includes a `sourceLocator` with a `memory show` command. Use it before saying an event ID or exact source is unavailable.
