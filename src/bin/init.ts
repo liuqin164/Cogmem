@@ -95,7 +95,6 @@ interface InitArgs {
   json: boolean;
   agent: 'auto' | 'openclaw' | 'hermes' | 'none';
   /** True when --agent was passed, so the wizard may still offer a detected host. */
-  agentExplicit: boolean;
   vectorDimension?: number;
   probeOllama: boolean;
   /** `--register-agent <hostId>`, repeatable. Registration is not the wizard. */
@@ -128,7 +127,6 @@ function readArgs(argv: string[]): InitArgs {
     return argv[index + 1] || fallback;
   };
   const yes = argv.includes('--yes') || argv.includes('-y');
-  const agentExplicit = argv.includes('--agent');
   // Host detection is advice, not a decision. An unattended run configures no
   // host unless one was named; the interactive wizard may still offer a
   // detected host, because a human confirms it. ADR-0003.
@@ -154,7 +152,6 @@ function readArgs(argv: string[]): InitArgs {
     yes,
     json: argv.includes('--json'),
     agent: agent === 'openclaw' || agent === 'hermes' || agent === 'none' ? agent : 'auto',
-    agentExplicit,
     vectorDimension,
     probeOllama: !argv.includes('--no-probe'),
     registerAgents,

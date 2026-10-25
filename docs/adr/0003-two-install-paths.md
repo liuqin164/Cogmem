@@ -60,3 +60,24 @@ a WARN, rather than failing the install or inventing a decision on the user's be
   resolves per workspace (walk up for `.cogmem/config.toml`, fall back to
   `~/.cogmem/config.toml`). The Operator path defaults to global scope, the Agent
   path to project scope.
+
+## Amendment: what "the flag was passed explicitly" means
+
+An audit of the install-path slices could not settle one sentence from the code:
+"never enables a host in the written config unless the agent passes `--agent <host>`
+explicitly". `--agent auto` passes a value, not a host name, and it was worth asking
+whether that counts.
+
+**It does.** `--agent auto` is an explicit request for detection to decide, and it is
+only reachable by typing it: the unattended default is `none`, so an agent-installed
+config contains no host nobody asked for. The interactive wizard is the third case and
+asks a human (step 6, "Enable OpenClaw batch source integration?"), so in all three
+paths the decision is either the flag or a person — machine-global state never decides
+on its own.
+
+`__tests__/init-agent-flag.unit.test.ts` pins the three: a detected workspace with no
+flag writes `enabled = false`, the same workspace with `--agent auto` writes `true`, and
+`--agent none` writes `false`. The flag parser also carried an `agentExplicit` field
+that nothing read; it was removed rather than kept as a hint that some behaviour
+depended on it.
+
