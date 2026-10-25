@@ -1,29 +1,32 @@
 /**
- * The recall scorecard (#51): cogmem's default path against two baselines, over a
- * scenario set that is generated here so the run is reproducible.
+ * The recall scorecard (#51): cogmem's default path against two baselines, over two
+ * scenario families generated here so the run is reproducible.
  *
- * What this is, stated plainly, because a benchmark that overstates itself is
- * worse than none:
+ * The first family is lexical — the query shares its topic and team words with the
+ * turn holding the answer — which is exactly the case a keyword or vector ranker is
+ * built for, so it measures the fallback floor. The second family is the case the
+ * structure exists for: a fact that was **superseded**. Two turns state when the same
+ * thing happens; only the later one is current. A recent window or a vector ranker
+ * that returns both has leaked a stale value into the context, and no amount of
+ * lexical cleverness prevents that — suppression does.
+ *
+ * What this is, stated plainly, because a benchmark that overstates itself is worse
+ * than none:
  *
  * - **The data is synthetic and generated below**, from a fixed seed. It is not
- *   LongMemEval: that dataset is not vendored in this repository, so a run
- *   claiming it would be claiming something it did not do. `--items` and `--seed`
- *   are the subset, and both are printed with the results.
+ *   LongMemEval: that dataset is not vendored in this repository, so a run claiming
+ *   it would be claiming something it did not do.
  * - **No model is called.** With no provider configured the kernel runs in
- *   `rule_only` mode, so cogmem's default path used no embedding model here. The
- *   vector baseline therefore embeds with a deterministic hashing vectorizer
- *   defined in this file. The two are not "the same embedder", and the table must
- *   not be read as though they were: this compares recall *paths* on text, not
- *   embedding quality.
+ *   `rule_only` mode, so the default path used no embedding model here. The vector
+ *   baseline embeds with a deterministic hashing vectorizer defined in this file.
+ *   The two are not "the same embedder": this compares recall *paths* over text.
  * - **`contextTokens` is an estimate** (`ceil(chars / 4)`), not a tokenizer count.
- * - **`provenance` is measured as "the returned context says where it came from"**:
- *   for cogmem, an item carrying a source or event anchor; for the baselines, the
- *   turn id they return with every turn. The baselines tie by construction on this
- *   one, and the table says so.
- * - **Latency covers the recall call only**, not ingestion, and is the p95 over
- *   the items.
+ * - **`provenance`** is "the returned context says where it came from": for cogmem an
+ *   item carrying a source identity and its ledger link; for the baselines the turn
+ *   id they return with every turn, so they tie by construction.
+ * - **Latency covers the recall call only**, never ingestion, and is the p95.
  *
- * Usage: `bun run scorecard [--items 24] [--seed 20261025] [--json] [--markdown]`
+ * Usage: `bun run scorecard [--items 24] [--seed 20261025] [--json]`
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -45,6 +48,8 @@ interface Scenario {
   turns: Array<{ turnId: string; content: string }>;
   answer: string;
   answerTurnId: string;
+  /** A value that was true earlier and is not true now, when the family has one. */
+  superseded?: string;
 }
 
 /** A small deterministic generator; `Math.random` would make runs incomparable. */
@@ -56,13 +61,18 @@ function makeRandom(seed: number): () => number {
   };
 }
 
+function token(prefix: string, index: number, random: () => number): string {
+  return `${prefix}-${index}-${Math.floor(random() * 0xffff).toString(16).padStart(4, '0')}`;
+}
+
+/** Family A: one target fact among distractor turns, queried with its own words. */
 export function buildScenarios(items: number, seed: number): Scenario[] {
   const random = makeRandom(seed);
   const scenarios: Scenario[] = [];
   for (let index = 0; index < items; index += 1) {
     const topic = TOPICS[index % TOPICS.length]!;
     const team = TEAMS[(index * 3) % TEAMS.length]!;
-    const answer = `SC-${index}-${Math.floor(random() * 0xffff).toString(16).padStart(4, '0')}`;
+    const answer = token('SC', index, random);
     const answerDay = 1 + (index % 28);
     const turns: Array<{ turnId: string; content: string }> = [];
     const answerPosition = Math.floor(random() * 8);
@@ -94,13 +104,65 @@ export function buildScenarios(items: number, seed: number): Scenario[] {
   return scenarios;
 }
 
+/**
+ * Family B: the same fact stated twice, the first statement superseded.
+ *
+ * The query names the topic and team, which both the current and the stale turn
+ * mention — so the baselines rank them by recency or by word overlap alone, and the
+ * only thing that can keep the stale value out of the context is suppression.
+ */
+export function buildSupersessionScenarios(items: number, seed: number): Scenario[] {
+  const random = makeRandom(seed + 977);
+  const scenarios: Scenario[] = [];
+  for (let index = 0; index < items; index += 1) {
+    const topic = TOPICS[(index + 3) % TOPICS.length]!;
+    const team = TEAMS[(index * 5) % TEAMS.length]!;
+    const stale = token('OLD', index, random);
+    const current = token('NEW', index, random);
+    const staleDay = 1 + (index % 27);
+    const currentDay = 2 + (index % 26);
+    const stalePosition = Math.floor(random() * 3);
+    const currentPosition = 3 + Math.floor(random() * 5);
+    const turns: Array<{ turnId: string; content: string }> = [];
+    for (let position = 0; position < 8; position += 1) {
+      if (position === stalePosition) {
+        turns.push({
+          turnId: `${index}-${position}`,
+          content: `The ${topic} for ${team} was scheduled on day ${staleDay}. Ticket ${stale}.`,
+        });
+        continue;
+      }
+      if (position === currentPosition) {
+        turns.push({
+          turnId: `${index}-${position}`,
+          content: `Correction: the ${topic} for ${team} is now scheduled on day ${currentDay}. Ticket ${current}.`,
+        });
+        continue;
+      }
+      turns.push({
+        turnId: `${index}-${position}`,
+        content: `The ${TOPICS[(index + position + 2) % TOPICS.length]!} for ${TEAMS[(position + 1) % TEAMS.length]!} is scheduled on day ${DISTRACTOR_DAYS[(index + position) % DISTRACTOR_DAYS.length]!}. Ticket D-${index}-${position}.`,
+      });
+    }
+    scenarios.push({
+      projectId: `scorecard-s${index}`,
+      query: `When is the ${topic} for ${team} now scheduled?`,
+      turns,
+      answer: current,
+      answerTurnId: `${index}-${currentPosition}`,
+      superseded: stale,
+    });
+  }
+  return scenarios;
+}
+
 /** A stated stand-in for an embedding model: hashed token counts, cosine rank. */
 function vectorize(text: string, buckets = 512): Float64Array {
   const vector = new Float64Array(buckets);
-  for (const token of text.toLowerCase().match(/[a-z0-9-]+/g) ?? []) {
+  for (const value of text.toLowerCase().match(/[a-z0-9-]+/g) ?? []) {
     let hash = 2166136261;
-    for (let index = 0; index < token.length; index += 1) {
-      hash ^= token.charCodeAt(index);
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
       hash = Math.imul(hash, 16777619) >>> 0;
     }
     vector[hash % buckets] += 1;
@@ -122,16 +184,20 @@ function cosine(a: Float64Array, b: Float64Array): number {
 
 interface ContextItem { text: string; hasProvenance: boolean }
 
-interface ArmResult {
+interface PerItem { context: ContextItem[]; latencyMs: number; hit: boolean; stale: boolean }
+
+export interface ArmResult {
   arm: string;
   recall: number;
+  staleLeakage: number;
   provenance: number;
   contextTokens: number;
   p95LatencyMs: number;
   misses: number[];
+  staleItems: number[];
 }
 
-function score(arm: string, perItem: Array<{ context: ContextItem[]; latencyMs: number; hit: boolean }>, scenarioCount: number): ArmResult {
+function score(arm: string, perItem: PerItem[], scenarioCount: number): ArmResult {
   const latencies = perItem.map((item) => item.latencyMs).sort((a, b) => a - b);
   const p95 = latencies.length === 0 ? 0 : latencies[Math.min(latencies.length - 1, Math.ceil(latencies.length * 0.95) - 1)]!;
   const allItems = perItem.flatMap((item) => item.context);
@@ -140,40 +206,36 @@ function score(arm: string, perItem: Array<{ context: ContextItem[]; latencyMs: 
   return {
     arm,
     recall: perItem.filter((item) => item.hit).length / scenarioCount,
+    staleLeakage: perItem.filter((item) => item.stale).length / scenarioCount,
     provenance: allItems.length === 0 ? 0 : withProvenance / allItems.length,
     contextTokens: tokens.reduce((sum, value) => sum + value, 0) / Math.max(1, tokens.length),
     p95LatencyMs: p95,
     misses: perItem.map((item, index) => (item.hit ? -1 : index)).filter((index) => index >= 0),
+    staleItems: perItem.map((item, index) => (item.stale ? index : -1)).filter((index) => index >= 0),
   };
 }
 
-export async function runScorecard(options: { items: number; seed: number }): Promise<{ results: ArmResult[]; scenarios: number }> {
-  const scenarios = buildScenarios(options.items, options.seed);
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-scorecard-'));
-  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db') });
-  const startedAt = Date.now();
-
-  const cogmem: Array<{ context: ContextItem[]; latencyMs: number; hit: boolean }> = [];
+async function runFamily(kernel: ReturnType<typeof createMemoryKernel>, scenarios: Scenario[], now: number): Promise<ArmResult[]> {
+  const cogmem: PerItem[] = [];
+  const recent: PerItem[] = [];
+  const vector: PerItem[] = [];
   const paths = new Map<string, number>();
-  const recent: typeof cogmem = [];
-  const vector: typeof cogmem = [];
 
-  for (const [index, scenario] of scenarios.entries()) {
+  for (const scenario of scenarios) {
     for (const turn of scenario.turns) {
       await kernel.ingest({ content: turn.content, projectId: scenario.projectId, tags: [turn.turnId] });
     }
 
     // The arm under test: cogmem's own recall, measured on its own.
     const before = performance.now();
-    const recalled = kernel.recall(scenario.query, { projectId: scenario.projectId, includeRawEvidence: true, now: startedAt });
+    const recalled = kernel.recall(scenario.query, { projectId: scenario.projectId, includeRawEvidence: true, now });
     const latencyMs = performance.now() - before;
-    // Provenance is measured as "the returned item says where it came from": a
-    // stable identity plus the ledger link that makes it checkable. A raw neuron
-    // carries `id`, `self_hash` and `prev_hash` — not `projectId`, which an earlier
-    // version of this file wrongly read, reporting 0% for a path that was in fact
-    // attributing every item. A metric that misreads the field is worse than no
-    // metric, because it looks like a result.
-    const recalledTexts = [
+    paths.set(recalled.strategy.primaryLevel, (paths.get(recalled.strategy.primaryLevel) ?? 0) + 1);
+    // Provenance is "the returned item says where it came from": a stable identity
+    // plus the ledger link. A raw neuron carries `id`, `self_hash` and `prev_hash` —
+    // not `projectId`, which an earlier version of this file wrongly read and
+    // reported as 0% for a path that attributed every item.
+    const recalledTexts: ContextItem[] = [
       ...recalled.compiledMemory.facts.map((fact) => ({
         text: String((fact as { statement?: string }).statement ?? JSON.stringify(fact)),
         hasProvenance: Boolean((fact as { factId?: string }).factId ?? (fact as { id?: string }).id),
@@ -182,55 +244,75 @@ export async function runScorecard(options: { items: number; seed: number }): Pr
         text: String((event as { summary?: string }).summary ?? JSON.stringify(event)),
         hasProvenance: Boolean((event as { eventId?: string }).eventId ?? (event as { id?: string }).id),
       })),
-      ...recalled.rawEvidence.map((neuron) => ({
-        text: neuron.content,
-        hasProvenance: Boolean(neuron.id && neuron.self_hash),
-      })),
-      ...recalled.fallbackSnippets.map((snippet) => ({
-        text: snippet.text ?? '',
-        hasProvenance: Boolean(snippet.sourceId),
-      })),
+      ...recalled.rawEvidence.map((neuron) => ({ text: neuron.content, hasProvenance: Boolean(neuron.id && neuron.self_hash) })),
+      ...recalled.fallbackSnippets.map((snippet) => ({ text: snippet.text ?? '', hasProvenance: Boolean(snippet.sourceId) })),
     ];
-    cogmem.push({ context: recalledTexts, latencyMs, hit: recalledTexts.some((entry) => entry.text.includes(scenario.answer)) });
-    paths.set(recalled.strategy.primaryLevel, (paths.get(recalled.strategy.primaryLevel) ?? 0) + 1);
+    cogmem.push(measure(recalledTexts, latencyMs, scenario));
 
-    // Baseline 1: the last four turns, verbatim.
     {
-      const window = scenario.turns.slice(-4);
-      const context = window.map((turn) => ({ text: turn.content, hasProvenance: true }));
-      recent.push({ context, latencyMs: 0, hit: context.some((entry) => entry.text.includes(scenario.answer)) });
+      const context = scenario.turns.slice(-4).map((turn) => ({ text: turn.content, hasProvenance: true }));
+      recent.push(measure(context, 0, scenario));
     }
 
-    // Baseline 2: vector top-k over the same turns, with the stated vectorizer.
     {
       const beforeVector = performance.now();
       const queryVector = vectorize(scenario.query);
-      const ranked = scenario.turns
+      const context = scenario.turns
         .map((turn) => ({ turn, score: cosine(queryVector, vectorize(turn.content)) }))
         .sort((a, b) => b.score - a.score)
-        .slice(0, 3);
-      const vectorLatency = performance.now() - beforeVector;
-      const context = ranked.map((entry) => ({ text: entry.turn.content, hasProvenance: true }));
-      vector.push({ context, latencyMs: vectorLatency, hit: context.some((entry) => entry.text.includes(scenario.answer)) });
+        .slice(0, 3)
+        .map((entry) => ({ text: entry.turn.content, hasProvenance: true }));
+      vector.push(measure(context, performance.now() - beforeVector, scenario));
     }
-    void index;
   }
-  kernel.close();
-  rmSync(dir, { recursive: true, force: true });
 
   console.error(`recall paths used: ${[...paths.entries()].map(([path, count]) => `${path}=${count}`).join(', ') || 'none'}`);
+  const count = scenarios.length;
+  return [
+    score('cogmem_default', cogmem, count),
+    score('fixed_recent_window_4', recent, count),
+    score('vector_topk_3_hashing', vector, count),
+  ];
+}
+
+function measure(context: ContextItem[], latencyMs: number, scenario: Scenario): PerItem {
+  const text = context.map((entry) => entry.text).join('\n');
   return {
-    scenarios: scenarios.length,
-    results: [
-      score('cogmem_default', cogmem, scenarios.length),
-      score('fixed_recent_window_4', recent, scenarios.length),
-      score('vector_topk_3_hashing', vector, scenarios.length),
-    ],
+    context,
+    latencyMs,
+    hit: text.includes(scenario.answer),
+    stale: scenario.superseded !== undefined && text.includes(scenario.superseded),
   };
 }
 
-function formatRow(result: ArmResult): string {
-  return `| ${result.arm} | ${(result.recall * 100).toFixed(1)}% | ${(result.provenance * 100).toFixed(1)}% | ${result.contextTokens.toFixed(0)} | ${result.p95LatencyMs.toFixed(1)} ms |`;
+export async function runScorecard(options: { items: number; seed: number }): Promise<{
+  recall: ArmResult[];
+  currentTruth: ArmResult[];
+  scenarios: number;
+  seed: number;
+}> {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-scorecard-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db') });
+  const now = Date.now();
+  const recallScenarios = buildScenarios(options.items, options.seed);
+  const supersessionScenarios = buildSupersessionScenarios(options.items, options.seed);
+
+  const recall = await runFamily(kernel, recallScenarios, now);
+  const currentTruth = await runFamily(kernel, supersessionScenarios, now + 1);
+  kernel.close();
+  rmSync(dir, { recursive: true, force: true });
+
+  return { recall, currentTruth, scenarios: recallScenarios.length, seed: options.seed };
+}
+
+function table(results: ArmResult[], withStale: boolean): string[] {
+  const lines = withStale
+    ? ['| arm | current truth found | stale value leaked | provenance | context tokens/turn | p95 latency |', '| --- | --- | --- | --- | --- | --- |']
+    : ['| arm | recall | stale value leaked | provenance | context tokens/turn | p95 latency |', '| --- | --- | --- | --- | --- | --- |'];
+  for (const result of results) {
+    lines.push(`| \`${result.arm}\` | ${(result.recall * 100).toFixed(1)}% | ${(result.staleLeakage * 100).toFixed(1)}% | ${(result.provenance * 100).toFixed(0)}% | ${result.contextTokens.toFixed(0)} | ${result.p95LatencyMs.toFixed(1)} ms |`);
+  }
+  return lines;
 }
 
 async function main(): Promise<void> {
@@ -241,20 +323,25 @@ async function main(): Promise<void> {
   };
   const items = value('--items', 24);
   const seed = value('--seed', 20261025);
-  const { results, scenarios } = await runScorecard({ items, seed });
+  const result = await runScorecard({ items, seed });
 
   if (argv.includes('--json')) {
-    console.log(JSON.stringify({ schemaVersion: 'cogmem.scorecard.v1', scenarios, items, seed, results }, null, 2));
+    console.log(JSON.stringify({ schemaVersion: 'cogmem.scorecard.v2', ...result }, null, 2));
     return;
   }
-  console.log(`scenarios: ${scenarios} (synthetic, generated here) | seed: ${seed} | model: none (rule_only)`);
+  console.log(`scenarios: ${result.scenarios} per family (synthetic, generated here) | seed: ${seed} | model: none (rule_only)`);
   console.log('');
-  console.log('| arm | recall | provenance | context tokens/turn | p95 latency |');
-  console.log('| --- | --- | --- | --- | --- |');
-  for (const result of results) console.log(formatRow(result));
+  console.log('### Family A — one fact among distractors, queried with its own words');
   console.log('');
-  for (const result of results) {
-    if (result.misses.length > 0) console.log(`${result.arm}: missed ${result.misses.length} of ${scenarios} (items ${result.misses.slice(0, 8).join(', ')}${result.misses.length > 8 ? ', …' : ''})`);
+  for (const line of table(result.recall, false)) console.log(line);
+  console.log('');
+  console.log('### Family B — the same fact superseded by a later statement');
+  console.log('');
+  for (const line of table(result.currentTruth, true)) console.log(line);
+  console.log('');
+  for (const arm of [...result.recall, ...result.currentTruth]) {
+    if (arm.misses.length > 0) console.log(`${arm.arm}: missed ${arm.misses.length} of ${items}`);
+    if (arm.staleItems.length > 0) console.log(`${arm.arm}: leaked the superseded value in ${arm.staleItems.length} of ${items}`);
   }
 }
 
