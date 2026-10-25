@@ -1,11 +1,11 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
 
 import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
 import { createAgentRegistry, loadAgentRegistry, parseAgentRegistry, digest } from '../src/mcp/AgentRegistry.js';
 import { makeTempDir } from './helpers/tmp.js';
+import { callTool, connect, rpc } from './helpers/mcp-http.js';
 
 /**
  * #65: several agents behind one resident process, each with private memory.
@@ -50,69 +50,6 @@ async function startServer(options: { registry?: boolean } = {}): Promise<Cogmem
   );
   handles.push(handle);
   return handle;
-}
-
-function parseRpcBody(contentType: string | null, body: string): any {
-  if (contentType?.includes('text/event-stream')) {
-    const dataLines = body.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).filter(Boolean);
-    if (dataLines.length === 0) throw new Error(`empty_sse:${body.slice(0, 120)}`);
-    return JSON.parse(dataLines[dataLines.length - 1]);
-  }
-  return JSON.parse(body);
-}
-
-async function rpc(
-  url: string,
-  payload: unknown,
-  options: { sessionId?: string; token?: string; identity?: Record<string, string> } = {},
-) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      ...(options.sessionId ? { 'mcp-session-id': options.sessionId } : {}),
-      ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
-      ...(options.identity ? { 'x-cogmem-identity': JSON.stringify(options.identity) } : {}),
-    },
-    body: JSON.stringify(payload),
-  });
-  const text = await response.text();
-  return {
-    status: response.status,
-    sessionId: response.headers.get('mcp-session-id') ?? undefined,
-    json: response.ok ? parseRpcBody(response.headers.get('content-type'), text) : null,
-    text,
-  };
-}
-
-async function connect(url: string, options: { token?: string; identity?: Record<string, string> } = {}): Promise<string> {
-  const init = await rpc(url, {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-    params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'agent-identity-test', version: '1' } },
-  }, options);
-  expect(init.status).toBe(200);
-  return init.sessionId as string;
-}
-
-async function callTool(
-  url: string,
-  sessionId: string,
-  name: string,
-  args: object,
-  options: { token?: string; identity?: Record<string, string> } = {},
-) {
-  const response = await rpc(url, {
-    jsonrpc: '2.0',
-    id: 2,
-    method: 'tools/call',
-    params: { name, arguments: args },
-  }, { sessionId, ...options });
-  const result = response.json.result;
-  const text = result.content[0].text as string;
-  return { isError: result.isError === true, body: text.startsWith('{') ? JSON.parse(text) : text, raw: text };
 }
 
 describe('#65 the credential registry', () => {

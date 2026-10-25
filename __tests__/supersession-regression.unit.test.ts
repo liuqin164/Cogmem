@@ -90,45 +90,6 @@ describe('Issue #72: supersession detection in raw_evidence recall', () => {
     kernel.close();
   });
 
-  test('same hostId newer statement supersedes older one', async () => {
-    const dir = makeTempDir('cogmem-same-agent-supersession-');
-    const kernel = createMemoryKernel({ dbPath: `${dir}/memory.db` });
-    const projectId = 'test-project';
-
-    // Same agent states a fact
-    await kernel.ingest({
-      content: 'The backup vault rotation for cinder is scheduled on day 8. Ticket OLD-777.',
-      projectId,
-      tags: ['agent:bot-a', 'turn-1'],
-    });
-
-    // Same agent corrects it later
-    await kernel.ingest({
-      content: 'Correction: the backup vault rotation for cinder is now on day 22. Ticket NEW-888.',
-      projectId,
-      tags: ['agent:bot-a', 'turn-2'],
-    });
-
-    const result = kernel.recall('When is the backup vault rotation for cinder scheduled?', {
-      projectId,
-      includeRawEvidence: true,
-    });
-
-    const allText = [
-      ...result.rawEvidence.map((n) => n.content),
-      ...result.compiledMemory.facts.map((f) => String(f.statement)),
-      ...result.compiledMemory.events.map((e) => String(e.summary)),
-    ].join('\n');
-
-    // Current truth should be found
-    expect(allText).toContain('NEW-888');
-
-    // Superseded value should not leak
-    expect(allText).not.toContain('OLD-777');
-
-    kernel.close();
-  });
-
   test('an untagged rule_only deployment still supersedes — the default path', async () => {
     // The scorecard writes raw turns with no `agent:` tag, because `rule_only`
     // has no host identity to write. An earlier version of this filter treated

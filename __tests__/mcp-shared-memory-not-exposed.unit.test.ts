@@ -13,6 +13,7 @@ import {
 } from '../src/mcp/profiles.js';
 import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
 import { makeTempDir } from './helpers/tmp.js';
+import { callTool, connect, rpc } from './helpers/mcp-http.js';
 
 /**
  * #68: 4.0 does not ship shared memory.
@@ -63,62 +64,8 @@ async function startServer(options: { profile?: McpToolProfile; dbPath?: string 
   return handle;
 }
 
-function parseRpcBody(contentType: string | null, body: string): any {
-  if (contentType?.includes('text/event-stream')) {
-    const dataLines = body
-      .split('\n')
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trim())
-      .filter(Boolean);
-    if (dataLines.length === 0) throw new Error(`empty_sse:${body.slice(0, 120)}`);
-    return JSON.parse(dataLines[dataLines.length - 1]);
-  }
-  return JSON.parse(body);
-}
-
-async function rpc(url: string, payload: unknown, sessionId?: string) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      ...(sessionId ? { 'mcp-session-id': sessionId } : {}),
-    },
-    body: JSON.stringify(payload),
-  });
-  const text = await response.text();
-  return {
-    status: response.status,
-    sessionId: response.headers.get('mcp-session-id') ?? undefined,
-    json: response.ok ? parseRpcBody(response.headers.get('content-type'), text) : null,
-  };
-}
-
-async function connect(url: string): Promise<string> {
-  const init = await rpc(url, {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-    params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'shared-removal-test', version: '1' } },
-  });
-  expect(init.status).toBe(200);
-  return init.sessionId as string;
-}
-
-async function callTool(url: string, sessionId: string, name: string, args: object = {}) {
-  const response = await rpc(url, {
-    jsonrpc: '2.0',
-    id: 2,
-    method: 'tools/call',
-    params: { name, arguments: args },
-  }, sessionId);
-  const result = response.json.result;
-  const text = result.content[0].text as string;
-  return { isError: result.isError === true, body: text.startsWith('{') ? JSON.parse(text) : text, raw: text };
-}
-
 async function listTools(url: string, sessionId: string): Promise<string[]> {
-  const listed = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }, sessionId);
+  const listed = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }, { sessionId });
   expect(listed.status).toBe(200);
   return (listed.json.result.tools as Array<{ name: string }>).map((tool) => tool.name);
 }

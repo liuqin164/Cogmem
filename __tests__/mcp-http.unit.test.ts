@@ -7,6 +7,7 @@ import { applyIdentity, parseSessionIdentity } from '../src/mcp/server.js';
 import { listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import { ADMIN_TOOLS, CORE_TOOLS, filterToolsByProfile, resolveProfile } from '../src/mcp/profiles.js';
 import { makeTempDir } from './helpers/tmp.js';
+import { rpc } from './helpers/mcp-http.js';
 
 const scratch = makeTempDir('cogmem-mcp-http-');
 const dbPath = join(scratch, 'memory.db');
@@ -51,44 +52,6 @@ async function start(options: { profile?: 'core' | 'admin' | 'full'; token?: str
   return handle;
 }
 
-function parseRpcBody(contentType: string | null, body: string): any {
-  if (contentType?.includes('text/event-stream')) {
-    const dataLines = body
-      .split('\n')
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trim())
-      .filter(Boolean);
-    if (dataLines.length === 0) throw new Error(`empty_sse:${body.slice(0, 120)}`);
-    return JSON.parse(dataLines[dataLines.length - 1]);
-  }
-  return JSON.parse(body);
-}
-
-async function rpc(
-  url: string,
-  payload: unknown,
-  options: { sessionId?: string; token?: string; extraHeaders?: Record<string, string> } = {},
-) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      ...(options.sessionId ? { 'mcp-session-id': options.sessionId } : {}),
-      ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
-      ...(options.extraHeaders ?? {}),
-    },
-    body: JSON.stringify(payload),
-  });
-  const text = await response.text();
-  return {
-    status: response.status,
-    sessionId: response.headers.get('mcp-session-id') ?? undefined,
-    json: response.ok ? parseRpcBody(response.headers.get('content-type'), text) : null,
-    text,
-  };
-}
-
 const initialize = {
   jsonrpc: '2.0',
   id: 1,
@@ -100,6 +63,8 @@ const initialize = {
   },
 };
 
+// Positional adapter over the shared client: this file calls `connect(url, token,
+// extraHeaders)` in ~20 places, and the argument order is not what is under test.
 async function connect(url: string, token?: string, extraHeaders?: Record<string, string>) {
   const init = await rpc(url, initialize, { token, extraHeaders });
   expect(init.status).toBe(200);

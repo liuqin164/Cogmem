@@ -217,8 +217,7 @@ export class BrainRecall {
       ? []
       : this.toRecallableNeurons(candidateNeuronIds, limit * 4)
           .filter((neuron) => matchesProjectScope(options.projectId, neuron.metadata.projectId));
-    this._filterSuperseded(rawCandidates, options.projectId);
-    const rawEvidence = rawCandidates.slice(0, limit);
+    const rawEvidence = this._filterSuperseded(rawCandidates).slice(0, limit);
     this._expandByCommunity(rawEvidence, limit, options.projectId);
     if (topicRouteResult && !topicRouteResult.fallbackToGlobal && options.includeRawEvidence !== false) {
       const summaryTopicPath = topicRouteResult.matchedTopicPath ?? options.topicPath ?? rawEvidence[0]?.metadata.topicPath ?? '';
@@ -321,8 +320,8 @@ export class BrainRecall {
    *   not look like a correction keeps every member, because losing a real
    *   memory is worse than showing a stale one next to its replacement.
    */
-  private _filterSuperseded(rawEvidence: Neuron[], projectId?: string): void {
-    if (rawEvidence.length <= 1) return;
+  private _filterSuperseded(rawEvidence: Neuron[]): Neuron[] {
+    if (rawEvidence.length <= 1) return rawEvidence;
 
     const groups = new Map<string, Neuron[]>();
     for (const neuron of rawEvidence) {
@@ -344,21 +343,15 @@ export class BrainRecall {
       if (group.length <= 1) continue;
       group.sort((a, b) => (b.metadata.createdAt ?? 0) - (a.metadata.createdAt ?? 0));
       if (!this.looksLikeCorrection(group[0]!.content)) continue;
-      for (let index = 1; index < group.length; index += 1) {
-        toRemove.add(group[index]!.id);
-      }
+      for (const neuron of group.slice(1)) toRemove.add(neuron.id);
     }
 
-    for (let index = rawEvidence.length - 1; index >= 0; index -= 1) {
-      if (toRemove.has(rawEvidence[index]!.id)) rawEvidence.splice(index, 1);
-    }
+    return toRemove.size === 0 ? rawEvidence : rawEvidence.filter((neuron) => !toRemove.has(neuron.id));
   }
 
   private extractHostId(neuron: Neuron): string | undefined {
-    const tags = neuron.metadata.tags || [];
-    for (const tag of tags) {
+    for (const tag of neuron.metadata.tags || []) {
       if (tag.startsWith('agent:')) return tag.slice(6);
-      if (tag.startsWith('sourceAgent:')) return tag.slice(12);
     }
     return undefined;
   }
@@ -403,21 +396,17 @@ export class BrainRecall {
       .trim();
   }
 
+  /**
+   * Does this read as a correction of an earlier statement?
+   *
+   * The prefix forms (`correction:`, `更正:`, `updated:`) are already detected by
+   * `normalizeContentForTopicKey`, which strips them — so a statement that
+   * changes under normalisation is a correction. Only the in-sentence forms have
+   * to be matched here.
+   */
   private looksLikeCorrection(content: string): boolean {
-    // Detect correction language patterns
-    const correctionPatterns = [
-      /correction:/i,
-      /更正[:：]/,
-      /纠正[:：]/,
-      /now\s+(?:is|scheduled|on)/i,
-      /现在[:：]\s*(?:是|安排在|为)/,
-      /已更新[:：]/,
-      /updated:|update:/i,
-      /supersede/i,
-      /取代/,
-      /替换/,
-    ];
-    return correctionPatterns.some((pattern) => pattern.test(content));
+    return this.normalizeContentForTopicKey(content) !== content.trim()
+      || /now\s+(?:is|scheduled|on)|现在[:：]\s*(?:是|安排在|为)|supersede|取代|替换/i.test(content);
   }
 
   private findDurableNeuronsByType(
