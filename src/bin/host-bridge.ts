@@ -22,8 +22,6 @@
  * `context` is the block to inject, empty when nothing surfaced; `remember`
  * returns the stored-turn result.
  */
-import { existsSync } from 'node:fs';
-
 import { KernelAgentMemoryBackend } from '../agent/AgentMemoryBackend.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
 import { recallForHost, rememberForHost, type HostIdentity } from '../host/bridge/HostBridge.js';
@@ -61,10 +59,15 @@ if (command !== 'recall' && command !== 'remember') {
 // Workspace first, then beside the home directory (ADR-0010): the registry
 // `init --scope project --register-agent` wrote is found from the Workspace it
 // was written under, which is the only place its readers were not looking (#80).
-const registryLookup = resolveAgentRegistryPath({ explicit: readArg('--agents'), configPath: readArg('--config') });
-if (registryLookup.explicit && registryLookup.path && !existsSync(registryLookup.path)) {
-  fail(`--agents ${registryLookup.path} does not exist. A named registry that cannot be read is not the single-agent case.`);
-}
+const registryLookup = (() => {
+  try {
+    return resolveAgentRegistryPath({ explicit: readArg('--agents'), configPath: readArg('--config') });
+  } catch (error) {
+    // A named registry that cannot be read is refused where it is resolved, so no
+    // reader has to remember to check.
+    fail(error instanceof Error ? error.message : String(error));
+  }
+})();
 const registry = registryLookup.path ? loadAgentRegistry(registryLookup.path) : undefined;
 const credential = readArg('--token') ?? process.env.COGMEM_AGENT_TOKEN;
 // A credential is a claim to an identity. With no registry there is nothing that

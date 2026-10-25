@@ -474,7 +474,7 @@ function expandHome(value: string, env: EnvLike): string {
   return value;
 }
 
-function findUp(start: string, relativePath: string, stopAt: Array<string | undefined> = []): string | undefined {
+export function findUp(start: string, relativePath: string, stopAt: Array<string | undefined> = []): string | undefined {
   const stops = new Set(stopAt.filter((entry): entry is string => Boolean(entry)).map((entry) => resolve(entry)));
   let current = resolve(start);
   while (true) {

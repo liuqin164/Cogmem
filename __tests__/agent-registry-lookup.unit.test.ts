@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadAgentRegistry, registerAgent, resolveAgentRegistryPath } from '../src/mcp/AgentRegistry.js';
+import { callTool } from './helpers/mcp-http.js';
 import { startCogmemMcpHttpServer, type CogmemMcpHttpHandle } from '../src/mcp/http.js';
 import { makeTempDir } from './helpers/tmp.js';
 import { connect, initializeRequest, rpc } from './helpers/mcp-http.js';
@@ -26,6 +27,7 @@ import { connect, initializeRequest, rpc } from './helpers/mcp-http.js';
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const bridgeBin = join(coreRoot, 'src/bin/host-bridge.ts');
 const mcpBin = join(coreRoot, 'src/bin/mcp.ts');
+const initBin = join(coreRoot, 'src/bin/init.ts');
 
 const handles: CogmemMcpHttpHandle[] = [];
 afterAll(() => {
@@ -52,14 +54,17 @@ async function startServer(registryPath: string | undefined, dbPath: string): Pr
   return handle;
 }
 
-function bridge(args: string[], stdin: string) {
+function bridge(args: string[], stdin: string, home: string) {
   const proc = Bun.spawn({
     cmd: ['bun', bridgeBin, ...args],
     cwd: coreRoot,
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, NO_COLOR: '1' },
+    // HOME is set explicitly: otherwise "no registry anywhere" would be whatever
+    // the developer happens to have in `~/.cogmem/agents.json`, which is the
+    // documented way to turn this suite green for the wrong reason.
+    env: { ...process.env, NO_COLOR: '1', HOME: home },
   });
   proc.stdin.write(stdin);
   void proc.stdin.end();
@@ -92,6 +97,19 @@ describe('where a registry is read from', () => {
     expect(resolveAgentRegistryPath({ cwd: elsewhere, configPath: ws.configPath, env }).path).toBe(ws.registryPath);
     expect(resolveAgentRegistryPath({ cwd: elsewhere, env }).path).toBe(homeRegistry);
 
+    // A `.cogmem/` that holds a registry but no config is still where its readers
+    // look: `init --register-agent` writes there and deliberately does not create a
+    // config, and the Workspace above is derived from a config (GLOSSARY: the
+    // Workspace is identified by the `.cogmem/` it contains).
+    const proj = makeTempDir('cogmem-registry-noconfig-');
+    const projRegistry = join(proj, '.cogmem', 'agents.json');
+    mkdirSync(dirname(projRegistry), { recursive: true });
+    registerAgent({ path: projRegistry, hostId: 'bot-proj', projectId: 'proj-only' });
+    const globalHome = join(makeTempDir('cogmem-registry-globalhome-'), 'home');
+    mkdirSync(join(globalHome, '.cogmem'), { recursive: true });
+    writeFileSync(join(globalHome, '.cogmem', 'config.toml'), '[core]\ndb_path = "memory.db"\n');
+    expect(resolveAgentRegistryPath({ cwd: proj, env: { HOME: globalHome } }).path).toBe(projRegistry);
+
     // A named path is taken as named.
     expect(resolveAgentRegistryPath({ explicit: homeRegistry, cwd: elsewhere, env }))
       .toEqual({ path: homeRegistry, explicit: true });
@@ -117,6 +135,27 @@ describe('the MCP server reads the registry its Workspace has', () => {
     expect(unknown.status).toBe(401);
   });
 
+  test('a session cannot be ridden by another agent\'s credential', async () => {
+    const ws = makeWorkspace('cogmem-registry-session-');
+    const first = registerAgent({ path: ws.registryPath, hostId: 'bot-a', projectId: 'proj-a', profile: 'full' });
+    const second = registerAgent({ path: ws.registryPath, hostId: 'bot-b', projectId: 'proj-b', profile: 'core' });
+    const url = (await startServer(ws.registryPath, join(ws.root, 'memory.db'))).url;
+
+    const sessionA = await connect(url, { token: first.token });
+    // The session's server was built with A's hostId and project. Riding it with
+    // B's (perfectly valid) credential would serve B as A — one agent reading
+    // another's memory with its own credential.
+    const replay = await callTool(url, sessionA, 'cogmem_recall', { query: 'anything' }, { token: second.token });
+    expect(replay.status).toBe(401);
+    expect(replay.raw).toContain('this session belongs to another agent');
+
+    // The owner can still use it, and B keeps its own session.
+    const own = await rpc(url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }, { sessionId: sessionA, token: first.token });
+    expect(own.status).toBe(200);
+    const sessionB = await connect(url, { token: second.token });
+    expect(sessionB).not.toBe(sessionA);
+  });
+
   test('a credential with no registry anywhere is refused, not served unauthenticated', async () => {
     const scratch = makeTempDir('cogmem-registry-none-');
     const url = (await startServer(undefined, join(scratch, 'memory.db'))).url;
@@ -140,6 +179,7 @@ describe('the host bridge searches the same places', () => {
     const result = await bridge(
       ['recall', '--config', ws.configPath, '--token', created.token],
       JSON.stringify({ query: 'anything' }),
+      ws.home,
     );
     expect(result.stderr).toBe('');
     expect(result.exitCode).toBe(0);
@@ -156,6 +196,7 @@ describe('the host bridge searches the same places', () => {
     const refused = await bridge(
       ['recall', '--config', configPath, '--token', 'borrowed', '--host', 'someone'],
       JSON.stringify({ query: 'anything' }),
+      ws.home,
     );
     expect(refused.exitCode).toBe(1);
     expect(refused.stderr).toContain('a credential was presented but no agent registry was found');
@@ -164,6 +205,7 @@ describe('the host bridge searches the same places', () => {
     const single = await bridge(
       ['remember', '--config', configPath, '--host', 'hermes', '--project', 'proj-single'],
       JSON.stringify({ userText: 'a turn', assistantText: 'an answer' }),
+      ws.home,
     );
     expect(single.exitCode).toBe(0);
 
@@ -210,6 +252,46 @@ describe('the stdio transport enforces the registry too', () => {
     const applied = await stdio(['--agents', ws.registryPath, '--db', dbPath], { COGMEM_AGENT_TOKEN: created.token });
     expect(applied.exitCode).toBe(0);
     expect(applied.stdout).toContain('cogmem_dream_tick');
+
+    // And with *no* registry, a presented credential is refused here as it is on
+    // HTTP and in the bridge: three readers, one answer.
+    const emptyHome = makeTempDir('cogmem-registry-stdio-nohome-');
+    const unnamed = await stdio(
+      ['--db', join(emptyHome, 'memory.db')],
+      { HOME: emptyHome, COGMEM_AGENT_TOKEN: 'borrowed' },
+    );
+    expect(unnamed.exitCode).toBe(1);
+    expect(unnamed.stderr).toContain('agent_registry_not_found');
+  });
+});
+
+describe('the writer and the readers agree where the registry goes', () => {
+  test('a registration made from a subdirectory lands beside the config its readers read', async () => {
+    const ws = makeWorkspace('cogmem-registry-subdir-');
+    const sub = join(ws.root, 'sub');
+    mkdirSync(sub, { recursive: true });
+
+    const registered = Bun.spawn({
+      cmd: ['bun', initBin, '--scope', 'project', '--register-agent', 'bot-sub', '--json'],
+      cwd: sub,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { ...process.env, NO_COLOR: '1', HOME: ws.home },
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(registered.stdout).text(),
+      new Response(registered.stderr).text(),
+      registered.exited,
+    ]);
+    expect(stderr).toBe('');
+    expect(exitCode).toBe(0);
+    const credential = JSON.parse(stdout).registeredAgents[0].token as string;
+
+    // Where the readers derive the Workspace from — not `<sub>/.cogmem/`, which no
+    // reader would look in.
+    expect(resolveAgentRegistryPath({ cwd: ws.root, configPath: ws.configPath, env: { HOME: ws.home } }).path)
+      .toBe(ws.registryPath);
+    expect(loadAgentRegistry(ws.registryPath)?.resolve(credential)?.hostId).toBe('bot-sub');
   });
 });
 

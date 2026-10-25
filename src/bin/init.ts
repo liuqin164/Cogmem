@@ -20,7 +20,7 @@ import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, resolve, join } from 'node:path';
 
-import { defaultCogmemHome } from '../config/CogmemConfig.js';
+import { defaultCogmemConfigPath, defaultCogmemHome, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
 import { installGateStep, resolveCogmemInvocation } from '../install/InstallSteps.js';
 import {
   DEFAULT_VECTOR_DIMENSION,
@@ -1078,7 +1078,21 @@ async function main(): Promise<void> {
     if (!args.json) console.log(line);
   };
   if (args.registerAgents.length > 0) {
-    runAgentRegistration(args, resolveInstallTarget(args).homeDir);
+    // Where the readers look. `--home`/`--config` name the place and win; otherwise
+    // the registry goes into the config-derived Workspace's own `.cogmem/`, so a
+    // registration made from a subdirectory lands beside the config `cogmem mcp`
+    // and `cogmem-host-bridge` read, instead of in a `.cogmem/` no reader derives
+    // (#80). On a machine whose only config is the global one, `--scope project`
+    // still means the directory the operator ran this in — the readers find that by
+    // walking up for the registry itself.
+    const target = resolveInstallTarget(args);
+    const workspace = resolveWorkspaceRoot({ cwd: process.cwd() });
+    const projectConfig = join(workspace, '.cogmem', 'config.toml');
+    const usesProjectConfig = projectConfig !== defaultCogmemConfigPath(process.env) && existsSync(projectConfig);
+    const registryHome = args.homePath || args.configPath || !usesProjectConfig
+      ? target.homeDir
+      : join(workspace, '.cogmem');
+    runAgentRegistration(args, registryHome);
     return;
   }
   say('');

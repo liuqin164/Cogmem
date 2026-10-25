@@ -16,7 +16,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
-import { defaultCogmemHome, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
+import { defaultCogmemHome, findUp, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
 import type { McpToolProfile } from './profiles.js';
 
 export interface RegisteredAgent {
@@ -243,10 +243,27 @@ export function resolveAgentRegistryPath(
 ): AgentRegistryLookup {
   const env = options.env ?? process.env;
   const explicit = options.explicit?.trim();
-  if (explicit) return { path: resolve(explicit), explicit: true };
+  if (explicit) {
+    const named = resolve(explicit);
+    // Refused here rather than in each caller: `loadAgentRegistry` answers
+    // `undefined` for a file that is not there, so a reader that forgets to check
+    // reopens exactly the hole this function closes (#80).
+    if (!existsSync(named)) {
+      throw new Error(`agent_registry_not_found: ${named} was named but does not exist. A registry that cannot be read is not the single-agent case.`);
+    }
+    return { path: named, explicit: true };
+  }
 
   const workspaceRegistry = join(resolveWorkspaceRoot({ cwd: options.cwd, configPath: options.configPath, env }), '.cogmem', 'agents.json');
   if (existsSync(workspaceRegistry)) return { path: workspaceRegistry, explicit: false };
+
+  // `init --register-agent` writes into the `.cogmem/` of the directory it was run
+  // in and deliberately does not create a config there, so a registration can sit
+  // in a `.cogmem/` that has no `config.toml` — and the Workspace above was derived
+  // from a config. Walking up for the registry itself is what makes that
+  // registration found rather than invisible (#80).
+  const inTree = findUp(options.cwd ?? process.cwd(), join('.cogmem', 'agents.json'));
+  if (inTree) return { path: inTree, explicit: false };
 
   const homeRegistry = defaultAgentRegistryPath(env);
   if (existsSync(homeRegistry)) return { path: homeRegistry, explicit: false };

@@ -129,9 +129,6 @@ async function main(): Promise<void> {
     configPath: args.configPath,
     cwd: runtime.cwd,
   });
-  if (registry.explicit && registry.path && !existsSync(registry.path)) {
-    throw new Error(`agent_registry_not_found: ${registry.path} was named but does not exist. A named registry that cannot be read is not the single-agent case.`);
-  }
   const agents = registry.path ? loadAgentRegistry(registry.path) : undefined;
 
   if (args.transport === 'stdio') {
@@ -145,9 +142,24 @@ async function main(): Promise<void> {
     if (agents && !stdioAgent) {
       throw new Error('agent_credential_required: this machine has a registered agent list, so a credential is required over stdio: set COGMEM_AGENT_TOKEN to a registered credential.');
     }
+    // The same answer the other two readers give: a credential is a claim to an
+    // identity, and with no registry there is nothing that can establish one. It
+    // is the single-agent *absence* of a credential that stays supported.
+    if (!agents && credential) {
+      throw new Error(`agent_registry_not_found: a credential was presented over stdio but no agent registry was found for ${registry.path ?? 'this workspace or home directory'}. Run cogmem init --register-agent <hostId>, or pass --agents <path>.`);
+    }
+    // And a claim that disagrees with the credential is refused here too, rather
+    // than silently overridden: HTTP and the host bridge both reject it, and one
+    // rule with three behaviours is how identities drift apart.
+    if (stdioAgent && args.hostId && args.hostId !== stdioAgent.hostId) {
+      throw new Error(`host_identity_mismatch: --host ${args.hostId} disagrees with the credential, which speaks for ${stdioAgent.hostId}.`);
+    }
+    if (stdioAgent?.projectId && args.projectId && args.projectId !== stdioAgent.projectId) {
+      throw new Error(`project_scope_violation: --project ${args.projectId} is outside the registered scope of ${stdioAgent.projectId}.`);
+    }
     await startCogmemMcpServer(runtime, {
       profile: stdioAgent?.profile ?? args.profile,
-      hostId: args.hostId,
+      hostId: stdioAgent?.hostId ?? args.hostId,
       projectId: stdioAgent?.projectId ?? args.projectId,
       ...(stdioAgent ? { authenticatedHostId: stdioAgent.hostId } : {}),
     });

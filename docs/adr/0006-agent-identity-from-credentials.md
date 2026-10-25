@@ -139,3 +139,13 @@ The shape, all of it implemented:
   and `--host` is a label the operator chooses when they start it. A registry for
   stdio would add a file to read without adding an isolation property, because
   the client cannot choose the process it is speaking to.
+
+  **Amended by #80.** The first half still holds; the second does not. A machine
+  with a registry has identities, and a `--host`/`--project` flag is a claim, not a
+  label, once credentials exist — so `cogmem mcp` now reads the credential from
+  `COGMEM_AGENT_TOKEN` (the variable `cogmem-host-bridge` already used), refuses
+  without it, refuses a flag that disagrees with it, and applies the registration's
+  project scope and profile ceiling. The isolation property it adds is that all
+  three readers of one registry now give one answer: HTTP refused a credential it
+  could not identify, the bridge refused it, and stdio served it. Three behaviours
+  for one rule is how identities drift apart.

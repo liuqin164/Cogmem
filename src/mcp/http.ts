@@ -109,6 +109,8 @@ export async function startCogmemMcpHttpServer(
     hostId: options.hostId ?? runtime.hostId,
   };
   const sessionIdentities = new Map<string, SessionIdentity>();
+  /** The hostId each session's creator authenticated as, for the registry case. */
+  const sessionAgents = new Map<string, string>();
   const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
   const maxSessions = options.maxSessions ?? 32;
   const ownsKernel = !runtime.kernel;
@@ -182,6 +184,14 @@ export async function startCogmemMcpHttpServer(
       const sessionId = request.headers.get('mcp-session-id');
       let transport = sessionId ? transports.get(sessionId) : undefined;
 
+      // A session carries the identity its creator established. Its server was built
+      // with that agent's `authenticatedHostId` and project scope, so a different
+      // credential replaying the session id would be served as the creator — one
+      // agent reading another agent's memory with its own valid credential (#80).
+      if (transport && options.agents && sessionId && sessionAgents.get(sessionId) !== agent?.hostId) {
+        return new Response('unauthorized: this session belongs to another agent', { status: 401 });
+      }
+
       if (!transport) {
         if (sessionId) {
           // A session header that names no live session must not silently open
@@ -202,18 +212,23 @@ export async function startCogmemMcpHttpServer(
                 transports.delete(oldestId);
                 void oldest?.close();
                 sessionIdentities.delete(oldestId);
+                sessionAgents.delete(oldestId);
               }
             }
             transports.set(id, created);
             // Bind identity from header if present
             const bound = parseSessionIdentity(request.headers.get(identityHeader));
             if (bound) sessionIdentities.set(id, bound);
+            // The identity this session established. A later request may only ride
+            // this session with a credential that speaks for the same agent.
+            if (agent) sessionAgents.set(id, agent.hostId);
           },
         });
         created.onclose = () => {
           if (created.sessionId) {
             transports.delete(created.sessionId);
             sessionIdentities.delete(created.sessionId);
+            sessionAgents.delete(created.sessionId);
           }
         };
 
@@ -252,6 +267,7 @@ export async function startCogmemMcpHttpServer(
       }
       transports.clear();
       sessionIdentities.clear();
+      sessionAgents.clear();
       httpServer.stop(true);
       // Only close what this server opened: an injected kernel belongs to the caller.
       if (ownsKernel) kernel.close();
