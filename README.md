@@ -250,8 +250,8 @@ cogmem openclaw diagnose --workspace <openclaw-workspace> --json
 If old 3.5.2-era rows were imported with an empty `project_id`, preview and apply the conservative single-project repair:
 
 ```bash
-cogmem repair project-scope --from "" --to openclaw --dry-run --json
-cogmem repair project-scope --from "" --to openclaw --apply --json
+cogmem repair project-scope --from "" --to 'openclaw-<workspace-hash>' --dry-run --json
+cogmem repair project-scope --from "" --to 'openclaw-<workspace-hash>' --apply --json
 ```
 
 Inspect and conditionally process sealed conversation episodes:
@@ -433,34 +433,34 @@ Always preview an import with `--dry-run` first.
 OpenClaw:
 
 ```bash
-# The project the installed plugin writes to and reads. Read it from:
-#   cogmem connect openclaw --auto --json   (field: integrationProject)
-# The import step connect prints already carries it; a literal --project openclaw
-# writes into a scope the plugin never asks about.
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --dry-run
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>'
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --session ./one.md
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --session ./one.md --session ./two.md
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./one.md
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./one.md --memory ./two.md
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --db ./memory.db --timezone Asia/Tokyo
+# Importing defaults to this workspace's own scope: the project the installed
+# plugin writes to and reads. Read it from: cogmem connect openclaw --auto --json
+# (field: integrationProject). Pass --project only to import somewhere else — a
+# literal --project openclaw writes into a scope the plugin never asks about.
+cogmem import-openclaw --workspace . --dry-run
+cogmem import-openclaw --workspace .
+cogmem import-openclaw --workspace . --session ./one.md
+cogmem import-openclaw --workspace . --session ./one.md --session ./two.md
+cogmem import-openclaw --workspace . --memory ./one.md
+cogmem import-openclaw --workspace . --memory ./one.md --memory ./two.md
+cogmem import-openclaw --workspace . --db ./memory.db --timezone Asia/Tokyo
 ```
 
 Hermes:
 
 ```bash
-# The project the installed integration writes to and reads. Read it from:
-#   cogmem connect hermes --auto --json   (field: integrationProject)
-# The import step connect prints already carries it; a literal --project hermes
-# writes into a scope the MCP server is not bound to.
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --dry-run
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>'
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --state-db ./state.db --dry-run
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --state-db ./state.db
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --profile ./memory/profile.md --sessions ./memory/sessions
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md --session ./two.md
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --db ./memory.db --timezone Asia/Tokyo
+# Importing defaults to this workspace's own scope: the project the installed
+# integration writes to and reads. Read it from: cogmem connect hermes --auto --json
+# (field: integrationProject). Pass --project only to import somewhere else — a
+# literal --project hermes writes into a scope the MCP server is not bound to.
+cogmem import-hermes --workspace . --dry-run
+cogmem import-hermes --workspace .
+cogmem import-hermes --workspace . --state-db ./state.db --dry-run
+cogmem import-hermes --workspace . --state-db ./state.db
+cogmem import-hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import-hermes --workspace . --session ./one.md
+cogmem import-hermes --workspace . --session ./one.md --session ./two.md
+cogmem import-hermes --workspace . --db ./memory.db --timezone Asia/Tokyo
 ```
 
 When importing through an explicit `--db`, pass the project's IANA `--timezone`. If it is omitted, Cogmem records a `project_timezone_missing_using_host_environment` warning so host-local calendar behavior is never silent.
@@ -496,14 +496,14 @@ cogmem doctor
 Import existing OpenClaw memory:
 
 ```bash
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --dry-run
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>'
+cogmem import-openclaw --workspace . --dry-run
+cogmem import-openclaw --workspace .
 ```
 
 If you imported old memory before raw ledger anchors existed:
 
 ```bash
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --config .cogmem/config.toml --reindex-raw --json
+cogmem import-openclaw --workspace . --config .cogmem/config.toml --reindex-raw --json
 ```
 
 `cogmem connect openclaw --auto` installs a local OpenClaw plugin wrapper under:
@@ -598,22 +598,22 @@ If recall reports `no_recent_episode_ingestion_detected` or `semantic_memory_may
 Import existing Hermes memory:
 
 ```bash
-cogmem import-hermes --workspace /path/to/hermes/workspace --project 'hermes-<workspace-hash>' --dry-run
-cogmem import-hermes --workspace /path/to/hermes/workspace --project 'hermes-<workspace-hash>'
+cogmem import-hermes --workspace /path/to/hermes/workspace --dry-run
+cogmem import-hermes --workspace /path/to/hermes/workspace
 ```
 
 If Hermes stores conversations in SQLite:
 
 ```bash
-cogmem import-hermes --workspace /path/to/hermes/workspace --project 'hermes-<workspace-hash>' --state-db /path/to/hermes/workspace/state.db --dry-run
-cogmem import-hermes --workspace /path/to/hermes/workspace --project 'hermes-<workspace-hash>' --state-db /path/to/hermes/workspace/state.db
+cogmem import-hermes --workspace /path/to/hermes/workspace --state-db /path/to/hermes/workspace/state.db --dry-run
+cogmem import-hermes --workspace /path/to/hermes/workspace --state-db /path/to/hermes/workspace/state.db
 ```
 
 If Hermes stores memory in non-default paths, pass explicit files:
 
 ```bash
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --profile ./memory/profile.md --sessions ./memory/sessions
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./sessions/one.md
+cogmem import-hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import-hermes --workspace . --session ./sessions/one.md
 ```
 
 ## Agent-Facing Recall

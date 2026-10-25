@@ -274,8 +274,12 @@ function resolveCogmemMcpServer(workspaceRoot: string, project: string): { comma
   // The server is bound to the integration's own scope: one Workspace is one
   // private memory scope, so a server that answers whatever project a caller
   // names is a Hermes integration with no scope at all (ADR-0010, #79).
+  // `cogmem` takes a subcommand; the standalone `cogmem-mcp`/`COGMEM_MCP_BIN`
+  // entry points are the server itself and would read a positional `mcp` as a
+  // bad argument. Same binding, two shapes.
   const bound = ['mcp', '--project', project];
-  if (process.env.COGMEM_MCP_BIN) return { command: process.env.COGMEM_MCP_BIN, args: bound };
+  const mcpOnlyBound = ['--project', project];
+  if (process.env.COGMEM_MCP_BIN) return { command: process.env.COGMEM_MCP_BIN, args: mcpOnlyBound };
   if (process.env.COGMEM_BIN) return { command: process.env.COGMEM_BIN, args: bound };
   // The documented order: an explicit override, then the workspace-local
   // launcher, then whatever this machine resolves. `cogmem-mcp` stays last as the
@@ -287,12 +291,12 @@ function resolveCogmemMcpServer(workspaceRoot: string, project: string): { comma
   // Compatibility entry points, in the order they have always been tried: a
   // workspace-local `cogmem-mcp` first, then one on `PATH`.
   const workspaceMcp = join(workspaceRoot, 'node_modules', '.bin', 'cogmem-mcp');
-  if (existsSync(workspaceMcp)) return { command: workspaceMcp, args: bound };
+  if (existsSync(workspaceMcp)) return { command: workspaceMcp, args: mcpOnlyBound };
   const pathValue = process.env.PATH || '';
   for (const segment of pathValue.split(':')) {
     if (!segment) continue;
     const candidate = join(segment, 'cogmem-mcp');
-    if (existsSync(candidate)) return { command: candidate, args: bound };
+    if (existsSync(candidate)) return { command: candidate, args: mcpOnlyBound };
   }
   return { command: 'cogmem', args: bound };
 }
@@ -440,7 +444,7 @@ function installHermesMcpConfig(input: {
 
 function patchHermesMcpConfig(original: string, serverCommand: string, serverArgs: string[], project: string): string {
   if (/^\s+cogmem\s*:/m.test(original)) {
-    return patchExistingHermesCogmemConfig(original, serverArgs, project);
+    return patchExistingHermesCogmemConfig(original, project);
   }
 
   const lines = original.replace(/\r\n/g, '\n').split('\n');
@@ -471,7 +475,7 @@ function patchHermesMcpConfig(original: string, serverCommand: string, serverArg
   return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
 }
 
-function patchExistingHermesCogmemConfig(original: string, serverArgs: string[], project: string): string {
+function patchExistingHermesCogmemConfig(original: string, project: string): string {
   const lines = original.replace(/\r\n/g, '\n').split('\n');
   const cogmemIndex = lines.findIndex((line) => /^\s+cogmem\s*:\s*$/.test(line));
   if (cogmemIndex === -1) return original.endsWith('\n') ? original : `${original}\n`;
@@ -500,11 +504,16 @@ function patchExistingHermesCogmemConfig(original: string, serverArgs: string[],
     if (!match) continue;
     try {
       const parsed = JSON.parse(match[2]!) as unknown;
-      if (Array.isArray(parsed) && !parsed.includes('--project')) {
+      // Only the shape this command wrote before the binding existed:
+      // `["mcp"]`. Anything else — a hand-written `--transport`, a flag this
+      // command does not know, an empty array it cannot attribute — is somebody's
+      // deliberate configuration and is left where it is; an unbound entry is a
+      // visible problem, a silently retargeted one is not.
+      if (Array.isArray(parsed) && parsed.length === 1 && parsed[0] === 'mcp') {
         lines[index] = `${match[1]}args: ${JSON.stringify([...parsed, '--project', project])}`;
       }
     } catch {
-      // Leave a hand-written args line alone.
+      // Leave an unparseable args line alone.
     }
     break;
   }

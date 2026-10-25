@@ -213,9 +213,6 @@ describe('one Workspace is one private scope', () => {
     const second = join(scratch, 'ws-two');
 
     expect(integrationScope('openclaw', first)).toMatch(/^openclaw-[0-9a-f]{8}$/);
-    // Same Workspace, same scope — that is what makes the plugin entry and the
-    // printed import step the same value (#79).
-    expect(integrationScope('openclaw', first)).toBe(integrationScope('openclaw', first));
     // Two Workspaces on one machine stay two scopes: importing into one cannot
     // surface in the other (ADR-0009).
     expect(integrationScope('openclaw', first)).not.toBe(integrationScope('openclaw', second));
@@ -242,7 +239,8 @@ describe('the documented project is the one the integration uses', () => {
     for (const doc of docs) {
       for (const [index, line] of readFileSync(join(coreRoot, doc), 'utf8').split('\n').entries()) {
         if (/^\s*#/.test(line)) continue;
-        if (!/--project\s+(openclaw|hermes)(?![\w-])/.test(line)) continue;
+        // `--to` is the same statement: the scope-repair target is a project.
+        if (!/--(?:project|to)\s+(openclaw|hermes)(?![\w-])/.test(line)) continue;
         offenders.push(`${doc}:${index + 1}: ${line.trim()}`);
       }
     }

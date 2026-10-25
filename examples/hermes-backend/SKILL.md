@@ -134,18 +134,18 @@ Default Hermes memory contract:
 Always preview first:
 
 ```bash
-# The project the installed integration writes to and reads. Read it from:
-#   cogmem connect hermes --auto --json   (field: integrationProject)
-# The import step connect prints already carries it; a literal --project hermes
-# writes into a scope the MCP server is not bound to.
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --dry-run
+# Importing defaults to this workspace's own scope: the project the installed
+# integration writes to and reads. Read it from: cogmem connect hermes --auto --json
+# (field: integrationProject). Pass --project only to import somewhere else — a
+# literal --project hermes writes into a scope the MCP server is not bound to.
+cogmem import-hermes --workspace . --dry-run
 ```
 
 If `state.db` exists, the default import scans it automatically. Use an explicit path when the database is outside the workspace:
 
 ```bash
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --state-db ./state.db --dry-run
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --state-db ./state.db
+cogmem import-hermes --workspace . --state-db ./state.db --dry-run
+cogmem import-hermes --workspace . --state-db ./state.db
 ```
 
 The SQLite importer reads the `messages` table, preserves row/message order, supports WAL-mode read-only databases through SQLite immutable mode, and prefers message-level `occurredAt`, `timestamp`, or `createdAt`. Numeric `timestamp` values below millisecond range are epoch seconds. `InsertTime` is only a fallback and must not be treated as the original conversation time.
@@ -153,21 +153,21 @@ The SQLite importer reads the `messages` table, preserves row/message order, sup
 Then import:
 
 ```bash
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>'
+cogmem import-hermes --workspace .
 ```
 
 Use JSON output when another agent is orchestrating the run:
 
 ```bash
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --json
+cogmem import-hermes --workspace . --json
 ```
 
 If Hermes stores memory somewhere else, pass explicit paths:
 
 ```bash
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --profile ./memory/profile.md --sessions ./memory/sessions
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md --session ./two.md
+cogmem import-hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import-hermes --workspace . --session ./one.md
+cogmem import-hermes --workspace . --session ./one.md --session ./two.md
 ```
 
 For Hermes JSONL session exports where each line is a session object with `messages[]`, normalize first:
@@ -175,7 +175,7 @@ For Hermes JSONL session exports where each line is a session object with `messa
 ```bash
 cogmem normalize-transcript --input ./hermes-sessions.jsonl --output ./hermes.normalized.md --family jsonl --dry-run --json
 cogmem normalize-transcript --input ./hermes-sessions.jsonl --output ./hermes.normalized.md --family jsonl
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./hermes.normalized.md
+cogmem import-hermes --workspace . --session ./hermes.normalized.md
 ```
 
 The importer is idempotent. Re-running it skips records already imported into the same memory database.
@@ -398,7 +398,7 @@ mcp_servers:
 
 The command path is resolved by `cogmem connect hermes`: it uses `COGMEM_BIN` when explicitly set, then a workspace-local `node_modules/.bin/cogmem`, then the CLI this machine resolves — the absolute launcher when `cogmem` is not on `PATH`, the bare name when it is — and passes `mcp` as the first argument. `COGMEM_MCP_BIN` and `cogmem-mcp` remain compatibility paths for existing host configs.
 
-When Hermes calls `cogmem_recall`, it should pass `projectId: "hermes"` and may omit `agentId`; the MCP bridge infers `agentId` from `projectId`. The returned `items` use the same shape as `cogmem memory recall --project 'hermes-<workspace-hash>' --agent hermes --json`, including `raw_ledger` items, labeled `sourceContext` events, `sourceContext.window`, and `sourceContext.locator.command` when vectors are empty or compiled evidence misses.
+When Hermes calls `cogmem_recall`, it should **omit `projectId`**: the MCP server `connect` wired is bound to this workspace's scope, and naming a different project is rejected with `project_scope_violation`. `agentId` may also be omitted; the bridge infers it from the bound project. The returned `items` use the same shape as `cogmem memory recall --project 'hermes-<workspace-hash>' --agent hermes --json`, including `raw_ledger` items, labeled `sourceContext` events, `sourceContext.window`, and `sourceContext.locator.command` when vectors are empty or compiled evidence misses.
 
 Hermes may pass `collection: "theseus"` to `cogmem_recall` when it wants creative artifacts. `cogmem_strategy_plan` is a read-only inspection tool: its capsule has no instruction authority and never authorizes work. Expose `cogmem_memory_map` and `cogmem_maintenance_tick` only to agents that are allowed to inspect memory anatomy or request host-owned upkeep. `cogmem_prospective` manages candidate state only; even a confirmed due item requires normal host authorization before any action.
 

@@ -148,30 +148,30 @@ Interpret the audit:
 If old records are under an empty project scope, repair only after a dry run confirms this is a single OpenClaw install:
 
 ```bash
-cogmem repair project-scope --from "" --to openclaw --dry-run --json
-cogmem repair project-scope --from "" --to openclaw --apply --json
+cogmem repair project-scope --from "" --to 'openclaw-<workspace-hash>' --dry-run --json
+cogmem repair project-scope --from "" --to 'openclaw-<workspace-hash>' --apply --json
 ```
 
 Always preview first:
 
 ```bash
-# The project the installed plugin writes to and reads. Read it from:
-#   cogmem connect openclaw --auto --json   (field: integrationProject)
-# The import step connect prints already carries it; a literal --project openclaw
-# writes into a scope the plugin never asks about.
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --dry-run
+# Importing defaults to this workspace's own scope: the project the installed
+# plugin writes to and reads. Read it from: cogmem connect openclaw --auto --json
+# (field: integrationProject). Pass --project only to import somewhere else — a
+# literal --project openclaw writes into a scope the plugin never asks about.
+cogmem import-openclaw --workspace . --dry-run
 ```
 
 Then import:
 
 ```bash
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>'
+cogmem import-openclaw --workspace .
 ```
 
 Use JSON output when another agent is orchestrating the run:
 
 ```bash
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --json
+cogmem import-openclaw --workspace . --json
 ```
 
 The importer is idempotent. Re-running it skips records already imported into the same memory database.
@@ -207,11 +207,11 @@ Imported sources:
 Useful scoped imports:
 
 ```bash
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --date 2026-05-07
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --session ./custom-session.md
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./custom-memory.md
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --session ./one.md --session ./two.md
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./one.md --memory ./two.md
+cogmem import-openclaw --workspace . --date 2026-05-07
+cogmem import-openclaw --workspace . --session ./custom-session.md
+cogmem import-openclaw --workspace . --memory ./custom-memory.md
+cogmem import-openclaw --workspace . --session ./one.md --session ./two.md
+cogmem import-openclaw --workspace . --memory ./one.md --memory ./two.md
 ```
 
 ## Runtime Wiring
@@ -352,7 +352,7 @@ Only fall back to searching OpenClaw's legacy `memory/` files when `cogmem memor
 If old imported memories do not appear in `cogmem memory recall` after an upgrade, backfill raw ledger anchors before concluding the memory is missing:
 
 ```bash
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --config .cogmem/config.toml --reindex-raw --json
+cogmem import-openclaw --workspace . --config .cogmem/config.toml --reindex-raw --json
 ```
 
 This command is idempotent. It does not duplicate compiled memory or hot vectors; it only restores searchable raw anchors for older imports.

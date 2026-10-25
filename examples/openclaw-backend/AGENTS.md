@@ -83,23 +83,23 @@ When the user explicitly names, aliases, moves, merges, splits, or relates a top
 Preview first:
 
 ```bash
-# The project the installed plugin writes to and reads. Read it from:
-#   cogmem connect openclaw --auto --json   (field: integrationProject)
-# The import step connect prints already carries it; a literal --project openclaw
-# writes into a scope the plugin never asks about.
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --dry-run
+# Importing defaults to this workspace's own scope: the project the installed
+# plugin writes to and reads. Read it from: cogmem connect openclaw --auto --json
+# (field: integrationProject). Pass --project only to import somewhere else — a
+# literal --project openclaw writes into a scope the plugin never asks about.
+cogmem import-openclaw --workspace . --dry-run
 ```
 
 Then import:
 
 ```bash
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>'
+cogmem import-openclaw --workspace .
 ```
 
 Use `--json` when another agent needs structured output:
 
 ```bash
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --json
+cogmem import-openclaw --workspace . --json
 ```
 
 Real non-JSON imports print source-level and embedding+ingest progress to stderr. Use `--json --progress` to keep JSON on stdout while streaming progress to stderr, or `--no-progress` when a wrapper needs quiet stderr.
@@ -135,11 +135,11 @@ Import scope:
 Useful options:
 
 ```bash
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --date 2026-05-07
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --session ./custom-session.md
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./custom-memory.md
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --session ./one.md --session ./two.md
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./one.md --memory ./two.md
+cogmem import-openclaw --workspace . --date 2026-05-07
+cogmem import-openclaw --workspace . --session ./custom-session.md
+cogmem import-openclaw --workspace . --memory ./custom-memory.md
+cogmem import-openclaw --workspace . --session ./one.md --session ./two.md
+cogmem import-openclaw --workspace . --memory ./one.md --memory ./two.md
 ```
 
 ## Runtime Wiring

@@ -84,18 +84,18 @@ Default Hermes memory contract:
 Preview first:
 
 ```bash
-# The project the installed integration writes to and reads. Read it from:
-#   cogmem connect hermes --auto --json   (field: integrationProject)
-# The import step connect prints already carries it; a literal --project hermes
-# writes into a scope the MCP server is not bound to.
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --dry-run
+# Importing defaults to this workspace's own scope: the project the installed
+# integration writes to and reads. Read it from: cogmem connect hermes --auto --json
+# (field: integrationProject). Pass --project only to import somewhere else — a
+# literal --project hermes writes into a scope the MCP server is not bound to.
+cogmem import-hermes --workspace . --dry-run
 ```
 
 If `state.db` exists, default import scans it automatically. If the database is elsewhere:
 
 ```bash
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --state-db ./state.db --dry-run
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --state-db ./state.db
+cogmem import-hermes --workspace . --state-db ./state.db --dry-run
+cogmem import-hermes --workspace . --state-db ./state.db
 ```
 
 The SQLite importer prefers message-level `occurredAt`, `timestamp`, or `createdAt`; numeric `timestamp` values below millisecond range are epoch seconds. It can read WAL-mode `state.db` through SQLite immutable mode. `InsertTime` is only a fallback. Do not use `InsertTime` as proof of the original conversation date when better message timestamps exist.
@@ -103,21 +103,21 @@ The SQLite importer prefers message-level `occurredAt`, `timestamp`, or `created
 Then import:
 
 ```bash
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>'
+cogmem import-hermes --workspace .
 ```
 
 Use `--json` when another agent needs structured output:
 
 ```bash
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --json
+cogmem import-hermes --workspace . --json
 ```
 
 If Hermes stores memory somewhere else, pass explicit paths:
 
 ```bash
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --profile ./memory/profile.md --sessions ./memory/sessions
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md --session ./two.md
+cogmem import-hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import-hermes --workspace . --session ./one.md
+cogmem import-hermes --workspace . --session ./one.md --session ./two.md
 ```
 
 For Hermes JSONL session exports where each line has a `messages[]` array:
@@ -125,7 +125,7 @@ For Hermes JSONL session exports where each line has a `messages[]` array:
 ```bash
 cogmem normalize-transcript --input ./hermes-sessions.jsonl --output ./hermes.normalized.md --family jsonl --dry-run --json
 cogmem normalize-transcript --input ./hermes-sessions.jsonl --output ./hermes.normalized.md --family jsonl
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./hermes.normalized.md
+cogmem import-hermes --workspace . --session ./hermes.normalized.md
 ```
 
 Cogmem skips import batch sealing for empty episode boundaries and skips legacy empty Dream jobs so one bad imported episode cannot block the queue.
@@ -227,7 +227,7 @@ The import command is idempotent. Re-running it skips records already imported i
 
 Hermes integration is currently a skill plus MCP bridge. It does not replace a native Hermes memory provider and it does not patch Hermes runtime internals. `cogmem connect hermes --workspace . --auto` writes or updates the `mcp_servers.cogmem` entry in the Hermes config. Restart or reload Hermes after patching MCP config.
 
-For active memory search through MCP, call `cogmem_recall` with `projectId: "hermes"` and `query`. `agentId` is optional for project-scoped Hermes calls; the MCP bridge infers it from `projectId`. The tool returns the same `items` shape as `cogmem memory recall`, including `raw_ledger` fallback, `sourceContext` locators, and `decisionTrace`. Inspect its selected lane, reason, and candidate counts before claiming memory is absent. For equal raw matches, prefer the original user anchor and inspect `sourceContext.after` rather than relying on a later assistant retelling.
+For active memory search through MCP, call `cogmem_recall` with `query` and **no `projectId`**: the server `connect` wired is bound to this workspace's scope, and a different project is rejected with `project_scope_violation`. `agentId` is optional too; the bridge infers it from the bound project. The tool returns the same `items` shape as `cogmem memory recall`, including `raw_ledger` fallback, `sourceContext` locators, and `decisionTrace`. Inspect its selected lane, reason, and candidate counts before claiming memory is absent. For equal raw matches, prefer the original user anchor and inspect `sourceContext.after` rather than relying on a later assistant retelling.
 
 Hermes has no automatic observation path in this integration. Use `cogmem_episode_append` for one message or bounded `cogmem_episode_import` for a session batch after meaningful conversation, and call `cogmem_recall` before memory-dependent answers. Supply stable external message IDs so retries are idempotent; never split/retry an auto-ID batch after `auto_identity_not_safe_across_split_batches`. These tools write Raw Ledger and episode control metadata only; they do not run Dream or create durable beliefs. Inspect `recommendedActions` and per-message checkpoints. On `no_recent_episode_ingestion_detected`, ingest recent messages; on `semantic_memory_may_lag`, inspect open/soft-sealed episodes and Dream failures before claiming freshness.
 

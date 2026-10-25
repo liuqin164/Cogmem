@@ -216,6 +216,28 @@ describe('printed steps run as printed', () => {
     for (const command of parsed.nextCommands) expectRunnableCommand(command);
   });
 
+  test('an MCP-only entry point is bound without the cogmem subcommand', async () => {
+    const dir = makeTempDir('cogmem-invocation-mcponly-');
+    const binDir = installedLauncher(dir);
+    const workspace = join(dir, 'ws');
+    const hermesConfig = join(dir, 'config.yaml');
+    const mcpBin = join(dir, 'my-cogmem-mcp');
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(mcpBin, '#!/bin/sh\nexit 0\n');
+    chmodSync(mcpBin, 0o755);
+
+    const { exitCode } = await run(
+      ['bun', connectBin, 'hermes', '--auto', '--json', '--workspace', workspace, '--hermes-config', hermesConfig],
+      {
+        cwd: workspace,
+        env: { COGMEM_MCP_BIN: mcpBin, COGMEM_BIN: '', COGMEM_BIN_DIR: binDir, PATH: '/usr/bin:/bin', HOME: dir },
+      },
+    );
+    expect(exitCode).toBe(0);
+    // `COGMEM_MCP_BIN` is the server itself: a positional `mcp` is a bad argument.
+    expect(readFileSync(hermesConfig, 'utf8')).toMatch(/args: \["--project","hermes-[0-9a-f]{8}"\]/);
+  });
+
   test('connect prints the workspace it was given, not a `.` of its own', async () => {
     const dir = makeTempDir('cogmem-invocation-connect-');
     const binDir = installedLauncher(dir);

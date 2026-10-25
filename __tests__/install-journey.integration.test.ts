@@ -236,8 +236,25 @@ describe('the install journey', () => {
       expect(imported.sourcesScanned).toBeGreaterThan(0);
       expect(imported.recordsIngested).toBeGreaterThan(0);
 
-      // Re-running it does not duplicate what is already in (#79): the imported
-      // records are skipped rather than ingested a second time.
+      // With no `--project` at all the default is the same scope, so the
+      // documented one-liner cannot land somewhere the agent never looks.
+      const byDefault = parseJson(
+        'import with no --project',
+        await cli.run(['import-openclaw', '--workspace', workspace, '--json'], { cwd: workspace }),
+      );
+      expect(byDefault.projectId).toBe(pluginProject);
+      expect(byDefault.recordsIngested).toBe(0);
+      expect(byDefault.skippedRecords).toBeGreaterThan(0);
+
+      // Memory a user already imported under the old literal scope: importing
+      // under the corrected project fills the scope the agent reads, and
+      // re-running the corrected step still does not duplicate.
+      const stranded = parseJson(
+        'import under the old literal scope',
+        await cli.runShell(printed('import_apply').replace(` --project ${pluginProject}`, ' --project openclaw'), { cwd: workspace }),
+      );
+      expect(stranded.projectId).toBe('openclaw');
+      expect(stranded.recordsIngested).toBeGreaterThan(0);
       const again = parseJson('printed import step, again', await cli.runShell(printed('import_apply'), { cwd: workspace }));
       expect(again.recordsIngested).toBe(0);
       expect(again.skippedRecords).toBeGreaterThan(0);
@@ -263,6 +280,16 @@ describe('the install journey', () => {
       );
       expect(elsewhere.decisionTrace.selectedCount).toBe(0);
       expect(elsewhere.items).toEqual([]);
+
+      // Two scopes in *one* database stay two scopes: the copy the stranded import
+      // put under the literal name is visible there and is still not what the
+      // integration's own project returns.
+      const strandedScope = parseJson(
+        'memory recall under the old literal scope',
+        await cli.run(['memory', 'recall', '--query', marker, '--project', 'openclaw', '--json'], { cwd: workspace }),
+      );
+      expect(strandedScope.decisionTrace.selectedCount).toBeGreaterThan(0);
+      expect(JSON.stringify(strandedScope.items)).toContain(marker);
     },
     120_000,
   );

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
@@ -99,7 +99,11 @@ const configPath = readArg('--config');
 const envPath = readArg('--env-path');
 const fix = hasFlag('--fix');
 const agent = readArg('--agent');
-const workspace = readArg('--workspace');
+// Resolved, not used verbatim: `integrationScope` hashes this path, so
+// `--workspace .` and the absolute path `connect` resolved were two different
+// plugin ids *and* two different memory scopes (ADR-0010).
+const workspaceArg = readArg('--workspace');
+const workspace = workspaceArg ? resolve(workspaceArg) : undefined;
 const openclawConfigPath = readArg('--openclaw-config');
 const pluginDir = readArg('--plugin-dir');
 const bunPath = readArg('--bun');

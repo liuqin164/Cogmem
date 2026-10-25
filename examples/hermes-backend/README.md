@@ -66,17 +66,17 @@ cogmem connect hermes --workspace . --auto --force --json
 Preview:
 
 ```bash
-# The project the installed integration writes to and reads. Read it from:
-#   cogmem connect hermes --auto --json   (field: integrationProject)
-# The import step connect prints already carries it; a literal --project hermes
-# writes into a scope the MCP server is not bound to.
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --dry-run
+# Importing defaults to this workspace's own scope: the project the installed
+# integration writes to and reads. Read it from: cogmem connect hermes --auto --json
+# (field: integrationProject). Pass --project only to import somewhere else — a
+# literal --project hermes writes into a scope the MCP server is not bound to.
+cogmem import-hermes --workspace . --dry-run
 ```
 
 Import:
 
 ```bash
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>'
+cogmem import-hermes --workspace .
 ```
 
 After import:
@@ -97,14 +97,14 @@ cogmem memory review --project 'hermes-<workspace-hash>' --id <candidate-id> --a
 If Hermes stores memory somewhere else:
 
 ```bash
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import-hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions
 ```
 
 Single session files and batches can be imported explicitly:
 
 ```bash
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md
-cogmem import-hermes --workspace . --project 'hermes-<workspace-hash>' --session ./one.md --session ./two.md
+cogmem import-hermes --workspace . --session ./one.md
+cogmem import-hermes --workspace . --session ./one.md --session ./two.md
 ```
 
 The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store. Imported raw records enter the same Episode Assembler used by live turns and are sealed at the explicit import batch boundary.
@@ -165,7 +165,7 @@ Use MCP append/import only for bounded traffic. Supply `externalMessageId` for e
 
 Recall warnings are operational signals: `no_recent_episode_ingestion_detected` means the hookless host has not supplied recent conversation evidence, while `semantic_memory_may_lag` means open/soft-sealed high-value work or Dream backlog/failures remain. Ingest or repair before claiming current semantic memory. Use `cogmem_topic_list` / `cogmem_topic_operate` for audited user-shaped topic structure and `cogmem_episode_repair` for synchronized boundary surgery.
 
-The MCP `cogmem_recall` tool uses the same backend as `cogmem memory recall`. A Hermes MCP call with only `projectId: "hermes"` still infers `agentId: "hermes"` and can return `raw_ledger` items with labeled `sourceContext` events, `sourceContext.window`, and locator commands when vectors are empty. Pass `collection: "theseus"` only when Hermes wants creative artifacts instead of normal operational memory.
+The MCP `cogmem_recall` tool uses the same backend as `cogmem memory recall`. A Hermes MCP call with no `projectId` uses the scope the server is bound to, infers `agentId` from it, and can return `raw_ledger` items with labeled `sourceContext` events, `sourceContext.window`, and locator commands when vectors are empty. Pass `collection: "theseus"` only when Hermes wants creative artifacts instead of normal operational memory.
 
 Useful host-owned inspection commands:
 

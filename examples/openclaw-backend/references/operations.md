@@ -119,8 +119,8 @@ cat .cogmem/queue/openclaw-remember.jsonl.spawn.lock/owner.json 2>/dev/null || t
 If records imported under an empty project scope exist, repair only after preview:
 
 ```bash
-cogmem repair project-scope --from "" --to openclaw --dry-run --json
-cogmem repair project-scope --from "" --to openclaw --apply --json
+cogmem repair project-scope --from "" --to 'openclaw-<workspace-hash>' --dry-run --json
+cogmem repair project-scope --from "" --to 'openclaw-<workspace-hash>' --apply --json
 ```
 
 The repair refuses an empty-to-OpenClaw merge when another non-OpenClaw project is present.
@@ -130,12 +130,12 @@ The repair refuses an empty-to-OpenClaw merge when another non-OpenClaw project 
 Preview OpenClaw discovery, then import idempotently:
 
 ```bash
-# The project the installed plugin writes to and reads. Read it from:
-#   cogmem connect openclaw --auto --json   (field: integrationProject)
-# The import step connect prints already carries it; a literal --project openclaw
-# writes into a scope the plugin never asks about.
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --dry-run --json
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --json
+# Importing defaults to this workspace's own scope: the project the installed
+# plugin writes to and reads. Read it from: cogmem connect openclaw --auto --json
+# (field: integrationProject). Pass --project only to import somewhere else — a
+# literal --project openclaw writes into a scope the plugin never asks about.
+cogmem import-openclaw --workspace . --dry-run --json
+cogmem import-openclaw --workspace . --json
 ```
 
 After import, verify semantic maintenance in this exact order:
@@ -159,8 +159,8 @@ cogmem memory recall --query "<verification question>" --project 'openclaw-<work
 Pass explicit sources when discovery is not enough:
 
 ```bash
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./MEMORY.md --session ./session.md --json
-cogmem import-openclaw --workspace . --project 'openclaw-<workspace-hash>' --memory ./one.md --memory ./two.md --session ./one.jsonl --session ./two.jsonl --json
+cogmem import-openclaw --workspace . --memory ./MEMORY.md --session ./session.md --json
+cogmem import-openclaw --workspace . --memory ./one.md --memory ./two.md --session ./one.jsonl --session ./two.jsonl --json
 ```
 
 For large generic JSONL, use checkpoints and bounded error handling:
