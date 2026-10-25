@@ -373,6 +373,19 @@ saving. Give both answers explicitly when scripting it.
 non-interactive way to confirm the entry. Remove one with
 `hermes mcp remove <name>`.
 
+`cogmem connect hermes --auto` writes that entry for you, and `--hermes-config
+<path>` points it at a config outside `~/.hermes`. The readers take the same flag,
+so an integration written elsewhere is not read back as missing:
+
+```bash
+cogmem connect hermes --auto --hermes-config /srv/hermes/config.yaml
+cogmem doctor --hermes-config /srv/hermes/config.yaml
+```
+
+Without it, `doctor` looks at `~/.hermes/config.yaml` and will recommend
+`connect hermes` again — and that recommendation writes to the default path, so an
+agent following it blindly would create a second integration.
+
 ---
 
 ## OpenClaw
