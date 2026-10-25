@@ -22,6 +22,13 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/d
 - **The resident MCP server does not hot-reload.** A long-running `cogmem mcp --transport http`
   keeps the `src/`/`dist/` it started with. Restart it after a build, and check
   `ss -ltnp | grep 7337` before assuming it is current.
+- **Check the disk before starting a round.** The suite's temporary directories live under
+  `.cogmem/tmp`, and before #70 they accumulated to 25 GB in one night and filled a 96 GB disk,
+  which surfaced as an `ENOSPC` from `npm pack` that looked like a broken build. `bun test`
+  now sweeps its own `cogmem-run-*` directories through `__tests__/helpers/preload.ts`, and new
+  tests should use `makeTempDir()` from `__tests__/helpers/tmp.ts` instead of `mkdtempSync`.
+  If `df -h .` reports under 2 GB free, remove the temporary root before running anything else
+  and record it in the ledger.
 - **In-flight work, if present, is recorded in `docs/overnight-progress.md`** — untracked and kept on
   disk by the owner's overnight loop, so a fresh clone will not have it. When it exists, read it
   first: it carries the round's real gate numbers, not the plan.

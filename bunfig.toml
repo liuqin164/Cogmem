@@ -1,0 +1,4 @@
+[test]
+# The suite's own temporary directories are removed by run, not by each test
+# remembering to ask (#70). See __tests__/helpers/preload.ts.
+preload = ["./__tests__/helpers/preload.ts"]
