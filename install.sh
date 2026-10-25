@@ -9,6 +9,9 @@ set -euo pipefail
 
 INSTALL_HOME="${COGMEM_INSTALL_HOME:-$HOME/.cogmem/pkg}"
 BIN_DIR="${COGMEM_BIN_DIR:-$HOME/.bun/bin}"
+# The most general name wins, then the npm-specific one, then the tarball. The same
+# order as `resolveLatestNpmSpec` in src/bin/update-release.ts, so setting two of
+# these cannot install one thing and update another.
 PACKAGE_SPEC="${COGMEM_PACKAGE_SPEC:-${COGMEM_NPM_SPEC:-${COGMEM_RELEASE_TARBALL:-latest}}}"
 
 log() {
@@ -41,6 +44,29 @@ ensure_install_home() {
   if [ ! -f "$INSTALL_HOME/package.json" ]; then
     printf '{"private":true,"dependencies":{}}\n' > "$INSTALL_HOME/package.json"
   fi
+}
+
+# Install one package spec.
+#
+# A registry spec is a version, so the name is added: `cogmem@latest`. A tarball,
+# a directory or a URL is already a package location, and prefixing it produces
+# `cogmem@/path/to/cogmem-4.0.0.tgz`, which npm and bun both reject — which is why
+# `COGMEM_RELEASE_TARBALL` and a local install had no working path. Registry specs
+# keep the name so no other package can be installed by accident.
+install_package() {
+  local spec="$1"
+  case "$spec" in
+    # Any spec carrying a scheme is a location too: `npm:`, `file:`, `http:`,
+    # `https:`, `github:`, `git+ssh:`. A version range never contains a colon, so
+    # this cannot swallow one. `*` stays in the registry branch, where `cogmem@*` is
+    # a valid range.
+    *:* | /* | ./* | ../* | *.tgz | *.tar.gz)
+      bun add "$spec"
+      ;;
+    *)
+      bun add "cogmem@$spec"
+      ;;
+  esac
 }
 
 link_cli() {
@@ -107,7 +133,7 @@ main() {
   log "Installing cogmem@$PACKAGE_SPEC from npm-compatible package resolution."
   (
     cd "$INSTALL_HOME"
-    bun add "cogmem@$PACKAGE_SPEC"
+    install_package "$PACKAGE_SPEC"
   )
   link_cli
 
