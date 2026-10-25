@@ -45,7 +45,7 @@ const DISTRACTOR_DAYS = [2, 4, 6, 11, 13, 15, 18, 20, 22, 25, 27, 28];
 interface Scenario {
   projectId: string;
   query: string;
-  turns: Array<{ turnId: string; content: string }>;
+  turns: Array<{ turnId: string; content: string; tags?: string[] }>;
   answer: string;
   answerTurnId: string;
   /** A value that was true earlier and is not true now, when the family has one. */
@@ -74,7 +74,7 @@ export function buildScenarios(items: number, seed: number): Scenario[] {
     const team = TEAMS[(index * 3) % TEAMS.length]!;
     const answer = token('SC', index, random);
     const answerDay = 1 + (index % 28);
-    const turns: Array<{ turnId: string; content: string }> = [];
+    const turns: Array<{ turnId: string; content: string; tags?: string[] }> = [];
     const answerPosition = Math.floor(random() * 8);
     let distractors = 0;
     for (let position = 0; position < 8; position += 1) {
@@ -111,7 +111,7 @@ export function buildScenarios(items: number, seed: number): Scenario[] {
  * mention — so the baselines rank them by recency or by word overlap alone, and the
  * only thing that can keep the stale value out of the context is suppression.
  */
-export function buildSupersessionScenarios(items: number, seed: number): Scenario[] {
+export function buildSupersessionScenarios(items: number, seed: number, options: { markStale?: boolean } = {}): Scenario[] {
   const random = makeRandom(seed + 977);
   const scenarios: Scenario[] = [];
   for (let index = 0; index < items; index += 1) {
@@ -129,6 +129,11 @@ export function buildSupersessionScenarios(items: number, seed: number): Scenari
         turns.push({
           turnId: `${index}-${position}`,
           content: `The ${topic} for ${team} was scheduled on day ${staleDay}. Ticket ${stale}.`,
+          // `status:superseded` is the marker the host recall block honours when it
+          // decides what reaches the model. Nothing in `src/` writes it — it comes
+          // from curation or review — so a run that marks nothing is measuring a
+          // system that was never told, and the two cases have to be measured apart.
+          ...(options.markStale ? { tags: ['status:superseded'] } : {}),
         });
         continue;
       }
@@ -223,7 +228,7 @@ async function runFamily(kernel: ReturnType<typeof createMemoryKernel>, scenario
 
   for (const scenario of scenarios) {
     for (const turn of scenario.turns) {
-      await kernel.ingest({ content: turn.content, projectId: scenario.projectId, tags: [turn.turnId] });
+      await kernel.ingest({ content: turn.content, projectId: scenario.projectId, tags: [turn.turnId, ...(turn.tags ?? [])] });
     }
 
     // The arm under test: cogmem's own recall, measured on its own.
@@ -288,6 +293,7 @@ function measure(context: ContextItem[], latencyMs: number, scenario: Scenario):
 export async function runScorecard(options: { items: number; seed: number }): Promise<{
   recall: ArmResult[];
   currentTruth: ArmResult[];
+  currentTruthMarked: ArmResult[];
   scenarios: number;
   seed: number;
 }> {
@@ -296,13 +302,15 @@ export async function runScorecard(options: { items: number; seed: number }): Pr
   const now = Date.now();
   const recallScenarios = buildScenarios(options.items, options.seed);
   const supersessionScenarios = buildSupersessionScenarios(options.items, options.seed);
+  const markedScenarios = buildSupersessionScenarios(options.items, options.seed, { markStale: true });
 
   const recall = await runFamily(kernel, recallScenarios, now);
   const currentTruth = await runFamily(kernel, supersessionScenarios, now + 1);
+  const currentTruthMarked = await runFamily(kernel, markedScenarios, now + 2);
   kernel.close();
   rmSync(dir, { recursive: true, force: true });
 
-  return { recall, currentTruth, scenarios: recallScenarios.length, seed: options.seed };
+  return { recall, currentTruth, currentTruthMarked, scenarios: recallScenarios.length, seed: options.seed };
 }
 
 function table(results: ArmResult[], withStale: boolean): string[] {
@@ -335,11 +343,15 @@ async function main(): Promise<void> {
   console.log('');
   for (const line of table(result.recall, false)) console.log(line);
   console.log('');
-  console.log('### Family B — the same fact superseded by a later statement');
+  console.log('### Family B — superseded, with nothing marking it stale');
   console.log('');
   for (const line of table(result.currentTruth, true)) console.log(line);
   console.log('');
-  for (const arm of [...result.recall, ...result.currentTruth]) {
+  console.log('### Family B′ — the same, with the stale statement tagged `status:superseded`');
+  console.log('');
+  for (const line of table(result.currentTruthMarked, true)) console.log(line);
+  console.log('');
+  for (const arm of [...result.recall, ...result.currentTruth, ...result.currentTruthMarked]) {
     if (arm.misses.length > 0) console.log(`${arm.arm}: missed ${arm.misses.length} of ${items}`);
     if (arm.staleItems.length > 0) console.log(`${arm.arm}: leaked the superseded value in ${arm.staleItems.length} of ${items}`);
   }

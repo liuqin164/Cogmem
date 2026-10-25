@@ -39,9 +39,10 @@ bun run scorecard              # bun run scorecard --json --markdown for machine
 ### Family B — the same fact superseded, which is what the structure is for
 
 The first family is lexical, so a vector ranker is expected to do well on it. The second
-asks the question the structure exists to answer: a fact stated twice, the earlier
-statement superseded, the query naming the thing rather than the value. `stale value
-leaked` is whether the **superseded** value appears in the returned context at all.
+asks the question the structure exists to answer: a fact stated twice, the earlier statement
+superseded, the query naming the thing rather than the value. `stale value leaked` is whether
+the **superseded** value appears in the returned context at all — and it is measured twice,
+once as written and once with the stale statement carrying the marker the host path honours.
 
 | arm | current truth found | stale value leaked | provenance | context tokens/turn | p95 latency |
 | --- | --- | --- | --- | --- | --- |
@@ -49,34 +50,54 @@ leaked` is whether the **superseded** value appears in the returned context at a
 | `fixed_recent_window_4` | 87.5% | 0.0% | 100% | 74 | 0.0 ms |
 | `vector_topk_3_hashing` | 100.0% | 100.0% | 100% | 59 | 0.2 ms |
 
-### Where the default path loses, and what these numbers do and do not say
+### Family B′ — the same fact, with the stale statement marked
 
-- **On supersession it does not beat a plain window.** The default path put the
-  superseded value into the context in **23 of 24 scenarios**, against 0% for the recent
-  window and 100% for the vector ranker. If the claim is that structure suppresses stale
-  memory, this fixture does not show it.
-- **Recall, family A: 87.5% against the lexical baseline's 100%** — three misses of 24 —
-  and it beats the recent-window baseline's 45.8%.
-- **Context size: it loses, 105 tokens per turn against 53** in family A. Roughly twice
-  the context for less recall.
-- **Latency: it loses, 16.9 ms against 0.2 ms.** It does work the baselines do not: a
-  SQLite round trip, graph traversal, scope filtering.
-- **Provenance: a three-way tie at 100%**, and the tie carries little information,
-  because every arm returns items that identify themselves.
+`status:superseded` is the marker the **host** recall block honours when it decides what
+reaches the model. Nothing in `src/` writes it — it comes from curation or review — so the
+two cases have to be measured apart: a run that marks nothing measures a system that was
+never told.
 
-**The qualifier matters more than the number.** With no provider configured the kernel
-runs `rule_only`, and **every one of the 48 recalls was served from `raw_evidence` —
-none was answered from compiled memory**. Whether the temporal and governance layer
-suppresses a superseded statement *once memories are compiled* is therefore not what
-this measured: this is the raw-evidence floor. A stale-leakage figure from this fixture
-must not be published as a property of cogmem's governance without a provider run, and
-the recent-window baseline's 0% is not quality either — its window simply does not reach
-back far enough to see the stale turn, and it misses the current truth in 3 scenarios
-for exactly that reason.
+| arm | current truth found | stale value leaked | provenance | context tokens/turn | p95 latency |
+| --- | --- | --- | --- | --- | --- |
+| `cogmem_default` | 75.0% | **95.8%** | 100% | 109 | 14.1 ms |
+| `fixed_recent_window_4` | 87.5% | 0.0% | 100% | 74 | 0.0 ms |
+| `vector_topk_3_hashing` | 100.0% | 100.0% | 100% | 59 | 0.1 ms |
 
-Family A's recall numbers are unchanged from the earlier table because that fixture is
-unchanged; latency varies slightly between runs, which is why it is the least interesting
-column here.
+**Identical to Family B.** Marking the stale statement changes nothing on this path, which
+is the finding of the three tables taken together, and it is two findings rather than one:
+
+1. **Nothing marks a raw turn stale.** In a `rule_only` run the kernel serves raw
+   evidence, and raw evidence arrives unmarked. A leakage figure from Family B is a
+   statement about a system that was never told, not about governance failing.
+2. **When it *is* told, this path still returns the item.** The host recall block excludes
+   `status:superseded` from the block it renders; `kernel.recall` returns it anyway, with
+   the tag visible on the returned item. Measured: 23 of 24 scenarios in both families.
+
+The second is a concrete inconsistency between two paths in the same codebase, and it does
+not need a model to reproduce — `bun run scorecard` shows it, and a one-item version of it
+is in the issue. Which of the two behaviours is right is a decision (evidence is arguably
+evidence, and the tag is visible to callers), but the two paths disagreeing is not.
+
+### Where the default path loses
+
+- **Recall, family A: 87.5% against the lexical baseline's 100%** — three misses of 24 — and
+  it beats the recent-window baseline's 45.8%.
+- **Context size: it loses, 105 tokens per turn against 53** in family A. Roughly twice the
+  context for less recall.
+- **Latency: it loses, 16.9 ms against 0.2 ms.** It does work the baselines do not: a SQLite
+  round trip, graph traversal, scope filtering.
+- **Provenance: a three-way tie at 100%**, and the tie carries little information, because
+  every arm returns items that identify themselves.
+- **Supersession: it does not beat a plain window.** 23 of 24 scenarios carry the superseded
+  value, marked or not, against 0% for the recent window and 100% for the vector ranker. The
+  window's 0% is not quality — it cannot reach far enough back to see the stale turn, which
+  is also why it misses the current truth in 3 scenarios.
+
+**The `rule_only` qualifier still applies to all of it.** With no provider configured the
+kernel runs `rule_only`, and every recall in all three families was served from
+`raw_evidence` — none from compiled memory. Whether compilation would suppress a superseded
+statement is not what these tables measured. A number from this fixture must not be
+published as a property of cogmem's governance.
 
 ### The benchmark groups have no numbers to publish
 
