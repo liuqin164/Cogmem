@@ -17,9 +17,12 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/d
 - **`dist/` is not tracked (#53).** A source checkout must run `bun run build` before anything that
   reads build output (the OpenClaw plugin installer falls back to `dist/public.js`, and `prepublishOnly`
   now builds *before* the test suite). `git ls-files dist` is 0 by design; `npm pack` still ships it.
-- **Tests need a writable temp dir.** Under the DSH sandbox `/tmp` is read-restricted, so
-  `bun test __tests__` fails ~20 `mcp-http` cases with `SQLITE_CANTOPEN`. Run it as
+- **Tests need a writable temp dir.** Under the DSH sandbox, writes outside the workspace are
+  refused, so the SQLite operations that need a temporary file — the `VACUUM` in the snapshot export
+  and in `forgetUser` — fail with `SQLITE_CANTOPEN`. Run the suite as
   `TMPDIR="$PWD/.cogmem/tmp" bun test __tests__`; `.cogmem/` is gitignored, so this leaves no trace.
+  Do not attribute ~20 `mcp-http` failures to this: that count was checked and did not reproduce
+  (`mcp-http.unit.test.ts` runs 23/0 with an emptied TMPDIR).
 - **The active branch is `feat/cogmem-4.0-multi-bot`, not `main`.** 4.0.0 is unreleased; do not tag
   or publish without the owner's explicit go-ahead. A tag is not a free label here: the owner's
   release flow creates the GitHub Release through the tag, and `release: published` runs

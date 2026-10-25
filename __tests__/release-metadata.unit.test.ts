@@ -356,7 +356,9 @@ describe('documented tool profile counts match the shipped registry', () => {
   });
 
   test('the dist entrypoint agrees with its source', () => {
-    // dist is checked in, so a stale build ships. A stale dist/bin/mcp.js once
+    // `dist/` is not tracked (#53), so this reads whatever the checkout last
+    // built — `prepublishOnly` builds before the suite for exactly that reason.
+    // A stale dist/bin/mcp.js once
     // opened a bare Database before the kernel existed, which created
     // shared_items first and made a fresh DB fail schema detection with
     // `unsupported_database_identity`. Each entrypoint must resolve shared
