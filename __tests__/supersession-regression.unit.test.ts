@@ -128,4 +128,76 @@ describe('Issue #72: supersession detection in raw_evidence recall', () => {
 
     kernel.close();
   });
+
+  test('an untagged rule_only deployment still supersedes — the default path', async () => {
+    // The scorecard writes raw turns with no `agent:` tag, because `rule_only`
+    // has no host identity to write. An earlier version of this filter treated
+    // "no hostId" as "unknown speaker, do not compare", which is why it looked
+    // fixed here and stayed at 95.8% leakage in `bun run scorecard`. This case
+    // pins the untagged path so the fixture cannot hide it again.
+    const dir = makeTempDir('cogmem-untagged-supersession-');
+    const kernel = createMemoryKernel({ dbPath: `${dir}/memory.db` });
+    const projectId = 'untagged-project';
+
+    await kernel.ingest({
+      content: 'The index rebuild for atlas was scheduled on day 9. Ticket OLD-UNTAGGED.',
+      projectId,
+      tags: ['turn-1'],
+    });
+    await kernel.ingest({
+      content: 'Correction: the index rebuild for atlas is now scheduled on day 10. Ticket NEW-UNTAGGED.',
+      projectId,
+      tags: ['turn-2'],
+    });
+
+    const result = kernel.recall('When is the index rebuild for atlas now scheduled?', {
+      projectId,
+      includeRawEvidence: true,
+    });
+    const allText = [
+      ...result.rawEvidence.map((n) => n.content),
+      ...result.compiledMemory.facts.map((f) => String(f.statement)),
+      ...result.compiledMemory.events.map((e) => String(e.summary)),
+    ].join('\n');
+
+    expect(allText).toContain('NEW-UNTAGGED');
+    expect(allText).not.toContain('OLD-UNTAGGED');
+
+    kernel.close();
+  });
+
+  test('a correction the ranker buried is still resolved before truncation', async () => {
+    // The correction usually ranks below the statement it replaces. If the
+    // candidate list is cut to `limit` first, the stale statement survives and
+    // the correction is never seen — a leak no later filter can undo.
+    const dir = makeTempDir('cogmem-buried-correction-');
+    const kernel = createMemoryKernel({ dbPath: `${dir}/memory.db` });
+    const projectId = 'buried-project';
+
+    await kernel.ingest({
+      content: 'The retention sweep for flint was scheduled on day 2. Ticket OLD-BURIED.',
+      projectId,
+    });
+    for (let index = 0; index < 6; index += 1) {
+      await kernel.ingest({
+        content: `The retention sweep for team-${index} is scheduled on day ${10 + index}. Ticket D-${index}.`,
+        projectId,
+      });
+    }
+    await kernel.ingest({
+      content: 'Correction: the retention sweep for flint is now scheduled on day 3. Ticket NEW-BURIED.',
+      projectId,
+    });
+
+    const result = kernel.recall('When is the retention sweep for flint now scheduled?', {
+      projectId,
+      includeRawEvidence: true,
+      limit: 3,
+    });
+    const allText = result.rawEvidence.map((n) => n.content).join('\n');
+
+    expect(allText).not.toContain('OLD-BURIED');
+
+    kernel.close();
+  });
 });

@@ -46,9 +46,28 @@ once as written and once with the stale statement carrying the marker the host p
 
 | arm | current truth found | stale value leaked | provenance | context tokens/turn | p95 latency |
 | --- | --- | --- | --- | --- | --- |
-| `cogmem_default` | 75.0% | **95.8%** | 100% | 109 | 14.5 ms |
+| `cogmem_default` | 91.7% | **4.2%** | 100% | 108 | 14.3 ms |
 | `fixed_recent_window_4` | 87.5% | 0.0% | 100% | 74 | 0.0 ms |
-| `vector_topk_3_hashing` | 100.0% | 100.0% | 100% | 59 | 0.2 ms |
+| `vector_topk_3_hashing` | 100.0% | 100.0% | 100% | 59 | 0.1 ms |
+
+**Before #72 was fixed this arm read 75.0% / 95.8%** — 23 of 24 scenarios carried the
+superseded value. `BrainRecall._filterSuperseded` now resolves it on the `raw_evidence` path
+itself, with no marker and no curation: statements from the same speaker inside one project
+that share a subject phrase are compared, and when the newest reads as a correction the older
+ones are dropped. The rule, including what it refuses to guess, is in the method's comment.
+
+Two details made the difference between a filter that looks right and one that works, and both
+are now regression tests rather than assumptions:
+
+- **An untagged statement is a speaker, not "unknown".** `rule_only` writes raw turns with no
+  `agent:` tag. Treating that as incomparable is what kept the number at 95.8% while a
+  hand-tagged unit test passed.
+- **Supersession resolves before the candidate list is truncated.** A correction usually ranks
+  *below* the statement it replaces, so cutting to `limit` first drops the current value and
+  leaves only the stale one — a leak no later filter can undo.
+
+The remaining 4.2% is one scenario where the correction's subject phrase does not match the
+statement it replaces; the conservative rule leaves both, which is the documented choice.
 
 ### Family B′ — the same fact, with the stale statement marked
 
@@ -59,7 +78,7 @@ told, and the two cases are measured apart.
 
 | arm | current truth found | stale value leaked | provenance | context tokens/turn | p95 latency |
 | --- | --- | --- | --- | --- | --- |
-| `cogmem_default` | 75.0% | 95.8% | 100% | 109 | 14.4 ms |
+| `cogmem_default` | 91.7% | 4.2% | 100% | 108 | 21.0 ms |
 | `fixed_recent_window_4` | 87.5% | 0.0% | 100% | 74 | 0.0 ms |
 | `vector_topk_3_hashing` | 100.0% | 100.0% | 100% | 59 | 0.1 ms |
 
@@ -96,9 +115,10 @@ been suppressed for. Each family now has its own projects.
 - **Latency**: 16.9 ms against 0.2 ms in family A. It does work the baselines do not.
 - **Provenance: a three-way tie at 100%**, which carries little information, because every
   arm returns items that identify themselves.
-- **Supersession**: with nothing marked, the default path carries the superseded value in 23
-  of 24 scenarios, against 0% for the recent window and 100% for the vector ranker — and the
-  window's 0% is not quality, since it cannot reach far enough back to see the stale turn.
+- **Supersession: the default path is now within its target** — 4.2% leakage against a ≤10%
+  target, with current-truth recall at 91.7% against a ≥87.5% floor. Before #72 it was 95.8% /
+  75.0%. The recent window's 0% is still not quality: its window does not reach far enough back
+  to see the stale turn, which is also why it misses the current truth in 3 of 24.
 
 **The `rule_only` qualifier applies to all of it**: with no provider configured, every
 recall in these families was served from `raw_evidence`, so nothing here says what compiled

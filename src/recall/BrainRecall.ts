@@ -37,6 +37,24 @@ import { matchesProjectScope } from '../topology/ProjectScope.js';
 
 export type { BrainRecallResult } from '../types/BrainRecallResult.js';
 
+/**
+ * Words that end the subject phrase. Everything from the first of these onward
+ * is the *value* being asserted — a date, a state, a ticket — and the value is
+ * exactly what differs between a statement and the correction that replaces it.
+ * Keeping it in the signature would give the two different keys and no
+ * supersession would ever be detected.
+ */
+const SUBJECT_TERMINATORS = new Set([
+  'is', 'was', 'are', 'were', 'will', 'now', 'scheduled', 'schedules',
+  'on', 'at', 'in', 'starts', 'start', 'begins', 'begin', 'moves', 'moved',
+  'runs', 'ran', 'happens', 'happened', 'becomes', 'became',
+]);
+
+/** Filler inside the subject phrase: it does not distinguish one subject from another. */
+const SUBJECT_FILLER = new Set([
+  'the', 'a', 'an', 'for', 'of', 'to', 'and', 'or', 'our', 'its', 'their', 'his', 'her',
+]);
+
 export interface BrainRecallOptions {
   projectId?: string;
   now?: number;
@@ -191,10 +209,16 @@ export class BrainRecall {
     }).filter((item) => matchesProjectScope(options.projectId, item.projectId));
 
     const compiledHitCount = beliefs.length + facts.length + events.length + entityTimeline.length;
-    const rawEvidence = options.includeRawEvidence === false
+    // Supersession has to be resolved *before* the candidate list is cut to
+    // `limit`. A correction often ranks below the statement it replaces, so
+    // truncating first can drop the current value and leave only the stale one —
+    // which is a leak that filtering afterwards cannot undo.
+    const rawCandidates = options.includeRawEvidence === false
       ? []
-      : this.toRecallableNeurons(candidateNeuronIds, limit)
+      : this.toRecallableNeurons(candidateNeuronIds, limit * 4)
           .filter((neuron) => matchesProjectScope(options.projectId, neuron.metadata.projectId));
+    this._filterSuperseded(rawCandidates, options.projectId);
+    const rawEvidence = rawCandidates.slice(0, limit);
     this._expandByCommunity(rawEvidence, limit, options.projectId);
     if (topicRouteResult && !topicRouteResult.fallbackToGlobal && options.includeRawEvidence !== false) {
       const summaryTopicPath = topicRouteResult.matchedTopicPath ?? options.topicPath ?? rawEvidence[0]?.metadata.topicPath ?? '';
@@ -208,8 +232,6 @@ export class BrainRecall {
     for (let index = rawEvidence.length - 1; index >= 0; index -= 1) {
       if (!matchesProjectScope(options.projectId, rawEvidence[index]?.metadata.projectId)) rawEvidence.splice(index, 1);
     }
-    // Filter superseded statements: same hostId + projectId, newer statement takes precedence
-    this._filterSuperseded(rawEvidence, options.projectId);
     const profileSignals = this.collectProfileSignals(query, options.projectId, limit);
     const profileSurface = this.collectProfileSurface(query, options.projectId, limit);
 
@@ -277,61 +299,58 @@ export class BrainRecall {
   }
 
   /**
-   * Filter out superseded statements from raw evidence.
+   * Filter out statements a later statement replaced.
    *
-   * Rule: within the same project, statements from the same hostId about the
-   * same canonical topic are compared by recency. A newer statement that
-   * explicitly corrects or replaces an older one causes the older to be
-   * excluded from recall results. Different hostIds never supersede each other
-   * (agent isolation per #65).
+   * The rule, stated so `BENCHMARKS.md` and this code cannot drift apart:
    *
-   * Detection is conservative: we group neurons by extracting key entities/topics
-   * from their content. Neurons in the same group from the same hostId are
-   * sorted by timestamp; the most recent is kept, older ones are filtered out.
+   * - **Scope**: only statements inside one project are compared. `rawEvidence`
+   *   is already project-filtered by the caller, so a group never spans projects.
+   * - **Who**: two statements are only compared when they come from the same
+   *   speaker. A speaker is the `agent:` tag when the writer recorded one, and a
+   *   single anonymous speaker otherwise — a `rule_only` deployment writes raw
+   *   turns with no agent tag, and treating those as "unknown, therefore
+   *   incomparable" is what left the superseded value in 23 of 24 scorecard
+   *   scenarios. Different `agent:` tags never supersede each other (#65).
+   * - **What**: the topic signature — the leading content words after a
+   *   correction prefix and the usual stopwords are dropped. Two statements
+   *   sharing it are about the same thing; anything else is left alone.
+   * - **Which wins**: the newest statement by `createdAt`, and only when it
+   *   reads as a correction. Older statements in that group are dropped rather
+   *   than returned alongside it.
+   * - **When unsure**: nothing is dropped. A group whose newest statement does
+   *   not look like a correction keeps every member, because losing a real
+   *   memory is worse than showing a stale one next to its replacement.
    */
   private _filterSuperseded(rawEvidence: Neuron[], projectId?: string): void {
     if (rawEvidence.length <= 1) return;
 
-    // Group neurons by (hostId, topicKey) where topicKey is derived from content
     const groups = new Map<string, Neuron[]>();
-
     for (const neuron of rawEvidence) {
-      const hostId = this.extractHostId(neuron);
       const topicKey = this.extractTopicKey(neuron);
-      if (!hostId || !topicKey) continue;
+      if (!topicKey) continue;
 
-      const key = `${hostId}|${topicKey}`;
+      // An untagged statement is not "unknown": it is the single anonymous
+      // speaker a rule_only deployment writes as, so it supersedes its own
+      // earlier statements. Only a *named* agent is a separate speaker.
+      const speaker = this.extractHostId(neuron) ?? '_';
+      const key = `${speaker}|${topicKey}`;
       const group = groups.get(key) ?? [];
       group.push(neuron);
       groups.set(key, group);
     }
 
-    // For each group, keep only the most recent neuron
     const toRemove = new Set<string>();
     for (const group of groups.values()) {
       if (group.length <= 1) continue;
-
-      // Sort by createdAt descending (newest first)
       group.sort((a, b) => (b.metadata.createdAt ?? 0) - (a.metadata.createdAt ?? 0));
-
-      // Check if the newest is a correction/supersession of the older ones
-      const newest = group[0];
-      const newestContent = newest.content.toLowerCase();
-      const isCorrection = this.looksLikeCorrection(newestContent);
-
-      if (isCorrection) {
-        // Mark older ones for removal
-        for (let i = 1; i < group.length; i++) {
-          toRemove.add(group[i].id);
-        }
+      if (!this.looksLikeCorrection(group[0]!.content)) continue;
+      for (let index = 1; index < group.length; index += 1) {
+        toRemove.add(group[index]!.id);
       }
     }
 
-    // Remove superseded neurons
-    for (let i = rawEvidence.length - 1; i >= 0; i--) {
-      if (toRemove.has(rawEvidence[i].id)) {
-        rawEvidence.splice(i, 1);
-      }
+    for (let index = rawEvidence.length - 1; index >= 0; index -= 1) {
+      if (toRemove.has(rawEvidence[index]!.id)) rawEvidence.splice(index, 1);
     }
   }
 
@@ -344,33 +363,43 @@ export class BrainRecall {
     return undefined;
   }
 
+  /**
+   * The topic signature two statements have to share to be compared.
+   *
+   * It is the **subject phrase** — the content words up to the first value
+   * marker (`is`, `on`, `scheduled`, a date…) — with filler removed. That is the
+   * part a correction keeps and a different fact does not: "the deployment
+   * window for beacon" is the subject, "day 3" and "day 17" are the values the
+   * correction replaced. Two teams' schedules keep different subjects, so they
+   * never collapse into one group.
+   */
   private extractTopicKey(neuron: Neuron): string | undefined {
-    // Use explicit topicPath if available
     if (neuron.metadata.topicPath) return neuron.metadata.topicPath;
 
-    // Fall back to extracting from tags
     const tags = neuron.metadata.tags || [];
     for (const tag of tags) {
       if (tag.startsWith('topic:')) return tag.slice(6);
       if (tag.startsWith('canonicalKey:')) return tag.slice(13);
     }
 
-    // Fall back to content-based key, normalized to remove correction prefixes
-    const normalizedContent = this.normalizeContentForTopicKey(neuron.content);
-    const words = normalizedContent
-      .toLowerCase()
-      .match(/[a-z0-9\u4e00-\u9fff]{3,}/g) ?? [];
-    if (words.length >= 2) {
-      return words.slice(0, 4).join(' ');
+    const normalized = this.normalizeContentForTopicKey(neuron.content);
+    const words = (normalized.toLowerCase().match(/[a-z0-9\u4e00-\u9fff]{2,}/g) ?? []);
+    const subject: string[] = [];
+    for (const word of words) {
+      if (SUBJECT_TERMINATORS.has(word)) break;
+      if (SUBJECT_FILLER.has(word)) continue;
+      subject.push(word);
+      if (subject.length >= 6) break;
     }
-    return undefined;
+    return subject.length >= 2 ? subject.join(' ') : undefined;
   }
 
   private normalizeContentForTopicKey(content: string): string {
-    // Remove common correction prefixes to group superseded/superseding statements together
+    // A correction prefix is framing, not subject: strip it so the correction
+    // and the statement it replaces produce the same signature.
     return content
-      .replace(/^(correction|更正|纠正|update|updated):\s*/i, '')
-      .replace(/^correction[:：]\s*/i, '')
+      .replace(/^(correction|update|updated)\s*[:：]\s*/i, '')
+      .replace(/^(更正|纠正|已更新)\s*[:：]\s*/, '')
       .trim();
   }
 
