@@ -1,2 +1,13 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# `dist/` is committed on purpose: a source checkout that has not been built still
+# has to work (the OpenClaw plugin installer falls back to `dist/public.js`), and
+# the build's staging-then-swap strategy exists because the directory is tracked.
+#
+# It is also generated, and it is half of every source diff — so mark it as such.
+# Reviewers that honour this attribute collapse these files by default, which
+# removes the noise without changing what is tracked, built or published. Issue #53
+# keeps the larger question of untracking it: it has two real consumers, and that
+# is the maintainer's call.
+dist/** linguist-generated=true
