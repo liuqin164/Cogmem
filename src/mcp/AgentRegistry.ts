@@ -14,9 +14,9 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
-import { defaultCogmemHome } from '../config/CogmemConfig.js';
+import { defaultCogmemHome, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
 import type { McpToolProfile } from './profiles.js';
 
 export interface RegisteredAgent {
@@ -211,4 +211,45 @@ export function registerAgent(input: RegisterAgentInput): RegisteredAgentCredent
 /** `~/.cogmem/agents.json` — next to the config, and not inside it. */
 export function defaultAgentRegistryPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(defaultCogmemHome(env), 'agents.json');
+}
+
+export interface AgentRegistryLookup {
+  /** Where a registry is read from, or undefined when none is configured. */
+  path?: string;
+  /**
+   * True when the caller named the path instead of it being discovered. A named
+   * registry that cannot be read is a misconfiguration, not the single-agent
+   * case (#80).
+   */
+  explicit: boolean;
+}
+
+/**
+ * Where this connection's registry lives.
+ *
+ * The Workspace first, then beside the home directory (ADR-0010): `init --scope
+ * project --register-agent` writes `<workspace>/.cogmem/agents.json`, and a
+ * reader that looked only beside the home directory found nothing, concluded
+ * "single agent", and served a registered agent as an unregistered one — no
+ * credential demanded and no project confinement (ADR-0006). An existing
+ * home-scoped registry keeps working, because it is the fallback.
+ *
+ * `path: undefined` means no registry is configured anywhere. That is a
+ * *different* answer from "a credential arrived and nothing could identify it",
+ * and only the second is refused.
+ */
+export function resolveAgentRegistryPath(
+  options: { explicit?: string; configPath?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): AgentRegistryLookup {
+  const env = options.env ?? process.env;
+  const explicit = options.explicit?.trim();
+  if (explicit) return { path: resolve(explicit), explicit: true };
+
+  const workspaceRegistry = join(resolveWorkspaceRoot({ cwd: options.cwd, configPath: options.configPath, env }), '.cogmem', 'agents.json');
+  if (existsSync(workspaceRegistry)) return { path: workspaceRegistry, explicit: false };
+
+  const homeRegistry = defaultAgentRegistryPath(env);
+  if (existsSync(homeRegistry)) return { path: homeRegistry, explicit: false };
+
+  return { explicit: false };
 }

@@ -22,11 +22,13 @@
  * `context` is the block to inject, empty when nothing surfaced; `remember`
  * returns the stored-turn result.
  */
+import { existsSync } from 'node:fs';
+
 import { KernelAgentMemoryBackend } from '../agent/AgentMemoryBackend.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
 import { recallForHost, rememberForHost, type HostIdentity } from '../host/bridge/HostBridge.js';
 import { formatStrategyContext } from '../strategy/StrategyContextFormatter.js';
-import { defaultAgentRegistryPath, loadAgentRegistry } from '../mcp/AgentRegistry.js';
+import { loadAgentRegistry, resolveAgentRegistryPath } from '../mcp/AgentRegistry.js';
 
 function readArg(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -56,8 +58,22 @@ if (command !== 'recall' && command !== 'remember') {
  * a host that does not name itself would have its turns recorded under whatever
  * default we picked, and the store would lie about where memory came from.
  */
-const registry = loadAgentRegistry(readArg('--agents') ?? defaultAgentRegistryPath());
+// Workspace first, then beside the home directory (ADR-0010): the registry
+// `init --scope project --register-agent` wrote is found from the Workspace it
+// was written under, which is the only place its readers were not looking (#80).
+const registryLookup = resolveAgentRegistryPath({ explicit: readArg('--agents'), configPath: readArg('--config') });
+if (registryLookup.explicit && registryLookup.path && !existsSync(registryLookup.path)) {
+  fail(`--agents ${registryLookup.path} does not exist. A named registry that cannot be read is not the single-agent case.`);
+}
+const registry = registryLookup.path ? loadAgentRegistry(registryLookup.path) : undefined;
 const credential = readArg('--token') ?? process.env.COGMEM_AGENT_TOKEN;
+// A credential is a claim to an identity. With no registry there is nothing that
+// can establish it, and answering the turn as an anonymous single agent is the
+// fail-open direction ADR-0006 closed. No credential at all still means
+// single-agent, which is a different statement (#80).
+if (!registry && credential) {
+  fail('a credential was presented but no agent registry was found for this workspace or home directory. Run cogmem init --register-agent <hostId>, or pass --agents <path>; a credential that cannot be identified is refused.');
+}
 const claimedHostId = readArg('--host');
 
 let hostId: string;

@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { startCogmemMcpServer } from '../mcp/server.js';
 import { startCogmemMcpHttpServer } from '../mcp/http.js';
-import { defaultAgentRegistryPath, loadAgentRegistry } from '../mcp/AgentRegistry.js';
+import { loadAgentRegistry, resolveAgentRegistryPath } from '../mcp/AgentRegistry.js';
 import { resolveProfile, type McpToolProfile } from '../mcp/profiles.js';
 import { resolveWorkspaceRoot } from '../config/CogmemConfig.js';
 
@@ -91,7 +92,7 @@ function usage(): string {
     '  --project <id>          Bind this connection to one project; conflicting projectId calls are rejected',
     '  --profile <core|admin|full>  Tool surface (default: core)',
     '  --token <value>         Require Authorization: Bearer <value> over HTTP',
-    '  --agents <agents.json>  Registered agents and credentials (default: ~/.cogmem/agents.json when present)',
+    '  --agents <agents.json>  Registered agents and credentials (default: <workspace>/.cogmem/agents.json, then ~/.cogmem/agents.json, when present)',
     '',
     'Examples:',
     '  cogmem mcp --db ~/.cogmem/memory.db',
@@ -117,17 +118,38 @@ async function main(): Promise<void> {
     hostId: args.hostId,
   };
 
-  // An absent registry is the single-agent case, not an error; a malformed one
-  // throws, because serving every agent as anonymous while the operator believes
-  // they are registered is the failure this file exists to prevent.
-  const agentsPath = args.agentsPath ? resolve(args.agentsPath) : defaultAgentRegistryPath();
-  const agents = loadAgentRegistry(agentsPath);
+  // Workspace first, then beside the home directory — the same search
+  // `init --register-agent` writes into (ADR-0010). An absent registry is the
+  // single-agent case; a *named* one that cannot be read is a misconfiguration
+  // and refuses to start, because serving every agent as anonymous while the
+  // operator believes they are registered is the failure this file exists to
+  // prevent (#80).
+  const registry = resolveAgentRegistryPath({
+    explicit: args.agentsPath,
+    configPath: args.configPath,
+    cwd: runtime.cwd,
+  });
+  if (registry.explicit && registry.path && !existsSync(registry.path)) {
+    throw new Error(`agent_registry_not_found: ${registry.path} was named but does not exist. A named registry that cannot be read is not the single-agent case.`);
+  }
+  const agents = registry.path ? loadAgentRegistry(registry.path) : undefined;
 
   if (args.transport === 'stdio') {
+    // stdio has no transport to authenticate, so the credential comes from the
+    // environment the host launched this process with — the variable the host
+    // bridge already reads. With a registry configured it is required, exactly as
+    // on HTTP: a registry means identities exist, and a connection that has not
+    // established one must not be served with project access (#80).
+    const credential = args.token ?? process.env.COGMEM_AGENT_TOKEN;
+    const stdioAgent = agents?.resolve(credential);
+    if (agents && !stdioAgent) {
+      throw new Error('agent_credential_required: this machine has a registered agent list, so a credential is required over stdio: set COGMEM_AGENT_TOKEN to a registered credential.');
+    }
     await startCogmemMcpServer(runtime, {
-      profile: args.profile,
+      profile: stdioAgent?.profile ?? args.profile,
       hostId: args.hostId,
-      projectId: args.projectId,
+      projectId: stdioAgent?.projectId ?? args.projectId,
+      ...(stdioAgent ? { authenticatedHostId: stdioAgent.hostId } : {}),
     });
     return;
   }

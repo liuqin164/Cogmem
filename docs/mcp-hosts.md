@@ -183,28 +183,42 @@ exceed the launch profile.
 ### Registering several agents
 
 One resident server can serve several agents, each with private memory. Each
-agent is registered with its own credential in `~/.cogmem/agents.json`:
+agent is registered with its own credential in `<workspace>/.cogmem/agents.json`,
+falling back to `~/.cogmem/agents.json`. Only a digest of the credential is
+stored:
 
 ```json
 {
   "agents": [
-    { "hostId": "bot-a", "token": "<secret>", "projectId": "project-a", "profile": "admin" },
-    { "hostId": "bot-b", "token": "<secret>", "projectId": "project-b" }
+    { "hostId": "bot-a", "tokenDigest": "<sha256 hex>", "projectId": "project-a", "profile": "admin" },
+    { "hostId": "bot-b", "tokenDigest": "<sha256 hex>", "projectId": "project-b" }
   ]
 }
 ```
 
-`cogmem mcp --transport http` loads that file when it exists; `--agents <path>`
-points somewhere else. With a registry loaded the credential decides the
-identity: a request that presents no registered credential is refused with `401`
-even on loopback, `projectId` is the project that agent is confined to, and
-`profile` is that agent's ceiling. A header may narrow those fields but never
-change them — a `hostId` that disagrees is rejected with
-`host_identity_mismatch`.
+Readers look in the Workspace first, then beside the home directory: a
+registration written by `cogmem init --scope project --register-agent` is read
+from the Workspace it was written under, from any directory. `--agents <path>`
+points somewhere else, and a path that is named but cannot be read **refuses to
+start** — that is a misconfiguration, not the single-agent case.
 
-A missing file is the single-agent case and is not an error. A file that exists
-and cannot be read is an error, because serving every agent as anonymous while
-the operator believes they are registered is the failure the file prevents.
+With a registry loaded the credential decides the identity: a request that
+presents no registered credential is refused with `401` even on loopback,
+`projectId` is the project that agent is confined to, and `profile` is that
+agent's ceiling. A header may narrow those fields but never change them — a
+`hostId` that disagrees is rejected with `host_identity_mismatch`.
+
+The **stdio** transport enforces it the same way, from the environment the host
+launched the process with: with a registry loaded, `cogmem mcp` requires
+`COGMEM_AGENT_TOKEN` to hold a registered credential and exits with
+`agent_credential_required` otherwise. A credential that cannot be found is
+refused, never served as an anonymous client with project access.
+
+No registry anywhere is the single-agent case and is not an error — but a
+credential that arrives when there is no registry to identify it *is* refused,
+which is a different answer from "no registry configured". A file that exists and
+cannot be read is an error, because serving every agent as anonymous while the
+operator believes they are registered is the failure the file prevents.
 
 Register an agent with `init`, which mints the credential for you:
 

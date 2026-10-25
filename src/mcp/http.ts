@@ -159,11 +159,22 @@ export async function startCogmemMcpHttpServer(
         }
       }
 
+      // A presented credential is a claim to an identity. With no registry
+      // anywhere there is nothing that can establish one, and answering the
+      // connection as an anonymous single agent is the fail-open direction
+      // ADR-0006 closed (#80). This is deliberately a different answer from "no
+      // registry configured", which stays supported: a client that presents no
+      // credential is still served.
+      const presented = bearerToken(request);
+      if (!hasAgentRegistry && !useGlobalToken && presented !== undefined) {
+        return new Response('unauthorized: credential presented but no agent registry was found', { status: 401 });
+      }
+
       // With a registry the credential *is* the identity, so an unregistered one
       // is refused even on loopback: a local client that presents no registered
       // credential has no agent to be, and letting it through as anonymous is
       // how one agent ends up reading another's memory.
-      const agent = options.agents?.resolve(bearerToken(request));
+      const agent = options.agents?.resolve(presented);
       if (options.agents && !agent) {
         return new Response('unauthorized', { status: 401 });
       }
