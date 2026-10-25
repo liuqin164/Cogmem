@@ -38,9 +38,15 @@ export function tempRunRoot(): string {
     hooked = true;
     // Synchronous on purpose: an exit hook may not await, and a directory this
     // small removes instantly.
-    process.on('exit', () => {
-      removeRunRoot(runRoot!);
-    });
+    const sweep = (): void => {
+      if (runRoot) removeRunRoot(runRoot);
+    };
+    // Two hooks because the first one is not reliable in a test worker: a run that
+    // ends normally does not always leave the root removed, which is why the preload
+    // also clears the temp root before the next run. Signals are deliberately not
+    // handled here — this module should not change how Ctrl-C behaves.
+    process.on('exit', sweep);
+    process.on('beforeExit', sweep);
   }
   return runRoot;
 }

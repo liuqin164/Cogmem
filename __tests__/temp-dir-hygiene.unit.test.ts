@@ -39,9 +39,15 @@ test('tests create temporary directories through the shared helper', () => {
   const offenders: string[] = [];
   for (const file of testFiles(testsRoot)) {
     const source = readFileSync(file, 'utf8');
-    // A call, not the word: an import that survived a migration is untidy but it
-    // does not leak a directory, and treating it as one makes this guard lie.
-    if (!/\bmkdtemp(Sync)?\s*\(/.test(source)) continue;
+    // Comments are stripped first: a file explaining what it used to do is not a
+    // file that does it. Then a *call*, not the word — an import that survived a
+    // migration is untidy but it does not leak anything, and treating it as a leak
+    // makes this guard lie.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    // `tmpdir()` counts too: the file that put named sqlite files straight into the
+    // temp root never called `mkdtemp`, so the first version of this guard could not
+    // see it.
+    if (!/\bmkdtemp(Sync)?\s*\(/.test(code) && !/\btmpdir\s*\(/.test(code)) continue;
     // The issue's wording is "without the shared helper **or** without cleanup",
     // so a file that removes what it creates is not an offender — it is just not
     // migrated yet. This is a string check and therefore a heuristic; the helper
@@ -61,7 +67,8 @@ test('tests create temporary directories through the shared helper', () => {
 test('the not-yet-migrated list only shrinks', () => {
   const stillOffending = NOT_YET_MIGRATED.filter((relative) => {
     const source = readFileSync(join(testsRoot, relative.replace('./', '')), 'utf8');
-    return !/\bmkdtemp(Sync)?\s*\(/.test(source);
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    return !/\bmkdtemp(Sync)?\s*\(/.test(code) && !/\btmpdir\s*\(/.test(code);
   });
   // A file that no longer creates temporary directories, or that now cleans up,
   // must not keep its exemption: the list is debt, not a permanent settlement.

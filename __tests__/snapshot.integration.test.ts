@@ -10,9 +10,10 @@ import {
   SnapshotImporter,
   createMemoryKernel,
 } from '../src/public.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function tempDir(): string {
-  const dir = join(tmpdir(), `core-snapshot-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const dir = makeTempDir('core-snapshot-');
   mkdirSync(dir, { recursive: true });
   return dir;
 }

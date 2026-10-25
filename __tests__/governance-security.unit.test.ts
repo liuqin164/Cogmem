@@ -13,9 +13,10 @@ import { FileBlockStore } from '../src/assets/FileBlockStore.js';
 import { FileChunkStore } from '../src/assets/FileChunkStore.js';
 import { UserModelStore } from '../src/models/UserModelStore.js';
 import { PlanRuntimeStore } from '../src/store/PlanRuntimeStore.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function tempDir(): string {
-  const dir = join(tmpdir(), `core-governance-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const dir = makeTempDir('core-governance-');
   mkdirSync(dir, { recursive: true });
   return dir;
 }

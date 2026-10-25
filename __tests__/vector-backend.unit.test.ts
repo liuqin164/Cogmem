@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { SqliteVecStore, VectorStore, createMemoryKernel } from '../src/public.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function tempDir(): string {
-  const dir = join(tmpdir(), `core-vector-backend-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const dir = makeTempDir('core-vector-backend-');
   mkdirSync(dir, { recursive: true });
   return dir;
 }
