@@ -51,7 +51,8 @@
     "prepublishOnly": "bun run typecheck && bun test __tests__ && bun run build && npm pack --dry-run --json",
     "type": "tsc -p tsconfig.json --noEmit",
     "test": "bun test __tests__",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "scorecard": "bun scripts/scorecard.ts"
   },
   "engines": {
     "bun": ">=1.0.0"
