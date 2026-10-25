@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { AesGcmEncryptionProvider } from '../encryption/index.js';
 import type { MemoryKernelOptions } from '../factory.js';
@@ -35,6 +35,11 @@ export interface CogmemConfigResolutionOptions {
 export interface LoadedCogmemConfig {
   configPath: string;
   homeDir: string;
+  /**
+   * The directory that contains `.cogmem/` — derived, never declared (ADR-0010).
+   * `homeDir` is the config's parent (`<ws>/.cogmem`); this is the Workspace.
+   */
+  workspaceRoot: string;
   options: MemoryKernelOptions;
   modelRegistry: ModelRegistry;
   paths: {
@@ -113,6 +118,74 @@ export function resolveCogmemConfigPath(options: CogmemConfigResolutionOptions =
   return { kind: 'missing', path: globalConfig };
 }
 
+/**
+ * The Workspace: the directory that contains `.cogmem/`.
+ *
+ * Derived, never declared (ADR-0010). The OpenClaw plugin id is a hash of this
+ * path, so two commands that derive it differently compute two identities and
+ * `doctor` can never see the plugin `connect` installed. Every command that
+ * needs to know where it is asks here.
+ *
+ * `--config` decides it when given: the Workspace is the directory whose
+ * `.cogmem/` holds that config. Otherwise it is the nearest ancestor with a
+ * `.cogmem/config.toml`, then the account's global one. Only when neither exists
+ * is it the current directory — which is where `init` will create `.cogmem/`.
+ */
+export function resolveWorkspaceRoot(options: CogmemConfigResolutionOptions = {}): string {
+  const env = options.env || process.env;
+  const cwd = resolve(options.cwd || process.cwd());
+  const explicit = options.configPath;
+  if (explicit?.trim()) return workspaceOfConfigPath(resolvePath(explicit.trim(), cwd, env));
+
+  const globalConfig = defaultCogmemConfigPath(env);
+  const projectConfig = findUp(cwd, join('.cogmem', 'config.toml'), [dirname(globalConfig), osUserHome()]);
+  if (projectConfig) return workspaceOfConfigPath(projectConfig);
+  // A global config names a Workspace too: `<home>` is the directory whose
+  // `.cogmem/` holds it. Reading that as "no Workspace" is what made `doctor`
+  // hash the config directory while `connect` hashed the project.
+  if (existsSync(globalConfig)) return workspaceOfConfigPath(globalConfig);
+  return cwd;
+}
+
+function workspaceOfConfigPath(configPath: string): string {
+  const dir = dirname(resolve(configPath));
+  return basename(dir) === '.cogmem' ? dirname(dir) : dir;
+}
+
+/**
+ * Record that a host is wired: `enabled = true` under `[integrations.<host>]`,
+ * adding the section when the file has none.
+ *
+ * Text-level rather than a TOML round trip, because a serializer would drop the
+ * comments and ordering an operator put into a file this command owns exactly one
+ * boolean of (ADR-0010). A file that already says `true` is not rewritten, so a
+ * repeated `connect` leaves the config byte-identical.
+ */
+export function enableHostIntegration(configPath: string, host: 'openclaw' | 'hermes'): { path: string; changed: boolean } {
+  const path = resolve(configPath);
+  const original = readFileSync(path, 'utf8');
+  const lines = original.replace(/\r\n/g, '\n').split('\n');
+  const header = lines.findIndex((line) => line.trim() === `[integrations.${host}]`);
+
+  if (header === -1) {
+    const prefix = original.trimEnd();
+    writeFileSync(path, `${prefix}${prefix ? '\n\n' : ''}[integrations.${host}]\nenabled = true\n`, 'utf8');
+    return { path, changed: true };
+  }
+
+  let end = header + 1;
+  while (end < lines.length && !/^\s*\[/.test(lines[end])) end += 1;
+  const enabled = lines.findIndex((line, index) => index > header && index < end && /^\s*enabled\s*=/.test(line));
+  if (enabled !== -1) {
+    if (/^\s*enabled\s*=\s*true\s*$/.test(lines[enabled])) return { path, changed: false };
+    lines[enabled] = 'enabled = true';
+  } else {
+    lines.splice(header + 1, 0, 'enabled = true');
+  }
+  writeFileSync(path, `${lines.join('\n').replace(/\n+$/u, '')}\n`, 'utf8');
+  return { path, changed: true };
+}
+
 export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedCogmemConfig {
   const resolution = resolveCogmemConfigPath(options);
   if (resolution.kind !== 'toml') {
@@ -122,6 +195,7 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   const env = options.env || process.env;
   const configPath = resolution.path;
   const homeDir = dirname(configPath);
+  const workspaceRoot = workspaceOfConfigPath(configPath);
   const diagnostics: ConfigDiagnosticLike[] = [];
   let parsed: unknown;
 
@@ -275,12 +349,13 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
 
   const openclawEnabled = booleanValue(openclaw.enabled) === true;
   const hermesEnabled = booleanValue(hermes.enabled) === true;
-  const openclawWorkspaceDir = maybeResolveWorkspace(openclaw.workspace_dir, homeDir, env, diagnostics);
-  const hermesWorkspaceDir = maybeResolveWorkspace(hermes.workspace_dir, homeDir, env, diagnostics);
+  const openclawWorkspaceDir = maybeResolveWorkspace(openclaw.workspace_dir, workspaceRoot, env, diagnostics);
+  const hermesWorkspaceDir = maybeResolveWorkspace(hermes.workspace_dir, workspaceRoot, env, diagnostics);
 
   return {
     configPath,
     homeDir,
+    workspaceRoot,
     options: optionsOut,
     modelRegistry,
     paths: { embeddingsDir, snapshotsDir, logsDir },

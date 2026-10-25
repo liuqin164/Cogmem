@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printCliJson } from './CliJson.js';
 import { automationSafeCommands, connectSteps, type InstallStep } from '../install/InstallSteps.js';
+import { enableHostIntegration, resolveCogmemConfigPath, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
 
 import {
   type OpenClawAutoMemoryInstallResult,
@@ -78,6 +79,11 @@ interface ConnectResult {
   hostConfigSnippet: string;
   autoMemory?: OpenClawAutoMemoryInstallResult;
   hermesMcp?: HermesMcpInstallResult;
+  /**
+   * Where `connect --auto` recorded that this host is wired. `null` means it did
+   * not record one (a dry run, or no config yet), not that the write failed.
+   */
+  integrationEnabled?: { configPath: string; changed: boolean } | null;
 }
 
 type ConnectNextStep = InstallStep;
@@ -137,10 +143,18 @@ function readArgs(argv: string[]): ConnectArgs {
 
   const rawAgent = positionals[0];
   const agent = rawAgent === 'openclaw' || rawAgent === 'hermes' ? rawAgent : undefined;
+  const configPath = stringValue(values.config);
+  // `--workspace` is the operator's override. Otherwise the Workspace is the
+  // directory that contains `.cogmem/`, derived here exactly as `init`, `doctor`
+  // and `update` derive it — the plugin id is a hash of this path, so a second
+  // derivation is a second identity nobody can inspect (ADR-0010).
+  const workspaceRoot = resolve(
+    stringValue(values.workspace) || resolveWorkspaceRoot({ cwd: process.cwd(), configPath }),
+  );
   return {
     agent,
-    workspaceRoot: resolve(stringValue(values.workspace) || '.'),
-    configPath: stringValue(values.config),
+    workspaceRoot,
+    configPath,
     openclawConfigPath: stringValue(values['openclaw-config']),
     hermesConfigPath: stringValue(values['hermes-config']),
     pluginDir: stringValue(values['plugin-dir']),
@@ -278,6 +292,9 @@ function installSkill(args: ConnectArgs): ConnectResult {
     && readFileSync(operationsPath, 'utf8') === operationsTemplate;
   let autoMemory: OpenClawAutoMemoryInstallResult | undefined;
   let hermesMcp: HermesMcpInstallResult | undefined;
+  // Resolved once, so what `connect` installs into and what it records cannot be
+  // two different configs.
+  const cogmemConfig = resolveCogmemConfigPath({ configPath: args.configPath, cwd: args.workspaceRoot });
 
   if (!args.dryRun && !alreadyCurrent) {
     if (existsSync(skillPath) && !args.force) {
@@ -292,7 +309,7 @@ function installSkill(args: ConnectArgs): ConnectResult {
   if (args.agent === 'openclaw' && args.auto) {
     autoMemory = installOpenClawAutoMemoryPlugin({
       workspaceRoot: args.workspaceRoot,
-      configPath: args.configPath,
+      configPath: cogmemConfig.kind === 'toml' ? cogmemConfig.path : args.configPath,
       openclawConfigPath: args.openclawConfigPath,
       pluginDir: args.pluginDir,
       bunPath: args.bunPath,
@@ -310,6 +327,15 @@ function installSkill(args: ConnectArgs): ConnectResult {
     });
   }
 
+  // A Host integration is a fact on disk, and this is the step that establishes
+  // it: record it where the Install gate reads it, so `update` maintains what
+  // `connect` wrote instead of declining because the switch still says otherwise.
+  // Not a tier change — the switch stays Human-required (ADR-0003); what changes
+  // is which human step records it (ADR-0010).
+  const integrationEnabled = !args.dryRun && args.auto && cogmemConfig.kind === 'toml'
+    ? { ...enableHostIntegration(cogmemConfig.path, args.agent), configPath: cogmemConfig.path }
+    : null;
+
   return {
     agent: args.agent,
     workspaceRoot: args.workspaceRoot,
@@ -324,6 +350,7 @@ function installSkill(args: ConnectArgs): ConnectResult {
     hostConfigSnippet: hostConfigSnippet(args.agent, args.workspaceRoot, args.auto),
     autoMemory,
     hermesMcp,
+    integrationEnabled,
   };
 }
 
@@ -471,6 +498,10 @@ function printHuman(result: ConnectResult): void {
     console.log(`  config: ${result.autoMemory.openclawConfigPath}`);
     console.log(`  hooks: ${result.autoMemory.hookNames.join(', ')}`);
     if (result.autoMemory.backupPath) console.log(`  backup: ${result.autoMemory.backupPath}`);
+  }
+  if (result.integrationEnabled) {
+    console.log('');
+    console.log(`integration: ${result.integrationEnabled.configPath} (${result.integrationEnabled.changed ? 'recorded' : 'already recorded'})`);
   }
   if (result.hermesMcp) {
     console.log('');

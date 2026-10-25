@@ -704,14 +704,15 @@ function buildTomlLines(cfg: WizardConfig): string[] {
   if (cfg.encryptionPassphrase) {
     lines.push(`encryption_passphrase = ${tomlString(cfg.encryptionPassphrase)}`);
   }
+  // No `workspace_dir`: the Workspace is derived from where `.cogmem/` is, so a
+  // declared one could only disagree with it (ADR-0010). A config written before
+  // this change still carries `"."`, and that resolves to the Workspace too.
   lines.push('');
   lines.push('[integrations.openclaw]');
   lines.push(`enabled = ${cfg.openClawEnabled}`);
-  lines.push('workspace_dir = "."');
   lines.push('');
   lines.push('[integrations.hermes]');
   lines.push(`enabled = ${cfg.hermesEnabled}`);
-  lines.push('workspace_dir = "."');
   lines.push('');
   return lines;
 }

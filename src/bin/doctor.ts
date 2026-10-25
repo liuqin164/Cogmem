@@ -8,6 +8,7 @@ import {
   defaultOpenClawAutoMemoryPluginDir,
   inspectOpenClawAutoMemoryPlugin,
   installOpenClawAutoMemoryPlugin,
+  type OpenClawAutoMemoryPluginInspection,
 } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { compactStorage } from '../storage/StorageCompactor.js';
 import {
@@ -142,9 +143,14 @@ if (envPath) {
   const error = loaded.diagnostics.find((diagnostic) => diagnostic.severity === 'error');
   if (error) fail(`${error.code}: ${error.message}`, error.code);
 
+  // One Workspace for this config: the directory that contains `.cogmem/`
+  // (ADR-0010). `--workspace` is the operator's override; the per-Host field is
+  // only for a host whose own workspace is genuinely elsewhere, and the config
+  // layer has already resolved it relative to this same Workspace.
+  const workspaceRoot = workspace || loaded.integrations.openclaw.workspaceDir || loaded.workspaceRoot;
+
   if (pluginOnly) {
     if (agent && agent !== 'openclaw') fail('doctor --plugin-only currently supports --agent openclaw.');
-    const workspaceRoot = workspace || loaded.integrations.openclaw.workspaceDir || process.cwd();
     let fixed = undefined as ReturnType<typeof installOpenClawAutoMemoryPlugin> | undefined;
     if (fix) {
       fixed = installOpenClawAutoMemoryPlugin({
@@ -226,7 +232,7 @@ if (envPath) {
       fail('doctor --fix currently requires --agent openclaw.');
     }
     const result = installOpenClawAutoMemoryPlugin({
-      workspaceRoot: workspace || loaded.integrations.openclaw.workspaceDir || process.cwd(),
+      workspaceRoot,
       configPath: resolution.path,
       openclawConfigPath,
       pluginDir,
@@ -237,12 +243,16 @@ if (envPath) {
     ok(`openclaw config patched at ${result.openclawConfigPath}`);
   }
 
-  if (agent === 'openclaw' || workspace) {
-    const workspaceRoot = workspace || loaded.integrations.openclaw.workspaceDir || process.cwd();
-    const inspection = inspectOpenClawAutoMemoryPlugin({
+  // Inspect the plugin when the host is configured, not only when the caller
+  // named it: `connect` records the integration it wired, so a plain `doctor`
+  // after `connect` is exactly the run that must report it installed (ADR-0010).
+  let plugin: OpenClawAutoMemoryPluginInspection | undefined;
+  if (agent === 'openclaw' || workspace || loaded.integrations.openclaw.enabled) {
+    plugin = inspectOpenClawAutoMemoryPlugin({
       workspaceRoot,
       pluginDir: pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot),
     });
+    const inspection = plugin;
     if (inspection.installed) {
       ok(`openclaw plugin ${inspection.current ? 'current' : 'stale'} at ${inspection.pluginDir}`);
       if (!inspection.current) {
@@ -284,7 +294,7 @@ if (envPath) {
   const level = gateDiagnostics.length > 0 ? 'warn' : 'ok';
   emitGate(
     buildGate(level, gateDiagnostics, [...pathSteps, ...postInstallSteps(resolveBinCommand())]),
-    { configPath: resolution.path, dbPath: kernelDbPath, integrations: loaded.integrations },
+    { configPath: resolution.path, workspaceRoot, dbPath: kernelDbPath, integrations: loaded.integrations, openclaw: plugin ? { plugin } : undefined },
   );
 }
 

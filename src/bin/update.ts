@@ -5,6 +5,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
+import { inspectOpenClawAutoMemoryPlugin } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { printCliJson } from './CliJson.js';
 import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
 import { buildGate, installPathSteps, postInstallSteps, type InstallGate, type InstallStep } from '../install/InstallSteps.js';
@@ -201,6 +202,23 @@ function loadConfigForUpdate(args: UpdateArgs, targetCwd: string): { configPath?
   return { configPath: resolution.path, loaded };
 }
 
+/**
+ * The Workspace `update` should repair, or `undefined` when OpenClaw was never
+ * wired.
+ *
+ * The recorded switch is read first and the artifacts second: a host wired before
+ * `connect` began recording itself has no switch, and `update` declining to
+ * maintain files that are visibly on disk is the defect ADR-0010 names. The
+ * Workspace is derived, so the repair refreshes the one integration `connect`
+ * wrote rather than adding a second one under the config directory.
+ */
+function openClawWorkspaceForUpdate(loaded: LoadedCogmemConfig | undefined): string | undefined {
+  if (!loaded) return undefined;
+  const workspaceRoot = loaded.integrations.openclaw.workspaceDir || loaded.workspaceRoot;
+  if (loaded.integrations.openclaw.enabled) return workspaceRoot;
+  return inspectOpenClawAutoMemoryPlugin({ workspaceRoot }).installed ? workspaceRoot : undefined;
+}
+
 async function runCommand(cmd: string[], cwd: string): Promise<number> {
   const proc = Bun.spawn({
     cmd,
@@ -250,9 +268,7 @@ async function main(): Promise<void> {
   const manager = target.manager;
   const command = buildCommand(target, resolvedSpec);
   const config = loadConfigForUpdate(args, target.cwd);
-  const openclawWorkspace = config.loaded?.integrations.openclaw.enabled
-    ? config.loaded.integrations.openclaw.workspaceDir || process.cwd()
-    : undefined;
+  const openclawWorkspace = openClawWorkspaceForUpdate(config.loaded);
   const openclawRepairExec = !args.skipAgentRefresh && openclawWorkspace && config.configPath
     ? buildOpenClawRepairExecForTarget(target, config.configPath, openclawWorkspace)
     : undefined;
@@ -277,7 +293,7 @@ async function main(): Promise<void> {
     openclawRepairCommand: openclawRepairExec?.join(' '),
     openclawRepairSkippedReason: openclawRepairExec
       ? undefined
-      : (args.skipAgentRefresh ? 'skip_agent_refresh_flag' : (config.loaded?.integrations.openclaw.enabled ? undefined : 'openclaw_not_configured')),
+      : (args.skipAgentRefresh ? 'skip_agent_refresh_flag' : (openclawWorkspace ? undefined : 'openclaw_not_configured')),
     restartRequired,
     followUp: restartRequired.length > 0
       ? `After update finishes, ${restartRequired.join('; ')}.`
