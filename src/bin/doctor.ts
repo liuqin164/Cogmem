@@ -18,6 +18,7 @@ import {
   pathWarningSteps,
   postInstallSteps,
   resolveCliBinDir,
+  resolveCogmemInvocation,
   type InstallGate,
   type InstallGateDiagnostic,
   type InstallStep,
@@ -59,17 +60,6 @@ function fail(message: string, code = 'doctor_failed'): never {
   }
   console.error(`FAIL ${message}`);
   process.exit(1);
-}
-
-/**
- * The command a reader should copy. A CLI installed into a `bin`/`.bin`
- * directory is named by absolute path, because the whole point of the PATH
- * WARN is that the bare name may not resolve.
- */
-function resolveBinCommand(): string {
-  const binDir = resolveCliBinDir(process.argv[1], process.env);
-  if (binDir && existsSync(join(binDir, 'cogmem'))) return join(binDir, 'cogmem');
-  return 'cogmem';
 }
 
 function printSteps(steps: InstallStep[]): void {
@@ -125,7 +115,7 @@ if (envPath) {
   if (resolution.kind === 'missing' || !existsSync(resolution.path)) {
     // No config is the state every fresh install is in. It is not a failure:
     // it is the gate saying "now configure it", with the command that does it.
-    const bin = resolveBinCommand();
+    const bin = resolveCogmemInvocation();
     if (!json) {
       console.log(`cogmem is installed but not configured yet (looked for ${resolution.path}).`);
     }
@@ -180,7 +170,7 @@ if (envPath) {
       printWarnings(loaded.diagnostics);
       ok('configuration parsed');
       ok(`openclaw plugin ${inspection.current ? 'current' : 'stale'} at ${inspection.pluginDir}`);
-      if (!inspection.current) warn('openclaw_plugin_stale', 'Run cogmem doctor --fix --agent openclaw --plugin-only --workspace <workspace>.');
+      if (!inspection.current) warn('openclaw_plugin_stale', `Run ${resolveCogmemInvocation()} doctor --fix --agent openclaw --plugin-only --workspace ${workspaceRoot}.`);
       if (fixed) ok(`openclaw auto memory integration fixed at ${fixed.pluginDir}`);
       if (audit.lastBeforePromptBuild) ok(`last before_prompt_build action=${audit.lastBeforePromptBuild.action || 'unknown'} reason=${audit.lastBeforePromptBuild.reason || ''}`);
     }
@@ -257,7 +247,7 @@ if (envPath) {
     if (inspection.installed) {
       ok(`openclaw plugin ${inspection.current ? 'current' : 'stale'} at ${inspection.pluginDir}`);
       if (!inspection.current) {
-        warn('openclaw_plugin_stale', 'Run cogmem connect openclaw --workspace <workspace> --auto --force or cogmem doctor --fix --agent openclaw --plugin-only.');
+        warn('openclaw_plugin_stale', `Run ${resolveCogmemInvocation()} connect openclaw --workspace ${workspaceRoot} --auto --force, or ${resolveCogmemInvocation()} doctor --fix --agent openclaw --plugin-only --workspace ${workspaceRoot}.`);
         gateDiagnostics.push({
           code: 'openclaw_plugin_stale',
           message: 'the OpenClaw plugin files are older than the installed package',
@@ -294,7 +284,7 @@ if (envPath) {
 
   const level = gateDiagnostics.length > 0 ? 'warn' : 'ok';
   emitGate(
-    buildGate(level, gateDiagnostics, [...pathSteps, ...postInstallSteps(resolveBinCommand())]),
+    buildGate(level, gateDiagnostics, [...pathSteps, ...postInstallSteps(resolveCogmemInvocation(), workspaceRoot)]),
     {
       configPath: resolution.path,
       workspaceRoot,

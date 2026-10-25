@@ -8,7 +8,7 @@ import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath, type Loade
 import { inspectOpenClawAutoMemoryPlugin } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { printCliJson } from './CliJson.js';
 import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
-import { buildGate, installPathSteps, postInstallSteps, type InstallGate, type InstallStep } from '../install/InstallSteps.js';
+import { buildGate, installPathSteps, postInstallSteps, resolveCogmemInvocation, type InstallGate, type InstallStep } from '../install/InstallSteps.js';
 
 interface UpdateArgs {
   dryRun: boolean;
@@ -176,7 +176,10 @@ function resolveUpdateTarget(args: UpdateArgs, env: Record<string, string | unde
     cwd,
     kind: 'cwd_fallback',
     manager: args.manager || detectManager(cwd),
-    bin: localCogmemBin(cwd),
+    // The only shape whose `localCogmemBin` path is fabricated: nothing was found
+    // to update, so `<cwd>/node_modules/.bin/cogmem` is a guess. Print the command
+    // this machine actually resolves instead (#78); a real run refuses anyway.
+    bin: resolveCogmemInvocation(),
     warning: 'no_install_home_or_project_dependency_detected',
   };
 }
@@ -326,7 +329,7 @@ async function main(): Promise<void> {
   // the first step `init` where the shared definition says `operator_init`, and
   // its wording still assumed an update could migrate something.
   result.nextSteps = config.configPath
-    ? postInstallSteps(gateBin)
+    ? postInstallSteps(gateBin, openclawWorkspace ?? config.loaded?.workspaceRoot)
     : installPathSteps(gateBin).filter((step) => step.id !== 'install_gate');
   result.postUpdateGateCommand = gateArgs(...(args.json ? ['--json'] : [])).join(' ');
 

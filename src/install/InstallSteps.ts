@@ -116,13 +116,16 @@ export function installPathSteps(bin: string): InstallStep[] {
 }
 
 /** What the gate says to do once a config exists and the kernel opened. */
-export function postInstallSteps(bin: string): InstallStep[] {
+export function postInstallSteps(bin: string, workspace?: string): InstallStep[] {
   return [
     {
       id: 'connect_host',
       actor: 'operator',
       safeForAutomation: false,
-      command: `${bin} connect openclaw --auto --force`,
+      // The workspace is carried, not left to the caller's directory: `connect`
+      // derives it by walking up, so the same step run one directory away writes a
+      // second integration under a second identity (ADR-0010).
+      command: `${bin} connect openclaw --auto --force${workspace ? ` --workspace ${workspace}` : ''}`,
       when: 'when an OpenClaw workspace should receive automatic recall (or `connect hermes` for Hermes)',
       purpose: 'install the host integration files; names the workspace it will write into',
     },
@@ -145,9 +148,13 @@ export type HostIntegration = 'openclaw' | 'hermes';
  * Ids and commands are the contract: the JSON field `nextSteps` and the derived
  * `nextCommands` both read this list.
  */
-export function connectSteps(host: HostIntegration, bin: string): InstallStep[] {
+export function connectSteps(host: HostIntegration, bin: string, workspace?: string): InstallStep[] {
   const project = host === 'openclaw' ? 'openclaw' : 'hermes';
   const importCommand = host === 'openclaw' ? 'import-openclaw' : 'import-hermes';
+  // The value the command was given, not a `.` of its own: a step that resolves
+  // the workspace from wherever it happens to be run is the same defect the
+  // resolver above exists to remove, one level down.
+  const workspaceArg = workspace ? ` --workspace ${workspace}` : '';
   const steps: InstallStep[] = [
     {
       id: 'doctor',
@@ -161,7 +168,7 @@ export function connectSteps(host: HostIntegration, bin: string): InstallStep[] 
       id: 'import_dry_run',
       actor: 'agent',
       safeForAutomation: true,
-      command: `${bin} ${importCommand} --workspace . --project ${project} --dry-run --json`,
+      command: `${bin} ${importCommand}${workspaceArg} --project ${project} --dry-run --json`,
       when: 'before importing legacy memory',
       purpose: 'preview source discovery and import counts',
     },
@@ -169,7 +176,7 @@ export function connectSteps(host: HostIntegration, bin: string): InstallStep[] 
       id: 'import_apply',
       actor: 'agent',
       safeForAutomation: true,
-      command: `${bin} ${importCommand} --workspace . --project ${project} --json`,
+      command: `${bin} ${importCommand}${workspaceArg} --project ${project} --json`,
       when: 'after dry-run looks correct',
       purpose: 'idempotently import legacy memory into Cogmem',
     },
@@ -203,7 +210,7 @@ export function connectSteps(host: HostIntegration, bin: string): InstallStep[] 
       id: 'openclaw_diagnose',
       actor: 'agent',
       safeForAutomation: true,
-      command: `${bin} openclaw diagnose --workspace . --json`,
+      command: `${bin} openclaw diagnose${workspaceArg} --json`,
       when: 'after connect --auto --force or before investigating injection failures',
       purpose: 'verify generated plugin files, audit log, queue lock, and hook diagnostics',
     });
@@ -278,6 +285,33 @@ export function resolveCliBinDir(
     }
   }
   return undefined;
+}
+
+/**
+ * How to invoke this CLI in a command that is about to be printed or written into
+ * a Host's configuration.
+ *
+ * The absolute launcher when the CLI is installed but its directory is not on
+ * `PATH`: a printed step that says `cogmem` on a machine where `cogmem` does not
+ * resolve is a step that fails the moment it is pasted. The bare name when it
+ * does resolve, so nothing bakes a machine-specific path into a host config that
+ * outlives this checkout (ADR-0010, #78).
+ *
+ * One function because four commands had four answers: `doctor` printed an
+ * absolute path unconditionally, `connect` printed a literal project-local
+ * `.bin/cogmem` path that exists only in a JS project with a local dependency,
+ * `init --json` printed the bin *directory*, and `connect hermes`
+ * wrote a bare `cogmem` into a config on machines where it was not on `PATH`.
+ */
+export function resolveCogmemInvocation(
+  env: Record<string, string | undefined> = process.env,
+  argv1: string | undefined = process.argv[1],
+): string {
+  const binDir = resolveCliBinDir(argv1, env);
+  if (!binDir) return 'cogmem';
+  const launcher = join(binDir, 'cogmem');
+  if (!existsSync(launcher)) return 'cogmem';
+  return isOnPath(binDir, env) ? 'cogmem' : launcher;
 }
 
 export function isOnPath(dir: string, env: Record<string, string | undefined> = process.env): boolean {

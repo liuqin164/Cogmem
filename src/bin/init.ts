@@ -21,7 +21,7 @@ import { createInterface } from 'node:readline';
 import { dirname, resolve, join } from 'node:path';
 
 import { defaultCogmemHome } from '../config/CogmemConfig.js';
-import { installGateStep } from '../install/InstallSteps.js';
+import { installGateStep, resolveCogmemInvocation } from '../install/InstallSteps.js';
 import {
   DEFAULT_VECTOR_DIMENSION,
   HIGH_VECTOR_DIMENSION_THRESHOLD,
@@ -940,9 +940,10 @@ function emitInitJson(input: {
   warnings: SettingWarning[];
   written: boolean;
 }): void {
-  // Resolved, not used verbatim: a relative COGMEM_BIN_DIR would otherwise be
-  // pasted into the next step's command, where it means something else entirely.
-  const bin = process.env.COGMEM_BIN_DIR ? resolve(process.env.COGMEM_BIN_DIR.trim()) : 'cogmem';
+  // A runnable command, not the bin directory: `--json` is what an agent follows,
+  // and `/path/to/bin doctor --json` is exit 126. Off PATH the step is the
+  // absolute launcher, on PATH the bare name (#78).
+  const bin = resolveCogmemInvocation();
   console.log(JSON.stringify({
     schemaVersion: 'cogmem.cli.v1',
     command: 'init',

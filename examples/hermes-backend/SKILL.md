@@ -392,7 +392,7 @@ mcp_servers:
         - cogmem_prospective
 ```
 
-The command path is resolved by `cogmem connect hermes`: it uses `COGMEM_BIN` when explicitly set, then a workspace-local `node_modules/.bin/cogmem`, then global `cogmem`, and passes `mcp` as the first argument. `COGMEM_MCP_BIN` and `cogmem-mcp` remain compatibility paths for existing host configs.
+The command path is resolved by `cogmem connect hermes`: it uses `COGMEM_BIN` when explicitly set, then a workspace-local `node_modules/.bin/cogmem`, then the CLI this machine resolves — the absolute launcher when `cogmem` is not on `PATH`, the bare name when it is — and passes `mcp` as the first argument. `COGMEM_MCP_BIN` and `cogmem-mcp` remain compatibility paths for existing host configs.
 
 When Hermes calls `cogmem_recall`, it should pass `projectId: "hermes"` and may omit `agentId`; the MCP bridge infers `agentId` from `projectId`. The returned `items` use the same shape as `cogmem memory recall --project hermes --agent hermes --json`, including `raw_ledger` items, labeled `sourceContext` events, `sourceContext.window`, and `sourceContext.locator.command` when vectors are empty or compiled evidence misses.
 

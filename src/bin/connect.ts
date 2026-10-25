@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { printCliJson } from './CliJson.js';
-import { automationSafeCommands, connectSteps, type InstallStep } from '../install/InstallSteps.js';
+import { automationSafeCommands, connectSteps, resolveCogmemInvocation, type InstallStep } from '../install/InstallSteps.js';
 import {
   enableHostIntegration,
   hostWorkspaceFor,
@@ -203,14 +203,12 @@ function defaultSkillPath(agent: AgentKind, workspaceRoot: string): string {
   return join(process.env.HOME || homedir(), '.hermes', 'skills', 'cogmem-memory', 'SKILL.md');
 }
 
-const CONNECT_BIN = './node_modules/.bin/cogmem';
-
-function nextCommands(agent: AgentKind): string[] {
-  return automationSafeCommands(nextSteps(agent));
+function nextCommands(agent: AgentKind, workspace: string): string[] {
+  return automationSafeCommands(nextSteps(agent, workspace));
 }
 
-function nextSteps(agent: AgentKind): ConnectNextStep[] {
-  return connectSteps(agent, CONNECT_BIN);
+function nextSteps(agent: AgentKind, workspace: string): ConnectNextStep[] {
+  return connectSteps(agent, resolveCogmemInvocation(), workspace);
 }
 
 function usage(): string {
@@ -260,24 +258,33 @@ function hostConfigSnippet(agent: AgentKind, workspaceRoot: string, auto: boolea
   ].join('\n');
 }
 
+/**
+ * The command written into a Host's MCP configuration.
+ *
+ * It has to resolve on the machine it was written on, so the shared resolver
+ * decides it (ADR-0010, #78): a bare `cogmem` for a host whose PATH does not
+ * carry it is a server entry that never starts. A workspace-local launcher, when
+ * there is one, still wins — that is the version the workspace actually depends
+ * on, so host and Cogmem upgrade together.
+ */
 function resolveCogmemMcpServer(workspaceRoot: string): { command: string; args: string[] } {
   if (process.env.COGMEM_MCP_BIN) return { command: process.env.COGMEM_MCP_BIN, args: [] };
   if (process.env.COGMEM_BIN) return { command: process.env.COGMEM_BIN, args: ['mcp'] };
+  // The documented order: an explicit override, then the workspace-local
+  // launcher, then whatever this machine resolves. `cogmem-mcp` stays last as the
+  // compatibility entry point for host configs written before the dispatcher.
   const workspaceCli = join(workspaceRoot, 'node_modules', '.bin', 'cogmem');
   if (existsSync(workspaceCli)) return { command: workspaceCli, args: ['mcp'] };
+  const resolved = resolveCogmemInvocation();
+  if (resolved !== 'cogmem') return { command: resolved, args: ['mcp'] };
   const pathValue = process.env.PATH || '';
-  for (const segment of pathValue.split(':')) {
-    if (!segment) continue;
-    const candidate = join(segment, 'cogmem');
-    if (existsSync(candidate)) return { command: candidate, args: ['mcp'] };
-  }
-  const workspaceMcp = join(workspaceRoot, 'node_modules', '.bin', 'cogmem-mcp');
-  if (existsSync(workspaceMcp)) return { command: workspaceMcp, args: [] };
   for (const segment of pathValue.split(':')) {
     if (!segment) continue;
     const candidate = join(segment, 'cogmem-mcp');
     if (existsSync(candidate)) return { command: candidate, args: [] };
   }
+  const workspaceMcp = join(workspaceRoot, 'node_modules', '.bin', 'cogmem-mcp');
+  if (existsSync(workspaceMcp)) return { command: workspaceMcp, args: [] };
   return { command: 'cogmem', args: ['mcp'] };
 }
 
@@ -369,8 +376,8 @@ function installSkill(args: ConnectArgs): ConnectResult {
     dryRun: args.dryRun,
     installed: !args.dryRun && !alreadyCurrent,
     alreadyCurrent,
-    nextCommands: nextCommands(args.agent),
-    nextSteps: nextSteps(args.agent),
+    nextCommands: nextCommands(args.agent, hostWorkspaceRoot),
+    nextSteps: nextSteps(args.agent, hostWorkspaceRoot),
     hostConfigSnippet: hostConfigSnippet(args.agent, hostWorkspaceRoot, args.auto),
     autoMemory,
     hermesMcp,

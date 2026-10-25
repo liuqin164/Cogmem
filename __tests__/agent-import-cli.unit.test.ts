@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMemoryKernel } from '../src/factory.js';
@@ -9,6 +9,22 @@ import { parseArgs, runOpenClawImport } from '../src/bin/import-support.js';
 import { KernelAgentMemoryBackend } from '../src/agent/index.js';
 import { explainRecallWithKernel } from '../src/recall/RecallExplanation.js';
 import { makeTempDir } from './helpers/tmp.js';
+
+/**
+ * A printed step is runnable when its first word resolves (#78): the bare name on
+ * a machine where `cogmem` is on PATH, the absolute launcher where it is not.
+ * Asserting a literal `./node_modules/.bin/cogmem` is what pinned the previous
+ * relative path in place — it exists only in a JS project with a local
+ * dependency, which is not the one-line-installer path the steps are for. This
+ * asserts the contract instead of the string.
+ */
+function expectRunnableSteps(commands: string[]): void {
+  expect(commands.length).toBeGreaterThan(0);
+  for (const command of commands) {
+    const [head] = command.split(' ');
+    expect(head === 'cogmem' || (isAbsolute(head!) && existsSync(head!))).toBe(true);
+  }
+}
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const openClawImportBin = join(coreRoot, 'src/bin/import-openclaw.ts');
@@ -886,10 +902,16 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   expect(installedParsed.nextCommands.join('\n')).not.toContain('cogmem-init');
   expect(installedParsed.nextCommands.join('\n')).not.toContain('cogmem init');
   expect(installedParsed.nextCommands.join('\n')).not.toContain('openclaw gateway restart');
-  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem doctor');
-  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem openclaw diagnose --workspace . --json');
-  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem import-openclaw --workspace . --project openclaw --dry-run --json');
-  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem memory plan --project openclaw --json');
+  expectRunnableSteps(installedParsed.nextCommands);
+  const openclawSteps = installedParsed.nextSteps as Array<{ id: string; command: string }>;
+  const stepOf = (id: string): string => openclawSteps.find((step) => step.id === id)!.command;
+  // The workspace the command was given, not a `.` of its own: a step that
+  // resolves it from wherever it is run writes a second integration.
+  expect(stepOf('import_dry_run')).toContain(`--workspace ${dir} `);
+  expect(stepOf('import_apply')).toContain(`--workspace ${dir} `);
+  expect(stepOf('openclaw_diagnose')).toContain(`--workspace ${dir} `);
+  expect(stepOf('import_dry_run')).not.toContain('--workspace . ');
+  expect(stepOf('memory_plan')).toContain('--project openclaw');
   expect(installedParsed.nextSteps).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: 'interactive_init', safeForAutomation: false, actor: 'operator' }),
     expect.objectContaining({ id: 'restart_gateway', safeForAutomation: false, actor: 'host' }),
@@ -1484,9 +1506,10 @@ test('cogmem-connect installs Hermes skill into the real Hermes skills directory
   expect(parsed.skillFiles).toEqual([skillPath, operationsPath]);
   expect(parsed.nextCommands.join('\n')).not.toContain('cogmem-init');
   expect(parsed.nextCommands.join('\n')).not.toContain('cogmem init');
-  expect(parsed.nextCommands).toContain('./node_modules/.bin/cogmem doctor');
-  expect(parsed.nextCommands).toContain('./node_modules/.bin/cogmem import-hermes --workspace . --project hermes --dry-run --json');
-  expect(parsed.nextCommands).toContain('./node_modules/.bin/cogmem memory plan --project hermes --json');
+  expectRunnableSteps(parsed.nextCommands);
+  const hermesSteps = parsed.nextSteps as Array<{ id: string; command: string }>;
+  expect(hermesSteps.find((step) => step.id === 'import_dry_run')!.command).toContain(`--workspace ${workspace} `);
+  expect(hermesSteps.find((step) => step.id === 'memory_plan')!.command).toContain('--project hermes');
   expect(parsed.nextSteps).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: 'interactive_init', safeForAutomation: false, actor: 'operator' }),
     expect.objectContaining({ id: 'reload_hermes', safeForAutomation: false, actor: 'host' }),
