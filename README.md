@@ -165,7 +165,7 @@ cogmem init --yes --dry-run --agent none --no-probe --vector-dimension 384
 
 ## Quick Start
 
-There are two install paths. They install the same thing and end on the same check; they differ only in who answers the setup questions.
+There are two install paths. They install the same thing and end on the same check; they differ only in who answers the setup questions. Every step names exactly one **Install actor** — the Operator answers the wizard, the Agent answers `init --yes`.
 
 **Operator path** — you are at the keyboard:
 
@@ -183,7 +183,7 @@ cogmem init --yes --json
 cogmem doctor --json
 ```
 
-The installer installs the package and links the CLI, then stops. It never runs the wizard and never writes config, so `curl | bash` cannot ask questions on one machine and invent answers on another. `COGMEM_SKIP_INIT` is still accepted and now does nothing.
+The installer installs the package and links the CLI, then stops. It never runs the wizard and never writes config, so `curl | bash` cannot ask questions on one machine and invent answers on another. `COGMEM_SKIP_INIT` is still accepted and now does nothing. If the next line reports `cogmem: command not found`, the CLI was linked into a directory outside your `PATH`; the installer prints the exact `export` line to fix it, and `cogmem doctor` reports the same directory as a WARN.
 
 `cogmem init` writes the config. `cogmem doctor` is the install gate: it answers **not installed**, **OK**, **WARN**, or **FAIL**, and always names the next step. `not installed` exits 0 — a fresh install with no config yet is not a failure. `rule_only` and a CLI directory outside `PATH` are WARNs: they work, but degraded.
 
