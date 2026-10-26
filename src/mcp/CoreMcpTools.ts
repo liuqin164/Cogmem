@@ -60,6 +60,11 @@ export interface CogmemMcpRuntime {
   cwd?: string;
   /** Host identity this connection resolved to, e.g. `claude`, `cursor`, `codex`. */
   hostId?: string;
+  /**
+   * The identity a credential resolved to, when one did. Outranks `hostId`, and nothing a
+   * caller sends may override it (ADR-0006).
+   */
+  authenticatedHostId?: string;
 }
 
 const STRING_SCHEMA = { type: 'string' };
@@ -571,27 +576,55 @@ const IDENTITY_WRITE_TOOLS = new Set([
 ]);
 
 /**
- * Identity is a fact about the connection, not a claim the caller makes (ADR-0006).
+ * The agent identity of this connection — the one authority for both reading and writing
+ * (ADR-0006, #92 direction ①).
  *
- * These three tools need an agent and a session. The server already injects the
- * project the connection is bound to, and the runtime carries the hostId the
- * connection authenticated as; asking the client to restate both made the server's
- * own instruction — "record what matters with `cogmem_remember_turn` or
- * `cogmem_episode_append`" — fail with `agentId must be a non-empty string` on
- * every host without an adapter that records turns for it (pi, Hermes, Claude Code,
- * Cursor, Codex). An explicit argument still wins, so a caller that knows better
- * keeps saying so; only what is missing is filled.
+ * Three sources, in order of authority:
+ *
+ * 1. `runtime.authenticatedHostId` — set when a credential resolved the connection. It is
+ *    the only source that may never be overridden.
+ * 2. `runtime.hostId` — the host adapter's fixed identity (stdio `--host`, the bridge's
+ *    `agentId`). A fact about how the process was started, not a caller's claim.
+ * 3. The project the connection is bound to. A single-agent install has no host name of
+ *    its own, and its writes are recorded under the project it serves — which is also how
+ *    the CLI reads it back, so one installation still finds its own memory.
+ *
+ * A client-supplied `agentId` is **not** in that list. It used to be honoured on the write
+ * side only, so a host like pi (which sends `pi:default`) wrote memory that its own recall
+ * could not see: `isAgentRawEvent()` compares the event's `source_id` against the reader's
+ * agent, and the two disagreed (#92).
+ */
+function connectionAgentId(
+  runtime: CogmemMcpRuntime,
+  input: Record<string, unknown>,
+): string | undefined {
+  const authenticated = runtime.authenticatedHostId?.trim();
+  if (authenticated) return authenticated;
+  const host = runtime.hostId?.trim();
+  if (host) return host;
+  return optionalString(input.projectId);
+}
+
+/**
+ * Apply the connection's identity to a tool call.
+ *
+ * A caller may still *label* a turn with its own agent id, but only in metadata: the value
+ * it sends is kept as `clientAgentId` and the authoritative `agentId` is the connection's.
+ * Refusing a conflicting id outright would break hosts that always send one (pi does), and
+ * accepting it as the stored identity is the defect. Labelling keeps both facts.
  */
 function withConnectionIdentity(
   input: Record<string, unknown>,
   runtime: CogmemMcpRuntime,
 ): Record<string, unknown> {
-  const agent = runtime.hostId?.trim() || optionalString(input.projectId);
+  const agent = connectionAgentId(runtime, input);
   if (!agent) return input;
+  const clientAgentId = optionalString(input.agentId);
   return {
     ...input,
-    agentId: input.agentId ?? agent,
-    sourceAgent: input.sourceAgent ?? agent,
+    agentId: agent,
+    ...(clientAgentId && clientAgentId !== agent ? { clientAgentId } : {}),
+    sourceAgent: agent,
     sessionId: input.sessionId ?? `${agent}-session`,
   };
 }
@@ -614,9 +647,9 @@ export async function callCogmemMcpTool(
       case 'cogmem_remember_turn':
         return await rememberTurn(opened.kernel, input);
       case 'cogmem_recall':
-        return recall(opened.kernel, input, false);
+        return recall(opened.kernel, input, false, runtime);
       case 'cogmem_explain_recall':
-        return recall(opened.kernel, input, true);
+        return recall(opened.kernel, input, true, runtime);
       case 'cogmem_strategy_plan': {
         const query = requiredString(input.query, 'query');
         const intent = opened.kernel.contextCortex.classifyIntent(query);
@@ -1027,14 +1060,17 @@ function recall(
   kernel: MemoryKernel,
   input: Record<string, unknown>,
   includeExplanation: boolean,
+  runtime: CogmemMcpRuntime,
 ): CogmemMcpCallResult {
   const query = requiredString(input.query, 'query');
-  const requestedAgentId = optionalString(input.agentId);
   const requestedProjectId = optionalString(input.projectId);
   const limit = optionalNumber(input.limit);
   const startTime = optionalTime(input.since, 'since');
   const endTime = optionalTime(input.until, 'until');
-  const agentId = requestedAgentId || requestedProjectId || 'openclaw';
+  // The same authority the write side uses, so a connection reads exactly what it wrote
+  // (#92). The caller's `agentId` is not consulted: honouring it here is how a connection
+  // could ask for another agent's memory.
+  const agentId = connectionAgentId(runtime, input) || 'openclaw';
   const projectId = requestedProjectId || agentId;
 
   if (!includeExplanation) {

@@ -371,19 +371,19 @@ test('memory CLI and MCP expose map, tick, and collection routing', async () => 
   expect(tickError).toBe('');
   expect(JSON.parse(tickOutput).hostOwned).toBe(true);
 
+  // #92: identity comes from the connection, so the read states which agent it is
+  // rather than claiming one in the arguments. The data above was written by `openclaw`.
   const defaultRecall = await callCogmemMcpTool('cogmem_recall', {
-    agentId: 'openclaw',
     projectId: 'demo',
     query: 'MoneyPrinterTurbo storyboard',
     limit: 5,
-  }, { dbPath });
+  }, { dbPath, hostId: 'openclaw' });
   const collectionRecall = await callCogmemMcpTool('cogmem_recall', {
-    agentId: 'openclaw',
     projectId: 'demo',
     collection: 'theseus',
     query: 'MoneyPrinterTurbo storyboard',
     limit: 5,
-  }, { dbPath });
+  }, { dbPath, hostId: 'openclaw' });
 
   expect(JSON.stringify(defaultRecall.structuredContent)).not.toContain('visual storyboard');
   expect(JSON.stringify(collectionRecall.structuredContent)).toContain('visual storyboard');

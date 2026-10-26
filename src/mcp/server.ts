@@ -289,6 +289,9 @@ export function createCogmemMcpServer(
     const sessionRuntime: CogmemMcpRuntime = {
       ...runtime,
       hostId: effectiveOptions.hostId ?? runtime.hostId,
+      // A credential outranks the adapter's host name: it is the only identity a request
+      // cannot narrow away from (ADR-0006, #92).
+      authenticatedHostId: effectiveOptions.authenticatedHostId ?? runtime.authenticatedHostId,
     };
 
     const result = await callCogmemMcpTool(request.params.name, args, sessionRuntime);

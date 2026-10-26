@@ -265,11 +265,12 @@ test('core MCP explain tool returns pulse and temporal recall details', async ()
     tags: ['agent:openclaw', 'openclaw'],
   });
 
+  // #92: the connection's identity decides which agent's memory this is, not an
+  // argument. The event above was tagged `agent:openclaw`.
   const explained = await callCogmemMcpTool('cogmem_explain_recall', {
-    agentId: 'openclaw',
     projectId: 'mcp-explain',
     query: 'Which vector backend should release use?',
-  }, { kernel });
+  }, { kernel, hostId: 'openclaw' });
 
   expect(explained.isError).toBeFalsy();
   expect(explained.structuredContent?.recallMode).toBe('universe_navigation');
