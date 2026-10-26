@@ -356,7 +356,7 @@ cogmem memory tick --project my-agent --json
 cogmem memory bind --project my-agent --json
 ```
 
-`memory tick` decays activation and returns suggested host actions. It refreshes Atlas only when dirty, records projection failures without aborting other maintenance, prunes old Atlas access telemetry, reports high-value unbound raw user events, and ages untouched review entries after the default 30-day TTL. It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
+`memory tick` decays activation and returns suggested host actions. It refreshes Atlas only when dirty, records projection failures without aborting other maintenance, prunes old Atlas access telemetry, reports high-value unbound raw user events, and ages untouched review entries after the default 30-day TTL. It also **seals conversations that have gone quiet** — an episode idle for longer than the boundary policy's idle gap — because Dream processes sealed episodes only, and a turn written over MCP is otherwise stored, searchable and unreachable by recall (ADR-0011). It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
 
 Operational cost classes:
 

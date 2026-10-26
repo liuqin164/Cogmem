@@ -387,6 +387,8 @@ export interface MaintenanceTickResult {
   };
   executed: {
     activationDecay: ActivationDecayResult;
+    /** Conversations the tick judged over: their episodes are sealed for Dream (#87). */
+    episodeSealing: { idleGapMs: number; idleBefore: number; sealedEpisodes: number };
     memoryAtlasRefresh: { documents: number; actions: number; refreshed: boolean; errors?: Array<{ projectId: string; error: string }> };
     memoryAtlasActivationDecay: number;
     memoryAtlasAccessPruned: number;
@@ -2869,6 +2871,19 @@ export class MemoryKernel {
     const memoryAtlasAccessPruned = this.memoryAtlasStore.cleanupAccess({
       projectId, before: ranAt - (options.atlasAccessRetentionMs ?? 90 * 24 * 60 * 60 * 1000),
     });
+    // A conversation that has gone quiet has ended, and that is what makes its episode
+    // something Dream can compile: Dream processes sealed episodes only, and until
+    // this ran nothing sealed a host's idle ones — a turn written over MCP was stored,
+    // searchable, and unreachable by recall (#87, ADR-0011). The window is the boundary
+    // policy's own idle gap, the same one the assembler audits boundaries against, not
+    // a second constant. A turn is never sealed on its own: this seals conversations.
+    const episodeIdleGapMs = this.episodeBoundaryPolicy.config.maxIdleGapMs;
+    const episodeIdleBefore = ranAt - episodeIdleGapMs;
+    const episodeSealing = {
+      idleGapMs: episodeIdleGapMs,
+      idleBefore: episodeIdleBefore,
+      sealedEpisodes: this.episodeStore.sealIdleEpisodes({ projectId, idleBefore: episodeIdleBefore, now: ranAt }).length,
+    };
     const confirmationTtlMs = options.confirmationTtlMs ?? 30 * 24 * 60 * 60 * 1000;
     const reviewQueueAging = this.deepWriteCandidateStore.expireNeedsConfirmation({
       projectId,
@@ -2971,6 +2986,7 @@ export class MemoryKernel {
       },
       executed: {
         activationDecay,
+        episodeSealing,
         memoryAtlasRefresh,
         memoryAtlasActivationDecay,
         memoryAtlasAccessPruned,

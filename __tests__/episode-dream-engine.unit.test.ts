@@ -123,6 +123,61 @@ test('agent turns assemble into one session-scoped episode and explicit user clo
   }
 });
 
+test('the host tick seals an idle conversation, so a remembered turn can be dreamed and recalled', async () => {
+  const dir = makeTempDir('cogmem-episode-idle-seal-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  try {
+    // A pull host records a turn exactly as the server's instructions tell it to
+    // (#85): the tool takes the identity from the connection, so only the turn is sent.
+    const written = await callCogmemMcpTool('cogmem_remember_turn', {
+      projectId: 'brain',
+      sessionId: 'session-idle',
+      userText: 'the okapi rollout ships on Saturdays',
+      assistantText: 'noted',
+    }, { kernel, hostId: 'pi' });
+    expect(JSON.parse(String((written as { content: { text: string }[] }).content[0]!.text)).ok).toBe(true);
+
+    const open = kernel.listEpisodes({ projectId: 'brain' });
+    expect(open).toHaveLength(1);
+    expect(open[0]!.status).toBe('open');
+    expect(open[0]!.eventCount).toBe(2);
+
+    // Nothing seals a conversation on its own — per ADR-0011 a turn is never sealed,
+    // a conversation that has gone quiet is. The host's own tick is what notices, and
+    // the window is the boundary policy's own idle gap, so the test asks it.
+    const idleGapMs = kernel.episodeBoundaryPolicy.config.maxIdleGapMs;
+    const ticked = kernel.runMaintenanceTick({ projectId: 'brain', now: Date.now() + 1_000 });
+    expect(ticked.executed.episodeSealing.sealedEpisodes).toBe(0);
+    expect(kernel.getEpisode(open[0]!.episodeId)?.status).toBe('open');
+
+    const quiet = kernel.runMaintenanceTick({ projectId: 'brain', now: Date.now() + idleGapMs + 60_000 });
+    expect(quiet.executed.episodeSealing.sealedEpisodes).toBe(1);
+    expect(quiet.executed.episodeSealing.idleGapMs).toBe(idleGapMs);
+    expect(kernel.getEpisode(open[0]!.episodeId)?.status).toBe('soft_sealed');
+
+    // A soft seal is the verdict "this conversation is over"; Dream promotes a mature
+    // one to a hard seal before compiling it, and that stabilization timer belongs to the
+    // scheduler. The mature step is taken here directly so the queue can be asserted
+    // without a wall clock.
+    kernel.sealEpisode(open[0]!.episodeId, {
+      mode: 'hard',
+      reason: 'soft_seal_stabilized',
+      now: Date.now() + idleGapMs + 120_000,
+    });
+    expect(kernel.getEpisode(open[0]!.episodeId)?.status).toBe('sealed');
+    expect(kernel.getEpisodeDreamStatus('brain').pending).toBeGreaterThan(0);
+
+    // What this test owns ends there: the episode is queued for the compile step. Whether
+    // a Dream curator is configured — the README's own distinction from embedding models —
+    // decides that it actually runs, so the end-to-end write → seal → Dream → recall
+    // sequence is verified on a host rather than against a stubbed curator that compiles
+    // nothing.
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('idle soft seal can reopen in the same session while a hard seal cannot', async () => {
   const { dir, kernel, backend } = createTestKernel('cogmem-episode-reopen-');
   try {
