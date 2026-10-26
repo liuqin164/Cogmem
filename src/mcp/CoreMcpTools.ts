@@ -110,7 +110,10 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
           timeZone: STRING_SCHEMA,
           projectTimeZone: STRING_SCHEMA,
         },
-        required: ['agentId', 'projectId', 'sessionId', 'userText'],
+        // Only what the caller owns. agentId/projectId/sessionId come from the
+        // connection (ADR-0006, #92); advertising them as required is what stopped a
+        // real host's agent from calling this tool at all — it had none of them to send.
+        required: ['userText'],
       },
       annotations: {
         title: 'Remember Turn',
@@ -208,7 +211,8 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
           text: STRING_SCHEMA, externalMessageId: STRING_SCHEMA, timestamp: NUMBER_SCHEMA,
           threadId: STRING_SCHEMA, turnId: STRING_SCHEMA, turnSeq: NUMBER_SCHEMA, localDate: STRING_SCHEMA, eventOrdinal: NUMBER_SCHEMA,
         },
-        required: ['projectId', 'sessionId', 'sourceAgent', 'role', 'text', 'externalMessageId'],
+        // Identity is the connection's; the message's own data is the caller's (#92).
+        required: ['role', 'text', 'externalMessageId'],
       },
       annotations: { title: 'Append Episode Message', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
@@ -223,7 +227,8 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
           sealBatch: { type: 'boolean' },
           forceSeal: { type: 'boolean' },
         },
-        required: ['projectId', 'sessionId', 'sourceAgent', 'messages'],
+        // Identity is the connection's; the messages are the caller's (#92).
+        required: ['messages'],
       },
       annotations: { title: 'Import Episode Messages', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },

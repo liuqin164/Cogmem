@@ -160,3 +160,29 @@ test('#92 a single-agent install with no host name still writes and recalls', as
   kernel.close();
   rmSync(dir, { recursive: true, force: true });
 });
+
+test('#92 the write tools do not advertise identity the connection already supplies', () => {
+  // The schema is what a model reads before deciding whether it *can* call a tool. While
+  // `remember_turn` demanded agentId/projectId/sessionId, an agent that has none of them
+  // declines to call it — measured with Hermes on the audit box: it ran its own `terminal`
+  // tool but never touched `cogmem_remember_turn`, and the turn it was asked to store was
+  // never written. Identity now comes from the connection, so the schema must say so.
+  const { listCogmemMcpTools } = require('../src/mcp/CoreMcpTools.js');
+  const tools = listCogmemMcpTools() as Array<{ name: string; inputSchema: { required?: string[]; properties: Record<string, unknown> } }>;
+  const required = (name: string): string[] => tools.find((tool) => tool.name === name)!.inputSchema.required ?? [];
+
+  // Only what the caller genuinely owns: the text of the turn.
+  expect(required('cogmem_remember_turn')).toEqual(['userText']);
+  // The message's own data, not the connection's.
+  expect(required('cogmem_episode_append')).toEqual(['role', 'text', 'externalMessageId']);
+  expect(required('cogmem_episode_import')).toEqual(['messages']);
+
+  // They stay available as properties: an explicit caller may still send them, they are
+  // simply no longer demanded, and they never override the connection.
+  for (const name of ['cogmem_remember_turn', 'cogmem_episode_append', 'cogmem_episode_import']) {
+    const properties = tools.find((tool) => tool.name === name)!.inputSchema.properties;
+    for (const field of ['agentId', 'projectId', 'sessionId', 'sourceAgent']) {
+      if (field in properties) expect(required(name)).not.toContain(field);
+    }
+  }
+});
