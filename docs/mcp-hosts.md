@@ -446,7 +446,19 @@ pi reads MCP servers from `$HOME/.pi/agent/mcp.json`, and from a project-local
 }
 ```
 
-Write it with pi's own command, which is the supported path:
+`connect pi --auto` writes that entry and installs the skill in one step:
+
+```bash
+cogmem connect pi --workspace /path/to/ws --auto --json
+pi mcp list          # → connected, 6 tools
+```
+
+The skill goes to `~/.agents/skills/cogmem-memory/`, which is the Agent Skills location pi
+actually scans — measured against a real pi: the same skill under `~/.pi/skills/` was **not**
+listed. `connect` leaves every other server in `mcp.json` alone, and `--pi-config` names a
+different file.
+
+By hand, pi's own command is the supported path:
 
 ```bash
 pi mcp add cogmem -- /absolute/path/to/cogmem mcp --config /path/to/ws/.cogmem/config.toml --project pi-abc12345
@@ -468,11 +480,15 @@ and the read disagreed and the memory was invisible to the connection that wrote
 Verified against a real pi conversation: the agent called `cogmem_remember_turn` itself,
 the turn landed (`rawEvents=5`, `vectors=1`), and the default recall returned it.
 
-pi has no Cogmem adapter, so its row above stays `pull` / `planned` — the stdio attachment
-being verified does not make the adapter shipped, and ADR-0002 requires those two facts to be
-stated separately. Nothing injects recall, and there is no skill bundle for pi yet, so the
-agent has to be told to record and recall on its own; that is what the `cogmem-memory` bundle
-does for Hermes, and there is no `connect pi` (#95).
+pi has no Cogmem adapter, so its row above stays `pull` / `planned` — shipping `connect pi`
+does not make the adapter shipped, and ADR-0002 requires those two facts to be stated
+separately. The same is true of Hermes, whose `connect hermes --auto` has shipped for a while
+while its adapter column still reads `planned`. Nothing injects recall: the installed
+`cogmem-memory` skill is what tells the agent when to record and recall, and the agent has to
+make the call itself.
+
+pi has **no history importer**, so `connect pi` prints no import steps — running
+`import-hermes` under a pi heading would be a step that cannot work.
 
 ## stdio fallback
 
