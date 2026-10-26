@@ -482,12 +482,12 @@ function buildPluginFiles(pluginId?: string): PluginFiles {
         },
       },
     }, null, 2)}\n`,
-    indexJs: pluginIndexJs(),
+    indexJs: pluginIndexJs(pid),
     bridgeMjs: pluginBridgeMjs(),
   };
 }
 
-function pluginIndexJs(): string {
+function pluginIndexJs(pluginId: string = PLUGIN_ID): string {
   return String.raw`'use strict';
 
 const { spawn, spawnSync } = require('node:child_process');
@@ -1319,7 +1319,7 @@ function audit(config, record) {
     mkdirSync(path.dirname(logPath), { recursive: true });
     appendFileSync(logPath, JSON.stringify({
       ts: new Date().toISOString(),
-      pluginId: '${PLUGIN_ID}',
+      pluginId: '${pluginId}',
       ...record,
     }) + '\n');
   } catch {
@@ -1328,7 +1328,7 @@ function audit(config, record) {
 }
 
 const plugin = {
-  id: PLUGIN_ID,
+  id: '${pluginId}',
   name: 'CogMem Auto Memory',
   version: '${PLUGIN_VERSION}',
   register(api) {

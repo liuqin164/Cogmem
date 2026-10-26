@@ -6,6 +6,37 @@ import { installOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemory
 import { stripCogmemRecallBlocks } from '../src/agent/ContextHygiene.js';
 import { makeTempDir } from './helpers/tmp.js';
 
+test('#90 the plugin the host loads exports the same id the config registers', () => {
+  // OpenClaw compares the plugin's exported `id` against the key it registered. The
+  // generated entry hardcoded the legacy constant while the manifest and the host config
+  // used the per-workspace id, so the host refused to load the plugin at all:
+  //   plugin id mismatch (config uses "cogmem-auto-memory-<hash>",
+  //                        export uses "cogmem-auto-memory")
+  // Two workspaces would also collide on one id, which is what the hash is for.
+  const ids: string[] = [];
+  for (const name of ['ws-one', 'ws-two']) {
+    const root = makeTempDir(`cogmem-plugin-id-${name}-`);
+    const configPath = join(root, '.cogmem', 'config.toml');
+    const openclawConfigPath = join(root, 'openclaw.json');
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+    writeFileSync(openclawConfigPath, '{}');
+    const result = installOpenClawAutoMemoryPlugin({ workspaceRoot: root, configPath, openclawConfigPath, force: true });
+
+    // What the host will actually compare, read from the artifacts rather than trusted.
+    const manifest = JSON.parse(readFileSync(join(result.pluginDir, 'openclaw.plugin.json'), 'utf8')) as { id: string };
+    const index = readFileSync(join(result.pluginDir, 'index.js'), 'utf8');
+    const exported = index.match(/const plugin = \{\s*\n\s*id: '([^']+)'/)?.[1];
+    expect(exported).toBe(manifest.id);
+    // And the id the host registered, so the three agree end to end.
+    const patched = JSON.parse(readFileSync(openclawConfigPath, 'utf8')) as { plugins: { entries: Record<string, unknown> } };
+    expect(Object.keys(patched.plugins.entries)).toContain(manifest.id);
+    ids.push(manifest.id);
+  }
+  // Per workspace, not one shared constant.
+  expect(ids[0]).not.toBe(ids[1]);
+});
+
 test('installed OpenClaw plugin sanitizes generated prompt context and routes Atlas without MCP', async () => {
   const root = makeTempDir('cogmem-atlas-openclaw-');
   const configPath = join(root, '.cogmem', 'config.toml');
