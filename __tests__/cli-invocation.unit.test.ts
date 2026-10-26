@@ -192,7 +192,7 @@ describe('printed steps run as printed', () => {
     expect(written).toContain(`command: "${join(binDir, 'cogmem')}"`);
     // Bound to the integration's own scope: an unbound server answers whatever
     // project a caller names (#79).
-    expect(written).toMatch(/args: \["mcp","--project","hermes-[0-9a-f]{8}"\]/);
+    expect(written).toMatch(/args: \["mcp","--project","hermes-[0-9a-f]{8}","--config","[^"]+config\.toml"\]/);
   });
 
   test('a workspace with a space is quoted, so the step still runs', async () => {
@@ -235,7 +235,7 @@ describe('printed steps run as printed', () => {
     );
     expect(exitCode).toBe(0);
     // `COGMEM_MCP_BIN` is the server itself: a positional `mcp` is a bad argument.
-    expect(readFileSync(hermesConfig, 'utf8')).toMatch(/args: \["--project","hermes-[0-9a-f]{8}"\]/);
+    expect(readFileSync(hermesConfig, 'utf8')).toMatch(/args: \["--project","hermes-[0-9a-f]{8}","--config","[^"]+config\.toml"\]/);
   });
 
   test('connect prints the workspace it was given, not a `.` of its own', async () => {

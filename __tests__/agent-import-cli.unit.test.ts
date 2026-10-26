@@ -1512,7 +1512,8 @@ test('cogmem-connect installs Hermes skill into the real Hermes skills directory
   ]));
   expect(parsed.hostConfigSnippet).toContain('mcp_servers:');
   expect(parsed.hostConfigSnippet).toContain('command: "cogmem"');
-  expect(parsed.hostConfigSnippet).toContain(`args: ["mcp","--project","${parsed.integrationProject}"]`);
+  expect(parsed.hostConfigSnippet).toContain(
+    `args: ["mcp","--project","${parsed.integrationProject}","--config","${join(workspace, '.cogmem', 'config.toml')}"]`);
   expect(parsed.hostConfigSnippet).toContain('cogmem_candidate_review');
   expect(parsed.hostConfigSnippet).toContain('cogmem_graph_touch');
   expect(existsSync(skillPath)).toBe(true);
@@ -1553,7 +1554,8 @@ test('cogmem-connect hermes --auto patches Hermes MCP config without claiming na
   expect(config).toContain('mcp_servers:');
   expect(config).toContain('cogmem:');
   expect(config).toContain('command: "cogmem"');
-  expect(config).toContain(`args: ["mcp","--project","${JSON.parse(installed.stdout).integrationProject}"]`);
+  expect(config).toContain(
+    `args: ["mcp","--project","${JSON.parse(installed.stdout).integrationProject}","--config","${join(workspace, '.cogmem', 'config.toml')}"]`);
   expect(config).toContain('cogmem_memory_map');
   expect(config).toContain('cogmem_maintenance_tick');
   expect(config).toContain('cogmem_prospective');
@@ -1644,11 +1646,74 @@ test('cogmem-connect hermes --auto does not duplicate existing cogmem mcp server
   const config = readFileSync(hermesConfig, 'utf8');
   expect(config.match(/^  cogmem:/gm)?.length).toBe(1);
   expect(config.match(/command: "cogmem"/g)?.length).toBe(1);
-  // An entry an earlier connect wrote names no project; the server would then
-  // answer whatever scope a caller asks for, which is no scope at all.
-  expect(config).toContain(`args: ["mcp","--project","${JSON.parse(installed.stdout).integrationProject}"]`);
+  // An entry an earlier connect wrote names no project and no Workspace; the server
+  // would then answer whatever scope a caller asks for, from whatever config its
+  // working directory happens to find.
+  expect(config).toContain(
+    `args: ["mcp","--project","${JSON.parse(installed.stdout).integrationProject}",` +
+    `"--config","${join(workspace, '.cogmem', 'config.toml')}"]`,
+  );
   expect(config).toContain('cogmem_memory_map');
   expect(config.match(/cogmem_recall/g)?.length).toBe(1);
+});
+
+test('cogmem-connect hermes --auto carries the Workspace an earlier connect could not', async () => {
+  const dir = makeTempDir('cogmem-connect-hermes-cwd-bound-');
+  const workspace = join(dir, 'workspace');
+  const hermesConfig = join(dir, '.hermes', 'config.yaml');
+  mkdirSync(workspace);
+  mkdirSync(dirname(hermesConfig), { recursive: true });
+
+  // First connect: the entry this branch wrote before it carried a `--config`, so
+  // Hermes only reached this Workspace when it happened to run from it.
+  const first = await runCli([
+    'bun', connectBin, 'hermes', '--workspace', workspace, '--auto', '--hermes-config', hermesConfig, '--json',
+  ], coreRoot, { HOME: dir });
+  expect(first.exitCode).toBe(0);
+  const project = JSON.parse(first.stdout).integrationProject as string;
+  const bound = readFileSync(hermesConfig, 'utf8');
+  writeFileSync(hermesConfig, bound.replace(
+    `args: ["mcp","--project","${project}","--config","${join(workspace, '.cogmem', 'config.toml')}"]`,
+    `args: ["mcp","--project","${project}"]`,
+  ));
+  expect(readFileSync(hermesConfig, 'utf8')).toContain(`args: ["mcp","--project","${project}"]`);
+
+  // Second connect: it converges to the entry that works from any directory, rather
+  // than being left behind beside the new one.
+  const second = await runCli([
+    'bun', connectBin, 'hermes', '--workspace', workspace, '--auto', '--hermes-config', hermesConfig, '--json',
+  ], coreRoot, { HOME: dir });
+  expect(second.stderr).toBe('');
+  expect(second.exitCode).toBe(0);
+  const config = readFileSync(hermesConfig, 'utf8');
+  expect(config).toContain(
+    `args: ["mcp","--project","${project}","--config","${join(workspace, '.cogmem', 'config.toml')}"]`,
+  );
+  expect(config.match(/^  cogmem:/gm)?.length).toBe(1);
+});
+
+test('cogmem-connect hermes --auto leaves configuration it cannot attribute alone', async () => {
+  const dir = makeTempDir('cogmem-connect-hermes-deliberate-');
+  const workspace = join(dir, 'workspace');
+  const hermesConfig = join(dir, '.hermes', 'config.yaml');
+  mkdirSync(workspace);
+  mkdirSync(dirname(hermesConfig), { recursive: true });
+  // A hand-written transport and a project somebody chose: retargeting either would
+  // be a silent change to a deliberate configuration.
+  writeFileSync(hermesConfig, [
+    'mcp_servers:',
+    '  cogmem:',
+    '    command: "cogmem"',
+    '    args: ["mcp","--transport","http","--port","7337"]',
+    '    enabled: true',
+    '',
+  ].join('\n'));
+
+  const installed = await runCli([
+    'bun', connectBin, 'hermes', '--workspace', workspace, '--auto', '--hermes-config', hermesConfig, '--json',
+  ], coreRoot, { HOME: dir });
+  expect(installed.exitCode).toBe(0);
+  expect(readFileSync(hermesConfig, 'utf8')).toContain('args: ["mcp","--transport","http","--port","7337"]');
 });
 
 test('package exposes agent migration bins', () => {

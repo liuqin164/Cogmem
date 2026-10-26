@@ -284,8 +284,15 @@ function resolveCogmemMcpServer(workspaceRoot: string, project: string): { comma
   // `cogmem` takes a subcommand; the standalone `cogmem-mcp`/`COGMEM_MCP_BIN`
   // entry points are the server itself and would read a positional `mcp` as a
   // bad argument. Same binding, two shapes.
-  const bound = ['mcp', '--project', project];
-  const mcpOnlyBound = ['--project', project];
+  // The Workspace travels with the entry, the way the OpenClaw plugin entry records
+  // its `cwd`: `cogmem mcp` otherwise resolves its config by walking up from
+  // whatever directory the host was launched in, so an entry without this works only
+  // when the host happens to run inside the Workspace — Hermes elsewhere reported
+  // `Connection closed` after 8.1s, and the same host from inside the Workspace
+  // connected in 414ms (#86).
+  const configPath = join(workspaceRoot, '.cogmem', 'config.toml');
+  const bound = ['mcp', '--project', project, '--config', configPath];
+  const mcpOnlyBound = ['--project', project, '--config', configPath];
   if (process.env.COGMEM_MCP_BIN) return { command: process.env.COGMEM_MCP_BIN, args: mcpOnlyBound };
   if (process.env.COGMEM_BIN) return { command: process.env.COGMEM_BIN, args: bound };
   // The documented order: an explicit override, then the workspace-local
@@ -447,7 +454,7 @@ function installHermesMcpConfig(input: {
 
 function patchHermesMcpConfig(original: string, serverCommand: string, serverArgs: string[], project: string): string {
   if (hasHermesCogmemEntry(original)) {
-    return patchExistingHermesCogmemConfig(original, project);
+    return patchExistingHermesCogmemConfig(original, project, serverArgs);
   }
 
   const lines = original.replace(/\r\n/g, '\n').split('\n');
@@ -478,7 +485,31 @@ function patchHermesMcpConfig(original: string, serverCommand: string, serverArg
   return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
 }
 
-function patchExistingHermesCogmemConfig(original: string, project: string): string {
+/**
+ * Whether an existing `args` line is a shape this command wrote, naming what it
+ * would write now.
+ *
+ * `["mcp"]` is what it wrote before the project binding existed;
+ * `["mcp","--project",<this project>]` is what it wrote before the Workspace
+ * travelled with it. Both are superseded by the current args and are rewritten.
+ * Anything else — a hand-written `--transport`, a flag this command does not know,
+ * a *different* project somebody chose — is somebody's deliberate configuration and
+ * is left where it is: an unbound entry is a visible problem, a silently retargeted
+ * one is not.
+ */
+function isSupersededCogmemMcpArgs(parsed: unknown[], project: string): boolean {
+  if (parsed[0] !== 'mcp') return false;
+  for (let index = 1; index < parsed.length; index += 2) {
+    const flag = parsed[index];
+    const value = parsed[index + 1];
+    if (flag === '--project' && value === project) continue;
+    if (flag === '--config' && typeof value === 'string') continue;
+    return false;
+  }
+  return true;
+}
+
+function patchExistingHermesCogmemConfig(original: string, project: string, serverArgs: string[]): string {
   const lines = original.replace(/\r\n/g, '\n').split('\n');
   const cogmemIndex = lines.findIndex((line) => /^\s+cogmem\s*:\s*$/.test(line));
   if (cogmemIndex === -1) return original.endsWith('\n') ? original : `${original}\n`;
@@ -507,13 +538,8 @@ function patchExistingHermesCogmemConfig(original: string, project: string): str
     if (!match) continue;
     try {
       const parsed = JSON.parse(match[2]!) as unknown;
-      // Only the shape this command wrote before the binding existed:
-      // `["mcp"]`. Anything else — a hand-written `--transport`, a flag this
-      // command does not know, an empty array it cannot attribute — is somebody's
-      // deliberate configuration and is left where it is; an unbound entry is a
-      // visible problem, a silently retargeted one is not.
-      if (Array.isArray(parsed) && parsed.length === 1 && parsed[0] === 'mcp') {
-        lines[index] = `${match[1]}args: ${JSON.stringify([...parsed, '--project', project])}`;
+      if (Array.isArray(parsed) && isSupersededCogmemMcpArgs(parsed, project)) {
+        lines[index] = `${match[1]}args: ${JSON.stringify(serverArgs)}`;
       }
     } catch {
       // Leave an unparseable args line alone.
