@@ -85,15 +85,19 @@ async function main(): Promise<void> {
   const proc = Bun.spawn({
     cmd: [process.execPath || 'bun', siblingEntrypoint(entrypoint), ...rest],
     cwd: process.cwd(),
+    // Inherited, not piped. The dispatcher used to read the child's output to EOF and
+    // write it afterwards, which works for a command that exits and cannot work for
+    // one that does not: `cogmem mcp` streams JSON-RPC until its client disconnects,
+    // so every response was held until the child exited and a client that keeps the
+    // connection open never completed the handshake — pi reported `MCP request timed
+    // out after 60000ms` with an empty tool list, and the same happened to the
+    // startup line of `cogmem mcp --transport http`. Inheriting the streams makes the
+    // child write to the client directly, so output arrives as it is produced.
     stdin: 'inherit',
-    stdout: 'pipe',
-    stderr: 'pipe',
+    stdout: 'inherit',
+    stderr: 'inherit',
     env,
   });
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  await Bun.write(Bun.stdout, stdout);
-  await Bun.write(Bun.stderr, stderr);
   process.exit(await proc.exited);
 }
 
