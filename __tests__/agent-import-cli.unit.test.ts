@@ -1474,6 +1474,35 @@ test('cogmem update targets npm global installs without writing a local package 
   expect(parsed.migrationCommand).toBeUndefined();
 });
 
+test('#89 a global install updates through the prefix that owns it, not npm\'s default', async () => {
+  const dir = makeTempDir('cogmem-update-global-prefix-');
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+
+  // A global install under a custom prefix — `npm install -g --prefix <dir>` — owns a
+  // package at `<dir>/lib/node_modules/cogmem`. A bare `npm install -g` resolves npm's own
+  // default prefix instead and fails with EACCES on a machine where that is not writable.
+  const update = await runCli(
+    ['bun', cogmemBin, 'update', '--dry-run', '--json'],
+    dir,
+    {
+      COGMEM_INSTALL_KIND: 'npm_global',
+      COGMEM_NPM_SPEC: '4.0.0',
+      COGMEM_NPM_PREFIX: join(dir, 'global'),
+    },
+  );
+
+  expect(update.exitCode).toBe(0);
+  const parsed = JSON.parse(update.stdout);
+  expect(parsed.installKind).toBe('npm_global');
+  // The command it would run must name the prefix, so it updates the copy that is
+  // actually installed rather than a different tree.
+  expect(parsed.nextCommand).toContain('--prefix');
+  expect(parsed.nextCommand).toContain(join(dir, 'global'));
+  expect(parsed.nextCommand).toContain('cogmem@4.0.0');
+});
+
 test('cogmem-connect installs Hermes skill into the real Hermes skills directory by default', async () => {
   const dir = makeTempDir('cogmem-connect-hermes-home-');
   const workspace = join(dir, 'workspace');

@@ -78,8 +78,35 @@ interface UpdateTarget {
   warning?: string;
 }
 
+/**
+ * The prefix that owns this installation, when it is a global npm one.
+ *
+ * A global install lives at `<prefix>/lib/node_modules/cogmem` (or `<prefix>/node_modules`
+ * on Windows). A bare `npm install -g` targets npm's *configured* default instead, which is
+ * a different tree whenever the install used `--prefix`: the operator updates one copy and
+ * keeps running another, or gets EACCES naming a path they never chose (#89). The running
+ * copy's own location is the only reliable statement of where it is, so it is derived
+ * rather than guessed. `COGMEM_NPM_PREFIX` overrides it for a layout that does not match.
+ */
+function npmGlobalPrefix(env: Record<string, string | undefined> = process.env): string | undefined {
+  const explicit = env.COGMEM_NPM_PREFIX?.trim();
+  if (explicit) return explicit;
+  const root = ownPackageRoot();
+  const marker = `${sep}node_modules${sep}cogmem`;
+  const index = root.indexOf(marker);
+  if (index === -1) return undefined;
+  // Strip `/lib` too when present: npm's posix layout is `<prefix>/lib/node_modules`.
+  const before = root.slice(0, index);
+  return before.endsWith(`${sep}lib`) ? before.slice(0, -`${sep}lib`.length) : before;
+}
+
 function buildCommand(target: UpdateTarget, spec: string): string[] {
-  if (target.kind === 'npm_global') return ['npm', 'install', '-g', `cogmem@${spec}`];
+  if (target.kind === 'npm_global') {
+    const prefix = npmGlobalPrefix();
+    return prefix
+      ? ['npm', 'install', '-g', '--prefix', prefix, `cogmem@${spec}`]
+      : ['npm', 'install', '-g', `cogmem@${spec}`];
+  }
   const manager = target.manager;
   if (manager === 'bun') return ['bun', 'add', `cogmem@${spec}`];
   if (manager === 'pnpm') return ['pnpm', 'add', `cogmem@${spec}`];
