@@ -358,6 +358,14 @@ cogmem memory bind --project my-agent --json
 
 `memory tick` decays activation and returns suggested host actions. It refreshes Atlas only when dirty, records projection failures without aborting other maintenance, prunes old Atlas access telemetry, reports high-value unbound raw user events, and ages untouched review entries after the default 30-day TTL. It also **seals conversations that have gone quiet** — an episode idle for longer than the boundary policy's idle gap — because Dream processes sealed episodes only, and a turn written over MCP is otherwise stored, searchable and unreachable by recall (ADR-0011). It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
 
+**Capturing JSON from a command.** Prefer `--out <path>`, which writes the report to that file atomically and fails loudly if it cannot:
+
+```bash
+cogmem doctor --json --out report.json
+```
+
+A shell redirect works too (`cogmem doctor --json > report.json`), but do not combine it with `2>&1` into the same file: a bun build that writes an empty string to its stderr sink truncates the shared descriptor at exit, and the file comes back empty with a success exit code. That is upstream, not Cogmem — `--out` exists so a report never depends on the shell's plumbing. If you must merge the streams, pipe instead: `cogmem doctor --json 2>&1 | cat > report.json`.
+
 Operational cost classes:
 
 - Interactive/read-only: `memory status`, `memory candidates`, Atlas query commands, `strategy plan`, and direct source `memory show`.
