@@ -1870,6 +1870,73 @@ test('cogmem-connect hermes stays quiet when the entry it preserved still works'
   expect(parsed.hermesMcp?.warning).toBeUndefined();
 });
 
+test('cogmem-connect pi installs the skill where pi scans and wires its mcp.json', async () => {
+  const dir = makeTempDir('cogmem-connect-pi-');
+  const workspace = join(dir, 'workspace');
+  const piConfig = join(dir, '.pi', 'agent', 'mcp.json');
+  mkdirSync(workspace);
+
+  const installed = await runCli([
+    'bun', connectBin, 'pi', '--workspace', workspace, '--auto', '--pi-config', piConfig, '--json',
+  ], coreRoot, { HOME: dir });
+  expect(installed.exitCode).toBe(0);
+
+  // `~/.agents/skills/` is the location pi actually scans: measured against a real pi,
+  // the same skill under `~/.pi/skills/` was not listed and this one was.
+  const skill = join(dir, '.agents', 'skills', 'cogmem-memory', 'SKILL.md');
+  expect(existsSync(skill)).toBe(true);
+  expect(readFileSync(skill, 'utf8')).toContain('name: cogmem-memory');
+  expect(existsSync(join(dirname(skill), 'references', 'operations.md'))).toBe(true);
+
+  // pi's entry is `{command, args}` under `mcpServers`, the shape `pi mcp add` writes.
+  const written = JSON.parse(readFileSync(piConfig, 'utf8')) as {
+    mcpServers?: Record<string, { command?: string; args?: string[] }>;
+  };
+  const entry = written.mcpServers?.cogmem;
+  expect(entry?.args?.[0]).toBe('mcp');
+  expect(entry?.args).toContain('--project');
+  expect(entry?.args).toContain('--config');
+
+  const parsed = JSON.parse(installed.stdout) as { piMcp?: { configUpdated?: boolean } };
+  expect(parsed.piMcp?.configUpdated).toBe(true);
+});
+
+test('cogmem-connect pi leaves other MCP servers alone, and is idempotent', async () => {
+  const dir = makeTempDir('cogmem-connect-pi-existing-');
+  const workspace = join(dir, 'workspace');
+  const piConfig = join(dir, '.pi', 'agent', 'mcp.json');
+  mkdirSync(workspace);
+  mkdirSync(dirname(piConfig), { recursive: true });
+  // Somebody else's server, including one with a shape connect has no opinion about.
+  writeFileSync(piConfig, JSON.stringify({
+    mcpServers: {
+      warehouse: { url: 'https://example.invalid/mcp', headers: { Authorization: 'Bearer x' } },
+    },
+  }, null, 2));
+
+  const run = (): Promise<{ exitCode: number; stdout: string }> => runCli([
+    'bun', connectBin, 'pi', '--workspace', workspace, '--auto', '--pi-config', piConfig, '--json',
+  ], coreRoot, { HOME: dir });
+
+  const first = await run();
+  expect(first.exitCode).toBe(0);
+  const afterFirst = readFileSync(piConfig, 'utf8');
+  const parsedFirst = JSON.parse(afterFirst) as { mcpServers?: Record<string, unknown> };
+  expect(parsedFirst.mcpServers?.warehouse).toEqual({
+    url: 'https://example.invalid/mcp',
+    headers: { Authorization: 'Bearer x' },
+  });
+  expect(parsedFirst.mcpServers?.cogmem).toBeDefined();
+
+  // A second run has nothing to do. Re-serialising the file would have made every run
+  // report a change, which is how a "wired it" line stops meaning anything.
+  const second = await run();
+  expect(second.exitCode).toBe(0);
+  expect(readFileSync(piConfig, 'utf8')).toBe(afterFirst);
+  const parsedSecond = JSON.parse(second.stdout) as { piMcp?: { configUpdated?: boolean } };
+  expect(parsedSecond.piMcp?.configUpdated).toBe(false);
+});
+
 test('package exposes agent migration bins', () => {
   const packageJson = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8'));
 

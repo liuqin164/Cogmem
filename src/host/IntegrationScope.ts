@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto';
  * has to be the value the printed import step names, or the import reports
  * success and the agent recalls nothing (ADR-0010, #79).
  */
-export function integrationScope(host: 'openclaw' | 'hermes', workspaceRoot: string): string {
+export function integrationScope(host: 'openclaw' | 'hermes' | 'pi', workspaceRoot: string): string {
   const hash = createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 8);
   return `${host}-${hash}`;
 }

@@ -156,7 +156,7 @@ export function postInstallSteps(bin: string, workspace: string, connectHost?: H
 }
 
 /** Host integration kinds that `connect` knows about. */
-export type HostIntegration = 'openclaw' | 'hermes';
+export type HostIntegration = 'openclaw' | 'hermes' | 'pi';
 
 /**
  * Whether one Host's integration exists.
@@ -178,6 +178,16 @@ const PRIMARY_HOST: HostIntegration = 'openclaw';
 /** The Hermes config `connect` patches. One function, so writer and reader agree. */
 export function defaultHermesConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(env.HOME || homedir(), '.hermes', 'config.yaml');
+}
+
+/**
+ * The pi config `connect` patches. pi resolves this from `HOME` — not a variable of
+ * its own, unlike Hermes' `HERMES_HOME` — and also reads a project-local
+ * `.pi/mcp.json`, which is left to the operator: one integration should not write a
+ * second scope into a project it does not own.
+ */
+export function defaultPiConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(env.HOME || homedir(), '.pi', 'agent', 'mcp.json');
 }
 
 /**
@@ -238,7 +248,10 @@ export function connectSteps(
   // (#79, ADR-0010).
   project: string,
 ): InstallStep[] {
-  const importCommand = host === 'openclaw' ? 'import-openclaw' : 'import-hermes';
+  // pi has no history importer, so it gets no import steps rather than Hermes'
+  // command under a pi heading. Printing a step that imports from a host pi is not
+  // is how an operator runs something that cannot work.
+  const importCommand = host === 'openclaw' ? 'import-openclaw' : host === 'hermes' ? 'import-hermes' : undefined;
   // The value the command was given, not a `.` of its own: a step that resolves
   // the workspace from wherever it happens to be run is the same defect the
   // resolver above exists to remove, one level down.
@@ -252,22 +265,24 @@ export function connectSteps(
       when: 'after installation or update',
       purpose: 'verify package, config, and database access',
     },
-    {
-      id: 'import_dry_run',
-      actor: 'agent',
-      safeForAutomation: true,
-      command: `${bin} ${importCommand}${workspaceArg} --project ${project} --dry-run --json`,
-      when: 'before importing legacy memory',
-      purpose: 'preview source discovery and import counts',
-    },
-    {
-      id: 'import_apply',
-      actor: 'agent',
-      safeForAutomation: true,
-      command: `${bin} ${importCommand}${workspaceArg} --project ${project} --json`,
-      when: 'after dry-run looks correct',
-      purpose: 'idempotently import legacy memory into Cogmem',
-    },
+    ...(importCommand ? [
+      {
+        id: 'import_dry_run',
+        actor: 'agent' as const,
+        safeForAutomation: true,
+        command: `${bin} ${importCommand}${workspaceArg} --project ${project} --dry-run --json`,
+        when: 'before importing legacy memory',
+        purpose: 'preview source discovery and import counts',
+      },
+      {
+        id: 'import_apply',
+        actor: 'agent' as const,
+        safeForAutomation: true,
+        command: `${bin} ${importCommand}${workspaceArg} --project ${project} --json`,
+        when: 'after dry-run looks correct',
+        purpose: 'idempotently import legacy memory into Cogmem',
+      },
+    ] : []),
     {
       id: 'memory_plan',
       actor: 'agent',
@@ -309,6 +324,15 @@ export function connectSteps(
       command: 'openclaw gateway restart',
       when: 'after plugin files or OpenClaw config changed',
       purpose: 'reload OpenClaw hooks so the refreshed Cogmem plugin is active',
+    });
+  } else if (host === 'pi') {
+    steps.push({
+      id: 'reload_pi',
+      actor: 'agent',
+      safeForAutomation: true,
+      command: 'pi mcp list',
+      when: 'after the pi MCP config changed',
+      purpose: 'confirm pi lists the cogmem server as connected',
     });
   } else {
     steps.push({

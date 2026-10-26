@@ -9,6 +9,7 @@ import {
   connectSteps,
   defaultHermesConfigPath,
   hasHermesCogmemEntry,
+  defaultPiConfigPath,
   resolveCogmemInvocation,
   type InstallStep,
 } from '../install/InstallSteps.js';
@@ -26,7 +27,7 @@ import {
   installOpenClawAutoMemoryPlugin,
 } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 
-type AgentKind = 'openclaw' | 'hermes';
+type AgentKind = 'openclaw' | 'hermes' | 'pi';
 
 const HERMES_COGMEM_TOOLS = [
   'cogmem_remember_turn',
@@ -69,6 +70,7 @@ interface ConnectArgs {
   configPath?: string;
   openclawConfigPath?: string;
   hermesConfigPath?: string;
+  piConfigPath?: string;
   pluginDir?: string;
   bunPath?: string;
   projectId?: string;
@@ -99,6 +101,7 @@ interface ConnectResult {
   hostConfigSnippet: string;
   autoMemory?: OpenClawAutoMemoryInstallResult;
   hermesMcp?: HermesMcpInstallResult;
+  piMcp?: PiMcpInstallResult;
   /**
    * Where `connect --auto` recorded that this host is wired. `null` means it did
    * not record one (a dry run, or no config yet), not that the write failed.
@@ -123,6 +126,16 @@ interface HermesMcpInstallResult {
    * is a host that is not wired while `connect` reports that it is (#96).
    */
   warning?: string;
+}
+
+interface PiMcpInstallResult {
+  enabled: true;
+  configPath: string;
+  serverCommand: string;
+  serverArgs: string[];
+  dryRun: boolean;
+  configUpdated: boolean;
+  backupPath?: string;
 }
 
 /**
@@ -158,6 +171,7 @@ const CONNECT_FLAGS = new Set([
   'config',
   'openclaw-config',
   'hermes-config',
+  'pi-config',
   'plugin-dir',
   'bun',
   'project',
@@ -197,7 +211,7 @@ function readArgs(argv: string[]): ConnectArgs {
   }
 
   const rawAgent = positionals[0];
-  const agent = rawAgent === 'openclaw' || rawAgent === 'hermes' ? rawAgent : undefined;
+  const agent = rawAgent === 'openclaw' || rawAgent === 'hermes' || rawAgent === 'pi' ? rawAgent : undefined;
   const configPath = stringValue(values.config);
   // `--workspace` is the operator's override. Otherwise the Workspace is the
   // directory that contains `.cogmem/`, derived here exactly as `init`, `doctor`
@@ -212,6 +226,7 @@ function readArgs(argv: string[]): ConnectArgs {
     configPath,
     openclawConfigPath: stringValue(values['openclaw-config']),
     hermesConfigPath: stringValue(values['hermes-config']),
+    piConfigPath: stringValue(values['pi-config']),
     pluginDir: stringValue(values['plugin-dir']),
     bunPath: stringValue(values.bun),
     projectId: stringValue(values.project),
@@ -245,7 +260,14 @@ function defaultSkillPath(agent: AgentKind, workspaceRoot: string): string {
   if (agent === 'openclaw') {
     return join(workspaceRoot, 'skills', 'cogmem-memory', 'SKILL.md');
   }
-  return join(process.env.HOME || homedir(), '.hermes', 'skills', 'cogmem-memory', 'SKILL.md');
+  const home = process.env.HOME || homedir();
+  if (agent === 'pi') {
+    // The Agent Skills location, because that is the one pi actually scans. Measured
+    // on a real pi: the same skill under `~/.pi/skills/` was not listed, and under
+    // `~/.agents/skills/` it was.
+    return join(home, '.agents', 'skills', 'cogmem-memory', 'SKILL.md');
+  }
+  return join(home, '.hermes', 'skills', 'cogmem-memory', 'SKILL.md');
 }
 
 function nextCommands(agent: AgentKind, workspace: string, project: string): string[] {
@@ -258,15 +280,17 @@ function nextSteps(agent: AgentKind, workspace: string, project: string): Connec
 
 function usage(): string {
   return [
-    'Usage: cogmem-connect <openclaw|hermes> [--workspace <dir>] [--output <SKILL.md>] [--auto] [--config <config.toml>] [--openclaw-config <openclaw.json>] [--hermes-config <config.yaml>] [--plugin-dir <dir>] [--bun <path>] [--project <id>] [--agent-id <id>] [--dry-run] [--force] [--json]',
+    'Usage: cogmem-connect <openclaw|hermes|pi> [--workspace <dir>] [--output <SKILL.md>] [--auto] [--config <config.toml>] [--openclaw-config <openclaw.json>] [--hermes-config <config.yaml>] [--pi-config <mcp.json>] [--plugin-dir <dir>] [--bun <path>] [--project <id>] [--agent-id <id>] [--dry-run] [--force] [--json]',
     '',
     'Installs the agent-facing cogmem memory skill bundle into:',
     '  OpenClaw: <workspace>/skills/cogmem-memory/',
     '  Hermes:   ~/.hermes/skills/cogmem-memory/',
+    '  pi:       ~/.agents/skills/cogmem-memory/',
     '',
     'The bundle includes SKILL.md plus references/operations.md with import, recall, Atlas, governance, repair, and backup commands.',
     'For OpenClaw, pass --auto to install the local automatic recall/remember plugin wrapper and patch OpenClaw plugin config.',
     'For Hermes, pass --auto to patch ~/.hermes/config.yaml with a cogmem MCP server entry.',
+    'For pi, pass --auto to patch ~/.pi/agent/mcp.json with the same server. --pi-config names another file.',
     '--bun must be a real Bun binary (the plugin bridge imports bun:sqlite); defaults to the runtime that invoked this CLI.',
   ].join('\n');
 }
@@ -291,6 +315,9 @@ function hostConfigSnippet(agent: AgentKind, workspaceRoot: string, auto: boolea
   }
 
   const mcpServer = resolveCogmemMcpServer(workspaceRoot, project);
+  if (agent === 'pi') {
+    return JSON.stringify({ mcpServers: { cogmem: { command: mcpServer.command, args: mcpServer.args } } }, null, 2);
+  }
   return [
     'mcp_servers:',
     '  cogmem:',
@@ -386,6 +413,7 @@ function installSkill(args: ConnectArgs): ConnectResult {
     && readFileSync(operationsPath, 'utf8') === operationsTemplate;
   let autoMemory: OpenClawAutoMemoryInstallResult | undefined;
   let hermesMcp: HermesMcpInstallResult | undefined;
+  let piMcp: PiMcpInstallResult | undefined;
 
   if (!args.dryRun && !alreadyCurrent) {
     if (existsSync(skillPath) && !args.force) {
@@ -415,6 +443,14 @@ function installSkill(args: ConnectArgs): ConnectResult {
     hermesMcp = installHermesMcpConfig({
       workspaceRoot: hostWorkspaceRoot,
       configPath: args.hermesConfigPath,
+      project: integrationProject,
+      dryRun: args.dryRun,
+      force: args.force,
+    });
+  } else if (args.agent === 'pi' && args.auto) {
+    piMcp = installPiMcpConfig({
+      workspaceRoot: hostWorkspaceRoot,
+      configPath: args.piConfigPath,
       project: integrationProject,
       dryRun: args.dryRun,
       force: args.force,
@@ -449,6 +485,7 @@ function installSkill(args: ConnectArgs): ConnectResult {
     hostConfigSnippet: hostConfigSnippet(args.agent, hostWorkspaceRoot, args.auto, integrationProject),
     autoMemory,
     hermesMcp,
+    piMcp,
     integrationEnabled,
   };
 }
@@ -496,6 +533,88 @@ function installHermesMcpConfig(input: {
     configUpdated: changed || input.force,
     backupPath,
     ...(warning ? { warning } : {}),
+  };
+}
+
+/**
+ * Write the pi MCP entry, leaving every other server in the file untouched.
+ *
+ * pi's file is JSON, and `pi mcp add` is the supported writer — but it prompts, and
+ * `connect --auto` has to be scriptable for the same reason `connect hermes --auto`
+ * is. The entry shape is the one pi writes itself: `{command, args}` under
+ * `mcpServers.<name>`.
+ */
+function patchPiMcpJsonConfig(original: string, serverCommand: string, serverArgs: string[]): string {
+  let parsed: Record<string, unknown> = {};
+  if (original.trim()) {
+    let candidate: unknown;
+    try {
+      candidate = JSON.parse(original);
+    } catch {
+      throw new Error(
+        'pi mcp.json is not valid JSON, so this command will not rewrite it. Fix the file, or point --pi-config at another path.',
+      );
+    }
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      parsed = candidate as Record<string, unknown>;
+    }
+  }
+  const existingServers = parsed.mcpServers;
+  const servers = existingServers && typeof existingServers === 'object' && !Array.isArray(existingServers)
+    ? { ...(existingServers as Record<string, unknown>) }
+    : {};
+  servers.cogmem = { command: serverCommand, args: serverArgs };
+  parsed.mcpServers = servers;
+  return `${JSON.stringify(parsed, null, 2)}\n`;
+}
+
+/** Whether the file already carries exactly the entry this command would write. */
+function piCogmemEntryMatches(original: string, serverCommand: string, serverArgs: string[]): boolean {
+  if (!original.trim()) return false;
+  try {
+    const parsed = JSON.parse(original) as { mcpServers?: Record<string, { command?: unknown; args?: unknown }> };
+    const entry = parsed.mcpServers?.cogmem;
+    return Boolean(entry)
+      && entry!.command === serverCommand
+      && JSON.stringify(entry!.args) === JSON.stringify(serverArgs);
+  } catch {
+    return false;
+  }
+}
+
+function installPiMcpConfig(input: {
+  workspaceRoot: string;
+  project: string;
+  configPath?: string;
+  dryRun: boolean;
+  force: boolean;
+}): PiMcpInstallResult {
+  const configPath = resolve(input.configPath || defaultPiConfigPath());
+  const server = resolveCogmemMcpServer(resolve(input.workspaceRoot), input.project);
+  const original = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
+  // Compared as values, not as text: re-serialising a file pi wrote would otherwise
+  // read as a change on every run.
+  const current = piCogmemEntryMatches(original, server.command, server.args);
+  const patched = patchPiMcpJsonConfig(original, server.command, server.args);
+  let backupPath: string | undefined;
+
+  if (!input.dryRun && (!current || input.force)) {
+    mkdirSync(dirname(configPath), { recursive: true });
+    if (existsSync(configPath)) {
+      backupPath = `${configPath}.cogmem.bak-${Date.now()}`;
+      writeFileSync(backupPath, original, 'utf8');
+    }
+    writeFileSync(configPath, patched, 'utf8');
+  }
+
+  return {
+    enabled: true,
+    configPath,
+    serverCommand: server.command,
+    serverArgs: server.args,
+    dryRun: input.dryRun,
+    configUpdated: !current || input.force,
+    backupPath,
   };
 }
 
@@ -652,6 +771,14 @@ function printHuman(result: ConnectResult): void {
   if (result.integrationEnabled) {
     console.log('');
     console.log(`integration: ${result.integrationEnabled.configPath} (${result.integrationEnabled.changed ? 'recorded' : 'already recorded'})`);
+  }
+  if (result.piMcp) {
+    console.log('');
+    console.log('pi MCP integration:');
+    console.log(`  config: ${result.piMcp.configPath}`);
+    console.log(`  command: ${result.piMcp.serverCommand} ${result.piMcp.serverArgs.join(' ')}`.trimEnd());
+    if (result.piMcp.backupPath) console.log(`  backup: ${result.piMcp.backupPath}`);
+    console.log('  check: pi mcp list');
   }
   if (result.hermesMcp) {
     console.log('');

@@ -56,6 +56,10 @@ export interface LoadedCogmemConfig {
       enabled: boolean;
       workspaceDir?: string;
     };
+    pi: {
+      enabled: boolean;
+      workspaceDir?: string;
+    };
   };
   diagnostics: ConfigDiagnosticLike[];
 }
@@ -148,7 +152,10 @@ export function resolveWorkspaceRoot(options: CogmemConfigResolutionOptions = {}
  * one function because `connect`, `doctor` and `update` must agree: the plugin id
  * is a hash of this path, so two answers are two identities.
  */
-export function hostWorkspaceFor(loaded: LoadedCogmemConfig, host: 'openclaw' | 'hermes'): string {
+/** Every host `connect` can wire. One union, so a new host cannot be half-added. */
+export type CogmemHost = 'openclaw' | 'hermes' | 'pi';
+
+export function hostWorkspaceFor(loaded: LoadedCogmemConfig, host: CogmemHost): string {
   return loaded.integrations[host].workspaceDir || loaded.workspaceRoot;
 }
 
@@ -166,7 +173,7 @@ function workspaceOfConfigPath(configPath: string): string {
  * boolean of (ADR-0010). A file that already says `true` is not rewritten, so a
  * repeated `connect` leaves the config byte-identical.
  */
-export function enableHostIntegration(configPath: string, host: 'openclaw' | 'hermes'): { configPath: string; changed: boolean } {
+export function enableHostIntegration(configPath: string, host: CogmemHost): { configPath: string; changed: boolean } {
   const path = resolve(configPath);
   const original = readFileSync(path, 'utf8');
   const lines = original.replace(/\r\n/g, '\n').split('\n');
@@ -230,6 +237,7 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   const integrations = section(root, 'integrations');
   const openclaw = section(integrations, 'openclaw');
   const hermes = section(integrations, 'hermes');
+  const pi = section(integrations, 'pi');
 
   const optionsOut: MemoryKernelOptions = {};
 
@@ -357,8 +365,10 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
 
   const openclawEnabled = booleanValue(openclaw.enabled) === true;
   const hermesEnabled = booleanValue(hermes.enabled) === true;
+  const piEnabled = booleanValue(pi.enabled) === true;
   const openclawWorkspaceDir = maybeResolveWorkspace(openclaw.workspace_dir, workspaceRoot, env, diagnostics);
   const hermesWorkspaceDir = maybeResolveWorkspace(hermes.workspace_dir, workspaceRoot, env, diagnostics);
+  const piWorkspaceDir = maybeResolveWorkspace(pi.workspace_dir, workspaceRoot, env, diagnostics);
 
   return {
     configPath,
@@ -370,6 +380,7 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
     integrations: {
       openclaw: { enabled: openclawEnabled, workspaceDir: openclawWorkspaceDir },
       hermes: { enabled: hermesEnabled, workspaceDir: hermesWorkspaceDir },
+      pi: { enabled: piEnabled, workspaceDir: piWorkspaceDir },
     },
     diagnostics,
   };
