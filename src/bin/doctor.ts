@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync } from 'node:fs';
+
+import { printJsonDocument } from './CliJson.js';
 import { join, resolve } from 'node:path';
 
 import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
@@ -84,7 +86,7 @@ function printSteps(steps: InstallStep[]): void {
 
 function emitGate(gate: InstallGate, payload: Record<string, unknown> = {}): void {
   if (json) {
-    console.log(JSON.stringify({
+    printJsonDocument(JSON.stringify({
       schemaVersion: 'cogmem.cli.v1',
       command: 'doctor',
       ...payload,
@@ -185,7 +187,7 @@ if (envPath) {
     });
     const audit = readLatestOpenClawAudit(workspaceRoot);
     if (json) {
-      console.log(JSON.stringify({
+      printJsonDocument(JSON.stringify({
         schemaVersion: 'cogmem.cli.v1',
         command: 'doctor',
         pluginOnly: true,

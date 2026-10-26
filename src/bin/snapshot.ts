@@ -78,7 +78,8 @@ async function main(): Promise<void> {
       : createMemoryKernel({ dbPath });
     const meta = await kernel.exportSnapshot(outputPath);
     kernel.close();
-    printCliJson('snapshot.export', meta);
+    // `--out` here is the snapshot file itself, so the JSON report stays on stdout.
+    printCliJson('snapshot.export', meta, { outExempt: true });
     return;
   }
   if (command === 'import') {
@@ -93,7 +94,7 @@ async function main(): Promise<void> {
       dryRun: args['dry-run'] === true,
       overwrite: args.overwrite === true,
     });
-    printCliJson('snapshot.import', result);
+    printCliJson('snapshot.import', result, { outExempt: true });
     return;
   }
   throw new Error('Usage: snapshot.ts export [--config <config.toml>|--db <db>] [--out <snap>] | import --snap <snap> [--config <config.toml>|--db <db>] [--dry-run] [--overwrite]');

@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
 import { formatCliJson } from '../src/bin/CliJson.js';
@@ -160,4 +161,97 @@ test('memory dream --promote --json exposes queue counters without requiring gov
   expect(output.promoted).toBe(0);
   expect(output.needs_confirmation).toBe(0);
   expect(output.beliefs).toBe(0);
+});
+
+/**
+ * #83: `--out <path>` — a reliable JSON file, not a redirect the shell can truncate.
+ *
+ * The flag used to be accepted and silently ignored: `doctor --json --out f` exited 0,
+ * printed to stdout, and created no file. These tests pin the contract that replaces it.
+ */
+test('#83 --out writes the same JSON the command prints, and says so on failure', async () => {
+  const dir = makeTempDir('cogmem-cli-out-');
+  const target = join(dir, 'report.json');
+  const config = join(dir, 'config.toml');
+
+  const written = Bun.spawnSync({
+    cmd: ['bun', cogmemBin, 'doctor', '--json', '--config', config, '--out', target],
+    cwd: join(import.meta.dir, '..'),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  expect(written.exitCode).toBe(0);
+  expect(existsSync(target)).toBe(true);
+  // Same payload as stdout: the file is a convenience, not a different view.
+  const fromStdout = JSON.parse(String(written.stdout)) as Record<string, unknown>;
+  const fromFile = JSON.parse(readFileSync(target, 'utf8')) as Record<string, unknown>;
+  expect(fromFile).toEqual(fromStdout);
+  expect(fromFile.command).toBe('doctor');
+
+  // A path that cannot be written is an error, not a silent success — and it must not
+  // leave a half-written file where the caller asked for a report.
+  const missingParent = join(dir, 'no-such-dir', 'report.json');
+  const failed = Bun.spawnSync({
+    cmd: ['bun', cogmemBin, 'doctor', '--json', '--config', config, '--out', missingParent],
+    cwd: join(import.meta.dir, '..'),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  expect(failed.exitCode).not.toBe(0);
+  expect(String(failed.stderr)).toContain('no-such-dir');
+  expect(existsSync(missingParent)).toBe(false);
+});
+
+test('#83 --out replaces an existing file whole, and a failed run leaves the old one intact', async () => {
+  const dir = makeTempDir('cogmem-cli-out-atomic-');
+  const target = join(dir, 'report.json');
+  const config = join(dir, 'config.toml');
+  writeFileSync(target, '{"previous":true}');
+
+  const ok = Bun.spawnSync({
+    cmd: ['bun', cogmemBin, 'doctor', '--json', '--config', config, '--out', target],
+    cwd: join(import.meta.dir, '..'),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  expect(ok.exitCode).toBe(0);
+  // Replaced whole: the old document is gone, not merged or truncated mid-write.
+  expect(readFileSync(target, 'utf8')).not.toContain('previous');
+  expect(() => JSON.parse(readFileSync(target, 'utf8'))).not.toThrow();
+
+  // Point the flag at a directory: the write must fail without destroying it, and the
+  // report that was there must still parse.
+  const before = readFileSync(target, 'utf8');
+  const asDir = join(dir, 'a-directory');
+  mkdirSync(asDir);
+  const failed = Bun.spawnSync({
+    cmd: ['bun', cogmemBin, 'doctor', '--json', '--config', config, '--out', asDir],
+    cwd: join(import.meta.dir, '..'),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  expect(failed.exitCode).not.toBe(0);
+  expect(readFileSync(target, 'utf8')).toBe(before);
+});
+
+test('#83 snapshot export keeps --out meaning the snapshot, not the JSON', async () => {
+  const dir = makeTempDir('cogmem-cli-out-snapshot-');
+  const dbPath = join(dir, 'memory.db');
+  const snapPath = join(dir, 'memory.snap');
+  const kernel = createMemoryKernel({ dbPath });
+  kernel.close();
+
+  const snapshotBin = join(import.meta.dir, '..', 'src', 'bin', 'snapshot.ts');
+  const exported = Bun.spawnSync({
+    cmd: ['bun', snapshotBin, 'export', '--db', dbPath, '--out', snapPath, '--json'],
+    cwd: join(import.meta.dir, '..'),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  expect(exported.exitCode).toBe(0);
+  expect(existsSync(snapPath)).toBe(true);
+  // `snapshot export --out` is a snapshot path, so the JSON report must not be written
+  // there: the file stays a snapshot, and the report still goes to stdout.
+  expect(JSON.parse(String(exported.stdout))).toEqual(expect.objectContaining({ command: 'snapshot.export' }));
+  expect(readFileSync(snapPath, 'utf8').startsWith('{')).toBe(false);
 });
