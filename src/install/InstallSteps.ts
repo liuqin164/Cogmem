@@ -355,6 +355,14 @@ export function resolveCliBinDir(
   if (base === 'bin') {
     const shimDir = join(dirname(dirname(dirname(dir))), '.bin');
     if (existsSync(join(shimDir, 'cogmem'))) return shimDir;
+    // A **global** npm install keeps its shims in `<prefix>/bin`, not in a sibling
+    // `node_modules/.bin`, so the branch above never fires for it. The script Bun
+    // reports is `<prefix>/lib/node_modules/cogmem/dist/bin/cogmem.js`; walking up
+    // four levels lands on `lib`, and the shim is beside it. Without this the
+    // resolver gave up on an install that was sitting right there (#94).
+    const above = dirname(dirname(dirname(dirname(dir))));
+    const prefix = basename(above) === 'lib' ? dirname(above) : above;
+    if (existsSync(join(prefix, 'bin', 'cogmem'))) return join(prefix, 'bin');
   }
 
   let launchedFile: string;

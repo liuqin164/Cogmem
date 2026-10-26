@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileS
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { resolveCogmemInvocation, type InstallStep } from '../src/install/InstallSteps.js';
+import { resolveCliBinDir, resolveCogmemInvocation, type InstallStep } from '../src/install/InstallSteps.js';
 import { expectRunnableCommand } from './helpers/cli-invocation.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -214,6 +214,25 @@ describe('printed steps run as printed', () => {
       expect(stepOf(id).command).toContain(`--workspace '${workspace}' `);
     }
     for (const command of parsed.nextCommands) expectRunnableCommand(command);
+  });
+
+  test('a global npm install is found through its own shim directory', () => {
+    // npm's posix global layout: the shim is `<prefix>/bin/cogmem`, and the script
+    // Bun actually reports as argv[1] is
+    // `<prefix>/lib/node_modules/cogmem/dist/bin/cogmem.js` — which has no sibling
+    // `node_modules/.bin`, so the local-install branch never fires. The resolver
+    // gave up on an install that was right there, `connect hermes` wrote a bare
+    // `cogmem`, and Hermes parked the server permanently (#94).
+    const dir = makeTempDir('cogmem-global-layout-');
+    const pkgBin = join(dir, 'lib', 'node_modules', 'cogmem', 'dist', 'bin');
+    mkdirSync(pkgBin, { recursive: true });
+    const script = join(pkgBin, 'cogmem.js');
+    writeFileSync(script, '');
+    const shimDir = join(dir, 'bin');
+    mkdirSync(shimDir, { recursive: true });
+    writeFileSync(join(shimDir, 'cogmem'), '');
+
+    expect(resolveCliBinDir(script, { PATH: '/usr/bin:/bin' })).toBe(shimDir);
   });
 
   test('an MCP-only entry point is bound without the cogmem subcommand', async () => {
