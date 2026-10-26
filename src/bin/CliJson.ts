@@ -35,13 +35,36 @@ export function formatCliJson(
  * where `--out` already means something else — `snapshot export --out` is the snapshot
  * file, and hijacking it would write a JSON report over the snapshot.
  */
+const OUT_USAGE = '--out needs a file path: `--out <path>` or `--out=<path>`';
+
+/**
+ * Report a usage error the way the other bins do — one line, non-zero — instead of
+ * letting a stack trace reach the operator. `doctor` runs top-level without a catch, so a
+ * thrown error there printed the whole source frame.
+ */
+function failUsage(message: string): never {
+  console.error(message);
+  process.exit(1);
+}
+
 function outputPathFromArgv(exemptCommand?: string): string | undefined {
   if (exemptCommand) return undefined;
   const argv = process.argv.slice(2);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--out') return argv[index + 1];
-    if (arg?.startsWith('--out=')) return arg.slice('--out='.length);
+    // `--out` takes the next token only if it is a value. A following option is a missing
+    // value, not a path: `--out --json` used to write a file named `--json` into the
+    // working directory and exit 0, which is a silent write to a place nobody asked for.
+    if (arg === '--out') {
+      const value = argv[index + 1];
+      if (value === undefined || value === '' || value.startsWith('-')) failUsage(OUT_USAGE);
+      return value;
+    }
+    if (arg?.startsWith('--out=')) {
+      const value = arg.slice('--out='.length);
+      if (value === '') failUsage(OUT_USAGE);
+      return value;
+    }
   }
   return undefined;
 }

@@ -255,3 +255,63 @@ test('#83 snapshot export keeps --out meaning the snapshot, not the JSON', async
   expect(JSON.parse(String(exported.stdout))).toEqual(expect.objectContaining({ command: 'snapshot.export' }));
   expect(readFileSync(snapPath, 'utf8').startsWith('{')).toBe(false);
 });
+
+/**
+ * #83 follow-up: the argument itself is validated, not just the write.
+ *
+ * `--out` with no value, `--out=`, and `--out --json` all used to be accepted: the flag
+ * took the next token as a path whatever it was, so `--out --json` created a file named
+ * `--json` in the working directory and exited 0. A missing value is a usage error.
+ */
+function runDoctorWith(dir: string, args: string[]) {
+  const config = join(dir, 'config.toml');
+  return Bun.spawnSync({
+    cmd: ['bun', cogmemBin, 'doctor', '--json', '--config', config, ...args],
+    cwd: join(import.meta.dir, '..'),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+}
+
+test('#83 --out rejects a missing value, an empty value, and a following flag', () => {
+  const dir = makeTempDir('cogmem-cli-out-args-');
+
+  // `--out` last, with nothing after it.
+  const missing = runDoctorWith(dir, ['--out']);
+  expect(missing.exitCode).not.toBe(0);
+  expect(String(missing.stderr)).toContain('--out');
+
+  // `--out=` — present but empty.
+  const empty = runDoctorWith(dir, ['--out=']);
+  expect(empty.exitCode).not.toBe(0);
+  expect(String(empty.stderr)).toContain('--out');
+
+  // `--out --json`: the next token is an option, not a path. This is the case that wrote
+  // a file literally named `--json` into the working directory.
+  const flagAsPath = runDoctorWith(dir, ['--out', '--json']);
+  expect(flagAsPath.exitCode).not.toBe(0);
+  expect(String(flagAsPath.stderr)).toContain('--out');
+  expect(existsSync(join(import.meta.dir, '..', '--json'))).toBe(false);
+
+  // And no unexpected file appeared in the target directory either.
+  expect(existsSync(join(dir, '--json'))).toBe(false);
+});
+
+test('#83 --out accepts both spellings and writes the same document either way', () => {
+  const dir = makeTempDir('cogmem-cli-out-spellings-');
+  const spaced = join(dir, 'spaced.json');
+  const joined = join(dir, 'joined.json');
+
+  const a = runDoctorWith(dir, ['--out', spaced]);
+  expect(a.exitCode).toBe(0);
+  const b = runDoctorWith(dir, [`--out=${joined}`]);
+  expect(b.exitCode).toBe(0);
+
+  for (const path of [spaced, joined]) {
+    expect(existsSync(path)).toBe(true);
+    expect(() => JSON.parse(readFileSync(path, 'utf8'))).not.toThrow();
+  }
+  // Same document as stdout, and identical to each other: the spelling is not a dialect.
+  expect(JSON.parse(readFileSync(spaced, 'utf8'))).toEqual(JSON.parse(readFileSync(joined, 'utf8')));
+  expect(JSON.parse(readFileSync(spaced, 'utf8'))).toEqual(JSON.parse(String(a.stdout)));
+});
