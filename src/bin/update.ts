@@ -100,12 +100,33 @@ function npmGlobalPrefix(env: Record<string, string | undefined> = process.env):
   return before.endsWith(`${sep}lib`) ? before.slice(0, -`${sep}lib`.length) : before;
 }
 
+/**
+ * Quote one argument so the printed command runs as printed.
+ *
+ * `nextCommand` is a string an operator copies into a shell, so a prefix containing a
+ * space has to survive the copy. Same rule the factory uses for the commands it prints.
+ */
+function shellQuoteArg(value: string): string {
+  // Only quote what a shell would otherwise split or expand, so the common command still
+  // reads as `npm install -g --prefix /usr/local cogmem@4.0.0`.
+  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/gu, `'\\''`)}'`;
+}
+
 function buildCommand(target: UpdateTarget, spec: string): string[] {
   if (target.kind === 'npm_global') {
+    // No fallback to a bare `npm install -g`: that targets npm's *configured* default
+    // prefix, which is a different tree whenever the install used `--prefix`. Updating a
+    // copy the operator does not run, or failing on a path they never chose, are both
+    // worse than saying the prefix is unknown (#89).
     const prefix = npmGlobalPrefix();
-    return prefix
-      ? ['npm', 'install', '-g', '--prefix', prefix, `cogmem@${spec}`]
-      : ['npm', 'install', '-g', `cogmem@${spec}`];
+    if (!prefix) {
+      throw new Error(
+        'Unable to determine the npm prefix that owns this installation, so `update` will not '
+        + 'guess. Set COGMEM_NPM_PREFIX to that prefix (for example COGMEM_NPM_PREFIX=/usr/local), '
+        + 'or run the install yourself: npm install -g --prefix <prefix> cogmem@<version>.',
+      );
+    }
+    return ['npm', 'install', '-g', '--prefix', prefix, `cogmem@${spec}`];
   }
   const manager = target.manager;
   if (manager === 'bun') return ['bun', 'add', `cogmem@${spec}`];
@@ -306,7 +327,16 @@ async function main(): Promise<void> {
     throw new Error('Unable to find an installed Cogmem package to update. Pass --global for npm global installs or --install-home <dir> for the one-line installer home.');
   }
   const manager = target.manager;
-  const command = buildCommand(target, resolvedSpec);
+  let command: string[] | undefined;
+  let prefixUnknownReason: string | undefined;
+  try {
+    command = buildCommand(target, resolvedSpec);
+  } catch (error) {
+    if (!args.dryRun) throw error;
+    // A dry run is exactly when an operator wants to know this, so it reports rather than
+    // exits — and it must not print a command it would then refuse to run.
+    prefixUnknownReason = error instanceof Error ? error.message : String(error);
+  }
   const config = loadConfigForUpdate(args, target.cwd);
   const openclawWorkspace = openClawWorkspaceForUpdate(config.loaded);
   const openclawRepairExec = !args.skipAgentRefresh && openclawWorkspace && config.configPath
@@ -327,8 +357,9 @@ async function main(): Promise<void> {
     packageSpec: resolvedSpec,
     targetCwd: target.cwd,
     currentSpec: target.kind === 'npm_global' ? 'npm:global' : installedSpec(target.cwd),
-    nextCommand: command.join(' '),
-    updateWarning: target.warning,
+    nextCommand: command ? command.map(shellQuoteArg).join(' ') : undefined,
+    prefixUnknown: prefixUnknownReason ? true : undefined,
+    updateWarning: [target.warning, prefixUnknownReason].filter(Boolean).join(' ') || undefined,
     configPath: config.configPath,
     openclawRepairCommand: openclawRepairExec?.join(' '),
     openclawRepairSkippedReason: openclawRepairExec
@@ -406,6 +437,9 @@ async function main(): Promise<void> {
   }
 
   if (!args.dryRun) {
+    // buildCommand only returns undefined for a dry run that could not determine the
+    // prefix; a real run has already thrown by then.
+    if (!command) throw new Error('update command was not resolved');
     const runStep = args.json ? runCommandViaStderr : runCommand;
     const updateExitCode = await runStep(command, target.cwd);
     if (updateExitCode !== 0) process.exit(updateExitCode);

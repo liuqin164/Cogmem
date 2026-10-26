@@ -1460,6 +1460,10 @@ test('cogmem update targets npm global installs without writing a local package 
     {
       COGMEM_INSTALL_KIND: 'npm_global',
       COGMEM_NPM_SPEC: '3.6.5',
+      // #89: a global install must name the prefix that owns it; without one, `update`
+      // refuses rather than falling back to npm's configured default. This test is about
+      // the global target, so it supplies the prefix the install would have.
+      COGMEM_NPM_PREFIX: join(dir, 'global'),
     },
   );
 
@@ -1468,7 +1472,7 @@ test('cogmem update targets npm global installs without writing a local package 
   const parsed = JSON.parse(update.stdout);
   expect(parsed.installKind).toBe('npm_global');
   expect(parsed.currentSpec).toBe('npm:global');
-  expect(parsed.nextCommand).toBe('npm install -g cogmem@3.6.5');
+  expect(parsed.nextCommand).toBe(`npm install -g --prefix ${join(dir, 'global')} cogmem@3.6.5`);
   // #59: update has no migration step at all, so the field is gone rather than
   // pointing at a command that no longer exists.
   expect(parsed.migrationCommand).toBeUndefined();
@@ -1501,6 +1505,67 @@ test('#89 a global install updates through the prefix that owns it, not npm\'s d
   expect(parsed.nextCommand).toContain('--prefix');
   expect(parsed.nextCommand).toContain(join(dir, 'global'));
   expect(parsed.nextCommand).toContain('cogmem@4.0.0');
+});
+
+test('#89 a prefix it cannot determine is reported, not silently replaced by npm\'s default', async () => {
+  const dir = makeTempDir('cogmem-update-global-unknown-prefix-');
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+
+  // The install is global (COGMEM_INSTALL_KIND), but the running copy is not under a
+  // `node_modules/cogmem` layout and no prefix was given — so the prefix that owns it is
+  // genuinely unknown. Printing `npm install -g cogmem@…` would silently target npm's
+  // configured default, which may be a different tree entirely.
+  const update = await runCli(
+    ['bun', cogmemBin, 'update', '--dry-run', '--json'],
+    dir,
+    {
+      COGMEM_INSTALL_KIND: 'npm_global',
+      COGMEM_NPM_SPEC: '4.0.0',
+      COGMEM_NPM_PREFIX: '',
+    },
+  );
+
+  const parsed = JSON.parse(update.stdout);
+  expect(parsed.installKind).toBe('npm_global');
+  // A dry run must not print a command it would refuse to run.
+  expect(parsed.nextCommand).toBeUndefined();
+  expect(parsed.prefixUnknown).toBe(true);
+  // And it has to say what to do about it.
+  expect(String(parsed.updateWarning)).toContain('COGMEM_NPM_PREFIX');
+  expect(String(parsed.updateWarning)).toContain('--prefix');
+});
+
+test('#89 a custom prefix with a space produces a command that would run as printed', async () => {
+  const dir = makeTempDir('cogmem-update-global-space-');
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+  const prefix = join(dir, 'a prefix with spaces');
+
+  const update = await runCli(
+    ['bun', cogmemBin, 'update', '--dry-run', '--json'],
+    dir,
+    { COGMEM_INSTALL_KIND: 'npm_global', COGMEM_NPM_SPEC: '4.0.0', COGMEM_NPM_PREFIX: prefix },
+  );
+
+  const parsed = JSON.parse(update.stdout);
+  // The path is quoted, so copy-pasting `nextCommand` into a shell keeps it one argument.
+  expect(parsed.nextCommand).toContain(`'${prefix}'`);
+  // Proof rather than appearance: run the printed command through a shell with npm stubbed,
+  // and assert the prefix arrives as exactly one argument.
+  const stubDir = join(dir, 'stub');
+  mkdirSync(stubDir, { recursive: true });
+  writeFileSync(join(stubDir, 'npm'), '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done\n', { mode: 0o755 });
+  const printed = Bun.spawnSync({
+    cmd: ['bash', '-c', String(parsed.nextCommand)],
+    env: { ...process.env, PATH: `${stubDir}:${process.env.PATH ?? ''}` },
+    stdout: 'pipe',
+  });
+  const argv = String(printed.stdout).trim().split('\n');
+  // npm's own argv: install -g --prefix <the prefix, one argument> cogmem@4.0.0
+  expect(argv[argv.indexOf('--prefix') + 1]).toBe(prefix);
 });
 
 test('cogmem-connect installs Hermes skill into the real Hermes skills directory by default', async () => {
