@@ -15,6 +15,7 @@ import { makeTempDir } from './helpers/tmp.js';
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
 const initBin = join(coreRoot, 'src/bin/init.ts');
+const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');
 const snapshotBin = join(coreRoot, 'src/bin/snapshot.ts');
 const reEmbedBin = join(coreRoot, 'src/bin/re-embed.ts');
 const compactBin = join(coreRoot, 'src/bin/compact.ts');
@@ -362,6 +363,51 @@ test('doctor rejects legacy env-path configuration', async () => {
   expect(output).toBe('');
   expect(exitCode).toBe(1);
   expect(errorOutput).toContain('--env-path is no longer supported');
+});
+
+test('#88 memory recall reads a project whose agent is not the literal default', async () => {
+  const dir = makeTempDir('cogmem-cli-recall-scope-');
+  const dbPath = join(dir, '.cogmem', 'memory.db');
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(join(dir, '.cogmem'), { recursive: true });
+  writeFileSync(configPath, ['[core]', `db_path = "${dbPath}"`].join('\n'));
+
+  // Recorded the way a connected host records it: the connection carries no host name,
+  // so the agent is the project it is bound to (ADR-0006, #85), and the event's source id
+  // becomes `zen-flow:s-1`.
+  const kernel = createMemoryKernel({ dbPath });
+  await new KernelAgentMemoryBackend(kernel).rememberTurnWithResult({
+    agentId: 'zen-flow',
+    projectId: 'zen-flow',
+    sessionId: 's-1',
+    userText: 'the quokka rollout ships on Fridays',
+    assistantText: 'noted',
+  });
+
+  const recallAs = async (project: string): Promise<{ agentId?: string; items: unknown[] }> => {
+    const proc = Bun.spawn({
+      cmd: ['bun', cogmemBin, 'memory', 'recall', '--query', 'when does the quokka rollout ship',
+        '--project', project, '--config', configPath, '--json'],
+      cwd: coreRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+    return JSON.parse(output) as { agentId?: string; items: unknown[] };
+  };
+
+  // Asking for that project's memory asks as the agent its writes are recorded under.
+  // The MCP read path has always derived it that way; the CLI asked as the literal
+  // default instead, so it could not read back a workspace `connect` had wired.
+  const own = await recallAs('zen-flow');
+  expect(own.agentId).toBe('zen-flow');
+  expect(JSON.stringify(own.items)).toContain('quokka');
+
+  // And the scope filter stays honest: the same memory is not returned for another project.
+  const other = await recallAs('someone-else');
+  expect(JSON.stringify(other.items)).not.toContain('quokka');
+  kernel.close();
 });
 
 test('doctor prints a high vector dimension warning for structured config', async () => {

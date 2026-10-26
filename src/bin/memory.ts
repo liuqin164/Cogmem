@@ -706,13 +706,19 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   if (!args.query) throw new Error(`Missing --query.\n${usage()}`);
   const backend = new KernelAgentMemoryBackend(kernel);
   const projectId = args.projectId || 'openclaw';
+  // Asking for a project's memory asks as the agent that project's writes are recorded
+  // under, which is what the MCP read path already does (`agentId || projectId`): a
+  // connection with no host name records under the project it is bound to (ADR-0006,
+  // #85). Defaulting to the literal instead meant the CLI could not read back a workspace
+  // `connect` had wired — the memory was there, and `memory search` found it (#88).
+  const agentId = args.agentId || args.projectId || 'openclaw';
   const strategyCapsule = kernel.strategyCortex.plan({
     query: args.query,
     intent: kernel.contextCortex.classifyIntent(args.query),
     projectId,
   });
   const result = backend.recall({
-    agentId: args.agentId || 'openclaw',
+    agentId,
     projectId,
     collection: args.collection,
     workspaceId: args.workspaceId,
@@ -729,7 +735,7 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   });
   return {
     query: args.query,
-    agentId: args.agentId || 'openclaw',
+    agentId,
     projectId,
     collection: args.collection,
     recallMode: result.recallMode,
