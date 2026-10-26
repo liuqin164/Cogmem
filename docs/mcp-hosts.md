@@ -74,7 +74,7 @@ a per-call identity that narrows the profile does not rewrite it.
 | OpenClaw + the Cogmem plugin | push | `before_prompt_build` | shipped and verified | Recall is already in the prompt |
 | OpenClaw via `openclaw mcp add` | pull | `before_prompt_build` | not installed on this path | The model must call `cogmem_recall` |
 | Hermes | pull | `pre_llm_call` | planned, first in the roadmap (ADR-0004) | The installed `cogmem-memory` skill documents when to call `cogmem_recall` |
-| pi | pull | `before_agent_start` | planned | The model must call `cogmem_recall` |
+| pi | pull | `before_agent_start` | none; stdio entry verified end to end | The model must call `cogmem_recall` |
 | DSH | pull | prompt section | planned | The model must call `cogmem_recall` |
 | Claude Code | pull | `UserPromptSubmit` | planned; unverified against a real client when it lands | Same contract, delivered by `instructions` |
 | Cursor | pull | none, MCP only | none | Same |
@@ -429,6 +429,49 @@ One gotcha when you want an agent turn that is not the live gateway session:
   enough to exercise MCP tools without touching any chat channel.
 
 ---
+
+## pi
+
+pi reads MCP servers from `$HOME/.pi/agent/mcp.json`, and from a project-local
+`.pi/mcp.json` when one exists. The entry is `{command, args}`:
+
+```json
+{
+  "mcpServers": {
+    "cogmem": {
+      "command": "/absolute/path/to/cogmem",
+      "args": ["mcp", "--config", "/path/to/ws/.cogmem/config.toml", "--project", "pi-<workspace-hash>"]
+    }
+  }
+}
+```
+
+Write it with pi's own command, which is the supported path:
+
+```bash
+pi mcp add cogmem -- /absolute/path/to/cogmem mcp --config /path/to/ws/.cogmem/config.toml --project pi-abc12345
+pi mcp list          # → connected, 6 tools
+```
+
+**`command` has to be absolute, or resolvable by the process pi spawns.** pi does not
+resolve a bare `cogmem` from the shell that ran the command, and an entry it cannot spawn
+is an integration that silently never starts. The same trap applies to every host here;
+`connect` records an absolute launcher for exactly this reason (#94).
+
+**`--project` is the identity, not `--agent`.** pi sends its own `agentId` on the write
+calls, and since #92 a caller-supplied `agentId` is a label rather than the authority: the
+connection's identity is the credential, then the host's fixed identity, then the bound
+project. So a turn pi stores is written under `pi-<workspace-hash>` and found again by
+`memory recall --project pi-<workspace-hash>` with no `--agent`. Before that fix the write
+and the read disagreed and the memory was invisible to the connection that wrote it.
+
+Verified against a real pi conversation: the agent called `cogmem_remember_turn` itself,
+the turn landed (`rawEvents=5`, `vectors=1`), and the default recall returned it.
+
+pi has no hook to install, so there is no plugin: the MCP entry is the integration. Nothing
+injects recall and there is no skill bundle for pi yet, so the agent has to be told to record
+and recall on its own — that is what the `cogmem-memory` bundle does for Hermes, and there is
+no `connect pi` (#95).
 
 ## stdio fallback
 
