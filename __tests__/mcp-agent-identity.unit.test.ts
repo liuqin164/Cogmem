@@ -165,6 +165,46 @@ describe('#65 a credential decides the identity, and a header cannot change it',
     expect(crossWrite.raw).toContain('project_scope_violation');
   });
 
+  test('a registered connection records a turn without restating the identity it authenticated as', async () => {
+    const handle = await startServer();
+    const sessionA = await connect(handle.url, { token: AGENT_A_TOKEN });
+
+    // The credential already decided `bot-a`, bound to `project-a`. The server's
+    // own instructions tell a hookless agent to "record what matters with
+    // cogmem_remember_turn or cogmem_episode_append" — and an agent that follows
+    // them sends the turn, not its own name. Requiring the caller to restate the
+    // agent, the project and a session is the old model: ADR-0006 makes identity a
+    // fact about the connection.
+    const write = await callTool(handle.url, sessionA, 'cogmem_remember_turn', {
+      userText: 'the narwhal rollout ships on Fridays',
+      ingestMode: 'immediate_compile',
+    }, { token: AGENT_A_TOKEN });
+    expect(write.isError).toBe(false);
+    expect(write.body.ok).toBe(true);
+    expect((write.body.rawEventIds as string[]).length).toBeGreaterThan(0);
+
+    // The second write tool has the field under another name (`sourceAgent`), so it
+    // is asserted too: one default in one place has to cover both.
+    const appended = await callTool(handle.url, sessionA, 'cogmem_episode_append', {
+      role: 'user',
+      text: 'the narwhal rollout ships on Fridays',
+      externalMessageId: 'msg-narwhal-1',
+    }, { token: AGENT_A_TOKEN });
+    expect(appended.isError).toBe(false);
+
+    // Recall is deliberately not asserted here. A turn written this way lands in the
+    // connection's project, and its vector write is queued (`vector_write_outbox`);
+    // the response says so itself (`semanticMemoryMayLag`), and turning that queue
+    // into recallable memory is a maintenance tick — the documented post-import
+    // sequence — not part of what the connection's identity decides. Asserting it
+    // here would tie this test to the embedding pipeline.
+    const recalled = await callTool(handle.url, sessionA, 'cogmem_recall', {
+      query: 'when does the rollout ship',
+    }, { token: AGENT_A_TOKEN });
+    expect(recalled.isError).toBe(false);
+    expect(recalled.body.projectId).toBe('project-a');
+  });
+
   test('a credential is a ceiling: the header may narrow the profile but never widen it', async () => {
     const handle = await startServer();
     // AGENT_A is registered with profile "admin"; the server launches at "admin".

@@ -558,12 +558,52 @@ export function isCogmemMcpTool(name: string): boolean {
   return COGMEM_TOOL_NAMES.has(name);
 }
 
+/**
+ * The tools that need an agent and a session to write with.
+ *
+ * Only these get identity defaults: `cogmem_recall` reads `agentId` as a *filter*,
+ * so filling it there would silently narrow what a connection can recall.
+ */
+const IDENTITY_WRITE_TOOLS = new Set([
+  'cogmem_remember_turn',
+  'cogmem_episode_append',
+  'cogmem_episode_import',
+]);
+
+/**
+ * Identity is a fact about the connection, not a claim the caller makes (ADR-0006).
+ *
+ * These three tools need an agent and a session. The server already injects the
+ * project the connection is bound to, and the runtime carries the hostId the
+ * connection authenticated as; asking the client to restate both made the server's
+ * own instruction — "record what matters with `cogmem_remember_turn` or
+ * `cogmem_episode_append`" — fail with `agentId must be a non-empty string` on
+ * every host without an adapter that records turns for it (pi, Hermes, Claude Code,
+ * Cursor, Codex). An explicit argument still wins, so a caller that knows better
+ * keeps saying so; only what is missing is filled.
+ */
+function withConnectionIdentity(
+  input: Record<string, unknown>,
+  runtime: CogmemMcpRuntime,
+): Record<string, unknown> {
+  const agent = runtime.hostId?.trim() || optionalString(input.projectId);
+  if (!agent) return input;
+  return {
+    ...input,
+    agentId: input.agentId ?? agent,
+    sourceAgent: input.sourceAgent ?? agent,
+    sessionId: input.sessionId ?? `${agent}-session`,
+  };
+}
+
 export async function callCogmemMcpTool(
   name: string,
   args: Record<string, unknown> | undefined,
   runtime: CogmemMcpRuntime = {},
 ): Promise<CogmemMcpCallResult> {
-  const input = args || {};
+  const input = IDENTITY_WRITE_TOOLS.has(name)
+    ? withConnectionIdentity(args || {}, runtime)
+    : (args || {});
   let opened: { kernel: MemoryKernel; shouldClose: boolean } | undefined;
   try {
     if (!isCogmemMcpTool(name)) {
