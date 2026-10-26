@@ -1057,6 +1057,11 @@ function injectionResult(context, warning) {
 function bridgeConfig(config) {
   return {
     configPath: config.configPath,
+    // The bridge spawns as its own process, so it cannot inherit how this one resolved
+    // Cogmem. Without this it falls back to \`import('cogmem')\` and loads whatever the
+    // machine has cached — measured as cogmem@3.7.5 against a 4.0 database, which fails
+    // with \`unsupported_database_identity\` and strands the turn in the queue (#91).
+    publicEntrypoint: config.publicEntrypoint,
     cwd: config.cwd,
     bunPath: config.bunPath,
     agentId: config.agentId,

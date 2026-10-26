@@ -37,6 +37,29 @@ test('#90 the plugin the host loads exports the same id the config registers', (
   expect(ids[0]).not.toBe(ids[1]);
 });
 
+test('#91 the plugin hands its runtime entrypoint to the bridge it spawns', () => {
+  // The remember queue is drained by a separate bridge process. If that process is not
+  // told which Cogmem entry to load, it falls back to `import('cogmem')`, which resolves
+  // whatever the machine has cached — measured on the audit box as cogmem@3.7.5, which
+  // then refused the 4.0 database with `unsupported_database_identity` and left the turn
+  // sitting in the queue for ever. The plugin already records the entrypoint for its own
+  // `serve` spawn; the drain path has to carry it too.
+  const root = makeTempDir('cogmem-bridge-entrypoint-');
+  const configPath = join(root, '.cogmem', 'config.toml');
+  const openclawConfigPath = join(root, 'openclaw.json');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+  writeFileSync(openclawConfigPath, '{}');
+  const result = installOpenClawAutoMemoryPlugin({ workspaceRoot: root, configPath, openclawConfigPath, force: true });
+  const index = readFileSync(join(result.pluginDir, 'index.js'), 'utf8');
+
+  // The entrypoint is what the install recorded, and the bridge config that is sent to a
+  // spawned drainer has to include it — otherwise the child cannot know it.
+  expect(index).toContain('publicEntrypoint');
+  const bridgeConfigBody = index.slice(index.indexOf('function bridgeConfig'), index.indexOf('function rememberQueuePath'));
+  expect(bridgeConfigBody).toContain('publicEntrypoint');
+});
+
 test('installed OpenClaw plugin sanitizes generated prompt context and routes Atlas without MCP', async () => {
   const root = makeTempDir('cogmem-atlas-openclaw-');
   const configPath = join(root, '.cogmem', 'config.toml');
