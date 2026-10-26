@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -1808,6 +1808,66 @@ test('cogmem-connect hermes --auto leaves configuration it cannot attribute alon
   ], coreRoot, { HOME: dir });
   expect(installed.exitCode).toBe(0);
   expect(readFileSync(hermesConfig, 'utf8')).toContain('args: ["mcp","--transport","http","--port","7337"]');
+});
+
+test('cogmem-connect hermes says so when the entry it preserved cannot run', async () => {
+  const dir = makeTempDir('cogmem-connect-hermes-dead-');
+  const workspace = join(dir, 'workspace');
+  const hermesConfig = join(dir, '.hermes', 'config.yaml');
+  mkdirSync(workspace);
+  mkdirSync(dirname(hermesConfig), { recursive: true });
+  // A different project, so the entry is deliberately left alone — but its command is
+  // gone, which means Hermes cannot start the server at all. Preserving it silently
+  // reports a wired host that is not wired (#96). This is the shape an upgrade leaves
+  // behind: the absolute path keeps pointing at the prefix that was replaced.
+  const missing = join(dir, 'gone', 'bin', 'cogmem');
+  writeFileSync(hermesConfig, [
+    'mcp_servers:',
+    '  cogmem:',
+    `    command: "${missing}"`,
+    '    args: ["mcp","--project","someone-elses-project"]',
+    '    enabled: true',
+    '',
+  ].join('\n'));
+
+  const installed = await runCli([
+    'bun', connectBin, 'hermes', '--workspace', workspace, '--auto', '--hermes-config', hermesConfig, '--json',
+  ], coreRoot, { HOME: dir });
+  expect(installed.exitCode).toBe(0);
+  // Still not retargeted: that part of the behaviour is deliberate and unchanged.
+  expect(readFileSync(hermesConfig, 'utf8')).toContain('someone-elses-project');
+  const parsed = JSON.parse(installed.stdout) as { hermesMcp?: { warning?: string } };
+  expect(parsed.hermesMcp?.warning).toContain(missing);
+});
+
+test('cogmem-connect hermes stays quiet when the entry it preserved still works', async () => {
+  const dir = makeTempDir('cogmem-connect-hermes-alive-');
+  const workspace = join(dir, 'workspace');
+  const hermesConfig = join(dir, '.hermes', 'config.yaml');
+  mkdirSync(workspace);
+  mkdirSync(dirname(hermesConfig), { recursive: true });
+  // Same deliberate binding as the test above, but the launcher is really there. A
+  // warning here would be noise, and noise is how a real warning gets ignored.
+  const alive = join(dir, 'prefix', 'bin', 'cogmem');
+  mkdirSync(dirname(alive), { recursive: true });
+  writeFileSync(alive, '#!/bin/sh\nexit 0\n');
+  chmodSync(alive, 0o755);
+  writeFileSync(hermesConfig, [
+    'mcp_servers:',
+    '  cogmem:',
+    `    command: "${alive}"`,
+    '    args: ["mcp","--project","someone-elses-project"]',
+    '    enabled: true',
+    '',
+  ].join('\n'));
+
+  const installed = await runCli([
+    'bun', connectBin, 'hermes', '--workspace', workspace, '--auto', '--hermes-config', hermesConfig, '--json',
+  ], coreRoot, { HOME: dir });
+  expect(installed.exitCode).toBe(0);
+  expect(readFileSync(hermesConfig, 'utf8')).toContain('someone-elses-project');
+  const parsed = JSON.parse(installed.stdout) as { hermesMcp?: { warning?: string } };
+  expect(parsed.hermesMcp?.warning).toBeUndefined();
 });
 
 test('package exposes agent migration bins', () => {

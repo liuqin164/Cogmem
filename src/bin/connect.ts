@@ -116,6 +116,41 @@ interface HermesMcpInstallResult {
   dryRun: boolean;
   configUpdated: boolean;
   backupPath?: string;
+  /**
+   * Set when an existing entry was deliberately left alone *and* the command it
+   * records cannot run here. The two are different facts and only one is fine: a
+   * preserved binding is somebody's choice, a preserved binding to a missing binary
+   * is a host that is not wired while `connect` reports that it is (#96).
+   */
+  warning?: string;
+}
+
+/**
+ * Whether a host config's `command` can be spawned from here.
+ *
+ * Absolute paths are checked as paths; a bare name is looked up on `PATH`, because
+ * that is what the host itself will do.
+ */
+function commandResolves(command: string): boolean {
+  if (isAbsolute(command)) return existsSync(command);
+  return (process.env.PATH || '')
+    .split(':')
+    .some((segment) => Boolean(segment) && existsSync(join(segment, command)));
+}
+
+/** The `command` an existing `mcp_servers.cogmem` block records, if it records one. */
+function existingCogmemCommand(original: string): string | undefined {
+  const lines = original.replace(/\r\n/g, '\n').split('\n');
+  const start = lines.findIndex((line) => /^\s+cogmem\s*:\s*$/.test(line));
+  if (start === -1) return undefined;
+  const indent = leadingSpaces(lines[start]);
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim() && leadingSpaces(line) <= indent) break;
+    const match = /^\s*command\s*:\s*(.+?)\s*$/.exec(line);
+    if (match) return match[1].replace(/^["']|["']$/g, '');
+  }
+  return undefined;
 }
 
 const CONNECT_FLAGS = new Set([
@@ -441,6 +476,17 @@ function installHermesMcpConfig(input: {
     writeFileSync(configPath, patched, 'utf8');
   }
 
+  // Which command the file will hold is the question, not whether the file changed:
+  // a preserved entry still gets a tools list added, so `changed` is often true while
+  // its command is exactly the stale one we are looking for. A command equal to the
+  // one we resolved is ours; anything else was preserved, and only needs reporting
+  // when it cannot run.
+  const written = existingCogmemCommand(patched);
+  const preserved = written && written !== server.command ? written : undefined;
+  const warning = preserved && !commandResolves(preserved)
+    ? `the existing mcp_servers.cogmem entry was left as it is (it names a configuration this command does not own), and its command does not exist on this machine: ${preserved}. Hermes will fail to start the server; point it at a real launcher or remove the entry.`
+    : undefined;
+
   return {
     enabled: true,
     configPath,
@@ -449,6 +495,7 @@ function installHermesMcpConfig(input: {
     dryRun: input.dryRun,
     configUpdated: changed || input.force,
     backupPath,
+    ...(warning ? { warning } : {}),
   };
 }
 
@@ -612,6 +659,7 @@ function printHuman(result: ConnectResult): void {
     console.log(`  config: ${result.hermesMcp.configPath}`);
     console.log(`  command: ${result.hermesMcp.serverCommand} ${result.hermesMcp.serverArgs.join(' ')}`.trimEnd());
     if (result.hermesMcp.backupPath) console.log(`  backup: ${result.hermesMcp.backupPath}`);
+    if (result.hermesMcp.warning) console.log(`  warning: ${result.hermesMcp.warning}`);
     console.log('  reload: /reload-mcp');
   }
   console.log('');
