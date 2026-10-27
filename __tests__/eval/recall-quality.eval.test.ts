@@ -21,8 +21,8 @@ import { KernelAgentMemoryBackend } from '../../src/agent/AgentMemoryBackend.js'
 import { makeTempDir } from '../helpers/tmp.js';
 import { EVAL_CASES } from './cases.js';
 
-/** Measured on the commit that introduced this floor: 5 of 18, of which 2 are the unanswerable cases. Lower means a regression. */
-const BASELINE_PASSES = 5;
+/** Measured on the commit that introduced this floor: 6 of 18, of which 2 are the unanswerable cases. Lower means a regression. */
+const BASELINE_PASSES = 6;
 
 const corpusPath = join(import.meta.dir, '..', '..', 'docs', 'engineering', '4.0-issue-loop.md');
 

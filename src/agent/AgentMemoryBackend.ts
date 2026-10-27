@@ -1233,7 +1233,16 @@ export class KernelAgentMemoryBackend {
     if (rawFallbackItems.length === 0) return false;
     const rawHasCue = this.itemsContainRecallCue(rawFallbackItems, queryPlan);
     if (!rawHasCue) return false;
-    if (!this.itemsContainRecallCue(candidateItems, queryPlan)) return true;
+
+    // Ask which lane holds the better match, not whether each lane holds a match.
+    // The compiled lane is a broad sample of the whole project, so it contains any
+    // common word and "does this set mention the query" is true for every query —
+    // measured: of eleven questions whose raw lane carried the cues, the compiled
+    // lane carried them eleven times too, so the preference below never fired and
+    // the compiled lane won by default while the raw lane held the record.
+    const rawMatch = this.bestRecallCueMatch(rawFallbackItems, queryPlan);
+    const candidateMatch = this.bestRecallCueMatch(candidateItems, queryPlan);
+    if (rawMatch > candidateMatch) return true;
 
     if (queryPlan.temporalHints.includes('past')) {
       const rawLead = rawFallbackItems.find((item) => this.itemsContainRecallCue([item], queryPlan));
@@ -1246,12 +1255,38 @@ export class KernelAgentMemoryBackend {
     return false;
   }
 
+  /**
+   * How many of the query's cues the best item in this set carries.
+   *
+   * A set-wide yes/no cannot compare two lanes of different sizes: a large diverse
+   * set answers yes to everything. Counting the best single item's coverage says
+   * which lane actually has the memory being asked about.
+   */
+  private bestRecallCueMatch(items: AgentRecallItem[], queryPlan: AgentRecallQueryPlan): number {
+    const cues = this.recallCueTerms(queryPlan);
+    if (cues.length === 0) return 0;
+    let best = 0;
+    for (const item of items) {
+      const haystack = this.itemSearchableText(item).toLowerCase();
+      const matched = cues.filter((cue) => haystack.includes(cue.toLowerCase())).length;
+      if (matched > best) best = matched;
+    }
+    return best;
+  }
+
   private itemsContainRecallCue(items: AgentRecallItem[], queryPlan: AgentRecallQueryPlan): boolean {
     const cues = this.recallCueTerms(queryPlan);
     if (cues.length === 0) return true;
+    // One shared word is not evidence of relevance. "CI" appears in nearly every
+    // review comment, so a single-word match marked the whole compiled lane as an
+    // answer and kept the raw lane — which held the record — from ever being read.
+    // An item carries the query when it holds more than one of its cues, or when
+    // the query named only one thing and that thing is present.
+    const required = cues.length === 1 ? 1 : 2;
     return items.some((item) => {
       const haystack = this.itemSearchableText(item).toLowerCase();
-      return cues.some((cue) => haystack.includes(cue.toLowerCase()));
+      const matched = cues.filter((cue) => haystack.includes(cue.toLowerCase())).length;
+      return matched >= required;
     });
   }
 
