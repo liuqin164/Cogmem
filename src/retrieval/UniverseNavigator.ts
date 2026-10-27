@@ -106,15 +106,11 @@ export class UniverseNavigator {
       // subject query still received "everything recorded that day" after the
       // neuron lists above were held back. Measured before this: disabling the two
       // gates above changed no evaluation outcome at all.
-      temporalBucketIds: input.temporalEnabled === false || queryNamesTerms
-        ? []
-        : Array.from(new Set([...input.temporalBucketIds, ...branchSearch.temporalTraversal.bucketIds])),
+      temporalBucketIds: input.temporalEnabled === false ? [] : Array.from(new Set([...input.temporalBucketIds, ...branchSearch.temporalTraversal.bucketIds])),
       temporalNeuronIds: input.temporalEnabled === false ? [] : temporalNeuronIdsForPulse,
       graphIds: input.graphIds,
       cognitiveGraphIds: input.cognitiveGraphIds,
-      entityNeuronIds: queryNamesTerms
-        ? input.entityNeuronIds
-        : Array.from(new Set([...input.entityNeuronIds, ...branchSearch.denseJointNeuronIds]))
+      entityNeuronIds: Array.from(new Set([...input.entityNeuronIds, ...branchSearch.denseJointNeuronIds]))
     });
 
     const traversal = this.traversalExecutor.execute({

@@ -30,7 +30,7 @@ import { EVAL_CASES } from './cases.js';
  * They are kept in the set because the number would otherwise be flattering, and
  * the miss list is where a known defect belongs.
  */
-const BASELINE_PASSES = 5;
+const BASELINE_PASSES = 6;
 
 const corpusPath = join(import.meta.dir, '..', '..', 'docs', 'engineering', '4.0-issue-loop.md');
 
@@ -69,8 +69,13 @@ test('recall finds the record that answers a real question', async () => {
   const kernel = createMemoryKernel({ dbPath: join(makeTempDir('cogmem-eval-'), 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
+  // Pin every clock. Built from `Date.now()` and asked with the live one, the same
+  // code and the same corpus scored 5 one hour and 4 the next, because recall reads
+  // "now" for recency and period cues and the corpus ages with it. A floor that
+  // drifts with the wall clock measures the wall clock.
+  const NOW = Date.UTC(2026, 9, 27, 12, 0, 0);
   const DAY = 86_400_000;
-  const started = Date.now() - corpus.length * DAY;
+  const started = NOW - corpus.length * DAY;
   for (const [index, record] of corpus.entries()) {
     await backend.rememberTurnWithResult({
       agentId: 'eval',
@@ -86,7 +91,13 @@ test('recall finds the record that answers a real question', async () => {
   const missed: string[] = [];
   const ranks: string[] = [];
   for (const evalCase of EVAL_CASES) {
-    const result = backend.recall({ query: evalCase.question, projectId: 'cogmem', agentId: 'eval', limit: 5 });
+    const result = backend.recall({
+      query: evalCase.question,
+      projectId: 'cogmem',
+      agentId: 'eval',
+      limit: 5,
+      now: NOW,
+    });
     const items = result.items ?? [];
     const text = JSON.stringify(items);
 
