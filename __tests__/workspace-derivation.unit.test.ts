@@ -191,6 +191,10 @@ describe('one config, one plugin entry', () => {
         entries: {
           [staleId]: { enabled: true, config: { configPath, cwd: staleRoot, projectId: 'openclaw' } },
           [otherId]: { enabled: true, config: { configPath: otherConfigPath, cwd: join(workspace, 'other'), projectId: 'other' } },
+          // A plugin that is not ours, whose directory is absent. Pruning must not
+          // touch it: deleting another integration's entry is the opposite of
+          // leaving it alone, and OpenClaw's own extensions would be fair game.
+          'memory-core': { enabled: true, config: { cwd: join(workspace, 'nowhere') } },
         },
       },
     }, null, 2)}\n`);
@@ -204,13 +208,14 @@ describe('one config, one plugin entry', () => {
     });
     const patched = JSON.parse(readFileSync(openclawConfigPath, 'utf8')) as any;
 
-    expect(Object.keys(patched.plugins.entries).sort()).toEqual([otherId, result.pluginId].sort());
+    expect(Object.keys(patched.plugins.entries).sort()).toEqual([otherId, result.pluginId, 'memory-core'].sort());
     expect(patched.plugins.load.paths).toContain(result.pluginDir);
     expect(patched.plugins.load.paths).not.toContain(staleDir);
     // Another Workspace's entry is another integration: untouched. Its load path is
     // kept because it resolves — and dropped when it does not, because OpenClaw
     // rejects the whole config over one missing entry.
     expect(patched.plugins.entries[otherId]).toBeDefined();
+    expect(patched.plugins.entries['memory-core']).toBeDefined();
     expect(patched.plugins.load.paths).toContain(otherDir);
     expect(patched.plugins.load.paths).not.toContain(absentDir);
     expect(patched.plugins.allow).not.toContain(staleId);

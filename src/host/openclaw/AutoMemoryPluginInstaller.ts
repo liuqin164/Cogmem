@@ -407,6 +407,10 @@ function buildPatchedOpenClawConfig(input: {
   // same fact as the path that cannot resolve.
   for (const [id, entry] of Object.entries(entries)) {
     if (id === input.pluginId || !isRecord(entry)) continue;
+    // Only entries this installer wrote. Without the id guard this loop drops any
+    // plugin whose directory is absent, which includes OpenClaw's own extensions --
+    // deleting another integration's entry is the opposite of leaving it alone.
+    if (!/^cogmem-auto-memory(-[0-9a-f]+)?$/u.test(id)) continue;
     const entryConfig = isRecord(entry.config) ? entry.config : {};
     const entryCwd = typeof entryConfig.cwd === 'string' ? entryConfig.cwd : '';
     if (!entryCwd) continue;
