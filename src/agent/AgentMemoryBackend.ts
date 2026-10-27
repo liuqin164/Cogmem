@@ -1102,6 +1102,10 @@ export class KernelAgentMemoryBackend {
         startTime: query.startTime,
         endTime: query.endTime,
         limit,
+        // Recall wants the event that answers the question. Chronological order
+        // here made the oldest match the best match, so the answer a query had
+        // found was ranked behind whatever happened first.
+        orderBy: 'relevance',
       });
       for (const event of events) {
         if (seen.has(event.eventId)) continue;

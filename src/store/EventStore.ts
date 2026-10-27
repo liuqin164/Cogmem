@@ -845,6 +845,16 @@ export class EventStore {
       startTime?: number;
       endTime?: number;
       limit?: number;
+      /**
+       * How to order the events a query matched.
+       *
+       * Chronological is for replay and audit: reading a thread back, the order is
+       * the point. Relevance is for recall, where the caller wants the event that
+       * answers the question and the sequence it sat in is incidental. Ordering
+       * every match by `global_seq` made the oldest hit the best hit, so the
+       * newest and most apt answer never reached the caller.
+       */
+      orderBy?: 'chronological' | 'relevance';
     } = {},
   ): MemoryEvent[] {
     const limit = Math.max(1, Math.min(options.limit ?? 20, 200));
@@ -856,15 +866,18 @@ export class EventStore {
 
     // An event holding every word of the query is the best answer there is, and
     // keeping this first attempt means the looser one below can never displace it.
+    const exactOrder = options.orderBy === 'relevance'
+      ? 'bm25(memory_events_fts) ASC, COALESCE(e.global_seq, 0) ASC, e.event_id ASC'
+      : `COALESCE(e.global_seq, 0) ASC,
+               COALESCE(e.thread_seq, e.event_version) ASC,
+               COALESCE(e.event_ordinal, 0) ASC,
+               e.event_id ASC`;
     const exact = this.db.prepare(`
       SELECT ${columns}
       FROM memory_events_fts
       JOIN memory_events e ON e.event_id = memory_events_fts.event_id
       WHERE memory_events_fts MATCH ?${scope.sql}
-      ORDER BY COALESCE(e.global_seq, 0) ASC,
-               COALESCE(e.thread_seq, e.event_version) ASC,
-               COALESCE(e.event_ordinal, 0) ASC,
-               e.event_id ASC
+      ORDER BY ${exactOrder}
       LIMIT ?
     `).all(ftsQuery, ...scope.params, limit) as any[];
     if (exact.length > 0) return exact.map((row) => this.mapRow(row));
@@ -1264,7 +1277,13 @@ export class EventStore {
       }
       tokens.push(token);
     }
-    return [...new Set(tokens)].slice(0, 12);
+    // The cap bounds how many LIKE clauses the scan carries, which is why a cap
+    // belongs here at all. It has to count the *expansion*, not the words: a
+    // Chinese run becomes one bigram per character, so a cap of twelve kept only
+    // the first twelve characters of the question and dropped its end. "我今天
+    // 下午去了北京出差见了张伟" then matched nothing, while the memory it was
+    // asking about held 张伟 and nothing else the question said.
+    return [...new Set(tokens)].slice(0, 48);
   }
 
   private encodePayload(payloadJson: string): string {

@@ -62,6 +62,24 @@ test('a Chinese question reaches the Chinese statement that answers it', () => {
   store.close();
 });
 
+test('a long Chinese question still reaches the word at its end', () => {
+  const store = new EventStore(tempDbPath('cogmem-raw-question-tail-'));
+  store.append({
+    streamId: 's1', streamType: 'thread', eventType: 'RAW_EVENT_RECORDED', projectId: 'p',
+    payload: { text: '张伟说下周一要交东西，别催他', role: 'user' },
+  });
+
+  // The name is the last thing in the question, and the only word the memory
+  // shares. Splitting the run into two-character steps gives one step per
+  // character, so a cap meant for a handful of words silently removes the end of
+  // a sentence — the question then matches nothing while the memory sits there.
+  const asked = store.searchRawEvents('我今天下午去了北京出差见了张伟', { projectId: 'p' });
+  expect(asked.length).toBe(1);
+  expect(JSON.stringify(asked[0]!.payload)).toContain('张伟');
+
+  store.close();
+});
+
 test('a question with no matching words still finds nothing', () => {
   const store = new EventStore(tempDbPath('cogmem-raw-question-none-'));
   seed(store);

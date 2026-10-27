@@ -224,6 +224,8 @@ export interface RawEventSearchOptions {
   startTime?: number;
   endTime?: number;
   limit?: number;
+  /** Chronological for replay and audit, relevance for recall. See EventStore. */
+  orderBy?: 'chronological' | 'relevance';
 }
 
 export type DreamCandidateStatus = DeepWriteCandidateStatus;
