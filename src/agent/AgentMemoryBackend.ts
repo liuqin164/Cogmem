@@ -1519,6 +1519,15 @@ export class KernelAgentMemoryBackend {
         byTurn.set(key, event);
       }
     }
+    // Deliberately re-ranked. The search orders by BM25 relevance, which alone
+    // ranks a second-hand retelling above the conversation it retells — this sort
+    // by cue coverage is what makes the original user turn win (pinned by
+    // `agent-nerve-system`: "prefers the original user anchor"). Removing it
+    // raises raw-lane delivery from 2 to 4 on the evaluation corpus and changes
+    // the end-to-end score not at all, because searching by relevance and
+    // preferring a primary source are different questions and this ordering only
+    // answers the second. A fix has to combine them — preference first, the
+    // search's rank within a preference class — rather than drop one.
     return [...byTurn.values()].sort((a, b) => (
       this.rawEventCueScore(b, queryPlan) - this.rawEventCueScore(a, queryPlan)
       || (a.globalSeq || 0) - (b.globalSeq || 0)
