@@ -86,17 +86,26 @@ export class TemporalBranchSearch {
       temporalSurface.bucketIds.length > 0
         ? temporalSurface.bucketIds
         : fallbackLabels.map((_, index) => `derived:${index}:${input.startTime ?? 0}:${input.endTime ?? 0}`);
-    // The surface answers the query only when the query itself seeded it. A seed
-    // segment is present whenever the caller passed bucket ids, and those ids come
-    // from the query's own matches — but the segment then expands to every memory
-    // recorded in that bucket, which for a day bucket is "everything said that day".
-    // That expansion is a neighbourhood, so a subject query may widen with it and
-    // must not be answered from it.
-    const queryNamesTerms = input.terms.some((term) => term.trim().length >= 2);
+    // A question can name a period or a subject, and the two want opposite
+    // treatment.
+    //
+    // Asking about a period — "这周说了什么", with a window given or a window the
+    // surface found — makes the memories inside it the answer. Widening to them is
+    // not dilution, and refusing to widen answers a question about a week with
+    // nothing.
+    //
+    // Asking about a subject ("CI 为什么不在 4.0 分支上跑") makes the period
+    // incidental. A bucket expands to every memory recorded in it, so for a day
+    // bucket that is everything said that day; the subject query may widen with it
+    // and must not be answered from it.
+    const asksAboutAPeriod = input.startTime !== undefined
+      || input.endTime !== undefined
+      || temporalSurface.segments.some((segment) => segment.source === 'window');
+    const namesSubject = !asksAboutAPeriod && input.terms.some((term) => term.trim().length >= 2);
     const fallbackTemporalNeuronIds =
       input.temporalEnabled === false
         ? []
-        : queryNamesTerms
+        : namesSubject
           ? []
           : temporalSurface.neuronIds.length > 0
             ? temporalSurface.neuronIds
