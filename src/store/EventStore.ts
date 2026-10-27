@@ -851,8 +851,54 @@ export class EventStore {
     const ftsQuery = this.toRawEventFtsQuery(query);
     if (!ftsQuery) return [];
 
-    const conditions = ['memory_events_fts MATCH ?'];
-    const params: Array<string | number> = [ftsQuery];
+    const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
+    const scope = this.rawEventScopeConditions(options);
+
+    // An event holding every word of the query is the best answer there is, and
+    // keeping this first attempt means the looser one below can never displace it.
+    const exact = this.db.prepare(`
+      SELECT ${columns}
+      FROM memory_events_fts
+      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
+      WHERE memory_events_fts MATCH ?${scope.sql}
+      ORDER BY COALESCE(e.global_seq, 0) ASC,
+               COALESCE(e.thread_seq, e.event_version) ASC,
+               COALESCE(e.event_ordinal, 0) ASC,
+               e.event_id ASC
+      LIMIT ?
+    `).all(ftsQuery, ...scope.params, limit) as any[];
+    if (exact.length > 0) return exact.map((row) => this.mapRow(row));
+
+    // Nothing held every word. The query may still be a question about a
+    // statement — see toRawEventFtsOrQuery — so match any word and rank by how
+    // much of the query each event actually carries.
+    const loose = this.db.prepare(`
+      SELECT ${columns}, bm25(memory_events_fts) AS rank
+      FROM memory_events_fts
+      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
+      WHERE memory_events_fts MATCH ?${scope.sql}
+      ORDER BY rank ASC,
+               COALESCE(e.global_seq, 0) ASC,
+               e.event_id ASC
+      LIMIT ?
+    `).all(this.toRawEventFtsOrQuery(query), ...scope.params, limit) as any[];
+    if (loose.length > 0) return loose.map((row) => this.mapRow(row));
+
+    return this.fallbackRawTextSearch(query, options, limit);
+  }
+
+  /** The scope filters shared by the raw-event searches. */
+  private rawEventScopeConditions(options: {
+    projectId?: string;
+    workspaceId?: string;
+    threadId?: string;
+    sessionId?: string;
+    localDate?: string;
+    startTime?: number;
+    endTime?: number;
+  }): { sql: string; params: Array<string | number> } {
+    const conditions: string[] = [];
+    const params: Array<string | number> = [];
     if (options.projectId !== undefined) {
       conditions.push("COALESCE(e.project_id, '') = ?");
       params.push(options.projectId);
@@ -881,23 +927,7 @@ export class EventStore {
       conditions.push('e.occurred_at < ?');
       params.push(options.endTime);
     }
-
-    params.push(limit);
-    const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
-    const rows = this.db.prepare(`
-      SELECT ${columns}
-      FROM memory_events_fts
-      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
-      WHERE ${conditions.join(' AND ')}
-      ORDER BY COALESCE(e.global_seq, 0) ASC,
-               COALESCE(e.thread_seq, e.event_version) ASC,
-               COALESCE(e.event_ordinal, 0) ASC,
-               e.event_id ASC
-      LIMIT ?
-    `).all(...params) as any[];
-
-    if (rows.length > 0) return rows.map((row) => this.mapRow(row));
-    return this.fallbackRawTextSearch(query, options, limit);
+    return { sql: conditions.map((condition) => ` AND ${condition}`).join(''), params };
   }
 
   getChildEvents(parentEventId: string, projectId?: string): MemoryEvent[] {
@@ -1130,13 +1160,37 @@ export class EventStore {
   }
 
   private toRawEventFtsQuery(query: string): string {
+    return this.rawEventFtsTokens(query)
+      .map((token) => `"${token}"`)
+      .join(' ');
+  }
+
+  /**
+   * The same tokens, any of which may match.
+   *
+   * A question is not a query its answer can satisfy. "when does the pelican
+   * migration window open" asks about "the pelican migration window opens in
+   * October": every question word the statement lacks ("when", "does", "the",
+   * and "open" against "opens") is one the statement may never contain, so
+   * requiring all of them returns nothing while the answer sits in the ledger.
+   * A question therefore falls back to matching any of its words and lets BM25
+   * rank the event that shares the most of them.
+   */
+  private toRawEventFtsOrQuery(query: string): string {
+    const meaningful = this.rawEventFtsTokens(query).filter((token) => !QUERY_STOP_WORDS.has(token));
+    // Every word was a question word; the query still has to search for them.
+    const tokens = meaningful.length > 0 ? meaningful : this.rawEventFtsTokens(query);
+    return tokens
+      .map((token) => `"${token}"`)
+      .join(' OR ');
+  }
+
+  private rawEventFtsTokens(query: string): string[] {
     return query
       .split(/[^\p{L}\p{N}_-]+/u)
       .map((token) => token.trim().replace(/"/g, ''))
       .filter((token) => token.length > 0)
-      .slice(0, 12)
-      .map((token) => `"${token}"`)
-      .join(' ');
+      .slice(0, 12);
   }
 
   private fallbackRawTextSearch(
@@ -1153,55 +1207,64 @@ export class EventStore {
     limit: number,
   ): MemoryEvent[] {
     if (this.encryptionProvider) return [];
-    const tokens = query
-      .split(/[^\p{L}\p{N}_-]+/u)
-      .map((token) => token.trim().toLowerCase())
-      .filter((token) => token.length > 0)
-      .slice(0, 8);
+    const tokens = this.rawTextSearchTokens(query);
     if (tokens.length === 0) return [];
 
-    const conditions = tokens.map(() => `LOWER(memory_events_fts.text) LIKE ? ESCAPE '\\'`);
-    const params: Array<string | number> = tokens.map((token) => `%${escapeSqlLike(token)}%`);
-    if (options.projectId !== undefined) {
-      conditions.push("COALESCE(e.project_id, '') = ?");
-      params.push(options.projectId);
-    }
-    if (options.workspaceId) {
-      conditions.push('e.workspace_id = ?');
-      params.push(options.workspaceId);
-    }
-    if (options.threadId) {
-      conditions.push('e.thread_id = ?');
-      params.push(options.threadId);
-    }
-    if (options.sessionId) {
-      conditions.push('e.session_id = ?');
-      params.push(options.sessionId);
-    }
-    if (options.localDate) {
-      conditions.push('e.local_date = ?');
-      params.push(options.localDate);
-    }
-    if (options.startTime !== undefined) {
-      conditions.push('e.occurred_at >= ?');
-      params.push(options.startTime);
-    }
-    if (options.endTime !== undefined) {
-      conditions.push('e.occurred_at < ?');
-      params.push(options.endTime);
-    }
+    // Any word may carry the answer: a question about a statement shares only
+    // some of its words, and requiring all of them is what made the question
+    // return nothing. Relevance is decided below, by how many words matched.
+    const likeConditions = tokens.map(() => `LOWER(memory_events_fts.text) LIKE ? ESCAPE '\\'`);
+    const likeParams: Array<string | number> = tokens.map((token) => `%${escapeSqlLike(token)}%`);
+    const scope = this.rawEventScopeConditions(options);
+    // Count how many of the query's words this event carries, so the event that
+    // answers the question outranks one that merely shares a common word.
+    const score = likeConditions
+      .map((condition) => `CASE WHEN ${condition} THEN 1 ELSE 0 END`)
+      .join(' + ');
 
-    params.push(limit);
-    const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
     const rows = this.db.prepare(`
-      SELECT ${columns}
+      SELECT ${MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ')},
+             (${score}) AS matched
       FROM memory_events_fts
       JOIN memory_events e ON e.event_id = memory_events_fts.event_id
-      WHERE ${conditions.join(' AND ')}
-      ORDER BY COALESCE(e.global_seq, 0) ASC, e.event_id ASC
+      WHERE (${likeConditions.join(' OR ')})${scope.sql}
+      ORDER BY matched DESC, COALESCE(e.global_seq, 0) ASC, e.event_id ASC
       LIMIT ?
-    `).all(...params) as any[];
+    `).all(...likeParams, ...likeParams, ...scope.params, limit) as any[];
     return rows.map((row) => this.mapRow(row));
+  }
+
+  /**
+   * Words to look for when the index cannot split the text.
+   *
+   * `unicode61` treats a run of Chinese characters as one word, so "我什么时候
+   * 去的北京" is a single token that no event contains, while the event says
+   * "我今天下午去了北京出差". Splitting CJK runs into overlapping bigrams keeps
+   * a word that appears inside the run findable, which is what a person expects
+   * when they ask about something they said.
+   */
+  private rawTextSearchTokens(query: string): string[] {
+    const tokens: string[] = [];
+    for (const part of query.split(/[^\p{L}\p{N}_-]+/u)) {
+      const token = part.trim().toLowerCase();
+      if (token.length === 0) continue;
+      if (QUERY_STOP_WORDS.has(token)) continue;
+      if (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(token)) {
+        if (token.length <= 2) {
+          tokens.push(token);
+          continue;
+        }
+        // The bigrams of a question word are as common as the word itself, so
+        // they are dropped too — "什么时候" must not match every Chinese event.
+        for (let i = 0; i + 2 <= token.length; i += 1) {
+          const bigram = token.slice(i, i + 2);
+          if (!QUERY_STOP_WORDS.has(bigram)) tokens.push(bigram);
+        }
+        continue;
+      }
+      tokens.push(token);
+    }
+    return [...new Set(tokens)].slice(0, 12);
   }
 
   private encodePayload(payloadJson: string): string {
@@ -1220,6 +1283,24 @@ function qualifiedMemoryEventColumns(alias: string): string {
 function escapeSqlLike(value: string): string {
   return value.replace(/[\\%_]/g, (character) => `\\${character}`);
 }
+
+/**
+ * Words that ask rather than say.
+ *
+ * A question and the statement answering it share the words that carry meaning
+ * and nothing else. Left in, "the" and "is" match almost every event, and a
+ * loose search returns the whole ledger ranked by how often it says "the".
+ * Dropped, the question matches on the words that distinguish it.
+ */
+const QUERY_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'been', 'but', 'by', 'can', 'could', 'did', 'do',
+  'does', 'for', 'from', 'had', 'has', 'have', 'how', 'i', 'if', 'in', 'is', 'it', 'its', 'me',
+  'my', 'of', 'on', 'or', 'our', 'should', 'so', 'that', 'the', 'their', 'them', 'then', 'there',
+  'these', 'they', 'this', 'to', 'was', 'we', 'were', 'what', 'when', 'where', 'which', 'who',
+  'why', 'will', 'with', 'would', 'you', 'your',
+  '吗', '呢', '吧', '啊', '的', '了', '是', '我', '你', '他', '她', '它', '们', '在', '和',
+  '就', '都', '也', '还', '有', '这', '那', '什么', '怎么', '哪', '哪个', '多少', '为什么',
+]);
 
 function sequenceKey(kind: string, projectId: string, id: string): string {
   return `${kind}:${createHash('sha256').update(`${projectId}\0${id}`).digest('hex')}`;
