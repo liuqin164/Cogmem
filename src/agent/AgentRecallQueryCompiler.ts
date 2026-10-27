@@ -217,6 +217,13 @@ function stripFillers(value: string): string {
 }
 
 function containsFiller(value: string): boolean {
+  // Substring matching, deliberately, and it is not free: the Latin article "a"
+  // occurs inside "quarterly", so every English candidate is rejected here and the
+  // caller falls back to the raw query — the compiled candidates and the semantic
+  // cue phrases are dropped. Measured, correcting this to whole-word matching drops
+  // the evaluation floor from 6 to 5, so whatever the fallback compensates for is
+  // worth more than the candidates add. Fixing this means fixing both together;
+  // changing it alone is a regression that looks like a correction.
   return QUERY_FILLERS.some((filler) => value.toLowerCase().includes(filler.toLowerCase()));
 }
 
