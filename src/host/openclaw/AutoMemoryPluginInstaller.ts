@@ -577,14 +577,19 @@ function pluginConfig(api, event, ctx) {
 
 function asMessages(event) {
   if (!event) return [];
-  // event.prompt is itself the array of messages in OpenClaw's
-  // before_prompt_build event, not an object carrying a messages key. Read as an
-  // object it yielded nothing, the user turn read as empty, and every recall
-  // returned early with empty_user_query: the hook ran, the recall never did, and
-  // the write half kept working, so the host looked wired and never remembered
-  // anything. Measured on the box: event keys ['prompt','messages'], prompt keys
-  // ['0','1','2','3','4'], zero messages resolved.
-  if (Array.isArray(event.prompt)) return event.prompt;
+  // event.prompt is the prompt text itself in OpenClaw's before_prompt_build event:
+  // not an array of messages, not an object with a messages key. Object.keys on a
+  // string returns character indices, which is what made this look like a message
+  // list and led to the wrong fix first time round; typeof says string.
+  //
+  // Read as an object it yielded nothing, the user turn read as empty, and every
+  // recall returned early with empty_user_query while the write half kept working.
+  // The host looked wired and never remembered anything. Measured on the box:
+  // promptType string, isArray false, ctor String, keys the character indices of a
+  // five-character prompt, and zero messages resolved.
+  if (typeof event.prompt === 'string' && event.prompt.trim()) {
+    return [{ role: 'user', content: event.prompt }];
+  }
   return event.messages ||
     (event.context && event.context.messages) ||
     (event.prompt && event.prompt.messages) ||
