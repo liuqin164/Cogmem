@@ -635,7 +635,7 @@ function installPiMcpConfig(input: {
 
 function patchHermesMcpConfig(original: string, serverCommand: string, serverArgs: string[], project: string): string {
   if (hasHermesCogmemEntry(original)) {
-    return patchExistingHermesCogmemConfig(original, project, serverArgs);
+    return patchExistingHermesCogmemConfig(original, project, serverCommand, serverArgs);
   }
 
   const lines = original.replace(/\r\n/g, '\n').split('\n');
@@ -690,7 +690,7 @@ function isSupersededCogmemMcpArgs(parsed: unknown[], project: string): boolean 
   return true;
 }
 
-function patchExistingHermesCogmemConfig(original: string, project: string, serverArgs: string[]): string {
+function patchExistingHermesCogmemConfig(original: string, project: string, serverCommand: string, serverArgs: string[]): string {
   const lines = original.replace(/\r\n/g, '\n').split('\n');
   const cogmemIndex = lines.findIndex((line) => /^\s+cogmem\s*:\s*$/.test(line));
   if (cogmemIndex === -1) return original.endsWith('\n') ? original : `${original}\n`;
@@ -721,6 +721,33 @@ function patchExistingHermesCogmemConfig(original: string, project: string, serv
       const parsed = JSON.parse(match[2]!) as unknown;
       if (Array.isArray(parsed) && isSupersededCogmemMcpArgs(parsed, project)) {
         lines[index] = `${match[1]}args: ${JSON.stringify(serverArgs)}`;
+        // This entry is ours — its args name this project — so its command is
+        // refreshed with them. Only the args ever were, so a re-run left the
+        // command naming whichever install wrote it first: on a box whose
+        // workspace had moved, Hermes kept a path into a directory that no longer
+        // existed, the server never started, and Hermes had no memory while
+        // reporting nothing. Measured there: `connect hermes --auto --force`
+        // reprocessed the entry and left the dead path in place.
+        //
+        // An entry bound to another project is not ours to retarget, and is left
+        // alone with a warning instead — that part is deliberate and unchanged.
+        for (let commandIndex = index - 1; commandIndex > cogmemIndex; commandIndex -= 1) {
+          const commandMatch = lines[commandIndex]!.match(/^(\s*)command\s*:\s*(.+?)\s*$/);
+          if (!commandMatch) continue;
+          const written = commandMatch[2]!;
+          let currentCommand = written;
+          if (written.startsWith('"') && written.endsWith('"')) {
+            try {
+              currentCommand = JSON.parse(written) as string;
+            } catch {
+              break;
+            }
+          }
+          if (currentCommand !== serverCommand) {
+            lines[commandIndex] = `${commandMatch[1]}command: ${JSON.stringify(serverCommand)}`;
+          }
+          break;
+        }
       }
     } catch {
       // Leave an unparseable args line alone.

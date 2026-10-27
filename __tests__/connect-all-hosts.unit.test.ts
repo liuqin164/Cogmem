@@ -137,3 +137,28 @@ describe('the gate finishes a three-host install in one step', () => {
     expect(step?.command).toContain('connect pi');
   });
 });
+
+describe('reconnecting a host refreshes its entry', () => {
+  test('a dead command path is repaired rather than preserved', async () => {
+    const p = project(['hermes']);
+    const hermesConfig = join(p.home, '.hermes', 'config.yaml');
+    const first = await run(connectArgs('hermes', p), p.ws, { HOME: p.home });
+    expect(first.exitCode).toBe(0);
+
+    // An entry written by an install that has since moved. Only the `args` line was
+    // ever refreshed on a re-run, so the command survived every reconnect: Hermes
+    // kept naming a directory that no longer existed, its server never started, and
+    // it had no memory while reporting nothing.
+    const dead = '/nonexistent/old-workspace/node_modules/.bin/cogmem';
+    const rewritten = readFileSync(hermesConfig, 'utf8').replace(/^(\s*)command\s*:.*$/mu, `$1command: "${dead}"`);
+    expect(rewritten).toContain(dead);
+    writeFileSync(hermesConfig, rewritten, 'utf8');
+
+    const second = await run([...connectArgs('hermes', p), '--force'], p.ws, { HOME: p.home });
+    expect(second.exitCode).toBe(0);
+
+    const after = readFileSync(hermesConfig, 'utf8');
+    expect(after).not.toContain(dead);
+    expect(after).toMatch(/^\s*command\s*:\s*".*cogmem.*"$/mu);
+  });
+});
