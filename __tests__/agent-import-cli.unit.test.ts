@@ -1810,16 +1810,22 @@ test('cogmem-connect hermes --auto leaves configuration it cannot attribute alon
   expect(readFileSync(hermesConfig, 'utf8')).toContain('args: ["mcp","--transport","http","--port","7337"]');
 });
 
-test('cogmem-connect hermes says so when the entry it preserved cannot run', async () => {
+test('cogmem-connect repairs a preserved entry whose command cannot run', async () => {
   const dir = makeTempDir('cogmem-connect-hermes-dead-');
   const workspace = join(dir, 'workspace');
   const hermesConfig = join(dir, '.hermes', 'config.yaml');
   mkdirSync(workspace);
   mkdirSync(dirname(hermesConfig), { recursive: true });
-  // A different project, so the entry is deliberately left alone — but its command is
-  // gone, which means Hermes cannot start the server at all. Preserving it silently
-  // reports a wired host that is not wired (#96). This is the shape an upgrade leaves
-  // behind: the absolute path keeps pointing at the prefix that was replaced.
+  // A different project, so the entry is deliberately not retargeted — but its
+  // command is gone, which means Hermes cannot start the server at all. This is the
+  // shape an upgrade leaves behind, and the shape a moved workspace leaves behind
+  // too: the project id is derived from the workspace path (#92), so the entry this
+  // command wrote yesterday stops looking like ours while its path goes stale.
+  //
+  // The command is repaired rather than reported. It names which binary to run, not
+  // which memories to read, so rewriting it retargets nothing — and a missing file
+  // is a server that can never start. Warning about it left the host memoryless and
+  // depended on someone reading the warning.
   const missing = join(dir, 'gone', 'bin', 'cogmem');
   writeFileSync(hermesConfig, [
     'mcp_servers:',
@@ -1834,10 +1840,14 @@ test('cogmem-connect hermes says so when the entry it preserved cannot run', asy
     'bun', connectBin, 'hermes', '--workspace', workspace, '--auto', '--hermes-config', hermesConfig, '--json',
   ], coreRoot, { HOME: dir });
   expect(installed.exitCode).toBe(0);
-  // Still not retargeted: that part of the behaviour is deliberate and unchanged.
-  expect(readFileSync(hermesConfig, 'utf8')).toContain('someone-elses-project');
-  const parsed = JSON.parse(installed.stdout) as { hermesMcp?: { warning?: string } };
-  expect(parsed.hermesMcp?.warning).toContain(missing);
+  const written = readFileSync(hermesConfig, 'utf8');
+  // The project binding is still not ours to retarget: that part is unchanged.
+  expect(written).toContain('someone-elses-project');
+  // The dead command is gone, and what replaced it is a command that can run.
+  expect(written).not.toContain(missing);
+  const command = written.match(/^\s*command\s*:\s*"(.+)"$/mu)?.[1];
+  expect(command).toBeString();
+  expect(command).not.toBe(missing);
 });
 
 test('cogmem-connect hermes stays quiet when the entry it preserved still works', async () => {

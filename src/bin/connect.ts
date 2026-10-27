@@ -710,44 +710,49 @@ function patchExistingHermesCogmemConfig(original: string, project: string, serv
   }
 
   const block = lines.slice(cogmemIndex, blockEnd);
+
+  // A command that names a file which is not there is repaired, whoever wrote the
+  // entry. The command says which binary to run, not which memories to read: it
+  // carries none of the project binding this command must not retarget, and a
+  // missing file means the server can never start. Leaving it "as it is" leaves a
+  // host with no memory and no way to say so — Hermes, on the box, had a path into
+  // a directory that had never existed and simply never stored anything.
+  //
+  // This matters most after a workspace move. The project id is derived from the
+  // workspace path (#92), so the entry this command wrote yesterday stops looking
+  // like ours and the preserve rule makes the dead path permanent.
+  for (let index = cogmemIndex + 1; index < blockEnd; index += 1) {
+    const match = lines[index]!.match(/^(\s*)command\s*:\s*(.+?)\s*$/);
+    if (!match) continue;
+    const written = match[2]!;
+    let current = written;
+    if (written.startsWith('"') && written.endsWith('"')) {
+      try {
+        current = JSON.parse(written) as string;
+      } catch {
+        break; // Unparseable; leave a line this command did not write alone.
+      }
+    }
+    // A bare command name is resolved on PATH at run time, so it is not missing
+    // merely because it is not a file here.
+    const missing = isAbsolute(current) && !existsSync(current);
+    if (missing || (current !== serverCommand && !isAbsolute(current))) {
+      lines[index] = `${match[1]}command: ${JSON.stringify(serverCommand)}`;
+    }
+    break;
+  }
+
   // An entry an earlier `connect` wrote names no project — the server then answers
   // whatever scope a caller asks for, which is the defect this fix closes. Its own
   // `args` line is rewritten in place; a line this command did not write
   // (unparseable, or carrying flags it does not know) is left alone.
   for (let index = cogmemIndex + 1; index < blockEnd; index += 1) {
-    const match = lines[index].match(/^(\s*)args\s*:\s*(\[.*\])\s*$/);
+    const match = lines[index]!.match(/^(\s*)args\s*:\s*(\[.*\])\s*$/);
     if (!match) continue;
     try {
       const parsed = JSON.parse(match[2]!) as unknown;
       if (Array.isArray(parsed) && isSupersededCogmemMcpArgs(parsed, project)) {
         lines[index] = `${match[1]}args: ${JSON.stringify(serverArgs)}`;
-        // This entry is ours — its args name this project — so its command is
-        // refreshed with them. Only the args ever were, so a re-run left the
-        // command naming whichever install wrote it first: on a box whose
-        // workspace had moved, Hermes kept a path into a directory that no longer
-        // existed, the server never started, and Hermes had no memory while
-        // reporting nothing. Measured there: `connect hermes --auto --force`
-        // reprocessed the entry and left the dead path in place.
-        //
-        // An entry bound to another project is not ours to retarget, and is left
-        // alone with a warning instead — that part is deliberate and unchanged.
-        for (let commandIndex = index - 1; commandIndex > cogmemIndex; commandIndex -= 1) {
-          const commandMatch = lines[commandIndex]!.match(/^(\s*)command\s*:\s*(.+?)\s*$/);
-          if (!commandMatch) continue;
-          const written = commandMatch[2]!;
-          let currentCommand = written;
-          if (written.startsWith('"') && written.endsWith('"')) {
-            try {
-              currentCommand = JSON.parse(written) as string;
-            } catch {
-              break;
-            }
-          }
-          if (currentCommand !== serverCommand) {
-            lines[commandIndex] = `${commandMatch[1]}command: ${JSON.stringify(serverCommand)}`;
-          }
-          break;
-        }
       }
     } catch {
       // Leave an unparseable args line alone.
