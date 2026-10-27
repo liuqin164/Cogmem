@@ -49,6 +49,19 @@ const PROTECTED_PHRASES = [
   '操作',
 ];
 
+/**
+ * Short Latin words that name something rather than pad a sentence.
+ *
+ * The three-character minimum exists to drop articles and prepositions, but it
+ * caught the project's own nouns too: CI, pi, git, DSH. These are kept however
+ * short they are, because a question about "pi" is about pi and about nothing
+ * else once that word is gone.
+ */
+const SHORT_SUBJECT_TERMS = new Set([
+  'ci', 'cd', 'pi', 'dsh', 'git', 'pr', 'id', 'ui', 'ux', 'db', 'os', 'ai', 'ml',
+  'mcp', 'npm', 'api', 'sdk', 'cli', 'url', 'http', 'sql', 'ts', 'js', 'go', 'py',
+]);
+
 const QUERY_FILLERS = [
   '我现在不是问你泛泛解释',
   '不是问你泛泛解释',
@@ -162,7 +175,13 @@ export function extractRecallKeywords(text: string): string[] {
 
   for (const token of normalized.split(/[^\p{L}\p{N}_-]+/u)) {
     const cleaned = token.trim();
-    if (!cleaned || cleaned.length < 3) continue;
+    if (!cleaned) continue;
+    // A short word is not a meaningless one. The project's own nouns are short —
+    // CI, pi, git, DSH — and dropping every token under three characters removed
+    // the subject of the question: "CI 为什么不在 4.0 分支上跑" became "不在
+    // 分支上跑". What makes a word worth skipping is being a filler, not being
+    // brief, so only the article-like Latin words are excluded here.
+    if (cleaned.length < 3 && !SHORT_SUBJECT_TERMS.has(cleaned.toLowerCase())) continue;
     if (/^[\u4e00-\u9fff]+$/u.test(cleaned)) continue;
     if (lower.includes('cogmem memory context') && /^(cogmem|memory|context)$/i.test(cleaned)) continue;
     if (QUERY_FILLERS.some((filler) => filler.toLowerCase() === cleaned.toLowerCase())) continue;
