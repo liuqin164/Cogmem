@@ -29,6 +29,9 @@ import {
 
 type AgentKind = 'openclaw' | 'hermes' | 'pi';
 
+/** One list, so `connect`, `init` and the gate cannot disagree about the hosts. */
+const HOST_NAMES: AgentKind[] = ['openclaw', 'hermes', 'pi'];
+
 const HERMES_COGMEM_TOOLS = [
   'cogmem_remember_turn',
   'cogmem_recall',
@@ -64,6 +67,8 @@ const HERMES_COGMEM_TOOLS = [
 
 interface ConnectArgs {
   agent?: AgentKind;
+  /** `connect all`: wire every host this config already enables, in one run. */
+  allHosts: boolean;
   workspaceRoot: string;
   /** True when the operator named `--workspace`; then nothing may override it. */
   workspaceGiven: boolean;
@@ -211,6 +216,10 @@ function readArgs(argv: string[]): ConnectArgs {
   }
 
   const rawAgent = positionals[0];
+  const allHosts = rawAgent === 'all';
+  if (!allHosts && rawAgent !== undefined && !HOST_NAMES.includes(rawAgent as AgentKind)) {
+    throw new Error(`Unknown host: ${rawAgent}. Expected one of ${HOST_NAMES.join(', ')}, or all.`);
+  }
   const agent = rawAgent === 'openclaw' || rawAgent === 'hermes' || rawAgent === 'pi' ? rawAgent : undefined;
   const configPath = stringValue(values.config);
   // `--workspace` is the operator's override. Otherwise the Workspace is the
@@ -221,6 +230,7 @@ function readArgs(argv: string[]): ConnectArgs {
   const workspaceRoot = resolve(givenWorkspace || resolveWorkspaceRoot({ cwd: process.cwd(), configPath }));
   return {
     agent,
+    allHosts,
     workspaceRoot,
     workspaceGiven: givenWorkspace !== undefined,
     configPath,
@@ -280,7 +290,7 @@ function nextSteps(agent: AgentKind, workspace: string, project: string): Connec
 
 function usage(): string {
   return [
-    'Usage: cogmem-connect <openclaw|hermes|pi> [--workspace <dir>] [--output <SKILL.md>] [--auto] [--config <config.toml>] [--openclaw-config <openclaw.json>] [--hermes-config <config.yaml>] [--pi-config <mcp.json>] [--plugin-dir <dir>] [--bun <path>] [--project <id>] [--agent-id <id>] [--dry-run] [--force] [--json]',
+    'Usage: cogmem-connect <openclaw|hermes|pi|all> [--workspace <dir>] [--output <SKILL.md>] [--auto] [--config <config.toml>] [--openclaw-config <openclaw.json>] [--hermes-config <config.yaml>] [--pi-config <mcp.json>] [--plugin-dir <dir>] [--bun <path>] [--project <id>] [--agent-id <id>] [--dry-run] [--force] [--json]',
     '',
     'Installs the agent-facing cogmem memory skill bundle into:',
     '  OpenClaw: <workspace>/skills/cogmem-memory/',
@@ -291,6 +301,7 @@ function usage(): string {
     'For OpenClaw, pass --auto to install the local automatic recall/remember plugin wrapper and patch OpenClaw plugin config.',
     'For Hermes, pass --auto to patch ~/.hermes/config.yaml with a cogmem MCP server entry.',
     'For pi, pass --auto to patch ~/.pi/agent/mcp.json with the same server. --pi-config names another file.',
+    'Use `all` to wire every host this config already enables in one run — the second half of `cogmem init --agent all`.',
     '--bun must be a real Bun binary (the plugin bridge imports bun:sqlite); defaults to the runtime that invoked this CLI.',
   ].join('\n');
 }
@@ -379,8 +390,12 @@ function resolveCogmemMcpServer(workspaceRoot: string, project: string): { comma
 
 function installSkill(args: ConnectArgs): ConnectResult {
   if (!args.agent) throw new Error(usage());
-  const templatePath = templatePathFor(args.agent);
-  const operationsTemplatePath = operationsTemplatePathFor(args.agent);
+  return installForHost(args.agent, args);
+}
+
+function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
+  const templatePath = templatePathFor(agent);
+  const operationsTemplatePath = operationsTemplatePathFor(agent);
   for (const requiredPath of [templatePath, operationsTemplatePath]) {
     if (!existsSync(requiredPath)) {
       throw new Error(`Missing packaged skill template: ${requiredPath}`);
@@ -399,12 +414,12 @@ function installSkill(args: ConnectArgs): ConnectResult {
   // not silently retarget the plugin to somewhere else.
   const hostWorkspaceRoot = args.workspaceGiven || cogmemConfig.kind !== 'toml'
     ? args.workspaceRoot
-    : hostWorkspaceFor(loadCogmemConfig({ configPath: cogmemConfig.path }), args.agent);
+    : hostWorkspaceFor(loadCogmemConfig({ configPath: cogmemConfig.path }), agent);
   // The one project this integration writes and reads. `--project` overrides it;
   // otherwise it is derived from the Workspace, so the plugin entry and the
   // printed import step cannot name two different scopes (#79).
-  const integrationProject = args.projectId || integrationScope(args.agent, hostWorkspaceRoot);
-  const skillPath = resolve(args.outputPath || defaultSkillPath(args.agent, hostWorkspaceRoot));
+  const integrationProject = args.projectId || integrationScope(agent, hostWorkspaceRoot);
+  const skillPath = resolve(args.outputPath || defaultSkillPath(agent, hostWorkspaceRoot));
   const operationsPath = join(dirname(skillPath), 'references', 'operations.md');
   const skillFiles = [skillPath, operationsPath];
   const alreadyCurrent = existsSync(skillPath)
@@ -425,7 +440,7 @@ function installSkill(args: ConnectArgs): ConnectResult {
     writeFileSync(operationsPath, operationsTemplate, 'utf8');
   }
 
-  if (args.agent === 'openclaw' && args.auto) {
+  if (agent === 'openclaw' && args.auto) {
     autoMemory = installOpenClawAutoMemoryPlugin({
       workspaceRoot: hostWorkspaceRoot,
       // Left unset when no config exists, so the installer refuses with its own
@@ -439,7 +454,7 @@ function installSkill(args: ConnectArgs): ConnectResult {
       dryRun: args.dryRun,
       force: args.force,
     });
-  } else if (args.agent === 'hermes' && args.auto) {
+  } else if (agent === 'hermes' && args.auto) {
     hermesMcp = installHermesMcpConfig({
       workspaceRoot: hostWorkspaceRoot,
       configPath: args.hermesConfigPath,
@@ -447,7 +462,7 @@ function installSkill(args: ConnectArgs): ConnectResult {
       dryRun: args.dryRun,
       force: args.force,
     });
-  } else if (args.agent === 'pi' && args.auto) {
+  } else if (agent === 'pi' && args.auto) {
     piMcp = installPiMcpConfig({
       workspaceRoot: hostWorkspaceRoot,
       configPath: args.piConfigPath,
@@ -466,11 +481,11 @@ function installSkill(args: ConnectArgs): ConnectResult {
   // not the file is there; recording into an absent one would throw *after* the
   // plugin and the host config were already written.
   const integrationEnabled = !args.dryRun && args.auto && cogmemConfig.kind === 'toml' && existsSync(cogmemConfig.path)
-    ? enableHostIntegration(cogmemConfig.path, args.agent)
+    ? enableHostIntegration(cogmemConfig.path, agent)
     : null;
 
   return {
-    agent: args.agent,
+    agent: agent,
     workspaceRoot: args.workspaceRoot,
     hostWorkspaceRoot,
     integrationProject,
@@ -480,9 +495,9 @@ function installSkill(args: ConnectArgs): ConnectResult {
     dryRun: args.dryRun,
     installed: !args.dryRun && !alreadyCurrent,
     alreadyCurrent,
-    nextCommands: nextCommands(args.agent, hostWorkspaceRoot, integrationProject),
-    nextSteps: nextSteps(args.agent, hostWorkspaceRoot, integrationProject),
-    hostConfigSnippet: hostConfigSnippet(args.agent, hostWorkspaceRoot, args.auto, integrationProject),
+    nextCommands: nextCommands(agent, hostWorkspaceRoot, integrationProject),
+    nextSteps: nextSteps(agent, hostWorkspaceRoot, integrationProject),
+    hostConfigSnippet: hostConfigSnippet(agent, hostWorkspaceRoot, args.auto, integrationProject),
     autoMemory,
     hermesMcp,
     piMcp,
@@ -805,12 +820,40 @@ async function main(): Promise<void> {
     return;
   }
 
-  const result = installSkill(args);
-  if (args.json) {
-    printCliJson(`connect.${result.agent}`, result);
+  if (!args.allHosts) {
+    const result = installSkill(args);
+    if (args.json) {
+      printCliJson(`connect.${result.agent}`, result);
+      return;
+    }
+    printHuman(result);
     return;
   }
-  printHuman(result);
+
+  // `connect all` wires what this config already enables — the hosts `init` found
+  // and the operator accepted. It is the second half of "install one cogmem and
+  // wire them all": one command, one backend, every host that asked for it (#97).
+  // It deliberately does not invent hosts: enabling an integration nobody enabled
+  // would install three host plugins on a machine that may have one agent.
+  const cogmemConfig = resolveCogmemConfigPath({ configPath: args.configPath, cwd: args.workspaceRoot });
+  if (cogmemConfig.kind !== 'toml') {
+    throw new Error(
+      `No cogmem config at ${cogmemConfig.path}, so there is nothing to wire. Run \`cogmem init --agent all\` first, or name one host: cogmem connect openclaw.`,
+    );
+  }
+  const loaded = loadCogmemConfig({ configPath: cogmemConfig.path });
+  const hosts = HOST_NAMES.filter((host) => loaded.integrations[host]?.enabled);
+  if (hosts.length === 0) {
+    throw new Error(
+      'No host integration is enabled in this config, so `connect all` has nothing to wire. Run `cogmem init --agent all`, or name one host: cogmem connect openclaw.',
+    );
+  }
+  const results = hosts.map((host) => installForHost(host, args));
+  if (args.json) {
+    printCliJson('connect.all', { hosts: results });
+    return;
+  }
+  for (const result of results) printHuman(result);
 }
 
 main().catch((error) => {

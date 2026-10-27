@@ -21,7 +21,7 @@ import {
   hermesIntegrationEstablished,
   piIntegrationEstablished,
   installPathSteps,
-  pendingHostIntegration,
+  pendingHostIntegrations,
   isOnPath,
   pathWarningSteps,
   postInstallSteps,
@@ -316,7 +316,7 @@ if (envPath) {
   // Workspace is what made it name the wrong Host (#81). Availability is read from
   // the same inspection the report uses — the effective plugin dir and workspace —
   // so one run cannot print "installed" and "connect it" at the same time.
-  const connectHost = pendingHostIntegration([
+  const connectHosts = pendingHostIntegrations([
     { host: 'openclaw', wanted: loaded.integrations.openclaw.enabled, established: plugin.installed },
     {
       host: 'hermes',
@@ -332,9 +332,9 @@ if (envPath) {
   // The step carries the workspace of the Host it names, not the OpenClaw one by
   // default: a pending Hermes in a Workspace whose OpenClaw dir is elsewhere would
   // otherwise be told to write into the wrong tree.
-  const connectWorkspace = workspace || (connectHost ? hostWorkspaceFor(loaded, connectHost) : workspaceRoot);
+  const connectWorkspace = workspace || (connectHosts[0] ? hostWorkspaceFor(loaded, connectHosts[0]) : workspaceRoot);
   emitGate(
-    buildGate(level, gateDiagnostics, [...pathSteps, ...postInstallSteps(resolveCogmemInvocation(), connectWorkspace, connectHost)]),
+    buildGate(level, gateDiagnostics, [...pathSteps, ...postInstallSteps(resolveCogmemInvocation(), connectWorkspace, connectHosts)]),
     {
       configPath: resolution.path,
       workspaceRoot,
@@ -347,7 +347,8 @@ if (envPath) {
         pi: { enabled: loaded.integrations.pi.enabled },
       },
       dbPath: kernelDbPath,
-      nextConnectHost: connectHost,
+      nextConnectHost: connectHosts[0],
+      nextConnectHosts: connectHosts,
       openclaw: reportPlugin ? { plugin } : undefined,
     },
   );

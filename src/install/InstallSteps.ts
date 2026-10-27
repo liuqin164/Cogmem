@@ -127,19 +127,28 @@ export function installPathSteps(bin: string): InstallStep[] {
  * (#81). The Host is a parameter rather than the literal `openclaw` so a
  * Hermes-only Workspace is told to connect Hermes.
  */
-export function postInstallSteps(bin: string, workspace: string, connectHost?: HostIntegration): InstallStep[] {
+export function postInstallSteps(bin: string, workspace: string, connectHosts: HostIntegration[] = []): InstallStep[] {
   const steps: InstallStep[] = [];
-  if (connectHost) {
+  if (connectHosts.length > 0) {
+    // The workspace is carried, not left to the caller's directory: `connect`
+    // derives it by walking up, so the same step run one directory away writes a
+    // second integration under a second identity (ADR-0010).
+    const workspaceArg = `--workspace ${cliArg(workspace)}`;
+    // Several outstanding hosts are one command, not several: `connect all` wires
+    // every host this config enables, so an install that found three agents does not
+    // have to be finished three times (#97).
+    const target = connectHosts.length > 1 ? 'all' : connectHosts[0];
     steps.push({
-      id: 'connect_host',
+      id: connectHosts.length > 1 ? 'connect_all_hosts' : 'connect_host',
       actor: 'operator',
       safeForAutomation: false,
-      // The workspace is carried, not left to the caller's directory: `connect`
-      // derives it by walking up, so the same step run one directory away writes a
-      // second integration under a second identity (ADR-0010).
-      command: `${bin} connect ${connectHost} --auto --force --workspace ${cliArg(workspace)}`,
-      when: `when this ${connectHost} workspace should receive automatic recall`,
-      purpose: 'install the host integration files; names the host it wires and the workspace it will write into',
+      command: `${bin} connect ${target} --auto --force ${workspaceArg}`,
+      when: connectHosts.length > 1
+        ? `when these hosts should receive automatic recall: ${connectHosts.join(', ')}`
+        : `when this ${target} workspace should receive automatic recall`,
+      purpose: connectHosts.length > 1
+        ? 'install every enabled host integration in one run; names the hosts it wires and the workspace it writes into'
+        : 'install the host integration files; names the host it wires and the workspace it will write into',
     });
   }
   if (steps.length > 0) {
@@ -245,11 +254,22 @@ export function piIntegrationEstablished(configPath: string): boolean {
  * 3. otherwise the primary Host, so a fresh machine is still told what to do.
  */
 export function pendingHostIntegration(wiring: HostWiring[]): HostIntegration | undefined {
-  const wanted = wiring.find((entry) => entry.wanted && !entry.established);
-  if (wanted) return wanted.host;
-  if (wiring.some((entry) => entry.established)) return undefined;
+  return pendingHostIntegrations(wiring)[0];
+}
+
+/**
+ * Every Host the gate still has work for.
+ *
+ * The same three rules as the singular form, returning all of them: an install that
+ * found three agents has three hosts to wire, and naming one per run is how the
+ * operator finishes an install by reading the gate three times (#97).
+ */
+export function pendingHostIntegrations(wiring: HostWiring[]): HostIntegration[] {
+  const wanted = wiring.filter((entry) => entry.wanted && !entry.established).map((entry) => entry.host);
+  if (wanted.length > 0) return wanted;
+  if (wiring.some((entry) => entry.established)) return [];
   const primary = wiring.find((entry) => entry.host === PRIMARY_HOST);
-  return primary && !primary.established ? PRIMARY_HOST : undefined;
+  return primary && !primary.established ? [PRIMARY_HOST] : [];
 }
 
 /**

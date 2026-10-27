@@ -11,9 +11,11 @@ import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
 import {
   buildGate,
   defaultHermesConfigPath,
+  defaultPiConfigPath,
   hermesIntegrationEstablished,
+  piIntegrationEstablished,
   installPathSteps,
-  pendingHostIntegration,
+  pendingHostIntegrations,
   postInstallSteps,
   resolveCogmemInvocation,
   type InstallGate,
@@ -406,16 +408,21 @@ async function main(): Promise<void> {
     // Only what is outstanding, and only the Host it belongs to: `update` runs on a
     // machine whose integration already exists, so recommending `connect` again
     // would be the gate repeating itself (#81).
-    const connectHost = pendingHostIntegration([
+    const connectHosts = pendingHostIntegrations([
       { host: 'openclaw', wanted: config.loaded.integrations.openclaw.enabled, established: Boolean(openclawWorkspace) },
       {
         host: 'hermes',
         wanted: config.loaded.integrations.hermes.enabled,
         established: hermesIntegrationEstablished(defaultHermesConfigPath(process.env)),
       },
+      {
+        host: 'pi',
+        wanted: config.loaded.integrations.pi.enabled,
+        established: piIntegrationEstablished(defaultPiConfigPath(process.env)),
+      },
     ]);
-    const connectWorkspace = connectHost ? hostWorkspaceFor(config.loaded, connectHost) : (openclawWorkspace ?? config.loaded.workspaceRoot);
-    result.nextSteps = postInstallSteps(gateBin, connectWorkspace, connectHost);
+    const connectWorkspace = connectHosts[0] ? hostWorkspaceFor(config.loaded, connectHosts[0]) : (openclawWorkspace ?? config.loaded.workspaceRoot);
+    result.nextSteps = postInstallSteps(gateBin, connectWorkspace, connectHosts);
   } else {
     result.nextSteps = installPathSteps(gateBin).filter((step) => step.id !== 'install_gate');
   }
