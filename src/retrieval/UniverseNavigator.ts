@@ -101,11 +101,20 @@ export class UniverseNavigator {
       entityIds: compiledQuery.entityResolution.resolved.map((entity) => entity.entityId),
       topologyIds: Array.from(new Set([...input.topologyIds, ...branchNeuronIdsForPulse])),
       branchIds: Array.from(new Set([...input.branchIds, ...branchSearch.denseJointNeuronIds])),
-      temporalBucketIds: input.temporalEnabled === false ? [] : Array.from(new Set([...input.temporalBucketIds, ...branchSearch.temporalTraversal.bucketIds])),
+      // The bucket ids are the third way the same expansion travels: the pulse
+      // resolves them through the adjacency store into pulse2, which is how a
+      // subject query still received "everything recorded that day" after the
+      // neuron lists above were held back. Measured before this: disabling the two
+      // gates above changed no evaluation outcome at all.
+      temporalBucketIds: input.temporalEnabled === false || queryNamesTerms
+        ? []
+        : Array.from(new Set([...input.temporalBucketIds, ...branchSearch.temporalTraversal.bucketIds])),
       temporalNeuronIds: input.temporalEnabled === false ? [] : temporalNeuronIdsForPulse,
       graphIds: input.graphIds,
       cognitiveGraphIds: input.cognitiveGraphIds,
-      entityNeuronIds: Array.from(new Set([...input.entityNeuronIds, ...branchSearch.denseJointNeuronIds]))
+      entityNeuronIds: queryNamesTerms
+        ? input.entityNeuronIds
+        : Array.from(new Set([...input.entityNeuronIds, ...branchSearch.denseJointNeuronIds]))
     });
 
     const traversal = this.traversalExecutor.execute({

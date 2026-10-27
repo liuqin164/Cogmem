@@ -30,7 +30,7 @@ import { EVAL_CASES } from './cases.js';
  * They are kept in the set because the number would otherwise be flattering, and
  * the miss list is where a known defect belongs.
  */
-const BASELINE_PASSES = 4;
+const BASELINE_PASSES = 5;
 
 const corpusPath = join(import.meta.dir, '..', '..', 'docs', 'engineering', '4.0-issue-loop.md');
 
