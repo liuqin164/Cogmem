@@ -21,8 +21,16 @@ import { KernelAgentMemoryBackend } from '../../src/agent/AgentMemoryBackend.js'
 import { makeTempDir } from '../helpers/tmp.js';
 import { EVAL_CASES } from './cases.js';
 
-/** Measured on the commit that introduced this floor: 6 of 18, of which 2 are the unanswerable cases. Lower means a regression. */
-const BASELINE_PASSES = 6;
+/**
+ * Measured on the commit that introduced this floor: 4 of 18 — four answered
+ * questions out of sixteen, and neither unanswerable case abstaining.
+ *
+ * The two unanswerable cases are expected to fail today: recall reports
+ * `compiled_cue_match` for a question whose words appear nowhere in the corpus.
+ * They are kept in the set because the number would otherwise be flattering, and
+ * the miss list is where a known defect belongs.
+ */
+const BASELINE_PASSES = 4;
 
 const corpusPath = join(import.meta.dir, '..', '..', 'docs', 'engineering', '4.0-issue-loop.md');
 
@@ -53,9 +61,10 @@ function loadCorpus(): IssueRecord[] {
 
 test('recall finds the record that answers a real question', async () => {
   const corpus = loadCorpus();
-  // Without the ledger there is nothing to measure; skip rather than report a
-  // confident zero, which would look like a recall failure that never happened.
-  if (corpus.length < 10) return;
+  // Assert rather than skip: a renamed or reformatted ledger would otherwise turn
+  // the only recall-quality measurement in the repo into a silent no-op that
+  // reports nothing and passes.
+  expect(corpus.length).toBeGreaterThan(10);
 
   const kernel = createMemoryKernel({ dbPath: join(makeTempDir('cogmem-eval-'), 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
@@ -82,10 +91,16 @@ test('recall finds the record that answers a real question', async () => {
     const text = JSON.stringify(items);
 
     if (evalCase.unanswerable) {
-      // The honest outcome is that the ledger lane did not claim a match.
-      const claimed = result.decisionTrace?.selectedLane === 'raw_ledger';
-      if (!claimed) passed += 1;
-      else missed.push(`${evalCase.question} (answered an unanswerable question)`);
+      // Nothing in the corpus is about this, so no lane can honestly claim the
+      // query's words were found. Asserting the lane name would not say that: the
+      // previous version passed these two cases because the lane happened to be
+      // "compiled" rather than "raw_ledger", while the trace still reported
+      // `compiled_cue_match` and the caller was handed five unrelated records with
+      // no way to tell they were a fallback. The claim is what must not be made.
+      const reason = result.decisionTrace?.reason ?? '';
+      const claimsMatch = reason.includes('cue_match');
+      if (!claimsMatch) passed += 1;
+      else missed.push(`${evalCase.question} (claimed "${reason}" for a question nothing answers)`);
       continue;
     }
 

@@ -68,7 +68,10 @@ test('recall governance hardening metrics stay within fixed leakage thresholds',
   });
   const operationalNoise = await kernel.ingest({
     projectId: 'project-a',
-    content: '[OpenClaw heartbeat poll]\nAgent: HEARTBEAT_OK',
+    // Shares "hardening" with the query on purpose: noise that is never a
+    // candidate proves nothing about governance. This one is a candidate, so the
+    // assertion below is about the filter rather than about the candidate set.
+    content: '[OpenClaw heartbeat poll] hardening check\nAgent: HEARTBEAT_OK',
     tags: ['agent:openclaw', 'hardening', 'record:heartbeat'],
   });
   const importedSummarySupport = await kernel.ingest({
@@ -147,10 +150,12 @@ test('recall governance hardening metrics stay within fixed leakage thresholds',
   expect(statusFiltered.map((item) => item.governanceReason)).toContain('suspect_llm_inference');
   expect(statusFiltered.map((item) => item.governanceReason)).toContain('suspect_external_tool_observation');
   expect(statusFiltered.map((item) => item.governanceReason)).toContain('suspect_unverified_claim');
-  // Operational noise shares no word with the query, so it is not a candidate at
-  // all. Excluding it before governance runs is a stronger guarantee than excluding
-  // it inside governance, and the leakage rate asserted above is what must hold:
-  // it does not reach the caller either way.
+  // Noise that reaches the candidate set is filtered with its own reason. An
+  // earlier version of this test dropped this line, on the reasoning that noise
+  // sharing no word with the query never becomes a candidate — but that made the
+  // assertion above vacuous, because the neuron never entered the set that
+  // governance was being asked about, so a leak would have gone unnoticed.
+  expect(statusFiltered.map((item) => item.governanceReason)).toContain('operational_noise');
   expect(statusFiltered.map((item) => item.governanceReason)).toContain('imported_summary_support');
 
   kernel.close();
