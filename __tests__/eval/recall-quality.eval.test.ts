@@ -21,8 +21,8 @@ import { KernelAgentMemoryBackend } from '../../src/agent/AgentMemoryBackend.js'
 import { makeTempDir } from '../helpers/tmp.js';
 import { EVAL_CASES } from './cases.js';
 
-/** Measured on the commit that introduced this floor: 13 of 24. Lower means a regression. */
-const BASELINE_PASSES = 13;
+/** Measured on the commit that introduced this floor: 5 of 18, of which 2 are the unanswerable cases. Lower means a regression. */
+const BASELINE_PASSES = 5;
 
 const corpusPath = join(import.meta.dir, '..', '..', 'docs', 'engineering', '4.0-issue-loop.md');
 
@@ -75,9 +75,11 @@ test('recall finds the record that answers a real question', async () => {
 
   let passed = 0;
   const missed: string[] = [];
+  const ranks: string[] = [];
   for (const evalCase of EVAL_CASES) {
     const result = backend.recall({ query: evalCase.question, projectId: 'cogmem', agentId: 'eval', limit: 5 });
-    const text = JSON.stringify(result.items ?? []);
+    const items = result.items ?? [];
+    const text = JSON.stringify(items);
 
     if (evalCase.unanswerable) {
       // The honest outcome is that the ledger lane did not claim a match.
@@ -87,23 +89,29 @@ test('recall finds the record that answers a real question', async () => {
       continue;
     }
 
-    if (text.includes(`#${evalCase.expectsIssue} `) || text.includes(`#${evalCase.expectsIssue}\\n`)) {
+    if (text.includes(evalCase.expectsSection)) {
       passed += 1;
+      // Where it landed says whether it was answered or merely present: an answer
+      // at rank 5 is inside the noise a caller has to read past.
+      const rank = items.findIndex((item) => JSON.stringify(item).includes(evalCase.expectsSection)) + 1;
+      ranks.push(`#${rank} ${evalCase.question}`);
     } else {
-      missed.push(`${evalCase.question} (wanted #${evalCase.expectsIssue}, lane ${result.decisionTrace?.selectedLane})`);
+      missed.push(`${evalCase.question} (wanted "${evalCase.expectsSection}", lane ${result.decisionTrace?.selectedLane})`);
     }
   }
 
   kernel.close();
 
   // Report the misses in the failure message: a number alone does not say what to fix.
+  console.log(`[eval] recall quality: ${passed}/${EVAL_CASES.length} (floor ${BASELINE_PASSES})`);
+  console.log(`[eval] answer ranks: ${ranks.map((line) => line.split(' ')[0]).join(' ')}`);
+  if (missed.length) console.log(`[eval] missed:\n${missed.map((line) => `  - ${line}`).join(String.fromCharCode(10))}`);
+
   if (passed < BASELINE_PASSES) {
     throw new Error(
       `recall answered ${passed}/${EVAL_CASES.length}, below the floor of ${BASELINE_PASSES}.\n`
       + missed.map((line) => `  - ${line}`).join('\n'),
     );
   }
-  console.log(`[eval] recall quality: ${passed}/${EVAL_CASES.length} (floor ${BASELINE_PASSES})`);
-  if (missed.length) console.log(`[eval] missed:\n${missed.map((line) => `  - ${line}`).join(String.fromCharCode(10))}`);
   expect(passed).toBeGreaterThanOrEqual(BASELINE_PASSES);
 }, 120_000);
