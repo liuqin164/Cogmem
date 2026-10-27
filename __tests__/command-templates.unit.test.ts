@@ -93,7 +93,7 @@ const EXPECTED_TEMPLATES = [
   ['src/bin/memory.ts', 'cogmem memory list${projectArg} --order asc --limit 20 --json'],
   ['src/bin/memory.ts', 'cogmem memory candidates${projectArg} --status needs_confirmation --json'],
   ['src/bin/memory.ts', 'cogmem memory candidates${projectArg} --json'],
-  ['src/bin/init.ts', 'cogmem init --agent ${suggestedHost}'],
+  ['src/bin/init.ts', "cogmem init --agent ${unwired.join(',')}"],
   ['src/bin/memory.ts', 'cogmem memory govern${projectArg} --limit 100 --json'],
   ['src/bin/memory.ts', 'cogmem memory candidates${projectArg} --status needs_confirmation --json'],
   ['src/bin/memory.ts', 'cogmem memory review${projectArg} --id <candidate-id> --action approve --actor <operator> --reason <reason> --confirmation-event <user-event-id> --json'],
@@ -114,7 +114,7 @@ const INTERPOLATIONS: Record<string, string> = {
   after: '2',
   'shellQuote(input.projectId)': 'probe-project',
   'shellQuote(episodeId)': 'ep-1',
-  suggestedHost: 'openclaw',
+  "unwired.join(',')": 'openclaw',
   base: '', // filled per template below
 };
 

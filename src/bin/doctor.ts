@@ -16,8 +16,10 @@ import { compactStorage } from '../storage/StorageCompactor.js';
 import {
   buildGate,
   defaultHermesConfigPath,
+  defaultPiConfigPath,
   hasInstalledLauncher,
   hermesIntegrationEstablished,
+  piIntegrationEstablished,
   installPathSteps,
   pendingHostIntegration,
   isOnPath,
@@ -321,6 +323,11 @@ if (envPath) {
       wanted: loaded.integrations.hermes.enabled,
       established: hermesIntegrationEstablished(hermesConfigPath ? resolve(hermesConfigPath) : defaultHermesConfigPath(process.env)),
     },
+    {
+      host: 'pi',
+      wanted: loaded.integrations.pi.enabled,
+      established: piIntegrationEstablished(defaultPiConfigPath(process.env)),
+    },
   ]);
   // The step carries the workspace of the Host it names, not the OpenClaw one by
   // default: a pending Hermes in a Workspace whose OpenClaw dir is elsewhere would
@@ -337,6 +344,7 @@ if (envPath) {
       integrations: {
         openclaw: { enabled: loaded.integrations.openclaw.enabled },
         hermes: { enabled: loaded.integrations.hermes.enabled },
+        pi: { enabled: loaded.integrations.pi.enabled },
       },
       dbPath: kernelDbPath,
       nextConnectHost: connectHost,

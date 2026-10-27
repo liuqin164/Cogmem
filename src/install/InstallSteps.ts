@@ -214,6 +214,25 @@ export function hermesIntegrationEstablished(configPath: string): boolean {
 }
 
 /**
+ * Whether pi's config carries the Cogmem MCP entry.
+ *
+ * Same shape as the Hermes check and for the same reason: an unreadable or
+ * malformed file is not "wired". Recommending the step again is recoverable; a
+ * false positive hides a host that cannot start the server.
+ */
+export function piIntegrationEstablished(configPath: string): boolean {
+  if (!existsSync(configPath)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as {
+      mcpServers?: Record<string, { command?: unknown }>;
+    };
+    return Boolean(parsed?.mcpServers?.cogmem?.command);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The Host the gate still has work for, or `undefined` when there is none.
  *
  * Only unsatisfied work is named (#81):
