@@ -184,7 +184,15 @@ function isVagueForensicFollowup(query: string): boolean {
 function stripFillers(value: string): string {
   let output = normalizeWhitespace(value);
   for (const filler of QUERY_FILLERS) {
-    output = output.replace(new RegExp(escapeRegExp(filler), 'giu'), ' ');
+    // A filler is a word, not a letter pattern. Replacing "a" wherever it occurs
+    // turns "quarterly revenue forecast" into "qu rterly revenue forec st" — the
+    // search then asks for words the memory never contains. Latin fillers are
+    // therefore matched only as whole words; CJK fillers have no word boundaries
+    // and stay substring matches.
+    const pattern = /^[a-z][a-z\s]*$/iu.test(filler)
+      ? `(?<![\\p{L}\\p{N}])${escapeRegExp(filler)}(?![\\p{L}\\p{N}])`
+      : escapeRegExp(filler);
+    output = output.replace(new RegExp(pattern, 'giu'), ' ');
   }
   return normalizeWhitespace(output.replace(/[，。？！、；：,.?!;:]/g, ' '));
 }
