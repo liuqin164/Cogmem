@@ -108,9 +108,9 @@ export const EVAL_CASES: EvalCase[] = [
     note: 'The write path that stored but did not become recallable',
   },
   {
-    question: '记忆黑盒当时为什么决定把原文永远保留',
-    expectsIssue: 31,
-    note: 'A principle question about cold memory',
+    question: '测试的临时目录为什么会把磁盘撑满',
+    expectsIssue: 70,
+    note: 'The temp-directory leak, which surfaced as a broken build',
   },
   {
     question: '两个 install path 是怎么定下来的',
@@ -123,9 +123,9 @@ export const EVAL_CASES: EvalCase[] = [
     note: 'The complexity budget question',
   },
   {
-    question: 'Facet 和 Dimension 的区别是什么',
-    expectsIssue: 29,
-    note: 'A vocabulary question',
+    question: '安装流程的终点是怎么被断言死的',
+    expectsIssue: 82,
+    note: 'The journey assertion, asked about the end state it checks',
   },
   {
     question: '为什么宿主上报的身份不能覆盖连接凭证',
