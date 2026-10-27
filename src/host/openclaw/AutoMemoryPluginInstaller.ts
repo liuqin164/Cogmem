@@ -399,6 +399,26 @@ function buildPatchedOpenClawConfig(input: {
     return existsSync(candidate);
   });
 
+  // An entry whose plugin directory is gone can never load, so it is dropped
+  // whatever Workspace it names -- the same judgement already applied to its load
+  // path. Pruning only the path left the entry behind, and OpenClaw warned on every
+  // start: "plugin not found ... stale config entry ignored; remove it from plugins
+  // config". A half-cleaned pair is noise, and the entry that cannot load is the
+  // same fact as the path that cannot resolve.
+  for (const [id, entry] of Object.entries(entries)) {
+    if (id === input.pluginId || !isRecord(entry)) continue;
+    const entryConfig = isRecord(entry.config) ? entry.config : {};
+    const entryCwd = typeof entryConfig.cwd === 'string' ? entryConfig.cwd : '';
+    if (!entryCwd) continue;
+    if (existsSync(join(entryCwd, 'extensions', id))) continue;
+    delete entries[id];
+    load.paths = (Array.isArray(load.paths) ? load.paths : [])
+      .filter((candidate: unknown) => id !== basename(String(candidate)));
+    if (Array.isArray(plugins.allow)) {
+      plugins.allow = plugins.allow.filter((candidate: unknown) => candidate !== id);
+    }
+  }
+
   // Clean up legacy entry if it belonged to this workspace (prevents duplicate enabled plugins)
   if (isRecord(entries[PLUGIN_ID])) {
     const legacy = entries[PLUGIN_ID];
