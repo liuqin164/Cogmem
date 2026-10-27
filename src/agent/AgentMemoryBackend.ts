@@ -1528,11 +1528,18 @@ export class KernelAgentMemoryBackend {
     // preferring a primary source are different questions and this ordering only
     // answers the second. A fix has to combine them — preference first, the
     // search's rank within a preference class — rather than drop one.
+    // Preference first, the search's ranking within it.
+    //
+    // Ranking by cue coverage alone discards the BM25 order the search produced,
+    // and ranking by relevance alone puts a second-hand retelling above the
+    // conversation it retells. They are different questions — which source is
+    // trustworthy, and which event is relevant — so the order answers them in that
+    // order and keeps the search's ranking inside each class rather than throwing
+    // it away.
+    const searchRank = new Map(events.map((event, index) => [event.eventId, index]));
     return [...byTurn.values()].sort((a, b) => (
-      this.rawEventCueScore(b, queryPlan) - this.rawEventCueScore(a, queryPlan)
-      || (a.globalSeq || 0) - (b.globalSeq || 0)
-      || (a.threadSeq || 0) - (b.threadSeq || 0)
-      || (a.eventOrdinal || 0) - (b.eventOrdinal || 0)
+      this.quoteEventPriority(a, queryPlan) - this.quoteEventPriority(b, queryPlan)
+      || (searchRank.get(a.eventId) ?? Number.MAX_SAFE_INTEGER) - (searchRank.get(b.eventId) ?? Number.MAX_SAFE_INTEGER)
       || a.eventId.localeCompare(b.eventId)
     ));
   }
