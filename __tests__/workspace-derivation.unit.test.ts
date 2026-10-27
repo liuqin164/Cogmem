@@ -176,10 +176,17 @@ describe('one config, one plugin entry', () => {
     const staleDir = join(staleRoot, 'extensions', staleId);
     const otherConfigPath = join(workspace, 'other', '.cogmem', 'config.toml');
     const otherId = 'cogmem-auto-memory-0000000000000000';
+    // The other Workspace's directory is really there, so its path can be loaded and
+    // is kept. A path to a directory that is gone is dropped whatever it belongs to:
+    // OpenClaw rejects the entire config over one missing `plugins.load.paths` entry,
+    // which is the state the box was left in — the host unusable, not just memoryless.
+    const otherDir = join(workspace, 'other', 'extensions', otherId);
+    mkdirSync(otherDir, { recursive: true });
+    const absentDir = join(workspace, 'gone', 'extensions', 'cogmem-auto-memory-deadbeefdeadbeef');
     writeFileSync(openclawConfigPath, `${JSON.stringify({
       plugins: {
         enabled: true,
-        load: { paths: [staleDir, join(workspace, 'other', 'extensions', otherId)] },
+        load: { paths: [staleDir, otherDir, absentDir] },
         allow: ['cogmem-auto-memory', staleId],
         entries: {
           [staleId]: { enabled: true, config: { configPath, cwd: staleRoot, projectId: 'openclaw' } },
@@ -200,8 +207,12 @@ describe('one config, one plugin entry', () => {
     expect(Object.keys(patched.plugins.entries).sort()).toEqual([otherId, result.pluginId].sort());
     expect(patched.plugins.load.paths).toContain(result.pluginDir);
     expect(patched.plugins.load.paths).not.toContain(staleDir);
-    // Another Workspace's entry and load path are another integration: untouched.
-    expect(patched.plugins.load.paths).toContain(join(workspace, 'other', 'extensions', otherId));
+    // Another Workspace's entry is another integration: untouched. Its load path is
+    // kept because it resolves — and dropped when it does not, because OpenClaw
+    // rejects the whole config over one missing entry.
+    expect(patched.plugins.entries[otherId]).toBeDefined();
+    expect(patched.plugins.load.paths).toContain(otherDir);
+    expect(patched.plugins.load.paths).not.toContain(absentDir);
     expect(patched.plugins.allow).not.toContain(staleId);
   });
 });

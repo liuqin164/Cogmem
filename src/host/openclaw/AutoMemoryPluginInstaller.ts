@@ -383,6 +383,22 @@ function buildPatchedOpenClawConfig(input: {
     }
   }
 
+  // A load path that cannot be found is dropped even when it belongs to another
+  // Workspace. OpenClaw rejects the whole config over one missing entry — measured
+  // on the box: `plugin path not found: .../agents/openclaw/ws/extensions/
+  // cogmem-auto-memory-e276dbd3caf0dae5`, "OpenClaw config is invalid", and every
+  // command failed, so the host was unusable rather than merely memoryless.
+  //
+  // Dropping it retargets nothing: that Workspace's own `connect` puts its path
+  // back when it returns. An entry that does resolve is still left alone, which is
+  // what "another integration, untouched" means once it can actually be loaded.
+  load.paths = (Array.isArray(load.paths) ? load.paths : []).filter((candidate: unknown) => {
+    if (typeof candidate !== 'string') return true;
+    if (candidate === input.pluginDir) return true;
+    if (!/^cogmem-auto-memory(-[0-9a-f]+)?$/u.test(basename(candidate))) return true;
+    return existsSync(candidate);
+  });
+
   // Clean up legacy entry if it belonged to this workspace (prevents duplicate enabled plugins)
   if (isRecord(entries[PLUGIN_ID])) {
     const legacy = entries[PLUGIN_ID];
