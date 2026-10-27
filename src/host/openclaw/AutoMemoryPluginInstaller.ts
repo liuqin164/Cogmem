@@ -576,12 +576,20 @@ function pluginConfig(api, event, ctx) {
 }
 
 function asMessages(event) {
-  return event && (
-    event.messages ||
+  if (!event) return [];
+  // event.prompt is itself the array of messages in OpenClaw's
+  // before_prompt_build event, not an object carrying a messages key. Read as an
+  // object it yielded nothing, the user turn read as empty, and every recall
+  // returned early with empty_user_query: the hook ran, the recall never did, and
+  // the write half kept working, so the host looked wired and never remembered
+  // anything. Measured on the box: event keys ['prompt','messages'], prompt keys
+  // ['0','1','2','3','4'], zero messages resolved.
+  if (Array.isArray(event.prompt)) return event.prompt;
+  return event.messages ||
     (event.context && event.context.messages) ||
     (event.prompt && event.prompt.messages) ||
-    (event.request && event.request.messages)
-  ) || [];
+    (event.request && event.request.messages) ||
+    [];
 }
 
 function roleOf(message) {
