@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { hostsEnabledByCombinedChoice, shouldOfferWireAll } from '../src/bin/init.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 /**
@@ -104,5 +105,42 @@ describe('init on a machine with all three agents', () => {
     // says so rather than leaving the operator to guess what it found.
     expect(parsed.hosts?.every((host) => !host.enabled)).toBe(true);
     expect(parsed.config?.integrations).toMatchObject({ openclaw: false, hermes: false, pi: false });
+  });
+});
+
+describe('the combined host question', () => {
+  const allPresent = { openclaw: true, hermes: true, pi: true };
+  const none = { openclaw: false, hermes: false, pi: false };
+
+  test('is offered only when it means something', () => {
+    // One agent has no "all of them" to offer, an explicit list already answered the
+    // question, and an unattended run asks nothing (ADR-0003).
+    expect(shouldOfferWireAll({ mode: 'auto', requested: [], detectedCount: 3 })).toBe(true);
+    expect(shouldOfferWireAll({ mode: 'auto', requested: [], detectedCount: 1 })).toBe(false);
+    expect(shouldOfferWireAll({ mode: 'auto', requested: ['pi'], detectedCount: 3 })).toBe(false);
+    expect(shouldOfferWireAll({ mode: 'hermes', requested: ['hermes'], detectedCount: 3 })).toBe(false);
+    expect(shouldOfferWireAll({ mode: 'none', requested: [], detectedCount: 3 })).toBe(false);
+  });
+
+  test('answering yes wires every detected host and nothing else', () => {
+    expect(hostsEnabledByCombinedChoice({ requested: [], detected: allPresent, wireAll: true }))
+      .toEqual({ openclaw: true, hermes: true, pi: true });
+    // A host that is not here is not switched on by "yes" — the answer is about the
+    // hosts that were found, not about the three names that exist.
+    expect(hostsEnabledByCombinedChoice({ requested: [], detected: { ...none, pi: true }, wireAll: true }))
+      .toEqual({ openclaw: false, hermes: false, pi: true });
+  });
+
+  test('a named host is wired whether or not the combined question was answered', () => {
+    expect(hostsEnabledByCombinedChoice({ requested: ['hermes'], detected: allPresent, wireAll: false }))
+      .toEqual({ openclaw: false, hermes: true, pi: false });
+    expect(hostsEnabledByCombinedChoice({ requested: ['hermes'], detected: allPresent, wireAll: true }))
+      .toEqual({ openclaw: true, hermes: true, pi: true });
+  });
+
+  test('answering no enables nothing on its own', () => {
+    // The per-host prompts run next; this function must not pre-empt them.
+    expect(hostsEnabledByCombinedChoice({ requested: [], detected: allPresent, wireAll: false }))
+      .toEqual({ openclaw: false, hermes: false, pi: false });
   });
 });

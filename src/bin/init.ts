@@ -727,6 +727,67 @@ async function stepHermes(hermes: HermesDetection): Promise<boolean> {
   return confirm('  Enable Hermes integration?', true);
 }
 
+/**
+ * Whether to offer the one combined question.
+ *
+ * Only when it means something: a run that was told which hosts to wire is not
+ * asked, an unattended run is not asked (ADR-0003), and a machine with one agent
+ * has no "all of them" to offer.
+ */
+export function shouldOfferWireAll(input: {
+  mode: InitArgs['agent'];
+  requested: HostName[];
+  detectedCount: number;
+}): boolean {
+  return input.mode === 'auto' && input.requested.length === 0 && input.detectedCount > 1;
+}
+
+/**
+ * Which hosts a run enables, given the combined answer.
+ *
+ * Pure so the choice is testable without a terminal: `ask()` opens a fresh readline
+ * interface per question, so a piped wizard loses its buffered input after the first
+ * prompt and can only be driven by hand (`--yes` is the automation path). The
+ * interactive per-host fallback below is the one part that still needs a human.
+ */
+export function hostsEnabledByCombinedChoice(input: {
+  requested: HostName[];
+  detected: Record<HostName, boolean>;
+  wireAll: boolean;
+}): Record<HostName, boolean> {
+  const enabled = { openclaw: false, hermes: false, pi: false } as Record<HostName, boolean>;
+  for (const host of HOST_NAMES) {
+    enabled[host] = input.requested.includes(host) || (input.wireAll && input.detected[host]);
+  }
+  return enabled;
+}
+
+/**
+ * The one question when this machine has more than one agent.
+ *
+ * Per-host prompts answer "may I wire this one", never "you have three — do you want
+ * one backend serving all of them", which is the question an operator with three
+ * agents actually has. Answering yes here skips the individual prompts; answering no
+ * falls through to them, so the two options are the two outcomes of one question
+ * rather than two different code paths ([#97](https://github.com/liuqin164/Cogmem/issues/97)).
+ */
+async function stepHostsChoice(detected: HostName[]): Promise<boolean> {
+  console.log('');
+  console.log('  ── Host integration ──────────────────────────────────────────');
+  console.log(`  Detected on this machine: ${detected.map(hostLabel).join(', ')}`);
+  console.log('');
+  console.log('  One cogmem install serves all of them at once: each host keeps its own');
+  console.log('  memory scope, and they share this database.');
+  console.log('');
+  return confirm(`  Enable all ${detected.length} integrations?`, true);
+}
+
+function hostLabel(host: HostName): string {
+  if (host === 'openclaw') return 'OpenClaw';
+  if (host === 'hermes') return 'Hermes';
+  return 'pi';
+}
+
 async function stepPi(pi: PiDetection): Promise<boolean> {
   console.log('');
   console.log('  ── Host integration: pi ──────────────────────────────────────');
@@ -1338,9 +1399,23 @@ async function main(): Promise<void> {
   // Each host is asked about on its own evidence. A machine that has all three
   // gets three independent answers, and every one of them may be yes: they share
   // the one backend and keep their own memory scope (#97).
+  const detectedMap = detectionMap(oclawDet, hermesDet, piDet);
+  const detectedHere = HOST_NAMES.filter((host) => detectedMap[host]);
+  const offerWireAll = shouldOfferWireAll({
+    mode: args.agent,
+    requested: args.requestedHosts,
+    detectedCount: detectedHere.length,
+  });
+  const wireAll = offerWireAll && await stepHostsChoice(detectedHere);
+  const combined = hostsEnabledByCombinedChoice({
+    requested: args.requestedHosts,
+    detected: detectedMap,
+    wireAll,
+  });
   const asked = async (host: HostName): Promise<boolean> => {
     if (args.requestedHosts.includes(host)) return true;
     if (args.agent !== 'auto') return false;
+    if (wireAll) return combined[host];
     if (host === 'openclaw') return stepOpenClaw(oclawDet);
     if (host === 'hermes') return stepHermes(hermesDet);
     return stepPi(piDet);
