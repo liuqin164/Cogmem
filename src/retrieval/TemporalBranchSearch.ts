@@ -86,12 +86,21 @@ export class TemporalBranchSearch {
       temporalSurface.bucketIds.length > 0
         ? temporalSurface.bucketIds
         : fallbackLabels.map((_, index) => `derived:${index}:${input.startTime ?? 0}:${input.endTime ?? 0}`);
+    // The surface answers the query only when the query itself seeded it. A seed
+    // segment is present whenever the caller passed bucket ids, and those ids come
+    // from the query's own matches — but the segment then expands to every memory
+    // recorded in that bucket, which for a day bucket is "everything said that day".
+    // That expansion is a neighbourhood, so a subject query may widen with it and
+    // must not be answered from it.
+    const queryNamesTerms = input.terms.some((term) => term.trim().length >= 2);
     const fallbackTemporalNeuronIds =
       input.temporalEnabled === false
         ? []
-        : temporalSurface.neuronIds.length > 0
-        ? temporalSurface.neuronIds
-        : branches.neuronIds.slice(0, 24);
+        : queryNamesTerms
+          ? []
+          : temporalSurface.neuronIds.length > 0
+            ? temporalSurface.neuronIds
+            : branches.neuronIds.slice(0, 24);
     const traversalMode: TemporalBranchSearchResult['temporalTraversal']['traversalMode'] =
       input.temporalEnabled === false
         ? 'disabled'

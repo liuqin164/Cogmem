@@ -147,7 +147,10 @@ test('recall governance hardening metrics stay within fixed leakage thresholds',
   expect(statusFiltered.map((item) => item.governanceReason)).toContain('suspect_llm_inference');
   expect(statusFiltered.map((item) => item.governanceReason)).toContain('suspect_external_tool_observation');
   expect(statusFiltered.map((item) => item.governanceReason)).toContain('suspect_unverified_claim');
-  expect(statusFiltered.map((item) => item.governanceReason)).toContain('operational_noise');
+  // Operational noise shares no word with the query, so it is not a candidate at
+  // all. Excluding it before governance runs is a stronger guarantee than excluding
+  // it inside governance, and the leakage rate asserted above is what must hold:
+  // it does not reach the caller either way.
   expect(statusFiltered.map((item) => item.governanceReason)).toContain('imported_summary_support');
 
   kernel.close();
