@@ -30,15 +30,22 @@ import { EVAL_CASES } from './cases.js';
  * They are kept in the set because the number would otherwise be flattering, and
  * the miss list is where a known defect belongs.
  */
-const BASELINE_PASSES = 6;
+const BASELINE_PASSES = 4;
 
-const corpusPath = join(import.meta.dir, '..', '..', 'docs', 'engineering', '4.0-issue-loop.md');
+// A frozen copy, not the live ledger.
+//
+// The corpus was the ledger itself, so recording a round changed the thing being
+// measured: five new sections moved the score from 6 to 4 with no code change at
+// all. An instrument that moves when the experimenter writes down results cannot
+// compare two rounds. This copy stops changing the moment it is committed.
+const corpusPath = join(import.meta.dir, 'corpus.md');
 
 interface IssueRecord { number: number; title: string; body: string | null }
 
 /**
- * The corpus is the ledger: every round's decisions, in the words they were
- * recorded in. It is committed, so the floor is reproducible on a fresh clone.
+ * The corpus is a frozen snapshot of the round ledger: every round's decisions, in
+ * the words they were recorded in, at the moment the floor was set. It is
+ * committed, so the floor is reproducible on a fresh clone.
  */
 function loadCorpus(): IssueRecord[] {
   if (!existsSync(corpusPath)) return [];
