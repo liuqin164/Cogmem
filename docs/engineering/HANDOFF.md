@@ -23,7 +23,7 @@
 
 | 要求 | 验证方式 | 结果 |
 |---|---|---|
-| 三个 host 的记忆后端可用 | `scripts/verify-host-memory.sh <box> <host>` | **openclaw / hermes / pi 均 PASS** |
+| 三个 host 的记忆后端可用 | `scripts/verify-host-memory.sh <box> <host>` | **openclaw / hermes / pi 均 PASS**（第 83 轮把 HEAD 构建装到 box 上复跑：3/3 PASS；#91 另用真实对话验证队列排空，见 §4.107） |
 | 一年以上的记忆能捞出 | `__tests__/recall-older-than-a-year.unit.test.ts` | **6/6（366–1500 天，最长 4.1 年）** |
 | **500ms 内** | 同上测试断言 `p95 < 500ms` | **年量级 p95 282ms，0/36 超限** |
 
@@ -42,8 +42,9 @@ bun run ledger:check                   # 台账与 GitHub 对齐
 box 操作（`scripts/verify-host-memory.sh` 里的模式）：
 
 ```bash
-export INSTABOX_API_KEY='ibk_vbmxc7k77zm4nghhpxhkrpbczrrjnhntlats5egevtuq7nccnwrq'
+export INSTABOX_API_KEY=<key>
 export INSTABOX_BIN=/home/ubuntu/.local/bin/instabox
+export XDG_CONFIG_HOME="$PWD/.cogmem/xdg"   # 必须：否则 instabox 写 ~/.config/instabox/.lock 被沙箱拒（permission denied）
 # 注意 PATH 顺序：/data/home/.npm-global/bin 必须在 /data/home/.bun/bin 之前，
 # 否则会跑到 /data/home/.cogmem/pkg 里的旧 cogmem
 ```
@@ -113,6 +114,8 @@ export INSTABOX_BIN=/home/ubuntu/.local/bin/instabox
 | 改动后（同副本清空 atlas） | 117.0ms | 206.8ms | 0 / 36 |
 
 **填充后已低于原来「空」时的基线（§4.100 记 282ms）**——冲突的成因是**读取没有选择性**，不是 facet 层本身。
+
+**收尾**：第 83 轮把 HEAD 构建装到 box 上真机复验，**#90/#91 已带证据关闭**（§4.107）。
 
 **仍未做（都不阻塞三项要求）**：① 维护 tick 仍是一次 96 秒的**全量重建**，增量维护未做（本轮只解决「填满之后召回还能不能达标」）；② 张伟那条查询仍是九条里最慢的（403ms），剩下的大头是 `fallbackRawTextSearch` 的 LIKE 扫描（68ms，与 atlas 无关）与 `resolveTargetNodeIds` 的候选全表扫（33ms），**都还没动**。
 
