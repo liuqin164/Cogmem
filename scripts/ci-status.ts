@@ -44,6 +44,9 @@ for (const row of rows) {
   if (!external) gating.push({ name: name ?? '', conclusion: conclusion ?? '' });
 }
 
-const failed = gating.filter((run) => run.conclusion !== 'success');
-console.log(`ci:status — ${sha.slice(0, 7)}: ${gating.length - failed.length}/${gating.length} gating checks succeeded`);
-process.exit(failed.length === 0 ? 0 : 1);
+const running = gating.filter((run) => run.conclusion === '' || run.conclusion === undefined);
+const failed = gating.filter((run) => run.conclusion !== '' && run.conclusion !== 'success');
+const passed = gating.length - running.length - failed.length;
+if (running.length > 0) console.log(`ci:status — ${sha.slice(0, 7)}: ${passed}/${gating.length} succeeded, ${running.length} still running`);
+else console.log(`ci:status — ${sha.slice(0, 7)}: ${passed}/${gating.length} gating checks succeeded`);
+process.exit(failed.length === 0 && running.length === 0 ? 0 : 1);
