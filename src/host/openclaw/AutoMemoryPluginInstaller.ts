@@ -375,12 +375,7 @@ function buildPatchedOpenClawConfig(input: {
     if (id === input.pluginId || !isRecord(entry)) continue;
     const staleConfig = isRecord(entry.config) ? entry.config : {};
     if (staleConfig.configPath !== input.configPath || staleConfig.cwd === input.workspaceRoot) continue;
-    delete entries[id];
-    load.paths = (Array.isArray(load.paths) ? load.paths : [])
-      .filter((candidate: unknown) => id !== basename(String(candidate)));
-    if (Array.isArray(plugins.allow)) {
-      plugins.allow = plugins.allow.filter((candidate: unknown) => candidate !== id);
-    }
+    dropPluginEntry(entries, load, plugins, id);
   }
 
   // A load path that cannot be found is dropped even when it belongs to another
@@ -415,12 +410,7 @@ function buildPatchedOpenClawConfig(input: {
     const entryCwd = typeof entryConfig.cwd === 'string' ? entryConfig.cwd : '';
     if (!entryCwd) continue;
     if (existsSync(join(entryCwd, 'extensions', id))) continue;
-    delete entries[id];
-    load.paths = (Array.isArray(load.paths) ? load.paths : [])
-      .filter((candidate: unknown) => id !== basename(String(candidate)));
-    if (Array.isArray(plugins.allow)) {
-      plugins.allow = plugins.allow.filter((candidate: unknown) => candidate !== id);
-    }
+    dropPluginEntry(entries, load, plugins, id);
   }
 
   // Clean up legacy entry if it belonged to this workspace (prevents duplicate enabled plugins)
@@ -2138,6 +2128,21 @@ function appendUniqueArray(value: unknown, item: string): string[] {
   const out = Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
   if (!out.includes(item)) out.push(item);
   return out;
+}
+
+/** Remove a plugin entry and every trace of it: its load path and its allow-list name. */
+function dropPluginEntry(
+  entries: Record<string, unknown>,
+  load: Record<string, unknown>,
+  plugins: Record<string, unknown>,
+  id: string,
+): void {
+  delete entries[id];
+  load.paths = (Array.isArray(load.paths) ? load.paths : [])
+    .filter((candidate: unknown) => id !== basename(String(candidate)));
+  if (Array.isArray(plugins.allow)) {
+    plugins.allow = plugins.allow.filter((candidate: unknown) => candidate !== id);
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
