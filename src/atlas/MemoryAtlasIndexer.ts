@@ -26,7 +26,7 @@ export class MemoryAtlasIndexer {
     let facetEdges = 0;
     let reviewNeeded = 0;
     try {
-      this.db.transaction(() => {
+      this.store.deferFts(() => this.db.transaction(() => {
       const ftsExists = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_atlas_fts'`).get());
       if (ftsExists) {
         if (projectId !== undefined) this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=?)`).run(projectId, projectId);
@@ -62,12 +62,15 @@ export class MemoryAtlasIndexer {
           metadata: { projection: MEMORY_ATLAS_PROJECTION_NAME, projectionSchemaVersion: MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION },
         });
       }
+      // Every document exists now, so the index is written once per project
+      // instead of once per node (see MemoryAtlasStore.deferFts).
+      for (const id of projects) this.store.refreshFtsProject(id);
       if (projectId !== undefined) {
         this.store.markProjectionClean(projectId, { actions, curatedEpisodes, facetEdges, reviewNeeded, projectionVersion: 'v2', frameSchemaVersion: 'memory_frame.v1' });
       } else {
         for (const id of projects) this.store.markProjectionClean(id, { actions, curatedEpisodes, facetEdges, reviewNeeded, projectionVersion: 'v2', frameSchemaVersion: 'memory_frame.v1' });
       }
-      })();
+      })());
     } catch (error) {
       this.store.markProjectionFailed(projectId ?? '__all__', error instanceof Error ? error.message : String(error));
       throw error;

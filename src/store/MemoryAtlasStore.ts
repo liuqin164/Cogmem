@@ -41,6 +41,7 @@ interface FacetEdgeRow {
 }
 
 export class MemoryAtlasStore {
+  private ftsDeferred = false;
   constructor(readonly db: Database, private readonly projectTimeZone?: string) {}
 
   upsertDocument(input: Omit<MemoryAtlasNode, 'activation' | 'score' | 'evidenceCount' | 'evidenceTotal' | 'evidenceReturned'> & { evidenceEventIds?: string[]; metadata?: Record<string, unknown>; updatedAt?: number }): void {
@@ -802,7 +803,32 @@ export class MemoryAtlasStore {
     return Number((row as { count?: number } | null)?.count || 0);
   }
 
+  /**
+   * Defer per-node FTS writes while a caller recomputes the whole index.
+   *
+   * `rebuild()` writes 14,271 documents on the year-scale corpus, and refreshing
+   * the FTS row inside each `upsertDocument` cost 71.8 s of a 90.4 s rebuild —
+   * ~5 ms per node, one statement pair each. A bulk rebuild writes the same rows
+   * in one pass, so the per-node path is turned off for its duration.
+   */
+  deferFts<T>(run: () => T): T {
+    const previous = this.ftsDeferred;
+    this.ftsDeferred = true;
+    try {
+      return run();
+    } finally {
+      this.ftsDeferred = previous;
+    }
+  }
+
+  /** Rewrite one project's search index from its documents in a single pass. */
+  refreshFtsProject(projectId: string): void {
+    this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=?`).run(projectId);
+    this.db.prepare(`INSERT INTO memory_atlas_fts(node_id,project_id,node_type,label,summary,topic_path) SELECT node_id,project_id,node_type,label,COALESCE(summary,''),COALESCE(topic_path,'') FROM memory_atlas_documents WHERE project_id=?`).run(projectId);
+  }
+
   private refreshFtsNode(nodeIdValue: string): void {
+    if (this.ftsDeferred) return;
     this.db.prepare(`DELETE FROM memory_atlas_fts WHERE node_id=?`).run(nodeIdValue);
     this.db.prepare(`INSERT INTO memory_atlas_fts(node_id,project_id,node_type,label,summary,topic_path) SELECT node_id,project_id,node_type,label,COALESCE(summary,''),COALESCE(topic_path,'') FROM memory_atlas_documents WHERE node_id=?`).run(nodeIdValue);
   }
