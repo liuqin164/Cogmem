@@ -85,6 +85,39 @@ export class MemoryAtlasIndexer {
     return { ...this.rebuild(options), refreshed: true };
   }
 
+  /**
+   * Add these episodes to the graph without recomputing the corpus.
+   *
+   * `GraphCurator.rebuildEpisodes` already deletes and re-projects exactly these
+   * episodes' edges and facet nodes; the full rebuild was used instead because a
+   * frame revision can change shared canonical nodes. That is still true for the
+   * frame and action layers, which stay batch-level (a full rebuild is 17.4 s
+   * after the index fix and remains the consistency backstop). What is gained
+   * here is the canonical layer — the nodes and edges facet recall reads —
+   * landing immediately, for ~30 nodes instead of 14,271.
+   *
+   * Shared-node support counts are aggregated once per batch by the caller
+   * (`aggregateFacetNodeSupport`), not per episode: it is a project-wide pass.
+   */
+  projectEpisodes(projectId: string, episodeIds: string[]): { episodeCount: number; facetNodeCount: number; facetEdgeCount: number; reviewNeeded: number } {
+    const bounded = Array.from(new Set(episodeIds.filter(Boolean))).slice(0, 100);
+    if (!bounded.length) return { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
+    try {
+      const result = this.db.transaction(() => this.curator.rebuildEpisodes(projectId, bounded))();
+      return {
+        episodeCount: result.episodeCount,
+        facetNodeCount: result.facetNodeCount,
+        facetEdgeCount: result.facetEdgeCount,
+        reviewNeeded: result.reviewNeeded,
+      };
+    } catch (error) {
+      // A failed projection must be retried by the next batch rather than
+      // reported as clean.
+      this.store.markProjectionDirty(projectId, { dirtyBecause: 'incremental_projection_failed' });
+      throw error;
+    }
+  }
+
   reindex(options: { projectId: string; eventId?: string; episodeId?: string }): { projectId: string; episodeIds: string[]; refreshed: boolean; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
     const episodeIds = new Set<string>();
     if (options.episodeId) episodeIds.add(options.episodeId);
@@ -94,16 +127,13 @@ export class MemoryAtlasIndexer {
     }
     const ids = Array.from(episodeIds);
     if (!ids.length) throw new Error('graph_reindex_target_not_found');
-    // A Frame revision can change shared canonical nodes and edges. A partial
-    // rebuild would leave the project dirty while reporting it as refreshed,
-    // so reindex uses the same clean, transactional path as a full rebuild.
-    const rebuilt = this.rebuild({ projectId: options.projectId });
+    const rebuilt = this.projectEpisodes(options.projectId, ids);
     return {
       projectId: options.projectId,
       episodeIds: ids,
       refreshed: true,
-      curatedEpisodes: rebuilt.curatedEpisodes,
-      facetEdges: rebuilt.facetEdges,
+      curatedEpisodes: rebuilt.episodeCount,
+      facetEdges: rebuilt.facetEdgeCount,
       reviewNeeded: rebuilt.reviewNeeded,
     };
   }
