@@ -23,8 +23,7 @@ function store(): EventStore {
   return new EventStore(join(makeTempDir('cogmem-raw-order-'), 'memory.db'));
 }
 
-function seedMentions(instance: EventStore, count: number, startAt: number): void {
-  const DAY = 86_400_000;
+function seedMentions(instance: EventStore, count: number): void {
   for (let index = 0; index < count; index += 1) {
     instance.append({
       streamId: `thread-${index}`,
@@ -34,16 +33,12 @@ function seedMentions(instance: EventStore, count: number, startAt: number): voi
       payload: { text: `round ${index} notes, and by the way the memory black box came up once`, role: 'user' },
     });
     // append() stamps its own timestamps; the ordering under test is by
-    // global_seq, so insertion order is what matters and startAt keeps the
-    // fixtures readable.
-    void startAt;
-    void DAY;
   }
 }
 
 test('a common phrase does not bury the event that answers the question', () => {
   const instance = store();
-  seedMentions(instance, 20, 0);
+  seedMentions(instance, 20);
   instance.append({
     streamId: 'answer',
     streamType: 'thread',
@@ -73,7 +68,7 @@ test('a common phrase does not bury the event that answers the question', () => 
 
 test('chronological order is still available and still chronological', () => {
   const instance = store();
-  seedMentions(instance, 5, 0);
+  seedMentions(instance, 5);
 
   const rows = instance.searchRawEvents('memory black box', { projectId: 'p', limit: 5 });
   const sequences = rows.map((row) => row.globalSeq ?? 0);
