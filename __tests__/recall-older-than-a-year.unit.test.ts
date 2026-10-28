@@ -59,16 +59,36 @@ test('a memory older than a year is still retrievable', async () => {
   }
 
   const misses: string[] = [];
+  const byAge: Array<{ days: number; ms: number }> = [];
   for (const entry of OLD) {
+    const started = performance.now();
     const recalled = backend.recall({
       query: `单据号 ${entry.code} 那件事是谁负责的`,
       projectId: 'p', agentId: 'a', limit: 5, now: NOW,
     });
+    byAge.push({ days: entry.days, ms: performance.now() - started });
     if (!JSON.stringify(recalled.items ?? []).includes(String(entry.code))) {
       misses.push(`${entry.code} (${entry.days} 天前, ${(entry.days / 365).toFixed(1)} 年)`);
     }
   }
 
   expect(misses).toEqual([]);
+
+  // "As fast as possible" is half the objective and had no check at all. Timing is
+  // machine-dependent, so the assertion is about shape first: the oldest memory must
+  // not cost materially more than the newest. That is the property the architecture
+  // is for, and it survives a slow or a busy runner in a way an absolute number does
+  // not.
+  const oldest = byAge.filter((entry) => entry.days >= 730).reduce((sum, entry) => sum + entry.ms, 0)
+    / byAge.filter((entry) => entry.days >= 730).length;
+  const newest = byAge.find((entry) => entry.days === 366)!.ms;
+  // ponytail: 4x is deliberately loose -- this catches an age penalty, not a slow
+  // machine. Tighten only against a fixed runner.
+  expect(oldest).toBeLessThan(newest * 4);
+
+  // And a ceiling loose enough to be a catastrophe detector rather than a benchmark.
+  const worst = Math.max(...byAge.map((entry) => entry.ms));
+  expect(worst).toBeLessThan(3000);
+
   kernel.close();
 }, 300_000);
