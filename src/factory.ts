@@ -1827,6 +1827,46 @@ export class MemoryKernel {
     return this.dreamCuratorWorker.run(options);
   }
 
+  /**
+   * The nightly batch: seal what has gone quiet, Dream a bounded number of the
+   * sealed episodes, and project exactly those into the atlas.
+   *
+   * The order matters. Sealing is what makes an episode Dreamable; Dream writes
+   * frames and beliefs and marks the projection dirty; projecting the episodes it
+   * actually processed is what puts yesterday's conversation in front of today's
+   * recall without a corpus-wide rebuild. Running it again with nothing new
+   * seals nothing, dreams nothing and projects nothing.
+   */
+  async runNightlyBatch(options: { projectId?: string; maxEpisodes?: number; now?: number } = {}): Promise<{
+    tick: MaintenanceTickResult;
+    dream: DreamTickResult;
+    projected: { episodes: number; documents: number };
+  }> {
+    const tick = this.runMaintenanceTick({ projectId: options.projectId, now: options.now });
+    // The tick seals what has gone quiet as a *soft* seal, which the scheduler
+    // only promotes after a grace period meant to let a conversation resume.
+    // A batch that runs once a night has already waited the idle gap the seal
+    // was based on, so the grace is redundant here and the night's conversations
+    // are dreamable in the same run.
+    this.episodeStore.finalizeMatureSoftSeals({
+      projectId: options.projectId,
+      sealedBefore: options.now ?? Date.now(),
+      now: options.now,
+    });
+    const maxEpisodes = Math.max(1, Math.min(Math.trunc(options.maxEpisodes ?? 50), 50));
+    const dream = await this.runDreamTick({ projectId: options.projectId, maxEpisodes, now: options.now });
+    const episodeIds = options.projectId === undefined ? [] : (dream.episodeIds ?? []);
+    const projected = episodeIds.length
+      ? this.memoryAtlasIndexer.projectEpisodes(options.projectId!, episodeIds)
+      : { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
+    if (projected.episodeCount > 0) this.memoryAtlasStore.aggregateFacetNodeSupport(options.projectId!);
+    return {
+      tick,
+      dream,
+      projected: { episodes: projected.episodeCount, documents: this.memoryAtlasStore.countDocuments(options.projectId) },
+    };
+  }
+
   async runDreamTick(options: DreamTickOptions = {}): Promise<DreamTickResult> {
     return this.dreamScheduler.tick(options);
   }

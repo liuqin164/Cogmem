@@ -20,8 +20,11 @@ function parseArgs(argv: string[]): Args {
 
 function usage(): string {
   return [
-    'Usage: cogmem dream <tick|status|retry> [args]',
+    'Usage: cogmem dream <tick|night|status|retry> [args]',
     '  tick [--project <id>] [--mode auto|micro|normal|deep] [--max-episodes <n>] [--json]',
+    '  night [--project <id>] [--max-episodes <n>] [--json]',
+    '         the nightly batch: seal idle episodes, Dream up to N of them (default 50,',
+    '         oldest first), then project those episodes into the atlas. Safe to re-run.',
     '  status [--project <id>] [--json]',
     '  retry [--project <id>] [--json]',
     'A tick is explicit and conditional. It processes sealed episodes only and never executes tools.',
@@ -40,7 +43,9 @@ async function main(): Promise<void> {
   const kernel = openKernel(args);
   try {
     const projectId = stringArg(args, 'project');
-    const result = args.command === 'tick'
+    const result = args.command === 'night'
+      ? await kernel.runNightlyBatch({ projectId, maxEpisodes: numberArg(args, 'max-episodes') })
+      : args.command === 'tick'
       ? await kernel.runDreamTick({ projectId, mode: modeArg(stringArg(args, 'mode')), maxEpisodes: numberArg(args, 'max-episodes') })
       : args.command === 'status'
         ? kernel.getEpisodeDreamStatus(projectId)

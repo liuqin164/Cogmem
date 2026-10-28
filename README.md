@@ -362,6 +362,17 @@ cogmem memory bind --project my-agent --json
 
 `memory tick` decays activation and returns suggested host actions. It refreshes Atlas only when dirty, records projection failures without aborting other maintenance, prunes old Atlas access telemetry, reports high-value unbound raw user events, and ages untouched review entries after the default 30-day TTL. It also **seals conversations that have gone quiet** — an episode idle for longer than the boundary policy's idle gap — because Dream processes sealed episodes only, and a turn written over MCP is otherwise stored, searchable and unreachable by recall (ADR-0011). It does not start a hidden daemon; cron, systemd, MCP hosts, or agent adapters decide when to call it.
 
+**Letting the graph grow by itself.** One command does the night's work — seal what has gone quiet, Dream up to N of those conversations, then project exactly those into the Atlas — and is safe to run again:
+
+```bash
+# every night at 02:00; add --json for a machine-readable report
+0 2 * * *  cogmem dream night --project my-agent --max-episodes 50
+```
+
+`dream night` processes the oldest sealed conversations first, so a backlog larger than the limit is caught up over later nights. It never runs inside recall and never blocks a conversation. A weekly `cogmem memory tick --project my-agent` (or any full refresh) remains the reconciliation pass: it recomputes the whole Atlas from the ledger, which is what repairs edits or deletions of older conversations.
+
+Dream reads a conversation with the `memory` model from your config (`[memory_model]`). With none configured it still records a rule-only reading, so the graph is never empty — a provider improves quality, availability does not depend on it.
+
 **Capturing JSON from a command.** Prefer `--out <path>`, which writes the report to that file atomically and fails loudly if it cannot:
 
 ```bash
