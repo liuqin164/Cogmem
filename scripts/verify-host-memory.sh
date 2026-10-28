@@ -21,10 +21,9 @@
 # Usage:
 #   INSTABOX_API_KEY=... scripts/verify-host-memory.sh <box> <openclaw|hermes|pi> [workdir]
 #
-# Run end to end against a box: openclaw recalled a code written only into cogmem, which
-# is the same result the round it replaces reached by hand. hermes and pi have not been
-# run through this wrapper yet, though both were confirmed by hand in the rounds that
-# found the broken backends.
+# Run end to end against a box for all three hosts, each recalling a code written only
+# into cogmem: openclaw VERIFY1985626, hermes VERIFY1987213, pi VERIFY1987556. Those are
+# the same results the rounds reached by hand, now reachable by re-running this.
 set -euo pipefail
 
 BOX="${1:?usage: verify-host-memory.sh <box> <openclaw|hermes|pi> [workdir]}"
@@ -63,7 +62,9 @@ try:
             if cfg.get('projectId'):
                 print(cfg['projectId']); break
     else:
-        m = re.search(r'--project"?\s*[",]?\s*([A-Za-z0-9_-]+)', open(conf).read())
+        # hermes writes args: ["mcp","--project","hermes-236412cc",...] and pi writes
+        # the same pair in JSON, so the separator can be a quote, a comma or space.
+        m = re.search(r'--project[",\s]+([A-Za-z0-9_-]+)', open(conf).read())
         if m: print(m.group(1))
 except Exception:
     pass
