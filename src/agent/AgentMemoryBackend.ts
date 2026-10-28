@@ -568,17 +568,23 @@ export class KernelAgentMemoryBackend {
     const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
     const allowsCompiled = laneAllowed(query.retrievalPolicy, 'compiled');
     const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
-    const earlyAtlasItems = query.projectId !== undefined && allowsGraph
-      ? this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource)
-      : [];
+    // Only the three intents below merge atlas items into their result. The
+    // ordinary recall path reads the atlas itself (multidimensionalRecall), so
+    // computing these up front made every recall pay for a second atlas read —
+    // measured at half of a 1.2 s query on the year-scale corpus — and throw the
+    // result away.
+    const withEarlyAtlasItems = (result: AgentRecallResult): AgentRecallResult =>
+      query.projectId === undefined || !allowsGraph
+        ? result
+        : this.withAtlasItems(result, this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource), limit);
     if (queryPlan.intent === 'previous_session_summary') {
-      return this.withAtlasItems(this.recallPreviousSession(query, queryPlan), earlyAtlasItems, limit);
+      return withEarlyAtlasItems(this.recallPreviousSession(query, queryPlan));
     }
     if (queryPlan.intent === 'forensic_quote') {
-      return this.withAtlasItems(this.recallForensicQuote(query, queryPlan), earlyAtlasItems, limit);
+      return withEarlyAtlasItems(this.recallForensicQuote(query, queryPlan));
     }
     if (queryPlan.intent === 'historical_discussion' || queryPlan.intent === 'action_history') {
-      return this.withAtlasItems(this.recallHistoricalDiscussion(query, queryPlan), earlyAtlasItems, limit);
+      return withEarlyAtlasItems(this.recallHistoricalDiscussion(query, queryPlan));
     }
     const retrievalLimit = Math.max(limit * 4, 24);
     const multidimensionalRecall = query.projectId !== undefined && allowsGraph
