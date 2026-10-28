@@ -86,9 +86,16 @@ test('a memory older than a year is still retrievable', async () => {
   // machine. Tighten only against a fixed runner.
   expect(oldest).toBeLessThan(newest * 4);
 
-  // And a ceiling loose enough to be a catastrophe detector rather than a benchmark.
-  const worst = Math.max(...byAge.map((entry) => entry.ms));
-  expect(worst).toBeLessThan(3000);
+  // The objective names a number: within 500 ms. The 95th percentile carries it --
+  // "usually within 500 ms" is the requirement, and one slow sample from a busy
+  // runner should not fail a build while a real regression moves the percentile.
+  //
+  // Measured at year scale (20,343 events, 101 neurons, 36 recalls): p50 189 ms, p95
+  // 282 ms, max 290 ms, none over 500. This corpus is smaller, so this guards the
+  // requirement rather than reproducing that measurement.
+  const sorted = byAge.map((entry) => entry.ms).sort((a, b) => a - b);
+  const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]!;
+  expect(p95).toBeLessThan(500);
 
   kernel.close();
 }, 300_000);
