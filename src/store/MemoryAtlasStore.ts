@@ -19,6 +19,10 @@ import { localDateFor, localDateRange } from '../utils/LocalDateContext.js';
 export const MEMORY_ATLAS_PROJECTION_NAME = 'memory_atlas.v2';
 export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.4';
 
+/** The relations that make two episodes "related but not selected". */
+const RELATED_EPISODE_RELATIONS = ['SAME_ISSUE', 'FOLLOWS_UP', 'REFINES', 'CORRECTS', 'CONTRADICTS', 'SUPERSEDES', 'RELATED_TO'];
+const RELATED_EPISODE_PRIORITY_SQL = `CASE related_edge.relation_type WHEN 'SAME_ISSUE' THEN 1 WHEN 'FOLLOWS_UP' THEN 2 WHEN 'REFINES' THEN 3 ELSE 4 END`;
+
 interface AtlasDocumentRow {
   node_id: string; project_id: string; node_type: string; memory_kind: string | null; source_id: string; label: string;
   summary: string | null; topic_path: string | null; confidence: number; support_count: number;
@@ -208,21 +212,37 @@ export class MemoryAtlasStore {
     return [...grouped.values()].filter((group) => group.length === 1).map((group) => group[0]!);
   }
 
+  /**
+   * Other episodes related to one episode card.
+   *
+   * Written as two indexed arms rather than one `OR`: with the `OR`, SQLite
+   * never used `idx_memory_edges_project_source`/`_target` and fell back to a
+   * scan of every edge in the project, which measured 34 ms per call on the
+   * 20k-event corpus. The caller asks this once per returned card and the atlas
+   * is read twice per recall, so that scan cost 1.6 s of a 2.7 s recall.
+   */
   relatedEpisodeCards(projectId: string, canonicalId: string, selectedIds: Set<string>, limit: number): MemoryAtlasRelatedCard[] {
     const parsed = parseNodeId(canonicalId, projectId);
     if (!parsed || parsed.type !== 'episode') return [];
+    const relationIn = RELATED_EPISODE_RELATIONS.map(() => '?').join(',');
     const rows = this.db.prepare(`
-      SELECT e.relation_type, e.confidence, d.node_id, d.label, d.metadata_json
-      FROM memory_edges e
-      JOIN memory_atlas_documents d ON d.project_id=e.project_id AND d.node_id=CASE
-        WHEN e.source_type='episode' AND e.source_id=? THEN 'episode:' || e.target_id
-        ELSE 'episode:' || e.source_id
-      END
-      WHERE e.project_id=? AND e.status IN ('active','weak') AND e.relation_type IN ('SAME_ISSUE','FOLLOWS_UP','REFINES','CORRECTS','CONTRADICTS','SUPERSEDES','RELATED_TO')
-        AND ((e.source_type='episode' AND e.source_id=?) OR (e.target_type='episode' AND e.target_id=?))
-      ORDER BY CASE e.relation_type WHEN 'SAME_ISSUE' THEN 1 WHEN 'FOLLOWS_UP' THEN 2 WHEN 'REFINES' THEN 3 ELSE 4 END, e.confidence DESC
+      SELECT relation_type, node_id, label FROM (
+        SELECT relation_type, confidence, target_id AS other_id FROM memory_edges
+          WHERE project_id=? AND status IN ('active','weak') AND source_type='episode' AND source_id=?
+            AND relation_type IN (${relationIn})
+        UNION ALL
+        SELECT relation_type, confidence, source_id AS other_id FROM memory_edges
+          WHERE project_id=? AND status IN ('active','weak') AND target_type='episode' AND target_id=?
+            AND relation_type IN (${relationIn})
+      ) related_edge
+      JOIN memory_atlas_documents d ON d.project_id=? AND d.node_id='episode:' || related_edge.other_id
+      ORDER BY ${RELATED_EPISODE_PRIORITY_SQL}, related_edge.confidence DESC
       LIMIT ?
-    `).all(parsed.id, projectId, parsed.id, parsed.id, Math.max(1, Math.min(limit * 3, 30))) as Array<{ relation_type: string; confidence: number; node_id: string; label: string; metadata_json?: string | null }>;
+    `).all(
+      projectId, parsed.id, ...RELATED_EPISODE_RELATIONS,
+      projectId, parsed.id, ...RELATED_EPISODE_RELATIONS,
+      projectId, Math.max(1, Math.min(limit * 3, 30)),
+    ) as Array<{ relation_type: string; node_id: string; label: string }>;
     const result: MemoryAtlasRelatedCard[] = [];
     for (const row of rows) {
       if (selectedIds.has(row.node_id)) continue;
