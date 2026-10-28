@@ -9,6 +9,7 @@ interface OpenAIChatCompleteParams {
   systemPrompt: string;
   userPrompt: string;
   maxTokens?: number;
+  jsonMode?: boolean;
 }
 
 interface OpenAIEmbedParams {
@@ -39,7 +40,8 @@ export class OpenAICompatibleClient {
             { role: 'user', content: params.userPrompt }
           ],
           temperature: 0,
-          max_tokens: params.maxTokens ?? 512
+          max_tokens: params.maxTokens ?? 512,
+          ...(params.jsonMode ? { response_format: { type: 'json_object' } } : {})
         }),
         signal: controller.signal
       });

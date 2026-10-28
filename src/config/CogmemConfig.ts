@@ -398,6 +398,8 @@ function buildRoleConfig(
   const model = stringValue(values.model) || defaultRoleModel(role);
   const apiKey = stringValue(values.api_key);
   const timeoutMs = numberValue(values.timeout_ms) ?? defaultRoleTimeout(role);
+  const maxTokens = numberValue(values.max_tokens) ?? defaultRoleMaxTokens(role);
+  const jsonMode = values.json_mode === true;
 
   return {
     role,
@@ -410,6 +412,8 @@ function buildRoleConfig(
     apiKey: apiKey ? interpolate(apiKey, env, diagnostics) : '',
     modelName: interpolate(model, env, diagnostics),
     timeoutMs,
+    maxTokens,
+    jsonMode,
     fallback,
   };
 }
@@ -442,6 +446,16 @@ function defaultRoleModel(role: ModelRoleName): string {
 
 function defaultRoleTimeout(role: ModelRoleName): number {
   return role === 'embedding' ? 30000 : 60000;
+}
+
+/**
+ * The memory role returns a `memory_frame.v1` document — nodes, relations,
+ * temporal references and their evidence ids. Left at the client's 512-token
+ * default the answer is cut off mid-JSON and discarded as invalid output, which
+ * is what a configured provider did before this existed.
+ */
+function defaultRoleMaxTokens(role: ModelRoleName): number {
+  return role === 'memory' ? 2048 : 1024;
 }
 
 function maybeResolveWorkspace(

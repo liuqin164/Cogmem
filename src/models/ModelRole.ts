@@ -9,6 +9,10 @@ export interface ModelRoleConfig {
   apiKey?: string;
   modelName: string;
   timeoutMs?: number;
+  /** Output budget. A memory frame is far larger than the 512-token client default. */
+  maxTokens?: number;
+  /** Ask the endpoint to constrain decoding to a JSON object (the frame contract). */
+  jsonMode?: boolean;
   fallback?: ModelRoleName | 'rule_only' | 'deterministic_local';
 }
 

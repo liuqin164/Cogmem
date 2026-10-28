@@ -14,13 +14,13 @@ afterEach(() => {
 });
 
 /** An OpenAI-compatible endpoint that answers Dream's schema, echoing the evidence it was given. */
-function startModelServer(): { url: string; requests: Array<{ authorization: string | null; model: string }> } {
-  const requests: Array<{ authorization: string | null; model: string }> = [];
+function startModelServer(): { url: string; requests: Array<{ authorization: string | null; model: string; maxTokens?: number; responseFormat?: string }> } {
+  const requests: Array<{ authorization: string | null; model: string; maxTokens?: number; responseFormat?: string }> = [];
   server = Bun.serve({
     port: 0,
     async fetch(request) {
-      const body = await request.json() as { model: string; messages: Array<{ role: string; content: string }> };
-      requests.push({ authorization: request.headers.get('authorization'), model: body.model });
+      const body = await request.json() as { model: string; messages: Array<{ role: string; content: string }>; max_tokens?: number; response_format?: { type?: string } };
+      requests.push({ authorization: request.headers.get('authorization'), model: body.model, maxTokens: body.max_tokens, responseFormat: body.response_format?.type });
       const prompt = JSON.parse(body.messages.find((message) => message.role === 'user')!.content) as {
         rawLedgerEvents: Array<{ eventId: string; role?: string }>;
       };
@@ -79,6 +79,9 @@ test('a configured OpenAI-compatible provider is what Dream reads a conversation
     expect(model.requests.length).toBeGreaterThan(0);
     expect(model.requests[0]!.authorization).toBe('Bearer test-key-do-not-leak');
     expect(model.requests[0]!.model).toBe('test-model');
+    // A memory frame is far larger than the client's 512-token default; capped
+    // there the answer arrives cut off mid-JSON and is thrown away as invalid.
+    expect(model.requests[0]!.maxTokens).toBeGreaterThan(512);
     expect(result.skipped).toBe(false);
     expect(result.candidateCount).toBeGreaterThan(0);
     expect(result.semanticProcessorAvailable).toBe(true);
@@ -119,6 +122,78 @@ test('with no provider configured Dream still lands a rule-only result', async (
     expect(result.skipped).toBe(false);
     expect(result.candidateCount).toBeGreaterThan(0);
     expect(result.semanticProcessorAvailable).toBe(false);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('max_tokens is configurable per role and defaults past the frame size', async () => {
+  const model = startModelServer();
+  const dir = makeTempDir('cogmem-model-config-tokens-');
+  const configPath = join(dir, 'config.toml');
+  writeFileSync(configPath, [
+    '[core]',
+    `db_path = ${JSON.stringify(join(dir, 'memory.db'))}`,
+    'vector_backend = "sqlite-vec"',
+    '',
+    '[memory_model]',
+    'provider = "openai_compatible"',
+    `base_url = ${JSON.stringify(model.url)}`,
+    'model = "test-model"',
+    'api_key = "test-key"',
+    'max_tokens = 4096',
+    '',
+  ].join('\n'));
+  const kernel = createMemoryKernelFromConfig({ configPath });
+  try {
+    const backend = new KernelAgentMemoryBackend(kernel);
+    await backend.rememberTurnWithResult({
+      agentId: 'openclaw',
+      projectId: 'demo',
+      sessionId: 'session-tokens',
+      userText: '我希望记忆系统能定位到原始对话。',
+      assistantText: '明白。',
+      ingestMode: 'raw_then_dream',
+    });
+    await kernel.runDreamCurator({ projectId: 'demo', limit: 5 });
+    expect(model.requests[0]!.maxTokens).toBe(4096);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('json_mode asks the endpoint to constrain decoding to a JSON object', async () => {
+  const model = startModelServer();
+  const dir = makeTempDir('cogmem-model-config-json-');
+  const configPath = join(dir, 'config.toml');
+  writeFileSync(configPath, [
+    '[core]',
+    `db_path = ${JSON.stringify(join(dir, 'memory.db'))}`,
+    'vector_backend = "sqlite-vec"',
+    '',
+    '[memory_model]',
+    'provider = "openai_compatible"',
+    `base_url = ${JSON.stringify(model.url)}`,
+    'model = "test-model"',
+    'api_key = "test-key"',
+    'json_mode = true',
+    '',
+  ].join('\n'));
+  const kernel = createMemoryKernelFromConfig({ configPath });
+  try {
+    const backend = new KernelAgentMemoryBackend(kernel);
+    await backend.rememberTurnWithResult({
+      agentId: 'openclaw',
+      projectId: 'demo',
+      sessionId: 'session-json',
+      userText: '我希望记忆系统能定位到原始对话。',
+      assistantText: '明白。',
+      ingestMode: 'raw_then_dream',
+    });
+    await kernel.runDreamCurator({ projectId: 'demo', limit: 5 });
+    // Without it the granted model answers in prose, and the whole reading is
+    // discarded as invalid output.
+    expect(model.requests[0]!.responseFormat).toBe('json_object');
   } finally {
     kernel.close();
   }
