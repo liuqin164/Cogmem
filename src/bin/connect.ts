@@ -531,12 +531,17 @@ function installHermesMcpConfig(input: {
   // Which command the file will hold is the question, not whether the file changed:
   // a preserved entry still gets a tools list added, so `changed` is often true while
   // its command is exactly the stale one we are looking for. A command equal to the
-  // one we resolved is ours; anything else was preserved, and only needs reporting
-  // when it cannot run.
+  // one we resolved is ours.
+  //
+  // A command that differs and does not resolve is a fallback case, not the norm: the
+  // repair above rewrites a command naming a missing file, so reaching here means the
+  // entry's command line could not be rewritten at all -- an unparseable line this
+  // command did not write. The message says that, because saying the entry "was left
+  // as it is" described the behaviour that the repair replaced.
   const written = existingCogmemCommand(patched);
   const preserved = written && written !== server.command ? written : undefined;
   const warning = preserved && !commandResolves(preserved)
-    ? `the existing mcp_servers.cogmem entry was left as it is (it names a configuration this command does not own), and its command does not exist on this machine: ${preserved}. Hermes will fail to start the server; point it at a real launcher or remove the entry.`
+    ? `the existing mcp_servers.cogmem entry could not be repaired: its command does not exist on this machine and its command line could not be rewritten: ${preserved}. Hermes will fail to start the server; point it at a real launcher or remove the entry.`
     : undefined;
 
   return {
