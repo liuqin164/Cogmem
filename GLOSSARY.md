@@ -36,6 +36,28 @@ _Avoid_: dimension, filter, tag, slot
 One of the thirteen axes the memory graph stores a node on. Storage vocabulary only; a person never names one.
 _Avoid_: facet, column, axis
 
+### Remembering
+
+**Episode**（会话片段）:
+A bounded stretch of one conversation, cut where the conversation pauses. The unit memory is built from.
+_Avoid_: session, thread, chunk, batch
+
+**Memory Atlas**（记忆图谱）:
+The derived graph of nodes and edges that recall reads to locate a memory by facet. Built from the ledger, never the source of truth.
+_Avoid_: facet layer, index, knowledge graph
+
+**Frame**（记忆帧）:
+One structured reading of a single episode: its people, time, events, decisions and corrections. The atlas is projected from frames — the reading model writes frames, never nodes.
+_Avoid_: summary, extraction, parse, record
+
+**Dream**:
+The step that reads one sealed episode and produces its frame. Model-driven when a provider is configured, rule-only otherwise.
+_Avoid_: curation, compile, distill, consolidate
+
+**Incremental projection**（增量投影）:
+Adding one episode's nodes and edges to the atlas without recomputing the rest. The unit is one episode, never the corpus.
+_Avoid_: reindex, refresh, resync
+
 ### Scope
 
 **Drill-down**（下钻）:
