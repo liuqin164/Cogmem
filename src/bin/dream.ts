@@ -23,7 +23,7 @@ function usage(): string {
     'Usage: cogmem dream <tick|night|status|retry> [args]',
     '  tick [--project <id>] [--mode auto|micro|normal|deep] [--max-episodes <n>] [--json]',
     '  night [--project <id>] [--max-episodes <n>] [--json]',
-    '         the nightly batch: seal idle episodes, Dream up to N of them (default 50,',
+    '         one Night: seal idle episodes, Dream up to N of them (default 50,',
     '         oldest first), then project those episodes into the atlas. Safe to re-run.',
     '  status [--project <id>] [--json]',
     '  retry [--project <id>] [--json]',
@@ -44,7 +44,7 @@ async function main(): Promise<void> {
   try {
     const projectId = stringArg(args, 'project');
     const result = args.command === 'night'
-      ? await kernel.runNightlyBatch({ projectId, maxEpisodes: numberArg(args, 'max-episodes') })
+      ? await kernel.runNight({ projectId, maxEpisodes: numberArg(args, 'max-episodes') })
       : args.command === 'tick'
       ? await kernel.runDreamTick({ projectId, mode: modeArg(stringArg(args, 'mode')), maxEpisodes: numberArg(args, 'max-episodes') })
       : args.command === 'status'

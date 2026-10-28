@@ -38,7 +38,7 @@ test('one command seals, dreams and projects the night, and running it again is 
     seedConversation(kernel, 1);
     const nextMorning = T0 + DAY;
 
-    const first = await kernel.runNightlyBatch({ projectId: 'p', now: nextMorning });
+    const first = await kernel.runNight({ projectId: 'p', now: nextMorning });
     expect(first.tick.executed.episodeSealing.sealedEpisodes).toBe(2);
     expect(first.dream.processedEpisodeCount).toBe(2);
     expect(first.projected.episodes).toBe(2);
@@ -54,7 +54,7 @@ test('one command seals, dreams and projects the night, and running it again is 
     expect(first.reconciled.refreshed).toBe(true);
 
     // Safe to re-run: nothing left to seal, dream or project.
-    const second = await kernel.runNightlyBatch({ projectId: 'p', now: nextMorning + 60_000 });
+    const second = await kernel.runNight({ projectId: 'p', now: nextMorning + 60_000 });
     expect(second.tick.executed.episodeSealing.sealedEpisodes).toBe(0);
     expect(second.dream.processedEpisodeCount).toBe(0);
     expect(second.projected.episodes).toBe(0);
@@ -71,11 +71,11 @@ test('the batch is bounded: a backlog larger than the limit is caught up over la
     for (let index = 0; index < 3; index += 1) seedConversation(kernel, index);
     const nextMorning = T0 + DAY;
 
-    const first = await kernel.runNightlyBatch({ projectId: 'p', maxEpisodes: 2, now: nextMorning });
+    const first = await kernel.runNight({ projectId: 'p', maxEpisodes: 2, now: nextMorning });
     expect(first.dream.processedEpisodeCount).toBe(2);
     expect(first.projected.episodes).toBe(2);
 
-    const second = await kernel.runNightlyBatch({ projectId: 'p', maxEpisodes: 2, now: nextMorning + DAY });
+    const second = await kernel.runNight({ projectId: 'p', maxEpisodes: 2, now: nextMorning + DAY });
     expect(second.dream.processedEpisodeCount).toBe(1);
     expect(second.projected.episodes).toBe(1);
   } finally {

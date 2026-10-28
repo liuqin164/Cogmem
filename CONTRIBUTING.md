@@ -22,11 +22,9 @@ bun run build
 bun run typecheck
 bun test
 npm pack --dry-run --json
-npm publish --dry-run --access public
-npm publish --provenance --access public
 ```
 
-`cogmem` is distributed through the npm registry. Use `npm pack --dry-run --json` to verify package contents. Normal publishing happens by creating a GitHub Release from the matching version tag; `.github/workflows/publish.yml` is intentionally triggered by the release `published` event, not by tag pushes. Use `npm publish --provenance --access public` only as an emergency manual fallback.
+`cogmem` is distributed through the npm registry. **This is not the PR gate.** Publishing is the point of no return for a version, and the 4.0 line is unreleased by decision (AGENTS.md): a tag creates a GitHub Release whose `published` event publishes to npm, so nothing here should be run until the owner says so. Use `npm pack --dry-run --json` to verify package contents. Normal publishing happens by creating a GitHub Release from the matching version tag; `.github/workflows/publish.yml` is intentionally triggered by the release `published` event, not by tag pushes. Use `npm publish --provenance --access public` only as an emergency manual fallback.
 
 ## API Discipline
 

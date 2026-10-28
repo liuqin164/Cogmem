@@ -1828,8 +1828,8 @@ export class MemoryKernel {
   }
 
   /**
-   * The nightly batch: seal what has gone quiet, Dream a bounded number of the
-   * sealed episodes, and project exactly those into the atlas.
+   * One Night: seal what has gone quiet, Dream a bounded number of the sealed
+   * episodes, and project exactly those into the atlas.
    *
    * The order matters. Sealing is what makes an episode Dreamable; Dream writes
    * frames and beliefs and marks the projection dirty; projecting the episodes it
@@ -1837,7 +1837,7 @@ export class MemoryKernel {
    * recall without a corpus-wide rebuild. Running it again with nothing new
    * seals nothing, dreams nothing and projects nothing.
    */
-  async runNightlyBatch(options: { projectId?: string; maxEpisodes?: number; now?: number } = {}): Promise<{
+  async runNight(options: { projectId?: string; maxEpisodes?: number; now?: number } = {}): Promise<{
     tick: MaintenanceTickResult;
     dream: DreamTickResult;
     projected: { episodes: number; atlasDocuments: number };

@@ -54,9 +54,9 @@ _Avoid_: summary, extraction, parse, record
 The step that reads one sealed episode and produces its frame. Model-driven when a provider is configured, rule-only otherwise.
 _Avoid_: curation, compile, distill, consolidate
 
-**Nightly run**（夜间跑）:
+**Night**（夜间跑）:
 One operation that seals what has gone quiet, Dreams a bounded number of those episodes, and projects them — safe to re-run.
-_Avoid_: nightly batch, cron job, dream job
+_Avoid_: nightly batch, nightly run, cron job, dream job
 
 **Incremental projection**（增量投影）:
 Adding one episode's nodes and edges to the atlas without recomputing the rest. The unit is one episode, never the corpus.

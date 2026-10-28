@@ -12,6 +12,13 @@ The five canonical triage roles map 1:1 to their names. See `docs/agents/triage-
 
 Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+### Memory pipeline
+
+What the tiers are, how Dream reads a conversation, and what the Atlas projects:
+`MEMORY_MODEL.md` and `MEMORY_ATLAS.md`. This round's measurements and the
+per-commit record: `docs/engineering/4.0-issue-loop.md`. Review rules no guardrail
+can enforce: `CODING_STANDARDS.md`.
+
 ## Local development facts
 
 - **`dist/` is not tracked (#53).** A source checkout must run `bun run build` before anything that
@@ -46,6 +53,11 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/d
   first: it carries the round's real gate numbers, not the plan.
 
 ## End of round
+
+**CI has already run.** `.github/workflows/ci.yml` runs `prepublishOnly` (typecheck →
+build → test → pack) on every push to `feat/**`, so read it instead of reporting it
+as unrun: `bun run ci:status`. It exits non-zero when a gating check failed and
+labels the external Cloudflare build, which is not this repo's CI.
 
 Post the round's measured result where GitHub shows it — a comment on the open PR for the
 branch, or on the issue that drove the round when there is no PR. The local progress file stays
