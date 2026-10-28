@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
+import { normalizeRelationType } from '../semantic/RelationConstraintRegistry.js';
 import { invalidateMemoryEdgeSupportIds } from '../binding/MemoryEdgeMerge.js';
 import { validateMemoryFrame } from '../semantic/MemoryFrameValidator.js';
 import type { MemoryFrameStatus, MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
@@ -18,9 +19,11 @@ export class MemoryFrameStore {
   save(input: MemoryFrameSaveInput): MemoryFrameV1 {
     const retryAttempt = (input as MemoryFrameSaveInput & { retryAttempt?: number }).retryAttempt ?? 0;
     const requestedStatus = input.status ?? input.frame.status ?? 'staged';
-    const validation = validateMemoryFrame(input.frame, { allowEmptyEvidence: requestedStatus !== 'active' && input.frame.sourceAuthority === 'deterministic_fallback' });
+    // Normalise the model's relation names before validating: a name outside the
+    // vocabulary is recorded as RELATED_TO rather than failing the whole frame.
+    const frame = normalizedFrame(input.frame);
+    const validation = validateMemoryFrame(frame, { allowEmptyEvidence: requestedStatus !== 'active' && frame.sourceAuthority === 'deterministic_fallback' });
     if (!validation.valid) throw new Error(`invalid_memory_frame:${validation.errors.join(',')}`);
-    const frame = input.frame;
     const now = input.now ?? Date.now();
     const status: MemoryFrameStatus = 'staged';
     const publishStatus = input.publishStatus ?? frame.publishStatus ?? (frame.needsReview ? 'needs_confirmation' : 'active');
@@ -281,6 +284,15 @@ function parseJsonArray(value: unknown): unknown[] {
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
   try { const parsed = JSON.parse(String(value ?? '{}')); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; } catch { return {}; }
+}
+
+/** Only model-authored frames may carry a name the vocabulary does not know. */
+function normalizedFrame(frame: MemoryFrameV1): MemoryFrameV1 {
+  if (frame.sourceAuthority !== 'processor') return frame;
+  return {
+    ...frame,
+    relations: frame.relations.map((relation) => ({ ...relation, relationType: normalizeRelationType(relation.relationType) as MemoryFrameV1['relations'][number]['relationType'] })),
+  };
 }
 
 function stripFrameNodeId(value: string, frameId: string): string {

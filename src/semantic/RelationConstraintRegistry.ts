@@ -12,10 +12,36 @@ const CONSTRAINTS: Endpoint[] = [
   ['episode', 'FOLLOWS_UP', 'episode'], ['episode', 'RELATED_TO', 'episode'], ['episode', 'CORRECTS', 'episode'], ['episode', 'CONTRADICTS', 'episode'], ['episode', 'SUPERSEDES', 'episode'],
   ['event', 'LOCATED_AT', 'location'], ['event', 'CHANGED_FROM', 'state'], ['event', 'CHANGED_TO', 'state'], ['event', 'ABOUT_TOPIC', 'topic'], ['event', 'ADDRESSES_ISSUE', 'issue'],
   ['episode', 'PART_OF_PROJECT', 'project'], ['episode', 'PART_OF_EVENT', 'event'], ['episode', 'SUPPORTED_BY', 'event'],
+  // What a person asks about most: what they like, and who they know. A
+  // preference or a relationship is a claim about the world, so it is recorded
+  // as a relation on the actor, not as a new dimension.
+  ['actor', 'LIKES', 'entity'], ['actor', 'LIKES', 'object'], ['actor', 'LIKES', 'topic'], ['actor', 'LIKES', 'event'],
+  ['actor', 'FRIEND_OF', 'actor'], ['actor', 'FRIEND_OF', 'entity'],
+  ['actor', 'FAMILY_OF', 'actor'], ['actor', 'FAMILY_OF', 'entity'],
 ];
+
+/** Whether a relation name is part of the vocabulary at all. */
+export function isKnownRelationType(relation: string): boolean {
+  return CONSTRAINTS.some(([, known]) => known === relation);
+}
+
+/**
+ * Map a relation the reading model invented onto the vocabulary's catch-all.
+ *
+ * The vocabulary is curated because recall ranks by relation name: an
+ * unregistered name is unqueryable. Coercing keeps the claim instead of
+ * discarding the whole frame.
+ */
+export function normalizeRelationType(relation: string): string {
+  return isKnownRelationType(relation) ? relation : 'RELATED_TO';
+}
 
 export class RelationConstraintRegistry {
   isAllowed(source: MemoryDimension, relation: MemoryRelationType, target: MemoryDimension): boolean {
+    // The catch-all is allowed between any two nodes: it is what a claim the
+    // vocabulary has no name for is recorded as, and refusing it would drop the
+    // claim along with the name.
+    if (relation === 'RELATED_TO') return true;
     return CONSTRAINTS.some(([s, r, t]) => s === source && r === relation && t === target);
   }
 

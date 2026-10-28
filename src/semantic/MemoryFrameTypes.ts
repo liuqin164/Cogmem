@@ -9,7 +9,8 @@ export type MemoryRelationType =
   | 'LOCATED_AT' | 'HAS_STATE' | 'CHANGED_FROM' | 'CHANGED_TO'
   | 'BROADER_THAN' | 'NARROWER_THAN' | 'SAME_EVENT' | 'SAME_ISSUE'
   | 'FOLLOWS_UP' | 'RELATED_TO' | 'CORRECTS' | 'CONTRADICTS'
-  | 'SUPERSEDES' | 'SUPPORTED_BY' | 'DERIVED_FROM';
+  | 'SUPERSEDES' | 'SUPPORTED_BY' | 'DERIVED_FROM'
+  | 'LIKES' | 'FRIEND_OF' | 'FAMILY_OF';
 
 export type MemoryFrameStatus = 'staged' | 'active' | 'needs_confirmation' | 'superseded' | 'failed';
 
