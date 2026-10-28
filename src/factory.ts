@@ -124,7 +124,7 @@ import { CandidateReviewStore, type CandidateReviewRecord } from './store/Candid
 import { DreamLedgerStore, type DreamBacklogStatus } from './store/DreamLedgerStore.js';
 import { ActivationStore, type ActivationDecayResult, type ActivationHotspot } from './store/ActivationStore.js';
 import { EntityStore } from './store/EntityStore.js';
-import { EventStore } from './store/EventStore.js';
+import { EventStore, type RawEventOrder } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
 import { InteractionUnitStore } from './store/InteractionUnitStore.js';
 import { MemoryBindingStore } from './store/MemoryBindingStore.js';
@@ -224,8 +224,8 @@ export interface RawEventSearchOptions {
   startTime?: number;
   endTime?: number;
   limit?: number;
-  /** Chronological for replay and audit, relevance for recall. See EventStore. */
-  orderBy?: 'chronological' | 'relevance';
+  /** Declared once, in EventStore, where the two orders are explained. */
+  orderBy?: RawEventOrder;
 }
 
 export type DreamCandidateStatus = DeepWriteCandidateStatus;

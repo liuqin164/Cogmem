@@ -75,6 +75,20 @@ const MEMORY_EVENT_COLUMNS = `
   occurred_at, payload_json, payload_hash, created_at
 `;
 
+/**
+ * How the events a raw-event search matched are ordered.
+ *
+ * Chronological is for replay and audit: reading a thread back, the order is the
+ * point. Relevance is for recall, where the caller wants the event that answers the
+ * question and the sequence it sat in is incidental. Ordering every match by
+ * `global_seq` made the oldest hit the best hit, so the newest and most apt answer
+ * never reached the caller.
+ *
+ * Declared once. It was written out in full in two files, and a union that means one
+ * thing should not have two definitions to drift apart.
+ */
+export type RawEventOrder = 'chronological' | 'relevance';
+
 export class EventStore {
   private ftsRebuilds = 0;
   private readonly validatedLocalDates = new Set<string>();
@@ -854,7 +868,7 @@ export class EventStore {
        * every match by `global_seq` made the oldest hit the best hit, so the
        * newest and most apt answer never reached the caller.
        */
-      orderBy?: 'chronological' | 'relevance';
+      orderBy?: RawEventOrder;
     } = {},
   ): MemoryEvent[] {
     const limit = Math.max(1, Math.min(options.limit ?? 20, 200));
