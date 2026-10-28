@@ -786,6 +786,18 @@ export class EventStore {
     return row ? this.mapRow(row) : null;
   }
 
+  /**
+   * One thread's events in thread order.
+   *
+   * Two indexed arms instead of one `OR`. The `OR` kept SQLite off
+   * `idx_memory_events_thread_order` — the index built for exactly this read,
+   * and off `idx_memory_events_stream` for the stream-spelled thread — so every
+   * call scanned the whole event table and sorted it in a temp B-tree: 6.5 ms to
+   * return a 60-event thread from a 20k-event store, on a path recall calls once
+   * per returned memory. `project_scope` is the indexed spelling of
+   * `COALESCE(project_id, '')`, which is how every writer stores it and how
+   * `getEventsByStreamId` already reads it.
+   */
   getThreadEvents(
     threadId: string,
     options: {
@@ -795,36 +807,45 @@ export class EventStore {
       limit?: number;
     } = {},
   ): MemoryEvent[] {
-    const conditions = [
-      `(thread_id = ? OR (thread_id IS NULL AND stream_type = 'thread' AND stream_id = ?))`,
-    ];
-    const params: Array<string | number> = [threadId, threadId];
+    const filters: string[] = [];
+    const filterParams: Array<string | number> = [];
     if (options.projectId !== undefined) {
-      conditions.push("COALESCE(project_id, '') = ?");
-      params.push(options.projectId);
+      filters.push('project_scope = ?');
+      filterParams.push(options.projectId);
     }
     if (options.sessionId) {
-      conditions.push('session_id = ?');
-      params.push(options.sessionId);
+      filters.push('session_id = ?');
+      filterParams.push(options.sessionId);
     }
     if (options.localDate) {
-      conditions.push('local_date = ?');
-      params.push(options.localDate);
+      filters.push('local_date = ?');
+      filterParams.push(options.localDate);
     }
+    const filtersSql = filters.map((filter) => ` AND ${filter}`).join('');
 
     const boundedLimit = options.limit === undefined ? undefined : Math.max(1, Math.min(Math.trunc(options.limit), 10_000));
     const limitSql = boundedLimit === undefined ? '' : 'LIMIT ?';
-    if (boundedLimit !== undefined) params.push(boundedLimit);
     const rows = this.db.prepare(`
       SELECT ${MEMORY_EVENT_COLUMNS}
-      FROM memory_events
-      WHERE ${conditions.join(' AND ')}
+      FROM (
+        SELECT ${MEMORY_EVENT_COLUMNS}
+        FROM memory_events
+        WHERE thread_id = ?${filtersSql}
+        UNION ALL
+        SELECT ${MEMORY_EVENT_COLUMNS}
+        FROM memory_events
+        WHERE thread_id IS NULL AND stream_type = 'thread' AND stream_id = ?${filtersSql}
+      )
       ORDER BY COALESCE(thread_seq, event_version) ASC,
                COALESCE(event_ordinal, 0) ASC,
                COALESCE(global_seq, 0) ASC,
                event_id ASC
       ${limitSql}
-    `).all(...params) as any[];
+    `).all(
+      threadId, ...filterParams,
+      threadId, ...filterParams,
+      ...(boundedLimit === undefined ? [] : [boundedLimit]),
+    ) as any[];
     return rows.map((row) => this.mapRow(row));
   }
 
