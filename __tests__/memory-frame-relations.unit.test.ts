@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
 import { deterministicFrameFallback } from '../src/semantic/DeterministicFrameFallback.js';
 import { validateMemoryFrame } from '../src/semantic/MemoryFrameValidator.js';
+import { StructuredSemanticProcessor } from '../src/semantic/StructuredSemanticProcessor.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 function createKernel(): MemoryKernel {
@@ -71,4 +72,19 @@ test('a relation the model invented is kept as RELATED_TO instead of dropping th
   } finally {
     kernel.close();
   }
+});
+
+test('the reading path keeps a claim whose relation the vocabulary does not know', async () => {
+  // The processor validates what the model returned before anything stores it:
+  // if the rewrite did not happen there, one invented word would throw and lose
+  // the whole reading — which is what the vocabulary's catch-all exists for.
+  const processor = new StructuredSemanticProcessor(async () => frameWithRelations([
+    { sourceFrameNodeId: 'n-actor', relationType: 'ADMIRES', targetFrameNodeId: 'n-entity' },
+  ]));
+  const frame = await processor.process({
+    projectId: 'p',
+    episodeId: 'ep-1',
+    events: [{ eventId: 'evt-1', occurredAt: 0 } as never],
+  });
+  expect(frame.relations.map((relation) => relation.relationType)).toEqual(['RELATED_TO']);
 });

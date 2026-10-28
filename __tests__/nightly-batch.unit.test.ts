@@ -48,14 +48,18 @@ test('one command seals, dreams and projects the night, and running it again is 
       .prepare(`SELECT node_id FROM memory_atlas_documents WHERE project_id='p' AND node_type='episode'`)
       .all() as Array<{ node_id: string }>;
     expect(episodeNodes.length).toBe(2);
-    expect(first.projected.documents).toBeGreaterThanOrEqual(2);
+    expect(first.projected.atlasDocuments).toBeGreaterThanOrEqual(2);
+    // Dream wrote frames and action frames; the run finishes with the
+    // reconciliation pass so the next night does not rebuild for them.
+    expect(first.reconciled.refreshed).toBe(true);
 
     // Safe to re-run: nothing left to seal, dream or project.
     const second = await kernel.runNightlyBatch({ projectId: 'p', now: nextMorning + 60_000 });
     expect(second.tick.executed.episodeSealing.sealedEpisodes).toBe(0);
     expect(second.dream.processedEpisodeCount).toBe(0);
     expect(second.projected.episodes).toBe(0);
-    expect(second.projected.documents).toBe(first.projected.documents);
+    expect(second.projected.atlasDocuments).toBe(first.projected.atlasDocuments);
+    expect(second.reconciled.refreshed).toBe(false);
   } finally {
     kernel.close();
   }

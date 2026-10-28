@@ -104,6 +104,11 @@ export class MemoryAtlasIndexer {
     if (!bounded.length) return { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
     try {
       const result = this.db.transaction(() => this.curator.rebuildEpisodes(projectId, bounded))();
+      // Only the canonical layer is touched here. Nothing is owed: this path
+      // re-projects episodes that were already projected, and the frame and
+      // action layers it does not touch stay as they were. A caller that just
+      // Dreamed new frames (the nightly run) is what owes a full refresh, and it
+      // finishes with one.
       return {
         episodeCount: result.episodeCount,
         facetNodeCount: result.facetNodeCount,

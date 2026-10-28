@@ -1840,7 +1840,8 @@ export class MemoryKernel {
   async runNightlyBatch(options: { projectId?: string; maxEpisodes?: number; now?: number } = {}): Promise<{
     tick: MaintenanceTickResult;
     dream: DreamTickResult;
-    projected: { episodes: number; documents: number };
+    projected: { episodes: number; atlasDocuments: number };
+    reconciled: { refreshed: boolean; documents: number };
   }> {
     const tick = this.runMaintenanceTick({ projectId: options.projectId, now: options.now });
     // The tick seals what has gone quiet as a *soft* seal, which the scheduler
@@ -1853,17 +1854,24 @@ export class MemoryKernel {
       sealedBefore: options.now ?? Date.now(),
       now: options.now,
     });
-    const maxEpisodes = Math.max(1, Math.min(Math.trunc(options.maxEpisodes ?? 50), 50));
-    const dream = await this.runDreamTick({ projectId: options.projectId, maxEpisodes, now: options.now });
+    const dream = await this.runDreamTick({ projectId: options.projectId, maxEpisodes: options.maxEpisodes ?? 50, now: options.now });
     const episodeIds = options.projectId === undefined ? [] : (dream.episodeIds ?? []);
     const projected = episodeIds.length
       ? this.memoryAtlasIndexer.projectEpisodes(options.projectId!, episodeIds)
       : { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
     if (projected.episodeCount > 0) this.memoryAtlasStore.aggregateFacetNodeSupport(options.projectId!);
+    // The incremental pass covers the canonical layer only; the frame and action
+    // layers Dream just wrote are still owed. Finishing the run with the
+    // reconciliation pass is what clears the dirty flag, so the next night's tick
+    // does not pay a corpus rebuild for work this run already knew about.
+    const reconciled = options.projectId !== undefined
+      ? this.ensureMemoryAtlas({ projectId: options.projectId })
+      : this.memoryAtlasIndexer.ensureAllFresh();
     return {
       tick,
       dream,
-      projected: { episodes: projected.episodeCount, documents: this.memoryAtlasStore.countDocuments(options.projectId) },
+      projected: { episodes: projected.episodeCount, atlasDocuments: this.memoryAtlasStore.countDocuments(options.projectId) },
+      reconciled: { refreshed: reconciled.refreshed, documents: reconciled.documents },
     };
   }
 

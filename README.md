@@ -369,7 +369,7 @@ cogmem memory bind --project my-agent --json
 0 2 * * *  cogmem dream night --project my-agent --max-episodes 50
 ```
 
-`dream night` processes the oldest sealed conversations first, so a backlog larger than the limit is caught up over later nights. It never runs inside recall and never blocks a conversation. A weekly `cogmem memory tick --project my-agent` (or any full refresh) remains the reconciliation pass: it recomputes the whole Atlas from the ledger, which is what repairs edits or deletions of older conversations.
+`dream night` processes the oldest sealed conversations first, so a backlog larger than the limit is caught up over later nights. It never runs inside recall and never blocks a conversation. The run finishes with the reconciliation pass: the incremental projection covers episodes, facets and edges, and a full Atlas refresh then covers the frame and action layers Dream just wrote (~17 s at 20k events). That same full refresh is what repairs edits or deletions of older conversations.
 
 Dream reads a conversation with the `memory` model from your config (`[memory_model]`). With none configured it still records a rule-only reading, so the graph is never empty — a provider improves quality, availability does not depend on it.
 

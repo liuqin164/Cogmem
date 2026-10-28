@@ -1,4 +1,4 @@
-import type { MemoryDimension, MemoryRelationType } from './MemoryFrameTypes.js';
+import type { MemoryDimension, MemoryFrameV1, MemoryRelationType } from './MemoryFrameTypes.js';
 
 type Endpoint = readonly [MemoryDimension, MemoryRelationType, MemoryDimension];
 
@@ -15,7 +15,7 @@ const CONSTRAINTS: Endpoint[] = [
   // What a person asks about most: what they like, and who they know. A
   // preference or a relationship is a claim about the world, so it is recorded
   // as a relation on the actor, not as a new dimension.
-  ['actor', 'LIKES', 'entity'], ['actor', 'LIKES', 'object'], ['actor', 'LIKES', 'topic'], ['actor', 'LIKES', 'event'],
+  ['actor', 'LIKES', 'entity'], ['actor', 'LIKES', 'object'], ['actor', 'LIKES', 'topic'], ['actor', 'LIKES', 'event'], ['actor', 'LIKES', 'actor'],
   ['actor', 'FRIEND_OF', 'actor'], ['actor', 'FRIEND_OF', 'entity'],
   ['actor', 'FAMILY_OF', 'actor'], ['actor', 'FAMILY_OF', 'entity'],
 ];
@@ -34,6 +34,27 @@ export function isKnownRelationType(relation: string): boolean {
  */
 export function normalizeRelationType(relation: string): string {
   return isKnownRelationType(relation) ? relation : 'RELATED_TO';
+}
+
+/**
+ * Rewrite a reading model's relation names onto the vocabulary.
+ *
+ * Applied where the model's output is parsed, before it is validated: the
+ * validator rejects an unknown name, and rejecting it there would drop the whole
+ * reading over one word. Only model-authored frames are rewritten — a
+ * deterministic frame that invents a relation is a defect, not a paraphrase.
+ */
+export function normalizeFrameRelations<T>(frame: T): T {
+  const candidate = frame as { sourceAuthority?: string; relations?: unknown } | null;
+  if (!candidate || typeof candidate !== 'object' || candidate.sourceAuthority !== 'processor' || !Array.isArray(candidate.relations)) return frame;
+  return {
+    ...candidate,
+    relations: candidate.relations.map((relation: { relationType?: unknown }) => (
+      relation && typeof relation === 'object' && typeof relation.relationType === 'string'
+        ? { ...relation, relationType: normalizeRelationType(relation.relationType) }
+        : relation
+    )),
+  } as T;
 }
 
 export class RelationConstraintRegistry {
