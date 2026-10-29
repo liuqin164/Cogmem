@@ -25,6 +25,8 @@ function frameWithRelations(relations: Array<{ sourceFrameNodeId: string; relati
     evidenceEventIds: ['evt-1'],
     nodes: [
       ...base.nodes,
+      { frameNodeId: 'n-event', dimension: 'event' as const, label: '部署决定', confidence: 0.9, evidenceEventIds: ['evt-1'] },
+      { frameNodeId: 'n-topic', dimension: 'topic' as const, label: '部署', confidence: 0.9, evidenceEventIds: ['evt-1'] },
       { frameNodeId: 'n-episode', dimension: 'episode' as const, label: 'ep-1', confidence: 1, evidenceEventIds: ['evt-1'] },
       { frameNodeId: 'n-project', dimension: 'project' as const, label: 'p', confidence: 1, evidenceEventIds: ['evt-1'] },
       { frameNodeId: 'n-actor', dimension: 'actor' as const, label: '用户', confidence: 0.9, evidenceEventIds: ['evt-1'] },
@@ -87,4 +89,21 @@ test('the reading path keeps a claim whose relation the vocabulary does not know
     events: [{ eventId: 'evt-1', occurredAt: 0 } as never],
   });
   expect(frame.relations.map((relation) => relation.relationType)).toEqual(['RELATED_TO']);
+});
+
+test('a known relation used between the wrong dimensions keeps the frame', async () => {
+  // Measured on the box: the model wrote `event -[INVOLVES]-> topic`, which the
+  // registry does not allow (INVOLVES takes an entity or an object), and the
+  // whole frame was rejected instead of the one claim being generalised —
+  // exactly what already happens for a relation the vocabulary never knew.
+  const kernel = createKernel();
+  try {
+    const frame = frameWithRelations([{ sourceFrameNodeId: 'n-event', relationType: 'INVOLVES', targetFrameNodeId: 'n-topic' }]);
+    const processor = new StructuredSemanticProcessor(async () => frame);
+    const processed = await processor.process({ projectId: 'p', episodeId: 'ep-1', episodeType: 'discussion', events: [{ eventId: 'evt-1', occurredAt: 0 } as never] });
+    expect(processed.relations.map((relation) => relation.relationType)).toEqual(['RELATED_TO']);
+    expect(validateMemoryFrame(processed).valid).toBe(true);
+  } finally {
+    kernel.close();
+  }
 });

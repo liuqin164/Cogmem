@@ -45,15 +45,30 @@ export function normalizeRelationType(relation: string): string {
  * deterministic frame that invents a relation is a defect, not a paraphrase.
  */
 export function normalizeFrameRelations<T>(frame: T): T {
-  const candidate = frame as { sourceAuthority?: string; relations?: unknown } | null;
+  const candidate = frame as { sourceAuthority?: string; nodes?: unknown; relations?: unknown } | null;
   if (!candidate || typeof candidate !== 'object' || candidate.sourceAuthority !== 'processor' || !Array.isArray(candidate.relations)) return frame;
+  const dimensions = new Map<string, string>();
+  if (Array.isArray(candidate.nodes)) {
+    for (const node of candidate.nodes as Array<{ frameNodeId?: unknown; dimension?: unknown }>) {
+      if (node && typeof node.frameNodeId === 'string' && typeof node.dimension === 'string') dimensions.set(node.frameNodeId, node.dimension);
+    }
+  }
   return {
     ...candidate,
-    relations: candidate.relations.map((relation: { relationType?: unknown }) => (
-      relation && typeof relation === 'object' && typeof relation.relationType === 'string'
-        ? { ...relation, relationType: normalizeRelationType(relation.relationType) }
-        : relation
-    )),
+    relations: candidate.relations.map((relation: { relationType?: unknown; sourceFrameNodeId?: unknown; targetFrameNodeId?: unknown }) => {
+      if (!relation || typeof relation !== 'object' || typeof relation.relationType !== 'string') return relation;
+      const relationType = normalizeRelationType(relation.relationType);
+      const source = typeof relation.sourceFrameNodeId === 'string' ? dimensions.get(relation.sourceFrameNodeId) : undefined;
+      const target = typeof relation.targetFrameNodeId === 'string' ? dimensions.get(relation.targetFrameNodeId) : undefined;
+      // A known relation between dimensions it does not hold for is the same
+      // situation as a relation the vocabulary never knew: the frame is worth
+      // keeping and the claim is worth keeping as a generic one. Measured on
+      // the box: `event -[INVOLVES]-> topic` cost the whole frame.
+      if (source && target && !relationConstraintRegistry.isAllowed(source as MemoryDimension, relationType as MemoryRelationType, target as MemoryDimension)) {
+        return { ...relation, relationType: 'RELATED_TO' };
+      }
+      return { ...relation, relationType };
+    }),
   } as T;
 }
 
