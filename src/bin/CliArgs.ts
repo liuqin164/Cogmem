@@ -6,10 +6,11 @@
  * (#105). A flag that is not part of an entry's published usage is now an
  * error, with the available flags listed.
  *
- * The allowed set is derived from the entry's own usage text — the contract it
- * prints — so the two cannot drift, and `extraFlags` covers a flag that is
- * accepted but deliberately undocumented. A flag that is used but missing from
- * usage is a documentation bug this surfaces rather than hides.
+ * The allowed set is the entry's own usage text plus `extraFlags` for flags it
+ * accepts but does not document. Not every entry has usage text: those pass
+ * `usage: ''` and a hand-kept list, which is exactly where the sets drifted once
+ * (`import-support.ts` validated argv for the bins that import it, with a
+ * narrower list — the library module no longer validates at all).", 
  */
 
 export type CliArgs = Record<string, string | boolean> & { command?: string };

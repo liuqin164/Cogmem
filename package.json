@@ -1,100 +1,100 @@
 {
- "name": "cogmem",
- "version": "4.0.0",
- "packageManager": "bun@1.3.11",
- "type": "module",
- "description": "cogmem \u2014 agent-native memory kernel for plugin-style agents on a local device",
- "repository": {
-  "type": "git",
-  "url": "git+https://github.com/liuqin164/cogmem.git"
- },
- "main": "./dist/public.js",
- "types": "./dist/public.d.ts",
- "exports": {
-  ".": {
-   "import": "./dist/public.js",
-   "types": "./dist/public.d.ts"
+  "name": "cogmem",
+  "version": "4.0.0",
+  "packageManager": "bun@1.3.11",
+  "type": "module",
+  "description": "cogmem — agent-native memory kernel for plugin-style agents on a local device",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liuqin164/cogmem.git"
   },
-  "./internal": {
-   "import": "./dist/internal.js",
-   "types": "./dist/internal.d.ts"
-  }
- },
- "bin": {
-  "cogmem": "dist/bin/cogmem.js",
-  "cogmem-init": "dist/bin/init.js",
-  "cogmem-doctor": "dist/bin/doctor.js",
-  "cogmem-host-bridge": "dist/bin/host-bridge.js",
-  "cogmem-connect": "dist/bin/connect.js",
-  "cogmem-update": "dist/bin/update.js",
-  "cogmem-openclaw": "dist/bin/openclaw.js",
-  "cogmem-compact": "dist/bin/compact.js",
-  "cogmem-memory": "dist/bin/memory.js",
-  "cogmem-repair": "dist/bin/repair.js",
-  "cogmem-explain-recall": "dist/bin/explain-recall.js",
-  "cogmem-mcp": "dist/bin/mcp.js",
-  "cogmem-import-openclaw": "dist/bin/import-openclaw.js",
-  "cogmem-import-hermes": "dist/bin/import-hermes.js",
-  "cogmem-normalize-transcript": "dist/bin/normalize-transcript.js",
-  "cogmem-snapshot": "dist/bin/snapshot.js",
-  "cogmem-re-embed": "dist/bin/re-embed.js",
-  "cogmem-prospective": "dist/bin/prospective.js",
-  "cogmem-strategy": "dist/bin/strategy.js",
-  "cogmem-brain-eval": "dist/bin/brain-eval.js",
-  "cogmem-episode": "dist/bin/episode.js",
-  "cogmem-dream": "dist/bin/dream.js"
- },
- "scripts": {
-  "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-  "build": "node scripts/build.mjs",
-  "prepare": "node scripts/build.mjs",
-  "prepublishOnly": "bun run typecheck && bun run build && bun test __tests__ && npm pack --dry-run --json",
-  "type": "tsc -p tsconfig.json --noEmit",
-  "test": "bun test __tests__",
-  "typecheck": "tsc -p tsconfig.json --noEmit",
-  "scorecard": "bun scripts/scorecard.ts",
-  "ledger:check": "bun scripts/check-ledger.ts",
-  "ci:status": "bun scripts/ci-status.ts"
- },
- "engines": {
-  "bun": ">=1.0.0"
- },
- "dependencies": {
-  "@modelcontextprotocol/sdk": "^1.29.0",
-  "@xenova/transformers": "^2.17.2",
-  "mammoth": "^1.12.0",
-  "pdfjs-dist": "^6.0.227",
-  "xlsx": "^0.18.5",
-  "zod": "4.1.12"
- },
- "optionalDependencies": {
-  "hnswlib-node": "^2.0.1"
- },
- "devDependencies": {
-  "bun-types": "^1.0.0",
-  "typescript": "^5.4.0"
- },
- "files": [
-  "dist/**/*.js",
-  "dist/**/*.d.ts",
-  "examples/**/*.md",
-  "install.sh",
-  "README.md",
-  "MEMORY_MODEL.md",
-  "RECALL_EXPLAINABILITY.md",
-  "MEMORY_ATLAS.md",
-  "BENCHMARKS.md",
-  "CHANGELOG.md",
-  "CONCURRENT_ACCESS.md",
-  "CONTRIBUTING.md",
-  "RELEASE_CHECKLIST.md",
-  "docs/mcp-hosts.md",
-  "docs/openclaw-runtime.md",
-  "SECURITY.md",
-  "LICENSE"
- ],
- "publishConfig": {
-  "access": "public"
- },
- "license": "MIT"
+  "main": "./dist/public.js",
+  "types": "./dist/public.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/public.js",
+      "types": "./dist/public.d.ts"
+    },
+    "./internal": {
+      "import": "./dist/internal.js",
+      "types": "./dist/internal.d.ts"
+    }
+  },
+  "bin": {
+    "cogmem": "dist/bin/cogmem.js",
+    "cogmem-init": "dist/bin/init.js",
+    "cogmem-doctor": "dist/bin/doctor.js",
+    "cogmem-host-bridge": "dist/bin/host-bridge.js",
+    "cogmem-connect": "dist/bin/connect.js",
+    "cogmem-update": "dist/bin/update.js",
+    "cogmem-openclaw": "dist/bin/openclaw.js",
+    "cogmem-compact": "dist/bin/compact.js",
+    "cogmem-memory": "dist/bin/memory.js",
+    "cogmem-repair": "dist/bin/repair.js",
+    "cogmem-explain-recall": "dist/bin/explain-recall.js",
+    "cogmem-mcp": "dist/bin/mcp.js",
+    "cogmem-import-openclaw": "dist/bin/import-openclaw.js",
+    "cogmem-import-hermes": "dist/bin/import-hermes.js",
+    "cogmem-normalize-transcript": "dist/bin/normalize-transcript.js",
+    "cogmem-snapshot": "dist/bin/snapshot.js",
+    "cogmem-re-embed": "dist/bin/re-embed.js",
+    "cogmem-prospective": "dist/bin/prospective.js",
+    "cogmem-strategy": "dist/bin/strategy.js",
+    "cogmem-brain-eval": "dist/bin/brain-eval.js",
+    "cogmem-episode": "dist/bin/episode.js",
+    "cogmem-dream": "dist/bin/dream.js"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "node scripts/build.mjs",
+    "prepare": "node scripts/build.mjs",
+    "prepublishOnly": "bun run typecheck && bun run build && bun test __tests__ && npm pack --dry-run --json",
+    "type": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test __tests__",
+    "ci:status": "bun scripts/ci-status.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "scorecard": "bun scripts/scorecard.ts",
+    "ledger:check": "bun scripts/check-ledger.ts"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@xenova/transformers": "^2.17.2",
+    "mammoth": "^1.12.0",
+    "pdfjs-dist": "^6.0.227",
+    "xlsx": "^0.18.5",
+    "zod": "4.1.12"
+  },
+  "optionalDependencies": {
+    "hnswlib-node": "^2.0.1"
+  },
+  "devDependencies": {
+    "bun-types": "^1.0.0",
+    "typescript": "^5.4.0"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "examples/**/*.md",
+    "install.sh",
+    "README.md",
+    "MEMORY_MODEL.md",
+    "RECALL_EXPLAINABILITY.md",
+    "MEMORY_ATLAS.md",
+    "BENCHMARKS.md",
+    "CHANGELOG.md",
+    "CONCURRENT_ACCESS.md",
+    "CONTRIBUTING.md",
+    "RELEASE_CHECKLIST.md",
+    "docs/mcp-hosts.md",
+    "docs/openclaw-runtime.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT"
 }

@@ -45,17 +45,6 @@ export type { BrainRecallResult } from '../types/BrainRecallResult.js';
  * Keeping it in the signature would give the two different keys and no
  * supersession would ever be detected.
  */
-const SUBJECT_TERMINATORS = new Set([
-  'is', 'was', 'are', 'were', 'will', 'now', 'scheduled', 'schedules',
-  'on', 'at', 'in', 'starts', 'start', 'begins', 'begin', 'moves', 'moved',
-  'runs', 'ran', 'happens', 'happened', 'becomes', 'became',
-]);
-
-/** Filler inside the subject phrase: it does not distinguish one subject from another. */
-const SUBJECT_FILLER = new Set([
-  'the', 'a', 'an', 'for', 'of', 'to', 'and', 'or', 'our', 'its', 'their', 'his', 'her',
-]);
-
 export interface BrainRecallOptions {
   projectId?: string;
   now?: number;

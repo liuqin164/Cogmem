@@ -20,7 +20,7 @@ test('Agent global scope executes the multidimensional graph lane instead of tre
     (kernel as unknown as { searchEvidence: MemoryKernel['searchEvidence'] }).searchEvidence = ((query, options) => {
       multidimensionalCalls += 1;
       return originalRecall(query, options);
-    }) as MemoryKernel['recall'];
+    }) as MemoryKernel['searchEvidence'];
     new KernelAgentMemoryBackend(kernel).recall({ agentId: 'global-agent', sessionId: 's', projectId: '', query: 'graph lane evidence', limit: 3 });
     expect(multidimensionalCalls).toBeGreaterThan(0);
   } finally { kernel.close(); }

@@ -7,7 +7,7 @@
 | | |
 |---|---|
 | 分支 | `feat/cogmem-4.0-multi-bot` |
-| HEAD | `8273aed`（CI 2/2 绿，工作区干净） |
+| HEAD | `ec8b952`（代码提交 `b14ab99` 起 CI 2/2 绿；工作区干净） |
 | 门禁 | **1811 pass / 0 fail / 232 files**；`typecheck` 0；`bun run build` 0；`bun run ci:status` 2/2 |
 | PR | **#60，OPEN + Draft** |
 | 仓库 | `/home/ubuntu/projects/Cogmem` |
@@ -163,7 +163,7 @@ instabox exec cogmem-test -- 'npm install -g --prefix /data/home/.npm-global /tm
 instabox exec --background cogmem-test -- 'bash /tmp/final-check.sh'   # 脚本在本地 .cogmem/ 里推上去
 ```
 
-- box 的 workspace 配置 `/data/workspace/flow/.cogmem/config.toml` 的 `[memory_model]` 已指向 `https://integrate.api.nvidia.com/v1`（key 来自 `/data/home/.openclaw/openclaw.json` 的 `models.providers.nvidia.apiKey`），已设 `max_tokens = 8192`、`json_mode = true`、`timeout_ms = 300000`。
+- box 的 workspace 配置 `/data/workspace/flow/.cogmem/config.toml` 的 `[memory_model]` 已指向 `https://integrate.api.nvidia.com/v1`（key 来自 `/data/home/.openclaw/openclaw.json` 的 `models.providers.nvidia.apiKey`），已设 `max_tokens = 16384`、`json_mode = true`、`timeout_ms = 900000`（与上一节同一份配置，两处保持一致）。
 - **该凭证只对 `nvidia/nemotron-3-ultra-550b-a55b` 有权**（其它模型返回 HTTP 404 `Function not found for account`），而它是个「先思考再回答」的模型：约 30–130 秒/次，预算给小了就会截断。
 - 造对话：`cogmem episode append --project openclaw-2cbf70c2 --session <s> --source-agent openclaw --role user --text "…"` → `episode seal --mode hard` → `episode requeue-dream --mode deep` → `cogmem dream tick --project openclaw-2cbf70c2 --mode deep --max-episodes 1`。
 - **宿主自己的 LLM 没配 key**（`No API key found for provider "openai"`），`openclaw agent` 跑不完整轮对话；验宿主记忆后端请用 `scripts/verify-host-memory.sh`（直接写 MCP，不依赖宿主模型），本轮三个宿主仍 **3/3 PASS**。

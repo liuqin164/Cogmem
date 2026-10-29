@@ -240,7 +240,7 @@ async function runFamily(kernel: ReturnType<typeof createMemoryKernel>, scenario
 
     // The arm under test: cogmem's own recall, measured on its own.
     const before = performance.now();
-    const recalled = kernel.recall(scenario.query, { projectId: scenario.projectId, includeRawEvidence: true, now });
+    const recalled = kernel.searchEvidence(scenario.query, { projectId: scenario.projectId, includeRawEvidence: true, now });
     const latencyMs = performance.now() - before;
     paths.set(recalled.strategy.primaryLevel, (paths.get(recalled.strategy.primaryLevel) ?? 0) + 1);
     // Provenance is "the returned item says where it came from": a stable identity
@@ -426,6 +426,30 @@ export async function measureHostPathSupersession(options: { items: number; seed
     const arms = await runHostPath(kernel, scenarios, now);
     const plan = arms.find((arm) => arm.arm === 'agent_backend_context_plan') ?? arms[0]!;
     return { found: plan.recall, stale: plan.staleLeakage, scenarios: scenarios.length };
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The cross-host property, measured: host-a's recall never carries host-b's
+ * value. On the host path that is agent-scope isolation doing the work — the
+ * speaker grouping inside `filterSuperseded` is defence in depth for paths that
+ * do not apply scope (verified by disabling the key and re-measuring).
+ */
+export async function measureCrossHostScope(options: { items: number; seed: number }): Promise<{
+  found: number;
+  stale: number;
+  scenarios: number;
+}> {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-scorecard-cross-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db') });
+  try {
+    const scenarios = buildCrossHostScenarios(options.items, options.seed);
+    const arms = await runCrossHostPath(kernel, scenarios, Date.now());
+    const arm = arms[0]!;
+    return { found: arm.recall, stale: arm.staleLeakage, scenarios: scenarios.length };
   } finally {
     kernel.close();
     rmSync(dir, { recursive: true, force: true });

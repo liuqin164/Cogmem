@@ -108,7 +108,7 @@ describe('project-local temporal topology regressions', () => {
     (kernel as unknown as { searchEvidence: typeof kernel.searchEvidence }).searchEvidence = ((query: string, options: Record<string, unknown>) => {
       calls.push(options);
       return originalRecall(query, options);
-    }) as typeof kernel.recall;
+    }) as typeof kernel.searchEvidence;
     explainRecallWithKernel(kernel, { query: 'today', projectId: 'p', now: 123, localDateNow: '2026-07-17', timeZone: 'Asia/Tokyo' });
     expect(calls[0]).toMatchObject({ now: 123, localDateNow: '2026-07-17', timeZone: 'Asia/Tokyo' });
     kernel.close();

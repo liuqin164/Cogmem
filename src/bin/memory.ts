@@ -1058,6 +1058,9 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
       for (const { action, command } of reviewCommands) console.log(`review ${action}: ${command}`);
     }
     console.log(`decisions: ${decisions.length}`);
+    if (payload.promoted_candidates !== undefined) console.log(`promoted_candidates: ${payload.promoted_candidates}`);
+    if (payload.neurons_written !== undefined) console.log(`neurons_written: ${payload.neurons_written}`);
+    if (payload.neurons_written_reason) console.log(`neurons_written_reason: ${payload.neurons_written_reason}`);
     console.log(`queue: ${JSON.stringify(payload.queue)}`);
     const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
     for (const candidate of candidates as Array<Record<string, unknown>>) {

@@ -36,3 +36,21 @@ test('#72 gate: the user-facing path leaks an untagged stale value in under 10% 
   expect({ found: measured.found >= 0.875 }).toEqual({ found: true });
   expect({ leaked: measured.stale <= 0.1 }).toEqual({ leaked: true });
 }, 180_000);
+
+test('the scorecard entry point runs, so a rename inside it cannot go unnoticed', async () => {
+  // The script lives outside tsconfig's `include`, so a method rename in src/
+  // broke it silently until someone ran the command by hand (#72 review). This
+  // exercises the real entry point on a tiny corpus.
+  const { runScorecard } = await import('../scripts/scorecard.js');
+  const result = await runScorecard({ items: 2, seed: 1 });
+  const arms = [...result.recall, ...result.currentTruth, ...result.hostPath, ...result.hostPathMarked, ...result.crossHost];
+  expect(arms.map((arm) => arm.arm)).toContain('evidence_layer');
+  expect(result.hostPath.some((arm) => arm.arm === 'agent_backend_context_plan')).toBe(true);
+}, 180_000);
+
+test('#72: the cross-host property holds (agent scope, with the speaker key as defence in depth)', async () => {
+  const { measureCrossHostScope } = await import('../scripts/scorecard.js');
+  const measured = await measureCrossHostScope({ items: 24, seed: 20261025 });
+  expect(measured.found).toBeGreaterThanOrEqual(0.875);
+  expect(measured.stale).toBeLessThanOrEqual(0.1);
+}, 180_000);

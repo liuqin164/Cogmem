@@ -10,8 +10,11 @@
  * Three constraints come from measurements, not taste:
  *
  * - **Compare only within a speaker.** Two hosts reporting different values for
- *   the same subject are two reporters, not a correction — measured on the
- *   cross-host family, this keeps it at 100% found / 0% leaked.
+ *   the same subject are two reporters, not a correction. In the host path this
+ *   is defence in depth: agent-scope isolation already drops another host's
+ *   items before this runs, so the cross-host family passes either way
+ *   (verified by disabling the key). `filterSuperseded` is the seam that has to
+ *   hold when scope is not applied.
  * - **Compare only within a project.** A project boundary is not a correction.
  * - **Filter before truncating.** Slicing first lets a stale item occupy a slot
  *   that the statement which replaced it would have taken.
@@ -22,6 +25,8 @@ export interface SupersessionView {
   id: string;
   /** The text the subject phrase and the correction marker are read from. */
   content: string;
+  /** Ordering key. Milliseconds where the caller has them, a monotonically
+   * increasing turn ordinal where it does not; only compared within one group. */
   createdAt?: number;
   topicPath?: string;
   tags?: string[];
@@ -80,7 +85,11 @@ export function extractTopicKey(view: SupersessionView): string | undefined {
   return subject.length >= 2 ? subject.join(' ') : undefined;
 }
 
-/** The speaker a statement belongs to; untagged statements share one anonymous speaker. */
+/**
+ * The speaker a statement belongs to; untagged statements share one anonymous speaker.
+ *
+ * Only a *named* speaker is a different reporter.
+ */
 export function extractSpeaker(view: SupersessionView): string {
   if (view.hostId) return view.hostId;
   for (const tag of view.tags ?? []) {
@@ -92,8 +101,8 @@ export function extractSpeaker(view: SupersessionView): string {
 /**
  * Drop the statements a later correction in the same group replaced.
  *
- * Returns the input unchanged when nothing is superseded, so callers can use it
- * on every path without paying for an allocation.
+ * Returns a copy of the input when nothing is superseded, so callers can use it
+ * on every path without worrying about mutating what they passed in.
  */
 export function filterSuperseded<T>(items: readonly T[], toView: (item: T) => SupersessionView | undefined): T[] {
   if (items.length <= 1) return [...items];

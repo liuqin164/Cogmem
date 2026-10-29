@@ -1224,6 +1224,9 @@ export class MemoryKernel {
    * supersession filtering and the context cortex, and that is the one entry
    * point an agent or a user should use (#105).
    *
+   * The name keeps "search" on purpose: GLOSSARY's `_Avoid_` for Pulse lists it,
+   * and this is the lookup Pulse runs over the ledger — not a second Pulse.
+   *
    * @internal
    */
   searchEvidence(query: string, options: BrainRecallOptions = {}) {
@@ -2736,7 +2739,10 @@ export class MemoryKernel {
     const decisions = this.deepWritePromotionPolicy.promotePending(options.limit ?? 100, {
       projectId: options.projectId,
     });
-    const promotedCandidates = decisions.filter((decision) => decision.outcome.startsWith('promote')).length;
+    // Named explicitly: a prefix match would silently start counting a future
+    // outcome called `promote_*` that is not a promotion.
+    const promoting = new Set<DeepWritePromotionDecision['outcome']>(['promote_verified', 'promote_provisional']);
+    const promotedCandidates = decisions.filter((decision) => promoting.has(decision.outcome)).length;
     return {
       projectId: options.projectId,
       decisions,
