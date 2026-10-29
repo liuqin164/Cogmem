@@ -306,6 +306,58 @@ function measure(context: ContextItem[], latencyMs: number, scenario: Scenario):
  * (`src/context/ContextCortex.ts`). Measuring `kernel.recall` alone describes the
  * evidence list, not the prompt, and those are different artifacts.
  */
+/**
+ * Family D: two hosts, one project, two different values for the same topic.
+ *
+ * Host A's statement must not be superseded by host B's — they are different
+ * reporters, not a correction. The stale slot is B's value, so a leak means A's
+ * answer was displaced by another host's.
+ */
+export function buildCrossHostScenarios(items: number, seed: number): Scenario[] {
+  const random = makeRandom(seed + 313);
+  const scenarios: Scenario[] = [];
+  for (let index = 0; index < items; index += 1) {
+    const topic = TOPICS[(index + 5) % TOPICS.length]!;
+    const team = TEAMS[(index * 3) % TEAMS.length]!;
+    const own = token('OWN', index, random);
+    const other = token('OTHER', index, random);
+    scenarios.push({
+      projectId: `scorecard-x-${index}`,
+      query: `What is the ${topic} for ${team} according to host-a?`,
+      answer: own,
+      superseded: other,
+      turns: [
+        { turnId: `${index}-a`, content: `host-a reports the ${topic} for ${team} on day ${1 + (index % 20)}. Ticket ${own}.`, hostId: 'host-a' },
+        { turnId: `${index}-b`, content: `host-b reports the ${topic} for ${team} on day ${2 + (index % 20)}. Ticket ${other}.`, hostId: 'host-b' },
+        { turnId: `${index}-d`, content: `The ${TOPICS[(index + 2) % TOPICS.length]!} for ${TEAMS[(index + 1) % TEAMS.length]!} is scheduled on day ${DISTRACTOR_DAYS[index % DISTRACTOR_DAYS.length]!}. Ticket D-${index}.` },
+      ],
+    });
+  }
+  return scenarios;
+}
+
+/** Measure the agent backend as host-a, over a family that carries host identity. */
+async function runCrossHostPath(kernel: ReturnType<typeof createMemoryKernel>, scenarios: Scenario[], now: number): Promise<ArmResult[]> {
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const items: PerItem[] = [];
+  for (const scenario of scenarios) {
+    for (const turn of scenario.turns) {
+      await backend.rememberTurn({
+        agentId: (turn as { hostId?: string }).hostId ?? 'host-a',
+        projectId: scenario.projectId,
+        sessionId: `${scenario.projectId}-s`,
+        userText: turn.content,
+        assistantText: 'Noted.',
+      });
+    }
+    const before = performance.now();
+    const result = backend.recall({ agentId: 'host-a', projectId: scenario.projectId, query: scenario.query, limit: 8, now });
+    const latencyMs = performance.now() - before;
+    items.push(measure(result.items.map((item) => ({ text: String((item as { text?: string }).text ?? ''), hasProvenance: Boolean((item as { id?: string }).id) })), latencyMs, scenario));
+  }
+  return [score('agent_backend_cross_host', items, scenarios.length)];
+}
+
 async function runHostPath(kernel: ReturnType<typeof createMemoryKernel>, scenarios: Scenario[], now: number): Promise<ArmResult[]> {
   const backend = new KernelAgentMemoryBackend(kernel);
   const rawItems: PerItem[] = [];
@@ -353,6 +405,8 @@ export async function runScorecard(options: { items: number; seed: number }): Pr
   currentTruth: ArmResult[];
   currentTruthMarked: ArmResult[];
   hostPath: ArmResult[];
+  hostPathMarked: ArmResult[];
+  crossHost: ArmResult[];
   scenarios: number;
   seed: number;
 }> {
@@ -366,11 +420,13 @@ export async function runScorecard(options: { items: number; seed: number }): Pr
   const recall = await runFamily(kernel, recallScenarios, now);
   const currentTruth = await runFamily(kernel, supersessionScenarios, now + 1);
   const currentTruthMarked = await runFamily(kernel, markedScenarios, now + 2);
-  const hostPath = await runHostPath(kernel, markedScenarios, now + 3);
+  const hostPath = await runHostPath(kernel, supersessionScenarios, now + 3);
+  const hostPathMarked = await runHostPath(kernel, markedScenarios, now + 4);
+  const crossHost = await runCrossHostPath(kernel, buildCrossHostScenarios(options.items, options.seed), now + 5);
   kernel.close();
   rmSync(dir, { recursive: true, force: true });
 
-  return { recall, currentTruth, currentTruthMarked, hostPath, scenarios: recallScenarios.length, seed: options.seed };
+  return { recall, currentTruth, currentTruthMarked, hostPath, hostPathMarked, crossHost, scenarios: recallScenarios.length, seed: options.seed };
 }
 
 function table(results: ArmResult[], withStale: boolean): string[] {
@@ -411,11 +467,19 @@ async function main(): Promise<void> {
   console.log('');
   for (const line of table(result.currentTruthMarked, true)) console.log(line);
   console.log('');
-  console.log('### Family C — the host path (agent backend → context candidates → cortex plan)');
+  console.log('### Family C — the host path (agent backend → context candidates → cortex plan), Family B unmarked');
   console.log('');
   for (const line of table(result.hostPath, true)) console.log(line);
   console.log('');
-  for (const arm of [...result.recall, ...result.currentTruth, ...result.currentTruthMarked, ...result.hostPath]) {
+  console.log('### Family C′ — the same host path, with the stale statement tagged `status:superseded`');
+  console.log('');
+  for (const line of table(result.hostPathMarked, true)) console.log(line);
+  console.log('');
+  console.log('### Family D — two hosts, one project: neither may supersede the other');
+  console.log('');
+  for (const line of table(result.crossHost, true)) console.log(line);
+  console.log('');
+  for (const arm of [...result.recall, ...result.currentTruth, ...result.currentTruthMarked, ...result.hostPath, ...result.hostPathMarked, ...result.crossHost]) {
     if (arm.misses.length > 0) console.log(`${arm.arm}: missed ${arm.misses.length} of ${items}`);
     if (arm.staleItems.length > 0) console.log(`${arm.arm}: leaked the superseded value in ${arm.staleItems.length} of ${items}`);
   }
