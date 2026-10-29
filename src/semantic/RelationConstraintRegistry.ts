@@ -57,6 +57,16 @@ export function normalizeFrameRelations<T>(frame: T): T {
   } as T;
 }
 
+/**
+ * The constraint table as prompt text.
+ *
+ * The reading model is told the relation *names*; without their endpoints it
+ * invents pairs (measured: `actor -[PART_OF_PROJECT]-> project`,
+ * `actor -[ADVANCES_TASK]-> task`), and the frame is rejected after the fact.
+ * Generated from the table itself so the two cannot drift.
+ */
+export const RELATION_ENDPOINTS_TEXT = CONSTRAINTS.map(([source, relation, target]) => `${source} -[${relation}]-> ${target}`).join('; ');
+
 export class RelationConstraintRegistry {
   isAllowed(source: MemoryDimension, relation: MemoryRelationType, target: MemoryDimension): boolean {
     // The catch-all is allowed between any two nodes: it is what a claim the

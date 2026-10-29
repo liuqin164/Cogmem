@@ -41,12 +41,18 @@ describe('MemoryFrame V1 contract', () => {
 
   test('runtime validation matches revision and nested schema constraints', () => {
     const frame = deterministicFrameFallback({ projectId: 'p', episodeId: 'e', events: [] });
-    expect(validateMemoryFrame({ ...frame, revisionNumber: 0 }).errors).toEqual(['invalid_memory_frame_shape']);
-    expect(validateMemoryFrame({ ...frame, revisionNumber: 1.5 }).errors).toEqual(['invalid_memory_frame_shape']);
-    expect(validateMemoryFrame({ ...frame, revisionId: '' }).errors).toEqual(['invalid_memory_frame_shape']);
-    expect(validateMemoryFrame({ ...frame, supersedesFrameId: '' }).errors).toEqual(['invalid_memory_frame_shape']);
-    expect(validateMemoryFrame({ ...frame, processor: { ...frame.processor, unknown: true } }).errors).toEqual(['invalid_memory_frame_shape']);
-    expect(validateMemoryFrame({ ...frame, nodes: frame.nodes.map((node, index) => index ? node : { ...node, unknown: true }) }).errors).toEqual(['invalid_memory_frame_shape']);
+    // A shape violation names which field is wrong, so a reading model's mistake
+    // is distinguishable from a truncated answer (see memoryFrameShapeError).
+    const shapeError = (patch: Record<string, unknown>): string[] => validateMemoryFrame({ ...frame, ...patch }).errors;
+    expect(shapeError({ revisionNumber: 0 })).toEqual(['invalid_memory_frame_shape:revisionNumber_invalid']);
+    expect(shapeError({ revisionNumber: 1.5 })).toEqual(['invalid_memory_frame_shape:revisionNumber_invalid']);
+    expect(shapeError({ revisionId: '' })).toEqual(['invalid_memory_frame_shape:revisionId_invalid']);
+    expect(shapeError({ supersedesFrameId: '' })).toEqual(['invalid_memory_frame_shape:supersedesFrameId_invalid']);
+    expect(shapeError({ processor: { ...frame.processor, unknown: true } })).toEqual(['invalid_memory_frame_shape:processor_has_unknown_key']);
+    expect(shapeError({ nodes: frame.nodes.map((node, index) => index ? node : { ...node, unknown: true }) })).toEqual(['invalid_memory_frame_shape:node_has_unknown_key']);
+    // The box's real failure: the model answered with every key present but a
+    // string where the processor object belongs.
+    expect(shapeError({ processor: 'extractor-v1' })).toEqual(['invalid_memory_frame_shape:processor_not_object:string']);
   });
 
   test('public JSON schema shares runtime dimensions, bounds, and required nodes', () => {

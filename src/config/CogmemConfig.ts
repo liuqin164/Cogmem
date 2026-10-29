@@ -450,12 +450,14 @@ function defaultRoleTimeout(role: ModelRoleName): number {
 
 /**
  * The memory role returns a `memory_frame.v1` document — nodes, relations,
- * temporal references and their evidence ids. Left at the client's 512-token
- * default the answer is cut off mid-JSON and discarded as invalid output, which
- * is what a configured provider did before this existed.
+ * temporal references and their evidence ids, plus whatever preamble a
+ * reasoning model emits first. Left at the client's 512-token default the answer
+ * is cut off mid-string; measured on the box, a real model needed 3.8k for the
+ * frame alone and overran 4k on the pipeline's own prompt. The default has to
+ * fit the contract the code itself demands.
  */
 function defaultRoleMaxTokens(role: ModelRoleName): number {
-  return role === 'memory' ? 2048 : 1024;
+  return role === 'memory' ? 8192 : 1024;
 }
 
 function maybeResolveWorkspace(

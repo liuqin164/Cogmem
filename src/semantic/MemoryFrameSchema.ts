@@ -54,28 +54,53 @@ export function memoryFrameJsonSchema(options: { allowEmptyEvidence?: boolean } 
   return schema;
 }
 
-export function isMemoryFrame(value: unknown): value is MemoryFrameV1 {
-  if (!value || typeof value !== 'object') return false;
+/**
+ * Why a value is not a frame, in one word per defect.
+ *
+ * `isMemoryFrame` answers yes or no, and a no is what the pipeline used to
+ * report — leaving a reading model's mistake indistinguishable from a
+ * truncated answer (measured on the box: the model returned every required key
+ * with `processor` as a string, and the log said only
+ * `invalid_memory_frame_shape`).
+ */
+export function memoryFrameShapeError(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return 'not_an_object';
   const frame = value as Partial<MemoryFrameV1>;
   const allowedKeys = new Set(['schemaVersion','frameId','projectId','episodeId','revisionId','revisionNumber','supersedesFrameId','title','summary','episodeKind','nodes','relations','temporalReferences','stateTransitions','confidence','evidenceEventIds','processor','primaryLanguage','sourceAuthority','semanticCompleteness','needsReview','publishStatus','status']);
-  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
+  const unknown = Object.keys(value).find((key) => !allowedKeys.has(key));
+  if (unknown) return `unknown_key:${unknown}`;
   const objectArray = (items: unknown): boolean => Array.isArray(items) && items.every((item) => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
   const stringArray = (items: unknown): boolean => Array.isArray(items) && items.every((item) => typeof item === 'string' && item.trim().length > 0);
   const onlyKeys = (item: unknown, keys: readonly string[]): boolean => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
     return Object.keys(item).every((key) => keys.includes(key));
   };
-  const processor = frame.processor && typeof frame.processor === 'object' ? frame.processor : undefined;
-  return Boolean(frame.schemaVersion === MEMORY_FRAME_SCHEMA_VERSION && typeof frame.frameId === 'string'
-    && typeof frame.projectId === 'string' && typeof frame.episodeId === 'string'
-    && (frame.revisionId === undefined || (typeof frame.revisionId === 'string' && frame.revisionId.trim().length > 0 && frame.revisionId.length <= MEMORY_FRAME_LIMITS.id))
-    && (frame.revisionNumber === undefined || (Number.isInteger(frame.revisionNumber) && frame.revisionNumber >= 1))
-    && (frame.supersedesFrameId === undefined || (typeof frame.supersedesFrameId === 'string' && frame.supersedesFrameId.trim().length > 0 && frame.supersedesFrameId.length <= MEMORY_FRAME_LIMITS.id))
-    && typeof frame.title === 'string' && typeof frame.summary === 'string'
-    && objectArray(frame.nodes) && Array.isArray(frame.nodes) && frame.nodes.length <= MEMORY_FRAME_LIMITS.nodes && frame.nodes.every((node) => onlyKeys(node, ['frameNodeId','dimension','label','description','aliases','canonicalHint','confidence','evidenceEventIds']) && (node.canonicalHint === undefined || onlyKeys(node.canonicalHint, ['nodeId','canonicalLabel','confidence'])))
-    && objectArray(frame.relations) && Array.isArray(frame.relations) && frame.relations.length <= MEMORY_FRAME_LIMITS.relations && frame.relations.every((relation) => onlyKeys(relation, ['sourceFrameNodeId','relationType','targetFrameNodeId','confidence','evidenceEventIds','validFrom','validTo']))
-    && objectArray(frame.temporalReferences) && Array.isArray(frame.temporalReferences) && frame.temporalReferences.length <= MEMORY_FRAME_LIMITS.temporalReferences && frame.temporalReferences.every((reference) => onlyKeys(reference, ['label','occurredAt','confidence','evidenceEventIds']))
-    && objectArray(frame.stateTransitions) && Array.isArray(frame.stateTransitions) && frame.stateTransitions.length <= MEMORY_FRAME_LIMITS.stateTransitions && frame.stateTransitions.every((transition) => onlyKeys(transition, ['subjectFrameNodeId','from','to','confidence','evidenceEventIds']))
-    && stringArray(frame.evidenceEventIds)
-    && Boolean(processor) && onlyKeys(processor, ['provider','model','promptVersion','generatedAt']) && typeof processor?.promptVersion === 'string' && processor.promptVersion.trim().length > 0 && Number.isFinite(processor.generatedAt));
+  if (frame.schemaVersion !== MEMORY_FRAME_SCHEMA_VERSION) return `schemaVersion:${String(frame.schemaVersion)}`;
+  for (const key of ['frameId', 'projectId', 'episodeId', 'title', 'summary'] as const) {
+    if (typeof frame[key] !== 'string') return `${key}_not_string`;
+  }
+  if (frame.revisionId !== undefined && !(typeof frame.revisionId === 'string' && frame.revisionId.trim().length > 0 && frame.revisionId.length <= MEMORY_FRAME_LIMITS.id)) return 'revisionId_invalid';
+  if (frame.revisionNumber !== undefined && !(Number.isInteger(frame.revisionNumber) && frame.revisionNumber >= 1)) return 'revisionNumber_invalid';
+  if (frame.supersedesFrameId !== undefined && !(typeof frame.supersedesFrameId === 'string' && frame.supersedesFrameId.trim().length > 0 && frame.supersedesFrameId.length <= MEMORY_FRAME_LIMITS.id)) return 'supersedesFrameId_invalid';
+  if (!objectArray(frame.nodes) || (frame.nodes?.length ?? 0) > MEMORY_FRAME_LIMITS.nodes) return Array.isArray(frame.nodes) ? 'nodes_too_many_or_malformed' : 'nodes_not_array';
+  if (!frame.nodes!.every((node) => onlyKeys(node, ['frameNodeId','dimension','label','description','aliases','canonicalHint','confidence','evidenceEventIds']) && (node.canonicalHint === undefined || onlyKeys(node.canonicalHint, ['nodeId','canonicalLabel','confidence'])))) return 'node_has_unknown_key';
+  if (!objectArray(frame.relations) || (frame.relations?.length ?? 0) > MEMORY_FRAME_LIMITS.relations) return Array.isArray(frame.relations) ? 'relations_too_many_or_malformed' : 'relations_not_array';
+  if (!frame.relations!.every((relation) => onlyKeys(relation, ['sourceFrameNodeId','relationType','targetFrameNodeId','confidence','evidenceEventIds','validFrom','validTo']))) return 'relation_has_unknown_key';
+  if (!objectArray(frame.temporalReferences) || (frame.temporalReferences?.length ?? 0) > MEMORY_FRAME_LIMITS.temporalReferences) return Array.isArray(frame.temporalReferences) ? 'temporalReferences_too_many_or_malformed' : 'temporalReferences_not_array';
+  if (!frame.temporalReferences!.every((reference) => onlyKeys(reference, ['label','occurredAt','confidence','evidenceEventIds']))) return 'temporalReference_has_unknown_key';
+  if (!objectArray(frame.stateTransitions) || (frame.stateTransitions?.length ?? 0) > MEMORY_FRAME_LIMITS.stateTransitions) return Array.isArray(frame.stateTransitions) ? 'stateTransitions_too_many_or_malformed' : 'stateTransitions_not_array';
+  if (!frame.stateTransitions!.every((transition) => onlyKeys(transition, ['subjectFrameNodeId','from','to','confidence','evidenceEventIds']))) return 'stateTransition_has_unknown_key';
+  if (!stringArray(frame.evidenceEventIds)) return 'evidenceEventIds_not_string_array';
+  const processor = frame.processor;
+  if (processor === undefined || processor === null) return 'processor_missing';
+  if (typeof processor !== 'object' || Array.isArray(processor)) return `processor_not_object:${typeof processor}`;
+  if (!onlyKeys(processor, ['provider','model','promptVersion','generatedAt'])) return 'processor_has_unknown_key';
+  const promptVersion = (processor as { promptVersion?: unknown }).promptVersion;
+  if (typeof promptVersion !== 'string' || !promptVersion.trim()) return 'processor_promptVersion_missing';
+  if (!Number.isFinite((processor as { generatedAt?: unknown }).generatedAt)) return 'processor_generatedAt_missing';
+  return undefined;
+}
+
+export function isMemoryFrame(value: unknown): value is MemoryFrameV1 {
+  return memoryFrameShapeError(value) === undefined;
 }

@@ -22,7 +22,7 @@ export class ModelRegistry {
         apiKey: '',
         modelName: 'rule_only',
         timeoutMs: 60000,
-        maxTokens: 2048,
+        maxTokens: 8192,
         fallback: 'rule_only'
       },
       reasoning: {

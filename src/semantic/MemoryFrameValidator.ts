@@ -1,11 +1,12 @@
 import { relationConstraintRegistry } from './RelationConstraintRegistry.js';
-import { isMemoryFrame, MEMORY_DIMENSIONS, MEMORY_FRAME_LIMITS, MEMORY_FRAME_REQUIRED_DIMENSIONS } from './MemoryFrameSchema.js';
+import { isMemoryFrame, memoryFrameShapeError, MEMORY_DIMENSIONS, MEMORY_FRAME_LIMITS, MEMORY_FRAME_REQUIRED_DIMENSIONS } from './MemoryFrameSchema.js';
 import type { MemoryFrameV1 } from './MemoryFrameTypes.js';
 
 export interface MemoryFrameValidationResult { valid: boolean; errors: string[]; frame?: MemoryFrameV1; }
 
 export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidence?: boolean } = {}): MemoryFrameValidationResult {
-  if (!isMemoryFrame(value)) return { valid: false, errors: ['invalid_memory_frame_shape'] };
+  const shapeError = memoryFrameShapeError(value);
+  if (shapeError) return { valid: false, errors: [`invalid_memory_frame_shape:${shapeError}`] };
   const frame = value as MemoryFrameV1;
   const errors: string[] = [];
   const malformedNode = frame.nodes.some((node) => {
