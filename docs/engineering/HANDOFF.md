@@ -131,7 +131,15 @@ export XDG_CONFIG_HOME="$PWD/.cogmem/xdg"   # 必须：否则 instabox 写 ~/.co
 - 失败先看 `dream tick --json` 的 `failedEpisodes[].error`，再看 `pipeline_nonfatal_events`（诊断候选按 reason 去重，可能不更新）。
 - 投影在 `dream night`（含 reconciliation），裸 `dream tick` 只写 `memory_frames`，不进图谱。
 
-**新发现、未修、未开票**：`recall` 对**单词**查询返回空——`openclaw` / `deployment` / `蓝绿发布` / `钓鱼` / `张伟` 全 0 条，而 `PELICAN-88` 返回 2 条；同一时刻 `memory_events_fts match 'openclaw'` 有 28 行。**索引有数据，召回侧把单词查询丢了**（ASCII 也一样，所以不是 #100 的 CJK 问题）。下一步先查 query frame 如何为单词查询选 lane（`compiledMemory` 甚至不是数组）。
+**新发现：召回为空，是因为「编译层」几乎没被填满**（不是 CJK 问题，也不是 lane 选择）：
+- `neurons` 全库 **16 行**，本项目 **8 行**；而 `memory_events` 有 96 条、`memory_atlas_documents` 176 篇。
+- `neurons_fts match 'openclaw'` = 0、`'钓鱼'` = 0；同一时刻 `memory_events_fts match 'openclaw'` = 28。**索引有数据，召回查的是 neurons，而 neurons 里没有这些东西。**
+- 实测 8 个查询（中英、单词、短语）只有 `PELICAN-88` 命中 2 条——那 8 行 neuron 就是那次巡检对话留下的。
+
+**下一步（按顺序，都不需要大改）**：
+1. **一次只跑一段 + `--promote`**：`cogmem dream tick --mode deep --max-episodes 1 --promote`。我试过 `--max-episodes 3`，结果 2 段报 `episode_dream_lease_lost`（这个模型每段 150–300 秒，3 段就超过租约）。看 `--promote` 之后 `neurons` 是否增长；tick 结果里 promotion 的字段名要确认（我看到的 `promotion` 是空对象）。
+2. 若 `--promote` 仍不产 neuron：读 `src/engine/DeepWritePromotionPolicy.ts`（它按治理规则决定哪些 candidate 能升级），对照 box 上 `deep_write_candidates` 的 `status`/`governance` 字段（现在多是 `candidate` + `candidate_only_cpu_governance_required`）。
+3. 之后才是 #100（CJK 关键词索引）——注意上面的证据表明**当前召回失败不是 CJK 造成的**（ASCII 单词同样为 0），#100 解决的是「中文分词后仍能命中」，不是「neurons 空」。
 
 **box 操作（照做）**：
 
