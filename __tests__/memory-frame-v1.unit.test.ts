@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { deterministicFrameFallback, memoryFrameJsonSchema, MEMORY_DIMENSIONS, MEMORY_FRAME_JSON_SCHEMA, MEMORY_FRAME_LIMITS, MEMORY_FRAME_REQUIRED_DIMENSIONS, normalizeAlias, validateMemoryFrame } from '../src/semantic/index.js';
+import { deterministicFrameFallback, memoryFrameJsonSchema, memoryFrameShapeError, MEMORY_DIMENSIONS, MEMORY_FRAME_JSON_SCHEMA, MEMORY_FRAME_LIMITS, MEMORY_FRAME_REQUIRED_DIMENSIONS, normalizeAlias, validateMemoryFrame } from '../src/semantic/index.js';
 import { MemoryFrameStore } from '../src/store/MemoryFrameStore.js';
 import Database from 'bun:sqlite';
 import { installFinalSchema } from '../src/migrations/v3_7_4/FinalSchemaInstall.js';
@@ -48,7 +48,9 @@ describe('MemoryFrame V1 contract', () => {
     expect(shapeError({ revisionNumber: 1.5 })).toEqual(['invalid_memory_frame_shape:revisionNumber_invalid']);
     expect(shapeError({ revisionId: '' })).toEqual(['invalid_memory_frame_shape:revisionId_invalid']);
     expect(shapeError({ supersedesFrameId: '' })).toEqual(['invalid_memory_frame_shape:supersedesFrameId_invalid']);
-    expect(shapeError({ processor: { ...frame.processor, unknown: true } })).toEqual(['invalid_memory_frame_shape:processor_has_unknown_key']);
+    // A key the model invents in the provenance bag is not a reason to drop the
+    // frame: the worker overwrites that bag with its own.
+    expect(memoryFrameShapeError({ ...frame, processor: { ...frame.processor, unknown: true } })).toBeUndefined();
     expect(shapeError({ nodes: frame.nodes.map((node, index) => index ? node : { ...node, unknown: true }) })).toEqual(['invalid_memory_frame_shape:node_has_unknown_key']);
     // The box's real failure: the model answered with every key present but a
     // string where the processor object belongs.

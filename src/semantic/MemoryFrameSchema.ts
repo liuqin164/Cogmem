@@ -94,7 +94,11 @@ export function memoryFrameShapeError(value: unknown): string | undefined {
   const processor = frame.processor;
   if (processor === undefined || processor === null) return 'processor_missing';
   if (typeof processor !== 'object' || Array.isArray(processor)) return `processor_not_object:${typeof processor}`;
-  if (!onlyKeys(processor, ['provider','model','promptVersion','generatedAt'])) return 'processor_has_unknown_key';
+  // The processor bag is provenance the pipeline overwrites with its own
+  // (worker: `{...frame.processor, ...resolveProviderConfig(), promptVersion,
+  // generatedAt}`), so a key the model invented there costs nothing — while
+  // rejecting it cost a whole frame on the box
+  // (`invalid_memory_frame_shape:processor_has_unknown_key`).
   const promptVersion = (processor as { promptVersion?: unknown }).promptVersion;
   if (typeof promptVersion !== 'string' || !promptVersion.trim()) return 'processor_promptVersion_missing';
   if (!Number.isFinite((processor as { generatedAt?: unknown }).generatedAt)) return 'processor_generatedAt_missing';
