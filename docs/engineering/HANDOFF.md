@@ -1,19 +1,21 @@
-# 交接文档 — 召回能力优化（第 1–82 轮）
+# 交接文档 — 召回能力优化 + 图谱自长（第 1–83 轮）
 
-> 给下一个会话。**先读这一页**，再读 `docs/engineering/4.0-issue-loop.md` 的 §4.92 与 §4.99–§4.101（那四节是当前唯一未结线索）。
+> 给下一个会话。**先读这一页**，再读 §4.102–§4.108（图谱自长、评审、retro）。**当前唯一的活**在最后一节「接力点」。
 
 ## 状态速览
 
 | | |
 |---|---|
 | 分支 | `feat/cogmem-4.0-multi-bot` |
-| HEAD | `c34e5d9`（其后一个纯文档提交） |
-| 门禁 | **1799 pass / 0 fail / 227 files**；`typecheck` 0；`bun run build` 0 |
+| HEAD | `8273aed`（CI 2/2 绿，工作区干净） |
+| 门禁 | **1811 pass / 0 fail / 232 files**；`typecheck` 0；`bun run build` 0；`bun run ci:status` 2/2 |
 | PR | **#60，OPEN + Draft** |
 | 仓库 | `/home/ubuntu/projects/Cogmem` |
 | box | `cogmem-test`（instabox），三个 host 均在机上 |
 
 **绝对不要做**：合并 `main`、发 npm、打 tag、部署。PR 保持 Draft。4.0 未发布。
+
+**推完就查 CI**：`bun run ci:status`（`.github/workflows/ci.yml` 在 `feat/**` 的 push 上跑 `prepublishOnly`）。这个仓库的 CI 一直在跑，此前两轮却把「没查」写成了「没跑」。
 
 ## 目标与三项可验证要求
 
@@ -119,10 +121,41 @@ export XDG_CONFIG_HOME="$PWD/.cogmem/xdg"   # 必须：否则 instabox 写 ~/.co
 
 **仍未做（都不阻塞三项要求）**：① 维护 tick 仍是一次 96 秒的**全量重建**，增量维护未做（本轮只解决「填满之后召回还能不能达标」）；② 张伟那条查询仍是九条里最慢的（403ms），剩下的大头是 `fallbackRawTextSearch` 的 LIKE 扫描（68ms，与 atlas 无关）与 `resolveTargetNodeIds` 的候选全表扫（33ms），**都还没动**。
 
+## 接力点：模型路径的最后一里（**唯一在做的活**）
+
+用户已授权用 box 上三个宿主的模型配置测试，要求「跑通为止」。目前**没跑通**，进度与卡点如下。
+
+**已经修掉的两个真缺陷**（都在 `8273aed`，都只有真模型才能发现）：
+1. 输出预算从没传下去 → 每个请求都是 512 token 默认 → 帧 JSON 被截断当作 `invalid_output` 丢弃 → **悄悄退回规则版**。现按角色传 `max_tokens`（memory 默认 2048）。
+2. 没人要求端点输出 JSON → 该凭证唯一可用的模型用散文回答。实测：加 `response_format: {"type":"json_object"}` + 4096 预算，**同一提示词返回完整合法帧**（`finish_reason: stop`，2569 token）。现提供 `json_mode = true`。
+
+**还差三步（按顺序）**：
+1. **让 provider 失败可观测**。`DreamCuratorWorker.providerDiagnosticCandidate` 会按 reason 去重，所以库里留下的永远是第一次那段的散文，看不到本次真实错误。先修这个（记原始输出，或不去重）。
+2. **放宽预算**（memory 角色 8192）或换模型——端点目录很大，但该凭证只对 `nvidia/nemotron-3-ultra-550b-a55b` 有权（其它返回 HTTP 404 `Function not found for account`）。
+3. **再跑 `dream night`**，预期在 box 图谱里看到帧、实体、以及 `LIKES`/`FRIEND_OF` 关系。
+
+**box 操作（照做）**：
+
+```bash
+export INSTABOX_API_KEY=<key>
+export INSTABOX_BIN=/home/ubuntu/.local/bin/instabox
+export XDG_CONFIG_HOME="$PWD/.cogmem/xdg"   # 必须，否则写 ~/.config/instabox/.lock 被沙箱拒
+instabox resume cogmem-test
+# 装当前 HEAD：
+bun run build && npm pack --pack-destination .cogmem/pack --cache .cogmem/npm-cache
+instabox push cogmem-test .cogmem/pack/cogmem-4.0.0.tgz /tmp/cogmem-4.0.0.tgz
+instabox exec cogmem-test -- 'npm install -g --prefix /data/home/.npm-global /tmp/cogmem-4.0.0.tgz'
+```
+
+- workspace 配置在 box 的 `/data/workspace/flow/.cogmem/config.toml`，`[memory_model]` 已指向 `https://integrate.api.nvidia.com/v1`（key 取自 `/data/home/.openclaw/openclaw.json` 的 `models.providers.nvidia.apiKey`），已设 `max_tokens = 4096`、`json_mode = true`、`timeout_ms = 300000`。
+- 造对话：`cogmem episode append --project openclaw-2cbf70c2 --session <s> --source-agent openclaw --role user --text "…"` → `episode seal --mode hard` → `episode requeue-dream --mode deep` → `cogmem dream night --project openclaw-2cbf70c2 --max-episodes 1`。
+- **宿主自己的 LLM 没配 key**（`No API key found for provider "openai"`），所以 `openclaw agent` 跑不完整轮对话；验记忆后端请用 `scripts/verify-host-memory.sh`（直接写 MCP，不依赖宿主模型），本轮三个宿主仍 **3/3 PASS**。
+
 ## 其余未完成项（都不阻塞三项要求）
 
 | # | 项 | 说明 |
 |---|---|---|
+| 0 | **#100 中文关键词索引** | 规格 #98 里最后一张票。要新增 schema 对象 + 迁移 + 写入/回填两条路径；触发线是 10 万条事件（现 2 万） |
 | 1 | lane 选择重设计 | **§4.97 评估后降为低优先级**：冻结语料 4/18 测的是「词汇高度同质时纯词汇信号能走多远」，不是召回质量。入口点与已排除项见 §4.92/§4.95/§4.96 |
 | 2 | `__tests__/eval/corpus.md` | 评审建议改用冻结的 git blob，而不是台账的副本 |
 | 3 | lane 之外的评审判断项 | 已修完（类型去重、死参数、重复三元组、#96 台账行、connect 警告文案） |
