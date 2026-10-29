@@ -121,45 +121,17 @@ export XDG_CONFIG_HOME="$PWD/.cogmem/xdg"   # 必须：否则 instabox 写 ~/.co
 
 **仍未做（都不阻塞三项要求）**：① 维护 tick 仍是一次 96 秒的**全量重建**，增量维护未做（本轮只解决「填满之后召回还能不能达标」）；② 张伟那条查询仍是九条里最慢的（403ms），剩下的大头是 `fallbackRawTextSearch` 的 LIKE 扫描（68ms，与 atlas 无关）与 `resolveTargetNodeIds` 的候选全表扫（33ms），**都还没动**。
 
-## 接力点：模型路径的最后一里（**唯一在做的活**）
+## 接力点：模型路径**已跑通**（2026-10-29）
 
-用户已授权用 box 上三个宿主的模型配置测试，要求「跑通为止」。**进展：模型能吐出合法帧了，但帧还没进到图谱。**
+一段真对话进去，带偏好和关系的帧出来——`frames: 1`，`source_authority: processor`，关系含 **LIKES / FRIEND_OF / PARTICIPATED_IN / SUPPORTED_BY / PART_OF_PROJECT / PERFORMED**，节点含 `actor(用户, 助手, 张伟)`、`entity(钓鱼, 蓝绿发布)`、`task(部署改蓝绿)`；`dream night` 的重建把节点投影进图谱（actor 3、entity 16、task 1）。细节见台账 §4.109。
 
-**本轮修掉的四个真缺陷**（只有真模型才能发现，全部已提交 `60e986b`）：
-1. **形状错误什么都不说**：`isMemoryFrame` 只答是/否，日志永远只有 `invalid_memory_frame_shape`。现由 `memoryFrameShapeError` 指名（`processor_not_object:string`、`temporalReference_has_unknown_key`…），`isMemoryFrame` 定义为「没有理由」——同一份判据，同一个接受集。**这一条是解锁其余三条的关键。**
-2. **输出预算从没传下去**：每个请求都是 512 token 默认。现按角色传 `max_tokens`，memory 角色默认 **8192**（实测：真模型光帧就要 3.8k）。
-3. **没人要求 JSON**：`json_mode = true` 发 `response_format: {"type":"json_object"}`；不加它，该凭证唯一可用的模型用散文回答。
-4. **提示词只给了名字没给形状**：列了关系词表却没给端点，模型于是发明 `actor -[PART_OF_PROJECT]-> project`。现在提示词带上**由 `RelationConstraintRegistry` 生成的端点表**（两者不可能漂移）、每个嵌套对象的精确键集、必需的 episode/project 节点、`episodeKind` 枚举。版本 v5。
+**box 上的正确姿势**（本轮踩过的坑都在这里）：
+- 配置：`/data/workspace/flow/.cogmem/config.toml` 的 `[memory_model]` 指向 `https://integrate.api.nvidia.com/v1`（key 取自 `/data/home/.openclaw/openclaw.json` 的 `models.providers.nvidia.apiKey`），`max_tokens = 16384`、`json_mode = true`、`timeout_ms = 900000`、模型 `minimaxai/minimax-m3.1-flash`（快且 JSON 可用；`nemotron-3-ultra-550b` 能出合法帧但管线里的大调用会被网关 504）。
+- **模式必须匹配**：`requeue-dream --mode deep` 就必须 `dream tick --mode deep`，否则作业一直 `pending`/`attempts=0`，你会误以为模型失败（本轮误判两次）。
+- 失败先看 `dream tick --json` 的 `failedEpisodes[].error`，再看 `pipeline_nonfatal_events`（诊断候选按 reason 去重，可能不更新）。
+- 投影在 `dream night`（含 reconciliation），裸 `dream tick` 只写 `memory_frames`，不进图谱。
 
-**已在 box 验证**：对着真模型跑真系统提示词 → `valid: true`（3775 completion tokens）。
-
-**还没验证：帧通过 `cogmem dream tick` 落到 `memory_frames`**（`frames: 0`）。本轮把卡点从「不知道错在哪」推进到「知道每一步卡在哪、且修掉了四步」，全部有红→绿测试：
-
-| 已修 | 症状（box 实测） |
-|---|---|
-| `memoryFrameShapeError` 指名形状错误 | 日志只有 `invalid_memory_frame_shape`，看不出是截断还是形状不对——**修了它，后面每一条才被点名** |
-| `max_tokens` 传下去，memory 默认 16384 | 请求一直是 512 默认；管线自己的提示词超过 8k（`JSON Parse error: Expected '}'`），孤立测一次帧要 5337 token |
-| `timeout_ms` memory 默认 300 秒 | 帧是一次长调用（实测 150–300 秒），60 秒默认会把它掐断，表现为 `Unexpected EOF`——像是模型坏了，其实是超时 |
-| `json_mode`（`response_format: json_object`） | 不加它，该凭证唯一能用的模型用散文回答 |
-| 提示词 v6：嵌套对象的精确键集、由注册表生成的**关系端点表**、`episodeKind` 枚举、`raw_event` 恰好一个证据 | 模型自己发明 `actor -[PART_OF_PROJECT]-> project`、`temporalReference` 多带键、`raw_event` 证据数不对 |
-| `reasoning_content` 兜底 | flash 模型把 JSON 放在 `reasoning_content` 而 `content` 为空 → 被当成 `provider_invalid_output`（detail 为空） |
-| 已知关系用错维度 → 降级为 `RELATED_TO` | `event -[INVOLVES]-> topic` 让**整帧**被拒（同「未知关系」已有的容忍逻辑，现在对齐） |
-| 空响应不再沉默 | 非 2xx 时客户端返回 `''`，状态只在 stderr，诊断里是空的 |
-
-**已确认可复现**：真系统提示词 + 真模型 → **`valid: true`**（5337 token / 154 秒）；curator 路径在匹配模式下产出 **10 个候选**。
-
-**最后一次运行的现象（下一步的第一件事）**：`dream tick --mode deep --max-episodes 1` 报 `processedEpisodeCount: 0, failedEpisodeCount: 1, candidateCount: 0`，而 `pipeline_nonfatal_events` **没有新增行**——失败发生在 curator 调用之前或它的诊断被去重隐藏。**先去查这个**（`providerDiagnosticCandidate` 按 reason 去重，会让新一轮的错误不可见；`recordNonFatal` 本身是无条件写的，所以新行缺失说明失败点在别处）。
-
-**另外一条本轮差点走错的教训**：我曾两次断言「flash 模型过不了 curator 契约」——错。我 requeue 的是 `deep` 作业，跑的却是 `--mode normal`，作业一直 `pending`/`attempts=0`，**根本没被领取**。**跑之前先看作业状态和模式是否匹配**。
-
-**该凭证的模型矩阵**（14 个候选逐个 ping，其余全 404/410）：
-
-| 模型 | 可用性 |
-|---|---|
-| `nvidia/nemotron-3-ultra-550b-a55b` | 能产出候选与合法帧，但管线里更大的调用会被网关 **HTTP 504** 掐断（孤立测试可以） |
-| `minimaxai/minimax-m3.1-flash` | 快、JSON 可用；修掉 `reasoning_content` 后 curator 产出 10 个候选 |
-
-两个调用**共用同一个 `memory` 角色**（`DreamCuratorWorker` 第 898/904 行）——若要一个模型做 curator、另一个做 frame，需要按调用选角色（小功能，未做）。
+**新发现、未修、未开票**：`recall` 对**单词**查询返回空——`openclaw` / `deployment` / `蓝绿发布` / `钓鱼` / `张伟` 全 0 条，而 `PELICAN-88` 返回 2 条；同一时刻 `memory_events_fts match 'openclaw'` 有 28 行。**索引有数据，召回侧把单词查询丢了**（ASCII 也一样，所以不是 #100 的 CJK 问题）。下一步先查 query frame 如何为单词查询选 lane（`compiledMemory` 甚至不是数组）。
 
 **box 操作（照做）**：
 
