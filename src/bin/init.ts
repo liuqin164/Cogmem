@@ -27,6 +27,7 @@ import {
   HIGH_VECTOR_DIMENSION_THRESHOLD,
   vectorDimensionWarningMessage,
 } from '../config/VectorDimension.js';
+import { assertCliArgs } from './CliArgs.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1261,6 +1262,7 @@ function runAgentRegistration(args: InitArgs, homeDir: string): void {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['agent', 'auto', 'config', 'dry-run', 'env-path', 'home', 'json', 'legacy-env', 'no-probe', 'project', 'register-agent', 'rotate', 'scope', 'vector-dimension', 'yes'] });
   const args = readArgs(process.argv.slice(2));
   // In --json mode stdout carries one JSON document and nothing else, and the
   // progress chatter is suppressed rather than moved to stderr: the JSON already

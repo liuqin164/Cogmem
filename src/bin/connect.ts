@@ -26,6 +26,7 @@ import {
   type OpenClawAutoMemoryInstallResult,
   installOpenClawAutoMemoryPlugin,
 } from '../host/openclaw/AutoMemoryPluginInstaller.js';
+import { assertCliArgs } from './CliArgs.js';
 
 type AgentKind = 'openclaw' | 'hermes' | 'pi';
 
@@ -851,6 +852,7 @@ function printHuman(result: ConnectResult): void {
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['agent', 'agent-id', 'auto', 'bun', 'bun-path', 'config', 'dry-run', 'force', 'hermes-config', 'json', 'openclaw-config', 'output', 'pi-config', 'plugin-dir', 'project', 'transport', 'workspace'] });
   const args = readArgs(process.argv.slice(2));
   if (args.help) {
     console.log(usage());

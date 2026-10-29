@@ -14,6 +14,8 @@ import {
   type NormalizedMessageSource,
 } from '../utils/ConversationMarkdownNormalization.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
+assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['dry-run', 'family', 'input', 'json', 'output', 'title'] });
 
 const USAGE = [
   'Usage: cogmem-normalize-transcript --input <file> --output <file> [--family json-array|jsonl|csv|tsv|app-private-mixed-event|jsonl-mixed-event-log] [--title <title>] [--dry-run] [--json]',

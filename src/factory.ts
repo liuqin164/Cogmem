@@ -261,6 +261,10 @@ export interface DreamGovernanceRunOptions {
 export interface DreamGovernanceRunResult {
   projectId?: string;
   decisions: DeepWritePromotionDecision[];
+  /** Candidates this run moved to a promoted status. */
+  promotedCandidates: number;
+  /** Neurons created by this run — zero unless a candidate carries a source neuron. */
+  neuronsWritten: number;
   queue: {
     candidate: number;
     needsConfirmation: number;
@@ -2709,12 +2713,29 @@ export class MemoryKernel {
 
   promoteDreamCandidates(options: DreamGovernanceRunOptions = {}): DreamGovernanceRunResult {
     this.deepWriteCandidateStore.recoverStalePromoting(Date.now() - 5 * 60_000, Date.now());
+    const countNeurons = (): number => {
+      try {
+        const row = this.factStore.getDatabase()
+          .prepare(`SELECT COUNT(*) AS total FROM neurons WHERE is_deleted=0`)
+          .get() as { total?: number } | null;
+        return Number(row?.total ?? 0);
+      } catch {
+        return 0;
+      }
+    };
+    const neuronsBefore = countNeurons();
     const decisions = this.deepWritePromotionPolicy.promotePending(options.limit ?? 100, {
       projectId: options.projectId,
     });
+    const promotedCandidates = decisions.filter((decision) => decision.outcome.startsWith('promote')).length;
     return {
       projectId: options.projectId,
       decisions,
+      // Promotion records a governance decision on a candidate; it does not
+      // create neurons. Reporting only `queue.promoted` read as "92 memories
+      // entered the compiled layer" (#105).
+      promotedCandidates,
+      neuronsWritten: countNeurons() - neuronsBefore,
       queue: this.getDreamCandidateQueue(options.projectId),
     };
   }

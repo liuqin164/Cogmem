@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveCliBinDir } from '../install/InstallSteps.js';
+import { assertCliArgs } from './CliArgs.js';
 
 const COMMANDS: Record<string, string> = {
   init: 'init',

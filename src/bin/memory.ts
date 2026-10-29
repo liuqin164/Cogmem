@@ -15,6 +15,7 @@ import { MemoryInspectionStore } from '../store/MemoryInspectionStore.js';
 import type { MemoryEvent } from '../types/index.js';
 import { printCliJson } from './CliJson.js';
 import { cliArg } from '../utils/CliArgument.js';
+import { assertCliArgs } from './CliArgs.js';
 
 interface MemoryArgs {
   command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
@@ -916,6 +917,13 @@ function runGovern(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   return {
     ...result,
     decisions: result.decisions,
+    promoted_candidates: result.promotedCandidates,
+    neurons_written: result.neuronsWritten,
+    ...(result.neuronsWritten === 0
+      ? {
+        neurons_written_reason: 'promotion records a governance decision on each candidate; it writes a neuron only when the candidate carries a source neuron. 4.0 host recall reads Frames and the Atlas, not the legacy neuron layer.',
+      }
+      : {}),
   };
 }
 
@@ -1169,6 +1177,7 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['action', 'actor', 'after', 'agent', 'before', 'collection', 'config', 'confirmation-event', 'db', 'episode', 'event', 'evidence-limit', 'from', 'global', 'hops', 'id', 'include-evidence', 'include-staged', 'intent', 'interval-ms', 'json', 'key', 'limit', 'local-date-now', 'max-episodes', 'max-runs', 'mode', 'no-refresh', 'now', 'order', 'project', 'promote', 'promote-limit', 'query', 'reason', 'refresh', 'replacement', 'review-after', 'session', 'since', 'stale-ok', 'status', 'target-belief', 'thread', 'timezone', 'to', 'until', 'watch', 'workspace'] });
   const args = readArgs(process.argv.slice(2));
   if (args.help || !args.command) {
     console.log(usage());

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
 
 interface ExplainArgs {
   query?: string;
@@ -121,6 +122,7 @@ function printHuman(explanation: ReturnType<typeof explainRecallWithKernel>): vo
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['agent', 'config', 'db', 'json', 'limit', 'project', 'query'] });
   const args = readArgs(process.argv.slice(2));
   if (args.help) {
     console.log(usage());

@@ -123,6 +123,17 @@ Collection routing is enforced in compiled and raw fallback paths. Default recal
 
 Graph edge confidence, stability, and activation are separate. Recall and maintenance may decay activation, but they must not decay provenance confidence or the stability of `SUPPORTS`, `CORRECTS`, `CONTRADICTS`, and `SUPERSEDES` evidence. `BrainGraphView` is a bounded read-only traversal surface; it cannot mutate canonical memory.
 
+### Two layers, two recall entry points — know which one you are measuring
+
+4.0 keeps the compiled neuron layer (`neurons`) that 3.x wrote, and adds Frames plus the Atlas on top of the raw ledger. **Host recall reads the raw ledger, the Atlas and the Frames; it does not read the legacy neuron layer.** Two entry points therefore answer different questions:
+
+| entry point | reads | use it for |
+| --- | --- | --- |
+| `KernelAgentMemoryBackend.recall()` / `.recallPack()` | raw ledger lanes, Atlas, Frames, graph | anything a host or agent asks |
+| `MemoryKernel.recall()` (`BrainRecall`) | `neurons` (the legacy compiled layer) | legacy compatibility, and its own tests |
+
+Measuring the second and concluding "recall finds nothing" is the mistake this note exists to prevent: on a corpus produced by the 4.0 pipeline the neuron layer is nearly empty by construction (`cogmem memory govern` promotes candidate *status*; it writes a neuron only when a candidate carries a source neuron), while `KernelAgentMemoryBackend.recall()` returns the right evidence in milliseconds. `cogmem memory govern` reports `promoted_candidates` and `neurons_written` separately for the same reason.
+
 ## SourceRefs
 
 Semantic memories remain traceable through `sourceRefs`. A source ref may point to:

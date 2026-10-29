@@ -3,6 +3,8 @@ import Database from 'bun:sqlite';
 import { NeuronEmbeddingStore } from '../embedding/NeuronEmbeddingStore.js';
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
+assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['config', 'db', 'dimension', 'dry-run', 'json', 'limit', 'project', 'status'] });
 
 function parseArgs(argv: string[]): Record<string, string | boolean> {
   const args: Record<string, string | boolean> = {};

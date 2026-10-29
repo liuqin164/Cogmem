@@ -30,6 +30,8 @@ import {
   createMemoryKernelFromConfig,
   type MemoryKernel,
 } from '../factory.js';
+import { assertCliArgs } from './CliArgs.js';
+assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['config', 'date', 'db', 'dry-run', 'env-path', 'json', 'memory', 'no-progress', 'profile', 'progress', 'project', 'reindex-raw', 'session', 'sessions', 'since', 'state-db', 'timezone', 'until', 'workspace'] });
 
 type AgentKind = 'openclaw' | 'hermes';
 

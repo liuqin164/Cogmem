@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
 import { inspectOpenClawAutoMemoryPlugin } from '../host/openclaw/AutoMemoryPluginInstaller.js';
+import { assertCliArgs } from './CliArgs.js';
 import { printCliJson } from './CliJson.js';
 import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
 import {
@@ -317,6 +318,7 @@ async function runCommandCapture(cmd: string[], cwd: string): Promise<{ stdout: 
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['agent', 'config', 'fix', 'json', 'plugin-only', 'prefix', 'workspace', 'dry-run', 'yes', 'install-home', 'manager', 'from', 'local-dev', 'global', 'check-tools', 'no-gate'] });
   const args = readArgs(process.argv.slice(2));
   const resolvedSpec = args.from === 'latest'
     ? resolveLatestNpmSpec({ env: process.env })

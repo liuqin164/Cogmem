@@ -27,6 +27,8 @@ import { createMemoryKernelFromConfig } from '../factory.js';
 import { recallForHost, rememberForHost, type HostIdentity } from '../host/bridge/HostBridge.js';
 import { formatStrategyContext } from '../strategy/StrategyContextFormatter.js';
 import { loadAgentRegistry, resolveAgentRegistryPath } from '../mcp/AgentRegistry.js';
+import { assertCliArgs } from './CliArgs.js';
+assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['agent', 'agents', 'config', 'host', 'plugin-id', 'project', 'register-agent', 'scope', 'session', 'source', 'token'] });
 
 function readArg(name: string): string | undefined {
   const index = process.argv.indexOf(name);

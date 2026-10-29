@@ -31,6 +31,8 @@ import {
   type InstallGateDiagnostic,
   type InstallStep,
 } from '../install/InstallSteps.js';
+import { assertCliArgs } from './CliArgs.js';
+assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['agent', 'auto', 'bun', 'config', 'dry-run', 'env-path', 'fix', 'force', 'hermes-config', 'json', 'openclaw-config', 'out', 'plugin-dir', 'plugin-only', 'storage', 'workspace'] });
 
 function readArg(name: string): string | undefined {
   const index = process.argv.indexOf(name);

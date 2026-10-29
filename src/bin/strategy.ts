@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
 
 function parse(argv: string[]): { command?: string; values: Map<string, string> } {
   const [command, ...rest] = argv;
@@ -26,6 +27,7 @@ function usage(): string {
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['config', 'db', 'json', 'limit', 'project', 'query'] });
   const args = parse(process.argv.slice(2));
   if (!args.command || args.command === 'help' || args.values.has('help')) {
     console.log(usage());

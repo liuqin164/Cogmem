@@ -7,6 +7,7 @@ import { startCogmemMcpHttpServer } from '../mcp/http.js';
 import { loadAgentRegistry, resolveAgentRegistryPath } from '../mcp/AgentRegistry.js';
 import { resolveProfile, type McpToolProfile } from '../mcp/profiles.js';
 import { resolveWorkspaceRoot } from '../config/CogmemConfig.js';
+import { assertCliArgs } from './CliArgs.js';
 
 interface McpArgs {
   dbPath?: string;
@@ -101,6 +102,7 @@ function usage(): string {
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['agents', 'bind', 'config', 'cwd', 'db', 'host', 'path', 'port', 'profile', 'project', 'register-agent', 'token', 'transport'] });
   const args = readArgs(process.argv.slice(2));
   if (args.help) {
     console.log(usage());
