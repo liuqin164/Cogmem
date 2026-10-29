@@ -1217,7 +1217,16 @@ export class MemoryKernel {
     }
   }
 
-  recall(query: string, options: BrainRecallOptions = {}) {
+  /**
+   * The evidence layer: governed recall over the raw ledger, compiled memory
+   * and the Atlas. It is a **building block**, not the recall a host calls —
+   * `KernelAgentMemoryBackend.recall()` composes it with graph expansion,
+   * supersession filtering and the context cortex, and that is the one entry
+   * point an agent or a user should use (#105).
+   *
+   * @internal
+   */
+  searchEvidence(query: string, options: BrainRecallOptions = {}) {
     const recallNow = (options as BrainRecallOptions & { now?: number }).now ?? Date.now();
     const recallTimeZone = options.timeZone ?? this.projectClock.timeZone;
     const normalizedOptions: BrainRecallOptions = {
@@ -1305,7 +1314,7 @@ export class MemoryKernel {
       };
     }
 
-    const fallbackEvidence = this.recall(query, {
+    const fallbackEvidence = this.searchEvidence(query, {
       projectId: options.projectId,
       limit,
       includeRawEvidence: true,

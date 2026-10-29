@@ -10,6 +10,7 @@ import {
   type SourceContextWindowMetadata,
 } from '../recall/SourceContextMetadata.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
+import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
 import type { StrategyRetrievalPolicy } from '../strategy/StrategyCapsule.js';
 import {
@@ -588,7 +589,7 @@ export class KernelAgentMemoryBackend {
     }
     const retrievalLimit = Math.max(limit * 4, 24);
     const multidimensionalRecall = query.projectId !== undefined && allowsGraph
-      ? this.kernel.recall(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone })
+      ? this.kernel.searchEvidence(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone })
       : undefined;
     const atlasItems = allowsGraph
       ? [
@@ -672,7 +673,7 @@ export class KernelAgentMemoryBackend {
     }
 
     const fallbackItems = allowsCompiled
-      ? this.filterAgentEvidence((multidimensionalRecall ?? this.kernel.recall(queryPlan.primarySearchText, {
+      ? this.filterAgentEvidence((multidimensionalRecall ?? this.kernel.searchEvidence(queryPlan.primarySearchText, {
         projectId: query.projectId,
         limit: retrievalLimit,
         now: query.now,
@@ -980,7 +981,7 @@ export class KernelAgentMemoryBackend {
     relaxationTrace: MemoryAtlasRelaxationStep[];
   } {
     try {
-      const recall = this.kernel.recall(query.query, { projectId: query.projectId, limit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
+      const recall = this.kernel.searchEvidence(query.query, { projectId: query.projectId, limit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
       const atlas = recall.atlas;
       const plannedCards = atlas?.cards ?? [];
       const legacyAtlas = this.kernel.graphExplore(query.query, {
@@ -1345,16 +1346,27 @@ export class KernelAgentMemoryBackend {
     const prioritizedPrimary = semanticAtlas && !hasSemanticAtlas && !hasScopedPrimary && primary.length >= limit
       ? [...primary.slice(0, Math.max(0, limit - 1)), semanticAtlas]
       : primary;
-    const out: AgentRecallItem[] = [];
+    const merged: AgentRecallItem[] = [];
     const seen = new Set<string>();
     for (const item of [...prioritizedPrimary, ...secondary.filter((candidate) => candidate !== semanticAtlas)]) {
       const keys = [item.canonicalId, item.sourceAnchor?.eventId, item.id].filter((value): value is string => Boolean(value));
       if (keys.some((key) => seen.has(key))) continue;
       for (const key of keys) seen.add(key);
-      out.push(item);
-      if (out.length >= limit) break;
+      merged.push(item);
     }
-    return out;
+    // Supersession is decided before the list is cut: a stale statement that
+    // occupies a slot is a stale statement the statement replacing it cannot
+    // take (#72, measured at 95.8% leakage when nothing tagged the old value).
+    return filterSuperseded(merged, (item) => ({
+      id: item.id,
+      content: item.text,
+      createdAt: item.sourceAnchor?.eventOrdinal ?? item.sourceAnchor?.turnSeq ?? 0,
+      // Deliberately no `topicPath`: on this path many unrelated records share
+      // one, and grouping by it collapsed the recall floor from 4/18 to 2/18.
+      // The subject phrase is the signature the rule is stated in.
+      tags: item.tags,
+      projectId: item.projectId,
+    })).slice(0, limit);
   }
 
   private withAtlasItems(result: AgentRecallResult, atlasItems: AgentRecallItem[], limit: number): AgentRecallResult {
@@ -1363,7 +1375,7 @@ export class KernelAgentMemoryBackend {
   }
 
   private atlasItemsForAgentQuery(searchText: string, query: AgentRecallQuery, allowsRawSource: boolean): AgentRecallItem[] {
-    const recall = this.kernel.recall(searchText, { projectId: query.projectId, limit: Math.max((query.limit ?? 5) * 4, 24), includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
+    const recall = this.kernel.searchEvidence(searchText, { projectId: query.projectId, limit: Math.max((query.limit ?? 5) * 4, 24), includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
     const cards = (recall.atlas?.cards ?? []).map((card) => this.toAgentRecallItemFromAtlasCard(card, query));
     const nodes = (recall.atlas?.nodes ?? [])
       .filter((node) => ['actor', 'event', 'task', 'object', 'location', 'state', 'project'].includes(node.nodeType))

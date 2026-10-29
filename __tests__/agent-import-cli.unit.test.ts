@@ -128,7 +128,7 @@ test('OpenClaw import writes memory once and skips already imported records on r
   expect(secondParsed.skippedRecords).toBeGreaterThanOrEqual(firstParsed.recordsIngested);
 
   const kernel = createMemoryKernel({ dbPath });
-  const recalled = kernel.recall('Bluetooth provisioning project', {
+  const recalled = kernel.searchEvidence('Bluetooth provisioning project', {
     projectId: 'openclaw-test',
     includeRawEvidence: true,
   });
@@ -386,7 +386,7 @@ test('Hermes import migrates profile and session markdown into core memory', asy
   expect(parsed.recordsIngested).toBeGreaterThanOrEqual(2);
 
   const kernel = createMemoryKernel({ dbPath });
-  const recalled = kernel.recall('GATT configuration service', {
+  const recalled = kernel.searchEvidence('GATT configuration service', {
     projectId: 'hermes-test',
     includeRawEvidence: true,
   });

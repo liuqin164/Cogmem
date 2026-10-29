@@ -273,7 +273,8 @@ test('init non-interactive output shows current SDK quickstart calls', async () 
   expect(exitCode).toBe(0);
   expect(output).toContain('const kernel = createMemoryKernelFromConfig();');
   expect(output).toContain("await kernel.ingest({ content: 'Remember that the user prefers concise answers.'");
-  expect(output).toContain("kernel.recall('what does the user prefer?'");
+  expect(output).toContain('new KernelAgentMemoryBackend(kernel)');
+  expect(output).toContain("memory.recall({ agentId: 'my-agent', projectId: 'my-agent', query: 'what does the user prefer?' })");
   expect(output).not.toContain('turns:');
   expect(existsSync(join(homePath, 'config.toml'))).toBe(true);
 });

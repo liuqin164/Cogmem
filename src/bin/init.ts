@@ -938,7 +938,8 @@ function printUsageSnippet(cfg: WizardConfig): void {
   console.log('  │  const kernel = createMemoryKernelFromConfig();');
   console.log('  │');
   console.log("  │  await kernel.ingest({ content: 'Remember that the user prefers concise answers.', projectId: 'my-agent' });");
-  console.log("  │  const result = kernel.recall('what does the user prefer?', { projectId: 'my-agent' });");
+  console.log("  │  const memory = new KernelAgentMemoryBackend(kernel);");
+  console.log("  │  const result = await memory.recall({ agentId: 'my-agent', projectId: 'my-agent', query: 'what does the user prefer?' });");
   console.log('  │  console.log(result.rawEvidence.map((item) => item.content));');
   if (cfg.encryptionPassphrase) {
     console.log('  │');

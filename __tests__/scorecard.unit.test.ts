@@ -26,3 +26,13 @@ test('the scorecard scenario set is a function of the seed alone', () => {
   }
 });
 
+
+test('#72 gate: the user-facing path leaks an untagged stale value in under 10% of cases', async () => {
+  // The bars the maintainer set for closing #72, asserted here so a regression
+  // fails the suite instead of moving a number in a report (#72, §4.110).
+  const { measureHostPathSupersession } = await import('../scripts/scorecard.js');
+  const measured = await measureHostPathSupersession({ items: 24, seed: 20261025 });
+  expect(measured.scenarios).toBe(24);
+  expect({ found: measured.found >= 0.875 }).toEqual({ found: true });
+  expect({ leaked: measured.stale <= 0.1 }).toEqual({ leaked: true });
+}, 180_000);

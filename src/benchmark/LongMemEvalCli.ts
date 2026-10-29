@@ -18,7 +18,12 @@ export async function runLongMemEvalCli(argv: string[] = Bun.argv.slice(2)): Pro
   const { datasetPath } = parseLongMemEvalArgs(argv);
   const brain = new MemoryKernel();
   await brain.initialize();
-  const metrics = await new ExternalBenchmarkRunner(brain, datasetPath).runLongMemEval();
+  // This benchmark measures the evidence layer on purpose (it compares against
+  // published baselines that never saw cogmem's host path); say so at the seam.
+  const metrics = await new ExternalBenchmarkRunner({
+    ingest: (input) => brain.ingest(input),
+    recall: (query, options) => brain.searchEvidence(query, options),
+  }, datasetPath).runLongMemEval();
   const temporal = metrics.accuracyByType.temporal ?? 0;
 
   return [

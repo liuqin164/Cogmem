@@ -281,7 +281,7 @@ async function runFamily(kernel: ReturnType<typeof createMemoryKernel>, scenario
   console.error(`recall paths used: ${[...paths.entries()].map(([path, count]) => `${path}=${count}`).join(', ') || 'none'}`);
   const count = scenarios.length;
   return [
-    score('cogmem_default', cogmem, count),
+    score('evidence_layer', cogmem, count),
     score('fixed_recent_window_4', recent, count),
     score('vector_topk_3_hashing', vector, count),
   ];
@@ -400,6 +400,38 @@ async function runHostPath(kernel: ReturnType<typeof createMemoryKernel>, scenar
   ];
 }
 
+/**
+ * The #72 gate: the user-facing path on the **unmarked** supersession family.
+ *
+ * The bars are the ones the maintainer set — current value found ≥87.5%, stale
+ * value leaked ≤10% — and they are asserted in the suite, so a change that
+ * reintroduces the leakage turns the gate red instead of quietly moving a
+ * number in a report nobody re-reads.
+ */
+export async function measureHostPathSupersession(options: { items: number; seed: number }): Promise<{
+  found: number;
+  stale: number;
+  scenarios: number;
+}> {
+  const dir = mkdtempSync(join(tmpdir(), 'cogmem-scorecard-gate-'));
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db') });
+  try {
+    const now = Date.now();
+    const scenarios = buildSupersessionScenarios(options.items, options.seed);
+    for (const scenario of scenarios) {
+      for (const turn of scenario.turns) {
+        await kernel.ingest({ content: turn.content, projectId: scenario.projectId, tags: [turn.turnId, ...(turn.tags ?? [])] });
+      }
+    }
+    const arms = await runHostPath(kernel, scenarios, now);
+    const plan = arms.find((arm) => arm.arm === 'agent_backend_context_plan') ?? arms[0]!;
+    return { found: plan.recall, stale: plan.staleLeakage, scenarios: scenarios.length };
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export async function runScorecard(options: { items: number; seed: number }): Promise<{
   recall: ArmResult[];
   currentTruth: ArmResult[];
@@ -454,6 +486,9 @@ async function main(): Promise<void> {
     return;
   }
   console.log(`scenarios: ${result.scenarios} per family (synthetic, generated here) | seed: ${seed} | model: none (rule_only)`);
+  console.log('');
+  console.log('**Primary metric: Family C — the host path (`KernelAgentMemoryBackend.recall`).**');
+  console.log('Families A/B measure the evidence layer (`MemoryKernel.searchEvidence`, internal); it is a component, not the path a host takes.');
   console.log('');
   console.log('### Family A — one fact among distractors, queried with its own words');
   console.log('');

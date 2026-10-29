@@ -413,7 +413,7 @@ test('tool call and result facade records parent-child ledger links without bypa
   expect(replay.find((event) => event.eventId === assistantEvent?.eventId)?.nextEventId).toBe(callEvent.eventId);
   expect(replay.find((event) => event.eventId === callEvent.eventId)?.nextEventId).toBe(resultEvent.eventId);
 
-  const recall = kernel.recall('idempotent ALTER TABLE', {
+  const recall = kernel.searchEvidence('idempotent ALTER TABLE', {
     projectId: 'tool-ledger-project',
     includeRawEvidence: true,
   });

@@ -16,8 +16,8 @@ test('Agent global scope executes the multidimensional graph lane instead of tre
   try {
     await kernel.ingest({ projectId: '', content: 'projectless graph lane evidence' });
     let multidimensionalCalls = 0;
-    const originalRecall = kernel.recall.bind(kernel);
-    (kernel as unknown as { recall: MemoryKernel['recall'] }).recall = ((query, options) => {
+    const originalRecall = kernel.searchEvidence.bind(kernel);
+    (kernel as unknown as { searchEvidence: MemoryKernel['searchEvidence'] }).searchEvidence = ((query, options) => {
       multidimensionalCalls += 1;
       return originalRecall(query, options);
     }) as MemoryKernel['recall'];

@@ -1,4 +1,5 @@
 import type { BeliefRecord, Neuron } from '../types/index.js';
+import { filterSuperseded } from './SupersessionFilter.js';
 import type { FactRecord, EventRecord, FactStore } from '../store/FactStore.js';
 import type { EntityStore, EntityTimelineItem } from '../store/EntityStore.js';
 import type { BeliefStore } from '../belief/BeliefStore.js';
@@ -321,92 +322,17 @@ export class BrainRecall {
    *   memory is worse than showing a stale one next to its replacement.
    */
   private _filterSuperseded(rawEvidence: Neuron[]): Neuron[] {
-    if (rawEvidence.length <= 1) return rawEvidence;
-
-    const groups = new Map<string, Neuron[]>();
-    for (const neuron of rawEvidence) {
-      const topicKey = this.extractTopicKey(neuron);
-      if (!topicKey) continue;
-
-      // An untagged statement is not "unknown": it is the single anonymous
-      // speaker a rule_only deployment writes as, so it supersedes its own
-      // earlier statements. Only a *named* agent is a separate speaker.
-      const speaker = this.extractHostId(neuron) ?? '_';
-      const key = `${speaker}|${topicKey}`;
-      const group = groups.get(key) ?? [];
-      group.push(neuron);
-      groups.set(key, group);
-    }
-
-    const toRemove = new Set<string>();
-    for (const group of groups.values()) {
-      if (group.length <= 1) continue;
-      group.sort((a, b) => (b.metadata.createdAt ?? 0) - (a.metadata.createdAt ?? 0));
-      if (!this.looksLikeCorrection(group[0]!.content)) continue;
-      for (const neuron of group.slice(1)) toRemove.add(neuron.id);
-    }
-
-    return toRemove.size === 0 ? rawEvidence : rawEvidence.filter((neuron) => !toRemove.has(neuron.id));
-  }
-
-  private extractHostId(neuron: Neuron): string | undefined {
-    for (const tag of neuron.metadata.tags || []) {
-      if (tag.startsWith('agent:')) return tag.slice(6);
-    }
-    return undefined;
-  }
-
-  /**
-   * The topic signature two statements have to share to be compared.
-   *
-   * It is the **subject phrase** — the content words up to the first value
-   * marker (`is`, `on`, `scheduled`, a date…) — with filler removed. That is the
-   * part a correction keeps and a different fact does not: "the deployment
-   * window for beacon" is the subject, "day 3" and "day 17" are the values the
-   * correction replaced. Two teams' schedules keep different subjects, so they
-   * never collapse into one group.
-   */
-  private extractTopicKey(neuron: Neuron): string | undefined {
-    if (neuron.metadata.topicPath) return neuron.metadata.topicPath;
-
-    const tags = neuron.metadata.tags || [];
-    for (const tag of tags) {
-      if (tag.startsWith('topic:')) return tag.slice(6);
-      if (tag.startsWith('canonicalKey:')) return tag.slice(13);
-    }
-
-    const normalized = this.normalizeContentForTopicKey(neuron.content);
-    const words = (normalized.toLowerCase().match(/[a-z0-9\u4e00-\u9fff]{2,}/g) ?? []);
-    const subject: string[] = [];
-    for (const word of words) {
-      if (SUBJECT_TERMINATORS.has(word)) break;
-      if (SUBJECT_FILLER.has(word)) continue;
-      subject.push(word);
-      if (subject.length >= 6) break;
-    }
-    return subject.length >= 2 ? subject.join(' ') : undefined;
-  }
-
-  private normalizeContentForTopicKey(content: string): string {
-    // A correction prefix is framing, not subject: strip it so the correction
-    // and the statement it replaces produce the same signature.
-    return content
-      .replace(/^(correction|update|updated)\s*[:：]\s*/i, '')
-      .replace(/^(更正|纠正|已更新)\s*[:：]\s*/, '')
-      .trim();
-  }
-
-  /**
-   * Does this read as a correction of an earlier statement?
-   *
-   * The prefix forms (`correction:`, `更正:`, `updated:`) are already detected by
-   * `normalizeContentForTopicKey`, which strips them — so a statement that
-   * changes under normalisation is a correction. Only the in-sentence forms have
-   * to be matched here.
-   */
-  private looksLikeCorrection(content: string): boolean {
-    return this.normalizeContentForTopicKey(content) !== content.trim()
-      || /now\s+(?:is|scheduled|on)|现在[:：]\s*(?:是|安排在|为)|supersede|取代|替换/i.test(content);
+    // One rule, shared with the user-facing path (#72). The grouping and the
+    // correction test live in SupersessionFilter; this adapter only says how a
+    // neuron presents itself to it.
+    return filterSuperseded(rawEvidence, (neuron) => ({
+      id: neuron.id,
+      content: neuron.content,
+      createdAt: neuron.metadata.createdAt,
+      topicPath: neuron.metadata.topicPath,
+      tags: neuron.metadata.tags,
+      projectId: neuron.metadata.projectId,
+    }));
   }
 
   private findDurableNeuronsByType(
