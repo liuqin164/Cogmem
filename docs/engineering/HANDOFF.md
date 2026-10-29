@@ -133,26 +133,33 @@ export XDG_CONFIG_HOME="$PWD/.cogmem/xdg"   # 必须：否则 instabox 写 ~/.co
 
 **已在 box 验证**：对着真模型跑真系统提示词 → `valid: true`（3775 completion tokens）。
 
-**还没验证：帧通过 `cogmem dream night` 落到 `memory_frames`**（`frames: 0`）。本轮把卡点从「不知道错在哪」推进到「知道是哪一次调用、哪一个模型属性」：
+**还没验证：帧通过 `cogmem dream tick` 落到 `memory_frames`**（`frames: 0`）。本轮把卡点从「不知道错在哪」推进到「知道每一步卡在哪、且修掉了四步」，全部有红→绿测试：
 
-**两个模型调用，两个契约，共用同一个 `memory` 角色**（`DreamCuratorWorker` 第 898/904 行都用 `getRoleConfig('memory')`）：
-1. **curator 调用**（产出候选：summary/preferences/indexing…）；
-2. **frame 调用**（产出 `memory_frame.v1`）。
+| 已修 | 症状（box 实测） |
+|---|---|
+| `memoryFrameShapeError` 指名形状错误 | 日志只有 `invalid_memory_frame_shape`，看不出是截断还是形状不对——**修了它，后面每一条才被点名** |
+| `max_tokens` 传下去，memory 默认 16384 | 请求一直是 512 默认；管线自己的提示词超过 8k（`JSON Parse error: Expected '}'`），孤立测一次帧要 5337 token |
+| `timeout_ms` memory 默认 300 秒 | 帧是一次长调用（实测 150–300 秒），60 秒默认会把它掐断，表现为 `Unexpected EOF`——像是模型坏了，其实是超时 |
+| `json_mode`（`response_format: json_object`） | 不加它，该凭证唯一能用的模型用散文回答 |
+| 提示词 v6：嵌套对象的精确键集、由注册表生成的**关系端点表**、`episodeKind` 枚举、`raw_event` 恰好一个证据 | 模型自己发明 `actor -[PART_OF_PROJECT]-> project`、`temporalReference` 多带键、`raw_event` 证据数不对 |
+| `reasoning_content` 兜底 | flash 模型把 JSON 放在 `reasoning_content` 而 `content` 为空 → 被当成 `provider_invalid_output`（detail 为空） |
+| 已知关系用错维度 → 降级为 `RELATED_TO` | `event -[INVOLVES]-> topic` 让**整帧**被拒（同「未知关系」已有的容忍逻辑，现在对齐） |
+| 空响应不再沉默 | 非 2xx 时客户端返回 `''`，状态只在 stderr，诊断里是空的 |
 
-**该凭证只有两个模型可用**（其余全部 HTTP 404/410 `Function not found for account`；实测 14 个候选模型逐个 ping）：
+**已确认可复现**：真系统提示词 + 真模型 → **`valid: true`**（5337 token / 154 秒）；curator 路径在匹配模式下产出 **10 个候选**。
 
-| 模型 | curator 调用 | frame 调用 |
-|---|---|---|
-| `nvidia/nemotron-3-ultra-550b-a55b` | ✅ 能产出候选 | ⚠️ 孤立测试**合法帧**（154 秒 / 5337 token），但管线里更大的调用会被网关 **HTTP 504** 掐断 |
-| `minimaxai/minimax-m3.1-flash` | ❌ `dream_curator_provider_invalid_output`（detail 为空） | 未走到 |
+**最后一次运行的现象（下一步的第一件事）**：`dream tick --mode deep --max-episodes 1` 报 `processedEpisodeCount: 0, failedEpisodeCount: 1, candidateCount: 0`，而 `pipeline_nonfatal_events` **没有新增行**——失败发生在 curator 调用之前或它的诊断被去重隐藏。**先去查这个**（`providerDiagnosticCandidate` 按 reason 去重，会让新一轮的错误不可见；`recordNonFatal` 本身是无条件写的，所以新行缺失说明失败点在别处）。
 
-而 API 层 flash 没问题（同一提示词 `plain` 与 `json_object` 都返回合法 JSON，6–35 token）。
+**另外一条本轮差点走错的教训**：我曾两次断言「flash 模型过不了 curator 契约」——错。我 requeue 的是 `deep` 作业，跑的却是 `--mode normal`，作业一直 `pending`/`attempts=0`，**根本没被领取**。**跑之前先看作业状态和模式是否匹配**。
 
-**所以下一步是这两个之一（都不需要大改）**：
-- **A（推荐）**：手工把 **curator 的提示词**跑一遍（照 `.cogmem/frame-probe.sh` 的样子，换成 curator 的 system prompt），看 flash 到底返回了什么——它的 detail 是空的，说明可能返回了空串或形状不对。修 curator 提示词（和本轮修 frame 提示词同样的手法）后，flash 就能一口气跑完两个调用。
-- **B**：让两个调用用不同角色（现在硬编码 `memory`），nemotron 做 curator、flash 做 frame——但 nemotron 的 frame 调用会 504，所以 A 更对。
+**该凭证的模型矩阵**（14 个候选逐个 ping，其余全 404/410）：
 
-**已经确认可复现的事实**：frame 路径在孤立测试下合法（`valid: true`），`max_tokens`/`timeout_ms`/`json_mode`/提示词形状四条修正都是必需的，缺一条就失败（每次失败都被点名，见下）。
+| 模型 | 可用性 |
+|---|---|
+| `nvidia/nemotron-3-ultra-550b-a55b` | 能产出候选与合法帧，但管线里更大的调用会被网关 **HTTP 504** 掐断（孤立测试可以） |
+| `minimaxai/minimax-m3.1-flash` | 快、JSON 可用；修掉 `reasoning_content` 后 curator 产出 10 个候选 |
+
+两个调用**共用同一个 `memory` 角色**（`DreamCuratorWorker` 第 898/904 行）——若要一个模型做 curator、另一个做 frame，需要按调用选角色（小功能，未做）。
 
 **box 操作（照做）**：
 
