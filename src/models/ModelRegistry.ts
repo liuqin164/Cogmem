@@ -21,8 +21,8 @@ export class ModelRegistry {
         baseUrl: '',
         apiKey: '',
         modelName: 'rule_only',
-        timeoutMs: 60000,
-        maxTokens: 8192,
+        timeoutMs: 300000,
+        maxTokens: 16384,
         fallback: 'rule_only'
       },
       reasoning: {

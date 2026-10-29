@@ -133,9 +133,26 @@ export XDG_CONFIG_HOME="$PWD/.cogmem/xdg"   # 必须：否则 instabox 写 ~/.co
 
 **已在 box 验证**：对着真模型跑真系统提示词 → `valid: true`（3775 completion tokens）。
 
-**还没验证（下一步就干这个）**：帧通过 `cogmem dream night` 落到 `memory_frames`。
-- 现状：`frames: 0`；一次 `dream night` 跑 124 秒、`failed=0 candidates=0`，而 `pipeline_nonfatal_events` **什么都没记**；随后 `dream tick --mode deep --max-episodes 3` **完全没有输出**且非零退出——与「超出作业 500 秒墙钟（约 125 秒/段 × 3 段）」一致。
-- 下一步：**`--max-episodes 1` + 把作业超时提到 900 秒**，同时盯 `pipeline_nonfatal_events`（现在会指名错误）与 `memory_frames`。若仍然没有帧，看 worker 组装 user prompt 的那段（`buildFramePrompt`）与我手写探针的差别——探针用的是自己拼的 events，worker 用的是真实 episode。
+**还没验证：帧通过 `cogmem dream night` 落到 `memory_frames`**（`frames: 0`）。本轮把卡点从「不知道错在哪」推进到「知道是哪一次调用、哪一个模型属性」：
+
+**两个模型调用，两个契约，共用同一个 `memory` 角色**（`DreamCuratorWorker` 第 898/904 行都用 `getRoleConfig('memory')`）：
+1. **curator 调用**（产出候选：summary/preferences/indexing…）；
+2. **frame 调用**（产出 `memory_frame.v1`）。
+
+**该凭证只有两个模型可用**（其余全部 HTTP 404/410 `Function not found for account`；实测 14 个候选模型逐个 ping）：
+
+| 模型 | curator 调用 | frame 调用 |
+|---|---|---|
+| `nvidia/nemotron-3-ultra-550b-a55b` | ✅ 能产出候选 | ⚠️ 孤立测试**合法帧**（154 秒 / 5337 token），但管线里更大的调用会被网关 **HTTP 504** 掐断 |
+| `minimaxai/minimax-m3.1-flash` | ❌ `dream_curator_provider_invalid_output`（detail 为空） | 未走到 |
+
+而 API 层 flash 没问题（同一提示词 `plain` 与 `json_object` 都返回合法 JSON，6–35 token）。
+
+**所以下一步是这两个之一（都不需要大改）**：
+- **A（推荐）**：手工把 **curator 的提示词**跑一遍（照 `.cogmem/frame-probe.sh` 的样子，换成 curator 的 system prompt），看 flash 到底返回了什么——它的 detail 是空的，说明可能返回了空串或形状不对。修 curator 提示词（和本轮修 frame 提示词同样的手法）后，flash 就能一口气跑完两个调用。
+- **B**：让两个调用用不同角色（现在硬编码 `memory`），nemotron 做 curator、flash 做 frame——但 nemotron 的 frame 调用会 504，所以 A 更对。
+
+**已经确认可复现的事实**：frame 路径在孤立测试下合法（`valid: true`），`max_tokens`/`timeout_ms`/`json_mode`/提示词形状四条修正都是必需的，缺一条就失败（每次失败都被点名，见下）。
 
 **box 操作（照做）**：
 

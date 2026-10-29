@@ -444,8 +444,15 @@ function defaultRoleModel(role: ModelRoleName): string {
   return role === 'embedding' ? 'deterministic_local' : 'rule_only';
 }
 
+/**
+ * A frame is one long call: measured on the box, a reasoning model needed
+ * 150–300 s for one two-turn episode, so a 60 s default aborts the reading
+ * mid-response (the body then fails to parse as `Unexpected EOF`, which reads
+ * like a model defect instead of a deadline).
+ */
 function defaultRoleTimeout(role: ModelRoleName): number {
-  return role === 'embedding' ? 30000 : 60000;
+  if (role === 'embedding') return 30000;
+  return role === 'memory' ? 300000 : 60000;
 }
 
 /**
@@ -453,11 +460,11 @@ function defaultRoleTimeout(role: ModelRoleName): number {
  * temporal references and their evidence ids, plus whatever preamble a
  * reasoning model emits first. Left at the client's 512-token default the answer
  * is cut off mid-string; measured on the box, a real model needed 3.8k for the
- * frame alone and overran 4k on the pipeline's own prompt. The default has to
- * fit the contract the code itself demands.
+ * frame alone and overran 8k on the pipeline's own prompt; 16384 is the measured ceiling it
+ * fits in (5337 tokens for one two-turn episode).
  */
 function defaultRoleMaxTokens(role: ModelRoleName): number {
-  return role === 'memory' ? 8192 : 1024;
+  return role === 'memory' ? 16384 : 1024;
 }
 
 function maybeResolveWorkspace(
