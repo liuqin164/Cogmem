@@ -131,15 +131,24 @@ export XDG_CONFIG_HOME="$PWD/.cogmem/xdg"   # 必须：否则 instabox 写 ~/.co
 - 失败先看 `dream tick --json` 的 `failedEpisodes[].error`，再看 `pipeline_nonfatal_events`（诊断候选按 reason 去重，可能不更新）。
 - 投影在 `dream night`（含 reconciliation），裸 `dream tick` 只写 `memory_frames`，不进图谱。
 
-**新发现：召回为空，是因为「编译层」几乎没被填满**（不是 CJK 问题，也不是 lane 选择）：
-- `neurons` 全库 **16 行**，本项目 **8 行**；而 `memory_events` 有 96 条、`memory_atlas_documents` 176 篇。
-- `neurons_fts match 'openclaw'` = 0、`'钓鱼'` = 0；同一时刻 `memory_events_fts match 'openclaw'` = 28。**索引有数据，召回查的是 neurons，而 neurons 里没有这些东西。**
-- 实测 8 个查询（中英、单词、短语）只有 `PELICAN-88` 命中 2 条——那 8 行 neuron 就是那次巡检对话留下的。
+**召回也验证过了（我一度测错入口）**：用 **`KernelAgentMemoryBackend.recall`**（宿主真正走的那条，lanes：compiled / raw_ledger / atlas）跑四个自然语言问题：
 
-**下一步（按顺序，都不需要大改）**：
-1. **一次只跑一段 + `--promote`**：`cogmem dream tick --mode deep --max-episodes 1 --promote`。我试过 `--max-episodes 3`，结果 2 段报 `episode_dream_lease_lost`（这个模型每段 150–300 秒，3 段就超过租约）。看 `--promote` 之后 `neurons` 是否增长；tick 结果里 promotion 的字段名要确认（我看到的 `promotion` 是空对象）。
-2. 若 `--promote` 仍不产 neuron：读 `src/engine/DeepWritePromotionPolicy.ts`（它按治理规则决定哪些 candidate 能升级），对照 box 上 `deep_write_candidates` 的 `status`/`governance` 字段（现在多是 `candidate` + `candidate_only_cpu_governance_required`）。
-3. 之后才是 #100（CJK 关键词索引）——注意上面的证据表明**当前召回失败不是 CJK 造成的**（ASCII 单词同样为 0），#100 解决的是「中文分词后仍能命中」，不是「neurons 空」。
+```
+我喜欢钓鱼吗      → 2 条（87ms）
+张伟在做什么项目   → 2 条（109ms）
+部署流程改成了什么 → 3 条（11ms）
+openclaw          → 3 条（9ms）
+```
+
+命中的正是那段对话的原始事件。**整条链因此全部验证**：对话 → 模型读出帧（LIKES / FRIEND_OF）→ `dream night` 投影进图谱 → 宿主式召回 9–109ms 命中。
+
+**别再踩的两个入口陷阱**（本轮各栽一次）：
+- `kernel.recall()` 是 **legacy BrainRecall**（查 `neurons`，本项目只有 8 行，所以全返回 0）；**用户面召回必须用 `KernelAgentMemoryBackend.recall`**。
+- `cogmem dream tick --promote` **静默无效**（`src/bin/dream.ts` 根本没有 promote 处理，参数解析器接受任意 `--flag`）。治理升级的命令是 **`cogmem memory govern --project X`**（内部 `promoteDreamCandidates`）。
+
+**两个未修的观察（不阻塞，值得开票）**：
+1. `memory govern` 报了 `promoted: 92`，candidate 状态确实变了，但 `neurons` 仍是 16 行——从原始事件来的 candidate 没有 `sourceNeuronId`，`DeepWritePromotionPolicy` 因此不写 neuron。旧的编译层（neurons）与 4.0 的帧/图谱是两套，宿主召回走的是后者，所以不影响可用性。
+2. `dream tick --promote` 静默忽略未知/未实现参数，容易让人以为治理跑过了。
 
 **box 操作（照做）**：
 
