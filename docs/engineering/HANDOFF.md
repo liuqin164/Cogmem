@@ -123,16 +123,19 @@ export XDG_CONFIG_HOME="$PWD/.cogmem/xdg"   # 必须：否则 instabox 写 ~/.co
 
 ## 接力点：模型路径的最后一里（**唯一在做的活**）
 
-用户已授权用 box 上三个宿主的模型配置测试，要求「跑通为止」。目前**没跑通**，进度与卡点如下。
+用户已授权用 box 上三个宿主的模型配置测试，要求「跑通为止」。**进展：模型能吐出合法帧了，但帧还没进到图谱。**
 
-**已经修掉的两个真缺陷**（都在 `8273aed`，都只有真模型才能发现）：
-1. 输出预算从没传下去 → 每个请求都是 512 token 默认 → 帧 JSON 被截断当作 `invalid_output` 丢弃 → **悄悄退回规则版**。现按角色传 `max_tokens`（memory 默认 2048）。
-2. 没人要求端点输出 JSON → 该凭证唯一可用的模型用散文回答。实测：加 `response_format: {"type":"json_object"}` + 4096 预算，**同一提示词返回完整合法帧**（`finish_reason: stop`，2569 token）。现提供 `json_mode = true`。
+**本轮修掉的四个真缺陷**（只有真模型才能发现，全部已提交 `60e986b`）：
+1. **形状错误什么都不说**：`isMemoryFrame` 只答是/否，日志永远只有 `invalid_memory_frame_shape`。现由 `memoryFrameShapeError` 指名（`processor_not_object:string`、`temporalReference_has_unknown_key`…），`isMemoryFrame` 定义为「没有理由」——同一份判据，同一个接受集。**这一条是解锁其余三条的关键。**
+2. **输出预算从没传下去**：每个请求都是 512 token 默认。现按角色传 `max_tokens`，memory 角色默认 **8192**（实测：真模型光帧就要 3.8k）。
+3. **没人要求 JSON**：`json_mode = true` 发 `response_format: {"type":"json_object"}`；不加它，该凭证唯一可用的模型用散文回答。
+4. **提示词只给了名字没给形状**：列了关系词表却没给端点，模型于是发明 `actor -[PART_OF_PROJECT]-> project`。现在提示词带上**由 `RelationConstraintRegistry` 生成的端点表**（两者不可能漂移）、每个嵌套对象的精确键集、必需的 episode/project 节点、`episodeKind` 枚举。版本 v5。
 
-**还差三步（按顺序）**：
-1. **让 provider 失败可观测**。`DreamCuratorWorker.providerDiagnosticCandidate` 会按 reason 去重，所以库里留下的永远是第一次那段的散文，看不到本次真实错误。先修这个（记原始输出，或不去重）。
-2. **放宽预算**（memory 角色 8192）或换模型——端点目录很大，但该凭证只对 `nvidia/nemotron-3-ultra-550b-a55b` 有权（其它返回 HTTP 404 `Function not found for account`）。
-3. **再跑 `dream night`**，预期在 box 图谱里看到帧、实体、以及 `LIKES`/`FRIEND_OF` 关系。
+**已在 box 验证**：对着真模型跑真系统提示词 → `valid: true`（3775 completion tokens）。
+
+**还没验证（下一步就干这个）**：帧通过 `cogmem dream night` 落到 `memory_frames`。
+- 现状：`frames: 0`；一次 `dream night` 跑 124 秒、`failed=0 candidates=0`，而 `pipeline_nonfatal_events` **什么都没记**；随后 `dream tick --mode deep --max-episodes 3` **完全没有输出**且非零退出——与「超出作业 500 秒墙钟（约 125 秒/段 × 3 段）」一致。
+- 下一步：**`--max-episodes 1` + 把作业超时提到 900 秒**，同时盯 `pipeline_nonfatal_events`（现在会指名错误）与 `memory_frames`。若仍然没有帧，看 worker 组装 user prompt 的那段（`buildFramePrompt`）与我手写探针的差别——探针用的是自己拼的 events，worker 用的是真实 episode。
 
 **box 操作（照做）**：
 
@@ -141,15 +144,17 @@ export INSTABOX_API_KEY=<key>
 export INSTABOX_BIN=/home/ubuntu/.local/bin/instabox
 export XDG_CONFIG_HOME="$PWD/.cogmem/xdg"   # 必须，否则写 ~/.config/instabox/.lock 被沙箱拒
 instabox resume cogmem-test
-# 装当前 HEAD：
-bun run build && npm pack --pack-destination .cogmem/pack --cache .cogmem/npm-cache
+bun run build && mkdir -p .cogmem/pack && npm pack --pack-destination .cogmem/pack --cache .cogmem/npm-cache
 instabox push cogmem-test .cogmem/pack/cogmem-4.0.0.tgz /tmp/cogmem-4.0.0.tgz
 instabox exec cogmem-test -- 'npm install -g --prefix /data/home/.npm-global /tmp/cogmem-4.0.0.tgz'
+instabox exec --background cogmem-test -- 'bash /tmp/final-check.sh'   # 脚本在本地 .cogmem/ 里推上去
 ```
 
-- workspace 配置在 box 的 `/data/workspace/flow/.cogmem/config.toml`，`[memory_model]` 已指向 `https://integrate.api.nvidia.com/v1`（key 取自 `/data/home/.openclaw/openclaw.json` 的 `models.providers.nvidia.apiKey`），已设 `max_tokens = 4096`、`json_mode = true`、`timeout_ms = 300000`。
-- 造对话：`cogmem episode append --project openclaw-2cbf70c2 --session <s> --source-agent openclaw --role user --text "…"` → `episode seal --mode hard` → `episode requeue-dream --mode deep` → `cogmem dream night --project openclaw-2cbf70c2 --max-episodes 1`。
-- **宿主自己的 LLM 没配 key**（`No API key found for provider "openai"`），所以 `openclaw agent` 跑不完整轮对话；验记忆后端请用 `scripts/verify-host-memory.sh`（直接写 MCP，不依赖宿主模型），本轮三个宿主仍 **3/3 PASS**。
+- box 的 workspace 配置 `/data/workspace/flow/.cogmem/config.toml` 的 `[memory_model]` 已指向 `https://integrate.api.nvidia.com/v1`（key 来自 `/data/home/.openclaw/openclaw.json` 的 `models.providers.nvidia.apiKey`），已设 `max_tokens = 8192`、`json_mode = true`、`timeout_ms = 300000`。
+- **该凭证只对 `nvidia/nemotron-3-ultra-550b-a55b` 有权**（其它模型返回 HTTP 404 `Function not found for account`），而它是个「先思考再回答」的模型：约 30–130 秒/次，预算给小了就会截断。
+- 造对话：`cogmem episode append --project openclaw-2cbf70c2 --session <s> --source-agent openclaw --role user --text "…"` → `episode seal --mode hard` → `episode requeue-dream --mode deep` → `cogmem dream tick --project openclaw-2cbf70c2 --mode deep --max-episodes 1`。
+- **宿主自己的 LLM 没配 key**（`No API key found for provider "openai"`），`openclaw agent` 跑不完整轮对话；验宿主记忆后端请用 `scripts/verify-host-memory.sh`（直接写 MCP，不依赖宿主模型），本轮三个宿主仍 **3/3 PASS**。
+- 探针脚本：`.cogmem/frame-probe.sh`（真提示词 + 校验模型输出，最快的一环）、`.cogmem/final-check.sh`（跑 tick 并打印帧/关系/最近事件）。
 
 ## 其余未完成项（都不阻塞三项要求）
 
