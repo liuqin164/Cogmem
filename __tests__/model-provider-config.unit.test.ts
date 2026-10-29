@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createMemoryKernelFromConfig } from '../src/factory.js';
+import { OpenAICompatibleClient } from '../src/models/providers/OpenAICompatibleClient.js';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -33,6 +34,10 @@ function startModelServer(): { url: string; requests: Array<{ authorization: str
           tags: ['auditability'],
         }],
       });
+      if (request.headers.get('x-test-reasoning-only')) {
+        // A provider that answers in reasoning_content and leaves content empty.
+        return Response.json({ choices: [{ message: { content: '', reasoning_content: content } }] });
+      }
       return Response.json({ choices: [{ message: { content } }] });
     },
   });
@@ -197,4 +202,17 @@ test('json_mode asks the endpoint to constrain decoding to a JSON object', async
   } finally {
     kernel.close();
   }
+});
+
+test('an answer that arrives in reasoning_content is not thrown away', async () => {
+  // Measured on the box: the entitled flash model answers the curator prompt
+  // with an empty `content` and the JSON in `reasoning_content`, which the
+  // pipeline reported as invalid output with an empty detail.
+  server = Bun.serve({
+    port: 0,
+    fetch: () => Response.json({ choices: [{ message: { content: '', reasoning_content: '{"candidates": []}' } }] }),
+  });
+  const client = new OpenAICompatibleClient({ baseUrl: `http://127.0.0.1:${server.port}/v1`, timeoutMs: 5000 });
+  const text = await client.chatComplete({ model: 'test-model', systemPrompt: 's', userPrompt: 'u' });
+  expect(text).toBe('{"candidates": []}');
 });
