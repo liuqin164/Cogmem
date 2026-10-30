@@ -30,7 +30,10 @@ test('the check says what it measured and where to look next', () => {
   expect(script).toContain('whether $HOST reaches for cogmem on its own');
   // One concrete command per host, so a reader can separate wiring from prompting.
   expect(script).toContain('pi mcp list');
-  expect(script).toContain("registered .* tool");
+  // Assert the command as the script spells it. `toContain` is a literal match, so a
+  // bare "registered .* tool" here would read like a regex while matching characters.
+  expect(script).toContain("grep 'registered .* tool'");
+  expect(script).toContain('agent.log');
   // The assertion itself is untouched: still the passcode, still never in the question.
   expect(script).toContain('PASSCODE="BEACON-$$"');
   expect(script).toContain('grep -q "$PASSCODE"');

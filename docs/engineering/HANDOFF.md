@@ -7,7 +7,7 @@
 | | |
 |---|---|
 | 分支 | `feat/cogmem-4.0-multi-bot` |
-| HEAD | `ec8b952`（代码提交 `b14ab99` 起 CI 2/2 绿；工作区干净） |
+| HEAD | `0cdb896` 是**本次发布前评审的对象**；评审后的修复见台账 §4.114，实际 HEAD 以 `git log -1` 为准（评审后工作区含未提交改动，不要照抄这里的 SHA 当「干净」证据） |
 | 门禁 | **1811 pass / 0 fail / 232 files**；`typecheck` 0；`bun run build` 0；`bun run ci:status` 2/2 |
 | PR | **#60，OPEN + Draft** |
 | 仓库 | `/home/ubuntu/projects/Cogmem` |

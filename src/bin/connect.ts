@@ -160,8 +160,28 @@ function commandResolves(command: string): boolean {
 }
 
 /**
- * A `--config` path in an existing `mcp_servers.cogmem` block whose file is not there,
- * or `undefined` when there is nothing this command can honestly report.
+ * The `args` an existing `mcp_servers.cogmem` block records, parsed.
+ *
+ * Parsed as JSON rather than matched with a regex on purpose: a Workspace path may
+ * contain a space, and every regex that reads a value out of the line has to guess
+ * where it ends. `["…","--config","/tmp/my ws/.cogmem/config.toml"]` truncated to
+ * `/tmp/my` is a path that does not exist, so the guess turns into a false warning on
+ * a healthy integration — the exact failure mode this helper exists to report.
+ */
+function existingCogmemArgs(block: string | undefined): unknown[] | undefined {
+  const line = block?.match(/^\s*args\s*:\s*(\[.*\])\s*$/m)?.[1];
+  if (!line) return undefined;
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A `--config` path in an existing entry whose file is not there, or `undefined` when
+ * there is nothing this command can honestly report.
  *
  * Two ways to have nothing to say, and both matter:
  *
@@ -171,9 +191,22 @@ function commandResolves(command: string): boolean {
  *   when the entry it preserved still works` is exactly that case;
  * - a `--config` whose file **is** there needs no warning.
  */
-function deadConfigArgument(block: string | undefined): string | undefined {
-  const value = block?.match(/--config["',\s]+([^"',\s\]]+)/)?.[1];
-  return value && !existsSync(value) ? value : undefined;
+function missingConfigPath(args: unknown[] | undefined): string | undefined {
+  if (!args) return undefined;
+  const index = args.indexOf('--config');
+  const value = index === -1 ? undefined : args[index + 1];
+  return typeof value === 'string' && !existsSync(value) ? value : undefined;
+}
+
+/**
+ * What to tell an operator whose entry points at a config file that is not there.
+ *
+ * One sentence, two hosts: the two call sites differed only in the host name, and two
+ * copies of a diagnosis is how one of them drifts out of date.
+ */
+function missingConfigWarning(host: string, path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  return `the cogmem entry reads its config from ${path}, which does not exist, so the server will exit at startup and ${host} will have no cogmem tools. Run \`cogmem init\` in this Workspace first.`;
 }
 
 /**
@@ -198,17 +231,8 @@ function existingCogmemBlock(original: string): string | undefined {
 
 /** The `command` an existing `mcp_servers.cogmem` block records, if it records one. */
 function existingCogmemCommand(original: string): string | undefined {
-  const lines = original.replace(/\r\n/g, '\n').split('\n');
-  const start = lines.findIndex((line) => /^\s+cogmem\s*:\s*$/.test(line));
-  if (start === -1) return undefined;
-  const indent = leadingSpaces(lines[start]);
-  for (let index = start + 1; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (line.trim() && leadingSpaces(line) <= indent) break;
-    const match = /^\s*command\s*:\s*(.+?)\s*$/.exec(line);
-    if (match) return match[1].replace(/^["']|["']$/g, '');
-  }
-  return undefined;
+  const line = existingCogmemBlock(original)?.match(/^\s*command\s*:\s*(.+?)\s*$/m)?.[1];
+  return line?.replace(/^["']|["']$/g, '');
 }
 
 const CONNECT_FLAGS = new Set([
@@ -591,11 +615,10 @@ function installHermesMcpConfig(input: {
   // Read from the block that will be written, not from the args we resolved: a
   // preserved entry may carry no `--config` at all, and reporting a missing file for
   // a flag that entry does not have would be inventing a problem (#108 review).
-  const deadConfig = deadConfigArgument(existingCogmemBlock(patched));
-  const configWarning = deadConfig
-    ? `the cogmem entry reads its config from ${deadConfig}, which does not exist, so the server will exit at startup and Hermes will have no cogmem tools. Run \`cogmem init\` in this Workspace first.`
-    : undefined;
-  const warning = commandWarning ?? configWarning;
+  const configWarning = missingConfigWarning('Hermes', missingConfigPath(existingCogmemArgs(existingCogmemBlock(patched))));
+  // Both can be true at once (a dead launcher *and* a dead config path). `??`
+  // reported one and hid the other, which is the shape #109 was about.
+  const warning = [commandWarning, configWarning].filter(Boolean).join(' ') || undefined;
 
   return {
     enabled: true,
@@ -682,10 +705,9 @@ function installPiMcpConfig(input: {
 
   // pi's entry carries the same `--config`, so it fails the same way when that file
   // is not there: the server exits and pi lists no cogmem tools (#108).
-  const deadConfig = deadConfigArgument(patched);
-  const warning = deadConfig
-    ? `the cogmem entry reads its config from ${deadConfig}, which does not exist, so the server will exit at startup and pi will have no cogmem tools. Run \`cogmem init\` in this Workspace first.`
-    : undefined;
+  // pi's entry is always the one this command writes (patchPiMcpJsonConfig overwrites
+  // it unconditionally), so the args to check are the ones we just resolved.
+  const warning = missingConfigWarning('pi', missingConfigPath(server.args));
 
   return {
     enabled: true,

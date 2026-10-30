@@ -84,3 +84,26 @@ test('connect pi carries the same warning for the same reason', async () => {
   expect(exitCode).toBe(0);
   expect((JSON.parse(stdout) as WarningJson).piMcp?.warning).toContain(p.configPath);
 });
+
+test('a Workspace path containing a space does not warn about a healthy config', async () => {
+  // The first version read the path out of the `args` line with a regex that stopped at
+  // whitespace, so `/tmp/my ws/.cogmem/config.toml` became `/tmp/my` — a path that never
+  // exists — and a perfectly healthy integration got a "your config is missing" warning.
+  // Reading the array as JSON is what makes the space stop mattering.
+  const dir = makeTempDir('cogmem-connect-space-');
+  const home = join(dir, 'home');
+  const ws = join(dir, 'my workspace');
+  mkdirSync(join(ws, '.cogmem'), { recursive: true });
+  const configPath = join(ws, '.cogmem', 'config.toml');
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+  const hermesConfig = join(home, '.hermes', 'config.yaml');
+  mkdirSync(dirname(hermesConfig), { recursive: true });
+
+  const { exitCode, stdout } = await run([
+    'bun', connectBin, 'hermes', '--workspace', ws, '--auto', '--hermes-config', hermesConfig, '--json',
+  ], ws, { HOME: home });
+  expect(exitCode).toBe(0);
+  expect((JSON.parse(stdout) as WarningJson).hermesMcp?.warning).toBeUndefined();
+  // The entry really does name the spaced path, so the test is not passing by omission.
+  expect(readFileSync(hermesConfig, 'utf8')).toContain(configPath);
+});

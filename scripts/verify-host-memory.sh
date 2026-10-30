@@ -3,6 +3,12 @@
 # Confirm, by conversation, that a host's memory backend actually works.
 #
 # The ledger records three separate instances of a host looking wired while being
+# unable to remember anything: a config mentioning cogmem in thirty-three places, a
+# `connect` that reported success, an exit code of zero. Two of the three hosts were
+# broken in exactly that state, and the test suite could not see either, because what
+# was wrong was which binary a plugin resolved and which shape a hook received on that
+# machine. Only holding a conversation finds those.
+#
 # The pass condition is a recall, not an echo: the question carries the code (a
 # distinctive retrieval key), the answer must carry an ASCII passcode that appears
 # nowhere in the question. Two earlier versions of this line were worthless: grepping
@@ -12,12 +18,6 @@
 # It writes one fact per run into the host's cogmem project, so it is a stateful
 # check, not an idempotent command: the box's own store grows by one `verify` event
 # each time. `--dry-run` is not offered; the point is a real round trip.
-#
-# unable to remember anything: a config mentioning cogmem in thirty-three places, a
-# `connect` that reported success, an exit code of zero. Two of the three hosts were
-# broken in exactly that state, and the test suite could not see either, because what
-# was wrong was which binary a plugin resolved and which shape a hook received on that
-# machine. Only holding a conversation finds those.
 #
 # The check, as a script rather than a paragraph:
 #
@@ -130,6 +130,13 @@ BOXSIDE
 REMOTE="/tmp/verify-host-memory-$$.sh"
 "$IB" push "$BOX" "$LIB" "$REMOTE" -p --json > /dev/null
 
+# The passcode travels on this argv, so the verdict would be worthless if the exec
+# envelope echoed the command it was given: `$OUT` would then contain the passcode no
+# matter what the host answered. It does not — measured 2026-10-30, `instabox exec
+# --json` returns exactly {stdout, stderr, exitCode, timedOut, truncated, durationMs}
+# and the argv is nowhere in it (a probe passed a token the remote script never printed
+# and the token did not appear in the output). Keep that property in mind if this
+# envelope ever changes: assert on the answer, never on the wrapper.
 OUT=$("$IB" exec "$BOX" --timeout 560 --json -- "bash $REMOTE '$HOST' '$CODE' '$WORKDIR' '$PASSCODE'")
 
 # The assertion is the passcode, which the question never contains. Grepping for the
