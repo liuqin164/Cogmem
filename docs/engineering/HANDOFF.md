@@ -166,7 +166,8 @@ instabox exec --background cogmem-test -- 'bash /tmp/final-check.sh'   # 脚本�
 - box 的 workspace 配置 `/data/workspace/flow/.cogmem/config.toml` 的 `[memory_model]` 已指向 `https://integrate.api.nvidia.com/v1`（key 来自 `/data/home/.openclaw/openclaw.json` 的 `models.providers.nvidia.apiKey`），已设 `max_tokens = 16384`、`json_mode = true`、`timeout_ms = 900000`（与上一节同一份配置，两处保持一致）。
 - **该凭证只对 `nvidia/nemotron-3-ultra-550b-a55b` 有权**（其它模型返回 HTTP 404 `Function not found for account`），而它是个「先思考再回答」的模型：约 30–130 秒/次，预算给小了就会截断。
 - 造对话：`cogmem episode append --project openclaw-2cbf70c2 --session <s> --source-agent openclaw --role user --text "…"` → `episode seal --mode hard` → `episode requeue-dream --mode deep` → `cogmem dream tick --project openclaw-2cbf70c2 --mode deep --max-episodes 1`。
-- **宿主自己的 LLM 没配 key**（`No API key found for provider "openai"`），`openclaw agent` 跑不完整轮对话；验宿主记忆后端请用 `scripts/verify-host-memory.sh`（直接写 MCP，不依赖宿主模型），本轮三个宿主仍 **3/3 PASS**。
+- **宿主自己的 LLM 没配 key**（`No API key found for provider "openai"`），`openclaw agent` 跑不完整轮对话；验宿主记忆后端请用 `scripts/verify-host-memory.sh`（直接写 MCP，不依赖宿主模型）。**上一轮写的「三个宿主仍 3/3 PASS」已作废**——那是空判定的产物；改成断言「问题里不存在的随机口令」后实测是 **openclaw PASS、hermes/pi FAIL(session)**。**§4.113（2026-10-30）把运行时真跑起来**之后才分清两个 FAIL 不是一回事：**pi 是接上的**（`pi mcp list` = connected / 6 tools；活会话里点名就真调 `cogmem_recall` 并取回随机口令），**但它不会自主调用**；**hermes 根本没接上**（新起的 gateway 仍报 `registered 0 tool(s) … cogmem (Connection closed)`，因为 `config.yaml` 的 `--config` 指向不存在的文件，MCP 进程启动即退出）。见 **#107** 与台账 §4.113。
+- **hermes 那条死路径是仓库缺陷的一半**：§4.69 只重写 `command:` 行，`src/bin/connect.ts:687` 的 `isSupersededCogmemMcpArgs` 无条件放行任何 `--config`，所以「`--project` 对得上、`--config` 已死」的条目永远不会被修正。**本轮只报不改**（修改点在 box 上，验证闭环需要重装 + 重跑会话），修法方向见 §4.113。
 - 探针脚本：`.cogmem/frame-probe.sh`（真提示词 + 校验模型输出，最快的一环）、`.cogmem/final-check.sh`（跑 tick 并打印帧/关系/最近事件）。
 
 ## 其余未完成项（都不阻塞三项要求）
@@ -180,7 +181,7 @@ instabox exec --background cogmem-test -- 'bash /tmp/final-check.sh'   # 脚本�
 
 ## 台账即权威
 
-`docs/engineering/4.0-issue-loop.md` 是**唯一权威记录**，§4.61–§4.106 覆盖本循环全部工作：每次改动的证据、效果、**更正**与未完成项。
+`docs/engineering/4.0-issue-loop.md` 是**唯一权威记录**，§4.61–§4.113 覆盖本循环全部工作：每次改动的证据、效果、**更正**与未完成项。
 
 - 每个修复是**独立提交**，`git revert` 任一即可，**且还原后对应测试会变红**（可验证的回滚）
 - 每轮结果发到 PR #60 评论（`AGENTS.md` 要求）
