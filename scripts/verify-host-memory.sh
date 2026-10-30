@@ -128,9 +128,12 @@ OUT=$("$IB" exec "$BOX" --timeout 560 --json -- "bash $REMOTE '$HOST' '$CODE' '$
 # code instead let a host pass by echoing its own prompt; grepping for a CJK phrase
 # measured the answer's shape instead (models paraphrased "青栎组-739198" to "青栎组").
 if printf '%s' "$OUT" | grep -q "$PASSCODE"; then
-  echo "PASS: $HOST recalled $PASSCODE for $CODE, a fact that exists only in cogmem"
+  echo "PASS(session): $HOST recalled $PASSCODE for $CODE, a fact that exists only in cogmem"
 else
-  echo "FAIL: $HOST did not return the passcode for $CODE -- its recall path does not reach cogmem" >&2
+  echo "FAIL(session): $HOST's one-shot invocation did not return the passcode for $CODE." >&2
+  echo "  What this tests is the session path only -- not whether $HOST is wired to cogmem." >&2
+  echo "  Measured 2026-10-30: the cogmem command hermes and pi are configured with DOES return" >&2
+  echo "  the fact over MCP; a one-shot prompt ('-z' / '-p') does not exercise their harness (#107)." >&2
   printf '%s\n' "$OUT" | tail -20 >&2
   exit 1
 fi
