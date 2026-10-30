@@ -21,7 +21,8 @@ const CONSTRAINTS: Endpoint[] = [
 ];
 
 /** Whether a relation name is part of the vocabulary at all. */
-export function isKnownRelationType(relation: string): boolean {
+/** A type predicate: membership is exactly what the callers then rely on. */
+export function isKnownRelationType(relation: string): relation is MemoryRelationType {
   return CONSTRAINTS.some(([, known]) => known === relation);
 }
 
@@ -32,7 +33,7 @@ export function isKnownRelationType(relation: string): boolean {
  * unregistered name is unqueryable. Coercing keeps the claim instead of
  * discarding the whole frame.
  */
-export function normalizeRelationType(relation: string): string {
+export function normalizeRelationType(relation: string): MemoryRelationType {
   return isKnownRelationType(relation) ? relation : 'RELATED_TO';
 }
 
@@ -64,7 +65,7 @@ export function normalizeFrameRelations<T>(frame: T): T {
       // situation as a relation the vocabulary never knew: the frame is worth
       // keeping and the claim is worth keeping as a generic one. Measured on
       // the box: `event -[INVOLVES]-> topic` cost the whole frame.
-      if (source && target && !relationConstraintRegistry.isAllowed(source as MemoryDimension, relationType as MemoryRelationType, target as MemoryDimension)) {
+      if (source && target && !relationConstraintRegistry.isAllowed(source as MemoryDimension, relationType, target as MemoryDimension)) {
         return { ...relation, relationType: 'RELATED_TO' };
       }
       return { ...relation, relationType };

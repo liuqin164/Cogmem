@@ -123,7 +123,7 @@ export class MemoryAtlasIndexer {
     }
   }
 
-  reindex(options: { projectId: string; eventId?: string; episodeId?: string }): { projectId: string; episodeIds: string[]; refreshed: boolean; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
+  reindex(options: { projectId: string; eventId?: string; episodeId?: string }): { projectId: string; episodeIds: string[]; refreshed: boolean; refreshOwed: boolean; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
     const episodeIds = new Set<string>();
     if (options.episodeId) episodeIds.add(options.episodeId);
     if (options.eventId) {
@@ -133,10 +133,17 @@ export class MemoryAtlasIndexer {
     const ids = Array.from(episodeIds);
     if (!ids.length) throw new Error('graph_reindex_target_not_found');
     const rebuilt = this.projectEpisodes(options.projectId, ids);
+    // `projectEpisodes` projects the canonical layer for these episodes and
+    // deliberately leaves the dirty flag as it found it, so whether the whole
+    // projection is current is a question about the store, not about this call.
+    // Reporting `refreshed: true` unconditionally told `cogmem memory
+    // graph-reindex` that a partial projection was a complete one.
+    const status = this.store.getProjectionState(options.projectId)?.status;
     return {
       projectId: options.projectId,
       episodeIds: ids,
-      refreshed: true,
+      refreshed: status === 'clean',
+      refreshOwed: status !== 'clean',
       curatedEpisodes: rebuilt.episodeCount,
       facetEdges: rebuilt.facetEdgeCount,
       reviewNeeded: rebuilt.reviewNeeded,

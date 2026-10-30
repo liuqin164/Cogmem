@@ -219,8 +219,9 @@ export class MemoryAtlasStore {
    * Written as two indexed arms rather than one `OR`: with the `OR`, SQLite
    * never used `idx_memory_edges_project_source`/`_target` and fell back to a
    * scan of every edge in the project, which measured 34 ms per call on the
-   * 20k-event corpus. The caller asks this once per returned card and the atlas
-   * is read twice per recall, so that scan cost 1.6 s of a 2.7 s recall.
+   * 20k-event corpus. The caller asks this once per returned card, and with the
+   * atlas read once per recall (it was twice until `dd67a72`) that scan was the
+   * largest single cost in a 2.7 s recall.
    */
   relatedEpisodeCards(projectId: string, canonicalId: string, selectedIds: Set<string>, limit: number): MemoryAtlasRelatedCard[] {
     const parsed = parseNodeId(canonicalId, projectId);

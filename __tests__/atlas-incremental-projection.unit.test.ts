@@ -104,3 +104,22 @@ test('the incremental graph matches what a full rebuild produces', () => {
     rebuiltKernel.close();
   }
 });
+
+test('reindex reports the projection state, not the intent of the call', () => {
+  // `projectEpisodes` projects the canonical layer and leaves the dirty flag as
+  // it found it, so `refreshed: true` was a claim about the call rather than
+  // about the store. The two fields now agree with the projection state.
+  const kernel = createKernelAt(join(makeTempDir('cogmem-reindex-state-'), 'memory.db'));
+  try {
+    const eventId = seedEpisode(kernel, 1, 'reindex target for the state assertion');
+    // A project that owes a refresh is the case the old code reported wrongly:
+    // it returned `refreshed: true` whatever the store said.
+    kernel.memoryAtlasStore.markProjectionDirty('p', { reason: 'test' });
+    const result = kernel.reindexMemoryAtlas({ projectId: 'p', eventId });
+    const status = kernel.memoryAtlasStore.getProjectionState('p')?.status;
+    expect(status).not.toBe('clean');
+    expect({ refreshed: result.refreshed, owed: result.refreshOwed }).toEqual({ refreshed: false, owed: true });
+  } finally {
+    kernel.close();
+  }
+});
