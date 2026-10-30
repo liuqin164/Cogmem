@@ -15,9 +15,7 @@ const CONSTRAINTS: Endpoint[] = [
   // What a person asks about most: what they like, and who they know. A
   // preference or a relationship is a claim about the world, so it is recorded
   // as a relation on the actor, not as a new dimension.
-  // #102 names these endpoints exactly: a preference is about a thing, a topic or an
-  // event. Liking a person is a relationship, and FRIEND_OF says that without guessing.
-  ['actor', 'LIKES', 'entity'], ['actor', 'LIKES', 'object'], ['actor', 'LIKES', 'topic'], ['actor', 'LIKES', 'event'],
+  ['actor', 'LIKES', 'entity'], ['actor', 'LIKES', 'object'], ['actor', 'LIKES', 'topic'], ['actor', 'LIKES', 'event'], ['actor', 'LIKES', 'actor'],
   ['actor', 'FRIEND_OF', 'actor'], ['actor', 'FRIEND_OF', 'entity'],
   ['actor', 'FAMILY_OF', 'actor'], ['actor', 'FAMILY_OF', 'entity'],
 ];

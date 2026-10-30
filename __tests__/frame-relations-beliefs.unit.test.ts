@@ -20,9 +20,13 @@ function createKernel(): MemoryKernel {
 }
 
 /** One real event with an episode link, so a frame built from it can be published. */
-function seedEvent(kernel: MemoryKernel, text = '我喜欢钓鱼。'): { eventId: string; episodeId: string; occurredAt: number } {
-  const eventId = 'evt-1';
-  const occurredAt = Date.UTC(2026, 5, 5, 12, 0, 0);
+function seedEvent(
+  kernel: MemoryKernel,
+  text = '我喜欢钓鱼。',
+  when: { eventId?: string; occurredAt?: number } = {},
+): { eventId: string; episodeId: string; occurredAt: number } {
+  const eventId = when.eventId ?? 'evt-1';
+  const occurredAt = when.occurredAt ?? Date.UTC(2026, 5, 5, 12, 0, 0);
   const event = kernel.eventStore.append({
     eventId,
     streamId: 'session-1',
@@ -34,7 +38,7 @@ function seedEvent(kernel: MemoryKernel, text = '我喜欢钓鱼。'): { eventId
     threadId: 'session-1',
     role: 'user',
     occurredAt,
-    localDate: '2026-06-05',
+    localDate: new Date(occurredAt).toISOString().slice(0, 10),
     payload: { text },
   });
   kernel.appendRawEventToEpisode(event, { projectId: 'p', sessionId: 'session-1', sourceAgent: 'test', now: occurredAt });
@@ -82,11 +86,16 @@ test('a published frame puts its preference in the belief path, where it can be 
     expect(kernel.memoryFrameStore.publish(saved.frameId, 'staged', 'active')).toBe(true);
 
     // The belief path, not the frame's own relations table.
-    const beliefs = kernel.beliefStore.findByCanonicalKey('用户|LIKES|project', 'p');
+    const beliefs = kernel.beliefStore.findByCanonicalKey('用户|preference.LIKES|project', 'p');
     expect(beliefs).toHaveLength(1);
-    expect(beliefs[0]!.predicate).toBe('LIKES');
+    expect(beliefs[0]!.predicate).toBe('preference.LIKES');
     expect(beliefs[0]!.objectValue.raw).toBe('钓鱼');
     expect(beliefs[0]!.status).toBe('active');
+
+    // And through the query API a host actually calls, with the intent that host passes
+    // (`recall`, not `preference_lookup`) — the first version only proved the row existed.
+    const recalled = kernel.beliefStore.getActiveBeliefsForQuery({ query: '我喜欢什么', projectId: 'p', limit: 6, intent: 'recall' });
+    expect(recalled.map((belief) => belief.objectValue.raw)).toContain('钓鱼');
   } finally {
     kernel.close();
   }
@@ -100,7 +109,7 @@ test('a frame that is not active yet records no belief', () => {
     const evidence = seedEvent(kernel);
     const frame = frameWith(evidence, [{ sourceFrameNodeId: 'n-actor', relationType: 'LIKES', targetFrameNodeId: 'n-fishing' }]);
     kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'fp', publishStatus: 'needs_confirmation' });
-    expect(kernel.beliefStore.findByCanonicalKey('用户|LIKES|project', 'p')).toHaveLength(0);
+    expect(kernel.beliefStore.findByCanonicalKey('用户|preference.LIKES|project', 'p')).toHaveLength(0);
   } finally {
     kernel.close();
   }
@@ -109,16 +118,19 @@ test('a frame that is not active yet records no belief', () => {
 test('a superseded preference keeps the old row and points at the new one', () => {
   const kernel = createKernel();
   try {
-    const evidence = seedEvent(kernel);
-    // "used to like fishing", then a later reading that says hiking.
-    projectFrameRelationsToBeliefs(kernel.beliefStore, frameWith(evidence, [
+    // Two episodes, not one: the second is later, which is what makes it a revision
+    // rather than a restatement. `validFrom` now comes from the evidence event, so the
+    // times have to differ for the supersession rule to fire at all.
+    const first = seedEvent(kernel, '我喜欢钓鱼。', { eventId: 'evt-1', occurredAt: Date.UTC(2026, 5, 5, 12) });
+    const later = seedEvent(kernel, '现在喜欢登山了。', { eventId: 'evt-2', occurredAt: Date.UTC(2026, 6, 5, 12) });
+    projectFrameRelationsToBeliefs(kernel.beliefStore, frameWith(first, [
       { sourceFrameNodeId: 'n-actor', relationType: 'LIKES', targetFrameNodeId: 'n-fishing' },
-    ]) as never, 1_000);
-    projectFrameRelationsToBeliefs(kernel.beliefStore, frameWith(evidence, [
+    ]) as never, first.occurredAt);
+    projectFrameRelationsToBeliefs(kernel.beliefStore, frameWith(later, [
       { sourceFrameNodeId: 'n-actor', relationType: 'LIKES', targetFrameNodeId: 'n-hiking' },
-    ]) as never, 2_000);
+    ]) as never, later.occurredAt);
 
-    const rows = kernel.beliefStore.findByCanonicalKey('用户|LIKES|project', 'p');
+    const rows = kernel.beliefStore.findByCanonicalKey('用户|preference.LIKES|project', 'p');
     const current = rows.filter((row) => row.status === 'active');
     const superseded = rows.filter((row) => row.status === 'superseded');
     expect(current).toHaveLength(1);
@@ -127,6 +139,10 @@ test('a superseded preference keeps the old row and points at the new one', () =
     expect(superseded).toHaveLength(1);
     expect(superseded[0]!.objectValue.raw).toBe('钓鱼');
     expect(superseded[0]!.supersededByBeliefId).toBe(current[0]!.id);
+
+    // Recall returns the current value and not the row it replaced.
+    const recalled = kernel.beliefStore.getActiveBeliefsForQuery({ query: '我喜欢什么', projectId: 'p', limit: 6, intent: 'recall' });
+    expect(recalled.map((belief) => belief.objectValue.raw)).toEqual(['登山']);
   } finally {
     kernel.close();
   }
@@ -181,7 +197,7 @@ test('publishing the same frame twice does not duplicate its beliefs', () => {
     expect(first.written).toBe(1);
     expect(second.written).toBe(0);
     expect(second.skipped).toContainEqual({ relation: 'LIKES', reason: 'already_recorded' });
-    expect(kernel.beliefStore.findByCanonicalKey('用户|LIKES|project', 'p')).toHaveLength(1);
+    expect(kernel.beliefStore.findByCanonicalKey('用户|preference.LIKES|project', 'p')).toHaveLength(1);
   } finally {
     kernel.close();
   }
