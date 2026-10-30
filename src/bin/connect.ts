@@ -142,6 +142,8 @@ interface PiMcpInstallResult {
   dryRun: boolean;
   configUpdated: boolean;
   backupPath?: string;
+  /** Same two facts as the Hermes result: a preserved entry, or a config that is not there. */
+  warning?: string;
 }
 
 /**
@@ -155,6 +157,43 @@ function commandResolves(command: string): boolean {
   return (process.env.PATH || '')
     .split(':')
     .some((segment) => Boolean(segment) && existsSync(join(segment, command)));
+}
+
+/**
+ * A `--config` path in an existing `mcp_servers.cogmem` block whose file is not there,
+ * or `undefined` when there is nothing this command can honestly report.
+ *
+ * Two ways to have nothing to say, and both matter:
+ *
+ * - an entry with **no** `--config` at all is a hand-written shape. It may be broken for
+ *   the reason #86 describes, but that is not a claim this command can make about a line
+ *   it did not write, and warning there is noise — the existing test `hermes stays quiet
+ *   when the entry it preserved still works` is exactly that case;
+ * - a `--config` whose file **is** there needs no warning.
+ */
+function deadConfigArgument(block: string | undefined): string | undefined {
+  const value = block?.match(/--config["',\s]+([^"',\s\]]+)/)?.[1];
+  return value && !existsSync(value) ? value : undefined;
+}
+
+/**
+ * The body of the `mcp_servers.cogmem` block, for reading a flag out of it.
+ *
+ * `args` is the only line `--config` appears on, but bounding the block is what keeps
+ * another server's `--config` from being read as this entry's.
+ */
+function existingCogmemBlock(original: string): string | undefined {
+  const lines = original.replace(/\r\n/g, '\n').split('\n');
+  const start = lines.findIndex((line) => /^\s+cogmem\s*:\s*$/.test(line));
+  if (start === -1) return undefined;
+  const indent = leadingSpaces(lines[start]);
+  const block: string[] = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (line.trim() && leadingSpaces(line) <= indent) break;
+    block.push(line);
+  }
+  return block.join('\n');
 }
 
 /** The `command` an existing `mcp_servers.cogmem` block records, if it records one. */
@@ -541,9 +580,22 @@ function installHermesMcpConfig(input: {
   // as it is" described the behaviour that the repair replaced.
   const written = existingCogmemCommand(patched);
   const preserved = written && written !== server.command ? written : undefined;
-  const warning = preserved && !commandResolves(preserved)
+  const commandWarning = preserved && !commandResolves(preserved)
     ? `the existing mcp_servers.cogmem entry could not be repaired: its command does not exist on this machine and its command line could not be rewritten: ${preserved}. Hermes will fail to start the server; point it at a real launcher or remove the entry.`
     : undefined;
+  // The half the command check does not cover: a launcher that resolves is still a
+  // server that cannot start when the config it is told to read is not there. The
+  // exit is immediate and silent (`invalid_toml: ENOENT`, then `registered 0 tool(s)`
+  // in the host's log), so the host looks wired and has no memory at all (#108).
+  //
+  // Read from the block that will be written, not from the args we resolved: a
+  // preserved entry may carry no `--config` at all, and reporting a missing file for
+  // a flag that entry does not have would be inventing a problem (#108 review).
+  const deadConfig = deadConfigArgument(existingCogmemBlock(patched));
+  const configWarning = deadConfig
+    ? `the cogmem entry reads its config from ${deadConfig}, which does not exist, so the server will exit at startup and Hermes will have no cogmem tools. Run \`cogmem init\` in this Workspace first.`
+    : undefined;
+  const warning = commandWarning ?? configWarning;
 
   return {
     enabled: true,
@@ -628,6 +680,13 @@ function installPiMcpConfig(input: {
     writeFileSync(configPath, patched, 'utf8');
   }
 
+  // pi's entry carries the same `--config`, so it fails the same way when that file
+  // is not there: the server exits and pi lists no cogmem tools (#108).
+  const deadConfig = deadConfigArgument(patched);
+  const warning = deadConfig
+    ? `the cogmem entry reads its config from ${deadConfig}, which does not exist, so the server will exit at startup and pi will have no cogmem tools. Run \`cogmem init\` in this Workspace first.`
+    : undefined;
+
   return {
     enabled: true,
     configPath,
@@ -636,6 +695,7 @@ function installPiMcpConfig(input: {
     dryRun: input.dryRun,
     configUpdated: !current || input.force,
     backupPath,
+    ...(warning ? { warning } : {}),
   };
 }
 
@@ -831,6 +891,7 @@ function printHuman(result: ConnectResult): void {
     console.log(`  config: ${result.piMcp.configPath}`);
     console.log(`  command: ${result.piMcp.serverCommand} ${result.piMcp.serverArgs.join(' ')}`.trimEnd());
     if (result.piMcp.backupPath) console.log(`  backup: ${result.piMcp.backupPath}`);
+    if (result.piMcp.warning) console.log(`  warning: ${result.piMcp.warning}`);
     console.log('  check: pi mcp list');
   }
   if (result.hermesMcp) {

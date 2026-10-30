@@ -167,7 +167,7 @@ instabox exec --background cogmem-test -- 'bash /tmp/final-check.sh'   # 脚本�
 - **该凭证只对 `nvidia/nemotron-3-ultra-550b-a55b` 有权**（其它模型返回 HTTP 404 `Function not found for account`），而它是个「先思考再回答」的模型：约 30–130 秒/次，预算给小了就会截断。
 - 造对话：`cogmem episode append --project openclaw-2cbf70c2 --session <s> --source-agent openclaw --role user --text "…"` → `episode seal --mode hard` → `episode requeue-dream --mode deep` → `cogmem dream tick --project openclaw-2cbf70c2 --mode deep --max-episodes 1`。
 - **宿主自己的 LLM 没配 key**（`No API key found for provider "openai"`），`openclaw agent` 跑不完整轮对话；验宿主记忆后端请用 `scripts/verify-host-memory.sh`（直接写 MCP，不依赖宿主模型）。**上一轮写的「三个宿主仍 3/3 PASS」已作废**——那是空判定的产物；改成断言「问题里不存在的随机口令」后实测是 **openclaw PASS、hermes/pi FAIL(session)**。**§4.113（2026-10-30）把运行时真跑起来**之后才分清两个 FAIL 不是一回事：**pi 是接上的**（`pi mcp list` = connected / 6 tools；活会话里点名就真调 `cogmem_recall` 并取回随机口令），**但它不会自主调用**；**hermes 根本没接上**（新起的 gateway 仍报 `registered 0 tool(s) … cogmem (Connection closed)`，因为 `config.yaml` 的 `--config` 指向不存在的文件，MCP 进程启动即退出）。见 **#107** 与台账 §4.113。
-- **hermes 那条死路径是仓库缺陷的一半**：§4.69 只重写 `command:` 行，`src/bin/connect.ts:687` 的 `isSupersededCogmemMcpArgs` 无条件放行任何 `--config`，所以「`--project` 对得上、`--config` 已死」的条目永远不会被修正。**本轮只报不改**（修改点在 box 上，验证闭环需要重装 + 重跑会话），修法方向见 §4.113。
+- **hermes 那条死路径【已更正】**：我起初说仓库缺陷在 `isSupersededCogmemMcpArgs` 对 `--config` 无条件放行——**实测推翻**（`--project` 对得上时整行 args 会重写，`--config` 也会改对；box 上那条只是没再跑过 `connect`）。真正的缺陷在旁边：`connect` **不检查自己刚写下的 `--config` 在不在**，空 Workspace 上会写出一条永远起不来的条目**且不报警**。已开 **#108** 并修（hermes/pi 两侧都报 warning，测试先红后绿）。
 - 探针脚本：`.cogmem/frame-probe.sh`（真提示词 + 校验模型输出，最快的一环）、`.cogmem/final-check.sh`（跑 tick 并打印帧/关系/最近事件）。
 
 ## 其余未完成项（都不阻塞三项要求）

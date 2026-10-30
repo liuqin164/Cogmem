@@ -487,6 +487,18 @@ while its adapter column still reads `planned`. Nothing injects recall: the inst
 `cogmem-memory` skill is what tells the agent when to record and recall, and the agent has to
 make the call itself.
 
+**The tools arrive through pi's `codemode` sandbox, and the model does not reach into it
+on its own.** Measured 2026-10-30 (#107): `pi mcp list` reports `connected, 6 tools`, and a
+live session that was asked to consult its memory did call
+`tools.mcp__cogmem__cogmem_recall(...)` and return the fact — but a session asked only
+*"the code I noted yesterday, what was its passcode?"* made **zero tool calls** and answered
+that it had no access to past conversations, even though pi's own system prompt says to call
+`cogmem_recall` for questions about the past. So `verify-host-memory.sh` failing for pi means
+"the model did not choose to recall", not "cogmem is unreachable"; check `pi mcp list` before
+concluding anything about the wiring. A Hermes failure has the opposite reading — see the
+`registered N tool(s)` line in `$HERMES_HOME/logs/agent.log`, where `0 tool(s) … cogmem
+(Connection closed)` means the server never started.
+
 pi has **no history importer**, so `connect pi` prints no import steps — running
 `import-hermes` under a pi heading would be a step that cannot work.
 

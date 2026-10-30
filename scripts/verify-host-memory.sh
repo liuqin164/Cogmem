@@ -28,6 +28,14 @@
 # Step 2 is what makes step 3 mean anything: without it a host answers from its own
 # store and passes, which is how a broken backend stayed invisible for nine rounds.
 #
+# What a FAIL means, and what it does not (#107, #109): it means the host did not
+# recall the fact in a fresh one-shot session. It does NOT mean the host is unwired or
+# that the server is unreachable, and this script cannot tell those apart. Measured
+# 2026-10-30: pi listed `cogmem: connected, 6 tools` and its live session called
+# `cogmem_recall` when asked to, yet failed here because the model does not reach for
+# the tool unprompted; hermes failed here because its entry names a `--config` that
+# does not exist, so its server never started. Same verdict, two unrelated fixes.
+#
 # Usage:
 #   INSTABOX_API_KEY=... scripts/verify-host-memory.sh <box> <openclaw|hermes|pi> [workdir]
 #
@@ -130,10 +138,21 @@ OUT=$("$IB" exec "$BOX" --timeout 560 --json -- "bash $REMOTE '$HOST' '$CODE' '$
 if printf '%s' "$OUT" | grep -q "$PASSCODE"; then
   echo "PASS(session): $HOST recalled $PASSCODE for $CODE, a fact that exists only in cogmem"
 else
+  # This wording is the whole reason the check is worth running: an explanation that
+  # names one cause for two different failures sends the next reader to fix the wrong
+  # thing. Measured 2026-10-30 (#107, #108): pi's server IS connected and its live
+  # session DOES call `cogmem_recall` when asked to, but the model does not reach for
+  # the tool unprompted -- the tools arrive through its `codemode` sandbox. hermes' own
+  # gateway reported `registered 0 tool(s) ... cogmem (Connection closed)` because the
+  # `--config` its entry names does not exist. Same FAIL, two unrelated fixes.
   echo "FAIL(session): $HOST's one-shot invocation did not return the passcode for $CODE." >&2
-  echo "  What this tests is the session path only -- not whether $HOST is wired to cogmem." >&2
-  echo "  Measured 2026-10-30: the cogmem command hermes and pi are configured with DOES return" >&2
-  echo "  the fact over MCP; a one-shot prompt ('-z' / '-p') does not exercise their harness (#107)." >&2
+  echo "  This measures ONE thing: whether $HOST reaches for cogmem on its own in a fresh" >&2
+  echo "  session. It does not measure whether the server is reachable or wired -- this" >&2
+  echo "  script cannot tell the two apart. Check that separately:" >&2
+  echo "    pi:     pi mcp list            # expects 'cogmem: connected, N tools'" >&2
+  echo "    hermes: grep 'registered .* tool' \$HERMES_HOME/logs/agent.log | tail -1" >&2
+  echo "  A host that lists the tools but still fails here is a prompting/model problem;" >&2
+  echo "  a host that lists none has a wiring problem, not a recall problem." >&2
   printf '%s\n' "$OUT" | tail -20 >&2
   exit 1
 fi
