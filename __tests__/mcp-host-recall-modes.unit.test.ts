@@ -80,25 +80,33 @@ describe('docs/mcp-hosts.md states the recall mode and the adapter status per ho
     ]);
   });
 
-  test('exactly one row is a push path, and it is the adapter that ships', () => {
+  test('every push row is an adapter that shipped and was verified', () => {
+    // Two rows are push as of 2026-10-30, and they are push for the same reason: an
+    // adapter cogmem ships and ran against a real client. The rule the count used to
+    // express is the one that matters, so it is asserted directly rather than as "there
+    // is exactly one": a push row without a shipped, verified adapter is emergence
+    // claimed for a hook nobody wired.
     const push = rows.filter((cells) => cells[1] === 'push');
-    expect(push).toHaveLength(1);
-    expect(push[0][0]).toBe('OpenClaw + the Cogmem plugin');
-    expect(push[0][3]).toContain('shipped and verified');
+    expect(push.map((cells) => cells[0])).toEqual(['OpenClaw + the Cogmem plugin', 'pi']);
+    for (const row of push) expect(row[3]).toContain('shipped and verified');
     // Every other row is explicit recall, including the hosts that do expose a
     // hook: a hook without a shipped adapter is not emergence.
-    for (const row of rows.filter((cells) => cells !== push[0])) {
+    for (const row of rows.filter((cells) => cells[1] !== 'push')) {
       expect(row[1]).toBe('pull');
     }
   });
 
   test('a host with a hook and no adapter is pull, and says so', () => {
-    // The corrected ADR 0002: Hermes, pi, DSH and Claude Code all expose a
-    // pre-prompt hook, and none of them has a Cogmem adapter yet. Documenting
-    // them as push is the conflation the ADR forbids.
+    // The corrected ADR 0002: these hosts expose a pre-prompt hook and none of them
+    // has a Cogmem adapter yet. Documenting them as push is the conflation the ADR
+    // forbids. pi used to be the hardest case here and is now the counter-example:
+    // its extension ships, so it reads `push` and says `shipped and verified`.
+    // pi left this list on 2026-10-30: `connect pi --auto` writes an extension that
+    // hooks `before_agent_start` for real, verified on a box. Hermes, DSH and Claude
+    // Code still expose a hook with no Cogmem adapter, which is the case the ADR is
+    // about.
     const planned: Array<[string, string, string]> = [
       ['Hermes', '`pre_llm_call`', 'planned, first in the roadmap (ADR-0004)'],
-      ['pi', '`before_agent_start`', 'planned'],
       ['DSH', 'prompt section', 'planned'],
       ['Claude Code', '`UserPromptSubmit`', 'planned'],
     ];
@@ -239,7 +247,15 @@ describe('README carries the same recall modes and adapter status as the host ta
     expect(openclaw[1]).toBe('`before_prompt_build`');
     expect(openclaw[2]).toContain('Implemented and verified');
 
-    for (const host of ['Hermes', 'pi', 'DSH', 'Claude Code']) {
+    // Two adapters ship as of 2026-10-30: OpenClaw's plugin and pi's extension. A row
+    // that claims injection must say it is implemented and verified, and the row must
+    // describe recall as arriving rather than being asked for.
+    const pi = rowFor(rows, 'pi');
+    expect(pi[1]).toBe('`before_agent_start`');
+    expect(pi[2]).toContain('Implemented and verified');
+    expect(pi[4]).toContain('already in the prompt');
+
+    for (const host of ['Hermes', 'DSH', 'Claude Code']) {
       const row = rowFor(rows, host);
       expect(row[2], `${host} must be marked planned`).toContain('Planned');
       // A planned adapter means explicit recall today; no planned row may read

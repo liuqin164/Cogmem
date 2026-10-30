@@ -74,7 +74,7 @@ a per-call identity that narrows the profile does not rewrite it.
 | OpenClaw + the Cogmem plugin | push | `before_prompt_build` | shipped and verified | Recall is already in the prompt |
 | OpenClaw via `openclaw mcp add` | pull | `before_prompt_build` | not installed on this path | The model must call `cogmem_recall` |
 | Hermes | pull | `pre_llm_call` | planned, first in the roadmap (ADR-0004) | The installed `cogmem-memory` skill documents when to call `cogmem_recall` |
-| pi | pull | `before_agent_start` | planned | The model must call `cogmem_recall` |
+| pi | push | `before_agent_start` | shipped and verified | Recall is already in the prompt, injected by the extension `connect pi --auto` writes |
 | DSH | pull | prompt section | planned | The model must call `cogmem_recall` |
 | Claude Code | pull | `UserPromptSubmit` | planned; unverified against a real client when it lands | Same contract, delivered by `instructions` |
 | Cursor | pull | none, MCP only | none | Same |
@@ -88,6 +88,16 @@ delivery to be stated separately, and ADR-0004 fixes the order the adapters land
 in — Hermes, then pi, DSH, and Claude Code last, written against the documented
 hook and **not verified against a real client**, which is the label it carries
 wherever it is described.
+
+**pi moved from `pull` to `push` on 2026-10-30**, and it is verified rather than
+planned. The distinction that decided it is pi's, not ours: a **skill** is
+documentation the model reads when it decides the task matches, while an
+**extension** is TypeScript pi loads at startup and can hook. Measured on a real
+pi with the cogmem skill installed and `cogmem_recall` in its tool list, a fresh
+session asked about something from an earlier session made **zero** tool calls
+and answered that it had no access to past conversations. The same session, with
+the extension installed, had the recalled context in its prompt before the model
+ran. `connect pi --auto` now writes both: the MCP entry and the extension.
 
 Do not describe a pull-only host as automatic. Its agent then looks for a memory
 that never surfaced, finds none, and concludes Cogmem does not work. Emergence

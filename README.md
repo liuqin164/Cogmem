@@ -55,14 +55,16 @@ A memory arriving before the agent asks for it is **Emergence**, and it takes tw
 | --- | --- | --- | --- | --- |
 | OpenClaw | `before_prompt_build` | Implemented and verified (plugin 0.7.2) | `agent_end` | Recall is already in the prompt |
 | Hermes | `pre_llm_call` | Planned — first on the roadmap | `post_llm_call` | Explicit recall: the installed skill says when to call `cogmem_recall` |
-| pi | `before_agent_start` | Planned | `turn_end`, `agent_settled` | Explicit recall over MCP |
+| pi | `before_agent_start` | Implemented and verified (`connect pi --auto` writes the extension) | `turn_end`, `agent_settled` | Recall is already in the prompt, injected before the run starts |
 | DSH | prompt section | Planned | not recorded yet | Explicit recall over MCP |
 | Claude Code | `UserPromptSubmit` | Planned; unverified against a real client when it lands | `Stop` | Explicit recall over MCP |
 | Cursor, Codex, or any host attached with `mcp add` | none | none | none | Explicit recall over MCP |
 
 Hook names, packaging shape, and how each host reads its config come from vendor sources in [docs/host-plugin-record-hooks.md](./docs/host-plugin-record-hooks.md), which covers Hermes, pi, and Claude Code; OpenClaw's own hooks are recorded with the [OpenClaw runtime](./docs/openclaw-runtime.md), and DSH's prompt section is stated in ADR-0004. Per-host MCP configuration is in [docs/mcp-hosts.md](./docs/mcp-hosts.md). A record hook does not make memory emerge: it writes the finished turn *after* the answer.
 
-Read the row before promising emergence. A host with a push hook and a planned adapter is on the explicit-recall path today, and calling it automatic sends the agent looking for a memory that never surfaced. Only OpenClaw's adapter has shipped and been verified in this release.
+Read the row before promising emergence. A host with a push hook and a planned adapter is on the explicit-recall path today, and calling it automatic sends the agent looking for a memory that never surfaced. Two adapters have shipped and been verified: OpenClaw's plugin, and pi's extension. The rest still need the model to call `cogmem_recall` itself.
+
+pi is worth reading twice, because the two halves of its surface are easy to confuse and only one of them can inject. A **skill** is documentation pi reads when the model decides the task matches; measured with the cogmem skill installed and the recall tools listed, a fresh session asked about an earlier one made zero tool calls. An **extension** is TypeScript pi loads at startup and can hook, which is what `connect pi --auto` writes.
 
 ## Architecture
 

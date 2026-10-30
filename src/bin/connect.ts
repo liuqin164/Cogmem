@@ -14,6 +14,7 @@ import {
   type InstallStep,
 } from '../install/InstallSteps.js';
 import { integrationScope } from '../host/IntegrationScope.js';
+import { installPiAutoMemoryExtension, type PiExtensionInstallResult } from '../host/pi/PiAutoMemoryExtension.js';
 import {
   enableHostIntegration,
   hostWorkspaceFor,
@@ -108,6 +109,8 @@ interface ConnectResult {
   autoMemory?: OpenClawAutoMemoryInstallResult;
   hermesMcp?: HermesMcpInstallResult;
   piMcp?: PiMcpInstallResult;
+  /** pi's push half: the generated extension that injects recall before each run. */
+  piExtension?: PiExtensionInstallResult;
   /**
    * Where `connect --auto` recorded that this host is wired. `null` means it did
    * not record one (a dry run, or no config yet), not that the write failed.
@@ -452,6 +455,22 @@ function resolveCogmemMcpServer(workspaceRoot: string, project: string): { comma
   return { command: 'cogmem', args: bound };
 }
 
+/**
+ * The entry that takes a subcommand, for callers that are not a host's MCP client.
+ *
+ * `resolveCogmemMcpServer` may hand back `cogmem-mcp`, which is the server itself and
+ * reads a positional `memory` as an unknown flag (`unknown flag --query`, measured on the
+ * box). The generated pi extension runs `cogmem memory recall`, so it needs the
+ * dispatcher: the sibling `cogmem` next to the server binary when there is one, since a
+ * host's PATH is not the installing shell's PATH.
+ */
+function cogmemDispatcherCommand(server: { command: string; args: string[] }): string {
+  if (server.args[0] === 'mcp') return server.command;
+  const sibling = join(dirname(server.command), 'cogmem');
+  if (existsSync(sibling)) return sibling;
+  return resolveCogmemInvocation();
+}
+
 function installSkill(args: ConnectArgs): ConnectResult {
   if (!args.agent) throw new Error(usage());
   return installForHost(args.agent, args);
@@ -493,6 +512,7 @@ function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
   let autoMemory: OpenClawAutoMemoryInstallResult | undefined;
   let hermesMcp: HermesMcpInstallResult | undefined;
   let piMcp: PiMcpInstallResult | undefined;
+  let piExtension: PiExtensionInstallResult | undefined;
 
   if (!args.dryRun && !alreadyCurrent) {
     if (existsSync(skillPath) && !args.force) {
@@ -534,6 +554,17 @@ function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
       dryRun: args.dryRun,
       force: args.force,
     });
+    // pi's skill is documentation the model reads when it decides to; measured, it does
+    // not. The extension is what actually injects recall, so it is installed with the
+    // same command that wires the MCP entry.
+    piExtension = installPiAutoMemoryExtension({
+      configPath: piMcp.configPath,
+      project: integrationProject,
+      workspaceRoot: hostWorkspaceRoot,
+      command: cogmemDispatcherCommand({ command: piMcp.serverCommand, args: piMcp.serverArgs }),
+      dryRun: args.dryRun,
+      force: args.force,
+    });
   }
 
   // A Host integration is a fact on disk, and this is the step that establishes
@@ -565,6 +596,7 @@ function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
     autoMemory,
     hermesMcp,
     piMcp,
+    piExtension,
     integrationEnabled,
   };
 }
@@ -914,6 +946,7 @@ function printHuman(result: ConnectResult): void {
     console.log(`  command: ${result.piMcp.serverCommand} ${result.piMcp.serverArgs.join(' ')}`.trimEnd());
     if (result.piMcp.backupPath) console.log(`  backup: ${result.piMcp.backupPath}`);
     if (result.piMcp.warning) console.log(`  warning: ${result.piMcp.warning}`);
+    if (result.piExtension) console.log(`  extension: ${result.piExtension.extensionPath} (${result.piExtension.changed ? 'written' : 'already current'})`);
     console.log('  check: pi mcp list');
   }
   if (result.hermesMcp) {
