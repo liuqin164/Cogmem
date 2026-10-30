@@ -393,7 +393,7 @@ export class BeliefStore {
     belief: BeliefRecord | null;
     decision: BeliefRevisionDecision;
   } {
-    const canonicalKey = this.toCanonicalKey(candidate.subject, candidate.predicate, candidate.scope);
+    const canonicalKey = this.toCanonicalKey(candidate.subject, candidate.predicate, candidate.scope, candidate.canonicalKeyDiscriminator);
     const projectId = candidate.projectId ?? '';
     const conflicts = this.findByCanonicalKey(canonicalKey, projectId).map((existing) => ({
       existing,
@@ -664,8 +664,10 @@ export class BeliefStore {
     const delta = incomingStrength - existingStrength;
     const incomingValidFrom = incoming.validFrom ?? now;
     const sameSourceFamily = incoming.sourceType === existing.sourceType;
+    // `LIKES` is the preference predicate the frame vocabulary uses (#102); without it
+    // here a changed preference ties with the old value and neither supersedes.
     const newerPreferenceRevision = (
-      (incoming.predicate.startsWith('preference.') || incoming.predicate.startsWith('decision.')) &&
+      (incoming.predicate.startsWith('preference.') || incoming.predicate.startsWith('decision.') || incoming.predicate === 'LIKES') &&
       incomingValidFrom > existing.validFrom &&
       sameSourceFamily &&
       delta > -0.05
@@ -779,8 +781,30 @@ export class BeliefStore {
     return (a.normalized || a.raw) === (b.normalized || b.raw);
   }
 
-  private toCanonicalKey(subject: string, predicate: string, scope: ScopeType): string {
-    return `${subject}|${predicate}|${scope}`;
+  /**
+   * The identity of a claim.
+   *
+   * A `discriminator` makes the claim multi-valued: `张三 FRIEND_OF 李四` and
+   * `张三 FRIEND_OF 王五` are two claims, not one value that replaced another. A
+   * predicate without one is single-valued, which is what lets a preference supersede
+   * the value it replaced (#102).
+   */
+  /**
+   * The active row that already carries this claim, if one does.
+   *
+   * The frame projection runs once per publication and must not pile up duplicates:
+   * `upsert` treats a same-value restatement as a coexistence and inserts another row.
+   */
+  findActiveEquivalent(candidate: BeliefCandidate): BeliefRecord[] {
+    const key = this.toCanonicalKey(candidate.subject, candidate.predicate, candidate.scope, candidate.canonicalKeyDiscriminator);
+    return this.findByCanonicalKey(key, candidate.projectId ?? '')
+      .filter((belief) => belief.status === 'active' && this.isSameBeliefValue(candidate.objectValue, belief.objectValue));
+  }
+
+  private toCanonicalKey(subject: string, predicate: string, scope: ScopeType, discriminator?: string): string {
+    return discriminator === undefined
+      ? `${subject}|${predicate}|${scope}`
+      : `${subject}|${predicate}|${scope}|${discriminator}`;
   }
 
   private getSourceTrust(sourceType: SourceType): number {

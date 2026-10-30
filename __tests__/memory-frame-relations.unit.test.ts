@@ -58,6 +58,28 @@ test('a preference and a relationship are relations a frame may carry', () => {
   }
 });
 
+test('LIKES between two actors is not a preference, so it is kept as RELATED_TO', () => {
+  // #102 lists actor -> entity/object/topic/event. Liking a person is a relationship,
+  // and FRIEND_OF is the relation that says so; guessing here would let the model record
+  // a friendship as a preference. The claim is still kept, under the catch-all.
+  const kernel = createKernel();
+  try {
+    const frame = frameWithRelations([
+      { sourceFrameNodeId: 'n-actor', relationType: 'LIKES', targetFrameNodeId: 'n-actor' },
+    ]);
+    const saved = kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'fp', status: 'active' });
+    const rows = kernel.memoryFrameStore.getDatabase()
+      .prepare(`SELECT relation_type FROM memory_frame_relations WHERE frame_id=?`)
+      .all(saved.frameId) as Array<{ relation_type: string }>;
+    const types = rows.map((row) => row.relation_type);
+    // The claim survives, under the catch-all, and no LIKES was recorded between actors.
+    expect(types).toContain('RELATED_TO');
+    expect(types).not.toContain('LIKES');
+  } finally {
+    kernel.close();
+  }
+});
+
 test('a relation the model invented is kept as RELATED_TO instead of dropping the frame', () => {
   const kernel = createKernel();
   try {

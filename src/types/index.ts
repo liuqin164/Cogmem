@@ -518,6 +518,13 @@ export interface BeliefCandidate {
   validTo?: number;
   explanation?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * Makes the claim multi-valued: the discriminator becomes part of the canonical key,
+   * so `张三 FRIEND_OF 李四` and `张三 FRIEND_OF 王五` are two claims instead of one
+   * value replacing the other. Omitted for single-valued claims such as a preference,
+   * which is exactly what lets a new value supersede the old row (#102).
+   */
+  canonicalKeyDiscriminator?: string;
   extractionReason:
     | 'explicit_user_statement'
     | 'decision_statement'

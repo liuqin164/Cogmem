@@ -7,6 +7,7 @@ import Database from 'bun:sqlite';
 import type { GraphEdgeStoreLike } from './types/ExtensionPoints.js';
 
 import { BeliefStore } from './belief/BeliefStore.js';
+import { projectFrameRelationsToBeliefs } from './belief/FrameRelationBeliefs.js';
 import { BeliefGovernanceService } from './belief/BeliefGovernanceService.js';
 import {
   MemoryBindingService,
@@ -824,6 +825,12 @@ export class MemoryKernel {
     this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
     this.memoryAtlasStore = new MemoryAtlasStore(db, this.projectClock.timeZone);
     this.memoryFrameStore = new MemoryFrameStore(db);
+    // A frame's preference and relationship relations also belong in the belief layer:
+    // the frame answers "what did this episode say", the belief path answers "what is
+    // true now and what did it replace", and that is the one recall reads (#102).
+    this.memoryFrameStore.setFrameActiveListener((frame, now) => {
+      projectFrameRelationsToBeliefs(this.beliefStore, frame, now);
+    });
     this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore, this.memoryFrameStore);
     this.memoryAtlasService = new MemoryAtlasService(this.memoryAtlasStore, this.eventStore);
     this.multidimensionalQueryPlanner = new MultidimensionalQueryPlanner();
