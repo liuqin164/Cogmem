@@ -3,6 +3,16 @@
 # Confirm, by conversation, that a host's memory backend actually works.
 #
 # The ledger records three separate instances of a host looking wired while being
+# The pass condition is a recall, not an echo: the question carries the code (a
+# distinctive retrieval key), the answer must carry an ASCII passcode that appears
+# nowhere in the question. Two earlier versions of this line were worthless: grepping
+# for the code passed a host that echoed its prompt, and asserting a CJK phrase
+# measured whether the model paraphrased rather than whether it remembered.
+#
+# It writes one fact per run into the host's cogmem project, so it is a stateful
+# check, not an idempotent command: the box's own store grows by one `verify` event
+# each time. `--dry-run` is not offered; the point is a real round trip.
+#
 # unable to remember anything: a config mentioning cogmem in thirty-three places, a
 # `connect` that reported success, an exit code of zero. Two of the three hosts were
 # broken in exactly that state, and the test suite could not see either, because what
@@ -31,6 +41,10 @@ HOST="${2:?usage: verify-host-memory.sh <box> <openclaw|hermes|pi> [workdir]}"
 WORKDIR="${3:-/data/workspace/flow}"
 IB="${INSTABOX_BIN:-instabox}"
 CODE="VERIFY$$"
+# What the host is asked to recall, and what the answer must contain. Unique per
+# run, ASCII so a model reproduces it verbatim, and -- crucially -- never present
+# in the question.
+PASSCODE="BEACON-$$"
 
 case "$HOST" in openclaw|hermes|pi) ;; *) echo "unknown host: $HOST" >&2; exit 2 ;; esac
 
@@ -41,7 +55,7 @@ trap 'rm -f "$LIB"' EXIT
 # code and workdir arrive as arguments rather than through quoting layers.
 cat > "$LIB" <<'BOXSIDE'
 set -e
-HOST="$1"; CODE="$2"; WORK="$3"
+HOST="$1"; CODE="$2"; WORK="$3"; PASSCODE="$4"
 export PATH="/data/home/.npm-global/bin:/data/home/.bun/bin:/data/home/.local/bin:$PATH"
 cd "$WORK"
 
@@ -77,7 +91,7 @@ echo "project: $PROJECT"
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"1"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-  printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"cogmem_remember_turn\",\"arguments\":{\"agentId\":\"verify\",\"projectId\":\"$PROJECT\",\"sessionId\":\"verify\",\"userText\":\"核对代号 $CODE，负责小组是青栎组。\",\"assistantText\":\"已记录。\"}}}"
+  printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"cogmem_remember_turn\",\"arguments\":{\"agentId\":\"verify\",\"projectId\":\"$PROJECT\",\"sessionId\":\"verify\",\"userText\":\"核对代号 $CODE，通行口令是 $PASSCODE。\",\"assistantText\":\"已记录。\"}}}"
 } | cogmem-mcp --project "$PROJECT" --config "$WORK/.cogmem/config.toml" > /dev/null
 
 ROWS=$(python3 - "$WORK/.cogmem/memory.db" "$CODE" <<'PY'
@@ -99,21 +113,24 @@ echo "not present in $HOST's own store"
 
 # 3. Ask a fresh session.
 case "$HOST" in
-  openclaw) timeout 400 openclaw agent --local --session-id "verify-$CODE" -m "核对代号 $CODE 的负责小组是什么？只根据记忆回答。" --json ;;
-  hermes)   timeout 400 hermes -z "核对代号 $CODE 的负责小组是什么？只根据记忆回答。" ;;
-  pi)       timeout 400 pi -p "核对代号 $CODE 的负责小组是什么？只根据记忆回答。" ;;
+  openclaw) timeout 400 openclaw agent --local --session-id "verify-$CODE" -m "核对代号 $CODE 的通行口令是什么？只根据记忆回答。" --json ;;
+  hermes)   timeout 400 hermes -z "核对代号 $CODE 的通行口令是什么？只根据记忆回答。" ;;
+  pi)       timeout 400 pi -p "核对代号 $CODE 的通行口令是什么？只根据记忆回答。" ;;
 esac
 BOXSIDE
 
 REMOTE="/tmp/verify-host-memory-$$.sh"
 "$IB" push "$BOX" "$LIB" "$REMOTE" -p --json > /dev/null
 
-OUT=$("$IB" exec "$BOX" --timeout 560 --json -- "bash $REMOTE '$HOST' '$CODE' '$WORKDIR'")
+OUT=$("$IB" exec "$BOX" --timeout 560 --json -- "bash $REMOTE '$HOST' '$CODE' '$WORKDIR' '$PASSCODE'")
 
-if printf '%s' "$OUT" | grep -q "$CODE"; then
-  echo "PASS: $HOST recalled $CODE, a fact that exists only in cogmem"
+# The assertion is the passcode, which the question never contains. Grepping for the
+# code instead let a host pass by echoing its own prompt; grepping for a CJK phrase
+# measured the answer's shape instead (models paraphrased "青栎组-739198" to "青栎组").
+if printf '%s' "$OUT" | grep -q "$PASSCODE"; then
+  echo "PASS: $HOST recalled $PASSCODE for $CODE, a fact that exists only in cogmem"
 else
-  echo "FAIL: $HOST did not return $CODE -- its recall path does not reach cogmem" >&2
+  echo "FAIL: $HOST did not return the passcode for $CODE -- its recall path does not reach cogmem" >&2
   printf '%s\n' "$OUT" | tail -20 >&2
   exit 1
 fi

@@ -26,8 +26,8 @@ const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 9, 27, 12, 0, 0);
 
 const PLANTED = [
-  { code: 1111, who: '张伟', days: 350 },
-  { code: 2222, who: '李娜', days: 300 },
+  { code: 1111, who: '张伟', days: 400 },
+  { code: 2222, who: '李娜', days: 380 },
   { code: 3333, who: '王强', days: 250 },
   { code: 4444, who: '陈静', days: 200 },
   { code: 5555, who: '刘洋', days: 150 },

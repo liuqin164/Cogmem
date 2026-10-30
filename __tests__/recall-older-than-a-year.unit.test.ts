@@ -67,7 +67,10 @@ test('a memory older than a year is still retrievable', async () => {
       projectId: 'p', agentId: 'a', limit: 5, now: NOW,
     });
     byAge.push({ days: entry.days, ms: performance.now() - started });
-    if (!JSON.stringify(recalled.items ?? []).includes(String(entry.code))) {
+    // On the item's own text: a substring over the whole serialised result passes
+    // on a numeric coincidence in an id, an ordinal or a timestamp.
+    const answered = (recalled.items ?? []).some((item) => String((item as { text?: string }).text ?? '').includes(String(entry.code)));
+    if (!answered) {
       misses.push(`${entry.code} (${entry.days} 天前, ${(entry.days / 365).toFixed(1)} 年)`);
     }
   }
@@ -86,16 +89,17 @@ test('a memory older than a year is still retrievable', async () => {
   // machine. Tighten only against a fixed runner.
   expect(oldest).toBeLessThan(newest * 4);
 
-  // The objective names a number: within 500 ms. The 95th percentile carries it --
-  // "usually within 500 ms" is the requirement, and one slow sample from a busy
-  // runner should not fail a build while a real regression moves the percentile.
+  // The objective names a number: within 500 ms. This asserts the SLOWEST of the
+  // sample, which is stricter than the p95 the objective names — at this sample
+  // size (6 recalls) an index of floor(0.95 * n) is the maximum anyway, and calling
+  // that a percentile was a label that outran the code.
   //
   // Measured at year scale (20,343 events, 101 neurons, 36 recalls): p50 189 ms, p95
   // 282 ms, max 290 ms, none over 500. This corpus is smaller, so this guards the
   // requirement rather than reproducing that measurement.
   const sorted = byAge.map((entry) => entry.ms).sort((a, b) => a - b);
-  const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]!;
-  expect(p95).toBeLessThan(500);
+  const slowest = sorted[sorted.length - 1]!;
+  expect(slowest).toBeLessThan(500);
 
   kernel.close();
 }, 300_000);

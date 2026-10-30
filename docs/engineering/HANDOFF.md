@@ -25,7 +25,7 @@
 
 | 要求 | 验证方式 | 结果 |
 |---|---|---|
-| 三个 host 的记忆后端可用 | `scripts/verify-host-memory.sh <box> <host>` | **openclaw / hermes / pi 均 PASS**（第 83 轮把 HEAD 构建装到 box 上复跑：3/3 PASS；#91 另用真实对话验证队列排空，见 §4.107） |
+| 三个 host 的记忆后端可用 | `scripts/verify-host-memory.sh <box> <host>` | **openclaw PASS；hermes / pi 未召回**（判定此前是空的，2026-10-30 修好后实测，见 **#107**） |
 | 一年以上的记忆能捞出 | `__tests__/recall-older-than-a-year.unit.test.ts` | **6/6（366–1500 天，最长 4.1 年）** |
 | **500ms 内** | 同上测试断言 `p95 < 500ms` | **年量级 p95 282ms，0/36 超限** |
 
