@@ -15,6 +15,7 @@ import {
 } from '../install/InstallSteps.js';
 import { integrationScope } from '../host/IntegrationScope.js';
 import { installPiAutoMemoryExtension, type PiExtensionInstallResult } from '../host/pi/PiAutoMemoryExtension.js';
+import { installHermesAutoMemoryHook, type HermesHookInstallResult } from '../host/hermes/HermesAutoMemoryHook.js';
 import {
   enableHostIntegration,
   hostWorkspaceFor,
@@ -111,6 +112,8 @@ interface ConnectResult {
   piMcp?: PiMcpInstallResult;
   /** pi's push half: the generated extension that injects recall before each run. */
   piExtension?: PiExtensionInstallResult;
+  /** Hermes' push half: the generated `pre_llm_call` shell hook. */
+  hermesHook?: HermesHookInstallResult;
   /**
    * Where `connect --auto` recorded that this host is wired. `null` means it did
    * not record one (a dry run, or no config yet), not that the write failed.
@@ -513,6 +516,7 @@ function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
   let hermesMcp: HermesMcpInstallResult | undefined;
   let piMcp: PiMcpInstallResult | undefined;
   let piExtension: PiExtensionInstallResult | undefined;
+  let hermesHook: HermesHookInstallResult | undefined;
 
   if (!args.dryRun && !alreadyCurrent) {
     if (existsSync(skillPath) && !args.force) {
@@ -543,6 +547,17 @@ function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
       workspaceRoot: hostWorkspaceRoot,
       configPath: args.hermesConfigPath,
       project: integrationProject,
+      dryRun: args.dryRun,
+      force: args.force,
+    });
+    // Hermes' push half. Its MCP entry is the pull path; this is the part that makes the
+    // memory arrive before the model answers, and it does not depend on that entry working.
+    hermesHook = installHermesAutoMemoryHook({
+      configPath: hermesMcp.configPath,
+      project: integrationProject,
+      workspaceRoot: hostWorkspaceRoot,
+      command: cogmemDispatcherCommand({ command: hermesMcp.serverCommand, args: hermesMcp.serverArgs }),
+      bunPath: args.bunPath || process.execPath,
       dryRun: args.dryRun,
       force: args.force,
     });
@@ -597,6 +612,7 @@ function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
     hermesMcp,
     piMcp,
     piExtension,
+    hermesHook,
     integrationEnabled,
   };
 }
@@ -956,6 +972,10 @@ function printHuman(result: ConnectResult): void {
     console.log(`  command: ${result.hermesMcp.serverCommand} ${result.hermesMcp.serverArgs.join(' ')}`.trimEnd());
     if (result.hermesMcp.backupPath) console.log(`  backup: ${result.hermesMcp.backupPath}`);
     if (result.hermesMcp.warning) console.log(`  warning: ${result.hermesMcp.warning}`);
+    if (result.hermesHook) {
+      console.log(`  recall hook: ${result.hermesHook.hookPath} (${result.hermesHook.configUpdated ? 'recorded' : 'already recorded'})`);
+      if (result.hermesHook.warning) console.log(`  warning: ${result.hermesHook.warning}`);
+    }
     console.log('  reload: /reload-mcp');
   }
   console.log('');

@@ -87,7 +87,7 @@ describe('docs/mcp-hosts.md states the recall mode and the adapter status per ho
     // is exactly one": a push row without a shipped, verified adapter is emergence
     // claimed for a hook nobody wired.
     const push = rows.filter((cells) => cells[1] === 'push');
-    expect(push.map((cells) => cells[0])).toEqual(['OpenClaw + the Cogmem plugin', 'pi']);
+    expect(push.map((cells) => cells[0])).toEqual(['OpenClaw + the Cogmem plugin', 'Hermes', 'pi']);
     for (const row of push) expect(row[3]).toContain('shipped and verified');
     // Every other row is explicit recall, including the hosts that do expose a
     // hook: a hook without a shipped adapter is not emergence.
@@ -101,12 +101,11 @@ describe('docs/mcp-hosts.md states the recall mode and the adapter status per ho
     // has a Cogmem adapter yet. Documenting them as push is the conflation the ADR
     // forbids. pi used to be the hardest case here and is now the counter-example:
     // its extension ships, so it reads `push` and says `shipped and verified`.
-    // pi left this list on 2026-10-30: `connect pi --auto` writes an extension that
-    // hooks `before_agent_start` for real, verified on a box. Hermes, DSH and Claude
-    // Code still expose a hook with no Cogmem adapter, which is the case the ADR is
-    // about.
+    // pi and Hermes left this list on 2026-10-30: `connect pi --auto` writes an extension
+    // that hooks `before_agent_start`, and `connect hermes --auto` writes a
+    // `pre_llm_call` shell hook — both verified on a box. DSH and Claude Code still
+    // expose a hook with no Cogmem adapter, which is the case the ADR is about.
     const planned: Array<[string, string, string]> = [
-      ['Hermes', '`pre_llm_call`', 'planned, first in the roadmap (ADR-0004)'],
       ['DSH', 'prompt section', 'planned'],
       ['Claude Code', '`UserPromptSubmit`', 'planned'],
     ];
@@ -255,7 +254,12 @@ describe('README carries the same recall modes and adapter status as the host ta
     expect(pi[2]).toContain('Implemented and verified');
     expect(pi[4]).toContain('already in the prompt');
 
-    for (const host of ['Hermes', 'DSH', 'Claude Code']) {
+    const hermes = rowFor(rows, 'Hermes');
+    expect(hermes[1]).toBe('`pre_llm_call`');
+    expect(hermes[2]).toContain('Implemented and verified');
+    expect(hermes[4]).toContain('already in the prompt');
+
+    for (const host of ['DSH', 'Claude Code']) {
       const row = rowFor(rows, host);
       expect(row[2], `${host} must be marked planned`).toContain('Planned');
       // A planned adapter means explicit recall today; no planned row may read

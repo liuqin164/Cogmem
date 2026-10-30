@@ -73,7 +73,7 @@ a per-call identity that narrows the profile does not rewrite it.
 |---|---|---|---|---|
 | OpenClaw + the Cogmem plugin | push | `before_prompt_build` | shipped and verified | Recall is already in the prompt |
 | OpenClaw via `openclaw mcp add` | pull | `before_prompt_build` | not installed on this path | The model must call `cogmem_recall` |
-| Hermes | pull | `pre_llm_call` | planned, first in the roadmap (ADR-0004) | The installed `cogmem-memory` skill documents when to call `cogmem_recall` |
+| Hermes | push | `pre_llm_call` | shipped and verified | Recall is already in the user message, injected by the shell hook `connect hermes --auto` writes |
 | pi | push | `before_agent_start` | shipped and verified | Recall is already in the prompt, injected by the extension `connect pi --auto` writes |
 | DSH | pull | prompt section | planned | The model must call `cogmem_recall` |
 | Claude Code | pull | `UserPromptSubmit` | planned; unverified against a real client when it lands | Same contract, delivered by `instructions` |
@@ -89,8 +89,18 @@ in — Hermes, then pi, DSH, and Claude Code last, written against the documente
 hook and **not verified against a real client**, which is the label it carries
 wherever it is described.
 
-**pi moved from `pull` to `push` on 2026-10-30**, and it is verified rather than
-planned. The distinction that decided it is pi's, not ours: a **skill** is
+**pi and Hermes moved from `pull` to `push` on 2026-10-30**, and both are verified
+rather than planned.
+
+Hermes needed no new mechanism, only the one it documents: `agent/turn_context.py`
+`_collect_pre_llm_call_context()` appends whatever a `pre_llm_call` hook returns under
+`context` to the **user message**, and a shell hook reaches that path because
+`agent/shell_hooks.py` parses its stdout as JSON (the event fields arrive under `extra`).
+`connect hermes --auto` writes that script and one config entry. Two things are easy to
+get wrong and both are in the installer's warning: Hermes runs a hook only after it is
+approved, and re-approving is required whenever the script changes, because the approval
+records the script it saw.
+ The distinction that decided it is pi's, not ours: a **skill** is
 documentation the model reads when it decides the task matches, while an
 **extension** is TypeScript pi loads at startup and can hook. Measured on a real
 pi with the cogmem skill installed and `cogmem_recall` in its tool list, a fresh
