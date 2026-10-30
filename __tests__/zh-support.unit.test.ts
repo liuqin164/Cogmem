@@ -32,7 +32,7 @@ describe('Chinese language support v1.13', () => {
     });
 
     expect(neuron.metadata.topicPath).toBe('工程/记忆内核');
-    const recall = kernel.searchEvidence('中文召回评估', { projectId: 'zh-project', limit: 5 });
+    const recall = kernel.evidenceFor('中文召回评估', { projectId: 'zh-project', limit: 5 });
     expect(recall.rawEvidence.some((item) => item.content.includes('中文召回评估'))).toBe(true);
     expect(recall.rawEvidence.every((item) => item.metadata.projectId === 'zh-project')).toBe(true);
     kernel.close();

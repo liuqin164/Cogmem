@@ -105,20 +105,28 @@ test('the incremental graph matches what a full rebuild produces', () => {
   }
 });
 
-test('reindex reports the projection state, not the intent of the call', () => {
-  // `projectEpisodes` projects the canonical layer and leaves the dirty flag as
-  // it found it, so `refreshed: true` was a claim about the call rather than
-  // about the store. The two fields now agree with the projection state.
+test('reindex reports the projection state in both directions', () => {
+  // `projectEpisodes` projects the canonical layer and leaves the dirty flag as it found
+  // it, so the honest field is the store's state — `projectionCurrent` — not a
+  // `refreshed` that read like "this call refreshed it". CODING_STANDARDS asks the test
+  // to assert the flag in both directions, which is what this does: a project that owes
+  // a refresh, and one that does not.
   const kernel = createKernelAt(join(makeTempDir('cogmem-reindex-state-'), 'memory.db'));
   try {
     const eventId = seedEpisode(kernel, 1, 'reindex target for the state assertion');
-    // A project that owes a refresh is the case the old code reported wrongly:
-    // it returned `refreshed: true` whatever the store said.
+
+    // Direction 1: a project that owes a refresh. The path must not claim to be current,
+    // and must leave the flag exactly where it found it.
     kernel.memoryAtlasStore.markProjectionDirty('p', { reason: 'test' });
-    const result = kernel.reindexMemoryAtlas({ projectId: 'p', eventId });
-    const status = kernel.memoryAtlasStore.getProjectionState('p')?.status;
-    expect(status).not.toBe('clean');
-    expect({ refreshed: result.refreshed, owed: result.refreshOwed }).toEqual({ refreshed: false, owed: true });
+    const owing = kernel.reindexMemoryAtlas({ projectId: 'p', eventId });
+    expect(owing.projectionCurrent).toBe(false);
+    expect(kernel.memoryAtlasStore.getProjectionState('p')?.status).not.toBe('clean');
+
+    // Direction 2: a project that is already current. It stays reported as current, and
+    // the call makes no claim about having refreshed anything.
+    kernel.memoryAtlasStore.markProjectionClean('p', { reason: 'test' });
+    const current = kernel.reindexMemoryAtlas({ projectId: 'p', eventId });
+    expect(current.projectionCurrent).toBe(true);
   } finally {
     kernel.close();
   }

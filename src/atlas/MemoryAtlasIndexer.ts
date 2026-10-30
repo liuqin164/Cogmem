@@ -123,7 +123,22 @@ export class MemoryAtlasIndexer {
     }
   }
 
-  reindex(options: { projectId: string; eventId?: string; episodeId?: string }): { projectId: string; episodeIds: string[]; refreshed: boolean; refreshOwed: boolean; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
+  /**
+   * Project the canonical layer for the episodes addressed here, then report whether the
+   * whole projection is current.
+   *
+   * It covers **the canonical layer for these episodes only**: frames, curated items and
+   * the relation/action-frame guarantees a full pass restores are not touched, and the
+   * dirty flag is left exactly as it was found. `projectionCurrent: false` is therefore a
+   * fact about the project, not a failure of this call — the caller that needs the whole
+   * projection current calls `ensureFresh`, the only path whose `refreshed` means "this
+   * run rebuilt it".
+   *
+   * One field, because "current" and "refresh owed" are the same fact: the first version
+   * returned `refreshed` and `refreshOwed` as exact complements, and named the state with
+   * a word for an action (CODING_STANDARDS, "Projections and their dirty flag").
+   */
+  reindex(options: { projectId: string; eventId?: string; episodeId?: string }): { projectId: string; episodeIds: string[]; projectionCurrent: boolean; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
     const episodeIds = new Set<string>();
     if (options.episodeId) episodeIds.add(options.episodeId);
     if (options.eventId) {
@@ -133,17 +148,11 @@ export class MemoryAtlasIndexer {
     const ids = Array.from(episodeIds);
     if (!ids.length) throw new Error('graph_reindex_target_not_found');
     const rebuilt = this.projectEpisodes(options.projectId, ids);
-    // `projectEpisodes` projects the canonical layer for these episodes and
-    // deliberately leaves the dirty flag as it found it, so whether the whole
-    // projection is current is a question about the store, not about this call.
-    // Reporting `refreshed: true` unconditionally told `cogmem memory
-    // graph-reindex` that a partial projection was a complete one.
-    const status = this.store.getProjectionState(options.projectId)?.status;
+    const projectionCurrent = this.store.getProjectionState(options.projectId)?.status === 'clean';
     return {
       projectId: options.projectId,
       episodeIds: ids,
-      refreshed: status === 'clean',
-      refreshOwed: status !== 'clean',
+      projectionCurrent,
       curatedEpisodes: rebuilt.episodeCount,
       facetEdges: rebuilt.facetEdgeCount,
       reviewNeeded: rebuilt.reviewNeeded,

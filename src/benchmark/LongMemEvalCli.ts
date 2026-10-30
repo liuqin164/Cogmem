@@ -22,7 +22,7 @@ export async function runLongMemEvalCli(argv: string[] = Bun.argv.slice(2)): Pro
   // published baselines that never saw cogmem's host path); say so at the seam.
   const metrics = await new ExternalBenchmarkRunner({
     ingest: (input) => brain.ingest(input),
-    recall: (query, options) => brain.searchEvidence(query, options),
+    recall: (query, options) => brain.evidenceFor(query, options),
   }, datasetPath).runLongMemEval();
   const temporal = metrics.accuracyByType.temporal ?? 0;
 

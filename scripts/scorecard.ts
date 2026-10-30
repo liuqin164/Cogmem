@@ -240,7 +240,7 @@ async function runFamily(kernel: ReturnType<typeof createMemoryKernel>, scenario
 
     // The arm under test: cogmem's own recall, measured on its own.
     const before = performance.now();
-    const recalled = kernel.searchEvidence(scenario.query, { projectId: scenario.projectId, includeRawEvidence: true, now });
+    const recalled = kernel.evidenceFor(scenario.query, { projectId: scenario.projectId, includeRawEvidence: true, now });
     const latencyMs = performance.now() - before;
     paths.set(recalled.strategy.primaryLevel, (paths.get(recalled.strategy.primaryLevel) ?? 0) + 1);
     // Provenance is "the returned item says where it came from": a stable identity
@@ -512,7 +512,7 @@ async function main(): Promise<void> {
   console.log(`scenarios: ${result.scenarios} per family (synthetic, generated here) | seed: ${seed} | model: none (rule_only)`);
   console.log('');
   console.log('**Primary metric: Family C — the host path (`KernelAgentMemoryBackend.recall`).**');
-  console.log('Families A/B measure the evidence layer (`MemoryKernel.searchEvidence`, internal); it is a component, not the path a host takes.');
+  console.log('Families A/B measure the evidence layer (`MemoryKernel.evidenceFor`, internal); it is a component, not the path a host takes.');
   console.log('');
   console.log('### Family A — one fact among distractors, queried with its own words');
   console.log('');

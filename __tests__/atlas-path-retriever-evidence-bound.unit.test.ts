@@ -47,7 +47,7 @@ function seedFacetNode(kernel: MemoryKernel, evidenceEventIds: string[], occurre
 }
 
 function evidenceReturnedFor(kernel: MemoryKernel, query: string): number {
-  const recall = kernel.searchEvidence(query, { projectId: 'p', limit: 10, includeRawEvidence: true });
+  const recall = kernel.evidenceFor(query, { projectId: 'p', limit: 10, includeRawEvidence: true });
   const node = (recall.atlas?.nodes ?? []).find((candidate) => candidate.id === 'entity:retry-policy');
   return node?.evidenceReturned ?? -1;
 }

@@ -152,7 +152,7 @@ describe('Governance and security v1.14', () => {
     await kernel.ingest({ projectId: 'classified-project', content: 'must remain until schema is classified' });
     kernel.factStore.getDatabase().exec(`CREATE TABLE privacy_unknown_payload(id TEXT PRIMARY KEY, payload TEXT)`);
     expect(kernel.forgetUser('classified-project')).rejects.toThrow('privacy_schema_unclassified:privacy_unknown_payload');
-    expect(kernel.searchEvidence('must remain until schema is classified', { projectId: 'classified-project' }).rawEvidence.length).toBeGreaterThan(0);
+    expect(kernel.evidenceFor('must remain until schema is classified', { projectId: 'classified-project' }).rawEvidence.length).toBeGreaterThan(0);
     kernel.close();
   });
 
@@ -287,8 +287,8 @@ describe('Governance and security v1.14', () => {
     expect(result.deleted.episodes).toBeGreaterThan(0);
     expect(result.deleted.brainProjections).toBeGreaterThan(0);
     expect(result.deleted.entityRecords).toBeGreaterThan(0);
-    expect(kernel.searchEvidence('delete this project memory', { projectId: 'forget-me' }).rawEvidence).toHaveLength(0);
-    expect(kernel.searchEvidence('keep this project memory', { projectId: 'keep-me' }).rawEvidence.length).toBeGreaterThan(0);
+    expect(kernel.evidenceFor('delete this project memory', { projectId: 'forget-me' }).rawEvidence).toHaveLength(0);
+    expect(kernel.evidenceFor('keep this project memory', { projectId: 'keep-me' }).rawEvidence.length).toBeGreaterThan(0);
     expect(kernel.activationStore.getTop({ projectId: 'forget-me' })).toHaveLength(0);
     expect(kernel.buildMemoryMap({ projectId: 'forget-me' }).counters.activationHotspots).toBe(0);
     expect(kernel.runMaintenanceTick({ projectId: 'forget-me' }).chargeVector.activationHotspots).toBe(0);

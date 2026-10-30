@@ -102,7 +102,7 @@ test('recall governance hardening metrics stay within fixed leakage thresholds',
   kernel.memoryGraph.updateNeuronStatus(otherProject.id, 'archived');
 
   const navigated = kernel.navigateMemory(query, { projectId: 'project-a', limit: 20 });
-  const brainRecall = kernel.searchEvidence(query, { projectId: 'project-a', limit: 20, includeRawEvidence: true });
+  const brainRecall = kernel.evidenceFor(query, { projectId: 'project-a', limit: 20, includeRawEvidence: true });
   const agentRecall = new KernelAgentMemoryBackend(kernel).recall({
     agentId: 'openclaw',
     projectId: 'project-a',

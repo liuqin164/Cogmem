@@ -589,7 +589,7 @@ export class KernelAgentMemoryBackend {
     }
     const retrievalLimit = Math.max(limit * 4, 24);
     const multidimensionalRecall = query.projectId !== undefined && allowsGraph
-      ? this.kernel.searchEvidence(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone })
+      ? this.kernel.evidenceFor(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone })
       : undefined;
     const atlasItems = allowsGraph
       ? [
@@ -673,7 +673,7 @@ export class KernelAgentMemoryBackend {
     }
 
     const fallbackItems = allowsCompiled
-      ? this.filterAgentEvidence((multidimensionalRecall ?? this.kernel.searchEvidence(queryPlan.primarySearchText, {
+      ? this.filterAgentEvidence((multidimensionalRecall ?? this.kernel.evidenceFor(queryPlan.primarySearchText, {
         projectId: query.projectId,
         limit: retrievalLimit,
         now: query.now,
@@ -981,7 +981,7 @@ export class KernelAgentMemoryBackend {
     relaxationTrace: MemoryAtlasRelaxationStep[];
   } {
     try {
-      const recall = this.kernel.searchEvidence(query.query, { projectId: query.projectId, limit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
+      const recall = this.kernel.evidenceFor(query.query, { projectId: query.projectId, limit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
       const atlas = recall.atlas;
       const plannedCards = atlas?.cards ?? [];
       const legacyAtlas = this.kernel.graphExplore(query.query, {
@@ -1375,7 +1375,7 @@ export class KernelAgentMemoryBackend {
   }
 
   private atlasItemsForAgentQuery(searchText: string, query: AgentRecallQuery, allowsRawSource: boolean): AgentRecallItem[] {
-    const recall = this.kernel.searchEvidence(searchText, { projectId: query.projectId, limit: Math.max((query.limit ?? 5) * 4, 24), includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
+    const recall = this.kernel.evidenceFor(searchText, { projectId: query.projectId, limit: Math.max((query.limit ?? 5) * 4, 24), includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
     const cards = (recall.atlas?.cards ?? []).map((card) => this.toAgentRecallItemFromAtlasCard(card, query));
     const nodes = (recall.atlas?.nodes ?? [])
       .filter((node) => ['actor', 'event', 'task', 'object', 'location', 'state', 'project'].includes(node.nodeType))

@@ -30,7 +30,7 @@ describe('Issue #72: supersession detection in raw_evidence recall', () => {
     });
 
     // Recall with a query that matches both statements
-    const result = kernel.searchEvidence('When is the deployment window for beacon now scheduled?', {
+    const result = kernel.evidenceFor('When is the deployment window for beacon now scheduled?', {
       projectId,
       includeRawEvidence: true,
     });
@@ -72,7 +72,7 @@ describe('Issue #72: supersession detection in raw_evidence recall', () => {
     });
 
     // Recall - both should be present since they're from different agents
-    const result = kernel.searchEvidence('When is the deployment window for atlas?', {
+    const result = kernel.evidenceFor('When is the deployment window for atlas?', {
       projectId,
       includeRawEvidence: true,
     });
@@ -111,7 +111,7 @@ describe('Issue #72: supersession detection in raw_evidence recall', () => {
       tags: ['turn-2'],
     });
 
-    const result = kernel.searchEvidence('When is the index rebuild for atlas now scheduled?', {
+    const result = kernel.evidenceFor('When is the index rebuild for atlas now scheduled?', {
       projectId,
       includeRawEvidence: true,
     });
@@ -150,7 +150,7 @@ describe('Issue #72: supersession detection in raw_evidence recall', () => {
       projectId,
     });
 
-    const result = kernel.searchEvidence('When is the retention sweep for flint now scheduled?', {
+    const result = kernel.evidenceFor('When is the retention sweep for flint now scheduled?', {
       projectId,
       includeRawEvidence: true,
       limit: 3,

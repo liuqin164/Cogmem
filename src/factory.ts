@@ -1224,12 +1224,14 @@ export class MemoryKernel {
    * supersession filtering and the context cortex, and that is the one entry
    * point an agent or a user should use (#105).
    *
-   * The name keeps "search" on purpose: GLOSSARY's `_Avoid_` for Pulse lists it,
-   * and this is the lookup Pulse runs over the ledger — not a second Pulse.
+   * `evidenceFor` rather than a "search" name: `search` is on GLOSSARY's `_Avoid_`
+   * list for Pulse, and CODING_STANDARDS says a new public name never uses an avoided
+   * word. This returns the evidence for one cue — it is not a second Pulse, and it
+   * should not borrow Pulse's rejected synonyms to say so.
    *
    * @internal
    */
-  searchEvidence(query: string, options: BrainRecallOptions = {}) {
+  evidenceFor(query: string, options: BrainRecallOptions = {}) {
     const recallNow = (options as BrainRecallOptions & { now?: number }).now ?? Date.now();
     const recallTimeZone = options.timeZone ?? this.projectClock.timeZone;
     const normalizedOptions: BrainRecallOptions = {
@@ -1317,7 +1319,7 @@ export class MemoryKernel {
       };
     }
 
-    const fallbackEvidence = this.searchEvidence(query, {
+    const fallbackEvidence = this.evidenceFor(query, {
       projectId: options.projectId,
       limit,
       includeRawEvidence: true,
@@ -2561,7 +2563,7 @@ export class MemoryKernel {
     return this.memoryAtlasIndexer.rebuild(options);
   }
 
-  reindexMemoryAtlas(options: { projectId: string; eventId?: string; episodeId?: string }): { projectId: string; episodeIds: string[]; refreshed: boolean; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
+  reindexMemoryAtlas(options: { projectId: string; eventId?: string; episodeId?: string }): { projectId: string; episodeIds: string[]; projectionCurrent: boolean; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
     return this.memoryAtlasIndexer.reindex(options);
   }
 

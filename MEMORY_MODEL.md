@@ -130,9 +130,9 @@ Graph edge confidence, stability, and activation are separate. Recall and mainte
 | entry point | reads | use it for |
 | --- | --- | --- |
 | `KernelAgentMemoryBackend.recall()` / `.recallPack()` | raw ledger lanes, Atlas, Frames, graph | anything a host or agent asks |
-| `MemoryKernel.searchEvidence()` — **internal** (`BrainRecall`) | `neurons` (the legacy compiled layer) | the evidence layer: `KernelAgentMemoryBackend.recall()` calls it, and so does the LongMemEval benchmark. Not an entry point. |
+| `MemoryKernel.evidenceFor()` — **internal** (`BrainRecall`) | `neurons` (the legacy compiled layer) | the evidence layer: `KernelAgentMemoryBackend.recall()` calls it, and so does the LongMemEval benchmark. Not an entry point. |
 
-The kernel-level method used to be called `recall`, which made it look like a peer of the host path and caused exactly the confusion below. It is now `searchEvidence()` and marked `@internal`; **`recall` names one entry point only.** Measuring the internal one and concluding "recall finds nothing" is the mistake this note exists to prevent: on a corpus produced by the 4.0 pipeline the neuron layer is nearly empty by construction (`cogmem memory govern` promotes candidate *status*; it writes a neuron only when a candidate carries a source neuron), while `KernelAgentMemoryBackend.recall()` returns the right evidence in milliseconds. `cogmem memory govern` reports `promoted_candidates` and `neurons_written` separately for the same reason.
+The kernel-level method used to be called `recall`, which made it look like a peer of the host path and caused exactly the confusion below. It is now `evidenceFor()` and marked `@internal`; **`recall` names one entry point only.** Measuring the internal one and concluding "recall finds nothing" is the mistake this note exists to prevent: on a corpus produced by the 4.0 pipeline the neuron layer is nearly empty by construction (`cogmem memory govern` promotes candidate *status*; it writes a neuron only when a candidate carries a source neuron), while `KernelAgentMemoryBackend.recall()` returns the right evidence in milliseconds. `cogmem memory govern` reports `promoted_candidates` and `neurons_written` separately for the same reason.
 
 ## SourceRefs
 

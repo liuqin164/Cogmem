@@ -104,11 +104,11 @@ describe('project-local temporal topology regressions', () => {
   test('non-agent recall explanation forwards the same explicit clock to fallback recall', () => {
     const kernel = createMemoryKernel({ projectTimeZone: 'UTC' });
     const calls: Array<Record<string, unknown>> = [];
-    const originalRecall = kernel.searchEvidence.bind(kernel);
-    (kernel as unknown as { searchEvidence: typeof kernel.searchEvidence }).searchEvidence = ((query: string, options: Record<string, unknown>) => {
+    const originalRecall = kernel.evidenceFor.bind(kernel);
+    (kernel as unknown as { evidenceFor: typeof kernel.evidenceFor }).evidenceFor = ((query: string, options: Record<string, unknown>) => {
       calls.push(options);
       return originalRecall(query, options);
-    }) as typeof kernel.searchEvidence;
+    }) as typeof kernel.evidenceFor;
     explainRecallWithKernel(kernel, { query: 'today', projectId: 'p', now: 123, localDateNow: '2026-07-17', timeZone: 'Asia/Tokyo' });
     expect(calls[0]).toMatchObject({ now: 123, localDateNow: '2026-07-17', timeZone: 'Asia/Tokyo' });
     kernel.close();

@@ -143,7 +143,7 @@ openclaw          → 3 条（9ms）
 命中的正是那段对话的原始事件。**整条链因此全部验证**：对话 → 模型读出帧（LIKES / FRIEND_OF）→ `dream night` 投影进图谱 → 宿主式召回 9–109ms 命中。
 
 **别再踩的两个入口陷阱**（本轮各栽一次）：
-- `kernel.searchEvidence()`（原名 `kernel.recall()`，现为 `@internal`）是**证据层**，查 `neurons`，本项目只有 8 行所以返回 0；**用户面召回只有 `KernelAgentMemoryBackend.recall` 一个入口**（#105 已按方案 A 改名）。
+- `kernel.evidenceFor()`（原名 `kernel.recall()`，现为 `@internal`）是**证据层**，查 `neurons`，本项目只有 8 行所以返回 0；**用户面召回只有 `KernelAgentMemoryBackend.recall` 一个入口**（#105 已按方案 A 改名）。
 - `cogmem dream tick --promote` **静默无效**（`src/bin/dream.ts` 根本没有 promote 处理，参数解析器接受任意 `--flag`）。治理升级的命令是 **`cogmem memory govern --project X`**（内部 `promoteDreamCandidates`）。
 
 **两个未修的观察（不阻塞，值得开票）**：

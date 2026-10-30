@@ -107,7 +107,7 @@ describe('Vector backends v1.12', () => {
 
     expect(kernel.vectorStore.getStats().backend).toBe('sqlite-vec');
     expect(kernel.vectorStore.getCurrentCount()).toBe(1);
-    const recall = kernel.searchEvidence('durable memory kernel facts', { projectId: 'vector-user', limit: 5 });
+    const recall = kernel.evidenceFor('durable memory kernel facts', { projectId: 'vector-user', limit: 5 });
     expect(recall.rawEvidence.some((item) => item.content.includes('SQLite vector backend'))).toBe(true);
     kernel.close();
     rmSync(dir, { recursive: true, force: true });

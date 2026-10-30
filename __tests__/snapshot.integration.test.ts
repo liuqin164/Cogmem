@@ -63,7 +63,7 @@ describe('MemorySnapshot v1.9.7', () => {
     await new SnapshotImporter({ expectedEmbeddingDimension: meta.header.embeddingDimension })
       .import(snapshotPath, targetDb);
     const restored = createMemoryKernel({ dbPath: targetDb });
-    const recall = restored.searchEvidence('Qwen embedding config', { projectId: 'snapshot-user', limit: 5 });
+    const recall = restored.evidenceFor('Qwen embedding config', { projectId: 'snapshot-user', limit: 5 });
 
     expect(recall.rawEvidence.some((item) => item.content.includes('Qwen embedding config'))).toBe(true);
     restored.close();
