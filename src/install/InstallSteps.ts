@@ -242,7 +242,7 @@ export function piIntegrationEstablished(configPath: string): boolean {
 }
 
 /**
- * The Host the gate still has work for, or `undefined` when there is none.
+ * Every Host the gate still has work for.
  *
  * Only unsatisfied work is named (#81):
  *
@@ -252,14 +252,10 @@ export function piIntegrationEstablished(configPath: string): boolean {
  *    this machine, and naming another one is how the gate never converged for the
  *    operator who already has what they asked for;
  * 3. otherwise the primary Host, so a fresh machine is still told what to do.
- */
-
-/**
- * Every Host the gate still has work for.
  *
- * The same three rules as the singular form, returning all of them: an install that
- * found three agents has three hosts to wire, and naming one per run is how the
- * operator finishes an install by reading the gate three times (#97).
+ * All of them, not one: an install that found three agents has three hosts to wire,
+ * and naming one per run is how the operator finishes an install by reading the gate
+ * three times (#97).
  */
 export function pendingHostIntegrations(wiring: HostWiring[]): HostIntegration[] {
   const wanted = wiring.filter((entry) => entry.wanted && !entry.established).map((entry) => entry.host);
