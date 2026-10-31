@@ -2964,19 +2964,25 @@ export class MemoryKernel {
       floor: options.activationFloor,
       now: ranAt,
     });
+    // `refreshed: false` means "the projection was already current". A pass that did not
+    // run and a pass that failed are two further states, and both say which they are:
+    // reporting either as "current" is how a missing pass reads as a working one.
+    const passDidNotProduce = (state: { skipped?: true; errors?: Array<{ projectId: string; error: string }> }) => ({
+      documents: this.memoryAtlasStore.countDocuments(projectId),
+      actions: 0,
+      refreshed: false,
+      ...state,
+    });
+    const runPass = (): MaintenanceTickResult['executed']['memoryAtlasRefresh'] => projectId !== undefined
+      ? { ...this.ensureMemoryAtlas({ projectId }), errors: [] }
+      : this.memoryAtlasIndexer.ensureAllFresh();
     let memoryAtlasRefresh: MaintenanceTickResult['executed']['memoryAtlasRefresh'];
     try {
-      // `refreshed: false` already means "the projection was current". A skipped pass
-      // is a third thing and says so, because reporting it as "current" is how a
-      // missing pass reads as a working one.
-      memoryAtlasRefresh = options.atlasRefresh === false
-        ? { documents: this.memoryAtlasStore.countDocuments(projectId), actions: 0, refreshed: false, skipped: true }
-        : projectId !== undefined
-          ? { ...this.ensureMemoryAtlas({ projectId }), errors: [] }
-          : this.memoryAtlasIndexer.ensureAllFresh();
+      memoryAtlasRefresh = options.atlasRefresh === false ? passDidNotProduce({ skipped: true }) : runPass();
     } catch (error) {
-      memoryAtlasRefresh = { documents: this.memoryAtlasStore.countDocuments(projectId), actions: 0, refreshed: false,
-        errors: [{ projectId: projectId ?? '__all__', error: error instanceof Error ? error.message : String(error) }] };
+      memoryAtlasRefresh = passDidNotProduce({
+        errors: [{ projectId: projectId ?? '__all__', error: error instanceof Error ? error.message : String(error) }],
+      });
     }
     const memoryAtlasActivationDecay = this.memoryAtlasStore.decay(projectId, options.activationDecayFactor ?? 0.85, ranAt);
     const memoryAtlasAccessPruned = this.memoryAtlasStore.cleanupAccess({
