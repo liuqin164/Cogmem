@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { verifyMcpEntry, type McpEntryVerification } from '../host/verifyMcpEntry.js';
 import { writeOwnedFiles } from '../host/InstalledArtifacts.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -105,6 +106,13 @@ interface ConnectResult {
   templatePath: string;
   dryRun: boolean;
   installed: boolean;
+  /**
+   * The entry this connect wrote was started and answered `tools/list`.
+   *
+   * Deliberately separate from `installed`: that one is a claim about a file, and #86,
+   * #94 and #96 were all commands whose file was there and which could not start (#116).
+   */
+  verification?: McpEntryVerification;
   alreadyCurrent: boolean;
   nextCommands: string[];
   nextSteps: ConnectNextStep[];
@@ -477,6 +485,25 @@ function cogmemDispatcherCommand(server: { command: string; args: string[] }): s
 function installSkill(args: ConnectArgs): ConnectResult {
   if (!args.agent) throw new Error(usage());
   return installForHost(args.agent, args);
+}
+
+/**
+ * Run the entry this connect just wrote and attach what happened.
+ *
+ * A dry run verifies nothing: there is no written entry to run, and reporting a
+ * verification for one would be the same claim with less evidence.
+ */
+async function withVerification(result: ConnectResult, args: ConnectArgs): Promise<ConnectResult> {
+  // Not gated on `installed`: that means "this run changed something", and an integration
+  // that was already current is exactly the one worth asking whether it still answers.
+  if (args.dryRun) return result;
+  const entry = result.hermesMcp
+    ? { command: result.hermesMcp.serverCommand, args: result.hermesMcp.serverArgs }
+    : result.piMcp
+      ? { command: result.piMcp.serverCommand, args: result.piMcp.serverArgs }
+      : undefined;
+  if (!entry) return result;
+  return { ...result, verification: await verifyMcpEntry(entry) };
 }
 
 function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
@@ -949,6 +976,9 @@ function printHuman(result: ConnectResult): void {
     console.log(`  command: ${result.piMcp.serverCommand} ${result.piMcp.serverArgs.join(' ')}`.trimEnd());
     if (result.piMcp.warning) console.log(`  warning: ${result.piMcp.warning}`);
     if (result.piExtension) console.log(`  extension: ${result.piExtension.extensionPath} (${result.piExtension.changed ? 'written' : 'already current'})`);
+    if (result.verification) {
+      console.log(`  ${result.verification.ok ? 'verified' : 'not verified'}: ${result.verification.detail}`);
+    }
     console.log('  check: pi mcp list');
   }
   if (result.hermesMcp) {
@@ -981,7 +1011,7 @@ async function main(): Promise<void> {
   }
 
   if (!args.allHosts) {
-    const result = installSkill(args);
+    const result = await withVerification(installSkill(args), args);
     if (args.json) {
       printCliJson(`connect.${result.agent}`, result);
       return;
@@ -1008,7 +1038,8 @@ async function main(): Promise<void> {
       'No host integration is enabled in this config, so `connect all` has nothing to wire. Run `cogmem init --agent all`, or name one host: cogmem connect openclaw.',
     );
   }
-  const results = hosts.map((host) => installForHost(host, args));
+  const results: ConnectResult[] = [];
+  for (const host of hosts) results.push(await withVerification(installForHost(host, args), args));
   if (args.json) {
     printCliJson('connect.all', { hosts: results });
     return;

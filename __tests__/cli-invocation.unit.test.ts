@@ -180,8 +180,11 @@ describe('printed steps run as printed', () => {
     const workspace = join(dir, 'ws');
     const hermesConfig = join(dir, 'config.yaml');
     mkdirSync(workspace, { recursive: true });
+    // The entry names a config the server has to find: without this the MCP server exits
+    // and the verification below is honestly false (#116).
+    writeConfig(workspace, `[core]\ndb_path = "${join(workspace, 'memory.db')}"\n`);
 
-    const { exitCode } = await run(
+    const { stdout, exitCode } = await run(
       ['bun', connectBin, 'hermes', '--auto', '--json', '--workspace', workspace, '--hermes-config', hermesConfig],
       {
         cwd: workspace,
@@ -204,6 +207,9 @@ describe('printed steps run as printed', () => {
     // Bound to the integration's own scope: an unbound server answers whatever
     // project a caller names (#79).
     expect(written).toMatch(/args: \["mcp","--project","hermes-[0-9a-f]{8}","--config","[^"]+config\.toml"\]/);
+    // And the entry it wrote is one Hermes can actually start (#116).
+    const reported = JSON.parse(stdout) as { verification?: { ok: boolean; detail: string } };
+    expect(reported.verification?.ok).toBe(true);
   });
 
   test('connect pi writes an extension that names the managed launcher, not this installation', async () => {
@@ -212,8 +218,9 @@ describe('printed steps run as printed', () => {
     const workspace = join(dir, 'ws');
     const piConfig = join(dir, 'pi', 'mcp.json');
     mkdirSync(workspace, { recursive: true });
+    writeConfig(workspace, `[core]\ndb_path = "${join(workspace, 'memory.db')}"\n`);
 
-    const { exitCode } = await run(
+    const { stdout: firstStdout, exitCode } = await run(
       ['bun', connectBin, 'pi', '--auto', '--json', '--workspace', workspace, '--pi-config', piConfig],
       {
         cwd: workspace,
@@ -227,6 +234,7 @@ describe('printed steps run as printed', () => {
       },
     );
     expect(exitCode).toBe(0);
+    expect((JSON.parse(firstStdout) as { installed: boolean }).installed).toBe(true);
 
     // A second connect must not add anything: the adapters used to leave a
     // `.cogmem.bak-<timestamp>` beside every file they replaced, so a directory grew by
@@ -240,6 +248,15 @@ describe('printed steps run as printed', () => {
 
     const extensions = readdirSync(join(dir, 'pi', 'extensions')).filter((name) => name.endsWith('.ts'));
     expect(extensions.length).toBe(1);
+
+    // `installed` is a claim about a file; this is a claim about the command in it, which
+    // is the one #86, #94 and #96 got wrong while reporting success (#116).
+    const reported = JSON.parse(again.stdout) as { installed: boolean; verification?: { ok: boolean; tools?: number; detail: string } };
+    // Nothing changed this time — and the entry still answers, which is the half that
+    // `installed: false` says nothing about.
+    expect(reported.installed).toBe(false);
+    expect(reported.verification?.ok).toBe(true);
+    expect(reported.verification?.tools).toBeGreaterThan(0);
     const extension = readFileSync(join(dir, 'pi', 'extensions', extensions[0]!), 'utf8');
     // Same property as the Hermes entry: the extension runs this launcher, which
     // resolves the installation when the host calls it, and the installation's own
