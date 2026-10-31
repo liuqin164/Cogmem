@@ -1,1 +1,0 @@
-{"version":3,"file":"BoardRegistry.d.ts","sourceRoot":"","sources":["../../src/boards/BoardRegistry.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,KAAK,EAAE,MAAM,YAAY,CAAC;AAExC;;GAEG;AACH,qBAAa,aAAa;IACxB,OAAO,CAAC,MAAM,CAA4B;IAE1C,QAAQ,CAAC,KAAK,EAAE,KAAK,GAAG,IAAI;IAI5B,GAAG,CAAC,EAAE,EAAE,MAAM,GAAG,KAAK,GAAG,SAAS;IAIlC,IAAI,IAAI,KAAK,EAAE;CAGhB"}

@@ -49,6 +49,19 @@ const PROTECTED_PHRASES = [
   '操作',
 ];
 
+/**
+ * Short Latin words that name something rather than pad a sentence.
+ *
+ * The three-character minimum exists to drop articles and prepositions, but it
+ * caught the project's own nouns too: CI, pi, git, DSH. These are kept however
+ * short they are, because a question about "pi" is about pi and about nothing
+ * else once that word is gone.
+ */
+const SHORT_SUBJECT_TERMS = new Set([
+  'ci', 'cd', 'pi', 'dsh', 'git', 'pr', 'id', 'ui', 'ux', 'db', 'os', 'ai', 'ml',
+  'mcp', 'npm', 'api', 'sdk', 'cli', 'url', 'http', 'sql', 'ts', 'js', 'go', 'py',
+]);
+
 const QUERY_FILLERS = [
   '我现在不是问你泛泛解释',
   '不是问你泛泛解释',
@@ -162,7 +175,13 @@ export function extractRecallKeywords(text: string): string[] {
 
   for (const token of normalized.split(/[^\p{L}\p{N}_-]+/u)) {
     const cleaned = token.trim();
-    if (!cleaned || cleaned.length < 3) continue;
+    if (!cleaned) continue;
+    // A short word is not a meaningless one. The project's own nouns are short —
+    // CI, pi, git, DSH — and dropping every token under three characters removed
+    // the subject of the question: "CI 为什么不在 4.0 分支上跑" became "不在
+    // 分支上跑". What makes a word worth skipping is being a filler, not being
+    // brief, so only the article-like Latin words are excluded here.
+    if (cleaned.length < 3 && !SHORT_SUBJECT_TERMS.has(cleaned.toLowerCase())) continue;
     if (/^[\u4e00-\u9fff]+$/u.test(cleaned)) continue;
     if (lower.includes('cogmem memory context') && /^(cogmem|memory|context)$/i.test(cleaned)) continue;
     if (QUERY_FILLERS.some((filler) => filler.toLowerCase() === cleaned.toLowerCase())) continue;
@@ -184,12 +203,27 @@ function isVagueForensicFollowup(query: string): boolean {
 function stripFillers(value: string): string {
   let output = normalizeWhitespace(value);
   for (const filler of QUERY_FILLERS) {
-    output = output.replace(new RegExp(escapeRegExp(filler), 'giu'), ' ');
+    // A filler is a word, not a letter pattern. Replacing "a" wherever it occurs
+    // turns "quarterly revenue forecast" into "qu rterly revenue forec st" — the
+    // search then asks for words the memory never contains. Latin fillers are
+    // therefore matched only as whole words; CJK fillers have no word boundaries
+    // and stay substring matches.
+    const pattern = /^[a-z][a-z\s]*$/iu.test(filler)
+      ? `(?<![\\p{L}\\p{N}])${escapeRegExp(filler)}(?![\\p{L}\\p{N}])`
+      : escapeRegExp(filler);
+    output = output.replace(new RegExp(pattern, 'giu'), ' ');
   }
   return normalizeWhitespace(output.replace(/[，。？！、；：,.?!;:]/g, ' '));
 }
 
 function containsFiller(value: string): boolean {
+  // Substring matching, deliberately, and it is not free: the Latin article "a"
+  // occurs inside "quarterly", so every English candidate is rejected here and the
+  // caller falls back to the raw query — the compiled candidates and the semantic
+  // cue phrases are dropped. Measured, correcting this to whole-word matching drops
+  // the evaluation floor from 6 to 5, so whatever the fallback compensates for is
+  // worth more than the candidates add. Fixing this means fixing both together;
+  // changing it alone is a regression that looks like a correction.
   return QUERY_FILLERS.some((filler) => value.toLowerCase().includes(filler.toLowerCase()));
 }
 

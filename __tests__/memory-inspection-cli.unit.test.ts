@@ -1,8 +1,7 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { makeTempDir } from './helpers/tmp.js';
 
 const memoryBin = join(import.meta.dir, '..', 'src', 'bin', 'memory.ts');
 
@@ -15,7 +14,7 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
 }
 
 test('read-only status inspects an empty existing database without initializing the full Kernel schema', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-inspection-status-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-inspection-status-'), 'memory.db');
   new Database(dbPath).close();
   const output = await run(['status', '--db', dbPath, '--project', 'demo', '--json']);
   expect(output.rawEvents).toBe(0);
@@ -27,7 +26,7 @@ test('read-only status inspects an empty existing database without initializing 
 });
 
 test('read-only candidates inspects an empty existing database without creating candidate tables', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-inspection-candidates-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-inspection-candidates-'), 'memory.db');
   new Database(dbPath).close();
   const output = await run(['candidates', '--db', dbPath, '--project', 'demo', '--status', 'needs_confirmation', '--json']);
   expect(output.total).toBe(0);

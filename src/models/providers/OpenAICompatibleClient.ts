@@ -9,6 +9,7 @@ interface OpenAIChatCompleteParams {
   systemPrompt: string;
   userPrompt: string;
   maxTokens?: number;
+  jsonMode?: boolean;
 }
 
 interface OpenAIEmbedParams {
@@ -39,7 +40,8 @@ export class OpenAICompatibleClient {
             { role: 'user', content: params.userPrompt }
           ],
           temperature: 0,
-          max_tokens: params.maxTokens ?? 512
+          max_tokens: params.maxTokens ?? 512,
+          ...(params.jsonMode ? { response_format: { type: 'json_object' } } : {})
         }),
         signal: controller.signal
       });
@@ -50,9 +52,13 @@ export class OpenAICompatibleClient {
       }
 
       const payload = await response.json() as {
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>;
       };
-      return payload.choices?.[0]?.message?.content ?? '';
+      const message = payload.choices?.[0]?.message;
+      // Some OpenAI-compatible providers put the answer in `reasoning_content`
+      // and leave `content` empty; returning '' there reads downstream as
+      // `provider_invalid_output` with an empty detail. Measured on the box.
+      return message?.content?.trim() ? message.content : (message?.reasoning_content ?? '');
     } catch (error) {
       console.warn('[cogmem] openai_compatible chat failed', error);
       return '';

@@ -6,9 +6,8 @@ import { OfflineConsolidationPipeline } from '../src/engine/OfflineConsolidation
 import { WorkingMemoryDelta } from '../src/engine/WorkingMemoryDelta.js';
 import { MemoryGraph } from '../src/core/MemoryGraph.js';
 import { NeuronFactory } from '../src/core/Neuron.js';
-import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { makeTempDir } from './helpers/tmp.js';
 
 function add(graph: MemoryGraph, content: string, updatedAt = Date.now(), projectId = 'p') {
   const neuron = NeuronFactory.create(content, graph.getLatestNeuronSelfHash(projectId) || 'genesis', { T: updatedAt, S: [0, 0, 0], V: [] }, {
@@ -241,7 +240,7 @@ describe('OfflineConsolidationPipeline checkpoints', () => {
 
 describe('WorkingMemoryDelta cleanup', () => {
   test('deletes expired consumed deltas and keeps fresh rows', () => {
-    const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-delta-')), 'brain.db');
+    const dbPath = join(makeTempDir('cogmem-delta-'), 'brain.db');
     const db = new Database(dbPath);
     const graph = new MemoryGraph(dbPath);
     const delta = new WorkingMemoryDelta(db, graph);
@@ -264,7 +263,7 @@ describe('WorkingMemoryDelta cleanup', () => {
   });
 
   test('deletes expired existing unconsumed deltas after neuron is durable', () => {
-    const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-delta-')), 'brain.db');
+    const dbPath = join(makeTempDir('cogmem-delta-'), 'brain.db');
     const db = new Database(dbPath);
     const graph = new MemoryGraph(dbPath);
     const delta = new WorkingMemoryDelta(db, graph);
@@ -287,7 +286,7 @@ describe('WorkingMemoryDelta cleanup', () => {
   });
 
   test('cleanup is idempotent after expired rows are removed', () => {
-    const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-delta-')), 'brain.db');
+    const dbPath = join(makeTempDir('cogmem-delta-'), 'brain.db');
     const db = new Database(dbPath);
     const graph = new MemoryGraph(dbPath);
     const delta = new WorkingMemoryDelta(db, graph);
@@ -299,7 +298,7 @@ describe('WorkingMemoryDelta cleanup', () => {
   });
 
   test('pipeline invokes working memory delta cleanup as the final unbudgeted step', async () => {
-    const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-delta-')), 'brain.db');
+    const dbPath = join(makeTempDir('cogmem-delta-'), 'brain.db');
     const db = new Database(dbPath);
     const graph = new MemoryGraph(dbPath);
     const delta = new WorkingMemoryDelta(db, graph);

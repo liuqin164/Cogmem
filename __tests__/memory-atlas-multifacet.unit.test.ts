@@ -1,15 +1,14 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { EpisodeTitleGenerator } from '../src/atlas/EpisodeTitleGenerator.js';
 import { FacetQueryPlanner } from '../src/atlas/FacetQueryPlanner.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function createKernel(): MemoryKernel {
-  return createMemoryKernel({ dbPath: join(mkdtempSync(join(tmpdir(), 'cogmem-atlas-facet-')), 'memory.db') });
+  return createMemoryKernel({ dbPath: join(makeTempDir('cogmem-atlas-facet-'), 'memory.db') });
 }
 
 test('Agent global scope executes the multidimensional graph lane instead of treating empty scope as absent', async () => {
@@ -17,11 +16,11 @@ test('Agent global scope executes the multidimensional graph lane instead of tre
   try {
     await kernel.ingest({ projectId: '', content: 'projectless graph lane evidence' });
     let multidimensionalCalls = 0;
-    const originalRecall = kernel.recall.bind(kernel);
-    (kernel as unknown as { recall: MemoryKernel['recall'] }).recall = ((query, options) => {
+    const originalRecall = kernel.evidenceFor.bind(kernel);
+    (kernel as unknown as { evidenceFor: MemoryKernel['evidenceFor'] }).evidenceFor = ((query, options) => {
       multidimensionalCalls += 1;
       return originalRecall(query, options);
-    }) as MemoryKernel['recall'];
+    }) as MemoryKernel['evidenceFor'];
     new KernelAgentMemoryBackend(kernel).recall({ agentId: 'global-agent', sessionId: 's', projectId: '', query: 'graph lane evidence', limit: 3 });
     expect(multidimensionalCalls).toBeGreaterThan(0);
   } finally { kernel.close(); }

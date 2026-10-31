@@ -87,6 +87,9 @@ function makeSuiteResult(suiteName: EvalSuiteName, overrides: Partial<EvalSuiteR
     suiteName,
     runAt: overrides.runAt ?? 100,
     passed: overrides.passed ?? true,
+    // The fixture supplies metrics, so it stands for a suite that measured
+    // something; the real suites report measured:false and cannot pass (#71).
+    measured: overrides.measured ?? true,
     metrics: overrides.metrics ?? {}
   };
 }
@@ -137,7 +140,8 @@ function makeGroupResult(
       runAt: 100 + BENCHMARK_GROUPS.findIndex((entry) => entry.name === groupName)
     }),
     baselineResults: overrides.baselineResults ?? group.baselines.map((baseline) => makeBaseline(groupName, baseline.label)),
-    passed: overrides.passed ?? true
+    passed: overrides.passed ?? true,
+    measured: overrides.measured ?? true
   };
 }
 

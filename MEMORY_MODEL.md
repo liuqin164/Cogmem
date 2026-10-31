@@ -1,8 +1,12 @@
 # Memory Model
 
-`cogmem` is an agent-native memory kernel. It stores agent experience, compiles durable memory at write time, recalls with structure-first pulse navigation, and keeps active context governed and bounded.
+`cogmem` is an agent-native memory kernel. It stores agent experience, compiles durable memory at write time, recalls in one Pulse of two waves — a direct hit, then an associative spread — and keeps active context governed and bounded.
 
 It is not a vector RAG store, a knowledge-base application, a wiki, an Obsidian replacement, or an agent runtime.
+
+## Language
+
+A person locates a memory by one of six **Facets**: time, person, place, event, topic, state. The thirteen **Dimensions** are the fixed keys a stored node carries; they are storage vocabulary and never reach a user. Recall is one **Pulse** in two waves: **Pulse 1** is the direct hit, **Pulse 2** the associative spread that brings back context the cue never mentioned. [GLOSSARY.md](./GLOSSARY.md) holds the authoritative definitions.
 
 ## Memory Tiers
 
@@ -13,7 +17,7 @@ It is not a vector RAG store, a knowledge-base application, a wiki, an Obsidian 
 - User-Shaped Topic Ontology: a fixed memory-class skeleton (`Time`, `Person`, `Object`, `Place`, `Project`, `Event`, `Decision`, `Goal`, `Preference`, `Correction`, `Plan`, `Evidence`, `Conversation`, `Topic`, `Entity`, `Relation`) plus project-scoped user names, aliases, paths, and relation edges. Explicit user operations are active and reversible; model proposals remain candidates.
 - Entity Governance: canonical entity identity, aliases, evidence-backed merge candidates, redirects, and reversible resolution logs. Person merges require explicit user evidence and stricter confidence; pronouns and generic relationship or role labels are never sufficient proof by themselves.
 - Belief Graph: evidence-backed current cognition with ownership, source roles, confidence, versions, conflicts, and supersession links. User-owned beliefs require explicit user evidence; assistant/tool-only evidence is limited to project observations and cannot establish user preferences, goals, or boundaries.
-- Temporal Memory: validity-window queries plus project, entity, milestone, decision, correction, and belief-version timelines. Historical lookup selects the version valid at the requested time; current lookup suppresses superseded versions unless history is explicitly requested.
+- Temporal Memory: validity-window queries plus project, entity, milestone, decision, correction, and belief-version timelines. Historical lookup selects the version valid at the requested time; current lookup suppresses superseded versions unless history is explicitly requested with `cogmem memory belief-history --key <canonicalKey>`, which returns each version with its validity interval and the id that replaced it.
 - Context Cortex: intent classification, hard safety suppression, layer activation, source drill-down policy, and bounded context packing. It defaults to 25% of available context with a 30% hard ceiling and emits an activation receipt that explains every selected or suppressed candidate.
 - Prospective Memory: candidate-only intentions, commitments, reminders, open loops, and plans with pending, confirmed, deferred, rejected, completed, and expired states. Only explicit user confirmation can activate a due candidate. Core stores state and provenance; it never executes tasks or tools from prospective memory.
 - BrainEval: release-gate metrics for recall, precision, provenance, context budget, stale and cross-project leakage, and unconfirmed prospective activation.
@@ -26,7 +30,7 @@ It is not a vector RAG store, a knowledge-base application, a wiki, an Obsidian 
 - Dream Candidates: curator output such as user preference candidates, project memories, long-term goals, boundaries, failure lessons, diagnostic conclusions, session/topic summaries, corrections, causal/tool-observation links, temporal invalidation suggestions, and conflict candidates. These remain candidates with source refs, confidence, and governance status; an LLM helper must not directly rewrite verified memory.
 - Active Core: a very small current operating context maintained by the host agent or adapter, not all history.
 - Collection Routing: `collection:<name>` tags split operational anchor memory from specialized lanes such as `collection:theseus` creative artifacts.
-- Associative Graph: pulse-activated local graph, topic, entity, temporal, and cognitive adjacency candidates.
+- Associative Graph: local graph, topic, entity, temporal, and cognitive adjacency candidates activated by Pulse 2.
 - Activation Store: persistent, decaying hot-memory traces touched by recall packs and inspected by host-owned maintenance ticks.
 - Recall Pack / ContextPack: the limited governed context returned for the current agent task. `KernelAgentMemoryBackend.recallPack()` adds direct memory, associative neighbors, entity cards, belief touches, and a charge vector.
 - Filtered Evidence: same-project candidates that were considered but suppressed by status, trust, scope, or budget.
@@ -97,7 +101,7 @@ The worker can be run manually or by a host-owned schedule, but the schedule onl
 
 chronological order is not recall ranking.
 
-Chronological order is for replay and audit. Recall ranking is for selecting useful current context. Agent-facing recall still uses governed universe navigation: query compilation, pulse activation, temporal traversal, graph expansion, inhibition, and evidence budgeting.
+Chronological order is for replay and audit. Recall ranking is for selecting useful current context. Agent-facing recall still uses governed universe navigation: query compilation, Pulse 1 then Pulse 2 activation, temporal traversal, graph expansion, inhibition, and evidence budgeting.
 
 Do not use vector topK to reconstruct conversation order. Do not use ledger replay to bypass governed recall. Do not inject an entire thread, day, or transcript into prompt context unless a forensic/audit tool explicitly requests replay.
 
@@ -115,9 +119,20 @@ For pre-answer agent context, prefer `KernelAgentMemoryBackend.recallPack()` whe
 
 Collection routing is enforced in compiled and raw fallback paths. Default recall includes untagged and `collection:anchor` memory. Specialized collections such as `collection:theseus` must be requested explicitly with `collection: "theseus"` or `--collection theseus`.
 
-`MemoryKernel.buildMemoryMap()` and `cogmem memory map` expose a static self-map: anatomy, data lanes, hard bounds, counters, and commands. The map includes episode counts, unassigned raw evidence, and the sealed Episode Dream backlog. Core schema version 28 includes project-scoped topic nodes, aliases, relations and operations; episode cross-references and repair audit; ingest lifecycle state; per-episode Dream failure details; and best-effort episode boundary decision audit rows. Production initialization runs migrations; `EpisodeStore.initializeSchema` is compatibility bootstrap for direct tests only, with a parity test against episode migrations 22–28. Use `cogmem migrate --dry-run --json` before an upgrade and `cogmem migrate --yes --backup` to apply it without rewriting Raw Ledger evidence.
+`MemoryKernel.buildMemoryMap()` and `cogmem memory map` expose a static self-map: anatomy, data lanes, hard bounds, counters, and commands. The map includes episode counts, unassigned raw evidence, and the sealed Episode Dream backlog. Core schema version 28 includes project-scoped topic nodes, aliases, relations and operations; episode cross-references and repair audit; ingest lifecycle state; per-episode Dream failure details; and best-effort episode boundary decision audit rows. Production initialization creates the final schema on a new database; `EpisodeStore.initializeSchema` is compatibility bootstrap for direct tests only, with a parity test against episode migrations 22–28. 4.0 does not upgrade a pre-4.0 database: opening one is refused with an error code beginning `no_upgrade_path:` and the file is left unchanged, so point 4.0 at a new database path instead.
 
 Graph edge confidence, stability, and activation are separate. Recall and maintenance may decay activation, but they must not decay provenance confidence or the stability of `SUPPORTS`, `CORRECTS`, `CONTRADICTS`, and `SUPERSEDES` evidence. `BrainGraphView` is a bounded read-only traversal surface; it cannot mutate canonical memory.
+
+### Two layers, two recall entry points — know which one you are measuring
+
+4.0 keeps the compiled neuron layer (`neurons`) that 3.x wrote, and adds Frames plus the Atlas on top of the raw ledger. **Host recall reads the raw ledger, the Atlas and the Frames; it does not read the legacy neuron layer.** Two entry points therefore answer different questions:
+
+| entry point | reads | use it for |
+| --- | --- | --- |
+| `KernelAgentMemoryBackend.recall()` / `.recallPack()` | raw ledger lanes, Atlas, Frames, graph | anything a host or agent asks |
+| `MemoryKernel.evidenceFor()` — **internal** (`BrainRecall`) | `neurons` (the legacy compiled layer) | the evidence layer: `KernelAgentMemoryBackend.recall()` calls it, and so does the LongMemEval benchmark. Not an entry point. |
+
+The kernel-level method used to be called `recall`, which made it look like a peer of the host path and caused exactly the confusion below. It is now `evidenceFor()` and marked `@internal`; **`recall` names one entry point only.** Measuring the internal one and concluding "recall finds nothing" is the mistake this note exists to prevent: on a corpus produced by the 4.0 pipeline the neuron layer is nearly empty by construction (`cogmem memory govern` promotes candidate *status*; it writes a neuron only when a candidate carries a source neuron), while `KernelAgentMemoryBackend.recall()` returns the right evidence in milliseconds. `cogmem memory govern` reports `promoted_candidates` and `neurons_written` separately for the same reason.
 
 ## SourceRefs
 

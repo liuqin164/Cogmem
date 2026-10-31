@@ -1,15 +1,42 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
+import { printJsonDocument } from './CliJson.js';
+import { join, resolve } from 'node:path';
+
+import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
 import {
   defaultOpenClawAutoMemoryPluginDir,
   inspectOpenClawAutoMemoryPlugin,
   installOpenClawAutoMemoryPlugin,
+  type OpenClawAutoMemoryPluginInspection,
 } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { compactStorage } from '../storage/StorageCompactor.js';
+import {
+  buildGate,
+  defaultHermesConfigPath,
+  defaultPiConfigPath,
+  hasInstalledLauncher,
+  hermesIntegrationEstablished,
+  piIntegrationEstablished,
+  installPathSteps,
+  pendingHostIntegrations,
+  isOnPath,
+  pathWarningSteps,
+  postInstallSteps,
+  resolveCliBinDir,
+  cogmemShimPath,
+  hasCogmemShim,
+  readCogmemShimTarget,
+  resolveCogmemInstallation,
+  resolveCogmemInvocation,
+  type InstallGate,
+  type InstallGateDiagnostic,
+  type InstallStep,
+} from '../install/InstallSteps.js';
+import { assertCliArgs } from './CliArgs.js';
+assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['agent', 'auto', 'bun', 'config', 'dry-run', 'env-path', 'fix', 'force', 'hermes-config', 'json', 'openclaw-config', 'out', 'plugin-dir', 'plugin-only', 'storage', 'workspace'] });
 
 function readArg(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -21,11 +48,16 @@ function hasFlag(name: string): boolean {
   return process.argv.includes(name);
 }
 
+// In --json mode stdout carries one JSON document and nothing else. The gate
+// already reports every warning as a diagnostic, so the human progress lines are
+// suppressed rather than moved to stderr: two renderings, one set of facts.
 function ok(message: string): void {
+  if (json) return;
   console.log(`OK ${message}`);
 }
 
 function warn(code: string, message: string): void {
+  if (json) return;
   console.log(`WARN ${code}: ${message}`);
 }
 
@@ -35,18 +67,68 @@ function printWarnings(diagnostics: Array<{ severity: string; code: string; mess
   }
 }
 
-function fail(message: string): never {
+function fail(message: string, code = 'doctor_failed'): never {
+  if (json) {
+    emitGate(buildGate('fail', [{ code, message }], []));
+    process.exit(1);
+  }
   console.error(`FAIL ${message}`);
   process.exit(1);
+}
+
+function printSteps(steps: InstallStep[]): void {
+  if (steps.length === 0) {
+    // Convergence, said out loud: nothing is outstanding, so there is nothing to
+    // recommend. Silence here reads as "the gate forgot to tell me".
+    console.log('');
+    console.log('Next steps: none — nothing is outstanding.');
+    return;
+  }
+  console.log('');
+  console.log('Next steps:');
+  for (const step of steps) {
+    console.log(`  [${step.actor}] ${step.command}`);
+    console.log(`      ${step.when} — ${step.purpose}`);
+  }
+}
+
+function emitGate(gate: InstallGate, payload: Record<string, unknown> = {}): void {
+  if (json) {
+    printJsonDocument(JSON.stringify({
+      schemaVersion: 'cogmem.cli.v1',
+      command: 'doctor',
+      ...payload,
+      installGate: {
+        level: gate.level,
+        exitCode: gate.exitCode,
+        summary: gate.summary,
+        diagnostics: gate.diagnostics,
+      },
+      nextSteps: gate.nextSteps,
+    }, null, 2));
+  } else {
+    console.log('');
+    console.log(`Install gate: ${gate.level.toUpperCase()} — ${gate.summary}`);
+    printSteps(gate.nextSteps);
+  }
+  process.exit(gate.exitCode);
 }
 
 const configPath = readArg('--config');
 const envPath = readArg('--env-path');
 const fix = hasFlag('--fix');
 const agent = readArg('--agent');
-const workspace = readArg('--workspace');
+// Resolved, not used verbatim: `integrationScope` hashes this path, so
+// `--workspace .` and the absolute path `connect` resolved were two different
+// plugin ids *and* two different memory scopes (ADR-0010).
+const workspaceArg = readArg('--workspace');
+const workspace = workspaceArg ? resolve(workspaceArg) : undefined;
 const openclawConfigPath = readArg('--openclaw-config');
 const pluginDir = readArg('--plugin-dir');
+// The reader's counterpart to `connect hermes --hermes-config`: without it the gate
+// cannot see an integration written somewhere other than the default, and would
+// recommend the step it just did.
+const hermesConfigPath = readArg('--hermes-config');
 const bunPath = readArg('--bun');
 const storage = hasFlag('--storage');
 const pluginOnly = hasFlag('--plugin-only');
@@ -56,13 +138,46 @@ if (envPath) {
   fail('--env-path is no longer supported. Use cogmem-init to create .cogmem/config.toml, then run cogmem-doctor --config <config.toml>.');
 } else {
   const resolution = resolveCogmemConfigPath({ configPath });
-  if (resolution.kind === 'missing') fail(`missing config file: ${resolution.path}`);
+  // The PATH question is asked before the branch, not inside it: a fresh
+  // one-line install is in the not-installed state first, and "the CLI is off
+  // PATH" is exactly as true there — the `export` line has to reach the reader of
+  // that state too, not only the one after setup (ADR-0010, #78).
+  const binDir = resolveCliBinDir(process.argv[1], process.env);
+  const cliOffPath = hasInstalledLauncher(binDir) && !isOnPath(binDir, process.env);
+  const pathSteps: InstallStep[] = cliOffPath ? pathWarningSteps(binDir) : [];
+
+  // A named config that is not on disk yet is the same state as no config:
+  // the install exists, the setup does not.
+  if (resolution.kind === 'missing' || !existsSync(resolution.path)) {
+    // No config is the state every fresh install is in. It is not a failure:
+    // it is the gate saying "now configure it", with the command that does it.
+    const bin = resolveCogmemInvocation();
+    if (!json) {
+      console.log(`cogmem is installed but not configured yet (looked for ${resolution.path}).`);
+    }
+    emitGate(
+      buildGate(
+        'not_installed',
+        [{ code: 'missing_config', message: `no cogmem config at ${resolution.path}` }],
+        [...pathSteps, ...installPathSteps(bin)],
+      ),
+      { configPath: null, resolvedConfigPath: resolution.path },
+    );
+  }
+
   const loaded = loadCogmemConfig({ configPath: resolution.path });
   const error = loaded.diagnostics.find((diagnostic) => diagnostic.severity === 'error');
-  if (error) fail(`${error.code}: ${error.message}`);
+  if (error) fail(`${error.code}: ${error.message}`, error.code);
+
+  // One Workspace for this config: the directory that contains `.cogmem/`
+  // (ADR-0010). `--workspace` is the operator's override; otherwise it is the
+  // host's own workspace, which is the Workspace unless the config moved it for
+  // this host — resolved by the config layer, and by `connect` and `update`
+  // through the same function, because the plugin id is a hash of this path.
+  const workspaceRoot = workspace || hostWorkspaceFor(loaded, 'openclaw');
+
   if (pluginOnly) {
     if (agent && agent !== 'openclaw') fail('doctor --plugin-only currently supports --agent openclaw.');
-    const workspaceRoot = workspace || loaded.integrations.openclaw.workspaceDir || process.cwd();
     let fixed = undefined as ReturnType<typeof installOpenClawAutoMemoryPlugin> | undefined;
     if (fix) {
       fixed = installOpenClawAutoMemoryPlugin({
@@ -80,7 +195,7 @@ if (envPath) {
     });
     const audit = readLatestOpenClawAudit(workspaceRoot);
     if (json) {
-      console.log(JSON.stringify({
+      printJsonDocument(JSON.stringify({
         schemaVersion: 'cogmem.cli.v1',
         command: 'doctor',
         pluginOnly: true,
@@ -91,23 +206,60 @@ if (envPath) {
       printWarnings(loaded.diagnostics);
       ok('configuration parsed');
       ok(`openclaw plugin ${inspection.current ? 'current' : 'stale'} at ${inspection.pluginDir}`);
-      if (!inspection.current) warn('openclaw_plugin_stale', 'Run cogmem doctor --fix --agent openclaw --plugin-only --workspace <workspace>.');
+      if (!inspection.current) warn('openclaw_plugin_stale', `Run ${resolveCogmemInvocation()} doctor --fix --agent openclaw --plugin-only --workspace ${workspaceRoot}.`);
       if (fixed) ok(`openclaw auto memory integration fixed at ${fixed.pluginDir}`);
       if (audit.lastBeforePromptBuild) ok(`last before_prompt_build action=${audit.lastBeforePromptBuild.action || 'unknown'} reason=${audit.lastBeforePromptBuild.reason || ''}`);
     }
     process.exit(0);
   }
+
+  const gateDiagnostics: InstallGateDiagnostic[] = [];
+  for (const diagnostic of loaded.diagnostics) {
+    if (diagnostic.severity === 'warning') {
+      gateDiagnostics.push({ code: diagnostic.code, message: diagnostic.message });
+    }
+  }
+
+  // The managed launcher is what keeps a host configuration valid across an upgrade, a
+  // moved checkout and a changed npm prefix (#114). Its absence is not a failure —
+  // `connect` and `init` write it — but a launcher that points at nothing is, because
+  // every host configured after this one is calling a file that cannot run the CLI.
+  const shimInvocation = resolveCogmemInstallation(process.env) ?? 'cogmem';
+  const shimFinding = hasCogmemShim() && !readCogmemShimTarget()
+    ? {
+      code: 'shim_target_missing',
+      message: `The managed launcher ${cogmemShimPath()} has no installation to run. Run ${shimInvocation} connect --auto --workspace ${workspaceRoot}, or set COGMEM_BIN, to point it at one.`,
+    }
+    : !hasCogmemShim() && resolveCogmemInstallation(process.env)
+      ? {
+        code: 'shim_missing',
+        message: `No managed launcher at ${cogmemShimPath()}: a host configuration written from here names this installation's own path, and stops working when that path changes. Run ${shimInvocation} connect --auto --workspace ${workspaceRoot} to create one.`,
+      }
+      : undefined;
+  if (shimFinding) {
+    warn(shimFinding.code, shimFinding.message);
+    gateDiagnostics.push(shimFinding);
+  }
+
   printWarnings(loaded.diagnostics);
   ok('configuration parsed');
   ok(`cogmem home ${loaded.homeDir}`);
-  const kernel = createMemoryKernelFromConfig({ configPath: resolution.path });
-  const health = kernel.getHealthStatus();
-  if (health.package !== 'cogmem') fail('unexpected package identity');
-  ok(`kernel ready at ${health.dbPath}`);
-  kernel.close();
+
+  let kernelDbPath: string | undefined;
+  try {
+    const kernel = createMemoryKernelFromConfig({ configPath: resolution.path });
+    const health = kernel.getHealthStatus();
+    if (health.package !== 'cogmem') fail('unexpected package identity');
+    kernelDbPath = health.dbPath;
+    kernel.close();
+    ok(`kernel ready at ${health.dbPath}`);
+  } catch (kernelError) {
+    fail(kernelError instanceof Error ? kernelError.message : String(kernelError));
+  }
+
   if (storage) {
     const storageStats = compactStorage({
-      dbPath: health.dbPath,
+      dbPath: kernelDbPath!,
       dryRun: true,
       dimension: loaded.options.vectorDimension,
     });
@@ -122,12 +274,13 @@ if (envPath) {
       warn('vector_storage_growth', 'Vector bytes per raw event are high; consider selective_compile/raw_then_dream and cogmem compact --dry-run.');
     }
   }
+
   if (fix) {
     if (agent !== 'openclaw') {
       fail('doctor --fix currently requires --agent openclaw.');
     }
     const result = installOpenClawAutoMemoryPlugin({
-      workspaceRoot: workspace || loaded.integrations.openclaw.workspaceDir || process.cwd(),
+      workspaceRoot,
       configPath: resolution.path,
       openclawConfigPath,
       pluginDir,
@@ -137,21 +290,95 @@ if (envPath) {
     ok(`openclaw auto memory integration fixed at ${result.pluginDir}`);
     ok(`openclaw config patched at ${result.openclawConfigPath}`);
   }
-  if (agent === 'openclaw' || workspace) {
-    const workspaceRoot = workspace || loaded.integrations.openclaw.workspaceDir || process.cwd();
-    const inspection = inspectOpenClawAutoMemoryPlugin({
-      workspaceRoot,
-      pluginDir: pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot),
-    });
+
+  // Inspected always, because the gate's answer depends on it: a Host whose
+  // integration is on disk must not be recommended again (#81). What is *reported*
+  // still depends on the Host being configured, so an unconfigured machine is not
+  // told about a plugin it never asked for.
+  const reportPlugin = Boolean(agent === 'openclaw' || workspace || loaded.integrations.openclaw.enabled);
+  const plugin = inspectOpenClawAutoMemoryPlugin({
+    workspaceRoot,
+    pluginDir: pluginDir || defaultOpenClawAutoMemoryPluginDir(workspaceRoot),
+  });
+  if (reportPlugin) {
+    const inspection = plugin;
     if (inspection.installed) {
       ok(`openclaw plugin ${inspection.current ? 'current' : 'stale'} at ${inspection.pluginDir}`);
-      if (!inspection.current) warn('openclaw_plugin_stale', 'Run cogmem connect openclaw --workspace <workspace> --auto --force or cogmem doctor --fix --agent openclaw --plugin-only.');
+      if (!inspection.current) {
+        warn('openclaw_plugin_stale', `Run ${resolveCogmemInvocation()} connect openclaw --workspace ${workspaceRoot} --auto --force, or ${resolveCogmemInvocation()} doctor --fix --agent openclaw --plugin-only --workspace ${workspaceRoot}.`);
+        gateDiagnostics.push({
+          code: 'openclaw_plugin_stale',
+          message: 'the OpenClaw plugin files are older than the installed package',
+        });
+      }
     }
     const audit = readLatestOpenClawAudit(workspaceRoot);
     if (audit.lastBeforePromptBuild) {
       ok(`last before_prompt_build action=${audit.lastBeforePromptBuild.action || 'unknown'} reason=${audit.lastBeforePromptBuild.reason || ''}`);
     }
   }
+
+  // A rule_only config works; it just does not do semantic recall. That is a
+  // degraded install, not a broken one, so it is a WARN and still exits 0.
+  const memoryRole = loaded.modelRegistry.getRoleConfig('memory');
+  if (memoryRole.provider === 'rule_only') {
+    gateDiagnostics.push({
+      code: 'rule_only',
+      message: 'memory and reasoning run rule_only; semantic recall and Dream curation stay off until a model provider is configured',
+    });
+  }
+
+  // A CLI nobody can invoke is not a success, even though the install worked.
+  if (cliOffPath) {
+    warn('cli_not_on_path', `${binDir} is not on PATH. Run: export PATH="${binDir}:$PATH"`);
+    gateDiagnostics.push({
+      code: 'cli_not_on_path',
+      message: `the cogmem CLI at ${binDir} is not reachable as cogmem`,
+    });
+  }
+
+  const level = gateDiagnostics.length > 0 ? 'warn' : 'ok';
+  // Only the Host that is still outstanding, named: recommending a finished step is
+  // what made the gate never converge, and recommending OpenClaw in a Hermes-only
+  // Workspace is what made it name the wrong Host (#81). Availability is read from
+  // the same inspection the report uses — the effective plugin dir and workspace —
+  // so one run cannot print "installed" and "connect it" at the same time.
+  const connectHosts = pendingHostIntegrations([
+    { host: 'openclaw', wanted: loaded.integrations.openclaw.enabled, established: plugin.installed },
+    {
+      host: 'hermes',
+      wanted: loaded.integrations.hermes.enabled,
+      established: hermesIntegrationEstablished(hermesConfigPath ? resolve(hermesConfigPath) : defaultHermesConfigPath(process.env)),
+    },
+    {
+      host: 'pi',
+      wanted: loaded.integrations.pi.enabled,
+      established: piIntegrationEstablished(defaultPiConfigPath(process.env)),
+    },
+  ]);
+  // The step carries the workspace of the Host it names, not the OpenClaw one by
+  // default: a pending Hermes in a Workspace whose OpenClaw dir is elsewhere would
+  // otherwise be told to write into the wrong tree.
+  const connectWorkspace = workspace || (connectHosts[0] ? hostWorkspaceFor(loaded, connectHosts[0]) : workspaceRoot);
+  emitGate(
+    buildGate(level, gateDiagnostics, [...pathSteps, ...postInstallSteps(resolveCogmemInvocation(), connectWorkspace, connectHosts)]),
+    {
+      configPath: resolution.path,
+      workspaceRoot,
+      // `workspaceDir` leaves the output: there is one Workspace per config, and
+      // it is named `workspaceRoot` (ADR-0010). A second spelling of it was how
+      // two commands came to disagree about where they were.
+      integrations: {
+        openclaw: { enabled: loaded.integrations.openclaw.enabled },
+        hermes: { enabled: loaded.integrations.hermes.enabled },
+        pi: { enabled: loaded.integrations.pi.enabled },
+      },
+      dbPath: kernelDbPath,
+      nextConnectHost: connectHosts[0],
+      nextConnectHosts: connectHosts,
+      openclaw: reportPlugin ? { plugin } : undefined,
+    },
+  );
 }
 
 function readLatestOpenClawAudit(workspaceRoot: string): { lastBeforePromptBuild?: Record<string, unknown> } {

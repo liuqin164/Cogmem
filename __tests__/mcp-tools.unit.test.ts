@@ -1,15 +1,15 @@
 import { afterEach, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, unlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
 import { callCogmemMcpTool, listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const opened: Array<{ kernel: MemoryKernel; dbPath: string }> = [];
 
 function makeKernel(): MemoryKernel {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-mcp-tools-'));
+  const dir = makeTempDir('cogmem-mcp-tools-');
   const dbPath = join(dir, 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   opened.push({ kernel, dbPath });
@@ -59,6 +59,9 @@ test('core MCP tool list exposes recall, write, explain, strategy, map, tick, an
     'cogmem_graph_touch',
     'cogmem_maintenance_tick',
     'cogmem_prospective',
+    'cogmem_import_preview',
+    'cogmem_import_apply',
+    'cogmem_import_status',
   ]);
   const recall = tools.find((tool) => tool.name === 'cogmem_recall');
   const explain = tools.find((tool) => tool.name === 'cogmem_explain_recall');
@@ -262,11 +265,12 @@ test('core MCP explain tool returns pulse and temporal recall details', async ()
     tags: ['agent:openclaw', 'openclaw'],
   });
 
+  // #92: the connection's identity decides which agent's memory this is, not an
+  // argument. The event above was tagged `agent:openclaw`.
   const explained = await callCogmemMcpTool('cogmem_explain_recall', {
-    agentId: 'openclaw',
     projectId: 'mcp-explain',
     query: 'Which vector backend should release use?',
-  }, { kernel });
+  }, { kernel, hostId: 'openclaw' });
 
   expect(explained.isError).toBeFalsy();
   expect(explained.structuredContent?.recallMode).toBe('universe_navigation');
@@ -275,4 +279,23 @@ test('core MCP explain tool returns pulse and temporal recall details', async ()
   expect((explained.structuredContent?.evidence as Array<{ text: string }>).some((item) => (
     item.text.includes('sqlite-vec')
   ))).toBe(true);
+});
+
+test('a removed tool name is answered without touching the runtime kernel', async () => {
+  // #68: 4.0 ships no shared-memory tools, so the dispatcher entry that used to
+  // attach a shared region to the caller's kernel is gone. The name now falls
+  // out as unknown, and — because the registry check runs before the runtime is
+  // opened — it does not reach the kernel at all.
+  const kernel = makeKernel();
+
+  const result = await callCogmemMcpTool('cogmem_shared_publish', {
+    items: [{ itemHash: 'attach-1', collection: 'standards', payload: { text: 'kernel-backed' } }],
+  }, { kernel, hostId: 'unit-host' });
+
+  expect(result.isError).toBe(true);
+  expect(String(result.structuredContent?.error)).toContain('Unknown cogmem MCP tool');
+  const tables = kernel.eventStore.getDatabase()
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%shared%'")
+    .all() as Array<{ name: string }>;
+  expect(tables).toEqual([]);
 });

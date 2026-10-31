@@ -1,14 +1,13 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { explainRecallWithKernel } from '../src/recall/RecallExplanation.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('agent recall explanation includes activation reasons and filtered evidence', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'recall-explanation-'));
+  const dir = makeTempDir('recall-explanation-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
 
   await kernel.ingest({
@@ -44,7 +43,7 @@ test('agent recall explanation includes activation reasons and filtered evidence
 });
 
 test('kernel recall explanation reports over-budget evidence without leaking other projects', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'recall-explanation-budget-'));
+  const dir = makeTempDir('recall-explanation-budget-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
 
   await kernel.ingest({
@@ -81,7 +80,7 @@ test('kernel recall explanation reports over-budget evidence without leaking oth
 });
 
 test('kernel recall explanation reports status-suppressed evidence', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'recall-explanation-status-'));
+  const dir = makeTempDir('recall-explanation-status-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
 
   await kernel.ingest({
@@ -128,7 +127,7 @@ test('kernel recall explanation reports status-suppressed evidence', async () =>
 });
 
 test('kernel recall explanation identifies suspect raw user utterances allowed as provenance evidence', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'recall-explanation-raw-user-'));
+  const dir = makeTempDir('recall-explanation-raw-user-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
 
   const userRaw = await kernel.ingest({
@@ -177,7 +176,7 @@ test('kernel recall explanation identifies suspect raw user utterances allowed a
 });
 
 test('agent explanation uses the same raw-ledger route and evidence ids as agent recall', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'recall-explanation-agent-parity-'));
+  const dir = makeTempDir('recall-explanation-agent-parity-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
   kernel.recordRawEvent({

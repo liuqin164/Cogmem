@@ -4,9 +4,24 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
+import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
+import { inspectOpenClawAutoMemoryPlugin } from '../host/openclaw/AutoMemoryPluginInstaller.js';
+import { assertCliArgs } from './CliArgs.js';
 import { printCliJson } from './CliJson.js';
 import { DEFAULT_NPM_PACKAGE, resolveLatestNpmSpec } from './update-release.js';
+import {
+  buildGate,
+  defaultHermesConfigPath,
+  defaultPiConfigPath,
+  hermesIntegrationEstablished,
+  piIntegrationEstablished,
+  installPathSteps,
+  pendingHostIntegrations,
+  postInstallSteps,
+  resolveCogmemInvocation,
+  type InstallGate,
+  type InstallStep,
+} from '../install/InstallSteps.js';
 
 interface UpdateArgs {
   dryRun: boolean;
@@ -18,7 +33,6 @@ interface UpdateArgs {
   localDev: boolean;
   manager?: 'bun' | 'npm' | 'pnpm';
   configPath?: string;
-  skipMigrate: boolean;
   skipAgentRefresh: boolean;
 }
 
@@ -49,7 +63,6 @@ function readArgs(argv: string[]): UpdateArgs {
     localDev: values['local-dev'] === true,
     manager,
     configPath: typeof values.config === 'string' ? values.config : undefined,
-    skipMigrate: values['skip-migrate'] === true,
     skipAgentRefresh: values['skip-agent-refresh'] === true,
   };
 }
@@ -68,8 +81,56 @@ interface UpdateTarget {
   warning?: string;
 }
 
+/**
+ * The prefix that owns this installation, when it is a global npm one.
+ *
+ * A global install lives at `<prefix>/lib/node_modules/cogmem` (or `<prefix>/node_modules`
+ * on Windows). A bare `npm install -g` targets npm's *configured* default instead, which is
+ * a different tree whenever the install used `--prefix`: the operator updates one copy and
+ * keeps running another, or gets EACCES naming a path they never chose (#89). The running
+ * copy's own location is the only reliable statement of where it is, so it is derived
+ * rather than guessed. `COGMEM_NPM_PREFIX` overrides it for a layout that does not match.
+ */
+function npmGlobalPrefix(env: Record<string, string | undefined> = process.env): string | undefined {
+  const explicit = env.COGMEM_NPM_PREFIX?.trim();
+  if (explicit) return explicit;
+  const root = ownPackageRoot();
+  const marker = `${sep}node_modules${sep}cogmem`;
+  const index = root.indexOf(marker);
+  if (index === -1) return undefined;
+  // Strip `/lib` too when present: npm's posix layout is `<prefix>/lib/node_modules`.
+  const before = root.slice(0, index);
+  return before.endsWith(`${sep}lib`) ? before.slice(0, -`${sep}lib`.length) : before;
+}
+
+/**
+ * Quote one argument so the printed command runs as printed.
+ *
+ * `nextCommand` is a string an operator copies into a shell, so a prefix containing a
+ * space has to survive the copy. Same rule the factory uses for the commands it prints.
+ */
+function shellQuoteArg(value: string): string {
+  // Only quote what a shell would otherwise split or expand, so the common command still
+  // reads as `npm install -g --prefix /usr/local cogmem@4.0.0`.
+  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/gu, `'\\''`)}'`;
+}
+
 function buildCommand(target: UpdateTarget, spec: string): string[] {
-  if (target.kind === 'npm_global') return ['npm', 'install', '-g', `cogmem@${spec}`];
+  if (target.kind === 'npm_global') {
+    // No fallback to a bare `npm install -g`: that targets npm's *configured* default
+    // prefix, which is a different tree whenever the install used `--prefix`. Updating a
+    // copy the operator does not run, or failing on a path they never chose, are both
+    // worse than saying the prefix is unknown (#89).
+    const prefix = npmGlobalPrefix();
+    if (!prefix) {
+      throw new Error(
+        'Unable to determine the npm prefix that owns this installation, so `update` will not '
+        + 'guess. Set COGMEM_NPM_PREFIX to that prefix (for example COGMEM_NPM_PREFIX=/usr/local), '
+        + 'or run the install yourself: npm install -g --prefix <prefix> cogmem@<version>.',
+      );
+    }
+    return ['npm', 'install', '-g', '--prefix', prefix, `cogmem@${spec}`];
+  }
   const manager = target.manager;
   if (manager === 'bun') return ['bun', 'add', `cogmem@${spec}`];
   if (manager === 'pnpm') return ['pnpm', 'add', `cogmem@${spec}`];
@@ -78,16 +139,6 @@ function buildCommand(target: UpdateTarget, spec: string): string[] {
 
 function localCogmemBin(cwd: string): string {
   return join(cwd, 'node_modules', '.bin', 'cogmem');
-}
-
-function buildMigrationExecForTarget(target: UpdateTarget, configPath?: string): string[] {
-  return [
-    target.bin,
-    'migrate',
-    '--yes',
-    '--backup',
-    ...(configPath ? ['--config', configPath] : []),
-  ];
 }
 
 function buildOpenClawRepairExecForTarget(target: UpdateTarget, configPath: string, workspaceRoot: string): string[] {
@@ -186,13 +237,24 @@ function resolveUpdateTarget(args: UpdateArgs, env: Record<string, string | unde
     cwd,
     kind: 'cwd_fallback',
     manager: args.manager || detectManager(cwd),
-    bin: localCogmemBin(cwd),
+    // The only shape whose `localCogmemBin` path is fabricated: nothing was found
+    // to update, so `<cwd>/node_modules/.bin/cogmem` is a guess. Print the command
+    // this machine actually resolves instead (#78); a real run refuses anyway.
+    bin: resolveCogmemInvocation(),
     warning: 'no_install_home_or_project_dependency_detected',
   };
 }
 
-function loadConfigForUpdate(args: UpdateArgs): { configPath?: string; loaded?: LoadedCogmemConfig; skippedReason?: string } {
-  const resolution = resolveCogmemConfigPath({ configPath: args.configPath, cwd: process.cwd() });
+/**
+ * Resolve the config this update is about.
+ *
+ * The search starts at the *target* install, not at the caller's directory: an
+ * operator who runs `cogmem update --install-home <dir>` from somewhere else is
+ * asking about that install, and resolving from the caller's cwd finds another
+ * project's config, or the developer machine's, or none at all (#62).
+ */
+function loadConfigForUpdate(args: UpdateArgs, targetCwd: string): { configPath?: string; loaded?: LoadedCogmemConfig; skippedReason?: string } {
+  const resolution = resolveCogmemConfigPath({ configPath: args.configPath, cwd: targetCwd });
   if (resolution.kind === 'missing') {
     return { configPath: undefined, skippedReason: `missing_config:${resolution.path}` };
   }
@@ -202,6 +264,23 @@ function loadConfigForUpdate(args: UpdateArgs): { configPath?: string; loaded?: 
     throw new Error(`config_error:${error.code}: ${error.message}`);
   }
   return { configPath: resolution.path, loaded };
+}
+
+/**
+ * The Workspace `update` should repair, or `undefined` when OpenClaw was never
+ * wired.
+ *
+ * The recorded switch is read first and the artifacts second: a host wired before
+ * `connect` began recording itself has no switch, and `update` declining to
+ * maintain files that are visibly on disk is the defect ADR-0010 names. The
+ * Workspace is derived, so the repair refreshes the one integration `connect`
+ * wrote rather than adding a second one under the config directory.
+ */
+function openClawWorkspaceForUpdate(loaded: LoadedCogmemConfig | undefined): string | undefined {
+  if (!loaded) return undefined;
+  const workspaceRoot = hostWorkspaceFor(loaded, 'openclaw');
+  if (loaded.integrations.openclaw.enabled) return workspaceRoot;
+  return inspectOpenClawAutoMemoryPlugin({ workspaceRoot }).installed ? workspaceRoot : undefined;
 }
 
 async function runCommand(cmd: string[], cwd: string): Promise<number> {
@@ -214,7 +293,32 @@ async function runCommand(cmd: string[], cwd: string): Promise<number> {
   return proc.exited;
 }
 
+/**
+ * Run a step whose own chatter must not land inside a JSON document.
+ *
+ * `--json` promises one object on stdout. A step that inherits stdout writes its
+ * progress in front of it — the OpenClaw repair prints `OK configuration parsed`
+ * — and the result is unparseable for the agent that asked for JSON.
+ */
+async function runCommandViaStderr(cmd: string[], cwd: string): Promise<number> {
+  const captured = await runCommandCapture(cmd, cwd);
+  if (captured.stdout) process.stderr.write(captured.stdout);
+  if (captured.stderr) process.stderr.write(captured.stderr);
+  return captured.exitCode;
+}
+
+async function runCommandCapture(cmd: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn({ cmd, cwd, stdout: 'pipe', stderr: 'pipe' });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { stdout, stderr, exitCode };
+}
+
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['agent', 'config', 'fix', 'json', 'plugin-only', 'prefix', 'workspace', 'dry-run', 'yes', 'install-home', 'manager', 'from', 'local-dev', 'global', 'check-tools', 'no-gate'] });
   const args = readArgs(process.argv.slice(2));
   const resolvedSpec = args.from === 'latest'
     ? resolveLatestNpmSpec({ env: process.env })
@@ -227,14 +331,18 @@ async function main(): Promise<void> {
     throw new Error('Unable to find an installed Cogmem package to update. Pass --global for npm global installs or --install-home <dir> for the one-line installer home.');
   }
   const manager = target.manager;
-  const command = buildCommand(target, resolvedSpec);
-  const config = loadConfigForUpdate(args);
-  const migrationExec = !args.skipMigrate && config.configPath
-    ? buildMigrationExecForTarget(target, config.configPath)
-    : undefined;
-  const openclawWorkspace = config.loaded?.integrations.openclaw.enabled
-    ? config.loaded.integrations.openclaw.workspaceDir || process.cwd()
-    : undefined;
+  let command: string[] | undefined;
+  let prefixUnknownReason: string | undefined;
+  try {
+    command = buildCommand(target, resolvedSpec);
+  } catch (error) {
+    if (!args.dryRun) throw error;
+    // A dry run is exactly when an operator wants to know this, so it reports rather than
+    // exits — and it must not print a command it would then refuse to run.
+    prefixUnknownReason = error instanceof Error ? error.message : String(error);
+  }
+  const config = loadConfigForUpdate(args, target.cwd);
+  const openclawWorkspace = openClawWorkspaceForUpdate(config.loaded);
   const openclawRepairExec = !args.skipAgentRefresh && openclawWorkspace && config.configPath
     ? buildOpenClawRepairExecForTarget(target, config.configPath, openclawWorkspace)
     : undefined;
@@ -253,51 +361,133 @@ async function main(): Promise<void> {
     packageSpec: resolvedSpec,
     targetCwd: target.cwd,
     currentSpec: target.kind === 'npm_global' ? 'npm:global' : installedSpec(target.cwd),
-    nextCommand: command.join(' '),
-    updateWarning: target.warning,
+    nextCommand: command ? command.map(shellQuoteArg).join(' ') : undefined,
+    prefixUnknown: prefixUnknownReason ? true : undefined,
+    updateWarning: [target.warning, prefixUnknownReason].filter(Boolean).join(' ') || undefined,
     configPath: config.configPath,
-    migrationCommand: migrationExec?.join(' '),
-    migrationSkippedReason: migrationExec ? undefined : (args.skipMigrate ? 'skip_migrate_flag' : config.skippedReason),
     openclawRepairCommand: openclawRepairExec?.join(' '),
     openclawRepairSkippedReason: openclawRepairExec
       ? undefined
-      : (args.skipAgentRefresh ? 'skip_agent_refresh_flag' : (config.loaded?.integrations.openclaw.enabled ? undefined : 'openclaw_not_configured')),
+      : (args.skipAgentRefresh ? 'skip_agent_refresh_flag' : (openclawWorkspace ? undefined : 'openclaw_not_configured')),
+    // The other Host, reported rather than silently absent: `update` has no repair
+    // path for Hermes because it generates nothing there, and "we did not touch it"
+    // is a reason a reader is entitled to (#81).
+    hermesMaintenanceSkippedReason: config.loaded?.integrations.hermes.enabled
+      ? (args.skipAgentRefresh ? 'skip_agent_refresh_flag' : 'hermes_has_no_generated_artifacts')
+      : undefined,
     restartRequired,
     followUp: restartRequired.length > 0
       ? `After update finishes, ${restartRequired.join('; ')}.`
       : 'After update finishes, restart any running agent host so it loads the new Cogmem CLI.',
+    installGate: undefined as InstallGate | undefined,
+    nextSteps: [] as InstallStep[],
+    postUpdateGateCommand: undefined as string | undefined,
+    gateError: undefined as string | undefined,
   };
 
-  if (args.json) {
-    printCliJson('update', result);
+  // The gate runs last, so post-update verification is the same contract as a
+  // fresh install rather than a second one with its own wording. A missing
+  // config is "not installed", not a failure: an updater may run before setup.
+  const gateBin = target.kind === 'npm_global' ? 'cogmem' : target.bin;
+  // The gate has to check the install this update touched, not whatever the
+  // caller's directory happens to hold. `--config` names the config this update
+  // resolved, and the working directory is the target install: without both,
+  // `cogmem update --install-home <dir>` run from somewhere else asked doctor
+  // about a different project's config — or the developer machine's — and
+  // reported OK or NOT_INSTALLED for it (#62).
+  const gateCwd = target.cwd;
+  const gateArgs = (...extra: string[]): string[] => [
+    gateBin,
+    'doctor',
+    ...extra,
+    ...(config.configPath ? ['--config', config.configPath] : []),
+  ];
+  // Reused, not retyped: ADR-0003 says the step list is defined once. The copy
+  // that used to live here had already drifted from the shared list — it named
+  // the first step `init` where the shared definition says `operator_init`, and
+  // its wording still assumed an update could migrate something.
+  if (config.configPath && config.loaded) {
+    // Only what is outstanding, and only the Host it belongs to: `update` runs on a
+    // machine whose integration already exists, so recommending `connect` again
+    // would be the gate repeating itself (#81).
+    const connectHosts = pendingHostIntegrations([
+      { host: 'openclaw', wanted: config.loaded.integrations.openclaw.enabled, established: Boolean(openclawWorkspace) },
+      {
+        host: 'hermes',
+        wanted: config.loaded.integrations.hermes.enabled,
+        established: hermesIntegrationEstablished(defaultHermesConfigPath(process.env)),
+      },
+      {
+        host: 'pi',
+        wanted: config.loaded.integrations.pi.enabled,
+        established: piIntegrationEstablished(defaultPiConfigPath(process.env)),
+      },
+    ]);
+    const connectWorkspace = connectHosts[0] ? hostWorkspaceFor(config.loaded, connectHosts[0]) : (openclawWorkspace ?? config.loaded.workspaceRoot);
+    result.nextSteps = postInstallSteps(gateBin, connectWorkspace, connectHosts);
   } else {
+    result.nextSteps = installPathSteps(gateBin).filter((step) => step.id !== 'install_gate');
+  }
+  result.postUpdateGateCommand = gateArgs(...(args.json ? ['--json'] : [])).join(' ');
+
+  if (args.dryRun && args.json) {
+    // A dry run has not checked the updated install, so do not publish a
+    // fabricated OK/NOT_INSTALLED gate. Name the command that will check it.
+    printCliJson('update', result);
+  } else if (!args.json) {
     console.log(`cogmem update ${args.dryRun ? 'dry-run' : 'running'}`);
     console.log(`target: ${result.targetCwd}`);
     if (result.updateWarning) console.log(`warning: ${result.updateWarning}`);
     console.log(`current: ${result.currentSpec || 'not listed in package.json'}`);
     console.log(`command: ${result.nextCommand}`);
-    if (result.migrationCommand) console.log(`migrate: ${result.migrationCommand}`);
     if (result.openclawRepairCommand) console.log(`openclaw: ${result.openclawRepairCommand}`);
     console.log(result.followUp);
+    if (args.dryRun) console.log(`Post-update gate: ${result.postUpdateGateCommand}`);
   }
 
   if (!args.dryRun) {
-    const updateExitCode = await runCommand(command, target.cwd);
+    // buildCommand only returns undefined for a dry run that could not determine the
+    // prefix; a real run has already thrown by then.
+    if (!command) throw new Error('update command was not resolved');
+    const runStep = args.json ? runCommandViaStderr : runCommand;
+    const updateExitCode = await runStep(command, target.cwd);
     if (updateExitCode !== 0) process.exit(updateExitCode);
-    if (migrationExec) {
-      const migrationExitCode = await runCommand(migrationExec, process.cwd());
-      if (migrationExitCode !== 0) process.exit(migrationExitCode);
-    }
     if (openclawRepairExec) {
-      const repairExitCode = await runCommand(openclawRepairExec, process.cwd());
+      const repairExitCode = await runStep(openclawRepairExec, process.cwd());
       if (repairExitCode !== 0) process.exit(repairExitCode);
     }
-    if (!args.json) console.log(result.followUp);
-    process.exit(0);
+
+    if (args.json) {
+      const gateRun = await runCommandCapture(gateArgs('--json'), gateCwd);
+      try {
+        const gatePayload = JSON.parse(gateRun.stdout) as { installGate?: InstallGate; nextSteps?: InstallStep[] };
+        if (!gatePayload.installGate) throw new Error('doctor JSON did not include installGate');
+        result.installGate = gatePayload.installGate;
+        result.nextSteps = gatePayload.nextSteps || [];
+      } catch (error) {
+        result.installGate = buildGate('fail', [{
+          code: 'post_update_gate_unreadable',
+          message: error instanceof Error ? error.message : String(error),
+        }], []);
+        result.gateError = gateRun.stderr || gateRun.stdout;
+      }
+      printCliJson('update', result);
+      process.exit(Math.max(gateRun.exitCode, result.installGate?.exitCode ?? 1));
+    }
+
+    process.exit(await runCommand(gateArgs(), gateCwd));
   }
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  const message = error instanceof Error ? error.message : String(error);
+  // `--json` promises one JSON document on stdout, and that includes the runs
+  // that stop before the gate: a config that cannot be parsed used to produce no
+  // stdout at all, so the agent that asked for JSON had to parse stderr to find
+  // out what happened. The message still goes to stderr for a human watching.
+  if (process.argv.includes('--json')) {
+    printCliJson('update', { status: 'error', error: { message } });
+  }
+  console.error(message);
   process.exit(1);
 });

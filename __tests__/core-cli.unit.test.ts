@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -11,18 +10,19 @@ import {
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
 const initBin = join(coreRoot, 'src/bin/init.ts');
+const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');
 const snapshotBin = join(coreRoot, 'src/bin/snapshot.ts');
 const reEmbedBin = join(coreRoot, 'src/bin/re-embed.ts');
-const migrateVectorsBin = join(coreRoot, 'src/bin/migrate-vectors.ts');
 const compactBin = join(coreRoot, 'src/bin/compact.ts');
 const memoryBin = join(coreRoot, 'src/bin/memory.ts');
 
 test('doctor validates a structured cogmem config file', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-doctor-'));
+  const dir = makeTempDir('cogmem-doctor-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, [
@@ -49,7 +49,7 @@ test('doctor validates a structured cogmem config file', async () => {
 });
 
 test('init supports non-interactive dry-run config generation', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-'));
+  const dir = makeTempDir('cogmem-init-');
   const homePath = join(dir, '.cogmem');
 
   const proc = Bun.spawn({
@@ -62,6 +62,9 @@ test('init supports non-interactive dry-run config generation', async () => {
       'none',
       '--home',
       homePath,
+      // Hermetic: without --no-probe the wizard reads localhost:11434 and would
+      // write whatever dimension this machine's Ollama happens to expose.
+      '--no-probe',
     ],
     cwd: coreRoot,
     stdout: 'pipe',
@@ -86,6 +89,36 @@ test('init supports non-interactive dry-run config generation', async () => {
   expect(existsSync(join(homePath, 'config.toml'))).toBe(false);
 });
 
+test('init --no-probe skips the Ollama probe so dry-run output is machine-independent', async () => {
+  const dir = makeTempDir('cogmem-init-no-probe-');
+  const homePath = join(dir, '.cogmem');
+
+  const run = async (extra: string[]) => {
+    const proc = Bun.spawn({
+      cmd: ['bun', initBin, '--yes', '--dry-run', '--agent', 'none', '--home', homePath, ...extra],
+      cwd: coreRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { ...process.env, NO_COLOR: '1' },
+    });
+    const output = await new Response(proc.stdout).text();
+    const errorOutput = await new Response(proc.stderr).text();
+    return { output, errorOutput, exitCode: await proc.exited };
+  };
+
+  const disabled = await run(['--no-probe']);
+  expect(disabled.errorOutput).toBe('');
+  expect(disabled.exitCode).toBe(0);
+  expect(disabled.output).toContain('Ollama    – skipped (--no-probe)');
+  expect(disabled.output).toContain('vector_dimension = 384');
+  expect(disabled.output).toContain('provider = "deterministic_local"');
+
+  // An explicit --vector-dimension still wins over the skipped probe.
+  const explicit = await run(['--no-probe', '--vector-dimension', '1024']);
+  expect(explicit.exitCode).toBe(0);
+  expect(explicit.output).toContain('vector_dimension = 1024');
+});
+
 test('init recognizes Qwen3 embedding GGUF model names exposed by Ollama', () => {
   const suggested = suggestEmbeddingModel({
     ollamaAvailable: true,
@@ -102,7 +135,7 @@ test('init recognizes Qwen3 embedding GGUF model names exposed by Ollama', () =>
 });
 
 test('init exposes vector dimension and warns for high-dimensional embeddings', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-vector-dimension-'));
+  const dir = makeTempDir('cogmem-init-vector-dimension-');
   const homePath = join(dir, '.cogmem');
 
   const proc = Bun.spawn({
@@ -138,7 +171,7 @@ test('init exposes vector dimension and warns for high-dimensional embeddings', 
 });
 
 test('init dry-run can target Hermes agent workspaces', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-hermes-'));
+  const dir = makeTempDir('cogmem-init-hermes-');
   const homePath = join(dir, '.cogmem');
 
   const proc = Bun.spawn({
@@ -173,7 +206,7 @@ test('init dry-run can target Hermes agent workspaces', async () => {
 });
 
 test('init auto-detects Hermes home in non-interactive setup', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-auto-hermes-'));
+  const dir = makeTempDir('cogmem-init-auto-hermes-');
   const homePath = join(dir, '.cogmem');
   const hermesHome = join(dir, '.hermes');
   mkdirSync(hermesHome, { recursive: true });
@@ -211,7 +244,7 @@ test('init auto-detects Hermes home in non-interactive setup', async () => {
 });
 
 test('init non-interactive output shows current SDK quickstart calls', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-snippet-'));
+  const dir = makeTempDir('cogmem-init-snippet-');
   const homePath = join(dir, '.cogmem');
 
   const proc = Bun.spawn({
@@ -240,13 +273,14 @@ test('init non-interactive output shows current SDK quickstart calls', async () 
   expect(exitCode).toBe(0);
   expect(output).toContain('const kernel = createMemoryKernelFromConfig();');
   expect(output).toContain("await kernel.ingest({ content: 'Remember that the user prefers concise answers.'");
-  expect(output).toContain("kernel.recall('what does the user prefer?'");
+  expect(output).toContain('new KernelAgentMemoryBackend(kernel)');
+  expect(output).toContain("memory.recall({ agentId: 'my-agent', projectId: 'my-agent', query: 'what does the user prefer?' })");
   expect(output).not.toContain('turns:');
   expect(existsSync(join(homePath, 'config.toml'))).toBe(true);
 });
 
 test('init project scope writes a workspace-local .cogmem config', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-project-'));
+  const dir = makeTempDir('cogmem-init-project-');
 
   const proc = Bun.spawn({
     cmd: [
@@ -278,7 +312,7 @@ test('init project scope writes a workspace-local .cogmem config', async () => {
 });
 
 test('init expands tilde in --home paths', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-home-'));
+  const dir = makeTempDir('cogmem-init-home-');
   const homeRoot = join(dir, 'home');
   mkdirSync(homeRoot, { recursive: true });
 
@@ -313,7 +347,7 @@ test('init expands tilde in --home paths', async () => {
 });
 
 test('doctor rejects legacy env-path configuration', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-doctor-legacy-'));
+  const dir = makeTempDir('cogmem-doctor-legacy-');
   const envPath = join(dir, '.cogmem.env');
   writeFileSync(envPath, 'COGMEM_DB=brain.db\n');
 
@@ -332,8 +366,53 @@ test('doctor rejects legacy env-path configuration', async () => {
   expect(errorOutput).toContain('--env-path is no longer supported');
 });
 
+test('#88 memory recall reads a project whose agent is not the literal default', async () => {
+  const dir = makeTempDir('cogmem-cli-recall-scope-');
+  const dbPath = join(dir, '.cogmem', 'memory.db');
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(join(dir, '.cogmem'), { recursive: true });
+  writeFileSync(configPath, ['[core]', `db_path = "${dbPath}"`].join('\n'));
+
+  // Recorded the way a connected host records it: the connection carries no host name,
+  // so the agent is the project it is bound to (ADR-0006, #85), and the event's source id
+  // becomes `zen-flow:s-1`.
+  const kernel = createMemoryKernel({ dbPath });
+  await new KernelAgentMemoryBackend(kernel).rememberTurnWithResult({
+    agentId: 'zen-flow',
+    projectId: 'zen-flow',
+    sessionId: 's-1',
+    userText: 'the quokka rollout ships on Fridays',
+    assistantText: 'noted',
+  });
+
+  const recallAs = async (project: string): Promise<{ agentId?: string; items: unknown[] }> => {
+    const proc = Bun.spawn({
+      cmd: ['bun', cogmemBin, 'memory', 'recall', '--query', 'when does the quokka rollout ship',
+        '--project', project, '--config', configPath, '--json'],
+      cwd: coreRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+    return JSON.parse(output) as { agentId?: string; items: unknown[] };
+  };
+
+  // Asking for that project's memory asks as the agent its writes are recorded under.
+  // The MCP read path has always derived it that way; the CLI asked as the literal
+  // default instead, so it could not read back a workspace `connect` had wired.
+  const own = await recallAs('zen-flow');
+  expect(own.agentId).toBe('zen-flow');
+  expect(JSON.stringify(own.items)).toContain('quokka');
+
+  // And the scope filter stays honest: the same memory is not returned for another project.
+  const other = await recallAs('someone-else');
+  expect(JSON.stringify(other.items)).not.toContain('quokka');
+  kernel.close();
+});
+
 test('doctor prints a high vector dimension warning for structured config', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-doctor-vector-warning-'));
+  const dir = makeTempDir('cogmem-doctor-vector-warning-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, [
@@ -359,7 +438,7 @@ test('doctor prints a high vector dimension warning for structured config', asyn
 });
 
 test('init rejects legacy env generation flags', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-init-legacy-'));
+  const dir = makeTempDir('cogmem-init-legacy-');
   const envPath = join(dir, '.cogmem.env');
 
   const proc = Bun.spawn({
@@ -393,7 +472,7 @@ test('init rejects legacy env generation flags', async () => {
 });
 
 test('snapshot export uses configured database and default snapshots directory', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-snapshot-config-'));
+  const dir = makeTempDir('cogmem-snapshot-config-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
@@ -426,7 +505,7 @@ test('snapshot export uses configured database and default snapshots directory',
 });
 
 test('re-embed status can read the configured database without --db', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-reembed-config-'));
+  const dir = makeTempDir('cogmem-reembed-config-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
@@ -458,41 +537,8 @@ test('re-embed status can read the configured database without --db', async () =
   expect(parsed.percentComplete).toBe(100);
 });
 
-test('vector migration dry-run can read the configured database without --db', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-vector-config-'));
-  const configPath = join(dir, '.cogmem', 'config.toml');
-  mkdirSync(join(dir, '.cogmem'), { recursive: true });
-  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
-
-  const seed = Bun.spawn({
-    cmd: ['bun', doctorBin, '--config', configPath],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  await new Response(seed.stdout).text();
-  await new Response(seed.stderr).text();
-  expect(await seed.exited).toBe(0);
-
-  const proc = Bun.spawn({
-    cmd: ['bun', migrateVectorsBin, '--config', configPath, '--dry-run'],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const output = await new Response(proc.stdout).text();
-  const errorOutput = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  expect(errorOutput).toBe('');
-  expect(exitCode).toBe(0);
-  const parsed = JSON.parse(output);
-  expect(parsed.dryRun).toBe(true);
-  expect(parsed.eligible).toBe(0);
-});
-
 test('compact dry-run reports eligible vector pruning without deleting raw events', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-compact-cli-'));
+  const dir = makeTempDir('cogmem-compact-cli-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
@@ -531,7 +577,7 @@ test('compact dry-run reports eligible vector pruning without deleting raw event
 });
 
 test('doctor storage mode reports vector bytes per raw event', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-doctor-storage-'));
+  const dir = makeTempDir('cogmem-doctor-storage-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
@@ -565,7 +611,7 @@ test('doctor storage mode reports vector bytes per raw event', async () => {
 });
 
 test('memory CLI lists and shows raw ledger events with source anchors', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-cli-'));
+  const dir = makeTempDir('cogmem-memory-cli-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
@@ -625,7 +671,7 @@ test('memory CLI lists and shows raw ledger events with source anchors', async (
 });
 
 test('memory CLI recall lets agents actively query governed memory with source context', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-recall-cli-'));
+  const dir = makeTempDir('cogmem-memory-recall-cli-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
@@ -673,7 +719,7 @@ test('memory CLI recall lets agents actively query governed memory with source c
 });
 
 test('memory CLI explicit database recall requires an explicit project timezone', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-explicit-db-timezone-'));
+  const dir = makeTempDir('cogmem-memory-explicit-db-timezone-');
   const proc = Bun.spawn({
     cmd: ['bun', memoryBin, 'recall', '--db', join(dir, 'memory.db'), '--project', 'demo', '--query', 'today', '--json'],
     cwd: coreRoot,
@@ -686,7 +732,7 @@ test('memory CLI explicit database recall requires an explicit project timezone'
 });
 
 test('memory CLI recall falls back to imported Hermes raw ledger when vectors are empty', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-hermes-recall-cli-'));
+  const dir = makeTempDir('cogmem-memory-hermes-recall-cli-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
@@ -757,7 +803,7 @@ test('memory CLI recall falls back to imported Hermes raw ledger when vectors ar
 });
 
 test('memory CLI status JSON exposes stable raw and dream counters', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-status-json-'));
+  const dir = makeTempDir('cogmem-memory-status-json-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
@@ -793,7 +839,7 @@ test('memory CLI status JSON exposes stable raw and dream counters', async () =>
 });
 
 test('memory CLI runs dream curator and lists governance candidates', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-dream-cli-'));
+  const dir = makeTempDir('cogmem-memory-dream-cli-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
@@ -844,7 +890,7 @@ test('memory CLI runs dream curator and lists governance candidates', async () =
 });
 
 test('memory CLI dream --max-runs 1 commits sealed episode progress across processes', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-dream-cli-progress-'));
+  const dir = makeTempDir('cogmem-memory-dream-cli-progress-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
@@ -894,7 +940,7 @@ test('memory CLI dream --max-runs 1 commits sealed episode progress across proce
 });
 
 test('memory CLI governs dream candidates and can run a one-iteration watch loop', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-govern-cli-'));
+  const dir = makeTempDir('cogmem-memory-govern-cli-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
@@ -989,64 +1035,8 @@ test('unified cogmem CLI exposes memory audit commands', async () => {
   expect(memoryOutput).toContain('--promote');
 });
 
-test('vector migration dry-run uses configured vector_dimension by default', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-vector-dimension-config-'));
-  const configPath = join(dir, '.cogmem', 'config.toml');
-  mkdirSync(join(dir, '.cogmem'), { recursive: true });
-  writeFileSync(configPath, [
-    '[core]',
-    'db_path = "memory.db"',
-    'vector_dimension = 4096',
-  ].join('\n'));
-
-  const seed = Bun.spawn({
-    cmd: ['bun', doctorBin, '--config', configPath],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  await new Response(seed.stdout).text();
-  await new Response(seed.stderr).text();
-  expect(await seed.exited).toBe(0);
-
-  const proc = Bun.spawn({
-    cmd: ['bun', migrateVectorsBin, '--config', configPath, '--dry-run'],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const output = await new Response(proc.stdout).text();
-  const errorOutput = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  expect(errorOutput).toBe('');
-  expect(exitCode).toBe(0);
-  const parsed = JSON.parse(output);
-  expect(parsed.dimension).toBe(4096);
-  expect(parsed.dryRun).toBe(true);
-});
-
-test('vector migration rejects invalid explicit dimensions', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-vector-invalid-dimension-'));
-  const dbPath = join(dir, 'memory.db');
-
-  const proc = Bun.spawn({
-    cmd: ['bun', migrateVectorsBin, '--db', dbPath, '--dimension', '4096px', '--dry-run'],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const output = await new Response(proc.stdout).text();
-  const errorOutput = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  expect(output).toBe('');
-  expect(exitCode).toBe(1);
-  expect(errorOutput).toContain('--dimension must be a positive integer');
-});
-
 test('snapshot import rejects invalid explicit dimensions before importing', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-snapshot-invalid-dimension-'));
+  const dir = makeTempDir('cogmem-snapshot-invalid-dimension-');
   const dbPath = join(dir, 'memory.db');
   const snapshotPath = join(dir, 'memory.snap');
 

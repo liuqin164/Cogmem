@@ -3,7 +3,6 @@ import { normalizeLexiconText } from '../lexicon/coreMemoryLexicon.js';
 import {
   buildAlgorithmReviewMetadata,
   MODEL_BACKED_PHASE2_REVIEW_VERSION,
-  NoopAlgorithmReviewBackend,
   Phase1RuleAlgorithmReviewBackend,
   PHASE1_RULE_REVIEW_VERSION,
   type AlgorithmFactAdjudication,
@@ -20,7 +19,6 @@ import {
 } from './AlgorithmReviewBackend.js';
 import { SemanticBackendRuntime, type SemanticBackendTask } from '../backend/SemanticBackend.js';
 import { ModelRegistry } from '../models/ModelRegistry.js';
-import { createMemoryReviewAdapter } from '../models/adapters/MemoryReviewAdapter.js';
 
 export interface Phase2ModelReviewRuntime {
   reviewProvisionalFactCandidates(
@@ -53,23 +51,6 @@ interface StructuredModelReply {
 
 export function resolveAlgorithmReviewBackendMode(): AlgorithmReviewBackendMode {
   return 'noop';
-}
-
-export function createAlgorithmReviewBackend(options: Phase2ModelAlgorithmReviewBackendOptions = {}): AlgorithmReviewBackend {
-  const registry = options.modelRegistry || ModelRegistry.defaults();
-  if (!registry.isRuleOnly('memory')) {
-    return createMemoryReviewAdapter(registry);
-  }
-  const mode = resolveAlgorithmReviewBackendMode();
-  if (mode === 'phase1_rule') return new Phase1RuleAlgorithmReviewBackend();
-  if (mode === 'model_backed_phase2') {
-    return new Phase2ModelAlgorithmReviewBackend({
-      semanticBackend: options.semanticBackend,
-      modelRuntime: options.modelRuntime,
-      fallbackBackend: options.fallbackBackend || new Phase1RuleAlgorithmReviewBackend()
-    });
-  }
-  return new NoopAlgorithmReviewBackend();
 }
 
 export class Phase2ModelAlgorithmReviewBackend implements AlgorithmReviewBackend {

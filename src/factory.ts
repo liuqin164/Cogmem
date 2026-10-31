@@ -1,8 +1,13 @@
+import { cliArg } from './utils/CliArgument.js';
+import { describeSqliteTempDirectoryFailure } from './utils/SqliteTempDirectory.js';
 import { createHash, randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import Database from 'bun:sqlite';
 import type { GraphEdgeStoreLike } from './types/ExtensionPoints.js';
 
 import { BeliefStore } from './belief/BeliefStore.js';
+import { projectFrameRelationsToBeliefs } from './belief/FrameRelationBeliefs.js';
 import { BeliefGovernanceService } from './belief/BeliefGovernanceService.js';
 import {
   MemoryBindingService,
@@ -80,9 +85,15 @@ import {
   type CandidateReviewInput,
   type CandidateReviewResult,
 } from './governance/index.js';
-import { ALL_MIGRATIONS, KERNEL_MIGRATIONS, SchemaMigrationRunner, migration_0032 } from './migrations/index.js';
+
 import { installRuntimeProvenanceGuards } from './migrations/v3_7_4/FinalRuntimeGuards.js';
-import { backupDatabase } from './migrations/MigrationBackup.js';
+import {
+  LATEST_SCHEMA_VERSION,
+  assertSupportedDatabase,
+  createFinalSchema,
+  hasUserSchema,
+} from './migrations/v3_7_4/FinalSchema.js';
+import { ensureUsableTempSpace } from './utils/SqliteTempDirectory.js';
 import { EntityGovernanceService } from './entity/index.js';
 import { TemporalMemoryService } from './temporal/index.js';
 import { ContextCortex } from './context/index.js';
@@ -114,7 +125,7 @@ import { CandidateReviewStore, type CandidateReviewRecord } from './store/Candid
 import { DreamLedgerStore, type DreamBacklogStatus } from './store/DreamLedgerStore.js';
 import { ActivationStore, type ActivationDecayResult, type ActivationHotspot } from './store/ActivationStore.js';
 import { EntityStore } from './store/EntityStore.js';
-import { EventStore } from './store/EventStore.js';
+import { EventStore, type RawEventOrder } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
 import { InteractionUnitStore } from './store/InteractionUnitStore.js';
 import { MemoryBindingStore } from './store/MemoryBindingStore.js';
@@ -161,7 +172,6 @@ import {
 } from './snapshot/index.js';
 import { CORE_VERSION } from './version.js';
 
-const LATEST_SCHEMA_VERSION = Math.max(...ALL_MIGRATIONS.map((migration) => Number.parseInt(migration.version, 10)));
 const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
@@ -215,6 +225,8 @@ export interface RawEventSearchOptions {
   startTime?: number;
   endTime?: number;
   limit?: number;
+  /** Declared once, in EventStore, where the two orders are explained. */
+  orderBy?: RawEventOrder;
 }
 
 export type DreamCandidateStatus = DeepWriteCandidateStatus;
@@ -250,6 +262,10 @@ export interface DreamGovernanceRunOptions {
 export interface DreamGovernanceRunResult {
   projectId?: string;
   decisions: DeepWritePromotionDecision[];
+  /** Candidates this run moved to a promoted status. */
+  promotedCandidates: number;
+  /** Neurons created by this run — zero unless a candidate carries a source neuron. */
+  neuronsWritten: number;
   queue: {
     candidate: number;
     needsConfirmation: number;
@@ -340,6 +356,15 @@ export interface MaintenanceTickOptions {
   confirmationTtlMs?: number;
   now?: number;
   atlasAccessRetentionMs?: number;
+  /**
+   * Whether this tick runs the atlas reconciliation pass. Set false by a caller that
+   * finishes with its own pass over the work it did — the Night, whose run ends by
+   * reconciling what Dream just wrote. Without this the Night reconciled twice per
+   * run (#106): the tick's pass ran *before* Dream wrote the frames it was there to
+   * notice, so the run paid a corpus rebuild for work it had not done yet, and then
+   * paid for it again afterwards.
+   */
+  atlasRefresh?: boolean;
 }
 
 export interface MaintenanceSuggestedAction {
@@ -378,7 +403,9 @@ export interface MaintenanceTickResult {
   };
   executed: {
     activationDecay: ActivationDecayResult;
-    memoryAtlasRefresh: { documents: number; actions: number; refreshed: boolean; errors?: Array<{ projectId: string; error: string }> };
+    /** Conversations the tick judged over: their episodes are sealed for Dream (#87). */
+    episodeSealing: { idleGapMs: number; idleBefore: number; sealedEpisodes: number };
+    memoryAtlasRefresh: { documents: number; actions: number; refreshed: boolean; /** This tick was told not to run the pass. */ skipped?: boolean; errors?: Array<{ projectId: string; error: string }> };
     memoryAtlasActivationDecay: number;
     memoryAtlasAccessPruned: number;
     reviewQueueAging: {
@@ -677,37 +704,27 @@ export class MemoryKernel {
     // File-backed databases migrate before any Store can inspect an old table.
     // `:memory:` must migrate on the connection retained by FactStore.
     const migrateAfterCoreBootstrap = this.dbPath === ':memory:';
-    let existingSchema = false;
     if (!migrateAfterCoreBootstrap) {
       const migrationDb = new Database(this.dbPath);
       try {
         migrationDb.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-        existingSchema = Boolean(migrationDb.prepare(`
-          SELECT 1 FROM sqlite_master
-          WHERE type='table' AND name NOT LIKE 'sqlite_%'
-          LIMIT 1
-        `).get());
-        if (existingSchema) {
-          const bootstrapRecovery = Boolean(migrationDb.prepare(`
-            SELECT 1 FROM sqlite_master WHERE type='table' AND name='_cogmem_bootstrap_state'
-          `).get());
-          const migrations = bootstrapRecovery ? [migration_0032] : KERNEL_MIGRATIONS;
-          const planner = new SchemaMigrationRunner(migrationDb, migrations);
-          planner.preflight();
-          const needsBackup = planner.plan().some((migration) => migration.requiresBackup);
-          const backupPath = needsBackup && !bootstrapRecovery ? backupDatabase(migrationDb, this.dbPath) : undefined;
-          new SchemaMigrationRunner(migrationDb, migrations, {
-            backupVerified: bootstrapRecovery || !needsBackup || Boolean(backupPath),
-          }).run();
+        if (hasUserSchema(migrationDb)) {
+          // 4.0 creates this file or refuses it; it never upgrades one. See
+          // ADR-0007, and `assertSupportedDatabase` for what a refusal says.
+          assertSupportedDatabase(migrationDb);
         } else {
+          // Dropped first because a creation that was interrupted leaves this
+          // marker behind, and `hasUserSchema` deliberately treats that as a new
+          // database rather than as someone else's file.
           migrationDb.exec(`
+            DROP TABLE IF EXISTS _cogmem_bootstrap_state;
             CREATE TABLE _cogmem_bootstrap_state (
               singleton INTEGER PRIMARY KEY CHECK(singleton=1),
               started_at INTEGER NOT NULL
             );
             INSERT INTO _cogmem_bootstrap_state(singleton,started_at) VALUES(1,unixepoch()*1000);
           `);
-          new SchemaMigrationRunner(migrationDb, [migration_0032], { backupVerified: true }).run();
+          createFinalSchema(migrationDb);
         }
       } finally {
         migrationDb.close();
@@ -716,12 +733,18 @@ export class MemoryKernel {
 
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
+    ensureUsableTempSpace(db);
     this.memoryGraph = new MemoryGraph(db);
     this.eventStore = new EventStore(db, this.encryptionProvider, this.projectClock.timeZone);
     db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
     if ((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys?: number } | undefined)?.foreign_keys !== 1) {
       throw new Error('memory_kernel_foreign_keys_disabled');
     }
+    // A read-only temporary directory makes an ordinary append fail with a message
+    // that blames the database; where the directory is unusable, this connection
+    // keeps its temporary space in memory instead. Where it is usable, nothing
+    // changes.
+    ensureUsableTempSpace(db);
     if (migrateAfterCoreBootstrap) {
       db.exec(`
         CREATE TABLE _cogmem_bootstrap_state (
@@ -730,7 +753,7 @@ export class MemoryKernel {
         );
         INSERT INTO _cogmem_bootstrap_state(singleton,started_at) VALUES(1,unixepoch()*1000);
       `);
-      new SchemaMigrationRunner(db, [migration_0032], { backupVerified: true }).run();
+      createFinalSchema(db);
     }
     const rebuildJobColumns = db.prepare(`PRAGMA table_info(topology_time_rebuild_jobs)`).all() as Array<{ name: string }>;
     if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_token')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_token TEXT`);
@@ -811,6 +834,12 @@ export class MemoryKernel {
     this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
     this.memoryAtlasStore = new MemoryAtlasStore(db, this.projectClock.timeZone);
     this.memoryFrameStore = new MemoryFrameStore(db);
+    // A frame's preference and relationship relations also belong in the belief layer:
+    // the frame answers "what did this episode say", the belief path answers "what is
+    // true now and what did it replace", and that is the one recall reads (#102).
+    this.memoryFrameStore.setFrameActiveListener((frame, now) => {
+      projectFrameRelationsToBeliefs(this.beliefStore, frame, now);
+    });
     this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore, this.memoryFrameStore);
     this.memoryAtlasService = new MemoryAtlasService(this.memoryAtlasStore, this.eventStore);
     this.multidimensionalQueryPlanner = new MultidimensionalQueryPlanner();
@@ -1204,7 +1233,21 @@ export class MemoryKernel {
     }
   }
 
-  recall(query: string, options: BrainRecallOptions = {}) {
+  /**
+   * The evidence layer: governed recall over the raw ledger, compiled memory
+   * and the Atlas. It is a **building block**, not the recall a host calls —
+   * `KernelAgentMemoryBackend.recall()` composes it with graph expansion,
+   * supersession filtering and the context cortex, and that is the one entry
+   * point an agent or a user should use (#105).
+   *
+   * `evidenceFor` rather than a "search" name: `search` is on GLOSSARY's `_Avoid_`
+   * list for Pulse, and CODING_STANDARDS says a new public name never uses an avoided
+   * word. This returns the evidence for one cue — it is not a second Pulse, and it
+   * should not borrow Pulse's rejected synonyms to say so.
+   *
+   * @internal
+   */
+  evidenceFor(query: string, options: BrainRecallOptions = {}) {
     const recallNow = (options as BrainRecallOptions & { now?: number }).now ?? Date.now();
     const recallTimeZone = options.timeZone ?? this.projectClock.timeZone;
     const normalizedOptions: BrainRecallOptions = {
@@ -1292,7 +1335,7 @@ export class MemoryKernel {
       };
     }
 
-    const fallbackEvidence = this.recall(query, {
+    const fallbackEvidence = this.evidenceFor(query, {
       projectId: options.projectId,
       limit,
       includeRawEvidence: true,
@@ -1533,6 +1576,45 @@ export class MemoryKernel {
         }
       })();
       entryCursor = entries[entries.length - 1]!.rowid;
+    }
+  }
+
+  /**
+   * A turn the caller named is an identity, not a label.
+   *
+   * Returns the event ids the turn must be written under, and whether that turn is
+   * already recorded. The ids come from stable fields only: the fallback that named a
+   * turn after `Date.now()` and an incrementing `turnSeq` gave every retry a new
+   * identity, so one conversation landed in the ledger twice (measured: two writes of
+   * one named turn left seven events, the user and assistant rows byte-identical).
+   * Reusing a turn id for different content is a conflict, and it throws here rather
+   * than after the insert.
+   */
+  claimAgentTurn(input: AgentTurnIdentityInput): AgentTurnClaim {
+    const userEventId = agentTurnEventId(input, 1);
+    const assistantEventId = input.assistantText ? agentTurnEventId(input, 2) : undefined;
+    const recordedUser = this.eventStore.getEvent(userEventId);
+    if (!recordedUser) return { userEventId, assistantEventId, replay: false };
+    this.assertAgentTurnIdentity(recordedUser, input, 1);
+    const recordedAssistant = assistantEventId ? this.eventStore.getEvent(assistantEventId) : null;
+    if (assistantEventId && !recordedAssistant) {
+      // The retry carries a reply the first write did not: same turn id, different turn.
+      throw new Error(`agent_turn_identity_conflict:${input.turnId}`);
+    }
+    if (recordedAssistant) this.assertAgentTurnIdentity(recordedAssistant, input, 2);
+    return { userEventId, assistantEventId, replay: true };
+  }
+
+  private assertAgentTurnIdentity(event: MemoryEvent, input: AgentTurnIdentityInput, ordinal: 1 | 2): void {
+    const raw = ordinal === 1 ? input.userText : input.assistantText ?? '';
+    const expectedText = this.piiRedactor ? this.piiRedactor.redact(raw).text : raw;
+    const payload = event.payload as { text?: unknown } | undefined;
+    if (
+      event.turnId !== input.turnId
+      || event.sessionId !== input.sessionId
+      || payload?.text !== expectedText
+    ) {
+      throw new Error(`agent_turn_identity_conflict:${input.turnId}`);
     }
   }
 
@@ -1816,6 +1898,56 @@ export class MemoryKernel {
 
   async runDreamCurator(options: DreamCuratorRunOptions = {}): Promise<DreamCuratorRunResult> {
     return this.dreamCuratorWorker.run(options);
+  }
+
+  /**
+   * One Night: seal what has gone quiet, Dream a bounded number of the sealed
+   * episodes, and project exactly those into the atlas.
+   *
+   * The order matters. Sealing is what makes an episode Dreamable; Dream writes
+   * frames and beliefs and marks the projection dirty; projecting the episodes it
+   * actually processed is what puts yesterday's conversation in front of today's
+   * recall without a corpus-wide rebuild. Running it again with nothing new
+   * seals nothing, dreams nothing and projects nothing.
+   */
+  async runNight(options: { projectId?: string; maxEpisodes?: number; now?: number } = {}): Promise<{
+    tick: MaintenanceTickResult;
+    dream: DreamTickResult;
+    projected: { episodes: number; atlasDocuments: number };
+    reconciled: { refreshed: boolean; documents: number };
+  }> {
+    // No atlas pass inside the tick: this run reconciles once, at the end, over the
+    // frames Dream is about to write. See MaintenanceTickOptions.atlasRefresh.
+    const tick = this.runMaintenanceTick({ projectId: options.projectId, now: options.now, atlasRefresh: false });
+    // The tick seals what has gone quiet as a *soft* seal, which the scheduler
+    // only promotes after a grace period meant to let a conversation resume.
+    // A batch that runs once a night has already waited the idle gap the seal
+    // was based on, so the grace is redundant here and the night's conversations
+    // are dreamable in the same run.
+    this.episodeStore.finalizeMatureSoftSeals({
+      projectId: options.projectId,
+      sealedBefore: options.now ?? Date.now(),
+      now: options.now,
+    });
+    const dream = await this.runDreamTick({ projectId: options.projectId, maxEpisodes: options.maxEpisodes ?? 50, now: options.now });
+    const episodeIds = options.projectId === undefined ? [] : (dream.episodeIds ?? []);
+    const projected = episodeIds.length
+      ? this.memoryAtlasIndexer.projectEpisodes(options.projectId!, episodeIds)
+      : { episodeCount: 0, facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
+    if (projected.episodeCount > 0) this.memoryAtlasStore.aggregateFacetNodeSupport(options.projectId!);
+    // The incremental pass covers the canonical layer only; the frame and action
+    // layers Dream just wrote are still owed. Finishing the run with the
+    // reconciliation pass is what clears the dirty flag, so the next night's tick
+    // does not pay a corpus rebuild for work this run already knew about.
+    const reconciled = options.projectId !== undefined
+      ? this.ensureMemoryAtlas({ projectId: options.projectId })
+      : this.memoryAtlasIndexer.ensureAllFresh();
+    return {
+      tick,
+      dream,
+      projected: { episodes: projected.episodeCount, atlasDocuments: this.memoryAtlasStore.countDocuments(options.projectId) },
+      reconciled: { refreshed: reconciled.refreshed, documents: reconciled.documents },
+    };
   }
 
   async runDreamTick(options: DreamTickOptions = {}): Promise<DreamTickResult> {
@@ -2488,7 +2620,7 @@ export class MemoryKernel {
     return this.memoryAtlasIndexer.rebuild(options);
   }
 
-  reindexMemoryAtlas(options: { projectId: string; eventId?: string; episodeId?: string }): { projectId: string; episodeIds: string[]; refreshed: boolean; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
+  reindexMemoryAtlas(options: { projectId: string; eventId?: string; episodeId?: string }): { projectId: string; episodeIds: string[]; projectionCurrent: boolean; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
     return this.memoryAtlasIndexer.reindex(options);
   }
 
@@ -2652,12 +2784,32 @@ export class MemoryKernel {
 
   promoteDreamCandidates(options: DreamGovernanceRunOptions = {}): DreamGovernanceRunResult {
     this.deepWriteCandidateStore.recoverStalePromoting(Date.now() - 5 * 60_000, Date.now());
+    const countNeurons = (): number => {
+      try {
+        const row = this.factStore.getDatabase()
+          .prepare(`SELECT COUNT(*) AS total FROM neurons WHERE is_deleted=0`)
+          .get() as { total?: number } | null;
+        return Number(row?.total ?? 0);
+      } catch {
+        return 0;
+      }
+    };
+    const neuronsBefore = countNeurons();
     const decisions = this.deepWritePromotionPolicy.promotePending(options.limit ?? 100, {
       projectId: options.projectId,
     });
+    // Named explicitly: a prefix match would silently start counting a future
+    // outcome called `promote_*` that is not a promotion.
+    const promoting = new Set<DeepWritePromotionDecision['outcome']>(['promote_verified', 'promote_provisional']);
+    const promotedCandidates = decisions.filter((decision) => promoting.has(decision.outcome)).length;
     return {
       projectId: options.projectId,
       decisions,
+      // Promotion records a governance decision on a candidate; it does not
+      // create neurons. Reporting only `queue.promoted` read as "92 memories
+      // entered the compiled layer" (#105).
+      promotedCandidates,
+      neuronsWritten: countNeurons() - neuronsBefore,
       queue: this.getDreamCandidateQueue(options.projectId),
     };
   }
@@ -2851,19 +3003,43 @@ export class MemoryKernel {
       floor: options.activationFloor,
       now: ranAt,
     });
+    // `refreshed: false` means "the projection was already current". A pass that did not
+    // run and a pass that failed are two further states, and both say which they are:
+    // reporting either as "current" is how a missing pass reads as a working one.
+    const passDidNotProduce = (state: { skipped?: true; errors?: Array<{ projectId: string; error: string }> }) => ({
+      documents: this.memoryAtlasStore.countDocuments(projectId),
+      actions: 0,
+      refreshed: false,
+      ...state,
+    });
+    const runPass = (): MaintenanceTickResult['executed']['memoryAtlasRefresh'] => projectId !== undefined
+      ? { ...this.ensureMemoryAtlas({ projectId }), errors: [] }
+      : this.memoryAtlasIndexer.ensureAllFresh();
     let memoryAtlasRefresh: MaintenanceTickResult['executed']['memoryAtlasRefresh'];
     try {
-      memoryAtlasRefresh = projectId !== undefined
-        ? { ...this.ensureMemoryAtlas({ projectId }), errors: [] }
-        : this.memoryAtlasIndexer.ensureAllFresh();
+      memoryAtlasRefresh = options.atlasRefresh === false ? passDidNotProduce({ skipped: true }) : runPass();
     } catch (error) {
-      memoryAtlasRefresh = { documents: this.memoryAtlasStore.countDocuments(projectId), actions: 0, refreshed: false,
-        errors: [{ projectId: projectId ?? '__all__', error: error instanceof Error ? error.message : String(error) }] };
+      memoryAtlasRefresh = passDidNotProduce({
+        errors: [{ projectId: projectId ?? '__all__', error: error instanceof Error ? error.message : String(error) }],
+      });
     }
     const memoryAtlasActivationDecay = this.memoryAtlasStore.decay(projectId, options.activationDecayFactor ?? 0.85, ranAt);
     const memoryAtlasAccessPruned = this.memoryAtlasStore.cleanupAccess({
       projectId, before: ranAt - (options.atlasAccessRetentionMs ?? 90 * 24 * 60 * 60 * 1000),
     });
+    // A conversation that has gone quiet has ended, and that is what makes its episode
+    // something Dream can compile: Dream processes sealed episodes only, and until
+    // this ran nothing sealed a host's idle ones — a turn written over MCP was stored,
+    // searchable, and unreachable by recall (#87, ADR-0011). The window is the boundary
+    // policy's own idle gap, the same one the assembler audits boundaries against, not
+    // a second constant. A turn is never sealed on its own: this seals conversations.
+    const episodeIdleGapMs = this.episodeBoundaryPolicy.config.maxIdleGapMs;
+    const episodeIdleBefore = ranAt - episodeIdleGapMs;
+    const episodeSealing = {
+      idleGapMs: episodeIdleGapMs,
+      idleBefore: episodeIdleBefore,
+      sealedEpisodes: this.episodeStore.sealIdleEpisodes({ projectId, idleBefore: episodeIdleBefore, now: ranAt }).length,
+    };
     const confirmationTtlMs = options.confirmationTtlMs ?? 30 * 24 * 60 * 60 * 1000;
     const reviewQueueAging = this.deepWriteCandidateStore.expireNeedsConfirmation({
       projectId,
@@ -2928,9 +3104,8 @@ export class MemoryKernel {
       suggestedActions.push(suggestedAction('resolve_entities', 'cogmem', ['memory', 'map', '--json'], `${entityConflicts} active entity alias conflicts need host or agent review.`));
     }
     if (staleVectors > 0) {
-      suggestedActions.push(suggestedAction('re_embed', 'cogmem-re-embed', [
-        'run', ...(projectId !== undefined ? ['--project', projectId] : [])
-      ], `${staleVectors} embeddings are stale for the configured embedding model.`));
+      suggestedActions.push(suggestedAction('re_embed', 'cogmem-re-embed', ['status'],
+        `${staleVectors} embeddings are stale for the configured embedding model; re-embedding runs in the host through ReEmbeddingPipeline.run(), and this command reports backfill progress.`));
     }
     if (unboundRawEvents > 0) {
       suggestedActions.push(suggestedAction('bind_raw_events', 'cogmem', [
@@ -2967,6 +3142,7 @@ export class MemoryKernel {
       },
       executed: {
         activationDecay,
+        episodeSealing,
         memoryAtlasRefresh,
         memoryAtlasActivationDecay,
         memoryAtlasAccessPruned,
@@ -3265,7 +3441,23 @@ export class MemoryKernel {
     })();
 
     db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
-    db.exec(`VACUUM`);
+    // #64: VACUUM needs temporary space, and the default is a file in a directory
+    // the process may not be able to write, which surfaces as `unable to open
+    // database file` and blames the database. In memory for the duration of the
+    // rebuild, so forgetting a user works on a read-only temp filesystem; the
+    // previous setting is restored afterwards, because this is the kernel's own
+    // connection and an in-memory temp store is the wrong default for large sorts.
+    const previousTempStore = (db.prepare('PRAGMA temp_store').get() as { temp_store?: number } | undefined)?.temp_store ?? 0;
+    db.exec('PRAGMA temp_store = MEMORY');
+    try {
+      db.exec(`VACUUM`);
+    } catch (error) {
+      // #64: as in snapshot export, a temp-file failure here is reported by
+      // SQLite as a database problem. Name it.
+      throw describeSqliteTempDirectoryFailure('forgetting a user', error) ?? error;
+    } finally {
+      db.exec(`PRAGMA temp_store = ${previousTempStore}`);
+    }
 
     for (const neuronId of neuronIds) {
       this.vectorStore.removePoint(neuronId);
@@ -3406,7 +3598,18 @@ export class MemoryKernel {
   }
 }
 
+/**
+ * SQLite creates the database file but not its parent directories, so a
+ * `--db` pointing at a fresh path failed with `unable to open database file`
+ * on any machine that had not run `cogmem init` against that path yet.
+ */
+function ensureDatabaseDirectory(dbPath?: string): void {
+  if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return;
+  mkdirSync(dirname(resolve(dbPath)), { recursive: true });
+}
+
 export function createMemoryKernel(options: MemoryKernelOptions = {}): MemoryKernel {
+  ensureDatabaseDirectory(options.dbPath);
   return new MemoryKernel(options);
 }
 
@@ -3683,6 +3886,31 @@ function stringifyToolPayload(value: unknown): string {
   }
 }
 
-function cliArg(value: string): string {
-  return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+export interface AgentTurnIdentityInput {
+  projectId?: string;
+  agentId: string;
+  sessionId: string;
+  turnId: string;
+  userText: string;
+  assistantText?: string;
+}
+
+export interface AgentTurnClaim {
+  userEventId: string;
+  assistantEventId?: string;
+  replay: boolean;
+}
+
+/**
+ * Identity for one message of a named turn.
+ *
+ * Stable inputs only — project, agent, session, the caller's turn id, and which
+ * message of the turn it is. Not the clock, not the turn sequence, not the text:
+ * those change between an attempt and its retry, which is how a retry became a
+ * duplicate (#113).
+ */
+function agentTurnEventId(input: AgentTurnIdentityInput, ordinal: 1 | 2): string {
+  return `evt-turn-${createHash('sha256')
+    .update(JSON.stringify([input.projectId ?? '', input.agentId, input.sessionId, input.turnId, ordinal]))
+    .digest('hex')}`;
 }

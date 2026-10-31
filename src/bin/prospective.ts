@@ -2,6 +2,7 @@
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 import type { ProspectiveMemoryStatus, ProspectiveMemoryType } from '../prospective/index.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
 
 interface Args {
   command?: string;
@@ -37,6 +38,7 @@ function usage(): string {
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['at', 'config', 'db', 'due', 'evidence', 'id', 'json', 'key', 'project', 'status', 'title', 'type', 'until'] });
   const args = parseArgs(process.argv.slice(2));
   if (!args.command || args.command === 'help' || args.values.has('help')) {
     console.log(usage());

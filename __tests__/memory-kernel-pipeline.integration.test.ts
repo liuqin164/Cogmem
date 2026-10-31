@@ -4,9 +4,13 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function tempDbPath(): string {
-  return join(tmpdir(), `memory-kernel-${randomUUID()}.sqlite`);
+  // A file, not a directory — which is why the guard's first version missed it: it
+  // looked for `mkdtemp` calls and this never made one. The run root removes it
+  // either way.
+  return join(makeTempDir('memory-kernel-'), 'memory.sqlite');
 }
 
 test('MemoryKernel.ingest runs the v1.9 write pipeline, not a minimal neuron insert', async () => {

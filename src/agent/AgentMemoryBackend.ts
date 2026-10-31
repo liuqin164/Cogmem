@@ -9,7 +9,9 @@ import {
   type MemoryEventSourceRange,
   type SourceContextWindowMetadata,
 } from '../recall/SourceContextMetadata.js';
+import { readRedactionMarks } from '../governance/PiiRedactor.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
+import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
 import type { StrategyRetrievalPolicy } from '../strategy/StrategyCapsule.js';
 import {
@@ -20,6 +22,7 @@ import {
 import { extractEntityCues } from '../utils/EntityCueExtractor.js';
 import { inferActionKinds } from '../utils/ActionKindRegistry.js';
 import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
+import { cliArg } from '../utils/CliArgument.js';
 
 export type AgentTurnIngestMode =
   | 'immediate_compile'
@@ -32,7 +35,8 @@ export type AgentTurnCompileReason =
   | 'durable_signal_detected'
   | 'low_signal_turn'
   | 'raw_archive_only'
-  | 'raw_then_dream';
+  | 'raw_then_dream'
+  | 'duplicate_turn';
 
 export interface AgentTurnMemory {
   agentId: string;
@@ -59,6 +63,12 @@ export interface AgentTurnMemoryResult {
   compiled: boolean;
   rawEventIds: string[];
   compiledNeuronId?: string;
+  /**
+   * This turn was already recorded under the caller's turn id, so nothing was written.
+   * `compiled` then reports what *this* call did — nothing — not what the first call did;
+   * the first call's compilation already exists and is not repeated.
+   */
+  duplicate?: boolean;
 }
 
 export interface AgentRecallQuery {
@@ -208,6 +218,12 @@ export interface AgentRecallItem {
   confidence?: number;
   whyMatched?: string;
   canAnswerExactQuote?: boolean;
+  /**
+   * Present when this item's text has been through redaction: how many values were
+   * removed and how many characters they held. Without it a caller cannot tell an
+   * altered text from the text that was written (#115).
+   */
+  redaction?: { count: number; chars: number };
 }
 
 export interface AgentRecallResult {
@@ -311,11 +327,34 @@ export class KernelAgentMemoryBackend {
   async rememberTurnWithResult(turn: AgentTurnMemory): Promise<AgentTurnMemoryResult> {
     const occurredAt = turn.timestamp ?? Date.now();
     const threadId = turn.threadId || turn.sessionId;
-    const turnSeq = turn.turnSeq ?? this.kernel.eventStore.getNextTurnSeq(threadId, turn.projectId ?? '');
-    const turnId = turn.turnId || `${turn.agentId}:${turn.sessionId}:${turnSeq}:${occurredAt}`;
     const sourceId = `${turn.agentId}:${turn.sessionId}`;
     const mode = turn.ingestMode ?? 'immediate_compile';
+    // A named turn is an identity: the same id means the same turn, so a retry returns
+    // what is already recorded instead of writing it again. This runs before the turn
+    // sequence is drawn, because a replay must not consume one (#113).
+    const claim = turn.turnId
+      ? this.kernel.claimAgentTurn({
+        projectId: turn.projectId,
+        agentId: turn.agentId,
+        sessionId: turn.sessionId,
+        turnId: turn.turnId,
+        userText: turn.userText,
+        assistantText: turn.assistantText,
+      })
+      : undefined;
+    if (claim?.replay) {
+      return {
+        mode,
+        reason: 'duplicate_turn',
+        compiled: false,
+        duplicate: true,
+        rawEventIds: [claim.userEventId, claim.assistantEventId].filter((id): id is string => Boolean(id)),
+      };
+    }
+    const turnSeq = turn.turnSeq ?? this.kernel.eventStore.getNextTurnSeq(threadId, turn.projectId ?? '');
+    const turnId = turn.turnId || `${turn.agentId}:${turn.sessionId}:${turnSeq}:${occurredAt}`;
     const userEvent = this.kernel.recordRawEvent({
+      eventId: claim?.userEventId,
       projectId: turn.projectId,
       workspaceId: turn.workspaceId,
       threadId,
@@ -334,6 +373,7 @@ export class KernelAgentMemoryBackend {
     });
     const assistantEvent = turn.assistantText
       ? this.kernel.recordRawEvent({
+        eventId: claim?.assistantEventId,
         projectId: turn.projectId,
         workspaceId: turn.workspaceId,
         threadId,
@@ -557,7 +597,21 @@ export class KernelAgentMemoryBackend {
     }
   }
 
+  /**
+   * Recall with every item marked for what is missing from its text.
+   *
+   * Redaction happens when a turn is written, so by the time an item is built its text
+   * is already altered — and the lane that built it decides nothing about whether the
+   * caller can tell. One decoration here covers the raw ledger, compiled memory and the
+   * Atlas alike; decorating the raw builder is how the raw lane got it and the compiled
+   * lane did not (#115).
+   */
   recall(query: AgentRecallQuery): AgentRecallResult {
+    const result = this.recallCore(query);
+    return { ...result, items: (result.items ?? []).map(withRedactionMarks) };
+  }
+
+  private recallCore(query: AgentRecallQuery): AgentRecallResult {
     const queryPlan = compileAgentRecallQuery({
       query: query.query,
       intent: query.intent,
@@ -567,21 +621,27 @@ export class KernelAgentMemoryBackend {
     const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
     const allowsCompiled = laneAllowed(query.retrievalPolicy, 'compiled');
     const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
-    const earlyAtlasItems = query.projectId !== undefined && allowsGraph
-      ? this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource)
-      : [];
+    // Only the three intents below merge atlas items into their result. The
+    // ordinary recall path reads the atlas itself (multidimensionalRecall), so
+    // computing these up front made every recall pay for a second atlas read —
+    // measured at half of a 1.2 s query on the year-scale corpus — and throw the
+    // result away.
+    const withEarlyAtlasItems = (result: AgentRecallResult): AgentRecallResult =>
+      query.projectId === undefined || !allowsGraph
+        ? result
+        : this.withAtlasItems(result, this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource), limit);
     if (queryPlan.intent === 'previous_session_summary') {
-      return this.withAtlasItems(this.recallPreviousSession(query, queryPlan), earlyAtlasItems, limit);
+      return withEarlyAtlasItems(this.recallPreviousSession(query, queryPlan));
     }
     if (queryPlan.intent === 'forensic_quote') {
-      return this.withAtlasItems(this.recallForensicQuote(query, queryPlan), earlyAtlasItems, limit);
+      return withEarlyAtlasItems(this.recallForensicQuote(query, queryPlan));
     }
     if (queryPlan.intent === 'historical_discussion' || queryPlan.intent === 'action_history') {
-      return this.withAtlasItems(this.recallHistoricalDiscussion(query, queryPlan), earlyAtlasItems, limit);
+      return withEarlyAtlasItems(this.recallHistoricalDiscussion(query, queryPlan));
     }
     const retrievalLimit = Math.max(limit * 4, 24);
     const multidimensionalRecall = query.projectId !== undefined && allowsGraph
-      ? this.kernel.recall(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone })
+      ? this.kernel.evidenceFor(queryPlan.primarySearchText, { projectId: query.projectId, limit: retrievalLimit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone })
       : undefined;
     const atlasItems = allowsGraph
       ? [
@@ -665,7 +725,7 @@ export class KernelAgentMemoryBackend {
     }
 
     const fallbackItems = allowsCompiled
-      ? this.filterAgentEvidence((multidimensionalRecall ?? this.kernel.recall(queryPlan.primarySearchText, {
+      ? this.filterAgentEvidence((multidimensionalRecall ?? this.kernel.evidenceFor(queryPlan.primarySearchText, {
         projectId: query.projectId,
         limit: retrievalLimit,
         now: query.now,
@@ -973,7 +1033,7 @@ export class KernelAgentMemoryBackend {
     relaxationTrace: MemoryAtlasRelaxationStep[];
   } {
     try {
-      const recall = this.kernel.recall(query.query, { projectId: query.projectId, limit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
+      const recall = this.kernel.evidenceFor(query.query, { projectId: query.projectId, limit, includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
       const atlas = recall.atlas;
       const plannedCards = atlas?.cards ?? [];
       const legacyAtlas = this.kernel.graphExplore(query.query, {
@@ -1101,6 +1161,10 @@ export class KernelAgentMemoryBackend {
         startTime: query.startTime,
         endTime: query.endTime,
         limit,
+        // Recall wants the event that answers the question. Chronological order
+        // here made the oldest match the best match, so the answer a query had
+        // found was ranked behind whatever happened first.
+        orderBy: 'relevance',
       });
       for (const event of events) {
         if (seen.has(event.eventId)) continue;
@@ -1137,6 +1201,20 @@ export class KernelAgentMemoryBackend {
   }
 
   private rawLedgerFallbackItemsForQuery(
+    queryPlan: AgentRecallQueryPlan,
+    query: AgentRecallQuery,
+    limit: number
+  ): AgentRecallItem[] {
+    const scoped = this.collectRawLedgerItems(queryPlan, query, limit);
+    if (scoped.length > 0 || !query.threadId) return scoped;
+    // A thread is one conversation, and recall exists to reach across them. A
+    // thread with no evidence of its own falls back to the whole project
+    // instead of answering nothing.
+    return this.collectRawLedgerItems(queryPlan, { ...query, threadId: undefined }, limit)
+      .map((item) => ({ ...item, tags: [...(item.tags ?? []), 'cross_thread'] }));
+  }
+
+  private collectRawLedgerItems(
     queryPlan: AgentRecallQueryPlan,
     query: AgentRecallQuery,
     limit: number
@@ -1218,7 +1296,16 @@ export class KernelAgentMemoryBackend {
     if (rawFallbackItems.length === 0) return false;
     const rawHasCue = this.itemsContainRecallCue(rawFallbackItems, queryPlan);
     if (!rawHasCue) return false;
-    if (!this.itemsContainRecallCue(candidateItems, queryPlan)) return true;
+
+    // Ask which lane holds the better match, not whether each lane holds a match.
+    // The compiled lane is a broad sample of the whole project, so it contains any
+    // common word and "does this set mention the query" is true for every query —
+    // measured: of eleven questions whose raw lane carried the cues, the compiled
+    // lane carried them eleven times too, so the preference below never fired and
+    // the compiled lane won by default while the raw lane held the record.
+    const rawMatch = this.bestRecallCueMatch(rawFallbackItems, queryPlan);
+    const candidateMatch = this.bestRecallCueMatch(candidateItems, queryPlan);
+    if (rawMatch > candidateMatch) return true;
 
     if (queryPlan.temporalHints.includes('past')) {
       const rawLead = rawFallbackItems.find((item) => this.itemsContainRecallCue([item], queryPlan));
@@ -1231,12 +1318,38 @@ export class KernelAgentMemoryBackend {
     return false;
   }
 
+  /**
+   * How many of the query's cues the best item in this set carries.
+   *
+   * A set-wide yes/no cannot compare two lanes of different sizes: a large diverse
+   * set answers yes to everything. Counting the best single item's coverage says
+   * which lane actually has the memory being asked about.
+   */
+  private bestRecallCueMatch(items: AgentRecallItem[], queryPlan: AgentRecallQueryPlan): number {
+    const cues = this.recallCueTerms(queryPlan);
+    if (cues.length === 0) return 0;
+    let best = 0;
+    for (const item of items) {
+      const haystack = this.itemSearchableText(item).toLowerCase();
+      const matched = cues.filter((cue) => haystack.includes(cue.toLowerCase())).length;
+      if (matched > best) best = matched;
+    }
+    return best;
+  }
+
   private itemsContainRecallCue(items: AgentRecallItem[], queryPlan: AgentRecallQueryPlan): boolean {
     const cues = this.recallCueTerms(queryPlan);
     if (cues.length === 0) return true;
+    // One shared word is not evidence of relevance. "CI" appears in nearly every
+    // review comment, so a single-word match marked the whole compiled lane as an
+    // answer and kept the raw lane — which held the record — from ever being read.
+    // An item carries the query when it holds more than one of its cues, or when
+    // the query named only one thing and that thing is present.
+    const required = cues.length === 1 ? 1 : 2;
     return items.some((item) => {
       const haystack = this.itemSearchableText(item).toLowerCase();
-      return cues.some((cue) => haystack.includes(cue.toLowerCase()));
+      const matched = cues.filter((cue) => haystack.includes(cue.toLowerCase())).length;
+      return matched >= required;
     });
   }
 
@@ -1285,16 +1398,27 @@ export class KernelAgentMemoryBackend {
     const prioritizedPrimary = semanticAtlas && !hasSemanticAtlas && !hasScopedPrimary && primary.length >= limit
       ? [...primary.slice(0, Math.max(0, limit - 1)), semanticAtlas]
       : primary;
-    const out: AgentRecallItem[] = [];
+    const merged: AgentRecallItem[] = [];
     const seen = new Set<string>();
     for (const item of [...prioritizedPrimary, ...secondary.filter((candidate) => candidate !== semanticAtlas)]) {
       const keys = [item.canonicalId, item.sourceAnchor?.eventId, item.id].filter((value): value is string => Boolean(value));
       if (keys.some((key) => seen.has(key))) continue;
       for (const key of keys) seen.add(key);
-      out.push(item);
-      if (out.length >= limit) break;
+      merged.push(item);
     }
-    return out;
+    // Supersession is decided before the list is cut: a stale statement that
+    // occupies a slot is a stale statement the statement replacing it cannot
+    // take (#72, measured at 95.8% leakage when nothing tagged the old value).
+    return filterSuperseded(merged, (item) => ({
+      id: item.id,
+      content: item.text,
+      createdAt: item.sourceAnchor?.eventOrdinal ?? item.sourceAnchor?.turnSeq ?? 0,
+      // Deliberately no `topicPath`: on this path many unrelated records share
+      // one, and grouping by it collapsed the recall floor from 4/18 to 2/18.
+      // The subject phrase is the signature the rule is stated in.
+      tags: item.tags,
+      projectId: item.projectId,
+    })).slice(0, limit);
   }
 
   private withAtlasItems(result: AgentRecallResult, atlasItems: AgentRecallItem[], limit: number): AgentRecallResult {
@@ -1303,7 +1427,7 @@ export class KernelAgentMemoryBackend {
   }
 
   private atlasItemsForAgentQuery(searchText: string, query: AgentRecallQuery, allowsRawSource: boolean): AgentRecallItem[] {
-    const recall = this.kernel.recall(searchText, { projectId: query.projectId, limit: Math.max((query.limit ?? 5) * 4, 24), includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
+    const recall = this.kernel.evidenceFor(searchText, { projectId: query.projectId, limit: Math.max((query.limit ?? 5) * 4, 24), includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
     const cards = (recall.atlas?.cards ?? []).map((card) => this.toAgentRecallItemFromAtlasCard(card, query));
     const nodes = (recall.atlas?.nodes ?? [])
       .filter((node) => ['actor', 'event', 'task', 'object', 'location', 'state', 'project'].includes(node.nodeType))
@@ -1465,11 +1589,27 @@ export class KernelAgentMemoryBackend {
         byTurn.set(key, event);
       }
     }
+    // Deliberately re-ranked. The search orders by BM25 relevance, which alone
+    // ranks a second-hand retelling above the conversation it retells — this sort
+    // by cue coverage is what makes the original user turn win (pinned by
+    // `agent-nerve-system`: "prefers the original user anchor"). Removing it
+    // raises raw-lane delivery from 2 to 4 on the evaluation corpus and changes
+    // the end-to-end score not at all, because searching by relevance and
+    // preferring a primary source are different questions and this ordering only
+    // answers the second. A fix has to combine them — preference first, the
+    // search's rank within a preference class — rather than drop one.
+    // Preference first, the search's ranking within it.
+    //
+    // Ranking by cue coverage alone discards the BM25 order the search produced,
+    // and ranking by relevance alone puts a second-hand retelling above the
+    // conversation it retells. They are different questions — which source is
+    // trustworthy, and which event is relevant — so the order answers them in that
+    // order and keeps the search's ranking inside each class rather than throwing
+    // it away.
+    const searchRank = new Map(events.map((event, index) => [event.eventId, index]));
     return [...byTurn.values()].sort((a, b) => (
-      this.rawEventCueScore(b, queryPlan) - this.rawEventCueScore(a, queryPlan)
-      || (a.globalSeq || 0) - (b.globalSeq || 0)
-      || (a.threadSeq || 0) - (b.threadSeq || 0)
-      || (a.eventOrdinal || 0) - (b.eventOrdinal || 0)
+      this.quoteEventPriority(a, queryPlan) - this.quoteEventPriority(b, queryPlan)
+      || (searchRank.get(a.eventId) ?? Number.MAX_SAFE_INTEGER) - (searchRank.get(b.eventId) ?? Number.MAX_SAFE_INTEGER)
       || a.eventId.localeCompare(b.eventId)
     ));
   }
@@ -2067,6 +2207,12 @@ function padDatePart(value: number): string {
   return String(value).padStart(2, '0');
 }
 
-function cliArg(value: string): string {
-  return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+/**
+ * Mark an item whose text has been through redaction, without touching the text.
+ * A caller that cannot see the difference between what was written and what it was
+ * given will quote the marker back as if it were the value (#115).
+ */
+function withRedactionMarks(item: AgentRecallItem): AgentRecallItem {
+  const redaction = readRedactionMarks(item.text);
+  return redaction.count > 0 ? { ...item, redaction } : item;
 }

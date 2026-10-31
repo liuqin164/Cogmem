@@ -15,16 +15,19 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { registerAgent } from '../mcp/AgentRegistry.js';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { dirname, resolve, join } from 'node:path';
 
-import { defaultCogmemHome } from '../config/CogmemConfig.js';
+import { defaultCogmemConfigPath, defaultCogmemHome, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
+import { ensureCogmemShim, installGateStep, resolveCogmemInvocation } from '../install/InstallSteps.js';
 import {
   DEFAULT_VECTOR_DIMENSION,
   HIGH_VECTOR_DIMENSION_THRESHOLD,
   vectorDimensionWarningMessage,
 } from '../config/VectorDimension.js';
+import { assertCliArgs } from './CliArgs.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -54,6 +57,18 @@ interface HermesDetection {
   hasSessionsDir: boolean;
 }
 
+interface PiDetection {
+  detected: boolean;
+  homeDir: string;
+  hasMcpConfig: boolean;
+  hasAuth: boolean;
+  hasAgentSkillsDir: boolean;
+}
+
+/** The hosts a run may wire. One list, so "detected", "requested" and "enabled" agree. */
+const HOST_NAMES = ['openclaw', 'hermes', 'pi'] as const;
+type HostName = typeof HOST_NAMES[number];
+
 interface WizardConfig {
   // Core
   dbPath: string;
@@ -80,6 +95,7 @@ interface WizardConfig {
   encryptionPassphrase: string;
   // OpenClaw
   openClawEnabled: boolean;
+  piEnabled: boolean;
   // Hermes
   hermesEnabled: boolean;
 }
@@ -90,8 +106,36 @@ interface InitArgs {
   scope: 'global' | 'project';
   dryRun: boolean;
   yes: boolean;
-  agent: 'auto' | 'openclaw' | 'hermes' | 'none';
+  json: boolean;
+  agent: 'auto' | 'none' | HostName;
+  /**
+   * The hosts this run was explicitly told to wire. Empty for `auto` and `none`,
+   * which is the difference between "the operator named these" and "detection
+   * suggested something" — only the first may write an integration unattended
+   * (ADR-0003).
+   */
+  requestedHosts: HostName[];
+  /** True when --agent was passed, so the wizard may still offer a detected host. */
   vectorDimension?: number;
+  probeOllama: boolean;
+  /** `--register-agent <hostId>`, repeatable. Registration is not the wizard. */
+  registerAgents: string[];
+  /** `--rotate`: replace an existing agent's credential instead of refusing. */
+  rotateAgents: boolean;
+  /** `--project` for the registered agents; defaults to each agent's hostId. */
+  registerProjectId: string;
+}
+
+/**
+ * A Human-required setting met without a human: the value fell back to a
+ * conservative default, and the report names the setting and the command that
+ * sets it. Never a key, never a passphrase. ADR-0003.
+ */
+interface SettingWarning {
+  code: string;
+  setting: string;
+  message: string;
+  command: string;
 }
 
 function readArgs(argv: string[]): InitArgs {
@@ -103,17 +147,61 @@ function readArgs(argv: string[]): InitArgs {
     if (index === -1) return fallback;
     return argv[index + 1] || fallback;
   };
-  const agent = readValue('--agent', 'auto');
-  const scope = readValue('--scope', 'global');
+  const yes = argv.includes('--yes') || argv.includes('-y');
+  // Host detection is advice, not a decision. An unattended run configures no
+  // host unless one was named; the interactive wizard may still offer a
+  // detected host, because a human confirms it. ADR-0003.
+  const agentRaw = readValue('--agent', yes ? 'none' : 'auto');
+  // `--agent` names hosts, so it accepts a list: `--agent openclaw,pi`, or `all`.
+  // A value this command does not know is refused rather than quietly read as
+  // `auto` — that is how `--agent pi` used to look accepted and do nothing.
+  const requestedHosts: HostName[] = [];
+  let agent: InitArgs['agent'] = 'auto';
+  if (agentRaw === 'auto' || agentRaw === 'none') {
+    agent = agentRaw;
+  } else if (agentRaw === 'all') {
+    requestedHosts.push(...HOST_NAMES);
+    agent = HOST_NAMES[0];
+  } else {
+    const names = agentRaw.split(',').map((part) => part.trim()).filter(Boolean);
+    const unknown = names.filter((name) => !(HOST_NAMES as readonly string[]).includes(name));
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown --agent value: ${unknown.join(', ')}. Expected auto, none, all, or a comma-separated list of ${HOST_NAMES.join(', ')}.`,
+      );
+    }
+    for (const name of names) if (!requestedHosts.includes(name as HostName)) requestedHosts.push(name as HostName);
+    // Kept for the readers that ask "was a single host named": with a list, the
+    // first name is the historical field, and `requestedHosts` is the authority.
+    agent = requestedHosts[0] ?? 'auto';
+  }
+  // The Operator path serves a machine (global); the Agent path serves the
+  // workspace it was pointed at (project). --scope overrides either.
+  const scope = readValue('--scope', yes ? 'project' : 'global');
   const vectorDimension = parseOptionalPositiveInteger(readValue('--vector-dimension', ''), '--vector-dimension');
+  const registerAgents: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] !== '--register-agent') continue;
+    const value = argv[index + 1];
+    if (!value || value.startsWith('--')) {
+      throw new Error('--register-agent needs a hostId, for example --register-agent bot-a');
+    }
+    registerAgents.push(value);
+  }
   return {
     configPath: readValue('--config', ''),
     homePath: readValue('--home', ''),
     scope: scope === 'project' ? 'project' : 'global',
     dryRun: argv.includes('--dry-run'),
-    yes: argv.includes('--yes') || argv.includes('-y'),
-    agent: agent === 'openclaw' || agent === 'hermes' || agent === 'none' ? agent : 'auto',
+    yes,
+    json: argv.includes('--json'),
+    agent,
+    requestedHosts,
     vectorDimension,
+    probeOllama: !argv.includes('--no-probe'),
+    registerAgents,
+    rotateAgents: argv.includes('--rotate'),
+    registerProjectId: readValue('--project', ''),
   };
 }
 
@@ -138,27 +226,29 @@ async function confirm(question: string, defaultYes = false): Promise<boolean> {
 
 // ─── Backend detection ────────────────────────────────────────────────────────
 
-async function detectBackends(): Promise<DetectionResult> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2500);
+async function detectBackends(probeOllama = true): Promise<DetectionResult> {
   let ollamaAvailable = false;
   let ollamaModels: string[] = [];
 
-  try {
-    const res = await fetch('http://localhost:11434/api/tags', {
-      signal: controller.signal,
-    });
-    if (res.ok) {
-      const payload = await res.json() as { models?: Array<{ name?: string }> };
-      ollamaModels = (payload.models ?? [])
-        .map((m) => m.name ?? '')
-        .filter((n) => n.length > 0);
-      ollamaAvailable = true;
+  if (probeOllama) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    try {
+      const res = await fetch('http://localhost:11434/api/tags', {
+        signal: controller.signal,
+      });
+      if (res.ok) {
+        const payload = await res.json() as { models?: Array<{ name?: string }> };
+        ollamaModels = (payload.models ?? [])
+          .map((m) => m.name ?? '')
+          .filter((n) => n.length > 0);
+        ollamaAvailable = true;
+      }
+    } catch {
+      // Ollama not running — fine
+    } finally {
+      clearTimeout(timer);
     }
-  } catch {
-    // Ollama not running — fine
-  } finally {
-    clearTimeout(timer);
   }
 
   return {
@@ -198,6 +288,30 @@ function detectHermes(cwd: string, env = process.env): HermesDetection {
   const hasSessionsDir = existsSync(join(root, 'sessions')) || existsSync(join(root, 'memories', 'sessions'));
   const detected = hasConfig || hasMemoriesDir || hasSkillsDir || hasProfile || hasSessionsDir;
   return { detected, homeDir: root, hasConfig, hasMemoriesDir, hasSkillsDir, hasProfile, hasSessionsDir };
+}
+
+/**
+ * Whether pi is on this machine.
+ *
+ * pi's own home holds the two files that make it an installation rather than a name:
+ * `~/.pi/agent/mcp.json` and an auth file. `~/.agents/skills/` is reported too because
+ * it is where pi looks for skills, but it does **not** decide on its own — that
+ * location belongs to the Agent Skills standard and another tool may own it.
+ */
+function detectPi(env = process.env): PiDetection {
+  const home = resolve(env.HOME || homedir());
+  const piHome = join(home, '.pi');
+  const agentDir = join(piHome, 'agent');
+  const hasMcpConfig = existsSync(join(agentDir, 'mcp.json'));
+  const hasAuth = existsSync(join(agentDir, 'auth.json')) || existsSync(join(piHome, 'auth.json'));
+  const hasAgentSkillsDir = existsSync(join(home, '.agents', 'skills'));
+  return {
+    detected: hasMcpConfig || hasAuth,
+    homeDir: piHome,
+    hasMcpConfig,
+    hasAuth,
+    hasAgentSkillsDir,
+  };
 }
 
 // ─── Model suggestion helpers ─────────────────────────────────────────────────
@@ -311,10 +425,12 @@ function suggestReasoningModel(det: DetectionResult): {
 
 function tick(ok: boolean): string { return ok ? '✓' : '✗'; }
 
-function printDetection(det: DetectionResult): void {
+function printDetection(det: DetectionResult, probed = true): void {
   console.log('');
   console.log('  Detection results:');
-  if (det.ollamaAvailable) {
+  if (!probed) {
+    console.log('    Ollama    – skipped (--no-probe)');
+  } else if (det.ollamaAvailable) {
     console.log(`    Ollama    ${tick(true)} running — ${det.ollamaModels.length} model(s): ${det.ollamaModels.slice(0, 4).join(', ')}${det.ollamaModels.length > 4 ? ' …' : ''}`);
   } else {
     console.log(`    Ollama    ${tick(false)} not running (install: https://ollama.com)`);
@@ -567,7 +683,7 @@ async function stepGovernance(): Promise<{
 
 async function stepOpenClaw(oclaw: OpenClawDetection): Promise<boolean> {
   console.log('');
-  console.log('  ── Step 6 of 6: OpenClaw Integration ─────────────────────────');
+  console.log('  ── Host integration: OpenClaw ────────────────────────────────');
 
   if (!oclaw.detected) {
     console.log('  No OpenClaw workspace detected in current directory.');
@@ -590,7 +706,7 @@ async function stepOpenClaw(oclaw: OpenClawDetection): Promise<boolean> {
 
 async function stepHermes(hermes: HermesDetection): Promise<boolean> {
   console.log('');
-  console.log('  ── Step 6 of 6: Hermes Integration ───────────────────────────');
+  console.log('  ── Host integration: Hermes ──────────────────────────────────');
 
   if (!hermes.detected) {
     console.log('  No Hermes home detected.');
@@ -610,6 +726,89 @@ async function stepHermes(hermes: HermesDetection): Promise<boolean> {
   console.log('');
 
   return confirm('  Enable Hermes integration?', true);
+}
+
+/**
+ * Whether to offer the one combined question.
+ *
+ * Only when it means something: a run that was told which hosts to wire is not
+ * asked, an unattended run is not asked (ADR-0003), and a machine with one agent
+ * has no "all of them" to offer.
+ */
+export function shouldOfferWireAll(input: {
+  mode: InitArgs['agent'];
+  requested: HostName[];
+  detectedCount: number;
+}): boolean {
+  return input.mode === 'auto' && input.requested.length === 0 && input.detectedCount > 1;
+}
+
+/**
+ * Which hosts a run enables, given the combined answer.
+ *
+ * Pure so the choice is testable without a terminal: `ask()` opens a fresh readline
+ * interface per question, so a piped wizard loses its buffered input after the first
+ * prompt and can only be driven by hand (`--yes` is the automation path). The
+ * interactive per-host fallback below is the one part that still needs a human.
+ */
+export function hostsEnabledByCombinedChoice(input: {
+  requested: HostName[];
+  detected: Record<HostName, boolean>;
+  wireAll: boolean;
+}): Record<HostName, boolean> {
+  const enabled = { openclaw: false, hermes: false, pi: false } as Record<HostName, boolean>;
+  for (const host of HOST_NAMES) {
+    enabled[host] = input.requested.includes(host) || (input.wireAll && input.detected[host]);
+  }
+  return enabled;
+}
+
+/**
+ * The one question when this machine has more than one agent.
+ *
+ * Per-host prompts answer "may I wire this one", never "you have three — do you want
+ * one backend serving all of them", which is the question an operator with three
+ * agents actually has. Answering yes here skips the individual prompts; answering no
+ * falls through to them, so the two options are the two outcomes of one question
+ * rather than two different code paths ([#97](https://github.com/liuqin164/Cogmem/issues/97)).
+ */
+async function stepHostsChoice(detected: HostName[]): Promise<boolean> {
+  console.log('');
+  console.log('  ── Host integration ──────────────────────────────────────────');
+  console.log(`  Detected on this machine: ${detected.map(hostLabel).join(', ')}`);
+  console.log('');
+  console.log('  One cogmem install serves all of them at once: each host keeps its own');
+  console.log('  memory scope, and they share this database.');
+  console.log('');
+  return confirm(`  Enable all ${detected.length} integrations?`, true);
+}
+
+function hostLabel(host: HostName): string {
+  if (host === 'openclaw') return 'OpenClaw';
+  if (host === 'hermes') return 'Hermes';
+  return 'pi';
+}
+
+async function stepPi(pi: PiDetection): Promise<boolean> {
+  console.log('');
+  console.log('  ── Host integration: pi ──────────────────────────────────────');
+
+  if (!pi.detected) {
+    console.log('  No pi home detected.');
+    console.log('  (Expects: ~/.pi/agent/mcp.json or ~/.pi/agent/auth.json)');
+    return false;
+  }
+
+  console.log(`  pi home detected: ${pi.homeDir}`);
+  if (pi.hasMcpConfig) console.log('    agent/mcp.json         ✓');
+  if (pi.hasAuth) console.log('    auth.json              ✓');
+  if (pi.hasAgentSkillsDir) console.log('    ~/.agents/skills/      ✓');
+  console.log('');
+  console.log('  Enabling records the integration here. Runtime setup is installed later with:');
+  console.log('    cogmem connect pi --auto');
+  console.log('');
+
+  return confirm('  Enable pi integration?', true);
 }
 
 // ─── Config file writer ───────────────────────────────────────────────────────
@@ -657,14 +856,19 @@ function buildTomlLines(cfg: WizardConfig): string[] {
   if (cfg.encryptionPassphrase) {
     lines.push(`encryption_passphrase = ${tomlString(cfg.encryptionPassphrase)}`);
   }
+  // No `workspace_dir`: the Workspace is derived from where `.cogmem/` is, so a
+  // declared one could only disagree with it (ADR-0010). A config written before
+  // this change still carries `"."`, and that resolves to the Workspace too.
   lines.push('');
   lines.push('[integrations.openclaw]');
   lines.push(`enabled = ${cfg.openClawEnabled}`);
-  lines.push('workspace_dir = "."');
   lines.push('');
   lines.push('[integrations.hermes]');
   lines.push(`enabled = ${cfg.hermesEnabled}`);
-  lines.push('workspace_dir = "."');
+
+  lines.push('');
+  lines.push('[integrations.pi]');
+  lines.push(`enabled = ${cfg.piEnabled}`);
   lines.push('');
   return lines;
 }
@@ -734,7 +938,8 @@ function printUsageSnippet(cfg: WizardConfig): void {
   console.log('  │  const kernel = createMemoryKernelFromConfig();');
   console.log('  │');
   console.log("  │  await kernel.ingest({ content: 'Remember that the user prefers concise answers.', projectId: 'my-agent' });");
-  console.log("  │  const result = kernel.recall('what does the user prefer?', { projectId: 'my-agent' });");
+  console.log("  │  const memory = new KernelAgentMemoryBackend(kernel);");
+  console.log("  │  const result = await memory.recall({ agentId: 'my-agent', projectId: 'my-agent', query: 'what does the user prefer?' });");
   console.log('  │  console.log(result.rawEvidence.map((item) => item.content));');
   if (cfg.encryptionPassphrase) {
     console.log('  │');
@@ -765,26 +970,346 @@ function printUsageSnippet(cfg: WizardConfig): void {
   }
 }
 
+// ─── Unattended configuration (the Agent path) ────────────────────────────────
+
+/**
+ * Build the config an unattended run may write, plus the warnings for every
+ * Human-required setting it had to settle without a human.
+ *
+ * Agent-decidable settings keep real defaults: database path, vector backend,
+ * all three PII redaction switches on.
+ *
+ * Human-required settings fall back to conservative values: no key is written,
+ * no passphrase is invented, no provider that could spend money is selected,
+ * and no host is enabled. Detection still runs, but only to suggest.
+ */
+function buildUnattendedConfig(
+  args: InitArgs,
+  det: DetectionResult,
+  oclawDet: OpenClawDetection,
+  hermesDet: HermesDetection,
+  piDet: PiDetection,
+): { cfg: WizardConfig; warnings: SettingWarning[] } {
+  const warnings: SettingWarning[] = [];
+  // Deliberately the literal `cogmem init`, not a resolved path: these are the
+  // runtime-built command templates `__tests__/command-templates.unit.test.ts`
+  // renders and resolves against the real dispatch tables, and a template built
+  // from the resolver is outside what that guard can render. Changing this means
+  // changing that guard's coverage too — a decision of its own, not a side effect
+  // of #78. Recorded as an open boundary in the ledger.
+  const rerun = 'cogmem init';
+
+  const embedding = suggestEmbeddingModel(det);
+  warnings.push({
+    code: 'embedding_provider_defaulted',
+    setting: 'embedding provider',
+    message: embedding.provider === 'deterministic_local'
+      ? 'deterministic_local embedding is written; semantic recall stays off until an embedding model is chosen.'
+      : `${embedding.model} was detected via Ollama, but an unattended run does not choose a provider; deterministic_local is written instead.`,
+    command: rerun,
+  });
+
+  const memory = suggestMemoryModel(det);
+  const reasoning = suggestReasoningModel(det);
+  const detectedModels = memory.provider !== 'rule_only' || reasoning.provider !== 'rule_only';
+  warnings.push({
+    code: 'model_provider_defaulted',
+    setting: 'memory and reasoning provider',
+    message: detectedModels
+      ? `${memory.model} / ${reasoning.model} were detected, but an unattended run does not choose a provider; rule_only is written.`
+      : 'rule_only is written; Dream curation and model-backed consolidation stay off until a provider is chosen.',
+    command: rerun,
+  });
+
+  warnings.push({
+    code: 'api_key_defaulted',
+    setting: 'API key',
+    message: 'no API key is written; an unattended run never copies one from the environment, so no provider can be called and no cost can be incurred.',
+    command: rerun,
+  });
+
+  warnings.push({
+    code: 'encryption_defaulted',
+    setting: 'encryption passphrase',
+    message: 'field encryption is off; an unattended run never invents a passphrase, because losing it loses the database.',
+    command: rerun,
+  });
+
+  // One Host is not a choice against another: a machine with all three gets all
+  // three named, and each is enabled on its own evidence. The old rule made Hermes
+  // conditional on OpenClaw being *absent*, so a machine with both silently
+  // configured one ([#97](https://github.com/liuqin164/Cogmem/issues/97)).
+  const detected = detectionMap(oclawDet, hermesDet, piDet);
+  const enabled = (host: HostName): boolean => args.requestedHosts.includes(host)
+    || (args.agent === 'auto' && detected[host]);
+  const openClawEnabled = enabled('openclaw');
+  const hermesEnabled = enabled('hermes');
+  const piEnabled = enabled('pi');
+  // Detection is advice in every mode: it names the flag, and changes nothing.
+  const unwired = HOST_NAMES.filter((host) => detected[host] && !enabled(host));
+  if (unwired.length > 0) {
+    warnings.push({
+      code: 'host_integration_suggested',
+      setting: 'host integration',
+      message: `${unwired.join(', ')} detected on this machine and not enabled. One backend serves all of them at once: pass --agent ${unwired.join(',')} to enable them here, or --agent all.`,
+      command: `cogmem init --agent ${unwired.join(',')}`,
+    });
+  }
+  if (!openClawEnabled && !hermesEnabled && !piEnabled && unwired.length === 0) {
+    warnings.push({
+      code: 'host_integration_defaulted',
+      setting: 'host integration',
+      message: 'no host integration is enabled and none was detected. Pass --agent openclaw, --agent hermes, --agent pi, or --agent all, or run `cogmem connect <host> --auto`, which installs the host-side files and records the integration it wired.',
+      command: 'cogmem init --agent all',
+    });
+  }
+
+  const cfg: WizardConfig = {
+    dbPath: 'memory.db',
+    vectorBackend: 'sqlite-vec',
+    vectorDimension: args.vectorDimension ?? DEFAULT_VECTOR_DIMENSION,
+    embeddingProvider: 'deterministic_local',
+    embeddingBaseUrl: '',
+    embeddingModel: 'deterministic_local',
+    memoryProvider: 'rule_only',
+    memoryBaseUrl: '',
+    memoryApiKey: '',
+    memoryModel: 'rule_only',
+    reasoningProvider: 'rule_only',
+    reasoningBaseUrl: '',
+    reasoningApiKey: '',
+    reasoningModel: 'rule_only',
+    piiEmail: true,
+    piiPhone: true,
+    piiSsn: true,
+    encryptionPassphrase: '',
+    openClawEnabled,
+    hermesEnabled,
+    piEnabled,
+  };
+  return { cfg, warnings };
+}
+
+/** What was found, and what this run did about it — for `--json` and for the wizard. */
+function hostReport(
+  args: InitArgs,
+  oclaw: OpenClawDetection,
+  hermes: HermesDetection,
+  pi: PiDetection,
+): Array<{ name: HostName; detected: boolean; enabled: boolean }> {
+  const detected = detectionMap(oclaw, hermes, pi);
+  return HOST_NAMES.map((name) => ({
+    name,
+    detected: detected[name],
+    enabled: args.requestedHosts.includes(name) || (args.agent === 'auto' && detected[name]),
+  }));
+}
+
+/** Which hosts this machine has, in one place so the three answers cannot drift. */
+function detectionMap(oclaw: OpenClawDetection, hermes: HermesDetection, pi: PiDetection): Record<HostName, boolean> {
+  return { openclaw: oclaw.detected, hermes: hermes.detected, pi: pi.detected };
+}
+
+function printSettingWarnings(warnings: SettingWarning[]): void {
+  if (warnings.length === 0) return;
+  console.log('');
+  console.log('  Warnings — settings this unattended run settled conservatively:');
+  for (const warning of warnings) {
+    console.log(`    WARN ${warning.code}: ${warning.setting}`);
+    console.log(`         ${warning.message}`);
+    console.log(`         set it with: ${warning.command}`);
+  }
+}
+
+function emitInitJson(input: {
+  dryRun: boolean;
+  configPath: string;
+  homeDir: string;
+  config: WizardConfig;
+  warnings: SettingWarning[];
+  written: boolean;
+  /**
+   * Which hosts were found, and whether each was wired. Reported even when
+   * nothing is wired, because "we looked and found pi" is information the
+   * operator needs and an unattended run cannot act on (ADR-0003).
+   */
+  hosts: Array<{ name: HostName; detected: boolean; enabled: boolean }>;
+}): void {
+  // A runnable command, not the bin directory: `--json` is what an agent follows,
+  // and `/path/to/bin doctor --json` is exit 126. Off PATH the step is the
+  // absolute launcher, on PATH the bare name (#78).
+  // Point the managed launcher at this installation before printing the steps, so the
+  // commands a reader copies name the stable path rather than this installation (#114).
+  ensureCogmemShim();
+  const bin = resolveCogmemInvocation();
+  console.log(JSON.stringify({
+    schemaVersion: 'cogmem.cli.v1',
+    command: 'init',
+    dryRun: input.dryRun,
+    written: input.written,
+    configPath: input.configPath,
+    homeDir: input.homeDir,
+    config: {
+      dbPath: input.config.dbPath,
+      vectorBackend: input.config.vectorBackend,
+      vectorDimension: input.config.vectorDimension,
+      embedding: { provider: input.config.embeddingProvider, model: input.config.embeddingModel },
+      memoryModel: { provider: input.config.memoryProvider, model: input.config.memoryModel },
+      reasoningModel: { provider: input.config.reasoningProvider, model: input.config.reasoningModel },
+      piiRedaction: {
+        email: input.config.piiEmail,
+        phone: input.config.piiPhone,
+        ssn: input.config.piiSsn,
+      },
+      encryption: Boolean(input.config.encryptionPassphrase),
+      integrations: {
+        openclaw: input.config.openClawEnabled,
+        hermes: input.config.hermesEnabled,
+        pi: input.config.piEnabled,
+      },
+    },
+    // Every host this machine has, so one install reports all three rather than
+    // the first match.
+    hosts: input.hosts,
+    warnings: input.warnings,
+    // Read from the shared module rather than restated here: a second copy of
+    // this step is how the two versions drifted apart before.
+    nextSteps: [installGateStep(bin, 'now')],
+  }, null, 2));
+}
+
+// ─── Agent registration (#65) ─────────────────────────────────────────────────
+
+/**
+ * `--register-agent` is not a configuration action.
+ *
+ * It mints a credential and writes the agent registry, and deliberately does not
+ * touch `config.toml`: the second agent on a machine is onboarded long after the
+ * config exists, and this command refuses to overwrite an existing config, so
+ * folding the two together would mean hand-editing a file to add an agent.
+ */
+function runAgentRegistration(args: InitArgs, homeDir: string): void {
+  const agentsPath = join(homeDir, 'agents.json');
+  const registered: Array<Record<string, unknown>> = [];
+  try {
+    for (const hostId of args.registerAgents) {
+      if (args.dryRun) {
+        registered.push({
+          hostId,
+          token: null,
+          projectId: args.registerProjectId || hostId,
+          replaced: false,
+          dryRun: true,
+        });
+        continue;
+      }
+      const agent = registerAgent({
+        path: agentsPath,
+        hostId,
+        projectId: args.registerProjectId || undefined,
+        rotate: args.rotateAgents,
+      });
+      registered.push({
+        hostId: agent.hostId,
+        token: agent.token,
+        projectId: agent.projectId,
+        replaced: agent.replaced,
+        dryRun: false,
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (args.json) {
+      console.error(JSON.stringify({
+        schemaVersion: 'cogmem.cli.v1',
+        command: 'init',
+        status: 'refused',
+        reason: 'agent_registration_failed',
+        agentsPath,
+        message,
+      }, null, 2));
+    } else {
+      console.error(`  ${message}`);
+    }
+    process.exit(1);
+  }
+
+  if (args.json) {
+    console.log(JSON.stringify({
+      schemaVersion: 'cogmem.cli.v1',
+      command: 'init',
+      status: args.dryRun ? 'dry_run' : 'registered',
+      dryRun: args.dryRun,
+      written: !args.dryRun,
+      agentsPath,
+      registeredAgents: registered,
+    }, null, 2));
+    return;
+  }
+
+  console.log('');
+  console.log(args.dryRun
+    ? `  Dry run: would register ${registered.length} agent(s) in ${agentsPath}`
+    : `  Registered ${registered.length} agent(s) in ${agentsPath}`);
+  for (const entry of registered) {
+    console.log(`    ${String(entry.hostId)}   project=${String(entry.projectId)}`);
+    console.log(`      credential: ${args.dryRun ? '(dry run — nothing generated)' : String(entry.token)}`);
+  }
+  if (!args.dryRun) {
+    console.log('');
+    console.log('  Store each credential now. The registry keeps only a digest, so it cannot');
+    console.log('  be read back: a lost credential is replaced with --rotate.');
+  }
+  console.log('');
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['agent', 'auto', 'config', 'dry-run', 'env-path', 'home', 'json', 'legacy-env', 'no-probe', 'project', 'register-agent', 'rotate', 'scope', 'vector-dimension', 'yes'] });
   const args = readArgs(process.argv.slice(2));
-  console.log('');
-  console.log('╔═══════════════════════════════════════════════════════════════╗');
-  console.log('║                  cogmem — Memory Kernel Init                 ║');
-  console.log('║                   Interactive Setup Wizard                    ║');
-  console.log('╚═══════════════════════════════════════════════════════════════╝');
-  console.log('');
+  // In --json mode stdout carries one JSON document and nothing else, and the
+  // progress chatter is suppressed rather than moved to stderr: the JSON already
+  // reports every setting and warning, so the human rendering has nothing to add.
+  const say = (line = ''): void => {
+    if (!args.json) console.log(line);
+  };
+  if (args.registerAgents.length > 0) {
+    // Where the readers look. `--home`/`--config` name the place and win; otherwise
+    // the registry goes into the config-derived Workspace's own `.cogmem/`, so a
+    // registration made from a subdirectory lands beside the config `cogmem mcp`
+    // and `cogmem-host-bridge` read, instead of in a `.cogmem/` no reader derives
+    // (#80). On a machine whose only config is the global one, `--scope project`
+    // still means the directory the operator ran this in — the readers find that by
+    // walking up for the registry itself.
+    const target = resolveInstallTarget(args);
+    const workspace = resolveWorkspaceRoot({ cwd: process.cwd() });
+    const projectConfig = join(workspace, '.cogmem', 'config.toml');
+    const usesProjectConfig = projectConfig !== defaultCogmemConfigPath(process.env) && existsSync(projectConfig);
+    const registryHome = args.homePath || args.configPath || !usesProjectConfig
+      ? target.homeDir
+      : join(workspace, '.cogmem');
+    runAgentRegistration(args, registryHome);
+    return;
+  }
+  say('');
+  say('╔═══════════════════════════════════════════════════════════════╗');
+  say('║                  cogmem — Memory Kernel Init                 ║');
+  say('║                   Interactive Setup Wizard                    ║');
+  say('╚═══════════════════════════════════════════════════════════════╝');
+  say('');
   const target = resolveInstallTarget(args);
-  console.log(`  This wizard writes ${args.scope === 'project' ? '.cogmem/config.toml in the current project' : '~/.cogmem/config.toml by default'}.`);
-  console.log('  Run cogmem-init again at any time to reconfigure.');
-  console.log(`  Cogmem home: ${target.homeDir}`);
+  say(`  This wizard writes ${args.scope === 'project' ? '.cogmem/config.toml in the current project' : '~/.cogmem/config.toml by default'}.`);
+  say('  Run cogmem-init again at any time to reconfigure.');
+  say(`  Cogmem home: ${target.homeDir}`);
 
   // Detect backends
-  process.stdout.write('\n  Detecting available backends …');
-  const det = await detectBackends();
-  process.stdout.write(' done.\n');
-  printDetection(det);
+  if (!args.json) process.stdout.write('\n  Detecting available backends …');
+  const det = await detectBackends(args.probeOllama);
+  if (!args.json) {
+    process.stdout.write(' done.\n');
+    printDetection(det, args.probeOllama);
+  }
 
   const hasAnyBackend = det.ollamaAvailable || det.openaiAvailable || det.anthropicAvailable || det.qwenAvailable;
   if (!hasAnyBackend && !args.yes) {
@@ -799,54 +1324,74 @@ async function main(): Promise<void> {
   // Detect OpenClaw workspace
   const oclawDet = detectOpenClaw(process.cwd());
   const hermesDet = detectHermes(process.cwd());
+  const piDet = detectPi();
 
   if (args.yes) {
-    const embedding = suggestEmbeddingModel(det);
-    const memory = suggestMemoryModel(det);
-    const reasoning = suggestReasoningModel(det);
-    const cfg: WizardConfig = {
-      dbPath: 'memory.db',
-      vectorBackend: 'sqlite-vec',
-      vectorDimension: args.vectorDimension ?? embedding.vectorDimension,
-      embeddingProvider: embedding.provider,
-      embeddingBaseUrl: embedding.baseUrl,
-      embeddingModel: embedding.model,
-      memoryProvider: memory.provider,
-      memoryBaseUrl: memory.baseUrl,
-      memoryApiKey: memory.apiKey,
-      memoryModel: memory.model,
-      reasoningProvider: reasoning.provider,
-      reasoningBaseUrl: reasoning.baseUrl,
-      reasoningApiKey: reasoning.apiKey,
-      reasoningModel: reasoning.model,
-      piiEmail: true,
-      piiPhone: true,
-      piiSsn: true,
-      encryptionPassphrase: '',
-      openClawEnabled: args.agent === 'openclaw' || (args.agent === 'auto' && oclawDet.detected),
-      hermesEnabled: args.agent === 'hermes' || (args.agent === 'auto' && !oclawDet.detected && hermesDet.detected),
-    };
+    const { cfg, warnings } = buildUnattendedConfig(args, det, oclawDet, hermesDet, piDet);
     const lines = buildTomlLines(cfg);
     const outputPath = target.configPath;
+
     if (args.dryRun) {
+      if (args.json) {
+        emitInitJson({
+          hosts: hostReport(args, oclawDet, hermesDet, piDet),
+          dryRun: true,
+          configPath: outputPath,
+          homeDir: target.homeDir,
+          config: cfg,
+          warnings,
+          written: false,
+        });
+        return;
+      }
       console.log('');
       console.log(`  Dry run config for ${outputPath}:`);
       console.log(lines.join('\n'));
       printVectorDimensionWarning(cfg.vectorDimension);
+      printSettingWarnings(warnings);
       console.log('');
       return;
     }
+
     if (existsSync(outputPath)) {
-      console.log(`  Aborted — config already exists at ${outputPath}. Use interactive mode to overwrite.`);
+      const message = `Aborted — config already exists at ${outputPath}. Use interactive mode to overwrite.`;
+      if (args.json) {
+        console.error(JSON.stringify({
+          schemaVersion: 'cogmem.cli.v1',
+          command: 'init',
+          status: 'refused',
+          reason: 'config_exists',
+          configPath: outputPath,
+          message,
+        }, null, 2));
+      } else {
+        console.log(`  ${message}`);
+      }
       process.exit(1);
     }
+
     ensureInstallDirs(target.homeDir);
     writeFileSync(outputPath, lines.join('\n') + '\n', 'utf8');
+
+    if (args.json) {
+      emitInitJson({
+        hosts: hostReport(args, oclawDet, hermesDet, piDet),
+        dryRun: false,
+        configPath: outputPath,
+        homeDir: target.homeDir,
+        config: cfg,
+        warnings,
+        written: true,
+      });
+      return;
+    }
+
     console.log(`  Configuration written to ${outputPath}`);
     console.log(`  Cogmem home ${target.homeDir}`);
     console.log(`  Database    ${join(target.homeDir, cfg.dbPath)}`);
     console.log(`  Snapshots   ${join(target.homeDir, 'snapshots')}`);
     printVectorDimensionWarning(cfg.vectorDimension);
+    printSettingWarnings(warnings);
     printUsageSnippet(cfg);
     return;
   }
@@ -857,16 +1402,33 @@ async function main(): Promise<void> {
   const embedding     = await stepEmbedding(det);
   const models        = await stepModelRoles(det);
   const governance    = await stepGovernance();
-  const openClawEnabled = args.agent === 'openclaw'
-    ? true
-    : args.agent === 'auto'
-      ? await stepOpenClaw(oclawDet)
-      : false;
-  const hermesEnabled = args.agent === 'hermes'
-    ? true
-    : args.agent === 'auto' && !openClawEnabled
-      ? await stepHermes(hermesDet)
-      : false;
+  // Each host is asked about on its own evidence. A machine that has all three
+  // gets three independent answers, and every one of them may be yes: they share
+  // the one backend and keep their own memory scope (#97).
+  const detectedMap = detectionMap(oclawDet, hermesDet, piDet);
+  const detectedHere = HOST_NAMES.filter((host) => detectedMap[host]);
+  const offerWireAll = shouldOfferWireAll({
+    mode: args.agent,
+    requested: args.requestedHosts,
+    detectedCount: detectedHere.length,
+  });
+  const wireAll = offerWireAll && await stepHostsChoice(detectedHere);
+  const combined = hostsEnabledByCombinedChoice({
+    requested: args.requestedHosts,
+    detected: detectedMap,
+    wireAll,
+  });
+  const asked = async (host: HostName): Promise<boolean> => {
+    if (args.requestedHosts.includes(host)) return true;
+    if (args.agent !== 'auto') return false;
+    if (wireAll) return combined[host];
+    if (host === 'openclaw') return stepOpenClaw(oclawDet);
+    if (host === 'hermes') return stepHermes(hermesDet);
+    return stepPi(piDet);
+  };
+  const openClawEnabled = await asked('openclaw');
+  const hermesEnabled = await asked('hermes');
+  const piEnabled = await asked('pi');
 
   // Compose final config
   const cfg: WizardConfig = {
@@ -880,6 +1442,7 @@ async function main(): Promise<void> {
     ...governance,
     openClawEnabled,
     hermesEnabled,
+    piEnabled,
   };
 
   const outputPath = target.configPath;
@@ -893,13 +1456,20 @@ async function main(): Promise<void> {
   }
 
   const lines = buildTomlLines(cfg);
-  ensureInstallDirs(target.homeDir);
-  writeFileSync(outputPath, lines.join('\n') + '\n', 'utf8');
+  // A dry run is a promise not to touch the machine — no file, and no directories
+  // either. The summary below is printed the same way in both cases, so what a
+  // dry run shows is exactly what the real run would have written.
+  if (!args.dryRun) {
+    ensureInstallDirs(target.homeDir);
+    writeFileSync(outputPath, lines.join('\n') + '\n', 'utf8');
+  }
 
   // Summary
   console.log('');
   console.log('  ─────────────────────────────────────────────────────────────');
-  console.log(`  Configuration written to ${outputPath}`);
+  console.log(args.dryRun
+    ? `  Dry run — nothing written. Would write ${outputPath}`
+    : `  Configuration written to ${outputPath}`);
   console.log(`  Cogmem home    ${target.homeDir}`);
   console.log(`  Config         ${target.configPath}`);
   console.log(`  Database       ${join(target.homeDir, cfg.dbPath)}`);
@@ -915,6 +1485,7 @@ async function main(): Promise<void> {
   console.log(`  Encryption     ${cfg.encryptionPassphrase ? 'AES-256-GCM enabled' : 'disabled'}`);
   console.log(`  OpenClaw       ${cfg.openClawEnabled ? 'enabled' : 'disabled'}`);
   console.log(`  Hermes         ${cfg.hermesEnabled ? 'enabled' : 'disabled'}`);
+  console.log(`  pi             ${cfg.piEnabled ? 'enabled' : 'disabled'}`);
   printVectorDimensionWarning(cfg.vectorDimension);
 
   printUsageSnippet(cfg);

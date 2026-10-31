@@ -2,6 +2,7 @@
 import Database from 'bun:sqlite';
 
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
+import { assertCliArgs } from './CliArgs.js';
 
 function readArg(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -60,6 +61,7 @@ function nonEmptyProjectIds(db: Database, table: string): string[] {
 }
 
 function main(): void {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['apply', 'config', 'db', 'dry-run', 'from', 'json', 'to'] });
   const [command] = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
   if (command !== 'project-scope' || hasFlag('--help') || hasFlag('-h')) {
     console.log(usage());

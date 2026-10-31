@@ -6,6 +6,7 @@ import { loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } fr
 import { parseVectorDimensionValue } from '../config/VectorDimension.js';
 import { config } from '../utils/Config.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
 
 function parseArgs(argv: string[]): Record<string, string | boolean> {
   const args: Record<string, string | boolean> = {};
@@ -67,6 +68,7 @@ function defaultSnapshotPath(loaded: LoadedCogmemConfig): string {
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['config', 'db', 'dimension', 'dry-run', 'json', 'out', 'overwrite', 'project', 'snap'] });
   const [command, ...rest] = process.argv.slice(2);
   const args = parseArgs(rest);
   const loaded = loadConfig(args);
@@ -78,7 +80,8 @@ async function main(): Promise<void> {
       : createMemoryKernel({ dbPath });
     const meta = await kernel.exportSnapshot(outputPath);
     kernel.close();
-    printCliJson('snapshot.export', meta);
+    // `--out` here is the snapshot file itself, so the JSON report stays on stdout.
+    printCliJson('snapshot.export', meta, { outExempt: true });
     return;
   }
   if (command === 'import') {
@@ -93,7 +96,7 @@ async function main(): Promise<void> {
       dryRun: args['dry-run'] === true,
       overwrite: args.overwrite === true,
     });
-    printCliJson('snapshot.import', result);
+    printCliJson('snapshot.import', result, { outExempt: true });
     return;
   }
   throw new Error('Usage: snapshot.ts export [--config <config.toml>|--db <db>] [--out <snap>] | import --snap <snap> [--config <config.toml>|--db <db>] [--dry-run] [--overwrite]');

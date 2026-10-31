@@ -818,7 +818,11 @@ export class DreamCuratorWorker {
     reason: string,
     detail: unknown,
   ): Omit<DeepWriteCandidateInput, 'runId'> | undefined {
-    const detailText = truncate(detail instanceof Error ? detail.message : String(detail || ''), 500);
+    // An empty detail is what a provider failure used to leave behind (the
+    // client returns '' when the endpoint answers non-2xx, and the status only
+    // reaches stderr). Say so, instead of storing nothing.
+    const raw = detail instanceof Error ? detail.message : String(detail || '');
+    const detailText = truncate(raw.trim() ? raw : 'provider returned an empty body (HTTP status is on stderr)', 500);
     this.deps.pipelineMetrics?.recordNonFatal(reason, {
       projectId,
       message: detailText,
@@ -883,9 +887,10 @@ export class DreamCuratorWorker {
         ? candidate.content as Record<string, unknown>
         : {};
       if (content.source !== 'dream_curator_provider_warning') continue;
+      // Same rule as review-queue expiry: the warning was retired because the provider recovered,
+      // not because something replaced it, so no promotion target is named.
       this.deps.candidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
         type: 'diagnostic_conclusion',
-        id: candidate.candidateId,
         reason: 'provider_recovered',
       });
     }

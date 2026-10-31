@@ -1,13 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('dream ledger reports undreamed raw backlog for raw-then-dream turns', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-ledger-'));
+  const dir = makeTempDir('cogmem-dream-ledger-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -31,7 +30,7 @@ test('dream ledger reports undreamed raw backlog for raw-then-dream turns', asyn
 });
 
 test('dream ledger markDreamed advances coverage without deleting raw events', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-ledger-mark-'));
+  const dir = makeTempDir('cogmem-dream-ledger-mark-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -58,7 +57,7 @@ test('dream ledger markDreamed advances coverage without deleting raw events', a
 });
 
 test('dream curator compiles raw backlog into governed candidates without hot vectors', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-'));
+  const dir = makeTempDir('cogmem-dream-curator-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -91,7 +90,7 @@ test('dream curator compiles raw backlog into governed candidates without hot ve
 });
 
 test('dream curator can use explicit memory-model generation to create governance candidates only', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-llm-'));
+  const dir = makeTempDir('cogmem-dream-curator-llm-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -230,7 +229,7 @@ test('dream curator can use explicit memory-model generation to create governanc
 });
 
 test('dream curator rejects conflict candidates without two exact window evidence events', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-conflict-evidence-'));
+  const dir = makeTempDir('cogmem-dream-curator-conflict-evidence-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -265,7 +264,7 @@ test('dream curator rejects conflict candidates without two exact window evidenc
 });
 
 test('dream curator proposes semantic tags, index decisions, and event relations for raw dialogue windows', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-relations-'));
+  const dir = makeTempDir('cogmem-dream-curator-relations-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -297,7 +296,7 @@ test('dream curator proposes semantic tags, index decisions, and event relations
 });
 
 test('dream governance promotes semantic organization candidates instead of letting the queue pile up', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-governance-'));
+  const dir = makeTempDir('cogmem-dream-governance-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -344,7 +343,7 @@ test('dream governance promotes semantic organization candidates instead of lett
 });
 
 test('dream curator rejects provider diagnostics without adding them to the review queue', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-llm-invalid-'));
+  const dir = makeTempDir('cogmem-dream-curator-llm-invalid-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -378,7 +377,7 @@ test('dream curator rejects provider diagnostics without adding them to the revi
 });
 
 test('dream curator deduplicates provider warnings and supersedes them after provider recovery', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-provider-recovery-'));
+  const dir = makeTempDir('cogmem-dream-curator-provider-recovery-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -436,7 +435,7 @@ test('dream curator deduplicates provider warnings and supersedes them after pro
 });
 
 test('dream curator treats user clarification as an organizational correction instead of a contradiction', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-correction-'));
+  const dir = makeTempDir('cogmem-dream-correction-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -464,7 +463,7 @@ test('dream curator treats user clarification as an organizational correction in
 });
 
 test('dream curator does not classify a negative-form diagnostic question as a correction', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-negative-question-'));
+  const dir = makeTempDir('cogmem-dream-negative-question-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -484,7 +483,7 @@ test('dream curator does not classify a negative-form diagnostic question as a c
 });
 
 test('dream curator suppresses operational noise before candidate generation', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-dream-curator-noise-'));
+  const dir = makeTempDir('cogmem-dream-curator-noise-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
 
   kernel.recordRawEvent({

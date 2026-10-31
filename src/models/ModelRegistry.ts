@@ -21,7 +21,8 @@ export class ModelRegistry {
         baseUrl: '',
         apiKey: '',
         modelName: 'rule_only',
-        timeoutMs: 60000,
+        timeoutMs: 300000,
+        maxTokens: 16384,
         fallback: 'rule_only'
       },
       reasoning: {
@@ -101,7 +102,9 @@ export class ModelRegistry {
       const result = await client.chatComplete({
         model: role.modelName,
         systemPrompt: system,
-        userPrompt: user
+        userPrompt: user,
+        maxTokens: role.maxTokens,
+        jsonMode: role.jsonMode
       });
       if (result.trim()) return result;
       return this.runFallback(role.fallback, system, user, visited);

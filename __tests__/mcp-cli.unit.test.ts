@@ -1,11 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { makeTempDir } from './helpers/tmp.js';
 
 describe('cogmem mcp dispatcher', () => {
   test('forwards stdin to the stdio MCP server', async () => {
-    const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-mcp-cli-')), 'memory.db');
+    const dbPath = join(makeTempDir('cogmem-mcp-cli-'), 'memory.db');
     const input = [
       JSON.stringify({
         jsonrpc: '2.0',

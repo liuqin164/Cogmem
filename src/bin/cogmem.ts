@@ -3,6 +3,9 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { resolveCliBinDir } from '../install/InstallSteps.js';
+import { assertCliArgs } from './CliArgs.js';
+
 const COMMANDS: Record<string, string> = {
   init: 'init',
   doctor: 'doctor',
@@ -19,13 +22,12 @@ const COMMANDS: Record<string, string> = {
   'normalize-transcript': 'normalize-transcript',
   snapshot: 'snapshot',
   're-embed': 're-embed',
-  'migrate-vectors': 'migrate-vectors',
-  migrate: 'migrate',
   prospective: 'prospective',
   strategy: 'strategy',
   'brain-eval': 'brain-eval',
   episode: 'episode',
   dream: 'dream',
+  'host-bridge': 'host-bridge',
 };
 
 function usage(): string {
@@ -46,14 +48,13 @@ function usage(): string {
     '  mcp                  start stdio MCP server',
     '  repair               conservative upgrade repair commands such as project-scope',
     '  snapshot             export/import snapshots',
-    '  re-embed             inspect or run re-embedding',
-    '  migrate-vectors      migrate vector backend data',
-    '  migrate              plan or apply schema migrations with optional backup',
+    '  re-embed             inspect re-embedding progress; re-embedding itself is a host pipeline call',
     '  prospective          manage confirmed-only future-memory candidates; never executes tasks',
     '  strategy             inspect current-turn memory policy and read-only outcome telemetry',
     '  brain-eval           evaluate recall, provenance, leakage, budget, and false activation',
     '  episode              append, import, inspect, seal, or repair conversation episodes',
     '  dream                conditionally process sealed episode backlog',
+    '  host-bridge          stdio bridge a host plugin can spawn: recall/remember without the MCP server',
     '',
     'JSON output: commands with --json emit cogmem.cli.v1. Object fields stay top-level; arrays use items.',
     'Queue commands expose candidate, promoted, needs_confirmation, and beliefs at the top level.',
@@ -80,18 +81,26 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const env = { ...process.env };
+  const binDir = resolveCliBinDir(process.argv[1], env);
+  if (binDir) env.COGMEM_BIN_DIR = binDir;
+
   const proc = Bun.spawn({
     cmd: [process.execPath || 'bun', siblingEntrypoint(entrypoint), ...rest],
     cwd: process.cwd(),
+    // Inherited, not piped. The dispatcher used to read the child's output to EOF and
+    // write it afterwards, which works for a command that exits and cannot work for
+    // one that does not: `cogmem mcp` streams JSON-RPC until its client disconnects,
+    // so every response was held until the child exited and a client that keeps the
+    // connection open never completed the handshake — pi reported `MCP request timed
+    // out after 60000ms` with an empty tool list, and the same happened to the
+    // startup line of `cogmem mcp --transport http`. Inheriting the streams makes the
+    // child write to the client directly, so output arrives as it is produced.
     stdin: 'inherit',
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: process.env,
+    stdout: 'inherit',
+    stderr: 'inherit',
+    env,
   });
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  await Bun.write(Bun.stdout, stdout);
-  await Bun.write(Bun.stderr, stderr);
   process.exit(await proc.exited);
 }
 

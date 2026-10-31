@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
@@ -10,9 +9,10 @@ import { EpisodeStore } from '../src/episode/EpisodeStore.js';
 import { classifyTurnRelation } from '../src/episode/TurnRelationClassifier.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function createTestKernel(prefix: string) {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = makeTempDir(prefix);
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   return { dir, kernel, backend: new KernelAgentMemoryBackend(kernel) };
 }
@@ -117,6 +117,61 @@ test('agent turns assemble into one session-scoped episode and explicit user clo
     expect(kernel.listEpisodeClosureReceipts({ episodeId: sealed[0].episodeId })).toEqual([
       expect.objectContaining({ closureMode: 'hard', closureReason: 'explicit_user_closure' }),
     ]);
+  } finally {
+    kernel.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the host tick seals an idle conversation, so a remembered turn can be dreamed and recalled', async () => {
+  const dir = makeTempDir('cogmem-episode-idle-seal-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  try {
+    // A pull host records a turn exactly as the server's instructions tell it to
+    // (#85): the tool takes the identity from the connection, so only the turn is sent.
+    const written = await callCogmemMcpTool('cogmem_remember_turn', {
+      projectId: 'brain',
+      sessionId: 'session-idle',
+      userText: 'the okapi rollout ships on Saturdays',
+      assistantText: 'noted',
+    }, { kernel, hostId: 'pi' });
+    expect(JSON.parse(String((written as { content: { text: string }[] }).content[0]!.text)).ok).toBe(true);
+
+    const open = kernel.listEpisodes({ projectId: 'brain' });
+    expect(open).toHaveLength(1);
+    expect(open[0]!.status).toBe('open');
+    expect(open[0]!.eventCount).toBe(2);
+
+    // Nothing seals a conversation on its own — per ADR-0011 a turn is never sealed,
+    // a conversation that has gone quiet is. The host's own tick is what notices, and
+    // the window is the boundary policy's own idle gap, so the test asks it.
+    const idleGapMs = kernel.episodeBoundaryPolicy.config.maxIdleGapMs;
+    const ticked = kernel.runMaintenanceTick({ projectId: 'brain', now: Date.now() + 1_000 });
+    expect(ticked.executed.episodeSealing.sealedEpisodes).toBe(0);
+    expect(kernel.getEpisode(open[0]!.episodeId)?.status).toBe('open');
+
+    const quiet = kernel.runMaintenanceTick({ projectId: 'brain', now: Date.now() + idleGapMs + 60_000 });
+    expect(quiet.executed.episodeSealing.sealedEpisodes).toBe(1);
+    expect(quiet.executed.episodeSealing.idleGapMs).toBe(idleGapMs);
+    expect(kernel.getEpisode(open[0]!.episodeId)?.status).toBe('soft_sealed');
+
+    // A soft seal is the verdict "this conversation is over"; Dream promotes a mature
+    // one to a hard seal before compiling it, and that stabilization timer belongs to the
+    // scheduler. The mature step is taken here directly so the queue can be asserted
+    // without a wall clock.
+    kernel.sealEpisode(open[0]!.episodeId, {
+      mode: 'hard',
+      reason: 'soft_seal_stabilized',
+      now: Date.now() + idleGapMs + 120_000,
+    });
+    expect(kernel.getEpisode(open[0]!.episodeId)?.status).toBe('sealed');
+    expect(kernel.getEpisodeDreamStatus('brain').pending).toBeGreaterThan(0);
+
+    // What this test owns ends there: the episode is queued for the compile step. Whether
+    // a Dream curator is configured — the README's own distinction from embedding models —
+    // decides that it actually runs, so the end-to-end write → seal → Dream → recall
+    // sequence is verified on a host rather than against a stubbed curator that compiles
+    // nothing.
   } finally {
     kernel.close();
     rmSync(dir, { recursive: true, force: true });
@@ -456,3 +511,41 @@ test('episode import CLI is idempotent and dream CLI processes its batch-sealed 
 function testEpisodeStore(db: Database, projectForEvent: (eventId: string) => string = () => 'brain'): EpisodeStore {
   return new EpisodeStore(db, (eventId) => ({ eventId, projectId: projectForEvent(eventId) } as never));
 }
+
+test('episode append names a message, so the same one twice is a replay (#113)', async () => {
+  // The implementation read `externalMessageId` from `--external-id` while the argument
+  // check rejected that flag, so the idempotent write path existed and no caller could
+  // reach it. Found by running the installed CLI on the box, not by a test.
+  const dir = makeTempDir('cogmem-episode-external-id-');
+  const dbPath = join(dir, 'memory.db');
+  const run = async (args: string[]) => {
+    const proc = Bun.spawn([process.execPath, 'src/bin/episode.ts', ...args], { cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe' });
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { code, stdout, stderr };
+  };
+  const append = (text: string, extra: string[] = []) => [
+    'append', '--db', dbPath, '--project', 'p', '--session', 's1', '--source-agent', 'openclaw',
+    '--role', 'user', '--text', text, '--json', ...extra,
+  ];
+  const text = '记住代号 EXT-1 属于青栎组。';
+
+  const first = await run(append(text, ['--external-id', 'host-msg-1']));
+  expect(first.code, first.stderr).toBe(0);
+  const created = JSON.parse(first.stdout) as { eventId: string; created: boolean };
+  expect(created.created).toBe(true);
+
+  // A flag the CLI does not accept is a path nobody can take.
+  const unnamed = await run(append(text));
+  expect(unnamed.code).toBe(0);
+  expect(JSON.parse(unnamed.stdout).eventId).not.toBe(created.eventId);
+
+  const again = await run(append(text, ['--external-id', 'host-msg-1']));
+  expect(again.code, again.stderr).toBe(0);
+  const replay = JSON.parse(again.stdout) as { eventId: string; created: boolean };
+  expect(replay.eventId).toBe(created.eventId);
+  expect(replay.created).toBe(false);
+
+  const conflict = await run(append('同一标识，完全不同的内容。', ['--external-id', 'host-msg-1']));
+  expect(conflict.code).not.toBe(0);
+  expect(conflict.stdout + conflict.stderr).toContain('episode_ingest_identity_conflict');
+});

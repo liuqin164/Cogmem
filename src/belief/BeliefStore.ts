@@ -393,7 +393,7 @@ export class BeliefStore {
     belief: BeliefRecord | null;
     decision: BeliefRevisionDecision;
   } {
-    const canonicalKey = this.toCanonicalKey(candidate.subject, candidate.predicate, candidate.scope);
+    const canonicalKey = this.toCanonicalKey(candidate.subject, candidate.predicate, candidate.scope, candidate.canonicalKeyDiscriminator);
     const projectId = candidate.projectId ?? '';
     const conflicts = this.findByCanonicalKey(canonicalKey, projectId).map((existing) => ({
       existing,
@@ -665,7 +665,7 @@ export class BeliefStore {
     const incomingValidFrom = incoming.validFrom ?? now;
     const sameSourceFamily = incoming.sourceType === existing.sourceType;
     const newerPreferenceRevision = (
-      (incoming.predicate.startsWith('preference.') || incoming.predicate.startsWith('decision.')) &&
+      (this.isPreferencePredicate(incoming.predicate) || incoming.predicate.startsWith('decision.')) &&
       incomingValidFrom > existing.validFrom &&
       sameSourceFamily &&
       delta > -0.05
@@ -704,7 +704,7 @@ export class BeliefStore {
     freshnessW: number;
     scopeW: number;
   } {
-    if (predicate.startsWith('preference.') || predicate.startsWith('decision.')) {
+    if (this.isPreferencePredicate(predicate) || predicate.startsWith('decision.')) {
       return { confidenceW: 0.28, trustW: 0.22, freshnessW: 0.38, scopeW: 0.12 };
     }
     if (predicate.startsWith('constraint.') || predicate.startsWith('workflow.')) {
@@ -718,7 +718,7 @@ export class BeliefStore {
 
   private computeTemporalFreshness(ageHours: number, predicate: string, sourceType: SourceType): number {
     let halfLifeHours = 24 * 30;
-    if (predicate.startsWith('preference.')) halfLifeHours = 24 * 10;
+    if (this.isPreferencePredicate(predicate)) halfLifeHours = 24 * 10;
     else if (predicate.startsWith('decision.')) halfLifeHours = 24 * 14;
     else if (predicate.startsWith('constraint.')) halfLifeHours = 24 * 21;
     else if (sourceType === 'verified_fact') halfLifeHours = 24 * 90;
@@ -779,8 +779,71 @@ export class BeliefStore {
     return (a.normalized || a.raw) === (b.normalized || b.raw);
   }
 
-  private toCanonicalKey(subject: string, predicate: string, scope: ScopeType): string {
-    return `${subject}|${predicate}|${scope}`;
+  /**
+   * When the event behind a claim happened, or `undefined` when it is not here.
+   *
+   * A belief's `validFrom` has to be the episode's time, not the moment it was
+   * projected: republishing an old frame would otherwise make a stale preference look
+   * newer than the one that replaced it, and the supersession rule would then pick the
+   * stale one.
+   */
+  eventOccurredAt(eventId: string | undefined): number | undefined {
+    if (!eventId) return undefined;
+    const row = this.db.prepare(`SELECT occurred_at FROM memory_events WHERE event_id=?`)
+      .get(eventId) as { occurred_at?: number } | null;
+    return typeof row?.occurred_at === 'number' ? row.occurred_at : undefined;
+  }
+
+  /**
+   * Whether an event exists in this project, i.e. whether a belief may name it as
+   * evidence.
+   *
+   * `attachEvidence` refuses an event outside the belief's scope, and it does so inside
+   * `upsert`'s transaction — so an unvetted id does not weaken the provenance, it throws
+   * away the whole belief. A frame can outlive the event it was read from (a forget, a
+   * prune), which makes this a real case and not a defensive one.
+   */
+  eventInProject(eventId: string | undefined, projectId?: string): boolean {
+    if (!eventId) return false;
+    const row = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM memory_events WHERE event_id=?`)
+      .get(eventId) as { scope?: string } | null;
+    return Boolean(row) && (row?.scope ?? '') === (projectId ?? '');
+  }
+
+  /**
+   * The active row that already carries this claim, if one does.
+   *
+   * The frame projection runs once per publication and must not pile up duplicates:
+   * `upsert` treats a same-value restatement as a coexistence and inserts another row.
+   */
+  findActiveEquivalent(candidate: BeliefCandidate): BeliefRecord[] {
+    const key = this.toCanonicalKey(candidate.subject, candidate.predicate, candidate.scope, candidate.canonicalKeyDiscriminator);
+    return this.findByCanonicalKey(key, candidate.projectId ?? '')
+      .filter((belief) => belief.status === 'active' && this.isSameBeliefValue(candidate.objectValue, belief.objectValue));
+  }
+
+  /**
+   * The identity of a claim.
+   *
+   * A `discriminator` makes the claim multi-valued: `张三 FRIEND_OF 李四` and
+   * `张三 FRIEND_OF 王五` are two claims, not one value that replaced another. A
+   * predicate without one is single-valued, which is what lets a preference supersede
+   * the value it replaced (#102).
+   */
+  private toCanonicalKey(subject: string, predicate: string, scope: ScopeType, discriminator?: string): string {
+    return discriminator === undefined
+      ? `${subject}|${predicate}|${scope}`
+      : `${subject}|${predicate}|${scope}|${discriminator}`;
+  }
+
+  /**
+   * Whether a predicate is a preference.
+   *
+   * One predicate, three sites (revision rule, weight matrix, decay). They had drifted
+   * before: `LIKES` was added to one and the other two still scored it as a fact.
+   */
+  private isPreferencePredicate(predicate: string): boolean {
+    return predicate.startsWith('preference.');
   }
 
   private getSourceTrust(sourceType: SourceType): number {
@@ -1136,6 +1199,14 @@ export class BeliefStore {
     } else if (intent === 'decision_lookup' || predicateHint === 'decision') {
       target.predicatePrefix = 'decision.';
       target.expectedValue = 'selected';
+    } else if (/(喜欢|讨厌|偏好|prefer|dislike|\blike\b)/i.test(query)) {
+      // A question that says "like" is asking about preferences whatever intent the
+      // caller passed. Host recall passes `recall`, so keying this on
+      // `preference_lookup` alone meant a projected preference could never be reached
+      // from the one path a host actually uses (#102).
+      target.predicatePrefix = 'preference.';
+      if (/(喜欢|prefer|\blike\b)/i.test(query)) target.expectedValue = 'like';
+      if (/(讨厌|dislike|不喜欢)/i.test(query)) target.expectedValue = 'dislike';
     } else if (intent === 'constraint_lookup' || predicateHint === 'constraint') {
       target.predicatePrefix = 'constraint.';
     } else if (intent === 'fact_lookup' || predicateHint === 'fact') {

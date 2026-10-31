@@ -1,27 +1,24 @@
 #!/usr/bin/env bun
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
+import { parseCliArgs, type CliArgs as Args } from './CliArgs.js';
 import { printCliJson } from './CliJson.js';
 
-type Args = Record<string, string | boolean> & { command?: string };
+const DREAM_COMMANDS = ['tick', 'night', 'status', 'retry'] as const;
 
 function parseArgs(argv: string[]): Args {
-  const [command, ...rest] = argv;
-  const args: Args = { command };
-  for (let index = 0; index < rest.length; index += 1) {
-    const item = rest[index];
-    if (!item.startsWith('--')) continue;
-    const key = item.slice(2);
-    const next = rest[index + 1];
-    if (!next || next.startsWith('--')) args[key] = true;
-    else { args[key] = next; index += 1; }
+  if (argv.includes('--promote')) {
+    throw new Error('dream tick does not promote; run `cogmem memory govern --project <id>` after the tick');
   }
-  return args;
+  return parseCliArgs(argv, { usage: usage(), commands: DREAM_COMMANDS });
 }
 
 function usage(): string {
   return [
-    'Usage: cogmem dream <tick|status|retry> [args]',
-    '  tick [--project <id>] [--mode auto|micro|normal|deep] [--max-episodes <n>] [--json]',
+    'Usage: cogmem dream <tick|night|status|retry> [args]',
+    '  tick [--project <id>] [--mode auto|micro|normal|deep] [--max-episodes <n>] [--json] [--db <memory.db>|--config <config.toml>]',
+    '  night [--project <id>] [--max-episodes <n>] [--json] [--db <memory.db>|--config <config.toml>]',
+    '         one Night: seal idle episodes, Dream up to N of them (default 50,',
+    '         oldest first), then project those episodes into the atlas. Safe to re-run.',
     '  status [--project <id>] [--json]',
     '  retry [--project <id>] [--json]',
     'A tick is explicit and conditional. It processes sealed episodes only and never executes tools.',
@@ -40,7 +37,9 @@ async function main(): Promise<void> {
   const kernel = openKernel(args);
   try {
     const projectId = stringArg(args, 'project');
-    const result = args.command === 'tick'
+    const result = args.command === 'night'
+      ? await kernel.runNight({ projectId, maxEpisodes: numberArg(args, 'max-episodes') })
+      : args.command === 'tick'
       ? await kernel.runDreamTick({ projectId, mode: modeArg(stringArg(args, 'mode')), maxEpisodes: numberArg(args, 'max-episodes') })
       : args.command === 'status'
         ? kernel.getEpisodeDreamStatus(projectId)

@@ -7,6 +7,29 @@ import {
   type MemoryKernel,
 } from '../factory.js';
 import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
+import {
+  OpenClawWorkspaceProfile,
+  HermesWorkspaceProfile,
+  MarkdownSourceLoader,
+  ConversationMarkdownAdapter,
+  HermesStateDbAdapter,
+  SoulMarkdownAdapter,
+  OpenClawDailyMemoryAdapter,
+  OpenClawSessionAdapter,
+  OpenClawMemoryIndexAdapter,
+  OpenClawUserProfileAdapter,
+  OpenClawPersonaAdapter,
+  buildEpisodeEnvelope,
+  type SourceDefinition,
+  type SourceAdapterKind,
+  type SourceAdapterDiagnostic,
+  type SourceAdapter,
+} from '../adapters/index.js';
+import { InstalledBatchProcessor, type BatchProgressEvent } from '../batch/InstalledBatchProcessor.js';
+import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
+import { resolve, join, basename, relative } from 'node:path';
+import { existsSync, statSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 export interface CogmemMcpTool {
   name: string;
@@ -35,6 +58,13 @@ export interface CogmemMcpRuntime {
   dbPath?: string;
   configPath?: string;
   cwd?: string;
+  /** Host identity this connection resolved to, e.g. `claude`, `cursor`, `codex`. */
+  hostId?: string;
+  /**
+   * The identity a credential resolved to, when one did. Outranks `hostId`, and nothing a
+   * caller sends may override it (ADR-0006).
+   */
+  authenticatedHostId?: string;
 }
 
 const STRING_SCHEMA = { type: 'string' };
@@ -64,13 +94,18 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
   return [
     {
       name: 'cogmem_remember_turn',
-      description: 'Write one user/agent turn into cogmem memory.',
+      description: 'Write one user/agent turn into cogmem memory. Pass the host\'s own turn id as '
+        + 'turnId to make a retry a replay: the same turnId with the same text writes nothing the '
+        + 'second time and returns the turn already recorded, while the same turnId with different '
+        + 'text is refused as a conflict. Without turnId the turn is still written, named after a '
+        + 'timestamp and a sequence, so a retry is a second copy.',
       inputSchema: {
         type: 'object',
         properties: {
           agentId: STRING_SCHEMA,
           projectId: STRING_SCHEMA,
           sessionId: STRING_SCHEMA,
+          turnId: STRING_SCHEMA,
           userText: STRING_SCHEMA,
           assistantText: STRING_SCHEMA,
           ingestMode: TURN_INGEST_MODE_SCHEMA,
@@ -80,7 +115,10 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
           timeZone: STRING_SCHEMA,
           projectTimeZone: STRING_SCHEMA,
         },
-        required: ['agentId', 'projectId', 'sessionId', 'userText'],
+        // Only what the caller owns. agentId/projectId/sessionId come from the
+        // connection (ADR-0006, #92); advertising them as required is what stopped a
+        // real host's agent from calling this tool at all — it had none of them to send.
+        required: ['userText'],
       },
       annotations: {
         title: 'Remember Turn',
@@ -178,7 +216,8 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
           text: STRING_SCHEMA, externalMessageId: STRING_SCHEMA, timestamp: NUMBER_SCHEMA,
           threadId: STRING_SCHEMA, turnId: STRING_SCHEMA, turnSeq: NUMBER_SCHEMA, localDate: STRING_SCHEMA, eventOrdinal: NUMBER_SCHEMA,
         },
-        required: ['projectId', 'sessionId', 'sourceAgent', 'role', 'text', 'externalMessageId'],
+        // Identity is the connection's; the message's own data is the caller's (#92).
+        required: ['role', 'text', 'externalMessageId'],
       },
       annotations: { title: 'Append Episode Message', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
@@ -193,7 +232,8 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
           sealBatch: { type: 'boolean' },
           forceSeal: { type: 'boolean' },
         },
-        required: ['projectId', 'sessionId', 'sourceAgent', 'messages'],
+        // Identity is the connection's; the messages are the caller's (#92).
+        required: ['messages'],
       },
       annotations: { title: 'Import Episode Messages', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
@@ -323,7 +363,7 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
     },
     {
       name: 'cogmem_candidate_review',
-      description: 'Apply one audited human review action to a needs-confirmation Dream candidate. Approve and correction relink require a distinct same-project raw user confirmation event; review never bypasses missing evidence or project scope.',
+      description: 'Apply one audited human review action to a needs-confirmation Dream candidate. approve and relink require confirmationEventId, a distinct same-project raw user event; relink additionally requires a correction candidate and an active same-project targetBeliefId, and it rebinds that correction to the named belief (correctedClaimKey, correctedBeliefCandidateIds, and targetBeliefId move together, and a previous target is kept as relinkedFromBeliefId); defer requires a future reviewAfter in epoch milliseconds; supersede requires a replacementCandidateId, which must be a different candidate in the same project, and omitting it fails with replacement_candidate_required. Each action consumes only its own inputs: confirmationEventId for approve and relink, targetBeliefId for relink, replacementCandidateId for supersede, reviewAfter for defer, and nothing for reject. Any of those four the chosen action does not consume is rejected with review_input_not_applicable and is never written into the audit row. Review never bypasses missing evidence or project scope.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -389,7 +429,7 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
     },
     {
       name: 'cogmem_maintenance_tick',
-      description: 'Run one explicit host-owned maintenance tick. This decays activation and returns suggested upkeep commands such as dream, govern, re-embed, or cogmem memory bind for unbound raw events; it never starts a hidden daemon.',
+      description: 'Run one explicit host-owned maintenance tick. This decays activation and returns suggested upkeep commands such as dream, govern, embedding backfill status, or cogmem memory bind for unbound raw events; it never starts a hidden daemon.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -433,7 +473,170 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
         idempotentHint: false,
       },
     },
+    {
+      name: 'cogmem_import_preview',
+      description: 'Dry-run scan agent memory sources (OpenClaw/Hermes) and return estimated record counts without ingesting. Use before import to verify source discovery.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          agent: { type: 'string', enum: ['openclaw', 'hermes'] },
+          workspaceRoot: STRING_SCHEMA,
+          projectId: STRING_SCHEMA,
+          configPath: STRING_SCHEMA,
+          date: STRING_SCHEMA,
+          sessionPaths: { type: 'array', items: STRING_SCHEMA },
+          memoryPaths: { type: 'array', items: STRING_SCHEMA },
+          stateDbPath: STRING_SCHEMA,
+          profilePath: STRING_SCHEMA,
+          sessionsDir: STRING_SCHEMA,
+          since: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
+          until: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
+          now: NUMBER_SCHEMA,
+          localDateNow: STRING_SCHEMA,
+          timeZone: STRING_SCHEMA,
+        },
+        required: ['agent', 'workspaceRoot'],
+      },
+      annotations: {
+        title: 'Import Preview',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    {
+      name: 'cogmem_import_apply',
+      description: 'Execute idempotent import of agent memory sources into cogmem. Runs the full pipeline: recordRawEvent -> ingest (vectorize+graph) -> consolidate -> rebuildMemoryAtlas. Returns ingested/skipped counts per source.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          agent: { type: 'string', enum: ['openclaw', 'hermes'] },
+          workspaceRoot: STRING_SCHEMA,
+          projectId: STRING_SCHEMA,
+          configPath: STRING_SCHEMA,
+          date: STRING_SCHEMA,
+          sessionPaths: { type: 'array', items: STRING_SCHEMA },
+          memoryPaths: { type: 'array', items: STRING_SCHEMA },
+          stateDbPath: STRING_SCHEMA,
+          profilePath: STRING_SCHEMA,
+          sessionsDir: STRING_SCHEMA,
+          since: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
+          until: { oneOf: [STRING_SCHEMA, NUMBER_SCHEMA] },
+          now: NUMBER_SCHEMA,
+          localDateNow: STRING_SCHEMA,
+          timeZone: STRING_SCHEMA,
+          reindexRaw: { type: 'boolean', default: false },
+        },
+        required: ['agent', 'workspaceRoot'],
+      },
+      annotations: {
+        title: 'Import Apply',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    {
+      name: 'cogmem_import_status',
+      description: 'Get the import state of a project: every registered source with its path, adapter kind, last processed timestamp and how many records it has already ingested. Sources are ordered most recently processed first; limit truncates the list while totalSources still reports the full count.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectId: STRING_SCHEMA,
+          limit: NUMBER_SCHEMA,
+        },
+        required: ['projectId'],
+      },
+      annotations: {
+        title: 'Import Status',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
   ];
+}
+
+const COGMEM_TOOL_NAMES = new Set(listCogmemMcpTools().map((tool) => tool.name));
+
+/**
+ * Whether `name` is a tool this build ships, independent of any profile.
+ *
+ * Both entry points need this question answered before they answer a
+ * profile question, and they must not disagree about the answer, so the set
+ * lives here and the protocol handler asks for it rather than rebuilding it.
+ * A name outside this set is answered as missing before a runtime kernel is
+ * opened: a host config that still names a tool this release does not ship
+ * must not touch (or create) a database to be told the tool does not exist.
+ */
+export function isCogmemMcpTool(name: string): boolean {
+  return COGMEM_TOOL_NAMES.has(name);
+}
+
+/**
+ * The tools that need an agent and a session to write with.
+ *
+ * Only these get identity defaults: `cogmem_recall` reads `agentId` as a *filter*,
+ * so filling it there would silently narrow what a connection can recall.
+ */
+const IDENTITY_WRITE_TOOLS = new Set([
+  'cogmem_remember_turn',
+  'cogmem_episode_append',
+  'cogmem_episode_import',
+]);
+
+/**
+ * The agent identity of this connection — the one authority for both reading and writing
+ * (ADR-0006, #92 direction ①).
+ *
+ * Three sources, in order of authority:
+ *
+ * 1. `runtime.authenticatedHostId` — set when a credential resolved the connection. It is
+ *    the only source that may never be overridden.
+ * 2. `runtime.hostId` — the host adapter's fixed identity (stdio `--host`, the bridge's
+ *    `agentId`). A fact about how the process was started, not a caller's claim.
+ * 3. The project the connection is bound to. A single-agent install has no host name of
+ *    its own, and its writes are recorded under the project it serves — which is also how
+ *    the CLI reads it back, so one installation still finds its own memory.
+ *
+ * A client-supplied `agentId` is **not** in that list. It used to be honoured on the write
+ * side only, so a host like pi (which sends `pi:default`) wrote memory that its own recall
+ * could not see: `isAgentRawEvent()` compares the event's `source_id` against the reader's
+ * agent, and the two disagreed (#92).
+ */
+function connectionAgentId(
+  runtime: CogmemMcpRuntime,
+  input: Record<string, unknown>,
+): string | undefined {
+  const authenticated = runtime.authenticatedHostId?.trim();
+  if (authenticated) return authenticated;
+  const host = runtime.hostId?.trim();
+  if (host) return host;
+  return optionalString(input.projectId);
+}
+
+/**
+ * Apply the connection's identity to a tool call.
+ *
+ * A caller may still *label* a turn with its own agent id, but only in metadata: the value
+ * it sends is kept as `clientAgentId` and the authoritative `agentId` is the connection's.
+ * Refusing a conflicting id outright would break hosts that always send one (pi does), and
+ * accepting it as the stored identity is the defect. Labelling keeps both facts.
+ */
+function withConnectionIdentity(
+  input: Record<string, unknown>,
+  runtime: CogmemMcpRuntime,
+): Record<string, unknown> {
+  const agent = connectionAgentId(runtime, input);
+  if (!agent) return input;
+  const clientAgentId = optionalString(input.agentId);
+  return {
+    ...input,
+    agentId: agent,
+    ...(clientAgentId && clientAgentId !== agent ? { clientAgentId } : {}),
+    sourceAgent: agent,
+    sessionId: input.sessionId ?? `${agent}-session`,
+  };
 }
 
 export async function callCogmemMcpTool(
@@ -441,17 +644,22 @@ export async function callCogmemMcpTool(
   args: Record<string, unknown> | undefined,
   runtime: CogmemMcpRuntime = {},
 ): Promise<CogmemMcpCallResult> {
-  const input = args || {};
+  const input = IDENTITY_WRITE_TOOLS.has(name)
+    ? withConnectionIdentity(args || {}, runtime)
+    : (args || {});
   let opened: { kernel: MemoryKernel; shouldClose: boolean } | undefined;
   try {
+    if (!isCogmemMcpTool(name)) {
+      return jsonResult({ error: `Unknown cogmem MCP tool: ${name}` }, true);
+    }
     opened = openRuntimeKernel(runtime);
     switch (name) {
       case 'cogmem_remember_turn':
         return await rememberTurn(opened.kernel, input);
       case 'cogmem_recall':
-        return recall(opened.kernel, input, false);
+        return recall(opened.kernel, input, false, runtime);
       case 'cogmem_explain_recall':
-        return recall(opened.kernel, input, true);
+        return recall(opened.kernel, input, true, runtime);
       case 'cogmem_strategy_plan': {
         const query = requiredString(input.query, 'query');
         const intent = opened.kernel.contextCortex.classifyIntent(query);
@@ -522,6 +730,12 @@ export async function callCogmemMcpTool(
         return jsonResult(opened.kernel.getEpisodeDreamStatus(optionalString(input.projectId)));
       case 'cogmem_memory_map':
         return jsonResult(opened.kernel.buildMemoryMap({ projectId: optionalString(input.projectId) }));
+      case 'cogmem_import_preview':
+        return await handleImportPreview(opened.kernel, input);
+      case 'cogmem_import_apply':
+        return await handleImportApply(opened.kernel, input);
+      case 'cogmem_import_status':
+        return handleImportStatus(opened.kernel, input);
       case 'cogmem_candidate_review':
         return jsonResult(opened.kernel.reviewDreamCandidate({
           candidateId: requiredString(input.candidateId, 'candidateId'),
@@ -709,8 +923,11 @@ function episodeStatus(kernel: MemoryKernel, input: Record<string, unknown>): Co
   const failedDreamAvailable = dream.failedRetryable + dream.failedTerminal > 0;
   const recentRawAvailable = episodes.length > 0 || kernel.episodeStore.countUnassignedRawEvents(projectId) > 0;
   const recommendedActions: string[] = [];
-  if (dreamBacklogAvailable) recommendedActions.push('cogmem_dream_tick_with_maintenance_mode');
-  if (dream.failedRetryable > 0) recommendedActions.push('cogmem_dream_retry');
+  // Callers read this list as "call these", so every `cogmem_*` value has to be a
+  // registered tool. One tick drains pending backlog, retry-scheduled work, and
+  // retryable failures alike (DreamScheduler counts all three), so both
+  // conditions name the same tool once.
+  if (dreamBacklogAvailable || dream.failedRetryable > 0) recommendedActions.push('cogmem_dream_tick');
   if (dream.failedTerminal > 0) recommendedActions.push('inspect_terminal_dream_failure');
   if (kernel.episodeStore.countUnassignedRawEvents(projectId) > 0) recommendedActions.push('cogmem_episode_repair');
   const highValueOpen = episodes.some((episode) => episode.status === 'open' && episode.importance >= 0.8);
@@ -836,6 +1053,7 @@ async function rememberTurn(kernel: MemoryKernel, input: Record<string, unknown>
     agentId: requiredString(input.agentId, 'agentId'),
     projectId: requiredString(input.projectId, 'projectId'),
     sessionId: requiredString(input.sessionId, 'sessionId'),
+    turnId: optionalString(input.turnId),
     userText: requiredString(input.userText, 'userText'),
     assistantText: optionalString(input.assistantText),
     ingestMode: optionalTurnIngestMode(input.ingestMode),
@@ -853,14 +1071,17 @@ function recall(
   kernel: MemoryKernel,
   input: Record<string, unknown>,
   includeExplanation: boolean,
+  runtime: CogmemMcpRuntime,
 ): CogmemMcpCallResult {
   const query = requiredString(input.query, 'query');
-  const requestedAgentId = optionalString(input.agentId);
   const requestedProjectId = optionalString(input.projectId);
   const limit = optionalNumber(input.limit);
   const startTime = optionalTime(input.since, 'since');
   const endTime = optionalTime(input.until, 'until');
-  const agentId = requestedAgentId || requestedProjectId || 'openclaw';
+  // The same authority the write side uses, so a connection reads exactly what it wrote
+  // (#92). The caller's `agentId` is not consulted: honouring it here is how a connection
+  // could ask for another agent's memory.
+  const agentId = connectionAgentId(runtime, input) || 'openclaw';
   const projectId = requestedProjectId || agentId;
 
   if (!includeExplanation) {
@@ -905,7 +1126,7 @@ function recall(
       items: result.items,
       warnings,
       semanticMemoryMayLag,
-      suggestedTool: recentEpisodeIngestion ? undefined : 'cogmem_episode_append_or_import',
+      suggestedTool: recentEpisodeIngestion ? undefined : 'cogmem_episode_append',
     });
   }
 
@@ -941,6 +1162,643 @@ function openRuntimeKernel(runtime: CogmemMcpRuntime): { kernel: MemoryKernel; s
     }),
     shouldClose: true,
   };
+}
+
+type AgentKind = 'openclaw' | 'hermes';
+
+interface ParsedArgs {
+  values: Record<string, string | boolean>;
+  lists: Record<string, string[]>;
+}
+
+interface AgentImportResult {
+  agent: AgentKind;
+  workspaceRoot: string;
+  projectId: string;
+  dbPath?: string;
+  dryRun: boolean;
+  window: {
+    start: number;
+    end: number;
+    label: string;
+  };
+  sourcesScanned: number;
+  sourcesChanged: number;
+  recordsParsed: number;
+  recordsWouldIngest: number;
+  recordsIngested: number;
+  skippedRecords: number;
+  rawRecordsAnchored?: number;
+  emptyEpisodesSkipped?: number;
+  reindexRaw?: boolean;
+  processedSourceIds: string[];
+  diagnostics: SourceAdapterDiagnostic[];
+  sourceResults: Array<{
+    sourceId: string;
+    sourcePath: string;
+    adapterKind: SourceAdapterKind;
+    recordsParsed: number;
+    recordsWouldIngest: number;
+    recordsIngested: number;
+    skippedRecords: number;
+    diagnostics: SourceAdapterDiagnostic[];
+  }>;
+}
+
+function parseArgs(argv: string[]): ParsedArgs {
+  const values: Record<string, string | boolean> = {};
+  const lists: Record<string, string[]> = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const item = argv[index];
+    if (!item.startsWith('--')) continue;
+    const key = item.slice(2);
+    const next = argv[index + 1];
+    if (!next || next.startsWith('--')) {
+      values[key] = true;
+      continue;
+    }
+    if (values[key] !== undefined) {
+      lists[key] = [...(lists[key] || []), next];
+    } else {
+      values[key] = next;
+    }
+    index += 1;
+  }
+  return { values, lists };
+}
+
+function stringArg(args: ParsedArgs, key: string): string | undefined {
+  const value = args.values[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function listArgs(args: ParsedArgs, key: string): string[] {
+  const value = args.values[key];
+  const first = typeof value === 'string' ? [value] : [];
+  return [...first, ...(args.lists[key] || [])];
+}
+
+function buildWindow(args: ParsedArgs): AgentImportResult['window'] {
+  const start = parseTime(stringArg(args, 'since'), 0, '--since');
+  const end = parseTime(stringArg(args, 'until'), Number.MAX_SAFE_INTEGER, '--until');
+  if (end <= start) throw new Error('--until must be later than --since');
+  return {
+    start,
+    end,
+    label: stringArg(args, 'date') || 'full-history',
+  };
+}
+
+function parseTime(value: string | undefined, fallback: number, flag: string): number {
+  if (!value) return fallback;
+  if (/^\d+$/.test(value)) return Number(value);
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) throw new Error(`Invalid ${flag}: ${value}`);
+  return parsed;
+}
+
+function buildAdapterMap(): Map<SourceAdapterKind, SourceAdapter> {
+  return new Map<SourceAdapterKind, SourceAdapter>([
+    ['conversation_markdown', new ConversationMarkdownAdapter()],
+    ['hermes_state_db', new HermesStateDbAdapter()],
+    ['soul_markdown', new SoulMarkdownAdapter()],
+    ['openclaw_daily_memory', new OpenClawDailyMemoryAdapter()],
+    ['openclaw_session', new OpenClawSessionAdapter()],
+    ['openclaw_memory_index', new OpenClawMemoryIndexAdapter()],
+    ['openclaw_user_profile', new OpenClawUserProfileAdapter()],
+    ['openclaw_persona', new OpenClawPersonaAdapter()],
+  ]);
+}
+
+function openKernel(
+  args: ParsedArgs,
+  workspaceRoot: string,
+): { kernel: MemoryKernel; dbPath: string; diagnostics: SourceAdapterDiagnostic[] } {
+  const explicitDb = stringArg(args, 'db');
+  if (explicitDb) {
+    const explicitTimeZone = stringArg(args, 'timezone');
+    const diagnostics: SourceAdapterDiagnostic[] = explicitTimeZone ? [] : [{
+      severity: 'warning',
+      code: 'project_timezone_missing_using_host_environment',
+      message: 'The explicit --db import did not provide --timezone; dates use the host environment timezone.',
+      filePath: explicitDb,
+      adapterKind: 'conversation_markdown',
+      fallbackHint: 'Pass --timezone <IANA> or use --config with project.timezone for reproducible imports.',
+    }];
+    return {
+      kernel: createMemoryKernel({ dbPath: explicitDb, projectTimeZone: explicitTimeZone }),
+      dbPath: explicitDb,
+      diagnostics,
+    };
+  }
+
+  const explicitConfig = stringArg(args, 'config');
+  const configResolution = explicitConfig
+    ? resolveCogmemConfigPath({ configPath: resolve(explicitConfig) })
+    : resolveCogmemConfigPath({ cwd: workspaceRoot });
+  if (configResolution.kind === 'toml') {
+    const loaded = loadCogmemConfig({ configPath: configResolution.path, cwd: workspaceRoot });
+    const error = loaded.diagnostics.find((item) => item.severity === 'error');
+    if (error) throw new Error(`${error.code}: ${error.message}`);
+    if (!loaded.options.dbPath) {
+      throw new Error(`Missing core.db_path in ${configResolution.path}. Run cogmem-init again or pass --db <memory.db>.`);
+    }
+    return {
+      kernel: createMemoryKernelFromConfig({ configPath: configResolution.path, cwd: workspaceRoot }),
+      dbPath: loaded.options.dbPath,
+      diagnostics: [],
+    };
+  }
+
+  throw new Error(`Missing cogmem config at ${configResolution.path}. Run cogmem-init first or pass --db <memory.db> / --config <config.toml>.`);
+}
+
+function buildSources(
+  agent: AgentKind,
+  workspaceRoot: string,
+  args: ParsedArgs,
+  projectId: string,
+): SourceDefinition[] {
+  if (agent === 'openclaw') {
+    const profile = new OpenClawWorkspaceProfile(workspaceRoot);
+    return profile.buildInstalledBatchSources({
+      projectId,
+      date: stringArg(args, 'date'),
+      sessionPaths: listArgs(args, 'session').map((item) => resolve(workspaceRoot, item)),
+      optionalMemoryPaths: listArgs(args, 'memory').map((item) => resolve(workspaceRoot, item)),
+    });
+  }
+  const profile = new HermesWorkspaceProfile(workspaceRoot);
+  return profile.buildSourceDefinitions({
+    projectId,
+    profilePath: stringArg(args, 'profile'),
+    sessionDir: stringArg(args, 'sessions'),
+    sessionPaths: listArgs(args, 'session').map((item) => resolve(workspaceRoot, item)),
+    stateDbPath: stringArg(args, 'state-db') ? resolve(workspaceRoot, stringArg(args, 'state-db') as string) : undefined,
+  });
+}
+
+async function handleImportPreview(
+  kernel: MemoryKernel,
+  input: Record<string, unknown>,
+): Promise<CogmemMcpCallResult> {
+  const agent = requiredString(input.agent, 'agent') as AgentKind;
+  const workspaceRoot = requiredString(input.workspaceRoot, 'workspaceRoot');
+  const projectId = requiredString(input.projectId, 'projectId');
+  const configPath = optionalString(input.configPath);
+  const date = optionalString(input.date);
+  const sessionPaths = (input.sessionPaths as string[]) || [];
+  const memoryPaths = (input.memoryPaths as string[]) || [];
+  const stateDbPath = optionalString(input.stateDbPath);
+  const profilePath = optionalString(input.profilePath);
+  const sessionsDir = optionalString(input.sessionsDir);
+  const since = optionalString(input.since) || optionalNumber(input.since)?.toString();
+  const until = optionalString(input.until) || optionalNumber(input.until)?.toString();
+  const now = optionalNumber(input.now);
+  const localDateNow = optionalString(input.localDateNow);
+  const timeZone = optionalString(input.timeZone);
+
+  const args = parseArgs([
+    ...(configPath ? ['--config', configPath] : []),
+    ...(date ? ['--date', date] : []),
+    ...sessionPaths.flatMap((p) => ['--session', p]),
+    ...memoryPaths.flatMap((p) => ['--memory', p]),
+    ...(stateDbPath ? ['--state-db', stateDbPath] : []),
+    ...(profilePath ? ['--profile', profilePath] : []),
+    ...(sessionsDir ? ['--sessions', sessionsDir] : []),
+    ...(since ? ['--since', since] : []),
+    ...(until ? ['--until', until] : []),
+    ...(now ? ['--now', String(now)] : []),
+    ...(localDateNow ? ['--localDateNow', localDateNow] : []),
+    ...(timeZone ? ['--timeZone', timeZone] : []),
+  ]);
+
+  const sources = buildSources(agent, workspaceRoot, args, projectId);
+  if (sources.length === 0) {
+    throw new Error(`No ${agent} memory sources found in ${workspaceRoot}.`);
+  }
+
+  const window = buildWindow(args);
+
+  const loader = new MarkdownSourceLoader();
+  const adapters = buildAdapterMap();
+  const diagnostics: SourceAdapterDiagnostic[] = [];
+  const sourceResults: AgentImportResult['sourceResults'] = [];
+  let recordsParsed = 0;
+
+  for (const source of sources) {
+    const adapter = adapters.get(source.adapterKind);
+    if (!adapter) continue;
+    const snapshot = loader.read(source);
+    const adapted = adapter.adapt(source, snapshot, { start: window.start, end: window.end });
+    diagnostics.push(...(adapted.diagnostics || []));
+    recordsParsed += adapted.records.length;
+    sourceResults.push({
+      sourceId: source.sourceId,
+      sourcePath: source.sourcePath,
+      adapterKind: source.adapterKind,
+      recordsParsed: adapted.records.length,
+      recordsWouldIngest: adapted.records.length,
+      recordsIngested: 0,
+      skippedRecords: 0,
+      diagnostics: adapted.diagnostics || [],
+    });
+  }
+
+  return jsonResult({
+    agent,
+    workspaceRoot,
+    projectId,
+    dryRun: true,
+    window,
+    sourcesScanned: sources.length,
+    sourcesChanged: sources.length,
+    recordsParsed,
+    recordsWouldIngest: recordsParsed,
+    recordsIngested: 0,
+    skippedRecords: 0,
+    rawRecordsAnchored: 0,
+    emptyEpisodesSkipped: 0,
+    reindexRaw: false,
+    processedSourceIds: [],
+    diagnostics,
+    sourceResults,
+  });
+}
+
+async function handleImportApply(
+  kernel: MemoryKernel,
+  input: Record<string, unknown>,
+): Promise<CogmemMcpCallResult> {
+  const agent = requiredString(input.agent, 'agent') as AgentKind;
+  const workspaceRoot = requiredString(input.workspaceRoot, 'workspaceRoot');
+  const projectId = requiredString(input.projectId, 'projectId');
+  const configPath = optionalString(input.configPath);
+  const date = optionalString(input.date);
+  const sessionPaths = (input.sessionPaths as string[]) || [];
+  const memoryPaths = (input.memoryPaths as string[]) || [];
+  const stateDbPath = optionalString(input.stateDbPath);
+  const profilePath = optionalString(input.profilePath);
+  const sessionsDir = optionalString(input.sessionsDir);
+  const since = optionalString(input.since) || optionalNumber(input.since)?.toString();
+  const until = optionalString(input.until) || optionalNumber(input.until)?.toString();
+  const now = optionalNumber(input.now);
+  const localDateNow = optionalString(input.localDateNow);
+  const timeZone = optionalString(input.timeZone);
+  const reindexRaw = Boolean(input.reindexRaw);
+
+  const args = parseArgs([
+    ...(configPath ? ['--config', configPath] : []),
+    ...(date ? ['--date', date] : []),
+    ...sessionPaths.flatMap((p) => ['--session', p]),
+    ...memoryPaths.flatMap((p) => ['--memory', p]),
+    ...(stateDbPath ? ['--state-db', stateDbPath] : []),
+    ...(profilePath ? ['--profile', profilePath] : []),
+    ...(sessionsDir ? ['--sessions', sessionsDir] : []),
+    ...(since ? ['--since', since] : []),
+    ...(until ? ['--until', until] : []),
+    ...(now ? ['--now', String(now)] : []),
+    ...(localDateNow ? ['--localDateNow', localDateNow] : []),
+    ...(timeZone ? ['--timeZone', timeZone] : []),
+    ...(reindexRaw ? ['--reindex-raw'] : []),
+  ]);
+
+  const sources = buildSources(agent, workspaceRoot, args, projectId);
+  if (sources.length === 0) {
+    throw new Error(`No ${agent} memory sources found in ${workspaceRoot}.`);
+  }
+
+  const window = buildWindow(args);
+
+  if (reindexRaw) {
+    return await reindexRawSources({ agent, args, workspaceRoot, projectId, sources, window, kernel });
+  }
+
+  return await importSources({ agent, args, workspaceRoot, projectId, sources, window, kernel });
+}
+
+async function importSources(input: {
+  agent: AgentKind;
+  args: ParsedArgs;
+  workspaceRoot: string;
+  projectId: string;
+  sources: SourceDefinition[];
+  window: AgentImportResult['window'];
+  kernel: MemoryKernel;
+}): Promise<CogmemMcpCallResult> {
+  const importedEpisodeIds = new Set<string>();
+  let emptyEpisodesSkipped = 0;
+  const processor = new InstalledBatchProcessor({
+    cursorStore: input.kernel.cursorStore,
+    ingestBatch: async (items) => {
+      const neurons = [];
+      for (const item of items) neurons.push(await input.kernel.ingest(item));
+      return neurons;
+    },
+    recordRawEvidence: async (envelope) => {
+      const anchored = await recordRawImportedEvidence(input.kernel, input.projectId, envelope);
+      if (anchored.episodeId) importedEpisodeIds.add(anchored.episodeId);
+      return anchored.event;
+    },
+    runOfflineWindow: (window) => input.kernel.consolidate({
+      projectId: input.projectId,
+      startTime: window.start,
+      endTime: window.end,
+    }),
+    onProgress: undefined,
+  });
+
+  const summary = await processor.runOnce({
+    window: input.window,
+    sources: input.sources,
+  });
+  for (const episodeId of importedEpisodeIds) {
+    const episode = input.kernel.getEpisode(episodeId);
+    if (episode?.status !== 'sealed') {
+      emptyEpisodesSkipped += sealImportedEpisodeIfReady(
+        input.kernel,
+        episodeId,
+        `${input.agent}_import_batch_boundary`,
+      ) ? 0 : 1;
+    }
+  }
+  return jsonResult({
+    agent: input.agent,
+    workspaceRoot: input.workspaceRoot,
+    projectId: input.projectId,
+    dryRun: false,
+    window: input.window,
+    sourcesScanned: summary.sourcesScanned,
+    sourcesChanged: summary.sourcesChanged,
+    recordsParsed: summary.recordsParsed,
+    recordsWouldIngest: summary.recordsIngested,
+    recordsIngested: summary.recordsIngested,
+    skippedRecords: summary.skippedRecords,
+    rawRecordsAnchored: summary.recordsIngested,
+    emptyEpisodesSkipped,
+    reindexRaw: false,
+    processedSourceIds: summary.processedSourceIds,
+    diagnostics: summary.adapterDiagnostics,
+    sourceResults: summary.sourceResults.map((item) => ({
+      sourceId: item.sourceId,
+      sourcePath: item.sourcePath,
+      adapterKind: item.adapterKind,
+      recordsParsed: item.recordsParsed,
+      recordsWouldIngest: item.recordsIngested,
+      recordsIngested: item.recordsIngested,
+      skippedRecords: item.skippedRecords,
+      diagnostics: item.diagnostics,
+    })),
+  });
+}
+
+async function reindexRawSources(input: {
+  agent: AgentKind;
+  args: ParsedArgs;
+  workspaceRoot: string;
+  projectId: string;
+  sources: SourceDefinition[];
+  window: AgentImportResult['window'];
+  kernel: MemoryKernel;
+}): Promise<CogmemMcpCallResult> {
+  const loader = new MarkdownSourceLoader();
+  const adapters = buildAdapterMap();
+  const diagnostics: SourceAdapterDiagnostic[] = [];
+  const sourceResults: AgentImportResult['sourceResults'] = [];
+  const processedSourceIds: string[] = [];
+  let recordsParsed = 0;
+  let rawRecordsAnchored = 0;
+  let skippedRecords = 0;
+  const importedEpisodeIds = new Set<string>();
+  let emptyEpisodesSkipped = 0;
+
+  for (const source of input.sources) {
+    const adapter = adapters.get(source.adapterKind);
+    if (!adapter) continue;
+    const snapshot = loader.read(source);
+    const adapted = adapter.adapt(source, snapshot, { start: input.window.start, end: input.window.end });
+    diagnostics.push(...(adapted.diagnostics || []));
+    recordsParsed += adapted.records.length;
+    let sourceAnchored = 0;
+    let sourceSkipped = 0;
+    for (const record of adapted.records) {
+      const envelope = buildEpisodeEnvelope(source, record);
+      const anchored = await recordRawImportedEvidence(input.kernel, input.projectId, envelope);
+      if (anchored.episodeId) importedEpisodeIds.add(anchored.episodeId);
+      if (anchored.created) {
+        sourceAnchored += 1;
+      } else {
+        sourceSkipped += 1;
+      }
+    }
+    rawRecordsAnchored += sourceAnchored;
+    skippedRecords += sourceSkipped;
+    if (adapted.records.length > 0) processedSourceIds.push(source.sourceId);
+    sourceResults.push({
+      sourceId: source.sourceId,
+      sourcePath: source.sourcePath,
+      adapterKind: source.adapterKind,
+      recordsParsed: adapted.records.length,
+      recordsWouldIngest: adapted.records.length,
+      recordsIngested: sourceAnchored,
+      skippedRecords: sourceSkipped,
+      diagnostics: adapted.diagnostics || [],
+    });
+  }
+  for (const episodeId of importedEpisodeIds) {
+    const episode = input.kernel.getEpisode(episodeId);
+    if (episode?.status !== 'sealed') {
+      emptyEpisodesSkipped += sealImportedEpisodeIfReady(
+        input.kernel,
+        episodeId,
+        `${input.agent}_reindex_batch_boundary`,
+      ) ? 0 : 1;
+    }
+  }
+
+  return jsonResult({
+    agent: input.agent,
+    workspaceRoot: input.workspaceRoot,
+    projectId: input.projectId,
+    dryRun: false,
+    reindexRaw: true,
+    window: input.window,
+    sourcesScanned: input.sources.length,
+    sourcesChanged: processedSourceIds.length,
+    recordsParsed,
+    recordsWouldIngest: recordsParsed,
+    recordsIngested: rawRecordsAnchored,
+    skippedRecords,
+    rawRecordsAnchored,
+    emptyEpisodesSkipped,
+    processedSourceIds,
+    diagnostics,
+    sourceResults,
+  });
+}
+
+function sealImportedEpisodeIfReady(kernel: MemoryKernel, episodeId: string, reason: string): boolean {
+  if (kernel.listEpisodeEventLinks(episodeId).length === 0) return false;
+  kernel.sealImportedEpisode(episodeId, { reason });
+  return true;
+}
+
+async function recordRawImportedEvidence(
+  kernel: MemoryKernel,
+  projectId: string,
+  envelope: any,
+): Promise<{ event: any; created: boolean; episodeId?: string }> {
+  const sourceRef = envelope.ingestInput.sourceRefs?.[0];
+  const record = envelope.record;
+  const metadata = record.metadata || {};
+  const sourceLocalDate = typeof metadata.localDate === 'string' ? metadata.localDate : undefined;
+  const sourceTimeZone = typeof metadata.timeZone === 'string' ? metadata.timeZone : undefined;
+  const role = sourceRef?.role === 'assistant'
+    ? 'assistant'
+    : sourceRef?.role === 'tool'
+      ? 'tool'
+      : sourceRef?.role === 'system'
+        ? 'system'
+        : record.role === 'agent'
+          ? 'assistant'
+          : record.role === 'user'
+            ? 'user'
+            : 'system';
+  const threadId = sourceRef?.threadId || (typeof metadata.threadId === 'string' ? metadata.threadId : undefined) || record.provenance.sourceId;
+  const sessionId = sourceRef?.sessionId || (typeof metadata.sessionId === 'string' ? metadata.sessionId : undefined) || record.provenance.sourceId;
+  const eventOrdinal = sourceRef?.eventOrdinal ?? sourceRef?.sourceOffset;
+  const allowNonUserEpisodeStart = metadata.importedSummarySupport === true || record.provenance.reliabilityClass === 'imported_summary';
+  const importAnchor = createHash('sha256').update(JSON.stringify({
+    sourceId: record.provenance.sourceId,
+    recordId: record.recordId ?? null,
+    sourcePath: sourceRef?.sourcePath ?? null,
+    lineStart: sourceRef?.lineStart ?? null,
+    lineEnd: sourceRef?.lineEnd ?? null,
+    eventOrdinal: eventOrdinal ?? null,
+  })).digest('hex');
+  const contentHash = createHash('sha256').update(record.text).digest('hex');
+  const existing = findImportedRawAnchor(kernel, {
+    projectId,
+    threadId,
+    sourceId: record.provenance.sourceId,
+    importAnchor,
+    contentHash,
+  });
+  if (existing) {
+    if (existing.contentHash !== contentHash) throw new Error(`import_anchor_content_conflict:${importAnchor}`);
+    let link = kernel.episodeStore.getEventLink(existing.eventId);
+    if (!link && !kernel.episodeStore.hasEventDisposition(existing.eventId)) {
+      await kernel.assembleEpisodeTurnAsync([existing], {
+        projectId,
+        sessionId,
+        sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
+        now: record.timestamp,
+        allowNonUserEpisodeStart,
+      });
+      link = kernel.episodeStore.getEventLink(existing.eventId);
+    }
+    return { event: existing, created: false, episodeId: link?.episodeId };
+  }
+
+  const event = kernel.recordRawEvent({
+    projectId,
+    workspaceId: projectId,
+    threadId,
+    sessionId,
+    turnId: sourceRef?.turnId || record.turnId || record.recordId,
+    turnSeq: sourceRef?.turnSeq,
+    role,
+    rawEventType: 'message',
+    content: record.text,
+    eventOrdinal,
+    occurredAt: record.timestamp,
+    localDate: sourceLocalDate,
+    timeZone: sourceTimeZone,
+    sourceId: record.provenance.sourceId,
+    sourceOffset: sourceRef?.sourceOffset,
+    lineStart: sourceRef?.lineStart,
+    lineEnd: sourceRef?.lineEnd,
+    charStart: sourceRef?.charStart,
+    charEnd: sourceRef?.charEnd,
+    metadata: {
+      ...metadata,
+      imported: true,
+      importAnchor,
+      sourcePath: record.provenance.sourcePath,
+      sourceType: record.provenance.sourceType,
+      sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
+      adapterVersion: record.provenance.adapterVersion,
+      reliabilityClass: record.provenance.reliabilityClass,
+      sourceRef,
+      tags: envelope.ingestInput.tags || [],
+    },
+  });
+  const assembly = await kernel.assembleEpisodeTurnAsync([event], {
+    projectId,
+    sessionId,
+    sourceAgent: record.provenance.sourceType || record.provenance.sourceId,
+    now: record.timestamp,
+    allowNonUserEpisodeStart,
+  });
+  return { event, created: true, episodeId: assembly.episode?.episodeId };
+}
+
+function findImportedRawAnchor(
+  kernel: MemoryKernel,
+  input: {
+    projectId: string;
+    threadId: string;
+    sourceId: string;
+    importAnchor: string;
+    contentHash?: string;
+  },
+): any {
+  const indexed = kernel.eventStore.findImportedEventAnchor(input.projectId, input.sourceId, input.importAnchor);
+  if (indexed) return indexed;
+  return kernel.getThreadEvents(input.threadId, { projectId: input.projectId, limit: 10_000 }).find((event) => {
+    const payload = event.payload as { metadata?: Record<string, unknown> };
+    return event.sourceId === input.sourceId
+      && payload.metadata?.importAnchor === input.importAnchor;
+  });
+}
+
+function handleImportStatus(
+  kernel: MemoryKernel,
+  input: Record<string, unknown>,
+): CogmemMcpCallResult {
+  const projectId = requiredString(input.projectId, 'projectId');
+  const requested = optionalNumber(input.limit);
+  if (requested !== undefined && (!Number.isInteger(requested) || requested < 1)) {
+    throw new Error('limit must be a positive integer');
+  }
+  const limit = requested ?? 50;
+
+  const cursors = kernel.cursorStore.listRegisteredSources().filter((c) => c.projectId === projectId);
+  const processedRecords = cursors.map((cursor) => {
+    const hashes = kernel.cursorStore.listProcessedRecordHashes(cursor.sourceId, cursor.contentWindowStart || 0, cursor.contentWindowEnd || 0, projectId);
+    return {
+      sourceId: cursor.sourceId,
+      sourcePath: cursor.sourcePath,
+      sourceType: cursor.sourceType,
+      lastProcessedAt: cursor.lastProcessedAt,
+      lastSeenHash: cursor.lastSeenHash,
+      lastSeenMtime: cursor.lastSeenMtime,
+      contentWindowStart: cursor.contentWindowStart,
+      contentWindowEnd: cursor.contentWindowEnd,
+      processedRecordCount: hashes.size,
+    };
+  });
+  // listRegisteredSources() is ordered updated_at DESC, source_id ASC, so slicing is stable
+  // and the newest sources are the ones a caller with a small limit sees.
+  const sources = processedRecords.slice(0, limit);
+
+  return jsonResult({
+    projectId,
+    sources,
+    totalSources: cursors.length,
+    returnedSources: sources.length,
+    limit,
+  });
 }
 
 function jsonResult(payload: object, isError = false): CogmemMcpCallResult {

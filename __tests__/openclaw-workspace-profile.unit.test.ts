@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { OpenClawWorkspaceProfile } from '../src/adapters/openclaw/OpenClawWorkspaceProfile.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('OpenClawWorkspaceProfile builds default source definitions', () => {
-  const root = mkdtempSync(join(tmpdir(), 'openclaw-profile-'));
+  const root = makeTempDir('openclaw-profile-');
   mkdirSync(join(root, 'memory'), { recursive: true });
   writeFileSync(join(root, 'USER.md'), '# User\nPrefers direct answers.');
   writeFileSync(join(root, 'SOUL.md'), '# Soul\nActs as a coding agent.');
@@ -24,7 +24,7 @@ test('OpenClawWorkspaceProfile builds default source definitions', () => {
 });
 
 test('OpenClawWorkspaceProfile includes same-day slugged memory files for date-scoped imports', () => {
-  const root = mkdtempSync(join(tmpdir(), 'openclaw-profile-'));
+  const root = makeTempDir('openclaw-profile-');
   mkdirSync(join(root, 'memory'), { recursive: true });
   writeFileSync(join(root, 'memory', '2026-06-03.md'), 'Base daily memory.');
   writeFileSync(join(root, 'memory', '2026-06-03-1207-2.md'), 'Slugged daily memory.');
@@ -40,7 +40,7 @@ test('OpenClawWorkspaceProfile includes same-day slugged memory files for date-s
 });
 
 test('OpenClawWorkspaceProfile ignores operational bootstrap files by default', () => {
-  const root = mkdtempSync(join(tmpdir(), 'openclaw-profile-'));
+  const root = makeTempDir('openclaw-profile-');
   writeFileSync(join(root, 'AGENTS.md'), '# Agent instructions');
 
   const profile = new OpenClawWorkspaceProfile(root);

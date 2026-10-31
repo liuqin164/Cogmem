@@ -30,8 +30,4 @@ export function fromAtlasEdgeEndpoint(type: string, id: string, projectId: strin
   return encodeAtlasNodeId(type, id, projectId);
 }
 
-export function isProjectScopedAtlasType(type: string): boolean {
-  return PROJECT_SCOPED.has(type);
-}
-
 export type { MemoryAtlasNodeType };

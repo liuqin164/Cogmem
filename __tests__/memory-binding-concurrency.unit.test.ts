@@ -1,14 +1,14 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
 import { memoryEdgeId } from '../src/binding/MemoryBindingIdentity.js';
 import { MemoryBindingStore } from '../src/store/MemoryBindingStore.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('independent writers atomically merge aliases and edge evidence', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'cogmem-binding-writers-'));
+  const directory = makeTempDir('cogmem-binding-writers-');
   const dbPath = join(directory, 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   kernel.memoryBindingStore.upsertEntity({

@@ -3,6 +3,7 @@ import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfi
 import { DEFAULT_VECTOR_DIMENSION, parseVectorDimensionValue } from '../config/VectorDimension.js';
 import { compactStorage, type CompactableNeuronStatus } from '../storage/StorageCompactor.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
 
 interface Args {
   dbPath?: string;
@@ -66,6 +67,7 @@ function parseStatuses(value: string): CompactableNeuronStatus[] {
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['apply', 'config', 'db', 'dimension', 'dry-run', 'json', 'project', 'status'] });
   const args = parseArgs(Bun.argv.slice(2));
   const resolution = args.configPath ? resolveCogmemConfigPath({ configPath: args.configPath }) : resolveCogmemConfigPath();
   const loaded = resolution.kind === 'toml' ? loadCogmemConfig({ configPath: resolution.path }) : undefined;

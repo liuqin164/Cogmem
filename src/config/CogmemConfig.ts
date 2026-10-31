@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { AesGcmEncryptionProvider } from '../encryption/index.js';
 import type { MemoryKernelOptions } from '../factory.js';
@@ -35,6 +35,11 @@ export interface CogmemConfigResolutionOptions {
 export interface LoadedCogmemConfig {
   configPath: string;
   homeDir: string;
+  /**
+   * The directory that contains `.cogmem/` — derived, never declared (ADR-0010).
+   * `homeDir` is the config's parent (`<ws>/.cogmem`); this is the Workspace.
+   */
+  workspaceRoot: string;
   options: MemoryKernelOptions;
   modelRegistry: ModelRegistry;
   paths: {
@@ -51,6 +56,10 @@ export interface LoadedCogmemConfig {
       enabled: boolean;
       workspaceDir?: string;
     };
+    pi: {
+      enabled: boolean;
+      workspaceDir?: string;
+    };
   };
   diagnostics: ConfigDiagnosticLike[];
 }
@@ -61,6 +70,31 @@ type UnknownRecord = Record<string, unknown>;
 
 export function defaultCogmemHome(env: EnvLike = process.env): string {
   return join(env.HOME || homedir(), '.cogmem');
+}
+
+/**
+ * The home of the account running this process, ignoring `$HOME`.
+ *
+ * Both `os.homedir()` and `os.userInfo()` honour `$HOME` on POSIX, so neither
+ * can tell a test with an overridden HOME from the real user. The password
+ * database can, which is what makes it usable as a boundary for the
+ * project-config walk: a config under the account's home is a global config.
+ */
+function osUserHome(): string | undefined {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+  if (uid === undefined) return undefined;
+  try {
+    const passwd = readFileSync('/etc/passwd', 'utf8');
+    for (const line of passwd.split('\n')) {
+      const fields = line.split(':');
+      if (fields.length < 6) continue;
+      if (Number(fields[2]) !== uid) continue;
+      return fields[5] || undefined;
+    }
+  } catch {
+    // No passwd database (or not readable): fall back to no extra boundary.
+  }
+  return undefined;
 }
 
 export function defaultCogmemConfigPath(env: EnvLike = process.env): string {
@@ -75,13 +109,96 @@ export function resolveCogmemConfigPath(options: CogmemConfigResolutionOptions =
     return { kind: 'toml', path: resolvePath(explicit.trim(), cwd, env) };
   }
 
-  const projectConfig = findUp(cwd, join('.cogmem', 'config.toml'));
+  const globalConfig = defaultCogmemConfigPath(env);
+  // The walk up for a project config stops at every home it could reach:
+  // `<home>/.cogmem/config.toml` is that home's *global* config, never a project
+  // one. Without the stop, a run with an overridden HOME adopts another user's
+  // config, and any test that meant to isolate itself inherits the developer's.
+  const projectConfig = findUp(cwd, join('.cogmem', 'config.toml'), [dirname(globalConfig), osUserHome()]);
   if (projectConfig) return { kind: 'toml', path: projectConfig };
 
-  const globalConfig = defaultCogmemConfigPath(env);
   if (existsSync(globalConfig)) return { kind: 'toml', path: globalConfig };
 
   return { kind: 'missing', path: globalConfig };
+}
+
+/**
+ * The Workspace: the directory that contains `.cogmem/`.
+ *
+ * Derived, never declared (ADR-0010). The OpenClaw plugin id is a hash of this
+ * path, so two commands that derive it differently compute two identities and
+ * `doctor` can never see the plugin `connect` installed. Every command that
+ * needs to know where it is asks here.
+ *
+ * `--config` decides it when given: the Workspace is the directory whose
+ * `.cogmem/` holds that config. Otherwise it is the nearest ancestor with a
+ * `.cogmem/config.toml`, then the account's global one — which is the same walk
+ * `resolveCogmemConfigPath` performs, deliberately not a second copy of it. Only
+ * when no config exists anywhere is it the current directory, where `init` will
+ * create one.
+ */
+export function resolveWorkspaceRoot(options: CogmemConfigResolutionOptions = {}): string {
+  const resolution = resolveCogmemConfigPath(options);
+  if (resolution.kind === 'toml') return workspaceOfConfigPath(resolution.path);
+  return resolve(options.cwd || process.cwd());
+}
+
+/**
+ * The workspace a host's own files belong to.
+ *
+ * The Workspace, unless the config overrides it for that host — which is only
+ * for a host whose files are genuinely elsewhere (Hermes' `~/.hermes`), and is
+ * resolved relative to the Workspace rather than to the config directory. It is
+ * one function because `connect`, `doctor` and `update` must agree: the plugin id
+ * is a hash of this path, so two answers are two identities.
+ */
+/** Every host `connect` can wire. One union, so a new host cannot be half-added. */
+export type CogmemHost = 'openclaw' | 'hermes' | 'pi';
+
+export function hostWorkspaceFor(loaded: LoadedCogmemConfig, host: CogmemHost): string {
+  return loaded.integrations[host].workspaceDir || loaded.workspaceRoot;
+}
+
+function workspaceOfConfigPath(configPath: string): string {
+  const dir = dirname(resolve(configPath));
+  return basename(dir) === '.cogmem' ? dirname(dir) : dir;
+}
+
+/**
+ * Record that a host is wired: `enabled = true` under `[integrations.<host>]`,
+ * adding the section when the file has none.
+ *
+ * Text-level rather than a TOML round trip, because a serializer would drop the
+ * comments and ordering an operator put into a file this command owns exactly one
+ * boolean of (ADR-0010). A file that already says `true` is not rewritten, so a
+ * repeated `connect` leaves the config byte-identical.
+ */
+export function enableHostIntegration(configPath: string, host: CogmemHost): { configPath: string; changed: boolean } {
+  const path = resolve(configPath);
+  const original = readFileSync(path, 'utf8');
+  const lines = original.replace(/\r\n/g, '\n').split('\n');
+  // Whitespace inside the brackets is legal TOML, and a padded header that read
+  // as "no section" would get a second one appended — a file that no longer
+  // parses, in the config every later command reads.
+  const header = lines.findIndex((line) => line.replace(/\s*#.*$/, '').replace(/\s+/g, '') === `[integrations.${host}]`);
+
+  if (header === -1) {
+    const prefix = original.trimEnd();
+    writeFileSync(path, `${prefix}${prefix ? '\n\n' : ''}[integrations.${host}]\nenabled = true\n`, 'utf8');
+    return { configPath: path, changed: true };
+  }
+
+  let end = header + 1;
+  while (end < lines.length && !/^\s*\[/.test(lines[end])) end += 1;
+  const enabled = lines.findIndex((line, index) => index > header && index < end && /^\s*enabled\s*=/.test(line));
+  if (enabled !== -1) {
+    if (/^\s*enabled\s*=\s*true\s*$/.test(lines[enabled])) return { configPath: path, changed: false };
+    lines[enabled] = 'enabled = true';
+  } else {
+    lines.splice(header + 1, 0, 'enabled = true');
+  }
+  writeFileSync(path, `${lines.join('\n').replace(/\n+$/u, '')}\n`, 'utf8');
+  return { configPath: path, changed: true };
 }
 
 export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedCogmemConfig {
@@ -93,6 +210,7 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   const env = options.env || process.env;
   const configPath = resolution.path;
   const homeDir = dirname(configPath);
+  const workspaceRoot = workspaceOfConfigPath(configPath);
   const diagnostics: ConfigDiagnosticLike[] = [];
   let parsed: unknown;
 
@@ -119,6 +237,7 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   const integrations = section(root, 'integrations');
   const openclaw = section(integrations, 'openclaw');
   const hermes = section(integrations, 'hermes');
+  const pi = section(integrations, 'pi');
 
   const optionsOut: MemoryKernelOptions = {};
 
@@ -246,18 +365,22 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
 
   const openclawEnabled = booleanValue(openclaw.enabled) === true;
   const hermesEnabled = booleanValue(hermes.enabled) === true;
-  const openclawWorkspaceDir = maybeResolveWorkspace(openclaw.workspace_dir, homeDir, env, diagnostics);
-  const hermesWorkspaceDir = maybeResolveWorkspace(hermes.workspace_dir, homeDir, env, diagnostics);
+  const piEnabled = booleanValue(pi.enabled) === true;
+  const openclawWorkspaceDir = maybeResolveWorkspace(openclaw.workspace_dir, workspaceRoot, env, diagnostics);
+  const hermesWorkspaceDir = maybeResolveWorkspace(hermes.workspace_dir, workspaceRoot, env, diagnostics);
+  const piWorkspaceDir = maybeResolveWorkspace(pi.workspace_dir, workspaceRoot, env, diagnostics);
 
   return {
     configPath,
     homeDir,
+    workspaceRoot,
     options: optionsOut,
     modelRegistry,
     paths: { embeddingsDir, snapshotsDir, logsDir },
     integrations: {
       openclaw: { enabled: openclawEnabled, workspaceDir: openclawWorkspaceDir },
       hermes: { enabled: hermesEnabled, workspaceDir: hermesWorkspaceDir },
+      pi: { enabled: piEnabled, workspaceDir: piWorkspaceDir },
     },
     diagnostics,
   };
@@ -275,6 +398,8 @@ function buildRoleConfig(
   const model = stringValue(values.model) || defaultRoleModel(role);
   const apiKey = stringValue(values.api_key);
   const timeoutMs = numberValue(values.timeout_ms) ?? defaultRoleTimeout(role);
+  const maxTokens = numberValue(values.max_tokens) ?? defaultRoleMaxTokens(role);
+  const jsonMode = values.json_mode === true;
 
   return {
     role,
@@ -287,6 +412,8 @@ function buildRoleConfig(
     apiKey: apiKey ? interpolate(apiKey, env, diagnostics) : '',
     modelName: interpolate(model, env, diagnostics),
     timeoutMs,
+    maxTokens,
+    jsonMode,
     fallback,
   };
 }
@@ -317,8 +444,27 @@ function defaultRoleModel(role: ModelRoleName): string {
   return role === 'embedding' ? 'deterministic_local' : 'rule_only';
 }
 
+/**
+ * A frame is one long call: measured on the box, a reasoning model needed
+ * 150–300 s for one two-turn episode, so a 60 s default aborts the reading
+ * mid-response (the body then fails to parse as `Unexpected EOF`, which reads
+ * like a model defect instead of a deadline).
+ */
 function defaultRoleTimeout(role: ModelRoleName): number {
-  return role === 'embedding' ? 30000 : 60000;
+  if (role === 'embedding') return 30000;
+  return role === 'memory' ? 300000 : 60000;
+}
+
+/**
+ * The memory role returns a `memory_frame.v1` document — nodes, relations,
+ * temporal references and their evidence ids, plus whatever preamble a
+ * reasoning model emits first. Left at the client's 512-token default the answer
+ * is cut off mid-string; measured on the box, a real model needed 3.8k for the
+ * frame alone and overran 8k on the pipeline's own prompt; 16384 is the measured ceiling it
+ * fits in (5337 tokens for one two-turn episode).
+ */
+function defaultRoleMaxTokens(role: ModelRoleName): number {
+  return role === 'memory' ? 16384 : 1024;
 }
 
 function maybeResolveWorkspace(
@@ -362,9 +508,11 @@ function expandHome(value: string, env: EnvLike): string {
   return value;
 }
 
-function findUp(start: string, relativePath: string): string | undefined {
+export function findUp(start: string, relativePath: string, stopAt: Array<string | undefined> = []): string | undefined {
+  const stops = new Set(stopAt.filter((entry): entry is string => Boolean(entry)).map((entry) => resolve(entry)));
   let current = resolve(start);
   while (true) {
+    if (stops.has(current)) return undefined;
     const candidate = join(current, relativePath);
     if (existsSync(candidate)) return candidate;
     const parent = dirname(current);

@@ -75,7 +75,22 @@ const MEMORY_EVENT_COLUMNS = `
   occurred_at, payload_json, payload_hash, created_at
 `;
 
+/**
+ * How the events a raw-event search matched are ordered.
+ *
+ * Chronological is for replay and audit: reading a thread back, the order is the
+ * point. Relevance is for recall, where the caller wants the event that answers the
+ * question and the sequence it sat in is incidental. Ordering every match by
+ * `global_seq` made the oldest hit the best hit, so the newest and most apt answer
+ * never reached the caller.
+ *
+ * Declared once. It was written out in full in two files, and a union that means one
+ * thing should not have two definitions to drift apart.
+ */
+export type RawEventOrder = 'chronological' | 'relevance';
+
 export class EventStore {
+  private ftsRebuilds = 0;
   private readonly validatedLocalDates = new Set<string>();
   private db: Database;
   private ownsDb = true;
@@ -91,6 +106,8 @@ export class EventStore {
   }
 
   getProjectTimeZone(): string | undefined { return this.projectTimeZone; }
+
+  getDatabase(): Database { return this.db; }
 
   private initializeSchema(): void {
     this.db.exec(`
@@ -244,6 +261,12 @@ export class EventStore {
         role UNINDEXED,
         raw_event_type UNINDEXED,
         tokenize='unicode61'
+      );
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_event_fts_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
       );
     `);
     this.rebuildRawEventFtsIfNeeded();
@@ -763,6 +786,18 @@ export class EventStore {
     return row ? this.mapRow(row) : null;
   }
 
+  /**
+   * One thread's events in thread order.
+   *
+   * Two indexed arms instead of one `OR`. The `OR` kept SQLite off
+   * `idx_memory_events_thread_order` — the index built for exactly this read,
+   * and off `idx_memory_events_stream` for the stream-spelled thread — so every
+   * call scanned the whole event table and sorted it in a temp B-tree: 6.5 ms to
+   * return a 60-event thread from a 20k-event store, on a path recall calls once
+   * per returned memory. `project_scope` is the indexed spelling of
+   * `COALESCE(project_id, '')`, which is how every writer stores it and how
+   * `getEventsByStreamId` already reads it.
+   */
   getThreadEvents(
     threadId: string,
     options: {
@@ -772,36 +807,45 @@ export class EventStore {
       limit?: number;
     } = {},
   ): MemoryEvent[] {
-    const conditions = [
-      `(thread_id = ? OR (thread_id IS NULL AND stream_type = 'thread' AND stream_id = ?))`,
-    ];
-    const params: Array<string | number> = [threadId, threadId];
+    const filters: string[] = [];
+    const filterParams: Array<string | number> = [];
     if (options.projectId !== undefined) {
-      conditions.push("COALESCE(project_id, '') = ?");
-      params.push(options.projectId);
+      filters.push('project_scope = ?');
+      filterParams.push(options.projectId);
     }
     if (options.sessionId) {
-      conditions.push('session_id = ?');
-      params.push(options.sessionId);
+      filters.push('session_id = ?');
+      filterParams.push(options.sessionId);
     }
     if (options.localDate) {
-      conditions.push('local_date = ?');
-      params.push(options.localDate);
+      filters.push('local_date = ?');
+      filterParams.push(options.localDate);
     }
+    const filtersSql = filters.map((filter) => ` AND ${filter}`).join('');
 
     const boundedLimit = options.limit === undefined ? undefined : Math.max(1, Math.min(Math.trunc(options.limit), 10_000));
     const limitSql = boundedLimit === undefined ? '' : 'LIMIT ?';
-    if (boundedLimit !== undefined) params.push(boundedLimit);
     const rows = this.db.prepare(`
       SELECT ${MEMORY_EVENT_COLUMNS}
-      FROM memory_events
-      WHERE ${conditions.join(' AND ')}
+      FROM (
+        SELECT ${MEMORY_EVENT_COLUMNS}
+        FROM memory_events
+        WHERE thread_id = ?${filtersSql}
+        UNION ALL
+        SELECT ${MEMORY_EVENT_COLUMNS}
+        FROM memory_events
+        WHERE thread_id IS NULL AND stream_type = 'thread' AND stream_id = ?${filtersSql}
+      )
       ORDER BY COALESCE(thread_seq, event_version) ASC,
                COALESCE(event_ordinal, 0) ASC,
                COALESCE(global_seq, 0) ASC,
                event_id ASC
       ${limitSql}
-    `).all(...params) as any[];
+    `).all(
+      threadId, ...filterParams,
+      threadId, ...filterParams,
+      ...(boundedLimit === undefined ? [] : [boundedLimit]),
+    ) as any[];
     return rows.map((row) => this.mapRow(row));
   }
 
@@ -836,14 +880,73 @@ export class EventStore {
       startTime?: number;
       endTime?: number;
       limit?: number;
+      /**
+       * How to order the events a query matched.
+       *
+       * Chronological is for replay and audit: reading a thread back, the order is
+       * the point. Relevance is for recall, where the caller wants the event that
+       * answers the question and the sequence it sat in is incidental. Ordering
+       * every match by `global_seq` made the oldest hit the best hit, so the
+       * newest and most apt answer never reached the caller.
+       */
+      orderBy?: RawEventOrder;
     } = {},
   ): MemoryEvent[] {
     const limit = Math.max(1, Math.min(options.limit ?? 20, 200));
     const ftsQuery = this.toRawEventFtsQuery(query);
     if (!ftsQuery) return [];
 
-    const conditions = ['memory_events_fts MATCH ?'];
-    const params: Array<string | number> = [ftsQuery];
+    const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
+    const scope = this.rawEventScopeConditions(options);
+
+    // An event holding every word of the query is the best answer there is, and
+    // keeping this first attempt means the looser one below can never displace it.
+    const exactOrder = options.orderBy === 'relevance'
+      ? 'bm25(memory_events_fts) ASC, COALESCE(e.global_seq, 0) ASC, e.event_id ASC'
+      : `COALESCE(e.global_seq, 0) ASC,
+               COALESCE(e.thread_seq, e.event_version) ASC,
+               COALESCE(e.event_ordinal, 0) ASC,
+               e.event_id ASC`;
+    const exact = this.db.prepare(`
+      SELECT ${columns}
+      FROM memory_events_fts
+      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
+      WHERE memory_events_fts MATCH ?${scope.sql}
+      ORDER BY ${exactOrder}
+      LIMIT ?
+    `).all(ftsQuery, ...scope.params, limit) as any[];
+    if (exact.length > 0) return exact.map((row) => this.mapRow(row));
+
+    // Nothing held every word. The query may still be a question about a
+    // statement — see toRawEventFtsOrQuery — so match any word and rank by how
+    // much of the query each event actually carries.
+    const loose = this.db.prepare(`
+      SELECT ${columns}, bm25(memory_events_fts) AS rank
+      FROM memory_events_fts
+      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
+      WHERE memory_events_fts MATCH ?${scope.sql}
+      ORDER BY rank ASC,
+               COALESCE(e.global_seq, 0) ASC,
+               e.event_id ASC
+      LIMIT ?
+    `).all(this.toRawEventFtsOrQuery(query), ...scope.params, limit) as any[];
+    if (loose.length > 0) return loose.map((row) => this.mapRow(row));
+
+    return this.fallbackRawTextSearch(query, options, limit);
+  }
+
+  /** The scope filters shared by the raw-event searches. */
+  private rawEventScopeConditions(options: {
+    projectId?: string;
+    workspaceId?: string;
+    threadId?: string;
+    sessionId?: string;
+    localDate?: string;
+    startTime?: number;
+    endTime?: number;
+  }): { sql: string; params: Array<string | number> } {
+    const conditions: string[] = [];
+    const params: Array<string | number> = [];
     if (options.projectId !== undefined) {
       conditions.push("COALESCE(e.project_id, '') = ?");
       params.push(options.projectId);
@@ -872,23 +975,7 @@ export class EventStore {
       conditions.push('e.occurred_at < ?');
       params.push(options.endTime);
     }
-
-    params.push(limit);
-    const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
-    const rows = this.db.prepare(`
-      SELECT ${columns}
-      FROM memory_events_fts
-      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
-      WHERE ${conditions.join(' AND ')}
-      ORDER BY COALESCE(e.global_seq, 0) ASC,
-               COALESCE(e.thread_seq, e.event_version) ASC,
-               COALESCE(e.event_ordinal, 0) ASC,
-               e.event_id ASC
-      LIMIT ?
-    `).all(...params) as any[];
-
-    if (rows.length > 0) return rows.map((row) => this.mapRow(row));
-    return this.fallbackRawTextSearch(query, options, limit);
+    return { sql: conditions.map((condition) => ` AND ${condition}`).join(''), params };
   }
 
   getChildEvents(parentEventId: string, projectId?: string): MemoryEvent[] {
@@ -1043,21 +1130,72 @@ export class EventStore {
   private rebuildRawEventFtsIfNeeded(): void {
     if (this.encryptionProvider) {
       this.db.prepare(`DELETE FROM memory_events_fts`).run();
+      this.writeFtsState(null, 0);
       return;
     }
-    const ftsRow = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events_fts`).get() as { count: number } | null;
-    const eventRow = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events`).get() as { count: number } | null;
-    if ((ftsRow?.count || 0) >= (eventRow?.count || 0)) return;
+    const ftsCount = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events_fts`).get() as { count: number } | null)?.count || 0);
+    const eventCount = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events`).get() as { count: number } | null)?.count || 0);
+    const maxRowid = Number((this.db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS maxRowid FROM memory_events`).get() as { maxRowid: number } | null)?.maxRowid || 0);
+    const state = this.readFtsState();
 
-    this.db.prepare(`DELETE FROM memory_events_fts`).run();
+    if (ftsCount >= eventCount) {
+      this.writeFtsState(maxRowid, ftsCount);
+      return;
+    }
+    // A short index is expected and permanent: events with no indexable text
+    // (state transitions, boundaries) never get a row, so counting rows against
+    // events can never converge and would re-index the whole database on every
+    // open. The recorded row count is what separates "short by design" from
+    // "truncated", which still has to be repaired.
+    if (state !== null && state.rowid === maxRowid && state.ftsRows === ftsCount) return;
+
+    const truncated = ftsCount === 0 && eventCount > 0;
+    const startRowid = !truncated && state !== null && state.rowid <= maxRowid && ftsCount >= state.ftsRows ? state.rowid : -1;
+    if (startRowid < 0) {
+      this.db.prepare(`DELETE FROM memory_events_fts`).run();
+      this.ftsRebuilds += 1;
+    }
     const rows = this.db.prepare(`
-      SELECT ${MEMORY_EVENT_COLUMNS}
+      SELECT rowid AS index_rowid, ${MEMORY_EVENT_COLUMNS}
       FROM memory_events
-      ORDER BY COALESCE(global_seq, 0) ASC, event_id ASC
-    `).all() as any[];
+      WHERE rowid > ?
+      ORDER BY rowid ASC
+    `).all(startRowid) as any[];
     for (const row of rows) {
       this.upsertRawEventFts(this.mapRow(row));
     }
+    const indexedCount = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events_fts`).get() as { count: number } | null)?.count || 0);
+    this.writeFtsState(maxRowid, indexedCount);
+  }
+
+  getRawEventFtsState(): { watermark: number | null; maxRowid: number; ftsRows: number; rebuilds: number } {
+    const maxRowid = Number((this.db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS maxRowid FROM memory_events`).get() as { maxRowid: number } | null)?.maxRowid || 0);
+    const ftsRows = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events_fts`).get() as { count: number } | null)?.count || 0);
+    return { watermark: this.readFtsState()?.rowid ?? null, maxRowid, ftsRows, rebuilds: this.ftsRebuilds };
+  }
+
+  private readFtsState(): { rowid: number; ftsRows: number } | null {
+    const rows = this.db.prepare(`SELECT key, value FROM memory_event_fts_state WHERE key IN ('indexed_rowid', 'indexed_fts_rows')`).all() as Array<{ key: string; value: string }>;
+    const map = new Map(rows.map((row) => [row.key, Number(row.value)]));
+    const rowid = map.get('indexed_rowid');
+    const ftsRows = map.get('indexed_fts_rows');
+    if (!Number.isFinite(rowid) || !Number.isFinite(ftsRows)) return null;
+    return { rowid: rowid as number, ftsRows: ftsRows as number };
+  }
+
+  private writeFtsState(rowid: number | null, ftsRows: number): void {
+    if (rowid === null) {
+      this.db.prepare(`DELETE FROM memory_event_fts_state`).run();
+      return;
+    }
+    const upsert = this.db.prepare(`
+      INSERT INTO memory_event_fts_state (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `);
+    this.db.transaction(() => {
+      upsert.run('indexed_rowid', String(rowid));
+      upsert.run('indexed_fts_rows', String(ftsRows));
+    })();
   }
 
   private extractIndexText(payload: unknown): string {
@@ -1070,13 +1208,37 @@ export class EventStore {
   }
 
   private toRawEventFtsQuery(query: string): string {
+    return this.rawEventFtsTokens(query)
+      .map((token) => `"${token}"`)
+      .join(' ');
+  }
+
+  /**
+   * The same tokens, any of which may match.
+   *
+   * A question is not a query its answer can satisfy. "when does the pelican
+   * migration window open" asks about "the pelican migration window opens in
+   * October": every question word the statement lacks ("when", "does", "the",
+   * and "open" against "opens") is one the statement may never contain, so
+   * requiring all of them returns nothing while the answer sits in the ledger.
+   * A question therefore falls back to matching any of its words and lets BM25
+   * rank the event that shares the most of them.
+   */
+  private toRawEventFtsOrQuery(query: string): string {
+    const meaningful = this.rawEventFtsTokens(query).filter((token) => !QUERY_STOP_WORDS.has(token));
+    // Every word was a question word; the query still has to search for them.
+    const tokens = meaningful.length > 0 ? meaningful : this.rawEventFtsTokens(query);
+    return tokens
+      .map((token) => `"${token}"`)
+      .join(' OR ');
+  }
+
+  private rawEventFtsTokens(query: string): string[] {
     return query
       .split(/[^\p{L}\p{N}_-]+/u)
       .map((token) => token.trim().replace(/"/g, ''))
       .filter((token) => token.length > 0)
-      .slice(0, 12)
-      .map((token) => `"${token}"`)
-      .join(' ');
+      .slice(0, 12);
   }
 
   private fallbackRawTextSearch(
@@ -1093,55 +1255,70 @@ export class EventStore {
     limit: number,
   ): MemoryEvent[] {
     if (this.encryptionProvider) return [];
-    const tokens = query
-      .split(/[^\p{L}\p{N}_-]+/u)
-      .map((token) => token.trim().toLowerCase())
-      .filter((token) => token.length > 0)
-      .slice(0, 8);
+    const tokens = this.rawTextSearchTokens(query);
     if (tokens.length === 0) return [];
 
-    const conditions = tokens.map(() => `LOWER(memory_events_fts.text) LIKE ? ESCAPE '\\'`);
-    const params: Array<string | number> = tokens.map((token) => `%${escapeSqlLike(token)}%`);
-    if (options.projectId !== undefined) {
-      conditions.push("COALESCE(e.project_id, '') = ?");
-      params.push(options.projectId);
-    }
-    if (options.workspaceId) {
-      conditions.push('e.workspace_id = ?');
-      params.push(options.workspaceId);
-    }
-    if (options.threadId) {
-      conditions.push('e.thread_id = ?');
-      params.push(options.threadId);
-    }
-    if (options.sessionId) {
-      conditions.push('e.session_id = ?');
-      params.push(options.sessionId);
-    }
-    if (options.localDate) {
-      conditions.push('e.local_date = ?');
-      params.push(options.localDate);
-    }
-    if (options.startTime !== undefined) {
-      conditions.push('e.occurred_at >= ?');
-      params.push(options.startTime);
-    }
-    if (options.endTime !== undefined) {
-      conditions.push('e.occurred_at < ?');
-      params.push(options.endTime);
-    }
+    // Any word may carry the answer: a question about a statement shares only
+    // some of its words, and requiring all of them is what made the question
+    // return nothing. Relevance is decided below, by how many words matched.
+    const likeConditions = tokens.map(() => `LOWER(memory_events_fts.text) LIKE ? ESCAPE '\\'`);
+    const likeParams: Array<string | number> = tokens.map((token) => `%${escapeSqlLike(token)}%`);
+    const scope = this.rawEventScopeConditions(options);
+    // Count how many of the query's words this event carries, so the event that
+    // answers the question outranks one that merely shares a common word.
+    const score = likeConditions
+      .map((condition) => `CASE WHEN ${condition} THEN 1 ELSE 0 END`)
+      .join(' + ');
 
-    params.push(limit);
-    const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
     const rows = this.db.prepare(`
-      SELECT ${columns}
+      SELECT ${MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ')},
+             (${score}) AS matched
       FROM memory_events_fts
       JOIN memory_events e ON e.event_id = memory_events_fts.event_id
-      WHERE ${conditions.join(' AND ')}
-      ORDER BY COALESCE(e.global_seq, 0) ASC, e.event_id ASC
+      WHERE (${likeConditions.join(' OR ')})${scope.sql}
+      ORDER BY matched DESC, COALESCE(e.global_seq, 0) ASC, e.event_id ASC
       LIMIT ?
-    `).all(...params) as any[];
+    `).all(...likeParams, ...likeParams, ...scope.params, limit) as any[];
     return rows.map((row) => this.mapRow(row));
+  }
+
+  /**
+   * Words to look for when the index cannot split the text.
+   *
+   * `unicode61` treats a run of Chinese characters as one word, so "我什么时候
+   * 去的北京" is a single token that no event contains, while the event says
+   * "我今天下午去了北京出差". Splitting CJK runs into overlapping bigrams keeps
+   * a word that appears inside the run findable, which is what a person expects
+   * when they ask about something they said.
+   */
+  private rawTextSearchTokens(query: string): string[] {
+    const tokens: string[] = [];
+    for (const part of query.split(/[^\p{L}\p{N}_-]+/u)) {
+      const token = part.trim().toLowerCase();
+      if (token.length === 0) continue;
+      if (QUERY_STOP_WORDS.has(token)) continue;
+      if (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(token)) {
+        if (token.length <= 2) {
+          tokens.push(token);
+          continue;
+        }
+        // The bigrams of a question word are as common as the word itself, so
+        // they are dropped too — "什么时候" must not match every Chinese event.
+        for (let i = 0; i + 2 <= token.length; i += 1) {
+          const bigram = token.slice(i, i + 2);
+          if (!QUERY_STOP_WORDS.has(bigram)) tokens.push(bigram);
+        }
+        continue;
+      }
+      tokens.push(token);
+    }
+    // The cap bounds how many LIKE clauses the scan carries, which is why a cap
+    // belongs here at all. It has to count the *expansion*, not the words: a
+    // Chinese run becomes one bigram per character, so a cap of twelve kept only
+    // the first twelve characters of the question and dropped its end. "我今天
+    // 下午去了北京出差见了张伟" then matched nothing, while the memory it was
+    // asking about held 张伟 and nothing else the question said.
+    return [...new Set(tokens)].slice(0, 48);
   }
 
   private encodePayload(payloadJson: string): string {
@@ -1161,15 +1338,26 @@ function escapeSqlLike(value: string): string {
   return value.replace(/[\\%_]/g, (character) => `\\${character}`);
 }
 
+/**
+ * Words that ask rather than say.
+ *
+ * A question and the statement answering it share the words that carry meaning
+ * and nothing else. Left in, "the" and "is" match almost every event, and a
+ * loose search returns the whole ledger ranked by how often it says "the".
+ * Dropped, the question matches on the words that distinguish it.
+ */
+const QUERY_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'been', 'but', 'by', 'can', 'could', 'did', 'do',
+  'does', 'for', 'from', 'had', 'has', 'have', 'how', 'i', 'if', 'in', 'is', 'it', 'its', 'me',
+  'my', 'of', 'on', 'or', 'our', 'should', 'so', 'that', 'the', 'their', 'them', 'then', 'there',
+  'these', 'they', 'this', 'to', 'was', 'we', 'were', 'what', 'when', 'where', 'which', 'who',
+  'why', 'will', 'with', 'would', 'you', 'your',
+  '吗', '呢', '吧', '啊', '的', '了', '是', '我', '你', '他', '她', '它', '们', '在', '和',
+  '就', '都', '也', '还', '有', '这', '那', '什么', '怎么', '哪', '哪个', '多少', '为什么',
+]);
+
 function sequenceKey(kind: string, projectId: string, id: string): string {
   return `${kind}:${createHash('sha256').update(`${projectId}\0${id}`).digest('hex')}`;
-}
-
-function validCalendarDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
-  const [year, month, day] = value.split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function legacyLocalDateSource(payloadJson: string): MemoryEvent['localDateSource'] {

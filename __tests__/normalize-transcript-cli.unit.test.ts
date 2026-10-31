@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const normalizeBin = join(coreRoot, 'src/bin/normalize-transcript.ts');
@@ -26,7 +26,7 @@ async function runCli(cmd: string[]): Promise<{ exitCode: number; stdout: string
 }
 
 test('cogmem-normalize-transcript writes normalized markdown with JSON source refs', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-normalize-json-'));
+  const dir = makeTempDir('cogmem-normalize-json-');
   const inputPath = join(dir, 'memory.json');
   const outputPath = join(dir, 'memory.normalized.md');
   writeFileSync(inputPath, JSON.stringify([
@@ -68,7 +68,7 @@ test('cogmem-normalize-transcript writes normalized markdown with JSON source re
 });
 
 test('cogmem-normalize-transcript dry-run reports CSV row anchors without writing output', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-normalize-csv-'));
+  const dir = makeTempDir('cogmem-normalize-csv-');
   const inputPath = join(dir, 'memory.csv');
   const outputPath = join(dir, 'memory.normalized.md');
   writeFileSync(inputPath, [
@@ -108,7 +108,7 @@ test('cogmem-normalize-transcript dry-run reports CSV row anchors without writin
 });
 
 test('cogmem-normalize-transcript expands Hermes JSONL session objects and preserves message timestamps', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-normalize-hermes-jsonl-'));
+  const dir = makeTempDir('cogmem-normalize-hermes-jsonl-');
   const inputPath = join(dir, 'hermes-sessions.jsonl');
   const outputPath = join(dir, 'hermes.normalized.md');
   writeFileSync(inputPath, JSON.stringify({
@@ -163,7 +163,7 @@ test('cogmem-normalize-transcript expands Hermes JSONL session objects and prese
 });
 
 test('cogmem-normalize-transcript treats Hermes numeric timestamp as epoch seconds before InsertTime', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-normalize-hermes-jsonl-seconds-'));
+  const dir = makeTempDir('cogmem-normalize-hermes-jsonl-seconds-');
   const inputPath = join(dir, 'hermes-sessions.jsonl');
   const outputPath = join(dir, 'hermes.normalized.md');
   writeFileSync(inputPath, JSON.stringify({

@@ -50,64 +50,71 @@ model = "qwen3-embedding:0.6b"
 
 Use the matching vector dimension for the selected model. `qwen3-embedding:4b` uses 2560 dimensions and `qwen3-embedding:8b` uses 4096 dimensions.
 
-## Migrate
+## Update and import
 
-Upgrade and migrate the Cogmem database itself before importing host memory:
+Cogmem 4.0 is a clean start and does not migrate or upgrade a pre-4.0 database. Opening a Cogmem 3.x file is refused with an error code beginning `no_upgrade_path:`, and the file is left exactly as it was — no backup, no partial rewrite. Keep that file for Cogmem 3.x, or point 4.0 at a new database path (a new `db_path` in the config, or `--db` for one command) and move history across from the 3.x install. Creating a new database is the supported path.
+
+Update the package and refresh the host wiring before importing host memory:
 
 ```bash
 cogmem update --yes
+cogmem connect hermes --workspace . --auto --force --json
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration, and then tells the operator to reload the Hermes MCP server or restart the agent host. Use `cogmem update --dry-run --json` to see the install and migration commands first.
+`cogmem update --yes` installs `cogmem@latest` from npm, refreshes the Hermes MCP wiring when configured, and ends on the same `cogmem doctor` install gate a fresh install ends on. It runs no migration step. Use `cogmem update --dry-run --json` to see the install and wiring plan first.
 
 Preview:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes --dry-run
+# Importing defaults to this workspace's own scope: the project the installed
+# integration writes to and reads. Read it from: cogmem connect hermes --auto --json
+# (field: integrationProject). Pass --project only to import somewhere else — a
+# literal --project hermes writes into a scope the MCP server is not bound to.
+cogmem import-hermes --workspace . --dry-run
 ```
 
 Import:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes
+cogmem import-hermes --workspace .
 ```
 
 After import:
 
 ```bash
-cogmem memory plan --project hermes --json
-cogmem memory status --project hermes --json
-cogmem memory candidates --project hermes --json
-cogmem episode status --project hermes --json
-cogmem dream status --project hermes --json
-cogmem dream tick --project hermes --mode auto --max-episodes 20 --json
-cogmem memory candidates --project hermes --status candidate --json
-cogmem memory govern --project hermes --limit 100 --json
-cogmem memory candidates --project hermes --status needs_confirmation --json
-cogmem memory review --project hermes --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
+cogmem memory plan --project 'hermes-<workspace-hash>' --json
+cogmem memory status --project 'hermes-<workspace-hash>' --json
+cogmem memory candidates --project 'hermes-<workspace-hash>' --json
+cogmem episode status --project 'hermes-<workspace-hash>' --json
+cogmem dream status --project 'hermes-<workspace-hash>' --json
+cogmem dream tick --project 'hermes-<workspace-hash>' --mode auto --max-episodes 20 --json
+cogmem memory candidates --project 'hermes-<workspace-hash>' --status candidate --json
+cogmem memory govern --project 'hermes-<workspace-hash>' --limit 100 --json
+cogmem memory candidates --project 'hermes-<workspace-hash>' --status needs_confirmation --json
+cogmem memory review --project 'hermes-<workspace-hash>' --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
 ```
 
 If Hermes stores memory somewhere else:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import-hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions
 ```
 
 Single session files and batches can be imported explicitly:
 
 ```bash
-cogmem import-hermes --workspace . --project hermes --session ./one.md
-cogmem import-hermes --workspace . --project hermes --session ./one.md --session ./two.md
+cogmem import-hermes --workspace . --session ./one.md
+cogmem import-hermes --workspace . --session ./one.md --session ./two.md
 ```
 
 The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store. Imported raw records enter the same Episode Assembler used by live turns and are sealed at the explicit import batch boundary.
 Imported records are embedded through the configured kernel embedder during import.
 
-MCP recall JSON includes `decisionTrace`. Check its selected lane, reason, and candidate counts before concluding that a memory is absent, and use `sourceContext.locator.command` for exact wording. Raw text fallback searches the fully scoped ledger and prefers original user anchors over later assistant retellings when cue scores tie. For old-discussion questions, run `cogmem memory recall --query "<past discussion>" --intent historical_discussion --project hermes --agent hermes --json`, then follow `sourceLocator` or inspect `cogmem memory list --project hermes --since <globalSeq> --order asc --json`.
+MCP recall JSON includes `decisionTrace`. Check its selected lane, reason, and candidate counts before concluding that a memory is absent, and use `sourceContext.locator.command` for exact wording. Raw text fallback searches the fully scoped ledger and prefers original user anchors over later assistant retellings when cue scores tie. For old-discussion questions, run `cogmem memory recall --query "<past discussion>" --intent historical_discussion --project 'hermes-<workspace-hash>' --agent hermes --json`, then follow `sourceLocator` or inspect `cogmem memory list --project 'hermes-<workspace-hash>' --since <globalSeq> --order asc --json`.
 
 Dream stores explicit user clarification as organizational correction evidence rather than an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Resolve `needs_confirmation` with `cogmem_candidate_review` or `cogmem memory review`; maintenance only supersedes entries left stale past the default 30-day TTL.
 
-After upgrades, reload MCP. Rerun `cogmem connect hermes --workspace . --auto --force --json` when MCP wiring, allow-listed tools, or the installed skill bundle changed. Follow only JSON `nextCommands` for unattended agent work; operator/host actions are in `nextSteps` with `safeForAutomation=false`.
+After a package update, reload MCP. Rerun `cogmem connect hermes --workspace . --auto --force --json` when MCP wiring, allow-listed tools, or the installed skill bundle changed. Follow only JSON `nextCommands` for unattended agent work; operator/host actions are in `nextSteps` with `safeForAutomation=false`.
 
 Cogmem 3.7.2 exposes read-only/idempotent Memory Atlas query tools plus explicit `cogmem_graph_touch`, installs from npm by default, prevents empty imported episodes from blocking Dream, and adds an agent-safe operations protocol. Use `memory plan` for the next safe command, grouped `memory candidates --json` for queue state, `historical_discussion` recall for old-discussion questions, and returned `sourceLocator` commands for exact evidence. Only run `dream_tick` when it appears in `memory plan.nextActions`; `raw_dream_ledger_lag` in `nonBlocking` has `resolvableByDreamTick:false` and is not fixed by looping `dream tick`. Use explore for broad memory inventory/history, search and node for a known concept, path/neighbors for relations, timeline for ordered reconstruction, and normal recall for a direct fact. Query facets combine the user's actual project, day/month/year, topic, issue, entity/target, session/thread, memory-kind, action-kind, and keyword conditions like table filters, so cold memory can be revived without requiring an entity-time-action tuple. Unicode entity cues are supported, but alias merges still require governed evidence. Prefer returned `cards[]` for historical discussion: `canonicalId` dedupes the episode, `matchedFacets` explains why it matched, `relatedButNotSelected` is only side context, `relaxationTrace` marks day/month/year or issue/topic fallback, and `sourceLocator` opens raw evidence. Touch only nodes actually used, and follow returned event IDs or `sourceLocator` commands before quoting exact wording.
 
@@ -150,7 +157,7 @@ console.log(recalled.items);
 
 If a Hermes workspace uses different paths, pass explicit `profilePath` and `sessionDir` values instead of changing core.
 
-For agent-facing instructions, run `cogmem connect hermes --workspace .`. It installs `SKILL.md` plus `references/operations.md`, a complete command-selection, migration, import, recall, Atlas, review, repair, backup, and maintenance handbook.
+For agent-facing instructions, run `cogmem connect hermes --workspace .`. It installs `SKILL.md` plus `references/operations.md`, a complete command-selection, update, import, recall, Atlas, review, repair, backup, and maintenance handbook.
 
 `cogmem connect hermes --workspace . --auto` patches the Hermes MCP config with a `cogmem` server command. Re-running it after an upgrade updates existing allow-lists with strategy, topic, episode repair, candidate review, graph touch, conditional Dream, memory-map, maintenance, and prospective tools. Cogmem cannot observe Hermes conversations unless Hermes calls append/import. Episode append/import never run Dream; MCP Dream tick mutates only with `maintenanceMode: true`, never executes tools, and durable semantic changes still require governance. After running it, restart or reload Hermes so the MCP server list is re-read.
 
@@ -158,16 +165,16 @@ Use MCP append/import only for bounded traffic. Supply `externalMessageId` for e
 
 Recall warnings are operational signals: `no_recent_episode_ingestion_detected` means the hookless host has not supplied recent conversation evidence, while `semantic_memory_may_lag` means open/soft-sealed high-value work or Dream backlog/failures remain. Ingest or repair before claiming current semantic memory. Use `cogmem_topic_list` / `cogmem_topic_operate` for audited user-shaped topic structure and `cogmem_episode_repair` for synchronized boundary surgery.
 
-The MCP `cogmem_recall` tool uses the same backend as `cogmem memory recall`. A Hermes MCP call with only `projectId: "hermes"` still infers `agentId: "hermes"` and can return `raw_ledger` items with labeled `sourceContext` events, `sourceContext.window`, and locator commands when vectors are empty. Pass `collection: "theseus"` only when Hermes wants creative artifacts instead of normal operational memory.
+The MCP `cogmem_recall` tool uses the same backend as `cogmem memory recall`. A Hermes MCP call with no `projectId` uses the scope the server is bound to, infers `agentId` from it, and can return `raw_ledger` items with labeled `sourceContext` events, `sourceContext.window`, and locator commands when vectors are empty. Pass `collection: "theseus"` only when Hermes wants creative artifacts instead of normal operational memory.
 
 Useful host-owned inspection commands:
 
 ```bash
-cogmem memory map --project hermes --json
-cogmem memory tick --project hermes --json
-cogmem memory bind --project hermes --json
-cogmem episode status --project hermes --json
-cogmem dream tick --project hermes --mode auto --max-episodes 20 --json
+cogmem memory map --project 'hermes-<workspace-hash>' --json
+cogmem memory tick --project 'hermes-<workspace-hash>' --json
+cogmem memory bind --project 'hermes-<workspace-hash>' --json
+cogmem episode status --project 'hermes-<workspace-hash>' --json
+cogmem dream tick --project 'hermes-<workspace-hash>' --mode auto --max-episodes 20 --json
 ```
 
 `memory map` includes Memory Binding and Graph Recall counters. Bindings attach valuable user raw events to stable topic/entity paths, fuse same-claim evidence into claim-key clusters, and create graph anchors for raw-ledger drill-down; they are not verified long-term facts. If `memory tick` suggests `bind_raw_events`, run `memory bind` to backfill imported Hermes raw user events into the binding graph.

@@ -9,7 +9,6 @@ export * from './assets/providers/types.js';
 export * from './backend/SemanticBackend.js';
 export * from './batch/IngestionCursorStore.js';
 export * from './batch/InstalledBatchProcessor.js';
-export * from './batch/SourceOnboarding.js';
 export * from './belief/BeliefStore.js';
 export {
   BeliefGovernanceService,
@@ -73,9 +72,8 @@ export * from './meta/ProposalApplier.js';
 export * from './meta/ProposalConfigOverlay.js';
 export * from './meta/ProposalLedger.js';
 export * from './meta/types.js';
-export * from './migrations/0001_init.js';
-export * from './migrations/0010_skill_neurons.js';
 export * from './migrations/index.js';
+export * from './migrations/MigrationUtils.js';
 export * from './episode/index.js';
 export * from './dream/index.js';
 export * from './ontology/MemoryOntology.js';
@@ -106,7 +104,6 @@ export * from './recall/HierarchicalRecallRouter.js';
 export * from './recall/VectorCandidateFilter.js';
 export * from './recall/index.js';
 export * from './retrieval/ConditionDslEvaluator.js';
-export * from './retrieval/EvidenceFusionPolicy.js';
 export * from './retrieval/NativeQueryParser.js';
 export * from './retrieval/PlanDslExecutor.js';
 export * from './retrieval/PolicyRuntimeEvaluator.js';

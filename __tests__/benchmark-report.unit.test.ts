@@ -15,6 +15,9 @@ function makeResult(groupName: string, overrides: Partial<BenchmarkGroupResult> 
       suiteName: group.suiteName,
       runAt: 1,
       passed: true,
+      // These fixtures stand for groups whose suite measured something; the report
+      // renders "not measured" for the ones that did not (#71).
+      measured: true,
       metrics: {}
     },
     baselineResults: group.baselines.map((baseline) => ({
@@ -27,6 +30,7 @@ function makeResult(groupName: string, overrides: Partial<BenchmarkGroupResult> 
       formatAs: baseline.formatAs
     })),
     passed: true,
+    measured: true,
     ...overrides
   };
 }

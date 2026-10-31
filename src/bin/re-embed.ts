@@ -3,6 +3,8 @@ import Database from 'bun:sqlite';
 import { NeuronEmbeddingStore } from '../embedding/NeuronEmbeddingStore.js';
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
+assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['config', 'db', 'dimension', 'dry-run', 'json', 'limit', 'project', 'status'] });
 
 function parseArgs(argv: string[]): Record<string, string | boolean> {
   const args: Record<string, string | boolean> = {};
@@ -25,7 +27,7 @@ const [command, ...rest] = process.argv.slice(2);
 const args = parseArgs(rest);
 
 if (command !== 'status') {
-  console.error('Usage: re-embed.ts status --db <cogmem.db>');
+  console.error('Usage: cogmem-re-embed status [--db <memory.db>|--config <config.toml>]');
   process.exit(1);
 }
 

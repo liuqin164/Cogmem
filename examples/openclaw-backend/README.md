@@ -57,16 +57,16 @@ timeout_ms = 60000
 Then run:
 
 ```bash
-cogmem episode status --project openclaw --json
-cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
-cogmem memory govern --project openclaw --json
-cogmem memory candidates --project openclaw --status candidate --json
+cogmem episode status --project 'openclaw-<workspace-hash>' --json
+cogmem dream tick --project 'openclaw-<workspace-hash>' --mode auto --max-episodes 20 --json
+cogmem memory govern --project 'openclaw-<workspace-hash>' --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --status candidate --json
 ```
 
 For a supervised long-running worker instead of cron:
 
 ```bash
-cogmem dream tick --project openclaw --mode auto --max-episodes 10 --json
+cogmem dream tick --project 'openclaw-<workspace-hash>' --mode auto --max-episodes 10 --json
 ```
 
 The OpenClaw hook writes Raw Ledger evidence and updates a source/thread-scoped episode, then returns without running Dream. Live classification stays CPU-only and uses previous assistant context to separate proposal acceptance, question/fact answers, rejection, and correction. Unknown turns become ambiguous review boundaries unless user-defined aliases, topic/entity/project overlap, or explicit continuation supports continuity. Background imports may use the advisory hybrid reviewer; it cannot mutate durable memory.
@@ -78,21 +78,21 @@ The Dream Worker processes sealed episodes and proposes candidate memories only.
 For host-owned inspection and upkeep:
 
 ```bash
-cogmem memory plan --project openclaw --json
-cogmem memory map --project openclaw --json
-cogmem memory tick --project openclaw --json
-cogmem memory bind --project openclaw --json
+cogmem memory plan --project 'openclaw-<workspace-hash>' --json
+cogmem memory map --project 'openclaw-<workspace-hash>' --json
+cogmem memory tick --project 'openclaw-<workspace-hash>' --json
+cogmem memory bind --project 'openclaw-<workspace-hash>' --json
 ```
 
 Cogmem 3.7.2 keeps npm as the default install/update channel and upgrades Memory Atlas into a multi-dimensional navigation graph. Use `memory plan` for the next safe command, grouped `memory candidates --json` for queue state, `historical_discussion` recall for old-discussion questions, and returned `sourceLocator` commands for exact evidence. Only run `dream_tick` when it appears in `memory plan.nextActions`; `raw_dream_ledger_lag` in `nonBlocking` has `resolvableByDreamTick:false` and is not fixed by looping `dream tick`. The auto plugin uses one shared bridge/kernel lifecycle for graph exploration, evidence-bearing node/timeline drill-down, and recall, so OpenClaw does not need MCP for broad inventory/history questions. Atlas combines the query's actual project, day/month/year, topic, issue, entity/target, session/thread, memory-kind, action-kind, and keyword conditions like table filters; no fixed entity-time-action tuple is required. Unicode entity cues are supported, but alias merges still require governed evidence. Prefer returned `cards[]` for historical discussion: `canonicalId` dedupes the episode, `matchedFacets` explains why it matched, `relatedButNotSelected` is only side context, `relaxationTrace` marks day/month/year or issue/topic fallback, and `sourceLocator` opens the raw evidence.
 
 ```bash
-cogmem memory plan --project openclaw --json
-cogmem memory graph-explore --project openclaw --query "去年与 Hermes 有关的决定" --json
-cogmem memory graph-explore --project openclaw --query "6月6号关于记忆黑盒聊过什么" --json
-cogmem memory graph-node --project openclaw --id <node-id> --include-evidence --json
-cogmem memory graph-path --project openclaw --from <node-id> --to <node-id> --json
-cogmem memory recall --query "几个月前我们是不是讨论过 Cogmem 的记忆黑盒" --intent historical_discussion --project openclaw --agent openclaw --json
+cogmem memory plan --project 'openclaw-<workspace-hash>' --json
+cogmem memory graph-explore --project 'openclaw-<workspace-hash>' --query "去年与 Hermes 有关的决定" --json
+cogmem memory graph-explore --project 'openclaw-<workspace-hash>' --query "6月6号关于记忆黑盒聊过什么" --json
+cogmem memory graph-node --project 'openclaw-<workspace-hash>' --id <node-id> --include-evidence --json
+cogmem memory graph-path --project 'openclaw-<workspace-hash>' --from <node-id> --to <node-id> --json
+cogmem memory recall --query "几个月前我们是不是讨论过 Cogmem 的记忆黑盒" --intent historical_discussion --project 'openclaw-<workspace-hash>' --agent openclaw --json
 ```
 
 Use Atlas to locate a bounded source-backed slice, then use `memory show` or the returned `sourceLocator` for exact evidence. Graph reads do not change activation; explicitly touch only nodes the agent actually uses. Activation controls default visibility and decays during explicit maintenance; exact scoped facets can still revive cold memory without promoting or rewriting it.
@@ -105,50 +105,57 @@ Recall JSON includes `decisionTrace`; the automatic prompt wrapper renders its c
 
 Dream treats explicit user clarification as organizational correction evidence, not an automatic contradiction. Assistant self-correction and negative-form questions do not create user-owned corrections. Review `needs_confirmation` with `cogmem memory review`; `memory tick` only supersedes entries left stale past the default 30-day TTL.
 
-## Migrate
+## Update and import
 
-Upgrade and migrate the Cogmem database itself before importing host memory:
+Cogmem 4.0 is a clean start and does not migrate or upgrade a pre-4.0 database. Opening a Cogmem 3.x file is refused with an error code beginning `no_upgrade_path:`, and the file is left exactly as it was — no backup, no partial rewrite. Keep that file for Cogmem 3.x, or point 4.0 at a new database path (a new `db_path` in the config, or `--db` for one command) and move history across from the 3.x install. Creating a new database is the supported path.
+
+Update the package and refresh the host integration before importing host memory:
 
 ```bash
 cogmem update --yes
+cogmem doctor --fix --agent openclaw --workspace . --plugin-only
 ```
 
-`cogmem update --yes` installs `cogmem@latest` from npm, runs the newly installed backed-up migration, refreshes configured OpenClaw plugin files, and then tells the operator to restart the OpenClaw gateway or agent host. Use `cogmem update --dry-run --json` to see the install, migration, and plugin-refresh commands first.
+`cogmem update --yes` installs `cogmem@latest` from npm, refreshes configured OpenClaw plugin files, and ends on the same `cogmem doctor` install gate a fresh install ends on. It runs no migration step. Use `cogmem update --dry-run --json` to see the install and plugin-refresh plan first.
 
 Preview:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw --dry-run
+# Importing defaults to this workspace's own scope: the project the installed
+# plugin writes to and reads. Read it from: cogmem connect openclaw --auto --json
+# (field: integrationProject). Pass --project only to import somewhere else — a
+# literal --project openclaw writes into a scope the plugin never asks about.
+cogmem import-openclaw --workspace . --dry-run
 ```
 
 Import:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw
+cogmem import-openclaw --workspace .
 ```
 
 After import:
 
 ```bash
-cogmem memory plan --project openclaw --json
-cogmem memory status --project openclaw --json
-cogmem memory candidates --project openclaw --json
-cogmem episode status --project openclaw --json
-cogmem dream status --project openclaw --json
-cogmem dream tick --project openclaw --mode auto --max-episodes 20 --json
-cogmem memory candidates --project openclaw --status candidate --json
-cogmem memory govern --project openclaw --limit 100 --json
-cogmem memory candidates --project openclaw --status needs_confirmation --json
-cogmem memory review --project openclaw --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
+cogmem memory plan --project 'openclaw-<workspace-hash>' --json
+cogmem memory status --project 'openclaw-<workspace-hash>' --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --json
+cogmem episode status --project 'openclaw-<workspace-hash>' --json
+cogmem dream status --project 'openclaw-<workspace-hash>' --json
+cogmem dream tick --project 'openclaw-<workspace-hash>' --mode auto --max-episodes 20 --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --status candidate --json
+cogmem memory govern --project 'openclaw-<workspace-hash>' --limit 100 --json
+cogmem memory candidates --project 'openclaw-<workspace-hash>' --status needs_confirmation --json
+cogmem memory review --project 'openclaw-<workspace-hash>' --id <candidate-id> --action approve --actor <operator> --reason "confirmed by user" --confirmation-event <user-event-id> --json
 ```
 
 Single source files and batches can be imported explicitly:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw --session ./one.md
-cogmem import-openclaw --workspace . --project openclaw --session ./one.md --session ./two.md
-cogmem import-openclaw --workspace . --project openclaw --memory ./one.md
-cogmem import-openclaw --workspace . --project openclaw --memory ./one.md --memory ./two.md
+cogmem import-openclaw --workspace . --session ./one.md
+cogmem import-openclaw --workspace . --session ./one.md --session ./two.md
+cogmem import-openclaw --workspace . --memory ./one.md
+cogmem import-openclaw --workspace . --memory ./one.md --memory ./two.md
 ```
 
 The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store.
@@ -201,7 +208,7 @@ Do not quote `compiled_memory` or `imported_summary` items as user wording when 
 If automatic `<COGMEM_RECALL_CONTEXT>` injection is absent or too thin, the agent should actively query the kernel before saying it does not remember:
 
 ```bash
-cogmem memory recall --query "<user question>" --project openclaw --agent openclaw --json
+cogmem memory recall --query "<user question>" --project 'openclaw-<workspace-hash>' --agent openclaw --json
 ```
 
 Use `--intent previous_session_summary` for "上个会话我们聊了什么" and `--intent forensic_quote` for "我当时的原话是什么". Only fall back to legacy `memory/` Markdown files after `cogmem memory recall` or `cogmem memory search` fails to find useful evidence.
@@ -209,20 +216,20 @@ Use `--intent previous_session_summary` for "上个会话我们聊了什么" and
 Use `--collection theseus` only for creative artifacts or drafts:
 
 ```bash
-cogmem memory recall --query "<artifact query>" --project openclaw --agent openclaw --collection theseus --json
+cogmem memory recall --query "<artifact query>" --project 'openclaw-<workspace-hash>' --agent openclaw --collection theseus --json
 ```
 
 Default recall includes untagged and `collection:anchor` memory only.
 
-After upgrading an existing OpenClaw workspace that imported old memory before raw ledger anchors were available, run:
+If an existing OpenClaw workspace imported old memory before raw ledger anchors were available, run:
 
 ```bash
-cogmem import-openclaw --workspace . --project openclaw --config .cogmem/config.toml --reindex-raw --json
+cogmem import-openclaw --workspace . --config .cogmem/config.toml --reindex-raw --json
 ```
 
 This backfills searchable raw anchors for old imported memories without duplicating compiled memory or vectors.
 
-For agent-facing instructions, run `cogmem connect openclaw --workspace .`. It installs `SKILL.md` plus `references/operations.md`, a complete command-selection, migration, import, recall, Atlas, governance, repair, backup, and maintenance handbook.
+For agent-facing instructions, run `cogmem connect openclaw --workspace .`. It installs `SKILL.md` plus `references/operations.md`, a complete command-selection, update, import, recall, Atlas, governance, repair, backup, and maintenance handbook.
 
 To make future OpenClaw turns automatically recall and record memory, run:
 

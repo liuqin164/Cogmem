@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { HermesWorkspaceProfile } from '../src/adapters/hermes/HermesWorkspaceProfile.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('HermesWorkspaceProfile maps sessions and profile into source definitions', () => {
-  const root = mkdtempSync(join(tmpdir(), 'hermes-profile-'));
+  const root = makeTempDir('hermes-profile-');
   mkdirSync(join(root, 'sessions', '2026'), { recursive: true });
   writeFileSync(join(root, 'profile.md'), '# Profile\nPrefers concise plans.');
   writeFileSync(join(root, 'sessions', '2026', '05-07.md'), 'User: Remember the release gate.\nAgent: Stored.');
@@ -21,7 +21,7 @@ test('HermesWorkspaceProfile maps sessions and profile into source definitions',
 });
 
 test('HermesWorkspaceProfile supports explicit profile and session directories', () => {
-  const root = mkdtempSync(join(tmpdir(), 'hermes-profile-'));
+  const root = makeTempDir('hermes-profile-');
   mkdirSync(join(root, 'logs'), { recursive: true });
   writeFileSync(join(root, 'identity.md'), '# Identity\nActs as Hermes.');
   writeFileSync(join(root, 'logs', 'session.md'), 'Human: Use sqlite-vec.\nAssistant: Stored.');
@@ -38,7 +38,7 @@ test('HermesWorkspaceProfile supports explicit profile and session directories',
 });
 
 test('HermesWorkspaceProfile includes state.db when Hermes stores messages in SQLite', () => {
-  const root = mkdtempSync(join(tmpdir(), 'hermes-profile-state-db-'));
+  const root = makeTempDir('hermes-profile-state-db-');
   writeFileSync(join(root, 'state.db'), 'sqlite placeholder');
 
   const profile = new HermesWorkspaceProfile(root);

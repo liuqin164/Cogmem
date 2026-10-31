@@ -1,1 +1,0 @@
-{"version":3,"file":"ConfirmationPhraseMatcher.d.ts","sourceRoot":"","sources":["../../src/routing/ConfirmationPhraseMatcher.ts"],"names":[],"mappings":"AAAA,MAAM,WAAW,uBAAuB;IACtC,MAAM,EAAE,SAAS,GAAG,QAAQ,CAAC;IAC7B,OAAO,CAAC,EAAE,MAAM,CAAC;CAClB;AAkBD,qBAAa,yBAAyB;IACpC,iBAAiB,CAAC,OAAO,EAAE,MAAM,GAAG,uBAAuB,GAAG,IAAI;IAuBlE,OAAO,CAAC,cAAc;CAavB"}

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
+import { normalizeFrameRelations } from '../semantic/RelationConstraintRegistry.js';
 import { invalidateMemoryEdgeSupportIds } from '../binding/MemoryEdgeMerge.js';
 import { validateMemoryFrame } from '../semantic/MemoryFrameValidator.js';
 import type { MemoryFrameStatus, MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
@@ -18,9 +19,11 @@ export class MemoryFrameStore {
   save(input: MemoryFrameSaveInput): MemoryFrameV1 {
     const retryAttempt = (input as MemoryFrameSaveInput & { retryAttempt?: number }).retryAttempt ?? 0;
     const requestedStatus = input.status ?? input.frame.status ?? 'staged';
-    const validation = validateMemoryFrame(input.frame, { allowEmptyEvidence: requestedStatus !== 'active' && input.frame.sourceAuthority === 'deterministic_fallback' });
+    // Normalise the model's relation names before validating: a name outside the
+    // vocabulary is recorded as RELATED_TO rather than failing the whole frame.
+    const frame = normalizeFrameRelations(input.frame);
+    const validation = validateMemoryFrame(frame, { allowEmptyEvidence: requestedStatus !== 'active' && frame.sourceAuthority === 'deterministic_fallback' });
     if (!validation.valid) throw new Error(`invalid_memory_frame:${validation.errors.join(',')}`);
-    const frame = input.frame;
     const now = input.now ?? Date.now();
     const status: MemoryFrameStatus = 'staged';
     const publishStatus = input.publishStatus ?? frame.publishStatus ?? (frame.needsReview ? 'needs_confirmation' : 'active');
@@ -109,19 +112,50 @@ export class MemoryFrameStore {
   }
 
   publish(frameId: string, from: MemoryFrameStatus, to?: MemoryFrameStatus, now = Date.now()): boolean {
-    return Boolean(this.db.transaction(() => this.publishUnsafe(frameId, from, to, now))());
+    const published = Boolean(this.db.transaction(() => this.publishUnsafe(frameId, from, to, now))());
+    if (published) this.notifyFrameActive(frameId, now);
+    return published;
   }
 
   publishStaged(frameIds: string[], now = Date.now()): void {
+    const activated: string[] = [];
     this.db.transaction(() => {
-      for (const id of frameIds) if (!this.publishUnsafe(id, 'staged', undefined, now)) throw new Error(`memory_frame_publish_conflict:${id}`);
+      for (const id of frameIds) {
+        if (!this.publishUnsafe(id, 'staged', undefined, now)) throw new Error(`memory_frame_publish_conflict:${id}`);
+        activated.push(id);
+      }
     })();
+    for (const id of activated) this.notifyFrameActive(id, now);
+  }
+
+  /**
+   * Told after a frame becomes active, outside the transaction that made it so.
+   *
+   * Outside, because the listener writes beliefs and `BeliefStore.upsert` opens its own
+   * transaction: nesting one inside this store's would fail on SQLite's single writer.
+   * One hook instead of one call per publisher, because the frame becomes active through
+   * three paths (`publish`, `publishStaged`, `review` approving) and a projection that
+   * remembers only two of them is the defect this class already has a name for.
+   */
+  setFrameActiveListener(listener: (frame: MemoryFrameV1, now: number) => void): void {
+    this.frameActiveListener = listener;
+  }
+
+  private frameActiveListener?: (frame: MemoryFrameV1, now: number) => void;
+
+  private notifyFrameActive(frameId: string, now: number): void {
+    if (!this.frameActiveListener) return;
+    const frame = this.get(frameId);
+    // `publishUnsafe` also publishes to `needs_confirmation`, which is not a claim about
+    // the world yet; only an active frame is.
+    if (!frame || frame.status !== 'active') return;
+    this.frameActiveListener(frame, now);
   }
   review(frameId: string, projectId: string, action: 'approve' | 'reject', actor: string, reason: string, now = Date.now()): boolean {
     if (!actor.trim() || !reason.trim()) throw new Error('memory_frame_review_actor_reason_required');
     const row = this.db.prepare(`SELECT project_id,status FROM memory_frames WHERE frame_id=?`).get(frameId) as { project_id?: string; status?: MemoryFrameStatus } | null;
     if (!row || row.project_id !== projectId || row.status !== 'needs_confirmation') return false;
-    return Boolean(this.db.transaction(() => {
+    const reviewed = Boolean(this.db.transaction(() => {
       if (action === 'approve') {
         const frame = this.get(frameId);
         const validation = validateMemoryFrame(frame);
@@ -141,6 +175,10 @@ export class MemoryFrameStore {
       this.markDirty(projectId, now);
       return true;
     })());
+    // Approving is the third way a frame becomes active; without this the reviewed
+    // frames would be the only ones whose relations never reached the belief layer.
+    if (reviewed && action === 'approve') this.notifyFrameActive(frameId, now);
+    return reviewed;
   }
   failStaged(frameIds: string[], now = Date.now()): void { for (const id of frameIds) this.db.prepare(`UPDATE memory_frames SET status='failed', updated_at=? WHERE frame_id=? AND status='staged'`).run(now, id); }
   failStagedForEpisode(episodeId: string, leaseId?: string, now = Date.now()): void {
