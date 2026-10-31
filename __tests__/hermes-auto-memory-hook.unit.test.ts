@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -138,6 +138,20 @@ test('patching the hooks block keeps other hooks and other events', () => {
 
   // Idempotent: a second pass changes nothing.
   expect(patchHermesHooksConfig(patched, '/home/u/.hermes/hooks/cogmem-recall')).toBe(patched);
+
+  // The event exists already, with somebody else's hook in its list: ours joins it and
+  // theirs survives. This is the branch that inserts at the head of the list.
+  const shared = [
+    'hooks:',
+    '  pre_llm_call:',
+    '    - command: "/opt/other/recall"',
+    '      timeout: 9',
+    '',
+  ].join('\n');
+  const withOurs = patchHermesHooksConfig(shared, '/home/u/.hermes/hooks/cogmem-recall');
+  expect(withOurs).toContain('command: "/opt/other/recall"');
+  expect(withOurs).toContain('command: "/home/u/.hermes/hooks/cogmem-recall"');
+  expect(patchHermesHooksConfig(withOurs, '/home/u/.hermes/hooks/cogmem-recall')).toBe(withOurs);
 });
 
 test('the hook does not depend on the PATH Hermes happens to pass down', async () => {
@@ -172,4 +186,21 @@ test('the hook reads the user message where Hermes actually puts it', async () =
   expect(source).toContain('payload?.extra?.user_message');
   // The flat shape stays as a fallback; it is what `hermes hooks test` documents.
   expect(source).toContain('payload?.user_message');
+});
+
+test('a hook the user chmod-ed is repaired, even though its bytes did not change', async () => {
+  // The exec bit is not part of the content compare: a 644 hook is byte-identical to the
+  // one we wrote and still unrunnable, and Hermes skips it without saying why.
+  const p = scratch();
+  const args = ['bun', connectBin, 'hermes', '--workspace', p.ws, '--auto', '--hermes-config', p.hermesConfig, '--json'];
+  expect((await run(args, p.ws, { HOME: p.home })).exitCode).toBe(0);
+  const hookPath = join(dirname(p.hermesConfig), 'hooks', 'cogmem-recall');
+  chmodSync(hookPath, 0o644);
+  expect(statSync(hookPath).mode & 0o111).toBe(0);
+
+  const second = await run(args, p.ws, { HOME: p.home });
+  expect(second.exitCode).toBe(0);
+  expect(statSync(hookPath).mode & 0o111).toBeGreaterThan(0);
+  // And it did not pretend the file changed.
+  expect((JSON.parse(second.stdout) as { hermesHook?: { configUpdated?: boolean } }).hermesHook?.configUpdated).toBe(false);
 });

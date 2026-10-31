@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /**
@@ -26,19 +26,17 @@ export interface HermesHookInstallInput {
   command: string;
   bunPath: string;
   dryRun: boolean;
-  force: boolean;
 }
 
 export interface HermesHookInstallResult {
   hookPath: string;
   configUpdated: boolean;
-  backupPath?: string;
-  /** Set when the hook is written and Hermes still will not run it until it is approved. */
-  warning?: string;
+  /** Hermes will not run the hook until it is approved; this says how. */
+  warning: string;
 }
 
 /** `~/.hermes/hooks/`, derived from the config file so the two cannot disagree. */
-export function hermesHookDir(configPath: string): string {
+function hermesHookDir(configPath: string): string {
   return join(dirname(configPath), 'hooks');
 }
 
@@ -57,7 +55,7 @@ export function hermesHookPath(configPath: string): string {
  * `shell=False` and an environment it builds itself, so a `#!/usr/bin/env bun` shebang
  * depends on bun being on *that* PATH — which is not the installing shell's PATH.
  */
-export function renderHermesAutoMemoryHook(input: { project: string; workspaceRoot: string; command: string; bunPath: string }): string {
+function renderHermesAutoMemoryHook(input: { project: string; workspaceRoot: string; command: string; bunPath: string }): string {
   const literal = (value: string): string => JSON.stringify(value);
   // `cogmem` is a shim whose shebang is `#!/usr/bin/env bun`, and Hermes builds the hook's
   // environment itself — measured, the child failed with `env: 'bun': No such file or
@@ -168,7 +166,13 @@ if (worthRecalling(userMessage)) {
  */
 export function patchHermesHooksConfig(original: string, hookPath: string, timeoutSeconds = 5): string {
   const lines = original.replace(/\r\n/g, '\n').split('\n');
-  const block = [`- command: ${JSON.stringify(hookPath)}`, `  timeout: ${timeoutSeconds}`];
+  const entry = `- command: ${JSON.stringify(hookPath)}`;
+  // Already recorded: leave the file byte for byte as it is. Rewriting an unchanged file
+  // on every `connect` is how "wired it" stops meaning anything, and Hermes ties its
+  // approval to the script's mtime.
+  if (lines.some((line) => line.trim() === entry)) return `${original.trimEnd()}\n`;
+
+  const block = [entry, `  timeout: ${timeoutSeconds}`];
 
   const hooksIndex = lines.findIndex((line) => /^hooks\s*:\s*(?:\{\})?\s*$/.test(line.trim()));
   if (hooksIndex === -1) {
@@ -196,51 +200,36 @@ export function patchHermesHooksConfig(original: string, hookPath: string, timeo
     return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
   }
 
-  // The event exists: if our command is already one of its entries, leave the file byte
-  // for byte as it is. Rewriting an unchanged file on every `connect` is how a "wired it"
-  // line stops meaning anything.
-  let eventEnd = eventIndex + 1;
-  while (eventEnd < hooksEnd) {
-    const line = lines[eventEnd]!;
-    if (line.trim() && !/^\s{4,}/.test(line) && !/^\s*-\s/.test(line)) break;
-    if (line.trim() && /^\s{2}\S/.test(line)) break;
-    eventEnd += 1;
-  }
-  const existing = lines.slice(eventIndex + 1, eventEnd).join('\n');
-  if (existing.includes(JSON.stringify(hookPath))) return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
-
-  lines.splice(eventEnd, 0, ...block.map((line) => `    ${line}`));
+  // At the head of the list rather than the tail: an entry's position in a YAML list is
+  // cosmetic, and scanning for the end of somebody else's list was nine lines of
+  // indentation edge cases.
+  lines.splice(eventIndex + 1, 0, ...block.map((line) => `    ${line}`));
   return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
 }
 
 export function installHermesAutoMemoryHook(input: HermesHookInstallInput): HermesHookInstallResult {
   const hookPath = hermesHookPath(input.configPath);
-  const rendered = renderHermesAutoMemoryHook(input);
-  const existingHook = existsSync(hookPath) ? readFileSync(hookPath, 'utf8') : '';
-  const hookChanged = existingHook !== rendered;
-
   const existingConfig = existsSync(input.configPath) ? readFileSync(input.configPath, 'utf8') : '';
   const patchedConfig = patchHermesHooksConfig(existingConfig, hookPath);
   const configChanged = patchedConfig !== existingConfig;
 
-  let backupPath: string | undefined;
-  if (!input.dryRun && (hookChanged || configChanged || input.force)) {
-    mkdirSync(hermesHookDir(input.configPath), { recursive: true });
-    if (existsSync(hookPath) && hookChanged) {
-      backupPath = `${hookPath}.cogmem.bak-${Date.now()}`;
-      writeFileSync(backupPath, existingHook, 'utf8');
+  if (!input.dryRun) {
+    const rendered = renderHermesAutoMemoryHook(input);
+    const existingHook = existsSync(hookPath) ? readFileSync(hookPath, 'utf8') : '';
+    if (existingHook !== rendered) {
+      mkdirSync(hermesHookDir(input.configPath), { recursive: true });
+      if (existingHook) writeFileSync(`${hookPath}.cogmem.bak-${Date.now()}`, existingHook, 'utf8');
+      writeFileSync(hookPath, rendered, 'utf8');
     }
-    writeFileSync(hookPath, rendered, 'utf8');
-    // Hermes checks the exec bit (`hermes hooks doctor`), and `writeFileSync`'s mode only
-    // applies when the file is created — an existing 0644 file would stay unrunnable.
-    chmodSync(hookPath, 0o755);
+    // Its own check, not part of the content compare: a file the user chmod'ed is
+    // byte-identical and still unrunnable, and Hermes skips a hook without saying why.
+    if (existsSync(hookPath) && (statSync(hookPath).mode & 0o777) !== 0o755) chmodSync(hookPath, 0o755);
     if (configChanged) writeFileSync(input.configPath, patchedConfig, 'utf8');
   }
 
   return {
     hookPath,
     configUpdated: configChanged,
-    ...(backupPath ? { backupPath } : {}),
     // Hermes will not run a hook command until it is approved, and it approves the *script*
     // it saw: a rewritten script is skipped until it is revoked and re-approved. Both facts
     // cost a silent integration on the box, and both are invisible without being told.

@@ -559,7 +559,6 @@ function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
       command: cogmemDispatcherCommand({ command: hermesMcp.serverCommand, args: hermesMcp.serverArgs }),
       bunPath: args.bunPath || process.execPath,
       dryRun: args.dryRun,
-      force: args.force,
     });
   } else if (agent === 'pi' && args.auto) {
     piMcp = installPiMcpConfig({
@@ -578,7 +577,6 @@ function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
       workspaceRoot: hostWorkspaceRoot,
       command: cogmemDispatcherCommand({ command: piMcp.serverCommand, args: piMcp.serverArgs }),
       dryRun: args.dryRun,
-      force: args.force,
     });
   }
 
@@ -974,7 +972,7 @@ function printHuman(result: ConnectResult): void {
     if (result.hermesMcp.warning) console.log(`  warning: ${result.hermesMcp.warning}`);
     if (result.hermesHook) {
       console.log(`  recall hook: ${result.hermesHook.hookPath} (${result.hermesHook.configUpdated ? 'recorded' : 'already recorded'})`);
-      if (result.hermesHook.warning) console.log(`  warning: ${result.hermesHook.warning}`);
+      console.log(`  warning: ${result.hermesHook.warning}`);
     }
     console.log('  reload: /reload-mcp');
   }
