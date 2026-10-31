@@ -71,4 +71,20 @@ The comment carries, at minimum:
 - what failed and what is still blocked, named plainly — an unfinished item listed as unfinished.
 
 A round that changes behaviour also states the user-visible effect in one line, so a reader does
-not have to reconstruct it from the diff.
+not have to reconstruct it from the diff. A round that adds a module, tool or bin names what it
+removed or merged to pay for it — the budget above is checked, not aspirational.
+
+## Complexity budget (4.x, #52)
+
+Two rules, both cheap enough to actually hold. Everything else about size stays a judgement
+call; these two are not.
+
+- **The `core` MCP profile stays at eight tools or fewer.** `core` is what a host gets by
+  default, so it is the one surface every user pays for. Growing it past eight is a decision
+  about what leaves first, and `__tests__/complexity-budget.unit.test.ts` fails until that
+  happens.
+- **Every minor release's notes list what was removed or merged, not only what was added.**
+  Subtraction nobody writes down does not happen.
+
+Consolidating the 22 `cogmem-*` binaries under one entry point is a breaking change with its
+own migration for users' scripts, so it is tracked separately (#111) rather than bundled here.
