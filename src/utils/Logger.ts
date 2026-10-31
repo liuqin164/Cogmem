@@ -90,12 +90,6 @@ export function getLogger(prefix?: string, level?: LogLevel): Logger {
   return globalLogger;
 }
 
-export function setGlobalLogLevel(level: LogLevel): void {
-  if (!globalLogger) {
-    getLogger();
-  }
-  globalLogger?.setLevel(level);
-}
 
 // 便捷函数
 export const logger = getLogger();

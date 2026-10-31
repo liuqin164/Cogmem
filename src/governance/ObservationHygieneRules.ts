@@ -29,13 +29,3 @@ export const HYGIENE_RULES: HygieneRule[] = [
   }
 ];
 
-export function applyHygieneRules(
-  content: string,
-  meta: { sourceType?: string; url?: string },
-  rules: HygieneRule[] = HYGIENE_RULES
-): { shouldFilter: boolean; triggeredRule?: string } {
-  const triggered = rules.find((rule) => rule.check(content, meta));
-  return triggered
-    ? { shouldFilter: true, triggeredRule: triggered.id }
-    : { shouldFilter: false };
-}

@@ -162,13 +162,5 @@ function tokenSet(text: string): Set<string> {
 }
 
 function uniqueNonEmpty(values: Array<string | undefined>): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const normalized = String(value || '').trim();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
+  return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))];
 }

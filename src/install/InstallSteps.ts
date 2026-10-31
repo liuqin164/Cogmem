@@ -253,9 +253,6 @@ export function piIntegrationEstablished(configPath: string): boolean {
  *    operator who already has what they asked for;
  * 3. otherwise the primary Host, so a fresh machine is still told what to do.
  */
-export function pendingHostIntegration(wiring: HostWiring[]): HostIntegration | undefined {
-  return pendingHostIntegrations(wiring)[0];
-}
 
 /**
  * Every Host the gate still has work for.

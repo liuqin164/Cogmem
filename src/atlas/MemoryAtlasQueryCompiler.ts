@@ -60,9 +60,6 @@ export function compileAtlasQuery(query: string, context: number | { now?: numbe
   return { text, tokens, keywords, target, actionIntent: ACTION_MARKERS.test(text), range, memoryKinds };
 }
 
-export function actionMarker(value: string): { frameType: string; action: string } | undefined {
-  return actionMarkers(value)[0];
-}
 
 export function actionMarkers(value: string): Array<{ frameType: string; action: string; index: number; end: number; clause: string; ordinal: number }> {
   const matches = [...value.matchAll(new RegExp(ACTION_MARKERS.source, 'giu'))];

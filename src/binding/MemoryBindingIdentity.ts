@@ -34,14 +34,7 @@ const EDGE_AUTHORITY_PRIORITY = [
   'raw_evidence',
 ] as const;
 
-export function preferredMemoryEdgeAuthority(left: string, right: string): string {
-  return EDGE_AUTHORITY_PRIORITY.indexOf(left as typeof EDGE_AUTHORITY_PRIORITY[number])
-    >= EDGE_AUTHORITY_PRIORITY.indexOf(right as typeof EDGE_AUTHORITY_PRIORITY[number]) ? left : right;
-}
 
-export function preferredMemoryEdgeAuthoritySql(left: string, right: string): string {
-  return `CASE WHEN ${memoryEdgeAuthorityRankSql(left)} >= ${memoryEdgeAuthorityRankSql(right)} THEN ${left} ELSE ${right} END`;
-}
 
 export function memoryEdgeAuthorityRankSql(value: string): string {
   return `CASE ${value} WHEN 'raw_evidence' THEN 4 WHEN 'governed_projection' THEN 3

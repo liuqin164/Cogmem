@@ -321,7 +321,6 @@ function boundedLimit(value?: number): number { if (value !== undefined && (!Num
 function boundedQuery(value: string): string { const query = String(value || '').trim(); if (!query) throw new Error('query is required'); if (query.length > 1000) throw new Error('query exceeds 1000 characters'); return query; }
 function boundedId(value: string): string { const id = String(value || '').trim(); if (!id || id.length > 500) throw new Error('invalid node id'); return id; }
 function uniqueNodes(nodes: MemoryAtlasNode[]): MemoryAtlasNode[] { return Array.from(new Map(nodes.map((node) => [node.id, node])).values()); }
-function uniqueIds(ids: string[]): string[] { return Array.from(new Set(ids)); }
 function uniqueEdges(edges: MemoryAtlasEdge[]): MemoryAtlasEdge[] {
   return Array.from(new Map(edges.map((edge) => [`${edge.source}\0${edge.relation}\0${edge.target}`, edge])).values());
 }

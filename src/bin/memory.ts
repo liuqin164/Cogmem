@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { resolve } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { KernelAgentMemoryBackend, type AgentRecallIntent } from '../agent/index.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
@@ -966,10 +967,6 @@ async function runDreamOnce(kernel: MemoryKernel, args: MemoryArgs): Promise<Rec
     });
   }
   return payload;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
 async function runDream(kernel: MemoryKernel, args: MemoryArgs): Promise<Record<string, unknown>> {

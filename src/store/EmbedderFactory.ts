@@ -18,16 +18,6 @@ export function resolveEmbeddingBackendId(modelRegistry?: ModelRegistry): Embedd
   return 'deterministic_local';
 }
 
-export function getEmbeddingBackendInfo(
-  backendId: EmbeddingBackendId = resolveEmbeddingBackendId()
-): EmbeddingBackendInfo {
-  if (backendId === 'openai_compatible') {
-    return { backendId, requiresModelSetup: false, mayDownloadModels: false };
-  }
-  return backendId === 'transformers_remote'
-    ? { backendId, requiresModelSetup: false, mayDownloadModels: true }
-    : { backendId, requiresModelSetup: false, mayDownloadModels: false };
-}
 
 class ModelRegistryEmbedder extends Embedder {
   constructor(private readonly embedFn: (text: string) => Promise<number[]>) {
