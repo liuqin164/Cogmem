@@ -90,6 +90,5 @@ export function getLogger(prefix?: string, level?: LogLevel): Logger {
   return globalLogger;
 }
 
-
 // 便捷函数
 export const logger = getLogger();

@@ -30,5 +30,4 @@ export function fromAtlasEdgeEndpoint(type: string, id: string, projectId: strin
   return encodeAtlasNodeId(type, id, projectId);
 }
 
-
 export type { MemoryAtlasNodeType };

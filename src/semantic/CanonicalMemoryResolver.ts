@@ -6,7 +6,6 @@ export function normalizeAlias(value: string): string {
 
 export interface CanonicalMemoryCandidate { nodeId: string; label: string; dimension: MemoryDimension; confidence: number; }
 
-
 export function containsCanonicalAlias(text: string, alias: string): boolean {
   const normalizedText = normalizeAlias(text);
   const normalizedAlias = normalizeAlias(alias);
