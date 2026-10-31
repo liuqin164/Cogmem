@@ -74,6 +74,11 @@ A round that changes behaviour also states the user-visible effect in one line, 
 not have to reconstruct it from the diff. A round that adds a module, tool or bin names what it
 removed or merged to pay for it — the budget in `## Complexity budget` is checked, not aspirational.
 
+**One commit, one thing.** A commit that fixes six findings is six commits. Whoever bisects, blames
+or reverts gets one reason per change, and `git revert` can undo one without dragging the others
+with it. Bundling is what made the two-axis review of `309f305..HEAD` report a sequencing problem
+instead of a code one.
+
 ## Complexity budget (4.x, #52)
 
 Two rules, both cheap enough to actually hold. Everything else about size stays a judgement
