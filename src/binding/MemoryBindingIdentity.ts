@@ -26,16 +26,6 @@ export function memoryEdgeId(input: {
   ].join('\0'))}`;
 }
 
-const EDGE_AUTHORITY_PRIORITY = [
-  'model_candidate',
-  'atlas_curator',
-  'memory_frame_projector',
-  'governed_projection',
-  'raw_evidence',
-] as const;
-
-
-
 export function memoryEdgeAuthorityRankSql(value: string): string {
   return `CASE ${value} WHEN 'raw_evidence' THEN 4 WHEN 'governed_projection' THEN 3
     WHEN 'memory_frame_projector' THEN 2 WHEN 'atlas_curator' THEN 1 ELSE 0 END`;

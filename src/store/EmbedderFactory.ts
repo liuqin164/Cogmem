@@ -4,12 +4,6 @@ import { ModelRegistry } from '../models/ModelRegistry.js';
 
 export type EmbeddingBackendId = 'deterministic_local' | 'transformers_remote' | 'openai_compatible';
 
-export interface EmbeddingBackendInfo {
-  backendId: EmbeddingBackendId;
-  requiresModelSetup: boolean;
-  mayDownloadModels: boolean;
-}
-
 export function resolveEmbeddingBackendId(modelRegistry?: ModelRegistry): EmbeddingBackendId {
   const role = modelRegistry?.getRoleConfig('embedding');
   if (role?.provider === 'openai_compatible') {
@@ -17,7 +11,6 @@ export function resolveEmbeddingBackendId(modelRegistry?: ModelRegistry): Embedd
   }
   return 'deterministic_local';
 }
-
 
 class ModelRegistryEmbedder extends Embedder {
   constructor(private readonly embedFn: (text: string) => Promise<number[]>) {

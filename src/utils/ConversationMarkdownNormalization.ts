@@ -20,13 +20,6 @@ export interface NormalizationMetadata {
   onboardingPath?: string;
 }
 
-export interface NormalizerArgs {
-  input?: string;
-  output?: string;
-  title: string;
-  format?: 'csv' | 'tsv';
-}
-
 export interface NormalizedMessage {
   role: 'user' | 'agent' | 'system' | 'narrator';
   text: string;
@@ -41,11 +34,6 @@ export interface NormalizedMessageSource {
   charStart?: number;
   charEnd?: number;
   orderingConfidence?: 'high' | 'medium' | 'low';
-}
-
-export interface CustomNormalizerOptions<TRecord> {
-  family: NormalizationFamily;
-  mapRecord: (record: TRecord, index: number) => NormalizedMessage | NormalizedMessage[] | null | undefined;
 }
 
 export interface ExportBridgeMarker {
@@ -89,7 +77,6 @@ type LooseRecord = Record<string, unknown>;
 const NORMALIZED_SOURCE_FAMILY: NormalizedSourceFamily = 'normalized_conversation_markdown';
 const NORMALIZATION_CONTRACT_VERSION = 'v1';
 const DEFAULT_ONBOARDING_PATH = 'export/preprocess -> normalize -> batch:preflight -> batch:consolidate --strict -> recall';
-
 
 export function normalizeRole(input: string | undefined): 'user' | 'agent' | 'system' | 'narrator' {
   const lowered = (input || '').trim().toLowerCase();
@@ -223,7 +210,6 @@ export function normalizeDelimitedRecords(inputPath: string, format?: 'csv' | 't
   return { family, messages };
 }
 
-
 export function parseNormalizationMetadata(markdown: string): NormalizationMetadata {
   const legacyFamily = readAnyMarker(markdown, 'cogmem-normalized-from', 'agent-brain-normalized-from');
   const originalInputFamily = readAnyMarker(markdown, 'cogmem-original-input-family', 'agent-brain-original-input-family') || legacyFamily;
@@ -256,8 +242,6 @@ export function parseNormalizationMetadata(markdown: string): NormalizationMetad
     onboardingPath
   };
 }
-
-
 
 export function normalizeAppPrivateMixedEventExport(inputPath: string): BridgeNormalizationResult {
   const parsed = JSON.parse(readFileSync(inputPath, 'utf8')) as LooseRecord;
@@ -316,7 +300,6 @@ export function normalizeAppPrivateMixedEventExport(inputPath: string): BridgeNo
     }
   }));
 }
-
 
 export function normalizeJsonlMixedEventLogExport(inputPath: string): BridgeNormalizationResult {
   const input = readFileSync(inputPath, 'utf8').replace(/\r\n/g, '\n');
