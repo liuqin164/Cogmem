@@ -174,14 +174,6 @@ export interface EmbeddingConfig {
   maxSequenceLength: number;
 }
 
-export interface BackupConfig {
-  enabled: boolean;
-  frequency: 'daily' | 'neuron_count';
-  neuronThreshold: number;
-  targetRepo: string;
-  encryptionKey: string;
-}
-
 // -------------------- 记忆锚点 --------------------
 
 export interface MemoryAnchor {
@@ -205,18 +197,6 @@ export enum BrainMode {
 }
 
 // -------------------- 健康度指标 --------------------
-
-export interface BrainMetrics {
-  queryLatency: number;
-  queryType: 'HARD' | 'STANDARD' | 'FUZZY';
-  neuronCount: number;
-  synapseCount: number;
-  energyPropagation: number;
-  memoryUsage: number;
-  modelInferenceHealth: number;
-  chainIntegrityScore: number;
-  fallbackCount: number;
-}
 
 // -------------------- 降级状态 --------------------
 
@@ -890,53 +870,6 @@ export interface RuntimeAuditTrail {
   policyExecutions: PolicyExecutionAuditPage;
 }
 
-export interface UnifiedAuditBundle {
-  runtimeHistory?: RuntimeDiagnosticsHistoryPage;
-  policyExecutions?: PolicyExecutionAuditPage;
-  events: EventAuditPage;
-}
-
-export interface ProjectionObservabilityStats {
-  vector: {
-    projectionName: string;
-    checkpointStatus: 'idle' | 'building' | 'ready' | 'degraded' | 'failed';
-    lastEventId?: string;
-    lastEventTime?: number;
-    lastRebuildAt?: number;
-    lastFullCount: number;
-    pendingEvents: number;
-    projectedCount: number;
-  };
-  runtime: {
-    projectionName: string;
-    checkpointStatus: 'idle' | 'building' | 'ready' | 'degraded' | 'failed';
-    lastEventId?: string;
-    lastEventTime?: number;
-    lastRebuildAt?: number;
-    lastFullCount: number;
-    pendingEvents: number;
-    projectedStateCount: number;
-  };
-  policy: {
-    projectionName: string;
-    checkpointStatus: 'idle' | 'building' | 'ready' | 'degraded' | 'failed';
-    lastEventId?: string;
-    lastEventTime?: number;
-    lastRebuildAt?: number;
-    lastFullCount: number;
-    pendingEvents: number;
-    projectedExecutionCount: number;
-    deadLetterCount: number;
-    pendingRetryCount: number;
-  };
-}
-
-export interface RetrievalCacheStats {
-  size: number;
-  hits: number;
-  misses: number;
-}
-
 export interface ProjectionObservabilityStorageStats {
   rawSampleCount: number;
   rollupCount: number;
@@ -965,20 +898,6 @@ export interface ProjectionObservabilityHistoryPage {
     endTime?: number;
     includeRollups?: boolean;
   };
-}
-
-export interface BackgroundJobStatus {
-  jobName: string;
-  intervalMs: number;
-  nextRunAt: number;
-  lastRunAt?: number;
-  lastStatus: 'idle' | 'running' | 'succeeded' | 'failed';
-  lastError?: string;
-  isEnabled: boolean;
-  leaseOwner?: string;
-  leaseExpiresAt?: number;
-  metadata?: Record<string, unknown>;
-  updatedAt: number;
 }
 
 export interface EventAuditPage {

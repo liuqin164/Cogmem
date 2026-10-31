@@ -1,10 +1,7 @@
-import type { MemoryDimension } from './MemoryFrameTypes.js';
 
 export function normalizeAlias(value: string): string {
   return value.normalize('NFKC').toLocaleLowerCase('und').trim().replace(/\s+/gu, ' ');
 }
-
-export interface CanonicalMemoryCandidate { nodeId: string; label: string; dimension: MemoryDimension; confidence: number; }
 
 export function containsCanonicalAlias(text: string, alias: string): boolean {
   const normalizedText = normalizeAlias(text);

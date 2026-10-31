@@ -1988,19 +1988,6 @@ async function rememberPayload(payload, bridgeConfig, kernel, memory) {
   return cachedApi.rememberForHost({ kernel, memory }, payload, bridgeConfig, HOST_IDENTITY);
 }
 
-async function drainRememberQueue(bridgeConfig) {
-  const api = await loadCogmemApi(bridgeConfig);
-  cachedApi = api;
-  const { createMemoryKernelFromConfig, KernelAgentMemoryBackend } = api;
-  const kernel = createMemoryKernelFromConfig({ configPath: bridgeConfig.configPath });
-  try {
-    const memory = new KernelAgentMemoryBackend(kernel);
-    return drainRememberQueueWithLock(bridgeConfig, acquireRememberQueueLock(bridgeConfig), kernel, memory);
-  } finally {
-    kernel.close();
-  }
-}
-
 function acquireRememberQueueLock(bridgeConfig) {
   const queuePath = bridgeConfig.rememberQueuePath;
   if (!queuePath) throw new Error('missing rememberQueuePath');

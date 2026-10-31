@@ -24,15 +24,6 @@ export interface EntityRecord {
   updatedAt: number;
 }
 
-export interface EntityAliasRecord {
-  aliasId: string;
-  entityId: string;
-  aliasText: string;
-  normalizedAlias: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
 export interface EntityAttributeRecord {
   attributeId: string;
   entityId: string;
