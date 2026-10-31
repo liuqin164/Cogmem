@@ -1,9 +1,8 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
 
-import { createSqlitePorts } from '../src/adapters/sqlite/SqliteMemoryPorts.js';
 import { callCogmemMcpTool, listCogmemMcpTools } from '../src/mcp/CoreMcpTools.js';
 import {
   ADMIN_TOOLS,
@@ -164,17 +163,8 @@ describe('#68 a fresh served database carries no shared-memory storage', () => {
     }
   });
 
-  test('the SQLite port bundle does not create a shared region on its own', () => {
-    // The last default-creation site: a caller that never mentioned sharing
-    // used to get a region constructed for it, which made the table exist.
-    const dbPath = join(scratch, 'ports', 'memory.db');
-    mkdirSync(dirname(dbPath), { recursive: true });
-    const db = new Database(dbPath);
-    try {
-      expect(createSqlitePorts({ db }).shared).toBeNull();
-      expect(sharedTables(db)).toEqual([]);
-    } finally {
-      db.close();
-    }
-  });
+  // The port bundle that used to be the last default-creation site is gone
+  // (2026-10-31): it had no consumer, so the property it guarded — nothing builds
+  // a shared region on its own — is asserted by the fresh-database test above,
+  // against the code that still exists.
 });
