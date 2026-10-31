@@ -87,8 +87,7 @@ export function sweepStaleRunRoots(root = tmpdir()): number {
   }
   for (const entry of entries) {
     if (!entry.startsWith(RUN_ROOT_PREFIX)) continue;
-    const pid = Number(entry.slice(RUN_ROOT_PREFIX.length));
-    if (Number.isInteger(pid) && pid > 0 && isAlive(pid)) continue;
+    if (isLiveRunRoot(entry)) continue;
     try {
       rmSync(join(root, entry), { recursive: true, force: true });
       removed += 1;
@@ -121,14 +120,30 @@ export function clearProjectTempRoot(repoRoot: string, root = tmpdir()): { clear
   } catch {
     return { cleared: false, entries: 0 };
   }
+  let removed = 0;
   for (const entry of entries) {
+    // A concurrent run's root is not this run's garbage. `TMPDIR` points at
+    // `.cogmem/tmp` — the documented way to run this suite — so that root is also where
+    // `cogmem-run-<pid>` lives. Clearing it blindly deletes another live process's
+    // temporary directories, and what that looks like from the outside is flaky tests:
+    // `mkdtemp ENOENT` in whichever file happened to run at that moment. Two full runs
+    // were blamed on a phantom flake before this was found.
+    if (isLiveRunRoot(entry)) continue;
     try {
       rmSync(join(target, entry), { recursive: true, force: true });
+      removed += 1;
     } catch {
       // Leave what cannot be removed; the run still proceeds.
     }
   }
-  return { cleared: true, entries: entries.length };
+  return { cleared: true, entries: removed };
+}
+
+/** `cogmem-run-<pid>` whose process is still alive: another run's, not stale. */
+function isLiveRunRoot(entry: string): boolean {
+  if (!entry.startsWith(RUN_ROOT_PREFIX)) return false;
+  const pid = Number(entry.slice(RUN_ROOT_PREFIX.length));
+  return Number.isInteger(pid) && pid > 0 && isAlive(pid);
 }
 
 function isAlive(pid: number): boolean {

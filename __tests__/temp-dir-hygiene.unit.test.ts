@@ -99,3 +99,25 @@ test('the temp-root clear refuses anything that is not inside the repository', (
   expect(readdirSync(inside)).toEqual([]);
   rmSync(join(repo, '.cogmem', 'tmp', `clear-inside-${process.pid}`), { recursive: true, force: true });
 });
+
+test("the temp-root clear leaves a concurrent run's root alone", () => {
+  // `TMPDIR` points at `.cogmem/tmp` — the documented way to run this suite — so the
+  // project temp root is also where `cogmem-run-<pid>` lives. Clearing it without a
+  // liveness check deleted another live process's temporary directories, which reads
+  // from the outside as flaky tests: `mkdtemp ENOENT` in whichever file happened to run
+  // at that moment. Two full runs were blamed on a phantom flake before this was found.
+  const repo = dirname(testsRoot);
+  const root = join(repo, '.cogmem', 'tmp', `clear-live-${process.pid}`);
+  const liveRoot = join(root, `cogmem-run-${process.pid}`);
+  const deadRoot = join(root, 'cogmem-run-99999999');
+  const stray = join(root, 'stray');
+  for (const dir of [liveRoot, deadRoot, stray]) mkdirSync(dir, { recursive: true });
+  try {
+    // This process is alive, so its run root is not garbage; the dead one and the
+    // unrelated entry are.
+    expect(clearProjectTempRoot(repo, root)).toEqual({ cleared: true, entries: 2 });
+    expect(readdirSync(root)).toEqual([`cogmem-run-${process.pid}`]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
