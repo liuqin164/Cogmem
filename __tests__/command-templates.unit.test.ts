@@ -219,6 +219,17 @@ function cliGroups(): Map<string, string> {
   return groups;
 }
 
+test('every cogmem-* bin has a dispatcher subcommand', () => {
+  // The two names are one capability, and nothing was keeping them in step: `host-bridge`
+  // shipped as a bin while `cogmem host-bridge` answered "Unknown cogmem command". A new
+  // bin that forgets the dispatcher makes the documented single entry point a lie.
+  const bins = Object.keys(JSON.parse(read('package.json')).bin as Record<string, string>)
+    .filter((name) => name.startsWith('cogmem-'))
+    .map((name) => name.slice('cogmem-'.length));
+  expect(bins.length).toBeGreaterThan(15);
+  expect(bins.filter((name) => !groups.has(name))).toEqual([]);
+});
+
 const groups = cliGroups();
 const binSource = (entry: string) => read(join('src', 'bin', `${entry}.ts`));
 
