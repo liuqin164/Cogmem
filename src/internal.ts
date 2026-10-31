@@ -9,7 +9,6 @@ export * from './assets/providers/types.js';
 export * from './backend/SemanticBackend.js';
 export * from './batch/IngestionCursorStore.js';
 export * from './batch/InstalledBatchProcessor.js';
-export * from './batch/SourceOnboarding.js';
 export * from './belief/BeliefStore.js';
 export {
   BeliefGovernanceService,
