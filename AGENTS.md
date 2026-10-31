@@ -81,8 +81,8 @@ instead of a code one.
 
 ## Complexity budget (4.x, #52)
 
-Two rules, both cheap enough to actually hold. Everything else about size stays a judgement
-call; these two are not.
+Three rules, all cheap enough to actually hold. Everything else about size stays a judgement
+call; these three are not.
 
 - **The `core` MCP profile stays at eight tools or fewer.** `core` is what a host gets by
   default, so it is the one surface every user pays for. Growing it past eight is a decision
@@ -90,6 +90,13 @@ call; these two are not.
   happens.
 - **Every minor release's notes list what was removed or merged, not only what was added.**
   Subtraction nobody writes down does not happen.
+- **Retrieval's shape is index first, detail by ID, and every `core` tool declares which step
+  of that chain it is.** A new `core` tool may not be a detail fetch that a smaller index tool
+  plus an existing detail tool could replace — that is the count going up without the surface
+  getting better. `docs/mcp-hosts.md` carries the classification for the tools that are in
+  `core`, `__tests__/complexity-budget.unit.test.ts` fails when one is missing or unnamed, and
+  budget freed this way goes to writes and maintenance, which are what actually need the model
+  to decide something.
 
 Consolidating the 22 bins (one dispatcher plus 21 separate `cogmem-*` entry points) under one
 entry point is a breaking change with its own migration for users' scripts, so it is tracked

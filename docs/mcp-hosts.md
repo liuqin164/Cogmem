@@ -40,8 +40,24 @@ The server exposes 36 tools. A host does not need all of them.
 | `admin` | 22 | Operators: sealing episodes, dream ticks, governance review, importing host history |
 | `full` | 36 | Debugging and tool discovery |
 
-`core` is: `cogmem_recall`, `cogmem_remember_turn`, `cogmem_episode_append`,
-`cogmem_graph_explore`, `cogmem_graph_node`, `cogmem_explain_recall`.
+`core` is these six, and each one says which step of the retrieval chain it is (#118).
+Index first, detail by ID: a broad answer returns identifiers, and the caller pays for
+the detail only on what it chose.
+
+| Tool | Step | Why it is in `core` |
+|---|---|---|
+| `cogmem_recall` | index | The everyday entry point: governed context for a question, with the evidence ids that reached it |
+| `cogmem_graph_explore` | index | Broad inventory across the Atlas when the question is "what do I have", not "what is this" |
+| `cogmem_graph_node` | detail | One node by id, with neighbors and evidence ids — the fetch that `graph_explore` makes cheap to need |
+| `cogmem_explain_recall` | detail | Why a given recall answered as it did, for a result the caller already has |
+| `cogmem_remember_turn` | write | Records a user/agent turn and follows the episode lifecycle (ADR-0011) |
+| `cogmem_episode_append` | write | One bounded raw message with its session and turn fields set explicitly |
+
+**Two writes is the pair to watch.** `cogmem_remember_turn` and `cogmem_episode_append`
+both put a turn in the ledger from different levels — the first through the episode
+lifecycle, the second message by message — and a third write would be the count going up
+without the surface getting better. Anything new that writes belongs in one of these two,
+or replaces one of them, before it becomes a tool.
 
 A tool outside the profile returns `tool_not_in_profile` instead of running. A
 name that is in **no** profile returns `tool_not_found`: there is no profile to
