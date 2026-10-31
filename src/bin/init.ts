@@ -21,7 +21,7 @@ import { createInterface } from 'node:readline';
 import { dirname, resolve, join } from 'node:path';
 
 import { defaultCogmemConfigPath, defaultCogmemHome, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
-import { installGateStep, resolveCogmemInvocation } from '../install/InstallSteps.js';
+import { ensureCogmemShim, installGateStep, resolveCogmemInvocation } from '../install/InstallSteps.js';
 import {
   DEFAULT_VECTOR_DIMENSION,
   HIGH_VECTOR_DIMENSION_THRESHOLD,
@@ -1138,6 +1138,9 @@ function emitInitJson(input: {
   // A runnable command, not the bin directory: `--json` is what an agent follows,
   // and `/path/to/bin doctor --json` is exit 126. Off PATH the step is the
   // absolute launcher, on PATH the bare name (#78).
+  // Point the managed launcher at this installation before printing the steps, so the
+  // commands a reader copies name the stable path rather than this installation (#114).
+  ensureCogmemShim();
   const bin = resolveCogmemInvocation();
   console.log(JSON.stringify({
     schemaVersion: 'cogmem.cli.v1',

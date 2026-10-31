@@ -63,6 +63,23 @@ A tool outside the profile returns `tool_not_in_profile` instead of running. A
 name that is in **no** profile returns `tool_not_found`: there is no profile to
 widen to, so the two answers stay distinct.
 
+## What a host configuration names
+
+Every entry written into a host — the Hermes MCP command, the Hermes hook and the Pi
+extension — names the **managed launcher**, `~/.cogmem/bin/cogmem`, and never the
+installation those were written from (#114). The launcher is created by `cogmem init`
+and `cogmem connect`, and resolves the installation when the host runs it:
+
+1. `COGMEM_BIN`, when an operator has set one;
+2. the installation recorded beside the launcher in `cogmem.target`;
+3. the first `cogmem` on `PATH` that is not the launcher itself.
+
+Finding none is reported and exits 127; it never runs something else. That order is
+what makes a configuration outlive the installation: an upgrade, a moved checkout, a
+changed npm prefix and a different package manager all leave the written entry valid.
+`cogmem doctor` warns when the launcher is absent while an installation exists, and
+when it exists with nothing to run.
+
 ## How memory reaches the model
 
 Two paths exist, and they promise different things. Keep two questions apart on

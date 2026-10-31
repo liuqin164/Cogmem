@@ -26,6 +26,10 @@ import {
   pathWarningSteps,
   postInstallSteps,
   resolveCliBinDir,
+  cogmemShimPath,
+  hasCogmemShim,
+  readCogmemShimTarget,
+  resolveCogmemInstallation,
   resolveCogmemInvocation,
   type InstallGate,
   type InstallGateDiagnostic,
@@ -214,6 +218,27 @@ if (envPath) {
     if (diagnostic.severity === 'warning') {
       gateDiagnostics.push({ code: diagnostic.code, message: diagnostic.message });
     }
+  }
+
+  // The managed launcher is what keeps a host configuration valid across an upgrade, a
+  // moved checkout and a changed npm prefix (#114). Its absence is not a failure —
+  // `connect` and `init` write it — but a launcher that points at nothing is, because
+  // every host configured after this one is calling a file that cannot run the CLI.
+  const shimInvocation = resolveCogmemInstallation(process.env) ?? 'cogmem';
+  const shimFinding = hasCogmemShim() && !readCogmemShimTarget()
+    ? {
+      code: 'shim_target_missing',
+      message: `The managed launcher ${cogmemShimPath()} has no installation to run. Run ${shimInvocation} connect --auto --workspace ${workspaceRoot}, or set COGMEM_BIN, to point it at one.`,
+    }
+    : !hasCogmemShim() && resolveCogmemInstallation(process.env)
+      ? {
+        code: 'shim_missing',
+        message: `No managed launcher at ${cogmemShimPath()}: a host configuration written from here names this installation's own path, and stops working when that path changes. Run ${shimInvocation} connect --auto --workspace ${workspaceRoot} to create one.`,
+      }
+      : undefined;
+  if (shimFinding) {
+    warn(shimFinding.code, shimFinding.message);
+    gateDiagnostics.push(shimFinding);
   }
 
   printWarnings(loaded.diagnostics);

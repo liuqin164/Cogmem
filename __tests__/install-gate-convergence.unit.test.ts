@@ -73,6 +73,31 @@ function wireOpenClaw(dir: string, configPath: string): void {
   });
 }
 
+describe('the gate reports the managed launcher (#114)', () => {
+  test('a launcher with nothing to run is a diagnostic, and the fix names a real command', async () => {
+    const dir = makeTempDir('cogmem-gate-shim-');
+    const home = join(dir, 'home');
+    const configPath = writeConfig(dir, '[core]\ndb_path = "memory.db"\n');
+    // The state a host configuration lands in after the installation moves and nothing
+    // rewrote the launcher: the recorded target is gone, so every host calling it fails.
+    const shimDir = join(home, '.cogmem', 'bin');
+    mkdirSync(shimDir, { recursive: true });
+    writeFileSync(join(shimDir, 'cogmem.target'), join(dir, 'moved-away', 'cogmem') + '\n');
+    writeFileSync(join(shimDir, 'cogmem'), '#!/bin/sh\nexit 127\n');
+
+    const parsed = await doctor(dir, configPath) as unknown as { installGate: { diagnostics: Array<{ code: string; message: string }> } };
+    const finding = parsed.installGate.diagnostics.find((diagnostic) => diagnostic.code === 'shim_target_missing');
+    expect(finding).toBeDefined();
+    expect(finding!.message).toContain(join(shimDir, 'cogmem'));
+    expect(finding!.message).toContain('connect --auto');
+
+    // A launcher that is fine says nothing: a warning here would be noise on every run.
+    writeFileSync(join(shimDir, 'cogmem.target'), process.execPath + '\n');
+    const clean = await doctor(dir, configPath) as unknown as { installGate: { diagnostics: Array<{ code: string }> } };
+    expect(clean.installGate.diagnostics.some((diagnostic) => diagnostic.code.startsWith('shim_'))).toBe(false);
+  });
+});
+
 describe('the gate recommends only what is outstanding', () => {
   test('names the Host that has no integration, and stops once it is wired', async () => {
     const dir = makeTempDir('cogmem-gate-converge-');

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 
@@ -440,6 +440,131 @@ export function resolveCliBinDir(
 }
 
 /**
+ * The managed launcher: one per user, at a path no installation owns.
+ *
+ * Host configurations point here and never at an installation. This path does not
+ * move when the installation does — an npm prefix change, a moved checkout, a
+ * different package manager and an upgrade all leave it valid — because the
+ * installation is resolved when the launcher runs, not when it is written.
+ *
+ * That is the whole difference from what #86, #94 and #96 were symptoms of:
+ * `connect` used to resolve the current installation's absolute path and bake it
+ * into every host artifact, so each of those moves broke the integration, and the
+ * answer each time was to notice harder instead of to stop writing the path.
+ */
+export function cogmemShimDir(env: Record<string, string | undefined> = process.env): string {
+  return env.COGMEM_SHIM_DIR?.trim() || join(env.HOME || homedir(), '.cogmem', 'bin');
+}
+
+export function cogmemShimPath(env: Record<string, string | undefined> = process.env): string {
+  return join(cogmemShimDir(env), 'cogmem');
+}
+
+export function cogmemShimTargetFile(env: Record<string, string | undefined> = process.env): string {
+  return join(cogmemShimDir(env), 'cogmem.target');
+}
+
+export function hasCogmemShim(env: Record<string, string | undefined> = process.env): boolean {
+  return existsSync(cogmemShimPath(env));
+}
+
+/** The recorded installation, when it still exists and can be executed. */
+export function readCogmemShimTarget(env: Record<string, string | undefined> = process.env): string | undefined {
+  let recorded: string;
+  try {
+    recorded = readFileSync(cogmemShimTargetFile(env), 'utf8').trim();
+  } catch {
+    return undefined;
+  }
+  if (!recorded || recorded === cogmemShimPath(env)) return undefined;
+  return isExecutableFile(recorded) ? recorded : undefined;
+}
+
+/**
+ * Point the managed launcher at an installation, creating it if needed.
+ *
+ * Returns undefined when there is nothing to point at — a source checkout run
+ * through `src/bin/*.ts` has no installed launcher of its own — in which case no
+ * shim is written and the caller keeps the invocation it already had.
+ */
+export function writeCogmemShim(options: {
+  env?: Record<string, string | undefined>;
+  target: string | undefined;
+}): { shim: string; target: string } | undefined {
+  const env = options.env ?? process.env;
+  const target = options.target;
+  if (!target || target === 'cogmem' || !isExecutableFile(target)) return undefined;
+  const shim = cogmemShimPath(env);
+  if (resolve(target) === resolve(shim)) return undefined;
+  mkdirSync(cogmemShimDir(env), { recursive: true });
+  writeFileSync(cogmemShimTargetFile(env), `${target}\n`);
+  writeFileSync(shim, renderCogmemShim());
+  chmodSync(shim, 0o755);
+  return { shim, target };
+}
+
+/**
+ * The launcher's source. POSIX `sh`, no bashisms: hosts run it with whatever they
+ * have, and one of them runs it with an empty PATH.
+ */
+export function renderCogmemShim(): string {
+  return `#!/bin/sh
+# Cogmem launcher, written by \`cogmem init\` and \`cogmem connect\`. Do not edit.
+#
+# Host configurations point at this file rather than at an installation, because
+# this path does not move when the installation does. The installation is resolved
+# here, when this runs:
+#   1. $COGMEM_BIN
+#   2. the installation recorded beside this file (cogmem.target)
+#   3. the first \`cogmem\` on PATH that is not this file
+# Finding none is reported and exits 127; it never runs something else.
+set -u
+shim_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 127
+self="$shim_dir/cogmem"
+
+if [ -n "\${COGMEM_BIN:-}" ] && [ -x "\${COGMEM_BIN}" ]; then exec "\${COGMEM_BIN}" "$@"; fi
+
+target=""
+if [ -r "$shim_dir/cogmem.target" ]; then
+  recorded=$(cat "$shim_dir/cogmem.target" 2>/dev/null || true)
+  case "$recorded" in
+    ""|"$self") ;;
+    *) if [ -x "$recorded" ]; then target="$recorded"; fi ;;
+  esac
+fi
+
+if [ -z "$target" ]; then
+  IFS=:
+  set -f
+  for dir in $PATH; do
+    if [ -n "$dir" ] && [ "$dir" != "$shim_dir" ] && [ -x "$dir/cogmem" ]; then
+      target="$dir/cogmem"
+      break
+    fi
+  done
+  unset IFS
+  set +f
+fi
+
+if [ -z "$target" ]; then
+  echo "cogmem: this launcher found no installation to run." >&2
+  echo "cogmem: re-run \`cogmem connect <host> --auto\`, or set COGMEM_BIN, then try again." >&2
+  exit 127
+fi
+exec "$target" "$@"
+`;
+}
+
+function isExecutableFile(path: string): boolean {
+  try {
+    const stat = statSync(path);
+    return stat.isFile() && (stat.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * How to invoke this CLI in a command that is about to be printed or written into
  * a Host's configuration.
  *
@@ -464,9 +589,37 @@ export function resolveCogmemInvocation(
   // rather than a fifth one that agrees only when nothing is set.
   const explicit = env.COGMEM_BIN?.trim();
   if (explicit) return explicit;
+  // The managed launcher next, and before any path this installation owns: it is the
+  // one entry that survives an upgrade, a moved checkout, a changed npm prefix and a
+  // different package manager, which is exactly what a host configuration outlives
+  // (#114). An operator who has no shim gets the previous answer, unchanged.
+  if (hasCogmemShim(env)) return cogmemShimPath(env);
+  const installation = resolveCogmemInstallation(env, argv1);
+  if (!installation) return 'cogmem';
+  return isOnPath(dirname(installation), env) ? 'cogmem' : installation;
+}
+
+/**
+ * The installed launcher this process is running from, when it is running from one.
+ *
+ * A source checkout run through `src/bin/*.ts` has none, and undefined is the honest
+ * answer there: there is nothing for a host configuration to point at.
+ */
+export function resolveCogmemInstallation(
+  env: Record<string, string | undefined> = process.env,
+  argv1: string | undefined = process.argv[1],
+): string | undefined {
   const binDir = resolveCliBinDir(argv1, env);
-  if (!hasInstalledLauncher(binDir)) return 'cogmem';
-  return isOnPath(binDir, env) ? 'cogmem' : join(binDir, 'cogmem');
+  if (!hasInstalledLauncher(binDir)) return undefined;
+  return join(binDir, 'cogmem');
+}
+
+/** Point the managed launcher at this installation, if it is one. */
+export function ensureCogmemShim(
+  env: Record<string, string | undefined> = process.env,
+  argv1: string | undefined = process.argv[1],
+): { shim: string; target: string } | undefined {
+  return writeCogmemShim({ env, target: resolveCogmemInstallation(env, argv1) });
 }
 
 /**

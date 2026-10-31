@@ -10,6 +10,7 @@ import {
   defaultHermesConfigPath,
   hasHermesCogmemEntry,
   defaultPiConfigPath,
+  ensureCogmemShim,
   resolveCogmemInvocation,
   type InstallStep,
 } from '../install/InstallSteps.js';
@@ -480,6 +481,10 @@ function installSkill(args: ConnectArgs): ConnectResult {
 }
 
 function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
+  // One place, before any host artifact is resolved or written: point the managed
+  // launcher at this installation so every configuration below can name the stable
+  // path instead of the one this installation happens to sit at (#114).
+  ensureCogmemShim();
   const templatePath = templatePathFor(agent);
   const operationsTemplatePath = operationsTemplatePathFor(agent);
   for (const requiredPath of [templatePath, operationsTemplatePath]) {

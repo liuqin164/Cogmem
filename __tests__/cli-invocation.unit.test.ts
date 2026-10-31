@@ -3,7 +3,12 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileS
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { resolveCliBinDir, resolveCogmemInvocation, type InstallStep } from '../src/install/InstallSteps.js';
+import {
+  cogmemShimPath,
+  resolveCliBinDir,
+  resolveCogmemInvocation,
+  type InstallStep,
+} from '../src/install/InstallSteps.js';
 import { expectRunnableCommand } from './helpers/cli-invocation.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -161,8 +166,11 @@ describe('printed steps run as printed', () => {
     expect(exitCode).toBe(0);
     const parsed = JSON.parse(stdout) as { nextSteps: InstallStep[] };
     // `/path/to/bin doctor --json` is exit 126 — the step an agent follows has to
-    // be the command, not the directory it lives in.
-    expect(parsed.nextSteps[0]!.command).toBe(`${join(binDir, 'cogmem')} doctor --json`);
+    // be the command, not the directory it lives in. It names the managed launcher
+    // rather than this installation, so the step a reader copies keeps working after
+    // the prefix or the checkout moves (#114).
+    expect(parsed.nextSteps[0]!.command).toBe(`${cogmemShimPath({ HOME: dir })} doctor --json`);
+    expect(parsed.nextSteps[0]!.command).not.toContain(binDir);
     expectRunnableCommand(parsed.nextSteps[0]!.command);
   });
 
@@ -188,11 +196,45 @@ describe('printed steps run as printed', () => {
     );
     expect(exitCode).toBe(0);
     const written = readFileSync(hermesConfig, 'utf8');
-    // A bare `cogmem` here is an MCP server entry that never starts.
-    expect(written).toContain(`command: "${join(binDir, 'cogmem')}"`);
+    // A bare `cogmem` here is an MCP server entry that never starts, and this
+    // installation's own path stops existing the moment the npm prefix or the
+    // checkout moves. The entry names the managed launcher instead (#114).
+    expect(written).toContain(`command: "${cogmemShimPath({ HOME: dir })}"`);
+    expect(written).not.toContain(join(binDir, 'cogmem'));
     // Bound to the integration's own scope: an unbound server answers whatever
     // project a caller names (#79).
     expect(written).toMatch(/args: \["mcp","--project","hermes-[0-9a-f]{8}","--config","[^"]+config\.toml"\]/);
+  });
+
+  test('connect pi writes an extension that names the managed launcher, not this installation', async () => {
+    const dir = makeTempDir('cogmem-invocation-pi-');
+    const binDir = installedLauncher(dir);
+    const workspace = join(dir, 'ws');
+    const piConfig = join(dir, 'pi', 'mcp.json');
+    mkdirSync(workspace, { recursive: true });
+
+    const { exitCode } = await run(
+      ['bun', connectBin, 'pi', '--auto', '--json', '--workspace', workspace, '--pi-config', piConfig],
+      {
+        cwd: workspace,
+        env: {
+          COGMEM_BIN_DIR: binDir,
+          COGMEM_BIN: '',
+          COGMEM_MCP_BIN: '',
+          PATH: '/usr/bin:/bin',
+          HOME: dir,
+        },
+      },
+    );
+    expect(exitCode).toBe(0);
+    const extensions = readdirSync(join(dir, 'pi', 'extensions')).filter((name) => name.endsWith('.ts'));
+    expect(extensions.length).toBe(1);
+    const extension = readFileSync(join(dir, 'pi', 'extensions', extensions[0]!), 'utf8');
+    // Same property as the Hermes entry: the extension runs this launcher, which
+    // resolves the installation when the host calls it, and the installation's own
+    // path appears nowhere (#114).
+    expect(extension).toContain(`const COGMEM_BIN = ${JSON.stringify(cogmemShimPath({ HOME: dir }))};`);
+    expect(extension).not.toContain(binDir);
   });
 
   test('a workspace with a space is quoted, so the step still runs', async () => {
