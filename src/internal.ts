@@ -104,7 +104,6 @@ export * from './recall/HierarchicalRecallRouter.js';
 export * from './recall/VectorCandidateFilter.js';
 export * from './recall/index.js';
 export * from './retrieval/ConditionDslEvaluator.js';
-export * from './retrieval/EvidenceFusionPolicy.js';
 export * from './retrieval/NativeQueryParser.js';
 export * from './retrieval/PlanDslExecutor.js';
 export * from './retrieval/PolicyRuntimeEvaluator.js';
