@@ -832,8 +832,11 @@ cogmem strategy
 cogmem brain-eval
 cogmem episode
 cogmem dream
+cogmem host-bridge
 cogmem mcp
 ```
+
+Every `cogmem-*` bin is a **compatibility alias** for the matching subcommand: `cogmem-memory` is `cogmem memory`, `cogmem-mcp` is `cogmem mcp`. Write new scripts and host configurations against the subcommand form; the standalone bins stay so a script written for 3.x keeps working, and `cogmem-mcp` in particular stays because existing host configs name it as their server command.
 
 ## MCP transport and profiles
 
