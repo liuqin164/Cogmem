@@ -1579,6 +1579,45 @@ export class MemoryKernel {
     }
   }
 
+  /**
+   * A turn the caller named is an identity, not a label.
+   *
+   * Returns the event ids the turn must be written under, and whether that turn is
+   * already recorded. The ids come from stable fields only: the fallback that named a
+   * turn after `Date.now()` and an incrementing `turnSeq` gave every retry a new
+   * identity, so one conversation landed in the ledger twice (measured: two writes of
+   * one named turn left seven events, the user and assistant rows byte-identical).
+   * Reusing a turn id for different content is a conflict, and it throws here rather
+   * than after the insert.
+   */
+  claimAgentTurn(input: AgentTurnIdentityInput): AgentTurnClaim {
+    const userEventId = agentTurnEventId(input, 1);
+    const assistantEventId = input.assistantText ? agentTurnEventId(input, 2) : undefined;
+    const recordedUser = this.eventStore.getEvent(userEventId);
+    if (!recordedUser) return { userEventId, assistantEventId, replay: false };
+    this.assertAgentTurnIdentity(recordedUser, input, 1);
+    const recordedAssistant = assistantEventId ? this.eventStore.getEvent(assistantEventId) : null;
+    if (assistantEventId && !recordedAssistant) {
+      // The retry carries a reply the first write did not: same turn id, different turn.
+      throw new Error(`agent_turn_identity_conflict:${input.turnId}`);
+    }
+    if (recordedAssistant) this.assertAgentTurnIdentity(recordedAssistant, input, 2);
+    return { userEventId, assistantEventId, replay: true };
+  }
+
+  private assertAgentTurnIdentity(event: MemoryEvent, input: AgentTurnIdentityInput, ordinal: 1 | 2): void {
+    const raw = ordinal === 1 ? input.userText : input.assistantText ?? '';
+    const expectedText = this.piiRedactor ? this.piiRedactor.redact(raw).text : raw;
+    const payload = event.payload as { text?: unknown } | undefined;
+    if (
+      event.turnId !== input.turnId
+      || event.sessionId !== input.sessionId
+      || payload?.text !== expectedText
+    ) {
+      throw new Error(`agent_turn_identity_conflict:${input.turnId}`);
+    }
+  }
+
   recordRawEvent(input: RawMemoryEventInput): MemoryEvent<{ text: string; metadata?: Record<string, unknown> }> {
     const text = this.piiRedactor ? this.piiRedactor.redact(input.content).text : input.content;
     const occurredAt = input.occurredAt ?? Date.now();
@@ -3847,3 +3886,31 @@ function stringifyToolPayload(value: unknown): string {
   }
 }
 
+export interface AgentTurnIdentityInput {
+  projectId?: string;
+  agentId: string;
+  sessionId: string;
+  turnId: string;
+  userText: string;
+  assistantText?: string;
+}
+
+export interface AgentTurnClaim {
+  userEventId: string;
+  assistantEventId?: string;
+  replay: boolean;
+}
+
+/**
+ * Identity for one message of a named turn.
+ *
+ * Stable inputs only — project, agent, session, the caller's turn id, and which
+ * message of the turn it is. Not the clock, not the turn sequence, not the text:
+ * those change between an attempt and its retry, which is how a retry became a
+ * duplicate (#113).
+ */
+function agentTurnEventId(input: AgentTurnIdentityInput, ordinal: 1 | 2): string {
+  return `evt-turn-${createHash('sha256')
+    .update(JSON.stringify([input.projectId ?? '', input.agentId, input.sessionId, input.turnId, ordinal]))
+    .digest('hex')}`;
+}

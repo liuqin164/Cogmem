@@ -94,13 +94,18 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
   return [
     {
       name: 'cogmem_remember_turn',
-      description: 'Write one user/agent turn into cogmem memory.',
+      description: 'Write one user/agent turn into cogmem memory. Pass the host\'s own turn id as '
+        + 'turnId to make a retry a replay: the same turnId with the same text writes nothing the '
+        + 'second time and returns the turn already recorded, while the same turnId with different '
+        + 'text is refused as a conflict. Without turnId the turn is still written, named after a '
+        + 'timestamp and a sequence, so a retry is a second copy.',
       inputSchema: {
         type: 'object',
         properties: {
           agentId: STRING_SCHEMA,
           projectId: STRING_SCHEMA,
           sessionId: STRING_SCHEMA,
+          turnId: STRING_SCHEMA,
           userText: STRING_SCHEMA,
           assistantText: STRING_SCHEMA,
           ingestMode: TURN_INGEST_MODE_SCHEMA,
@@ -1048,6 +1053,7 @@ async function rememberTurn(kernel: MemoryKernel, input: Record<string, unknown>
     agentId: requiredString(input.agentId, 'agentId'),
     projectId: requiredString(input.projectId, 'projectId'),
     sessionId: requiredString(input.sessionId, 'sessionId'),
+    turnId: optionalString(input.turnId),
     userText: requiredString(input.userText, 'userText'),
     assistantText: optionalString(input.assistantText),
     ingestMode: optionalTurnIngestMode(input.ingestMode),

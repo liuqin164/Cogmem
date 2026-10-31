@@ -86,6 +86,41 @@ async function call(url: string, sessionId: string, name: string, args: object) 
 }
 
 describe('tool execution semantics', () => {
+  test('a retry under the same turnId is a replay, not a second turn (#113)', async () => {
+    // The tool now exposes turnId, and a named turn is an identity. Before this the
+    // MCP surface could not name a turn at all, so every write was named after a
+    // timestamp and a sequence and every retry landed a second copy in the ledger.
+    const handle = await start();
+    const session = await connect(handle.url);
+    const turn = {
+      turnId: 'exec-turn-replay-1',
+      userText: '请记住代号 REPLAY-1 的负责小组是青栎组。',
+      assistantText: '已记下。',
+      sessionId: 'exec-session-replay',
+      agentId: 'exec-agent',
+      projectId: 'exec-project-replay',
+    };
+
+    const first = await call(handle.url, session, 'cogmem_remember_turn', turn);
+    expect(first.isError).toBe(false);
+    expect(first.body.duplicate).toBeUndefined();
+
+    const second = await call(handle.url, session, 'cogmem_remember_turn', turn);
+    expect(second.isError).toBe(false);
+    expect(second.body.duplicate).toBe(true);
+    expect(second.body.reason).toBe('duplicate_turn');
+    expect(second.body.rawEventIds).toEqual(first.body.rawEventIds);
+
+    // The same identity carrying different text is refused rather than written beside it.
+    const conflict = await call(handle.url, session, 'cogmem_remember_turn', {
+      ...turn,
+      userText: '同一轮次，完全不同的内容。',
+    });
+    expect(conflict.isError).toBe(true);
+    expect(conflict.raw).toContain('agent_turn_identity_conflict');
+  });
+
+
   test('remember_turn writes evidence that recall returns', async () => {
     const handle = await start();
     const session = await connect(handle.url);

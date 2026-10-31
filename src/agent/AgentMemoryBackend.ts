@@ -34,7 +34,8 @@ export type AgentTurnCompileReason =
   | 'durable_signal_detected'
   | 'low_signal_turn'
   | 'raw_archive_only'
-  | 'raw_then_dream';
+  | 'raw_then_dream'
+  | 'duplicate_turn';
 
 export interface AgentTurnMemory {
   agentId: string;
@@ -61,6 +62,12 @@ export interface AgentTurnMemoryResult {
   compiled: boolean;
   rawEventIds: string[];
   compiledNeuronId?: string;
+  /**
+   * This turn was already recorded under the caller's turn id, so nothing was written.
+   * `compiled` then reports what *this* call did — nothing — not what the first call did;
+   * the first call's compilation already exists and is not repeated.
+   */
+  duplicate?: boolean;
 }
 
 export interface AgentRecallQuery {
@@ -313,11 +320,34 @@ export class KernelAgentMemoryBackend {
   async rememberTurnWithResult(turn: AgentTurnMemory): Promise<AgentTurnMemoryResult> {
     const occurredAt = turn.timestamp ?? Date.now();
     const threadId = turn.threadId || turn.sessionId;
-    const turnSeq = turn.turnSeq ?? this.kernel.eventStore.getNextTurnSeq(threadId, turn.projectId ?? '');
-    const turnId = turn.turnId || `${turn.agentId}:${turn.sessionId}:${turnSeq}:${occurredAt}`;
     const sourceId = `${turn.agentId}:${turn.sessionId}`;
     const mode = turn.ingestMode ?? 'immediate_compile';
+    // A named turn is an identity: the same id means the same turn, so a retry returns
+    // what is already recorded instead of writing it again. This runs before the turn
+    // sequence is drawn, because a replay must not consume one (#113).
+    const claim = turn.turnId
+      ? this.kernel.claimAgentTurn({
+        projectId: turn.projectId,
+        agentId: turn.agentId,
+        sessionId: turn.sessionId,
+        turnId: turn.turnId,
+        userText: turn.userText,
+        assistantText: turn.assistantText,
+      })
+      : undefined;
+    if (claim?.replay) {
+      return {
+        mode,
+        reason: 'duplicate_turn',
+        compiled: false,
+        duplicate: true,
+        rawEventIds: [claim.userEventId, claim.assistantEventId].filter((id): id is string => Boolean(id)),
+      };
+    }
+    const turnSeq = turn.turnSeq ?? this.kernel.eventStore.getNextTurnSeq(threadId, turn.projectId ?? '');
+    const turnId = turn.turnId || `${turn.agentId}:${turn.sessionId}:${turnSeq}:${occurredAt}`;
     const userEvent = this.kernel.recordRawEvent({
+      eventId: claim?.userEventId,
       projectId: turn.projectId,
       workspaceId: turn.workspaceId,
       threadId,
@@ -336,6 +366,7 @@ export class KernelAgentMemoryBackend {
     });
     const assistantEvent = turn.assistantText
       ? this.kernel.recordRawEvent({
+        eventId: claim?.assistantEventId,
         projectId: turn.projectId,
         workspaceId: turn.workspaceId,
         threadId,

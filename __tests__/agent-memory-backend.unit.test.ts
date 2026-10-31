@@ -803,3 +803,68 @@ test('a turn attributed to another agent is invisible to a recall that names onl
     kernel.close();
   }
 });
+
+test('a named turn written twice is recorded once and returns the first copy (#113)', async () => {
+  // The caller names the turn, so the name is its identity. Before this, `turnId` was
+  // recorded but never used as one: two writes of one turn left seven events, with the
+  // user and assistant rows byte-identical, because the fallback identity came from
+  // Date.now() and an incrementing turn sequence.
+  const dir = makeTempDir('agent-backend-named-turn-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const count = () => (kernel.episodeStore.db.prepare('select count(*) c from memory_events').get() as { c: number }).c;
+  const turn = {
+    agentId: 'openclaw', projectId: 'p', sessionId: 's', turnId: 'host-turn-7',
+    userText: '请记住代号 IDEM-7 的负责小组是青栎组。', assistantText: '已记下。',
+  };
+  try {
+    const first = await backend.rememberTurnWithResult(turn);
+    const afterFirst = count();
+    const firstTurnSeq = (kernel.eventStore.getEvent(first.rawEventIds[0]) as { turnSeq?: number }).turnSeq;
+
+    const second = await backend.rememberTurnWithResult(turn);
+    expect(count()).toBe(afterFirst);
+    expect(second.duplicate).toBe(true);
+    expect(second.reason).toBe('duplicate_turn');
+    expect(second.compiled).toBe(false);
+    expect(second.rawEventIds).toEqual(first.rawEventIds);
+    // A replay is not a new turn, so it must not draw a number from the turn sequence.
+    expect(kernel.eventStore.getNextTurnSeq('s', 'p')).toBe((firstTurnSeq ?? 0) + 1);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('reusing a named turn for different text is a conflict, not a second copy (#113)', async () => {
+  const dir = makeTempDir('agent-backend-turn-conflict-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const base = { agentId: 'openclaw', projectId: 'p', sessionId: 's', turnId: 'host-turn-8' };
+  try {
+    await backend.rememberTurnWithResult({ ...base, userText: '第一版内容。' });
+    await expect(backend.rememberTurnWithResult({ ...base, userText: '完全不同的第二版内容。' }))
+      .rejects.toThrow(/agent_turn_identity_conflict:host-turn-8/);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('equal text under two turn ids is two turns (#113)', async () => {
+  // Content is not identity. A user who sends the same sentence twice sent it twice, and
+  // the caller is the one who knows that — which is why the id comes from the caller.
+  const dir = makeTempDir('agent-backend-two-turns-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const count = () => (kernel.episodeStore.db.prepare('select count(*) c from memory_events').get() as { c: number }).c;
+  const base = { agentId: 'openclaw', projectId: 'p', sessionId: 's', userText: '继续。' };
+  try {
+    const a = await backend.rememberTurnWithResult({ ...base, turnId: 'turn-a' });
+    const afterA = count();
+    const b = await backend.rememberTurnWithResult({ ...base, turnId: 'turn-b' });
+    expect(count()).toBeGreaterThan(afterA);
+    expect(b.duplicate).toBeUndefined();
+    expect(b.rawEventIds).not.toEqual(a.rawEventIds);
+  } finally {
+    kernel.close();
+  }
+});
