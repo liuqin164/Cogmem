@@ -1,4 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+
+import { writeOwnedFiles } from '../InstalledArtifacts.js';
 import { dirname, join } from 'node:path';
 
 /**
@@ -143,9 +145,9 @@ export function installPiAutoMemoryExtension(input: PiExtensionInstallInput): Pi
   // nothing, and rewriting the same bytes on every `connect` is how "already wired"
   // stops meaning anything.
   if (changed && !input.dryRun) {
-    mkdirSync(dirname(extensionPath), { recursive: true });
-    if (existing) writeFileSync(`${extensionPath}.cogmem.bak-${Date.now()}`, existing, 'utf8');
-    writeFileSync(extensionPath, rendered, 'utf8');
+    // One transaction: preflighted, and rolled back if the write fails. The timestamped
+    // backup that used to sit beside it added a file per `connect` and never left (#116).
+    writeOwnedFiles([{ path: extensionPath, content: rendered }]);
   }
   return { extensionPath, changed };
 }

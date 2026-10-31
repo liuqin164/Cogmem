@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { writeOwnedFiles } from '../host/InstalledArtifacts.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -131,7 +132,6 @@ interface HermesMcpInstallResult {
   serverArgs: string[];
   dryRun: boolean;
   configUpdated: boolean;
-  backupPath?: string;
   /**
    * Set when an existing entry was deliberately left alone *and* the command it
    * records cannot run here. The two are different facts and only one is fine: a
@@ -148,7 +148,6 @@ interface PiMcpInstallResult {
   serverArgs: string[];
   dryRun: boolean;
   configUpdated: boolean;
-  backupPath?: string;
   /** Same two facts as the Hermes result: a preserved entry, or a config that is not there. */
   warning?: string;
 }
@@ -632,15 +631,10 @@ function installHermesMcpConfig(input: {
   const original = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
   const patched = patchHermesMcpConfig(original, server.command, server.args, input.project);
   const changed = patched !== original;
-  let backupPath: string | undefined;
-
   if (!input.dryRun && (changed || input.force)) {
-    mkdirSync(dirname(configPath), { recursive: true });
-    if (existsSync(configPath)) {
-      backupPath = `${configPath}.cogmem.bak-${Date.now()}`;
-      writeFileSync(backupPath, original, 'utf8');
-    }
-    writeFileSync(configPath, patched, 'utf8');
+    // Preflighted, and rolled back if the write fails. The `.cogmem.bak-<timestamp>`
+    // file that used to be left here was one more file per install, forever (#116).
+    writeOwnedFiles([{ path: configPath, content: patched }]);
   }
 
   // Which command the file will hold is the question, not whether the file changed:
@@ -678,7 +672,6 @@ function installHermesMcpConfig(input: {
     serverArgs: server.args,
     dryRun: input.dryRun,
     configUpdated: changed || input.force,
-    backupPath,
     ...(warning ? { warning } : {}),
   };
 }
@@ -743,15 +736,8 @@ function installPiMcpConfig(input: {
   // read as a change on every run.
   const current = piCogmemEntryMatches(original, server.command, server.args);
   const patched = patchPiMcpJsonConfig(original, server.command, server.args);
-  let backupPath: string | undefined;
-
   if (!input.dryRun && (!current || input.force)) {
-    mkdirSync(dirname(configPath), { recursive: true });
-    if (existsSync(configPath)) {
-      backupPath = `${configPath}.cogmem.bak-${Date.now()}`;
-      writeFileSync(backupPath, original, 'utf8');
-    }
-    writeFileSync(configPath, patched, 'utf8');
+    writeOwnedFiles([{ path: configPath, content: patched }]);
   }
 
   // pi's entry carries the same `--config`, so it fails the same way when that file
@@ -767,7 +753,6 @@ function installPiMcpConfig(input: {
     serverArgs: server.args,
     dryRun: input.dryRun,
     configUpdated: !current || input.force,
-    backupPath,
     ...(warning ? { warning } : {}),
   };
 }
@@ -952,7 +937,6 @@ function printHuman(result: ConnectResult): void {
     console.log(`  plugin: ${result.autoMemory.pluginDir}`);
     console.log(`  config: ${result.autoMemory.openclawConfigPath}`);
     console.log(`  hooks: ${result.autoMemory.hookNames.join(', ')}`);
-    if (result.autoMemory.backupPath) console.log(`  backup: ${result.autoMemory.backupPath}`);
   }
   if (result.integrationEnabled) {
     console.log('');
@@ -963,7 +947,6 @@ function printHuman(result: ConnectResult): void {
     console.log('pi MCP integration:');
     console.log(`  config: ${result.piMcp.configPath}`);
     console.log(`  command: ${result.piMcp.serverCommand} ${result.piMcp.serverArgs.join(' ')}`.trimEnd());
-    if (result.piMcp.backupPath) console.log(`  backup: ${result.piMcp.backupPath}`);
     if (result.piMcp.warning) console.log(`  warning: ${result.piMcp.warning}`);
     if (result.piExtension) console.log(`  extension: ${result.piExtension.extensionPath} (${result.piExtension.changed ? 'written' : 'already current'})`);
     console.log('  check: pi mcp list');
@@ -973,7 +956,6 @@ function printHuman(result: ConnectResult): void {
     console.log('Hermes MCP integration:');
     console.log(`  config: ${result.hermesMcp.configPath}`);
     console.log(`  command: ${result.hermesMcp.serverCommand} ${result.hermesMcp.serverArgs.join(' ')}`.trimEnd());
-    if (result.hermesMcp.backupPath) console.log(`  backup: ${result.hermesMcp.backupPath}`);
     if (result.hermesMcp.warning) console.log(`  warning: ${result.hermesMcp.warning}`);
     if (result.hermesHook) {
       console.log(`  recall hook: ${result.hermesHook.hookPath} (${result.hermesHook.configUpdated ? 'recorded' : 'already recorded'})`);

@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { writeOwnedFiles, type OwnedFile } from '../InstalledArtifacts.js';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /**
@@ -216,15 +217,18 @@ export function installHermesAutoMemoryHook(input: HermesHookInstallInput): Herm
   if (!input.dryRun) {
     const rendered = renderHermesAutoMemoryHook(input);
     const existingHook = existsSync(hookPath) ? readFileSync(hookPath, 'utf8') : '';
+    const files: OwnedFile[] = [];
     if (existingHook !== rendered) {
-      mkdirSync(hermesHookDir(input.configPath), { recursive: true });
-      if (existingHook) writeFileSync(`${hookPath}.cogmem.bak-${Date.now()}`, existingHook, 'utf8');
-      writeFileSync(hookPath, rendered, 'utf8');
+      files.push({ path: hookPath, content: rendered, mode: 0o755 });
+    } else if (existingHook && (statSync(hookPath).mode & 0o777) !== 0o755) {
+      // Its own check, not part of the content compare: a file the user chmod'ed is
+      // byte-identical and still unrunnable, and Hermes skips a hook without saying why.
+      files.push({ path: hookPath, content: existingHook, mode: 0o755 });
     }
-    // Its own check, not part of the content compare: a file the user chmod'ed is
-    // byte-identical and still unrunnable, and Hermes skips a hook without saying why.
-    if (existsSync(hookPath) && (statSync(hookPath).mode & 0o777) !== 0o755) chmodSync(hookPath, 0o755);
-    if (configChanged) writeFileSync(input.configPath, patchedConfig, 'utf8');
+    // The hook and the config it is named in go in the same transaction: a config that
+    // names a hook the write failed to place is worse than neither (#116).
+    if (configChanged) files.push({ path: input.configPath, content: patchedConfig });
+    if (files.length > 0) writeOwnedFiles(files);
   }
 
   return {

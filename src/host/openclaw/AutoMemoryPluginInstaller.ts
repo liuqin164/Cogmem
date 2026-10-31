@@ -1,3 +1,4 @@
+import { writeOwnedFiles, type OwnedFile } from '../InstalledArtifacts.js';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -71,7 +72,6 @@ export interface OpenClawAutoMemoryInstallResult {
   installed: boolean;
   alreadyCurrent: boolean;
   configUpdated: boolean;
-  backupPath?: string;
   hookNames: string[];
   nextCommands: string[];
 }
@@ -178,23 +178,23 @@ export function installOpenClawAutoMemoryPlugin(
     pluginId,
   });
   const alreadyCurrent = filesAlreadyCurrent && !patchedConfig.changed;
-  let backupPath: string | undefined;
 
   if (!options.dryRun) {
     if (!existsSync(openclawConfigPath)) {
       throw new Error(`Missing OpenClaw config at ${openclawConfigPath}. Pass --openclaw-config <path>.`);
     }
+    // The plugin's files and the config entry that names it are one transaction: a
+    // config naming a plugin whose files are missing is a broken integration, and the
+    // timestamped backup this used to leave added a file per install and removed none
+    // (#116).
+    const owned: OwnedFile[] = [];
     if (!filesAlreadyCurrent || options.force) {
-      mkdirSync(pluginDir, { recursive: true });
-      for (const [path, body] of desiredFiles) {
-        writeFileSync(path, body, 'utf8');
-      }
+      for (const [path, body] of desiredFiles) owned.push({ path, content: body });
     }
     if (patchedConfig.changed || options.force) {
-      backupPath = `${openclawConfigPath}.cogmem.bak-${Date.now()}`;
-      writeFileSync(backupPath, readFileSync(openclawConfigPath, 'utf8'), 'utf8');
-      writeFileSync(openclawConfigPath, patchedConfig.text, 'utf8');
+      owned.push({ path: openclawConfigPath, content: patchedConfig.text });
     }
+    if (owned.length > 0) writeOwnedFiles(owned);
   }
 
   return {
@@ -207,7 +207,6 @@ export function installOpenClawAutoMemoryPlugin(
     installed: !options.dryRun && (!filesAlreadyCurrent || patchedConfig.changed || options.force === true),
     alreadyCurrent,
     configUpdated: patchedConfig.changed || options.force === true,
-    backupPath,
     hookNames: ['before_prompt_build', 'agent_end'],
     nextCommands: [
       `openclaw plugins inspect ${pluginId} --runtime --json`,

@@ -227,6 +227,17 @@ describe('printed steps run as printed', () => {
       },
     );
     expect(exitCode).toBe(0);
+
+    // A second connect must not add anything: the adapters used to leave a
+    // `.cogmem.bak-<timestamp>` beside every file they replaced, so a directory grew by
+    // one file per install and none of them was ever removed (#116).
+    const again = await run(
+      ['bun', connectBin, 'pi', '--auto', '--json', '--workspace', workspace, '--pi-config', piConfig],
+      { cwd: workspace, env: { COGMEM_BIN_DIR: binDir, COGMEM_BIN: '', COGMEM_MCP_BIN: '', PATH: '/usr/bin:/bin', HOME: dir } },
+    );
+    expect(again.exitCode).toBe(0);
+    expect(readdirSync(join(dir, 'pi', 'extensions')).filter((name) => name.includes('.bak'))).toEqual([]);
+
     const extensions = readdirSync(join(dir, 'pi', 'extensions')).filter((name) => name.endsWith('.ts'));
     expect(extensions.length).toBe(1);
     const extension = readFileSync(join(dir, 'pi', 'extensions', extensions[0]!), 'utf8');
