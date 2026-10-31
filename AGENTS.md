@@ -72,7 +72,7 @@ The comment carries, at minimum:
 
 A round that changes behaviour also states the user-visible effect in one line, so a reader does
 not have to reconstruct it from the diff. A round that adds a module, tool or bin names what it
-removed or merged to pay for it — the budget above is checked, not aspirational.
+removed or merged to pay for it — the budget in `## Complexity budget` is checked, not aspirational.
 
 ## Complexity budget (4.x, #52)
 
@@ -86,5 +86,6 @@ call; these two are not.
 - **Every minor release's notes list what was removed or merged, not only what was added.**
   Subtraction nobody writes down does not happen.
 
-Consolidating the 22 `cogmem-*` binaries under one entry point is a breaking change with its
-own migration for users' scripts, so it is tracked separately (#111) rather than bundled here.
+Consolidating the 22 bins (one dispatcher plus 21 separate `cogmem-*` entry points) under one
+entry point is a breaking change with its own migration for users' scripts, so it is tracked
+separately (#111) rather than bundled here.
