@@ -28,6 +28,8 @@ function usage(): string {
   return [
     'Usage: cogmem episode <append|import|list|get|seal|status|audit-boundaries|boundary-decisions|split-plan|repair|split|merge|move-event|reclassify|requeue-dream> [args]',
     '  append --project <id> --session <id> --source-agent <id> --role <role> --text <text>',
+    '         --source-agent is who the turn belongs to; `memory recall` defaults --agent to',
+    '         the project id, so name the same agent there when the two differ',
     '  import --project <id> --session <id> --source-agent <id> --format jsonl --file <path> [--seal-batch] [--force-seal] [--chunk-size <n>] [--checkpoint-file <path>] [--resume] [--start-line <n>] [--end-line <n>] [--max-lines <n>] [--skip-errors] [--max-errors <n>]',
     '  list|status [--project <id>] [--session <id>] [--json]',
     '  get --project <id> --episode <id> [--json]',
@@ -63,13 +65,23 @@ async function main(): Promise<void> {
     const sessionId = stringArg(args, 'session');
     let result: unknown;
     if (args.command === 'append') {
+      const appendProject = requiredArg(args, 'project');
+      const appendAgent = requiredArg(args, 'source-agent');
       result = kernel.appendEpisodeMessage({
-        projectId: requiredArg(args, 'project'), sessionId: requiredArg(args, 'session'),
-        sourceAgent: requiredArg(args, 'source-agent'), role: roleArg(args.role), text: requiredArg(args, 'text'),
+        projectId: appendProject, sessionId: requiredArg(args, 'session'),
+        sourceAgent: appendAgent, role: roleArg(args.role), text: requiredArg(args, 'text'),
         externalMessageId: stringArg(args, 'external-id'), timestamp: numberArg(args, 'timestamp'),
         threadId: stringArg(args, 'thread-id'), turnId: stringArg(args, 'turn-id'), turnSeq: numberArg(args, 'turn-seq'),
         localDate: stringArg(args, 'local-date'), eventOrdinal: numberArg(args, 'event-ordinal'),
       });
+      // The read path defaults its agent to the project id (`memory.ts`: `agentId ||
+      // projectId`), while this attributes the turn to --source-agent. Naming a different
+      // agent makes the turn invisible to a recall that does not name it, and the result is
+      // an empty answer with nothing to explain it. Say so where the mismatch is
+      // created; stderr, so `--json` output stays a single document on stdout.
+      if (appendAgent !== appendProject) {
+        console.error(`note: this turn is attributed to agent "${appendAgent}", but \`cogmem memory recall\` defaults --agent to the project id ("${appendProject}"). Pass --agent ${appendAgent} to read it back.`);
+      }
     } else if (args.command === 'import') {
       result = await importJsonl(kernel, args);
     } else if (args.command === 'list') {

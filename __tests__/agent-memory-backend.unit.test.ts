@@ -777,3 +777,29 @@ test('agent backend suppresses archived and suspect memory from recall context',
 
   kernel.close();
 });
+
+test('a turn attributed to another agent is invisible to a recall that names only the project', async () => {
+  // The CLI read path defaults its agent to the project id (`src/bin/memory.ts`:
+  // `args.agentId || args.projectId`), while `cogmem episode append` attributes the turn
+  // to `--source-agent`. When those differ, the turn exists and the search finds it, but
+  // recall drops it as another agent's event — an empty answer with nothing to explain it.
+  // #113 records the mismatch; this test pins the mechanism so a change to either default
+  // has to be a decision rather than an accident.
+  const dir = makeTempDir('agent-backend-source-agent-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  try {
+    kernel.appendEpisodeMessage({
+      projectId: 'p', sessionId: 's1', sourceAgent: 'eval', role: 'user',
+      text: '代号 ZZ-9 的负责小组是青栎组。',
+    });
+    // What the CLI passes when --agent is omitted.
+    const asProject = backend.recall({ query: '青栎组', projectId: 'p', agentId: 'p', limit: 5, now: Date.now() });
+    expect(asProject.items ?? []).toHaveLength(0);
+    // What it passes when the reader names the agent the turn was attributed to.
+    const asAgent = backend.recall({ query: '青栎组', projectId: 'p', agentId: 'eval', limit: 5, now: Date.now() });
+    expect((asAgent.items ?? []).length).toBeGreaterThan(0);
+  } finally {
+    kernel.close();
+  }
+});

@@ -159,6 +159,8 @@ function usage(): string {
     '  list                 list raw ledger events with source anchors',
     '  search --query <q>   search raw ledger text without requiring hot vectors',
     '  recall --query <q>   run agent-facing governed recall with source context',
+    '         --agent defaults to the project id; name the agent that wrote the turn, or',
+    '         a turn appended under another --source-agent will not be in scope',
     '  show --event <id>    show one raw event with surrounding context',
     '  dream                compatibility alias for a conditional sealed-episode Dream tick',
     '  govern               apply CPU governance to pending dream/deep-write candidates',
