@@ -356,6 +356,15 @@ export interface MaintenanceTickOptions {
   confirmationTtlMs?: number;
   now?: number;
   atlasAccessRetentionMs?: number;
+  /**
+   * Whether this tick runs the atlas reconciliation pass. Set false by a caller that
+   * finishes with its own pass over the work it did — the Night, whose run ends by
+   * reconciling what Dream just wrote. Without this the Night reconciled twice per
+   * run (#106): the tick's pass ran *before* Dream wrote the frames it was there to
+   * notice, so the run paid a corpus rebuild for work it had not done yet, and then
+   * paid for it again afterwards.
+   */
+  atlasRefresh?: boolean;
 }
 
 export interface MaintenanceSuggestedAction {
@@ -396,7 +405,7 @@ export interface MaintenanceTickResult {
     activationDecay: ActivationDecayResult;
     /** Conversations the tick judged over: their episodes are sealed for Dream (#87). */
     episodeSealing: { idleGapMs: number; idleBefore: number; sealedEpisodes: number };
-    memoryAtlasRefresh: { documents: number; actions: number; refreshed: boolean; errors?: Array<{ projectId: string; error: string }> };
+    memoryAtlasRefresh: { documents: number; actions: number; refreshed: boolean; /** This tick was told not to run the pass. */ skipped?: boolean; errors?: Array<{ projectId: string; error: string }> };
     memoryAtlasActivationDecay: number;
     memoryAtlasAccessPruned: number;
     reviewQueueAging: {
@@ -1868,7 +1877,9 @@ export class MemoryKernel {
     projected: { episodes: number; atlasDocuments: number };
     reconciled: { refreshed: boolean; documents: number };
   }> {
-    const tick = this.runMaintenanceTick({ projectId: options.projectId, now: options.now });
+    // No atlas pass inside the tick: this run reconciles once, at the end, over the
+    // frames Dream is about to write. See MaintenanceTickOptions.atlasRefresh.
+    const tick = this.runMaintenanceTick({ projectId: options.projectId, now: options.now, atlasRefresh: false });
     // The tick seals what has gone quiet as a *soft* seal, which the scheduler
     // only promotes after a grace period meant to let a conversation resume.
     // A batch that runs once a night has already waited the idle gap the seal
@@ -2955,9 +2966,14 @@ export class MemoryKernel {
     });
     let memoryAtlasRefresh: MaintenanceTickResult['executed']['memoryAtlasRefresh'];
     try {
-      memoryAtlasRefresh = projectId !== undefined
-        ? { ...this.ensureMemoryAtlas({ projectId }), errors: [] }
-        : this.memoryAtlasIndexer.ensureAllFresh();
+      // `refreshed: false` already means "the projection was current". A skipped pass
+      // is a third thing and says so, because reporting it as "current" is how a
+      // missing pass reads as a working one.
+      memoryAtlasRefresh = options.atlasRefresh === false
+        ? { documents: this.memoryAtlasStore.countDocuments(projectId), actions: 0, refreshed: false, skipped: true }
+        : projectId !== undefined
+          ? { ...this.ensureMemoryAtlas({ projectId }), errors: [] }
+          : this.memoryAtlasIndexer.ensureAllFresh();
     } catch (error) {
       memoryAtlasRefresh = { documents: this.memoryAtlasStore.countDocuments(projectId), actions: 0, refreshed: false,
         errors: [{ projectId: projectId ?? '__all__', error: error instanceof Error ? error.message : String(error) }] };

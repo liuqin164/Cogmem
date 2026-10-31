@@ -52,6 +52,17 @@ test('one command seals, dreams and projects the night, and running it again is 
     // Dream wrote frames and action frames; the run finishes with the
     // reconciliation pass so the next night does not rebuild for them.
     expect(first.reconciled.refreshed).toBe(true);
+    // Exactly one pass per night (#106): the tick's own pass is skipped because it ran
+    // before Dream wrote the frames it exists to notice, and the run reconciles once
+    // afterwards. `skipped` is not `refreshed: false` — the second means "already
+    // current", and reporting a pass that never ran as "current" is how a missing pass
+    // reads as a working one.
+    expect(first.tick.executed.memoryAtlasRefresh.skipped).toBe(true);
+    expect(first.tick.executed.memoryAtlasRefresh.refreshed).toBe(false);
+    // The property the trailing pass exists for: the dirty flag is cleared inside this
+    // run, so the next maintenance tick finds the projection current and pays nothing.
+    // Delete the trailing pass and this is what goes red.
+    expect(kernel.runMaintenanceTick({ projectId: 'p', now: nextMorning + 1 }).executed.memoryAtlasRefresh.refreshed).toBe(false);
 
     // Safe to re-run: nothing left to seal, dream or project.
     const second = await kernel.runNight({ projectId: 'p', now: nextMorning + 60_000 });
