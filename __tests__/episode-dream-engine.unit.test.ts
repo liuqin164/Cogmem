@@ -511,3 +511,41 @@ test('episode import CLI is idempotent and dream CLI processes its batch-sealed 
 function testEpisodeStore(db: Database, projectForEvent: (eventId: string) => string = () => 'brain'): EpisodeStore {
   return new EpisodeStore(db, (eventId) => ({ eventId, projectId: projectForEvent(eventId) } as never));
 }
+
+test('episode append names a message, so the same one twice is a replay (#113)', async () => {
+  // The implementation read `externalMessageId` from `--external-id` while the argument
+  // check rejected that flag, so the idempotent write path existed and no caller could
+  // reach it. Found by running the installed CLI on the box, not by a test.
+  const dir = makeTempDir('cogmem-episode-external-id-');
+  const dbPath = join(dir, 'memory.db');
+  const run = async (args: string[]) => {
+    const proc = Bun.spawn([process.execPath, 'src/bin/episode.ts', ...args], { cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe' });
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { code, stdout, stderr };
+  };
+  const append = (text: string, extra: string[] = []) => [
+    'append', '--db', dbPath, '--project', 'p', '--session', 's1', '--source-agent', 'openclaw',
+    '--role', 'user', '--text', text, '--json', ...extra,
+  ];
+  const text = '记住代号 EXT-1 属于青栎组。';
+
+  const first = await run(append(text, ['--external-id', 'host-msg-1']));
+  expect(first.code, first.stderr).toBe(0);
+  const created = JSON.parse(first.stdout) as { eventId: string; created: boolean };
+  expect(created.created).toBe(true);
+
+  // A flag the CLI does not accept is a path nobody can take.
+  const unnamed = await run(append(text));
+  expect(unnamed.code).toBe(0);
+  expect(JSON.parse(unnamed.stdout).eventId).not.toBe(created.eventId);
+
+  const again = await run(append(text, ['--external-id', 'host-msg-1']));
+  expect(again.code, again.stderr).toBe(0);
+  const replay = JSON.parse(again.stdout) as { eventId: string; created: boolean };
+  expect(replay.eventId).toBe(created.eventId);
+  expect(replay.created).toBe(false);
+
+  const conflict = await run(append('同一标识，完全不同的内容。', ['--external-id', 'host-msg-1']));
+  expect(conflict.code).not.toBe(0);
+  expect(conflict.stdout + conflict.stderr).toContain('episode_ingest_identity_conflict');
+});

@@ -28,6 +28,8 @@ function usage(): string {
   return [
     'Usage: cogmem episode <append|import|list|get|seal|status|audit-boundaries|boundary-decisions|split-plan|repair|split|merge|move-event|reclassify|requeue-dream> [args]',
     '  append --project <id> --session <id> --source-agent <id> --role <role> --text <text>',
+    '         [--external-id <id>]  name this message: the same id with the same text is',
+    '         a replay, and the same id with different text is refused as a conflict',
     '         --source-agent is who the turn belongs to; `memory recall` defaults --agent to',
     '         the project id, so name the same agent there when the two differ',
     '  import --project <id> --session <id> --source-agent <id> --format jsonl --file <path> [--seal-batch] [--force-seal] [--chunk-size <n>] [--checkpoint-file <path>] [--resume] [--start-line <n>] [--end-line <n>] [--max-lines <n>] [--skip-errors] [--max-errors <n>]',
