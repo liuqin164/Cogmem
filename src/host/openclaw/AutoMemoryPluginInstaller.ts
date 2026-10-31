@@ -1,7 +1,7 @@
 import { writeOwnedFiles, type OwnedFile } from '../InstalledArtifacts.js';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -2133,4 +2133,92 @@ function dropPluginEntry(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The name this project's manifest carries, and a hand-written plugin's does not. */
+const OWNED_PLUGIN_NAME = 'CogMem Auto Memory';
+
+/**
+ * Take the generated plugin and the config entry that enables it back out.
+ *
+ * The directory is removed only while it still holds this project's plugin — the manifest
+ * it wrote names it — and the config entry only while it still points at this workspace
+ * and project. A directory or an entry somebody else wrote is left alone and reported
+ * (#116).
+ */
+export function removeOpenClawAutoMemoryPlugin(options: {
+  workspaceRoot: string;
+  configPath: string;
+  openclawConfigPath: string;
+  pluginDir?: string;
+  pluginId?: string;
+  projectId: string;
+  dryRun?: boolean;
+}): { pluginDir: string; pluginId: string; dirRemoved: boolean; configUpdated: boolean; preserved: string[] } {
+  // The id the install derived from this workspace, not the legacy constant: the entry
+  // key and the directory name come from `makePluginId`, and a removal that looked for
+  // `cogmem-auto-memory` would find neither (#116).
+  const workspaceRoot = resolve(options.workspaceRoot);
+  const pluginId = options.pluginId || makePluginId(workspaceRoot);
+  const pluginDir = resolve(options.pluginDir || join(workspaceRoot, 'extensions', pluginId));
+  const preserved: string[] = [];
+
+  let ours = false;
+  try {
+    const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8')) as { name?: unknown };
+    ours = manifest?.name === OWNED_PLUGIN_NAME;
+  } catch {
+    ours = false;
+  }
+  let dirRemoved = false;
+  if (ours) {
+    if (!options.dryRun) rmSync(pluginDir, { recursive: true, force: true });
+    dirRemoved = true;
+  } else if (existsSync(pluginDir)) {
+    preserved.push(pluginDir);
+  }
+
+  let configUpdated = false;
+  if (existsSync(options.openclawConfigPath)) {
+    const original = readFileSync(options.openclawConfigPath, 'utf8');
+    const unpatched = unpatchOpenClawPluginEntry(original, pluginId, options.configPath, options.projectId);
+    configUpdated = unpatched !== original;
+    if (!options.dryRun && configUpdated) writeOwnedFiles([{ path: options.openclawConfigPath, content: unpatched }]);
+  }
+  return { pluginDir, pluginId, dirRemoved, configUpdated, preserved };
+}
+
+/**
+ * Drop this project's plugin entry, and the allow-list entry that names it.
+ *
+ * Guarded by the workspace and project the entry records: an entry pointing somewhere
+ * else is a different integration that happens to share the id, and removing it would
+ * uninstall somebody's working setup (#116).
+ */
+export function unpatchOpenClawPluginEntry(original: string, pluginId: string, configPath: string, projectId: string): string {
+  let root: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(original) as unknown;
+    if (!isRecord(parsed)) return original;
+    root = parsed as Record<string, unknown>;
+  } catch {
+    throw new Error(
+      'the OpenClaw config is not valid JSON, so this command will not rewrite it. Fix the file, or point --openclaw-config at another path.',
+    );
+  }
+  const plugins = root.plugins;
+  if (!isRecord(plugins) || !isRecord((plugins as Record<string, unknown>).entries)) return `${JSON.stringify(root, null, 2)}\n`;
+  const entries = (plugins as Record<string, unknown>).entries as Record<string, unknown>;
+  const entry = entries[pluginId];
+  if (!isRecord(entry)) return `${JSON.stringify(root, null, 2)}\n`;
+  const entryConfig = isRecord(entry.config) ? entry.config : {};
+  if (entryConfig.configPath !== configPath || entryConfig.projectId !== projectId) {
+    return `${JSON.stringify(root, null, 2)}\n`;
+  }
+  delete entries[pluginId];
+  if (Object.keys(entries).length === 0) delete (plugins as Record<string, unknown>).entries;
+  if (Array.isArray((plugins as Record<string, unknown>).allow)) {
+    (plugins as Record<string, unknown>).allow = ((plugins as Record<string, unknown>).allow as unknown[]).filter((id) => id !== pluginId);
+  }
+  return `${JSON.stringify(root, null, 2)}\n`;
 }

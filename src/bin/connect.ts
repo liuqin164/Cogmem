@@ -17,8 +17,16 @@ import {
   type InstallStep,
 } from '../install/InstallSteps.js';
 import { integrationScope } from '../host/IntegrationScope.js';
-import { installPiAutoMemoryExtension, type PiExtensionInstallResult } from '../host/pi/PiAutoMemoryExtension.js';
-import { installHermesAutoMemoryHook, type HermesHookInstallResult } from '../host/hermes/HermesAutoMemoryHook.js';
+import {
+  installPiAutoMemoryExtension,
+  removePiAutoMemoryExtension,
+  type PiExtensionInstallResult,
+} from '../host/pi/PiAutoMemoryExtension.js';
+import {
+  installHermesAutoMemoryHook,
+  removeHermesAutoMemoryHook,
+  type HermesHookInstallResult,
+} from '../host/hermes/HermesAutoMemoryHook.js';
 import {
   enableHostIntegration,
   hostWorkspaceFor,
@@ -28,8 +36,10 @@ import {
 } from '../config/CogmemConfig.js';
 
 import {
+  defaultOpenClawConfigPath,
   type OpenClawAutoMemoryInstallResult,
   installOpenClawAutoMemoryPlugin,
+  removeOpenClawAutoMemoryPlugin,
 } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { assertCliArgs } from './CliArgs.js';
 
@@ -89,6 +99,8 @@ interface ConnectArgs {
   outputPath?: string;
   auto: boolean;
   dryRun: boolean;
+  /** Take the integration back out instead of installing it. */
+  remove: boolean;
   force: boolean;
   json: boolean;
   help: boolean;
@@ -260,6 +272,7 @@ const CONNECT_FLAGS = new Set([
   'project',
   'agent-id',
   'output',
+  'remove',
   'auto',
   'dry-run',
   'force',
@@ -320,6 +333,7 @@ function readArgs(argv: string[]): ConnectArgs {
     projectId: stringValue(values.project),
     agentId: stringValue(values['agent-id']),
     outputPath: stringValue(values.output),
+    remove: values.remove === true,
     auto: values.auto === true,
     dryRun: values['dry-run'] === true,
     force: values.force === true,
@@ -368,6 +382,7 @@ function nextSteps(agent: AgentKind, workspace: string, project: string): Connec
 
 function usage(): string {
   return [
+    '  --remove  take this host integration back out, removing only what cogmem wrote',
     'Usage: cogmem-connect <openclaw|hermes|pi|all> [--workspace <dir>] [--output <SKILL.md>] [--auto] [--config <config.toml>] [--openclaw-config <openclaw.json>] [--hermes-config <config.yaml>] [--pi-config <mcp.json>] [--plugin-dir <dir>] [--bun <path>] [--project <id>] [--agent-id <id>] [--dry-run] [--force] [--json]',
     '',
     'Installs the agent-facing cogmem memory skill bundle into:',
@@ -504,6 +519,111 @@ async function withVerification(result: ConnectResult, args: ConnectArgs): Promi
       : undefined;
   if (!entry) return result;
   return { ...result, verification: await verifyMcpEntry(entry) };
+}
+
+/** What `connect <host> --remove` took out, and what it deliberately left. */
+interface RemovalResult {
+  agent: AgentKind;
+  dryRun: boolean;
+  project: string;
+  workspaceRoot: string;
+  removedPaths: string[];
+  /** Paths this command declined to touch, because they are not what it wrote. */
+  preserved: string[];
+  configFiles: string[];
+}
+
+/**
+ * Take a host integration back out.
+ *
+ * Only what this project wrote: each artifact is identified by its path plus what it
+ * contains, and the config entries by the workspace and project they name. Anything else
+ * is reported as preserved rather than removed — a command that deletes whatever sits at
+ * a path it once used is a command that eats a user's own file (#116).
+ */
+function removeForHost(agent: AgentKind, args: ConnectArgs): RemovalResult {
+  const cogmemConfig = resolveCogmemConfigPath({ configPath: args.configPath, cwd: args.workspaceRoot });
+  const hostWorkspaceRoot = args.workspaceGiven || cogmemConfig.kind !== 'toml'
+    ? args.workspaceRoot
+    : hostWorkspaceFor(loadCogmemConfig({ configPath: cogmemConfig.path }), agent);
+  const project = args.projectId || integrationScope(agent, hostWorkspaceRoot);
+  const removedPaths: string[] = [];
+  const preserved: string[] = [];
+  const configFiles: string[] = [];
+
+  if (agent === 'openclaw') {
+    const openclawConfigPath = resolve(args.openclawConfigPath || defaultOpenClawConfigPath(hostWorkspaceRoot));
+    const result = removeOpenClawAutoMemoryPlugin({
+      workspaceRoot: hostWorkspaceRoot,
+      configPath: cogmemConfig.kind === 'toml' ? cogmemConfig.path : '',
+      openclawConfigPath,
+      pluginDir: args.pluginDir,
+      projectId: project,
+      dryRun: args.dryRun,
+    });
+    if (result.dirRemoved) removedPaths.push(result.pluginDir);
+    if (result.configUpdated) configFiles.push(openclawConfigPath);
+    preserved.push(...result.preserved);
+  } else if (agent === 'hermes') {
+    const configPath = resolve(args.hermesConfigPath || defaultHermesConfigPath());
+    const hook = removeHermesAutoMemoryHook({ configPath, dryRun: args.dryRun });
+    if (hook.hookRemoved) removedPaths.push(hook.hookPath);
+    preserved.push(...hook.preserved);
+    if (hook.configUpdated) configFiles.push(configPath);
+    // The MCP entry lives in the same file as the hook, so it is read after that write.
+    const original = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
+    const unpatched = unpatchHermesMcpConfig(original);
+    if (unpatched !== original) {
+      if (!args.dryRun) writeOwnedFiles([{ path: configPath, content: unpatched }]);
+      if (!configFiles.includes(configPath)) configFiles.push(configPath);
+    }
+  } else {
+    const extension = removePiAutoMemoryExtension({ configPath: args.piConfigPath || defaultPiConfigPath(), dryRun: args.dryRun });
+    if (extension.removed) removedPaths.push(extension.extensionPath);
+    preserved.push(...extension.preserved);
+    const configPath = resolve(args.piConfigPath || defaultPiConfigPath());
+    const original = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
+    const unpatched = unpatchPiMcpJsonConfig(original);
+    if (unpatched !== original) {
+      if (!args.dryRun) writeOwnedFiles([{ path: configPath, content: unpatched }]);
+      configFiles.push(configPath);
+    }
+  }
+  return { agent, dryRun: args.dryRun, project, workspaceRoot: hostWorkspaceRoot, removedPaths, preserved, configFiles };
+}
+
+function printRemoval(result: RemovalResult): void {
+  console.log(`${result.agent} integration${result.dryRun ? ' (dry run)' : ''}:`);
+  console.log(`  removed: ${result.removedPaths.length > 0 ? result.removedPaths.join(', ') : 'nothing'}`);
+  console.log(`  config: ${result.configFiles.length > 0 ? result.configFiles.join(', ') : 'unchanged'}`);
+  if (result.preserved.length > 0) {
+    console.log(`  preserved: ${result.preserved.join(', ')} (not written by cogmem; left alone)`);
+  }
+}
+
+function requireAgent(args: ConnectArgs): AgentKind {
+  if (!args.agent) {
+    throw new Error('Name the host to remove: cogmem connect <openclaw|hermes|pi> --remove, or pass --all.');
+  }
+  return args.agent;
+}
+
+/** The hosts this config enables — the ones `init` found and the operator accepted. */
+function enabledHosts(args: ConnectArgs): AgentKind[] {
+  const cogmemConfig = resolveCogmemConfigPath({ configPath: args.configPath, cwd: args.workspaceRoot });
+  if (cogmemConfig.kind !== 'toml') {
+    throw new Error(
+      `No cogmem config at ${cogmemConfig.path}, so there is nothing to wire. Run \`cogmem init --agent all\` first, or name one host: cogmem connect openclaw.`,
+    );
+  }
+  const loaded = loadCogmemConfig({ configPath: cogmemConfig.path });
+  const hosts = HOST_NAMES.filter((host) => loaded.integrations[host]?.enabled);
+  if (hosts.length === 0) {
+    throw new Error(
+      'No host integration is enabled in this config, so `connect all` has nothing to wire. Run `cogmem init --agent all`, or name one host: cogmem connect openclaw.',
+    );
+  }
+  return hosts;
 }
 
 function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
@@ -784,6 +904,66 @@ function installPiMcpConfig(input: {
   };
 }
 
+/**
+ * Take this project's `mcp_servers.cogmem` block back out.
+ *
+ * Same boundary rule the patchers use: the block runs from its key to the first line at
+ * or above its indentation. Every other server, key and comment stays where it was, and
+ * an `mcp_servers:` map that this command emptied goes with the block — that is what
+ * "back to how it was" means for the common case, where cogmem was the only server in a
+ * otherwise empty map (#116).
+ */
+export function unpatchHermesMcpConfig(original: string): string {
+  const lines = original.replace(/\r\n/g, '\n').split('\n');
+  const start = lines.findIndex((line) => /^\s+cogmem\s*:\s*$/.test(line));
+  if (start === -1) return original;
+  const indent = leadingSpaces(lines[start]!);
+  let end = start + 1;
+  while (end < lines.length) {
+    const line = lines[end]!;
+    if (line.trim() && leadingSpaces(line) <= indent) break;
+    end += 1;
+  }
+  let kept = [...lines.slice(0, start), ...lines.slice(end)];
+  const mapIndex = kept.findIndex((line) => /^mcp_servers\s*:\s*$/.test(line));
+  if (mapIndex !== -1) {
+    const hasSibling = kept.slice(mapIndex + 1).some((line) => line.trim() && /^\s{2}\S/.test(line));
+    if (!hasSibling) kept = [...kept.slice(0, mapIndex), ...kept.slice(mapIndex + 1)];
+  }
+  const text = kept.join('\n');
+  return text.trim() ? text : '';
+}
+
+/**
+ * Take this project's MCP entry back out, and leave everything else where it was.
+ *
+ * The entry is the one we wrote, identified by its key rather than by a recorded list:
+ * `mcpServers.cogmem`. Anything else in the file — other servers, other keys at the same
+ * level — is somebody else's and is not this command's to remove (#116).
+ */
+export function unpatchPiMcpJsonConfig(original: string): string {
+  if (!original.trim()) return original;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(original);
+  } catch {
+    throw new Error(
+      'pi mcp.json is not valid JSON, so this command will not rewrite it. Fix the file, or point --pi-config at another path.',
+    );
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return original;
+  const root = parsed as Record<string, unknown>;
+  const servers = root.mcpServers;
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return original;
+  const remaining = { ...(servers as Record<string, unknown>) };
+  delete remaining.cogmem;
+  // An empty map that this command emptied is this command's to remove; a map with
+  // servers in it stays.
+  if (Object.keys(remaining).length === 0) delete root.mcpServers;
+  else root.mcpServers = remaining;
+  return `${JSON.stringify(root, null, 2)}\n`;
+}
+
 function patchHermesMcpConfig(original: string, serverCommand: string, serverArgs: string[], project: string): string {
   if (hasHermesCogmemEntry(original)) {
     return patchExistingHermesCogmemConfig(original, project, serverCommand, serverArgs);
@@ -1007,6 +1187,17 @@ async function main(): Promise<void> {
   const args = readArgs(process.argv.slice(2));
   if (args.help) {
     console.log(usage());
+    return;
+  }
+
+  if (args.remove) {
+    const targets = args.allHosts ? enabledHosts(args) : [requireAgent(args)];
+    const removals = targets.map((host) => removeForHost(host, args));
+    if (args.json) {
+      printCliJson('connect.remove', { hosts: removals });
+      return;
+    }
+    for (const removal of removals) printRemoval(removal);
     return;
   }
 

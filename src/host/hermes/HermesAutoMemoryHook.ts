@@ -1,4 +1,4 @@
-import { writeOwnedFiles, type OwnedFile } from '../InstalledArtifacts.js';
+import { removeOwnedFile, writeOwnedFiles, type OwnedFile } from '../InstalledArtifacts.js';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -243,4 +243,73 @@ export function installHermesAutoMemoryHook(input: HermesHookInstallInput): Herm
       + '`hermes hooks revoke <hookPath>` first, because a modified script is skipped until it is '
       + 're-approved. A Hermes that is already running also has to be restarted to pick it up.',
   };
+}
+
+/** The line a hook file this project wrote always holds, and a user's own file does not. */
+const HOOK_OWNERSHIP_MARKER = 'const COGMEM_BIN =';
+
+/**
+ * Take this project's `pre_llm_call` entry back out, and leave every other hook where it
+ * was. The entry is identified by the command it names — the one this project writes —
+ * rather than by a recorded list, because a recorded list is a second state file to keep
+ * in step with the first (#116).
+ */
+export function unpatchHermesHooksConfig(original: string, hookPath: string): string {
+  const lines = original.replace(/\r\n/g, '\n').split('\n');
+  const entry = `- command: ${JSON.stringify(hookPath)}`;
+  const start = lines.findIndex((line) => line.trim() === entry);
+  if (start === -1) return original;
+  const indent = leadingSpaces(lines[start]!);
+  let end = start + 1;
+  while (end < lines.length) {
+    const line = lines[end]!;
+    if (line.trim() && leadingSpaces(line) <= indent) break;
+    end += 1;
+  }
+  let kept = [...lines.slice(0, start), ...lines.slice(end)];
+  // A `pre_llm_call:` key this command emptied goes with its last entry; one that still
+  // holds somebody else's hook stays.
+  const eventIndex = kept.findIndex((line) => /^\s{2}pre_llm_call\s*:\s*$/.test(line));
+  if (eventIndex !== -1) {
+    let blockEnd = eventIndex + 1;
+    while (blockEnd < kept.length) {
+      const line = kept[blockEnd]!;
+      if (line.trim() && leadingSpaces(line) <= 2) break;
+      blockEnd += 1;
+    }
+    const hasEntry = kept.slice(eventIndex + 1, blockEnd).some((line) => line.trim().length > 0);
+    if (!hasEntry) kept = [...kept.slice(0, eventIndex), ...kept.slice(blockEnd)];
+  }
+  const text = kept.join('\n');
+  return text.trim() ? text : '';
+}
+
+function leadingSpaces(line: string): number {
+  return line.match(/^\s*/)?.[0].length ?? 0;
+}
+
+/**
+ * Remove the hook and the config entry that names it.
+ *
+ * The file is only deleted while it still holds what this project writes: a user who put
+ * their own script at this path keeps it, and is told so, rather than losing it to a
+ * command that assumed the path meant ownership (#116).
+ */
+export function removeHermesAutoMemoryHook(input: { configPath: string; dryRun?: boolean }): {
+  hookPath: string;
+  hookRemoved: boolean;
+  configUpdated: boolean;
+  preserved: string[];
+} {
+  const hookPath = hermesHookPath(input.configPath);
+  const preserved: string[] = [];
+  const hookRemoved = removeOwnedFile(hookPath, (content) => content.includes(HOOK_OWNERSHIP_MARKER)) === 'removed';
+  if (!hookRemoved && existsSync(hookPath)) preserved.push(hookPath);
+
+  const existingConfig = existsSync(input.configPath) ? readFileSync(input.configPath, 'utf8') : '';
+  const unpatched = unpatchHermesHooksConfig(existingConfig, hookPath);
+  const configUpdated = unpatched !== existingConfig;
+  if (!input.dryRun && configUpdated) writeOwnedFiles([{ path: input.configPath, content: unpatched }]);
+
+  return { hookPath, hookRemoved, configUpdated, preserved };
 }

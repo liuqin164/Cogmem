@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 
-import { writeOwnedFiles } from '../InstalledArtifacts.js';
+import { removeOwnedFile, writeOwnedFiles } from '../InstalledArtifacts.js';
 import { dirname, join } from 'node:path';
 
 /**
@@ -150,4 +150,27 @@ export function installPiAutoMemoryExtension(input: PiExtensionInstallInput): Pi
     writeOwnedFiles([{ path: extensionPath, content: rendered }]);
   }
   return { extensionPath, changed };
+}
+
+/** The line an extension this project wrote always holds, and a user's own file does not. */
+const EXTENSION_OWNERSHIP_MARKER = 'const COGMEM_BIN =';
+
+/**
+ * Remove the generated extension.
+ *
+ * Only while it still holds what this project writes: a user who put their own file at
+ * this path keeps it, and is told it was preserved, rather than losing it to a command
+ * that read the path as ownership (#116).
+ */
+export function removePiAutoMemoryExtension(input: { configPath: string; dryRun?: boolean }): {
+  extensionPath: string;
+  removed: boolean;
+  preserved: string[];
+} {
+  const extensionPath = piExtensionPath(input.configPath);
+  const preserved: string[] = [];
+  if (input.dryRun) return { extensionPath, removed: existsSync(extensionPath), preserved };
+  const outcome = removeOwnedFile(extensionPath, (content) => content.includes(EXTENSION_OWNERSHIP_MARKER));
+  if (outcome === 'not_ours') preserved.push(extensionPath);
+  return { extensionPath, removed: outcome === 'removed', preserved };
 }
