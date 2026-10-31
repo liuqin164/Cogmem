@@ -470,14 +470,43 @@ export function hasCogmemShim(env: Record<string, string | undefined> = process.
 
 /** The recorded installation, when it still exists and can be executed. */
 export function readCogmemShimTarget(env: Record<string, string | undefined> = process.env): string | undefined {
-  let recorded: string;
-  try {
-    recorded = readFileSync(cogmemShimTargetFile(env), 'utf8').trim();
-  } catch {
-    return undefined;
-  }
+  const recorded = readCogmemShimRecord(env)[0];
   if (!recorded || recorded === cogmemShimPath(env)) return undefined;
   return isExecutableFile(recorded) ? recorded : undefined;
+}
+
+/**
+ * The runtime directory recorded beside the installation.
+ *
+ * An installed `cogmem` is a launcher for a runtime — npm writes a shim that runs
+ * `bun` — so the installation is not runnable on its own. A host launching it from a
+ * desktop app has a PATH that does not contain that runtime (#94), which is what the
+ * `BUN_DIR` baked into the Hermes hook and the Pi extension was compensating for.
+ * The launcher owns the runtime instead, and a host configuration stops needing it.
+ */
+export function readCogmemShimRuntime(env: Record<string, string | undefined> = process.env): string | undefined {
+  const recorded = readCogmemShimRecord(env)[1];
+  return recorded && isDirectory(recorded) ? recorded : undefined;
+}
+
+function readCogmemShimRecord(env: Record<string, string | undefined>): [string | undefined, string | undefined] {
+  let lines: string[];
+  try {
+    lines = readFileSync(cogmemShimTargetFile(env), 'utf8').split('\n');
+  } catch {
+    return [undefined, undefined];
+  }
+  const target = lines[0]?.trim() || undefined;
+  const runtime = lines[1]?.trim() || undefined;
+  return [target, runtime];
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -490,17 +519,19 @@ export function readCogmemShimTarget(env: Record<string, string | undefined> = p
 export function writeCogmemShim(options: {
   env?: Record<string, string | undefined>;
   target: string | undefined;
-}): { shim: string; target: string } | undefined {
+  runtimeDir?: string;
+}): { shim: string; target: string; runtimeDir?: string } | undefined {
   const env = options.env ?? process.env;
   const target = options.target;
   if (!target || target === 'cogmem' || !isExecutableFile(target)) return undefined;
   const shim = cogmemShimPath(env);
   if (resolve(target) === resolve(shim)) return undefined;
+  const runtimeDir = options.runtimeDir && isDirectory(options.runtimeDir) ? options.runtimeDir : undefined;
   mkdirSync(cogmemShimDir(env), { recursive: true });
-  writeFileSync(cogmemShimTargetFile(env), `${target}\n`);
+  writeFileSync(cogmemShimTargetFile(env), `${target}\n${runtimeDir ?? ''}\n`);
   writeFileSync(shim, renderCogmemShim());
   chmodSync(shim, 0o755);
-  return { shim, target };
+  return { shim, target, runtimeDir };
 }
 
 /**
@@ -512,26 +543,43 @@ export function renderCogmemShim(): string {
 # Cogmem launcher, written by \`cogmem init\` and \`cogmem connect\`. Do not edit.
 #
 # Host configurations point at this file rather than at an installation, because
-# this path does not move when the installation does. The installation is resolved
-# here, when this runs:
-#   1. $COGMEM_BIN
-#   2. the installation recorded beside this file (cogmem.target)
-#   3. the first \`cogmem\` on PATH that is not this file
+# this path does not move when the installation does. Everything an installation
+# needs is resolved here, when this runs:
+#   1. the runtime directory recorded beside this file, so a host whose PATH has no
+#      runtime on it can still run an installed CLI that is a launcher for one;
+#   2. $COGMEM_BIN, when an operator has set one;
+#   3. the installation recorded beside this file (cogmem.target, its first line);
+#   4. the first \`cogmem\` on PATH that is not this file.
 # Finding none is reported and exits 127; it never runs something else.
+#
+# Only shell builtins are used to find this file and read its record: a host can run
+# a launcher with a PATH that has nothing on it, which is the situation #94 was
+# about, and \`dirname\` or \`cat\` missing there would break the launcher rather than
+# the installation.
 set -u
-shim_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 127
+self=$0
+case "$self" in
+  */*) shim_dir=\${self%/*} ;;
+  *) shim_dir=. ;;
+esac
+shim_dir=$(cd "$shim_dir" && pwd) || shim_dir=\${self%/*}
 self="$shim_dir/cogmem"
+
+recorded=""
+runtime=""
+if [ -r "$shim_dir/cogmem.target" ]; then
+  { IFS= read -r recorded; IFS= read -r runtime; } < "$shim_dir/cogmem.target" || true
+fi
+
+if [ -n "$runtime" ] && [ -d "$runtime" ]; then PATH="$runtime:$PATH"; export PATH; fi
 
 if [ -n "\${COGMEM_BIN:-}" ] && [ -x "\${COGMEM_BIN}" ]; then exec "\${COGMEM_BIN}" "$@"; fi
 
 target=""
-if [ -r "$shim_dir/cogmem.target" ]; then
-  recorded=$(cat "$shim_dir/cogmem.target" 2>/dev/null || true)
-  case "$recorded" in
-    ""|"$self") ;;
-    *) if [ -x "$recorded" ]; then target="$recorded"; fi ;;
-  esac
-fi
+case "$recorded" in
+  ""|"$self") ;;
+  *) if [ -x "$recorded" ]; then target="$recorded"; fi ;;
+esac
 
 if [ -z "$target" ]; then
   IFS=:
@@ -618,8 +666,14 @@ export function resolveCogmemInstallation(
 export function ensureCogmemShim(
   env: Record<string, string | undefined> = process.env,
   argv1: string | undefined = process.argv[1],
-): { shim: string; target: string } | undefined {
-  return writeCogmemShim({ env, target: resolveCogmemInstallation(env, argv1) });
+): { shim: string; target: string; runtimeDir?: string } | undefined {
+  // The runtime this process is running under is the runtime the installation needs,
+  // recorded once here instead of in every host configuration (#114).
+  return writeCogmemShim({
+    env,
+    target: resolveCogmemInstallation(env, argv1),
+    runtimeDir: dirname(process.execPath),
+  });
 }
 
 /**

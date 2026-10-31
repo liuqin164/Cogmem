@@ -8,6 +8,7 @@ import {
   ensureCogmemShim,
   hasCogmemShim,
   readCogmemShimTarget,
+  readCogmemShimRuntime,
   resolveCogmemInvocation,
   writeCogmemShim,
 } from '../src/install/InstallSteps.js';
@@ -68,6 +69,32 @@ test("a host configuration pointing at the launcher survives the installation mo
   expect(nowhere.stdout).toBe('');
 });
 
+test('the launcher puts the recorded runtime on PATH, so a thin-PATH host can still run it (#114)', () => {
+  // An installed cogmem is a launcher for a runtime: npm writes a shim that runs
+  // `bun`, so the installation is not runnable on its own. A host started from a
+  // desktop app has a PATH without that runtime on it (#94) — which is what the
+  // BUN_DIR baked into the Hermes hook and the Pi extension was compensating for.
+  const root = makeTempDir('cogmem-shim-runtime-');
+  const env = { HOME: join(root, 'home'), PATH: '/usr/bin:/bin' };
+  const runtime = join(root, 'runtime');
+  mkdirSync(runtime, { recursive: true });
+  // The runtime the installation needs, available nowhere on PATH.
+  writeFileSync(join(runtime, 'bun'), '#!/bin/sh\necho ran-runtime "$@"\n');
+  chmodSync(join(runtime, 'bun'), 0o755);
+  const installDir = join(root, 'install');
+  mkdirSync(installDir, { recursive: true });
+  const target = join(installDir, 'cogmem');
+  writeFileSync(target, '#!/bin/sh\nbun "$@"\n');
+  chmodSync(target, 0o755);
+
+  const shim = writeCogmemShim({ env, target, runtimeDir: runtime })!;
+  expect(readCogmemShimRuntime(env)).toBe(runtime);
+  // PATH has no bun on it; the launcher's recorded runtime is what makes this run.
+  const withoutRuntime = spawnSync(target, ['--help'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
+  expect(withoutRuntime.status).not.toBe(0);
+  expect(run(shim.shim, env).stdout.trim()).toBe('ran-runtime recall --project p');
+});
+
 test('the recorded installation wins, and COGMEM_BIN wins over it (#114)', () => {
   const root = makeTempDir('cogmem-shim-recorded-');
   const env = { HOME: join(root, 'home'), PATH: '/usr/bin:/bin' };
@@ -78,6 +105,10 @@ test('the recorded installation wins, and COGMEM_BIN wins over it (#114)', () =>
   const asked = { ...env, PATH: `${join(root, 'other')}:/usr/bin:/bin` };
   expect(run(shim.shim, asked).stdout.trim()).toBe(`ran:${recorded} recall --project p`);
   expect(run(shim.shim, { ...asked, COGMEM_BIN: other }).stdout.trim()).toBe(`ran:${other} recall --project p`);
+
+  // A host can run this with nothing on PATH — that is the situation #94 was about —
+  // so finding itself and reading its record must not need an external command.
+  expect(run(shim.shim, { ...env, PATH: '/nonexistent' }).stdout.trim()).toBe(`ran:${recorded} recall --project p`);
 });
 
 test('the launcher is the invocation a host configuration gets, once it exists (#114)', () => {
