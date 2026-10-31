@@ -9,6 +9,7 @@ import {
   type MemoryEventSourceRange,
   type SourceContextWindowMetadata,
 } from '../recall/SourceContextMetadata.js';
+import { readRedactionMarks } from '../governance/PiiRedactor.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
@@ -217,6 +218,12 @@ export interface AgentRecallItem {
   confidence?: number;
   whyMatched?: string;
   canAnswerExactQuote?: boolean;
+  /**
+   * Present when this item's text has been through redaction: how many values were
+   * removed and how many characters they held. Without it a caller cannot tell an
+   * altered text from the text that was written (#115).
+   */
+  redaction?: { count: number; chars: number };
 }
 
 export interface AgentRecallResult {
@@ -590,7 +597,21 @@ export class KernelAgentMemoryBackend {
     }
   }
 
+  /**
+   * Recall with every item marked for what is missing from its text.
+   *
+   * Redaction happens when a turn is written, so by the time an item is built its text
+   * is already altered — and the lane that built it decides nothing about whether the
+   * caller can tell. One decoration here covers the raw ledger, compiled memory and the
+   * Atlas alike; decorating the raw builder is how the raw lane got it and the compiled
+   * lane did not (#115).
+   */
   recall(query: AgentRecallQuery): AgentRecallResult {
+    const result = this.recallCore(query);
+    return { ...result, items: (result.items ?? []).map(withRedactionMarks) };
+  }
+
+  private recallCore(query: AgentRecallQuery): AgentRecallResult {
     const queryPlan = compileAgentRecallQuery({
       query: query.query,
       intent: query.intent,
@@ -2186,3 +2207,12 @@ function padDatePart(value: number): string {
   return String(value).padStart(2, '0');
 }
 
+/**
+ * Mark an item whose text has been through redaction, without touching the text.
+ * A caller that cannot see the difference between what was written and what it was
+ * given will quote the marker back as if it were the value (#115).
+ */
+function withRedactionMarks(item: AgentRecallItem): AgentRecallItem {
+  const redaction = readRedactionMarks(item.text);
+  return redaction.count > 0 ? { ...item, redaction } : item;
+}

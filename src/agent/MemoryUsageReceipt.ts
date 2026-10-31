@@ -150,7 +150,10 @@ function formatSourceAnchor(anchor: MemoryUsageReceiptSourceAnchor): string {
 function clampBlock(text: string, closingTag: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   const budget = Math.max(120, maxChars - closingTag.length - 36);
-  return `${text.slice(0, budget).trimEnd()}\n... [truncated]\n${closingTag}`;
+  const kept = text.slice(0, budget).trimEnd();
+  // The count is the point: "... [truncated]" says something is missing, and a reader
+  // who does not know how much cannot judge whether the answer is here (#115).
+  return `${kept}\n... [truncated: ${text.length - kept.length} chars omitted]\n${closingTag}`;
 }
 
 function tokenSet(text: string): Set<string> {

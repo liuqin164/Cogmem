@@ -107,9 +107,11 @@ describe('Governance and security v1.14', () => {
 
     const db = new Database(dbPath);
     const row = db.prepare(`SELECT content FROM neurons LIMIT 1`).get() as { content: string };
-    expect(row.content).toContain('[REDACTED_EMAIL]');
-    expect(row.content).toContain('[REDACTED_PHONE]');
-    expect(row.content).toContain('[REDACTED_SSN]');
+    // Each marker names what was removed and how long it was, so a reader of the stored
+    // text can tell that it was altered and by how much (#115).
+    expect(row.content).toMatch(/\[REDACTED_EMAIL:\d+\]/);
+    expect(row.content).toMatch(/\[REDACTED_PHONE:\d+\]/);
+    expect(row.content).toMatch(/\[REDACTED_SSN:\d+\]/);
     expect(row.content).not.toContain('alice@example.com');
     expect(new PiiRedactor().redact('email a@b.com').findings[0]?.type).toBe('email');
     db.close();
