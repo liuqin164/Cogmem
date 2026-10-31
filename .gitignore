@@ -36,3 +36,6 @@ dist.next/
 # Local code-intelligence index (codegraph init) and its MCP wiring
 .codegraph/
 .mcp.json
+
+# Pack artifacts: `npm pack` writes here by default, and they are build output.
+/cogmem-*.tgz
