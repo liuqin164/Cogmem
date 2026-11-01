@@ -234,8 +234,19 @@ export interface AgentRecallItem {
   redaction?: { count: number; chars: number };
 }
 
+/** A recall result before the single exit adds what the kernel knows about the index. */
+type RecallCoreResult = Omit<AgentRecallResult, 'semanticIndex'>;
+
 export interface AgentRecallResult {
   recallMode: MemoryKernelNavigationResult['recallMode'] | 'raw_ledger_fallback' | 'atlas_facet_recall' | 'atlas_raw_grounded_recall';
+  /**
+   * Whether a semantic index was available for this answer.
+   *
+   * False means `memory` is `rule_only`: nothing is vectorised, so every answer here came
+   * from literal matching over the raw ledger, and a paraphrase that shares no words with
+   * the memory will not find it.
+   */
+  semanticIndex: boolean;
   items: AgentRecallItem[];
   narrative?: NonNullable<MemoryKernelNavigationResult['navigation']>['narrative'];
   pulseTrace?: NonNullable<MemoryKernelNavigationResult['navigation']>['pulse']['trace'];
@@ -651,10 +662,18 @@ export class KernelAgentMemoryBackend {
    */
   recall(query: AgentRecallQuery): AgentRecallResult {
     const result = this.recallCore(query);
-    return { ...result, items: (result.items ?? []).map(withRedactionMarks) };
+    return {
+      ...result,
+      items: (result.items ?? []).map(withRedactionMarks),
+      // One place, because every lane returns through here. A caller that needs to know
+      // whether an answer came from a semantic index should not have to read the config.
+      semanticIndex: this.kernel.semanticIndexEnabled(),
+    };
   }
 
-  private recallCore(query: AgentRecallQuery): AgentRecallResult {
+  // Everything but the semantic-index answer: that is a property of the kernel, not of
+  // which lane answered, so it is added once at the single exit above.
+  private recallCore(query: AgentRecallQuery): RecallCoreResult {
     const queryPlan = compileAgentRecallQuery({
       query: query.query,
       intent: query.intent,
@@ -669,7 +688,7 @@ export class KernelAgentMemoryBackend {
     // computing these up front made every recall pay for a second atlas read —
     // measured at half of a 1.2 s query on the year-scale corpus — and throw the
     // result away.
-    const withEarlyAtlasItems = (result: AgentRecallResult): AgentRecallResult =>
+    const withEarlyAtlasItems = (result: RecallCoreResult): RecallCoreResult =>
       query.projectId === undefined || !allowsGraph
         ? result
         : this.withAtlasItems(result, this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource), limit);
@@ -903,7 +922,7 @@ export class KernelAgentMemoryBackend {
     };
   }
 
-  private recallPreviousSession(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan): AgentRecallResult {
+  private recallPreviousSession(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan): RecallCoreResult {
     const limit = query.limit ?? 5;
     const previousSessionId = this.findPreviousSessionId(query);
     const events = previousSessionId
@@ -935,7 +954,7 @@ export class KernelAgentMemoryBackend {
     };
   }
 
-  private recallForensicQuote(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan): AgentRecallResult {
+  private recallForensicQuote(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan): RecallCoreResult {
     const limit = query.limit ?? 5;
     const anchorItems = this.recallForensicAnchor(query, queryPlan, limit);
     const rawEvents = anchorItems.length > 0 && (queryPlan.anchorUsed || !!query.anchorEventId)
@@ -983,7 +1002,7 @@ export class KernelAgentMemoryBackend {
     };
   }
 
-  private recallHistoricalDiscussion(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan): AgentRecallResult {
+  private recallHistoricalDiscussion(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan): RecallCoreResult {
     const limit = query.limit ?? 5;
     const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
     const allowsCompiled = laneAllowed(query.retrievalPolicy, 'compiled');
@@ -1464,7 +1483,7 @@ export class KernelAgentMemoryBackend {
     })).slice(0, limit);
   }
 
-  private withAtlasItems(result: AgentRecallResult, atlasItems: AgentRecallItem[], limit: number): AgentRecallResult {
+  private withAtlasItems(result: RecallCoreResult, atlasItems: AgentRecallItem[], limit: number): RecallCoreResult {
     if (!atlasItems.length) return result;
     return { ...result, items: this.mergeRecallItems(result.items, atlasItems, limit) };
   }

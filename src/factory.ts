@@ -1888,6 +1888,19 @@ export class MemoryKernel {
     return this.eventStore.searchRawEvents(query, options);
   }
 
+  /**
+   * Whether recall can use a semantic index at all.
+   *
+   * `memory` defaults to `rule_only`, and in that mode the curator marks every event
+   * `shouldEmbed: false` and stores it `raw_ledger_only` — nothing is vectorised, so recall
+   * is lexical. Callers say so in the result rather than leaving a reader to infer it from
+   * answer quality (measured: 8 of 12 paraphrased questions at rank 1 with `rule_only`,
+   * and the misses are the ones whose words are not in the fact).
+   */
+  semanticIndexEnabled(): boolean {
+    return this.modelRegistry.getRoleConfig('memory').provider !== 'rule_only';
+  }
+
   getDreamBacklogStatus(projectId?: string): DreamBacklogStatus {
     return this.dreamLedgerStore.getStatus(projectId);
   }

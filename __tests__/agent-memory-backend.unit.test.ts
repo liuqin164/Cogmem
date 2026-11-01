@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
+import { ModelRegistry } from '../src/models/ModelRegistry.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 test('agent backend can record a raw-only turn without creating compiled vectors', async () => {
@@ -851,6 +852,37 @@ test('a turn nobody named acknowledges no id (#113)', async () => {
     expect(result.duplicate).toBeUndefined();
   } finally {
     kernel.close();
+  }
+});
+
+test('recall says whether a semantic index was available (#135)', async () => {
+  // The field exists because answer quality is a bad way to discover it: with `memory` at
+  // `rule_only` the curator never writes a vector, so recall is lexical and a paraphrase
+  // sharing no words with the memory simply misses (measured 8/12 at rank 1).
+  const dir = makeTempDir('cogmem-semantic-index-');
+  const plain = createMemoryKernel({ dbPath: join(dir, 'plain.db'), vectorBackend: 'sqlite-vec' });
+  const plainBackend = new KernelAgentMemoryBackend(plain);
+  try {
+    await plainBackend.rememberTurnWithResult({ agentId: 'a', projectId: 'p', sessionId: 's', userText: '归档保留期定成七年。' });
+    expect(plainBackend.recall({ query: '归档保留期', projectId: 'p', agentId: 'a', limit: 3 }).semanticIndex).toBe(false);
+  } finally {
+    plain.close();
+  }
+
+  // A configured memory provider is what turns the semantic half on; the role config is
+  // read, never called, so no server is needed to assert this.
+  const configured = createMemoryKernel({
+    dbPath: join(dir, 'configured.db'),
+    vectorBackend: 'sqlite-vec',
+    modelRegistry: new ModelRegistry({
+      memory: { role: 'memory', provider: 'openai_compatible', modelName: 'm', baseUrl: 'http://127.0.0.1:1' },
+    } as never),
+  });
+  try {
+    expect(configured.semanticIndexEnabled()).toBe(true);
+    expect(new KernelAgentMemoryBackend(configured).recall({ query: 'anything', projectId: 'p', agentId: 'a', limit: 3 }).semanticIndex).toBe(true);
+  } finally {
+    configured.close();
   }
 });
 
