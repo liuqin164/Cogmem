@@ -2170,11 +2170,13 @@ export function removeOpenClawAutoMemoryPlugin(options: {
   } catch {
     ours = false;
   }
+  // Same contract as the other two: this field reports what the call removed, and a dry
+  // run removes nothing (#116 review).
   let dirRemoved = false;
-  if (ours) {
-    if (!options.dryRun) rmSync(pluginDir, { recursive: true, force: true });
+  if (ours && !options.dryRun) {
+    rmSync(pluginDir, { recursive: true, force: true });
     dirRemoved = true;
-  } else if (existsSync(pluginDir)) {
+  } else if (!ours && existsSync(pluginDir)) {
     preserved.push(pluginDir);
   }
 

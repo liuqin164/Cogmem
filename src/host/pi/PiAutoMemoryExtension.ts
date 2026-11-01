@@ -169,7 +169,9 @@ export function removePiAutoMemoryExtension(input: { configPath: string; dryRun?
 } {
   const extensionPath = piExtensionPath(input.configPath);
   const preserved: string[] = [];
-  if (input.dryRun) return { extensionPath, removed: existsSync(extensionPath), preserved };
+  // `removed` is what this call removed, and a dry run removes nothing. Reporting
+  // `existsSync` here claimed a deletion that had not happened (#116 review).
+  if (input.dryRun) return { extensionPath, removed: false, preserved };
   const outcome = removeOwnedFile(extensionPath, (content) => content.includes(EXTENSION_OWNERSHIP_MARKER));
   if (outcome === 'not_ours') preserved.push(extensionPath);
   return { extensionPath, removed: outcome === 'removed', preserved };

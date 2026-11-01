@@ -573,8 +573,8 @@ function removeForHost(agent: AgentKind, args: ConnectArgs): RemovalResult {
     // The MCP entry lives in the same file as the hook, so it is read after that write.
     const original = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
     const unpatched = unpatchHermesMcpConfig(original);
-    if (unpatched !== original) {
-      if (!args.dryRun) writeOwnedFiles([{ path: configPath, content: unpatched }]);
+    if (!args.dryRun && unpatched !== original) {
+      writeOwnedFiles([{ path: configPath, content: unpatched }]);
       if (!configFiles.includes(configPath)) configFiles.push(configPath);
     }
   } else {
@@ -584,8 +584,8 @@ function removeForHost(agent: AgentKind, args: ConnectArgs): RemovalResult {
     const configPath = resolve(args.piConfigPath || defaultPiConfigPath());
     const original = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
     const unpatched = unpatchPiMcpJsonConfig(original);
-    if (unpatched !== original) {
-      if (!args.dryRun) writeOwnedFiles([{ path: configPath, content: unpatched }]);
+    if (!args.dryRun && unpatched !== original) {
+      writeOwnedFiles([{ path: configPath, content: unpatched }]);
       configFiles.push(configPath);
     }
   }

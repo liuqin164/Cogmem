@@ -142,6 +142,37 @@ test('connect pi --remove leaves a config with nothing of ours byte for byte (#1
   expect(readFileSync(piConfig, 'utf8')).toBe(before);
 });
 
+test('a dry run removes nothing and reports nothing removed (#116 review)', async () => {
+  const dir = makeTempDir('cogmem-remove-dry-');
+  const workspace = join(dir, 'ws');
+  const hermesConfig = join(dir, 'hermes', 'config.yaml');
+  const binDir = join(dir, 'bin');
+  mkdirSync(join(workspace, '.cogmem'), { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  mkdirSync(dirname(hermesConfig), { recursive: true });
+  writeFileSync(join(workspace, '.cogmem', 'config.toml'), `[core]\ndb_path = "${join(workspace, 'memory.db')}"\n`);
+  writeFileSync(join(binDir, 'cogmem'), '#!/bin/sh\nexit 0\n');
+  writeFileSync(hermesConfig, 'mcp_servers: {}\n');
+  const env = { COGMEM_BIN_DIR: binDir, COGMEM_BIN: '', COGMEM_MCP_BIN: '', PATH: '/usr/bin:/bin', HOME: dir };
+  const common = ['--workspace', workspace, '--hermes-config', hermesConfig];
+
+  expect((await connectIn(workspace, env, ['hermes', '--auto', '--json', ...common])).code).toBe(0);
+  const hook = join(dir, 'hermes', 'hooks', 'cogmem-recall');
+  expect(existsSync(hook)).toBe(true);
+  const installed = readFileSync(hermesConfig, 'utf8');
+
+  const dry = await connectIn(workspace, env, ['hermes', '--remove', '--dry-run', '--json', ...common]);
+  expect(dry.code, dry.stderr).toBe(0);
+  const parsed = JSON.parse(dry.stdout) as { hosts: Array<{ dryRun: boolean; removedPaths: string[]; configFiles: string[] }> };
+  expect(parsed.hosts[0]!.dryRun).toBe(true);
+  expect(parsed.hosts[0]!.removedPaths).toEqual([]);
+  expect(parsed.hosts[0]!.configFiles).toEqual([]);
+  // The whole point: a dry run is not an optimistic run. The hook used to be deleted here,
+  // because the config write was gated on `dryRun` and the file removal was not.
+  expect(existsSync(hook)).toBe(true);
+  expect(readFileSync(hermesConfig, 'utf8')).toBe(installed);
+});
+
 test('connect hermes --remove takes back the block and the hook, and only those (#116)', async () => {
   const dir = makeTempDir('cogmem-remove-hermes-');
   const workspace = join(dir, 'ws');

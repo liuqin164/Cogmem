@@ -303,13 +303,20 @@ export function removeHermesAutoMemoryHook(input: { configPath: string; dryRun?:
 } {
   const hookPath = hermesHookPath(input.configPath);
   const preserved: string[] = [];
-  const hookRemoved = removeOwnedFile(hookPath, (content) => content.includes(HOOK_OWNERSHIP_MARKER)) === 'removed';
-  if (!hookRemoved && existsSync(hookPath)) preserved.push(hookPath);
+  // A dry run deletes nothing. It used to delete the hook anyway: the config write was
+  // gated and the file removal was not, so `--dry-run --remove` took the file out and
+  // said nothing about it (#116 review).
+  const outcome = input.dryRun ? 'unchanged' : removeOwnedFile(hookPath, (content) => content.includes(HOOK_OWNERSHIP_MARKER));
+  const hookRemoved = outcome === 'removed';
+  if (outcome === 'not_ours') preserved.push(hookPath);
 
   const existingConfig = existsSync(input.configPath) ? readFileSync(input.configPath, 'utf8') : '';
   const unpatched = unpatchHermesHooksConfig(existingConfig, hookPath);
-  const configUpdated = unpatched !== existingConfig;
-  if (!input.dryRun && configUpdated) writeOwnedFiles([{ path: input.configPath, content: unpatched }]);
+  // Reported like `removeOwnedFile`: what this call wrote. A dry run writes nothing, and
+  // the caller's own `dryRun` field is where "this was a rehearsal" lives — the same shape
+  // `connect --dry-run` already uses for `installed` (#116 review).
+  const configUpdated = !input.dryRun && unpatched !== existingConfig;
+  if (configUpdated) writeOwnedFiles([{ path: input.configPath, content: unpatched }]);
 
   return { hookPath, hookRemoved, configUpdated, preserved };
 }
