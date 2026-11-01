@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { verifyMcpEntry, type McpEntryVerification } from '../host/verifyMcpEntry.js';
 import { writeOwnedFiles } from '../host/InstalledArtifacts.js';
+import { blockEnd, hasContent, joinUnlessEmpty, leadingSpaces } from '../host/YamlLines.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -917,21 +918,13 @@ export function unpatchHermesMcpConfig(original: string): string {
   const lines = original.replace(/\r\n/g, '\n').split('\n');
   const start = lines.findIndex((line) => /^\s+cogmem\s*:\s*$/.test(line));
   if (start === -1) return original;
-  const indent = leadingSpaces(lines[start]!);
-  let end = start + 1;
-  while (end < lines.length) {
-    const line = lines[end]!;
-    if (line.trim() && leadingSpaces(line) <= indent) break;
-    end += 1;
-  }
-  let kept = [...lines.slice(0, start), ...lines.slice(end)];
+  let kept = [...lines.slice(0, start), ...lines.slice(blockEnd(lines, start))];
   const mapIndex = kept.findIndex((line) => /^mcp_servers\s*:\s*$/.test(line));
   if (mapIndex !== -1) {
-    const hasSibling = kept.slice(mapIndex + 1).some((line) => line.trim() && /^\s{2}\S/.test(line));
-    if (!hasSibling) kept = [...kept.slice(0, mapIndex), ...kept.slice(mapIndex + 1)];
+    const end = blockEnd(kept, mapIndex);
+    if (!hasContent(kept, mapIndex + 1, end)) kept = [...kept.slice(0, mapIndex), ...kept.slice(end)];
   }
-  const text = kept.join('\n');
-  return text.trim() ? text : '';
+  return joinUnlessEmpty(kept);
 }
 
 /**
@@ -1127,10 +1120,6 @@ function patchExistingHermesCogmemConfig(original: string, project: string, serv
   const itemIndent = `${' '.repeat(cogmemIndent + 6)}`;
   lines.splice(blockEnd, 0, `${childIndent}tools:`, `${includeIndent}include:`, ...HERMES_COGMEM_TOOLS.map((tool) => `${itemIndent}- ${tool}`));
   return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
-}
-
-function leadingSpaces(line: string): number {
-  return line.match(/^\s*/)?.[0].length ?? 0;
 }
 
 function printHuman(result: ConnectResult): void {

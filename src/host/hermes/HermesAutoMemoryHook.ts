@@ -1,4 +1,5 @@
 import { removeOwnedFile, writeOwnedFiles, type OwnedFile } from '../InstalledArtifacts.js';
+import { blockEnd, hasContent, joinUnlessEmpty } from '../YamlLines.js';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -259,33 +260,15 @@ export function unpatchHermesHooksConfig(original: string, hookPath: string): st
   const entry = `- command: ${JSON.stringify(hookPath)}`;
   const start = lines.findIndex((line) => line.trim() === entry);
   if (start === -1) return original;
-  const indent = leadingSpaces(lines[start]!);
-  let end = start + 1;
-  while (end < lines.length) {
-    const line = lines[end]!;
-    if (line.trim() && leadingSpaces(line) <= indent) break;
-    end += 1;
-  }
-  let kept = [...lines.slice(0, start), ...lines.slice(end)];
+  let kept = [...lines.slice(0, start), ...lines.slice(blockEnd(lines, start))];
   // A `pre_llm_call:` key this command emptied goes with its last entry; one that still
   // holds somebody else's hook stays.
   const eventIndex = kept.findIndex((line) => /^\s{2}pre_llm_call\s*:\s*$/.test(line));
   if (eventIndex !== -1) {
-    let blockEnd = eventIndex + 1;
-    while (blockEnd < kept.length) {
-      const line = kept[blockEnd]!;
-      if (line.trim() && leadingSpaces(line) <= 2) break;
-      blockEnd += 1;
-    }
-    const hasEntry = kept.slice(eventIndex + 1, blockEnd).some((line) => line.trim().length > 0);
-    if (!hasEntry) kept = [...kept.slice(0, eventIndex), ...kept.slice(blockEnd)];
+    const end = blockEnd(kept, eventIndex);
+    if (!hasContent(kept, eventIndex + 1, end)) kept = [...kept.slice(0, eventIndex), ...kept.slice(end)];
   }
-  const text = kept.join('\n');
-  return text.trim() ? text : '';
-}
-
-function leadingSpaces(line: string): number {
-  return line.match(/^\s*/)?.[0].length ?? 0;
+  return joinUnlessEmpty(kept);
 }
 
 /**
