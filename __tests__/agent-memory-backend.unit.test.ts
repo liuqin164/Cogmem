@@ -822,14 +822,33 @@ test('a named turn written twice is recorded once and returns the first copy (#1
     const afterFirst = count();
     const firstTurnSeq = (kernel.eventStore.getEvent(first.rawEventIds[0]) as { turnSeq?: number }).turnSeq;
 
+    // The caller's identity is acknowledged, so a retry can reuse exactly what was sent.
+    expect(first.turnId).toBe('host-turn-7');
     const second = await backend.rememberTurnWithResult(turn);
     expect(count()).toBe(afterFirst);
     expect(second.duplicate).toBe(true);
+    expect(second.turnId).toBe('host-turn-7');
     expect(second.reason).toBe('duplicate_turn');
     expect(second.compiled).toBe(false);
     expect(second.rawEventIds).toEqual(first.rawEventIds);
     // A replay is not a new turn, so it must not draw a number from the turn sequence.
     expect(kernel.eventStore.getNextTurnSeq('s', 'p')).toBe((firstTurnSeq ?? 0) + 1);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('a turn nobody named acknowledges no id (#113)', async () => {
+  // Echoing a synthesized turn id would acknowledge an identity the caller never gave.
+  const dir = makeTempDir('cogmem-nameless-turn-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  try {
+    const result = await backend.rememberTurnWithResult({
+      agentId: 'openclaw', projectId: 'p', sessionId: 's', userText: '一位没有名字的轮次。',
+    });
+    expect(result.turnId).toBeUndefined();
+    expect(result.duplicate).toBeUndefined();
   } finally {
     kernel.close();
   }

@@ -104,11 +104,15 @@ describe('tool execution semantics', () => {
     const first = await call(handle.url, session, 'cogmem_remember_turn', turn);
     expect(first.isError).toBe(false);
     expect(first.body.duplicate).toBeUndefined();
+    // The acknowledged identity comes back, so a caller can retry with exactly what the
+    // server recorded rather than what it hoped it sent (#113).
+    expect(first.body.turnId).toBe('exec-turn-replay-1');
 
     const second = await call(handle.url, session, 'cogmem_remember_turn', turn);
     expect(second.isError).toBe(false);
     expect(second.body.duplicate).toBe(true);
     expect(second.body.reason).toBe('duplicate_turn');
+    expect(second.body.turnId).toBe('exec-turn-replay-1');
     expect(second.body.rawEventIds).toEqual(first.body.rawEventIds);
 
     // The same identity carrying different text is refused rather than written beside it.

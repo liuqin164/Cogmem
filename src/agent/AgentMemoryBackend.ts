@@ -69,6 +69,14 @@ export interface AgentTurnMemoryResult {
    * the first call's compilation already exists and is not repeated.
    */
   duplicate?: boolean;
+  /**
+   * The turn id the caller supplied, echoed back.
+   *
+   * Present only when the caller named the turn: it is their identity being acknowledged,
+   * and echoing a synthesized one would acknowledge something they never said. Retrying
+   * with this value is what makes the retry a replay (#113).
+   */
+  turnId?: string;
 }
 
 export interface AgentRecallQuery {
@@ -349,11 +357,19 @@ export class KernelAgentMemoryBackend {
         compiled: false,
         duplicate: true,
         rawEventIds: [claim.userEventId, claim.assistantEventId].filter((id): id is string => Boolean(id)),
+        ...(turn.turnId ? { turnId: turn.turnId } : {}),
       };
     }
     const turnSeq = turn.turnSeq ?? this.kernel.eventStore.getNextTurnSeq(threadId, turn.projectId ?? '');
     const turnId = turn.turnId || `${turn.agentId}:${turn.sessionId}:${turnSeq}:${occurredAt}`;
-    const userEvent = this.kernel.recordRawEvent({
+    // ponytail: the claim and this insert are two statements, so another process writing
+    // the same turn between them reaches the primary key instead of the claim. Re-asking
+    // the claim turns that into the answer the caller can act on — already recorded, or
+    // this id reused for different text. Forcing the interleaving in-process is not
+    // possible (no await between the two), so this branch is covered by the sequential
+    // conflict and replay tests plus this comment, not by a race test that would restate
+    // the id derivation.
+    const writeUserEvent = () => this.kernel.recordRawEvent({
       eventId: claim?.userEventId,
       projectId: turn.projectId,
       workspaceId: turn.workspaceId,
@@ -371,6 +387,30 @@ export class KernelAgentMemoryBackend {
       sourceId,
       metadata: this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
     });
+    let userEvent: ReturnType<typeof writeUserEvent>;
+    try {
+      userEvent = writeUserEvent();
+    } catch (error) {
+      const settled = turn.turnId
+        ? this.kernel.claimAgentTurn({
+          projectId: turn.projectId,
+          agentId: turn.agentId,
+          sessionId: turn.sessionId,
+          turnId: turn.turnId,
+          userText: turn.userText,
+          assistantText: turn.assistantText,
+        })
+        : undefined;
+      if (!settled?.replay) throw error;
+      return {
+        mode,
+        reason: 'duplicate_turn',
+        compiled: false,
+        duplicate: true,
+        rawEventIds: [settled.userEventId, settled.assistantEventId].filter((id): id is string => Boolean(id)),
+        turnId: turn.turnId!,
+      };
+    }
     const assistantEvent = turn.assistantText
       ? this.kernel.recordRawEvent({
         eventId: claim?.assistantEventId,
@@ -452,12 +492,14 @@ export class KernelAgentMemoryBackend {
 
     const decision = this.shouldCompileTurn(mode, compileSignalText);
     const rawEventIds = [userEvent, assistantEvent].filter(Boolean).map((event) => event!.eventId);
+    const named = turn.turnId ? { turnId: turn.turnId } : {};
     if (!decision.compile) {
       return {
         mode,
         reason: decision.reason,
         compiled: false,
         rawEventIds,
+        ...named,
       };
     }
 
@@ -480,6 +522,7 @@ export class KernelAgentMemoryBackend {
       compiled: true,
       rawEventIds,
       compiledNeuronId: neuron.id,
+      ...named,
     };
   }
 
