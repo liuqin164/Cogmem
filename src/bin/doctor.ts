@@ -26,9 +26,9 @@ import {
   pathWarningSteps,
   postInstallSteps,
   resolveCliBinDir,
-  cogmemShimPath,
-  hasCogmemShim,
-  readCogmemShimTarget,
+  cogmemLauncherPath,
+  hasCogmemLauncher,
+  readCogmemLauncherTarget,
   resolveCogmemInstallation,
   resolveCogmemInvocation,
   type InstallGate,
@@ -224,21 +224,21 @@ if (envPath) {
   // moved checkout and a changed npm prefix (#114). Its absence is not a failure —
   // `connect` and `init` write it — but a launcher that points at nothing is, because
   // every host configured after this one is calling a file that cannot run the CLI.
-  const shimInvocation = resolveCogmemInstallation(process.env) ?? 'cogmem';
-  const shimFinding = hasCogmemShim() && !readCogmemShimTarget()
+  const launcherInvocation = resolveCogmemInstallation(process.env) ?? 'cogmem';
+  const launcherFinding = hasCogmemLauncher() && !readCogmemLauncherTarget()
     ? {
-      code: 'shim_target_missing',
-      message: `The managed launcher ${cogmemShimPath()} has no installation to run. Run ${shimInvocation} connect --auto --workspace ${workspaceRoot}, or set COGMEM_BIN, to point it at one.`,
+      code: 'launcher_target_missing',
+      message: `The managed launcher ${cogmemLauncherPath()} has no installation to run. Run ${launcherInvocation} connect --auto --workspace ${workspaceRoot}, or set COGMEM_BIN, to point it at one.`,
     }
-    : !hasCogmemShim() && resolveCogmemInstallation(process.env)
+    : !hasCogmemLauncher() && resolveCogmemInstallation(process.env)
       ? {
-        code: 'shim_missing',
-        message: `No managed launcher at ${cogmemShimPath()}: a host configuration written from here names this installation's own path, and stops working when that path changes. Run ${shimInvocation} connect --auto --workspace ${workspaceRoot} to create one.`,
+        code: 'launcher_missing',
+        message: `No managed launcher at ${cogmemLauncherPath()}: a host configuration written from here names this installation's own path, and stops working when that path changes. Run ${launcherInvocation} connect --auto --workspace ${workspaceRoot} to create one.`,
       }
       : undefined;
-  if (shimFinding) {
-    warn(shimFinding.code, shimFinding.message);
-    gateDiagnostics.push(shimFinding);
+  if (launcherFinding) {
+    warn(launcherFinding.code, launcherFinding.message);
+    gateDiagnostics.push(launcherFinding);
   }
 
   printWarnings(loaded.diagnostics);

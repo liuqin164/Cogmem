@@ -86,7 +86,7 @@ describe('the gate reports the managed launcher (#114)', () => {
     writeFileSync(join(shimDir, 'cogmem'), '#!/bin/sh\nexit 127\n');
 
     const parsed = await doctor(dir, configPath) as unknown as { installGate: { diagnostics: Array<{ code: string; message: string }> } };
-    const finding = parsed.installGate.diagnostics.find((diagnostic) => diagnostic.code === 'shim_target_missing');
+    const finding = parsed.installGate.diagnostics.find((diagnostic) => diagnostic.code === 'launcher_target_missing');
     expect(finding).toBeDefined();
     expect(finding!.message).toContain(join(shimDir, 'cogmem'));
     expect(finding!.message).toContain('connect --auto');

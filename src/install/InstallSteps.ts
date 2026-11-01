@@ -452,26 +452,26 @@ export function resolveCliBinDir(
  * into every host artifact, so each of those moves broke the integration, and the
  * answer each time was to notice harder instead of to stop writing the path.
  */
-export function cogmemShimDir(env: Record<string, string | undefined> = process.env): string {
-  return env.COGMEM_SHIM_DIR?.trim() || join(env.HOME || homedir(), '.cogmem', 'bin');
+export function cogmemLauncherDir(env: Record<string, string | undefined> = process.env): string {
+  return env.COGMEM_LAUNCHER_DIR?.trim() || join(env.HOME || homedir(), '.cogmem', 'bin');
 }
 
-export function cogmemShimPath(env: Record<string, string | undefined> = process.env): string {
-  return join(cogmemShimDir(env), 'cogmem');
+export function cogmemLauncherPath(env: Record<string, string | undefined> = process.env): string {
+  return join(cogmemLauncherDir(env), 'cogmem');
 }
 
-export function cogmemShimTargetFile(env: Record<string, string | undefined> = process.env): string {
-  return join(cogmemShimDir(env), 'cogmem.target');
+export function cogmemLauncherRecordPath(env: Record<string, string | undefined> = process.env): string {
+  return join(cogmemLauncherDir(env), 'cogmem.target');
 }
 
-export function hasCogmemShim(env: Record<string, string | undefined> = process.env): boolean {
-  return existsSync(cogmemShimPath(env));
+export function hasCogmemLauncher(env: Record<string, string | undefined> = process.env): boolean {
+  return existsSync(cogmemLauncherPath(env));
 }
 
 /** The recorded installation, when it still exists and can be executed. */
-export function readCogmemShimTarget(env: Record<string, string | undefined> = process.env): string | undefined {
-  const recorded = readCogmemShimRecord(env)[0];
-  if (!recorded || recorded === cogmemShimPath(env)) return undefined;
+export function readCogmemLauncherTarget(env: Record<string, string | undefined> = process.env): string | undefined {
+  const recorded = readCogmemLauncherRecord(env)[0];
+  if (!recorded || recorded === cogmemLauncherPath(env)) return undefined;
   return isExecutableFile(recorded) ? recorded : undefined;
 }
 
@@ -484,15 +484,15 @@ export function readCogmemShimTarget(env: Record<string, string | undefined> = p
  * `BUN_DIR` baked into the Hermes hook and the Pi extension was compensating for.
  * The launcher owns the runtime instead, and a host configuration stops needing it.
  */
-export function readCogmemShimRuntime(env: Record<string, string | undefined> = process.env): string | undefined {
-  const recorded = readCogmemShimRecord(env)[1];
+export function readCogmemLauncherRuntime(env: Record<string, string | undefined> = process.env): string | undefined {
+  const recorded = readCogmemLauncherRecord(env)[1];
   return recorded && isDirectory(recorded) ? recorded : undefined;
 }
 
-function readCogmemShimRecord(env: Record<string, string | undefined>): [string | undefined, string | undefined] {
+function readCogmemLauncherRecord(env: Record<string, string | undefined>): [string | undefined, string | undefined] {
   let lines: string[];
   try {
-    lines = readFileSync(cogmemShimTargetFile(env), 'utf8').split('\n');
+    lines = readFileSync(cogmemLauncherRecordPath(env), 'utf8').split('\n');
   } catch {
     return [undefined, undefined];
   }
@@ -514,31 +514,31 @@ function isDirectory(path: string): boolean {
  *
  * Returns undefined when there is nothing to point at — a source checkout run
  * through `src/bin/*.ts` has no installed launcher of its own — in which case no
- * shim is written and the caller keeps the invocation it already had.
+ * launcher is written and the caller keeps the invocation it already had.
  */
-export function writeCogmemShim(options: {
+export function writeCogmemLauncher(options: {
   env?: Record<string, string | undefined>;
   target: string | undefined;
   runtimeDir?: string;
-}): { shim: string; target: string; runtimeDir?: string } | undefined {
+}): { launcher: string; target: string; runtimeDir?: string } | undefined {
   const env = options.env ?? process.env;
   const target = options.target;
   if (!target || target === 'cogmem' || !isExecutableFile(target)) return undefined;
-  const shim = cogmemShimPath(env);
-  if (resolve(target) === resolve(shim)) return undefined;
+  const launcher = cogmemLauncherPath(env);
+  if (resolve(target) === resolve(launcher)) return undefined;
   const runtimeDir = options.runtimeDir && isDirectory(options.runtimeDir) ? options.runtimeDir : undefined;
-  mkdirSync(cogmemShimDir(env), { recursive: true });
-  writeFileSync(cogmemShimTargetFile(env), `${target}\n${runtimeDir ?? ''}\n`);
-  writeFileSync(shim, renderCogmemShim());
-  chmodSync(shim, 0o755);
-  return { shim, target, runtimeDir };
+  mkdirSync(cogmemLauncherDir(env), { recursive: true });
+  writeFileSync(cogmemLauncherRecordPath(env), `${target}\n${runtimeDir ?? ''}\n`);
+  writeFileSync(launcher, renderCogmemLauncher());
+  chmodSync(launcher, 0o755);
+  return { launcher, target, runtimeDir };
 }
 
 /**
  * The launcher's source. POSIX `sh`, no bashisms: hosts run it with whatever they
  * have, and one of them runs it with an empty PATH.
  */
-export function renderCogmemShim(): string {
+export function renderCogmemLauncher(): string {
   return `#!/bin/sh
 # Cogmem launcher, written by \`cogmem init\` and \`cogmem connect\`. Do not edit.
 #
@@ -559,16 +559,16 @@ export function renderCogmemShim(): string {
 set -u
 self=$0
 case "$self" in
-  */*) shim_dir=\${self%/*} ;;
-  *) shim_dir=. ;;
+  */*) launcher_dir=\${self%/*} ;;
+  *) launcher_dir=. ;;
 esac
-shim_dir=$(cd "$shim_dir" && pwd) || shim_dir=\${self%/*}
-self="$shim_dir/cogmem"
+launcher_dir=$(cd "$launcher_dir" && pwd) || launcher_dir=\${self%/*}
+self="$launcher_dir/cogmem"
 
 recorded=""
 runtime=""
-if [ -r "$shim_dir/cogmem.target" ]; then
-  { IFS= read -r recorded; IFS= read -r runtime; } < "$shim_dir/cogmem.target" || true
+if [ -r "$launcher_dir/cogmem.target" ]; then
+  { IFS= read -r recorded; IFS= read -r runtime; } < "$launcher_dir/cogmem.target" || true
 fi
 
 if [ -n "$runtime" ] && [ -d "$runtime" ]; then PATH="$runtime:$PATH"; export PATH; fi
@@ -585,7 +585,7 @@ if [ -z "$target" ]; then
   IFS=:
   set -f
   for dir in $PATH; do
-    if [ -n "$dir" ] && [ "$dir" != "$shim_dir" ] && [ -x "$dir/cogmem" ]; then
+    if [ -n "$dir" ] && [ "$dir" != "$launcher_dir" ] && [ -x "$dir/cogmem" ]; then
       target="$dir/cogmem"
       break
     fi
@@ -640,8 +640,8 @@ export function resolveCogmemInvocation(
   // The managed launcher next, and before any path this installation owns: it is the
   // one entry that survives an upgrade, a moved checkout, a changed npm prefix and a
   // different package manager, which is exactly what a host configuration outlives
-  // (#114). An operator who has no shim gets the previous answer, unchanged.
-  if (hasCogmemShim(env)) return cogmemShimPath(env);
+  // (#114). An operator who has no launcher gets the previous answer, unchanged.
+  if (hasCogmemLauncher(env)) return cogmemLauncherPath(env);
   const installation = resolveCogmemInstallation(env, argv1);
   if (!installation) return 'cogmem';
   return isOnPath(dirname(installation), env) ? 'cogmem' : installation;
@@ -663,13 +663,13 @@ export function resolveCogmemInstallation(
 }
 
 /** Point the managed launcher at this installation, if it is one. */
-export function ensureCogmemShim(
+export function ensureCogmemLauncher(
   env: Record<string, string | undefined> = process.env,
   argv1: string | undefined = process.argv[1],
-): { shim: string; target: string; runtimeDir?: string } | undefined {
+): { launcher: string; target: string; runtimeDir?: string } | undefined {
   // The runtime this process is running under is the runtime the installation needs,
   // recorded once here instead of in every host configuration (#114).
-  return writeCogmemShim({
+  return writeCogmemLauncher({
     env,
     target: resolveCogmemInstallation(env, argv1),
     runtimeDir: dirname(process.execPath),

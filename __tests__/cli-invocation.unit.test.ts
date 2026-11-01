@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  cogmemShimPath,
+  cogmemLauncherPath,
   resolveCliBinDir,
   resolveCogmemInvocation,
   type InstallStep,
@@ -169,7 +169,7 @@ describe('printed steps run as printed', () => {
     // be the command, not the directory it lives in. It names the managed launcher
     // rather than this installation, so the step a reader copies keeps working after
     // the prefix or the checkout moves (#114).
-    expect(parsed.nextSteps[0]!.command).toBe(`${cogmemShimPath({ HOME: dir })} doctor --json`);
+    expect(parsed.nextSteps[0]!.command).toBe(`${cogmemLauncherPath({ HOME: dir })} doctor --json`);
     expect(parsed.nextSteps[0]!.command).not.toContain(binDir);
     expectRunnableCommand(parsed.nextSteps[0]!.command);
   });
@@ -202,7 +202,7 @@ describe('printed steps run as printed', () => {
     // A bare `cogmem` here is an MCP server entry that never starts, and this
     // installation's own path stops existing the moment the npm prefix or the
     // checkout moves. The entry names the managed launcher instead (#114).
-    expect(written).toContain(`command: "${cogmemShimPath({ HOME: dir })}"`);
+    expect(written).toContain(`command: "${cogmemLauncherPath({ HOME: dir })}"`);
     expect(written).not.toContain(join(binDir, 'cogmem'));
     // Bound to the integration's own scope: an unbound server answers whatever
     // project a caller names (#79).
@@ -261,7 +261,7 @@ describe('printed steps run as printed', () => {
     // Same property as the Hermes entry: the extension runs this launcher, which
     // resolves the installation when the host calls it, and the installation's own
     // path appears nowhere (#114).
-    expect(extension).toContain(`const COGMEM_BIN = ${JSON.stringify(cogmemShimPath({ HOME: dir }))};`);
+    expect(extension).toContain(`const COGMEM_BIN = ${JSON.stringify(cogmemLauncherPath({ HOME: dir }))};`);
     expect(extension).not.toContain(binDir);
   });
 

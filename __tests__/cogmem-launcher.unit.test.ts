@@ -4,13 +4,13 @@ import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
-  cogmemShimPath,
-  ensureCogmemShim,
-  hasCogmemShim,
-  readCogmemShimTarget,
-  readCogmemShimRuntime,
+  cogmemLauncherPath,
+  ensureCogmemLauncher,
+  hasCogmemLauncher,
+  readCogmemLauncherTarget,
+  readCogmemLauncherRuntime,
   resolveCogmemInvocation,
-  writeCogmemShim,
+  writeCogmemLauncher,
 } from '../src/install/InstallSteps.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -45,25 +45,25 @@ function run(bin: string, env: Record<string, string>): { status: number | null;
 }
 
 test("a host configuration pointing at the launcher survives the installation moving (#114)", () => {
-  const root = makeTempDir('cogmem-shim-');
+  const root = makeTempDir('cogmem-launcher-');
   const env = { HOME: join(root, 'home'), PATH: '/usr/bin:/bin' };
   const installed = fakeInstall(root, 'install-a');
 
-  const shim = writeCogmemShim({ env, target: installed });
-  expect(shim?.shim).toBe(cogmemShimPath(env));
-  expect(hasCogmemShim(env)).toBe(true);
-  expect(run(shim!.shim, env).stdout.trim()).toBe(`ran:${installed} recall --project p`);
+  const launcher = writeCogmemLauncher({ env, target: installed });
+  expect(launcher?.launcher).toBe(cogmemLauncherPath(env));
+  expect(hasCogmemLauncher(env)).toBe(true);
+  expect(run(launcher!.launcher, env).stdout.trim()).toBe(`ran:${installed} recall --project p`);
 
   // The installation moves. The host configuration is not touched, and the path it
   // would have named before this — the installation's own — no longer exists.
   const moved = join(root, 'install-b');
   renameSync(join(root, 'install-a'), moved);
-  expect(readCogmemShimTarget(env)).toBeUndefined();
+  expect(readCogmemLauncherTarget(env)).toBeUndefined();
   const onPath = { ...env, PATH: `${moved}:/usr/bin:/bin` };
-  expect(run(shim!.shim, onPath).stdout.trim()).toBe(`ran:${join(moved, 'cogmem')} recall --project p`);
+  expect(run(launcher!.launcher, onPath).stdout.trim()).toBe(`ran:${join(moved, 'cogmem')} recall --project p`);
 
   // With nothing to run, it says so and exits 127 rather than running something else.
-  const nowhere = run(shim!.shim, { ...onPath, PATH: '/nonexistent' });
+  const nowhere = run(launcher!.launcher, { ...onPath, PATH: '/nonexistent' });
   expect(nowhere.status).toBe(127);
   expect(nowhere.stderr).toContain('found no installation to run');
   expect(nowhere.stdout).toBe('');
@@ -74,7 +74,7 @@ test('the launcher puts the recorded runtime on PATH, so a thin-PATH host can st
   // `bun`, so the installation is not runnable on its own. A host started from a
   // desktop app has a PATH without that runtime on it (#94) — which is what the
   // BUN_DIR baked into the Hermes hook and the Pi extension was compensating for.
-  const root = makeTempDir('cogmem-shim-runtime-');
+  const root = makeTempDir('cogmem-launcher-runtime-');
   const env = { HOME: join(root, 'home'), PATH: '/usr/bin:/bin' };
   const runtime = join(root, 'runtime');
   mkdirSync(runtime, { recursive: true });
@@ -87,32 +87,32 @@ test('the launcher puts the recorded runtime on PATH, so a thin-PATH host can st
   writeFileSync(target, '#!/bin/sh\nbun "$@"\n');
   chmodSync(target, 0o755);
 
-  const shim = writeCogmemShim({ env, target, runtimeDir: runtime })!;
-  expect(readCogmemShimRuntime(env)).toBe(runtime);
+  const launcher = writeCogmemLauncher({ env, target, runtimeDir: runtime })!;
+  expect(readCogmemLauncherRuntime(env)).toBe(runtime);
   // PATH has no bun on it; the launcher's recorded runtime is what makes this run.
   const withoutRuntime = spawnSync(target, ['--help'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
   expect(withoutRuntime.status).not.toBe(0);
-  expect(run(shim.shim, env).stdout.trim()).toBe('ran-runtime recall --project p');
+  expect(run(launcher.launcher, env).stdout.trim()).toBe('ran-runtime recall --project p');
 });
 
 test('the recorded installation wins, and COGMEM_BIN wins over it (#114)', () => {
-  const root = makeTempDir('cogmem-shim-recorded-');
+  const root = makeTempDir('cogmem-launcher-recorded-');
   const env = { HOME: join(root, 'home'), PATH: '/usr/bin:/bin' };
   const recorded = fakeInstall(root, 'recorded');
   const other = fakeInstall(root, 'other');
-  const shim = writeCogmemShim({ env, target: recorded })!;
+  const launcher = writeCogmemLauncher({ env, target: recorded })!;
 
   const asked = { ...env, PATH: `${join(root, 'other')}:/usr/bin:/bin` };
-  expect(run(shim.shim, asked).stdout.trim()).toBe(`ran:${recorded} recall --project p`);
-  expect(run(shim.shim, { ...asked, COGMEM_BIN: other }).stdout.trim()).toBe(`ran:${other} recall --project p`);
+  expect(run(launcher.launcher, asked).stdout.trim()).toBe(`ran:${recorded} recall --project p`);
+  expect(run(launcher.launcher, { ...asked, COGMEM_BIN: other }).stdout.trim()).toBe(`ran:${other} recall --project p`);
 
   // A host can run this with nothing on PATH — that is the situation #94 was about —
   // so finding itself and reading its record must not need an external command.
-  expect(run(shim.shim, { ...env, PATH: '/nonexistent' }).stdout.trim()).toBe(`ran:${recorded} recall --project p`);
+  expect(run(launcher.launcher, { ...env, PATH: '/nonexistent' }).stdout.trim()).toBe(`ran:${recorded} recall --project p`);
 });
 
 test('the launcher is the invocation a host configuration gets, once it exists (#114)', () => {
-  const root = makeTempDir('cogmem-shim-invocation-');
+  const root = makeTempDir('cogmem-launcher-invocation-');
   const env = { HOME: join(root, 'home'), PATH: '/usr/bin:/bin' };
   const installed = fakeInstall(root, 'install');
   const argv1 = join(root, 'install', 'cogmem');
@@ -122,18 +122,18 @@ test('the launcher is the invocation a host configuration gets, once it exists (
   // installation that has not written one yet.
   expect(resolveCogmemInvocation(onPath, argv1)).toBe('cogmem');
 
-  writeCogmemShim({ env, target: installed });
-  expect(resolveCogmemInvocation(onPath, argv1)).toBe(cogmemShimPath(env));
+  writeCogmemLauncher({ env, target: installed });
+  expect(resolveCogmemInvocation(onPath, argv1)).toBe(cogmemLauncherPath(env));
   // An operator who names the binary still means it.
   expect(resolveCogmemInvocation({ ...onPath, COGMEM_BIN: installed }, argv1)).toBe(installed);
 });
 
 test('a source checkout has no installation to point at, so no launcher is written (#114)', () => {
-  const root = makeTempDir('cogmem-shim-checkout-');
+  const root = makeTempDir('cogmem-launcher-checkout-');
   const env = { HOME: join(root, 'home'), PATH: '/usr/bin:/bin' };
   // `src/bin/doctor.ts` is not an installed layout, which is what `resolveCliBinDir`
   // already decides; the launcher must not invent a target it cannot run.
-  expect(ensureCogmemShim(env, join(root, 'src', 'bin', 'doctor.ts'))).toBeUndefined();
-  expect(hasCogmemShim(env)).toBe(false);
+  expect(ensureCogmemLauncher(env, join(root, 'src', 'bin', 'doctor.ts'))).toBeUndefined();
+  expect(hasCogmemLauncher(env)).toBe(false);
   expect(resolveCogmemInvocation(env, join(root, 'src', 'bin', 'doctor.ts'))).toBe('cogmem');
 });
