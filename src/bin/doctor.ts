@@ -38,18 +38,6 @@ import {
 import { assertCliArgs } from './CliArgs.js';
 const DOCTOR_FLAGS = ['agent', 'auto', 'bun', 'config', 'dry-run', 'env-path', 'fix', 'force', 'hermes-config', 'json', 'openclaw-config', 'out', 'plugin-dir', 'plugin-only', 'storage', 'workspace'] as const;
 assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: [...DOCTOR_FLAGS] });
-// A help flag must not run the diagnosis. This bin has no `main()`, so `--help` used to
-// pass the checker and then read the config, open storage and report findings — including
-// a failure when the storage it found was not writable.
-if (process.argv.slice(2).some((item) => item === '--help' || item === '-h')) {
-  console.log([
-    'Usage: cogmem doctor [options]',
-    '  Reads the config, the storage and the host wiring, and reports what is wrong.',
-    `  ${DOCTOR_FLAGS.map((flag) => `--${flag}`).join(' ')}`,
-    '  The fix flag repairs what it can; without it nothing is changed.',
-  ].join('\n'));
-  process.exit(0);
-}
 
 function readArg(name: string): string | undefined {
   const index = process.argv.indexOf(name);

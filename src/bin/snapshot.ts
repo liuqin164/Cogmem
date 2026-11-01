@@ -99,7 +99,7 @@ async function main(): Promise<void> {
     printCliJson('snapshot.import', result, { outExempt: true });
     return;
   }
-  throw new Error('Usage: snapshot.ts export [--config <config.toml>|--db <db>] [--out <snap>] | import --snap <snap> [--config <config.toml>|--db <db>] [--dry-run] [--overwrite]');
+  throw new Error('Usage: cogmem snapshot export [--config <config.toml>|--db <db>] [--out <snap>] | import --snap <snap> [--config <config.toml>|--db <db>] [--dry-run] [--overwrite]');
 }
 
 main().catch((error) => {

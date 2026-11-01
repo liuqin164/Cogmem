@@ -80,21 +80,30 @@ describe('the invocation resolver', () => {
   expect(body.semanticIndex).toBe(false);
 });
 
-test('every bin answers --help with its usage, not with an error (#105 review)', async () => {
-  // `episode --help` used to take "--help" as the command name, skip the usage branch,
-  // open a kernel and print a SQLite error. The help for that bin did not work at all.
-  for (const bin of ['episode', 'memory', 'init', 'doctor', 'connect']) {
-    const proc = Bun.spawn([process.execPath, `src/bin/${bin}.ts`, '--help'], {
-      cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe',
+test('every command answers --help with its usage, not with an error', async () => {
+  // The list comes from the dispatcher itself, so a new command is covered the day it is
+  // added. Five commands answered `--help` by doing their work (`update` ran an update
+  // check; `compact`, `prospective` and `strategy` opened a database; `host-bridge`
+  // reported a bad verb), and three had no usage text to answer with at all.
+  const source = readFileSync(join(coreRoot, 'src', 'bin', 'cogmem.ts'), 'utf8');
+  const block = /const COMMANDS[^=]*=\s*\{([\s\S]*?)\n\};/.exec(source)?.[1] ?? '';
+  const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');
+  const commands = [...block.matchAll(/^\s*'?([a-z][a-z0-9-]*)'?:/gm)].map((m) => m[1]!);
+  expect(commands.length).toBeGreaterThan(20);
+
+  const offenders: string[] = [];
+  for (const command of commands) {
+    const proc = Bun.spawn([process.execPath, cogmemBin, command, '--help'], {
+      cwd: coreRoot, stdout: 'pipe', stderr: 'pipe', env: { ...process.env, PATH: '/usr/bin:/bin', HOME: makeTempDir(`cogmem-help-${command}-`) },
     });
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
-    ]);
-    expect(stderr, `${bin} --help wrote to stderr`).toBe('');
-    expect(stdout, `${bin} --help printed no usage`).toContain('Usage:');
-    expect(code, `${bin} --help`).toBe(0);
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    if (code !== 0) offenders.push(`${command}: exit ${code}`);
+    else if (!stdout.includes('Usage:')) offenders.push(`${command}: no usage on stdout (${stdout.trim().slice(0, 40)})`);
+    else if (stderr.trim()) offenders.push(`${command}: wrote to stderr (${stderr.trim().slice(0, 40)})`);
   }
-});
+  expect(offenders).toEqual([]);
+}, 120_000);
+
 
 test('absolute off PATH, bare on it, and never the bin directory', () => {
     const dir = makeTempDir('cogmem-invocation-unit-');

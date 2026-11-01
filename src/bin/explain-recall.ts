@@ -72,7 +72,7 @@ function timeArg(values: Record<string, string | boolean>, key: string): number 
 
 function usage(): string {
   return [
-    'Usage: cogmem-explain-recall --query <text> [--project <id>] [--agent <id>] [--limit <n>] [--db <memory.db>|--config <config.toml>] [--json]',
+    'Usage: cogmem explain-recall --query <text> [--project <id>] [--agent <id>] [--limit <n>] [--db <memory.db>|--config <config.toml>] [--json]',
     '',
     'Explains the memory kernel recall path: narrative, pulse trace, temporal traversal, runtime path, evidence, and filteredEvidence.',
     'filteredEvidence keeps suppressed same-project candidates with reason and optional governanceReason such as archived, suspect_llm_inference, suspect_external_tool_observation, or suspect_unverified_claim.',

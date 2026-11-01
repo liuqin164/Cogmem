@@ -117,7 +117,7 @@ export async function runOpenClawImport(argv: string[]): Promise<void> {
     workspaceRoot,
     projectId,
     sources,
-    usage: 'Usage: cogmem-import-openclaw [--workspace <dir>] [--project <id>] [--db <memory.db> --timezone <IANA>|--config <config.toml>] [--date YYYY-MM-DD] [--session <file>...] [--memory <file>...] [--reindex-raw] [--dry-run] [--json] [--progress] [--no-progress]',
+    usage: 'Usage: cogmem import-openclaw [--workspace <dir>] [--project <id>] [--db <memory.db> --timezone <IANA>|--config <config.toml>] [--date YYYY-MM-DD] [--session <file>...] [--memory <file>...] [--reindex-raw] [--dry-run] [--json] [--progress] [--no-progress]',
   });
 }
 
@@ -140,7 +140,7 @@ export async function runHermesImport(argv: string[]): Promise<void> {
     workspaceRoot,
     projectId,
     sources,
-    usage: 'Usage: cogmem-import-hermes [--workspace <dir>] [--project <id>] [--db <memory.db> --timezone <IANA>|--config <config.toml>] [--state-db <state.db>] [--profile <file>] [--sessions <dir>] [--session <file>...] [--reindex-raw] [--dry-run] [--json] [--progress] [--no-progress]',
+    usage: 'Usage: cogmem import-hermes [--workspace <dir>] [--project <id>] [--db <memory.db> --timezone <IANA>|--config <config.toml>] [--state-db <state.db>] [--profile <file>] [--sessions <dir>] [--session <file>...] [--reindex-raw] [--dry-run] [--json] [--progress] [--no-progress]',
   });
 }
 

@@ -383,8 +383,13 @@ function nextSteps(agent: AgentKind, workspace: string, project: string): Connec
 
 function usage(): string {
   return [
+    'Usage: cogmem connect <openclaw|hermes|pi|all> [--auto] [--remove] [--workspace <dir>] [--config <config.toml>] [--json]',
+    '         [--output <SKILL.md>] [--openclaw-config <openclaw.json>] [--hermes-config <config.yaml>]',
+    '         [--pi-config <mcp.json>] [--plugin-dir <dir>] [--bun <path>] [--project <id>] [--agent-id <id>]',
+    '         [--dry-run] [--force]',
+    '',
+    '  --auto    also patch the host runtime wiring, not just the skill bundle',
     '  --remove  take this host integration back out, removing only what cogmem wrote',
-    'Usage: cogmem-connect <openclaw|hermes|pi|all> [--workspace <dir>] [--output <SKILL.md>] [--auto] [--config <config.toml>] [--openclaw-config <openclaw.json>] [--hermes-config <config.yaml>] [--pi-config <mcp.json>] [--plugin-dir <dir>] [--bun <path>] [--project <id>] [--agent-id <id>] [--dry-run] [--force] [--json]',
     '',
     'Installs the agent-facing cogmem memory skill bundle into:',
     '  OpenClaw: <workspace>/skills/cogmem-memory/',

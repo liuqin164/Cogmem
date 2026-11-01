@@ -100,7 +100,7 @@ function inspectQueue(workspaceRoot: string): Record<string, unknown> {
 function main(): void {
   assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['json', 'plugin-dir', 'workspace'] });
   const [command] = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-  if (command !== 'diagnose' || hasFlag('--help') || hasFlag('-h')) {
+  if (command !== 'diagnose') {
     console.log(usage());
     process.exit(command === 'diagnose' ? 0 : 1);
   }

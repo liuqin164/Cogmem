@@ -317,8 +317,18 @@ async function runCommandCapture(cmd: string[], cwd: string): Promise<{ stdout: 
   return { stdout, stderr, exitCode };
 }
 
+function usage(): string {
+  return [
+    'Usage: cogmem update [dry-run] [--json] [--agent <host>] [--manager npm|bun] [--prefix <dir>]',
+    '         [--workspace <dir>] [--config <config.toml>] [--global|--local-dev] [--yes] [--fix]',
+    '',
+    'Reports the command that updates this installation, or runs it with `dry-run` first.',
+    '--fix repairs the host wiring after an update; --agent limits it to one host.',
+  ].join('\n');
+}
+
 async function main(): Promise<void> {
-  assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['agent', 'config', 'fix', 'json', 'plugin-only', 'prefix', 'workspace', 'dry-run', 'yes', 'install-home', 'manager', 'from', 'local-dev', 'global', 'check-tools', 'no-gate'] });
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['agent', 'config', 'fix', 'json', 'plugin-only', 'prefix', 'workspace', 'dry-run', 'yes', 'install-home', 'manager', 'from', 'local-dev', 'global', 'check-tools', 'no-gate'] });
   const args = readArgs(process.argv.slice(2));
   const resolvedSpec = args.from === 'latest'
     ? resolveLatestNpmSpec({ env: process.env })

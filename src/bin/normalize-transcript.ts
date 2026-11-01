@@ -18,7 +18,7 @@ import { assertCliArgs } from './CliArgs.js';
 assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['dry-run', 'family', 'input', 'json', 'output', 'title'] });
 
 const USAGE = [
-  'Usage: cogmem-normalize-transcript --input <file> --output <file> [--family json-array|jsonl|csv|tsv|app-private-mixed-event|jsonl-mixed-event-log] [--title <title>] [--dry-run] [--json]',
+  'Usage: cogmem normalize-transcript --input <file> --output <file> [--family json-array|jsonl|csv|tsv|app-private-mixed-event|jsonl-mixed-event-log] [--title <title>] [--dry-run] [--json]',
   '',
   'This command only normalizes transcript exports into conversation Markdown with source-ref anchors.',
   'It does not open a memory database, run recall, or modify agent runtime state.',

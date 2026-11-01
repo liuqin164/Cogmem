@@ -80,7 +80,9 @@ describe('maintenance tick suggested actions point at commands that run', () => 
     });
     expect(run.exitCode).toBe(1);
     const stderr = new TextDecoder().decode(run.stderr);
-    expect(stderr).toContain('cogmem-re-embed status');
+    // The usage names the command, not the deprecated bin: help used to teach the spelling
+    // #112 is trying to retire.
+    expect(stderr).toContain('cogmem re-embed status');
     expect(stderr).not.toContain('run');
   });
 

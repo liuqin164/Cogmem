@@ -87,7 +87,23 @@ export function parseCliArgs(argv: readonly string[], options: CliParseOptions):
  * Prints the error and exits non-zero, so a mistyped flag stops the command
  * instead of being ignored (#105).
  */
+/**
+ * Answer `--help` here rather than in each entry point.
+ *
+ * The checker already allowed the flag; nothing acted on it, so five commands answered
+ * `--help` by doing their work (`update` ran an update check, `compact`, `prospective` and
+ * `strategy` opened a database, `host-bridge` reported a bad verb). Each entry point that
+ * fixed this added its own branch, which is twenty-two chances to forget — one place every
+ * entry point already routes through is where it belongs.
+ */
+function answerHelpRequest(argv: readonly string[], usage: string): never | void {
+  if (!argv.includes('--help') && !argv.includes('-h')) return;
+  console.log(usage.trim() || 'Usage: cogmem <command> [args]');
+  process.exit(0);
+}
+
 export function assertCliArgs(argv: readonly string[], options: CliParseOptions): void {
+  answerHelpRequest(argv, options.usage);
   try {
     parseCliArgs(argv, options);
   } catch (error) {

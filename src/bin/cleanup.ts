@@ -47,10 +47,6 @@ function readRecordedTarget(record: string): string | undefined {
 
 function main(): void {
   assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['dry-run', 'json'] });
-  if (process.argv.slice(2).some((item) => item === '--help' || item === '-h')) {
-    console.log(usage());
-    return;
-  }
   const args = parseCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['dry-run', 'json'] });
   const dryRun = args['dry-run'] === true;
   const launcher = cogmemLauncherPath();

@@ -66,8 +66,18 @@ function parseStatuses(value: string): CompactableNeuronStatus[] {
   return statuses as CompactableNeuronStatus[];
 }
 
+function usage(): string {
+  return [
+    'Usage: cogmem compact [status] [--apply] [--dry-run] [--project <id>] [--dimension <n>] [--json]',
+    '         [--config <config.toml>|--db <memory.db>]',
+    '',
+    'Compacts vector storage only. Raw ledger events are never touched.',
+    'Without --apply this reports what compaction would reclaim.',
+  ].join('\n');
+}
+
 async function main(): Promise<void> {
-  assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['apply', 'config', 'db', 'dimension', 'dry-run', 'json', 'project', 'status'] });
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['apply', 'config', 'db', 'dimension', 'dry-run', 'json', 'project', 'status'] });
   const args = parseArgs(Bun.argv.slice(2));
   const resolution = args.configPath ? resolveCogmemConfigPath({ configPath: args.configPath }) : resolveCogmemConfigPath();
   const loaded = resolution.kind === 'toml' ? loadCogmemConfig({ configPath: resolution.path }) : undefined;

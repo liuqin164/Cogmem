@@ -28,7 +28,17 @@ import { recallForHost, rememberForHost, type HostIdentity } from '../host/bridg
 import { formatStrategyContext } from '../strategy/StrategyContextFormatter.js';
 import { loadAgentRegistry, resolveAgentRegistryPath } from '../mcp/AgentRegistry.js';
 import { assertCliArgs } from './CliArgs.js';
-assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['agent', 'agents', 'config', 'host', 'plugin-id', 'project', 'register-agent', 'scope', 'session', 'source', 'token'] });
+assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['agent', 'agents', 'config', 'host', 'plugin-id', 'project', 'register-agent', 'scope', 'session', 'source', 'token'] });
+
+function usage(): string {
+  return [
+    'Usage: cogmem host-bridge <recall|remember> [--query <text>] [--text <text>] [--json]',
+    '         [--project <id>] [--agent <id>] [--session <id>] [--scope <scope>] [--host <name>]',
+    '         [--config <config.toml>] [--plugin-id <id>] [--register-agent] [--source <s>] [--agents <list>] [--token <t>]',
+    '',
+    'A stdio bridge a host plugin spawns: recall or remember one turn without an MCP server.',
+  ].join('\n');
+}
 
 function readArg(name: string): string | undefined {
   const index = process.argv.indexOf(name);
