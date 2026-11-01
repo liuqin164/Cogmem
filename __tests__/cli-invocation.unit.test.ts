@@ -207,7 +207,17 @@ describe('printed steps run as printed', () => {
     // the prefix or the checkout moves (#114).
     expect(parsed.nextSteps[0]!.command).toBe(`${cogmemLauncherPath({ HOME: dir })} doctor --json`);
     expect(parsed.nextSteps[0]!.command).not.toContain(binDir);
-    expectRunnableCommand(parsed.nextSteps[0]!.command);
+    // A dry run writes nothing, so the launcher it names does not exist yet — that is the
+    // point of the flag. The step is runnable once the real run has happened, which is the
+    // claim worth checking, so make that run and check it then.
+    const real = await run(
+      ['bun', initBin, '--yes', '--json', '--no-probe'],
+      { cwd: workspace, env: { COGMEM_BIN_DIR: binDir, PATH: '/usr/bin:/bin', HOME: dir } },
+    );
+    expect(real.exitCode).toBe(0);
+    const afterReal = JSON.parse(real.stdout) as { nextSteps: InstallStep[] };
+    expect(afterReal.nextSteps[0]!.command).toBe(`${cogmemLauncherPath({ HOME: dir })} doctor --json`);
+    expectRunnableCommand(afterReal.nextSteps[0]!.command);
   });
 
   test('connect hermes writes an MCP command that resolves on this machine', async () => {

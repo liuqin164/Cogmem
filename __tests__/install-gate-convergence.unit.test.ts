@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -246,4 +246,31 @@ describe("init's warning about the switch", () => {
     expect(warning.message).not.toContain('does not change this switch');
     expect(warning.message).toContain('records the integration it wired');
   });
+});
+
+// #114 follow-up. The managed launcher was created inside the `--json` output path, so an
+// interactive `cogmem init` left no launcher and every host configuration written after it
+// named the installation directly — the prefix-change failure #114 exists to prevent. The
+// output format must not decide what lands on disk.
+test('init writes the managed launcher on both output paths', async () => {
+  const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const bin = join(coreRoot, 'src', 'bin', 'init.ts');
+  for (const json of [false, true]) {
+    const home = makeTempDir(`cogmem-init-launcher-${json ? 'json' : 'human'}-`);
+    const workspace = join(home, 'ws');
+    const install = join(home, 'install');
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(join(install, 'dist', 'bin'), { recursive: true });
+    writeFileSync(join(install, 'cogmem'), '#!/bin/sh\n');
+    chmodSync(join(install, 'cogmem'), 0o755);
+    writeFileSync(join(install, 'dist', 'bin', 'cogmem.js'), '');
+
+    const proc = Bun.spawn([process.execPath, bin, '--yes', '--agent', 'none', '--no-probe', ...(json ? ['--json'] : [])], {
+      cwd: workspace, stdout: 'pipe', stderr: 'pipe',
+      env: { ...process.env, HOME: home, COGMEM_BIN_DIR: install, PATH: '/usr/bin:/bin' },
+    });
+    const code = await proc.exited;
+    expect(code).toBe(0);
+    expect({ json, launcher: existsSync(join(home, '.cogmem', 'bin', 'cogmem')) }).toEqual({ json, launcher: true });
+  }
 });

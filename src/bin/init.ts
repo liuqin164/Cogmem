@@ -21,7 +21,7 @@ import { createInterface } from 'node:readline';
 import { dirname, resolve, join } from 'node:path';
 
 import { defaultCogmemConfigPath, defaultCogmemHome, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
-import { ensureCogmemLauncher, installGateStep, resolveCogmemInvocation } from '../install/InstallSteps.js';
+import { cogmemLauncherPath, ensureCogmemLauncher, hasCogmemLauncher, installGateStep, resolveCogmemInstallation, resolveCogmemInvocation } from '../install/InstallSteps.js';
 import {
   DEFAULT_VECTOR_DIMENSION,
   HIGH_VECTOR_DIMENSION_THRESHOLD,
@@ -1140,8 +1140,13 @@ function emitInitJson(input: {
   // absolute launcher, on PATH the bare name (#78).
   // Point the managed launcher at this installation before printing the steps, so the
   // commands a reader copies name the stable path rather than this installation (#114).
-  ensureCogmemLauncher();
-  const bin = resolveCogmemInvocation();
+  // A dry run writes nothing, so the launcher may not exist yet — but the step a reader
+  // copies has to name the path the real run creates, or it names this installation and
+  // stops working after the prefix moves (#114). Fall back to the installation when there
+  // is none to point at (a source checkout).
+  const bin = input.dryRun && !hasCogmemLauncher() && resolveCogmemInstallation()
+    ? cogmemLauncherPath()
+    : resolveCogmemInvocation();
   console.log(JSON.stringify({
     schemaVersion: 'cogmem.cli.v1',
     command: 'init',
@@ -1390,6 +1395,11 @@ async function main(): Promise<void> {
 
     ensureInstallDirs(target.homeDir);
     writeFileSync(outputPath, lines.join('\n') + '\n', 'utf8');
+    // The managed launcher is part of finishing an install, not part of printing JSON:
+    // it used to be created only by the `--json` output path, so an interactive `cogmem
+    // init` left no launcher and every host configuration written afterwards named this
+    // installation directly — the failure #114 exists to prevent.
+    ensureCogmemLauncher();
 
     if (args.json) {
       emitInitJson({
@@ -1480,6 +1490,11 @@ async function main(): Promise<void> {
   if (!args.dryRun) {
     ensureInstallDirs(target.homeDir);
     writeFileSync(outputPath, lines.join('\n') + '\n', 'utf8');
+    // The managed launcher is part of finishing an install, not part of printing JSON:
+    // it used to be created only by the `--json` output path, so an interactive `cogmem
+    // init` left no launcher and every host configuration written afterwards named this
+    // installation directly — the failure #114 exists to prevent.
+    ensureCogmemLauncher();
   }
 
   // Summary
