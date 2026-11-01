@@ -68,10 +68,33 @@ function siblingEntrypoint(command: string): string {
   return join(base, `${command}.ts`);
 }
 
+/** The version this installation reports, read from the manifest beside the entry point. */
+async function readVersion(): Promise<string> {
+  const { readFile } = await import('node:fs/promises');
+  const { fileURLToPath } = await import('node:url');
+  const { join, dirname } = await import('node:path');
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 4; depth += 1) {
+    try {
+      const raw = await readFile(join(dir, 'package.json'), 'utf8');
+      const version = (JSON.parse(raw) as { version?: string }).version;
+      if (version) return version;
+    } catch { /* keep walking up: src/bin and dist/bin sit at different depths */ }
+    dir = dirname(dir);
+  }
+  return 'unknown';
+}
+
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
   if (!command || command === '--help' || command === '-h') {
     console.log(usage());
+    return;
+  }
+  // A version flag is what a person types after installing, before anything else works.
+  // It used to answer "Unknown cogmem command: --version".
+  if (command === '--version' || command === '-v' || command === 'version') {
+    console.log(await readVersion());
     return;
   }
   const entrypoint = COMMANDS[command];
