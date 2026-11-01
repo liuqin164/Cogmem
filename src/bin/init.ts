@@ -1265,8 +1265,26 @@ function runAgentRegistration(args: InitArgs, homeDir: string): void {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+// The flags this command honours, named once: `assertCliArgs` allows them and the help
+// prints them, so the two cannot drift. `env-path` and `legacy-env` are allowed through
+// only so `readArgs` can refuse them with a reason instead of "unknown flag".
+const INIT_FLAGS = ['agent', 'auto', 'config', 'dry-run', 'home', 'json', 'no-probe', 'project', 'register-agent', 'rotate', 'scope', 'vector-dimension', 'yes'] as const;
+
+function usage(): string {
+  return [
+    'Usage: cogmem init [options]',
+    '  With no flags this runs the setup wizard; with --yes it takes every default.',
+    `  ${INIT_FLAGS.map((flag) => `--${flag}`).join(' ')}`,
+    '  The agent flag accepts auto, none, all, or a comma-separated list of hosts.',
+  ].join('\n');
+}
+
 async function main(): Promise<void> {
-  assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['agent', 'auto', 'config', 'dry-run', 'env-path', 'home', 'json', 'legacy-env', 'no-probe', 'project', 'register-agent', 'rotate', 'scope', 'vector-dimension', 'yes'] });
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: [...INIT_FLAGS, 'env-path', 'legacy-env'] });
+  // Before `readArgs`: a help request must not fail on a flag this command refuses, and
+  // it must not fall into the wizard. `init --help` used to start the wizard and begin
+  // writing a config — a help flag with a side effect.
+  if (process.argv.slice(2).some((item) => item === '--help' || item === '-h')) { console.log(usage()); return; }
   const args = readArgs(process.argv.slice(2));
   // In --json mode stdout carries one JSON document and nothing else, and the
   // progress chatter is suppressed rather than moved to stderr: the JSON already

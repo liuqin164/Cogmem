@@ -11,10 +11,16 @@ import { assertCliArgs } from './CliArgs.js';
 type Args = Record<string, string | boolean> & { command?: string };
 
 function parseArgs(argv: string[]): Args {
-  const [command, ...rest] = argv;
-  const args: Args = { command };
+  // A leading flag is a flag, not a command. Taking argv[0] unconditionally made
+  // `episode --help` a command named "--help", which skipped the usage branch, opened a
+  // kernel and answered with a SQLite error — the help for this bin did not work at all.
+  const command = argv[0] && !argv[0].startsWith('-') ? argv[0] : undefined;
+  const args: Args = {};
+  if (command) args.command = command;
+  const rest = command ? argv.slice(1) : argv;
   for (let index = 0; index < rest.length; index += 1) {
     const item = rest[index];
+    if (item === '-h') { args.h = true; continue; }
     if (!item.startsWith('--')) continue;
     const key = item.slice(2);
     const next = rest[index + 1];

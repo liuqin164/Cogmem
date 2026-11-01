@@ -60,7 +60,23 @@ function writeConfig(dir: string, body: string): string {
 }
 
 describe('the invocation resolver', () => {
-  test('absolute off PATH, bare on it, and never the bin directory', () => {
+  test('every bin answers --help with its usage, not with an error (#105 review)', async () => {
+  // `episode --help` used to take "--help" as the command name, skip the usage branch,
+  // open a kernel and print a SQLite error. The help for that bin did not work at all.
+  for (const bin of ['episode', 'memory', 'init', 'doctor', 'connect']) {
+    const proc = Bun.spawn([process.execPath, `src/bin/${bin}.ts`, '--help'], {
+      cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe',
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+    ]);
+    expect(stderr, `${bin} --help wrote to stderr`).toBe('');
+    expect(stdout, `${bin} --help printed no usage`).toContain('Usage:');
+    expect(code, `${bin} --help`).toBe(0);
+  }
+});
+
+test('absolute off PATH, bare on it, and never the bin directory', () => {
     const dir = makeTempDir('cogmem-invocation-unit-');
     const binDir = installedLauncher(dir);
     const launcher = join(binDir, 'cogmem');
