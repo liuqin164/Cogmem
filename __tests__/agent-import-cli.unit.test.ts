@@ -1950,14 +1950,17 @@ test('cogmem-connect pi leaves other MCP servers alone, and is idempotent', asyn
 test('package exposes agent migration bins', () => {
   const packageJson = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8'));
 
-  expect(packageJson.bin['cogmem-explain-recall']).toBe('dist/bin/explain-recall.js');
+  // Since #112 the `cogmem-*` names are deprecated aliases, each pointing at its own
+  // three-line forwarder so the deprecation can be announced; `cogmem-mcp` keeps pointing
+  // at the real entry because host configurations name it as a server command.
+  expect(packageJson.bin['cogmem-explain-recall']).toBe('dist/bin/alias/explain-recall.js');
   expect(packageJson.bin['cogmem-mcp']).toBe('dist/bin/mcp.js');
-  expect(packageJson.bin['cogmem-import-openclaw']).toBe('dist/bin/import-openclaw.js');
-  expect(packageJson.bin['cogmem-import-hermes']).toBe('dist/bin/import-hermes.js');
-  expect(packageJson.bin['cogmem-connect']).toBe('dist/bin/connect.js');
+  expect(packageJson.bin['cogmem-import-openclaw']).toBe('dist/bin/alias/import-openclaw.js');
+  expect(packageJson.bin['cogmem-import-hermes']).toBe('dist/bin/alias/import-hermes.js');
+  expect(packageJson.bin['cogmem-connect']).toBe('dist/bin/alias/connect.js');
   expect(packageJson.bin.cogmem).toBe('dist/bin/cogmem.js');
-  expect(packageJson.bin['cogmem-update']).toBe('dist/bin/update.js');
-  expect(packageJson.bin['cogmem-memory']).toBe('dist/bin/memory.js');
+  expect(packageJson.bin['cogmem-update']).toBe('dist/bin/alias/update.js');
+  expect(packageJson.bin['cogmem-memory']).toBe('dist/bin/alias/memory.js');
 });
 
 test('import CLI parser keeps repeated path arguments in order without duplication', () => {

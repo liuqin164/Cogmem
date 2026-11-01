@@ -26,6 +26,24 @@ export interface CliParseOptions {
 
 export class CliUsageError extends Error {}
 
+/**
+ * The one line a deprecated alias prints before it runs its subcommand (#112).
+ *
+ * `package.json` exposes every capability under two names: `cogmem <subcommand>` and a
+ * `cogmem-*` alias kept for scripts written before #111. The alias is deprecated. It has
+ * its own three-line entry under `src/bin/alias/` because the invoked name cannot be
+ * recovered at runtime — a package manager's shim is a symlink, and bun resolves it, so
+ * `argv[1]` is the entry file either way. The file name is the mechanism, and deleting
+ * that directory is the removal.
+ *
+ * Written to stderr and skipped entirely under `--json`, whose shape is published.
+ */
+export function warnDeprecatedAlias(subcommand: string, argv: readonly string[] = process.argv.slice(2)): void {
+  if (argv.includes('--json')) return;
+  process.stderr.write(`cogmem-${subcommand} is deprecated; use \`cogmem ${subcommand}\` (removal in the next breaking release)\n`);
+}
+
+
 const FLAG_IN_TEXT = /--([a-z][a-z0-9-]*)/g;
 
 export function knownFlags(usage: string, extraFlags: readonly string[] = []): Set<string> {

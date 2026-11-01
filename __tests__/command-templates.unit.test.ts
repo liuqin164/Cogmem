@@ -513,3 +513,41 @@ test('every flag a bin reads is declared in its usage text', () => {
   }
   expect(offenders).toEqual([]);
 });
+
+// #112. Every `cogmem-*` alias is a three-line entry under src/bin/alias/ whose file name
+// is the mechanism: the invoked name cannot be recovered at runtime, because a package
+// manager's shim is a symlink and bun resolves it, so argv[1] is the entry file either
+// way. These tests are what keeps the list honest — an alias with no entry warns nobody,
+// and an entry with no alias is dead weight that the removal will forget.
+test('every deprecated alias has an entry, and only the deprecated ones (#112)', () => {
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { bin: Record<string, string> };
+  const aliasEntries = readdirSync(join(root, 'src/bin/alias')).filter((f) => f.endsWith('.ts')).map((f) => f.replace(/\.ts$/, ''));
+  const aliases = Object.keys(pkg.bin).filter((name) => name.startsWith('cogmem-') && name !== 'cogmem-mcp');
+
+  expect(aliasEntries.sort()).toEqual(aliases.map((name) => name.replace(/^cogmem-/, '')).sort());
+  // Each bin entry points at its own alias file, so the name survives installation.
+  for (const name of aliases) {
+    const sub = name.replace(/^cogmem-/, '');
+    expect(pkg.bin[name]).toBe(`dist/bin/alias/${sub}.js`);
+  }
+  // `cogmem-mcp` stays: host configurations name it as a server command and are not
+  // rewritten on upgrade, so deprecating it would break a working install silently.
+  expect(pkg.bin['cogmem-mcp']).toBe('dist/bin/mcp.js');
+  expect(aliasEntries).not.toContain('mcp');
+});
+
+test('a deprecated alias warns, and --json stays clean (#112)', async () => {
+  const run = async (args: string[]) => {
+    const proc = Bun.spawn([process.execPath, 'src/bin/alias/memory.ts', ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+    const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    await proc.exited;
+    return { stdout, stderr };
+  };
+  const human = await run(['--help']);
+  expect(human.stderr).toContain('cogmem-memory is deprecated; use `cogmem memory`');
+  expect(human.stdout).toContain('Usage:');
+
+  // A published shape: no warning in the JSON stream.
+  const machine = await run(['--help', '--json']);
+  expect(machine.stderr).toBe('');
+});
