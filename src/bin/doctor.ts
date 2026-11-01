@@ -241,7 +241,7 @@ if (envPath) {
   const launcherFinding = hasCogmemLauncher() && !readCogmemLauncherTarget()
     ? {
       code: 'launcher_target_missing',
-      message: `The managed launcher ${cogmemLauncherPath()} has no installation to run. Run ${launcherInvocation} connect --auto --workspace ${workspaceRoot}, or set COGMEM_BIN, to point it at one.`,
+      message: `The managed launcher ${cogmemLauncherPath()} has no installation to run. Run ${launcherInvocation} cleanup to remove it (the state an uninstall leaves), or ${launcherInvocation} connect --auto --workspace ${workspaceRoot} to point it at an installation.`,
     }
     : !hasCogmemLauncher() && resolveCogmemInstallation(process.env)
       ? {

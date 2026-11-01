@@ -28,6 +28,7 @@ const COMMANDS: Record<string, string> = {
   episode: 'episode',
   dream: 'dream',
   'host-bridge': 'host-bridge',
+  cleanup: 'cleanup',
 };
 
 function usage(): string {
@@ -55,6 +56,7 @@ function usage(): string {
     '  episode              append, import, inspect, seal, or repair conversation episodes',
     '  dream                conditionally process sealed episode backlog',
     '  host-bridge          stdio bridge a host plugin can spawn: recall/remember without the MCP server',
+    '  cleanup              remove the managed launcher after its installation is gone',
     '',
     'JSON output: commands with --json emit cogmem.cli.v1. Object fields stay top-level; arrays use items.',
     'Queue commands expose candidate, promoted, needs_confirmation, and beliefs at the top level.',
