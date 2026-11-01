@@ -76,6 +76,20 @@ export interface MemoryFrameV1 {
   publishStatus?: 'active' | 'needs_confirmation';
 }
 
+/**
+ * The episode kinds a frame may carry. An episode type the frame layer does not know —
+ * `prospective` was the first one in practice — is `other`, which the enum already keeps
+ * for exactly this. Passing it through unmapped made the frame invalid, and one invalid
+ * frame aborted a whole backfill batch.
+ */
+export const MEMORY_FRAME_EPISODE_KINDS = ['discussion', 'operation', 'decision', 'correction', 'diagnostic', 'planning', 'status_update', 'preference', 'other'] as const;
+
+export function normalizeEpisodeKind(value: unknown): MemoryFrameV1['episodeKind'] {
+  return typeof value === 'string' && (MEMORY_FRAME_EPISODE_KINDS as readonly string[]).includes(value)
+    ? (value as MemoryFrameV1['episodeKind'])
+    : 'other';
+}
+
 export type MemoryQueryIntent = 'exact_lookup' | 'historical_summary' | 'continuity' | 'causal_explanation' | 'status_check' | 'preference_recall' | 'source_drilldown';
 
 export interface MemoryQueryFacet { label: string; dimension?: MemoryDimension; canonicalNodeId?: string; confidence?: number; }

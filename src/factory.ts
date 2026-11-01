@@ -2650,29 +2650,36 @@ export class MemoryKernel {
     return rows.map((row) => ({ id: row.node_id, nodeType: row.node_type, label: row.label, confidence: Number(row.confidence), evidenceEventIds: JSON.parse(row.evidence_event_ids_json || '[]') as string[] }));
   }
 
-  backfillMemoryFrames(options: { projectId: string; limit?: number; cursor?: string; mode?: 'shadow' | 'active' }): { projectId: string; processed: number; created: number; needsReview: number; nextCursor?: string; hasMore: boolean } {
+  backfillMemoryFrames(options: { projectId: string; limit?: number; cursor?: string; mode?: 'shadow' | 'active' }): { projectId: string; processed: number; created: number; needsReview: number; failed: number; errors?: Array<{ episodeId: string; message: string }>; nextCursor?: string; hasMore: boolean } {
     const page = this.episodeStore.listEpisodesForFrameBackfill({ projectId: options.projectId, cursor: options.cursor, limit: options.limit });
     const selected = page.episodes;
-    let created = 0; let needsReview = 0;
+    let created = 0; let needsReview = 0; const failed: Array<{ episodeId: string; message: string }> = [];
     for (const episode of selected) {
       const events = this.episodeStore.listEventLinks(episode.episodeId).map((link) => this.eventStore.getEvent(link.eventId)).filter((event): event is MemoryEvent => Boolean(event));
       if (!events.length) continue;
-      const frame = deterministicFrameFallback({ projectId: options.projectId, episodeId: episode.episodeId, episodeType: episode.episodeType as MemoryFrameV1['episodeKind'], events });
-      const saved = this.memoryFrameStore.save({
+      // One episode this layer cannot frame must not stop the page: the earlier version
+      // threw out of the loop, so a single unknown episode type left every episode after
+      // it unbackfilled with no record of which one stopped it.
+      try {
+        const frame = deterministicFrameFallback({ projectId: options.projectId, episodeId: episode.episodeId, episodeType: episode.episodeType as MemoryFrameV1['episodeKind'], events });
+        const saved = this.memoryFrameStore.save({
         frame,
         sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), episode.episodeId),
-        status: 'staged',
-        publishStatus: 'needs_confirmation',
-      });
-      // Backfill active is an explicit publication request, but deterministic
-      // fallback frames remain review-only and can never become active here.
-      if (options.mode === 'active') {
-        const published = this.memoryFrameStore.publish(saved.frameId, 'staged', frame.needsReview ? 'needs_confirmation' : 'active');
-        if (!published) throw new Error(`memory_frame_backfill_publish_conflict:${saved.frameId}`);
+          status: 'staged',
+          publishStatus: 'needs_confirmation',
+        });
+        // Backfill active is an explicit publication request, but deterministic
+        // fallback frames remain review-only and can never become active here.
+        if (options.mode === 'active') {
+          const published = this.memoryFrameStore.publish(saved.frameId, 'staged', frame.needsReview ? 'needs_confirmation' : 'active');
+          if (!published) throw new Error(`memory_frame_backfill_publish_conflict:${saved.frameId}`);
+        }
+        created += 1; needsReview += frame.needsReview ? 1 : 0;
+      } catch (error) {
+        failed.push({ episodeId: episode.episodeId, message: error instanceof Error ? error.message : String(error) });
       }
-      created += 1; needsReview += frame.needsReview ? 1 : 0;
     }
-    return { projectId: options.projectId, processed: selected.length, created, needsReview, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}), hasMore: page.hasMore };
+    return { projectId: options.projectId, processed: selected.length, created, needsReview, failed: failed.length, ...(failed.length ? { errors: failed } : {}), ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}), hasMore: page.hasMore };
   }
 
   private prepareMemoryAtlasRead(options: MemoryAtlasQueryOptions): { atlasFresh: boolean; refreshError?: string } {
