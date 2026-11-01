@@ -234,6 +234,21 @@ export interface AgentRecallItem {
   redaction?: { count: number; chars: number };
 }
 
+/**
+ * Atlas node types worth returning as recall items.
+ *
+ * One list, because there were two: the two call sites kept their own copy, both named
+ * dimensions the projection does not emit for a conversation, and the compiled lane
+ * therefore returned nothing for every query (measured: `evidenceFor` found 4 nodes and
+ * recall reported `navigation: 0` for the same text).
+ *
+ * `raw_event` is deliberately absent: the raw-ledger lane already answers with those, and
+ * a card reading "assistant 2026-11-01" is not an answer.
+ */
+const ATLAS_RECALL_NODE_TYPES: readonly string[] = [
+  'episode', 'entity', 'topic', 'issue', 'actor', 'event', 'task', 'object', 'location', 'state', 'project', 'time',
+];
+
 /** A recall result before the single exit adds what the kernel knows about the index. */
 type RecallCoreResult = Omit<AgentRecallResult, 'semanticIndex'>;
 
@@ -709,7 +724,7 @@ export class KernelAgentMemoryBackend {
       ? [
         ...(multidimensionalRecall?.atlas?.cards ?? []).map((card) => this.toAgentRecallItemFromAtlasCard(card, query)),
         ...(multidimensionalRecall?.atlas?.nodes ?? [])
-          .filter((node) => ['actor', 'event', 'task', 'object', 'location', 'state'].includes(node.nodeType))
+          .filter((node) => ATLAS_RECALL_NODE_TYPES.includes(node.nodeType))
           .map((node) => this.toAgentRecallItemFromAtlasNode(node, query)),
       ]
         .filter((item): item is AgentRecallItem => Boolean(item))
@@ -744,6 +759,7 @@ export class KernelAgentMemoryBackend {
       scopedNavigation: scopedItems.length,
       brainFallback: 0,
       rawLedger: rawFallbackItems.length,
+      atlas: atlasItems.length,
     };
     if (scopedItems.length > 0) {
       if (this.shouldPreferRawLedgerFallback(scopedItems, rawFallbackItems, queryPlan)) {
@@ -1462,10 +1478,23 @@ export class KernelAgentMemoryBackend {
       : primary;
     const merged: AgentRecallItem[] = [];
     const seen = new Set<string>();
+    const keptByKey = new Map<string, AgentRecallItem>();
     for (const item of [...prioritizedPrimary, ...secondary.filter((candidate) => candidate !== semanticAtlas)]) {
       const keys = [item.canonicalId, item.sourceAnchor?.eventId, item.id].filter((value): value is string => Boolean(value));
-      if (keys.some((key) => seen.has(key))) continue;
-      for (const key of keys) seen.add(key);
+      const duplicate = keys.map((key) => keptByKey.get(key)).find((candidate): candidate is AgentRecallItem => Boolean(candidate));
+      if (keys.some((key) => seen.has(key))) {
+        // A compiled card that cites the same event as an answer already kept is not a
+        // second answer — it says what that answer is. Dropping it silently is what made
+        // the compiled layer invisible: `evidenceFor` returned four atlas nodes and every
+        // recall answer was raw text with no trace of them (#119).
+        if (duplicate && item.source === 'memory_atlas' && duplicate.source !== 'memory_atlas') {
+          duplicate.displayTitle ??= item.displayTitle;
+          duplicate.whyMatched ??= item.whyMatched;
+          for (const tag of item.tags) if (!duplicate.tags.includes(tag)) duplicate.tags.push(tag);
+        }
+        continue;
+      }
+      for (const key of keys) { seen.add(key); keptByKey.set(key, item); }
       merged.push(item);
     }
     // Supersession is decided before the list is cut: a stale statement that
@@ -1492,7 +1521,7 @@ export class KernelAgentMemoryBackend {
     const recall = this.kernel.evidenceFor(searchText, { projectId: query.projectId, limit: Math.max((query.limit ?? 5) * 4, 24), includeRawEvidence: true, now: query.now, localDateNow: query.localDateNow, timeZone: query.timeZone });
     const cards = (recall.atlas?.cards ?? []).map((card) => this.toAgentRecallItemFromAtlasCard(card, query));
     const nodes = (recall.atlas?.nodes ?? [])
-      .filter((node) => ['actor', 'event', 'task', 'object', 'location', 'state', 'project'].includes(node.nodeType))
+      .filter((node) => ATLAS_RECALL_NODE_TYPES.includes(node.nodeType))
       .map((node) => this.toAgentRecallItemFromAtlasNode(node, query));
     return [...cards, ...nodes]
       .filter((item): item is AgentRecallItem => Boolean(item))
