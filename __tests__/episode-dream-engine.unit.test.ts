@@ -512,6 +512,28 @@ function testEpisodeStore(db: Database, projectForEvent: (eventId: string) => st
   return new EpisodeStore(db, (eventId) => ({ eventId, projectId: projectForEvent(eventId) } as never));
 }
 
+test('episode append --timestamp is a flag the CLI accepts, and the time it records (#113 review)', async () => {
+  // The implementation read `--timestamp` while the usage text never declared it, and the
+  // argument checker builds its allowlist from that text — so the flag was rejected and the
+  // recorded time was always "now". Same root cause as --external-id, found the same way:
+  // by running the installed CLI while measuring something else.
+  const dir = makeTempDir('cogmem-episode-timestamp-');
+  const dbPath = join(dir, 'memory.db');
+  const occurredAt = Date.now() - 400 * 86_400_000;
+  const proc = Bun.spawn([
+    process.execPath, 'src/bin/episode.ts', 'append', '--db', dbPath,
+    '--project', 'p', '--session', 's1', '--source-agent', 'a', '--role', 'user',
+    '--text', '一年零两个月前定的结论是保留七年。', '--timestamp', String(occurredAt), '--json',
+  ], { cwd: process.cwd(), stdout: 'pipe', stderr: 'pipe' });
+  const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+  expect(code, stderr).toBe(0);
+
+  const db = new Database(dbPath);
+  const row = db.prepare('SELECT occurred_at FROM memory_events LIMIT 1').get() as { occurred_at: number };
+  db.close();
+  expect(row.occurred_at).toBe(occurredAt);
+});
+
 test('episode append names a message, so the same one twice is a replay (#113)', async () => {
   // The implementation read `externalMessageId` from `--external-id` while the argument
   // check rejected that flag, so the idempotent write path existed and no caller could
