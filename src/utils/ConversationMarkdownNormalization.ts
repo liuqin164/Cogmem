@@ -210,39 +210,6 @@ export function normalizeDelimitedRecords(inputPath: string, format?: 'csv' | 't
   return { family, messages };
 }
 
-export function parseNormalizationMetadata(markdown: string): NormalizationMetadata {
-  const legacyFamily = readAnyMarker(markdown, 'cogmem-normalized-from', 'agent-brain-normalized-from');
-  const originalInputFamily = readAnyMarker(markdown, 'cogmem-original-input-family', 'agent-brain-original-input-family') || legacyFamily;
-  const normalizedSourceFamily = readAnyMarker(markdown, 'cogmem-normalized-source-family', 'agent-brain-normalized-source-family');
-  const contractVersion = readAnyMarker(markdown, 'cogmem-normalization-contract', 'agent-brain-normalization-contract');
-  const normalizedValue = readAnyMarker(markdown, 'cogmem-normalized', 'agent-brain-normalized');
-  const title = readAnyMarker(markdown, 'cogmem-normalized-title', 'agent-brain-normalized-title');
-  const onboardingPath = readAnyMarker(markdown, 'cogmem-onboarding-path', 'agent-brain-onboarding-path');
-  const family = originalInputFamily as NormalizationFamily | undefined;
-
-  if (
-    family !== 'jsonl_transcript_export'
-    && family !== 'json_array_transcript_export'
-    && family !== 'csv_transcript_export'
-    && family !== 'tsv_transcript_export'
-    && family !== 'app_private_mixed_event_export'
-    && family !== 'jsonl_mixed_event_log_export'
-  ) {
-    return {
-      isNormalized: normalizedValue === 'true' || Boolean(legacyFamily)
-    };
-  }
-
-  return {
-    isNormalized: normalizedValue === 'true' || Boolean(legacyFamily),
-    contractVersion: contractVersion === NORMALIZATION_CONTRACT_VERSION ? NORMALIZATION_CONTRACT_VERSION : undefined,
-    normalizedSourceFamily: normalizedSourceFamily === NORMALIZED_SOURCE_FAMILY ? NORMALIZED_SOURCE_FAMILY : undefined,
-    originalInputFamily: family,
-    title,
-    onboardingPath
-  };
-}
-
 export function normalizeAppPrivateMixedEventExport(inputPath: string): BridgeNormalizationResult {
   const parsed = JSON.parse(readFileSync(inputPath, 'utf8')) as LooseRecord;
   return normalizeEventExportToConversationMarkdown<LooseRecord, LooseRecord>(parsed, createExportBridge<LooseRecord, LooseRecord>({

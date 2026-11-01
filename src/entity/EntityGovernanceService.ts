@@ -251,10 +251,6 @@ function candidateIdFor(input: ProposeEntityMergeInput): string {
   return `emerge-${createHash('sha256').update(value).digest('hex').slice(0, 24)}`;
 }
 
-function projectIdOf(entity: EntityRecord): string | undefined {
-  return typeof entity.metadata?.projectId === 'string' ? entity.metadata.projectId : undefined;
-}
-
 function mapCandidate(row: Record<string, unknown>): EntityMergeCandidate {
   return {
     candidateId: String(row.candidate_id),

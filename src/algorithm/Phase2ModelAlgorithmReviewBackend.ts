@@ -49,10 +49,6 @@ interface StructuredModelReply {
   suggestedFacts?: Array<Partial<AlgorithmReviewSuggestedFact>>;
 }
 
-export function resolveAlgorithmReviewBackendMode(): AlgorithmReviewBackendMode {
-  return 'noop';
-}
-
 export class Phase2ModelAlgorithmReviewBackend implements AlgorithmReviewBackend {
   private readonly semanticBackend: SemanticBackendRuntime;
   private readonly fallbackBackend: AlgorithmReviewBackend;
