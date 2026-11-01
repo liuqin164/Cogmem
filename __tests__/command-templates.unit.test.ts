@@ -481,3 +481,35 @@ describe('runtime-built command lines are executable, not aspirational', () => {
     });
   });
 });
+
+// The argument checker (#105) builds its allowlist from the usage text, so a flag the
+// code reads but the usage never declares is a flag no user can pass — the CLI answers
+// "unknown flag". Three instances turned up by hand (--external-id, --timestamp, and
+// eight more in episode), each found only while measuring something else. This is the
+// check that would have found them all, and it is static: it reads the bins, not a run.
+test('every flag a bin reads is declared in its usage text', () => {
+  const bins = readdirSync(join(root, 'src/bin')).filter((f) => f.endsWith('.ts'));
+  expect(bins.length).toBeGreaterThan(20);
+
+  const offenders: string[] = [];
+  for (const file of bins) {
+    const source = readFileSync(join(root, 'src/bin', file), 'utf8');
+    const read = new Set<string>();
+    for (const m of source.matchAll(/(?:stringArg|numberArg|optionalString|booleanArg|intArg|enumArg|timeArg)\(\s*args\s*,\s*'([a-z0-9-]+)'/g)) read.add(m[1]!);
+
+    const usageBody = /function usage\(\)[^{]*\{([\s\S]*?)\n\}/.exec(source)?.[1] ?? '';
+    const declared = new Set<string>();
+    for (const lit of usageBody.matchAll(/'((?:[^'\\]|\\.)*)'/g)) {
+      for (const f of lit[1]!.matchAll(/--([a-z0-9-]+)/g)) declared.add(f[1]!);
+    }
+    for (const m of source.matchAll(/extraFlags:\s*\[([^\]]*)\]/g)) {
+      for (const f of m[1]!.matchAll(/'([a-z0-9-]+)'/g)) declared.add(f[1]!);
+    }
+
+    // A bin with no usage() of its own has no allowlist to satisfy.
+    if (!usageBody) continue;
+    const missing = [...read].filter((f) => !declared.has(f));
+    if (missing.length) offenders.push(`${file}: ${missing.join(', ')}`);
+  }
+  expect(offenders).toEqual([]);
+});
