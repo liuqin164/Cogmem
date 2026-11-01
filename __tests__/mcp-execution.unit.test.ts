@@ -147,6 +147,9 @@ describe('tool execution semantics', () => {
       agentId: 'exec-agent',
       projectId: 'exec-project',
     });
+    // Recall says whether a semantic index existed (#135); the tool result is built by
+    // hand, which is how a field goes missing.
+    expect(typeof recalled.body.semanticIndex).toBe('boolean');
 
     expect(recalled.isError).toBe(false);
     expect(recalled.raw).toContain(marker);

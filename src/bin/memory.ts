@@ -743,6 +743,9 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
     projectId,
     collection: args.collection,
     recallMode: result.recallMode,
+    // Whether a semantic index existed for this answer, carried through rather than
+    // rebuilt: the CLI used to assemble this object by hand and silently drop fields.
+    semanticIndex: result.semanticIndex,
     fallbackUsed: result.fallbackUsed,
     queryPlan: result.queryPlan,
     decisionTrace: result.decisionTrace,

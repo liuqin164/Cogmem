@@ -1117,6 +1117,7 @@ function recall(
       projectId,
       agentId,
       recallMode: result.recallMode,
+      semanticIndex: result.semanticIndex,
       fallbackUsed: result.fallbackUsed,
       queryPlan: result.queryPlan,
       decisionTrace: result.decisionTrace,

@@ -60,7 +60,27 @@ function writeConfig(dir: string, body: string): string {
 }
 
 describe('the invocation resolver', () => {
-  test('every bin answers --help with its usage, not with an error (#105 review)', async () => {
+  test('recall --json carries semanticIndex (#135)', async () => {
+  // The CLI assembled its recall output by hand, so a field added to the backend result
+  // never reached the command line — the one place a person checks it.
+  const dir = makeTempDir('cogmem-recall-field-');
+  const dbPath = join(dir, 'memory.db');
+  const binDir = join(import.meta.dir, '..', 'src', 'bin');
+  const spawn = async (args: string[]) => {
+    const proc = Bun.spawn([process.execPath, ...args], { cwd: dir, stdout: 'pipe', stderr: 'pipe', env: { ...process.env, PATH: '/usr/bin:/bin', HOME: dir } });
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { stdout, stderr, code };
+  };
+  const appended = await spawn([join(binDir, 'episode.ts'), 'append', '--db', dbPath, '--project', 'p', '--session', 's1', '--source-agent', 'a', '--role', 'user', '--text', '归档保留期定成七年。', '--json']);
+  expect(appended.code, appended.stderr).toBe(0);
+  const recall = await spawn([join(binDir, 'memory.ts'), 'recall', '--db', dbPath, '--timezone', 'UTC', '--project', 'p', '--agent', 'a', '--query', '归档保留期', '--json']);
+  expect(recall.code, recall.stderr).toBe(0);
+  const body = JSON.parse(recall.stdout) as { semanticIndex?: unknown };
+  // No model provider configured: the answer came from literal matching, and it says so.
+  expect(body.semanticIndex).toBe(false);
+});
+
+test('every bin answers --help with its usage, not with an error (#105 review)', async () => {
   // `episode --help` used to take "--help" as the command name, skip the usage branch,
   // open a kernel and print a SQLite error. The help for that bin did not work at all.
   for (const bin of ['episode', 'memory', 'init', 'doctor', 'connect']) {
