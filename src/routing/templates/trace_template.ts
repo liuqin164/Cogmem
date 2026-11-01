@@ -1,3 +1,4 @@
+import { asRecord, stringOrEmpty } from '../../utils/Values.js';
 export function formatTraceReply(data: unknown): string {
   const events = extractArray(data, ['events', 'items']);
   if (events.length === 0) {
@@ -6,7 +7,7 @@ export function formatTraceReply(data: unknown): string {
 
   const lines = events.map((item) => {
     const event = asRecord(item);
-    const eventType = stringify(event.eventType) || 'unknown';
+    const eventType = stringOrEmpty(event.eventType) || 'unknown';
     const timestamp = numberOrNull(event.timestamp);
     const timeLabel = timestamp === null ? 'unknown-time' : new Date(timestamp).toISOString();
     return `• ${timeLabel} ${eventType}`;
@@ -28,16 +29,6 @@ function extractArray(data: unknown, keys: string[]): unknown[] {
   }
 
   return [];
-}
-
-function asRecord(data: unknown): Record<string, unknown> {
-  return data && typeof data === 'object' && !Array.isArray(data)
-    ? data as Record<string, unknown>
-    : {};
-}
-
-function stringify(value: unknown): string {
-  return typeof value === 'string' ? value : '';
 }
 
 function numberOrNull(value: unknown): number | null {

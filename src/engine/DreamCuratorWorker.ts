@@ -19,6 +19,7 @@ import type { StructuredSemanticProcessor } from '../semantic/StructuredSemantic
 import { StructuredSemanticProcessor as StructuredSemanticProcessorImpl } from '../semantic/StructuredSemanticProcessor.js';
 import { MEMORY_FRAME_PROMPT_VERSION, MEMORY_FRAME_SYSTEM_PROMPT } from '../semantic/SemanticProcessorPrompt.js';
 import type { MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
+import { truncate } from '../utils/Values.js';
 
 export interface DreamCuratorRunOptions {
   projectId?: string;
@@ -1092,10 +1093,6 @@ function minDefined(values: Array<number | undefined>): number | undefined {
 function maxDefined(values: Array<number | undefined>): number | undefined {
   const defined = values.filter((value): value is number => Number.isFinite(value));
   return defined.length ? Math.max(...defined) : undefined;
-}
-
-function truncate(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {

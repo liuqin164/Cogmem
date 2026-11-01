@@ -11,6 +11,7 @@ import {
   FINAL_TABLES,
   type FinalSchemaObject,
 } from './FinalSchemaDefinition.js';
+import { tableExists } from '../../utils/Values.js';
 
 /**
  * Install the 4.0 final schema in a database that has none.
@@ -575,10 +576,6 @@ function withIfNotExists(sql: string): string {
   return sql
     .replace(/^CREATE VIRTUAL TABLE\s+/i, 'CREATE VIRTUAL TABLE IF NOT EXISTS ')
     .replace(/^CREATE TABLE\s+/i, 'CREATE TABLE IF NOT EXISTS ');
-}
-
-function tableExists(db: Database, table: string): boolean {
-  return Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(table));
 }
 
 function quoteIdentifier(identifier: string): string {

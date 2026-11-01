@@ -1,3 +1,4 @@
+import { asRecord, stringOrEmpty } from '../../utils/Values.js';
 export function formatContradictionsReply(data: unknown): string {
   const items = extractArray(data, ['contradictions', 'items']);
   if (items.length === 0) {
@@ -6,11 +7,11 @@ export function formatContradictionsReply(data: unknown): string {
 
   const lines = items.map((item) => {
     const contradiction = asRecord(item);
-    const id = stringify(contradiction.contradictionId) || 'unknown';
-    const subject = stringify(contradiction.subject) || 'unknown';
-    const predicate = stringify(contradiction.predicateFamily) || 'fact';
-    const oldValue = stringify(contradiction.existingValue) || '无内容';
-    const newValue = stringify(contradiction.newValue) || '无内容';
+    const id = stringOrEmpty(contradiction.contradictionId) || 'unknown';
+    const subject = stringOrEmpty(contradiction.subject) || 'unknown';
+    const predicate = stringOrEmpty(contradiction.predicateFamily) || 'fact';
+    const oldValue = stringOrEmpty(contradiction.existingValue) || '无内容';
+    const newValue = stringOrEmpty(contradiction.newValue) || '无内容';
     return `• [${id}] ${subject} ${predicate}: 旧值「${oldValue}」 / 新值「${newValue}」`;
   });
 
@@ -30,14 +31,4 @@ function extractArray(data: unknown, keys: string[]): unknown[] {
   }
 
   return [];
-}
-
-function asRecord(data: unknown): Record<string, unknown> {
-  return data && typeof data === 'object' && !Array.isArray(data)
-    ? data as Record<string, unknown>
-    : {};
-}
-
-function stringify(value: unknown): string {
-  return typeof value === 'string' ? value : '';
 }

@@ -1,4 +1,5 @@
 import type Database from 'bun:sqlite';
+import { tableExists } from '../utils/Values.js';
 
 /**
  * v0.5 baseline tables - used for privacy classification.
@@ -71,10 +72,6 @@ export const V0_5_BASELINE_TABLES = [
 /**
  * Checks if a table exists in the database.
  */
-export function tableExists(db: Database, name: string): boolean {
-  return Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name));
-}
-
 /**
  * Backfills memory_atlas_documents from source tables.
  * Used by MemoryAtlasIndexer for reindexing.

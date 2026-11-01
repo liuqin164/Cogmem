@@ -10,10 +10,7 @@ import {
 } from '../../algorithm/AlgorithmReviewBackend.js';
 import { ModelRegistry } from '../ModelRegistry.js';
 import type { TextGenerateFn } from '../ModelRole.js';
-
-function truncate(value: string, maxLength: number = 1500): string {
-  return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
-}
+import { truncate } from '../../utils/Values.js';
 
 function safeParse<T>(raw: string): Partial<T> {
   if (!raw.trim()) return {};
@@ -39,7 +36,7 @@ export class MemoryReviewAdapter implements AlgorithmReviewBackend {
       })),
       facts: input.facts,
       entities: input.entities
-    }));
+    }), 1500);
     const parsed = safeParse<ReviewProvisionalFactCandidatesResult>(await this.generateFn(system, user));
     return {
       adjudications: Array.isArray(parsed.adjudications) ? parsed.adjudications : [],
@@ -59,7 +56,7 @@ export class MemoryReviewAdapter implements AlgorithmReviewBackend {
       })),
       facts: input.facts,
       entities: input.entities
-    }));
+    }), 1500);
     const parsed = safeParse<ReviewSelfCorrectionCandidatesResult>(await this.generateFn(system, user));
     return {
       suggestedFacts: Array.isArray(parsed.suggestedFacts) ? parsed.suggestedFacts : []
@@ -79,7 +76,7 @@ export class MemoryReviewAdapter implements AlgorithmReviewBackend {
       })),
       facts: input.facts,
       entities: input.entities
-    }));
+    }), 1500);
     const parsed = safeParse<ReviewMultiFactExtractionCandidatesResult>(await this.generateFn(system, user));
     return {
       suggestedEntities: Array.isArray(parsed.suggestedEntities) ? parsed.suggestedEntities : [],

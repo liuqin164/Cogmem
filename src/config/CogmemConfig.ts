@@ -17,6 +17,7 @@ import {
 export type { ConfigDiagnosticLike } from './VectorDimension.js';
 import { normalizeEpisodeBoundaryConfig } from '../episode/EpisodeBoundaryPolicy.js';
 import { resolveTimeZone } from '../utils/LocalDateContext.js';
+import { asRecord } from '../utils/Values.js';
 
 export type CogmemConfigKind = 'toml' | 'missing';
 export type EnvLike = Record<string, string | undefined>;
@@ -519,10 +520,6 @@ export function findUp(start: string, relativePath: string, stopAt: Array<string
     if (parent === current) return undefined;
     current = parent;
   }
-}
-
-function asRecord(value: unknown): UnknownRecord {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : {};
 }
 
 function section(root: UnknownRecord, key: string): UnknownRecord {

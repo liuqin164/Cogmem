@@ -1,6 +1,7 @@
 import type Database from 'bun:sqlite';
 
 import { FINAL_AUXILIARY_OBJECTS } from './FinalSchemaDefinition.js';
+import { tableExists } from '../../utils/Values.js';
 
 const PROVENANCE_TRIGGER_PREFIXES = [
   'synapses_scope_',
@@ -34,12 +35,6 @@ function installFinalTriggers(db: Database, matches: (name: string) => boolean):
     db.exec(`DROP TRIGGER IF EXISTS "${trigger.name.replaceAll('"', '""')}"`);
     db.exec(trigger.sql);
   }
-}
-
-function tableExists(db: Database, name: string): boolean {
-  return Boolean(db.prepare(`
-    SELECT 1 FROM sqlite_master WHERE type='table' AND name=?
-  `).get(name));
 }
 
 function provenanceDependenciesPresent(db: Database, name: string): boolean {

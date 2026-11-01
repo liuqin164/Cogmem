@@ -10,6 +10,7 @@ import {
 } from '../store/DeepWriteCandidateStore.js';
 import type { BeliefCandidate } from '../types/index.js';
 import { projectScope } from '../topology/ProjectScope.js';
+import { asRecord } from '../utils/Values.js';
 
 export type DeepWritePromotionOutcome =
   | 'promote_provisional'
@@ -42,12 +43,6 @@ export interface DeepWritePromotionOptions {
 
 export interface DeepWriteEvaluationOptions {
   reviewConfirmed?: boolean;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
 }
 
 function stringField(record: Record<string, unknown>, keys: string[]): string | undefined {

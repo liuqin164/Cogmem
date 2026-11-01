@@ -9,6 +9,7 @@ import { cognitiveEdgeId, cognitiveNodeId } from '../engine/CognitiveGraphIdenti
 import { projectQueryValue } from '../topology/ProjectScope.js';
 import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
 import { recallableNeuronSql } from '../recall/RecallGovernance.js';
+import { tableExists } from '../utils/Values.js';
 
 export class CognitiveGraphStore {
   private db: Database;
@@ -399,10 +400,6 @@ function recallableCognitiveNodeSql(db: Database, alias: string): string {
         AND e.status IN ('provisional','verified')
     ))`);
   return conditions.join(' AND ');
-}
-
-function tableExists(db: Database, name: string): boolean {
-  return Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name));
 }
 
 function tableColumns(db: Database, name: string): Set<string> {

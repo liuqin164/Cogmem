@@ -15,6 +15,7 @@ import {
   installFinalSchema,
   multidimensionalMemoryGraph374Issue,
 } from './FinalSchemaInstall.js';
+import { tableExists } from '../../utils/Values.js';
 
 /** The release schema version this build creates and accepts. */
 export const LATEST_SCHEMA_VERSION = 32;
@@ -117,8 +118,4 @@ function readsSchemaVersion(db: Database): number {
   } catch {
     return 0;
   }
-}
-
-function tableExists(db: Database, name: string): boolean {
-  return Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name));
 }
