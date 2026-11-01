@@ -46,7 +46,7 @@ export const MEMORY_FRAME_JSON_SCHEMA = {
 
 export function memoryFrameJsonSchema(options: { allowEmptyEvidence?: boolean } = {}): Record<string, unknown> {
   if (!options.allowEmptyEvidence) return MEMORY_FRAME_JSON_SCHEMA as unknown as Record<string, unknown>;
-  const schema = JSON.parse(JSON.stringify(MEMORY_FRAME_JSON_SCHEMA)) as any;
+  const schema = structuredClone(MEMORY_FRAME_JSON_SCHEMA) as any;
   schema.properties.evidenceEventIds.minItems = 0;
   for (const key of ['nodes', 'relations', 'temporalReferences', 'stateTransitions']) {
     schema.properties[key].items.properties.evidenceEventIds.minItems = 0;

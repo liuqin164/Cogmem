@@ -23,6 +23,7 @@ import { extractEntityCues } from '../utils/EntityCueExtractor.js';
 import { inferActionKinds } from '../utils/ActionKindRegistry.js';
 import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
 import { cliArg } from '../utils/CliArgument.js';
+import { pad2 } from '../utils/Values.js';
 
 export type AgentTurnIngestMode =
   | 'immediate_compile'
@@ -2295,7 +2296,7 @@ function localYear(options: Pick<AgentRecallQuery, 'now' | 'localDateNow' | 'tim
 }
 
 function padDatePart(value: number): string {
-  return String(value).padStart(2, '0');
+  return pad2(value);
 }
 
 /**

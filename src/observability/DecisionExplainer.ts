@@ -1,7 +1,8 @@
 import type { TraceEvent } from './TraceEvent.js';
+import { pad2 } from '../utils/Values.js';
 
 function pad(value: number): string {
-  return value.toString().padStart(2, '0');
+  return pad2(value);
 }
 
 function formatTime(timestamp: number): string {

@@ -1,6 +1,7 @@
 import { extractEntityCues } from '../utils/EntityCueExtractor.js';
 import { ACTION_KIND_RULES } from '../utils/ActionKindRegistry.js';
 import { localDateFor, localDateRange, nextCivilDate, resolveTimeZone } from '../utils/LocalDateContext.js';
+import { pad2 } from '../utils/Values.js';
 
 export type FacetType = 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind';
 export type FacetOperator = 'intersection' | 'union';
@@ -257,5 +258,5 @@ function extractKeywords(query: string): string[] {
 }
 
 function pad(value: number): string {
-  return String(value).padStart(2, '0');
+  return pad2(value);
 }
