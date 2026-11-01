@@ -50,6 +50,15 @@ from `raw_ledger_fallback` — the three misses were exactly the questions whose
 not appear in the fact ("最多几次" against "上限是五次"). `cogmem doctor` reports
 `rule_only` as a warning; configuring a model provider is what turns the semantic half on.
 
+What a `rule_only` install can and cannot do, stated plainly: it finds a memory whose
+words are close to the question, and it will not find one that only shares its meaning —
+"归档数据保留多久" does not reach a memory that says "归档保留期定成七年" unless those
+words appear. The compiled layer (episodes, frames, Atlas) still contributes: it labels a
+matching answer with the topic it belongs to (`displayTitle`, an `atlas_node` tag) and the
+recall trace reports how many compiled cards were consulted. What it does not do is answer
+instead of the raw text, or match a paraphrase. Both need a model provider.
+
+
 ## Profiles
 
 The server exposes 36 tools. A host does not need all of them.
