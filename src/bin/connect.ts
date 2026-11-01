@@ -955,6 +955,10 @@ export function unpatchPiMcpJsonConfig(original: string): string {
   const root = parsed as Record<string, unknown>;
   const servers = root.mcpServers;
   if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return original;
+  // Nothing of ours in it: returning the re-serialised document would rewrite a user's
+  // file — reformatting it, reordering nothing, changing everything a diff looks at —
+  // for a removal that has nothing to remove (#116 review).
+  if (!('cogmem' in (servers as Record<string, unknown>))) return original;
   const remaining = { ...(servers as Record<string, unknown>) };
   delete remaining.cogmem;
   // An empty map that this command emptied is this command's to remove; a map with

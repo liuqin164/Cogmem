@@ -2206,14 +2206,18 @@ export function unpatchOpenClawPluginEntry(original: string, pluginId: string, c
       'the OpenClaw config is not valid JSON, so this command will not rewrite it. Fix the file, or point --openclaw-config at another path.',
     );
   }
+  // Everything past here either removes our entry or does nothing — and "doing nothing"
+  // has to mean the file is left alone. Returning a re-serialised document would rewrite
+  // a config this command does not own, which is the failure the content check exists to
+  // prevent (#116 review).
   const plugins = root.plugins;
-  if (!isRecord(plugins) || !isRecord((plugins as Record<string, unknown>).entries)) return `${JSON.stringify(root, null, 2)}\n`;
+  if (!isRecord(plugins) || !isRecord((plugins as Record<string, unknown>).entries)) return original;
   const entries = (plugins as Record<string, unknown>).entries as Record<string, unknown>;
   const entry = entries[pluginId];
-  if (!isRecord(entry)) return `${JSON.stringify(root, null, 2)}\n`;
+  if (!isRecord(entry)) return original;
   const entryConfig = isRecord(entry.config) ? entry.config : {};
   if (entryConfig.configPath !== configPath || entryConfig.projectId !== projectId) {
-    return `${JSON.stringify(root, null, 2)}\n`;
+    return original;
   }
   delete entries[pluginId];
   if (Object.keys(entries).length === 0) delete (plugins as Record<string, unknown>).entries;

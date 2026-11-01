@@ -58,9 +58,14 @@ test('the openclaw entry goes only when it points at this workspace and project 
   expect(gone.plugins.entries).toBeUndefined();
   expect(gone.plugins.allow).toEqual([]);
 
-  // Somebody else's workspace: the id matches, the integration does not.
-  const kept = JSON.parse(unpatchOpenClawPluginEntry(entry('/other/.cogmem/config.toml', 'p2'), 'cogmem-auto-memory-abc', '/w/.cogmem/config.toml', 'p1')) as Record<string, any>;
-  expect(kept.plugins.entries['cogmem-auto-memory-abc']).toBeDefined();
+  // Somebody else's workspace: the id matches, the integration does not — and the file
+  // comes back byte for byte, because a removal with nothing to remove must not rewrite
+  // a config it does not own (#116 review).
+  const foreign = entry('/other/.cogmem/config.toml', 'p2');
+  expect(unpatchOpenClawPluginEntry(foreign, 'cogmem-auto-memory-abc', '/w/.cogmem/config.toml', 'p1')).toBe(foreign);
+  const noEntries = JSON.stringify({ plugins: { allow: ['x'] }, other: 1 });
+  expect(unpatchOpenClawPluginEntry(noEntries, 'cogmem-auto-memory-abc', '/w/.cogmem/config.toml', 'p1')).toBe(noEntries);
+  expect(unpatchOpenClawPluginEntry('{}', 'cogmem-auto-memory-abc', '/w/.cogmem/config.toml', 'p1')).toBe('{}');
 
   // Another plugin in the same workspace is not ours to remove.
   const mixed = JSON.parse(unpatchOpenClawPluginEntry(
@@ -113,6 +118,28 @@ test('connect pi --remove takes back what connect wrote, and only that (#116)', 
   expect(after.mcpServers.cogmem).toBeUndefined();
   // The user's own server is untouched — the whole point of identifying ours by key.
   expect(after.mcpServers.keepme).toEqual({ command: '/opt/keepme', args: [] });
+});
+
+test('connect pi --remove leaves a config with nothing of ours byte for byte (#116 review)', async () => {
+  const dir = makeTempDir('cogmem-remove-pi-foreign-');
+  const workspace = join(dir, 'ws');
+  const piConfig = join(dir, 'pi', 'mcp.json');
+  mkdirSync(join(workspace, '.cogmem'), { recursive: true });
+  mkdirSync(dirname(piConfig), { recursive: true });
+  writeFileSync(join(workspace, '.cogmem', 'config.toml'), `[core]\ndb_path = "${join(workspace, 'memory.db')}"\n`);
+  // Deliberately not prettified: any re-serialisation shows up as a byte difference.
+  const before = '{"mcpServers":{"keepme":{"command":"/opt/keepme"}},"otherKey":true}\n';
+  writeFileSync(piConfig, before);
+
+  const removed = await connectIn(workspace, { PATH: '/usr/bin:/bin', HOME: dir }, [
+    'pi', '--remove', '--json', '--workspace', workspace, '--pi-config', piConfig,
+  ]);
+  expect(removed.code, removed.stderr).toBe(0);
+  const parsed = JSON.parse(removed.stdout) as { hosts: Array<{ removedPaths: string[]; configFiles: string[] }> };
+  expect(parsed.hosts[0]!.removedPaths).toEqual([]);
+  // Not "still valid JSON" — the same bytes, because nothing here is this command's.
+  expect(parsed.hosts[0]!.configFiles).toEqual([]);
+  expect(readFileSync(piConfig, 'utf8')).toBe(before);
 });
 
 test('connect hermes --remove takes back the block and the hook, and only those (#116)', async () => {
