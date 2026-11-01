@@ -30,6 +30,17 @@ stamped with that project, and a call that names a different one is rejected
 with `project_scope_violation` instead of reading another project's memory.
 Without `--project`, each call's `projectId` argument decides.
 
+### Without a model provider, recall is lexical
+
+`memory` and `reasoning` default to `rule_only`, and that is not only about answer quality:
+the deterministic curator then marks every event `shouldEmbed: false` and stores it
+`raw_ledger_only`, so nothing enters the vector index and recall answers from the raw
+ledger by literal match. Measured on a 1,230-message, 12-month corpus: 8 of 12
+paraphrased questions were answered at rank 1, 9 of 12 within five, and every answer came
+from `raw_ledger_fallback` — the three misses were exactly the questions whose words do
+not appear in the fact ("最多几次" against "上限是五次"). `cogmem doctor` reports
+`rule_only` as a warning; configuring a model provider is what turns the semantic half on.
+
 ## Profiles
 
 The server exposes 36 tools. A host does not need all of them.
