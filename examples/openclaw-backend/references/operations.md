@@ -11,7 +11,7 @@ Read this file when installing, upgrading, importing, repairing, or operating Co
 | Refresh only the generated OpenClaw plugin | `cogmem doctor --fix --agent openclaw --plugin-only` |
 | Diagnose OpenClaw hook/plugin failures | `cogmem doctor --plugin-only --agent openclaw` |
 | Repair empty project scope from old imports | `cogmem repair project-scope` |
-| Import OpenClaw files | `cogmem import-openclaw` |
+| Import OpenClaw files | `cogmem import openclaw` |
 | Import generic message JSONL | `cogmem episode import` |
 | Decide the next safe agent operation | `cogmem memory plan` |
 | Answer one direct memory question | `cogmem memory recall` or `cogmem_recall` |
@@ -151,8 +151,8 @@ Preview OpenClaw discovery, then import idempotently:
 # plugin writes to and reads. Read it from: cogmem connect openclaw --auto --json
 # (field: integrationProject). Pass --project only to import somewhere else — a
 # literal --project openclaw writes into a scope the plugin never asks about.
-cogmem import-openclaw --workspace . --dry-run --json
-cogmem import-openclaw --workspace . --json
+cogmem import openclaw --workspace . --dry-run --json
+cogmem import openclaw --workspace . --json
 ```
 
 After import, verify semantic maintenance in this exact order:
@@ -176,8 +176,8 @@ cogmem memory recall --query "<verification question>" --project 'openclaw-<work
 Pass explicit sources when discovery is not enough:
 
 ```bash
-cogmem import-openclaw --workspace . --memory ./MEMORY.md --session ./session.md --json
-cogmem import-openclaw --workspace . --memory ./one.md --memory ./two.md --session ./one.jsonl --session ./two.jsonl --json
+cogmem import openclaw --workspace . --memory ./MEMORY.md --session ./session.md --json
+cogmem import openclaw --workspace . --memory ./one.md --memory ./two.md --session ./one.jsonl --session ./two.jsonl --json
 ```
 
 For large generic JSONL, use checkpoints and bounded error handling:

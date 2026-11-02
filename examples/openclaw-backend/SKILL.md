@@ -99,7 +99,7 @@ base_url = "http://localhost:11434/v1"
 model = "qwen3-embedding:0.6b"
 ```
 
-Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2560`; `qwen3-embedding:8b` uses `4096`. Run `cogmem doctor` after editing. Imported records are embedded through the configured kernel embedder during `cogmem import-openclaw`.
+Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2560`; `qwen3-embedding:8b` uses `4096`. Run `cogmem doctor` after editing. Imported records are embedded through the configured kernel embedder during `cogmem import openclaw`.
 
 Also configure `[memory_model]` for the Dream Curator. Embeddings are for recall; the memory model is the LLM that proposes candidate summaries, preferences, tags, conflicts, and diagnostics:
 
@@ -159,19 +159,19 @@ Always preview first:
 # plugin writes to and reads. Read it from: cogmem connect openclaw --auto --json
 # (field: integrationProject). Pass --project only to import somewhere else — a
 # literal --project openclaw writes into a scope the plugin never asks about.
-cogmem import-openclaw --workspace . --dry-run
+cogmem import openclaw --workspace . --dry-run
 ```
 
 Then import:
 
 ```bash
-cogmem import-openclaw --workspace .
+cogmem import openclaw --workspace .
 ```
 
 Use JSON output when another agent is orchestrating the run:
 
 ```bash
-cogmem import-openclaw --workspace . --json
+cogmem import openclaw --workspace . --json
 ```
 
 The importer is idempotent. Re-running it skips records already imported into the same memory database.
@@ -207,11 +207,11 @@ Imported sources:
 Useful scoped imports:
 
 ```bash
-cogmem import-openclaw --workspace . --date 2026-05-07
-cogmem import-openclaw --workspace . --session ./custom-session.md
-cogmem import-openclaw --workspace . --memory ./custom-memory.md
-cogmem import-openclaw --workspace . --session ./one.md --session ./two.md
-cogmem import-openclaw --workspace . --memory ./one.md --memory ./two.md
+cogmem import openclaw --workspace . --date 2026-05-07
+cogmem import openclaw --workspace . --session ./custom-session.md
+cogmem import openclaw --workspace . --memory ./custom-memory.md
+cogmem import openclaw --workspace . --session ./one.md --session ./two.md
+cogmem import openclaw --workspace . --memory ./one.md --memory ./two.md
 ```
 
 ## Runtime Wiring
@@ -352,7 +352,7 @@ Only fall back to searching OpenClaw's legacy `memory/` files when `cogmem memor
 If old imported memories do not appear in `cogmem memory recall` after an upgrade, backfill raw ledger anchors before concluding the memory is missing:
 
 ```bash
-cogmem import-openclaw --workspace . --config .cogmem/config.toml --reindex-raw --json
+cogmem import openclaw --workspace . --config .cogmem/config.toml --reindex-raw --json
 ```
 
 This command is idempotent. It does not duplicate compiled memory or hot vectors; it only restores searchable raw anchors for older imports.

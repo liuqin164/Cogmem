@@ -67,7 +67,7 @@ base_url = "http://localhost:11434/v1"
 model = "qwen3-embedding:0.6b"
 ```
 
-Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2560`; `qwen3-embedding:8b` uses `4096`. Run `cogmem doctor` after editing. Imported records are embedded through the configured kernel embedder during `cogmem import-hermes`.
+Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2560`; `qwen3-embedding:8b` uses `4096`. Run `cogmem doctor` after editing. Imported records are embedded through the configured kernel embedder during `cogmem import hermes`.
 
 ## Import Existing Hermes Memory
 
@@ -88,14 +88,14 @@ Preview first:
 # integration writes to and reads. Read it from: cogmem connect hermes --auto --json
 # (field: integrationProject). Pass --project only to import somewhere else — a
 # literal --project hermes writes into a scope the MCP server is not bound to.
-cogmem import-hermes --workspace . --dry-run
+cogmem import hermes --workspace . --dry-run
 ```
 
 If `state.db` exists, default import scans it automatically. If the database is elsewhere:
 
 ```bash
-cogmem import-hermes --workspace . --state-db ./state.db --dry-run
-cogmem import-hermes --workspace . --state-db ./state.db
+cogmem import hermes --workspace . --state-db ./state.db --dry-run
+cogmem import hermes --workspace . --state-db ./state.db
 ```
 
 The SQLite importer prefers message-level `occurredAt`, `timestamp`, or `createdAt`; numeric `timestamp` values below millisecond range are epoch seconds. It can read WAL-mode `state.db` through SQLite immutable mode. `InsertTime` is only a fallback. Do not use `InsertTime` as proof of the original conversation date when better message timestamps exist.
@@ -103,21 +103,21 @@ The SQLite importer prefers message-level `occurredAt`, `timestamp`, or `created
 Then import:
 
 ```bash
-cogmem import-hermes --workspace .
+cogmem import hermes --workspace .
 ```
 
 Use `--json` when another agent needs structured output:
 
 ```bash
-cogmem import-hermes --workspace . --json
+cogmem import hermes --workspace . --json
 ```
 
 If Hermes stores memory somewhere else, pass explicit paths:
 
 ```bash
-cogmem import-hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions
-cogmem import-hermes --workspace . --session ./one.md
-cogmem import-hermes --workspace . --session ./one.md --session ./two.md
+cogmem import hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import hermes --workspace . --session ./one.md
+cogmem import hermes --workspace . --session ./one.md --session ./two.md
 ```
 
 For Hermes JSONL session exports where each line has a `messages[]` array:
@@ -125,7 +125,7 @@ For Hermes JSONL session exports where each line has a `messages[]` array:
 ```bash
 cogmem normalize-transcript --input ./hermes-sessions.jsonl --output ./hermes.normalized.md --family jsonl --dry-run --json
 cogmem normalize-transcript --input ./hermes-sessions.jsonl --output ./hermes.normalized.md --family jsonl
-cogmem import-hermes --workspace . --session ./hermes.normalized.md
+cogmem import hermes --workspace . --session ./hermes.normalized.md
 ```
 
 Cogmem skips import batch sealing for empty episode boundaries and skips legacy empty Dream jobs so one bad imported episode cannot block the queue.

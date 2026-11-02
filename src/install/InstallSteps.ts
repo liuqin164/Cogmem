@@ -283,7 +283,7 @@ export function connectSteps(
   // pi has no history importer, so it gets no import steps rather than Hermes'
   // command under a pi heading. Printing a step that imports from a host pi is not
   // is how an operator runs something that cannot work.
-  const importCommand = host === 'openclaw' ? 'import-openclaw' : host === 'hermes' ? 'import-hermes' : undefined;
+  const importCommand = host === 'openclaw' ? 'import openclaw' : host === 'hermes' ? 'import hermes' : undefined;
   // The value the command was given, not a `.` of its own: a step that resolves
   // the workspace from wherever it happens to be run is the same defect the
   // resolver above exists to remove, one level down.

@@ -70,13 +70,13 @@ Preview:
 # integration writes to and reads. Read it from: cogmem connect hermes --auto --json
 # (field: integrationProject). Pass --project only to import somewhere else — a
 # literal --project hermes writes into a scope the MCP server is not bound to.
-cogmem import-hermes --workspace . --dry-run
+cogmem import hermes --workspace . --dry-run
 ```
 
 Import:
 
 ```bash
-cogmem import-hermes --workspace .
+cogmem import hermes --workspace .
 ```
 
 After import:
@@ -97,14 +97,14 @@ cogmem memory review --project 'hermes-<workspace-hash>' --id <candidate-id> --a
 If Hermes stores memory somewhere else:
 
 ```bash
-cogmem import-hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions
 ```
 
 Single session files and batches can be imported explicitly:
 
 ```bash
-cogmem import-hermes --workspace . --session ./one.md
-cogmem import-hermes --workspace . --session ./one.md --session ./two.md
+cogmem import hermes --workspace . --session ./one.md
+cogmem import hermes --workspace . --session ./one.md --session ./two.md
 ```
 
 The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store. Imported raw records enter the same Episode Assembler used by live turns and are sealed at the explicit import batch boundary.

@@ -125,13 +125,13 @@ Preview:
 # plugin writes to and reads. Read it from: cogmem connect openclaw --auto --json
 # (field: integrationProject). Pass --project only to import somewhere else — a
 # literal --project openclaw writes into a scope the plugin never asks about.
-cogmem import-openclaw --workspace . --dry-run
+cogmem import openclaw --workspace . --dry-run
 ```
 
 Import:
 
 ```bash
-cogmem import-openclaw --workspace .
+cogmem import openclaw --workspace .
 ```
 
 After import:
@@ -152,10 +152,10 @@ cogmem memory review --project 'openclaw-<workspace-hash>' --id <candidate-id> -
 Single source files and batches can be imported explicitly:
 
 ```bash
-cogmem import-openclaw --workspace . --session ./one.md
-cogmem import-openclaw --workspace . --session ./one.md --session ./two.md
-cogmem import-openclaw --workspace . --memory ./one.md
-cogmem import-openclaw --workspace . --memory ./one.md --memory ./two.md
+cogmem import openclaw --workspace . --session ./one.md
+cogmem import openclaw --workspace . --session ./one.md --session ./two.md
+cogmem import openclaw --workspace . --memory ./one.md
+cogmem import openclaw --workspace . --memory ./one.md --memory ./two.md
 ```
 
 The import command is idempotent. Re-running it against the same database skips records already processed by the cursor store.
@@ -224,7 +224,7 @@ Default recall includes untagged and `collection:anchor` memory only.
 If an existing OpenClaw workspace imported old memory before raw ledger anchors were available, run:
 
 ```bash
-cogmem import-openclaw --workspace . --config .cogmem/config.toml --reindex-raw --json
+cogmem import openclaw --workspace . --config .cogmem/config.toml --reindex-raw --json
 ```
 
 This backfills searchable raw anchors for old imported memories without duplicating compiled memory or vectors.

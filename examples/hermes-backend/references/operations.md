@@ -8,7 +8,7 @@ Read this file when installing, upgrading, importing, repairing, or operating Co
 |---|---|
 | Verify installation or config | `cogmem doctor` |
 | Update package and refresh host wiring | `cogmem update --yes` |
-| Import Hermes state/profile/sessions | `cogmem import-hermes` |
+| Import Hermes state/profile/sessions | `cogmem import hermes` |
 | Import generic message JSONL | `cogmem episode import` |
 | Decide the next safe agent operation | `cogmem memory plan` |
 | Answer one direct memory question | `cogmem_recall` or `cogmem memory recall` |
@@ -105,17 +105,17 @@ Preview, then import idempotently:
 # integration writes to and reads. Read it from: cogmem connect hermes --auto --json
 # (field: integrationProject). Pass --project only to import somewhere else — a
 # literal --project hermes writes into a scope the MCP server is not bound to.
-cogmem import-hermes --workspace . --dry-run --json
-cogmem import-hermes --workspace . --json
+cogmem import hermes --workspace . --dry-run --json
+cogmem import hermes --workspace . --json
 ```
 
 Explicit source examples:
 
 ```bash
-cogmem import-hermes --workspace . --state-db ./state.db --dry-run --json
-cogmem import-hermes --workspace . --state-db ./state.db --json
-cogmem import-hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions --json
-cogmem import-hermes --workspace . --session ./one.md --session ./two.md --json
+cogmem import hermes --workspace . --state-db ./state.db --dry-run --json
+cogmem import hermes --workspace . --state-db ./state.db --json
+cogmem import hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions --json
+cogmem import hermes --workspace . --session ./one.md --session ./two.md --json
 ```
 
 Normalize JSONL exports with `messages[]` before import:
@@ -123,7 +123,7 @@ Normalize JSONL exports with `messages[]` before import:
 ```bash
 cogmem normalize-transcript --input ./hermes.jsonl --output ./hermes.normalized.md --family jsonl --dry-run --json
 cogmem normalize-transcript --input ./hermes.jsonl --output ./hermes.normalized.md --family jsonl
-cogmem import-hermes --workspace . --session ./hermes.normalized.md --json
+cogmem import hermes --workspace . --session ./hermes.normalized.md --json
 ```
 
 For large generic histories, use the streaming importer:

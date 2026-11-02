@@ -299,7 +299,7 @@ describe('the install journey', () => {
       // documented one-liner cannot land somewhere the agent never looks.
       const byDefault = parseJson(
         'import with no --project',
-        await cli.run(['import-openclaw', '--workspace', workspace, '--json'], { cwd: workspace }),
+        await cli.run(['import', 'openclaw', '--workspace', workspace, '--json'], { cwd: workspace }),
       );
       expect(byDefault.projectId).toBe(pluginProject);
       expect(byDefault.recordsIngested).toBe(0);

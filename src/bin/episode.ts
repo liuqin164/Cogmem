@@ -55,7 +55,7 @@ function usage(): string {
     '  move-event --project <id> --event <id> --target-episode <id>',
     '  reclassify --project <id> --episode <id> [--episode-type discussion|decision|correction|preference|goal|debugging|planning|prospective|general] [--topic-path <path>] [--importance <0..1>]',
     '  requeue-dream --project <id> --episode <id> [--mode micro|normal|deep]',
-    'Existing source-specific imports remain: cogmem import-openclaw and cogmem import-hermes.',
+    'Existing source-specific imports remain: cogmem import openclaw and cogmem import hermes.',
     '--json emits cogmem.cli.v1; array results are returned under items.',
   ].join('\n');
 }

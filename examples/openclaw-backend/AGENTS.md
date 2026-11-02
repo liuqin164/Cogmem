@@ -66,7 +66,7 @@ base_url = "http://localhost:11434/v1"
 model = "qwen3-embedding:0.6b"
 ```
 
-Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2560`; `qwen3-embedding:8b` uses `4096`. Run `cogmem doctor` after editing. Imported records are embedded through the configured kernel embedder during `cogmem import-openclaw`.
+Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2560`; `qwen3-embedding:8b` uses `4096`. Run `cogmem doctor` after editing. Imported records are embedded through the configured kernel embedder during `cogmem import openclaw`.
 
 ## Import Existing OpenClaw Memory
 
@@ -87,19 +87,19 @@ Preview first:
 # plugin writes to and reads. Read it from: cogmem connect openclaw --auto --json
 # (field: integrationProject). Pass --project only to import somewhere else — a
 # literal --project openclaw writes into a scope the plugin never asks about.
-cogmem import-openclaw --workspace . --dry-run
+cogmem import openclaw --workspace . --dry-run
 ```
 
 Then import:
 
 ```bash
-cogmem import-openclaw --workspace .
+cogmem import openclaw --workspace .
 ```
 
 Use `--json` when another agent needs structured output:
 
 ```bash
-cogmem import-openclaw --workspace . --json
+cogmem import openclaw --workspace . --json
 ```
 
 Real non-JSON imports print source-level and embedding+ingest progress to stderr. Use `--json --progress` to keep JSON on stdout while streaming progress to stderr, or `--no-progress` when a wrapper needs quiet stderr.
@@ -135,11 +135,11 @@ Import scope:
 Useful options:
 
 ```bash
-cogmem import-openclaw --workspace . --date 2026-05-07
-cogmem import-openclaw --workspace . --session ./custom-session.md
-cogmem import-openclaw --workspace . --memory ./custom-memory.md
-cogmem import-openclaw --workspace . --session ./one.md --session ./two.md
-cogmem import-openclaw --workspace . --memory ./one.md --memory ./two.md
+cogmem import openclaw --workspace . --date 2026-05-07
+cogmem import openclaw --workspace . --session ./custom-session.md
+cogmem import openclaw --workspace . --memory ./custom-memory.md
+cogmem import openclaw --workspace . --session ./one.md --session ./two.md
+cogmem import openclaw --workspace . --memory ./one.md --memory ./two.md
 ```
 
 ## Runtime Wiring

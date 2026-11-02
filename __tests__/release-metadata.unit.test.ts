@@ -171,8 +171,6 @@ describe('core release metadata', () => {
       'cogmem-episode',
       'cogmem-explain-recall',
       'cogmem-host-bridge',
-      'cogmem-import-hermes',
-      'cogmem-import-openclaw',
       'cogmem-init',
       'cogmem-mcp',
       'cogmem-memory',
@@ -545,4 +543,21 @@ test('the skill bundles state the profile each tool actually needs', () => {
     }
   }
   expect(rows).toBeGreaterThanOrEqual(14);
+});
+
+test('the release checklist counts the deprecated aliases that exist', () => {
+  // The sentence said nineteen while there were sixteen: two merges removed an alias each
+  // (`openclaw diagnose`, `re-embed`) and a third removed two more (`import-openclaw`,
+  // `import-hermes`), and only the first of those updated the number.
+  const manifest = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8')) as { bin: Record<string, string> };
+  const aliases = Object.entries(manifest.bin).filter(([, target]) => target.includes('alias/'));
+  const sentence = readFileSync(join(coreRoot, 'RELEASE_CHECKLIST.md'), 'utf8')
+    .split('\n').find((line) => line.includes('`cogmem-*` aliases are **deprecated in 4.0**')) ?? '';
+  expect(sentence).not.toBe('');
+  expect(sentence).toContain(`The other ${aliases.length} `);
+  // and each of them is a forwarder that announces itself, not a second implementation
+  for (const [name] of aliases) {
+    const entry = join(coreRoot, 'src', 'bin', 'alias', `${name.replace(/^cogmem-/, '')}.ts`);
+    expect({ name, announces: readFileSync(entry, 'utf8').includes('warnDeprecatedAlias') }).toEqual({ name, announces: true });
+  }
 });

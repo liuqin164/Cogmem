@@ -32,8 +32,6 @@
     "cogmem-repair": "dist/bin/alias/repair.js",
     "cogmem-explain-recall": "dist/bin/alias/explain-recall.js",
     "cogmem-mcp": "dist/bin/mcp.js",
-    "cogmem-import-openclaw": "dist/bin/alias/import-openclaw.js",
-    "cogmem-import-hermes": "dist/bin/alias/import-hermes.js",
     "cogmem-normalize-transcript": "dist/bin/alias/normalize-transcript.js",
     "cogmem-snapshot": "dist/bin/alias/snapshot.js",
     "cogmem-prospective": "dist/bin/alias/prospective.js",

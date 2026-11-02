@@ -197,7 +197,7 @@ tools come back as an opt-in feature rather than a default region.
 
 ## Importing host history
 
-Three admin-profile tools wrap the `cogmem import-hermes` / `import-openclaw`
+Three admin-profile tools wrap the `cogmem import hermes` / `import openclaw`
 pipeline so a host can pull its own prior transcripts into the ledger without
 shelling out.
 
@@ -582,7 +582,7 @@ concluding anything about the wiring. A Hermes failure has the opposite reading 
 (Connection closed)` means the server never started.
 
 pi has **no history importer**, so `connect pi` prints no import steps — running
-`import-hermes` under a pi heading would be a step that cannot work.
+`import hermes` under a pi heading would be a step that cannot work.
 
 ## stdio fallback
 

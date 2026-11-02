@@ -99,7 +99,7 @@ base_url = "http://localhost:11434/v1"
 model = "qwen3-embedding:0.6b"
 ```
 
-Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2560`; `qwen3-embedding:8b` uses `4096`. Run `cogmem doctor` after editing. Imported records are embedded through the configured kernel embedder during `cogmem import-hermes`.
+Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2560`; `qwen3-embedding:8b` uses `4096`. Run `cogmem doctor` after editing. Imported records are embedded through the configured kernel embedder during `cogmem import hermes`.
 
 Also configure `[memory_model]` for the Dream Curator. Embeddings are for recall; the memory model is the LLM that proposes candidate summaries, preferences, tags, conflicts, and diagnostics:
 
@@ -138,14 +138,14 @@ Always preview first:
 # integration writes to and reads. Read it from: cogmem connect hermes --auto --json
 # (field: integrationProject). Pass --project only to import somewhere else — a
 # literal --project hermes writes into a scope the MCP server is not bound to.
-cogmem import-hermes --workspace . --dry-run
+cogmem import hermes --workspace . --dry-run
 ```
 
 If `state.db` exists, the default import scans it automatically. Use an explicit path when the database is outside the workspace:
 
 ```bash
-cogmem import-hermes --workspace . --state-db ./state.db --dry-run
-cogmem import-hermes --workspace . --state-db ./state.db
+cogmem import hermes --workspace . --state-db ./state.db --dry-run
+cogmem import hermes --workspace . --state-db ./state.db
 ```
 
 The SQLite importer reads the `messages` table, preserves row/message order, supports WAL-mode read-only databases through SQLite immutable mode, and prefers message-level `occurredAt`, `timestamp`, or `createdAt`. Numeric `timestamp` values below millisecond range are epoch seconds. `InsertTime` is only a fallback and must not be treated as the original conversation time.
@@ -153,21 +153,21 @@ The SQLite importer reads the `messages` table, preserves row/message order, sup
 Then import:
 
 ```bash
-cogmem import-hermes --workspace .
+cogmem import hermes --workspace .
 ```
 
 Use JSON output when another agent is orchestrating the run:
 
 ```bash
-cogmem import-hermes --workspace . --json
+cogmem import hermes --workspace . --json
 ```
 
 If Hermes stores memory somewhere else, pass explicit paths:
 
 ```bash
-cogmem import-hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions
-cogmem import-hermes --workspace . --session ./one.md
-cogmem import-hermes --workspace . --session ./one.md --session ./two.md
+cogmem import hermes --workspace . --profile ./memory/profile.md --sessions ./memory/sessions
+cogmem import hermes --workspace . --session ./one.md
+cogmem import hermes --workspace . --session ./one.md --session ./two.md
 ```
 
 For Hermes JSONL session exports where each line is a session object with `messages[]`, normalize first:
@@ -175,7 +175,7 @@ For Hermes JSONL session exports where each line is a session object with `messa
 ```bash
 cogmem normalize-transcript --input ./hermes-sessions.jsonl --output ./hermes.normalized.md --family jsonl --dry-run --json
 cogmem normalize-transcript --input ./hermes-sessions.jsonl --output ./hermes.normalized.md --family jsonl
-cogmem import-hermes --workspace . --session ./hermes.normalized.md
+cogmem import hermes --workspace . --session ./hermes.normalized.md
 ```
 
 The importer is idempotent. Re-running it skips records already imported into the same memory database.

@@ -13,8 +13,9 @@ import { commandArguments, expectRunnableCommands } from './helpers/cli-invocati
 import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const openClawImportBin = join(coreRoot, 'src/bin/import-openclaw.ts');
-const hermesImportBin = join(coreRoot, 'src/bin/import-hermes.ts');
+// The merged entry point: the host is its first argument.
+const openClawImportBin = join(coreRoot, 'src/bin/import.ts');
+const hermesImportBin = join(coreRoot, 'src/bin/import.ts');
 const connectBin = join(coreRoot, 'src/bin/connect.ts');
 const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
 const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');
@@ -58,6 +59,7 @@ test('OpenClaw import dry-run scans workspace sources without creating a memory 
   const result = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -93,6 +95,7 @@ test('OpenClaw import writes memory once and skips already imported records on r
   const first = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -113,6 +116,7 @@ test('OpenClaw import writes memory once and skips already imported records on r
   const second = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -156,6 +160,7 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
   const imported = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -175,6 +180,7 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
   const skipped = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -190,6 +196,7 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
   const reindexed = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -208,6 +215,7 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
   const again = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -254,6 +262,7 @@ test('OpenClaw migrated records are visible through KernelAgentMemoryBackend rec
   const imported = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -297,6 +306,7 @@ test('OpenClaw legacy daily summary imports are searchable as bounded provenance
   const imported = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -366,6 +376,7 @@ test('Hermes import migrates profile and session markdown into core memory', asy
   const result = await runCli([
     'bun',
     hermesImportBin,
+    'hermes',
     '--workspace',
     dir,
     '--db',
@@ -437,6 +448,7 @@ test('Hermes import scans state.db messages and preserves original message times
   const result = await runCli([
     'bun',
     hermesImportBin,
+    'hermes',
     '--workspace',
     dir,
     '--db',
@@ -502,6 +514,7 @@ test('Hermes import reads WAL-mode state.db and numeric timestamp seconds', asyn
   const result = await runCli([
     'bun',
     hermesImportBin,
+    'hermes',
     '--workspace',
     dir,
     '--db',
@@ -545,6 +558,7 @@ test('Hermes import accepts an explicit --state-db path outside the workspace', 
   const result = await runCli([
     'bun',
     hermesImportBin,
+    'hermes',
     '--workspace',
     workspace,
     '--state-db',
@@ -573,6 +587,7 @@ test('Hermes import accepts repeated explicit session files for single or batch 
   const result = await runCli([
     'bun',
     hermesImportBin,
+    'hermes',
     '--workspace',
     dir,
     '--db',
@@ -671,6 +686,7 @@ test('OpenClaw import auto-discovers structured cogmem config instead of env fil
   const result = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--project',
@@ -703,6 +719,7 @@ test('OpenClaw import resolves explicit --config relative to the shell cwd', asy
   const result = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     workspace,
     '--config',
@@ -731,6 +748,7 @@ test('agent import CLIs reject legacy env-path configuration', async () => {
   const result = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--env-path',
@@ -752,7 +770,7 @@ test('agent-facing runbooks tell OpenClaw and Hermes agents how to self-install 
   expect(openclaw).toContain('npm install cogmem@latest --save');
   expect(openclaw).toContain('COGMEM="./node_modules/.bin/cogmem"');
   expect(openclaw).toContain('Do not run `cogmem init` as an unattended agent action');
-  expect(openclaw).toContain('cogmem import-openclaw');
+  expect(openclaw).toContain('cogmem import openclaw');
   expect(openclaw).toContain("cogmem memory candidates --project 'openclaw-<workspace-hash>' --status needs_confirmation --json");
   expect(openclaw).toContain("cogmem memory review --project 'openclaw-<workspace-hash>'");
   expect(openclaw).toContain('KernelAgentMemoryBackend');
@@ -761,7 +779,7 @@ test('agent-facing runbooks tell OpenClaw and Hermes agents how to self-install 
   expect(hermes).toContain('npm install cogmem@latest --save');
   expect(hermes).toContain('COGMEM="./node_modules/.bin/cogmem"');
   expect(hermes).toContain('Do not run `cogmem init` as an unattended agent action');
-  expect(hermes).toContain('cogmem import-hermes');
+  expect(hermes).toContain('cogmem import hermes');
   expect(hermes).toContain("cogmem memory candidates --project 'hermes-<workspace-hash>' --status needs_confirmation --json");
   expect(hermes).toContain("cogmem memory review --project 'hermes-<workspace-hash>'");
   expect(hermes).toContain('KernelAgentMemoryBackend');
@@ -775,10 +793,10 @@ test('README documents complete import usage including single files, batches, an
   expect(readme).toContain('ollama pull qwen3-embedding:0.6b');
   expect(readme).toContain('provider = "openai_compatible"');
   expect(readme).toContain('model = "qwen3-embedding:0.6b"');
-  expect(readme).toContain('cogmem import-openclaw');
+  expect(readme).toContain('cogmem import openclaw');
   expect(readme).toContain('--session ./one.md --session ./two.md');
   expect(readme).toContain('--memory ./one.md --memory ./two.md');
-  expect(readme).toContain('cogmem import-hermes');
+  expect(readme).toContain('cogmem import hermes');
   expect(readme).toContain('--state-db ./state.db');
   expect(readme).toContain('--family jsonl');
   expect(readme).toContain('--profile ./memory/profile.md --sessions ./memory/sessions');
@@ -816,7 +834,7 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
     expect(body).toContain('Imported records are embedded through the configured kernel embedder');
   }
 
-  expect(openclaw).toContain('cogmem import-openclaw');
+  expect(openclaw).toContain('cogmem import openclaw');
   expect(openclaw).toContain('memory_search');
   expect(openclaw).toContain('memory.backend');
   expect(openclaw).toContain('Do not write `plugins.slots.memory`');
@@ -833,7 +851,7 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
   expect(openclaw).toContain('filteredEvidence');
   expect(openclaw).toContain('--session ./one.md --session ./two.md');
   expect(openclaw).toContain('--memory ./one.md --memory ./two.md');
-  expect(hermes).toContain('cogmem import-hermes');
+  expect(hermes).toContain('cogmem import hermes');
   expect(hermes).toContain('~/.hermes/config.yaml');
   expect(hermes).toContain('memory.provider');
   expect(hermes).toContain('--state-db ./state.db');
@@ -899,8 +917,8 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   // project the agent never asks about (#79).
   expect(project).toMatch(/^openclaw-[0-9a-f]{8}$/);
   expect(commandArguments(stepOf('doctor'))).toBe(`doctor --workspace ${dir}`);
-  expect(commandArguments(stepOf('import_dry_run'))).toBe(`import-openclaw --workspace ${dir} --project ${project} --dry-run --json`);
-  expect(commandArguments(stepOf('import_apply'))).toBe(`import-openclaw --workspace ${dir} --project ${project} --json`);
+  expect(commandArguments(stepOf('import_dry_run'))).toBe(`import openclaw --workspace ${dir} --project ${project} --dry-run --json`);
+  expect(commandArguments(stepOf('import_apply'))).toBe(`import openclaw --workspace ${dir} --project ${project} --json`);
   expect(commandArguments(stepOf('openclaw_diagnose'))).toBe(`doctor --plugin-only --agent openclaw --workspace ${dir} --json`);
   expect(commandArguments(stepOf('memory_plan'))).toBe(`memory plan --project ${project} --json`);
   expect(commandArguments(stepOf('memory_status'))).toBe(`memory status --project ${project} --json`);
@@ -919,7 +937,7 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   expect(body).toContain('OpenClaw');
   expect(body).toContain('references/operations.md');
   for (const command of [
-    'cogmem import-openclaw',
+    'cogmem import openclaw',
     'cogmem memory review',
     'cogmem memory graph-explore',
     'cogmem doctor --plugin-only --agent openclaw',
@@ -1590,8 +1608,8 @@ test('cogmem-connect installs Hermes skill into the real Hermes skills directory
   const project = parsed.integrationProject as string;
   expect(project).toMatch(/^hermes-[0-9a-f]{8}$/);
   expect(commandArguments(hermesStep('doctor'))).toBe(`doctor --workspace ${workspace}`);
-  expect(commandArguments(hermesStep('import_dry_run'))).toBe(`import-hermes --workspace ${workspace} --project ${project} --dry-run --json`);
-  expect(commandArguments(hermesStep('import_apply'))).toBe(`import-hermes --workspace ${workspace} --project ${project} --json`);
+  expect(commandArguments(hermesStep('import_dry_run'))).toBe(`import hermes --workspace ${workspace} --project ${project} --dry-run --json`);
+  expect(commandArguments(hermesStep('import_apply'))).toBe(`import hermes --workspace ${workspace} --project ${project} --json`);
   expect(commandArguments(hermesStep('memory_plan'))).toBe(`memory plan --project ${project} --json`);
   expect(parsed.nextSteps).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: 'interactive_init', safeForAutomation: false, actor: 'operator' }),
@@ -1608,7 +1626,7 @@ test('cogmem-connect installs Hermes skill into the real Hermes skills directory
   expect(existsSync(operationsPath)).toBe(true);
   expect(readFileSync(skillPath, 'utf8')).toStartWith('---\nname: cogmem-memory-backend');
   const operations = readFileSync(operationsPath, 'utf8');
-  expect(operations).toContain('cogmem import-hermes');
+  expect(operations).toContain('cogmem import hermes');
   expect(operations).toContain('cogmem memory review');
   expect(operations).toContain('cogmem memory graph-timeline');
 });
@@ -1953,8 +1971,12 @@ test('package exposes agent migration bins', () => {
   // at the real entry because host configurations name it as a server command.
   expect(packageJson.bin['cogmem-explain-recall']).toBe('dist/bin/alias/explain-recall.js');
   expect(packageJson.bin['cogmem-mcp']).toBe('dist/bin/mcp.js');
-  expect(packageJson.bin['cogmem-import-openclaw']).toBe('dist/bin/alias/import-openclaw.js');
-  expect(packageJson.bin['cogmem-import-hermes']).toBe('dist/bin/alias/import-hermes.js');
+  // The two import bins are gone rather than deprecated: the owner chose to merge them into
+  // `cogmem import <host>` and ship no compatibility entry point for either name.
+  expect(packageJson.bin['cogmem-import-openclaw']).toBeUndefined();
+  expect(packageJson.bin['cogmem-import-hermes']).toBeUndefined();
+  expect(existsSync(join(coreRoot, 'src', 'bin', 'alias', 'import-openclaw.ts'))).toBe(false);
+  expect(existsSync(join(coreRoot, 'src', 'bin', 'import.ts'))).toBe(true);
   expect(packageJson.bin['cogmem-connect']).toBe('dist/bin/alias/connect.js');
   expect(packageJson.bin.cogmem).toBe('dist/bin/cogmem.js');
   expect(packageJson.bin['cogmem-update']).toBe('dist/bin/alias/update.js');
