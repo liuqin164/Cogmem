@@ -68,7 +68,10 @@ function defaultSnapshotPath(loaded: LoadedCogmemConfig): string {
 }
 
 async function main(): Promise<void> {
-  assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: ['config', 'db', 'dimension', 'dry-run', 'json', 'out', 'overwrite', 'project', 'snap'] });
+  // The command's own usage, so `--help` answers with it rather than with the dispatcher's
+// generic line. The throw below keeps the same text for a bad verb.
+const USAGE = 'Usage: cogmem snapshot export [--config <config.toml>|--db <db>] [--out <snap>] | import --snap <snap> [--config <config.toml>|--db <db>] [--dry-run] [--overwrite] [--json]';
+assertCliArgs(process.argv.slice(2), { usage: USAGE, extraFlags: ['config', 'db', 'dimension', 'dry-run', 'json', 'out', 'overwrite', 'project', 'snap'] });
   const [command, ...rest] = process.argv.slice(2);
   const args = parseArgs(rest);
   const loaded = loadConfig(args);
@@ -99,7 +102,7 @@ async function main(): Promise<void> {
     printCliJson('snapshot.import', result, { outExempt: true });
     return;
   }
-  throw new Error('Usage: cogmem snapshot export [--config <config.toml>|--db <db>] [--out <snap>] | import --snap <snap> [--config <config.toml>|--db <db>] [--dry-run] [--overwrite]');
+  throw new Error(USAGE);
 }
 
 main().catch((error) => {

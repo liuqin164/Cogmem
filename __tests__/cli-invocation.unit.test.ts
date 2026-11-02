@@ -80,6 +80,24 @@ describe('the invocation resolver', () => {
   expect(body.semanticIndex).toBe(false);
 });
 
+test('no entry point leaves its usage text empty', () => {
+  // `--help` is answered centrally, so an empty usage still exits 0 — which is how five
+  // commands shipped with `usage: ''` and printed the dispatcher's generic line instead of
+  // their own (#141). Asking each one dynamically cannot catch that; this reads the source.
+  const offenders = readdirSync(join(coreRoot, 'src', 'bin'))
+    .filter((entry) => entry.endsWith('.ts'))
+    .map((entry) => ({ entry, source: readFileSync(join(coreRoot, 'src', 'bin', entry), 'utf8') }))
+    // Only entry points: the shared checker both defines the function and mentions
+    // `usage: ''` in its doc comment about the drift that pattern caused.
+    .filter(({ source }) => source.includes('assertCliArgs(') && !source.includes('export function assertCliArgs'))
+    .filter(({ source }) => /usage:\s*''/.test(source))
+    .map(({ entry }) => entry)
+    // The alias directory is generated from the same three-line pattern and is deleted with
+    // #112; its entries never had a usage of their own.
+    .filter((entry) => !entry.startsWith('alias'));
+  expect(offenders).toEqual([]);
+});
+
 test('every command answers --help with its usage, not with an error', async () => {
   // The list comes from the dispatcher itself, so a new command is covered the day it is
   // added. Five commands answered `--help` by doing their work (`update` ran an update
