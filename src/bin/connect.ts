@@ -2,6 +2,7 @@
 import { verifyMcpEntry, type McpEntryVerification } from '../host/verifyMcpEntry.js';
 import { writeOwnedFiles } from '../host/InstalledArtifacts.js';
 import { blockEnd, hasContent, joinUnlessEmpty, leadingSpaces } from '../host/YamlLines.js';
+import { CORE_TOOLS } from '../mcp/profiles.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -49,38 +50,16 @@ type AgentKind = 'openclaw' | 'hermes' | 'pi';
 /** One list, so `connect`, `init` and the gate cannot disagree about the hosts. */
 const HOST_NAMES: AgentKind[] = ['openclaw', 'hermes', 'pi'];
 
-const HERMES_COGMEM_TOOLS = [
-  'cogmem_remember_turn',
-  'cogmem_recall',
-  'cogmem_explain_recall',
-  'cogmem_strategy_plan',
-  'cogmem_episode_append',
-  'cogmem_episode_import',
-  'cogmem_episode_status',
-  'cogmem_topic_list',
-  'cogmem_topic_operate',
-  'cogmem_topic_rollback',
-  'cogmem_episode_repair',
-  'cogmem_episode_seal',
-  'cogmem_dream_tick',
-  'cogmem_dream_status',
-  'cogmem_memory_map',
-  'cogmem_graph_overview',
-  'cogmem_graph_search',
-  'cogmem_graph_explore',
-  'cogmem_memory_frame_show',
-  'cogmem_memory_frame_review',
-  'cogmem_memory_dimensions',
-  'cogmem_memory_query_plan',
-  'cogmem_graph_node',
-  'cogmem_graph_neighbors',
-  'cogmem_graph_path',
-  'cogmem_graph_timeline',
-  'cogmem_graph_touch',
-  'cogmem_candidate_review',
-  'cogmem_maintenance_tick',
-  'cogmem_prospective',
-];
+/**
+ * The tools the Hermes MCP entry lists.
+ *
+ * The entry passes no `--profile`, so the server it launches serves `core` — the surface every
+ * host gets by default (#52). The list used to name thirty tools by hand (matching no profile:
+ * core is 6, admin 22, full 36), so Hermes reported "30 selected" and registered 6, and 24 of
+ * the entries could never arrive. It now comes from the registry that decides the profile, so
+ * config and reality cannot disagree, and a host that wants more passes `--profile` and edits
+ * this list deliberately.
+ */
 
 interface ConnectArgs {
   agent?: AgentKind;
@@ -436,7 +415,7 @@ function hostConfigSnippet(agent: AgentKind, workspaceRoot: string, auto: boolea
     '    enabled: true',
     '    tools:',
     '      include:',
-    ...HERMES_COGMEM_TOOLS.map((tool) => `        - ${tool}`),
+    ...CORE_TOOLS.map((tool) => `        - ${tool}`),
   ].join('\n');
 }
 
@@ -979,7 +958,7 @@ function patchHermesMcpConfig(original: string, serverCommand: string, serverArg
     '    enabled: true',
     '    tools:',
     '      include:',
-    ...HERMES_COGMEM_TOOLS.map((tool) => `        - ${tool}`),
+    ...CORE_TOOLS.map((tool) => `        - ${tool}`),
   ];
 
   const mcpIndex = lines.findIndex((line) => /^mcp_servers\s*:\s*(?:\{\})?\s*$/.test(line.trim()));
@@ -1097,7 +1076,7 @@ function patchExistingHermesCogmemConfig(original: string, project: string, serv
     const match = line.match(/^\s*-\s*(cogmem_[\w-]+)\s*$/);
     if (match?.[1]) existingTools.add(match[1]);
   }
-  const missing = HERMES_COGMEM_TOOLS.filter((tool) => !existingTools.has(tool));
+  const missing = CORE_TOOLS.filter((tool) => !existingTools.has(tool));
   if (missing.length === 0) return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
 
   const includeRelativeIndex = block.findIndex((line) => /^\s+include\s*:\s*$/.test(line));
@@ -1123,7 +1102,7 @@ function patchExistingHermesCogmemConfig(original: string, project: string, serv
   const childIndent = `${' '.repeat(cogmemIndent + 2)}`;
   const includeIndent = `${' '.repeat(cogmemIndent + 4)}`;
   const itemIndent = `${' '.repeat(cogmemIndent + 6)}`;
-  lines.splice(blockEnd, 0, `${childIndent}tools:`, `${includeIndent}include:`, ...HERMES_COGMEM_TOOLS.map((tool) => `${itemIndent}- ${tool}`));
+  lines.splice(blockEnd, 0, `${childIndent}tools:`, `${includeIndent}include:`, ...CORE_TOOLS.map((tool) => `${itemIndent}- ${tool}`));
   return `${lines.join('\n').replace(/\n+$/u, '')}\n`;
 }
 

@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSy
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { CORE_TOOLS } from '../src/mcp/profiles.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { parseArgs, runOpenClawImport } from '../src/bin/import-support.js';
 import { KernelAgentMemoryBackend } from '../src/agent/index.js';
@@ -1600,8 +1601,9 @@ test('cogmem-connect installs Hermes skill into the real Hermes skills directory
   expect(parsed.hostConfigSnippet).toContain('command: "cogmem"');
   expect(parsed.hostConfigSnippet).toContain(
     `args: ["mcp","--project","${parsed.integrationProject}","--config","${join(workspace, '.cogmem', 'config.toml')}"]`);
-  expect(parsed.hostConfigSnippet).toContain('cogmem_candidate_review');
-  expect(parsed.hostConfigSnippet).toContain('cogmem_graph_touch');
+  // The snippet shows the entry that is actually written: no --profile, so the core surface.
+  for (const tool of CORE_TOOLS) expect(parsed.hostConfigSnippet).toContain(`- ${tool}`);
+  expect(parsed.hostConfigSnippet).not.toContain('cogmem_graph_touch');
   expect(existsSync(skillPath)).toBe(true);
   expect(existsSync(operationsPath)).toBe(true);
   expect(readFileSync(skillPath, 'utf8')).toStartWith('---\nname: cogmem-memory-backend');
@@ -1642,10 +1644,11 @@ test('cogmem-connect hermes --auto patches Hermes MCP config without claiming na
   expect(config).toContain('command: "cogmem"');
   expect(config).toContain(
     `args: ["mcp","--project","${JSON.parse(installed.stdout).integrationProject}","--config","${join(workspace, '.cogmem', 'config.toml')}"]`);
-  expect(config).toContain('cogmem_memory_map');
-  expect(config).toContain('cogmem_maintenance_tick');
-  expect(config).toContain('cogmem_prospective');
-  expect(config).toContain('cogmem_strategy_plan');
+  // The entry passes no `--profile`, so the server serves `core`; the written list has to be
+  // that surface and nothing wider, or Hermes reports tools it can never register.
+  for (const tool of CORE_TOOLS) expect(config).toContain(`- ${tool}`);
+  const listed = [...config.matchAll(/^\s+- (cogmem_[a-z_]+)$/gm)].map((m) => m[1]!);
+  expect(listed).toEqual([...CORE_TOOLS]);
   expect(config).not.toContain('memory:\n  provider: cogmem');
 });
 
@@ -1688,10 +1691,13 @@ test('cogmem-connect hermes --auto updates existing Cogmem MCP tool allow-list',
   const parsed = JSON.parse(installed.stdout);
   expect(parsed.hermesMcp.configUpdated).toBe(true);
   const config = readFileSync(hermesConfig, 'utf8');
-  expect(config).toContain('cogmem_memory_map');
-  expect(config).toContain('cogmem_maintenance_tick');
-  expect(config).toContain('cogmem_prospective');
-  expect(config).toContain('cogmem_strategy_plan');
+  // The entry passes no `--profile`, so the server serves `core`; the written list has to be
+  // that surface and nothing wider, or Hermes reports tools it can never register.
+  for (const tool of CORE_TOOLS) expect(config).toContain(`- ${tool}`);
+  const listed = [...config.matchAll(/^\s+- (cogmem_[a-z_]+)$/gm)].map((m) => m[1]!);
+  // The patch adds what is missing and leaves what is there, so the set matches but the
+  // order is the operator's.
+  expect([...listed].sort()).toEqual([...CORE_TOOLS].sort());
   expect(config.match(/cogmem_recall/g)?.length).toBe(1);
 });
 
@@ -1739,7 +1745,7 @@ test('cogmem-connect hermes --auto does not duplicate existing cogmem mcp server
     `args: ["mcp","--project","${JSON.parse(installed.stdout).integrationProject}",` +
     `"--config","${join(workspace, '.cogmem', 'config.toml')}"]`,
   );
-  expect(config).toContain('cogmem_memory_map');
+  expect(config).toContain('cogmem_recall');
   expect(config.match(/cogmem_recall/g)?.length).toBe(1);
 });
 
