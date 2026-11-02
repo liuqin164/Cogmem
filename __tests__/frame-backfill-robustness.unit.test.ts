@@ -1,10 +1,14 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { createMemoryKernel } from '../src/factory.js';
 import { normalizeEpisodeKind } from '../src/semantic/MemoryFrameTypes.js';
 import { makeTempDir } from './helpers/tmp.js';
+
+const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
  * Found by running the compile chain end to end on a diverse corpus: `frame-backfill`
@@ -48,4 +52,43 @@ test('a backfill survives an episode it cannot frame, and says which (#134)', ()
     expect(frame?.episodeKind).toBe('other');
   }
   kernel.close();
+});
+
+test('a staged frame is reported as staged, not as no frame at all (#143)', async () => {
+  // `frame-backfill` answers `created: 2, needsReview: 2`, and the read that follows answered
+  // `memory_frame_not_found` — three different facts (no frame / staged frame / active frame)
+  // collapsed into one, with no hint at the flag that reveals the staged one.
+  const dir = makeTempDir('cogmem-frame-staged-');
+  const configDir = join(dir, '.cogmem');
+  mkdirSync(configDir, { recursive: true });
+  const dbPath = join(configDir, 'memory.db');
+  writeFileSync(join(configDir, 'config.toml'), '[core]\ndb_path = "memory.db"\n');
+  const kernel = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
+  kernel.appendEpisodeMessage({ projectId: 'p', sessionId: 's1', sourceAgent: 'a', role: 'user', text: '归档保留期定成七年。', timestamp: Date.now() - 3_600_000 });
+  const backfill = kernel.backfillMemoryFrames({ projectId: 'p', limit: 50 });
+  expect(backfill.created).toBe(1);
+  const episodeId = kernel.listEpisodes({ projectId: 'p', limit: 1 })[0]!.episodeId;
+  kernel.close();
+
+  const read = (extra: string[]) => Bun.spawnSync({
+    cmd: ['bun', join(coreRoot, 'src', 'bin', 'memory.ts'), 'frame', '--project', 'p', '--episode', episodeId, '--config', join(configDir, 'config.toml'), '--json', ...extra],
+    cwd: coreRoot, stdout: 'pipe', stderr: 'pipe',
+  });
+  const staged = read([]);
+  const text = new TextDecoder().decode(staged.stdout) + new TextDecoder().decode(staged.stderr);
+  expect(staged.exitCode).toBe(1);
+  expect(text).toContain('memory_frame_not_active');
+  expect(text).toContain('--include-staged');
+
+  const revealed = read(['--include-staged']);
+  expect(revealed.exitCode).toBe(0);
+  expect(JSON.parse(new TextDecoder().decode(revealed.stdout)).episodeId).toBe(episodeId);
+
+  // And without --json the same read has to say something: `memory frame` had no human
+  // rendering, so a successful read printed nothing at all.
+  const human = Bun.spawnSync({
+    cmd: ['bun', join(coreRoot, 'src', 'bin', 'memory.ts'), 'frame', '--project', 'p', '--episode', episodeId, '--config', join(configDir, 'config.toml'), '--include-staged'],
+    cwd: coreRoot, stdout: 'pipe', stderr: 'pipe',
+  });
+  expect({ exitCode: human.exitCode, printed: new TextDecoder().decode(human.stdout).trim().length > 0 }).toEqual({ exitCode: 0, printed: true });
 });

@@ -28,7 +28,7 @@ function usage(): string {
     'Usage: cogmem prospective <list|due|create|confirm|reject|defer|complete|expire> [options]',
     '  list --project <id> [--status pending --status confirmed]',
     '  due --project <id> [--at <epoch-ms>]',
-    '  create --project <id> --type <type> --key <key> --title <text> --evidence <eventId> [--due <epoch-ms>]',
+    '  create --project <id> --type intention|commitment|reminder|open_loop|plan --key <key> --title <text> --evidence <eventId> [--due <epoch-ms>]',
     '  confirm --project <id> --id <candidateId> --evidence <userEventId>',
     '  reject|complete|expire --project <id> --id <candidateId>',
     '  defer --project <id> --id <candidateId> --until <epoch-ms>',

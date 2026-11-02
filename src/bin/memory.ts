@@ -160,7 +160,7 @@ function usage(): string {
     '  map                  print the self-describing memory map for agent/host inspection',
     '  tick                 run one explicit host-owned maintenance tick',
     '  bind                 backfill memory bindings for high-value raw user events',
-    '  frame --episode <id> show one structured MemoryFrame',
+    '  frame --episode <id> show one structured MemoryFrame [--include-staged]',
     '  frame-backfill       create deterministic evidence-backed frames for existing episodes',
     '  frame-review         approve or reject a staged/needs-confirmation MemoryFrame',
     '  belief-history --key <canonicalKey>  show every version of one belief, superseded ones included',
@@ -781,8 +781,15 @@ function runFrame(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknow
   }
   if (!args.episodeId) throw new Error(`frame requires --episode.\n${usage()}`);
   const frame = kernel.getMemoryFrame(args.episodeId, args.projectId, { includeStaged: args.includeStaged });
-  if (!frame) throw new Error('memory_frame_not_found');
-  return frame as unknown as Record<string, unknown>;
+  if (frame) return frame as unknown as Record<string, unknown>;
+  // A staged frame is not the same fact as no frame, and the default read hid the difference:
+  // `frame-backfill` reports `created` and `needsReview`, then this answered
+  // `memory_frame_not_found` — which reads as "the backfill did nothing" and names no next step.
+  const staged = args.includeStaged ? undefined : kernel.getMemoryFrame(args.episodeId, args.projectId, { includeStaged: true });
+  if (staged) {
+    throw new Error(`memory_frame_not_active: this episode has a staged frame awaiting review. Pass --include-staged to read it, or approve it with \`cogmem memory frame-review --id <frameId> --project <id> --action approve --actor <name> --reason <text>\`.`);
+  }
+  throw new Error('memory_frame_not_found');
 }
 
 function runBeliefHistory(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
@@ -1098,6 +1105,10 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
       for (const event of rows) console.log(`- ${event.label || event.eventId} ${event.eventId} ${event.role || 'unknown'} ${event.text}`);
     }
   }
+  // Every branch above returns, so reaching here means this subcommand has no human
+  // rendering yet. Printing nothing looked like a command that failed silently; print the
+  // payload instead. Adding a branch for one command cannot make another silent again.
+  console.log(JSON.stringify(payload, null, 2));
 }
 
 async function main(): Promise<void> {
