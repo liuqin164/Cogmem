@@ -311,7 +311,7 @@ cogmem memory recall --query "<user question>" --project 'openclaw-<workspace-ha
 Useful intents:
 
 ```bash
-cogmem memory recall --query "上个会话我们聊了什么" --intent previous_session_summary --project 'openclaw-<workspace-hash>' --agent openclaw --session "$OPENCLAW_SESSION_ID" --json
+cogmem memory recall --query "上个会话我们聊了什么" --intent previous_session_summary --project 'openclaw-<workspace-hash>' --agent openclaw --session "$OPENCLAW_SESSION_ID" --exclude-session "$OPENCLAW_SESSION_ID" --json
 cogmem memory recall --query "我关于记忆黑盒问题的原话是什么" --intent forensic_quote --project 'openclaw-<workspace-hash>' --agent openclaw --json
 cogmem memory recall --query "几个月前我们是不是讨论过 Cogmem 的记忆黑盒" --intent historical_discussion --project 'openclaw-<workspace-hash>' --agent openclaw --json
 cogmem memory recall --query "我之前让你对 <实体或工具名> 做过什么" --intent action_history --project 'openclaw-<workspace-hash>' --agent openclaw --json

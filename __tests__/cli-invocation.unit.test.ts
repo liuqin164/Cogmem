@@ -438,3 +438,57 @@ describe('the old relative path is gone from the product', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+test('every flag a command reads is a flag the checker allows', () => {
+  // The checker validates against the usage text plus `extraFlags`, and a flag that is *read*
+  // but not listed is unreachable: `--exclude-session` was implemented (parsed and passed into
+  // the recall query), documented, and refused by `assertCliArgs` — while `--cursor`,
+  // `--max-hops` and `--skip-agent-refresh` were consumed by their handlers and equally
+  // impossible to pass. The reverse also shipped: a dozen `--x-id` alias spellings were read
+  // and never allowed, so they were dead code that looked like compatibility.
+  const dir = join(coreRoot, 'src', 'bin');
+  const offenders: string[] = [];
+  for (const file of readdirSync(dir).filter((entry) => entry.endsWith('.ts'))) {
+    const source = readFileSync(join(dir, file), 'utf8');
+    if (!source.includes('assertCliArgs')) continue;
+    const reads = new Set<string>();
+    for (const pattern of [
+      /(?:stringArg|numberArg|listArgs|booleanArg)\(\s*(?:values|args|argv)\s*,\s*'([a-z][a-z0-9-]*)'/g,
+      /(?:values|args)\[\s*'([a-z][a-z0-9-]*)'\s*\]/g,
+      /hasFlag\(\s*'--([a-z][a-z0-9-]*)'/g,
+      /readArg\(\s*'--([a-z][a-z0-9-]*)'/g,
+    ]) {
+      for (const match of source.matchAll(pattern)) reads.add(match[1]!);
+    }
+    // allowed: every `--flag` written anywhere in the file (the usage text and the checker's
+    // own call) plus the `extraFlags` array, whose entries carry no dashes.
+    const allowed = new Set([...source.matchAll(/--([a-z][a-z0-9-]*)/g)].map((m) => m[1]!));
+    for (const array of source.matchAll(/extraFlags:\s*\[([^\]]*)\]/g)) {
+      for (const name of array[1]!.matchAll(/'([a-z][a-z0-9-]*)'/g)) allowed.add(name[1]!);
+    }
+    for (const read of reads) if (!allowed.has(read)) offenders.push(`${file}: --${read}`);
+  }
+  expect(offenders).toEqual([]);
+});
+
+test('the flags that shipped as reads without an allowlist entry now run', () => {
+  // Each of these was consumed by its handler and refused by the checker: an implemented
+  // capability nobody could reach. `--exclude-session` was also documented, which is how the
+  // mismatch surfaced. This pins the four, so a future edit to an allowlist has to notice.
+  const dir = makeTempDir('cogmem-flag-allowed-');
+  const configDir = join(dir, '.cogmem');
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, 'config.toml'), '[core]\ndb_path = "memory.db"\n');
+  const config = join(configDir, 'config.toml');
+  const cases: Array<[string, string[]]> = [
+    ['memory.ts', ['recall', '--query', 'x', '--exclude-session', 's1', '--config', config, '--json']],
+    ['memory.ts', ['graph-path', '--from', 'a', '--to', 'b', '--max-hops', '2', '--config', config, '--json']],
+    ['memory.ts', ['frame-backfill', '--project', 'p', '--cursor', 'c', '--limit', '2', '--config', config, '--json']],
+    ['update.ts', ['dry-run', '--skip-agent-refresh', '--config', config, '--json']],
+  ];
+  for (const [file, args] of cases) {
+    const proc = Bun.spawnSync({ cmd: ['bun', join(coreRoot, 'src', 'bin', file), ...args], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe' });
+    const text = new TextDecoder().decode(proc.stdout) + new TextDecoder().decode(proc.stderr);
+    expect({ case: `${file} ${args[0]}`, refused: text.includes('unknown flag') }).toEqual({ case: `${file} ${args[0]}`, refused: false });
+  }
+});

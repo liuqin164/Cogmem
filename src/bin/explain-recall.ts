@@ -36,8 +36,8 @@ function readArgs(argv: string[]): ExplainArgs {
 
   return {
     query: stringArg(values, 'query'),
-    projectId: stringArg(values, 'project') || stringArg(values, 'project-id'),
-    agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
+    projectId: stringArg(values, 'project'),
+    agentId: stringArg(values, 'agent'),
     limit: numberArg(values, 'limit'),
     startTime: timeArg(values, 'since'),
     endTime: timeArg(values, 'until'),

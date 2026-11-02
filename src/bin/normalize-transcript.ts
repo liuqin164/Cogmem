@@ -52,7 +52,7 @@ export async function runNormalizeTranscript(argv: string[]): Promise<NormalizeT
   const outputPath = resolve(requireString(args, 'output'));
   const title = stringArg(args, 'title') || 'Normalized Conversation Export';
   const dryRun = args.values['dry-run'] === true;
-  const normalized = normalizeInput(inputPath, stringArg(args, 'family'), stringArg(args, 'format'));
+  const normalized = normalizeInput(inputPath, stringArg(args, 'family'));
 
   if (!dryRun) {
     writeNormalizedConversationMarkdown(
@@ -91,9 +91,8 @@ export async function runNormalizeTranscript(argv: string[]): Promise<NormalizeT
 function normalizeInput(
   inputPath: string,
   familyArg?: string,
-  formatArg?: string,
 ): { family: NormalizationFamily; messages: NormalizedMessage[]; markers: ExportBridgeMarker[] } {
-  const family = resolveFamily(inputPath, familyArg, formatArg);
+  const family = resolveFamily(inputPath, familyArg);
   switch (family) {
     case 'jsonl_transcript_export':
       return { family, messages: normalizeJsonlRecords(inputPath), markers: [] };

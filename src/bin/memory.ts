@@ -92,10 +92,10 @@ function readArgs(argv: string[]): MemoryArgs {
 
   return {
     command,
-    query: stringArg(values, 'query') || stringArg(values, 'q'),
-    eventId: stringArg(values, 'event') || stringArg(values, 'event-id'),
-    episodeId: stringArg(values, 'episode') || stringArg(values, 'episode-id'),
-    nodeId: stringArg(values, 'id') || stringArg(values, 'node-id'),
+    query: stringArg(values, 'query'),
+    eventId: stringArg(values, 'event'),
+    episodeId: stringArg(values, 'episode'),
+    nodeId: stringArg(values, 'id'),
     key: stringArg(values, 'key'),
     fromId: stringArg(values, 'from'),
     toId: stringArg(values, 'to'),
@@ -113,20 +113,20 @@ function readArgs(argv: string[]): MemoryArgs {
     localDateNow: stringArg(values, 'local-date-now'),
     timeZone: stringArg(values, 'timezone'),
     evidenceLimit: numberArg(values, 'evidence-limit'),
-    agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
+    agentId: stringArg(values, 'agent'),
     intent: recallIntentArg(values, 'intent'),
-    projectId: stringArg(values, 'project') || stringArg(values, 'project-id'),
+    projectId: stringArg(values, 'project'),
     global: values.global === true,
     collection: stringArg(values, 'collection'),
-    workspaceId: stringArg(values, 'workspace') || stringArg(values, 'workspace-id'),
-    threadId: stringArg(values, 'thread') || stringArg(values, 'thread-id'),
-    sessionId: stringArg(values, 'session') || stringArg(values, 'session-id'),
-    excludeSessionId: stringArg(values, 'exclude-session') || stringArg(values, 'exclude-session-id'),
+    workspaceId: stringArg(values, 'workspace'),
+    threadId: stringArg(values, 'thread'),
+    sessionId: stringArg(values, 'session'),
+    excludeSessionId: stringArg(values, 'exclude-session'),
     limit: numberArg(values, 'limit'),
     before: numberArg(values, 'before'),
     after: numberArg(values, 'after'),
-    sinceGlobalSeq: numberArg(values, 'since') ?? numberArg(values, 'since-global-seq'),
-    untilGlobalSeq: numberArg(values, 'until') ?? numberArg(values, 'until-global-seq'),
+    sinceGlobalSeq: numberArg(values, 'since'),
+    untilGlobalSeq: numberArg(values, 'until'),
     order: orderArg(values, 'order'),
     dbPath: stringArg(values, 'db'),
     configPath: stringArg(values, 'config'),
@@ -161,7 +161,7 @@ function usage(): string {
     '  tick                 run one explicit host-owned maintenance tick',
     '  bind                 backfill memory bindings for high-value raw user events',
     '  frame --episode <id> show one structured MemoryFrame [--include-staged]',
-    '  frame-backfill       create deterministic evidence-backed frames for existing episodes',
+    '  frame-backfill       create deterministic evidence-backed frames for existing episodes [--cursor <cursor> --limit <n> --mode shadow|active]',
     '  frame-review         approve or reject a needs_confirmation MemoryFrame (see --mode active on frame-backfill)',
     '  belief-history --key <canonicalKey>  show every version of one belief, superseded ones included',
     '  graph                show a bounded overview of remembered topics, entities, clusters, actions, and time',
@@ -170,7 +170,7 @@ function usage(): string {
     '  graph-plan           build a multidimensional query frame and bounded graph result',
     '  graph-node           inspect --id with neighbors and evidence drilldown commands',
     '  graph-neighbors      expand --id by --hops 1..2',
-    '  graph-path           find a bounded path from --from to --to',
+    '  graph-path           find a bounded path from --from to --to [--max-hops <n>]',
     '  graph-timeline       reconstruct entity/time/action history for --query',
     '  graph-reindex        reproject one Atlas episode/card by --event or --episode without rebuilding the whole graph',
     '  rebuild-topology     explicitly rebuild project or global time and cognitive projections',
@@ -183,6 +183,7 @@ function usage(): string {
     '  --workspace <id>     scope to one workspace',
     '  --thread <id>        scope to one thread',
     '  --session <id>       scope to one session',
+    '  --exclude-session <id>  exclude one session from recall; the flag `cogmem_recall` exposes as excludeSessionId',
     '  --limit <n>          result limit, default 20',
     '  --since <globalSeq>  list/bind events at or after a global sequence',
     '  --until <globalSeq>  list events at or before a global sequence',
@@ -1123,7 +1124,7 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
 }
 
 async function main(): Promise<void> {
-  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['action', 'actor', 'after', 'agent', 'before', 'collection', 'config', 'confirmation-event', 'db', 'episode', 'event', 'evidence-limit', 'from', 'global', 'hops', 'id', 'include-evidence', 'include-staged', 'intent', 'json', 'key', 'limit', 'local-date-now', 'max-episodes', 'mode', 'no-refresh', 'now', 'order', 'project', 'promote-limit', 'query', 'reason', 'refresh', 'replacement', 'review-after', 'session', 'since', 'stale-ok', 'status', 'target-belief', 'thread', 'timezone', 'to', 'until', 'workspace'] });
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['action', 'actor', 'after', 'agent', 'before', 'collection', 'config', 'confirmation-event', 'cursor', 'db', 'episode', 'event', 'evidence-limit', 'exclude-session', 'from', 'global', 'hops', 'id', 'include-evidence', 'include-staged', 'intent', 'json', 'key', 'limit', 'local-date-now', 'max-episodes', 'max-hops', 'mode', 'no-refresh', 'now', 'order', 'project', 'promote-limit', 'query', 'reason', 'refresh', 'replacement', 'review-after', 'session', 'since', 'stale-ok', 'status', 'target-belief', 'thread', 'timezone', 'to', 'until', 'workspace'] });
   const args = readArgs(process.argv.slice(2));
   if (args.help) {
     console.log(usage());
