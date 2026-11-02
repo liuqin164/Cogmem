@@ -179,7 +179,6 @@ describe('core release metadata', () => {
       'cogmem-normalize-transcript',
       'cogmem-openclaw',
       'cogmem-prospective',
-      'cogmem-re-embed',
       'cogmem-repair',
       'cogmem-snapshot',
       'cogmem-strategy',

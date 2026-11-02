@@ -17,7 +17,6 @@ const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
 const initBin = join(coreRoot, 'src/bin/init.ts');
 const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');
 const snapshotBin = join(coreRoot, 'src/bin/snapshot.ts');
-const reEmbedBin = join(coreRoot, 'src/bin/re-embed.ts');
 const compactBin = join(coreRoot, 'src/bin/compact.ts');
 const dreamBin = join(coreRoot, 'src/bin/dream.ts');
 const memoryBin = join(coreRoot, 'src/bin/memory.ts');
@@ -505,37 +504,27 @@ test('snapshot export uses configured database and default snapshots directory',
   expect(existsSync(parsed.snapshotPath)).toBe(true);
 });
 
-test('re-embed status can read the configured database without --db', async () => {
-  const dir = makeTempDir('cogmem-reembed-config-');
+test('doctor --storage reads the configured database without --db', async () => {
+  // This was `cogmem re-embed status`, whose only job was to report backfill progress. The
+  // progress is storage state, so it reads from the storage report — and the property this
+  // test held (the database is resolved from the config, not from a flag) still holds there.
+  const dir = makeTempDir('cogmem-storage-config-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
 
-  const seed = Bun.spawn({
-    cmd: ['bun', doctorBin, '--config', configPath],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  await new Response(seed.stdout).text();
-  await new Response(seed.stderr).text();
-  expect(await seed.exited).toBe(0);
-
   const proc = Bun.spawn({
-    cmd: ['bun', reEmbedBin, 'status', '--config', configPath],
+    cmd: ['bun', doctorBin, '--storage', '--config', configPath, '--json'],
     cwd: coreRoot,
     stdout: 'pipe',
     stderr: 'pipe',
   });
   const output = await new Response(proc.stdout).text();
   const errorOutput = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  expect(errorOutput).toBe('');
-  expect(exitCode).toBe(0);
-  const parsed = JSON.parse(output);
+  expect({ exitCode: await proc.exited, stderr: errorOutput }).toEqual({ exitCode: 0, stderr: '' });
+  const parsed = JSON.parse(output) as { dbPath?: string; storage?: { embeddings?: unknown } };
   expect(parsed.dbPath).toBe(join(dir, '.cogmem', 'memory.db'));
-  expect(parsed.percentComplete).toBe(100);
+  expect(parsed.storage?.embeddings).toEqual({ completed: 0, total: 0, failed: 0 });
 });
 
 test('compact dry-run reports eligible vector pruning without deleting raw events', async () => {

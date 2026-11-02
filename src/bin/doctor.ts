@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
+import Database from 'bun:sqlite';
 import { existsSync, readFileSync } from 'node:fs';
 
 import { printJsonDocument } from './CliJson.js';
 import { join, resolve } from 'node:path';
 
 import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
+import { NeuronEmbeddingStore } from '../embedding/NeuronEmbeddingStore.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
 import {
   defaultOpenClawAutoMemoryPluginDir,
@@ -258,18 +260,36 @@ if (envPath) {
     fail(kernelError instanceof Error ? kernelError.message : String(kernelError));
   }
 
+  // The numbers a machine consumer needs. The human line is suppressed under --json — that
+  // is the contract — but `--storage` used to produce *only* that line, so an agent asking
+  // for storage state received a JSON document with none of it in.
+  let storageReport: Record<string, unknown> | undefined;
   if (storage) {
     const storageStats = compactStorage({
       dbPath: kernelDbPath!,
       dryRun: true,
       dimension: loaded.options.vectorDimension,
     });
+    // The re-embedding progress used to be its own command (`cogmem re-embed status`), which
+    // could only ever report: the re-embedding itself runs in the host, and the numbers are
+    // storage state. It reads here instead, so the command is gone (#141).
+    const embeddings = new NeuronEmbeddingStore(new Database(kernelDbPath!, { readonly: true })).getProgress();
+    storageReport = {
+      rawEvents: storageStats.rawEventsBefore,
+      vectorCount: storageStats.vectorCountBefore,
+      vectorBytes: storageStats.vectorBytesBefore,
+      eligibleVectorBytes: storageStats.eligibleVectorBytes,
+      vectorBytesPerRawEvent: storageStats.vectorBytesPerRawEventBefore,
+      embeddings: { completed: embeddings.completed, total: embeddings.total, failed: embeddings.failed },
+    };
     ok([
       `storage raw_events=${storageStats.rawEventsBefore}`,
       `vectors=${storageStats.vectorCountBefore}`,
       `vector_bytes=${storageStats.vectorBytesBefore}`,
       `eligible_vector_bytes=${storageStats.eligibleVectorBytes}`,
       `vector_bytes_per_raw_event=${storageStats.vectorBytesPerRawEventBefore.toFixed(2)}`,
+      `embeddings=${embeddings.completed}/${embeddings.total}`,
+      ...(embeddings.failed > 0 ? [`embedding_failures=${embeddings.failed}`] : []),
     ].join(' '));
     if (storageStats.rawEventsBefore > 0 && storageStats.vectorBytesPerRawEventBefore >= 8192) {
       warn('vector_storage_growth', 'Vector bytes per raw event are high; consider selective_compile/raw_then_dream and cogmem compact --dry-run.');
@@ -375,6 +395,7 @@ if (envPath) {
         pi: { enabled: loaded.integrations.pi.enabled },
       },
       dbPath: kernelDbPath,
+      ...(storageReport ? { storage: storageReport } : {}),
       nextConnectHost: connectHosts[0],
       nextConnectHosts: connectHosts,
       openclaw: reportPlugin ? { plugin } : undefined,

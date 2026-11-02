@@ -37,7 +37,6 @@
     "cogmem-import-hermes": "dist/bin/alias/import-hermes.js",
     "cogmem-normalize-transcript": "dist/bin/alias/normalize-transcript.js",
     "cogmem-snapshot": "dist/bin/alias/snapshot.js",
-    "cogmem-re-embed": "dist/bin/alias/re-embed.js",
     "cogmem-prospective": "dist/bin/alias/prospective.js",
     "cogmem-strategy": "dist/bin/alias/strategy.js",
     "cogmem-brain-eval": "dist/bin/alias/brain-eval.js",

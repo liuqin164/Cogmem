@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMemoryKernel } from '../src/factory.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const reEmbedBin = join(coreRoot, 'src/bin/re-embed.ts');
+const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
 const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');
 
 class FakeEmbeddingProvider {
@@ -42,50 +42,37 @@ function staleVectorFixture() {
 }
 
 describe('maintenance tick suggested actions point at commands that run', () => {
-  test('the stale-embedding action names the executable status command, not a run subcommand', () => {
+  test('the stale-embedding action names a command that reports the progress', () => {
     const { kernel, dbPath } = staleVectorFixture();
     try {
       const tick = kernel.runMaintenanceTick({ projectId: 'p' });
       expect(tick.chargeVector.staleVectors).toBe(1);
       const action = tick.suggestedActions.find((item) => item.kind === 're_embed');
       expect(action).toBeDefined();
-      expect(action?.executable).toBe('cogmem-re-embed');
-      expect(action?.args).toEqual(['status']);
-      expect(action?.command).toBe('cogmem-re-embed status');
+      expect(action?.executable).toBe('cogmem');
+      expect(action?.args).toEqual(['doctor', '--storage', '--json']);
       // The command cannot re-embed on its own; the reason has to name the real path.
       expect(action?.reason).toContain('ReEmbeddingPipeline.run()');
       expect(action?.command).not.toContain(' run');
-      // The db the tick ran against stays readable by that command.
-      const probe = Bun.spawnSync({
-        cmd: ['bun', reEmbedBin, 'status', '--db', dbPath],
-        cwd: coreRoot,
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      expect(probe.exitCode).toBe(0);
-      expect(JSON.parse(new TextDecoder().decode(probe.stdout)).command).toBe('re-embed.status');
     } finally {
       kernel.close();
     }
   });
 
-  test('cogmem-re-embed rejects the retired run subcommand and names the one it supports', () => {
-    const dir = makeTempDir('cogmem-reembed-usage-');
-    const dbPath = join(dir, 'memory.db');
-    const run = Bun.spawnSync({
-      cmd: ['bun', reEmbedBin, 'run', '--project', 'p', '--db', dbPath],
-      cwd: coreRoot,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    expect(run.exitCode).toBe(1);
-    const stderr = new TextDecoder().decode(run.stderr);
-    // The usage names the command, not the deprecated bin: help used to teach the spelling
-    // #112 is trying to retire.
-    expect(stderr).toContain('cogmem re-embed status');
-    expect(stderr).not.toContain('run');
+  test('doctor --storage reports the embedding progress as data, not only as a human line', () => {
+    // `cogmem re-embed status` could only ever read this, so it reads from the storage
+    // report instead of from a command of its own (#141) — and the report is now in the
+    // JSON, which it was not: `--storage` used to produce a human line and nothing
+    // machine-readable, so an agent asking for storage state got a document without it.
+    const { kernel, dbPath } = staleVectorFixture();
+    kernel.close();
+    const configPath = join(dirname(dbPath), 'config.toml');
+    writeFileSync(configPath, `[core]\ndb_path = "${dbPath}"\n`);
+    const probe = Bun.spawnSync({ cmd: ['bun', doctorBin, '--storage', '--config', configPath, '--json'], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe' });
+    expect(probe.exitCode).toBe(0);
+    const body = JSON.parse(new TextDecoder().decode(probe.stdout)) as { storage?: { embeddings?: { completed: number; total: number; failed: number } } };
+    expect(body.storage?.embeddings).toEqual({ completed: 0, total: 1, failed: 0 });
   });
-
   test('every suggested action names an executable that exists as a bin', () => {
     const packageJson = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8')) as {
       bin: Record<string, string>;
@@ -102,15 +89,4 @@ describe('maintenance tick suggested actions point at commands that run', () => 
     expect(unknown).toEqual([]);
   });
 
-  test('cogmem --help does not promise a CLI re-embed run', () => {
-    const help = Bun.spawnSync({
-      cmd: ['bun', cogmemBin, '--help'],
-      cwd: coreRoot,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const text = new TextDecoder().decode(help.stdout) + new TextDecoder().decode(help.stderr);
-    expect(text).toContain('inspect re-embedding progress');
-    expect(text).not.toContain('or run re-embedding');
-  });
 });

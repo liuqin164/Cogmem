@@ -387,7 +387,7 @@ Operational cost classes:
 
 - Interactive/read-only: `memory status`, `memory candidates`, Atlas query commands, `strategy plan`, and direct source `memory show`.
 - Interactive/bounded: `memory recall`; every call reports `performance.totalMs`.
-- Maintenance/write: import, Dream, governance, review, repair, binding, re-embedding, compaction, and `memory tick`.
+- Maintenance/write: import, Dream, governance, review, repair, binding, compaction, and `memory tick` (`doctor --storage` reports re-embedding progress).
 
 Never overlap maintenance writers against one database. Wait for each command to exit, use returned `durationMs`, backlog, and failure details to set the next interval, and keep routine status/candidate inspection on the read-only path. A `vectors` count of zero is not by itself a failure: `memory status --json` includes `vectorState.recallAvailableWithoutVectors` and the active fallback status.
 
@@ -826,7 +826,6 @@ cogmem import-hermes
 cogmem normalize-transcript
 cogmem snapshot export|import
 cogmem compact
-cogmem re-embed
 cogmem prospective
 cogmem strategy
 cogmem brain-eval
