@@ -53,7 +53,7 @@ function usage(): string {
     '  split --project <id> --episode <id> --events <eventId,eventId>',
     '  merge --project <id> --source-episode <id> --target-episode <id>',
     '  move-event --project <id> --event <id> --target-episode <id>',
-    '  reclassify --project <id> --episode <id> [--episode-type <type>] [--topic-path <path>] [--importance <0..1>]',
+    '  reclassify --project <id> --episode <id> [--episode-type discussion|decision|correction|preference|goal|debugging|planning|prospective|general] [--topic-path <path>] [--importance <0..1>]',
     '  requeue-dream --project <id> --episode <id> [--mode micro|normal|deep]',
     'Existing source-specific imports remain: cogmem import-openclaw and cogmem import-hermes.',
     '--json emits cogmem.cli.v1; array results are returned under items.',
@@ -328,10 +328,12 @@ function statusArg(value?: string): 'open' | 'soft_sealed' | 'sealed' | undefine
   if (value === 'open' || value === 'soft_sealed' || value === 'sealed') return value;
   throw new Error('status must be open, soft_sealed, or sealed');
 }
+const EPISODE_TYPES = ['discussion', 'decision', 'correction', 'preference', 'goal', 'debugging', 'planning', 'prospective', 'general'] as const;
+
 function episodeTypeArg(value?: string): 'discussion' | 'decision' | 'correction' | 'preference' | 'goal' | 'debugging' | 'planning' | 'prospective' | 'general' | undefined {
   if (!value) return undefined;
-  if (['discussion', 'decision', 'correction', 'preference', 'goal', 'debugging', 'planning', 'prospective', 'general'].includes(value)) return value as never;
-  throw new Error('invalid episode type');
+  if ((EPISODE_TYPES as readonly string[]).includes(value)) return value as never;
+  throw new Error(`invalid episode type: expected one of ${EPISODE_TYPES.join(', ')}`);
 }
 function timeValue(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined;
