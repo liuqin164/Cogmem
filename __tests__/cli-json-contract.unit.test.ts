@@ -43,7 +43,9 @@ test('top-level help documents the machine-readable JSON shape', async () => {
   const stdout = await new Response(proc.stdout).text();
   expect(await proc.exited).toBe(0);
   expect(stdout).toContain('cogmem.cli.v1');
-  expect(stdout).toContain('arrays use items');
+  // The help used to promise a universal `items`; nine measured commands produced it twice.
+  expect(stdout).toContain('named for what they hold');
+  expect(stdout).not.toContain('arrays use items');
   expect(stdout).toContain('needs_confirmation');
 });
 

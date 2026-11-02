@@ -183,7 +183,7 @@ cogmem episode status --project 'openclaw-<workspace-hash>' --json
 cogmem dream status --project 'openclaw-<workspace-hash>' --json
 ```
 
-All documented JSON commands emit `schemaVersion: "cogmem.cli.v1"`. Object payload fields are top-level; arrays use `items`. Queue counters `candidate`, `promoted`, `needs_confirmation`, and `beliefs` are top-level. `memory status` explains whether recall remains available when `vectors` is zero.
+All documented JSON commands emit `schemaVersion: "cogmem.cli.v1"`. Object payload fields are top-level; arrays are named for what they hold (`items`, `events`, `decisions`, `episodes`, `statuses`, `nodes`/`edges`/`matchedFacets`/`nextActions`/`warnings`). Queue counters `candidate`, `promoted`, `needs_confirmation`, and `beliefs` are top-level. `memory status` explains whether recall remains available when `vectors` is zero.
 
 `memory plan`, `memory status`, and `memory candidates` use a lightweight read-only SQLite connection. They should remain usable while the OpenClaw plugin has a long-lived connection.
 

@@ -152,7 +152,7 @@ cogmem memory show --event <event-id> --before 2 --after 2 --json
 cogmem memory list --project 'hermes-<workspace-hash>' --since <globalSeq> --order asc --json
 ```
 
-JSON uses `cogmem.cli.v1`: object fields are top-level, arrays use `items`, and queue counters remain top-level. `vectors: 0` is not a recall failure; inspect `vectorState`.
+JSON uses `cogmem.cli.v1`: object fields are top-level, arrays are named for what they hold (`items` on recall and `prospective list`, `events` on `list`/`search`, `decisions` on `govern`, `episodes` on `episode list`, `statuses` on `compact`, and `nodes`/`edges`/`matchedFacets`/`nextActions`/`warnings` on Atlas reads), and queue counters remain top-level. `vectors: 0` is not a recall failure; inspect `vectorState`.
 
 Use `historical_discussion` for “did we discuss this before?”, “几个月前是不是聊过…”, “记忆黑盒”, and missing MCP memory cases. Use `action_history` for “what did I ask you to do to <entity>?”, “启动 <tool>”, or “对 <entity> 做过什么操作”; the entity is the project/tool/person/service named in memory, not necessarily Hermes. Raw list rows include `sourceLocator`; run the locator before quoting exact words or saying the event cannot be found. Read-only plan/status/candidates use a lightweight SQLite path and should not require stopping the MCP server.
 

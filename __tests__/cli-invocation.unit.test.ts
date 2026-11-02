@@ -529,3 +529,42 @@ test('the JSON command field names the command the way every other one does', ()
     expect({ file, name: command, spaceFree: /^[a-z][a-z0-9.-]*$/.test(command) }).toEqual({ file, name: command, spaceFree: true });
   }
 });
+
+test('the JSON contract in --help names the array keys the commands actually emit', () => {
+  // `--help` promised "arrays use items". Nine measured commands produced `items` twice and
+  // `events`, `episodes`, `nodes`, `edges`, `decisions` and `statuses` everywhere else — and the
+  // agent-facing docs already tell readers to use `nodes`/`edges`. Domain names are the better
+  // contract, so the help describes them and this fails when one is added without being named.
+  const dir = makeTempDir('cogmem-array-keys-');
+  const configDir = join(dir, '.cogmem');
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, 'config.toml'), '[core]\ndb_path = "memory.db"\n');
+  const config = join(configDir, 'config.toml');
+
+  const help = new TextDecoder().decode(Bun.spawnSync({ cmd: ['bun', join(coreRoot, 'src', 'bin', 'cogmem.ts'), '--help'], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe' }).stdout);
+  expect(help).toContain('named for what they hold');
+
+  const cases: Array<[string, string[]]> = [
+    ['memory.ts', ['recall', '--query', 'x', '--project', 'p', '--config', config]],
+    ['memory.ts', ['list', '--project', 'p', '--config', config]],
+    ['memory.ts', ['search', '--query', 'x', '--project', 'p', '--config', config]],
+    ['memory.ts', ['govern', '--project', 'p', '--config', config]],
+    ['memory.ts', ['graph', '--project', 'p', '--config', config]],
+    ['memory.ts', ['graph-search', '--project', 'p', '--query', 'x', '--config', config]],
+    ['episode.ts', ['list', '--project', 'p', '--config', config]],
+    ['prospective.ts', ['list', '--project', 'p', '--config', config]],
+    ['compact.ts', ['--dry-run', '--config', config]],
+  ];
+  const undocumented: string[] = [];
+  for (const [file, args] of cases) {
+    const proc = Bun.spawnSync({ cmd: ['bun', join(coreRoot, 'src', 'bin', file), ...args, '--json'], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe' });
+    const text = new TextDecoder().decode(proc.stdout);
+    if (!text.trim().startsWith('{')) continue; // a refusing run printed no envelope
+    const body = JSON.parse(text) as Record<string, unknown>;
+    for (const key of Object.keys(body)) {
+      if (!Array.isArray(body[key])) continue;
+      if (!help.includes(key)) undocumented.push(`${file} ${args[0]}: ${key}`);
+    }
+  }
+  expect(undocumented).toEqual([]);
+});

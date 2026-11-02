@@ -54,7 +54,7 @@ function usage(): string {
     '  host-bridge          stdio bridge a host plugin can spawn: recall/remember without the MCP server',
     '  cleanup              remove the managed launcher after its installation is gone',
     '',
-    'JSON output: commands with --json emit cogmem.cli.v1. Object fields stay top-level; arrays use items.',
+    'JSON output: commands with --json emit cogmem.cli.v1. Object fields stay top-level, and arrays are named for what they hold: items (recall, prospective list), events (list, search), decisions (govern), episodes (episode list), statuses (compact), and nodes/edges/matchedFacets/nextActions/warnings on Atlas reads.',
     'Queue commands expose candidate, promoted, needs_confirmation, and beliefs at the top level.',
   ].join('\n');
 }
