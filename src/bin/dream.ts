@@ -16,6 +16,7 @@ function usage(): string {
   return [
     'Usage: cogmem dream <tick|night|status|retry> [args]',
     '  tick [--project <id>] [--mode auto|micro|normal|deep] [--max-episodes <n>] [--json] [--db <memory.db>|--config <config.toml>]',
+    '       [--watch] [--interval-ms <n>] [--max-runs <n>]',
     '  night [--project <id>] [--max-episodes <n>] [--json] [--db <memory.db>|--config <config.toml>]',
     '         one Night: seal idle episodes, Dream up to N of them (default 50,',
     '         oldest first), then project those episodes into the atlas. Safe to re-run.',
@@ -37,10 +38,39 @@ async function main(): Promise<void> {
   const kernel = openKernel(args);
   try {
     const projectId = stringArg(args, 'project');
+
+  /**
+   * The payload the removed `memory dream` alias returned, kept because it is the useful
+   * part: the run, the queue state after it, and the counters a host watches. The alias's
+   * `--promote` is deliberately *not* kept — the canonical command refuses it, because
+   * governance is its own step, and that refusal is the boundary the alias had drifted past.
+   */
+  const tickPayload = (tick: unknown): Record<string, unknown> => ({
+    ...(tick as Record<string, unknown>),
+    processedEventCount: 0,
+    dreamableEventCount: (tick as { processedEpisodeCount?: number }).processedEpisodeCount,
+    status: kernel.getEpisodeDreamStatus(projectId),
+    candidates: (tick as { candidateIds?: string[] }).candidateIds,
+  });
+
+    // The watch loop used to live on `memory dream`, which was the same tick behind a
+    // second name. One entry point, one operation: the loop moves here and the alias goes.
+    if (args.command === 'tick' && args.watch === true) {
+      const intervalMs = numberArg(args, 'interval-ms') ?? 300_000;
+      const maxRuns = numberArg(args, 'max-runs');
+      const runs: unknown[] = [];
+      for (let done = 0; maxRuns === undefined || done < maxRuns; done += 1) {
+        runs.push(tickPayload(await kernel.runDreamTick({ projectId, mode: modeArg(stringArg(args, 'mode')), maxEpisodes: numberArg(args, 'max-episodes') })));
+        if (maxRuns === undefined || done + 1 >= maxRuns) break;
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+      printCliJson('dream.tick.watch', { watch: true, intervalMs, maxRuns, runs, status: kernel.getEpisodeDreamStatus(projectId) });
+      return;
+    }
     const result = args.command === 'night'
       ? await kernel.runNight({ projectId, maxEpisodes: numberArg(args, 'max-episodes') })
       : args.command === 'tick'
-      ? await kernel.runDreamTick({ projectId, mode: modeArg(stringArg(args, 'mode')), maxEpisodes: numberArg(args, 'max-episodes') })
+      ? tickPayload(await kernel.runDreamTick({ projectId, mode: modeArg(stringArg(args, 'mode')), maxEpisodes: numberArg(args, 'max-episodes') }))
       : args.command === 'status'
         ? kernel.getEpisodeDreamStatus(projectId)
         : args.command === 'retry'

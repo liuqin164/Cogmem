@@ -2488,7 +2488,7 @@ export class MemoryKernel {
         ...nextCommands,
         `cogmem memory graph-explore --project ${shellQuote(input.projectId)} --query '<query>' --json`,
       ],
-      note: 'repairId is an audit id, not a dream candidate id; do not run memory dream --promote just because repairId exists.',
+      note: 'repairId is an audit id, not a dream candidate id; do not run governance just because repairId exists.',
     };
   }
 

@@ -19,6 +19,7 @@ const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');
 const snapshotBin = join(coreRoot, 'src/bin/snapshot.ts');
 const reEmbedBin = join(coreRoot, 'src/bin/re-embed.ts');
 const compactBin = join(coreRoot, 'src/bin/compact.ts');
+const dreamBin = join(coreRoot, 'src/bin/dream.ts');
 const memoryBin = join(coreRoot, 'src/bin/memory.ts');
 
 test('doctor validates a structured cogmem config file', async () => {
@@ -859,7 +860,7 @@ test('memory CLI runs dream curator and lists governance candidates', async () =
   kernel.close();
 
   const dreamProc = Bun.spawn({
-    cmd: ['bun', memoryBin, 'dream', '--config', configPath, '--project', 'demo', '--json'],
+    cmd: ['bun', dreamBin, 'tick', '--config', configPath, '--project', 'demo', '--json'],
     cwd: coreRoot,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -910,7 +911,7 @@ test('memory CLI dream --max-runs 1 commits sealed episode progress across proce
   kernel.close();
 
   const firstProc = Bun.spawn({
-    cmd: ['bun', memoryBin, 'dream', '--config', configPath, '--project', 'hermes', '--max-runs', '1', '--json'],
+    cmd: ['bun', dreamBin, 'tick', '--config', configPath, '--project', 'hermes', '--max-runs', '1', '--json'],
     cwd: coreRoot,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -924,7 +925,7 @@ test('memory CLI dream --max-runs 1 commits sealed episode progress across proce
   expect(first.status.processed).toBe(1);
 
   const secondProc = Bun.spawn({
-    cmd: ['bun', memoryBin, 'dream', '--config', configPath, '--project', 'hermes', '--max-runs', '1', '--json'],
+    cmd: ['bun', dreamBin, 'tick', '--config', configPath, '--project', 'hermes', '--max-runs', '1', '--json'],
     cwd: coreRoot,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -962,8 +963,8 @@ test('memory CLI governs dream candidates and can run a one-iteration watch loop
   const watchProc = Bun.spawn({
     cmd: [
       'bun',
-      memoryBin,
-      'dream',
+      dreamBin,
+      'tick',
       '--config',
       configPath,
       '--project',
@@ -971,7 +972,6 @@ test('memory CLI governs dream candidates and can run a one-iteration watch loop
       '--watch',
       '--max-runs',
       '1',
-      '--promote',
       '--json',
     ],
     cwd: coreRoot,
@@ -985,7 +985,8 @@ test('memory CLI governs dream candidates and can run a one-iteration watch loop
   const watched = JSON.parse(watchOutput);
   expect(watched.watch).toBe(true);
   expect(watched.runs).toHaveLength(1);
-  expect(watched.runs[0].governance.decisions.length).toBeGreaterThan(0);
+  // Governance is its own step now: the merged tick keeps the counters, not the promotion.
+  expect(watched.runs[0].status.processed).toBeGreaterThan(0);
 
   const governProc = Bun.spawn({
     cmd: ['bun', memoryBin, 'govern', '--config', configPath, '--project', 'demo', '--json'],

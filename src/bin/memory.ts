@@ -19,7 +19,7 @@ import { cliArg } from '../utils/CliArgument.js';
 import { assertCliArgs } from './CliArgs.js';
 
 interface MemoryArgs {
-  command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
+  command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show'  | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
     | 'graph' | 'graph-search' | 'graph-explore' | 'graph-plan' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex' | 'rebuild-topology' | 'frame' | 'frame-backfill' | 'frame-review'
     | 'belief-history';
   query?: string;
@@ -238,7 +238,6 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'search'
     || value === 'recall'
     || value === 'show'
-    || value === 'dream'
     || value === 'govern'
     || value === 'candidates'
     || value === 'review'
@@ -953,58 +952,6 @@ function runReview(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   return { review: result.review, reviewedCandidate: result.candidate, decision: result.decision, queue: kernel.getDreamCandidateQueue(args.projectId) };
 }
 
-async function runDreamOnce(kernel: MemoryKernel, args: MemoryArgs): Promise<Record<string, unknown>> {
-  const result = await kernel.runDreamTick({
-    projectId: args.projectId,
-    maxEpisodes: args.limit || 10,
-  });
-  const payload: Record<string, unknown> = {
-    ...result,
-    processedEventCount: 0,
-    dreamableEventCount: result.processedEpisodeCount,
-    status: kernel.getEpisodeDreamStatus(args.projectId),
-    candidates: result.candidateIds,
-  };
-  if (args.promote) {
-    payload.governance = kernel.promoteDreamCandidates({
-      projectId: args.projectId,
-      limit: args.promoteLimit || args.limit || 100,
-    });
-  }
-  return payload;
-}
-
-async function runDream(kernel: MemoryKernel, args: MemoryArgs): Promise<Record<string, unknown>> {
-  if (!args.watch) return runDreamOnce(kernel, args);
-
-  const intervalMs = args.intervalMs ?? 300000;
-  const maxRuns = args.maxRuns;
-  const runs: Record<string, unknown>[] = [];
-  let completed = 0;
-  while (maxRuns === undefined || completed < maxRuns) {
-    const run = await runDreamOnce(kernel, args);
-    completed += 1;
-    if (maxRuns === undefined) {
-      if (args.json) {
-        printCliJson('memory.dream.watch', { watch: true, intervalMs, run });
-      } else {
-        printHuman('dream', run);
-      }
-    } else {
-      runs.push(run);
-    }
-    if (maxRuns !== undefined && completed >= maxRuns) break;
-    await sleep(intervalMs);
-  }
-  return {
-    watch: true,
-    intervalMs,
-    maxRuns,
-    runs,
-    queue: kernel.getDreamCandidateQueue(args.projectId),
-  };
-}
-
 function runCandidates(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
   const candidates = kernel.listDreamCandidates({
     projectId: args.projectId,
@@ -1035,21 +982,6 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     console.log(`dreamCandidateQueue: ${JSON.stringify(payload.dreamCandidateQueue)}`);
     if (payload.queueSummary) console.log(`queueSummary: ${JSON.stringify(payload.queueSummary)}`);
     if (payload.nextActions) console.log(`nextActions: ${JSON.stringify(payload.nextActions)}`);
-    return;
-  }
-  if (command === 'dream') {
-    if (payload.watch === true) {
-      const runs = Array.isArray(payload.runs) ? payload.runs : [];
-      console.log(`watch: true intervalMs=${payload.intervalMs}`);
-      console.log(`runs: ${runs.length}`);
-      console.log(`queue: ${JSON.stringify(payload.queue)}`);
-      return;
-    }
-    console.log(`processedEpisodes: ${payload.processedEpisodeCount}`);
-    console.log(`selectedMode: ${payload.selectedMode}`);
-    console.log(`candidates: ${payload.candidateCount}`);
-    console.log(`dreamBacklog: ${JSON.stringify(payload.status)}`);
-    if (payload.governance) console.log(`governance: ${JSON.stringify(payload.governance)}`);
     return;
   }
   if (command === 'govern') {
@@ -1211,9 +1143,7 @@ async function main(): Promise<void> {
             ? runRecall(kernel, kernelArgs)
             : kernelArgs.command === 'show'
               ? runShow(kernel, kernelArgs)
-              : kernelArgs.command === 'dream'
-                ? await runDream(kernel, kernelArgs)
-                : kernelArgs.command === 'govern'
+              : kernelArgs.command === 'govern'
                   ? runGovern(kernel, kernelArgs)
                   : kernelArgs.command === 'candidates'
                     ? runCandidates(kernel, kernelArgs)
@@ -1235,11 +1165,7 @@ async function main(): Promise<void> {
     if (kernelArgs.json) {
       const queue = kernelArgs.command === 'status'
         ? payload.dreamCandidateQueue as ReturnType<MemoryKernel['getDreamCandidateQueue']>
-        : kernelArgs.command === 'dream' && payload.governance
-          ? (payload.governance as { queue?: ReturnType<MemoryKernel['getDreamCandidateQueue']> }).queue
-          : kernelArgs.command === 'dream' && payload.queue
-            ? payload.queue as ReturnType<MemoryKernel['getDreamCandidateQueue']>
-            : kernelArgs.command === 'govern'
+        : kernelArgs.command === 'govern'
               ? payload.queue as ReturnType<MemoryKernel['getDreamCandidateQueue']>
               : kernelArgs.command === 'review'
                 ? payload.queue as ReturnType<MemoryKernel['getDreamCandidateQueue']>

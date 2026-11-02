@@ -96,7 +96,7 @@ cogmem episode list    --project <id> --json
 cogmem episode status  --project <id> --json
 cogmem episode seal    --project <id> --id <episode> --json
 cogmem episode repair  --project <id> --json
-cogmem memory dream    --project <id> --max-runs 1 --json
+cogmem dream tick      --project <id> --watch --max-runs 1 --json
 ```
 
 Sealing an empty episode is an error, not an empty seal. Dream promotes durable memory; it is a

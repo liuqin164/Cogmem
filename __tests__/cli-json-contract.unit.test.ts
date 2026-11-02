@@ -15,6 +15,13 @@ test('shared CLI JSON metadata cannot be overridden by command payloads', () => 
 const memoryBin = join(import.meta.dir, '..', 'src', 'bin', 'memory.ts');
 const cogmemBin = join(import.meta.dir, '..', 'src', 'bin', 'cogmem.ts');
 
+async function runDream(args: string[]): Promise<Record<string, unknown>> {
+  const proc = Bun.spawn({ cmd: ['bun', join(import.meta.dir, '..', 'src', 'bin', 'dream.ts'), ...args], stdout: 'pipe', stderr: 'pipe' });
+  const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+  if (exitCode !== 0) throw new Error(`dream ${args.join(' ')} exited ${exitCode}: ${stderr || stdout}`);
+  return JSON.parse(stdout) as Record<string, unknown>;
+}
+
 async function runMemory(args: string[]): Promise<Record<string, unknown>> {
   const proc = Bun.spawn({
     cmd: ['bun', memoryBin, ...args],
@@ -151,16 +158,29 @@ test('memory plan does not suggest dream tick for raw-only dream ledger lag', as
   }));
 });
 
-test('memory dream --promote --json exposes queue counters without requiring governance.queue paths', async () => {
-  const dbPath = join(makeTempDir('cogmem-cli-json-'), 'memory.db');
-  const output = await runMemory(['dream', '--promote', '--db', dbPath, '--project', 'demo', '--json']);
+test('the merged dream entry point refuses --promote, and names the step that does it', async () => {
+  // `memory dream --promote` used to promote, while the canonical `dream tick` refused and
+  // said governance is its own step. Two names for one operation had drifted into two
+  // different boundaries; the alias is gone and the boundary it bypassed is what remains.
+  const dbPath = join(makeTempDir('cogmem-cli-json-dream-'), 'memory.db');
+  const proc = Bun.spawn({
+    cmd: ['bun', join(import.meta.dir, '..', 'src', 'bin', 'dream.ts'), 'tick', '--promote', '--db', dbPath, '--project', 'demo', '--json'],
+    stdout: 'pipe', stderr: 'pipe',
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+  expect(exitCode).toBe(1);
+  expect(`${stdout}${stderr}`).toContain('dream tick does not promote');
+  expect(`${stdout}${stderr}`).toContain('cogmem memory govern');
 
+  // And the tick itself still answers with the queue counters the contract promises.
+  const tick = Bun.spawn({
+    cmd: ['bun', join(import.meta.dir, '..', 'src', 'bin', 'dream.ts'), 'tick', '--db', dbPath, '--project', 'demo', '--json'],
+    stdout: 'pipe', stderr: 'pipe',
+  });
+  const [tickOut, , tickCode] = await Promise.all([new Response(tick.stdout).text(), new Response(tick.stderr).text(), tick.exited]);
+  expect(tickCode).toBe(0);
+  const output = JSON.parse(tickOut) as Record<string, unknown>;
   expect(output.schemaVersion).toBe('cogmem.cli.v1');
-  expect(output.command).toBe('memory.dream');
-  expect(output.candidate).toBe(0);
-  expect(output.promoted).toBe(0);
-  expect(output.needs_confirmation).toBe(0);
-  expect(output.beliefs).toBe(0);
 });
 
 /**
