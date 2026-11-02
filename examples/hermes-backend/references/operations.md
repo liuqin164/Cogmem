@@ -20,6 +20,23 @@ Read this file when installing, upgrading, importing, repairing, or operating Co
 | Correct episode boundaries | `cogmem_episode_repair` or episode repair CLI |
 | Back up/restore | `snapshot export/import` |
 
+## Which profile serves these tools
+
+`connect` writes the MCP entry without `--profile`, so the server it launches runs the default
+`core` profile — six tools. A tool outside it answers `tool_not_in_profile` rather than running;
+`docs/mcp-hosts.md` describes the mechanism and the `admin`/`full` sets. Of the tools named in
+this file:
+
+| Tool | Minimum profile |
+| --- | --- |
+| `cogmem_recall`, `cogmem_graph_explore`, `cogmem_graph_node` | `core` (nothing to change) |
+| `cogmem_candidate_review`, `cogmem_episode_repair`, `cogmem_graph_touch` | `admin` |
+| `cogmem_graph_search`, `cogmem_graph_path`, `cogmem_graph_neighbors`, `cogmem_graph_timeline` | `full` |
+
+Add `--profile admin` or `--profile full` to the entry's args when the agent needs a row below
+the first. The profile the server *launched* with is what bounds `tools/list`; a per-call
+identity header can only narrow it.
+
 ## Install, connect, and reload
 
 Recommended workspace-local npm install:

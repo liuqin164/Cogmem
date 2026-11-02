@@ -520,3 +520,29 @@ test("the release checklist's MCP claims hold against the registry", () => {
   }
 });
 
+test('the skill bundles state the profile each tool actually needs', () => {
+  // `connect` writes an entry with no `--profile`, so the server runs `core` (six tools) and a
+  // documented call for anything above it answers `tool_not_in_profile`. The bundles now say
+  // which row each tool needs; this keeps that table equal to the registry rather than to what
+  // the profiles were when it was written.
+  const all = listCogmemMcpTools();
+  const core = new Set(filterToolsByProfile('core', all).map((tool) => tool.name));
+  const admin = new Set(filterToolsByProfile('admin', all).map((tool) => tool.name));
+  const minimumFor = (name: string) => (core.has(name) ? 'core' : admin.has(name) ? 'admin' : 'full');
+
+  let rows = 0;
+  for (const file of ['examples/hermes-backend/references/operations.md', 'examples/openclaw-backend/references/operations.md']) {
+    const text = readFileSync(join(coreRoot, file), 'utf8');
+    const table = text.slice(text.indexOf('Which profile serves these tools'));
+    expect({ file, hasTable: table.length > 0 }).toEqual({ file, hasTable: true });
+    for (const row of table.matchAll(/^\|\s*([^|]+?)\s*\|\s*`(core|admin|full)`/gm)) {
+      const tools = [...row[1]!.matchAll(/`(cogmem_[a-z_]+)`/g)].map((m) => m[1]!);
+      expect(tools.length).toBeGreaterThan(0);
+      for (const tool of tools) {
+        expect({ file, tool, stated: row[2]!, actual: minimumFor(tool) }).toEqual({ file, tool, stated: row[2]!, actual: row[2]! });
+        rows += 1;
+      }
+    }
+  }
+  expect(rows).toBeGreaterThanOrEqual(14);
+});
