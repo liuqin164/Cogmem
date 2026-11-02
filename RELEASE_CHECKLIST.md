@@ -21,16 +21,10 @@ This release is distributed through the npm registry. GitHub remains the source 
 - `cogmem update`
 - `cogmem mcp`
 - `cogmem doctor --plugin-only --agent openclaw`
-- `cogmem-compact`
-- `cogmem memory`
-- `cogmem repair`
-- `cogmem explain-recall`
-- `cogmem-mcp` compatibility bin for existing host configs
-- The other 16 `cogmem-*` aliases are **deprecated in 4.0** and removed in the next breaking
-  release (#112). Each one is a three-line entry under `src/bin/alias/` that warns on
-  stderr (never under `--json`); deleting that directory plus its `bin` lines is the
-  removal. `cogmem-mcp` is not in it: host configurations name it as a server command and
-  are not rewritten on upgrade.
+- The `cogmem-*` aliases for the other commands are **Removed in 4.0 (#112)** — all sixteen,
+  with `src/bin/alias/` and the `warnDeprecatedAlias` helper. This ships two bins in total:
+  `cogmem` and the `cogmem-mcp` compatibility name, which host configurations carry and are
+  not rewritten on upgrade.
 - `cogmem import <openclaw|hermes>`
 - `cogmem normalize-transcript`
 - `cogmem snapshot`

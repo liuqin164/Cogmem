@@ -1963,25 +1963,24 @@ test('cogmem-connect pi leaves other MCP servers alone, and is idempotent', asyn
   expect(parsedSecond.piMcp?.configUpdated).toBe(false);
 });
 
-test('package exposes agent migration bins', () => {
-  const packageJson = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8'));
+test('the package exposes two bins, and the migration commands come through the dispatcher', () => {
+  const packageJson = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8')) as { bin: Record<string, string> };
 
-  // Since #112 the `cogmem-*` names are deprecated aliases, each pointing at its own
-  // three-line forwarder so the deprecation can be announced; `cogmem-mcp` keeps pointing
-  // at the real entry because host configurations name it as a server command.
-  expect(packageJson.bin['cogmem-explain-recall']).toBe('dist/bin/alias/explain-recall.js');
-  expect(packageJson.bin['cogmem-mcp']).toBe('dist/bin/mcp.js');
-  // The two import bins are gone rather than deprecated: the owner chose to merge them into
-  // `cogmem import <host>` and ship no compatibility entry point for either name.
-  expect(packageJson.bin['cogmem-import-openclaw']).toBeUndefined();
-  expect(packageJson.bin['cogmem-import-hermes']).toBeUndefined();
-  expect(existsSync(join(coreRoot, 'src', 'bin', 'alias', 'import-openclaw.ts'))).toBe(false);
-  expect(existsSync(join(coreRoot, 'src', 'bin', 'import.ts'))).toBe(true);
-  expect(packageJson.bin['cogmem-connect']).toBe('dist/bin/alias/connect.js');
+  // The owner removed the `cogmem-*` alias bins ahead of 4.0 rather than in a later breaking
+  // release (#112), so `cogmem` is the only command entry point. `cogmem-mcp` stays because
+  // host configurations name it as a server command and are not rewritten on upgrade.
+  expect(Object.keys(packageJson.bin).sort()).toEqual(['cogmem', 'cogmem-mcp']);
   expect(packageJson.bin.cogmem).toBe('dist/bin/cogmem.js');
-  expect(packageJson.bin['cogmem-update']).toBe('dist/bin/alias/update.js');
-  expect(packageJson.bin['cogmem-memory']).toBe('dist/bin/alias/memory.js');
+  expect(packageJson.bin['cogmem-mcp']).toBe('dist/bin/mcp.js');
+  expect(existsSync(join(coreRoot, 'src', 'bin', 'alias'))).toBe(false);
+
+  // The commands those bins used to carry are still reachable, through the dispatcher.
+  const source = readFileSync(join(coreRoot, 'src', 'bin', 'cogmem.ts'), 'utf8');
+  for (const command of ['explain-recall', 'import', 'memory', 'repair']) {
+    expect({ command, present: new RegExp(`'?${command}'?:\\s*'`).test(source) }).toEqual({ command, present: true });
+  }
 });
+
 
 test('import CLI parser keeps repeated path arguments in order without duplication', () => {
   const parsed = parseArgs([

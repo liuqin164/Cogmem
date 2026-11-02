@@ -22,23 +22,7 @@
   },
   "bin": {
     "cogmem": "dist/bin/cogmem.js",
-    "cogmem-init": "dist/bin/alias/init.js",
-    "cogmem-doctor": "dist/bin/alias/doctor.js",
-    "cogmem-host-bridge": "dist/bin/alias/host-bridge.js",
-    "cogmem-connect": "dist/bin/alias/connect.js",
-    "cogmem-update": "dist/bin/alias/update.js",
-    "cogmem-compact": "dist/bin/alias/compact.js",
-    "cogmem-memory": "dist/bin/alias/memory.js",
-    "cogmem-repair": "dist/bin/alias/repair.js",
-    "cogmem-explain-recall": "dist/bin/alias/explain-recall.js",
-    "cogmem-mcp": "dist/bin/mcp.js",
-    "cogmem-normalize-transcript": "dist/bin/alias/normalize-transcript.js",
-    "cogmem-snapshot": "dist/bin/alias/snapshot.js",
-    "cogmem-prospective": "dist/bin/alias/prospective.js",
-    "cogmem-strategy": "dist/bin/alias/strategy.js",
-    "cogmem-brain-eval": "dist/bin/alias/brain-eval.js",
-    "cogmem-episode": "dist/bin/alias/episode.js",
-    "cogmem-dream": "dist/bin/alias/dream.js"
+    "cogmem-mcp": "dist/bin/mcp.js"
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",

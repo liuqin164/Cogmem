@@ -161,28 +161,12 @@ describe('core release metadata', () => {
 
   test('every package CLI bin has a source entrypoint', () => {
     const manifest = packageJson();
-    const expectedBins = [
-      'cogmem',
-      'cogmem-brain-eval',
-      'cogmem-compact',
-      'cogmem-connect',
-      'cogmem-doctor',
-      'cogmem-dream',
-      'cogmem-episode',
-      'cogmem-explain-recall',
-      'cogmem-host-bridge',
-      'cogmem-init',
-      'cogmem-mcp',
-      'cogmem-memory',
-      'cogmem-normalize-transcript',
-      'cogmem-prospective',
-      'cogmem-repair',
-      'cogmem-snapshot',
-      'cogmem-strategy',
-      'cogmem-update',
-    ];
+    // `cogmem` is the single entry point and `cogmem-mcp` stays because host configurations
+    // name it as a server command and are not rewritten on upgrade. The `cogmem-*` aliases for
+    // the other commands are gone (#112): the dispatcher is the only way in, so a name that is
+    // not a command cannot be invoked at all.
+    expect(Object.keys(manifest.bin).sort()).toEqual(['cogmem', 'cogmem-mcp']);
 
-    expect(Object.keys(manifest.bin).sort()).toEqual(expectedBins);
     for (const target of Object.values(manifest.bin)) {
       const source = target.replace(/^dist\//, 'src/').replace(/\.js$/, '.ts');
       expect(existsSync(join(coreRoot, source))).toBe(true);
@@ -545,19 +529,14 @@ test('the skill bundles state the profile each tool actually needs', () => {
   expect(rows).toBeGreaterThanOrEqual(14);
 });
 
-test('the release checklist counts the deprecated aliases that exist', () => {
-  // The sentence said nineteen while there were sixteen: two merges removed an alias each
-  // (`openclaw diagnose`, `re-embed`) and a third removed two more (`import-openclaw`,
-  // `import-hermes`), and only the first of those updated the number.
+test('the deprecated aliases are gone, and the checklist says so', () => {
+  // #112 removed them. The owner chose to do it before 4.0 ships rather than in a later
+  // breaking release, so the shape to hold is "no alias directory, no alias bin", not a count.
   const manifest = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8')) as { bin: Record<string, string> };
-  const aliases = Object.entries(manifest.bin).filter(([, target]) => target.includes('alias/'));
-  const sentence = readFileSync(join(coreRoot, 'RELEASE_CHECKLIST.md'), 'utf8')
-    .split('\n').find((line) => line.includes('`cogmem-*` aliases are **deprecated in 4.0**')) ?? '';
-  expect(sentence).not.toBe('');
-  expect(sentence).toContain(`The other ${aliases.length} `);
-  // and each of them is a forwarder that announces itself, not a second implementation
-  for (const [name] of aliases) {
-    const entry = join(coreRoot, 'src', 'bin', 'alias', `${name.replace(/^cogmem-/, '')}.ts`);
-    expect({ name, announces: readFileSync(entry, 'utf8').includes('warnDeprecatedAlias') }).toEqual({ name, announces: true });
-  }
+  expect(Object.entries(manifest.bin).filter(([, target]) => target.includes('alias/'))).toEqual([]);
+  expect(existsSync(join(coreRoot, 'src', 'bin', 'alias'))).toBe(false);
+  expect(readFileSync(join(coreRoot, 'src', 'bin', 'CliArgs.ts'), 'utf8')).not.toContain('warnDeprecatedAlias');
+
+  const checklist = readFileSync(join(coreRoot, 'RELEASE_CHECKLIST.md'), 'utf8');
+  expect(checklist).toContain('Removed in 4.0 (#112)');
 });

@@ -30,14 +30,14 @@ stamped with that project, and a call that names a different one is rejected
 with `project_scope_violation` instead of reading another project's memory.
 Without `--project`, each call's `projectId` argument decides.
 
-### The `cogmem-*` aliases are deprecated, except `cogmem-mcp`
+### Two bins ship: `cogmem` and `cogmem-mcp`
 
-`cogmem <subcommand>` is the entry point; the 20 `cogmem-*` aliases still run and print one
-deprecation line on stderr (never under `--json`), and they are removed in the next
-breaking release. `cogmem-mcp` is exempt because this document, and every host
-configuration `connect` writes, name it as the MCP server command — a configuration
-written today is not rewritten when the user upgrades, so removing it would break a
-working install silently.
+`cogmem <subcommand>` is the entry point, and it is the only way in for commands: the
+`cogmem-<command>` aliases (twenty of them in 3.x) were removed in 4.0, along with the
+deprecation warning they printed. `cogmem-mcp` is the exception because this document, and every
+host configuration `connect` writes, name it as the MCP server command — a configuration
+written before the upgrade is not rewritten, so removing it would break a working install
+silently.
 
 ### Without a model provider, recall is lexical
 

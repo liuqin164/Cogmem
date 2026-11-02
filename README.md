@@ -835,7 +835,7 @@ cogmem host-bridge
 cogmem mcp
 ```
 
-Every `cogmem-*` bin is a **compatibility alias** for the matching subcommand: `cogmem-memory` is `cogmem memory`, `cogmem-mcp` is `cogmem mcp`. Write new scripts and host configurations against the subcommand form; the standalone bins stay so a script written for 3.x keeps working, and `cogmem-mcp` in particular stays because existing host configs name it as their server command.
+4.0 ships **two bins**: `cogmem`, the entry point every command goes through, and `cogmem-mcp`, which host configurations name as their MCP server command. The other `cogmem-<command>` aliases (`cogmem-memory`, `cogmem-dream`, …) were removed in 4.0 rather than deprecated further, so a 3.x script calling one needs the subcommand form.
 
 ## MCP transport and profiles
 

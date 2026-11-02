@@ -26,10 +26,16 @@ test('the parser rejects an unknown flag and lists what it accepts', () => {
   expect(parseCliArgs(['thing', '--project=p'], { usage })).toEqual({ command: 'thing', project: 'p' });
 });
 
-test('every published entry point fails on an unknown flag', () => {
+test('every published command entry point fails on an unknown flag', () => {
   const entries = binEntries();
-  expect(entries.length).toBeGreaterThan(10);
-  for (const entry of entries) {
+  // The package ships exactly two bins: the dispatcher and the MCP server name. Only the
+  // dispatcher parses command flags — `cogmem-mcp` is a server with no command line to typo,
+  // and the MCP tests cover its behaviour.
+  expect(entries.map((entry) => entry.name).sort()).toEqual(['cogmem', 'cogmem-mcp']);
+  const commandEntries = entries.filter((entry) => entry.name !== 'cogmem-mcp');
+  expect(commandEntries.length).toBe(1);
+
+  for (const entry of commandEntries) {
     const result = Bun.spawnSync(['bun', entry.source, '--typo'], { cwd: root, timeout: 30_000 });
     const output = `${result.stdout?.toString() ?? ''}${result.stderr?.toString() ?? ''}`;
     expect({ name: entry.name, rejected: result.exitCode !== 0 }).toEqual({ name: entry.name, rejected: true });
