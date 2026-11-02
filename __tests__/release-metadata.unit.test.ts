@@ -463,3 +463,60 @@ test('shipped docs only show invocations the CLI accepts', () => {
   }
   expect([...new Set(offenders)]).toEqual([]);
 });
+
+test("the release checklist's MCP claims hold against the registry", () => {
+  // The checklist is a release gate, so its sentences about the MCP surface are assertions.
+  // They were verified by hand once (#155); this keeps them true without another hand pass.
+  const paragraph = readFileSync(join(coreRoot, 'RELEASE_CHECKLIST.md'), 'utf8')
+    .split('\n').find((line) => line.includes('MCP `tools/list` includes')) ?? '';
+  expect(paragraph).not.toBe('');
+
+  const all = listCogmemMcpTools();
+  const byName = new Map(all.map((tool) => [tool.name, tool]));
+  const hints = (name: string) => (byName.get(name)?.annotations ?? {}) as { readOnlyHint?: boolean; idempotentHint?: boolean };
+
+  // "all seven read-only Memory Atlas queries ... declare read-only/idempotent semantics"
+  const atlasReads = all.filter((tool) => tool.name.startsWith('cogmem_graph_') && tool.name !== 'cogmem_graph_touch').map((tool) => tool.name);
+  expect({ claim: paragraph.includes('seven read-only Memory Atlas queries'), count: atlasReads.length }).toEqual({ claim: true, count: 7 });
+  for (const name of atlasReads) {
+    // toMatchObject: the annotation object also carries a title and destructiveHint.
+    expect({ name, hints: hints(name) }).toMatchObject({ name, hints: { readOnlyHint: true, idempotentHint: true } });
+  }
+  // "only touch records selected-node use"
+  expect(hints('cogmem_graph_touch').readOnlyHint).toBe(false);
+  expect(all.filter((tool) => tool.name.startsWith('cogmem_graph_') && hints(tool.name).readOnlyHint !== true).map((tool) => tool.name)).toEqual(['cogmem_graph_touch']);
+
+  // "Episode audit-boundaries and split-plan are read-only"
+  for (const name of ['cogmem_episode_audit_boundaries', 'cogmem_episode_split_plan']) {
+    expect({ name, hints: hints(name) }).toMatchObject({ name, hints: { readOnlyHint: true, idempotentHint: true } });
+  }
+
+  // Every family the paragraph names still has a tool whose name carries those words. The list
+  // mixes separators — `episode append/import/status/audit-boundaries/...`, `topic
+  // list/operate/rollback`, `Dream tick/status` — so a slash extends the family named before it.
+  // The slice stops before "all seven read-only Memory Atlas queries": that count is asserted
+  // above against the registry rather than parsed out of prose.
+  const named = paragraph.slice(paragraph.indexOf('includes') + 'includes'.length, paragraph.indexOf(', all seven'));
+  const pairs: Array<{ item: string; family: string; sub: string }> = [];
+  for (const piece of named.split(',').map((part) => part.trim().replace(/ tools$/, '')).filter((part) => part.length > 2)) {
+    const tokens = piece.split('/').map((token) => token.trim().toLowerCase()).filter(Boolean);
+    if (tokens.length === 0) continue;
+    const head = tokens[0]!.split(/[^a-z]+/).filter(Boolean);
+    const family = head.slice(0, -1).join(' ');
+    for (const sub of [head[head.length - 1]!, ...tokens.slice(1)]) {
+      pairs.push({ item: piece, family, sub: sub.split(/[^a-z]+/).filter(Boolean).join(' ') });
+    }
+  }
+  expect(pairs.length).toBeGreaterThan(10);
+  for (const { item, family, sub } of pairs) {
+    const words = [...family.split(' '), ...sub.split(' ')].filter(Boolean);
+    // A leading adjective is prose ("conditional Dream tick", "explicit graph_touch"), so a
+    // suffix of the words may be the pair; two words stay required when there are two.
+    const found = all.some((tool) => words.some((_, start) => {
+      const tail = words.slice(start);
+      return tail.length >= Math.min(2, words.length) && tail.every((word) => tool.name.includes(word));
+    }));
+    expect({ item, found }).toEqual({ item, found: true });
+  }
+});
+
