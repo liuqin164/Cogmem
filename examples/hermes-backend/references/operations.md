@@ -236,7 +236,7 @@ cogmem snapshot export --out ./cogmem.snapshot
 cogmem snapshot import --snap ./cogmem.snapshot --dry-run
 cogmem compact --dry-run --json
 cogmem compact --apply --json
-cogmem re-embed status --json
+cogmem doctor --storage --json
 cogmem brain-eval --input ./samples.json --json
 cogmem strategy plan --query "<question>" --project 'hermes-<workspace-hash>' --json
 cogmem strategy outcomes --project 'hermes-<workspace-hash>' --limit 100 --json

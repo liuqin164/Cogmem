@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, globSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -401,4 +401,65 @@ describe('documented tool profile counts match the shipped registry', () => {
     expect(build).toBeGreaterThan(-1);
     expect(test).toBeGreaterThan(build);
   });
+});
+
+test('shipped docs only show invocations the CLI accepts', () => {
+  // The readers of these docs are agents that run what they read. Three classes of drift have
+  // shipped: a deleted command (`memory dream`, `openclaw diagnose`, `re-embed`), an invented
+  // command family (`cogmem atlas overview …`), and flags that no command takes
+  // (`memory recall --exclude-session`). Only fenced code blocks count, with comments removed:
+  // prose says "cogmem can", and mcp-hosts.md discusses `--db` in a comment.
+  const readSource = (file: string) => readFileSync(join(coreRoot, file), 'utf8');
+  const dispatcher = readSource('src/bin/cogmem.ts');
+  const block = /const COMMANDS[^=]*=\s*\{([\s\S]*?)\n\};/.exec(dispatcher)?.[1] ?? '';
+  const entries = new Map([...block.matchAll(/'?([a-z][a-z0-9-]*)'?:\s*'([a-z0-9-]+)'/g)].map((m) => [m[1]!, m[2]!] as const));
+
+  const flagsFor = (entry: string): Set<string> => {
+    const source = readSource(join('src', 'bin', `${entry}.ts`));
+    const flags = new Set([...source.matchAll(/--([a-z][a-z0-9-]*)/g)].map((m) => m[1]!));
+    for (const array of source.matchAll(/extraFlags:\s*\[([^\]]*)\]/g)) {
+      for (const name of array[1]!.matchAll(/'([a-z][a-z0-9-]*)'/g)) flags.add(name[1]!);
+    }
+    return flags;
+  };
+  const subsFor = (entry: string): Set<string> => {
+    const source = readSource(join('src', 'bin', `${entry}.ts`));
+    const predicate = /function is\w+Command\([^)]*\)[^{]*\{([\s\S]*?)\n\}/.exec(source)?.[1];
+    const subs = new Set(predicate ? [...predicate.matchAll(/===\s*'([a-z][a-z0-9-]*)'/g)].map((m) => m[1]!) : []);
+    const usage = /Usage: cogmem \w+ <([^>]+)>/.exec(source)?.[1];
+    // A usage line may abbreviate the tail (`…|graph...>`); it only ever adds names.
+    for (const name of (usage ?? '').split('|')) if (/^[a-z][a-z0-9-]*$/.test(name)) subs.add(name);
+    return subs;
+  };
+
+  const docs = [
+    ...globSync('docs/*.md', { cwd: coreRoot }),
+    ...globSync('*.md', { cwd: coreRoot }),
+    ...globSync('examples/**/*.md', { cwd: coreRoot }),
+  ].filter((file) => !file.includes('archive') && !file.includes('4.0-issue-loop') && !file.includes('CHANGELOG'));
+  expect(docs.length).toBeGreaterThan(10);
+
+  const offenders: string[] = [];
+  for (const file of docs) {
+    const parts = readSource(file).split('```');
+    const fenced = parts.filter((_, index) => index % 2 === 1).join('\n');
+    for (const raw of fenced.split('\n')) {
+      const line = raw.replace(/#.*$/, '');
+      const head = /^\s*\$?\s*cogmem\s+([a-z][a-z0-9-]*)(?:\s+(\S+))?/.exec(line);
+      if (!head) continue;
+      const command = head[1]!;
+      const entry = entries.get(command);
+      if (!entry) { offenders.push(`${file}: cogmem ${command} (no such command)`); continue; }
+      const second = head[2];
+      if (second && !second.startsWith('-') && /^[a-z][a-z0-9-]*$/.test(second)) {
+        const subs = subsFor(entry);
+        if (subs.size > 0 && !subs.has(second)) offenders.push(`${file}: cogmem ${command} ${second} (no such subcommand)`);
+      }
+      const allowed = flagsFor(entry);
+      for (const flag of line.matchAll(/--([a-z][a-z0-9-]*)/g)) {
+        if (!allowed.has(flag[1]!)) offenders.push(`${file}: cogmem ${command} --${flag[1]!} (no such flag)`);
+      }
+    }
+  }
+  expect([...new Set(offenders)]).toEqual([]);
 });

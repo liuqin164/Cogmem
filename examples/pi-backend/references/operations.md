@@ -58,7 +58,7 @@ cogmem memory status  --project <id> --json
 cogmem memory recall  --project <id> --query "what did we decide about the release?" --json
 cogmem memory recall  --project <id> --query "…" --agent <label> --json   # narrows, never widens
 cogmem memory search  --project <id> --query "…" --json
-cogmem memory events  --project <id> --json
+cogmem memory list    --project <id> --json
 ```
 
 `--agent` **narrows** a read to turns recorded under that label. It cannot widen a read beyond
@@ -67,11 +67,11 @@ the connection's own scope, and the bound server infers identity from `--project
 ## Memory Atlas as composable filters
 
 ```bash
-cogmem atlas overview --project <id> --json
-cogmem atlas search   --project <id> --query "…" --json
-cogmem atlas explore  --project <id> --node <id> --json
-cogmem atlas path     --project <id> --from <id> --to <id> --json
-cogmem atlas node     --project <id> --id <node> --json
+cogmem memory graph         --project <id> --json
+cogmem memory graph-search  --project <id> --query "…" --json
+cogmem memory graph-explore --project <id> --query "…" --json
+cogmem memory graph-path    --project <id> --from <id> --to <id> --json
+cogmem memory graph-node    --project <id> --id <node> --json
 ```
 
 Atlas output is a map, not evidence. Summaries and edges are navigation hints; the evidence is
@@ -81,9 +81,9 @@ the raw event the node points at. Never quote an Atlas summary as if it were the
 
 ```bash
 cogmem memory candidates --project <id> --json
-cogmem memory review --project <id> --id <candidate> --approve --evidence <userEventId> --json
-cogmem memory review --project <id> --id <candidate> --reject --json
-cogmem memory review --project <id> --id <candidate> --supersede --json
+cogmem memory review --project <id> --id <candidate> --action approve --actor <name> --reason <text> --confirmation-event <userEventId> --json
+cogmem memory review --project <id> --id <candidate> --action reject --actor <name> --reason <text> --json
+cogmem memory review --project <id> --id <candidate> --action supersede --actor <name> --reason <text> --replacement <candidateId> --json
 ```
 
 A review needs the raw event it is based on. Candidate state changes only; it never executes the
@@ -94,7 +94,7 @@ action it describes.
 ```bash
 cogmem episode list    --project <id> --json
 cogmem episode status  --project <id> --json
-cogmem episode seal    --project <id> --id <episode> --json
+cogmem episode seal    --project <id> --episode <episode> --json
 cogmem episode repair  --project <id> --json
 cogmem dream tick      --project <id> --watch --max-runs 1 --json
 ```
@@ -105,11 +105,11 @@ host-owned step, so an agent asks for it rather than running it unattended.
 ## Backup, storage, prospective state, and evaluation
 
 ```bash
-cogmem snapshot export --project <id> --json
-cogmem snapshot import <file> --json
-cogmem memory compact --dry-run --json
+cogmem snapshot export --config <config.toml> --out <snap> --json
+cogmem snapshot import --snap <snap> --config <config.toml> --json
+cogmem compact --dry-run --json
 cogmem prospective list --project <id> --json
-cogmem brain-eval --json
+cogmem brain-eval --input ./samples.json --json
 ```
 
 `--dry-run` first for anything that writes. Export before a destructive operation, and check
