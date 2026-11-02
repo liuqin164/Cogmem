@@ -25,8 +25,23 @@ export class MemoryAtlasService {
 
   overview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
     const limit = boundedLimit(options.limit);
-    const nodes = this.store.listNodes(requiredProject(options.projectId), limit);
-    return slice(options.projectId, nodes, this.edgesFor(nodes, options.projectId));
+    const projectId = requiredProject(options.projectId);
+    const nodes = this.store.listNodes(projectId, limit);
+    const edges = this.edgesFor(nodes, projectId);
+    const result = slice(projectId, nodes, edges);
+    if (edges.length === 0) {
+      // The node budget is spent before any relation becomes visible. It is not a rare shape:
+      // every edge of a frame-sourced projection starts at an episode, and an episode ranks
+      // last on support_count, so `memory graph --limit 8` reported `nodes: 8, edges: 0` on a
+      // project that reports `nodes: 19, edges: 24` at `--limit 20`. An edgeless scatter is a
+      // wrong answer to "show me this project's graph", so the fact goes in `warnings` — the
+      // field that exists for it — rather than being inferred from an empty array.
+      const available = this.safeEdges(this.store.listEdges(projectId), projectId).length;
+      if (available > 0) {
+        result.warnings.push(`edges_hidden_by_node_budget: ${available} relation(s) exist in this project, but this overview's ${nodes.length}-node budget was spent on nodes that no relation touches. Raise --limit (maximum 30) to see them.`);
+      }
+    }
+    return result;
   }
 
   search(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {

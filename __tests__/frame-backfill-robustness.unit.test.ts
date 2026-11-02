@@ -4,7 +4,11 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { MemoryAtlasService } from '../src/atlas/MemoryAtlasService.js';
 import { createMemoryKernel } from '../src/factory.js';
+import type { EventStore } from '../src/store/EventStore.js';
+import type { MemoryAtlasStore } from '../src/store/MemoryAtlasStore.js';
+import type { MemoryAtlasEdge, MemoryAtlasNode } from '../src/atlas/MemoryAtlasTypes.js';
 import { normalizeEpisodeKind } from '../src/semantic/MemoryFrameTypes.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -118,4 +122,34 @@ test('reviewing a staged frame names the state and the step that changes it (#14
   expect(text).toContain('memory_frame_review_not_applicable');
   expect(text).toContain('staged');
   expect(text).toContain('--mode active');
+});
+
+test('an overview that hides the relations behind its node budget says so (#145)', () => {
+  // Every edge of a frame-sourced projection starts at an episode, and an episode ranks last
+  // on support_count — so the default 8-node overview of a connected project reported
+  // `nodes: 8, edges: 0` while `--limit 20` reported `nodes: 19, edges: 24`. An empty edges
+  // array was the only signal, and it reads as "this project has no relations".
+  const node = (id: string): MemoryAtlasNode => ({ id, projectId: 'p', type: 'time', label: id, aliases: [], evidenceEventIds: [], confidence: 1, supportCount: 1 } as unknown as MemoryAtlasNode);
+  const ambient = ['time:1', 'time:2', 'session:1', 'thread:1'].map(node);
+  const edge = { id: 'e1', projectId: 'p', source: 'episode:1', target: 'raw_event:1', relationType: 'PART_OF_EVENT', confidence: 0.7, evidenceEventIds: ['evt-1'] } as unknown as MemoryAtlasEdge;
+  const store = {
+    // the budget is spent on nodes no relation touches, which is the shape the box produced
+    listNodes: () => ambient,
+    listEdgesWithinNodes: () => [],
+    listEdges: () => [edge],
+    getNode: (id: string) => node(id),
+  } as unknown as MemoryAtlasStore;
+  const service = new MemoryAtlasService(store, { getEvent: () => ({ projectId: 'p' }) } as unknown as EventStore);
+
+  const hidden = service.overview({ projectId: 'p', limit: 8 });
+  expect(hidden.edges).toEqual([]);
+  expect(hidden.warnings.join(' ')).toContain('edges_hidden_by_node_budget');
+  expect(hidden.warnings.join(' ')).toContain('--limit');
+
+  // and with the relations inside the budget the warning is not there
+  const internal = { ...edge, source: 'time:1', target: 'time:2' } as unknown as MemoryAtlasEdge;
+  const shown = new MemoryAtlasService({ ...store, listEdgesWithinNodes: () => [internal], listEdges: () => [internal] } as unknown as MemoryAtlasStore, { getEvent: () => ({ projectId: 'p' }) } as unknown as EventStore)
+    .overview({ projectId: 'p', limit: 8 });
+  expect(shown.edges).toHaveLength(1);
+  expect(shown.warnings).toEqual([]);
 });
