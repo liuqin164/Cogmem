@@ -113,6 +113,7 @@ Use `cogmem doctor --plugin-only --agent openclaw --workspace . --json` when aut
 - `plugin.current=false`: generated files are stale; run plugin-only fix and restart gateway.
 - no `audit.lastBeforePromptBuild`: plugin is not loaded or the hook did not fire.
 - `audit.lastBeforePromptBuild.action=error`: bridge or DB failure; inspect `reason`, `bridgeCommand`, and `dbLocked`.
+- no block at all in a **headless one-shot**: `openclaw agent exec` runs "one isolated headless embedded agent turn" and takes no session options, so it is always a fresh session with no prior turn. `shouldInjectTurnBridge` returns false without a receipt from an earlier turn of the same session, whatever `turnBridgeInjectPolicy` says — so a turn-bridge block is impossible there by design, and a missing block is not evidence that recall or the bridge failed. Check the bridge directly (it is a newline-delimited JSON socket at `bridgeSocket`; arguments go under `payload`) and then re-test on a session-reusing turn such as `openclaw agent --local --session-id <id>`.
 - `action=inject` but no visible block: inspect `returnedInjectionShape`. Plugin 0.7.2 returns `prependContext`, `context`, and `promptPrefix`; if OpenClaw still ignores all three, the host hook contract changed and the OpenClaw plugin API must be checked before blaming recall.
 
 Plugin 0.7.2 queue behavior:
