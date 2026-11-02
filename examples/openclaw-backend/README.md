@@ -253,7 +253,7 @@ If the package is updated later, repair the OpenClaw wiring with:
 ```bash
 cogmem doctor --fix --agent openclaw --workspace . --plugin-only --json
 openclaw gateway restart
-cogmem openclaw diagnose --workspace . --json
+cogmem doctor --plugin-only --agent openclaw --workspace . --json
 ```
 
 Current OpenClaw memory config is OpenClaw-owned (`memory.backend` supports backends such as `"builtin"` and `"qmd"`). Do not add unknown host config fields for cogmem and do not write `plugins.slots.memory`.

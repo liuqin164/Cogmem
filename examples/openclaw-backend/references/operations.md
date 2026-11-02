@@ -9,7 +9,7 @@ Read this file when installing, upgrading, importing, repairing, or operating Co
 | Verify installation or config | `cogmem doctor` |
 | Update package and refresh configured plugin | `cogmem update --yes` |
 | Refresh only the generated OpenClaw plugin | `cogmem doctor --fix --agent openclaw --plugin-only` |
-| Diagnose OpenClaw hook/plugin failures | `cogmem openclaw diagnose` |
+| Diagnose OpenClaw hook/plugin failures | `cogmem doctor --plugin-only --agent openclaw` |
 | Repair empty project scope from old imports | `cogmem repair project-scope` |
 | Import OpenClaw files | `cogmem import-openclaw` |
 | Import generic message JSONL | `cogmem episode import` |
@@ -82,7 +82,7 @@ Refresh OpenClaw's generated plugin files and re-check the wiring after an updat
 ```bash
 cogmem doctor --fix --agent openclaw --workspace . --plugin-only --json
 openclaw gateway restart
-cogmem openclaw diagnose --workspace . --json
+cogmem doctor --plugin-only --agent openclaw --workspace . --json
 ```
 
 `doctor --plugin-only` avoids opening the Cogmem kernel, so it can repair stale `extensions/cogmem-auto-memory/index.js` and `bridge.mjs` even when an old drainer has SQLite busy. Use `connect --auto --force` when intentionally reinstalling the full integration and patching OpenClaw config:
@@ -91,7 +91,7 @@ cogmem openclaw diagnose --workspace . --json
 cogmem connect openclaw --workspace . --auto --force --json
 ```
 
-Use `cogmem openclaw diagnose --workspace . --json` when automatic memory blocks are missing. Check:
+Use `cogmem doctor --plugin-only --agent openclaw --workspace . --json` when automatic memory blocks are missing. Check:
 
 - `plugin.current=false`: generated files are stale; run plugin-only fix and restart gateway.
 - no `audit.lastBeforePromptBuild`: plugin is not loaded or the hook did not fire.
@@ -105,12 +105,12 @@ Plugin 0.7.2 queue behavior:
 - Stale `.cogmem/queue/openclaw-remember.jsonl.lock`, `.spawn.lock`, and `.processing` files older than `rememberDrainTimeoutMs` are recovered automatically and carry enough metadata for diagnosis.
 - `rememberDrainBatchSize` defaults to `20`, so a busy workspace drains bounded batches and releases DB handles quickly. Lower it temporarily if OpenClaw shares a slow SQLite disk.
 - Failed jobs retry up to `rememberMaxAttempts`; exhausted jobs move to `.dead.jsonl`.
-- `cogmem openclaw diagnose --workspace . --json` reports pending queue lines, dead-letter lines, lock owners, spawn-lock owners, and `.processing` files.
+- `cogmem doctor --plugin-only --agent openclaw --workspace . --json` reports pending queue lines, dead-letter lines, lock owners, spawn-lock owners, and `.processing` files.
 
 If the queue is not draining, diagnose before deleting files:
 
 ```bash
-cogmem openclaw diagnose --workspace . --json
+cogmem doctor --plugin-only --agent openclaw --workspace . --json
 ls -la .cogmem/queue/
 cat .cogmem/queue/openclaw-remember.jsonl.lock/owner.json 2>/dev/null || true
 cat .cogmem/queue/openclaw-remember.jsonl.spawn.lock/owner.json 2>/dev/null || true

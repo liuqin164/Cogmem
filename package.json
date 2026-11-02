@@ -27,7 +27,6 @@
     "cogmem-host-bridge": "dist/bin/alias/host-bridge.js",
     "cogmem-connect": "dist/bin/alias/connect.js",
     "cogmem-update": "dist/bin/alias/update.js",
-    "cogmem-openclaw": "dist/bin/alias/openclaw.js",
     "cogmem-compact": "dist/bin/alias/compact.js",
     "cogmem-memory": "dist/bin/alias/memory.js",
     "cogmem-repair": "dist/bin/alias/repair.js",

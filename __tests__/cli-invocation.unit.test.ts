@@ -89,7 +89,9 @@ test('every command answers --help with its usage, not with an error', async () 
   const block = /const COMMANDS[^=]*=\s*\{([\s\S]*?)\n\};/.exec(source)?.[1] ?? '';
   const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');
   const commands = [...block.matchAll(/^\s*'?([a-z][a-z0-9-]*)'?:/gm)].map((m) => m[1]!);
-  expect(commands.length).toBeGreaterThan(20);
+  // A parse sanity floor, not a count contract: the surface is being shortened on purpose
+  // (#141, #142), and an exact number here would fight that instead of guarding the parse.
+  expect(commands.length).toBeGreaterThanOrEqual(15);
 
   const offenders: string[] = [];
   for (const command of commands) {

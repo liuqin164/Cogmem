@@ -250,7 +250,7 @@ openclaw gateway restart
 Diagnose plugin staleness and hook failures without touching the DB:
 
 ```bash
-cogmem openclaw diagnose --workspace <openclaw-workspace> --json
+cogmem doctor --plugin-only --agent openclaw --workspace <openclaw-workspace> --json
 ```
 
 If old 3.5.2-era rows were imported with an empty `project_id`, preview and apply the conservative single-project repair:

@@ -177,7 +177,6 @@ describe('core release metadata', () => {
       'cogmem-mcp',
       'cogmem-memory',
       'cogmem-normalize-transcript',
-      'cogmem-openclaw',
       'cogmem-prospective',
       'cogmem-repair',
       'cogmem-snapshot',

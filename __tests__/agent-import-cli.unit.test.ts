@@ -900,7 +900,7 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   expect(commandArguments(stepOf('doctor'))).toBe(`doctor --workspace ${dir}`);
   expect(commandArguments(stepOf('import_dry_run'))).toBe(`import-openclaw --workspace ${dir} --project ${project} --dry-run --json`);
   expect(commandArguments(stepOf('import_apply'))).toBe(`import-openclaw --workspace ${dir} --project ${project} --json`);
-  expect(commandArguments(stepOf('openclaw_diagnose'))).toBe(`openclaw diagnose --workspace ${dir} --json`);
+  expect(commandArguments(stepOf('openclaw_diagnose'))).toBe(`doctor --plugin-only --agent openclaw --workspace ${dir} --json`);
   expect(commandArguments(stepOf('memory_plan'))).toBe(`memory plan --project ${project} --json`);
   expect(commandArguments(stepOf('memory_status'))).toBe(`memory status --project ${project} --json`);
   expect(installedParsed.nextSteps).toEqual(expect.arrayContaining([
@@ -921,7 +921,7 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
     'cogmem import-openclaw',
     'cogmem memory review',
     'cogmem memory graph-explore',
-    'cogmem openclaw diagnose',
+    'cogmem doctor --plugin-only --agent openclaw',
     'cogmem repair project-scope',
     'cogmem episode repair',
     'cogmem snapshot export',
@@ -1286,7 +1286,7 @@ test('doctor --fix can repair OpenClaw automatic memory wiring', async () => {
   expect(pluginEntry.enabled).toBe(true);
 });
 
-test('doctor plugin-only and openclaw diagnose inspect stale plugin without opening kernel', async () => {
+test('doctor --plugin-only inspects a stale plugin and its queue without opening the kernel', async () => {
   const dir = makeTempDir('cogmem-openclaw-plugin-diagnose-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   const openclawConfigPath = join(dir, 'openclaw.json');
@@ -1353,24 +1353,16 @@ test('doctor plugin-only and openclaw diagnose inspect stale plugin without open
   expect(fixed.exitCode).toBe(0);
   expect(JSON.parse(fixed.stdout).openclaw.plugin.current).toBe(true);
 
-  const diagnosed = await runCli([
-    'bun',
-    cogmemBin,
-    'openclaw',
-    'diagnose',
-    '--workspace',
-    dir,
-    '--json',
-  ]);
-  expect(diagnosed.stderr).toBe('');
-  expect(diagnosed.exitCode).toBe(0);
-  const diagnosedJson = JSON.parse(diagnosed.stdout);
-  expect(diagnosedJson.plugin.current).toBe(true);
-  expect(diagnosedJson.audit.lastBeforePromptBuild.reason).toBe('database is locked');
-  expect(diagnosedJson.queue.pendingLines).toBe(1);
-  expect(diagnosedJson.queue.deadLines).toBe(1);
-  expect(diagnosedJson.queue.lock.owner.pid).toBe(123);
-  expect(diagnosedJson.queue.processingFiles).toHaveLength(1);
+  // The queue that `cogmem openclaw diagnose` alone reported moved into this same payload
+  // when that command was folded in (#142): a stuck queue is what an injection failure
+  // looks like from outside, and the kernel is still never opened to read it.
+  const queue = inspectedJson.openclaw.queue as {
+    pendingLines: number; deadLines: number; lock: { owner: { pid: number } }; processingFiles: unknown[];
+  };
+  expect(queue.pendingLines).toBe(1);
+  expect(queue.deadLines).toBe(1);
+  expect(queue.lock.owner.pid).toBe(123);
+  expect(queue.processingFiles).toHaveLength(1);
 });
 
 test('unified cogmem CLI dispatches doctor and update commands', async () => {

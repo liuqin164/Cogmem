@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 import Database from 'bun:sqlite';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 
 import { printJsonDocument } from './CliJson.js';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { NeuronEmbeddingStore } from '../embedding/NeuronEmbeddingStore.js';
@@ -39,7 +39,15 @@ import {
 } from '../install/InstallSteps.js';
 import { assertCliArgs } from './CliArgs.js';
 const DOCTOR_FLAGS = ['agent', 'auto', 'bun', 'config', 'dry-run', 'env-path', 'fix', 'force', 'hermes-config', 'json', 'openclaw-config', 'out', 'plugin-dir', 'plugin-only', 'storage', 'workspace'] as const;
-assertCliArgs(process.argv.slice(2), { usage: '', extraFlags: [...DOCTOR_FLAGS] });
+const USAGE = [
+  'Usage: cogmem doctor [--config <config.toml>] [--workspace <dir>] [--json]',
+  '  --storage                 report vector/raw storage and re-embedding progress',
+  '  --plugin-only             inspect the OpenClaw plugin, its audit log, and the remember',
+  '                            queue without opening the kernel (--agent openclaw)',
+  '  --fix --agent openclaw    repair the OpenClaw auto-memory wiring',
+  '  --out <path>              write the same JSON the command prints to a file',
+].join('\n');
+assertCliArgs(process.argv.slice(2), { usage: USAGE, extraFlags: [...DOCTOR_FLAGS] });
 
 function readArg(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -203,7 +211,7 @@ if (envPath) {
         command: 'doctor',
         pluginOnly: true,
         configPath: resolution.path,
-        openclaw: { plugin: inspection, fixed, audit },
+        openclaw: { plugin: inspection, fixed, audit, queue: inspectOpenClawRememberQueue(workspaceRoot) },
       }));
     } else {
       printWarnings(loaded.diagnostics);
@@ -212,6 +220,8 @@ if (envPath) {
       if (!inspection.current) warn('openclaw_plugin_stale', `Run ${resolveCogmemInvocation()} doctor --fix --agent openclaw --plugin-only --workspace ${workspaceRoot}.`);
       if (fixed) ok(`openclaw auto memory integration fixed at ${fixed.pluginDir}`);
       if (audit.lastBeforePromptBuild) ok(`last before_prompt_build action=${audit.lastBeforePromptBuild.action || 'unknown'} reason=${audit.lastBeforePromptBuild.reason || ''}`);
+      const queue = inspectOpenClawRememberQueue(workspaceRoot);
+      ok(`queue pending=${queue.pendingLines} dead=${queue.deadLines} processing=${Array.isArray(queue.processingFiles) ? queue.processingFiles.length : 0}`);
     }
     process.exit(0);
   }
@@ -401,6 +411,54 @@ if (envPath) {
       openclaw: reportPlugin ? { plugin } : undefined,
     },
   );
+}
+
+/**
+ * The remember-queue state `cogmem openclaw diagnose` used to report.
+ *
+ * That command called the same `inspectOpenClawAutoMemoryPlugin` this one does and had its own
+ * copy of the audit reader; the queue was the one thing it had that this did not. It moved here
+ * rather than disappearing with the command (#142): a stuck queue is exactly what an injection
+ * failure looks like from the outside.
+ */
+function countJsonlLines(path: string): number {
+  if (!existsSync(path)) return 0;
+  return readFileSync(path, 'utf8').split('\n').map((line) => line.trim()).filter(Boolean).length;
+}
+
+function readLock(path: string): Record<string, unknown> | undefined {
+  if (!existsSync(path)) return undefined;
+  const ownerPath = join(path, 'owner.json');
+  let owner: Record<string, unknown> | undefined;
+  if (existsSync(ownerPath)) {
+    try { owner = JSON.parse(readFileSync(ownerPath, 'utf8')) as Record<string, unknown>; }
+    catch { owner = { parseError: true }; }
+  }
+  const stat = statSync(path);
+  return { path, mtimeMs: stat.mtimeMs, ageMs: Date.now() - stat.mtimeMs, owner };
+}
+
+function inspectOpenClawRememberQueue(workspaceRoot: string): Record<string, unknown> {
+  const queuePath = join(workspaceRoot, '.cogmem', 'queue', 'openclaw-remember.jsonl');
+  const queueDir = dirname(queuePath);
+  const processingFiles = existsSync(queueDir)
+    ? readdirSync(queueDir)
+      .filter((entry) => entry.startsWith('openclaw-remember.jsonl.') && entry.endsWith('.processing'))
+      .map((entry) => {
+        const path = join(queueDir, entry);
+        const stat = statSync(path);
+        return { path, lines: countJsonlLines(path), mtimeMs: stat.mtimeMs, ageMs: Date.now() - stat.mtimeMs };
+      })
+    : [];
+  return {
+    queuePath,
+    pendingLines: countJsonlLines(queuePath),
+    deadPath: `${queuePath}.dead.jsonl`,
+    deadLines: countJsonlLines(`${queuePath}.dead.jsonl`),
+    lock: readLock(`${queuePath}.lock`),
+    spawnLock: readLock(`${queuePath}.spawn.lock`),
+    processingFiles,
+  };
 }
 
 function readLatestOpenClawAudit(workspaceRoot: string): { lastBeforePromptBuild?: Record<string, unknown> } {

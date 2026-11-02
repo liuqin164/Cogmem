@@ -20,7 +20,7 @@ This release is distributed through the npm registry. GitHub remains the source 
 - `cogmem connect`
 - `cogmem update`
 - `cogmem mcp`
-- `cogmem openclaw diagnose`
+- `cogmem doctor --plugin-only --agent openclaw`
 - `cogmem-compact`
 - `cogmem memory`
 - `cogmem repair`

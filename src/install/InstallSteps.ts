@@ -345,7 +345,7 @@ export function connectSteps(
       id: 'openclaw_diagnose',
       actor: 'agent',
       safeForAutomation: true,
-      command: `${bin} openclaw diagnose${workspaceArg} --json`,
+      command: `${bin} doctor --plugin-only --agent openclaw${workspaceArg} --json`,
       when: 'after connect --auto --force or before investigating injection failures',
       purpose: 'verify generated plugin files, audit log, queue lock, and hook diagnostics',
     });

@@ -135,7 +135,7 @@ openclaw gateway restart
 Diagnose plugin staleness and hook failures without opening SQLite:
 
 ```bash
-cogmem openclaw diagnose --workspace . --json
+cogmem doctor --plugin-only --agent openclaw --workspace . --json
 ```
 
 Interpret the audit:
@@ -376,13 +376,13 @@ Queued remember is the default. `agent_end` appends a durable JSONL job under `.
 When automatic memory recording looks stuck, do not delete queue files first. Diagnose the plugin and locks:
 
 ```bash
-cogmem openclaw diagnose --workspace . --json
+cogmem doctor --plugin-only --agent openclaw --workspace . --json
 ls -la .cogmem/queue/
 cat .cogmem/queue/openclaw-remember.jsonl.lock/owner.json 2>/dev/null || true
 cat .cogmem/queue/openclaw-remember.jsonl.spawn.lock/owner.json 2>/dev/null || true
 ```
 
-`openclaw diagnose` reports pending queue lines, dead-letter lines, active lock metadata, spawn-lock metadata, and stale `.processing` files. Use that JSON before deleting anything manually.
+`doctor --plugin-only --agent openclaw` reports pending queue lines, dead-letter lines, active lock metadata, spawn-lock metadata, and stale `.processing` files. Use that JSON before deleting anything manually.
 
 If `plugin.current=false`, refresh without opening the database:
 

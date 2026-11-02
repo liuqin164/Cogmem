@@ -19,7 +19,7 @@ npm install cogmem@latest --save
 COGMEM="./node_modules/.bin/cogmem"
 "$COGMEM" doctor
 "$COGMEM" connect openclaw --workspace . --auto --force --json
-"$COGMEM" openclaw diagnose --workspace . --json
+"$COGMEM" doctor --plugin-only --agent openclaw --workspace . --json
 ```
 
 Do not run `cogmem init` as an unattended agent action. It is an interactive wizard. Use it only when an operator is present:
@@ -216,7 +216,7 @@ After updating the package or editing OpenClaw config, repair wiring with:
 cogmem connect openclaw --workspace . --auto --force
 cogmem doctor --fix --agent openclaw --workspace . --plugin-only --json
 openclaw gateway restart
-cogmem openclaw diagnose --workspace . --json
+cogmem doctor --plugin-only --agent openclaw --workspace . --json
 ```
 
 The import command is idempotent. Re-running it skips records already imported into the same memory database.
