@@ -93,7 +93,10 @@ function main(): void {
     const changed = 0;
     const payload = {
       schemaVersion: 'cogmem.cli.v1',
-      command: 'repair project-scope',
+      // The `command` field is dot-separated everywhere else a multi-word command reports
+      // (`memory.graph-search`, `strategy.plan`, `snapshot.export`, `dream.tick`); this was the
+      // one that used a space, so a consumer keying on it had to special-case one command.
+      command: 'repair.project-scope',
       dbPath,
       dryRun: !apply,
       apply,

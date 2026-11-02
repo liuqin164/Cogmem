@@ -492,3 +492,40 @@ test('the flags that shipped as reads without an allowlist entry now run', () =>
     expect({ case: `${file} ${args[0]}`, refused: text.includes('unknown flag') }).toEqual({ case: `${file} ${args[0]}`, refused: false });
   }
 });
+
+test('the JSON command field names the command the way every other one does', () => {
+  // Multi-word commands report dot-separated names — `memory.graph-search`, `strategy.plan`,
+  // `snapshot.export`, `dream.tick` — so a consumer keys on one shape. `repair project-scope`
+  // reported a space, the only one, which meant special-casing a single command.
+  const dir = makeTempDir('cogmem-command-field-');
+  const configDir = join(dir, '.cogmem');
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, 'config.toml'), '[core]\ndb_path = "memory.db"\n');
+  const config = join(configDir, 'config.toml');
+
+  // Every helper-built envelope takes its command from the first argument, so a literal with a
+  // space there is wrong by construction. Template arguments interpolate and are skipped.
+  const offenders: string[] = [];
+  for (const file of readdirSync(join(coreRoot, 'src', 'bin')).filter((entry) => entry.endsWith('.ts'))) {
+    const source = readFileSync(join(coreRoot, 'src', 'bin', file), 'utf8');
+    for (const match of source.matchAll(/printCliJson\(\s*'([^']*)'/g)) {
+      if (/\s/.test(match[1]!)) offenders.push(`${file}: ${match[1]}`);
+    }
+  }
+  expect(offenders).toEqual([]);
+
+  // The commands that hand-roll their envelope are checked as they run.
+  const runs: Array<[string, string[]]> = [
+    ['cleanup.ts', ['--dry-run']],
+    ['doctor.ts', ['--config', config]],
+    ['repair.ts', ['project-scope', '--from', 'a', '--to', 'b', '--dry-run', '--config', config]],
+    ['init.ts', ['--yes', '--agent', 'none', '--no-probe']],
+  ];
+  for (const [file, args] of runs) {
+    const proc = Bun.spawnSync({ cmd: ['bun', join(coreRoot, 'src', 'bin', file), ...args, '--json'], cwd: dir, stdout: 'pipe', stderr: 'pipe' });
+    const text = new TextDecoder().decode(proc.stdout);
+    if (!text.trim().startsWith('{')) continue; // a run that refused printed no envelope
+    const command = (JSON.parse(text) as { command?: string }).command ?? '';
+    expect({ file, name: command, spaceFree: /^[a-z][a-z0-9.-]*$/.test(command) }).toEqual({ file, name: command, spaceFree: true });
+  }
+});
