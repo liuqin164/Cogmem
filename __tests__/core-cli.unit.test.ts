@@ -1021,8 +1021,32 @@ test('unified cogmem CLI exposes memory audit commands', async () => {
   expect(memoryError).toBe('');
   expect(await memoryProc.exited).toBe(0);
   expect(memoryOutput).toContain('govern');
-  expect(memoryOutput).toContain('--watch');
-  expect(memoryOutput).toContain('--promote');
+  // `memory dream --watch` moved to `dream tick --watch`, so this help must no longer promise
+  // it — and the command that does must. A help text that advertises a removed subcommand is
+  // how a merge leaves users running something that silently does nothing.
+  expect(memoryOutput).not.toContain('--watch');
+  expect(memoryOutput).not.toContain('|dream|');
+  const dreamHelp = Bun.spawn({ cmd: ['bun', join(coreRoot, 'src/bin/dream.ts'), '--help'], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe' });
+  const dreamOutput = await new Response(dreamHelp.stdout).text();
+  expect(await dreamHelp.exited).toBe(0);
+  expect(dreamOutput).toContain('--watch');
+  expect(dreamOutput).toContain('--max-runs');
+});
+
+test('an unknown memory subcommand fails instead of printing usage and exiting 0', async () => {
+  // `isMemoryCommand` rejects the name and leaves the command unset, which used to be answered
+  // the same way as no subcommand at all: usage on stdout, exit 0. A script that mistyped — or
+  // called the removed `memory dream` — was told it succeeded.
+  const dir = makeTempDir('cogmem-memory-unknown-');
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(join(dir, '.cogmem'), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+  for (const subcommand of ['dream', 'bogus']) {
+    const proc = Bun.spawn({ cmd: ['bun', memoryBin, subcommand, '--config', configPath, '--json'], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe' });
+    const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    expect({ subcommand, exitCode, names: `${stdout}${stderr}`.includes(`Unknown memory subcommand: ${subcommand}`) })
+      .toEqual({ subcommand, exitCode: 1, names: true });
+  }
 });
 
 test('snapshot import rejects invalid explicit dimensions before importing', async () => {

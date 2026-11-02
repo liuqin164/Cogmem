@@ -53,20 +53,17 @@ interface MemoryArgs {
   sessionId?: string;
   excludeSessionId?: string;
   limit?: number;
+  /** The candidate limit `memory govern` applies when it promotes. */
+  promoteLimit?: number;
   before?: number;
   after?: number;
   sinceGlobalSeq?: number;
   untilGlobalSeq?: number;
   order?: 'asc' | 'desc';
-  intervalMs?: number;
-  maxRuns?: number;
-  promoteLimit?: number;
   dbPath?: string;
   configPath?: string;
   mode?: 'shadow' | 'active';
   cursor?: string;
-  watch: boolean;
-  promote: boolean;
   json: boolean;
   includeEvidence: boolean;
   includeStaged: boolean;
@@ -131,15 +128,10 @@ function readArgs(argv: string[]): MemoryArgs {
     sinceGlobalSeq: numberArg(values, 'since') ?? numberArg(values, 'since-global-seq'),
     untilGlobalSeq: numberArg(values, 'until') ?? numberArg(values, 'until-global-seq'),
     order: orderArg(values, 'order'),
-    intervalMs: numberArg(values, 'interval-ms'),
-    maxRuns: numberArg(values, 'max-runs'),
-    promoteLimit: numberArg(values, 'promote-limit'),
     dbPath: stringArg(values, 'db'),
     configPath: stringArg(values, 'config'),
     mode: modeArg(values, 'mode'),
     cursor: stringArg(values, 'cursor'),
-    watch: values.watch === true,
-    promote: values.promote === true,
     json: values.json === true,
     includeEvidence: values['include-evidence'] === true,
     includeStaged: values['include-staged'] === true,
@@ -151,7 +143,7 @@ function readArgs(argv: string[]): MemoryArgs {
 
 function usage(): string {
   return [
-    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|frame-review|belief-history|graph...> [args]',
+    'Usage: cogmem memory <status|list|search|recall|show|govern|candidates|review|map|tick|bind|frame|frame-backfill|frame-review|belief-history|graph...> [args]',
     '',
     'Commands:',
     '  status               summarize raw ledger, vector, and dream backlog state',
@@ -162,7 +154,6 @@ function usage(): string {
     '         --agent defaults to the project id; name the agent that wrote the turn, or',
     '         a turn appended under another --source-agent will not be in scope',
     '  show --event <id>    show one raw event with surrounding context',
-    '  dream                compatibility alias for a conditional sealed-episode Dream tick',
     '  govern               apply CPU governance to pending dream/deep-write candidates',
     '  candidates           list dream/deep-write governance candidates',
     '  review               approve, reject, defer, supersede, or relink one needs-confirmation candidate',
@@ -185,6 +176,7 @@ function usage(): string {
     '  rebuild-topology     explicitly rebuild project or global time and cognitive projections',
     '',
     'Common options:',
+    '  --promote-limit <n>  governance candidate limit for `memory govern`, default follows --limit or 100',
     '  --project <id>       scope to one project',
     '  --global             select the projectless/global scope for topology rebuild',
     '  --collection <name>  recall from a named collection; default excludes collection:theseus',
@@ -205,11 +197,6 @@ function usage(): string {
     '  --replacement <id>         required for supersede: distinct same-project candidate that replaces this one',
     '  --review-after <ms>         future epoch milliseconds for defer',
     '                       review inputs are per action: an input the chosen action does not consume is rejected, not recorded',
-    '  --promote            after dream, run CPU governance over pending candidates',
-    '  --promote-limit <n>  governance candidate limit, default follows --limit or 100',
-    '  --watch              keep issuing conditional Dream ticks as a host-owned worker',
-    '  --interval-ms <n>    watch sleep interval, default 300000',
-    '  --max-runs <n>       stop watch after n iterations; omit for long-running worker',
     '  --agent <id>         agent id for governed recall, default openclaw',
     '  --intent <intent>    memory_recall, previous_session_summary, forensic_quote, historical_discussion, or action_history',
     '  --db <memory.db>     open an explicit database path',
@@ -1114,9 +1101,18 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
 }
 
 async function main(): Promise<void> {
-  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['action', 'actor', 'after', 'agent', 'before', 'collection', 'config', 'confirmation-event', 'db', 'episode', 'event', 'evidence-limit', 'from', 'global', 'hops', 'id', 'include-evidence', 'include-staged', 'intent', 'interval-ms', 'json', 'key', 'limit', 'local-date-now', 'max-episodes', 'max-runs', 'mode', 'no-refresh', 'now', 'order', 'project', 'promote', 'promote-limit', 'query', 'reason', 'refresh', 'replacement', 'review-after', 'session', 'since', 'stale-ok', 'status', 'target-belief', 'thread', 'timezone', 'to', 'until', 'watch', 'workspace'] });
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['action', 'actor', 'after', 'agent', 'before', 'collection', 'config', 'confirmation-event', 'db', 'episode', 'event', 'evidence-limit', 'from', 'global', 'hops', 'id', 'include-evidence', 'include-staged', 'intent', 'json', 'key', 'limit', 'local-date-now', 'max-episodes', 'mode', 'no-refresh', 'now', 'order', 'project', 'promote-limit', 'query', 'reason', 'refresh', 'replacement', 'review-after', 'session', 'since', 'stale-ok', 'status', 'target-belief', 'thread', 'timezone', 'to', 'until', 'workspace'] });
   const args = readArgs(process.argv.slice(2));
-  if (args.help || !args.command) {
+  if (args.help) {
+    console.log(usage());
+    return;
+  }
+  if (!args.command) {
+    // A typo is not a help request: `isMemoryCommand` rejects the name and leaves the command
+    // unset, so this is the only place that can tell "no subcommand" from "unknown subcommand"
+    // — and answering both with exit 0 made a mistyped or removed subcommand look successful.
+    const given = process.argv.slice(2).find((arg) => !arg.startsWith('-'));
+    if (given) throw new Error(`Unknown memory subcommand: ${given}\n${usage()}`);
     console.log(usage());
     return;
   }
