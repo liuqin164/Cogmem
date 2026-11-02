@@ -154,7 +154,11 @@ export class MemoryFrameStore {
   review(frameId: string, projectId: string, action: 'approve' | 'reject', actor: string, reason: string, now = Date.now()): boolean {
     if (!actor.trim() || !reason.trim()) throw new Error('memory_frame_review_actor_reason_required');
     const row = this.db.prepare(`SELECT project_id,status FROM memory_frames WHERE frame_id=?`).get(frameId) as { project_id?: string; status?: MemoryFrameStatus } | null;
-    if (!row || row.project_id !== projectId || row.status !== 'needs_confirmation') return false;
+    // The evidence and conflict cases below already throw named errors; this precondition was the
+    // one that answered `false`, so a caller could not tell "no such frame" from "not in the state
+    // that can be reviewed" — and `frame-review` reported `applied: false` with nothing else.
+    if (!row || row.project_id !== projectId) throw new Error(`memory_frame_not_found:${frameId}`);
+    if (row.status !== 'needs_confirmation') throw new Error(`memory_frame_review_not_applicable:${frameId}:${row.status}`);
     const reviewed = Boolean(this.db.transaction(() => {
       if (action === 'approve') {
         const frame = this.get(frameId);

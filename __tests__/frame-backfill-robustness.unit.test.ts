@@ -92,3 +92,30 @@ test('a staged frame is reported as staged, not as no frame at all (#143)', asyn
   });
   expect({ exitCode: human.exitCode, printed: new TextDecoder().decode(human.stdout).trim().length > 0 }).toEqual({ exitCode: 0, printed: true });
 });
+
+test('reviewing a staged frame names the state and the step that changes it (#144)', async () => {
+  // The store answered a bare `false` for "not in a reviewable state", so `frame-review`
+  // reported `applied: false` and nothing else — the same collapse of different facts that the
+  // staged-frame read had. Its evidence and conflict cases already threw named errors.
+  const dir = makeTempDir('cogmem-frame-review-state-');
+  const configDir = join(dir, '.cogmem');
+  mkdirSync(configDir, { recursive: true });
+  const dbPath = join(configDir, 'memory.db');
+  writeFileSync(join(configDir, 'config.toml'), '[core]\ndb_path = "memory.db"\n');
+  const kernel = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
+  kernel.appendEpisodeMessage({ projectId: 'p', sessionId: 's1', sourceAgent: 'a', role: 'user', text: '归档保留期定成七年。', timestamp: Date.now() - 3_600_000 });
+  kernel.backfillMemoryFrames({ projectId: 'p', limit: 50 });
+  const episodeId = kernel.listEpisodes({ projectId: 'p', limit: 1 })[0]!.episodeId;
+  const frameId = kernel.getMemoryFrame(episodeId, 'p', { includeStaged: true })!.frameId;
+  kernel.close();
+
+  const review = Bun.spawnSync({
+    cmd: ['bun', join(coreRoot, 'src', 'bin', 'memory.ts'), 'frame-review', '--project', 'p', '--id', frameId, '--action', 'approve', '--actor', 'op', '--reason', 'probe', '--config', join(configDir, 'config.toml'), '--json'],
+    cwd: coreRoot, stdout: 'pipe', stderr: 'pipe',
+  });
+  const text = new TextDecoder().decode(review.stdout) + new TextDecoder().decode(review.stderr);
+  expect(review.exitCode).toBe(1);
+  expect(text).toContain('memory_frame_review_not_applicable');
+  expect(text).toContain('staged');
+  expect(text).toContain('--mode active');
+});

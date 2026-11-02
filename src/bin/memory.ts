@@ -162,7 +162,7 @@ function usage(): string {
     '  bind                 backfill memory bindings for high-value raw user events',
     '  frame --episode <id> show one structured MemoryFrame [--include-staged]',
     '  frame-backfill       create deterministic evidence-backed frames for existing episodes',
-    '  frame-review         approve or reject a staged/needs-confirmation MemoryFrame',
+    '  frame-review         approve or reject a needs_confirmation MemoryFrame (see --mode active on frame-backfill)',
     '  belief-history --key <canonicalKey>  show every version of one belief, superseded ones included',
     '  graph                show a bounded overview of remembered topics, entities, clusters, actions, and time',
     '  graph-search         locate Atlas nodes by --query without expanding the graph',
@@ -777,7 +777,18 @@ function runFrame(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknow
     if (!args.nodeId || !args.projectId || !args.actor || !args.reason || !['approve', 'reject'].includes(args.reviewAction ?? '')) {
       throw new Error(`frame-review requires --id, --project, --action approve|reject, --actor, and --reason.\n${usage()}`);
     }
-    return { frameId: args.nodeId, action: args.reviewAction, applied: kernel.reviewMemoryFrame({ frameId: args.nodeId, projectId: args.projectId, action: args.reviewAction as 'approve' | 'reject', actor: args.actor, reason: args.reason }) };
+    try {
+      return { frameId: args.nodeId, action: args.reviewAction, applied: kernel.reviewMemoryFrame({ frameId: args.nodeId, projectId: args.projectId, action: args.reviewAction as 'approve' | 'reject', actor: args.actor, reason: args.reason }) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // A staged frame is not reviewable: the backfill's default mode stages, and only
+      // `--mode active` puts a frame in the state review acts on. Say which step applies.
+      if (message.startsWith('memory_frame_review_not_applicable:')) {
+        const status = message.split(':').pop();
+        throw new Error(`${message} — a frame can be reviewed in needs_confirmation only. Run \`cogmem memory frame-backfill --project <id> --mode active\` to move staged frames into it, or review the status that applies to this one.`);
+      }
+      throw error;
+    }
   }
   if (!args.episodeId) throw new Error(`frame requires --episode.\n${usage()}`);
   const frame = kernel.getMemoryFrame(args.episodeId, args.projectId, { includeStaged: args.includeStaged });
