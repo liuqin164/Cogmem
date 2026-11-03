@@ -47,7 +47,9 @@ describe('core release metadata', () => {
     expect(readme).not.toContain('@CognitiveOS/core');
     expect(contributing).toContain('npm pack --dry-run --json');
     expect(contributing).toContain('npm publish --provenance --access public');
-    expect(readme).toContain('Current version: `4.0.0`');
+    // The version is a release fact, not a README one: package.json owns it and the changelog has
+    // to agree, so the README can stay a landing page.
+    expect(changelog).toContain(manifest.version);
     expect(changelog).toContain('## 4.0.0');
     expect(checklist).toContain('# cogmem 4.0.0 Release Checklist');
     // 4.0 ships no ordered migration list (ADR-0007): one schema, created

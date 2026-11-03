@@ -42,9 +42,10 @@ describe('domain vocabulary in the main documents', () => {
     expect(atlas, 'the product facet field must be documented').toContain('productFacet');
   });
 
-  test('README names both waves', () => {
-    const readme = read('README.md');
-    expect(readme, 'README must name Pulse 1').toContain('Pulse 1');
-    expect(readme, 'README must name Pulse 2').toContain('Pulse 2');
+  test('GLOSSARY names both waves', () => {
+    // The vocabulary lives in the domain document, not in a README that is now a landing page.
+    const glossary = read('GLOSSARY.md');
+    expect(glossary, 'GLOSSARY must name Pulse 1').toContain('Pulse 1');
+    expect(glossary, 'GLOSSARY must name Pulse 2').toContain('Pulse 2');
   });
 });
