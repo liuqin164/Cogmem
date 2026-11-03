@@ -237,14 +237,13 @@ describe('core release metadata', () => {
 });
 
 describe('documented tool profile counts match the shipped registry', () => {
-  test('mcp-hosts.md, README, and CHANGELOG state the real core / admin / full counts', () => {
+  test('mcp-hosts.md and CHANGELOG state the real core / admin / full counts', () => {
     const all = listCogmemMcpTools();
     const core = filterToolsByProfile('core', all).length;
     const admin = filterToolsByProfile('admin', all).length;
     const full = filterToolsByProfile('full', all).length;
 
     const hosts = readText(join(coreRoot, 'docs', 'mcp-hosts.md'));
-    const readme = readText(join(coreRoot, 'README.md'));
     const changelog = readText(join(coreRoot, 'CHANGELOG.md'));
 
     expect(core).toBe(6);
@@ -257,7 +256,9 @@ describe('documented tool profile counts match the shipped registry', () => {
     expect(hosts).toContain('| `full` | ' + full + ' |');
     expect(hosts).toContain(`sees ${core} tools`);
     expect(hosts).toContain(`${core} means the\n\`core\` profile, ${full} means \`full\``);
-    expect(readme).toContain(`bounds the tool surface to ${core}, ${admin}, or ${full} tools`);
+    // The counts and what they bound are stated where the profile is documented; the README no
+    // longer restates them.
+    expect(hosts).toContain('A host does not need all of them.');
     expect(changelog).toContain('`core` (' + core + '), `admin` (' + admin + '), `full` (' + full + ')');
   });
 

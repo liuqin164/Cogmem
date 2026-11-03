@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Your agent forgets everything when the session ends. The usual fix — hand it a memory tool — only works when the model remembers to call it. In our own hosted verification the tools were installed and listed, the session was asked about an earlier conversation, and nothing was written: they were reachable, the memory existed, and it did not arrive ([the three-host verification record](docs/engineering/)).
+Your agent forgets everything when the session ends. The usual fix — hand it a memory tool — only works when the model remembers to call it. In our own hosted verification the tools were installed and listed, the session was asked about an earlier conversation, and the model made zero tool calls: the memory existed, was reachable, and never arrived ([the three-host verification record](docs/engineering/)).
 
 cogmem fixes the delivery, not only the storage. On OpenClaw, Hermes, and pi it puts the relevant memory into the prompt **before** the model answers — no tool call, no hoping the model thinks of it. On every other host it works over MCP, and the [host table](#hosts) says plainly which host gets which. Read it before promising anyone automatic memory.
 
@@ -84,7 +84,7 @@ The scenario memory systems actually fail: a fact is stated, then corrected, the
 | pi | Injected before the run starts (extension) |
 | Claude Code, Cursor, Codex, any MCP host | The model calls recall explicitly over MCP |
 
-Per-host setup and MCP configuration: [docs/mcp-hosts.md](docs/mcp-hosts.md) — the MCP server bounds the tool surface to 6, 22, or 36 tools, so a host can be given as much or as little as it needs. What was verified on each host, and what was not: the three-host verification record under [engineering records](docs/engineering/).
+Per-host setup and MCP configuration: [docs/mcp-hosts.md](docs/mcp-hosts.md). What was verified on each host, and what was not: the three-host verification record under [engineering records](docs/engineering/).
 
 ## Quick Start
 
