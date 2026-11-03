@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 export interface McpEntryVerification {
   ok: boolean;
   /** What was actually done, so a reader can weigh the claim. */
-  how: 'mcp_handshake';
+  how: 'mcp_handshake' | 'plugin_files_and_config_entry';
   detail: string;
   tools?: number;
 }

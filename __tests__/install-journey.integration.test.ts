@@ -162,6 +162,11 @@ describe('the install journey', () => {
       const pluginProject = host.plugins.entries[connect.autoMemory.pluginId].config.projectId;
       expect(host.plugins.entries[connect.autoMemory.pluginId].config.cwd).toBe(workspace);
 
+      // #124: the plugin now carries a verification of its own kind, so an agent-driven install can
+      // assert something the way it already can for hermes and pi instead of guessing.
+      expect(connect.verification).toMatchObject({ ok: true, how: 'plugin_files_and_config_entry' });
+      expect(connect.verification.detail).toContain(connect.autoMemory.pluginId);
+
       // 5. doctor sees what connect installed — the plugin identity `connect`
       //    wrote is the one `doctor` inspects, for the same Workspace.
       const after = parseJson('doctor after connect', await cli.run(['doctor', '--json'], { cwd: workspace }));

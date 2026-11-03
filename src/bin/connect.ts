@@ -493,10 +493,40 @@ function installSkill(args: ConnectArgs): ConnectResult {
  * A dry run verifies nothing: there is no written entry to run, and reporting a
  * verification for one would be the same claim with less evidence.
  */
+/**
+ * What can be checked about the OpenClaw plugin without asking OpenClaw: the entry the host will
+ * read, and the files that entry loads. Hermes and pi answer a live `mcp_handshake`; the plugin is a
+ * different kind of artifact, so `how` names this check rather than borrowing theirs (#124).
+ */
+function verifyOpenClawPlugin(install: OpenClawAutoMemoryInstallResult): McpEntryVerification {
+  const filesPresent = existsSync(join(install.pluginDir, 'openclaw.plugin.json'))
+    && existsSync(join(install.pluginDir, 'index.js'));
+  let entryEnabled = false;
+  try {
+    const host = JSON.parse(readFileSync(install.openclawConfigPath, 'utf8')) as {
+      plugins?: { entries?: Record<string, { enabled?: boolean }> };
+    };
+    entryEnabled = host.plugins?.entries?.[install.pluginId]?.enabled === true;
+  } catch {
+    entryEnabled = false;
+  }
+  const ok = filesPresent && entryEnabled;
+  return {
+    ok,
+    how: 'plugin_files_and_config_entry',
+    detail: ok
+      ? `plugin ${install.pluginId} is enabled in ${install.openclawConfigPath}; its files are present in ${install.pluginDir}`
+      : `${filesPresent ? 'files present' : `no plugin files in ${install.pluginDir}`}; ${entryEnabled ? 'entry enabled' : `no enabled plugins.entries entry for ${install.pluginId} in ${install.openclawConfigPath}`}`,
+  };
+}
+
 async function withVerification(result: ConnectResult, args: ConnectArgs): Promise<ConnectResult> {
   // Not gated on `installed`: that means "this run changed something", and an integration
   // that was already current is exactly the one worth asking whether it still answers.
   if (args.dryRun) return result;
+  // OpenClaw gets a different check, not a worse one: the plugin is not an MCP entry to start, and
+  // what can be read is the entry the host will load plus the files it points at (#124).
+  if (result.autoMemory) return { ...result, verification: verifyOpenClawPlugin(result.autoMemory) };
   const entry = result.hermesMcp
     ? { command: result.hermesMcp.serverCommand, args: result.hermesMcp.serverArgs }
     : result.piMcp
