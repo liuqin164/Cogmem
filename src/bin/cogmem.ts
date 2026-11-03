@@ -42,6 +42,7 @@ function usage(): string {
     '  import <host>        import memory files from one host (openclaw | hermes)',
     '  explain-recall       explain governed recall',
     '  mcp                  start stdio MCP server',
+    '  normalize-transcript  convert a transcript export into conversation Markdown',
     '  repair               conservative upgrade repair commands such as project-scope',
     '  snapshot             export/import snapshots',
     '  prospective          manage confirmed-only future-memory candidates; never executes tasks',

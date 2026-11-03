@@ -568,3 +568,54 @@ test('the JSON contract in --help names the array keys the commands actually emi
   }
   expect(undocumented).toEqual([]);
 });
+
+test('every dispatched command is named in --help', () => {
+  // `normalize-transcript` ran, had a usage text, and was required by the release checklist,
+  // while the top-level help never listed it — a command nobody can discover from `--help`.
+  const source = readFileSync(join(coreRoot, 'src', 'bin', 'cogmem.ts'), 'utf8');
+  const map = source.slice(source.indexOf('const COMMANDS'), source.indexOf('};', source.indexOf('const COMMANDS')));
+  const commands = [...map.matchAll(/'?([a-z][a-z-]*)'?:\s*'/g)].map((m) => m[1]!);
+  expect(commands.length).toBeGreaterThan(15);
+
+  const help = new TextDecoder().decode(Bun.spawnSync({
+    cmd: ['bun', join(coreRoot, 'src', 'bin', 'cogmem.ts'), '--help'], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe',
+  }).stdout);
+  const missing = commands.filter((command) => !help.includes(command));
+  expect(missing).toEqual([]);
+});
+
+test('every subcommand a bin accepts is named in that command --help', () => {
+  // The top-level guard above catches a command that is dispatched but undocumented; this is
+  // the same question one level down. Names are read from the bin's own `command === '...'`
+  // and `isMemoryCommand` guards, and matched anywhere in the help text rather than at the
+  // start of a line — help writes related actions on one line (`reject|complete|expire`).
+  const source = readFileSync(join(coreRoot, 'src', 'bin', 'cogmem.ts'), 'utf8');
+  const map = source.slice(source.indexOf('const COMMANDS'), source.indexOf('};', source.indexOf('const COMMANDS')));
+  const commands = [...map.matchAll(/'?([a-z][a-z-]*)'?:\s*'([a-z-]+)'/g)].map((m) => m[2]!);
+
+  const undocumented: string[] = [];
+  let checked = 0;
+  for (const entry of new Set(commands)) {
+    const file = join(coreRoot, 'src', 'bin', `${entry}.ts`);
+    if (!existsSync(file)) continue;
+    const code = readFileSync(file, 'utf8');
+    const accepted = new Set<string>();
+    for (const m of code.matchAll(/command === '([a-z][a-z-]*)'/g)) accepted.add(m[1]!);
+    const guardStart = code.indexOf('function isMemoryCommand');
+    if (guardStart >= 0) {
+      const body = code.slice(guardStart, guardStart + 1200);
+      for (const m of body.matchAll(/value === '([a-z][a-z-]*)'/g)) accepted.add(m[1]!);
+    }
+    if (accepted.size === 0) continue;
+    const help = new TextDecoder().decode(Bun.spawnSync({
+      cmd: ['bun', file, '--help'], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe',
+    }).stdout);
+    for (const sub of accepted) {
+      if (sub === 'help') continue;
+      checked += 1;
+      if (!help.includes(sub)) undocumented.push(`${entry} ${sub}`);
+    }
+  }
+  expect(checked).toBeGreaterThan(30);
+  expect(undocumented).toEqual([]);
+});
