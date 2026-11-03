@@ -101,6 +101,8 @@ model = "qwen3-embedding:0.6b"
 
 Use the matching dimension for larger local models: `qwen3-embedding:4b` uses `2560`; `qwen3-embedding:8b` uses `4096`. Run `cogmem doctor` after editing. Imported records are embedded through the configured kernel embedder during `cogmem import openclaw`.
 
+For asymmetrical embedding models — NVIDIA's `nemotron-3.5-embed-*`, for example — add `input_type = "passage"` to `[embedding]`: those endpoints reject a request without it. Ollama and other symmetric models need no such field, and leaving it out sends exactly the request they already accept.
+
 Also configure `[memory_model]` for the Dream Curator. Embeddings are for recall; the memory model is the LLM that proposes candidate summaries, preferences, tags, conflicts, and diagnostics:
 
 ```toml

@@ -401,6 +401,7 @@ function buildRoleConfig(
   const timeoutMs = numberValue(values.timeout_ms) ?? defaultRoleTimeout(role);
   const maxTokens = numberValue(values.max_tokens) ?? defaultRoleMaxTokens(role);
   const jsonMode = values.json_mode === true;
+  const inputType = stringValue(values.input_type);
 
   return {
     role,
@@ -415,6 +416,7 @@ function buildRoleConfig(
     timeoutMs,
     maxTokens,
     jsonMode,
+    inputType,
     fallback,
   };
 }

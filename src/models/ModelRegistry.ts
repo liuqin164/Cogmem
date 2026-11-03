@@ -75,7 +75,8 @@ export class ModelRegistry {
     });
     return async (text: string): Promise<number[]> => client.embed({
       model: role.modelName,
-      input: text
+      input: text,
+      inputType: role.inputType
     });
   }
 

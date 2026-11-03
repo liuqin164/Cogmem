@@ -4,6 +4,7 @@ import { OllamaEmbeddingProvider } from '../src/embedding/OllamaEmbeddingProvide
 import { QwenAPIEmbeddingProvider } from '../src/embedding/QwenAPIEmbeddingProvider.js';
 import { EmbeddingUnavailableError, type EmbeddingProvider } from '../src/embedding/EmbeddingProvider.js';
 import { NeuronEmbeddingStore } from '../src/embedding/NeuronEmbeddingStore.js';
+import { OpenAICompatibleClient } from '../src/models/providers/OpenAICompatibleClient.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -93,5 +94,26 @@ describe('EmbeddingProvider', () => {
   });
   test('empty batch returns empty array', async () => {
     expect(await new DeterministicProvider().embedBatch([])).toEqual([]);
+  });
+});
+
+describe('OpenAI-compatible embeddings', () => {
+  test('sends input_type only when it is configured', async () => {
+    // Asymmetrical embedders — NVIDIA's `nemotron-3.5-embed-*` among them — reject a request
+    // without this field, which is why a whole family of models was unusable through
+    // `openai_compatible`. Symmetrical endpoints must keep seeing the body they saw before, so the
+    // field is absent, not empty, when no `[embedding] input_type` is set.
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2] }] }));
+    }) as unknown as typeof fetch;
+
+    const client = new OpenAICompatibleClient({ baseUrl: 'https://example.test/v1', apiKey: 'k' });
+    await client.embed({ model: 'm', input: 'x', inputType: 'passage' });
+    await client.embed({ model: 'm', input: 'x' });
+
+    expect(bodies[0]).toMatchObject({ model: 'm', input: 'x', input_type: 'passage' });
+    expect(bodies[1]).not.toHaveProperty('input_type');
   });
 });

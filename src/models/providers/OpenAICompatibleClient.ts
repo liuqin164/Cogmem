@@ -15,6 +15,8 @@ interface OpenAIChatCompleteParams {
 interface OpenAIEmbedParams {
   model: string;
   input: string;
+  /** Required by asymmetrical embedders; left out of the body entirely when undefined. */
+  inputType?: string;
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -82,7 +84,8 @@ export class OpenAICompatibleClient {
         headers: this.buildHeaders(),
         body: JSON.stringify({
           model: params.model,
-          input: params.input
+          input: params.input,
+          ...(params.inputType ? { input_type: params.inputType } : {})
         }),
         signal: controller.signal
       });
