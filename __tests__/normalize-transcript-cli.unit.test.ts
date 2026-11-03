@@ -200,13 +200,17 @@ test('cogmem-normalize-transcript treats Hermes numeric timestamp as epoch secon
   expect(output).not.toContain('[1970-01-21');
 });
 
-test('README documents normalize transcript usage and source-ref output', async () => {
-  const readme = await Bun.file(join(coreRoot, 'README.md')).text();
-
-  expect(readme).toContain('cogmem-normalize-transcript');
-  expect(readme).toContain('--family json-array');
-  expect(readme).toContain('--family csv');
-  expect(readme).toContain('--dry-run --json');
-  expect(readme).toContain('cogmem-source-ref');
-  expect(readme).toContain('does not open a memory database');
+test('the normalize-transcript command documents its own usage and source-ref output', () => {
+  // Two things changed under this test: the README stopped carrying CLI reference detail, and the
+  // dashed bin names it asserted (`cogmem-normalize-transcript`, `cogmem-source-ref`) were removed
+  // with the other compatibility aliases. The command's own help is the surface that must say this.
+  const help = new TextDecoder().decode(Bun.spawnSync({
+    cmd: ['bun', join(coreRoot, 'src', 'bin', 'normalize-transcript.ts'), '--help'], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe',
+  }).stdout);
+  expect(help).toContain('cogmem normalize-transcript');
+  expect(help).toContain('--family json-array|jsonl|csv');
+  expect(help).toContain('--dry-run');
+  expect(help).toContain('--json');
+  expect(help).toContain('does not open a memory database');
 });
+
