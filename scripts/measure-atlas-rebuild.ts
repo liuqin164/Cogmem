@@ -52,6 +52,46 @@ console.log(`db ${dbPath}\nproject ${projectId}  ${JSON.stringify(stats())}`);
 
 const indexer = new MemoryAtlasIndexer(db, eventStore, store, frameStore);
 store.markProjectionDirty(projectId);
+/**
+ * (c) The double-stamp scan, which is what a "recompute the summaries" check actually costs:
+ * hash every stored frame row and compare it with the fingerprint stored when the frame was
+ * written (`frameSourceFingerprint(eventIds, episodeId)` = sha256 of `episodeId\0ids…`).
+ *
+ * Two variants, because they answer different questions: hashing the row's own evidence is the
+ * floor (one table read), while the real check re-reads each frame's episode from
+ * `memory_episode_events`, which is where the time goes and where a stale frame shows up.
+ */
+async function stampScan(): Promise<void> {
+  const { createHash } = await import('node:crypto');
+  const sha = (episodeId: string, ids: string[]) => createHash('sha256').update(`${episodeId}\u0000${ids.join('\u0000')}`).digest('hex');
+  const rows = db.prepare(`SELECT frame_id, episode_id, evidence_event_ids_json, source_fingerprint FROM memory_frames WHERE project_id=? AND status='active'`).all(projectId) as Array<{ frame_id: string; episode_id: string; evidence_event_ids_json: string; source_fingerprint: string }>;
+
+  let started = performance.now();
+  let ownMismatch = 0;
+  for (const row of rows) {
+    const ids = JSON.parse(row.evidence_event_ids_json || '[]') as string[];
+    if (sha(row.episode_id, ids) !== row.source_fingerprint) ownMismatch += 1;
+  }
+  const ownMs = performance.now() - started;
+
+  started = performance.now();
+  let episodeMismatch = 0;
+  const episodeEvents = db.prepare('SELECT event_id FROM memory_episode_events WHERE episode_id=? ORDER BY position ASC');
+  for (const row of rows) {
+    const ids = (episodeEvents.all(row.episode_id) as Array<{ event_id: string }>).map((r) => r.event_id).filter(Boolean);
+    if (sha(row.episode_id, ids) !== row.source_fingerprint) episodeMismatch += 1;
+  }
+  const episodeMs = performance.now() - started;
+
+  console.log(`\n(c) double-stamp scan over ${rows.length} stored frame rows`);
+  console.log(`    hash each row\'s own evidence     ${ownMs.toFixed(0).padStart(8)} ms  ${(ownMs / Math.max(1, rows.length)).toFixed(2)} ms/frame  mismatches ${ownMismatch}`);
+  console.log(`    hash each row\'s episode events   ${episodeMs.toFixed(0).padStart(8)} ms  ${(episodeMs / Math.max(1, rows.length)).toFixed(2)} ms/frame  mismatches ${episodeMismatch}`);
+}
+if (process.env.MEASURE_ONLY === 'stamp') {
+  await stampScan();
+  process.exit(0);
+}
+
 let started = performance.now();
 const rebuilt = indexer.rebuild({ projectId });
 const total = performance.now() - started;
@@ -71,6 +111,8 @@ const actions = new ActionFrameExtractor(db, eventStore, store);
 const curator = new GraphCurator(db, eventStore, store);
 const frameProjector = new MemoryFrameProjector(db, frameStore, store, eventStore.getProjectTimeZone());
 
+
+
 console.log('\n(a) per phase (context of the real path, idempotent, projection already in place)');
 timed('backfillAtlasDocuments', () => { backfillAtlasDocuments(db, projectId); return 'ok'; });
 timed('ActionFrameExtractor.rebuild', () => actions.rebuild(projectId));
@@ -80,7 +122,8 @@ timed('aggregateFacetNodeSupport', () => { store.aggregateFacetNodeSupport(proje
 timed('refreshFtsProject', () => { store.refreshFtsProject(projectId); return 'ok'; });
 
 const frames = stats().activeFrames;
-console.log('\n(b) recompute every frame\'s derived summary twice — the second is the pure recompute');
+console.log('\n(b) frame-layer re-projection unit cost — rebuild the frames twice, the second is the pure re-projection');
+console.log('    (this is NOT a summary recompute: nothing here hashes or compares anything)');
 if (frames === 0) {
   console.log('    no active frames in this database: nothing to recompute');
 } else {
@@ -91,3 +134,5 @@ if (frames === 0) {
     console.log(`    pass ${pass}                        ${ms.toFixed(0).padStart(8)} ms  ${(ms / frames).toFixed(0)} ms/frame  ${JSON.stringify(out)}`);
   }
 }
+
+await stampScan();
