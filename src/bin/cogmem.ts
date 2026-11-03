@@ -54,7 +54,7 @@ function usage(): string {
     '  cleanup              remove the managed launcher after its installation is gone',
     '',
     'JSON output: commands with --json emit cogmem.cli.v1. Object fields stay top-level, and arrays are named for what they hold: items (recall, prospective list), events (list, search), decisions (govern), episodes (episode list), statuses (compact), and nodes/edges/matchedFacets/nextActions/warnings on Atlas reads.',
-    'Queue commands expose candidate, promoted, needs_confirmation, and beliefs at the top level.',
+    'Queue commands expose candidate, promoted, needs_confirmation, and beliefs at the top level. `dream status` and `dream night` nest the frame-stamp report as staleFrames: {checked, total, stale, truncated}.',
   ].join('\n');
 }
 

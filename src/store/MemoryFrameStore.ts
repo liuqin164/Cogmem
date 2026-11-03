@@ -111,6 +111,36 @@ export class MemoryFrameStore {
     return rows.map((row) => this.read(row));
   }
 
+  /**
+   * Frames whose stored `source_fingerprint` no longer matches their episode's current events —
+   * the read-only half of the frame repair story (#110). Nothing is written here, so a caller
+   * can report the stale set nightly without changing behaviour; acting on it is the repair
+   * path, which does not exist yet.
+   *
+   * The check is `frameSourceFingerprint` again, over `memory_episode_events` as it stands now.
+   * Measured at 0.05 ms/frame over 100 frames on the 20k-event corpus, so the report is free
+   * next to the 382 ms/frame it would take to re-project them.
+   */
+  listStaleFrames(options: { projectId?: string; statuses?: MemoryFrameStatus[]; limit?: number } = {}): { checked: number; total: number; stale: string[]; truncated: boolean } {
+    const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 1000), 5000));
+    // `active` by default, because that is the set the projector projects. A caller may widen
+    // it to `needs_confirmation` to see frames that would be stale once they are approved.
+    const statuses = options.statuses ?? ['active'];
+    if (statuses.length === 0) return { checked: 0, total: 0, stale: [], truncated: false };
+    const statusPlaceholders = statuses.map(() => '?').join(',');
+    const where = `status IN (${statusPlaceholders})${options.projectId === undefined ? '' : ' AND project_id=?'}`;
+    const args = options.projectId === undefined ? [...statuses] : [...statuses, options.projectId];
+    const rows = this.db.prepare(`SELECT frame_id,episode_id,source_fingerprint FROM memory_frames WHERE ${where} ORDER BY frame_id ASC LIMIT ?`).all(...args, limit) as Array<{ frame_id: string; episode_id: string; source_fingerprint: string }>;
+    const total = (this.db.prepare(`SELECT COUNT(*) n FROM memory_frames WHERE ${where}`).get(...args) as { n: number }).n;
+    const events = this.db.prepare('SELECT event_id FROM memory_episode_events WHERE episode_id=? ORDER BY position ASC');
+    const stale: string[] = [];
+    for (const row of rows) {
+      const ids = (events.all(row.episode_id) as Array<{ event_id: string }>).map((event) => event.event_id).filter(Boolean);
+      if (frameSourceFingerprint(ids, row.episode_id) !== row.source_fingerprint) stale.push(row.frame_id);
+    }
+    return { checked: rows.length, total, stale, truncated: total > rows.length };
+  }
+
   publish(frameId: string, from: MemoryFrameStatus, to?: MemoryFrameStatus, now = Date.now()): boolean {
     const published = Boolean(this.db.transaction(() => this.publishUnsafe(frameId, from, to, now))());
     if (published) this.notifyFrameActive(frameId, now);

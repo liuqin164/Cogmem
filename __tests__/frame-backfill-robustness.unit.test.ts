@@ -153,3 +153,49 @@ test('an overview that hides the relations behind its node budget says so (#145)
   expect(shown.edges).toHaveLength(1);
   expect(shown.warnings).toEqual([]);
 });
+
+test('the frame-stamp report names exactly the frames whose episode changed (#110)', () => {
+  // The read-only half of #110: compare every active frame's stored `source_fingerprint` with
+  // the fingerprint of its episode's events as they stand now. Nothing may be written by it.
+  const dir = makeTempDir('cogmem-frame-stamp-');
+  const configDir = join(dir, '.cogmem');
+  mkdirSync(configDir, { recursive: true });
+  const dbPath = join(configDir, 'memory.db');
+  writeFileSync(join(configDir, 'config.toml'), '[core]\ndb_path = "memory.db"\n');
+  const kernel = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
+  const now = Date.now();
+  for (const [index, text] of ['归档保留期定成七年，第八年统一销毁。', '这条决定来自合规评审，记录在案。'].entries()) {
+    kernel.appendEpisodeMessage({ projectId: 'p', sessionId: 's1', sourceAgent: 'a', role: 'user', text, timestamp: now - 3_600_000 + index * 1000 });
+  }
+  kernel.backfillMemoryFrames({ projectId: 'p', limit: 50 });
+  const episodeId = kernel.listEpisodes({ projectId: 'p', limit: 1 })[0]!.episodeId;
+  const frame = kernel.getMemoryFrame(episodeId, 'p', { includeStaged: true })!;
+  // A rule-backfilled frame starts `staged`; publishing it moves it to the state the publish
+  // status names. It cannot reach `active` in a unit test (approval needs publishable evidence,
+  // which is what a model frame has), so the scan is widened to the status it can hold.
+  expect(kernel.memoryFrameStore.publish(frame.frameId, frame.status)).toBe(true);
+
+  // A rule-backfilled frame cannot reach `active` in a unit test — approval needs publishable
+  // evidence, which is what a model frame has — so the scan is widened to the status this
+  // frame can hold. The default (`active`) is the set the projector projects.
+  const scan = () => kernel.memoryFrameStore.listStaleFrames({ projectId: 'p', statuses: ['needs_confirmation'] });
+  const before = scan();
+  expect({ ...before, stale: before.stale.length }).toEqual({ checked: 1, total: 1, stale: 0, truncated: false });
+
+  // An episode whose event set changed is exactly what a repair, split or merge leaves behind.
+  const db = new Database(dbPath);
+  db.prepare('DELETE FROM memory_episode_events WHERE rowid = (SELECT rowid FROM memory_episode_events WHERE episode_id=? LIMIT 1)').run(episodeId);
+  db.close();
+
+  const after = scan();
+  expect(after.stale).toEqual([frame.frameId]);
+  expect(after.checked).toBe(1);
+
+  // Reporting is read-only: the frame row and the projection stay exactly as they were.
+  const rowsBefore = kernel.memoryFrameStore.list('p', { statuses: ['needs_confirmation'], limit: 10 });
+  const afterSecond = scan();
+  expect(afterSecond.stale).toEqual([frame.frameId]);
+  expect(kernel.memoryFrameStore.list('p', { statuses: ['needs_confirmation'], limit: 10 })).toEqual(rowsBefore);
+  kernel.close();
+});
+

@@ -68,11 +68,11 @@ async function main(): Promise<void> {
       return;
     }
     const result = args.command === 'night'
-      ? await kernel.runNight({ projectId, maxEpisodes: numberArg(args, 'max-episodes') })
+      ? { ...(await kernel.runNight({ projectId, maxEpisodes: numberArg(args, 'max-episodes') })), staleFrames: kernel.memoryFrameStore.listStaleFrames({ projectId }) }
       : args.command === 'tick'
       ? tickPayload(await kernel.runDreamTick({ projectId, mode: modeArg(stringArg(args, 'mode')), maxEpisodes: numberArg(args, 'max-episodes') }))
       : args.command === 'status'
-        ? kernel.getEpisodeDreamStatus(projectId)
+        ? { ...kernel.getEpisodeDreamStatus(projectId), staleFrames: kernel.memoryFrameStore.listStaleFrames({ projectId }) }
         : args.command === 'retry'
           ? { retried: kernel.retryFailedEpisodeDreams(projectId), status: kernel.getEpisodeDreamStatus(projectId) }
           : (() => { throw new Error(usage()); })();
