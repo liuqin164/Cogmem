@@ -571,3 +571,37 @@ test('episode append names a message, so the same one twice is a replay (#113)',
   expect(conflict.code).not.toBe(0);
   expect(conflict.stdout + conflict.stderr).toContain('episode_ingest_identity_conflict');
 });
+
+test('a tick reports why the semantic processor gave up, not only that it did', async () => {
+  // Measured on the box: a model call that timed out produced `semanticProcessorFailedCount: 1`,
+  // no frame and no reason anywhere in the result, because the counter was all the scheduler
+  // carried. The reason and the error text now travel with it.
+  const db = new Database(':memory:');
+  const store = testEpisodeStore(db);
+  const curator = {
+    run: async () => ({
+      candidates: [],
+      semanticProcessorAvailable: false,
+      semanticProcessorReason: 'semantic_processor_failed',
+      semanticProcessorError: 'The operation was aborted',
+    }),
+  };
+  const scheduler = new DreamScheduler(store, curator as never);
+  try {
+    const episode = store.createEpisode({
+      projectId: 'brain', sessionId: 'reason', episodeType: 'decision', importance: 0.9,
+      eventId: 'evt-reason', occurredAt: 100,
+    });
+    store.appendEvent({ episodeId: episode.episodeId, eventId: 'evt-reason', relation: 'continues_previous', confidence: 1, occurredAt: 100 });
+    store.sealEpisode(episode.episodeId, { mode: 'hard', reason: 'test', now: 101 });
+
+    expect(await scheduler.tick({ projectId: 'brain', now: 200, maxAttempts: 1 })).toEqual(expect.objectContaining({
+      semanticProcessorFailedCount: 1,
+      semanticProcessorAvailable: false,
+      semanticProcessorReason: 'semantic_processor_failed',
+      semanticProcessorError: 'The operation was aborted',
+    }));
+  } finally {
+    db.close();
+  }
+});

@@ -60,7 +60,12 @@ export class OpenAICompatibleClient {
       // `provider_invalid_output` with an empty detail. Measured on the box.
       return message?.content?.trim() ? message.content : (message?.reasoning_content ?? '');
     } catch (error) {
-      console.warn('[cogmem] openai_compatible chat failed', error);
+      // A bare exception object here cost a box investigation: a model call that had timed out
+      // printed `DOMException { line: 0, column: 0, ... }` and nothing else. Name the cause.
+      const timedOut = error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
+      console.warn(timedOut
+        ? `[cogmem] openai_compatible chat timed out after ${this.options.timeoutMs ?? 30000}ms (model ${params.model})`
+        : `[cogmem] openai_compatible chat failed (model ${params.model}): ${error instanceof Error ? error.message : String(error)}`);
       return '';
     } finally {
       clearTimeout(timeout);

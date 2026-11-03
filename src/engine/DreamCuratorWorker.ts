@@ -56,6 +56,7 @@ export interface DreamCuratorRunResult {
   frameIds?: string[];
   semanticProcessorAvailable?: boolean;
   semanticProcessorReason?: string;
+  semanticProcessorError?: string;
 }
 
 export interface DreamCuratorWorkerDeps {
@@ -134,6 +135,7 @@ export class DreamCuratorWorker {
     const frameIds: string[] = [];
     let semanticProcessorUnavailable = false;
     let semanticProcessorReason: string | undefined;
+    let semanticProcessorError: string | undefined;
     if (options.sourceEpisodeId && this.deps.memoryFrameStore) {
       const frameInput = {
         projectId: options.projectId || events[0]?.projectId || '', episodeId: options.sourceEpisodeId,
@@ -160,6 +162,7 @@ export class DreamCuratorWorker {
       } catch (error) {
         semanticProcessorUnavailable = true;
         semanticProcessorReason = 'semantic_processor_failed';
+        semanticProcessorError = error instanceof Error ? error.message : String(error);
         this.deps.pipelineMetrics?.recordNonFatal('memory_frame_processor_fallback', {
           projectId: options.projectId,
           message: error instanceof Error ? error.message : String(error),
@@ -285,6 +288,7 @@ export class DreamCuratorWorker {
       frameIds,
       semanticProcessorAvailable: !semanticProcessorUnavailable && providerConfig.provider !== 'rule_only',
       semanticProcessorReason: semanticProcessorReason ?? (providerConfig.provider === 'rule_only' ? 'semantic_processor_unavailable' : undefined),
+      semanticProcessorError,
     };
   }
 

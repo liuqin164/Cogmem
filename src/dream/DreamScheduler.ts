@@ -38,6 +38,10 @@ export interface DreamTickResult {
   semanticProcessorAvailable: boolean;
   semanticProcessorUnavailableCount: number;
   semanticProcessorFailedCount: number;
+  /** Why the processor was skipped or gave up, and the error when it threw: a counter alone is not
+   *  a diagnosis. Absent on a skipped tick, which never reaches a processor. */
+  semanticProcessorReason?: string;
+  semanticProcessorError?: string;
 }
 
 export class DreamScheduler {
@@ -102,6 +106,8 @@ export class DreamScheduler {
     let semanticProcessorUnavailableCount = 0;
     let semanticProcessorFailedCount = 0;
     let semanticProcessorAvailable = false;
+    let semanticProcessorReason: string | undefined;
+    let semanticProcessorError: string | undefined;
     for (const [jobIndex, job] of jobs.entries()) {
       const links = this.episodeStore.listEventLinks(job.episodeId);
       const episode = this.episodeStore.getEpisode(job.episodeId);
@@ -130,6 +136,9 @@ export class DreamScheduler {
         if (run.semanticProcessorAvailable) semanticProcessorAvailable = true;
         if (run.semanticProcessorReason === 'semantic_processor_unavailable') semanticProcessorUnavailableCount += 1;
         if (run.semanticProcessorReason === 'semantic_processor_failed') semanticProcessorFailedCount += 1;
+        // First writer wins: one reason for the tick, and the earliest failure is the one to read.
+        if (run.semanticProcessorReason && !semanticProcessorReason) semanticProcessorReason = run.semanticProcessorReason;
+        if (run.semanticProcessorError && !semanticProcessorError) semanticProcessorError = run.semanticProcessorError;
         const ids = run.candidates.map((candidate) => candidate.candidateId);
         try {
           const commitCandidates = run.runId
@@ -169,6 +178,7 @@ export class DreamScheduler {
       candidateCount: candidateIds.length, episodeIds, candidateIds, durationMs: elapsed(startedAt, options.now),
       selectedModes, failedEpisodes,
       semanticProcessorAvailable, semanticProcessorUnavailableCount, semanticProcessorFailedCount,
+      semanticProcessorReason, semanticProcessorError,
     };
     this.recordRun(result, startedAt, failures ? 'partial' : 'succeeded');
     return result;
