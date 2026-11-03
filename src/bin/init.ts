@@ -27,6 +27,7 @@ import {
   HIGH_VECTOR_DIMENSION_THRESHOLD,
   vectorDimensionWarningMessage,
 } from '../config/VectorDimension.js';
+import { ModelRegistry } from '../models/ModelRegistry.js';
 import { assertCliArgs } from './CliArgs.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -828,25 +829,30 @@ function buildTomlLines(cfg: WizardConfig): string[] {
   lines.push('snapshots_dir = "snapshots"');
   lines.push('logs_dir = "logs"');
   lines.push('');
+  // The generated timeouts come from the roles themselves. Writing a smaller number here (the
+  // memory role used to get 60s against its own 300s default) makes a slow model abort mid-Dream
+  // with only an opaque DOMException to show for it — measured on the box against a 550B model
+  // whose Dream call takes ~84s.
+  const roleTimeouts = ModelRegistry.defaultConfig();
   lines.push('[embedding]');
   lines.push(`provider = ${tomlString(cfg.embeddingProvider)}`);
   if (cfg.embeddingBaseUrl) lines.push(`base_url = ${tomlString(cfg.embeddingBaseUrl)}`);
   lines.push(`model = ${tomlString(cfg.embeddingModel)}`);
-  lines.push('timeout_ms = 30000');
+  lines.push(`timeout_ms = ${roleTimeouts.embedding.timeoutMs}`);
   lines.push('');
   lines.push('[memory_model]');
   lines.push(`provider = ${tomlString(cfg.memoryProvider)}`);
   if (cfg.memoryBaseUrl) lines.push(`base_url = ${tomlString(cfg.memoryBaseUrl)}`);
   lines.push(`model = ${tomlString(cfg.memoryModel)}`);
   if (cfg.memoryApiKey) lines.push(`api_key = ${tomlString(cfg.memoryApiKey)}`);
-  lines.push('timeout_ms = 60000');
+  lines.push(`timeout_ms = ${roleTimeouts.memory.timeoutMs}`);
   lines.push('');
   lines.push('[reasoning_model]');
   lines.push(`provider = ${tomlString(cfg.reasoningProvider)}`);
   if (cfg.reasoningBaseUrl) lines.push(`base_url = ${tomlString(cfg.reasoningBaseUrl)}`);
   lines.push(`model = ${tomlString(cfg.reasoningModel)}`);
   if (cfg.reasoningApiKey) lines.push(`api_key = ${tomlString(cfg.reasoningApiKey)}`);
-  lines.push('timeout_ms = 60000');
+  lines.push(`timeout_ms = ${roleTimeouts.reasoning.timeoutMs}`);
   lines.push('');
   lines.push('[governance]');
   lines.push(`pii_redact_email = ${cfg.piiEmail}`);

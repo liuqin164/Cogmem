@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { hostsEnabledByCombinedChoice, shouldOfferWireAll } from '../src/bin/init.js';
+import { ModelRegistry } from '../src/models/ModelRegistry.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 /**
@@ -143,4 +144,30 @@ describe('the combined host question', () => {
     expect(hostsEnabledByCombinedChoice({ requested: [], detected: allPresent, wireAll: false }))
       .toEqual({ openclaw: false, hermes: false, pi: false });
   });
+});
+
+test('the generated config takes every role timeout from the role default', async () => {
+  // A smaller number here is not a harmless preference. The memory role's default is 300s, the
+  // box's 550B model needs ~84s for one Dream call, and the generated 60s aborted it mid-run with
+  // nothing but an opaque DOMException in stderr. The generator reads the defaults instead of
+  // repeating them, so the two cannot drift apart again.
+  const dir = makeTempDir('cogmem-init-timeouts-');
+  const home = join(dir, 'home');
+  const cwd = join(dir, 'workspace');
+  mkdirSync(home, { recursive: true });
+  mkdirSync(cwd, { recursive: true });
+  const { exitCode } = await runInit(['--yes', '--agent', 'none', '--no-probe'], { HOME: home, COGMEM_TEST_CWD: cwd });
+  expect(exitCode).toBe(0);
+
+  const candidates = [join(cwd, '.cogmem', 'config.toml'), join(home, '.cogmem', 'config.toml')];
+  const configPath = candidates.find((path) => existsSync(path));
+  expect(configPath).toBeDefined();
+  const config = readFileSync(configPath!, 'utf8');
+  const defaults = ModelRegistry.defaultConfig();
+
+  for (const [section, role] of [['embedding', 'embedding'], ['memory_model', 'memory'], ['reasoning_model', 'reasoning']] as const) {
+    const block = new RegExp(`\\[${section}\\]([\\s\\S]*?)(?=\\n\\[|$)`).exec(config)?.[1] ?? '';
+    const timeout = /timeout_ms = (\d+)/.exec(block)?.[1];
+    expect({ section, timeout }).toEqual({ section, timeout: String(defaults[role].timeoutMs) });
+  }
 });
