@@ -104,11 +104,18 @@ function printSteps(steps: InstallStep[]): void {
 }
 
 function emitGate(gate: InstallGate, payload: Record<string, unknown> = {}): void {
+  // Counts only, and only marked events: the scope note travels with the number in both outputs, and
+  // an early failure path that never resolved a database simply omits the field.
+  const secretScope = 'only events carrying the write-path mark (written since this landed); existing databases are not re-scanned';
+  const secretPayload = secretMarkedEvents === undefined
+    ? {}
+    : { secretFindings: { markedEvents: secretMarkedEvents, scope: secretScope } };
   if (json) {
     printJsonDocument(JSON.stringify({
       schemaVersion: 'cogmem.cli.v1',
       command: 'doctor',
       ...payload,
+      ...secretPayload,
       installGate: {
         level: gate.level,
         exitCode: gate.exitCode,
@@ -120,6 +127,9 @@ function emitGate(gate: InstallGate, payload: Record<string, unknown> = {}): voi
   } else {
     console.log('');
     console.log(`Install gate: ${gate.level.toUpperCase()} — ${gate.summary}`);
+    if (secretMarkedEvents !== undefined) {
+      console.log(`Secret-marked events: ${secretMarkedEvents} (${secretScope})`);
+    }
     printSteps(gate.nextSteps);
   }
   process.exit(gate.exitCode);
@@ -141,6 +151,45 @@ const pluginDir = readArg('--plugin-dir');
 // recommend the step it just did.
 const hermesConfigPath = readArg('--hermes-config');
 const bunPath = readArg('--bun');
+/**
+ * Marked-event summary, filled once in the main flow and reported by `emitGate`.
+ *
+ * Scope, stated because it matters when reading the number: only events that carry the mark are
+ * counted — those written after write-path secret detection landed. Existing databases are not
+ * re-scanned, so an old ledger reports 0 here without meaning it holds no secrets.
+ */
+let secretMarkedEvents: number | undefined;
+
+/**
+ * How many ledger events carry a write-path secret mark.
+ *
+ * The database path comes from the kernel's own health status: reading it out of the config was the
+ * first attempt and produced an empty path, so the count never ran. Read-only query, no new storage.
+ */
+function countMarkedSecretEvents(configPath: string): number | undefined {
+  let kernel: ReturnType<typeof createMemoryKernelFromConfig> | undefined;
+  try {
+    kernel = createMemoryKernelFromConfig({ configPath });
+    const dbPath = kernel.getHealthStatus().dbPath;
+    if (!dbPath || !existsSync(dbPath)) return undefined;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const row = db.prepare(`
+        SELECT COUNT(*) AS count FROM memory_events
+        WHERE json_extract(payload_json, '$.metadata.secretFindings.total') > 0
+           OR json_extract(payload_json, '$.metadata.secretFindingsAssistant.total') > 0
+      `).get() as { count?: number } | undefined;
+      return Number(row?.count ?? 0);
+    } finally {
+      db.close();
+    }
+  } catch {
+    return undefined;
+  } finally {
+    kernel?.close();
+  }
+}
+
 const storage = hasFlag('--storage');
 const pluginOnly = hasFlag('--plugin-only');
 const json = hasFlag('--json');
@@ -177,6 +226,8 @@ if (envPath) {
   }
 
   const loaded = loadCogmemConfig({ configPath: resolution.path });
+  // Filled once, after the config resolved and before any gate is emitted past this point.
+  secretMarkedEvents = countMarkedSecretEvents(resolution.path);
   const error = loaded.diagnostics.find((diagnostic) => diagnostic.severity === 'error');
   if (error) fail(`${error.code}: ${error.message}`, error.code);
 
