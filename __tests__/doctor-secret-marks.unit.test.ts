@@ -28,6 +28,8 @@ test('doctor counts exactly the events carrying a secret mark, under either key'
     });
   };
   append({ secretFindings: { total: 2, byKind: { assigned_api_key: 1, assigned_password: 1 } } });
+  // A tool result redacted on the way in: marked, and carrying the write-time redaction record.
+  append({ secretFindings: { total: 1, byKind: { openai_key: 1 } }, redaction: { count: 1, chars: 27 } });
   append({ secretFindings: { total: 1, byKind: { github_token: 1 } } });
   append({ secretFindingsAssistant: { total: 3, byKind: { jwt: 3 } } });
   append();
@@ -47,7 +49,9 @@ test('doctor counts exactly the events carrying a secret mark, under either key'
     encoding: 'utf8',
     env: { ...process.env, TMPDIR: dir },
   });
-  const payload = JSON.parse(run.stdout) as { secretFindings?: { markedEvents?: number } };
-  // Three seeded with a mark; the other three carry none.
-  expect(payload.secretFindings?.markedEvents).toBe(3);
+  const payload = JSON.parse(run.stdout) as { secretFindings?: { markedEvents?: number; redactedOnWrite?: number; markedOnly?: number } };
+  // Four seeded with a mark now; the other three carry none. One of the four was redacted on write.
+  expect(payload.secretFindings?.markedEvents).toBe(4);
+  expect(payload.secretFindings?.redactedOnWrite).toBe(1);
+  expect(payload.secretFindings?.markedOnly).toBe(3);
 });
