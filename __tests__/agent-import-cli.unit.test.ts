@@ -998,7 +998,10 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(indexBody).toContain('function classifyRecallIntent(query)');
   expect(indexBody).toContain('const intent = classifyRecallIntent(query)');
   expect(indexBody).toContain('function classifyContextIntent(query)');
-  expect(indexBody).toContain("reason: 'context_cortex:greeting'");
+  // The skip reason is now composed, because the gate covers two intents: a greeting and (new) a
+  // social turn judged by content. Both the branch and the composed reason are pinned.
+  expect(indexBody).toContain("contextIntent === 'greeting' || contextIntent === 'social'");
+  expect(indexBody).toContain("reason: 'context_cortex:' + contextIntent");
   expect(indexBody).toContain("recallMode: 'context_cortex_short_followup'");
   expect(indexBody).toContain('anchorEventId: anchor && anchor.eventId');
   expect(indexBody).toContain('excludeSessionId: config.excludeCurrentSessionCompiledMemory === false ? undefined : sessionId');

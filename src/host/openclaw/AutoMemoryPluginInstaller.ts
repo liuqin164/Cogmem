@@ -1,4 +1,5 @@
 import { writeOwnedFiles, type OwnedFile } from '../InstalledArtifacts.js';
+import { socialTurnGateSource } from '../../context/SocialTurn.js';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -933,9 +934,17 @@ function classifyRecallIntent(query) {
   return 'memory_recall';
 }
 
+/**
+ * Generated from src/context/SocialTurn.ts, the module the shared classifier uses: this plugin is
+ * written as a standalone file and cannot import the package, so the rules are inlined rather than
+ * hand-copied.
+ */
+${socialTurnGateSource()}
+
 function classifyContextIntent(query) {
   const text = String(query || '').trim().toLowerCase();
   if (/^(hi|hello|hey|你好|您好|早上好|晚上好|嗨)[!！。. ]*$/.test(text)) return 'greeting';
+  if (classifySocialTurn(query) === 'social') return 'social';
   if (/^(继续|接着|然后呢|上面那个|刚才说的|这个呢|continue|go on|and then)[?？!！。. ]*$/.test(text)) return 'short_followup';
   if (/原话|逐字|怎么说的|完整对话|exact quote|verbatim|word for word/.test(text)) return 'exact_quote';
   return 'memory_query';
@@ -1407,9 +1416,9 @@ const plugin = {
         return {};
       }
       const contextIntent = classifyContextIntent(query);
-      if (config.contextCortexEnabled !== false && contextIntent === 'greeting') {
+      if (config.contextCortexEnabled !== false && (contextIntent === 'greeting' || contextIntent === 'social')) {
         lastRecallForSession.delete(sessionId);
-        audit(config, { hook: 'before_prompt_build', sessionId, action: 'skip', reason: 'context_cortex:greeting' });
+        audit(config, { hook: 'before_prompt_build', sessionId, action: 'skip', reason: 'context_cortex:' + contextIntent });
         return {};
       }
       try {

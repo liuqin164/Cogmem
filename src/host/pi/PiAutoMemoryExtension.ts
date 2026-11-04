@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { removeOwnedFile, writeOwnedFiles } from '../InstalledArtifacts.js';
 import { dirname, join } from 'node:path';
+import { socialTurnGateSource } from '../../context/SocialTurn.js';
 
 /**
  * The pi extension that gives pi the push half of Cogmem's memory (#102 follow-up).
@@ -71,11 +72,21 @@ const PROJECT = ${literal(input.project)};
 const WORKDIR = ${literal(input.workspaceRoot)};
 const TIMEOUT_MS = 4000;
 
-/** Greetings and one-word acknowledgements are not memory questions. */
+/**
+ * Greetings and one-word acknowledgements are not memory questions.
+ *
+ * The rules below are generated from src/context/SocialTurn.ts, the same module the shared
+ * classifier uses. This file runs standalone inside pi and cannot import the package, so the rules
+ * are inlined rather than hand-copied — the previous version was a fourth list, and it missed every
+ * Chinese thanks variant.
+ */
+${socialTurnGateSource()}
+
 function worthRecalling(prompt: string): boolean {
-  const text = prompt.trim();
+  const text = (prompt || "").trim();
   if (text.length < 3) return false;
-  if (/^(hi|hello|hey|ok|okay|thanks|thank you|你好|在吗|嗯|好的)[\\s!！。.?？]*$/i.test(text)) return false;
+  if (classifySocialTurn(text) === "social") return false;
+  if (isContinuationReference(text)) return false;
   return true;
 }
 
