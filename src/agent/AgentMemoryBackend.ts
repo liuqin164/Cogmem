@@ -767,8 +767,7 @@ export class KernelAgentMemoryBackend {
         // is one turn of small talk. Frequency alone is not enough evidence — this repository's own
         // corpus holds an answer deliberately worded like seven others, and a rule that discards on
         // frequency alone suppresses exactly that answer.
-        const onlyCommonWords = overlap.length > 0
-          && overlap.every((term) => frequent.has(term) && isFillerProbe(term));
+        const onlyCommonWords = overlapIsOnlySmallTalk(overlap, frequent);
         if (onlyCommonWords) {
           if (grey) { belowFloor += 1; continue; }
           if (item.sourceType === 'raw_ledger') { noDiscriminativeHit += 1; continue; }
@@ -2358,7 +2357,7 @@ const RAW_TERM_DF_CACHE = new WeakMap<object, Map<string, number>>();
 const FREQUENT_TERM_MIN = 3;
 const DISCRIMINATIVE_TERM_BUDGET = 8;
 
-function discriminativeProbes(text: string): string[] {
+function discriminativeProbesOf(text: string): string[] {
   const probes = new Set<string>();
   for (const run of text.match(/[\p{Script=Han}]+/gu) ?? []) {
     for (let index = 0; index + 1 < run.length; index += 1) probes.add(run.slice(index, index + 2));
@@ -2367,6 +2366,26 @@ function discriminativeProbes(text: string): string[] {
   for (const word of text.match(/[A-Za-z][A-Za-z0-9_-]{1,}/g) ?? []) probes.add(word.toLowerCase());
   for (const digits of text.match(/\d+/g) ?? []) probes.add(digits);
   return [...probes];
+}
+
+/**
+ * Whether every word an item shares with the question is small talk.
+ *
+ * This is defence 3's decision, and defence 4's for a grey query. Frequency alone is not evidence: an
+ * answer deliberately worded like seven others overlaps its question only through common words, and
+ * discarding on frequency alone suppressed exactly that answer. So a hit is dropped only when the
+ * whole overlap is both frequent in this project and part of the shared pleasantry vocabulary.
+ */
+export function overlapIsOnlySmallTalk(overlap: string[], frequent: Set<string>): boolean {
+  return overlap.length > 0 && overlap.every((term) => frequent.has(term) && isFillerProbe(term));
+}
+
+/**
+ * The probes a question is reduced to for the discriminator check: CJK bigrams and whole runs, latin
+ * words, numbers. The index matches consecutive characters, so a bigram is a valid probe.
+ */
+export function discriminativeProbes(text: string): string[] {
+  return discriminativeProbesOf(text);
 }
 
 /** Whether a probe is made only of pleasantry words — the shape a social overlap has. */
