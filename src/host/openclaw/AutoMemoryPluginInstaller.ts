@@ -143,7 +143,7 @@ export function installOpenClawAutoMemoryPlugin(
     ? { kind: 'toml' as const, path: resolve(options.configPath) }
     : resolveCogmemConfigPath({ cwd: workspaceRoot });
   if (configResolution.kind !== 'toml') {
-    throw new Error(`Missing cogmem config at ${configResolution.path}. Ask an operator to run the interactive setup: cogmem init --agent openclaw --scope project.`);
+    throw new Error(`Missing cogmem config at ${configResolution.path}. Ask an operator to run the interactive setup: cogmem init --agent openclaw --scope project --yes.`);
   }
 
   const configPath = configResolution.path;

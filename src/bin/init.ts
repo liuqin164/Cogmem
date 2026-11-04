@@ -148,7 +148,11 @@ function readArgs(argv: string[]): InitArgs {
     if (index === -1) return fallback;
     return argv[index + 1] || fallback;
   };
-  const yes = argv.includes('--yes') || argv.includes('-y');
+  // A run with no terminal cannot answer the wizard's prompts, and the alternative it used to take —
+  // print the backend notice, write no config, exit 0 — told an agent or a CI job that setup had
+  // succeeded when nothing existed. `--yes` is the documented automation path, so a non-interactive
+  // run takes it: the same defaults, written for real.
+  const yes = argv.includes('--yes') || argv.includes('-y') || !process.stdin.isTTY;
   // Host detection is advice, not a decision. An unattended run configures no
   // host unless one was named; the interactive wizard may still offer a
   // detected host, because a human confirms it. ADR-0003.

@@ -32,8 +32,9 @@ test('init --dry-run without --yes writes no config', async () => {
   expect(exitCode).toBe(0);
   expect(existsSync(join(home, '.cogmem', 'config.toml'))).toBe(false);
   expect(existsSync(join(home, '.cogmem'))).toBe(false);
-  // It says what it would have written, rather than going quiet.
+  // It says what it would have written, rather than going quiet. An unattended run now takes the
+  // documented --yes defaults, so the message is the dry-run config rather than a notice about
+  // writing nothing; the assertions above are what carry the intent — no config, no home created.
   expect(stdout).toContain('Dry run');
-  expect(stdout).toContain('nothing written');
   rmSync(home, { recursive: true, force: true });
 }, 30000);
