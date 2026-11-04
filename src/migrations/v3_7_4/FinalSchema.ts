@@ -101,7 +101,7 @@ export function assertSupportedDatabase(db: Database): void {
       return;
     } catch (error) {
       const racy = error instanceof Error
-        && error.message === 'unsupported_database_identity'
+        && error.message.startsWith('unsupported_database_identity')
         && hasUserSchema(db);
       if (!racy || Date.now() >= deadline) throw error;
       sleepSync(50);
@@ -128,7 +128,7 @@ function assertSupportedDatabaseOnce(db: Database): void {
   }
 
   if (readsSchemaVersion(db) === LATEST_SCHEMA_VERSION) return;
-  throw new Error('unsupported_database_identity');
+  throw new Error(unknownIdentityMessage());
 }
 
 /** Verify a database against the final schema; throws when it does not match. */
@@ -140,6 +140,19 @@ export function assertFinalSchema(db: Database): void {
   if (issue.startsWith('trigger_definition:trg_memory_atlas_dirty_')
     || issue.startsWith('trigger_missing:trg_memory_atlas_dirty_')) return;
   throw new Error(`final_schema_postcondition_failed:0032:${issue}`);
+}
+
+/**
+ * The refusal for a file that is neither ours nor recognisably an older Cogmem.
+ *
+ * It used to be the bare internal code, which said nothing to the operator standing in front of a
+ * failed upgrade — while the 3.x case next to it explains the version, the policy, two ways forward
+ * and that the file was left alone. Same shape here, and the same guarantee (#127).
+ */
+function unknownIdentityMessage(): string {
+  return 'unsupported_database_identity - this file has tables Cogmem 4.0 does not recognise and no '
+    + 'Cogmem version marker, so 4.0 will not open it. Point 4.0 at a new database path (a new `db_path` in the '
+    + 'config, or --db for one command), or check that this is the file you meant. This file has not been changed.';
 }
 
 function refusalMessage(latest: string): string {
