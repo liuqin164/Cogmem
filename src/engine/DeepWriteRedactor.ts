@@ -1,3 +1,4 @@
+import { SECRET_PATTERNS as SECRET_PATTERN_TABLE } from '../security/SecretPatterns.js';
 export interface DeepWriteRedactionResult<T> {
   value: T;
   redactionCount: number;
@@ -7,13 +8,9 @@ export interface CustomRedactor {
   redact(input: unknown): { value: unknown; redactionCount: number };
 }
 
-const SECRET_PATTERNS: Array<[RegExp, string]> = [
-  [/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}\b/g, 'Bearer [REDACTED]'],
-  [/\bsk-[A-Za-z0-9_-]{16,}\b/g, 'sk-[REDACTED]'],
-  [/\b[A-Za-z0-9_]*API[_-]?KEY[A-Za-z0-9_]*\s*[:=]\s*["']?[^"'\s,;]+/gi, 'API_KEY=[REDACTED]'],
-  [/\b(password|passwd|pwd)\s*[:=]\s*["']?[^"'\s,;]+/gi, '$1=[REDACTED]'],
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]']
-];
+// One table for the whole repository: the write-path detection in src/security/SecretPatterns.ts
+// and the redaction here read the same definitions, so they cannot drift apart.
+const SECRET_PATTERNS: Array<[RegExp, string]> = SECRET_PATTERN_TABLE.map(({ pattern, replacement }) => [pattern, replacement]);
 
 function redactString(input: string): { value: string; count: number } {
   let value = input;
