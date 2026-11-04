@@ -251,6 +251,9 @@ export async function rememberForHost(
   const userSecretFindings = countSecretFindings(cleanUser.text);
   const assistantSecretFindings = countSecretFindings(cleanAssistant.text);
   if (userSecretFindings.total > 0) { secretTally.total += userSecretFindings.total; secretTally.events += 1; }
+  // The assistant's marks are reported by the same summary, or the count would disagree with what
+  // the events carry — the alignment the guard exists to hold.
+  if (assistantSecretFindings.total > 0) { secretTally.total += assistantSecretFindings.total; secretTally.events += 1; }
 
   const result = await memory.rememberTurnWithResult({
     agentId,
@@ -264,7 +267,7 @@ export async function rememberForHost(
     metadata: {
       // The two conversation texts go through the turn's own metadata channel. They share it, so the
       // assistant's findings travel under their own key rather than overwriting the user's.
-      ...(userSecretFindings ? { secretFindings: userSecretFindings } : {}),
+      ...(userSecretFindings.total > 0 ? { secretFindings: userSecretFindings } : {}),
       source: identity.memorySource,
       ...(identity.pluginId ? { pluginId: identity.pluginId } : {}),
       lifecycle: 'turn',
@@ -277,23 +280,40 @@ export async function rememberForHost(
   let toolResultCount = 0;
   let taskEventCount = 0;
 
-  for (const call of Array.isArray(payload.toolCalls) ? payload.toolCalls : []) {
+  // Both spellings are real: the host plugins send `toolCalls`/`toolResults`, and the snake_case
+  // `tool_calls`/`tool_results` also arrive. Reading only the camel case skipped the snake-case ones
+  // entirely — no event, and therefore no scan — and a tool result is where a secret usually arrives.
+  const hostToolCalls = Array.isArray(payload.toolCalls)
+    ? payload.toolCalls
+    : Array.isArray((payload as { tool_calls?: unknown }).tool_calls)
+      ? (payload as { tool_calls: unknown[] }).tool_calls
+      : [];
+  for (const call of hostToolCalls) {
     const event = await memory.ingestToolCall({
       agentId, projectId, workspaceId: projectId, sessionId,
       assistantEventId,
-      toolCallId: call.toolCallId || undefined,
+      // The call id travels under both spellings as well; the snake-case hosts pair by `tool_call_id`.
+      toolCallId: call.toolCallId || (call as { tool_call_id?: unknown }).tool_call_id || undefined,
       toolName: call.toolName || 'unknown_tool',
       input: call.input,
       eventOrdinal: call.eventOrdinal,
       timestamp: call.timestamp,
       metadata: withSecretFindings(call.metadata, toolCallText(call), secretTally),
     });
-    if (call.toolCallId) toolCallEventIds.set(call.toolCallId, event.eventId);
+    const callId = call.toolCallId ?? (call as { tool_call_id?: unknown }).tool_call_id;
+    if (callId) toolCallEventIds.set(String(callId), event.eventId);
     toolCallCount += 1;
   }
 
-  for (const observation of Array.isArray(payload.toolResults) ? payload.toolResults : []) {
-    const toolCallEventId = observation.toolCallId ? toolCallEventIds.get(observation.toolCallId) : undefined;
+  const hostToolResults = Array.isArray(payload.toolResults)
+    ? payload.toolResults
+    : Array.isArray((payload as { tool_results?: unknown }).tool_results)
+      ? (payload as { tool_results: unknown[] }).tool_results
+      : [];
+  for (const observation of hostToolResults) {
+    // The pairing id travels under both spellings too, for the same reason the payload keys do.
+    const observationCallId = observation.toolCallId ?? (observation as { tool_call_id?: unknown }).tool_call_id;
+    const toolCallEventId = observationCallId ? toolCallEventIds.get(String(observationCallId)) : undefined;
     if (toolCallEventId) {
       await memory.ingestToolObservation({
         agentId, projectId, workspaceId: projectId, sessionId,

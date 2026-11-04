@@ -488,7 +488,10 @@ export class KernelAgentMemoryBackend {
         prevEventId: userEvent.eventId,
         causalityType: 'replies_to',
         sourceId,
-        metadata: this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
+        // This event carries its own findings only. The turn metadata channel is shared with the user
+        // event, so spreading it would put the user's mark on the assistant turn as well, and the
+        // event marks would then disagree with the hygiene summary that counts them.
+        metadata: this.metadataWithCollection({ ...omitSecretFindings(turn.metadata), sourceAgent: turn.agentId }, turn.collection),
       })
       : undefined;
     if (assistantEvent) {
@@ -2466,6 +2469,16 @@ function isFillerProbe(probe: string): boolean {
 
 /** How many index hits a zero-result explanation samples: enough to tell scope from absence. */
 const ZERO_EXPLANATION_SAMPLE = 25;
+
+/** Turn metadata without the conversation-text secret marks: those belong to their own event. */
+function omitSecretFindings(metadata: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!metadata) return {};
+  const { secretFindings, secretFindingsAssistant, ...rest } = metadata as Record<string, unknown> & {
+    secretFindings?: unknown; secretFindingsAssistant?: unknown;
+  };
+  if (secretFindingsAssistant !== undefined) rest.secretFindings = secretFindingsAssistant;
+  return rest;
+}
 
 /** Intents that explicitly ask for words as they were said: those may reach social entries. */
 const FORENSIC_SOCIAL_EXEMPT_INTENTS = new Set(['forensic_quote', 'exact_quote']);
