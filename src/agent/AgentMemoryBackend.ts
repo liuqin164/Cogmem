@@ -1,4 +1,5 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
+import { classifySocialTurn, isSocialTurn } from '../context/SocialTurn.js';
 import type { MemoryAtlasCard, MemoryAtlasNode, MemoryAtlasRelatedCard, MemoryAtlasRelaxationStep } from '../atlas/MemoryAtlasTypes.js';
 import {
   memoryEventCharRange,
@@ -254,7 +255,7 @@ const ATLAS_RECALL_NODE_TYPES: readonly string[] = [
 type RecallCoreResult = Omit<AgentRecallResult, 'semanticIndex'>;
 
 export interface AgentRecallResult {
-  recallMode: MemoryKernelNavigationResult['recallMode'] | 'raw_ledger_fallback' | 'atlas_facet_recall' | 'atlas_raw_grounded_recall';
+  recallMode: MemoryKernelNavigationResult['recallMode'] | 'raw_ledger_fallback' | 'atlas_facet_recall' | 'atlas_raw_grounded_recall' | 'social_turn_suppressed';
   /**
    * Whether a semantic index was available for this answer.
    *
@@ -281,6 +282,7 @@ export interface AgentRecallDecisionTrace {
   version: 'agent_recall_decision.v1';
   selectedLane: 'facet_graph_raw_ledger' | 'graph' | 'compiled' | 'brain_fallback' | 'raw_ledger' | 'mixed' | 'none';
   reason:
+    | 'social_query_residue_empty'
     | 'previous_session'
     | 'forensic_quote'
     | 'historical_discussion'
@@ -299,7 +301,23 @@ export interface AgentRecallDecisionTrace {
     rawLedger: number;
   };
   selectedCount: number;
+  /**
+   * What this recall withheld and why, one entry per reason.
+   *
+   * A gate that only removes things is indistinguishable from a memory that was never there, so
+   * every suppression names itself: the query carried nothing to look up (`residue_empty`), the
+   * entry is itself a social turn (`entry_social`), a raw-lane hit rested only on high-frequency
+   * words (`no_discriminative_hit`), or a grey-zone query's results fell below the relevance floor
+   * (`grey_below_floor`).
+   */
+  suppressed?: Array<{ reason: RecallSuppressionReason; count: number }>;
 }
+
+export type RecallSuppressionReason =
+  | 'residue_empty'
+  | 'entry_social'
+  | 'no_discriminative_hit'
+  | 'grey_below_floor';
 
 export interface AgentRecallEntityCard {
   entityId: string;
@@ -677,13 +695,74 @@ export class KernelAgentMemoryBackend {
    * lane did not (#115).
    */
   recall(query: AgentRecallQuery): AgentRecallResult {
+    const queryText = String(query.query ?? '');
+    const forensic = FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(query.intent ?? ''));
+    // Defence 1, at the one place every caller routes through: a social turn asks nothing, so no
+    // lane runs. Later in this file the same judgement removes social *entries* from the lanes a
+    // real query does run (defence 2).
+    if (!forensic && classifySocialTurn(queryText) === 'social') {
+      const empty = this.emptyRecallResult(query, 'social_query_residue_empty');
+      const trace: AgentRecallDecisionTrace = {
+        ...empty.decisionTrace!,
+        suppressed: [{ reason: 'residue_empty', count: 0 }],
+      };
+      return { ...empty, decisionTrace: trace, semanticIndex: this.kernel.semanticIndexEnabled() };
+    }
     const result = this.recallCore(query);
+    const gated = this.gateSocialEntries(result.items ?? [], query, forensic);
     return {
       ...result,
-      items: (result.items ?? []).map(withRedactionMarks),
+      items: gated.items.map(withRedactionMarks),
+      decisionTrace: gated.suppressed.length && result.decisionTrace
+        ? { ...result.decisionTrace, suppressed: mergeSuppressions(result.decisionTrace.suppressed, gated.suppressed) }
+        : result.decisionTrace,
       // One place, because every lane returns through here. A caller that needs to know
       // whether an answer came from a semantic index should not have to read the config.
       semanticIndex: this.kernel.semanticIndexEnabled(),
+    };
+  }
+
+  /** An answer with no items, keeping the shape every caller already handles. */
+  private emptyRecallResult(query: AgentRecallQuery, reason: AgentRecallDecisionTrace['reason']): RecallCoreResult {
+    const queryPlan = compileAgentRecallQuery({ query: query.query, intent: query.intent, anchorText: query.anchorText });
+    return {
+      recallMode: 'social_turn_suppressed',
+      items: [],
+      fallbackUsed: false,
+      queryPlan,
+      decisionTrace: recallDecisionTrace('none', reason, {
+        graph: 0, navigation: 0, scopedNavigation: 0, brainFallback: 0, rawLedger: 0,
+      }, 0),
+    };
+  }
+
+  /**
+   * Defence 2: a social entry is never memory content, whatever the question is.
+   *
+   * The write side already classifies turns (MemoryGate drops pure thanks), but ten-thousand-event
+   * databases hold turns written before that gate existed, and the ticket requires them to work
+   * without a migration. So the classification is redone here at recall time with the same shared
+   * rules — the ledger keeps everything, and this only stops the old pleasantries from being handed
+   * back as answers.
+   */
+  private gateSocialEntries(
+    items: AgentRecallItem[],
+    query: AgentRecallQuery,
+    forensic: boolean,
+  ): { items: AgentRecallItem[]; suppressed: Array<{ reason: RecallSuppressionReason; count: number }> } {
+    if (forensic) return { items, suppressed: [] };
+    const kept: AgentRecallItem[] = [];
+    let entrySocial = 0;
+    for (const item of items) {
+      if (isSocialTurn(String(item.text ?? ''))) {
+        entrySocial += 1;
+        continue;
+      }
+      kept.push(item);
+    }
+    return {
+      items: kept,
+      suppressed: entrySocial ? [{ reason: 'entry_social', count: entrySocial }] : [],
     };
   }
 
@@ -2227,6 +2306,23 @@ export class KernelAgentMemoryBackend {
     ];
     return durableSignals.some((signal) => signal.test(normalized));
   }
+}
+
+/** Intents that explicitly ask for words as they were said: those may reach social entries. */
+const FORENSIC_SOCIAL_EXEMPT_INTENTS = new Set(['forensic_quote', 'exact_quote']);
+
+/** Fold a new suppression breakdown into whatever the lane trace already carried. */
+function mergeSuppressions(
+  existing: Array<{ reason: RecallSuppressionReason; count: number }> | undefined,
+  added: Array<{ reason: RecallSuppressionReason; count: number }>,
+): Array<{ reason: RecallSuppressionReason; count: number }> {
+  const merged = [...(existing ?? [])];
+  for (const entry of added) {
+    const found = merged.find((item) => item.reason === entry.reason);
+    if (found) found.count += entry.count;
+    else merged.push({ ...entry });
+  }
+  return merged;
 }
 
 function recallDecisionTrace(
