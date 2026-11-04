@@ -72,7 +72,44 @@ export function hasUserSchema(db: Database): boolean {
  *    version, so the number is compared rather than the column merely found.
  * 3. **The schema itself**, for a 4.0 database that predates the marker.
  */
+/**
+ * How long an unmarked but populated database is given for a concurrent initializer to write its
+ * marker before the file is treated as someone else's.
+ */
+const UNMARKED_DATABASE_GRACE_MS = 1000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * `unsupported_database_identity` is the one verdict that can be a race rather than a fact: it says
+ * "there are tables here I do not recognise, and no marker". A second writer starting at the same
+ * moment can be between creating the schema and writing `_meta.schema_version`, and then the file
+ * is refused for being exactly what it is on the way to becoming.
+ *
+ * Measured on a fresh database with four writers starting together: 4 of 20 starts were refused
+ * this way, while `CONCURRENT_ACCESS.md` promises all four start and the schema is applied once.
+ * So wait for the marker — briefly — and let a stable file (foreign, 3.x, or simply not ours) keep
+ * refusing with the same message it always did.
+ */
 export function assertSupportedDatabase(db: Database): void {
+  const deadline = Date.now() + UNMARKED_DATABASE_GRACE_MS;
+  for (;;) {
+    try {
+      assertSupportedDatabaseOnce(db);
+      return;
+    } catch (error) {
+      const racy = error instanceof Error
+        && error.message === 'unsupported_database_identity'
+        && hasUserSchema(db);
+      if (!racy || Date.now() >= deadline) throw error;
+      sleepSync(50);
+    }
+  }
+}
+
+function assertSupportedDatabaseOnce(db: Database): void {
   if (tableExists(db, '_schema_migrations')) {
     const versions = (db.prepare(`SELECT version FROM _schema_migrations ORDER BY version`).all() as Array<{ version: string }>)
       .map((row) => row.version);
