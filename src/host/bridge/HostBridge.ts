@@ -13,6 +13,7 @@
  * a daemon, another a one-shot CLI, and a third an in-process plugin.
  */
 import { stripCogmemRecallBlocks } from '../../agent/ContextHygiene.js';
+import { countSecretFindings } from '../../security/SecretPatterns.js';
 import { serializeUntrustedMemory } from '../../agent/UntrustedMemorySerializer.js';
 import {
   clampRecallContext,
@@ -191,6 +192,35 @@ export interface RememberForHostResult {
  * Any Cogmem block the host echoed back is stripped here, because re-ingesting a
  * recall block as new memory would launder injected context into evidence.
  */
+/** The text a tool call, tool result or task event carries, whatever the host called it. */
+function toolCallText(call: Record<string, unknown>): string {
+  return String(call.input ?? call.arguments ?? call.text ?? '');
+}
+function toolObservationText(observation: Record<string, unknown>): string {
+  return String(observation.output ?? observation.text ?? observation.result ?? '');
+}
+function taskEventText(task: Record<string, unknown>): string {
+  return String(task.detail ?? task.text ?? task.description ?? '');
+}
+
+/**
+ * Scan one text on its way to the ledger, and mark the event only when it holds something.
+ *
+ * Detection only: the stored text is untouched, and a text with no findings adds no field at all, so
+ * the ledger looks exactly as it did before for the ordinary case.
+ */
+function withSecretFindings(
+  metadata: Record<string, unknown> | undefined,
+  text: string,
+  tally: { total: number; events: number },
+): Record<string, unknown> | undefined {
+  const found = countSecretFindings(text);
+  if (found.total === 0) return metadata;
+  tally.total += found.total;
+  tally.events += 1;
+  return { ...(metadata ?? {}), secretFindings: { total: found.total, byKind: found.byKind } };
+}
+
 export async function rememberForHost(
   runtime: Omit<HostBridgeRuntime, 'formatStrategyContext'>,
   payload: Payload,
@@ -208,12 +238,20 @@ export async function rememberForHost(
   const cleanAssistant = config.stripRecallBlocksBeforeRemember === false
     ? { text: payload.assistantText || '', stripped: false, strippedChars: 0, blockCount: 0 }
     : stripCogmemRecallBlocks(payload.assistantText || '');
+  const secretTally = { total: 0, events: 0 };
   const hygiene = {
     ...(payload.hygiene || {}),
     strippedRecallBlocks: Boolean(payload.hygiene && payload.hygiene.strippedRecallBlocks) || cleanUser.stripped || cleanAssistant.stripped,
     strippedBlockCount: Number(payload.hygiene && payload.hygiene.strippedBlockCount || 0) + cleanUser.blockCount + cleanAssistant.blockCount,
     strippedChars: Number(payload.hygiene && payload.hygiene.strippedChars || 0) + cleanUser.strippedChars + cleanAssistant.strippedChars,
+    get secretFindings() { return { total: secretTally.total, events: secretTally.events }; },
   };
+  // One scan per conversation text: the user's mark is what the event carries, the assistant's rides
+  // beside it because the turn metadata channel is shared by both events.
+  const userSecretFindings = countSecretFindings(cleanUser.text);
+  const assistantSecretFindings = countSecretFindings(cleanAssistant.text);
+  if (userSecretFindings.total > 0) { secretTally.total += userSecretFindings.total; secretTally.events += 1; }
+
   const result = await memory.rememberTurnWithResult({
     agentId,
     projectId,
@@ -224,6 +262,9 @@ export async function rememberForHost(
     ingestMode: config.ingestMode || 'selective_compile',
     timestamp: Date.now(),
     metadata: {
+      // The two conversation texts go through the turn's own metadata channel. They share it, so the
+      // assistant's findings travel under their own key rather than overwriting the user's.
+      ...(userSecretFindings ? { secretFindings: userSecretFindings } : {}),
       source: identity.memorySource,
       ...(identity.pluginId ? { pluginId: identity.pluginId } : {}),
       lifecycle: 'turn',
@@ -245,7 +286,7 @@ export async function rememberForHost(
       input: call.input,
       eventOrdinal: call.eventOrdinal,
       timestamp: call.timestamp,
-      metadata: call.metadata,
+      metadata: withSecretFindings(call.metadata, toolCallText(call), secretTally),
     });
     if (call.toolCallId) toolCallEventIds.set(call.toolCallId, event.eventId);
     toolCallCount += 1;
@@ -262,7 +303,7 @@ export async function rememberForHost(
         output: observation.output || '',
         eventOrdinal: observation.eventOrdinal,
         timestamp: observation.timestamp,
-        metadata: observation.metadata,
+        metadata: withSecretFindings(observation.metadata, toolObservationText(observation), secretTally),
       });
       toolResultCount += 1;
     } else {
@@ -276,6 +317,7 @@ export async function rememberForHost(
         eventOrdinal: observation.eventOrdinal,
         timestamp: observation.timestamp,
         metadata: {
+      ...(assistantSecretFindings.total > 0 ? { secretFindingsAssistant: assistantSecretFindings } : {}),
           ...(observation.metadata || {}),
           toolCallId: observation.toolCallId,
           toolName: observation.toolName,
@@ -296,7 +338,7 @@ export async function rememberForHost(
       content: task.content || '',
       eventOrdinal: task.eventOrdinal,
       timestamp: task.timestamp,
-      metadata: task.metadata,
+      metadata: withSecretFindings(task.metadata, taskEventText(task), secretTally),
     });
     taskEventCount += 1;
   }
