@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { makeTempDir } from './helpers/tmp.js';
 
 const BIN = join(import.meta.dir, '..', 'src', 'bin');
 
@@ -42,15 +43,36 @@ test('every entrypoint that opens a database renders refusals through the shared
   }
 });
 
+/**
+ * Its own fixtures, on purpose: a test that reads a file under `.cogmem/` passes on the machine that
+ * made it and fails on a fresh clone, which is exactly how this one shipped broken.
+ */
+function refusalFixtures(): { foreign: string; old3x: string } {
+  const dir = makeTempDir('cogmem-refusal-coverage-');
+  const foreign = join(dir, 'foreign.db');
+  const old3x = join(dir, 'old3x.db');
+  const create = (file: string, sql: string): void => {
+    const result = spawnSync('bun', ['-e', `const { Database } = require('bun:sqlite'); const db = new Database(${JSON.stringify(file)}); ${sql} db.close();`], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+  };
+  create(foreign, `db.exec('CREATE TABLE notes (id integer primary key, body text)');`);
+  create(old3x, `db.exec('CREATE TABLE _schema_migrations (id integer primary key, version integer)'); db.exec('INSERT INTO _schema_migrations VALUES (1, 31)'); db.exec('CREATE TABLE _meta (key text primary key, value text)'); db.exec("INSERT INTO _meta VALUES ('schema_version','31')");`);
+  const foreignConfig = join(dir, 'c-foreign.toml');
+  const oldConfig = join(dir, 'c-old3x.toml');
+  writeFileSync(foreignConfig, `[core]\ndb_path = ${JSON.stringify(foreign)}\n`);
+  writeFileSync(oldConfig, `[core]\ndb_path = ${JSON.stringify(old3x)}\n`);
+  return { foreign: foreignConfig, old3x: oldConfig };
+}
+
 test('host-bridge, the path every host turn takes, answers both refusals with the contract', () => {
-  const dir = join(import.meta.dir, '..', '.cogmem', 'refusecheck');
+  const { foreign, old3x } = refusalFixtures();
   const cases = [
-    ['c-foreign.toml', 'unsupported_database_identity', ['use_new_database', 'verify_database_path']],
-    ['c-old3x.toml', 'no_upgrade_path', ['keep_with_3x', 'use_new_database']],
+    [foreign, 'unsupported_database_identity', ['use_new_database', 'verify_database_path']],
+    [old3x, 'no_upgrade_path', ['keep_with_3x', 'use_new_database']],
   ] as const;
   for (const [config, reason, ids] of cases) {
     const result = spawnSync('bun', [join(BIN, 'cogmem.ts'), 'host-bridge', 'recall', '--project', 'p',
-      '--agent', 'a', '--host', 'openclaw', '--config', join(dir, config)], {
+      '--agent', 'a', '--host', 'openclaw', '--config', config], {
       encoding: 'utf8', input: JSON.stringify({ query: 'x' }),
     });
     const document = JSON.parse(result.stdout) as Record<string, unknown>;
