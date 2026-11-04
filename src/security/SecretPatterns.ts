@@ -84,3 +84,24 @@ export function countSecretFindings(text: string): { total: number; byKind: Reco
   }
   return { total, byKind };
 }
+
+/**
+ * Replace the secrets in a text with their redacted forms, and say how much was replaced.
+ *
+ * Same table and same replacement bodies as the compile-path redactor, so a value redacted here and a
+ * value redacted there come out identical. Everything that is not a match is returned untouched.
+ */
+export function redactSecretText(text: string): { text: string; count: number; chars: number } {
+  let value = text;
+  let count = 0;
+  let chars = 0;
+  for (const { pattern, replacement } of SECRET_PATTERNS) {
+    pattern.lastIndex = 0;
+    value = value.replace(pattern, (match) => {
+      count += 1;
+      chars += match.length;
+      return replacement.includes('$1') ? match.replace(pattern, replacement) : replacement;
+    });
+  }
+  return { text: value, count, chars };
+}

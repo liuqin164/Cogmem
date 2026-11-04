@@ -13,7 +13,7 @@
  * a daemon, another a one-shot CLI, and a third an in-process plugin.
  */
 import { stripCogmemRecallBlocks } from '../../agent/ContextHygiene.js';
-import { countSecretFindings } from '../../security/SecretPatterns.js';
+import { countSecretFindings, redactSecretText } from '../../security/SecretPatterns.js';
 import { serializeUntrustedMemory } from '../../agent/UntrustedMemorySerializer.js';
 import {
   clampRecallContext,
@@ -315,15 +315,24 @@ export async function rememberForHost(
     const observationCallId = observation.toolCallId ?? (observation as { tool_call_id?: unknown }).tool_call_id;
     const toolCallEventId = observationCallId ? toolCallEventIds.get(String(observationCallId)) : undefined;
     if (toolCallEventId) {
+      // Redacted before it reaches the ledger: a tool result is the main place a secret arrives from,
+      // and the stored text is the only copy. Everything that is not a match goes through untouched.
+      const observationText = toolObservationText(observation);
+      const observationRedaction = redactSecretText(observationText);
       await memory.ingestToolObservation({
         agentId, projectId, workspaceId: projectId, sessionId,
         toolCallEventId,
         toolCallId: observation.toolCallId || undefined,
         toolName: observation.toolName || 'unknown_tool',
-        output: observation.output || '',
+        output: observationRedaction.text,
         eventOrdinal: observation.eventOrdinal,
         timestamp: observation.timestamp,
-        metadata: withSecretFindings(observation.metadata, toolObservationText(observation), secretTally),
+        metadata: {
+          ...withSecretFindings(observation.metadata, observationText, secretTally),
+          ...(observationRedaction.count > 0
+            ? { redaction: { count: observationRedaction.count, chars: observationRedaction.chars } }
+            : {}),
+        },
       });
       toolResultCount += 1;
     } else {
