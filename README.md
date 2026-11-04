@@ -56,6 +56,7 @@ Three things in there are the whole design. The value is in the prompt, not behi
 ## Why cogmem
 
 - **It shows up on its own.** Shipped adapters inject recall before the model answers on OpenClaw (plugin), Hermes (hook), and pi (extension), each verified in a real conversation. Other hosts get explicit recall over MCP — see [Hosts](#hosts).
+- It knows when not to answer with memory. Greetings, thanks, and small talk are social turns, not memory questions: they are written to the ledger but never trigger a flood of look-alike history. The gate judges whether a message carries anything to look up — not whether it matches a phrase list — so "thanks, did we change the deploy time last week?" still recalls, and a bare "thanks, that's all" recalls nothing.
 - **It knows what is no longer true.** Facts get corrected, and plain similarity search cannot tell the correction from the thing it replaced. In the reproducible [scorecard](BENCHMARKS.md), a vector top-k returned the superseded value in 100% of correction scenarios; cogmem leaked it in 4.2%.
 - **Every answer carries its receipts.** Recall is source-anchored: each item links back to the raw turn it came from, and text that was redacted or truncated says so rather than looking intact.
 - **Governed, not hoarded.** Everything lands in a raw ledger first; promotion into compiled memory is curated and audited, and decay controls what surfaces rather than what exists.
