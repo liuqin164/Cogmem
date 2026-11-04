@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import type { StrategyCapsule, StrategyTemplateId } from '../strategy/StrategyCapsule.js';
 import { matchesProjectScope } from '../topology/ProjectScope.js';
 
+import { classifySocialTurn, isContinuationReference } from './SocialTurn.js';
+
 export type ContextIntent =
   | 'greeting'
   | 'short_followup'
@@ -12,6 +14,7 @@ export type ContextIntent =
   | 'preference_lookup'
   | 'project_status'
   | 'debugging'
+  | 'social'
   | 'general_memory';
 
 export type ContextLayer =
@@ -85,6 +88,9 @@ export interface ContextActivationPlan {
 
 const INTENT_LAYERS: Record<ContextIntent, ContextLayer[]> = {
   greeting: [],
+  // A social turn asks nothing and carries nothing to look up, so it activates no layer at all:
+  // recall for it is not narrowed, it is silent (see SocialTurn.ts for the residue judgement).
+  social: [],
   short_followup: ['session_state', 'turn_bridge'],
   exact_quote: ['raw_source', 'graph', 'belief'],
   decision_history: ['temporal', 'belief', 'raw_source', 'graph'],
@@ -102,12 +108,19 @@ export class ContextCortex {
   classifyIntent(query: string): ContextIntent {
     const text = query.trim().toLowerCase();
     if (/^(hi|hello|hey|你好|您好|早上好|晚上好|嗨)[!！。. ]*$/.test(text)) return 'greeting';
+    // Measured leak in all three hosts (#social): a bare thanks in any of its Chinese shapes reached
+    // recall and pulled look-alike history in. Placed after `greeting` so the existing intent keeps
+    // its meaning, and driven by the shared residue rule rather than a second phrase list.
+    if (classifySocialTurn(query) === 'social') return 'social';
     if (/^(继续|接着|然后呢|上面那个|刚才说的|这个呢|continue|go on|and then)[?？!！。. ]*$/.test(text)) return 'short_followup';
     if (/原话|逐字|怎么说的|完整对话|exact quote|verbatim|word for word/.test(text)) return 'exact_quote';
     if (/为什么.*(改|变|推翻)|何时|什么时候|之前.*决定|decision.*(change|history)|why.*change|timeline|历史/.test(text)) return 'decision_history';
     if (/偏好|喜欢|不喜欢|边界|习惯|preference|prefer|boundary/.test(text)) return 'preference_lookup';
     if (/项目.*(状态|进度|当前)|release status|project status|current state/.test(text)) return 'project_status';
     if (/报错|错误|调试|根因|bug|debug|error|failure|root cause/.test(text)) return 'debugging';
+    // Last, so every specific intent keeps priority: an acknowledgement that only points back at the
+    // session belongs in the session layer rather than in a history search (#social, acceptance case 3).
+    if (isContinuationReference(query)) return 'short_followup';
     return 'general_memory';
   }
 
