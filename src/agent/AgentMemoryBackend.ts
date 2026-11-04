@@ -329,7 +329,9 @@ export type RecallSuppressionReason =
   | 'residue_empty'
   | 'entry_social'
   | 'no_discriminative_hit'
-  | 'grey_below_floor';
+  | 'grey_below_floor'
+  // A conversation turn holding a secret: written verbatim, marked, and not injected by default.
+  | 'secret_bearing_withheld';
 
 export interface AgentRecallEntityCard {
   entityId: string;
@@ -710,6 +712,7 @@ export class KernelAgentMemoryBackend {
    * lane did not (#115).
    */
   recall(query: AgentRecallQuery): AgentRecallResult {
+    SECRET_WITHHELD_COUNTS.set(this, 0);
     const queryText = String(query.query ?? '');
     const forensic = FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(query.intent ?? ''));
     // Defence 1, at the one place every caller routes through: a social turn asks nothing, so no
@@ -725,6 +728,15 @@ export class KernelAgentMemoryBackend {
     }
     const result = this.recallCore(query);
     const gated = this.gateSocialEntries(result.items ?? [], query, forensic);
+    const secretWithheld = SECRET_WITHHELD_COUNTS.get(this) ?? 0;
+    if (secretWithheld > 0 && result.decisionTrace) {
+      result.decisionTrace = {
+        ...result.decisionTrace,
+        suppressed: mergeSuppressions(result.decisionTrace.suppressed, [
+          { reason: 'secret_bearing_withheld', count: secretWithheld },
+        ]),
+      };
+    }
     const zeroExplanation = gated.items.length === 0 ? this.explainZeroResult(query) : undefined;
     return {
       ...result,
@@ -1965,6 +1977,13 @@ export class KernelAgentMemoryBackend {
   }
 
   private isRawEventInRecallScope(event: MemoryEvent, query: AgentRecallQuery, effectiveIntent?: AgentRecallIntent): boolean {
+    // A turn that holds a secret is stored verbatim and marked, never redacted, so the default lanes
+    // do not hand it back. A question about the words someone used still may — that is the caller's
+    // explicit intent — and both outcomes are counted for the trace.
+    if (eventHoldsSecretMark(event) && !FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(effectiveIntent ?? ''))) {
+      SECRET_WITHHELD_COUNTS.set(this, (SECRET_WITHHELD_COUNTS.get(this) ?? 0) + 1);
+      return false;
+    }
     if (query.projectId !== undefined && (event.projectId ?? '') !== query.projectId) return false;
     if (query.workspaceId && event.workspaceId !== query.workspaceId) return false;
     if (query.threadId && event.threadId !== query.threadId) return false;
@@ -2465,6 +2484,20 @@ function isFillerProbe(probe: string): boolean {
   // Then CJK n-grams, where the probes are bigrams of pleasantries like 「好的收到」 and the individual
   // characters are what can be checked. Never applied to a probe holding a non-CJK character.
   return /^\p{Script=Han}+$/u.test(probe) && [...probe].every((character) => FILLER_CHARACTERS.has(character));
+}
+
+/**
+ * Turns withheld because they carry a secret mark, counted per recall.
+ *
+ * Keyed by the backend instance rather than a module global, for the same reason the document
+ * frequency cache is: one process may serve more than one database.
+ */
+const SECRET_WITHHELD_COUNTS = new WeakMap<object, number>();
+
+/** Whether this event's own metadata says it holds something secret-looking. */
+function eventHoldsSecretMark(event: MemoryEvent): boolean {
+  const metadata = (event.payload as { metadata?: { secretFindings?: { total?: number }; secretFindingsAssistant?: { total?: number } } })?.metadata;
+  return Number(metadata?.secretFindings?.total ?? 0) > 0 || Number(metadata?.secretFindingsAssistant?.total ?? 0) > 0;
 }
 
 /** How many index hits a zero-result explanation samples: enough to tell scope from absence. */
