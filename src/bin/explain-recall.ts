@@ -37,7 +37,10 @@ function readArgs(argv: string[]): ExplainArgs {
   return {
     query: stringArg(values, 'query'),
     projectId: stringArg(values, 'project'),
-    agentId: stringArg(values, 'agent'),
+    // The same default `memory recall` applies (`--agent || --project || openclaw`): this command
+    // exists to explain that one, and defaulting differently made them answer 0 and 8 to the same
+    // query on a real database (#128).
+    agentId: stringArg(values, 'agent') || stringArg(values, 'project') || 'openclaw',
     limit: numberArg(values, 'limit'),
     startTime: timeArg(values, 'since'),
     endTime: timeArg(values, 'until'),

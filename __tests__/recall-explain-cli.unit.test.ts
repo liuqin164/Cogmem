@@ -78,3 +78,44 @@ test('cogmem-explain-recall help documents filtered evidence governance fields',
   expect(result.stdout).toContain('filteredEvidence');
   expect(result.stdout).toContain('governanceReason');
 });
+
+test('explain-recall reads under the same default scope as recall', async () => {
+  // The two commands diverge silently if they default differently: on a real 20k-event database
+  // `recall` scoped itself to the project and answered 0 while `explain-recall` read unscoped and
+  // answered 8 for the same query, so the inspector contradicted the thing it inspects (#128).
+  const dir = makeTempDir('cogmem-explain-scope-');
+  const dbPath = join(dir, 'memory.db');
+  const kernel = createMemoryKernel({ dbPath });
+  await kernel.ingest({
+    content: 'The retention window for archived logs is thirty days.',
+    projectId: 'p',
+    tags: ['agent:a'],
+  });
+  kernel.close();
+
+  const run = async (command: 'recall' | 'explain', extra: string[]): Promise<Record<string, any>> => {
+    const { exitCode, stdout, stderr } = await runCli([
+      'bun', join(coreRoot, 'src/bin/cogmem.ts'),
+      ...(command === 'recall' ? ['memory', 'recall'] : ['explain-recall']),
+      // `recall` requires a timezone alongside `--db`; `explain-recall` has no such flag (its own
+      // small divergence from the command it explains), so it is passed only where it is accepted.
+      '--db', dbPath, ...(command === 'recall' ? ['--timezone', 'UTC'] : []),
+      '--project', 'p', '--query', 'retention window', ...extra, '--json',
+    ]);
+    expect({ command, exitCode, stderr: stderr.slice(0, 140) }).toEqual({ command, exitCode: 0, stderr: '' });
+    return JSON.parse(stdout);
+  };
+
+  // Neither command is told an agent: both must resolve the same one and therefore agree.
+  const recallDefault = await run('recall', []);
+  const explainDefault = await run('explain', []);
+  expect(recallDefault.agentId).toBe(explainDefault.agentId);
+  expect(recallDefault.agentId).toBe('p');
+
+  // Told the agent the memory is tagged with, both see it — so the empty default is a scope
+  // answer, not a missing memory.
+  const recallScoped = await run('recall', ['--agent', 'a']);
+  const explainScoped = await run('explain', ['--agent', 'a']);
+  expect((recallScoped.items ?? []).length).toBeGreaterThan(0);
+  expect((explainScoped.evidence ?? []).length).toBeGreaterThan(0);
+});
