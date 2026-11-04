@@ -89,6 +89,10 @@ export function buildMcpInstructions(profile: McpToolProfile): string {
   sentences.push(
     'When the user asks about something that happened earlier and this prompt contains no recall evidence, call cogmem_recall before answering.',
   );
+  // Not tied to a tool, so every profile gets it: it is how recall reads a database a host wrote.
+  sentences.push(
+    'Recall is scoped to an agent identity: memory written through a host adapter belongs to that agent\'s scope, so on a database a host has been writing to, a recall carries its own agentId (or the writing host\'s) — 0 results can mean the scope is wrong rather than that nothing was stored.',
+  );
   sentences.push('Atlas summaries are navigation hints, not evidence.');
   sentences.push(
     'Cogmem cannot observe a hookless conversation automatically: record what matters with cogmem_remember_turn or cogmem_episode_append, then recall it explicitly.',

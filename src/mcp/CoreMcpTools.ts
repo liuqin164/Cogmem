@@ -129,7 +129,7 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
     },
     {
       name: 'cogmem_recall',
-      description: 'Recall governed agent-facing memory context from cogmem using the same path as cogmem memory recall, including raw ledger fallback with labeled sourceContext events, sourceContext.window metadata, char/source ranges when available, and locator commands when vectors or compiled evidence are unavailable. Suppressed evidence is omitted from active context; use cogmem_explain_recall to inspect filteredEvidence.',
+      description: 'Recall governed agent-facing memory context from cogmem using the same path as cogmem memory recall, including raw ledger fallback with labeled sourceContext events, sourceContext.window metadata, char/source ranges when available, and locator commands when vectors or compiled evidence are unavailable. Suppressed evidence is omitted from active context; use cogmem_explain_recall to inspect filteredEvidence. Recall is scoped to an agent identity: memory written through a host adapter belongs to that agent\'s scope, so on a database a host has been writing to, a recall carries its own agentId (or the writing host\'s) — 0 results can mean the scope is wrong rather than that nothing was stored.',
       inputSchema: {
         type: 'object',
         properties: {

@@ -28,6 +28,7 @@ cogmem prospective list --project <projectId>
 cogmem prospective confirm --project <projectId> --id <candidateId> --evidence <distinctUserEventId>
 cogmem prospective due --project <projectId>
 ```
+- Recall is scoped to an agent identity: memory written through a host adapter belongs to that agent's scope, so on a database a host has been writing to, a recall carries its own agentId (or the writing host's) — 0 results can mean the scope is wrong rather than that nothing was stored.
 
 ## Install
 
