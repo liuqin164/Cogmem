@@ -80,7 +80,27 @@ function printWarnings(diagnostics: Array<{ severity: string; code: string; mess
 
 function fail(message: string, code = 'doctor_failed'): never {
   if (json) {
-    emitGate(buildGate('fail', [{ code, message }], []));
+    emitGate(buildGate('fail', [{ code, message }], [
+      // The same two ways forward the human message names, in the machine-readable shape the gate
+      // already uses for every other outcome. An agent reading this document gets the steps, not a
+      // sentence it has to parse.
+      {
+        id: 'choose_database_path',
+        actor: 'operator',
+        command: 'cogmem init --config <new-config.toml> --yes',
+        when: 'when the file this configuration names is not the database you meant',
+        purpose: 'point cogmem at a recognised database path; the existing file is left untouched',
+        safeForAutomation: false,
+      },
+      {
+        id: 'recheck_with_doctor',
+        actor: 'operator',
+        command: 'cogmem doctor --config <config.toml>',
+        when: 'after changing the path, or when you believe the current path is right',
+        purpose: 're-check the configuration and the database identity together',
+        safeForAutomation: true,
+      },
+    ]));
     process.exit(1);
   }
   console.error(`FAIL ${message}`);
