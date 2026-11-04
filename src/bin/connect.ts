@@ -44,6 +44,7 @@ import {
   removeOpenClawAutoMemoryPlugin,
 } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { assertCliArgs } from './CliArgs.js';
+import { refusalDocumentFor } from '../cli/RefusalDocument.js';
 
 type AgentKind = 'openclaw' | 'hermes' | 'pi';
 
@@ -1246,6 +1247,13 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
+  // The same contract every command that can meet a refusal emits: a document under --json, and the
+  // sentence unchanged otherwise.
+  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'connect') : undefined;
+  if (refusal) {
+    printCliJson('connect', refusal);
+    process.exit(1);
+  }
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

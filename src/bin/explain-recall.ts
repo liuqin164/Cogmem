@@ -5,6 +5,7 @@ import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } f
 import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
 import { printCliJson } from './CliJson.js';
 import { assertCliArgs } from './CliArgs.js';
+import { refusalDocumentFor } from '../cli/RefusalDocument.js';
 
 interface ExplainArgs {
   query?: string;
@@ -154,6 +155,11 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
+  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'explain-recall') : undefined;
+  if (refusal) {
+    printCliJson('explain-recall', refusal);
+    process.exit(1);
+  }
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

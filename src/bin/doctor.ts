@@ -38,6 +38,7 @@ import {
   type InstallStep,
 } from '../install/InstallSteps.js';
 import { assertCliArgs } from './CliArgs.js';
+import { REFUSAL_NEXT_STEPS, refusalReasonOf } from '../cli/RefusalDocument.js';
 const DOCTOR_FLAGS = ['agent', 'auto', 'bun', 'config', 'dry-run', 'env-path', 'fix', 'force', 'hermes-config', 'json', 'openclaw-config', 'out', 'plugin-dir', 'plugin-only', 'storage', 'workspace'] as const;
 const USAGE = [
   'Usage: cogmem doctor [--config <config.toml>] [--workspace <dir>] [--json]',
@@ -80,27 +81,21 @@ function printWarnings(diagnostics: Array<{ severity: string; code: string; mess
 
 function fail(message: string, code = 'doctor_failed'): never {
   if (json) {
-    emitGate(buildGate('fail', [{ code, message }], [
-      // The same two ways forward the human message names, in the machine-readable shape the gate
-      // already uses for every other outcome. An agent reading this document gets the steps, not a
-      // sentence it has to parse.
-      {
-        id: 'choose_database_path',
-        actor: 'operator',
-        command: 'cogmem init --config <new-config.toml> --yes',
-        when: 'when the file this configuration names is not the database you meant',
-        purpose: 'point cogmem at a recognised database path; the existing file is left untouched',
-        safeForAutomation: false,
-      },
-      {
-        id: 'recheck_with_doctor',
-        actor: 'operator',
-        command: 'cogmem doctor --config <config.toml>',
-        when: 'after changing the path, or when you believe the current path is right',
-        purpose: 're-check the configuration and the database identity together',
-        safeForAutomation: true,
-      },
-    ]));
+    // Mapped, not re-worded: the ids, actions and commands come from the one refusal definition the
+    // JSON contract uses, and the gate's own step fields are derived from it.
+    const gateSteps = REFUSAL_NEXT_STEPS[
+      refusalReasonOf(new Error(message)) ?? 'unsupported_database_identity'
+    ].map((step) => ({
+      id: step.id,
+      actor: step.actor ?? 'operator',
+      command: step.command ?? '',
+      when: step.when ?? step.action,
+      purpose: step.purpose ?? step.action,
+      safeForAutomation: step.safeForAutomation,
+    }));
+    // The gate's step type carries a closed id union; the refusal ids are contract-fixed, and the
+    // rendered shape is what the guard asserts.
+    emitGate(buildGate('fail', [{ code, message }], gateSteps as unknown as Parameters<typeof buildGate>[2]));
     process.exit(1);
   }
   console.error(`FAIL ${message}`);
@@ -129,7 +124,16 @@ function emitGate(gate: InstallGate, payload: Record<string, unknown> = {}): voi
   const secretScope = 'only events carrying the write-path mark (written since this landed); existing databases are not re-scanned';
   const secretPayload = secretMarkedEvents === undefined
     ? {}
-    : { secretFindings: { markedEvents: secretMarkedEvents, scope: secretScope } };
+    : {
+      secretFindings: {
+        markedEvents: secretMarkedEvents,
+        // Split, because the two are different facts: a redacted tool result no longer holds the
+        // value, while a marked conversation turn still does and is withheld at recall instead.
+        redactedOnWrite: secretRedactedEvents ?? 0,
+        markedOnly: Math.max(0, secretMarkedEvents - (secretRedactedEvents ?? 0)),
+        scope: secretScope,
+      },
+    };
   if (json) {
     printJsonDocument(JSON.stringify({
       schemaVersion: 'cogmem.cli.v1',
@@ -148,7 +152,7 @@ function emitGate(gate: InstallGate, payload: Record<string, unknown> = {}): voi
     console.log('');
     console.log(`Install gate: ${gate.level.toUpperCase()} — ${gate.summary}`);
     if (secretMarkedEvents !== undefined) {
-      console.log(`Secret-marked events: ${secretMarkedEvents} (${secretScope})`);
+      console.log(`Secret-marked events: ${secretMarkedEvents} — redacted on write ${secretRedactedEvents ?? 0}, marked only ${Math.max(0, secretMarkedEvents - (secretRedactedEvents ?? 0))} (${secretScope})`);
     }
     printSteps(gate.nextSteps);
   }
@@ -179,6 +183,8 @@ const bunPath = readArg('--bun');
  * re-scanned, so an old ledger reports 0 here without meaning it holds no secrets.
  */
 let secretMarkedEvents: number | undefined;
+/** Of the marked events: those whose tool result was redacted on the way in, and those only marked. */
+let secretRedactedEvents: number | undefined;
 
 /**
  * How many ledger events carry a write-path secret mark.
@@ -195,11 +201,14 @@ function countMarkedSecretEvents(configPath: string): number | undefined {
     const db = new Database(dbPath, { readonly: true });
     try {
       const row = db.prepare(`
-        SELECT COUNT(*) AS count FROM memory_events
-        WHERE json_extract(payload_json, '$.metadata.secretFindings.total') > 0
-           OR json_extract(payload_json, '$.metadata.secretFindingsAssistant.total') > 0
-      `).get() as { count?: number } | undefined;
-      return Number(row?.count ?? 0);
+        SELECT COUNT(*) AS marked,
+               SUM(CASE WHEN json_extract(payload_json, '$.metadata.redaction.count') > 0 THEN 1 ELSE 0 END) AS redacted
+          FROM memory_events
+         WHERE json_extract(payload_json, '$.metadata.secretFindings.total') > 0
+            OR json_extract(payload_json, '$.metadata.secretFindingsAssistant.total') > 0
+      `).get() as { marked?: number; redacted?: number } | undefined;
+      secretRedactedEvents = Number(row?.redacted ?? 0);
+      return Number(row?.marked ?? 0);
     } finally {
       db.close();
     }

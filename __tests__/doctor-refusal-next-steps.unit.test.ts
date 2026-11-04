@@ -28,9 +28,12 @@ test('a failing doctor gate carries the two ways forward as structured nextSteps
   // Two ways forward, both actionable, matching the human message.
   expect(steps.length).toBeGreaterThanOrEqual(2);
   const ids = steps.map((step) => step.id);
-  expect(ids).toContain('choose_database_path');
-  expect(ids).toContain('recheck_with_doctor');
-  for (const step of steps) expect(typeof step.command).toBe('string');
+  expect(ids).toContain('use_new_database');
+  expect(ids).toContain('verify_database_path');
+  // The contract gives a command only where a real one exists, so at least one step carries one and
+  // any step that does must be a string.
+  expect(steps.some((step) => typeof step.command === 'string')).toBe(true);
+  for (const step of steps) if (step.command !== undefined) expect(typeof step.command).toBe('string');
   // A step that changes configuration is not offered as safe for unattended agents.
-  expect(steps.find((step) => step.id === 'choose_database_path')?.safeForAutomation).toBe(false);
+  expect(steps.find((step) => step.id === 'verify_database_path')?.safeForAutomation).toBe(false);
 });
