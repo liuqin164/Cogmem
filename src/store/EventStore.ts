@@ -1207,6 +1207,13 @@ export class EventStore {
     return '';
   }
 
+  /** Capped per-term document count, routed through the search path recall itself uses. */
+  countRawEventMatches(token: string, options: { projectId?: string; workspaceId?: string; threadId?: string; cap?: number } = {}): number {
+    const cap = Math.max(1, Math.min(options.cap ?? 64, 500));
+    if (!this.toRawEventFtsQuery(token)) return 0;
+    return this.searchRawEvents(token, { projectId: options.projectId, workspaceId: options.workspaceId, threadId: options.threadId, limit: cap }).length;
+  }
+
   private toRawEventFtsQuery(query: string): string {
     return this.rawEventFtsTokens(query)
       .map((token) => `"${token}"`)

@@ -1,5 +1,5 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
-import { classifySocialTurn, isSocialTurn } from '../context/SocialTurn.js';
+import { SOCIAL_FILLER_TOKENS, classifySocialTurn, isSocialTurn } from '../context/SocialTurn.js';
 import type { MemoryAtlasCard, MemoryAtlasNode, MemoryAtlasRelatedCard, MemoryAtlasRelaxationStep } from '../atlas/MemoryAtlasTypes.js';
 import {
   memoryEventCharRange,
@@ -751,19 +751,61 @@ export class KernelAgentMemoryBackend {
     forensic: boolean,
   ): { items: AgentRecallItem[]; suppressed: Array<{ reason: RecallSuppressionReason; count: number }> } {
     if (forensic) return { items, suppressed: [] };
+    const { frequent, rare } = this.queryTermFrequencies(query);
+    const measurable = frequent.size > 0 && rare.size > 0;
+    const grey = classifySocialTurn(String(query.query ?? '')) === 'grey';
     const kept: AgentRecallItem[] = [];
-    let entrySocial = 0;
+    let entrySocial = 0, noDiscriminativeHit = 0, belowFloor = 0;
     for (const item of items) {
-      if (isSocialTurn(String(item.text ?? ''))) {
-        entrySocial += 1;
-        continue;
+      const text = String(item.text ?? '');
+      if (isSocialTurn(text)) { entrySocial += 1; continue; }
+      if (measurable) {
+        const overlap = [...frequent, ...rare].filter((term) => text.includes(term));
+        // "Resting only on high-frequency words" is measured against the shared filler vocabulary as
+        // well as the corpus: a hit is discarded only when every word it shares with the question is
+        // both everywhere in this project and part of the pleasantry vocabulary, i.e. the whole match
+        // is one turn of small talk. Frequency alone is not enough evidence — this repository's own
+        // corpus holds an answer deliberately worded like seven others, and a rule that discards on
+        // frequency alone suppresses exactly that answer.
+        const onlyCommonWords = overlap.length > 0
+          && overlap.every((term) => frequent.has(term) && isFillerProbe(term));
+        if (onlyCommonWords) {
+          if (grey) { belowFloor += 1; continue; }
+          if (item.sourceType === 'raw_ledger') { noDiscriminativeHit += 1; continue; }
+        }
       }
       kept.push(item);
     }
-    return {
-      items: kept,
-      suppressed: entrySocial ? [{ reason: 'entry_social', count: entrySocial }] : [],
-    };
+    const suppressed: Array<{ reason: RecallSuppressionReason; count: number }> = [];
+    if (entrySocial) suppressed.push({ reason: 'entry_social', count: entrySocial });
+    if (noDiscriminativeHit) suppressed.push({ reason: 'no_discriminative_hit', count: noDiscriminativeHit });
+    if (belowFloor) suppressed.push({ reason: 'grey_below_floor', count: belowFloor });
+    return { items: kept, suppressed };
+  }
+
+  private queryTermFrequencies(query: AgentRecallQuery): { frequent: Set<string>; rare: Set<string> } {
+    const text = String(query.query ?? '');
+    const frequent = new Set<string>(); const rare = new Set<string>();
+    if (!text.trim()) return { frequent, rare };
+    const scopeKey = query.projectId ?? '*';
+    let probes = 0;
+    for (const probe of discriminativeProbes(text)) {
+      if (probes >= DISCRIMINATIVE_TERM_BUDGET) break;
+      probes += 1;
+      const key = `${scopeKey}\u0000${probe}`;
+      let cache = RAW_TERM_DF_CACHE.get(this);
+      if (!cache) {
+        cache = new Map<string, number>();
+        RAW_TERM_DF_CACHE.set(this, cache);
+      }
+      let count = cache.get(key);
+      if (count === undefined) {
+        count = this.kernel.countRawEventMatches(probe, { projectId: query.projectId, cap: FREQUENT_TERM_MIN });
+        cache.set(key, count);
+      }
+      (count >= FREQUENT_TERM_MIN ? frequent : rare).add(probe);
+    }
+    return { frequent, rare };
   }
 
   // Everything but the semantic-index answer: that is a property of the kernel, not of
@@ -2306,6 +2348,34 @@ export class KernelAgentMemoryBackend {
     ];
     return durableSignals.some((signal) => signal.test(normalized));
   }
+}
+
+/**
+ * Per backend instance, never global: document frequency describes one database, and a daemon serving
+ * two of them must not answer the second with the first one's counts.
+ */
+const RAW_TERM_DF_CACHE = new WeakMap<object, Map<string, number>>();
+const FREQUENT_TERM_MIN = 3;
+const DISCRIMINATIVE_TERM_BUDGET = 8;
+
+function discriminativeProbes(text: string): string[] {
+  const probes = new Set<string>();
+  for (const run of text.match(/[\p{Script=Han}]+/gu) ?? []) {
+    for (let index = 0; index + 1 < run.length; index += 1) probes.add(run.slice(index, index + 2));
+    if (run.length > 1) probes.add(run);
+  }
+  for (const word of text.match(/[A-Za-z][A-Za-z0-9_-]{1,}/g) ?? []) probes.add(word.toLowerCase());
+  for (const digits of text.match(/\d+/g) ?? []) probes.add(digits);
+  return [...probes];
+}
+
+/** Whether a probe is made only of pleasantry words — the shape a social overlap has. */
+function isFillerProbe(probe: string): boolean {
+  let rest = probe;
+  for (const token of SOCIAL_FILLER_TOKENS) {
+    while (rest.includes(token)) rest = rest.split(token).join('');
+  }
+  return rest.length === 0;
 }
 
 /** Intents that explicitly ask for words as they were said: those may reach social entries. */

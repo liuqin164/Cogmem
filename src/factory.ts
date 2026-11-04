@@ -1888,6 +1888,11 @@ export class MemoryKernel {
     return this.eventStore.searchRawEvents(query, options);
   }
 
+  /** Capped per-term document count, for recall's discriminator check. */
+  countRawEventMatches(token: string, options: { projectId?: string; workspaceId?: string; threadId?: string; cap?: number } = {}): number {
+    return this.eventStore.countRawEventMatches(token, options);
+  }
+
   /**
    * Whether recall can use a semantic index at all.
    *
