@@ -177,6 +177,7 @@ export function isSocialTurn(text: string): boolean {
  */
 export function socialTurnGateSource(): string {
   return [
+    `// --- social-turn gate: generated from src/context/SocialTurn.ts ---`,
     `const SOCIAL_FILLER_TOKENS = ${JSON.stringify(SOCIAL_FILLER_TOKENS)};`,
     `const CONTENT_CUE_SOURCES = ${JSON.stringify(CONTENT_CUE_PATTERNS.map((pattern) => pattern.source))};`,
     `const SKIPPABLE = /[\\s\\p{P}\\p{S}]/u;`,
@@ -242,5 +243,6 @@ export function socialTurnGateSource(): string {
     `  if (/\\d/.test(rest) || /[A-Za-z][A-Za-z0-9_-]{2,}/.test(rest) || new RegExp(NEW_CONTENT).test(rest)) return false;`,
     `  return new RegExp(ACK_LEAD, 'iu').test(String(text ?? ''));`,
     `}`,
+    `// --- end social-turn gate ---`,
   ].join('\n');
 }
