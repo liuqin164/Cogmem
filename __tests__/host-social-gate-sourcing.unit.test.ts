@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { installHermesAutoMemoryHook } from '../src/host/hermes/HermesAutoMemoryHook.js';
+import { installOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemoryPluginInstaller.js';
 import { installPiAutoMemoryExtension } from '../src/host/pi/PiAutoMemoryExtension.js';
 import { classifySocialTurn, isContinuationReference } from '../src/context/SocialTurn.js';
 import { makeTempDir } from './helpers/tmp.js';
@@ -27,9 +28,15 @@ function installedGate(source: string): { classifySocialTurn: (text: string) => 
   };
 }
 
+/**
+ * One case set for all three hosts — pure thanks in several Chinese shapes, a greeting, thanks with a
+ * content cue, and a short phrase carrying a memory cue. The hosts must reach the same verdict as the
+ * canonical module on every one of them, so a hand-copied list fails rather than diverging quietly.
+ */
 const CASES = [
   '这次谢谢你啦', '太感谢了', '辛苦了', '不客气', '好的收到', '嗯嗯', '回头聊', '谢谢你啦',
   '谢谢，上次部署时间改了吗', '麻烦你了，发布窗口定在几点', '好的，就按上次那个方案', '部署窗口改到几点',
+  '你好', '您好，早', '记得上次那个方案吗',
 ];
 
 function expectSameAsCanonical(source: string): void {
@@ -68,3 +75,26 @@ test('the hermes hook that lands on disk carries the shared rules, not its own l
   expect(source).toContain('太感谢了');
   expectSameAsCanonical(source);
 });
+
+test('the OpenClaw plugin that lands on disk carries the shared rules, not its own list', () => {
+  const dir = makeTempDir('cogmem-openclaw-gate-');
+  const configPath = join(dir, 'cogmem.toml');
+  writeFileSync(configPath, '[memory]\n');
+  writeFileSync(join(dir, 'openclaw.json'), '{}\n');
+  const installed = installOpenClawAutoMemoryPlugin({
+    workspaceRoot: dir,
+    configPath,
+    // Both config paths inside the temp dir: the install writes the plugin and the host entry, and a
+    // default host path would land outside the sandbox.
+    openclawConfigPath: join(dir, 'openclaw.json'),
+    bunPath: process.execPath,
+    dryRun: false,
+  });
+  const source = readFileSync(join(installed.pluginDir, 'index.js'), 'utf8');
+  // The plugin listed only greetings; this asserts the artifact now carries the vocabulary the other
+  // two hosts carry, and that the old regex is gone from it.
+  expect(source).toContain('太感谢了');
+  expect(source).not.toContain("ok|okay|thanks|thank you");
+  expectSameAsCanonical(source);
+});
+

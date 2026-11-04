@@ -77,6 +77,7 @@
 - `cogmem update` ends on the same install gate and inherits its exit code, so post-update verification is the same contract as a fresh install. `--json` gains `installGate` and `nextSteps` beside the existing install-kind fields.
 - Breaking: the MCP server now defaults to the `core` profile. A host that expects every tool must start with `--profile full`.
 - Storage note: 4.0.0 ships on SQLite. The seekdb backend was evaluated in `docs/superpowers/specs/2026-10-22-cogmem-seekdb-evaluation.md` and is conditionally approved pending x86_64 and macOS verification; it lands behind the same ports in a later release.
+- Social turns are judged by content, not by phrasing. A message is stripped of its pleasantries (greetings, thanks, small talk, particles) and the residue decides: nothing left means there is nothing to look up, so it no longer triggers recall or injects a flood of look-alike history, while a turn carrying a number, a date, a question or a memory cue recalls as before. A social turn already stored is not served as an answer on the default lanes, and a recall that explicitly asks for the words as they were said (`forensic_quote`, `exact_quote`) can still reach it. Measured on a 20,343-event database copy: 0 of 40 real questions suppressed, 31 of 32 Chinese social variants suppressed.
 
 ## 3.7.5
 
