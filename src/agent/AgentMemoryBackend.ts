@@ -2388,13 +2388,29 @@ export function discriminativeProbes(text: string): string[] {
   return discriminativeProbesOf(text);
 }
 
-/** Whether a probe is made only of pleasantry words — the shape a social overlap has. */
+/** The characters the pleasantry vocabulary is made of, computed once. */
+const FILLER_CHARACTERS = new Set(SOCIAL_FILLER_TOKENS.join(''));
+
+/**
+ * Whether a probe is made only of pleasantry characters — the shape a social overlap has.
+ *
+ * Character-level rather than token-level because the probes are n-grams: 「的收」 is a bigram of
+ * 「好的收到」 and every character in it comes from the pleasantry vocabulary. A content character never
+ * qualifies, which is what keeps an answer out of this rule.
+ */
 function isFillerProbe(probe: string): boolean {
+  if (probe.length === 0) return false;
+  // Token coverage first, which is what keeps a latin word safe: 「later」 and 「ty」 contribute the
+  // letters of 「retry」 to the character set, so a character test alone would call a content word
+  // small talk.
   let rest = probe;
   for (const token of SOCIAL_FILLER_TOKENS) {
     while (rest.includes(token)) rest = rest.split(token).join('');
   }
-  return rest.length === 0;
+  if (rest.length === 0) return true;
+  // Then CJK n-grams, where the probes are bigrams of pleasantries like 「好的收到」 and the individual
+  // characters are what can be checked. Never applied to a probe holding a non-CJK character.
+  return /^\p{Script=Han}+$/u.test(probe) && [...probe].every((character) => FILLER_CHARACTERS.has(character));
 }
 
 /** Intents that explicitly ask for words as they were said: those may reach social entries. */
