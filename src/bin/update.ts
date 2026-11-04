@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { refusalDocumentFor } from '../cli/RefusalDocument.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
@@ -490,6 +491,13 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
+  // Every entry that can open a database emits the same refusal document under --json; without the
+  // flag the sentence on stderr is unchanged.
+  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'update') : undefined;
+  if (refusal) {
+    printCliJson('update', refusal);
+    process.exit(1);
+  }
   const message = error instanceof Error ? error.message : String(error);
   // `--json` promises one JSON document on stdout, and that includes the runs
   // that stop before the gate: a config that cannot be parsed used to produce no

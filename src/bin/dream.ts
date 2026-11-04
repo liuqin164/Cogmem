@@ -2,6 +2,7 @@
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 import { parseCliArgs, type CliArgs as Args } from './CliArgs.js';
 import { printCliJson } from './CliJson.js';
+import { refusalDocumentFor } from '../cli/RefusalDocument.js';
 
 const DREAM_COMMANDS = ['tick', 'night', 'status', 'retry'] as const;
 
@@ -84,4 +85,11 @@ function stringArg(args: Args, key: string): string | undefined { return typeof 
 function numberArg(args: Args, key: string): number | undefined { const value = stringArg(args, key); if (!value) return undefined; const parsed = Number(value); if (!Number.isFinite(parsed)) throw new Error(`--${key} must be numeric`); return parsed; }
 function modeArg(value?: string): 'auto' | 'micro' | 'normal' | 'deep' | undefined { if (!value) return undefined; if (value === 'auto' || value === 'micro' || value === 'normal' || value === 'deep') return value; throw new Error('mode must be auto, micro, normal, or deep'); }
 
-main().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });
+main().catch((error) => {
+  // Every entry that can open a database emits the same refusal document under --json; without the
+  // flag the sentence on stderr is unchanged.
+  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'dream') : undefined;
+  if (refusal) {
+    printCliJson('dream', refusal);
+    process.exit(1);
+  } console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });

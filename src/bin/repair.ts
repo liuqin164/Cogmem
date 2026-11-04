@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { printCliJson } from './CliJson.js';
+import { refusalDocumentFor } from '../cli/RefusalDocument.js';
 import Database from 'bun:sqlite';
 
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
@@ -116,4 +118,14 @@ function main(): void {
   }
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'repair') : undefined;
+  if (refusal) {
+    printCliJson('repair', refusal);
+    process.exit(1);
+  }
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}

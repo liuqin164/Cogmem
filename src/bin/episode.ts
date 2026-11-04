@@ -7,6 +7,7 @@ import { createStableImportIdentityFactory } from '../episode/EpisodeImportIdent
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 import { printCliJson } from './CliJson.js';
 import { assertCliArgs } from './CliArgs.js';
+import { refusalDocumentFor } from '../cli/RefusalDocument.js';
 
 type Args = Record<string, string | boolean> & { command?: string };
 
@@ -342,4 +343,11 @@ function timeValue(value: unknown): number | undefined {
   throw new Error('timestamp must be a finite number or parseable date');
 }
 
-main().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });
+main().catch((error) => {
+  // Every entry that can open a database emits the same refusal document under --json; without the
+  // flag the sentence on stderr is unchanged.
+  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'episode') : undefined;
+  if (refusal) {
+    printCliJson('episode', refusal);
+    process.exit(1);
+  } console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });

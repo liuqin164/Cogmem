@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { refusalDocumentFor } from '../cli/RefusalDocument.js';
 /**
  * One host-agnostic entry point to the shared orchestration.
  *
@@ -140,7 +141,18 @@ if (stdinText.trim()) {
 if (identity.projectId === 'default' && typeof request.projectId === 'string') identity.projectId = request.projectId;
 if (identity.sessionId.endsWith('-session') && typeof request.sessionId === 'string') identity.sessionId = request.sessionId;
 
-const kernel = createMemoryKernelFromConfig({ configPath: readArg('--config') });
+// Opening the database is where a refusal happens, and it used to escape this module as a raw dump.
+// This tool speaks JSON on stdout for every outcome and has no --json flag, so a refusal is rendered
+// as the contract document directly; any other error is re-thrown exactly as before.
+let kernel: ReturnType<typeof createMemoryKernelFromConfig>;
+try {
+  kernel = createMemoryKernelFromConfig({ configPath: readArg('--config') });
+} catch (error) {
+  const refusal = refusalDocumentFor(error, `host-bridge ${command}`);
+  if (!refusal) throw error;
+  console.log(JSON.stringify(refusal));
+  process.exit(1);
+}
 try {
   const runtime = {
     kernel,
@@ -153,7 +165,15 @@ try {
     : await rememberForHost(runtime, request, config, identity);
   console.log(JSON.stringify({ ok: true, command, result }));
 } catch (error) {
-  fail(error instanceof Error ? error.message : String(error));
+  // This tool speaks JSON on stdout for every outcome and has no --json flag, so a refusal is rendered
+  // as the contract document directly; any other error keeps the existing failure path.
+  const refusal = refusalDocumentFor(error, `host-bridge ${command}`);
+  if (refusal) {
+    console.log(JSON.stringify(refusal));
+    process.exitCode = 1;
+  } else {
+    fail(error instanceof Error ? error.message : String(error));
+  }
 } finally {
   try { kernel.close(); } catch { /* the response is already written */ }
 }

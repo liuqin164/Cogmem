@@ -4,6 +4,7 @@ import { DEFAULT_VECTOR_DIMENSION, parseVectorDimensionValue } from '../config/V
 import { compactStorage, type CompactableNeuronStatus } from '../storage/StorageCompactor.js';
 import { printCliJson } from './CliJson.js';
 import { assertCliArgs } from './CliArgs.js';
+import { refusalDocumentFor } from '../cli/RefusalDocument.js';
 
 interface Args {
   dbPath?: string;
@@ -105,6 +106,13 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
+  // Every entry that can open a database emits the same refusal document under --json; without the
+  // flag the sentence on stderr is unchanged.
+  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'compact') : undefined;
+  if (refusal) {
+    printCliJson('compact', refusal);
+    process.exit(1);
+  }
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

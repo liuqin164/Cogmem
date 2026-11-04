@@ -3,6 +3,7 @@ import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js'
 import type { ProspectiveMemoryStatus, ProspectiveMemoryType } from '../prospective/index.js';
 import { printCliJson } from './CliJson.js';
 import { assertCliArgs } from './CliArgs.js';
+import { refusalDocumentFor } from '../cli/RefusalDocument.js';
 
 interface Args {
   command?: string;
@@ -103,6 +104,13 @@ function numberValue(values: Map<string, string[]>, key: string): number | undef
 }
 
 main().catch((error) => {
+  // Every entry that can open a database emits the same refusal document under --json; without the
+  // flag the sentence on stderr is unchanged.
+  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'prospective') : undefined;
+  if (refusal) {
+    printCliJson('prospective', refusal);
+    process.exit(1);
+  }
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

@@ -2,6 +2,7 @@
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 import { printCliJson } from './CliJson.js';
 import { assertCliArgs } from './CliArgs.js';
+import { refusalDocumentFor } from '../cli/RefusalDocument.js';
 
 function parse(argv: string[]): { command?: string; values: Map<string, string> } {
   const [command, ...rest] = argv;
@@ -61,6 +62,13 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
+  // Every entry that can open a database emits the same refusal document under --json; without the
+  // flag the sentence on stderr is unchanged.
+  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'strategy') : undefined;
+  if (refusal) {
+    printCliJson('strategy', refusal);
+    process.exit(1);
+  }
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

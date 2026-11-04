@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { printCliJson } from './CliJson.js';
+import { refusalDocumentFor } from '../cli/RefusalDocument.js';
 /**
  * cogmem-init — Interactive configuration wizard for cogmem
  *
@@ -1534,6 +1536,12 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
   main().catch((err) => {
+    // Same refusal rendering as every other entry that can open a database.
+    const refusal = process.argv.includes('--json') ? refusalDocumentFor(err, 'init') : undefined;
+    if (refusal) {
+      printCliJson('init', refusal);
+      process.exit(1);
+    }
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   });
