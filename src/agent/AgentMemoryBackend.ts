@@ -311,7 +311,19 @@ export interface AgentRecallDecisionTrace {
    * (`grey_below_floor`).
    */
   suppressed?: Array<{ reason: RecallSuppressionReason; count: number }>;
+  /**
+   * Why a recall that returned nothing returned nothing.
+   *
+   * `scope_filtered` means the question does match stored turns, but they belong to another agent
+   * identity: those turns are invisible here, and a silent 0 reads as "nothing was remembered".
+   * Counts only — never another identity's content.
+   */
+  zeroExplanation?: ZeroExplanation;
 }
+
+export type ZeroExplanation =
+  | { kind: 'scope_filtered'; thisScope: 0; otherScopes: number; agentId?: string }
+  | { kind: 'no_match'; thisScope: 0; otherScopes: 0 };
 
 export type RecallSuppressionReason =
   | 'residue_empty'
@@ -710,15 +722,54 @@ export class KernelAgentMemoryBackend {
     }
     const result = this.recallCore(query);
     const gated = this.gateSocialEntries(result.items ?? [], query, forensic);
+    const zeroExplanation = gated.items.length === 0 ? this.explainZeroResult(query) : undefined;
     return {
       ...result,
       items: gated.items.map(withRedactionMarks),
-      decisionTrace: gated.suppressed.length && result.decisionTrace
-        ? { ...result.decisionTrace, suppressed: mergeSuppressions(result.decisionTrace.suppressed, gated.suppressed) }
+      decisionTrace: result.decisionTrace
+        ? {
+          ...result.decisionTrace,
+          ...(gated.suppressed.length ? { suppressed: mergeSuppressions(result.decisionTrace.suppressed, gated.suppressed) } : {}),
+          ...(zeroExplanation ? { zeroExplanation } : {}),
+        }
         : result.decisionTrace,
       // One place, because every lane returns through here. A caller that needs to know
       // whether an answer came from a semantic index should not have to read the config.
       semanticIndex: this.kernel.semanticIndexEnabled(),
+    };
+  }
+
+
+  /**
+   * Which kind of zero this is, from the index rather than from a second recall.
+   *
+   * One bounded raw search for the same question, then the identity test the lanes already apply.
+   * Nothing else runs: no vectors, no lanes, no ranking. The answer is counts only, because how many
+   * turns another identity holds says nothing about what they contain.
+   */
+  private explainZeroResult(query: AgentRecallQuery): ZeroExplanation {
+    const text = String(query.query ?? query.anchorText ?? '').trim();
+    if (!text) return { kind: 'no_match', thisScope: 0, otherScopes: 0 };
+    const queryPlan = compileAgentRecallQuery({ query: query.query, intent: query.intent, anchorText: query.anchorText });
+    let events: MemoryEvent[] = [];
+    try {
+      events = this.kernel.searchRawEvents(text, {
+        projectId: query.projectId,
+        workspaceId: query.workspaceId,
+        startTime: query.startTime,
+        endTime: query.endTime,
+        limit: ZERO_EXPLANATION_SAMPLE,
+      });
+    } catch {
+      return { kind: 'no_match', thisScope: 0, otherScopes: 0 };
+    }
+    const outOfScope = events.filter((event) => !this.isRawEventInRecallScope(event, query, queryPlan.intent)).length;
+    if (outOfScope === 0) return { kind: 'no_match', thisScope: 0, otherScopes: 0 };
+    return {
+      kind: 'scope_filtered',
+      thisScope: 0,
+      otherScopes: outOfScope,
+      ...(query.agentId ? { agentId: query.agentId } : {}),
     };
   }
 
@@ -2412,6 +2463,9 @@ function isFillerProbe(probe: string): boolean {
   // characters are what can be checked. Never applied to a probe holding a non-CJK character.
   return /^\p{Script=Han}+$/u.test(probe) && [...probe].every((character) => FILLER_CHARACTERS.has(character));
 }
+
+/** How many index hits a zero-result explanation samples: enough to tell scope from absence. */
+const ZERO_EXPLANATION_SAMPLE = 25;
 
 /** Intents that explicitly ask for words as they were said: those may reach social entries. */
 const FORENSIC_SOCIAL_EXEMPT_INTENTS = new Set(['forensic_quote', 'exact_quote']);
