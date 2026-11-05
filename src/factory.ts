@@ -3656,6 +3656,49 @@ export class MemoryKernel {
     return this.sharedMemory.listCollections();
   }
 
+  /**
+   * Import state for one project: every registered source with its path, adapter kind, last processed
+   * timestamp and how many records it has already ingested, newest first.
+   *
+   * On the kernel rather than only behind the MCP tool (#63): the OpenClaw plugin loads the public
+   * entry and builds its API from `createMemoryKernelFromConfig`, so a capability that exists only as
+   * an MCP tool is one the automatic path cannot ask about. Read-only, so it carries no new authority.
+   */
+  importStatus(projectId: string, options: { limit?: number } = {}): {
+    projectId: string;
+    sources: Array<Record<string, unknown>>;
+    totalSources: number;
+    returnedSources: number;
+    limit: number;
+  } {
+    const requested = options.limit;
+    if (requested !== undefined && (!Number.isInteger(requested) || requested < 1)) {
+      throw new Error('limit must be a positive integer');
+    }
+    const limit = requested ?? 50;
+    const cursors = this.cursorStore.listRegisteredSources().filter((cursor) => cursor.projectId === projectId);
+    const processed = cursors.map((cursor) => {
+      const hashes = this.cursorStore.listProcessedRecordHashes(
+        cursor.sourceId, cursor.contentWindowStart || 0, cursor.contentWindowEnd || 0, projectId,
+      );
+      return {
+        sourceId: cursor.sourceId,
+        sourcePath: cursor.sourcePath,
+        sourceType: cursor.sourceType,
+        lastProcessedAt: cursor.lastProcessedAt,
+        lastSeenHash: cursor.lastSeenHash,
+        lastSeenMtime: cursor.lastSeenMtime,
+        contentWindowStart: cursor.contentWindowStart,
+        contentWindowEnd: cursor.contentWindowEnd,
+        processedRecordCount: hashes.size,
+      };
+    });
+    // listRegisteredSources() is ordered updated_at DESC, source_id ASC, so slicing is stable and the
+    // newest sources are the ones a caller with a small limit sees.
+    const sources = processed.slice(0, limit);
+    return { projectId, sources, totalSources: cursors.length, returnedSources: sources.length, limit };
+  }
+
   private ensureMetaTable(db: ReturnType<FactStore['getDatabase']>): void {
     db.exec(`
       CREATE TABLE IF NOT EXISTS _meta (

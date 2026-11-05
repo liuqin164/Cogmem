@@ -1845,39 +1845,11 @@ function handleImportStatus(
   kernel: MemoryKernel,
   input: Record<string, unknown>,
 ): CogmemMcpCallResult {
+  // The logic lives on the kernel (#63) so host plugins reach the same code through the public entry;
+  // this handler only parses arguments. It used to hold its own copy of the query.
   const projectId = requiredString(input.projectId, 'projectId');
   const requested = optionalNumber(input.limit);
-  if (requested !== undefined && (!Number.isInteger(requested) || requested < 1)) {
-    throw new Error('limit must be a positive integer');
-  }
-  const limit = requested ?? 50;
-
-  const cursors = kernel.cursorStore.listRegisteredSources().filter((c) => c.projectId === projectId);
-  const processedRecords = cursors.map((cursor) => {
-    const hashes = kernel.cursorStore.listProcessedRecordHashes(cursor.sourceId, cursor.contentWindowStart || 0, cursor.contentWindowEnd || 0, projectId);
-    return {
-      sourceId: cursor.sourceId,
-      sourcePath: cursor.sourcePath,
-      sourceType: cursor.sourceType,
-      lastProcessedAt: cursor.lastProcessedAt,
-      lastSeenHash: cursor.lastSeenHash,
-      lastSeenMtime: cursor.lastSeenMtime,
-      contentWindowStart: cursor.contentWindowStart,
-      contentWindowEnd: cursor.contentWindowEnd,
-      processedRecordCount: hashes.size,
-    };
-  });
-  // listRegisteredSources() is ordered updated_at DESC, source_id ASC, so slicing is stable
-  // and the newest sources are the ones a caller with a small limit sees.
-  const sources = processedRecords.slice(0, limit);
-
-  return jsonResult({
-    projectId,
-    sources,
-    totalSources: cursors.length,
-    returnedSources: sources.length,
-    limit,
-  });
+  return jsonResult(kernel.importStatus(projectId, requested === undefined ? {} : { limit: requested }));
 }
 
 function jsonResult(payload: object, isError = false): CogmemMcpCallResult {
