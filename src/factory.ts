@@ -1814,6 +1814,7 @@ export class MemoryKernel {
         verifiedEvents: outputs.flatMap((output) => output.verifiedEvents),
         correctedEntityBindings: outputs.flatMap((output) => output.correctedEntityBindings),
         consolidatedBeliefs: outputs.flatMap((output) => output.consolidatedBeliefs),
+        blockedConsolidations: outputs.flatMap((output) => output.blockedConsolidations),
         archivedFactIds: outputs.flatMap((output) => output.archivedFactIds),
         rejectedFactIds: outputs.flatMap((output) => output.rejectedFactIds),
         archivedEntityIds: outputs.flatMap((output) => output.archivedEntityIds),

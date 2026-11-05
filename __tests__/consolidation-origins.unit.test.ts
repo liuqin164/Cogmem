@@ -77,3 +77,50 @@ test('turns of one imported document count as one origin', async () => {
   ], ['turn-1', 'turn-2', 'turn-3']);
   expect(verified).toEqual([]);
 });
+
+/** A belief store that only records that it was asked to write (#129 rules are about the decision). */
+function beliefStub(written: string[]) {
+  return {
+    upsert: (candidate: { subject: string; objectValue: { normalized: string } }) => {
+      const id = `b-${written.length + 1}`;
+      written.push(`${candidate.subject}/${candidate.objectValue.normalized}`);
+      return { belief: { id } };
+    },
+    attachEvidence: () => undefined,
+  };
+}
+
+async function runWithBeliefs(facts: FactRecord[], units: string[]) {
+  const written: string[] = [];
+  const pipeline = new OfflineConsolidationPipeline({ beliefStore: beliefStub(written) } as never);
+  const output = await pipeline.run(input(facts, units) as never);
+  return { written, blocked: output.blockedConsolidations };
+}
+
+test('origins that disagree about the same thing consolidate nothing', async () => {
+  // `likes` and `dislikes` both land on the `preference` predicate, so the polarity is what disagrees.
+  // Each side carries two independent origins, which is what makes both sides consolidate-worthy on
+  // their own — the disagreement is the reason neither is.
+  const units = ['turn-1', 'turn-2', 'turn-3', 'turn-4'];
+  const { written, blocked } = await runWithBeliefs([
+    fact({ factId: 'f1', unitId: 'turn-1', predicateFamily: 'likes' }),
+    fact({ factId: 'f2', unitId: 'turn-2', predicateFamily: 'likes' }),
+    fact({ factId: 'f3', unitId: 'turn-3', predicateFamily: 'dislikes' }),
+    fact({ factId: 'f4', unitId: 'turn-4', predicateFamily: 'dislikes' }),
+  ], units);
+  expect(written).toEqual([]);
+  expect(blocked.map((entry) => entry.reason)).toEqual(['origin_polarity_conflict', 'origin_polarity_conflict']);
+});
+
+test('a consolidation is voided when a newer fact supersedes its evidence before it is sent', async () => {
+  // An older stance with two origins of its own, and a newer stance on the same subject and predicate:
+  // the older consolidation was ready to be dispatched while its evidence had already moved on.
+  const { written, blocked } = await runWithBeliefs([
+    fact({ factId: 'f1', unitId: 'turn-1', validFrom: 1000 }),
+    fact({ factId: 'f2', unitId: 'turn-2', validFrom: 1000 }),
+    fact({ factId: 'f3', unitId: 'turn-3', validFrom: 5000, object: 'npm' }),
+    fact({ factId: 'f4', unitId: 'turn-4', validFrom: 5000, object: 'npm' }),
+  ], ['turn-1', 'turn-2', 'turn-3', 'turn-4']);
+  expect(blocked.map((entry) => entry.reason)).toContain('origin_superseded_before_dispatch');
+  expect(written).not.toContain('the team/pnpm');
+});

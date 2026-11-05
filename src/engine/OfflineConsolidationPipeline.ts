@@ -80,6 +80,14 @@ export interface OfflineConsolidationOutput {
     reason: string;
   }>;
   consolidatedBeliefs: BeliefRecord[];
+  /**
+   * Consolidations that were generated but not landed, with the reason (#129).
+   *
+   * A blocked consolidation is a fact the run decided **not** to publish: the origin evidence disagreed, or
+   * it was no longer current by the time the item was ready to be written. Kept in the output so the
+   * decision is observable — silence would look the same as "there was nothing to consolidate".
+   */
+  blockedConsolidations: Array<{ factId: string; subject: string; predicate: string; reason: 'origin_polarity_conflict' | 'origin_superseded_before_dispatch' }>;
   archivedFactIds: string[];
   rejectedFactIds: string[];
   archivedEntityIds: string[];
@@ -522,9 +530,37 @@ export class OfflineConsolidationPipeline {
       rejectedFactIds
     });
 
-    for (const fact of verifiedFacts) {
-      const candidate = this.factToBeliefCandidate(fact, episodeById.get(fact.neuronId), input.window.projectId);
-      if (!candidate || !this.deps.beliefStore) continue;
+    const blockedConsolidations: OfflineConsolidationOutput['blockedConsolidations'] = [];
+    const beliefCandidates = verifiedFacts
+      .map((fact) => ({ fact, candidate: this.factToBeliefCandidate(fact, episodeById.get(fact.neuronId), input.window.projectId) }))
+      .filter((entry): entry is { fact: FactRecord; candidate: BeliefCandidate } => Boolean(entry.candidate));
+    for (const { fact, candidate } of beliefCandidates) {
+      if (!this.deps.beliefStore) break;
+      // (1) Origins that disagree about the same thing: `likes` and `dislikes` both land on `preference`,
+      //     so the polarity is what distinguishes them. Two origins holding it both ways is an observation,
+      //     not a resolution — nothing is consolidated, and the reason is recorded rather than swallowed.
+      const disagreeing = beliefCandidates.find((other) => other.fact !== fact
+        && other.candidate.subject === candidate.subject
+        && other.candidate.predicate === candidate.predicate
+        && other.candidate.metadata?.polarity !== candidate.metadata?.polarity);
+      if (disagreeing) {
+        blockedConsolidations.push({ factId: fact.factId, subject: candidate.subject, predicate: candidate.predicate, reason: 'origin_polarity_conflict' });
+        continue;
+      }
+      // (2) Re-verified before it is dispatched, not cleaned up after: if this fact was superseded, or a
+      //     newer stance on the same subject and predicate exists in this run, its item was built on evidence
+      //     that is no longer current. The item is void — the fact keeps whatever status it earned, and
+      //     nothing is re-keyed and sent under a new id.
+      const superseding = workingFacts.find((other) => other !== fact
+        && other.subject === fact.subject
+        && other.predicateFamily === fact.predicateFamily
+        && other.validFrom > fact.validFrom
+        && other.status !== 'archived'
+        && other.status !== 'rejected');
+      if (fact.status === 'superseded' || superseding) {
+        blockedConsolidations.push({ factId: fact.factId, subject: candidate.subject, predicate: candidate.predicate, reason: 'origin_superseded_before_dispatch' });
+        continue;
+      }
       const result = this.deps.beliefStore.upsert(candidate, fact.validFrom);
       if (result.belief) {
         this.deps.beliefStore.attachEvidence([
@@ -567,6 +603,7 @@ export class OfflineConsolidationPipeline {
       verifiedEvents,
       correctedEntityBindings,
       consolidatedBeliefs,
+      blockedConsolidations,
       archivedFactIds,
       rejectedFactIds,
       archivedEntityIds,
@@ -787,7 +824,11 @@ export class OfflineConsolidationPipeline {
       metadata: {
         factId: fact.factId,
         entityId: fact.entityId,
-        source: 'offline_deep_consolidation_v1'
+        source: 'offline_deep_consolidation_v1',
+        // `likes` and `dislikes` both land on the `preference` predicate, so without this the polarity is
+        // lost at exactly the point where two origins disagreeing about it has to be visible (#129).
+        polarity: fact.predicateFamily === 'dislikes' ? 'negative' : 'positive',
+        predicateFamily: fact.predicateFamily
       },
       extractionReason: fact.predicateFamily === 'likes' || fact.predicateFamily === 'dislikes'
         ? 'preference_signal'
