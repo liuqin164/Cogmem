@@ -20,6 +20,7 @@ import {
   compactRecallItems,
   contextCandidateFromRecallItem,
   formatRecallContext,
+  renderRecallBlock,
 } from '../RecallBlock.js';
 
 /** Anything arriving from a host as JSON. */
@@ -158,14 +159,17 @@ export async function recallForHost(
     ? result.atlasCards.filter((card: Payload) => card && selectedCanonicalIds.has(card.canonicalId))
     : [];
   plannedResult = { ...plannedResult, atlasCards: selectedEpisodeCards };
-  const recallContext = formatRecallContext(plannedResult, config);
+  const { text: recallContext, fit } = renderRecallBlock(plannedResult, config);
   return {
     context: recallContext ? (strategyCapsule ? formatStrategyContext(strategyCapsule) + '\n\n' : '') + recallContext : '',
     items: compactRecallItems(plannedResult.items, config), itemCount: plannedResult.items.length,
     recallMode: result.recallMode, fallbackUsed: result.fallbackUsed,
     intent: (result.queryPlan && result.queryPlan.intent) || input.intent || 'memory_recall',
     anchorEventId: anchorItem && anchorItem.sourceAnchor && anchorItem.sourceAnchor.eventId,
-    anchorText: anchorItem && anchorItem.text, queryPlan: result.queryPlan, decisionTrace: result.decisionTrace,
+    anchorText: anchorItem && anchorItem.text, queryPlan: result.queryPlan,
+    // The fit travels with the trace (#131): how many memories were whole, how many were reduced to index
+    // lines, what the block cost and whether it had to leave something out.
+    decisionTrace: { ...((result.decisionTrace ?? {}) as Record<string, unknown>), recallFit: fit },
     atlasCards: result.atlasCards, selectedEpisodeCards,
     relatedButNotSelected: result.relatedButNotSelected, relaxationTrace: result.relaxationTrace,
     activationReceipt, strategyCapsule,

@@ -55,3 +55,29 @@ test('when even index lines do not fit, the fit says over budget instead of trun
   // rule 1 keeps whole whatever it costs, and here it fits.
   expect(fit.measuredCost).toBeLessThanOrEqual(140);
 });
+
+/**
+ * #131: the caller that assembles a decision trace gets the same numbers the block acts on, so a host can
+ * report how much of the budget it spent and how many memories had to be reduced.
+ */
+test('the rendered block reports the fit it applied', async () => {
+  const { renderRecallBlock } = await import('../src/host/RecallBlock.js');
+  const items = [item({ id: 'a' }), item({ id: 'b' }), item({ id: 'c' }), item({ id: 'd' })];
+  const roomy = renderRecallBlock({ items }, { memoryContextMaxChars: 200_000 });
+  expect(roomy.fit.fullCount).toBe(4);
+  expect(roomy.fit.indexCount).toBe(0);
+  expect(roomy.fit.overBudget).toBe(false);
+  expect(roomy.fit.measuredCost).toBeGreaterThan(0);
+
+  // Tight for this fixture: its items are short, so the header is most of a small budget, and at 1000 the
+  // remaining room does not even pay for an index line — the honest outcome is to drop one and say so.
+  const tight = renderRecallBlock({ items }, { memoryContextMaxChars: 1000 });
+  expect(tight.fit.fullCount).toBeLessThan(4);
+  expect(tight.fit.overBudget).toBe(true);
+  expect(tight.text).toContain('overBudget=true');
+  expect(tight.text).toContain(`dropped=${tight.fit.droppedCount}`);
+  // An empty result renders nothing and costs nothing, rather than reporting a fit for an absent block.
+  expect(renderRecallBlock({ items: [] }, {})).toEqual({
+    text: '', fit: { items: [], fullCount: 0, indexCount: 0, measuredCost: 0, overBudget: false, degraded: [], droppedCount: 0 },
+  });
+});

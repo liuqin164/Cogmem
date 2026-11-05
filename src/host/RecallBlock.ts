@@ -468,9 +468,18 @@ export function recallItemLines(
   return lines;
 }
 
-export function formatRecallContext(result: Payload, config: Payload): string {
+/**
+ * Render the block and report what it cost to fit (#131).
+ *
+ * The fit is returned rather than only acted upon, so the caller that assembles a decision trace can say how
+ * much of the budget was spent and how many memories had to be reduced — the same numbers the block itself
+ * prints when it runs out.
+ */
+export function renderRecallBlock(result: Payload, config: Payload): { text: string; fit: RecallItemFit } {
   const lines: string[] = [];
-  if (result.items.length === 0 && !(result.narrative && result.narrative.summary)) return '';
+  if (result.items.length === 0 && !(result.narrative && result.narrative.summary)) {
+    return { text: '', fit: { items: [], fullCount: 0, indexCount: 0, measuredCost: 0, overBudget: false, degraded: [], droppedCount: 0 } };
+  }
   lines.push('<COGMEM_RECALL_CONTEXT volatile="true" persistence="forbidden" lifecycle="current_turn_only" source="cogmem">');
   lines.push('Purpose: governed historical memory retrieved from Cogmem.');
   lines.push('Rules:');
@@ -535,5 +544,13 @@ export function formatRecallContext(result: Payload, config: Payload): string {
   }
   lines.push(...sharedLines);
   lines.push('</COGMEM_RECALL_CONTEXT>');
-  return clampRecallContext(lines.join('\n'), Number(config.memoryContextMaxChars || 3500));
+  return {
+    text: clampRecallContext(lines.join('\n'), Number(config.memoryContextMaxChars || 3500)),
+    fit: { ...fit, measuredCost: fit.measuredCost },
+  };
+}
+
+/** The rendered block on its own, for callers that do not report the fit. */
+export function formatRecallContext(result: Payload, config: Payload): string {
+  return renderRecallBlock(result, config).text;
 }

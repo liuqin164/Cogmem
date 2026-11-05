@@ -433,3 +433,12 @@ memory:
 ```
 
 If using a future MCP bridge instead, add it under `mcp_servers` in `~/.hermes/config.yaml` and expose only the recall/write tools needed by the agent.
+
+## Reading an index answer
+
+A recall answer at index granularity is a list of memories you have not read yet: each entry carries an id, a title, a date and a locator. Fetch the ones the question needs with cogmem_graph_node (pass several ids at once) or by running the locator, and never answer from an index entry as though it were the memory.
+
+`cogmem_recall` returns this shape when it is called with `granularity: "index"`, and the injected recall block
+falls back to the same one-line form when the budget cannot pay for whole memories. Both name the locator that
+brings the whole thing back, so nothing is unreachable — it is only unread.
+
