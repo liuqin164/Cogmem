@@ -85,5 +85,5 @@ The `command` must be absolute, or a name the process pi spawns can resolve. A b
 that pi cannot find is not a degraded entry: pi never starts the server, and the failure is
 easy to miss because the entry still looks configured.
 
-pi has **no history importer**. `cogmem-import-openclaw` and `cogmem-import-hermes` do not apply
+pi has **no history importer**. `cogmem import openclaw` and `cogmem import hermes` do not apply
 to pi, and running one would import from a host that is not there.

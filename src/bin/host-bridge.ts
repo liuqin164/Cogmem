@@ -49,7 +49,7 @@ function readArg(name: string): string | undefined {
 }
 
 function fail(message: string): never {
-  console.error(`cogmem-host-bridge: ${message}`);
+  console.error(`cogmem host-bridge: ${message}`);
   process.exit(1);
 }
 

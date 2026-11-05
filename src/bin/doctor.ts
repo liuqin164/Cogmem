@@ -231,7 +231,7 @@ const pluginOnly = hasFlag('--plugin-only');
 const json = hasFlag('--json');
 
 if (envPath) {
-  fail('--env-path is no longer supported. Use cogmem-init to create .cogmem/config.toml, then run cogmem-doctor --config <config.toml>.');
+  fail('--env-path is no longer supported. Use cogmem init to create .cogmem/config.toml, then run cogmem doctor --config <config.toml>.');
 } else {
   const resolution = resolveCogmemConfigPath({ configPath });
   // The PATH question is asked before the branch, not inside it: a fresh

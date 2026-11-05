@@ -211,7 +211,7 @@ export function enableHostIntegration(configPath: string, host: CogmemHost): { c
 export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedCogmemConfig {
   const resolution = resolveCogmemConfigPath(options);
   if (resolution.kind !== 'toml') {
-    throw new Error(`Missing cogmem config at ${resolution.path}. Run cogmem-init first.`);
+    throw new Error(`Missing cogmem config at ${resolution.path}. Run cogmem init first.`);
   }
 
   const env = options.env || process.env;

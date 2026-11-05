@@ -389,14 +389,14 @@ function hostConfigSnippet(agent: AgentKind, workspaceRoot: string, auto: boolea
   if (agent === 'openclaw') {
     if (auto) {
       return [
-        '// cogmem-connect openclaw --auto installs a local OpenClaw plugin wrapper.',
+        '// cogmem connect openclaw --auto installs a local OpenClaw plugin wrapper.',
         '// The wrapper registers before_prompt_build for governed recall and agent_end for turn recording.',
         '// It calls KernelAgentMemoryBackend through cogmem public API via a Bun bridge.',
         '// Restart the OpenClaw Gateway after changing plugin code, hook policy, or plugins.load.paths.',
       ].join('\n');
     }
     return [
-      '// cogmem-connect does not modify OpenClaw host config.',
+      '// cogmem connect does not modify OpenClaw host config.',
       '// It installs a workspace skill at <workspace>/skills/cogmem-memory/SKILL.md.',
       '// Current OpenClaw memory config is owned by OpenClaw, for example memory.backend = "builtin" | "qmd".',
       '// Do not write unknown OpenClaw config fields for cogmem.',
