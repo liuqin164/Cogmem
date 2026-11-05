@@ -2,6 +2,7 @@ import { extractEntityCues } from '../utils/EntityCueExtractor.js';
 import { ACTION_KIND_RULES } from '../utils/ActionKindRegistry.js';
 import { localDateFor, localDateRange, nextCivilDate, resolveTimeZone } from '../utils/LocalDateContext.js';
 import { pad2 } from '../utils/Values.js';
+import { DEFAULT_TAXONOMY } from '../config/MemoryTaxonomy.js';
 
 export type FacetType = 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind' | 'state' | 'place';
 export type FacetOperator = 'intersection' | 'union';
@@ -159,11 +160,8 @@ function isConceptFacetEntity(entity: { label: string; id: string }, facets: Pla
 
 function parseKindFacets(query: string, projectId: string): PlannedFacet[] {
   const facets: PlannedFacet[] = [];
-  const memoryKindRules: Array<[string, RegExp]> = [
-    ['bug', /(bug|问题|卡死|failure|故障|错误|报错)/i],
-    ['decision', /(decision|决定|方案|结论)/i],
-    ['plan', /(计划|下一步|策略|plan)/i],
-  ];
+  // The rules live in the taxonomy (#132): one definition, read here rather than restated.
+  const memoryKindRules: Array<[string, RegExp]> = DEFAULT_TAXONOMY.memoryKindRules.map((rule) => [rule.id, rule.pattern]);
   for (const [value, test] of memoryKindRules) {
     if (test.test(query)) facets.push(withNodeId({ type: 'memoryKind', value, label: value, relation: 'HAS_MEMORY_KIND' }, projectId));
   }
