@@ -23,7 +23,6 @@ const registered = new Set(listCogmemMcpTools().map((tool) => tool.name));
 // the scan.
 const NOT_TOOL_NAMES: Record<string, string> = {
   cogmem_bootstrap_state: 'the _cogmem_bootstrap_state migration bookkeeping table',
-  cogmem_config: 'the missing_cogmem_config error code, which names a config file',
   cogmem_memory_dream: 'the operator_runs_cogmem_memory_dream schedule-mode token',
 };
 

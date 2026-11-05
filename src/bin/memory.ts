@@ -1137,8 +1137,9 @@ async function main(): Promise<void> {
     // — and answering both with exit 0 made a mistyped or removed subcommand look successful.
     const given = process.argv.slice(2).find((arg) => !arg.startsWith('-'));
     if (given) throw new Error(`Unknown memory subcommand: ${given}\n${usage()}`);
-    console.log(usage());
-    return;
+    // The other half of the same hole: no subcommand at all printed usage and exited 0, so a script
+    // could not tell a successful run from one that never named a command.
+    throw new Error(`cogmem memory needs a subcommand\n${usage()}`);
   }
   if (args.command === 'status' || args.command === 'plan' || args.command === 'candidates') {
     runReadOnlyInspection(args);

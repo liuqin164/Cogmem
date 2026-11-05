@@ -3648,7 +3648,7 @@ export function createMemoryKernelFromConfig(input: string | MemoryKernelFromCon
     env: options.env,
   });
   if (resolution.kind === 'missing') {
-    throw new Error(`missing_cogmem_config: Missing cogmem config at ${resolution.path}. Run cogmem-init first.`);
+    throw new Error(`Missing cogmem config at ${resolution.path}. Run cogmem-init first.`);
   }
 
   const loaded = loadCogmemConfig({

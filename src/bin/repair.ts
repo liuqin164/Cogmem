@@ -66,7 +66,8 @@ function main(): void {
   assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['apply', 'config', 'db', 'dry-run', 'from', 'json', 'to'] });
   const [command] = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
   if (command !== 'project-scope') {
-    console.log(usage());
+    console.error(usage());
+    process.exit(1);
     process.exit(command === 'project-scope' ? 0 : 1);
   }
   const from = readArg('--from');

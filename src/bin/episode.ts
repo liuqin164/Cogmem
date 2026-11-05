@@ -71,7 +71,8 @@ function openKernel(args: Args): MemoryKernel {
 async function main(): Promise<void> {
   assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['checkpoint-file', 'chunk-size', 'config', 'cursor', 'db', 'end-line', 'episode', 'episode-type', 'event', 'events', 'file', 'force-seal', 'format', 'help', 'importance', 'include-event-ids', 'json', 'limit', 'max-errors', 'max-lines', 'mode', 'project', 'reason', 'resume', 'role', 'seal-batch', 'session', 'since', 'skip-errors', 'source-agent', 'source-episode', 'start-line', 'status', 'target-episode', 'text', 'topic-path'] });
   const args = parseArgs(process.argv.slice(2));
-  if (!args.command || args.help === true || args.h === true) { console.log(usage()); return; }
+  if (args.help === true || args.h === true) { console.log(usage()); return; }
+  if (!args.command) { console.error(usage()); process.exit(1); }
   const kernel = openKernel(args);
   try {
     const projectId = stringArg(args, 'project');

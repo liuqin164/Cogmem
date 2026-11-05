@@ -53,10 +53,10 @@ async function main(): Promise<void> {
     const projectId = args.values.get('project')?.[0];
     let result: unknown;
     if (args.command === 'list') {
-      if (!projectId) throw new Error('--project is required');
+      if (!projectId) throw new Error(`--project is required\n${usage()}`);
       result = service.list({ projectId, statuses: args.values.get('status') as ProspectiveMemoryStatus[] | undefined });
     } else if (args.command === 'due') {
-      if (!projectId) throw new Error('--project is required');
+      if (!projectId) throw new Error(`--project is required\n${usage()}`);
       result = service.listDue({ projectId, atTime: numberValue(args.values, 'at') });
     } else if (args.command === 'create') {
       const candidateType = args.values.get('type')?.[0] as ProspectiveMemoryType | undefined;
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
     } else {
       const candidateId = args.values.get('id')?.[0];
       if (!candidateId) throw new Error('--id is required');
-      if (!projectId) throw new Error('--project is required');
+      if (!projectId) throw new Error(`--project is required\n${usage()}`);
       if (args.command === 'confirm') {
         const evidence = args.values.get('evidence')?.[0];
         if (!evidence) throw new Error('confirm requires --evidence <userEventId>');

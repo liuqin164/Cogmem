@@ -35,7 +35,8 @@ function openKernel(args: Args): MemoryKernel {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  if (!args.command || args.help === true || args.h === true) { console.log(usage()); return; }
+  if (args.help === true || args.h === true) { console.log(usage()); return; }
+  if (!args.command) { console.error(usage()); process.exit(1); }
   const kernel = openKernel(args);
   try {
     const projectId = stringArg(args, 'project');

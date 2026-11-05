@@ -149,7 +149,16 @@ try {
   kernel = createMemoryKernelFromConfig({ configPath: readArg('--config') });
 } catch (error) {
   const refusal = refusalDocumentFor(error, `host-bridge ${command}`);
-  if (!refusal) throw error;
+  if (!refusal) {
+    // This tool's callers parse stdout. An uncaught throw here printed a Bun code frame and no
+    // document at all, so a plain mistake in --config read as a crash in the host's own logs.
+    console.log(JSON.stringify({
+      ok: false,
+      command: `host-bridge ${command}`,
+      error: { code: (error as { code?: string }).code ?? 'host_bridge_failed', message: error instanceof Error ? error.message : String(error) },
+    }));
+    process.exit(1);
+  }
   console.log(JSON.stringify(refusal));
   process.exit(1);
 }

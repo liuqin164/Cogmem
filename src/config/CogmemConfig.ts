@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { statSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
@@ -107,7 +107,13 @@ export function resolveCogmemConfigPath(options: CogmemConfigResolutionOptions =
   const env = options.env || process.env;
   const explicit = options.configPath;
   if (explicit?.trim()) {
-    return { kind: 'toml', path: resolvePath(explicit.trim(), cwd, env) };
+    const path = resolvePath(explicit.trim(), cwd, env);
+    // An explicit path that is not a readable file is not a config. Returning it as one let commands
+    // that tolerate a missing config carry on against whatever database they found instead, and made
+    // the ones that read the file fail with `invalid_toml: ENOENT` — a typo that looks like success or
+    // like a malformed file, never like a typo.
+    const isFile = existsSync(path) && (() => { try { return statSync(path).isFile(); } catch { return false; } })();
+    return isFile ? { kind: 'toml', path } : { kind: 'missing', path };
   }
 
   const globalConfig = defaultCogmemConfigPath(env);
