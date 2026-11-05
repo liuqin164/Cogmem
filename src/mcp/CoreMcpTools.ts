@@ -30,6 +30,7 @@ import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfi
 import { resolve, join, basename, relative } from 'node:path';
 import { existsSync, statSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { recallIndexFields } from '../host/RecallBlock.js';
 
 export interface CogmemMcpTool {
   name: string;
@@ -147,6 +148,11 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
           now: NUMBER_SCHEMA,
           localDateNow: STRING_SCHEMA,
           timeZone: STRING_SCHEMA,
+          granularity: {
+            type: 'string',
+            enum: ['full', 'index'],
+            description: "How much of each result to return. `full` (default) is the whole item. `index` returns one entry per memory — id, title, date and the locator that fetches the whole thing — for a caller that wants to see what is available before paying for it; fetch the ones it picks with cogmem_graph_node's batch `ids`, or the locator itself.",
+          },
         },
         required: ['query'],
       },
@@ -408,8 +414,8 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
       projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, now: NUMBER_SCHEMA, localDateNow: STRING_SCHEMA, timeZone: STRING_SCHEMA,
     }, ['projectId', 'query']),
     graphTool('cogmem_graph_node', 'Inspect Memory Node', 'Inspect one source-anchored node, its neighbors, evidence event ids, and exact raw drilldown commands.', {
-      projectId: STRING_SCHEMA, id: STRING_SCHEMA, includeEvidence: { type: 'boolean' }, evidenceLimit: NUMBER_SCHEMA,
-    }, ['projectId', 'id']),
+      projectId: STRING_SCHEMA, id: STRING_SCHEMA, ids: { type: 'array', items: STRING_SCHEMA }, includeEvidence: { type: 'boolean' }, evidenceLimit: NUMBER_SCHEMA,
+    }, ['projectId']),
     graphTool('cogmem_graph_neighbors', 'Expand Memory Neighbors', 'Expand one Memory Atlas node by one or two bounded hops.', {
       projectId: STRING_SCHEMA, id: STRING_SCHEMA, hops: NUMBER_SCHEMA, limit: NUMBER_SCHEMA,
     }, ['projectId', 'id']),
@@ -699,8 +705,11 @@ export async function callCogmemMcpTool(
     switch (name) {
       case 'cogmem_remember_turn':
         return await rememberTurn(opened.kernel, input);
-      case 'cogmem_recall':
-        return recall(opened.kernel, input, false, runtime);
+      case 'cogmem_recall': {
+        // `granularity: 'index'` is a view of the same result, not a second query (#131).
+        const recalled = recall(opened.kernel, input, false, runtime);
+        return optionalString(input.granularity) === 'index' ? asIndexView(recalled) : recalled;
+      }
       case 'cogmem_explain_recall':
         return recall(opened.kernel, input, true, runtime);
       case 'cogmem_strategy_plan': {
@@ -862,6 +871,17 @@ export async function callCogmemMcpTool(
       }
       case 'cogmem_graph_node': {
         const projectId = requiredString(input.projectId, 'projectId');
+        const ids = Array.isArray(input.ids) ? input.ids.map(String).filter(Boolean) : [];
+        const openKernel = opened.kernel;
+        if (ids.length) {
+          // Batch fetch by id (#131), which is how a caller turns an index line back into the whole thing.
+          // The same lookup the single-id form uses, once per id; an id that is not there is reported in
+          // place rather than failing the batch, because the caller asked for several and can use the rest.
+          const nodes = ids.map((id) => openKernel.graphNode(id, {
+            projectId, includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit), refresh: false, staleOk: true,
+          }) ?? { id, found: false });
+          return jsonResult({ nodes, requested: ids.length, found: nodes.filter((node) => (node as { found?: boolean }).found !== false).length });
+        }
         const result = opened.kernel.graphNode(requiredString(input.id, 'id'), { projectId, includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit), refresh: false, staleOk: true });
         if (!result) throw new Error('Memory Atlas node not found in the requested project');
         return jsonResult(result);
@@ -1850,6 +1870,22 @@ function handleImportStatus(
   const projectId = requiredString(input.projectId, 'projectId');
   const requested = optionalNumber(input.limit);
   return jsonResult(kernel.importStatus(projectId, requested === undefined ? {} : { limit: requested }));
+}
+
+/**
+ * Reduce a recall result to one entry per memory: id, title, date and the locator that fetches the whole
+ * thing (#131). The fields come from `recallIndexFields`, the same source the injected index line renders,
+ * so the index a host's prompt shows and the index this tool returns cannot disagree.
+ */
+function asIndexView(result: CogmemMcpCallResult): CogmemMcpCallResult {
+  const body = result.structuredContent as { items?: Array<Record<string, unknown>> } | undefined;
+  const items = Array.isArray(body?.items) ? body.items : [];
+  return jsonResult({
+    ...(result.structuredContent as Record<string, unknown>),
+    granularity: 'index',
+    items: items.map((item) => recallIndexFields(item)),
+    itemCount: items.length,
+  });
 }
 
 function jsonResult(payload: object, isError = false): CogmemMcpCallResult {

@@ -263,17 +263,29 @@ export interface RecallItemFit {
   droppedCount: number;
 }
 
+/**
+ * The fields that stand for an item when the whole thing is not what the caller wants (#131).
+ *
+ * One source for both forms: `recallIndexLine` renders exactly these fields into the prompt's one-line
+ * index, and the MCP surface returns them as the structured `granularity: 'index'` view. A second copy of
+ * these fields is how the two would drift apart.
+ */
+export function recallIndexFields(item: Payload): { id: string; title: string; when: string; sourceLocator: string } {
+  const id = String(item.id || item.canonicalId || 'unknown');
+  const title = String(item.displayTitle || item.text || '');
+  const when = Number.isFinite(item.sourceAnchor?.occurredAt) ? new Date(Number(item.sourceAnchor?.occurredAt)).toISOString().slice(0, 10)
+    : item.sourceAnchor?.eventId ? String(item.sourceAnchor.eventId)
+    : 'unknown';
+  const sourceLocator = String(item.sourceLocator || (item.sourceAnchor?.eventId
+    ? `cogmem memory show --event ${item.sourceAnchor.eventId}${item.projectId ? ` --project ${item.projectId}` : ''} --before 2 --after 2 --json`
+    : 'cogmem memory show --event <id> --json'));
+  return { id, title, when, sourceLocator };
+}
+
 /** The one line that stands for an item when the budget cannot pay for the whole thing. */
 export function recallIndexLine(item: Payload): string {
-  const id = serializeUntrustedMemory(item.id || item.canonicalId || 'unknown', 120);
-  const title = serializeUntrustedMemory(item.displayTitle || item.text, 120);
-  const when = Number.isFinite(item.sourceAnchor?.occurredAt) ? new Date(Number(item.sourceAnchor?.occurredAt)).toISOString().slice(0, 10)
-    : item.sourceAnchor?.eventId ? serializeUntrustedMemory(item.sourceAnchor.eventId, 80)
-    : 'unknown';
-  const locator = serializeUntrustedMemory(item.sourceLocator || (item.sourceAnchor?.eventId
-    ? `cogmem memory show --event ${item.sourceAnchor.eventId}${item.projectId ? ` --project ${item.projectId}` : ''} --before 2 --after 2 --json`
-    : `cogmem memory show --event <id> --json`), 220);
-  return `- index[${id}] ${title} · ${when} · ${locator}`;
+  const fields = recallIndexFields(item);
+  return `- index[${serializeUntrustedMemory(fields.id, 120)}] ${serializeUntrustedMemory(fields.title, 120)} · ${serializeUntrustedMemory(fields.when, 80)} · ${serializeUntrustedMemory(fields.sourceLocator, 220)}`;
 }
 
 /**
