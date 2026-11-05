@@ -100,9 +100,16 @@ next step.
 For each host the user named (or all of them, if they said so):
 
 ```bash
-cogmem connect <host>     # openclaw | hermes | pi | all
-cogmem doctor --json       # re-gate after wiring
+cogmem connect <host>            # openclaw | hermes | pi | all — writes the integration files
+cogmem connect <host> --auto     # also patch the host runtime; needs that host's own config
+cogmem doctor --json             # re-gate after wiring
 ```
+
+Without `--auto`, `connect` writes the integration files only. With `--auto` it also patches the host's
+runtime wiring, which needs the host's config to exist: when it does not, the command says so and names
+the flag to pass instead (`--openclaw-config <openclaw.json>`, `--hermes-config <config.yaml>`,
+`--pi-config <mcp.json>`). In a fresh home directory that is the expected first outcome, not a failure —
+report it and ask the user for the host's config path.
 
 Per-host setup and MCP configuration details: `docs/mcp-hosts.md`. Hosts
 without a cogmem adapter connect over MCP instead:
