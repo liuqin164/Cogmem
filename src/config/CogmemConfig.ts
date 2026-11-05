@@ -240,6 +240,9 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   const reasoningModel = section(root, 'reasoning_model');
   const governance = section(root, 'governance');
   const episodeBoundary = section(root, 'episode_boundary');
+  // Sharing between agents is off unless the operator turns it on: the default install shares
+  // nothing, and a host only becomes a reader by an explicit grant.
+  const shared = section(root, 'shared');
   const project = section(root, 'project');
   const integrations = section(root, 'integrations');
   const openclaw = section(integrations, 'openclaw');
@@ -256,6 +259,7 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
 
   const dbPath = stringValue(core.db_path) || 'memory.db';
   optionsOut.dbPath = resolveConfigPath(interpolate(dbPath, env, diagnostics), homeDir, env);
+  optionsOut.sharedEnabled = booleanValue(shared.enabled) === true;
 
   const vectorBackend = stringValue(core.vector_backend) || 'sqlite-vec';
   if (vectorBackend === 'sqlite-vec' || vectorBackend === 'hnswlib') {

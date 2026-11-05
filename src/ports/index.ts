@@ -27,12 +27,32 @@ export interface SharedRetraction {
 }
 
 /**
+ * A shared collection and who may read it. The owner is the host that first published into the
+ * collection; readers are granted explicitly, so a collection with no readers is readable by its owner
+ * alone — which is what "sharing is off by default" means at the storage layer.
+ */
+export interface SharedCollection {
+  collection: string;
+  ownerHost: string;
+  readers: string[];
+  createdAt: number;
+  itemCount: number;
+}
+
+/**
  * Shared region. Publishing is idempotent on `itemHash`; retraction is soft, so
  * a subscriber's earlier reasoning stays explainable.
+ *
+ * Reading takes the reader's identity and filters unauthorized collections out in SQL: every surface
+ * routes through `subscribe`, so this is the one place the check can live. A `subscribe` with no reader
+ * returns nothing rather than everything — a missing identity must fail closed.
  */
 export interface SharedMemoryPort {
   publish(items: SharedItem[]): Promise<number>;
   retract(retraction: SharedRetraction): Promise<void>;
-  subscribe(collections: string[], options?: { limit?: number }): Promise<SharedItem[]>;
+  subscribe(collections: string[], options: { readerHost?: string; limit?: number }): Promise<SharedItem[]>;
   explain(itemHash: string): Promise<{ item: SharedItem; retractedAt: number | null } | null>;
+  grantReader(collection: string, readerHost: string, actorHost: string): Promise<void>;
+  revokeReader(collection: string, readerHost: string, actorHost: string): Promise<void>;
+  listCollections(): Promise<SharedCollection[]>;
 }

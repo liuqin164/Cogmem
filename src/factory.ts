@@ -179,6 +179,8 @@ export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
 export type { EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeListOptions, MemoryEpisode } from './episode/index.js';
 
 export interface MemoryKernelOptions {
+  /** Sharing between agents. Read from `[shared] enabled`, off unless it is true. */
+  sharedEnabled?: boolean;
   dbPath?: string;
   embedder?: Embedder;
   embeddingProvider?: EmbeddingProvider;

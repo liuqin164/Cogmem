@@ -9,7 +9,7 @@
 
 import type { Database } from 'bun:sqlite';
 
-import type { SharedItem, SharedMemoryPort, SharedRetraction } from '../../ports/index.js';
+import type { SharedCollection, SharedItem, SharedMemoryPort, SharedRetraction } from '../../ports/index.js';
 
 interface SharedRow {
   item_hash: string;
@@ -48,11 +48,31 @@ export class SqliteSharedMemory implements SharedMemoryPort {
       );
       CREATE INDEX IF NOT EXISTS idx_shared_collection
         ON shared_items(collection, published_at DESC);
+
+      -- Who owns a collection and who may read it. Kept beside the shared region rather than in each
+      -- host's config file: the owner is a runtime fact (whoever published first), and every host
+      -- shares this one database, while config files are per host and would disagree.
+      CREATE TABLE IF NOT EXISTS shared_collections (
+        collection  TEXT PRIMARY KEY,
+        owner_host  TEXT NOT NULL,
+        created_at  INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS shared_collection_readers (
+        collection  TEXT NOT NULL,
+        reader_host TEXT NOT NULL,
+        PRIMARY KEY (collection, reader_host)
+      );
     `);
   }
 
   async publish(items: SharedItem[]): Promise<number> {
     if (items.length === 0) return 0;
+
+    // Ownership first: a publisher that does not own the collection must not get as far as writing an
+    // item, and the first publisher of a collection becomes its owner.
+    for (const item of items) {
+      if (item.collection && item.sourceHost) this.claimCollection(item.collection, item.sourceHost);
+    }
 
     for (const item of items) {
       if (!item.itemHash) throw new Error('shared_item_hash_required');
@@ -126,20 +146,91 @@ export class SqliteSharedMemory implements SharedMemoryPort {
       .run(retraction.retractedAt, retraction.retractedBy, retraction.itemHash);
   }
 
-  async subscribe(collections: string[], options: { limit?: number } = {}): Promise<SharedItem[]> {
+  async subscribe(collections: string[], options: { readerHost?: string; limit?: number } = {}): Promise<SharedItem[]> {
     if (collections.length === 0) return [];
+    // No identity, nothing to authorize: fail closed rather than hand over every collection.
+    if (!options.readerHost) return [];
     const limit = options.limit ?? 100;
     const placeholders = collections.map(() => '?').join(', ');
     const rows = this.db
       .prepare(`
-        SELECT * FROM shared_items
-        WHERE collection IN (${placeholders}) AND retracted_at IS NULL
-        ORDER BY published_at DESC
+        SELECT s.* FROM shared_items s
+        JOIN shared_collections c ON c.collection = s.collection
+        WHERE s.collection IN (${placeholders})
+          AND s.retracted_at IS NULL
+          AND (c.owner_host = ? OR EXISTS (
+            SELECT 1 FROM shared_collection_readers r
+             WHERE r.collection = s.collection AND r.reader_host = ?
+          ))
+        ORDER BY s.published_at DESC
         LIMIT ?
       `)
-      .all(...collections, limit) as SharedRow[];
+      .all(...collections, options.readerHost, options.readerHost, limit) as SharedRow[];
 
     return rows.map(toItem);
+  }
+
+  /** The first publisher of a collection owns it; anyone else needs that owner's grant. */
+  private claimCollection(collection: string, publisherHost: string): void {
+    const row = this.db
+      .prepare('SELECT owner_host FROM shared_collections WHERE collection = ?')
+      .get(collection) as { owner_host: string } | null;
+    if (!row) {
+      this.db
+        .prepare('INSERT INTO shared_collections (collection, owner_host, created_at) VALUES (?, ?, ?)')
+        .run(collection, publisherHost, Date.now());
+      return;
+    }
+    if (row.owner_host !== publisherHost) {
+      // Same shape as `shared_item_not_owned`: the code names the thing that was refused.
+      throw new Error(`shared_collection_not_owned:${collection}`);
+    }
+  }
+
+  private requireOwner(collection: string, actorHost: string): void {
+    const row = this.db
+      .prepare('SELECT owner_host FROM shared_collections WHERE collection = ?')
+      .get(collection) as { owner_host: string } | null;
+    if (!row) throw new Error(`shared_collection_not_found:${collection}`);
+    if (row.owner_host !== actorHost) throw new Error(`shared_collection_not_owned:${collection}`);
+  }
+
+  async grantReader(collection: string, readerHost: string, actorHost: string): Promise<void> {
+    if (!readerHost) throw new Error('shared_reader_host_required');
+    this.requireOwner(collection, actorHost);
+    this.db
+      .prepare('INSERT OR IGNORE INTO shared_collection_readers (collection, reader_host) VALUES (?, ?)')
+      .run(collection, readerHost);
+  }
+
+  async revokeReader(collection: string, readerHost: string, actorHost: string): Promise<void> {
+    this.requireOwner(collection, actorHost);
+    // Grants already delivered into someone's session are not recalled; this stops the next read.
+    this.db
+      .prepare('DELETE FROM shared_collection_readers WHERE collection = ? AND reader_host = ?')
+      .run(collection, readerHost);
+  }
+
+  async listCollections(): Promise<SharedCollection[]> {
+    const rows = this.db
+      .prepare(`
+        SELECT c.collection, c.owner_host, c.created_at,
+               (SELECT COUNT(*) FROM shared_items s
+                 WHERE s.collection = c.collection AND s.retracted_at IS NULL) AS item_count
+          FROM shared_collections c
+         ORDER BY c.collection
+      `)
+      .all() as Array<{ collection: string; owner_host: string; created_at: number; item_count: number }>;
+    const readerRows = this.db
+      .prepare('SELECT collection, reader_host FROM shared_collection_readers ORDER BY reader_host')
+      .all() as Array<{ collection: string; reader_host: string }>;
+    return rows.map((row) => ({
+      collection: row.collection,
+      ownerHost: row.owner_host,
+      createdAt: row.created_at,
+      itemCount: row.item_count,
+      readers: readerRows.filter((r) => r.collection === row.collection).map((r) => r.reader_host),
+    }));
   }
 
   async explain(itemHash: string): Promise<{ item: SharedItem; retractedAt: number | null } | null> {
