@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.1.0 (Unreleased)
+
+Scope for this line, in the order it is worked: the shared-memory design comparison (#134, whose
+conclusion is written into #66) and the shared-memory implementations (#63, #66, #67, #28), then the
+evidence discipline for consolidation (#129), injection budget fitting and recall granularity (#131),
+explicit capture-side exclusion (#133), configurable memory modes (#132), English support (#135), the
+phase-projection study (#130), and docs/install.md last (#137). #138 landed on main before this branch.
+
 ## 4.0.0
 
 - Added `docs/agent-install.md`: a linear install procedure for an agent installing cogmem at a user's request — preconditions, the installer, `init --yes --json`, the `doctor` gate, host wiring, and a smoke test that has to pass before the install counts as done. Every command in it was checked against `cogmem --help` rather than written from memory, and a test keeps each `cogmem <subcommand>` in the document equal to the CLI's own command list. The README's agent section is now a pointer to it.
