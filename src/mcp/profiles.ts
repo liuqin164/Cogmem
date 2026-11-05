@@ -37,6 +37,10 @@ export const ADMIN_TOOLS = [
   'cogmem_import_preview',
   'cogmem_import_apply',
   'cogmem_import_status',
+  'cogmem_shared_publish',
+  'cogmem_shared_retract',
+  'cogmem_shared_subscribe',
+  'cogmem_shared_explain',
 ] as const;
 
 export function isToolAllowed(profile: McpToolProfile, toolName: string): boolean {

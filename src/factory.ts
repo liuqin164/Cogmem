@@ -171,6 +171,8 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 import { CORE_VERSION } from './version.js';
+import { SqliteSharedMemory } from './adapters/sqlite/SqliteSharedMemory.js';
+import type { SharedCollection, SharedItem, SharedRetraction } from './ports/index.js';
 
 const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 
@@ -638,6 +640,8 @@ export class MemoryKernel {
   readonly memoryAtlasStore: MemoryAtlasStore;
   readonly memoryFrameStore: MemoryFrameStore;
   readonly memoryAtlasService: MemoryAtlasService;
+  /** Shared region between hosts. Reads are authorized in the adapter; writes need the switch on. */
+  readonly sharedMemory: SqliteSharedMemory;
   readonly multidimensionalQueryPlanner: MultidimensionalQueryPlanner;
   readonly memoryGovernanceStore: MemoryGovernanceStore;
   readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;
@@ -761,6 +765,12 @@ export class MemoryKernel {
     if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_token')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_token TEXT`);
     if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_lease_until')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_lease_until INTEGER`);
     db.exec(`CREATE TABLE IF NOT EXISTS vector_write_outbox (neuron_id TEXT PRIMARY KEY, vector_json TEXT NOT NULL, created_at INTEGER NOT NULL)`);
+    // Built after the schema phase on purpose: `createFinalSchema` detaches every view, trigger and
+    // index it does not own and replays them afterwards, so a shared index created before it would be
+    // saved and replayed against a table the final schema does not contain. Same connection as the
+    // kernel (ADR-0004: the bridge/kernel holds the only one), tables created IF NOT EXISTS, so a 4.0
+    // database opens unchanged and its version marker stays put — no migration.
+    this.sharedMemory = new SqliteSharedMemory(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
     const vectorDimension = options.vectorDimension ?? config.vector.dimension;
@@ -3594,6 +3604,56 @@ export class MemoryKernel {
 
   private getEmbeddingDimension(): number {
     return this.embeddingProvider?.dimensions ?? this.vectorStore.getStats().dimension;
+  }
+
+  /**
+   * Shared-memory methods for surfaces (MCP tools, host plugins via the public entry).
+   *
+   * Every method takes the caller's host identity explicitly, and each surface fills it from its
+   * authenticated channel (`connectionAgentId` in the MCP layer, the bridge's configured agent):
+   * sharing must never trust an identity the caller typed into a request (ADR-0006).
+   *
+   * Writes are refused while `[shared] enabled` is off, so a default install cannot share by accident;
+   * reads return nothing in that state rather than throwing, because a read that finds nothing is a
+   * normal outcome and an exception is not.
+   */
+  get sharedEnabled(): boolean {
+    return this.options.sharedEnabled === true;
+  }
+
+  /** Publish items into shared collections. The first publisher of a collection becomes its owner. */
+  async publishShared(items: SharedItem[]): Promise<number> {
+    if (!this.sharedEnabled) throw new Error('shared_disabled');
+    return this.sharedMemory.publish(items);
+  }
+
+  async retractShared(retraction: SharedRetraction): Promise<void> {
+    if (!this.sharedEnabled) throw new Error('shared_disabled');
+    return this.sharedMemory.retract(retraction);
+  }
+
+  async grantSharedReader(collection: string, readerHost: string, actorHost: string): Promise<void> {
+    if (!this.sharedEnabled) throw new Error('shared_disabled');
+    return this.sharedMemory.grantReader(collection, readerHost, actorHost);
+  }
+
+  async revokeSharedReader(collection: string, readerHost: string, actorHost: string): Promise<void> {
+    if (!this.sharedEnabled) throw new Error('shared_disabled');
+    return this.sharedMemory.revokeReader(collection, readerHost, actorHost);
+  }
+
+  /** Authorized in the adapter; an unauthorized collection is simply absent from the result. */
+  async subscribeShared(collections: string[], readerHost: string | undefined, options: { limit?: number } = {}): Promise<SharedItem[]> {
+    if (!this.sharedEnabled) return [];
+    return this.sharedMemory.subscribe(collections, { readerHost, limit: options.limit });
+  }
+
+  async explainShared(itemHash: string): Promise<{ item: SharedItem; retractedAt: number | null } | null> {
+    return this.sharedMemory.explain(itemHash);
+  }
+
+  async listSharedCollections(): Promise<SharedCollection[]> {
+    return this.sharedMemory.listCollections();
   }
 
   private ensureMetaTable(db: ReturnType<FactStore['getDatabase']>): void {

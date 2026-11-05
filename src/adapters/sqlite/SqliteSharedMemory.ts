@@ -34,7 +34,17 @@ function toItem(row: SharedRow): SharedItem {
 }
 
 export class SqliteSharedMemory implements SharedMemoryPort {
-  constructor(private readonly db: Database) {
+  private schemaReady = false;
+
+  constructor(private readonly db: Database) {}
+
+  /**
+   * Tables are created on first use, not on construction: a kernel that never shares must leave a
+   * database exactly as 4.0 left it — no shared tables at all — and `#68`'s fresh-database guard
+   * asserts precisely that. Idempotent, and paid once per adapter instance.
+   */
+  private ensureSchema(): void {
+    if (this.schemaReady) return;
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS shared_items (
         item_hash     TEXT PRIMARY KEY,
@@ -63,9 +73,11 @@ export class SqliteSharedMemory implements SharedMemoryPort {
         PRIMARY KEY (collection, reader_host)
       );
     `);
+    this.schemaReady = true;
   }
 
   async publish(items: SharedItem[]): Promise<number> {
+    this.ensureSchema();
     if (items.length === 0) return 0;
 
     // Ownership first: a publisher that does not own the collection must not get as far as writing an
@@ -131,6 +143,7 @@ export class SqliteSharedMemory implements SharedMemoryPort {
   }
 
   async retract(retraction: SharedRetraction): Promise<void> {
+    this.ensureSchema();
     const row = this.db
       .prepare('SELECT source_host, retracted_at FROM shared_items WHERE item_hash = ?')
       .get(retraction.itemHash) as { source_host: string; retracted_at: number | null } | null;
@@ -147,6 +160,7 @@ export class SqliteSharedMemory implements SharedMemoryPort {
   }
 
   async subscribe(collections: string[], options: { readerHost?: string; limit?: number } = {}): Promise<SharedItem[]> {
+    this.ensureSchema();
     if (collections.length === 0) return [];
     // No identity, nothing to authorize: fail closed rather than hand over every collection.
     if (!options.readerHost) return [];
@@ -196,6 +210,7 @@ export class SqliteSharedMemory implements SharedMemoryPort {
   }
 
   async grantReader(collection: string, readerHost: string, actorHost: string): Promise<void> {
+    this.ensureSchema();
     if (!readerHost) throw new Error('shared_reader_host_required');
     this.requireOwner(collection, actorHost);
     this.db
@@ -204,6 +219,7 @@ export class SqliteSharedMemory implements SharedMemoryPort {
   }
 
   async revokeReader(collection: string, readerHost: string, actorHost: string): Promise<void> {
+    this.ensureSchema();
     this.requireOwner(collection, actorHost);
     // Grants already delivered into someone's session are not recalled; this stops the next read.
     this.db
@@ -212,6 +228,7 @@ export class SqliteSharedMemory implements SharedMemoryPort {
   }
 
   async listCollections(): Promise<SharedCollection[]> {
+    this.ensureSchema();
     const rows = this.db
       .prepare(`
         SELECT c.collection, c.owner_host, c.created_at,
@@ -234,6 +251,7 @@ export class SqliteSharedMemory implements SharedMemoryPort {
   }
 
   async explain(itemHash: string): Promise<{ item: SharedItem; retractedAt: number | null } | null> {
+    this.ensureSchema();
     const row = this.db
       .prepare('SELECT * FROM shared_items WHERE item_hash = ?')
       .get(itemHash) as SharedRow | null;

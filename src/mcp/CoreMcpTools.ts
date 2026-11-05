@@ -554,6 +554,49 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
         idempotentHint: true,
       },
     },
+    {
+      name: 'cogmem_shared_publish',
+      description: 'Publish memory items into a shared collection other hosts can subscribe to. Only the collection\'s owner may publish into it, and the first publisher of a collection becomes its owner. Disabled entirely unless the install set `[shared] enabled`; a refused publish answers `shared_disabled`. The publishing host is the identity of this connection — it is not taken from the arguments.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          collection: STRING_SCHEMA,
+          items: { type: 'array', items: { type: 'object' }, description: 'Items to publish: each needs itemHash, sourceItem and payload.' },
+        },
+        required: ['collection', 'items'],
+      },
+      annotations: { title: 'Shared Publish', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: 'cogmem_shared_retract',
+      description: 'Retract an item from a shared collection. Soft: the item leaves subscriptions, stays explainable, and only the host that published it may retract it. Disabled unless `[shared] enabled`.',
+      inputSchema: {
+        type: 'object',
+        properties: { itemHash: STRING_SCHEMA },
+        required: ['itemHash'],
+      },
+      annotations: { title: 'Shared Retract', readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    {
+      name: 'cogmem_shared_subscribe',
+      description: 'Read items from shared collections this connection is allowed to read. Filtering is by the connection\'s identity: an unauthorized collection is absent from the result rather than refused, and an install with sharing off returns nothing.',
+      inputSchema: {
+        type: 'object',
+        properties: { collections: { type: 'array', items: { type: 'string' } }, limit: NUMBER_SCHEMA },
+        required: ['collections'],
+      },
+      annotations: { title: 'Shared Subscribe', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: 'cogmem_shared_explain',
+      description: 'Look up one shared item by hash, including whether and when it was retracted. Read-only.',
+      inputSchema: {
+        type: 'object',
+        properties: { itemHash: STRING_SCHEMA },
+        required: ['itemHash'],
+      },
+      annotations: { title: 'Shared Explain', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
   ];
 }
 
@@ -736,6 +779,41 @@ export async function callCogmemMcpTool(
         return await handleImportApply(opened.kernel, input);
       case 'cogmem_import_status':
         return handleImportStatus(opened.kernel, input);
+      case 'cogmem_shared_publish': {
+        // The publisher is this connection's identity (ADR-0006), never an argument.
+        const sourceHost = connectionAgentId(runtime, input) ?? '';
+        if (!sourceHost) throw new Error('shared_source_host_required');
+        const collection = requiredString(input.collection, 'collection');
+        const items = Array.isArray(input.items) ? input.items as Array<Record<string, unknown>> : [];
+        return jsonResult({ published: await opened.kernel.publishShared(items.map((raw) => ({
+          itemHash: requiredString(raw.itemHash, 'itemHash'),
+          sourceHost,
+          sourceItem: requiredString(raw.sourceItem, 'sourceItem'),
+          collection,
+          payload: (raw.payload ?? {}) as Record<string, unknown>,
+          publishedAt: Date.now(),
+        }))) });
+      }
+      case 'cogmem_shared_retract': {
+        const retractedBy = connectionAgentId(runtime, input) ?? '';
+        if (!retractedBy) throw new Error('shared_source_host_required');
+        await opened.kernel.retractShared({
+          itemHash: requiredString(input.itemHash, 'itemHash'), retractedAt: Date.now(), retractedBy,
+        });
+        return jsonResult({ retracted: true });
+      }
+      case 'cogmem_shared_subscribe': {
+        const collections = Array.isArray(input.collections) ? input.collections.map(String) : [];
+        const items = await opened.kernel.subscribeShared(collections, connectionAgentId(runtime, input), {
+          limit: typeof input.limit === 'number' ? input.limit : undefined,
+        });
+        return jsonResult({ items, count: items.length });
+      }
+      case 'cogmem_shared_explain': {
+        //  is "no such item", which the JSON result cannot carry, so it is spelled out.
+        const found = await opened.kernel.explainShared(requiredString(input.itemHash, 'itemHash'));
+        return jsonResult({ item: found?.item ?? null, retractedAt: found?.retractedAt ?? null });
+      }
       case 'cogmem_candidate_review':
         return jsonResult(opened.kernel.reviewDreamCandidate({
           candidateId: requiredString(input.candidateId, 'candidateId'),

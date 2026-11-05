@@ -538,3 +538,5 @@ export type { ProjectClockContext, ProjectClockSource } from './utils/LocalDateC
  */
 export { ZH_ENTITY_HINTS, ZH_STOPWORDS, ZH_TOPIC_LEXICON } from './lexicon/zh/index.js';
 export type { ChineseTopicLexiconEntry } from './lexicon/zh/index.js';
+// The shared-memory types a host integrates against; the SQLite adapter stays internal (ADR-0004).
+export type { SharedCollection, SharedItem, SharedMemoryPort, SharedRetraction } from './ports/index.js';

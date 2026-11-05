@@ -163,18 +163,21 @@ describe('tool execution semantics', () => {
     expect(called.raw).toContain('cogmem_does_not_exist');
   });
 
-  test('a removed shared-memory tool is rejected as missing, not as profile-restricted', async () => {
-    // #68: this server runs the admin profile, which is the widest surface a
-    // caller can reach without a token. The old answer here was
-    // `tool_not_in_profile`, which reads as "widen the profile and it appears".
+  test('a shared tool on admin is refused by the switch, not hidden by the profile', async () => {
+    // #63: 4.1 registers the shared tools on admin (ADR-0005 deferred the region to 4.1). A server
+    // started without `[shared] enabled` must answer `shared_disabled` — `tool_not_in_profile` would
+    // send the caller to `--profile full` after a capability the switch is withholding, and
+    // `tool_not_found` after a typo that is not there.
     const handle = await start();
     const session = await connect(handle.url);
     const called = await call(handle.url, session, 'cogmem_shared_publish', {
-      items: [{ itemHash: 'no-such-tool', collection: 'team' }],
+      collection: 'team',
+      items: [{ itemHash: 'switch-off', sourceItem: 's1', payload: {} }],
     });
     expect(called.isError).toBe(true);
-    expect(called.raw).toContain('tool_not_found');
+    expect(called.raw).toContain('shared_disabled');
     expect(called.raw).not.toContain('tool_not_in_profile');
+    expect(called.raw).not.toContain('tool_not_found');
   });
 
   test('a missing required argument is reported with the field name', async () => {
