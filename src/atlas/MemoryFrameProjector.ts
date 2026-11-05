@@ -135,6 +135,10 @@ export class MemoryFrameProjector {
             confidence: transition.confidence, supportCount: 1, status: 'active', evidenceEventIds: transition.evidenceEventIds,
             metadata: { projection: 'memory_atlas.frame.v2', frameId: frame.frameId }, updatedAt: now });
           this.contributeSupport(nodeSnapshots, stateId, frame, transition.evidenceEventIds, { label: transition.to, confidence: transition.confidence, kind: 'state' });
+          // A state is named in words too, so it goes into the same alias index places use (#28). Its id
+          // is a hash, and the only other name for it lived in the frame's transition — which a reader's
+          // cue can never reach. This is what makes `state` resolvable at all.
+          this.contributeAlias(aliasSnapshots, projectId, stateId, { dimension: 'state', evidenceEventIds: transition.evidenceEventIds, confidence: transition.confidence }, transition.to);
           if (isCurrentState) this.contributeEdge(edgeSnapshots, projectId, subject, stateId, { sourceFrameNodeId: transition.subjectFrameNodeId, relationType: 'HAS_STATE', targetFrameNodeId: stateId,
             confidence: transition.confidence, evidenceEventIds: transition.evidenceEventIds }, frame, now, currentStateStatus);
           if (transition.from && subjectNode.dimension === 'event') {
@@ -334,7 +338,7 @@ export class MemoryFrameProjector {
     }
   }
 
-  private contributeAlias(snapshots: Map<string, AliasSupportSnapshot>, projectId: string, nodeId: string, node: MemoryFrameNode, alias: string): void {
+  private contributeAlias(snapshots: Map<string, AliasSupportSnapshot>, projectId: string, nodeId: string, node: Pick<MemoryFrameNode, 'dimension' | 'evidenceEventIds' | 'confidence'>, alias: string): void {
     const normalized = normalizeAlias(alias);
     if (!normalized) return;
     const aliasId = createHash('sha256').update(`${projectId}\0${nodeId}\0${normalized}`).digest('hex');
