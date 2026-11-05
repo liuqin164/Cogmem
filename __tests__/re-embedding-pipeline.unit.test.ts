@@ -1,13 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { MemoryGraph } from '../src/core/MemoryGraph.js';
 import { NeuronFactory } from '../src/core/Neuron.js';
 import { NeuronEmbeddingStore } from '../src/embedding/NeuronEmbeddingStore.js';
 import { ReEmbeddingPipeline } from '../src/embedding/ReEmbeddingPipeline.js';
 import type { EmbeddingProvider } from '../src/embedding/EmbeddingProvider.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 class FakeEmbeddingProvider implements EmbeddingProvider {
   modelId = 'model/new';
@@ -29,7 +28,7 @@ class FakeEmbeddingProvider implements EmbeddingProvider {
 }
 
 function fixture() {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-reembed-')), 'brain.db');
+  const dbPath = join(makeTempDir('cogmem-reembed-'), 'brain.db');
   const db = new Database(dbPath);
   const graph = new MemoryGraph(dbPath);
   const store = new NeuronEmbeddingStore(db);

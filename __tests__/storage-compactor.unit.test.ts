@@ -1,14 +1,13 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { compactStorage } from '../src/storage/StorageCompactor.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('storage compactor dry-run plans vector pruning without deleting raw ledger evidence', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-compact-dry-run-'));
+  const dir = makeTempDir('cogmem-compact-dry-run-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -43,7 +42,7 @@ test('storage compactor dry-run plans vector pruning without deleting raw ledger
 });
 
 test('storage compactor apply deletes only eligible vectors and preserves raw ledger replay', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-compact-apply-'));
+  const dir = makeTempDir('cogmem-compact-apply-');
   const dbPath = join(dir, 'memory.db');
   const kernel = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);

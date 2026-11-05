@@ -48,6 +48,7 @@ function makeSuiteResult(suiteName: EvalSuiteName, overrides: Partial<EvalSuiteR
     suiteName,
     runAt: overrides.runAt ?? Date.now(),
     passed: overrides.passed ?? true,
+    measured: overrides.measured ?? true,
     metrics: overrides.metrics ?? {}
   };
 }
@@ -88,7 +89,8 @@ function makeGroupResult(
     group,
     suiteResult: overrides.suiteResult ?? makeSuiteResult(group.suiteName),
     baselineResults: overrides.baselineResults ?? group.baselines.map((baseline) => makeBaseline(groupName, baseline.label)),
-    passed: overrides.passed ?? true
+    passed: overrides.passed ?? true,
+    measured: overrides.measured ?? true
   };
 }
 

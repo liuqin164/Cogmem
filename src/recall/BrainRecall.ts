@@ -1,4 +1,5 @@
 import type { BeliefRecord, Neuron } from '../types/index.js';
+import { filterSuperseded } from './SupersessionFilter.js';
 import type { FactRecord, EventRecord, FactStore } from '../store/FactStore.js';
 import type { EntityStore, EntityTimelineItem } from '../store/EntityStore.js';
 import type { BeliefStore } from '../belief/BeliefStore.js';
@@ -37,6 +38,13 @@ import { matchesProjectScope } from '../topology/ProjectScope.js';
 
 export type { BrainRecallResult } from '../types/BrainRecallResult.js';
 
+/**
+ * Words that end the subject phrase. Everything from the first of these onward
+ * is the *value* being asserted — a date, a state, a ticket — and the value is
+ * exactly what differs between a statement and the correction that replaces it.
+ * Keeping it in the signature would give the two different keys and no
+ * supersession would ever be detected.
+ */
 export interface BrainRecallOptions {
   projectId?: string;
   now?: number;
@@ -191,10 +199,15 @@ export class BrainRecall {
     }).filter((item) => matchesProjectScope(options.projectId, item.projectId));
 
     const compiledHitCount = beliefs.length + facts.length + events.length + entityTimeline.length;
-    const rawEvidence = options.includeRawEvidence === false
+    // Supersession has to be resolved *before* the candidate list is cut to
+    // `limit`. A correction often ranks below the statement it replaces, so
+    // truncating first can drop the current value and leave only the stale one —
+    // which is a leak that filtering afterwards cannot undo.
+    const rawCandidates = options.includeRawEvidence === false
       ? []
-      : this.toRecallableNeurons(candidateNeuronIds, limit)
+      : this.toRecallableNeurons(candidateNeuronIds, limit * 4)
           .filter((neuron) => matchesProjectScope(options.projectId, neuron.metadata.projectId));
+    const rawEvidence = this._filterSuperseded(rawCandidates).slice(0, limit);
     this._expandByCommunity(rawEvidence, limit, options.projectId);
     if (topicRouteResult && !topicRouteResult.fallbackToGlobal && options.includeRawEvidence !== false) {
       const summaryTopicPath = topicRouteResult.matchedTopicPath ?? options.topicPath ?? rawEvidence[0]?.metadata.topicPath ?? '';
@@ -272,6 +285,43 @@ export class BrainRecall {
       if (index >= 0) rawEvidence.splice(index, 1);
     }
     rawEvidence.unshift(...principles);
+  }
+
+  /**
+   * Filter out statements a later statement replaced.
+   *
+   * The rule, stated so `BENCHMARKS.md` and this code cannot drift apart:
+   *
+   * - **Scope**: only statements inside one project are compared. `rawEvidence`
+   *   is already project-filtered by the caller, so a group never spans projects.
+   * - **Who**: two statements are only compared when they come from the same
+   *   speaker. A speaker is the `agent:` tag when the writer recorded one, and a
+   *   single anonymous speaker otherwise — a `rule_only` deployment writes raw
+   *   turns with no agent tag, and treating those as "unknown, therefore
+   *   incomparable" is what left the superseded value in 23 of 24 scorecard
+   *   scenarios. Different `agent:` tags never supersede each other (#65).
+   * - **What**: the topic signature — the leading content words after a
+   *   correction prefix and the usual stopwords are dropped. Two statements
+   *   sharing it are about the same thing; anything else is left alone.
+   * - **Which wins**: the newest statement by `createdAt`, and only when it
+   *   reads as a correction. Older statements in that group are dropped rather
+   *   than returned alongside it.
+   * - **When unsure**: nothing is dropped. A group whose newest statement does
+   *   not look like a correction keeps every member, because losing a real
+   *   memory is worse than showing a stale one next to its replacement.
+   */
+  private _filterSuperseded(rawEvidence: Neuron[]): Neuron[] {
+    // One rule, shared with the user-facing path (#72). The grouping and the
+    // correction test live in SupersessionFilter; this adapter only says how a
+    // neuron presents itself to it.
+    return filterSuperseded(rawEvidence, (neuron) => ({
+      id: neuron.id,
+      content: neuron.content,
+      createdAt: neuron.metadata.createdAt,
+      topicPath: neuron.metadata.topicPath,
+      tags: neuron.metadata.tags,
+      projectId: neuron.metadata.projectId,
+    }));
   }
 
   private findDurableNeuronsByType(

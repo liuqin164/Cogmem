@@ -9,11 +9,14 @@ interface OpenAIChatCompleteParams {
   systemPrompt: string;
   userPrompt: string;
   maxTokens?: number;
+  jsonMode?: boolean;
 }
 
 interface OpenAIEmbedParams {
   model: string;
   input: string;
+  /** Required by asymmetrical embedders; left out of the body entirely when undefined. */
+  inputType?: string;
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -39,7 +42,8 @@ export class OpenAICompatibleClient {
             { role: 'user', content: params.userPrompt }
           ],
           temperature: 0,
-          max_tokens: params.maxTokens ?? 512
+          max_tokens: params.maxTokens ?? 512,
+          ...(params.jsonMode ? { response_format: { type: 'json_object' } } : {})
         }),
         signal: controller.signal
       });
@@ -50,11 +54,20 @@ export class OpenAICompatibleClient {
       }
 
       const payload = await response.json() as {
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>;
       };
-      return payload.choices?.[0]?.message?.content ?? '';
+      const message = payload.choices?.[0]?.message;
+      // Some OpenAI-compatible providers put the answer in `reasoning_content`
+      // and leave `content` empty; returning '' there reads downstream as
+      // `provider_invalid_output` with an empty detail. Measured on the box.
+      return message?.content?.trim() ? message.content : (message?.reasoning_content ?? '');
     } catch (error) {
-      console.warn('[cogmem] openai_compatible chat failed', error);
+      // A bare exception object here cost a box investigation: a model call that had timed out
+      // printed `DOMException { line: 0, column: 0, ... }` and nothing else. Name the cause.
+      const timedOut = error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
+      console.warn(timedOut
+        ? `[cogmem] openai_compatible chat timed out after ${this.options.timeoutMs ?? 30000}ms (model ${params.model})`
+        : `[cogmem] openai_compatible chat failed (model ${params.model}): ${error instanceof Error ? error.message : String(error)}`);
       return '';
     } finally {
       clearTimeout(timeout);
@@ -71,7 +84,8 @@ export class OpenAICompatibleClient {
         headers: this.buildHeaders(),
         body: JSON.stringify({
           model: params.model,
-          input: params.input
+          input: params.input,
+          ...(params.inputType ? { input_type: params.inputType } : {})
         }),
         signal: controller.signal
       });

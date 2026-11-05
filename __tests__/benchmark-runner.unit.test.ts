@@ -8,6 +8,10 @@ function createMockEvalRunner(overrides: Record<string, number> = {}) {
       return {
         suiteName: name,
         passed: true,
+        // The mock supplies metrics, so it stands for a suite that measured
+        // something. `measured: false` is what the real runner returns today (#71),
+        // and the comparison path is deliberately gated on this flag.
+        measured: true,
         runAt: Date.now(),
         metrics: {
           brain_vs_dump_token_ratio: 0.049,

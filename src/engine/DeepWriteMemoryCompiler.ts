@@ -1,4 +1,5 @@
 import type { TextGenerateFn } from '../models/ModelRole.js';
+import { truncate } from '../utils/Values.js';
 
 export interface DeepWriteTurnInput {
   role: 'user' | 'assistant';
@@ -38,10 +39,6 @@ export interface DeepWriteMemoryCompilerResult {
   rawOutput: string;
   systemPrompt: string;
   userPrompt: string;
-}
-
-function truncate(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
 }
 
 function stripJsonFence(raw: string): string {

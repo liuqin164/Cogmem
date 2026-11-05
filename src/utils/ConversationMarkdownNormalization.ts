@@ -20,13 +20,6 @@ export interface NormalizationMetadata {
   onboardingPath?: string;
 }
 
-export interface NormalizerArgs {
-  input?: string;
-  output?: string;
-  title: string;
-  format?: 'csv' | 'tsv';
-}
-
 export interface NormalizedMessage {
   role: 'user' | 'agent' | 'system' | 'narrator';
   text: string;
@@ -41,11 +34,6 @@ export interface NormalizedMessageSource {
   charStart?: number;
   charEnd?: number;
   orderingConfidence?: 'high' | 'medium' | 'low';
-}
-
-export interface CustomNormalizerOptions<TRecord> {
-  family: NormalizationFamily;
-  mapRecord: (record: TRecord, index: number) => NormalizedMessage | NormalizedMessage[] | null | undefined;
 }
 
 export interface ExportBridgeMarker {
@@ -89,32 +77,6 @@ type LooseRecord = Record<string, unknown>;
 const NORMALIZED_SOURCE_FAMILY: NormalizedSourceFamily = 'normalized_conversation_markdown';
 const NORMALIZATION_CONTRACT_VERSION = 'v1';
 const DEFAULT_ONBOARDING_PATH = 'export/preprocess -> normalize -> batch:preflight -> batch:consolidate --strict -> recall';
-
-export function parseNormalizerArgs(argv: string[], usage: string): NormalizerArgs {
-  const args = argv[0] === '--' ? argv.slice(1) : argv;
-  const result: NormalizerArgs = {
-    title: 'Normalized Conversation Export',
-    format: undefined
-  };
-
-  for (let index = 0; index < args.length; index += 1) {
-    const token = args[index];
-    if (token === '--input') result.input = args[index + 1];
-    if (token === '--output') result.output = args[index + 1];
-    if (token === '--title') result.title = args[index + 1];
-    if (token === '--format') {
-      const format = args[index + 1];
-      if (format === 'csv' || format === 'tsv') result.format = format;
-    }
-    if (token.startsWith('--')) index += 1;
-  }
-
-  if (!result.input || !result.output) {
-    throw new Error(usage);
-  }
-
-  return result;
-}
 
 export function normalizeRole(input: string | undefined): 'user' | 'agent' | 'system' | 'narrator' {
   const lowered = (input || '').trim().toLowerCase();
@@ -248,58 +210,6 @@ export function normalizeDelimitedRecords(inputPath: string, format?: 'csv' | 't
   return { family, messages };
 }
 
-export function detectNormalizationFamily(markdown: string): NormalizationFamily | undefined {
-  return parseNormalizationMetadata(markdown).originalInputFamily;
-}
-
-export function parseNormalizationMetadata(markdown: string): NormalizationMetadata {
-  const legacyFamily = readAnyMarker(markdown, 'cogmem-normalized-from', 'agent-brain-normalized-from');
-  const originalInputFamily = readAnyMarker(markdown, 'cogmem-original-input-family', 'agent-brain-original-input-family') || legacyFamily;
-  const normalizedSourceFamily = readAnyMarker(markdown, 'cogmem-normalized-source-family', 'agent-brain-normalized-source-family');
-  const contractVersion = readAnyMarker(markdown, 'cogmem-normalization-contract', 'agent-brain-normalization-contract');
-  const normalizedValue = readAnyMarker(markdown, 'cogmem-normalized', 'agent-brain-normalized');
-  const title = readAnyMarker(markdown, 'cogmem-normalized-title', 'agent-brain-normalized-title');
-  const onboardingPath = readAnyMarker(markdown, 'cogmem-onboarding-path', 'agent-brain-onboarding-path');
-  const family = originalInputFamily as NormalizationFamily | undefined;
-
-  if (
-    family !== 'jsonl_transcript_export'
-    && family !== 'json_array_transcript_export'
-    && family !== 'csv_transcript_export'
-    && family !== 'tsv_transcript_export'
-    && family !== 'app_private_mixed_event_export'
-    && family !== 'jsonl_mixed_event_log_export'
-  ) {
-    return {
-      isNormalized: normalizedValue === 'true' || Boolean(legacyFamily)
-    };
-  }
-
-  return {
-    isNormalized: normalizedValue === 'true' || Boolean(legacyFamily),
-    contractVersion: contractVersion === NORMALIZATION_CONTRACT_VERSION ? NORMALIZATION_CONTRACT_VERSION : undefined,
-    normalizedSourceFamily: normalizedSourceFamily === NORMALIZED_SOURCE_FAMILY ? NORMALIZED_SOURCE_FAMILY : undefined,
-    originalInputFamily: family,
-    title,
-    onboardingPath
-  };
-}
-
-export function createConversationMarkdownNormalizer<TRecord>(
-  options: CustomNormalizerOptions<TRecord>
-): (records: TRecord[]) => NormalizedMessage[] {
-  return (records: TRecord[]) => records.flatMap((record, index) => {
-    const mapped = options.mapRecord(record, index);
-    if (!mapped) return [];
-    const entries = Array.isArray(mapped) ? mapped : [mapped];
-    return entries.filter((entry) => entry.text.trim());
-  });
-}
-
-export function normalizeAppPrivateMixedEventRecords(inputPath: string): NormalizedMessage[] {
-  return normalizeAppPrivateMixedEventExport(inputPath).messages;
-}
-
 export function normalizeAppPrivateMixedEventExport(inputPath: string): BridgeNormalizationResult {
   const parsed = JSON.parse(readFileSync(inputPath, 'utf8')) as LooseRecord;
   return normalizeEventExportToConversationMarkdown<LooseRecord, LooseRecord>(parsed, createExportBridge<LooseRecord, LooseRecord>({
@@ -356,10 +266,6 @@ export function normalizeAppPrivateMixedEventExport(inputPath: string): BridgeNo
       ];
     }
   }));
-}
-
-export function normalizeJsonlMixedEventLogRecords(inputPath: string): NormalizedMessage[] {
-  return normalizeJsonlMixedEventLogExport(inputPath).messages;
 }
 
 export function normalizeJsonlMixedEventLogExport(inputPath: string): BridgeNormalizationResult {

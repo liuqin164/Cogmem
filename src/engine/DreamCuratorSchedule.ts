@@ -58,7 +58,7 @@ function baseDescription(mode: DreamCuratorScheduleMode, trigger: string): Dream
   return {
     mode,
     trigger,
-    hostResponsibility: 'cron/systemd/agent adapter decides when to call cogmem memory dream; core does not run a hidden daemon',
+    hostResponsibility: 'cron/systemd/agent adapter decides when to call cogmem dream tick; core does not run a hidden daemon',
     coreResponsibility: 'conditionally process sealed episodes and write candidate-only governance records',
   };
 }

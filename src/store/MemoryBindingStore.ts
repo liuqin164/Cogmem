@@ -20,6 +20,7 @@ import {
 } from '../binding/MemoryBindingIdentity.js';
 import { mergeMemoryEdge, reduceMemoryEdges } from '../binding/MemoryEdgeMerge.js';
 import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
+import { clamp } from '../utils/Values.js';
 
 export interface UpsertMemoryEntityInput {
   entityId?: string;
@@ -913,8 +914,4 @@ function parseStringArray(value: string | null | undefined): string[] {
 function parentPathFor(topicPath: string): string | undefined {
   const index = topicPath.lastIndexOf('/');
   return index > 0 ? topicPath.slice(0, index) : undefined;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
 }

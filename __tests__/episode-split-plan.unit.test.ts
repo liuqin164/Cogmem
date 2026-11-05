@@ -1,16 +1,16 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createMemoryKernel, type MemoryKernelOptions } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const JULY_4_2026 = Date.UTC(2026, 6, 4);
 const JULY_6_2026 = Date.UTC(2026, 6, 6);
 
 function createTestKernel(prefix: string, options: MemoryKernelOptions = {}) {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = makeTempDir(prefix);
   const kernel = createMemoryKernel({
     dbPath: join(dir, 'memory.db'),
     vectorBackend: 'sqlite-vec',

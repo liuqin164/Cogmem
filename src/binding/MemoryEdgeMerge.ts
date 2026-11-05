@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type Database from 'bun:sqlite';
 
 import { memoryEdgeId } from './MemoryBindingIdentity.js';
+import { clamp } from '../utils/Values.js';
 
 export interface MemoryEdgeMergeInput {
   projectId?: string;
@@ -333,8 +334,4 @@ function parseStringArray(value: string): string[] {
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values.filter(Boolean))];
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
 }

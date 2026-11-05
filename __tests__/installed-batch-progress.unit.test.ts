@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { IngestionCursorStore } from '../src/batch/IngestionCursorStore.js';
@@ -9,9 +8,10 @@ import {
   type BatchProgressEvent,
 } from '../src/batch/InstalledBatchProcessor.js';
 import type { SourceDefinition } from '../src/adapters/types.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('InstalledBatchProcessor emits source and ingest progress events', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-batch-progress-'));
+  const root = makeTempDir('cogmem-batch-progress-');
   mkdirSync(join(root, 'memory'), { recursive: true });
   const sourcePath = join(root, 'memory', '2026-06-03-1207.md');
   writeFileSync(sourcePath, 'User: Import progress should be visible.\nAgent: Confirmed.');

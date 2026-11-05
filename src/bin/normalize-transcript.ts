@@ -14,13 +14,15 @@ import {
   type NormalizedMessageSource,
 } from '../utils/ConversationMarkdownNormalization.js';
 import { printCliJson } from './CliJson.js';
-
+import { assertCliArgs } from './CliArgs.js';
 const USAGE = [
-  'Usage: cogmem-normalize-transcript --input <file> --output <file> [--family json-array|jsonl|csv|tsv|app-private-mixed-event|jsonl-mixed-event-log] [--title <title>] [--dry-run] [--json]',
+  'Usage: cogmem normalize-transcript --input <file> --output <file> [--family json-array|jsonl|csv|tsv|app-private-mixed-event|jsonl-mixed-event-log] [--title <title>] [--dry-run] [--json]',
   '',
   'This command only normalizes transcript exports into conversation Markdown with source-ref anchors.',
   'It does not open a memory database, run recall, or modify agent runtime state.',
 ].join('\n');
+assertCliArgs(process.argv.slice(2), { usage: USAGE, extraFlags: ['dry-run', 'family', 'input', 'json', 'output', 'title'] });
+
 
 export interface NormalizeTranscriptCliResult {
   inputPath: string;
@@ -50,7 +52,7 @@ export async function runNormalizeTranscript(argv: string[]): Promise<NormalizeT
   const outputPath = resolve(requireString(args, 'output'));
   const title = stringArg(args, 'title') || 'Normalized Conversation Export';
   const dryRun = args.values['dry-run'] === true;
-  const normalized = normalizeInput(inputPath, stringArg(args, 'family'), stringArg(args, 'format'));
+  const normalized = normalizeInput(inputPath, stringArg(args, 'family'));
 
   if (!dryRun) {
     writeNormalizedConversationMarkdown(
@@ -89,9 +91,8 @@ export async function runNormalizeTranscript(argv: string[]): Promise<NormalizeT
 function normalizeInput(
   inputPath: string,
   familyArg?: string,
-  formatArg?: string,
 ): { family: NormalizationFamily; messages: NormalizedMessage[]; markers: ExportBridgeMarker[] } {
-  const family = resolveFamily(inputPath, familyArg, formatArg);
+  const family = resolveFamily(inputPath, familyArg);
   switch (family) {
     case 'jsonl_transcript_export':
       return { family, messages: normalizeJsonlRecords(inputPath), markers: [] };

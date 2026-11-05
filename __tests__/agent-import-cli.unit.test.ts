@@ -1,18 +1,21 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { CORE_TOOLS } from '../src/mcp/profiles.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { parseArgs, runOpenClawImport } from '../src/bin/import-support.js';
 import { KernelAgentMemoryBackend } from '../src/agent/index.js';
 import { explainRecallWithKernel } from '../src/recall/RecallExplanation.js';
+import { commandArguments, expectRunnableCommands } from './helpers/cli-invocation.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const openClawImportBin = join(coreRoot, 'src/bin/import-openclaw.ts');
-const hermesImportBin = join(coreRoot, 'src/bin/import-hermes.ts');
+// The merged entry point: the host is its first argument.
+const openClawImportBin = join(coreRoot, 'src/bin/import.ts');
+const hermesImportBin = join(coreRoot, 'src/bin/import.ts');
 const connectBin = join(coreRoot, 'src/bin/connect.ts');
 const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
 const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');
@@ -43,7 +46,7 @@ async function runCli(
 }
 
 test('OpenClaw import dry-run scans workspace sources without creating a memory database', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-dry-'));
+  const dir = makeTempDir('cogmem-openclaw-dry-');
   const dbPath = join(dir, 'memory.db');
   mkdirSync(join(dir, 'memory'));
   writeFileSync(join(dir, 'USER.md'), 'User prefers Bluetooth protocol project notes.');
@@ -56,6 +59,7 @@ test('OpenClaw import dry-run scans workspace sources without creating a memory 
   const result = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -78,7 +82,7 @@ test('OpenClaw import dry-run scans workspace sources without creating a memory 
 });
 
 test('OpenClaw import writes memory once and skips already imported records on repeat runs', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-import-'));
+  const dir = makeTempDir('cogmem-openclaw-import-');
   const dbPath = join(dir, 'memory.db');
   mkdirSync(join(dir, 'memory'));
   writeFileSync(join(dir, 'USER.md'), 'User identity: remembers protocol design details.');
@@ -91,6 +95,7 @@ test('OpenClaw import writes memory once and skips already imported records on r
   const first = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -111,6 +116,7 @@ test('OpenClaw import writes memory once and skips already imported records on r
   const second = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -127,7 +133,7 @@ test('OpenClaw import writes memory once and skips already imported records on r
   expect(secondParsed.skippedRecords).toBeGreaterThanOrEqual(firstParsed.recordsIngested);
 
   const kernel = createMemoryKernel({ dbPath });
-  const recalled = kernel.recall('Bluetooth provisioning project', {
+  const recalled = kernel.evidenceFor('Bluetooth provisioning project', {
     projectId: 'openclaw-test',
     includeRawEvidence: true,
   });
@@ -142,7 +148,7 @@ test('OpenClaw import writes memory once and skips already imported records on r
 });
 
 test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy records', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-reindex-raw-'));
+  const dir = makeTempDir('cogmem-openclaw-reindex-raw-');
   const dbPath = join(dir, 'memory.db');
   mkdirSync(join(dir, 'memory'));
   writeFileSync(join(dir, 'memory', '2026-06-03-1310.md'), [
@@ -154,6 +160,7 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
   const imported = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -173,6 +180,7 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
   const skipped = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -188,6 +196,7 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
   const reindexed = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -206,6 +215,7 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
   const again = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -239,7 +249,7 @@ test('OpenClaw --reindex-raw backfills raw anchors for already imported legacy r
 });
 
 test('OpenClaw migrated records are visible through KernelAgentMemoryBackend recall', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-backend-recall-'));
+  const dir = makeTempDir('cogmem-openclaw-backend-recall-');
   const dbPath = join(dir, 'memory.db');
   mkdirSync(join(dir, 'memory'));
   writeFileSync(join(dir, 'USER.md'), 'User identity: remembers protocol design details.');
@@ -252,6 +262,7 @@ test('OpenClaw migrated records are visible through KernelAgentMemoryBackend rec
   const imported = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -278,7 +289,7 @@ test('OpenClaw migrated records are visible through KernelAgentMemoryBackend rec
 });
 
 test('OpenClaw legacy daily summary imports are searchable as bounded provenance support after dreaming', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-legacy-summary-'));
+  const dir = makeTempDir('cogmem-openclaw-legacy-summary-');
   const dbPath = join(dir, 'memory.db');
   mkdirSync(join(dir, 'memory'));
   writeFileSync(join(dir, 'memory', '2026-06-03-1310.md'), [
@@ -295,6 +306,7 @@ test('OpenClaw legacy daily summary imports are searchable as bounded provenance
   const imported = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--db',
@@ -351,7 +363,7 @@ test('OpenClaw legacy daily summary imports are searchable as bounded provenance
 });
 
 test('Hermes import migrates profile and session markdown into core memory', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-hermes-import-'));
+  const dir = makeTempDir('cogmem-hermes-import-');
   const dbPath = join(dir, 'memory.db');
   mkdirSync(join(dir, 'sessions'));
   writeFileSync(join(dir, 'profile.md'), 'Preference: Hermes should remember release gate commands.');
@@ -364,6 +376,7 @@ test('Hermes import migrates profile and session markdown into core memory', asy
   const result = await runCli([
     'bun',
     hermesImportBin,
+    'hermes',
     '--workspace',
     dir,
     '--db',
@@ -385,7 +398,7 @@ test('Hermes import migrates profile and session markdown into core memory', asy
   expect(parsed.recordsIngested).toBeGreaterThanOrEqual(2);
 
   const kernel = createMemoryKernel({ dbPath });
-  const recalled = kernel.recall('GATT configuration service', {
+  const recalled = kernel.evidenceFor('GATT configuration service', {
     projectId: 'hermes-test',
     includeRawEvidence: true,
   });
@@ -394,7 +407,7 @@ test('Hermes import migrates profile and session markdown into core memory', asy
 });
 
 test('Hermes import scans state.db messages and preserves original message timestamps', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-hermes-state-db-'));
+  const dir = makeTempDir('cogmem-hermes-state-db-');
   const dbPath = join(dir, 'memory.db');
   const stateDbPath = join(dir, 'state.db');
   const stateDb = new Database(stateDbPath);
@@ -435,6 +448,7 @@ test('Hermes import scans state.db messages and preserves original message times
   const result = await runCli([
     'bun',
     hermesImportBin,
+    'hermes',
     '--workspace',
     dir,
     '--db',
@@ -469,7 +483,7 @@ test('Hermes import scans state.db messages and preserves original message times
 });
 
 test('Hermes import reads WAL-mode state.db and numeric timestamp seconds', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-hermes-state-db-wal-'));
+  const dir = makeTempDir('cogmem-hermes-state-db-wal-');
   const dbPath = join(dir, 'memory.db');
   const stateDbPath = join(dir, 'state.db');
   const stateDb = new Database(stateDbPath);
@@ -500,6 +514,7 @@ test('Hermes import reads WAL-mode state.db and numeric timestamp seconds', asyn
   const result = await runCli([
     'bun',
     hermesImportBin,
+    'hermes',
     '--workspace',
     dir,
     '--db',
@@ -525,7 +540,7 @@ test('Hermes import reads WAL-mode state.db and numeric timestamp seconds', asyn
 });
 
 test('Hermes import accepts an explicit --state-db path outside the workspace', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-hermes-state-db-explicit-'));
+  const dir = makeTempDir('cogmem-hermes-state-db-explicit-');
   const workspace = join(dir, 'workspace');
   const dbPath = join(dir, 'memory.db');
   const stateDbPath = join(dir, 'hermes-state.db');
@@ -543,6 +558,7 @@ test('Hermes import accepts an explicit --state-db path outside the workspace', 
   const result = await runCli([
     'bun',
     hermesImportBin,
+    'hermes',
     '--workspace',
     workspace,
     '--state-db',
@@ -563,7 +579,7 @@ test('Hermes import accepts an explicit --state-db path outside the workspace', 
 });
 
 test('Hermes import accepts repeated explicit session files for single or batch migration', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-hermes-explicit-sessions-'));
+  const dir = makeTempDir('cogmem-hermes-explicit-sessions-');
   const dbPath = join(dir, 'memory.db');
   writeFileSync(join(dir, 'one.md'), 'Human: Hermes explicit session one remembered OAuth refresh.\nAI: Stored.');
   writeFileSync(join(dir, 'two.md'), 'Human: Hermes explicit session two remembered vector migration.\nAI: Stored.');
@@ -571,6 +587,7 @@ test('Hermes import accepts repeated explicit session files for single or batch 
   const result = await runCli([
     'bun',
     hermesImportBin,
+    'hermes',
     '--workspace',
     dir,
     '--db',
@@ -596,7 +613,7 @@ test('Hermes import accepts repeated explicit session files for single or batch 
 });
 
 test('agent import uses configured local OpenAI-compatible embedding endpoint during migration', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-quantized-embed-'));
+  const dir = makeTempDir('cogmem-openclaw-quantized-embed-');
   const workspace = join(dir, 'workspace');
   const configDir = join(workspace, '.cogmem');
   mkdirSync(join(workspace, 'memory'), { recursive: true });
@@ -653,7 +670,7 @@ test('agent import uses configured local OpenAI-compatible embedding endpoint du
 });
 
 test('OpenClaw import auto-discovers structured cogmem config instead of env files', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-config-import-'));
+  const dir = makeTempDir('cogmem-openclaw-config-import-');
   const dbPath = join(dir, '.cogmem', 'memory.db');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
@@ -669,6 +686,7 @@ test('OpenClaw import auto-discovers structured cogmem config instead of env fil
   const result = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--project',
@@ -684,7 +702,7 @@ test('OpenClaw import auto-discovers structured cogmem config instead of env fil
 });
 
 test('OpenClaw import resolves explicit --config relative to the shell cwd', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-explicit-config-'));
+  const dir = makeTempDir('cogmem-openclaw-explicit-config-');
   const workspace = join(dir, 'workspace');
   const configDir = join(dir, 'configs');
   const dbPath = join(configDir, 'memory.db');
@@ -701,6 +719,7 @@ test('OpenClaw import resolves explicit --config relative to the shell cwd', asy
   const result = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     workspace,
     '--config',
@@ -719,7 +738,7 @@ test('OpenClaw import resolves explicit --config relative to the shell cwd', asy
 });
 
 test('agent import CLIs reject legacy env-path configuration', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-envpath-reject-'));
+  const dir = makeTempDir('cogmem-openclaw-envpath-reject-');
   const envPath = join(dir, '.cogmem.env');
   mkdirSync(join(dir, 'memory'));
   writeFileSync(envPath, 'COGMEM_DB=memory.db\n');
@@ -729,6 +748,7 @@ test('agent import CLIs reject legacy env-path configuration', async () => {
   const result = await runCli([
     'bun',
     openClawImportBin,
+    'openclaw',
     '--workspace',
     dir,
     '--env-path',
@@ -750,44 +770,47 @@ test('agent-facing runbooks tell OpenClaw and Hermes agents how to self-install 
   expect(openclaw).toContain('npm install cogmem@latest --save');
   expect(openclaw).toContain('COGMEM="./node_modules/.bin/cogmem"');
   expect(openclaw).toContain('Do not run `cogmem init` as an unattended agent action');
-  expect(openclaw).toContain('cogmem import-openclaw');
-  expect(openclaw).toContain('cogmem memory candidates --project openclaw --status needs_confirmation --json');
-  expect(openclaw).toContain('cogmem memory review --project openclaw');
+  expect(openclaw).toContain('cogmem import openclaw');
+  expect(openclaw).toContain("cogmem memory candidates --project 'openclaw-<workspace-hash>' --status needs_confirmation --json");
+  expect(openclaw).toContain("cogmem memory review --project 'openclaw-<workspace-hash>'");
   expect(openclaw).toContain('KernelAgentMemoryBackend');
   expect(openclaw).toContain('Do not import AGENTS.md');
 
   expect(hermes).toContain('npm install cogmem@latest --save');
   expect(hermes).toContain('COGMEM="./node_modules/.bin/cogmem"');
   expect(hermes).toContain('Do not run `cogmem init` as an unattended agent action');
-  expect(hermes).toContain('cogmem import-hermes');
-  expect(hermes).toContain('cogmem memory candidates --project hermes --status needs_confirmation --json');
-  expect(hermes).toContain('cogmem memory review --project hermes');
+  expect(hermes).toContain('cogmem import hermes');
+  expect(hermes).toContain("cogmem memory candidates --project 'hermes-<workspace-hash>' --status needs_confirmation --json");
+  expect(hermes).toContain("cogmem memory review --project 'hermes-<workspace-hash>'");
   expect(hermes).toContain('KernelAgentMemoryBackend');
   expect(hermes).toContain('profile.md');
 });
 
-test('README documents complete import usage including single files, batches, and local quantized embeddings', async () => {
+test('import usage and local-embedding setup are documented where the host bundles keep them', async () => {
+  // The README used to be the reference for this. It is a landing page now, so the assertions
+  // follow the content: the host bundles an installing agent reads, and the CLI's own help.
+  // (`cogmem import --help` prints the merged usage only; the import-specific flags such as
+  // `--session`/`--memory` are printed at runtime by the per-host usage, which is why the
+  // examples — not the help text — carry them here.)
+  const openclawSkill = await Bun.file(join(coreRoot, 'examples/openclaw-backend/SKILL.md')).text();
+  const openclawOps = await Bun.file(join(coreRoot, 'examples/openclaw-backend/references/operations.md')).text();
+  const hermesOps = await Bun.file(join(coreRoot, 'examples/hermes-backend/references/operations.md')).text();
+  const importHelp = new TextDecoder().decode(Bun.spawnSync({
+    cmd: ['bun', join(coreRoot, 'src', 'bin', 'import.ts'), '--help'], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe',
+  }).stdout);
   const readme = await Bun.file(join(coreRoot, 'README.md')).text();
 
-  expect(readme).toContain('## Import Existing Agent Memory');
-  expect(readme).toContain('ollama pull qwen3-embedding:0.6b');
-  expect(readme).toContain('provider = "openai_compatible"');
-  expect(readme).toContain('model = "qwen3-embedding:0.6b"');
-  expect(readme).toContain('cogmem import-openclaw');
-  expect(readme).toContain('--session ./one.md --session ./two.md');
-  expect(readme).toContain('--memory ./one.md --memory ./two.md');
-  expect(readme).toContain('cogmem import-hermes');
-  expect(readme).toContain('--state-db ./state.db');
-  expect(readme).toContain('--family jsonl');
-  expect(readme).toContain('--profile ./memory/profile.md --sessions ./memory/sessions');
-  expect(readme).toContain('--session ./one.md --session ./two.md');
-  expect(readme).toContain('dry-run');
-  expect(readme).toContain('Imported records are embedded through the configured kernel embedder');
-  expect(readme).toContain('<COGMEM_RECALL_CONTEXT>');
-  expect(readme).toContain('<COGMEM_TURN_BRIDGE>');
-  expect(readme).toContain('<COGMEM_SESSION_STATE>');
-  expect(readme).toContain('selective_compile` uses user text as the durable compile signal');
+  expect(openclawSkill).toContain('ollama pull qwen3-embedding:0.6b');
+  expect(openclawSkill).toContain('provider = "openai_compatible"');
+  expect(openclawSkill).toContain('model = "qwen3-embedding:0.6b"');
+  expect(openclawOps).toContain('--memory ./one.md --memory ./two.md');
+  expect(openclawOps).toContain('--session ./');
+  expect(hermesOps).toContain('--state-db ./state.db');
+  expect(importHelp).toContain('cogmem import <openclaw|hermes>');
+  expect(importHelp).toContain('--dry-run');
+  expect(readme).toContain('cogmem import openclaw');
 });
+
 
 test('agent-facing skill files tell OpenClaw and Hermes agents how to self-install, migrate, and recall', async () => {
   const openclaw = await Bun.file(join(coreRoot, 'examples/openclaw-backend/SKILL.md')).text();
@@ -814,7 +837,7 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
     expect(body).toContain('Imported records are embedded through the configured kernel embedder');
   }
 
-  expect(openclaw).toContain('cogmem import-openclaw');
+  expect(openclaw).toContain('cogmem import openclaw');
   expect(openclaw).toContain('memory_search');
   expect(openclaw).toContain('memory.backend');
   expect(openclaw).toContain('Do not write `plugins.slots.memory`');
@@ -831,22 +854,22 @@ test('agent-facing skill files tell OpenClaw and Hermes agents how to self-insta
   expect(openclaw).toContain('filteredEvidence');
   expect(openclaw).toContain('--session ./one.md --session ./two.md');
   expect(openclaw).toContain('--memory ./one.md --memory ./two.md');
-  expect(hermes).toContain('cogmem import-hermes');
+  expect(hermes).toContain('cogmem import hermes');
   expect(hermes).toContain('~/.hermes/config.yaml');
   expect(hermes).toContain('memory.provider');
   expect(hermes).toContain('--state-db ./state.db');
   expect(hermes).toContain('--family jsonl');
-  expect(hermes).toContain('cogmem dream tick --project hermes --mode auto --max-episodes 20 --json');
-  expect(hermes).toContain('cogmem episode status --project hermes --json');
-  expect(hermes).toContain('cogmem memory map --project hermes --json');
-  expect(hermes).toContain('cogmem memory tick --project hermes --json');
+  expect(hermes).toContain("cogmem dream tick --project 'hermes-<workspace-hash>' --mode auto --max-episodes 20 --json");
+  expect(hermes).toContain("cogmem episode status --project 'hermes-<workspace-hash>' --json");
+  expect(hermes).toContain("cogmem memory map --project 'hermes-<workspace-hash>' --json");
+  expect(hermes).toContain("cogmem memory tick --project 'hermes-<workspace-hash>' --json");
   expect(hermes).toContain('cogmem_candidate_review');
   expect(hermes).toContain('cogmem_graph_touch');
   expect(hermes).toContain('--session ./one.md --session ./two.md');
 });
 
 test('cogmem-connect installs an agent skill into a workspace without migrating data', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-openclaw-'));
+  const dir = makeTempDir('cogmem-connect-openclaw-');
   const skillPath = join(dir, 'skills', 'cogmem-memory', 'SKILL.md');
   const operationsPath = join(dir, 'skills', 'cogmem-memory', 'references', 'operations.md');
 
@@ -886,10 +909,22 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   expect(installedParsed.nextCommands.join('\n')).not.toContain('cogmem-init');
   expect(installedParsed.nextCommands.join('\n')).not.toContain('cogmem init');
   expect(installedParsed.nextCommands.join('\n')).not.toContain('openclaw gateway restart');
-  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem doctor');
-  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem openclaw diagnose --workspace . --json');
-  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem import-openclaw --workspace . --project openclaw --dry-run --json');
-  expect(installedParsed.nextCommands).toContain('./node_modules/.bin/cogmem memory plan --project openclaw --json');
+  expectRunnableCommands(installedParsed.nextCommands);
+  const openclawSteps = installedParsed.nextSteps as Array<{ id: string; command: string }>;
+  const stepOf = (id: string): string => openclawSteps.find((step) => step.id === id)!.command;
+  // Every argument, pinned exactly — the workspace the command was given rather
+  // than a `.` of its own, and not a `.` anywhere else either.
+  const project = installedParsed.integrationProject as string;
+  // The project the integration itself writes, not a literal: the printed step and
+  // the plugin entry have to name one scope, or the import "succeeds" into a
+  // project the agent never asks about (#79).
+  expect(project).toMatch(/^openclaw-[0-9a-f]{8}$/);
+  expect(commandArguments(stepOf('doctor'))).toBe(`doctor --workspace ${dir}`);
+  expect(commandArguments(stepOf('import_dry_run'))).toBe(`import openclaw --workspace ${dir} --project ${project} --dry-run --json`);
+  expect(commandArguments(stepOf('import_apply'))).toBe(`import openclaw --workspace ${dir} --project ${project} --json`);
+  expect(commandArguments(stepOf('openclaw_diagnose'))).toBe(`doctor --plugin-only --agent openclaw --workspace ${dir} --json`);
+  expect(commandArguments(stepOf('memory_plan'))).toBe(`memory plan --project ${project} --json`);
+  expect(commandArguments(stepOf('memory_status'))).toBe(`memory status --project ${project} --json`);
   expect(installedParsed.nextSteps).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: 'interactive_init', safeForAutomation: false, actor: 'operator' }),
     expect.objectContaining({ id: 'restart_gateway', safeForAutomation: false, actor: 'host' }),
@@ -905,11 +940,10 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
   expect(body).toContain('OpenClaw');
   expect(body).toContain('references/operations.md');
   for (const command of [
-    'cogmem migrate --dry-run --json',
-    'cogmem import-openclaw',
+    'cogmem import openclaw',
     'cogmem memory review',
     'cogmem memory graph-explore',
-    'cogmem openclaw diagnose',
+    'cogmem doctor --plugin-only --agent openclaw',
     'cogmem repair project-scope',
     'cogmem episode repair',
     'cogmem snapshot export',
@@ -920,10 +954,9 @@ test('cogmem-connect installs an agent skill into a workspace without migrating 
 });
 
 test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-openclaw-auto-'));
+  const dir = makeTempDir('cogmem-connect-openclaw-auto-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   const openclawConfigPath = join(dir, 'openclaw.json');
-  const pluginDir = join(dir, 'extensions', 'cogmem-auto-memory');
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
   writeFileSync(openclawConfigPath, JSON.stringify({ plugins: { enabled: true } }, null, 2));
@@ -948,6 +981,11 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   const parsed = JSON.parse(installed.stdout);
   expect(parsed.autoMemory.enabled).toBe(true);
   expect(parsed.autoMemory.installed).toBe(true);
+  // Plugin ID is now workspace-hash based; find the actual plugin dir
+  const extensionsDir = join(dir, 'extensions');
+  const pluginDirs = readdirSync(extensionsDir).filter((d) => d.startsWith('cogmem-auto-memory-'));
+  expect(pluginDirs.length).toBe(1);
+  const pluginDir = join(extensionsDir, pluginDirs[0]);
   expect(parsed.autoMemory.pluginDir).toBe(pluginDir);
   expect(existsSync(join(pluginDir, 'index.js'))).toBe(true);
   expect(existsSync(join(pluginDir, 'bridge.mjs'))).toBe(true);
@@ -960,7 +998,10 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(indexBody).toContain('function classifyRecallIntent(query)');
   expect(indexBody).toContain('const intent = classifyRecallIntent(query)');
   expect(indexBody).toContain('function classifyContextIntent(query)');
-  expect(indexBody).toContain("reason: 'context_cortex:greeting'");
+  // The skip reason is now composed, because the gate covers two intents: a greeting and (new) a
+  // social turn judged by content. Both the branch and the composed reason are pinned.
+  expect(indexBody).toContain("contextIntent === 'greeting' || contextIntent === 'social'");
+  expect(indexBody).toContain("reason: 'context_cortex:' + contextIntent");
   expect(indexBody).toContain("recallMode: 'context_cortex_short_followup'");
   expect(indexBody).toContain('anchorEventId: anchor && anchor.eventId');
   expect(indexBody).toContain('excludeSessionId: config.excludeCurrentSessionCompiledMemory === false ? undefined : sessionId');
@@ -978,14 +1019,20 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   expect(indexBody).toContain('recallItems.length > 0 || recall.context');
   const cortexBridgeBody = readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8');
   expect(cortexBridgeBody).toContain('KernelAgentMemoryBackend');
-  expect(cortexBridgeBody).toContain('kernel.contextCortex.plan');
-  expect(cortexBridgeBody).toContain('kernel.strategyCortex.plan');
-  expect(cortexBridgeBody).toContain('kernel.strategyCortex.replan');
-  expect(cortexBridgeBody).toContain('retrievalPolicy');
   expect(cortexBridgeBody).toContain('formatStrategyContext');
-  expect(cortexBridgeBody).toContain('kernel.memoryUseJudge.judge');
-  expect(cortexBridgeBody).toContain('kernel.contextOutcomeStore.record');
-  expect(cortexBridgeBody).toContain('activationReceipt');
+  // Planning, replanning, the context budget, the strict-facet retention rule and
+  // the memory-use judge are the kernel's shared orchestration (ADR-0004). They
+  // are executed against a real database in `__tests__/host-bridge.unit.test.ts`;
+  // what this generated file has to show is that it is wired to them.
+  expect(cortexBridgeBody).toContain('recallForHost: api.recallForHost');
+  expect(cortexBridgeBody).toContain('render.recallForHost(');
+  expect(cortexBridgeBody).toContain('cachedApi.rememberForHost(');
+  expect(cortexBridgeBody).not.toContain('kernel.contextCortex.plan');
+  expect(cortexBridgeBody).not.toContain('kernel.strategyCortex.plan');
+  expect(cortexBridgeBody).not.toContain('kernel.strategyCortex.replan');
+  expect(cortexBridgeBody).not.toContain('kernel.memoryUseJudge.judge');
+  expect(cortexBridgeBody).not.toContain('kernel.contextOutcomeStore.record');
+  expect(cortexBridgeBody).not.toContain('activationReceipt');
   const manifest = JSON.parse(readFileSync(join(pluginDir, 'openclaw.plugin.json'), 'utf8'));
   expect(manifest.version).toBe('0.7.2');
   expect(manifest.configSchema.type).toBe('object');
@@ -1016,34 +1063,38 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
 
   const openclawConfig = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
   expect(openclawConfig.plugins.load.paths).toContain(pluginDir);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].enabled).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].hooks.allowConversationAccess).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].hooks.allowPromptInjection).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.configPath).toBe(configPath);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.ingestMode).toBe('selective_compile');
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.rememberStrategy).toBe('queued');
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.rememberDrainBatchSize).toBe(20);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.auditLog).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.publicEntrypoint).toContain('public.js');
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.limit).toBe(3);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.maxQueryChars).toBe(1200);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.maxAssistantChars).toBe(6000);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.stripRecallBlocksBeforeRemember).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.compileSignalSource).toBe('user_only');
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.excludeCurrentSessionCompiledMemory).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.memoryContextMaxChars).toBe(3500);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.memoryContextMaxItems).toBe(3);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.sourceWindowMaxChars).toBe(1200);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.includeSourceWindowByDefault).toBe(false);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.contextCortexEnabled).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.contextMemoryMaxRatio).toBe(0.25);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.strategyCortexEnabled).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeEnabled).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeMaxTurns).toBe(3);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeMaxChars).toBe(1200);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.turnBridgeInjectPolicy).toBe('same_topic_only');
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.sessionStateEnabled).toBe(true);
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].config.sessionStateMaxChars).toBe(1800);
+  // Plugin ID is workspace-hash based; find the actual entry
+  const pluginEntryKey = Object.keys(openclawConfig.plugins.entries).find((k) => k.startsWith('cogmem-auto-memory-'));
+  expect(pluginEntryKey).toBeDefined();
+  const pluginEntry = openclawConfig.plugins.entries[pluginEntryKey!];
+  expect(pluginEntry.enabled).toBe(true);
+  expect(pluginEntry.hooks.allowConversationAccess).toBe(true);
+  expect(pluginEntry.hooks.allowPromptInjection).toBe(true);
+  expect(pluginEntry.config.configPath).toBe(configPath);
+  expect(pluginEntry.config.ingestMode).toBe('selective_compile');
+  expect(pluginEntry.config.rememberStrategy).toBe('queued');
+  expect(pluginEntry.config.rememberDrainBatchSize).toBe(20);
+  expect(pluginEntry.config.auditLog).toBe(true);
+  expect(pluginEntry.config.publicEntrypoint).toContain('public.js');
+  expect(pluginEntry.config.limit).toBe(3);
+  expect(pluginEntry.config.maxQueryChars).toBe(1200);
+  expect(pluginEntry.config.maxAssistantChars).toBe(6000);
+  expect(pluginEntry.config.stripRecallBlocksBeforeRemember).toBe(true);
+  expect(pluginEntry.config.compileSignalSource).toBe('user_only');
+  expect(pluginEntry.config.excludeCurrentSessionCompiledMemory).toBe(true);
+  expect(pluginEntry.config.memoryContextMaxChars).toBe(3500);
+  expect(pluginEntry.config.memoryContextMaxItems).toBe(3);
+  expect(pluginEntry.config.sourceWindowMaxChars).toBe(1200);
+  expect(pluginEntry.config.includeSourceWindowByDefault).toBe(false);
+  expect(pluginEntry.config.contextCortexEnabled).toBe(true);
+  expect(pluginEntry.config.contextMemoryMaxRatio).toBe(0.25);
+  expect(pluginEntry.config.strategyCortexEnabled).toBe(true);
+  expect(pluginEntry.config.turnBridgeEnabled).toBe(true);
+  expect(pluginEntry.config.turnBridgeMaxTurns).toBe(3);
+  expect(pluginEntry.config.turnBridgeMaxChars).toBe(1200);
+  expect(pluginEntry.config.turnBridgeInjectPolicy).toBe('same_topic_only');
+  expect(pluginEntry.config.sessionStateEnabled).toBe(true);
+  expect(pluginEntry.config.sessionStateMaxChars).toBe(1800);
   expect(indexBody).toContain("openclaw-auto-memory.jsonl");
   expect(indexBody).toContain("action: context ? 'inject' : 'skip'");
   expect(indexBody).toContain('function enqueueRememberJob(config, payload)');
@@ -1062,43 +1113,43 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
   const bridgeBody = readFileSync(join(pluginDir, 'bridge.mjs'), 'utf8');
   expect(bridgeBody).toContain('loadCogmemApi');
   expect(bridgeBody).toContain('publicEntrypoint');
-  expect(bridgeBody).toContain('rememberTurnWithResult');
-  expect(bridgeBody).toContain("ingestMode: bridgeConfig.ingestMode || 'selective_compile'");
+  expect(bridgeBody).not.toContain('rememberTurnWithResult');
+  expect(bridgeBody).not.toContain("ingestMode: bridgeConfig.ingestMode || 'selective_compile'");
   expect(bridgeBody).toContain("command === 'drain-remember-queue'");
   expect(bridgeBody).toContain('function acquireRememberQueueLock(bridgeConfig)');
   expect(bridgeBody).toContain('staleLockRecovered');
   expect(bridgeBody).toContain('rememberDrainBatchSize');
   expect(bridgeBody).toContain('rememberPayload(job.payload || {}, job.payload?.config || bridgeConfig, kernel, memory)');
-  expect(bridgeBody.indexOf("if (command === 'drain-remember-queue')")).toBeLessThan(bridgeBody.indexOf('await loadCogmemApi(config)'));
-  expect(bridgeBody).toContain('ingestToolCall');
-  expect(bridgeBody).toContain('ingestToolObservation');
-  expect(bridgeBody).toContain('ingestTaskEvent');
+  // The drain lock is taken before the kernel is acquired, so a locked queue
+  // never pays for opening the database.
+  expect(bridgeBody.indexOf("if (command === 'drain-remember-queue')")).toBeLessThan(bridgeBody.indexOf('await acquireRuntime(config, keepAlive)'));
+  // Writing a turn — the assistant event, its tool calls, their observations —
+  // is the kernel's shared orchestration now (`rememberForHost`, ADR-0004). The
+  // bridge delegates, and `__tests__/host-bridge.unit.test.ts` records a real
+  // turn through it against a real database.
+  expect(bridgeBody).toContain('cachedApi.rememberForHost(');
+  expect(bridgeBody).not.toContain('ingestToolCall');
+  expect(bridgeBody).not.toContain('ingestToolObservation');
+  expect(bridgeBody).not.toContain('ingestTaskEvent');
   expect(bridgeBody).toContain('function stripCogmemRecallBlocks(text)');
   expect(bridgeBody).toContain('COGMEM_TURN_BRIDGE');
   expect(bridgeBody).toContain('COGMEM_SESSION_STATE');
   expect(bridgeBody).toContain('COGMEM_STRATEGY_CONTEXT');
-  expect(bridgeBody).toContain('hygiene');
-  expect(bridgeBody).toContain('<COGMEM_RECALL_CONTEXT');
-  expect(bridgeBody).toContain('persistence="forbidden"');
-  expect(bridgeBody).toContain('lifecycle="current_turn_only"');
-  expect(bridgeBody).toContain('This block must not be persisted or re-ingested as new memory.');
-  expect(bridgeBody).toContain('sourceType');
-  expect(bridgeBody).toContain('canAnswerExactQuote=false');
-  expect(bridgeBody).toContain('sourceContext');
-  expect(bridgeBody).toContain('recallDecision=');
-  expect(bridgeBody).toContain('sourceWindow');
-  expect(bridgeBody).toContain('formatContextEvent');
-  expect(bridgeBody).toContain('truncatedAtChar');
-  expect(bridgeBody).toContain('overlapHandling');
-  expect(bridgeBody).toContain('uniqueWindowEvents');
-  expect(bridgeBody).toContain('cogmem memory show --event');
-  expect(bridgeBody).toContain('Use it only as current-turn background memory.');
-  expect(bridgeBody).toContain('function serializeUntrustedMemory');
-  expect(bridgeBody).toContain("replace(/&/g, '&amp;')");
+  expect(bridgeBody).not.toContain('strippedRecallBlocks');
+  // The recall block itself is rendered by the kernel now (ADR-0004): the bridge
+  // asks for it rather than carrying the block's text, so the tags, the rules,
+  // the escaping and the window lines are asserted where they actually run, in
+  // `__tests__/recall-block.unit.test.ts`. What belongs here is that this
+  // generated file delegates and no longer holds a copy.
+  expect(bridgeBody).toContain('formatRecallContext: api.formatRecallContext');
+  expect(bridgeBody).not.toContain('sourceType');
+  expect(bridgeBody).not.toContain('<COGMEM_RECALL_CONTEXT');
+  expect(bridgeBody).not.toContain('function serializeUntrustedMemory');
+  expect(bridgeBody).not.toContain("replace(/&/g, '&amp;')");
   expect(indexBody).toContain('function serializeUntrustedMemory');
   expect(indexBody).toContain("serializeUntrustedMemory(receipt.workingConclusion");
   expect(indexBody).toContain("serializeUntrustedMemory(state.currentTopic");
-  expect(bridgeBody).toContain('intent: input.intent || undefined');
+  expect(bridgeBody).not.toContain('intent: input.intent || undefined');
 
   const indexCheck = await runCli(['node', '--check', join(pluginDir, 'index.js')]);
   expect(indexCheck.stderr).toBe('');
@@ -1109,11 +1160,10 @@ test('cogmem-connect can install the OpenClaw automatic memory plugin wrapper', 
 });
 
 test('OpenClaw generated bridge drains remember queue with stale lock recovery', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-drain-smoke-'));
+  const dir = makeTempDir('cogmem-openclaw-drain-smoke-');
   const dbPath = join(dir, 'memory.db');
   const configPath = join(dir, '.cogmem', 'config.toml');
   const openclawConfigPath = join(dir, 'openclaw.json');
-  const pluginDir = join(dir, 'extensions', 'cogmem-auto-memory');
   const queuePath = join(dir, '.cogmem', 'queue', 'openclaw-remember.jsonl');
   mkdirSync(dirname(configPath), { recursive: true });
   mkdirSync(dirname(queuePath), { recursive: true });
@@ -1185,6 +1235,12 @@ test('OpenClaw generated bridge drains remember queue with stale lock recovery',
     stripRecallBlocksBeforeRemember: true,
   };
 
+  // Find the actual plugin dir
+  const extensionsDir = join(dir, 'extensions');
+  const pluginDirs = readdirSync(extensionsDir).filter((d) => d.startsWith('cogmem-auto-memory-'));
+  expect(pluginDirs.length).toBe(1);
+  const pluginDir = join(extensionsDir, pluginDirs[0]);
+  
   const first = await runCli(
     ['bun', join(pluginDir, 'bridge.mjs'), 'drain-remember-queue'],
     dir,
@@ -1222,7 +1278,7 @@ test('OpenClaw generated bridge drains remember queue with stale lock recovery',
 });
 
 test('doctor --fix can repair OpenClaw automatic memory wiring', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-doctor-openclaw-fix-'));
+  const dir = makeTempDir('cogmem-doctor-openclaw-fix-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   const openclawConfigPath = join(dir, 'openclaw.json');
   mkdirSync(dirname(configPath), { recursive: true });
@@ -1248,11 +1304,15 @@ test('doctor --fix can repair OpenClaw automatic memory wiring', async () => {
   expect(fixed.stdout).toContain('OK configuration parsed');
   expect(fixed.stdout).toContain('OK openclaw auto memory integration fixed');
   const openclawConfig = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
-  expect(openclawConfig.plugins.entries['cogmem-auto-memory'].enabled).toBe(true);
+  // Plugin ID is workspace-hash based; find the actual entry
+  const pluginEntryKey = Object.keys(openclawConfig.plugins.entries).find((k) => k.startsWith('cogmem-auto-memory-'));
+  expect(pluginEntryKey).toBeDefined();
+  const pluginEntry = openclawConfig.plugins.entries[pluginEntryKey!];
+  expect(pluginEntry.enabled).toBe(true);
 });
 
-test('doctor plugin-only and openclaw diagnose inspect stale plugin without opening kernel', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-openclaw-plugin-diagnose-'));
+test('doctor --plugin-only inspects a stale plugin and its queue without opening the kernel', async () => {
+  const dir = makeTempDir('cogmem-openclaw-plugin-diagnose-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   const openclawConfigPath = join(dir, 'openclaw.json');
   const pluginDir = join(dir, 'extensions', 'cogmem-auto-memory');
@@ -1318,28 +1378,20 @@ test('doctor plugin-only and openclaw diagnose inspect stale plugin without open
   expect(fixed.exitCode).toBe(0);
   expect(JSON.parse(fixed.stdout).openclaw.plugin.current).toBe(true);
 
-  const diagnosed = await runCli([
-    'bun',
-    cogmemBin,
-    'openclaw',
-    'diagnose',
-    '--workspace',
-    dir,
-    '--json',
-  ]);
-  expect(diagnosed.stderr).toBe('');
-  expect(diagnosed.exitCode).toBe(0);
-  const diagnosedJson = JSON.parse(diagnosed.stdout);
-  expect(diagnosedJson.plugin.current).toBe(true);
-  expect(diagnosedJson.audit.lastBeforePromptBuild.reason).toBe('database is locked');
-  expect(diagnosedJson.queue.pendingLines).toBe(1);
-  expect(diagnosedJson.queue.deadLines).toBe(1);
-  expect(diagnosedJson.queue.lock.owner.pid).toBe(123);
-  expect(diagnosedJson.queue.processingFiles).toHaveLength(1);
+  // The queue that `cogmem openclaw diagnose` alone reported moved into this same payload
+  // when that command was folded in (#142): a stuck queue is what an injection failure
+  // looks like from outside, and the kernel is still never opened to read it.
+  const queue = inspectedJson.openclaw.queue as {
+    pendingLines: number; deadLines: number; lock: { owner: { pid: number } }; processingFiles: unknown[];
+  };
+  expect(queue.pendingLines).toBe(1);
+  expect(queue.deadLines).toBe(1);
+  expect(queue.lock.owner.pid).toBe(123);
+  expect(queue.processingFiles).toHaveLength(1);
 });
 
 test('unified cogmem CLI dispatches doctor and update commands', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-unified-cli-'));
+  const dir = makeTempDir('cogmem-unified-cli-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
@@ -1367,18 +1419,21 @@ test('unified cogmem CLI dispatches doctor and update commands', async () => {
   expect(parsed.nextCommand).toContain('cogmem@3.6.5');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
   expect(parsed.nextCommand).not.toContain('@CognitiveOS/core');
-  expect(parsed.migrationCommand).toContain('cogmem migrate --yes --backup');
-  expect(parsed.migrationCommand).toContain(configPath);
+  // #59: update has no migration step at all, so the field is gone rather than
+  // pointing at a command that no longer exists.
+  expect(parsed.migrationCommand).toBeUndefined();
 });
 
 test('cogmem update targets the one-line installer home when cwd has no package dependency', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-update-home-'));
+  const dir = makeTempDir('cogmem-update-home-');
   const installHome = join(dir, 'pkg');
   const randomCwd = join(dir, 'work');
   const home = join(dir, 'home');
+  const configPath = join(home, '.cogmem', 'config.toml');
   mkdirSync(installHome, { recursive: true });
   mkdirSync(randomCwd, { recursive: true });
-  mkdirSync(home, { recursive: true });
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
   writeFileSync(join(installHome, 'package.json'), JSON.stringify({
     private: true,
     dependencies: {
@@ -1404,13 +1459,17 @@ test('cogmem update targets the one-line installer home when cwd has no package 
   expect(parsed.packageSpec).toBe('3.6.5');
   expect(parsed.nextCommand).toContain('cogmem@3.6.5');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
+  // The user config lives beside the installer home, not inside the package root.
+  // #59: update has no migration step at all, so the field is gone rather than
+  // pointing at a command that no longer exists.
   expect(parsed.migrationCommand).toBeUndefined();
-  expect(parsed.migrationSkippedReason).toContain('missing_config');
 });
 
 test('cogmem update targets npm global installs without writing a local package dependency', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-update-global-'));
-  mkdirSync(dir, { recursive: true });
+  const dir = makeTempDir('cogmem-update-global-');
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
 
   const update = await runCli(
     ['bun', cogmemBin, 'update', '--dry-run', '--json'],
@@ -1418,6 +1477,10 @@ test('cogmem update targets npm global installs without writing a local package 
     {
       COGMEM_INSTALL_KIND: 'npm_global',
       COGMEM_NPM_SPEC: '3.6.5',
+      // #89: a global install must name the prefix that owns it; without one, `update`
+      // refuses rather than falling back to npm's configured default. This test is about
+      // the global target, so it supplies the prefix the install would have.
+      COGMEM_NPM_PREFIX: join(dir, 'global'),
     },
   );
 
@@ -1426,12 +1489,104 @@ test('cogmem update targets npm global installs without writing a local package 
   const parsed = JSON.parse(update.stdout);
   expect(parsed.installKind).toBe('npm_global');
   expect(parsed.currentSpec).toBe('npm:global');
-  expect(parsed.nextCommand).toBe('npm install -g cogmem@3.6.5');
+  expect(parsed.nextCommand).toBe(`npm install -g --prefix ${join(dir, 'global')} cogmem@3.6.5`);
+  // #59: update has no migration step at all, so the field is gone rather than
+  // pointing at a command that no longer exists.
   expect(parsed.migrationCommand).toBeUndefined();
 });
 
+test('#89 a global install updates through the prefix that owns it, not npm\'s default', async () => {
+  const dir = makeTempDir('cogmem-update-global-prefix-');
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+
+  // A global install under a custom prefix — `npm install -g --prefix <dir>` — owns a
+  // package at `<dir>/lib/node_modules/cogmem`. A bare `npm install -g` resolves npm's own
+  // default prefix instead and fails with EACCES on a machine where that is not writable.
+  const update = await runCli(
+    ['bun', cogmemBin, 'update', '--dry-run', '--json'],
+    dir,
+    {
+      COGMEM_INSTALL_KIND: 'npm_global',
+      COGMEM_NPM_SPEC: '4.0.0',
+      COGMEM_NPM_PREFIX: join(dir, 'global'),
+    },
+  );
+
+  expect(update.exitCode).toBe(0);
+  const parsed = JSON.parse(update.stdout);
+  expect(parsed.installKind).toBe('npm_global');
+  // The command it would run must name the prefix, so it updates the copy that is
+  // actually installed rather than a different tree.
+  expect(parsed.nextCommand).toContain('--prefix');
+  expect(parsed.nextCommand).toContain(join(dir, 'global'));
+  expect(parsed.nextCommand).toContain('cogmem@4.0.0');
+});
+
+test('#89 a prefix it cannot determine is reported, not silently replaced by npm\'s default', async () => {
+  const dir = makeTempDir('cogmem-update-global-unknown-prefix-');
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+
+  // The install is global (COGMEM_INSTALL_KIND), but the running copy is not under a
+  // `node_modules/cogmem` layout and no prefix was given — so the prefix that owns it is
+  // genuinely unknown. Printing `npm install -g cogmem@…` would silently target npm's
+  // configured default, which may be a different tree entirely.
+  const update = await runCli(
+    ['bun', cogmemBin, 'update', '--dry-run', '--json'],
+    dir,
+    {
+      COGMEM_INSTALL_KIND: 'npm_global',
+      COGMEM_NPM_SPEC: '4.0.0',
+      COGMEM_NPM_PREFIX: '',
+    },
+  );
+
+  const parsed = JSON.parse(update.stdout);
+  expect(parsed.installKind).toBe('npm_global');
+  // A dry run must not print a command it would refuse to run.
+  expect(parsed.nextCommand).toBeUndefined();
+  expect(parsed.prefixUnknown).toBe(true);
+  // And it has to say what to do about it.
+  expect(String(parsed.updateWarning)).toContain('COGMEM_NPM_PREFIX');
+  expect(String(parsed.updateWarning)).toContain('--prefix');
+});
+
+test('#89 a custom prefix with a space produces a command that would run as printed', async () => {
+  const dir = makeTempDir('cogmem-update-global-space-');
+  const configPath = join(dir, '.cogmem', 'config.toml');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+  const prefix = join(dir, 'a prefix with spaces');
+
+  const update = await runCli(
+    ['bun', cogmemBin, 'update', '--dry-run', '--json'],
+    dir,
+    { COGMEM_INSTALL_KIND: 'npm_global', COGMEM_NPM_SPEC: '4.0.0', COGMEM_NPM_PREFIX: prefix },
+  );
+
+  const parsed = JSON.parse(update.stdout);
+  // The path is quoted, so copy-pasting `nextCommand` into a shell keeps it one argument.
+  expect(parsed.nextCommand).toContain(`'${prefix}'`);
+  // Proof rather than appearance: run the printed command through a shell with npm stubbed,
+  // and assert the prefix arrives as exactly one argument.
+  const stubDir = join(dir, 'stub');
+  mkdirSync(stubDir, { recursive: true });
+  writeFileSync(join(stubDir, 'npm'), '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done\n', { mode: 0o755 });
+  const printed = Bun.spawnSync({
+    cmd: ['bash', '-c', String(parsed.nextCommand)],
+    env: { ...process.env, PATH: `${stubDir}:${process.env.PATH ?? ''}` },
+    stdout: 'pipe',
+  });
+  const argv = String(printed.stdout).trim().split('\n');
+  // npm's own argv: install -g --prefix <the prefix, one argument> cogmem@4.0.0
+  expect(argv[argv.indexOf('--prefix') + 1]).toBe(prefix);
+});
+
 test('cogmem-connect installs Hermes skill into the real Hermes skills directory by default', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-hermes-home-'));
+  const dir = makeTempDir('cogmem-connect-hermes-home-');
   const workspace = join(dir, 'workspace');
   mkdirSync(workspace);
   const skillPath = join(dir, '.hermes', 'skills', 'cogmem-memory', 'SKILL.md');
@@ -1453,29 +1608,37 @@ test('cogmem-connect installs Hermes skill into the real Hermes skills directory
   expect(parsed.skillFiles).toEqual([skillPath, operationsPath]);
   expect(parsed.nextCommands.join('\n')).not.toContain('cogmem-init');
   expect(parsed.nextCommands.join('\n')).not.toContain('cogmem init');
-  expect(parsed.nextCommands).toContain('./node_modules/.bin/cogmem doctor');
-  expect(parsed.nextCommands).toContain('./node_modules/.bin/cogmem import-hermes --workspace . --project hermes --dry-run --json');
-  expect(parsed.nextCommands).toContain('./node_modules/.bin/cogmem memory plan --project hermes --json');
+  expectRunnableCommands(parsed.nextCommands);
+  const hermesSteps = parsed.nextSteps as Array<{ id: string; command: string }>;
+  const hermesStep = (id: string): string => hermesSteps.find((step) => step.id === id)!.command;
+  const project = parsed.integrationProject as string;
+  expect(project).toMatch(/^hermes-[0-9a-f]{8}$/);
+  expect(commandArguments(hermesStep('doctor'))).toBe(`doctor --workspace ${workspace}`);
+  expect(commandArguments(hermesStep('import_dry_run'))).toBe(`import hermes --workspace ${workspace} --project ${project} --dry-run --json`);
+  expect(commandArguments(hermesStep('import_apply'))).toBe(`import hermes --workspace ${workspace} --project ${project} --json`);
+  expect(commandArguments(hermesStep('memory_plan'))).toBe(`memory plan --project ${project} --json`);
   expect(parsed.nextSteps).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: 'interactive_init', safeForAutomation: false, actor: 'operator' }),
     expect.objectContaining({ id: 'reload_hermes', safeForAutomation: false, actor: 'host' }),
   ]));
   expect(parsed.hostConfigSnippet).toContain('mcp_servers:');
   expect(parsed.hostConfigSnippet).toContain('command: "cogmem"');
-  expect(parsed.hostConfigSnippet).toContain('args: ["mcp"]');
-  expect(parsed.hostConfigSnippet).toContain('cogmem_candidate_review');
-  expect(parsed.hostConfigSnippet).toContain('cogmem_graph_touch');
+  expect(parsed.hostConfigSnippet).toContain(
+    `args: ["mcp","--project","${parsed.integrationProject}","--config","${join(workspace, '.cogmem', 'config.toml')}"]`);
+  // The snippet shows the entry that is actually written: no --profile, so the core surface.
+  for (const tool of CORE_TOOLS) expect(parsed.hostConfigSnippet).toContain(`- ${tool}`);
+  expect(parsed.hostConfigSnippet).not.toContain('cogmem_graph_touch');
   expect(existsSync(skillPath)).toBe(true);
   expect(existsSync(operationsPath)).toBe(true);
   expect(readFileSync(skillPath, 'utf8')).toStartWith('---\nname: cogmem-memory-backend');
   const operations = readFileSync(operationsPath, 'utf8');
-  expect(operations).toContain('cogmem import-hermes');
+  expect(operations).toContain('cogmem import hermes');
   expect(operations).toContain('cogmem memory review');
   expect(operations).toContain('cogmem memory graph-timeline');
 });
 
 test('cogmem-connect hermes --auto patches Hermes MCP config without claiming native memory provider', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-hermes-auto-'));
+  const dir = makeTempDir('cogmem-connect-hermes-auto-');
   const workspace = join(dir, 'workspace');
   const hermesConfig = join(dir, '.hermes', 'config.yaml');
   mkdirSync(workspace);
@@ -1503,16 +1666,18 @@ test('cogmem-connect hermes --auto patches Hermes MCP config without claiming na
   expect(config).toContain('mcp_servers:');
   expect(config).toContain('cogmem:');
   expect(config).toContain('command: "cogmem"');
-  expect(config).toContain('args: ["mcp"]');
-  expect(config).toContain('cogmem_memory_map');
-  expect(config).toContain('cogmem_maintenance_tick');
-  expect(config).toContain('cogmem_prospective');
-  expect(config).toContain('cogmem_strategy_plan');
+  expect(config).toContain(
+    `args: ["mcp","--project","${JSON.parse(installed.stdout).integrationProject}","--config","${join(workspace, '.cogmem', 'config.toml')}"]`);
+  // The entry passes no `--profile`, so the server serves `core`; the written list has to be
+  // that surface and nothing wider, or Hermes reports tools it can never register.
+  for (const tool of CORE_TOOLS) expect(config).toContain(`- ${tool}`);
+  const listed = [...config.matchAll(/^\s+- (cogmem_[a-z_]+)$/gm)].map((m) => m[1]!);
+  expect(listed).toEqual([...CORE_TOOLS]);
   expect(config).not.toContain('memory:\n  provider: cogmem');
 });
 
 test('cogmem-connect hermes --auto updates existing Cogmem MCP tool allow-list', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-hermes-existing-'));
+  const dir = makeTempDir('cogmem-connect-hermes-existing-');
   const workspace = join(dir, 'workspace');
   const hermesConfig = join(dir, '.hermes', 'config.yaml');
   mkdirSync(workspace);
@@ -1550,15 +1715,18 @@ test('cogmem-connect hermes --auto updates existing Cogmem MCP tool allow-list',
   const parsed = JSON.parse(installed.stdout);
   expect(parsed.hermesMcp.configUpdated).toBe(true);
   const config = readFileSync(hermesConfig, 'utf8');
-  expect(config).toContain('cogmem_memory_map');
-  expect(config).toContain('cogmem_maintenance_tick');
-  expect(config).toContain('cogmem_prospective');
-  expect(config).toContain('cogmem_strategy_plan');
+  // The entry passes no `--profile`, so the server serves `core`; the written list has to be
+  // that surface and nothing wider, or Hermes reports tools it can never register.
+  for (const tool of CORE_TOOLS) expect(config).toContain(`- ${tool}`);
+  const listed = [...config.matchAll(/^\s+- (cogmem_[a-z_]+)$/gm)].map((m) => m[1]!);
+  // The patch adds what is missing and leaves what is there, so the set matches but the
+  // order is the operator's.
+  expect([...listed].sort()).toEqual([...CORE_TOOLS].sort());
   expect(config.match(/cogmem_recall/g)?.length).toBe(1);
 });
 
 test('cogmem-connect hermes --auto does not duplicate existing cogmem mcp server blocks', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-connect-hermes-existing-cogmem-'));
+  const dir = makeTempDir('cogmem-connect-hermes-existing-cogmem-');
   const workspace = join(dir, 'workspace');
   const hermesConfig = join(dir, '.hermes', 'config.yaml');
   mkdirSync(workspace);
@@ -1594,23 +1762,231 @@ test('cogmem-connect hermes --auto does not duplicate existing cogmem mcp server
   const config = readFileSync(hermesConfig, 'utf8');
   expect(config.match(/^  cogmem:/gm)?.length).toBe(1);
   expect(config.match(/command: "cogmem"/g)?.length).toBe(1);
-  expect(config).toContain('args: ["mcp"]');
-  expect(config).toContain('cogmem_memory_map');
+  // An entry an earlier connect wrote names no project and no Workspace; the server
+  // would then answer whatever scope a caller asks for, from whatever config its
+  // working directory happens to find.
+  expect(config).toContain(
+    `args: ["mcp","--project","${JSON.parse(installed.stdout).integrationProject}",` +
+    `"--config","${join(workspace, '.cogmem', 'config.toml')}"]`,
+  );
+  expect(config).toContain('cogmem_recall');
   expect(config.match(/cogmem_recall/g)?.length).toBe(1);
 });
 
-test('package exposes agent migration bins', () => {
-  const packageJson = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8'));
+test('cogmem-connect hermes --auto carries the Workspace an earlier connect could not', async () => {
+  const dir = makeTempDir('cogmem-connect-hermes-cwd-bound-');
+  const workspace = join(dir, 'workspace');
+  const hermesConfig = join(dir, '.hermes', 'config.yaml');
+  mkdirSync(workspace);
+  mkdirSync(dirname(hermesConfig), { recursive: true });
 
-  expect(packageJson.bin['cogmem-explain-recall']).toBe('dist/bin/explain-recall.js');
-  expect(packageJson.bin['cogmem-mcp']).toBe('dist/bin/mcp.js');
-  expect(packageJson.bin['cogmem-import-openclaw']).toBe('dist/bin/import-openclaw.js');
-  expect(packageJson.bin['cogmem-import-hermes']).toBe('dist/bin/import-hermes.js');
-  expect(packageJson.bin['cogmem-connect']).toBe('dist/bin/connect.js');
-  expect(packageJson.bin.cogmem).toBe('dist/bin/cogmem.js');
-  expect(packageJson.bin['cogmem-update']).toBe('dist/bin/update.js');
-  expect(packageJson.bin['cogmem-memory']).toBe('dist/bin/memory.js');
+  // First connect: the entry this branch wrote before it carried a `--config`, so
+  // Hermes only reached this Workspace when it happened to run from it.
+  const first = await runCli([
+    'bun', connectBin, 'hermes', '--workspace', workspace, '--auto', '--hermes-config', hermesConfig, '--json',
+  ], coreRoot, { HOME: dir });
+  expect(first.exitCode).toBe(0);
+  const project = JSON.parse(first.stdout).integrationProject as string;
+  const bound = readFileSync(hermesConfig, 'utf8');
+  writeFileSync(hermesConfig, bound.replace(
+    `args: ["mcp","--project","${project}","--config","${join(workspace, '.cogmem', 'config.toml')}"]`,
+    `args: ["mcp","--project","${project}"]`,
+  ));
+  expect(readFileSync(hermesConfig, 'utf8')).toContain(`args: ["mcp","--project","${project}"]`);
+
+  // Second connect: it converges to the entry that works from any directory, rather
+  // than being left behind beside the new one.
+  const second = await runCli([
+    'bun', connectBin, 'hermes', '--workspace', workspace, '--auto', '--hermes-config', hermesConfig, '--json',
+  ], coreRoot, { HOME: dir });
+  expect(second.stderr).toBe('');
+  expect(second.exitCode).toBe(0);
+  const config = readFileSync(hermesConfig, 'utf8');
+  expect(config).toContain(
+    `args: ["mcp","--project","${project}","--config","${join(workspace, '.cogmem', 'config.toml')}"]`,
+  );
+  expect(config.match(/^  cogmem:/gm)?.length).toBe(1);
 });
+
+test('cogmem-connect hermes --auto leaves configuration it cannot attribute alone', async () => {
+  const dir = makeTempDir('cogmem-connect-hermes-deliberate-');
+  const workspace = join(dir, 'workspace');
+  const hermesConfig = join(dir, '.hermes', 'config.yaml');
+  mkdirSync(workspace);
+  mkdirSync(dirname(hermesConfig), { recursive: true });
+  // A hand-written transport and a project somebody chose: retargeting either would
+  // be a silent change to a deliberate configuration.
+  writeFileSync(hermesConfig, [
+    'mcp_servers:',
+    '  cogmem:',
+    '    command: "cogmem"',
+    '    args: ["mcp","--transport","http","--port","7337"]',
+    '    enabled: true',
+    '',
+  ].join('\n'));
+
+  const installed = await runCli([
+    'bun', connectBin, 'hermes', '--workspace', workspace, '--auto', '--hermes-config', hermesConfig, '--json',
+  ], coreRoot, { HOME: dir });
+  expect(installed.exitCode).toBe(0);
+  expect(readFileSync(hermesConfig, 'utf8')).toContain('args: ["mcp","--transport","http","--port","7337"]');
+});
+
+test('cogmem-connect repairs a preserved entry whose command cannot run', async () => {
+  const dir = makeTempDir('cogmem-connect-hermes-dead-');
+  const workspace = join(dir, 'workspace');
+  const hermesConfig = join(dir, '.hermes', 'config.yaml');
+  mkdirSync(workspace);
+  mkdirSync(dirname(hermesConfig), { recursive: true });
+  // A different project, so the entry is deliberately not retargeted — but its
+  // command is gone, which means Hermes cannot start the server at all. This is the
+  // shape an upgrade leaves behind, and the shape a moved workspace leaves behind
+  // too: the project id is derived from the workspace path (#92), so the entry this
+  // command wrote yesterday stops looking like ours while its path goes stale.
+  //
+  // The command is repaired rather than reported. It names which binary to run, not
+  // which memories to read, so rewriting it retargets nothing — and a missing file
+  // is a server that can never start. Warning about it left the host memoryless and
+  // depended on someone reading the warning.
+  const missing = join(dir, 'gone', 'bin', 'cogmem');
+  writeFileSync(hermesConfig, [
+    'mcp_servers:',
+    '  cogmem:',
+    `    command: "${missing}"`,
+    '    args: ["mcp","--project","someone-elses-project"]',
+    '    enabled: true',
+    '',
+  ].join('\n'));
+
+  const installed = await runCli([
+    'bun', connectBin, 'hermes', '--workspace', workspace, '--auto', '--hermes-config', hermesConfig, '--json',
+  ], coreRoot, { HOME: dir });
+  expect(installed.exitCode).toBe(0);
+  const written = readFileSync(hermesConfig, 'utf8');
+  // The project binding is still not ours to retarget: that part is unchanged.
+  expect(written).toContain('someone-elses-project');
+  // The dead command is gone, and what replaced it is a command that can run.
+  expect(written).not.toContain(missing);
+  const command = written.match(/^\s*command\s*:\s*"(.+)"$/mu)?.[1];
+  expect(command).toBeString();
+  expect(command).not.toBe(missing);
+});
+
+test('cogmem-connect hermes stays quiet when the entry it preserved still works', async () => {
+  const dir = makeTempDir('cogmem-connect-hermes-alive-');
+  const workspace = join(dir, 'workspace');
+  const hermesConfig = join(dir, '.hermes', 'config.yaml');
+  mkdirSync(workspace);
+  mkdirSync(dirname(hermesConfig), { recursive: true });
+  // Same deliberate binding as the test above, but the launcher is really there. A
+  // warning here would be noise, and noise is how a real warning gets ignored.
+  const alive = join(dir, 'prefix', 'bin', 'cogmem');
+  mkdirSync(dirname(alive), { recursive: true });
+  writeFileSync(alive, '#!/bin/sh\nexit 0\n');
+  chmodSync(alive, 0o755);
+  writeFileSync(hermesConfig, [
+    'mcp_servers:',
+    '  cogmem:',
+    `    command: "${alive}"`,
+    '    args: ["mcp","--project","someone-elses-project"]',
+    '    enabled: true',
+    '',
+  ].join('\n'));
+
+  const installed = await runCli([
+    'bun', connectBin, 'hermes', '--workspace', workspace, '--auto', '--hermes-config', hermesConfig, '--json',
+  ], coreRoot, { HOME: dir });
+  expect(installed.exitCode).toBe(0);
+  expect(readFileSync(hermesConfig, 'utf8')).toContain('someone-elses-project');
+  const parsed = JSON.parse(installed.stdout) as { hermesMcp?: { warning?: string } };
+  expect(parsed.hermesMcp?.warning).toBeUndefined();
+});
+
+test('cogmem-connect pi installs the skill where pi scans and wires its mcp.json', async () => {
+  const dir = makeTempDir('cogmem-connect-pi-');
+  const workspace = join(dir, 'workspace');
+  const piConfig = join(dir, '.pi', 'agent', 'mcp.json');
+  mkdirSync(workspace);
+
+  const installed = await runCli([
+    'bun', connectBin, 'pi', '--workspace', workspace, '--auto', '--pi-config', piConfig, '--json',
+  ], coreRoot, { HOME: dir });
+  expect(installed.exitCode).toBe(0);
+
+  // `~/.agents/skills/` is the location pi actually scans: measured against a real pi,
+  // the same skill under `~/.pi/skills/` was not listed and this one was.
+  const skill = join(dir, '.agents', 'skills', 'cogmem-memory', 'SKILL.md');
+  expect(existsSync(skill)).toBe(true);
+  expect(readFileSync(skill, 'utf8')).toContain('name: cogmem-memory');
+  expect(existsSync(join(dirname(skill), 'references', 'operations.md'))).toBe(true);
+
+  // pi's entry is `{command, args}` under `mcpServers`, the shape `pi mcp add` writes.
+  const written = JSON.parse(readFileSync(piConfig, 'utf8')) as {
+    mcpServers?: Record<string, { command?: string; args?: string[] }>;
+  };
+  const entry = written.mcpServers?.cogmem;
+  expect(entry?.args?.[0]).toBe('mcp');
+  expect(entry?.args).toContain('--project');
+  expect(entry?.args).toContain('--config');
+
+  const parsed = JSON.parse(installed.stdout) as { piMcp?: { configUpdated?: boolean } };
+  expect(parsed.piMcp?.configUpdated).toBe(true);
+});
+
+test('cogmem-connect pi leaves other MCP servers alone, and is idempotent', async () => {
+  const dir = makeTempDir('cogmem-connect-pi-existing-');
+  const workspace = join(dir, 'workspace');
+  const piConfig = join(dir, '.pi', 'agent', 'mcp.json');
+  mkdirSync(workspace);
+  mkdirSync(dirname(piConfig), { recursive: true });
+  // Somebody else's server, including one with a shape connect has no opinion about.
+  writeFileSync(piConfig, JSON.stringify({
+    mcpServers: {
+      warehouse: { url: 'https://example.invalid/mcp', headers: { Authorization: 'Bearer x' } },
+    },
+  }, null, 2));
+
+  const run = (): Promise<{ exitCode: number; stdout: string }> => runCli([
+    'bun', connectBin, 'pi', '--workspace', workspace, '--auto', '--pi-config', piConfig, '--json',
+  ], coreRoot, { HOME: dir });
+
+  const first = await run();
+  expect(first.exitCode).toBe(0);
+  const afterFirst = readFileSync(piConfig, 'utf8');
+  const parsedFirst = JSON.parse(afterFirst) as { mcpServers?: Record<string, unknown> };
+  expect(parsedFirst.mcpServers?.warehouse).toEqual({
+    url: 'https://example.invalid/mcp',
+    headers: { Authorization: 'Bearer x' },
+  });
+  expect(parsedFirst.mcpServers?.cogmem).toBeDefined();
+
+  // A second run has nothing to do. Re-serialising the file would have made every run
+  // report a change, which is how a "wired it" line stops meaning anything.
+  const second = await run();
+  expect(second.exitCode).toBe(0);
+  expect(readFileSync(piConfig, 'utf8')).toBe(afterFirst);
+  const parsedSecond = JSON.parse(second.stdout) as { piMcp?: { configUpdated?: boolean } };
+  expect(parsedSecond.piMcp?.configUpdated).toBe(false);
+});
+
+test('the package exposes two bins, and the migration commands come through the dispatcher', () => {
+  const packageJson = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8')) as { bin: Record<string, string> };
+
+  // The owner removed the `cogmem-*` alias bins ahead of 4.0 rather than in a later breaking
+  // release (#112), so `cogmem` is the only command entry point. `cogmem-mcp` stays because
+  // host configurations name it as a server command and are not rewritten on upgrade.
+  expect(Object.keys(packageJson.bin).sort()).toEqual(['cogmem', 'cogmem-mcp']);
+  expect(packageJson.bin.cogmem).toBe('dist/bin/cogmem.js');
+  expect(packageJson.bin['cogmem-mcp']).toBe('dist/bin/mcp.js');
+  expect(existsSync(join(coreRoot, 'src', 'bin', 'alias'))).toBe(false);
+
+  // The commands those bins used to carry are still reachable, through the dispatcher.
+  const source = readFileSync(join(coreRoot, 'src', 'bin', 'cogmem.ts'), 'utf8');
+  for (const command of ['explain-recall', 'import', 'memory', 'repair']) {
+    expect({ command, present: new RegExp(`'?${command}'?:\\s*'`).test(source) }).toEqual({ command, present: true });
+  }
+});
+
 
 test('import CLI parser keeps repeated path arguments in order without duplication', () => {
   const parsed = parseArgs([

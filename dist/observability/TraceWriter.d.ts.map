@@ -1,1 +1,0 @@
-{"version":3,"file":"TraceWriter.d.ts","sourceRoot":"","sources":["../../src/observability/TraceWriter.ts"],"names":[],"mappings":"AACA,OAAO,KAAK,EAAE,UAAU,EAAE,MAAM,iBAAiB,CAAC;AAClD,OAAO,EAAE,UAAU,EAAE,MAAM,iBAAiB,CAAC;AAE7C,qBAAa,WAAW;IACV,OAAO,CAAC,KAAK;gBAAL,KAAK,EAAE,UAAU;IAErC,IAAI,CAAC,KAAK,EAAE,IAAI,CAAC,UAAU,EAAE,IAAI,GAAG,WAAW,CAAC,GAAG,IAAI;CAOxD"}

@@ -1,9 +1,8 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const repairBin = join(coreRoot, 'src', 'bin', 'repair.ts');
@@ -24,7 +23,7 @@ async function runRepair(args: string[]): Promise<{ exitCode: number; stdout: st
 }
 
 test('repair project-scope previews but refuses schema-blind writes', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-repair-project-scope-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-repair-project-scope-'), 'memory.db');
   const db = new Database(dbPath);
   db.exec(`
     CREATE TABLE memory_events(event_id TEXT PRIMARY KEY, project_id TEXT);
@@ -56,7 +55,7 @@ test('repair project-scope previews but refuses schema-blind writes', async () =
 });
 
 test('repair project-scope refuses empty-to-openclaw merge when another project exists', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-repair-project-scope-refuse-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-repair-project-scope-refuse-'), 'memory.db');
   const db = new Database(dbPath);
   db.exec(`
     CREATE TABLE memory_events(event_id TEXT PRIMARY KEY, project_id TEXT);

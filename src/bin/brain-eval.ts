@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { BrainEvalRunner, type BrainEvalSample } from '../benchmark/BrainEval.js';
 import { StrategyRolloutEvaluator, type StrategyRolloutOutcome } from '../eval/strategy/index.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
 
 function usage(): string {
   return [
@@ -14,11 +15,8 @@ function usage(): string {
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['input', 'json', 'strategy-rollout'] });
   const argv = process.argv.slice(2);
-  if (argv.includes('--help') || argv.includes('-h')) {
-    console.log(usage());
-    return;
-  }
   const index = argv.indexOf('--input');
   const inputPath = index >= 0 ? argv[index + 1] : undefined;
   if (!inputPath) throw new Error(usage());

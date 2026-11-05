@@ -4,29 +4,12 @@ import { ModelRegistry } from '../models/ModelRegistry.js';
 
 export type EmbeddingBackendId = 'deterministic_local' | 'transformers_remote' | 'openai_compatible';
 
-export interface EmbeddingBackendInfo {
-  backendId: EmbeddingBackendId;
-  requiresModelSetup: boolean;
-  mayDownloadModels: boolean;
-}
-
 export function resolveEmbeddingBackendId(modelRegistry?: ModelRegistry): EmbeddingBackendId {
   const role = modelRegistry?.getRoleConfig('embedding');
   if (role?.provider === 'openai_compatible') {
     return 'openai_compatible';
   }
   return 'deterministic_local';
-}
-
-export function getEmbeddingBackendInfo(
-  backendId: EmbeddingBackendId = resolveEmbeddingBackendId()
-): EmbeddingBackendInfo {
-  if (backendId === 'openai_compatible') {
-    return { backendId, requiresModelSetup: false, mayDownloadModels: false };
-  }
-  return backendId === 'transformers_remote'
-    ? { backendId, requiresModelSetup: false, mayDownloadModels: true }
-    : { backendId, requiresModelSetup: false, mayDownloadModels: false };
 }
 
 class ModelRegistryEmbedder extends Embedder {

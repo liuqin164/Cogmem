@@ -1,9 +1,11 @@
 import type { EventStore } from '../store/EventStore.js';
+import { productFacetFor } from './ProductFacet.js';
 import { MEMORY_ATLAS_PROJECTION_NAME, type MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { FacetQueryPlanner, type FacetQueryPlan } from './FacetQueryPlanner.js';
 import { compileAtlasQuery } from './MemoryAtlasQueryCompiler.js';
 import type { MemoryAtlasCard, MemoryAtlasEdge, MemoryAtlasEvidence, MemoryAtlasNode, MemoryAtlasNodeDetail, MemoryAtlasPathResult, MemoryAtlasQueryOptions, MemoryAtlasRelaxationStep, MemoryAtlasSlice, MemoryAtlasTimelineResult } from './MemoryAtlasTypes.js';
+import { cliArg } from '../utils/CliArgument.js';
 
 export class MemoryAtlasService {
   private readonly facetPlanner = new FacetQueryPlanner();
@@ -23,8 +25,23 @@ export class MemoryAtlasService {
 
   overview(options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
     const limit = boundedLimit(options.limit);
-    const nodes = this.store.listNodes(requiredProject(options.projectId), limit);
-    return slice(options.projectId, nodes, this.edgesFor(nodes, options.projectId));
+    const projectId = requiredProject(options.projectId);
+    const nodes = this.store.listNodes(projectId, limit);
+    const edges = this.edgesFor(nodes, projectId);
+    const result = slice(projectId, nodes, edges);
+    if (edges.length === 0) {
+      // The node budget is spent before any relation becomes visible. It is not a rare shape:
+      // every edge of a frame-sourced projection starts at an episode, and an episode ranks
+      // last on support_count, so `memory graph --limit 8` reported `nodes: 8, edges: 0` on a
+      // project that reports `nodes: 19, edges: 24` at `--limit 20`. An edgeless scatter is a
+      // wrong answer to "show me this project's graph", so the fact goes in `warnings` — the
+      // field that exists for it — rather than being inferred from an empty array.
+      const available = this.safeEdges(this.store.listEdges(projectId), projectId).length;
+      if (available > 0) {
+        result.warnings.push(`edges_hidden_by_node_budget: ${available} relation(s) exist in this project, but this overview's ${nodes.length}-node budget was spent on nodes that no relation touches. Raise --limit (maximum 30) to see them.`);
+      }
+    }
+    return result;
   }
 
   search(query: string, options: MemoryAtlasQueryOptions): MemoryAtlasSlice {
@@ -319,7 +336,6 @@ function boundedLimit(value?: number): number { if (value !== undefined && (!Num
 function boundedQuery(value: string): string { const query = String(value || '').trim(); if (!query) throw new Error('query is required'); if (query.length > 1000) throw new Error('query exceeds 1000 characters'); return query; }
 function boundedId(value: string): string { const id = String(value || '').trim(); if (!id || id.length > 500) throw new Error('invalid node id'); return id; }
 function uniqueNodes(nodes: MemoryAtlasNode[]): MemoryAtlasNode[] { return Array.from(new Map(nodes.map((node) => [node.id, node])).values()); }
-function uniqueIds(ids: string[]): string[] { return Array.from(new Set(ids)); }
 function uniqueEdges(edges: MemoryAtlasEdge[]): MemoryAtlasEdge[] {
   return Array.from(new Map(edges.map((edge) => [`${edge.source}\0${edge.relation}\0${edge.target}`, edge])).values());
 }
@@ -350,6 +366,10 @@ function chunked<T>(values: T[], size: number): T[][] {
 }
 function slice(projectId: string, nodes: MemoryAtlasNode[], edges: MemoryAtlasEdge[], query?: string): MemoryAtlasSlice { return { version: MEMORY_ATLAS_PROJECTION_NAME, projectId, query, nodes, edges, nextActions: nodes.slice(0, 5).map((node) => ({ label: `Inspect ${node.label}`, tool: 'cogmem_graph_node', args: { id: node.id, projectId } })), warnings: [] }; }
 function facetsForPlan(plan: FacetQueryPlan): NonNullable<MemoryAtlasSlice['facets']> {
+  const labelled = plan.facets.map((facet) => {
+    const productFacet = productFacetFor(facet.type, facet.value);
+    return productFacet ? { ...facet, productFacet } : { ...facet, internal: true };
+  });
   return {
     planner: {
       intent: plan.intent,
@@ -450,7 +470,4 @@ function atlasSourceLocator(event: { eventId: string; globalSeq?: number; projec
     command: `${base} --before 2 --after 2 --json`,
     contextCommand: `${base} --before 3 --after 3 --json`,
   };
-}
-function cliArg(value: string): string {
-  return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 }

@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { installMultidimensionalMemoryGraph374 } from '../src/migrations/0032_multidimensional_memory_graph_3_7_4.js';
+import { installFinalSchema } from '../src/migrations/v3_7_4/FinalSchemaInstall.js';
 
 test('the final 3.7.4 frame and Atlas schema installer is idempotent', () => {
   const db = new Database(':memory:');
-  installMultidimensionalMemoryGraph374(db);
-  installMultidimensionalMemoryGraph374(db);
+  installFinalSchema(db);
+  installFinalSchema(db);
   expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='memory_frames'`).get()).toBeTruthy();
   expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='memory_atlas_supports'`).get()).toBeTruthy();
   const columns = db.prepare(`PRAGMA table_info(memory_atlas_projection_state)`).all() as Array<{ name: string }>;

@@ -1,1 +1,0 @@
-{"version":3,"file":"MarkdownSourceLoader.d.ts","sourceRoot":"","sources":["../../src/adapters/MarkdownSourceLoader.ts"],"names":[],"mappings":"AACA,OAAO,KAAK,EAAE,gBAAgB,EAAE,kBAAkB,EAAE,MAAM,YAAY,CAAC;AAGvE,qBAAa,oBAAoB;IAC/B,IAAI,CAAC,MAAM,EAAE,gBAAgB,GAAG,kBAAkB;CAenD"}

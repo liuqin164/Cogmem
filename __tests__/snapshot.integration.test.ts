@@ -10,9 +10,10 @@ import {
   SnapshotImporter,
   createMemoryKernel,
 } from '../src/public.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function tempDir(): string {
-  const dir = join(tmpdir(), `core-snapshot-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const dir = makeTempDir('core-snapshot-');
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -62,7 +63,7 @@ describe('MemorySnapshot v1.9.7', () => {
     await new SnapshotImporter({ expectedEmbeddingDimension: meta.header.embeddingDimension })
       .import(snapshotPath, targetDb);
     const restored = createMemoryKernel({ dbPath: targetDb });
-    const recall = restored.recall('Qwen embedding config', { projectId: 'snapshot-user', limit: 5 });
+    const recall = restored.evidenceFor('Qwen embedding config', { projectId: 'snapshot-user', limit: 5 });
 
     expect(recall.rawEvidence.some((item) => item.content.includes('Qwen embedding config'))).toBe(true);
     restored.close();

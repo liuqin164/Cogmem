@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
+import { productFacetFor } from '../atlas/ProductFacet.js';
 import type { PlannedFacet, FacetQueryPlan } from '../atlas/FacetQueryPlanner.js';
 import type {
   MemoryAtlasAction,
@@ -17,6 +18,10 @@ import { localDateFor, localDateRange } from '../utils/LocalDateContext.js';
 
 export const MEMORY_ATLAS_PROJECTION_NAME = 'memory_atlas.v2';
 export const MEMORY_ATLAS_PROJECTION_SCHEMA_VERSION = '3.7.4';
+
+/** The relations that make two episodes "related but not selected". */
+const RELATED_EPISODE_RELATIONS = ['SAME_ISSUE', 'FOLLOWS_UP', 'REFINES', 'CORRECTS', 'CONTRADICTS', 'SUPERSEDES', 'RELATED_TO'];
+const RELATED_EPISODE_PRIORITY_SQL = `CASE related_edge.relation_type WHEN 'SAME_ISSUE' THEN 1 WHEN 'FOLLOWS_UP' THEN 2 WHEN 'REFINES' THEN 3 ELSE 4 END`;
 
 interface AtlasDocumentRow {
   node_id: string; project_id: string; node_type: string; memory_kind: string | null; source_id: string; label: string;
@@ -36,6 +41,7 @@ interface FacetEdgeRow {
 }
 
 export class MemoryAtlasStore {
+  private ftsDeferred = false;
   constructor(readonly db: Database, private readonly projectTimeZone?: string) {}
 
   upsertDocument(input: Omit<MemoryAtlasNode, 'activation' | 'score' | 'evidenceCount' | 'evidenceTotal' | 'evidenceReturned'> & { evidenceEventIds?: string[]; metadata?: Record<string, unknown>; updatedAt?: number }): void {
@@ -207,21 +213,38 @@ export class MemoryAtlasStore {
     return [...grouped.values()].filter((group) => group.length === 1).map((group) => group[0]!);
   }
 
+  /**
+   * Other episodes related to one episode card.
+   *
+   * Written as two indexed arms rather than one `OR`: with the `OR`, SQLite
+   * never used `idx_memory_edges_project_source`/`_target` and fell back to a
+   * scan of every edge in the project, which measured 34 ms per call on the
+   * 20k-event corpus. The caller asks this once per returned card, and with the
+   * atlas read once per recall (it was twice until `dd67a72`) that scan was the
+   * largest single cost in a 2.7 s recall.
+   */
   relatedEpisodeCards(projectId: string, canonicalId: string, selectedIds: Set<string>, limit: number): MemoryAtlasRelatedCard[] {
     const parsed = parseNodeId(canonicalId, projectId);
     if (!parsed || parsed.type !== 'episode') return [];
+    const relationIn = RELATED_EPISODE_RELATIONS.map(() => '?').join(',');
     const rows = this.db.prepare(`
-      SELECT e.relation_type, e.confidence, d.node_id, d.label, d.metadata_json
-      FROM memory_edges e
-      JOIN memory_atlas_documents d ON d.project_id=e.project_id AND d.node_id=CASE
-        WHEN e.source_type='episode' AND e.source_id=? THEN 'episode:' || e.target_id
-        ELSE 'episode:' || e.source_id
-      END
-      WHERE e.project_id=? AND e.status IN ('active','weak') AND e.relation_type IN ('SAME_ISSUE','FOLLOWS_UP','REFINES','CORRECTS','CONTRADICTS','SUPERSEDES','RELATED_TO')
-        AND ((e.source_type='episode' AND e.source_id=?) OR (e.target_type='episode' AND e.target_id=?))
-      ORDER BY CASE e.relation_type WHEN 'SAME_ISSUE' THEN 1 WHEN 'FOLLOWS_UP' THEN 2 WHEN 'REFINES' THEN 3 ELSE 4 END, e.confidence DESC
+      SELECT relation_type, node_id, label FROM (
+        SELECT relation_type, confidence, target_id AS other_id FROM memory_edges
+          WHERE project_id=? AND status IN ('active','weak') AND source_type='episode' AND source_id=?
+            AND relation_type IN (${relationIn})
+        UNION ALL
+        SELECT relation_type, confidence, source_id AS other_id FROM memory_edges
+          WHERE project_id=? AND status IN ('active','weak') AND target_type='episode' AND target_id=?
+            AND relation_type IN (${relationIn})
+      ) related_edge
+      JOIN memory_atlas_documents d ON d.project_id=? AND d.node_id='episode:' || related_edge.other_id
+      ORDER BY ${RELATED_EPISODE_PRIORITY_SQL}, related_edge.confidence DESC
       LIMIT ?
-    `).all(parsed.id, projectId, parsed.id, parsed.id, Math.max(1, Math.min(limit * 3, 30))) as Array<{ relation_type: string; confidence: number; node_id: string; label: string; metadata_json?: string | null }>;
+    `).all(
+      projectId, parsed.id, ...RELATED_EPISODE_RELATIONS,
+      projectId, parsed.id, ...RELATED_EPISODE_RELATIONS,
+      projectId, Math.max(1, Math.min(limit * 3, 30)),
+    ) as Array<{ relation_type: string; node_id: string; label: string }>;
     const result: MemoryAtlasRelatedCard[] = [];
     for (const row of rows) {
       if (selectedIds.has(row.node_id)) continue;
@@ -781,7 +804,32 @@ export class MemoryAtlasStore {
     return Number((row as { count?: number } | null)?.count || 0);
   }
 
+  /**
+   * Defer per-node FTS writes while a caller recomputes the whole index.
+   *
+   * `rebuild()` writes 14,271 documents on the year-scale corpus, and refreshing
+   * the FTS row inside each `upsertDocument` cost 71.8 s of a 90.4 s rebuild —
+   * ~5 ms per node, one statement pair each. A bulk rebuild writes the same rows
+   * in one pass, so the per-node path is turned off for its duration.
+   */
+  deferFts<T>(run: () => T): T {
+    const previous = this.ftsDeferred;
+    this.ftsDeferred = true;
+    try {
+      return run();
+    } finally {
+      this.ftsDeferred = previous;
+    }
+  }
+
+  /** Rewrite one project's search index from its documents in a single pass. */
+  refreshFtsProject(projectId: string): void {
+    this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=?`).run(projectId);
+    this.db.prepare(`INSERT INTO memory_atlas_fts(node_id,project_id,node_type,label,summary,topic_path) SELECT node_id,project_id,node_type,label,COALESCE(summary,''),COALESCE(topic_path,'') FROM memory_atlas_documents WHERE project_id=?`).run(projectId);
+  }
+
   private refreshFtsNode(nodeIdValue: string): void {
+    if (this.ftsDeferred) return;
     this.db.prepare(`DELETE FROM memory_atlas_fts WHERE node_id=?`).run(nodeIdValue);
     this.db.prepare(`INSERT INTO memory_atlas_fts(node_id,project_id,node_type,label,summary,topic_path) SELECT node_id,project_id,node_type,label,COALESCE(summary,''),COALESCE(topic_path,'') FROM memory_atlas_documents WHERE node_id=?`).run(nodeIdValue);
   }
@@ -863,7 +911,7 @@ export class MemoryAtlasStore {
       issueType: issueHints[0],
       eventKind: optionalMetadataString(metadata.eventKind),
       localDate: optionalMetadataString(metadata.localDate) ?? (row.occurred_at ? localDateFor(row.occurred_at, this.projectTimeZone) : undefined),
-      whyMatched: matchedFacets.length ? `matched ${matchedFacets.map((facet) => `${facet.type}:${facet.value}`).join(', ')}` : 'matched canonical episode',
+      whyMatched: matchedFacets.length ? `matched ${matchedFacets.map((facet) => `${facet.productFacet ?? facet.type}:${facet.value}`).join(', ')}` : 'matched canonical episode',
       relatedButNotSelected: [],
       evidenceEventIds,
       evidenceTotal: evidenceEventIds.length,
@@ -963,12 +1011,14 @@ function chunked<T>(values: T[], size: number): T[][] {
 }
 
 function facetFromEdge(edge: FacetEdgeRow, projectId: string): MemoryAtlasMatchedFacet {
+  const productFacet = productFacetFor(edge.target_type, edge.target_id);
   return {
     type: edge.target_type as MemoryAtlasMatchedFacet['type'],
     value: edge.target_id,
     label: facetLabel(edge.target_type, edge.target_id),
     nodeId: nodeId(edge.target_type, edge.target_id, projectId),
     relation: edge.relation_type,
+    ...(productFacet ? { productFacet } : { internal: true }),
   };
 }
 

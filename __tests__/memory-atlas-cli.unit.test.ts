@@ -1,8 +1,7 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const memoryBin = join(import.meta.dir, '..', 'src', 'bin', 'memory.ts');
 
@@ -20,7 +19,7 @@ async function runHuman(args: string[]): Promise<string> {
 }
 
 test('memory graph CLI commands use the shared JSON contract and source drilldowns', async () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-atlas-cli-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-atlas-cli-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   const event = kernel.eventStore.append({ eventId: 'evt-cli-hermes', streamId: 't', streamType: 'thread', eventType: 'MESSAGE', rawEventType: 'message', projectId: 'cogmem', role: 'user', occurredAt: Date.UTC(2025, 3, 1), payload: { text: '给 Hermes 配置 MCP' } });
   const entity = kernel.memoryBindingStore.upsertEntity({ projectId: 'cogmem', canonicalName: 'Hermes', entityType: 'project' });

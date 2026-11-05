@@ -4,6 +4,9 @@ import { DimensionAwareRanker } from './DimensionAwareRanker.js';
 import { MultidimensionalQueryPlanner } from './MultidimensionalQueryPlanner.js';
 import { localDateFor } from '../utils/LocalDateContext.js';
 
+/** Enough evidence for a source anchor; the service default is the same 2. */
+const EVIDENCE_ANCHOR_LIMIT = 2;
+
 export class AtlasPathRetriever {
   constructor(private readonly atlas: MemoryAtlasService, private readonly planner = new MultidimensionalQueryPlanner(), private readonly ranker = new DimensionAwareRanker()) {}
 
@@ -26,7 +29,13 @@ export class AtlasPathRetriever {
       ...options,
       seedNodeIds: [...new Set(this.atlas.resolveQueryAliases(query, options.projectId).map((alias) => alias.nodeId))],
       includeEvidence: Boolean(queryFrame.time),
-      evidenceLimit: queryFrame.time ? Math.max(options.evidenceLimit ?? 0, 1000) : options.evidenceLimit,
+      // Evidence is read in exactly two places: the time-frame match below, which
+      // needs the evidence dates, and a caller, which reads the first evidence as
+      // a source anchor. With no time facet the caller's own evidenceLimit (1000
+      // on the recall path) made every explore hydrate ~940 event rows just to
+      // report a count — measured at 175 ms of a 751 ms query on the year-scale
+      // corpus — while the read itself never looks past the first entry.
+      evidenceLimit: queryFrame.time ? Math.max(options.evidenceLimit ?? 0, 1000) : EVIDENCE_ANCHOR_LIMIT,
       limit: Math.min(options.limit ?? 30, 100),
     });
     const seedIds = [...new Set(this.atlas.resolveQueryAliases(query, options.projectId).map((alias) => alias.nodeId))];

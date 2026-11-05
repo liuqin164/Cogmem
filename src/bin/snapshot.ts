@@ -6,6 +6,8 @@ import { loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } fr
 import { parseVectorDimensionValue } from '../config/VectorDimension.js';
 import { config } from '../utils/Config.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
+import { emitRefusalDocument } from './RefusalDocument.js';
 
 function parseArgs(argv: string[]): Record<string, string | boolean> {
   const args: Record<string, string | boolean> = {};
@@ -67,6 +69,10 @@ function defaultSnapshotPath(loaded: LoadedCogmemConfig): string {
 }
 
 async function main(): Promise<void> {
+  // The command's own usage, so `--help` answers with it rather than with the dispatcher's
+// generic line. The throw below keeps the same text for a bad verb.
+const USAGE = 'Usage: cogmem snapshot export [--config <config.toml>|--db <db>] [--out <snap>] | import --snap <snap> [--config <config.toml>|--db <db>] [--dry-run] [--overwrite] [--json]';
+assertCliArgs(process.argv.slice(2), { usage: USAGE, extraFlags: ['config', 'db', 'dimension', 'dry-run', 'json', 'out', 'overwrite', 'project', 'snap'] });
   const [command, ...rest] = process.argv.slice(2);
   const args = parseArgs(rest);
   const loaded = loadConfig(args);
@@ -78,7 +84,8 @@ async function main(): Promise<void> {
       : createMemoryKernel({ dbPath });
     const meta = await kernel.exportSnapshot(outputPath);
     kernel.close();
-    printCliJson('snapshot.export', meta);
+    // `--out` here is the snapshot file itself, so the JSON report stays on stdout.
+    printCliJson('snapshot.export', meta, { outExempt: true });
     return;
   }
   if (command === 'import') {
@@ -93,13 +100,16 @@ async function main(): Promise<void> {
       dryRun: args['dry-run'] === true,
       overwrite: args.overwrite === true,
     });
-    printCliJson('snapshot.import', result);
+    printCliJson('snapshot.import', result, { outExempt: true });
     return;
   }
-  throw new Error('Usage: snapshot.ts export [--config <config.toml>|--db <db>] [--out <snap>] | import --snap <snap> [--config <config.toml>|--db <db>] [--dry-run] [--overwrite]');
+  throw new Error(USAGE);
 }
 
 main().catch((error) => {
+  // Every entry that can open a database emits the same refusal document under --json; without the
+  // flag the sentence on stderr is unchanged.
+  if (emitRefusalDocument(error, 'snapshot')) return;
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

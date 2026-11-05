@@ -22,7 +22,7 @@ import { type EpisodeBoundaryGuardResult } from './EpisodeBoundaryPolicy.js';
 import type { TurnRelationDecision } from './TurnRelationClassifier.js';
 import { projectScope } from '../topology/ProjectScope.js';
 
-interface CreateEpisodeInput {
+export interface CreateEpisodeInput {
   projectId: string;
   sessionId: string;
   sourceAgent?: string;

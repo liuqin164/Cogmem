@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
+import { ModelRegistry } from '../src/models/ModelRegistry.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('agent backend can record a raw-only turn without creating compiled vectors', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-raw-only-'));
+  const dir = makeTempDir('agent-backend-raw-only-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -32,7 +32,7 @@ test('agent backend can record a raw-only turn without creating compiled vectors
 });
 
 test('agent backend recall falls back to bounded raw ledger search for raw-only memories', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-raw-fallback-'));
+  const dir = makeTempDir('agent-backend-raw-fallback-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -64,7 +64,7 @@ test('agent backend recall falls back to bounded raw ledger search for raw-only 
 });
 
 test('agent backend raw fallback finds multilingual Hermes terms without hot vectors', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-raw-fallback-multilingual-'));
+  const dir = makeTempDir('agent-backend-raw-fallback-multilingual-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -98,7 +98,7 @@ test('agent backend raw fallback finds multilingual Hermes terms without hot vec
 });
 
 test('agent backend prefers raw ledger cue matches over unrelated compiled recall', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-raw-fallback-cue-'));
+  const dir = makeTempDir('agent-backend-raw-fallback-cue-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -136,7 +136,7 @@ test('agent backend prefers raw ledger cue matches over unrelated compiled recal
 });
 
 test('agent backend selective mode compiles durable instructions but skips low-signal chatter', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-selective-'));
+  const dir = makeTempDir('agent-backend-selective-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -179,7 +179,7 @@ test('agent backend selective mode compiles durable instructions but skips low-s
 });
 
 test('agent backend selective mode uses only user text as the durable compile signal', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-user-only-compile-'));
+  const dir = makeTempDir('agent-backend-user-only-compile-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -212,7 +212,7 @@ test('agent backend selective mode uses only user text as the durable compile si
 });
 
 test('agent backend excludes current-session compiled evidence when excludeSessionId is set', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-compiled-exclude-session-'));
+  const dir = makeTempDir('agent-backend-compiled-exclude-session-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -252,7 +252,7 @@ test('agent backend excludes current-session compiled evidence when excludeSessi
 });
 
 test('agent backend can recall the previous session from the raw ledger without semantic guessing', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-previous-session-'));
+  const dir = makeTempDir('agent-backend-previous-session-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -306,7 +306,7 @@ test('agent backend can recall the previous session from the raw ledger without 
 });
 
 test('agent backend forensic quote recall returns raw user events with source anchors', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-forensic-quote-'));
+  const dir = makeTempDir('agent-backend-forensic-quote-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -351,7 +351,7 @@ test('agent backend forensic quote recall returns raw user events with source an
 });
 
 test('agent backend forensic quote recall distills long follow-up queries before raw ledger search', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-forensic-long-query-'));
+  const dir = makeTempDir('agent-backend-forensic-long-query-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -384,7 +384,7 @@ test('agent backend forensic quote recall distills long follow-up queries before
 });
 
 test('agent backend cue recall finds old black-box archive wording and returns drill-down context', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-cue-source-context-'));
+  const dir = makeTempDir('agent-backend-cue-source-context-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -421,7 +421,7 @@ test('agent backend cue recall finds old black-box archive wording and returns d
 });
 
 test('agent backend historical discussion recall prefers original memory-context black box source over later graph runtime issue', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-historical-discussion-'));
+  const dir = makeTempDir('agent-backend-historical-discussion-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -467,7 +467,7 @@ test('agent backend historical discussion recall prefers original memory-context
 });
 
 test('agent backend compiled memory recall includes source locator and bounded surrounding raw context', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-compiled-source-context-'));
+  const dir = makeTempDir('agent-backend-compiled-source-context-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -502,7 +502,7 @@ test('agent backend compiled memory recall includes source locator and bounded s
 });
 
 test('agent backend source context annotates labels, source positions, and strict window semantics', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-source-window-'));
+  const dir = makeTempDir('agent-backend-source-window-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -574,7 +574,7 @@ test('agent backend source context annotates labels, source positions, and stric
 });
 
 test('agent backend forensic quote recall can use a prior raw source anchor for vague follow-up questions', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-followup-anchor-'));
+  const dir = makeTempDir('agent-backend-followup-anchor-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -609,7 +609,7 @@ test('agent backend forensic quote recall can use a prior raw source anchor for 
 });
 
 test('agent backend remembers and recalls a project-scoped turn', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-'));
+  const dir = makeTempDir('agent-backend-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -636,7 +636,7 @@ test('agent backend remembers and recalls a project-scoped turn', async () => {
 });
 
 test('agent backend recall uses universe navigation as the default first path', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-universe-'));
+  const dir = makeTempDir('agent-backend-universe-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
   const day = Date.parse('2026-05-07T09:00:00+09:00');
@@ -676,7 +676,7 @@ test('agent backend recall uses universe navigation as the default first path', 
 });
 
 test('agent backend recall overfetches before agent tag filtering', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-scope-'));
+  const dir = makeTempDir('agent-backend-scope-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
   const day = Date.parse('2026-05-07T10:00:00+09:00');
@@ -713,7 +713,7 @@ test('agent backend recall overfetches before agent tag filtering', async () => 
 });
 
 test('agent backend recalls project-scoped imported evidence without requiring an agent tag', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-project-evidence-'));
+  const dir = makeTempDir('agent-backend-project-evidence-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -740,7 +740,7 @@ test('agent backend recalls project-scoped imported evidence without requiring a
 });
 
 test('agent backend suppresses archived and suspect memory from recall context', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'agent-backend-status-filter-'));
+  const dir = makeTempDir('agent-backend-status-filter-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -777,4 +777,145 @@ test('agent backend suppresses archived and suspect memory from recall context',
   expect(JSON.stringify(recalled.items)).not.toContain('suspect disputed evidence');
 
   kernel.close();
+});
+
+test('a turn attributed to another agent is invisible to a recall that names only the project', async () => {
+  // The CLI read path defaults its agent to the project id (`src/bin/memory.ts`:
+  // `args.agentId || args.projectId`), while `cogmem episode append` attributes the turn
+  // to `--source-agent`. When those differ, the turn exists and the search finds it, but
+  // recall drops it as another agent's event — an empty answer with nothing to explain it.
+  // #113 records the mismatch; this test pins the mechanism so a change to either default
+  // has to be a decision rather than an accident.
+  const dir = makeTempDir('agent-backend-source-agent-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  try {
+    kernel.appendEpisodeMessage({
+      projectId: 'p', sessionId: 's1', sourceAgent: 'eval', role: 'user',
+      text: '代号 ZZ-9 的负责小组是青栎组。',
+    });
+    // What the CLI passes when --agent is omitted.
+    const asProject = backend.recall({ query: '青栎组', projectId: 'p', agentId: 'p', limit: 5, now: Date.now() });
+    expect(asProject.items ?? []).toHaveLength(0);
+    // What it passes when the reader names the agent the turn was attributed to.
+    const asAgent = backend.recall({ query: '青栎组', projectId: 'p', agentId: 'eval', limit: 5, now: Date.now() });
+    expect((asAgent.items ?? []).length).toBeGreaterThan(0);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('a named turn written twice is recorded once and returns the first copy (#113)', async () => {
+  // The caller names the turn, so the name is its identity. Before this, `turnId` was
+  // recorded but never used as one: two writes of one turn left seven events, with the
+  // user and assistant rows byte-identical, because the fallback identity came from
+  // Date.now() and an incrementing turn sequence.
+  const dir = makeTempDir('agent-backend-named-turn-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const count = () => (kernel.episodeStore.db.prepare('select count(*) c from memory_events').get() as { c: number }).c;
+  const turn = {
+    agentId: 'openclaw', projectId: 'p', sessionId: 's', turnId: 'host-turn-7',
+    userText: '请记住代号 IDEM-7 的负责小组是青栎组。', assistantText: '已记下。',
+  };
+  try {
+    const first = await backend.rememberTurnWithResult(turn);
+    const afterFirst = count();
+    const firstTurnSeq = (kernel.eventStore.getEvent(first.rawEventIds[0]) as { turnSeq?: number }).turnSeq;
+
+    // The caller's identity is acknowledged, so a retry can reuse exactly what was sent.
+    expect(first.turnId).toBe('host-turn-7');
+    const second = await backend.rememberTurnWithResult(turn);
+    expect(count()).toBe(afterFirst);
+    expect(second.duplicate).toBe(true);
+    expect(second.turnId).toBe('host-turn-7');
+    expect(second.reason).toBe('duplicate_turn');
+    expect(second.compiled).toBe(false);
+    expect(second.rawEventIds).toEqual(first.rawEventIds);
+    // A replay is not a new turn, so it must not draw a number from the turn sequence.
+    expect(kernel.eventStore.getNextTurnSeq('s', 'p')).toBe((firstTurnSeq ?? 0) + 1);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('a turn nobody named acknowledges no id (#113)', async () => {
+  // Echoing a synthesized turn id would acknowledge an identity the caller never gave.
+  const dir = makeTempDir('cogmem-nameless-turn-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  try {
+    const result = await backend.rememberTurnWithResult({
+      agentId: 'openclaw', projectId: 'p', sessionId: 's', userText: '一位没有名字的轮次。',
+    });
+    expect(result.turnId).toBeUndefined();
+    expect(result.duplicate).toBeUndefined();
+  } finally {
+    kernel.close();
+  }
+});
+
+test('recall says whether a semantic index was available (#135)', async () => {
+  // The field exists because answer quality is a bad way to discover it: with `memory` at
+  // `rule_only` the curator never writes a vector, so recall is lexical and a paraphrase
+  // sharing no words with the memory simply misses (measured 8/12 at rank 1).
+  const dir = makeTempDir('cogmem-semantic-index-');
+  const plain = createMemoryKernel({ dbPath: join(dir, 'plain.db'), vectorBackend: 'sqlite-vec' });
+  const plainBackend = new KernelAgentMemoryBackend(plain);
+  try {
+    await plainBackend.rememberTurnWithResult({ agentId: 'a', projectId: 'p', sessionId: 's', userText: '归档保留期定成七年。' });
+    expect(plainBackend.recall({ query: '归档保留期', projectId: 'p', agentId: 'a', limit: 3 }).semanticIndex).toBe(false);
+  } finally {
+    plain.close();
+  }
+
+  // A configured memory provider is what turns the semantic half on; the role config is
+  // read, never called, so no server is needed to assert this.
+  const configured = createMemoryKernel({
+    dbPath: join(dir, 'configured.db'),
+    vectorBackend: 'sqlite-vec',
+    modelRegistry: new ModelRegistry({
+      memory: { role: 'memory', provider: 'openai_compatible', modelName: 'm', baseUrl: 'http://127.0.0.1:1' },
+    } as never),
+  });
+  try {
+    expect(configured.semanticIndexEnabled()).toBe(true);
+    expect(new KernelAgentMemoryBackend(configured).recall({ query: 'anything', projectId: 'p', agentId: 'a', limit: 3 }).semanticIndex).toBe(true);
+  } finally {
+    configured.close();
+  }
+});
+
+test('reusing a named turn for different text is a conflict, not a second copy (#113)', async () => {
+  const dir = makeTempDir('agent-backend-turn-conflict-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const base = { agentId: 'openclaw', projectId: 'p', sessionId: 's', turnId: 'host-turn-8' };
+  try {
+    await backend.rememberTurnWithResult({ ...base, userText: '第一版内容。' });
+    await expect(backend.rememberTurnWithResult({ ...base, userText: '完全不同的第二版内容。' }))
+      .rejects.toThrow(/agent_turn_identity_conflict:host-turn-8/);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('equal text under two turn ids is two turns (#113)', async () => {
+  // Content is not identity. A user who sends the same sentence twice sent it twice, and
+  // the caller is the one who knows that — which is why the id comes from the caller.
+  const dir = makeTempDir('agent-backend-two-turns-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const count = () => (kernel.episodeStore.db.prepare('select count(*) c from memory_events').get() as { c: number }).c;
+  const base = { agentId: 'openclaw', projectId: 'p', sessionId: 's', userText: '继续。' };
+  try {
+    const a = await backend.rememberTurnWithResult({ ...base, turnId: 'turn-a' });
+    const afterA = count();
+    const b = await backend.rememberTurnWithResult({ ...base, turnId: 'turn-b' });
+    expect(count()).toBeGreaterThan(afterA);
+    expect(b.duplicate).toBeUndefined();
+    expect(b.rawEventIds).not.toEqual(a.rawEventIds);
+  } finally {
+    kernel.close();
+  }
 });

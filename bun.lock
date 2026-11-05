@@ -10,7 +10,6 @@
         "mammoth": "^1.12.0",
         "pdfjs-dist": "^6.0.227",
         "xlsx": "^0.18.5",
-        "zod": "4.1.12",
       },
       "devDependencies": {
         "bun-types": "^1.0.0",

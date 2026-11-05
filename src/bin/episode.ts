@@ -6,14 +6,22 @@ import { createInterface } from 'node:readline';
 import { createStableImportIdentityFactory } from '../episode/EpisodeImportIdentity.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
+import { emitRefusalDocument } from './RefusalDocument.js';
 
 type Args = Record<string, string | boolean> & { command?: string };
 
 function parseArgs(argv: string[]): Args {
-  const [command, ...rest] = argv;
-  const args: Args = { command };
+  // A leading flag is a flag, not a command. Taking argv[0] unconditionally made
+  // `episode --help` a command named "--help", which skipped the usage branch, opened a
+  // kernel and answered with a SQLite error — the help for this bin did not work at all.
+  const command = argv[0] && !argv[0].startsWith('-') ? argv[0] : undefined;
+  const args: Args = {};
+  if (command) args.command = command;
+  const rest = command ? argv.slice(1) : argv;
   for (let index = 0; index < rest.length; index += 1) {
     const item = rest[index];
+    if (item === '-h') { args.h = true; continue; }
     if (!item.startsWith('--')) continue;
     const key = item.slice(2);
     const next = rest[index + 1];
@@ -27,20 +35,28 @@ function usage(): string {
   return [
     'Usage: cogmem episode <append|import|list|get|seal|status|audit-boundaries|boundary-decisions|split-plan|repair|split|merge|move-event|reclassify|requeue-dream> [args]',
     '  append --project <id> --session <id> --source-agent <id> --role <role> --text <text>',
+    '         [--external-id <id>] [--timestamp <ms>] [--turn-id <id>] [--turn-seq <n>]',
+    '         [--thread-id <id>] [--local-date <YYYY-MM-DD>] [--event-ordinal <n>]',
+    '         an external id names the message (same id + same text is a replay); the',
+    '         timestamp is when it happened; the turn and thread fields place it in a',
+    '         conversation; the local date and event ordinal pin its order',
+    '         --source-agent is who the turn belongs to; `memory recall` defaults --agent to',
+    '         the project id, so name the same agent there when the two differ',
     '  import --project <id> --session <id> --source-agent <id> --format jsonl --file <path> [--seal-batch] [--force-seal] [--chunk-size <n>] [--checkpoint-file <path>] [--resume] [--start-line <n>] [--end-line <n>] [--max-lines <n>] [--skip-errors] [--max-errors <n>]',
     '  list|status [--project <id>] [--session <id>] [--json]',
     '  get --project <id> --episode <id> [--json]',
     '  seal --project <id> --episode <id> [--mode soft|hard|manual|batch] [--reason <reason>]',
     '  audit-boundaries --project <id> [--episode <id>] [--status open|soft_sealed|sealed] [--limit <n>] [--cursor <cursor>]',
+    '         [--max-events <n>] [--max-duration-ms <ms>] [--max-idle-gap-ms <ms>] [--timezone <tz>]',
     '  boundary-decisions --project <id> [--event <eventId>] [--limit <n>]',
     '  split-plan --project <id> --episode <id> [--include-event-ids]',
     '  repair [--project <id>] [--since <globalSeq>] [--limit <n>]',
     '  split --project <id> --episode <id> --events <eventId,eventId>',
     '  merge --project <id> --source-episode <id> --target-episode <id>',
     '  move-event --project <id> --event <id> --target-episode <id>',
-    '  reclassify --project <id> --episode <id> [--episode-type <type>] [--topic-path <path>] [--importance <0..1>]',
+    '  reclassify --project <id> --episode <id> [--episode-type discussion|decision|correction|preference|goal|debugging|planning|prospective|general] [--topic-path <path>] [--importance <0..1>]',
     '  requeue-dream --project <id> --episode <id> [--mode micro|normal|deep]',
-    'Existing source-specific imports remain: cogmem import-openclaw and cogmem import-hermes.',
+    'Existing source-specific imports remain: cogmem import openclaw and cogmem import hermes.',
     '--json emits cogmem.cli.v1; array results are returned under items.',
   ].join('\n');
 }
@@ -53,21 +69,33 @@ function openKernel(args: Args): MemoryKernel {
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['checkpoint-file', 'chunk-size', 'config', 'cursor', 'db', 'end-line', 'episode', 'episode-type', 'event', 'events', 'file', 'force-seal', 'format', 'help', 'importance', 'include-event-ids', 'json', 'limit', 'max-errors', 'max-lines', 'mode', 'project', 'reason', 'resume', 'role', 'seal-batch', 'session', 'since', 'skip-errors', 'source-agent', 'source-episode', 'start-line', 'status', 'target-episode', 'text', 'topic-path'] });
   const args = parseArgs(process.argv.slice(2));
-  if (!args.command || args.help === true || args.h === true) { console.log(usage()); return; }
+  if (args.help === true || args.h === true) { console.log(usage()); return; }
+  if (!args.command) { console.error(usage()); process.exit(1); }
   const kernel = openKernel(args);
   try {
     const projectId = stringArg(args, 'project');
     const sessionId = stringArg(args, 'session');
     let result: unknown;
     if (args.command === 'append') {
+      const appendProject = requiredArg(args, 'project');
+      const appendAgent = requiredArg(args, 'source-agent');
       result = kernel.appendEpisodeMessage({
-        projectId: requiredArg(args, 'project'), sessionId: requiredArg(args, 'session'),
-        sourceAgent: requiredArg(args, 'source-agent'), role: roleArg(args.role), text: requiredArg(args, 'text'),
+        projectId: appendProject, sessionId: requiredArg(args, 'session'),
+        sourceAgent: appendAgent, role: roleArg(args.role), text: requiredArg(args, 'text'),
         externalMessageId: stringArg(args, 'external-id'), timestamp: numberArg(args, 'timestamp'),
         threadId: stringArg(args, 'thread-id'), turnId: stringArg(args, 'turn-id'), turnSeq: numberArg(args, 'turn-seq'),
         localDate: stringArg(args, 'local-date'), eventOrdinal: numberArg(args, 'event-ordinal'),
       });
+      // The read path defaults its agent to the project id (`memory.ts`: `agentId ||
+      // projectId`), while this attributes the turn to --source-agent. Naming a different
+      // agent makes the turn invisible to a recall that does not name it, and the result is
+      // an empty answer with nothing to explain it. Say so where the mismatch is
+      // created; stderr, so `--json` output stays a single document on stdout.
+      if (appendAgent !== appendProject) {
+        console.error(`note: this turn is attributed to agent "${appendAgent}", but \`cogmem memory recall\` defaults --agent to the project id ("${appendProject}"). Pass --agent ${appendAgent} to read it back.`);
+      }
     } else if (args.command === 'import') {
       result = await importJsonl(kernel, args);
     } else if (args.command === 'list') {
@@ -302,10 +330,12 @@ function statusArg(value?: string): 'open' | 'soft_sealed' | 'sealed' | undefine
   if (value === 'open' || value === 'soft_sealed' || value === 'sealed') return value;
   throw new Error('status must be open, soft_sealed, or sealed');
 }
+const EPISODE_TYPES = ['discussion', 'decision', 'correction', 'preference', 'goal', 'debugging', 'planning', 'prospective', 'general'] as const;
+
 function episodeTypeArg(value?: string): 'discussion' | 'decision' | 'correction' | 'preference' | 'goal' | 'debugging' | 'planning' | 'prospective' | 'general' | undefined {
   if (!value) return undefined;
-  if (['discussion', 'decision', 'correction', 'preference', 'goal', 'debugging', 'planning', 'prospective', 'general'].includes(value)) return value as never;
-  throw new Error('invalid episode type');
+  if ((EPISODE_TYPES as readonly string[]).includes(value)) return value as never;
+  throw new Error(`invalid episode type: expected one of ${EPISODE_TYPES.join(', ')}`);
 }
 function timeValue(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined;
@@ -314,4 +344,7 @@ function timeValue(value: unknown): number | undefined {
   throw new Error('timestamp must be a finite number or parseable date');
 }
 
-main().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });
+main().catch((error) => {
+  // Every entry that can open a database emits the same refusal document under --json; without the
+  // flag the sentence on stderr is unchanged.
+  if (emitRefusalDocument(error, 'episode')) return; console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });

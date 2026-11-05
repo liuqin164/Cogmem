@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import type {
   AdaptedSource,
   AdapterWindow,
@@ -28,6 +29,12 @@ interface SoulSection {
   lineNumber: number;
 }
 
+/** The `YYYY-MM-DD` a dated filename carries (`2025-11-05.md`, `2025-11-05-suffix.md`), or undefined. */
+function dateInFilename(sourcePath: string): string | undefined {
+  const match = /(\d{4})-(\d{2})-(\d{2})/.exec(basename(sourcePath));
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : undefined;
+}
+
 export class SoulMarkdownAdapter implements SourceAdapter {
   readonly kind = 'soul_markdown' as const;
   private readonly adapterVersion = 'soul-markdown-v2';
@@ -39,13 +46,21 @@ export class SoulMarkdownAdapter implements SourceAdapter {
     const diagnostics: SourceAdapterDiagnostic[] = [];
     const title = inferSourceTitle(source.sourcePath).toLowerCase();
     const defaultKind = this.inferDocumentKind(frontmatter.type || title);
-    const defaultTimestamp = parseLooseTimestamp(frontmatter.created_at || frontmatter.date, snapshot.fileMtimeMs);
+    // A dated filename is a real date source: OpenClaw's daily memory is `memory/YYYY-MM-DD.md`, and
+    // without this fallback a year of such files was dated to the import day (see the ledger).
+    const filenameDate = dateInFilename(source.sourcePath);
+    const defaultTimestamp = parseLooseTimestamp(
+      frontmatter.created_at || frontmatter.date || filenameDate,
+      snapshot.fileMtimeMs
+    );
 
     if (!frontmatter.type && !frontmatter.created_at && !frontmatter.date) {
       diagnostics.push({
         severity: 'warning',
         code: 'soul_missing_frontmatter_fields',
-        message: 'Soul-like markdown is missing type/date frontmatter; the adapter fell back to filename and file mtime.',
+        message: filenameDate
+          ? `Soul-like markdown is missing type/date frontmatter; the date in the filename (${filenameDate}) was used.`
+          : 'Soul-like markdown is missing type/date frontmatter and the filename carries no date; the file mtime was used.',
         filePath: source.sourcePath,
         adapterKind: this.kind,
         contractHint: 'Preferred fields are type plus created_at/date, but partial files are still ingested.',

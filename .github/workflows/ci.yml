@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, 'codex/**']
+    # `feat/**` carries the 4.0 line. It had ~40 commits and no CI run before
+    # this, so every "tests pass" claim on it came from one local machine.
+    branches: [main, 'codex/**', 'feat/**']
   pull_request:
 
 permissions:

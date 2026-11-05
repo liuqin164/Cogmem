@@ -73,7 +73,11 @@ export class ProspectiveMemoryService {
 
   private proposeInTransaction(input: ProposeProspectiveMemoryInput): ProspectiveMemoryRecord {
     const projectId = requireProjectId(input.projectId);
-    if (!PROSPECTIVE_MEMORY_TYPES.includes(input.candidateType)) throw new Error('invalid_prospective_memory_type');
+    if (!PROSPECTIVE_MEMORY_TYPES.includes(input.candidateType)) {
+      // The caller of this CLI is usually a model holding one shot: a bare code sends it back
+      // for another round-trip, or into a guess. Name the set.
+      throw new Error(`invalid_prospective_memory_type: expected one of ${PROSPECTIVE_MEMORY_TYPES.join(', ')}`);
+    }
     if (!PROSPECTIVE_MEMORY_PROPOSERS.includes(input.proposedBy)) throw new Error('invalid_prospective_memory_proposer');
     const canonicalKey = input.canonicalKey.trim().toLowerCase();
     const title = input.title.trim();

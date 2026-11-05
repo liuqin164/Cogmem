@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 async function run(entrypoint: string, args: string[]) {
   const proc = Bun.spawn({ cmd: ['bun', entrypoint, ...args], stdout: 'pipe', stderr: 'pipe' });
@@ -14,7 +14,7 @@ async function run(entrypoint: string, args: string[]) {
 }
 
 test('prospective CLI creates, confirms, and lists a due candidate without executing it', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-prospective-'));
+  const dir = makeTempDir('cogmem-prospective-');
   const dbPath = join(dir, 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   const evidence = kernel.eventStore.append({
@@ -45,7 +45,7 @@ test('prospective CLI creates, confirms, and lists a due candidate without execu
 });
 
 test('brain-eval CLI returns non-zero when safety metrics fail', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-brain-eval-'));
+  const dir = makeTempDir('cogmem-brain-eval-');
   const inputPath = join(dir, 'samples.json');
   writeFileSync(inputPath, JSON.stringify([{ expectedIds: ['a'], selectedIds: ['stale'], selectedWithEvidenceIds: [], staleSelectedIds: ['stale'], crossProjectSelectedIds: [], usedTokens: 20, budgetTokens: 10, prospectiveTriggeredIds: ['p'], confirmedProspectiveIds: [] }]));
   const cli = join(import.meta.dir, '..', 'src', 'bin', 'brain-eval.ts');
@@ -57,7 +57,7 @@ test('brain-eval CLI returns non-zero when safety metrics fail', async () => {
 });
 
 test('brain-eval CLI compares precomputed strategy rollouts without online generation', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-strategy-eval-'));
+  const dir = makeTempDir('cogmem-strategy-eval-');
   const inputPath = join(dir, 'strategy-outcomes.json');
   writeFileSync(inputPath, JSON.stringify({ outcomes: [{
     outcomeId: 'outcome-1', receiptId: 'receipt-1', strategyId: 'strategy-1',

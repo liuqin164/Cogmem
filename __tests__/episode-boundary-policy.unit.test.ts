@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { EpisodeBoundaryPolicy, normalizeEpisodeBoundaryConfig } from '../src/episode/EpisodeBoundaryPolicy.js';
 import { createMemoryKernel, type MemoryKernelOptions } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function createTestKernel(prefix: string, options: MemoryKernelOptions = {}) {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = makeTempDir(prefix);
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec', ...options });
   return { dir, kernel };
 }
@@ -452,7 +452,7 @@ test('ambiguous shift may leave soft-sealed episode beside one open episode', ()
 });
 
 test('transaction re-read prevents older closure from moving episode time backwards', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-boundary-now-race-'));
+  const dir = makeTempDir('cogmem-boundary-now-race-');
   const dbPath = join(dir, 'memory.db');
   const first = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
   const second = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
@@ -490,7 +490,7 @@ test('transaction re-read prevents older closure from moving episode time backwa
 });
 
 test('two kernel connections leave at most one active episode in a scope', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-boundary-active-scope-'));
+  const dir = makeTempDir('cogmem-boundary-active-scope-');
   let releaseReview!: () => void;
   const reviewerGate = new Promise<void>((resolve) => { releaseReview = resolve; });
   const reviewer = { review: async () => { await reviewerGate; return { relation: 'starts_new_topic', confidence: 0.99 }; } };

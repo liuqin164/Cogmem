@@ -57,6 +57,8 @@ const TEMPLATES: Record<StrategyTemplateId, StrategyTemplate> = {
 
 const INTENT_TEMPLATE: Record<ContextIntent, StrategyTemplateId> = {
   greeting: 'no-memory',
+  // A social turn has nothing to look up, so it gets the same empty template as a greeting.
+  social: 'no-memory',
   short_followup: 'continuity-only',
   exact_quote: 'source-first',
   decision_history: 'temporal-first',

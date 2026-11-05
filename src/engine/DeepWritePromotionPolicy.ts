@@ -10,6 +10,7 @@ import {
 } from '../store/DeepWriteCandidateStore.js';
 import type { BeliefCandidate } from '../types/index.js';
 import { projectScope } from '../topology/ProjectScope.js';
+import { asRecord } from '../utils/Values.js';
 
 export type DeepWritePromotionOutcome =
   | 'promote_provisional'
@@ -42,12 +43,6 @@ export interface DeepWritePromotionOptions {
 
 export interface DeepWriteEvaluationOptions {
   reviewConfirmed?: boolean;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
 }
 
 function stringField(record: Record<string, unknown>, keys: string[]): string | undefined {
@@ -316,7 +311,12 @@ export class DeepWritePromotionPolicy {
       outcome: 'promote_provisional',
       reason: 'semantic_organization_candidate_accepted',
       targetType: candidate.promotionTargetType || candidate.candidateType,
-      targetId: candidate.promotionTargetId || stringField(content, ['sourceEventId', 'targetEventId', 'topicPath']) || candidate.candidateId
+      // The id answers "what is this candidate about?"; it is written only when the candidate names
+      // a real target (an event id, a topic path, or a target an earlier pass recorded). Falling
+      // back to the candidate's own id would make a promoted row claim a target that is itself.
+      // Such an id is a locator, not the id of a stored row; see `GLOSSARY.md` for the three
+      // classes a promotion target can belong to.
+      targetId: candidate.promotionTargetId || stringField(content, ['sourceEventId', 'targetEventId', 'topicPath'])
     });
   }
 

@@ -3,6 +3,8 @@ import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfi
 import { DEFAULT_VECTOR_DIMENSION, parseVectorDimensionValue } from '../config/VectorDimension.js';
 import { compactStorage, type CompactableNeuronStatus } from '../storage/StorageCompactor.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
+import { emitRefusalDocument } from './RefusalDocument.js';
 
 interface Args {
   dbPath?: string;
@@ -65,7 +67,18 @@ function parseStatuses(value: string): CompactableNeuronStatus[] {
   return statuses as CompactableNeuronStatus[];
 }
 
+function usage(): string {
+  return [
+    'Usage: cogmem compact [status] [--apply] [--dry-run] [--project <id>] [--dimension <n>] [--json]',
+    '         [--config <config.toml>|--db <memory.db>]',
+    '',
+    'Compacts vector storage only. Raw ledger events are never touched.',
+    'Without --apply this reports what compaction would reclaim.',
+  ].join('\n');
+}
+
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['apply', 'config', 'db', 'dimension', 'dry-run', 'json', 'project', 'status'] });
   const args = parseArgs(Bun.argv.slice(2));
   const resolution = args.configPath ? resolveCogmemConfigPath({ configPath: args.configPath }) : resolveCogmemConfigPath();
   const loaded = resolution.kind === 'toml' ? loadCogmemConfig({ configPath: resolution.path }) : undefined;
@@ -93,6 +106,9 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
+  // Every entry that can open a database emits the same refusal document under --json; without the
+  // flag the sentence on stderr is unchanged.
+  if (emitRefusalDocument(error, 'compact')) return;
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

@@ -1,0 +1,24 @@
+import { expect, test } from 'bun:test';
+import { discriminativeProbes, overlapIsOnlySmallTalk } from '../src/agent/AgentMemoryBackend.js';
+
+test('a question reduces to probes that can tell small talk from an answer', () => {
+  const probes = discriminativeProbes('好的收到，归档保留期几年');
+  expect(probes).toContain('好的');
+  expect(probes).toContain('好的收到');
+  expect(probes).toContain('归档');
+  expect(discriminativeProbes('deploy window retry')).toEqual(expect.arrayContaining(['deploy', 'window', 'retry']));
+  expect(discriminativeProbes('窗口改到 2025-11-04')).toContain('2025');
+});
+
+test('a hit whose whole overlap with the question is small talk is not a hit', () => {
+  const frequent = new Set(['好的', '好的收到', '收到']);
+  // The pleasantry pile: everything it shares with the question is used everywhere in this project.
+  expect(overlapIsOnlySmallTalk(['好的', '好的收到'], frequent)).toBe(true);
+  // The red line: an answer that shares an answer-carrying word is never discarded.
+  expect(overlapIsOnlySmallTalk(['好的', '归档'], frequent)).toBe(false);
+  // Frequency alone is not evidence. This is the case the suite's own corpus argued for — an answer
+  // worded like seven others overlaps only through common words, and must stay retrievable.
+  expect(overlapIsOnlySmallTalk(['retry'], new Set(['retry']))).toBe(false);
+  // Nothing readable: nothing demonstrated, so nothing discarded.
+  expect(overlapIsOnlySmallTalk([], frequent)).toBe(false);
+});

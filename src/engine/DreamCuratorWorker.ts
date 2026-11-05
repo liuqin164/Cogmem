@@ -19,6 +19,7 @@ import type { StructuredSemanticProcessor } from '../semantic/StructuredSemantic
 import { StructuredSemanticProcessor as StructuredSemanticProcessorImpl } from '../semantic/StructuredSemanticProcessor.js';
 import { MEMORY_FRAME_PROMPT_VERSION, MEMORY_FRAME_SYSTEM_PROMPT } from '../semantic/SemanticProcessorPrompt.js';
 import type { MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
+import { truncate } from '../utils/Values.js';
 
 export interface DreamCuratorRunOptions {
   projectId?: string;
@@ -55,6 +56,7 @@ export interface DreamCuratorRunResult {
   frameIds?: string[];
   semanticProcessorAvailable?: boolean;
   semanticProcessorReason?: string;
+  semanticProcessorError?: string;
 }
 
 export interface DreamCuratorWorkerDeps {
@@ -133,6 +135,7 @@ export class DreamCuratorWorker {
     const frameIds: string[] = [];
     let semanticProcessorUnavailable = false;
     let semanticProcessorReason: string | undefined;
+    let semanticProcessorError: string | undefined;
     if (options.sourceEpisodeId && this.deps.memoryFrameStore) {
       const frameInput = {
         projectId: options.projectId || events[0]?.projectId || '', episodeId: options.sourceEpisodeId,
@@ -159,6 +162,7 @@ export class DreamCuratorWorker {
       } catch (error) {
         semanticProcessorUnavailable = true;
         semanticProcessorReason = 'semantic_processor_failed';
+        semanticProcessorError = error instanceof Error ? error.message : String(error);
         this.deps.pipelineMetrics?.recordNonFatal('memory_frame_processor_fallback', {
           projectId: options.projectId,
           message: error instanceof Error ? error.message : String(error),
@@ -284,6 +288,7 @@ export class DreamCuratorWorker {
       frameIds,
       semanticProcessorAvailable: !semanticProcessorUnavailable && providerConfig.provider !== 'rule_only',
       semanticProcessorReason: semanticProcessorReason ?? (providerConfig.provider === 'rule_only' ? 'semantic_processor_unavailable' : undefined),
+      semanticProcessorError,
     };
   }
 
@@ -818,7 +823,11 @@ export class DreamCuratorWorker {
     reason: string,
     detail: unknown,
   ): Omit<DeepWriteCandidateInput, 'runId'> | undefined {
-    const detailText = truncate(detail instanceof Error ? detail.message : String(detail || ''), 500);
+    // An empty detail is what a provider failure used to leave behind (the
+    // client returns '' when the endpoint answers non-2xx, and the status only
+    // reaches stderr). Say so, instead of storing nothing.
+    const raw = detail instanceof Error ? detail.message : String(detail || '');
+    const detailText = truncate(raw.trim() ? raw : 'provider returned an empty body (HTTP status is on stderr)', 500);
     this.deps.pipelineMetrics?.recordNonFatal(reason, {
       projectId,
       message: detailText,
@@ -883,9 +892,10 @@ export class DreamCuratorWorker {
         ? candidate.content as Record<string, unknown>
         : {};
       if (content.source !== 'dream_curator_provider_warning') continue;
+      // Same rule as review-queue expiry: the warning was retired because the provider recovered,
+      // not because something replaced it, so no promotion target is named.
       this.deps.candidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
         type: 'diagnostic_conclusion',
-        id: candidate.candidateId,
         reason: 'provider_recovered',
       });
     }
@@ -1087,10 +1097,6 @@ function minDefined(values: Array<number | undefined>): number | undefined {
 function maxDefined(values: Array<number | undefined>): number | undefined {
   const defined = values.filter((value): value is number => Number.isFinite(value));
   return defined.length ? Math.max(...defined) : undefined;
-}
-
-function truncate(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> {

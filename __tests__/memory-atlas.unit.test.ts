@@ -1,14 +1,13 @@
 import { expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
 import { localDateFor, localDateRange } from '../src/utils/LocalDateContext.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function createFixture(): { kernel: MemoryKernel; hermesEventId: string; privateEventId: string; hermesEntityId: string; hermesClusterId: string } {
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'cogmem-atlas-')), 'memory.db');
+  const dbPath = join(makeTempDir('cogmem-atlas-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   const hermes = kernel.eventStore.append({
     eventId: 'evt-hermes-config', streamId: 'thread-hermes', streamType: 'thread', eventType: 'MESSAGE',
@@ -492,7 +491,7 @@ test('Atlas does not split connector characters inside CJK entity names', () => 
 });
 
 test('Atlas reinstalls a same-name no-op dirty trigger without rerunning the release migration', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-atlas-trigger-'));
+  const dir = makeTempDir('cogmem-atlas-trigger-');
   const dbPath = join(dir, 'memory.db');
   const seeded = createMemoryKernel({ dbPath });
   await seeded.ingest({ content: 'seed non-temporal topology', projectId: 'p' });

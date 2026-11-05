@@ -1,1 +1,0 @@
-{"version":3,"file":"FileLoaderRegistry.d.ts","sourceRoot":"","sources":["../../src/assets/FileLoaderRegistry.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,aAAa,EAAE,UAAU,EAAE,MAAM,YAAY,CAAC;AAG5D,qBAAa,kBAAkB;IAC7B,OAAO,CAAC,QAAQ,CAAC,OAAO,CAAe;gBAE3B,OAAO,CAAC,EAAE,UAAU,EAAE;IAYlC,OAAO,CAAC,KAAK,EAAE,aAAa,GAAG,UAAU,GAAG,IAAI;IAIhD,IAAI,IAAI,UAAU,EAAE;CAGrB"}

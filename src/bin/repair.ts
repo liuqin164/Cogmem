@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
+import { emitRefusalDocument } from './RefusalDocument.js';
 import Database from 'bun:sqlite';
 
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
+import { assertCliArgs } from './CliArgs.js';
 
 function readArg(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -60,9 +62,11 @@ function nonEmptyProjectIds(db: Database, table: string): string[] {
 }
 
 function main(): void {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['apply', 'config', 'db', 'dry-run', 'from', 'json', 'to'] });
   const [command] = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-  if (command !== 'project-scope' || hasFlag('--help') || hasFlag('-h')) {
-    console.log(usage());
+  if (command !== 'project-scope') {
+    console.error(usage());
+    process.exit(1);
     process.exit(command === 'project-scope' ? 0 : 1);
   }
   const from = readArg('--from');
@@ -91,7 +95,10 @@ function main(): void {
     const changed = 0;
     const payload = {
       schemaVersion: 'cogmem.cli.v1',
-      command: 'repair project-scope',
+      // The `command` field is dot-separated everywhere else a multi-word command reports
+      // (`memory.graph-search`, `strategy.plan`, `snapshot.export`, `dream.tick`); this was the
+      // one that used a space, so a consumer keying on it had to special-case one command.
+      command: 'repair.project-scope',
       dbPath,
       dryRun: !apply,
       apply,
@@ -111,4 +118,10 @@ function main(): void {
   }
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  emitRefusalDocument(error, 'repair');
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}

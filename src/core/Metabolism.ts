@@ -3,6 +3,8 @@
 // 优化：SM-2 遗忘曲线 + stability/repetitions 驱动状态流转
 // ============================================
 
+import { setTimeout as sleep } from 'node:timers/promises';
+
 import type { Neuron, NeuronStatus } from '../types/index.js';
 import { MemoryGraph } from './MemoryGraph.js';
 import { logger } from '../utils/Logger.js';
@@ -53,7 +55,7 @@ export class Metabolism {
       if (elapsed >= this.silentPeriod) {
         await this.performMetabolism();
       }
-      await this.sleep(this.metabolismInterval);
+      await sleep(this.metabolismInterval);
     }
   }
 
@@ -219,7 +221,4 @@ export class Metabolism {
     return Math.min(1.0, forgettingFactor * reinforcementFactor);
   }
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
 }

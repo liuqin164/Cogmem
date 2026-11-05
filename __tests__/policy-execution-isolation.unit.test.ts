@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { BeliefStore } from '../src/belief/BeliefStore.js';
@@ -10,11 +9,12 @@ import { EventStore } from '../src/store/EventStore.js';
 import { PolicyExecutionProjector } from '../src/store/PolicyExecutionProjector.js';
 import { PolicyExecutionStore, type PolicyExecutionRecord } from '../src/store/PolicyExecutionStore.js';
 import { PolicyProjectionStore } from '../src/store/PolicyProjectionStore.js';
-import { installMultidimensionalMemoryGraph374 } from '../src/migrations/0032_multidimensional_memory_graph_3_7_4.js';
+import { installFinalSchema } from '../src/migrations/v3_7_4/FinalSchemaInstall.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 describe('policy execution project isolation', () => {
   test('the same effect executes independently in each exact project scope', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-scope-'));
+    const dir = makeTempDir('cogmem-policy-scope-');
     const path = join(dir, 'policy.db');
     const store = new PolicyExecutionStore(path);
     const calls: string[] = [];
@@ -66,7 +66,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('event projection replays only the requested named or projectless scope', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-projector-'));
+    const dir = makeTempDir('cogmem-policy-projector-');
     const path = join(dir, 'policy.db');
     const events = new EventStore(path);
     const executions = new PolicyExecutionStore(path);
@@ -96,7 +96,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('concurrent callers atomically claim one side effect', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-concurrent-'));
+    const dir = makeTempDir('cogmem-policy-concurrent-');
     const path = join(dir, 'policy.db');
     const stores = Array.from({ length: 20 }, () => new PolicyExecutionStore(path));
     let calls = 0;
@@ -120,7 +120,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('lease heartbeat prevents a second worker from taking a long-running side effect', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-heartbeat-'));
+    const dir = makeTempDir('cogmem-policy-heartbeat-');
     const path = join(dir, 'policy.db');
     const firstStore = new PolicyExecutionStore(path);
     const secondStore = new PolicyExecutionStore(path);
@@ -295,7 +295,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('restart respects audit retry schedule and a later due drain succeeds', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-audit-restart-'));
+    const dir = makeTempDir('cogmem-policy-audit-restart-');
     const path = join(dir, 'policy.db');
     const bootstrap = new EventStore(path);
     bootstrap.close();
@@ -328,7 +328,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('one audit drain attempts each due row once and dead-letters on the fifth due cycle', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-audit-cycles-'));
+    const dir = makeTempDir('cogmem-policy-audit-cycles-');
     const path = join(dir, 'policy.db');
     const bootstrap = new EventStore(path);
     bootstrap.close();
@@ -409,7 +409,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('failure outcomes survive reopen and in-progress replay omits outcome', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-outcome-'));
+    const dir = makeTempDir('cogmem-policy-outcome-');
     const path = join(dir, 'policy.db');
     const first = new PolicyExecutionStore(path);
     const executor = new ReliablePolicySideEffectExecutor({
@@ -452,7 +452,7 @@ describe('policy execution project isolation', () => {
   });
 
   test('same-millisecond policy updates keep distinct audit events', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-policy-audit-id-'));
+    const dir = makeTempDir('cogmem-policy-audit-id-');
     const path = join(dir, 'policy.db');
     const events = new EventStore(path);
     const store = new PolicyExecutionStore(path, events);
@@ -470,30 +470,4 @@ describe('policy execution project isolation', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test('legacy executed keys become fail-closed tombstones after migration', async () => {
-    const db = new Database(':memory:');
-    db.exec(`CREATE TABLE policy_executions(
-      execution_id TEXT PRIMARY KEY,idempotency_key TEXT UNIQUE,policy TEXT,action TEXT,status TEXT,
-      attempt_count INTEGER,detail TEXT,created_at INTEGER,updated_at INTEGER
-    );
-    INSERT INTO policy_executions VALUES('legacy','already-ran','p','allow','executed',1,NULL,1,1)`);
-    installMultidimensionalMemoryGraph374(db);
-    const store = new PolicyExecutionStore(db);
-    let calls = 0;
-    const executor = new ReliablePolicySideEffectExecutor({
-      execute(effect) {
-        calls += 1;
-        return { policy: effect.policy, action: effect.action, status: 'executed', outcome: 'executed' };
-      },
-    }, store);
-
-    const result = await executor.execute({
-      projectId: 'a', policy: 'p', action: 'allow', idempotencyKey: 'already-ran',
-    });
-
-    expect(calls).toBe(0);
-    expect(result).toMatchObject({ status: 'failed', detail: 'legacy_execution_scope_ambiguous' });
-    store.close();
-    db.close();
-  });
 });

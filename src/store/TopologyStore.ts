@@ -687,33 +687,6 @@ export class TopologyStore {
     const liveJoin = hasNeurons ? 'JOIN neurons n ON n.id=tm.neuron_id AND n.is_deleted=0' : '';
     const liveScope = hasNeurons ? "AND COALESCE(n.project_id,'')=COALESCE(tm.project_id,'')" : '';
 
-    const baseRows = this.db.prepare(`
-      SELECT tm.neuron_id
-      FROM topology_membership tm
-      ${liveJoin}
-      WHERE (? IS NULL OR COALESCE(tm.project_id, '') = ?)
-        ${liveScope}
-        AND (? = 0 OR tm.dimension_type <> 'time_bucket')
-        AND (? IS NULL OR tm.created_at >= ?)
-        AND (? IS NULL OR tm.created_at < ?)
-      ORDER BY tm.created_at DESC
-      LIMIT ?
-    `).all(
-      queryProject,
-      queryProject,
-      input.excludeTemporal ? 1 : 0,
-      input.startTime ?? null,
-      input.startTime ?? null,
-      input.endTime ?? null,
-      input.endTime ?? null,
-      limit * 2
-    ) as Array<{ neuron_id: string }>;
-
-    for (const row of baseRows) {
-      collected.add(row.neuron_id);
-      if (collected.size >= limit) break;
-    }
-
     for (const term of terms) {
       if (collected.size >= limit) break;
       const rows = this.db.prepare(`
@@ -735,6 +708,39 @@ export class TopologyStore {
         limit
       ) as Array<{ neuron_id: string }>;
       for (const row of rows) {
+        collected.add(row.neuron_id);
+        if (collected.size >= limit) break;
+      }
+    }
+
+    // The terms matched nothing. The newest neurons answer "what happened lately",
+    // which is the question a query with no terms is asking — and with terms it is
+    // still the only honest thing to fall back on, as long as it is a fallback and
+    // not a candidate set that buries the term matches before they are looked for.
+    if (collected.size === 0) {
+      const baseRows = this.db.prepare(`
+        SELECT tm.neuron_id
+        FROM topology_membership tm
+        ${liveJoin}
+        WHERE (? IS NULL OR COALESCE(tm.project_id, '') = ?)
+          ${liveScope}
+          AND (? = 0 OR tm.dimension_type <> 'time_bucket')
+          AND (? IS NULL OR tm.created_at >= ?)
+          AND (? IS NULL OR tm.created_at < ?)
+        ORDER BY tm.created_at DESC
+        LIMIT ?
+      `).all(
+        queryProject,
+        queryProject,
+        input.excludeTemporal ? 1 : 0,
+        input.startTime ?? null,
+        input.startTime ?? null,
+        input.endTime ?? null,
+        input.endTime ?? null,
+        limit * 2
+      ) as Array<{ neuron_id: string }>;
+
+      for (const row of baseRows) {
         collected.add(row.neuron_id);
         if (collected.size >= limit) break;
       }
@@ -779,8 +785,15 @@ export class TopologyStore {
         WHERE COALESCE(project_id, '') = ?
       `).all(projectScope(input.projectId)) as Array<{ branch_id: string }>;
 
-      for (const row of rootRows) {
-        branchIds.add(row.branch_id);
+      // Every branch of the project is the right answer to "what is in this project"
+      // and the wrong answer to "where is this said". With terms the search is the
+      // second question, and taking every branch here puts the whole project back
+      // into the candidate set: the term-matched branches below then compete with
+      // every branch that matched nothing.
+      if (terms.length === 0) {
+        for (const row of rootRows) {
+          branchIds.add(row.branch_id);
+        }
       }
     }
 
@@ -834,7 +847,11 @@ export class TopologyStore {
       for (const row of clusterRows) clusterIds.add(row.cluster_id);
     }
 
-    if (branchIds.size > 0 && siblingDepth > 0) {
+    // A sibling branch is a neighbour in the project's shape, not a match for what
+    // was asked. Widening to siblings answers "what is around this" and not "where
+    // is this said": six branches matched "鲸鱼迁徙" and the sibling step pulled in
+    // every branch beside them, so the result stopped depending on the term.
+    if (branchIds.size > 0 && siblingDepth > 0 && terms.length === 0) {
       const frontier = Array.from(branchIds);
       const visited = new Set(frontier);
 

@@ -12,6 +12,30 @@ node_modules/
 # TypeScript incremental state
 dist/.tsbuildinfo
 
+# Build output (generated, not tracked — run `bun run build` to generate)
+dist/
+
 # Local runtime state
 .cogmem/
 *.log
+dist.next/
+
+# Local agent skills (installed via .dsh/vendor, not tracked)
+.dsh/vendor/
+.agents/
+
+# Local runtime artifacts (untracked by design)
+/docs/overnight.lock
+/docs/overnight-progress.md
+
+# Test temp roots (a suite run with TMPDIR=.tmp-test lands 300 MB here)
+.tmp-test/
+
+.cogmem/tmp/
+
+# Local code-intelligence index (codegraph init) and its MCP wiring
+.codegraph/
+.mcp.json
+
+# Pack artifacts: `npm pack` writes here by default, and they are build output.
+/cogmem-*.tgz

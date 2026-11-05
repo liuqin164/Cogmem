@@ -1,3 +1,4 @@
+import { asRecord, stringOrEmpty } from '../../utils/Values.js';
 export function formatApprovalsReply(data: unknown): string {
   if (isCommandResult(data)) {
     return data.message || (data.success ? '确认请求已处理。' : '确认请求未执行。');
@@ -10,13 +11,13 @@ export function formatApprovalsReply(data: unknown): string {
 
   const lines = items.map((item) => {
     const approval = asRecord(item);
-    const id = stringify(approval.id) || 'unknown';
-    const action = stringify(
+    const id = stringOrEmpty(approval.id) || 'unknown';
+    const action = stringOrEmpty(
       approval.action
       ?? approval.description
       ?? approval.capabilityId
     ) || '操作';
-    const riskLevel = stringify(approval.riskLevel) || '未知';
+    const riskLevel = stringOrEmpty(approval.riskLevel) || '未知';
     return `• [${id}] ${action} (风险: ${riskLevel})`;
   });
 
@@ -41,14 +42,4 @@ function extractArray(data: unknown, keys: string[]): unknown[] {
 function isCommandResult(data: unknown): data is { success: boolean; message?: string } {
   const record = asRecord(data);
   return typeof record.success === 'boolean';
-}
-
-function asRecord(data: unknown): Record<string, unknown> {
-  return data && typeof data === 'object' && !Array.isArray(data)
-    ? data as Record<string, unknown>
-    : {};
-}
-
-function stringify(value: unknown): string {
-  return typeof value === 'string' ? value : '';
 }

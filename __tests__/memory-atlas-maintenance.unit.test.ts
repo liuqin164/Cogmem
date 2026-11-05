@@ -1,11 +1,10 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMemoryKernel } from '../src/factory.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('maintenance skips a clean Atlas, decays explicit-use activation, and prunes old telemetry', () => {
-  const kernel = createMemoryKernel({ dbPath: join(mkdtempSync(join(tmpdir(), 'cogmem-atlas-maintenance-')), 'memory.db') });
+  const kernel = createMemoryKernel({ dbPath: join(makeTempDir('cogmem-atlas-maintenance-'), 'memory.db') });
   try {
     kernel.memoryBindingStore.upsertEntity({ projectId: 'cogmem', canonicalName: 'Hermes', entityType: 'project' });
     kernel.rebuildMemoryAtlas({ projectId: 'cogmem' });

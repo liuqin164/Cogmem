@@ -281,7 +281,11 @@ export class InstalledBatchProcessor {
     }
 
     this.deps.onProgress?.({ stage: 'offline:start', recordsIngested });
-    const offline = await this.deps.runOfflineWindow(options.window);
+    // Re-deriving a window with nothing new in it only re-upserts the beliefs that are
+    // already there, appending duplicate BELIEF_UPSERTED events on every repeat import.
+    const offline = recordsIngested > 0
+      ? await this.deps.runOfflineWindow(options.window)
+      : emptyOfflineOutput();
     this.deps.onProgress?.({ stage: 'offline:complete', recordsIngested });
     return {
       window: options.window,
@@ -296,4 +300,18 @@ export class InstalledBatchProcessor {
       offline
     };
   }
+}
+
+function emptyOfflineOutput(): OfflineConsolidationOutput {
+  return {
+    verifiedFacts: [],
+    verifiedEvents: [],
+    correctedEntityBindings: [],
+    consolidatedBeliefs: [],
+    archivedFactIds: [],
+    rejectedFactIds: [],
+    archivedEntityIds: [],
+    unresolvedReferenceIds: [],
+    plasticityProposals: []
+  };
 }

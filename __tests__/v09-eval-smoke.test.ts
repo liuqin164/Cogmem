@@ -43,6 +43,7 @@ function makeMockEvalRunner() {
       suiteName: name,
       runAt: Date.now(),
       passed: true,
+        measured: true,
       metrics: {
         ...KNOWN_BASELINE_METRICS,
         resume_success_rate_200_turns: 1.0
@@ -50,6 +51,9 @@ function makeMockEvalRunner() {
     })),
     runAll: mock(async () => [{
       passed: true,
+      // A mock that supplies metrics stands for a suite that measured something;
+      // the real runner returns measured:false and cannot pass (#71).
+      measured: true,
       metrics: KNOWN_BASELINE_METRICS
     }])
   };

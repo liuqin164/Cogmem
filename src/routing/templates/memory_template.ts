@@ -1,3 +1,4 @@
+import { asRecord, stringOrEmpty } from '../../utils/Values.js';
 export function formatMemoryReply(data: unknown): string {
   if (typeof data === 'number') {
     return `当前记忆条目数：${data}`;
@@ -10,9 +11,9 @@ export function formatMemoryReply(data: unknown): string {
 
   const lines = facts.map((item) => {
     const fact = asRecord(item);
-    const subject = stringify(fact.subject) || 'unknown';
-    const predicate = stringify(fact.predicateFamily) || 'fact';
-    const value = stringify(fact.predicateValue ?? fact.object ?? fact.sourceText) || '无内容';
+    const subject = stringOrEmpty(fact.subject) || 'unknown';
+    const predicate = stringOrEmpty(fact.predicateFamily) || 'fact';
+    const value = stringOrEmpty(fact.predicateValue ?? fact.object ?? fact.sourceText) || '无内容';
     return `• ${subject} ${predicate}: ${value}`;
   });
 
@@ -32,14 +33,4 @@ function extractArray(data: unknown, keys: string[]): unknown[] {
   }
 
   return [];
-}
-
-function asRecord(data: unknown): Record<string, unknown> {
-  return data && typeof data === 'object' && !Array.isArray(data)
-    ? data as Record<string, unknown>
-    : {};
-}
-
-function stringify(value: unknown): string {
-  return typeof value === 'string' ? value : '';
 }

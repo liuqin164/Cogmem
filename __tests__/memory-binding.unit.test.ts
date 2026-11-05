@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend, createMemoryKernel } from '../src/public.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 test('memory binding groups valuable user events under a stable topic path', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-stable-topic-'));
+  const dir = makeTempDir('cogmem-binding-stable-topic-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -48,7 +48,7 @@ test('memory binding groups valuable user events under a stable topic path', asy
 });
 
 test('binding classifier generalizes project topics beyond Cogmem-specific rules', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-general-topic-'));
+  const dir = makeTempDir('cogmem-binding-general-topic-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -74,7 +74,7 @@ test('binding classifier generalizes project topics beyond Cogmem-specific rules
 });
 
 test('memory binding backfills valuable raw user events written outside agent turns', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-backfill-'));
+  const dir = makeTempDir('cogmem-binding-backfill-');
   const dbPath = join(dir, 'memory.db');
   const kernel = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
 
@@ -129,7 +129,7 @@ test('memory binding backfills valuable raw user events written outside agent tu
 });
 
 test('memory binding backfill scans forward from old global sequence instead of only latest raw page', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-backfill-cursor-'));
+  const dir = makeTempDir('cogmem-binding-backfill-cursor-');
   const dbPath = join(dir, 'memory.db');
   const kernel = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
 
@@ -171,7 +171,7 @@ test('memory binding backfill scans forward from old global sequence instead of 
 });
 
 test('binding failures are non-fatal but observable through pipeline metrics and maintenance tick', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-failure-metrics-'));
+  const dir = makeTempDir('cogmem-binding-failure-metrics-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
   const original = kernel.bindMemoryEvent.bind(kernel);
@@ -199,7 +199,7 @@ test('binding failures are non-fatal but observable through pipeline metrics and
 });
 
 test('claim-key clusters prevent over-fusing different diagnostics under one topic', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-claim-key-'));
+  const dir = makeTempDir('cogmem-binding-claim-key-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -235,7 +235,7 @@ test('claim-key clusters prevent over-fusing different diagnostics under one top
 });
 
 test('corrections create explicit correction edges without poisoning active clusters', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-correction-edges-'));
+  const dir = makeTempDir('cogmem-binding-correction-edges-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -285,7 +285,7 @@ test('corrections create explicit correction edges without poisoning active clus
 });
 
 test('graph recall ranks query-matching anchors ahead of older cluster evidence', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-rerank-'));
+  const dir = makeTempDir('cogmem-binding-rerank-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -328,7 +328,7 @@ test('graph recall ranks query-matching anchors ahead of older cluster evidence'
 });
 
 test('memory binding and candidate lifecycle schema is governed by schema version 14', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-schema-version-'));
+  const dir = makeTempDir('cogmem-binding-schema-version-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
 
   const row = kernel.factStore.getDatabase().prepare(`
@@ -341,7 +341,7 @@ test('memory binding and candidate lifecycle schema is governed by schema versio
 });
 
 test('memory binding performs historical binding and cluster fusion for same-topic events', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-cluster-fusion-'));
+  const dir = makeTempDir('cogmem-binding-cluster-fusion-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -388,7 +388,7 @@ test('memory binding performs historical binding and cluster fusion for same-top
 });
 
 test('memory binding marks corrections with review flags without overwriting prior clusters', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-correction-'));
+  const dir = makeTempDir('cogmem-binding-correction-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -431,7 +431,7 @@ test('memory binding marks corrections with review flags without overwriting pri
 });
 
 test('agent recall uses graph bindings to surface topic-linked raw ledger evidence', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-graph-recall-'));
+  const dir = makeTempDir('cogmem-binding-graph-recall-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -480,7 +480,7 @@ test('agent recall uses graph bindings to surface topic-linked raw ledger eviden
 });
 
 test('memory binding skips low-value turns and assistant-only durable claims', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-binding-low-signal-'));
+  const dir = makeTempDir('cogmem-binding-low-signal-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 

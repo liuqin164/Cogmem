@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { resolve } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { KernelAgentMemoryBackend, type AgentRecallIntent } from '../agent/index.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
@@ -14,14 +15,19 @@ import type { DeepWriteCandidateRecord, DeepWriteCandidateStatus } from '../stor
 import { MemoryInspectionStore } from '../store/MemoryInspectionStore.js';
 import type { MemoryEvent } from '../types/index.js';
 import { printCliJson } from './CliJson.js';
+import { cliArg } from '../utils/CliArgument.js';
+import { assertCliArgs } from './CliArgs.js';
+import { emitRefusalDocument } from './RefusalDocument.js';
 
 interface MemoryArgs {
-  command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show' | 'dream' | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
-    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-plan' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex' | 'rebuild-topology' | 'frame' | 'frame-backfill' | 'frame-review';
+  command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show'  | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
+    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-plan' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex' | 'rebuild-topology' | 'frame' | 'frame-backfill' | 'frame-review'
+    | 'belief-history';
   query?: string;
   eventId?: string;
   episodeId?: string;
   nodeId?: string;
+  key?: string;
   fromId?: string;
   toId?: string;
   hops?: number;
@@ -48,20 +54,17 @@ interface MemoryArgs {
   sessionId?: string;
   excludeSessionId?: string;
   limit?: number;
+  /** The candidate limit `memory govern` applies when it promotes. */
+  promoteLimit?: number;
   before?: number;
   after?: number;
   sinceGlobalSeq?: number;
   untilGlobalSeq?: number;
   order?: 'asc' | 'desc';
-  intervalMs?: number;
-  maxRuns?: number;
-  promoteLimit?: number;
   dbPath?: string;
   configPath?: string;
   mode?: 'shadow' | 'active';
   cursor?: string;
-  watch: boolean;
-  promote: boolean;
   json: boolean;
   includeEvidence: boolean;
   includeStaged: boolean;
@@ -90,10 +93,11 @@ function readArgs(argv: string[]): MemoryArgs {
 
   return {
     command,
-    query: stringArg(values, 'query') || stringArg(values, 'q'),
-    eventId: stringArg(values, 'event') || stringArg(values, 'event-id'),
-    episodeId: stringArg(values, 'episode') || stringArg(values, 'episode-id'),
-    nodeId: stringArg(values, 'id') || stringArg(values, 'node-id'),
+    query: stringArg(values, 'query'),
+    eventId: stringArg(values, 'event'),
+    episodeId: stringArg(values, 'episode'),
+    nodeId: stringArg(values, 'id'),
+    key: stringArg(values, 'key'),
     fromId: stringArg(values, 'from'),
     toId: stringArg(values, 'to'),
     hops: numberArg(values, 'hops'),
@@ -110,30 +114,25 @@ function readArgs(argv: string[]): MemoryArgs {
     localDateNow: stringArg(values, 'local-date-now'),
     timeZone: stringArg(values, 'timezone'),
     evidenceLimit: numberArg(values, 'evidence-limit'),
-    agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
+    agentId: stringArg(values, 'agent'),
     intent: recallIntentArg(values, 'intent'),
-    projectId: stringArg(values, 'project') || stringArg(values, 'project-id'),
+    projectId: stringArg(values, 'project'),
     global: values.global === true,
     collection: stringArg(values, 'collection'),
-    workspaceId: stringArg(values, 'workspace') || stringArg(values, 'workspace-id'),
-    threadId: stringArg(values, 'thread') || stringArg(values, 'thread-id'),
-    sessionId: stringArg(values, 'session') || stringArg(values, 'session-id'),
-    excludeSessionId: stringArg(values, 'exclude-session') || stringArg(values, 'exclude-session-id'),
+    workspaceId: stringArg(values, 'workspace'),
+    threadId: stringArg(values, 'thread'),
+    sessionId: stringArg(values, 'session'),
+    excludeSessionId: stringArg(values, 'exclude-session'),
     limit: numberArg(values, 'limit'),
     before: numberArg(values, 'before'),
     after: numberArg(values, 'after'),
-    sinceGlobalSeq: numberArg(values, 'since') ?? numberArg(values, 'since-global-seq'),
-    untilGlobalSeq: numberArg(values, 'until') ?? numberArg(values, 'until-global-seq'),
+    sinceGlobalSeq: numberArg(values, 'since'),
+    untilGlobalSeq: numberArg(values, 'until'),
     order: orderArg(values, 'order'),
-    intervalMs: numberArg(values, 'interval-ms'),
-    maxRuns: numberArg(values, 'max-runs'),
-    promoteLimit: numberArg(values, 'promote-limit'),
     dbPath: stringArg(values, 'db'),
     configPath: stringArg(values, 'config'),
     mode: modeArg(values, 'mode'),
     cursor: stringArg(values, 'cursor'),
-    watch: values.watch === true,
-    promote: values.promote === true,
     json: values.json === true,
     includeEvidence: values['include-evidence'] === true,
     includeStaged: values['include-staged'] === true,
@@ -145,7 +144,7 @@ function readArgs(argv: string[]): MemoryArgs {
 
 function usage(): string {
   return [
-    'Usage: cogmem memory <status|list|search|recall|show|dream|govern|candidates|review|map|tick|bind|frame|frame-backfill|frame-review|graph...> [args]',
+    'Usage: cogmem memory <status|list|search|recall|show|govern|candidates|review|map|tick|bind|frame|frame-backfill|frame-review|belief-history|graph...> [args]',
     '',
     'Commands:',
     '  status               summarize raw ledger, vector, and dream backlog state',
@@ -153,35 +152,39 @@ function usage(): string {
     '  list                 list raw ledger events with source anchors',
     '  search --query <q>   search raw ledger text without requiring hot vectors',
     '  recall --query <q>   run agent-facing governed recall with source context',
+    '         --agent defaults to the project id; name the agent that wrote the turn, or',
+    '         a turn appended under another --source-agent will not be in scope',
     '  show --event <id>    show one raw event with surrounding context',
-    '  dream                compatibility alias for a conditional sealed-episode Dream tick',
     '  govern               apply CPU governance to pending dream/deep-write candidates',
     '  candidates           list dream/deep-write governance candidates',
     '  review               approve, reject, defer, supersede, or relink one needs-confirmation candidate',
     '  map                  print the self-describing memory map for agent/host inspection',
     '  tick                 run one explicit host-owned maintenance tick',
     '  bind                 backfill memory bindings for high-value raw user events',
-    '  frame --episode <id> show one structured MemoryFrame',
-    '  frame-backfill       create deterministic evidence-backed frames for existing episodes',
-    '  frame-review         approve or reject a staged/needs-confirmation MemoryFrame',
+    '  frame --episode <id> show one structured MemoryFrame [--include-staged]',
+    '  frame-backfill       create deterministic evidence-backed frames for existing episodes [--cursor <cursor> --limit <n> --mode shadow|active]',
+    '  frame-review         approve or reject a needs_confirmation MemoryFrame (see --mode active on frame-backfill)',
+    '  belief-history --key <canonicalKey>  show every version of one belief, superseded ones included',
     '  graph                show a bounded overview of remembered topics, entities, clusters, actions, and time',
     '  graph-search         locate Atlas nodes by --query without expanding the graph',
     '  graph-explore        return a bounded local graph for a broad --query',
     '  graph-plan           build a multidimensional query frame and bounded graph result',
     '  graph-node           inspect --id with neighbors and evidence drilldown commands',
     '  graph-neighbors      expand --id by --hops 1..2',
-    '  graph-path           find a bounded path from --from to --to',
+    '  graph-path           find a bounded path from --from to --to [--max-hops <n>]',
     '  graph-timeline       reconstruct entity/time/action history for --query',
     '  graph-reindex        reproject one Atlas episode/card by --event or --episode without rebuilding the whole graph',
     '  rebuild-topology     explicitly rebuild project or global time and cognitive projections',
     '',
     'Common options:',
+    '  --promote-limit <n>  governance candidate limit for `memory govern`, default follows --limit or 100',
     '  --project <id>       scope to one project',
     '  --global             select the projectless/global scope for topology rebuild',
     '  --collection <name>  recall from a named collection; default excludes collection:theseus',
     '  --workspace <id>     scope to one workspace',
     '  --thread <id>        scope to one thread',
     '  --session <id>       scope to one session',
+    '  --exclude-session <id>  exclude one session from recall; the flag `cogmem_recall` exposes as excludeSessionId',
     '  --limit <n>          result limit, default 20',
     '  --since <globalSeq>  list/bind events at or after a global sequence',
     '  --until <globalSeq>  list events at or before a global sequence',
@@ -193,13 +196,9 @@ function usage(): string {
     '  --reason <text>      required audited review reason',
     '  --confirmation-event <id>  distinct same-project raw user evidence for approve/relink',
     '  --target-belief <id>       active same-project belief for correction relink',
-    '  --replacement <id>         replacement candidate for supersede',
+    '  --replacement <id>         required for supersede: distinct same-project candidate that replaces this one',
     '  --review-after <ms>         future epoch milliseconds for defer',
-    '  --promote            after dream, run CPU governance over pending candidates',
-    '  --promote-limit <n>  governance candidate limit, default follows --limit or 100',
-    '  --watch              keep issuing conditional Dream ticks as a host-owned worker',
-    '  --interval-ms <n>    watch sleep interval, default 300000',
-    '  --max-runs <n>       stop watch after n iterations; omit for long-running worker',
+    '                       review inputs are per action: an input the chosen action does not consume is rejected, not recorded',
     '  --agent <id>         agent id for governed recall, default openclaw',
     '  --intent <intent>    memory_recall, previous_session_summary, forensic_quote, historical_discussion, or action_history',
     '  --db <memory.db>     open an explicit database path',
@@ -228,7 +227,6 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'search'
     || value === 'recall'
     || value === 'show'
-    || value === 'dream'
     || value === 'govern'
     || value === 'candidates'
     || value === 'review'
@@ -247,7 +245,8 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'rebuild-topology'
     || value === 'frame'
     || value === 'frame-backfill'
-    || value === 'frame-review';
+    || value === 'frame-review'
+    || value === 'belief-history';
 }
 
 function modeArg(values: Record<string, string | boolean>, key: string): MemoryArgs['mode'] {
@@ -603,10 +602,31 @@ function candidateNextActions(queueSummary: CandidateQueueSummary, projectId?: s
       safeForAutomation: false,
       reason: `${queueSummary.activeNeedsConfirmation} candidates need explicit operator/user confirmation`,
       command: `cogmem memory candidates${projectArg} --status needs_confirmation --json`,
-      reviewCommand: `cogmem memory review${projectArg} --id <candidate-id> --action <approve|reject|defer|supersede|relink> --actor <operator> --reason <reason> --json`,
+      reviewCommands: reviewCommandsFor(projectArg),
     });
   }
   return actions;
+}
+
+/**
+ * One runnable shape per review action. A single shape cannot serve all five:
+ * approve and relink require --confirmation-event, relink also requires an active
+ * --target-belief, defer requires a future --review-after, and supersede requires the
+ * candidate that replaces this one. Every flag printed here is required by the service;
+ * a shape that omits one is not a shorter command, it is a rejection.
+ * reject needs nothing beyond the audited reason.
+ *
+ * The replacement gets its own placeholder: reusing <candidate-id> for both --id and
+ * --replacement made the printed line a self-supersede, which the service now rejects.
+ */
+function reviewCommandsFor(projectArg: string): Array<{ action: NonNullable<MemoryArgs['reviewAction']>; command: string }> {
+  return [
+    { action: 'approve', command: `cogmem memory review${projectArg} --id <candidate-id> --action approve --actor <operator> --reason <reason> --confirmation-event <user-event-id> --json` },
+    { action: 'reject', command: `cogmem memory review${projectArg} --id <candidate-id> --action reject --actor <operator> --reason <reason> --json` },
+    { action: 'defer', command: `cogmem memory review${projectArg} --id <candidate-id> --action defer --actor <operator> --reason <reason> --review-after <epoch-ms> --json` },
+    { action: 'supersede', command: `cogmem memory review${projectArg} --id <candidate-id> --action supersede --actor <operator> --reason <reason> --replacement <replacement-candidate-id> --json` },
+    { action: 'relink', command: `cogmem memory review${projectArg} --id <candidate-id> --action relink --actor <operator> --reason <reason> --confirmation-event <user-event-id> --target-belief <belief-id> --json` },
+  ];
 }
 
 function asCount(value: unknown): number {
@@ -678,13 +698,19 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   if (!args.query) throw new Error(`Missing --query.\n${usage()}`);
   const backend = new KernelAgentMemoryBackend(kernel);
   const projectId = args.projectId || 'openclaw';
+  // Asking for a project's memory asks as the agent that project's writes are recorded
+  // under, which is what the MCP read path already does (`agentId || projectId`): a
+  // connection with no host name records under the project it is bound to (ADR-0006,
+  // #85). Defaulting to the literal instead meant the CLI could not read back a workspace
+  // `connect` had wired — the memory was there, and `memory search` found it (#88).
+  const agentId = args.agentId || args.projectId || 'openclaw';
   const strategyCapsule = kernel.strategyCortex.plan({
     query: args.query,
     intent: kernel.contextCortex.classifyIntent(args.query),
     projectId,
   });
   const result = backend.recall({
-    agentId: args.agentId || 'openclaw',
+    agentId,
     projectId,
     collection: args.collection,
     workspaceId: args.workspaceId,
@@ -701,10 +727,13 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   });
   return {
     query: args.query,
-    agentId: args.agentId || 'openclaw',
+    agentId,
     projectId,
     collection: args.collection,
     recallMode: result.recallMode,
+    // Whether a semantic index existed for this answer, carried through rather than
+    // rebuilt: the CLI used to assemble this object by hand and silently drop fields.
+    semanticIndex: result.semanticIndex,
     fallbackUsed: result.fallbackUsed,
     queryPlan: result.queryPlan,
     decisionTrace: result.decisionTrace,
@@ -750,12 +779,56 @@ function runFrame(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknow
     if (!args.nodeId || !args.projectId || !args.actor || !args.reason || !['approve', 'reject'].includes(args.reviewAction ?? '')) {
       throw new Error(`frame-review requires --id, --project, --action approve|reject, --actor, and --reason.\n${usage()}`);
     }
-    return { frameId: args.nodeId, action: args.reviewAction, applied: kernel.reviewMemoryFrame({ frameId: args.nodeId, projectId: args.projectId, action: args.reviewAction as 'approve' | 'reject', actor: args.actor, reason: args.reason }) };
+    try {
+      return { frameId: args.nodeId, action: args.reviewAction, applied: kernel.reviewMemoryFrame({ frameId: args.nodeId, projectId: args.projectId, action: args.reviewAction as 'approve' | 'reject', actor: args.actor, reason: args.reason }) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // A staged frame is not reviewable: the backfill's default mode stages, and only
+      // `--mode active` puts a frame in the state review acts on. Say which step applies.
+      if (message.startsWith('memory_frame_review_not_applicable:')) {
+        const status = message.split(':').pop();
+        throw new Error(`${message} — a frame can be reviewed in needs_confirmation only. Run \`cogmem memory frame-backfill --project <id> --mode active\` to move staged frames into it, or review the status that applies to this one.`);
+      }
+      throw error;
+    }
   }
   if (!args.episodeId) throw new Error(`frame requires --episode.\n${usage()}`);
   const frame = kernel.getMemoryFrame(args.episodeId, args.projectId, { includeStaged: args.includeStaged });
-  if (!frame) throw new Error('memory_frame_not_found');
-  return frame as unknown as Record<string, unknown>;
+  if (frame) return frame as unknown as Record<string, unknown>;
+  // A staged frame is not the same fact as no frame, and the default read hid the difference:
+  // `frame-backfill` reports `created` and `needsReview`, then this answered
+  // `memory_frame_not_found` — which reads as "the backfill did nothing" and names no next step.
+  const staged = args.includeStaged ? undefined : kernel.getMemoryFrame(args.episodeId, args.projectId, { includeStaged: true });
+  if (staged) {
+    throw new Error(`memory_frame_not_active: this episode has a staged frame awaiting review. Pass --include-staged to read it, or approve it with \`cogmem memory frame-review --id <frameId> --project <id> --action approve --actor <name> --reason <text>\`.`);
+  }
+  throw new Error('memory_frame_not_found');
+}
+
+function runBeliefHistory(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
+  const key = args.key?.trim();
+  if (!key) throw new Error(`belief-history requires --key <canonicalKey>.\n${usage()}`);
+  // Read the live belief table: that is what recall and belief touches use.
+  const history = kernel.beliefStore.getBeliefHistoryForCanonicalKeys([key], {
+    projectId: args.projectId,
+    includeStatuses: ['active', 'superseded', 'suspect', 'expired', 'revoked'],
+    limitPerCanonical: 50,
+  });
+  const rows = [...(history.get(key) ?? [])].sort((a, b) => a.validFrom - b.validFrom || a.createdAt - b.createdAt);
+  return {
+    projectId: args.projectId,
+    key,
+    versions: rows.map((row) => ({
+      beliefId: row.id,
+      canonicalKey: row.canonicalKey,
+      value: row.objectValue.raw,
+      status: row.status,
+      validFrom: row.validFrom,
+      validTo: row.validTo,
+      supersedesBeliefId: row.supersedesBeliefId,
+      supersededByBeliefId: row.supersededByBeliefId,
+    })),
+  };
 }
 
 function runGraphCommand(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
@@ -810,6 +883,11 @@ function runShow(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown
     after: afterCount,
   });
   if (!context) throw new Error(`No raw ledger event found for ${args.eventId}`);
+  // A project-bound drill-down must not reach into another project, and the
+  // failure must not confirm that the event exists somewhere else.
+  if (args.projectId && context.event.projectId !== args.projectId) {
+    throw new Error(`No raw ledger event found for ${args.eventId}`);
+  }
   const normalized = normalizeSourceContextWindow(context.event, context.before, context.after, {
     before: beforeCount,
     after: afterCount,
@@ -839,7 +917,7 @@ function runGovern(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
         decisions: [],
         queue: kernel.getDreamCandidateQueue(args.projectId),
         warning: 'memory govern does not process needs_confirmation candidates. Use memory review for approve, reject, defer, supersede, or relink.',
-        reviewCommand: 'cogmem memory review --project <projectId> --id <candidateId> --action <approve|reject|defer|supersede|relink> --actor <operator> --reason <reason>',
+        reviewCommands: reviewCommandsFor(args.projectId ? ` --project ${cliArg(args.projectId)}` : ' --project <projectId>'),
       };
     }
     throw new Error(`memory govern processes only candidate status; ${args.status} requires "cogmem memory review --id <candidateId> --action <action>"`);
@@ -851,6 +929,13 @@ function runGovern(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   return {
     ...result,
     decisions: result.decisions,
+    promoted_candidates: result.promotedCandidates,
+    neurons_written: result.neuronsWritten,
+    ...(result.neuronsWritten === 0
+      ? {
+        neurons_written_reason: 'promotion records a governance decision on each candidate; it writes a neuron only when the candidate carries a source neuron. 4.0 host recall reads Frames and the Atlas, not the legacy neuron layer.',
+      }
+      : {}),
   };
 }
 
@@ -872,62 +957,6 @@ function runReview(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
     reviewAfter: args.reviewAfter,
   });
   return { review: result.review, reviewedCandidate: result.candidate, decision: result.decision, queue: kernel.getDreamCandidateQueue(args.projectId) };
-}
-
-async function runDreamOnce(kernel: MemoryKernel, args: MemoryArgs): Promise<Record<string, unknown>> {
-  const result = await kernel.runDreamTick({
-    projectId: args.projectId,
-    maxEpisodes: args.limit || 10,
-  });
-  const payload: Record<string, unknown> = {
-    ...result,
-    processedEventCount: 0,
-    dreamableEventCount: result.processedEpisodeCount,
-    status: kernel.getEpisodeDreamStatus(args.projectId),
-    candidates: result.candidateIds,
-  };
-  if (args.promote) {
-    payload.governance = kernel.promoteDreamCandidates({
-      projectId: args.projectId,
-      limit: args.promoteLimit || args.limit || 100,
-    });
-  }
-  return payload;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
-}
-
-async function runDream(kernel: MemoryKernel, args: MemoryArgs): Promise<Record<string, unknown>> {
-  if (!args.watch) return runDreamOnce(kernel, args);
-
-  const intervalMs = args.intervalMs ?? 300000;
-  const maxRuns = args.maxRuns;
-  const runs: Record<string, unknown>[] = [];
-  let completed = 0;
-  while (maxRuns === undefined || completed < maxRuns) {
-    const run = await runDreamOnce(kernel, args);
-    completed += 1;
-    if (maxRuns === undefined) {
-      if (args.json) {
-        printCliJson('memory.dream.watch', { watch: true, intervalMs, run });
-      } else {
-        printHuman('dream', run);
-      }
-    } else {
-      runs.push(run);
-    }
-    if (maxRuns !== undefined && completed >= maxRuns) break;
-    await sleep(intervalMs);
-  }
-  return {
-    watch: true,
-    intervalMs,
-    maxRuns,
-    runs,
-    queue: kernel.getDreamCandidateQueue(args.projectId),
-  };
 }
 
 function runCandidates(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
@@ -962,26 +991,17 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     if (payload.nextActions) console.log(`nextActions: ${JSON.stringify(payload.nextActions)}`);
     return;
   }
-  if (command === 'dream') {
-    if (payload.watch === true) {
-      const runs = Array.isArray(payload.runs) ? payload.runs : [];
-      console.log(`watch: true intervalMs=${payload.intervalMs}`);
-      console.log(`runs: ${runs.length}`);
-      console.log(`queue: ${JSON.stringify(payload.queue)}`);
-      return;
-    }
-    console.log(`processedEpisodes: ${payload.processedEpisodeCount}`);
-    console.log(`selectedMode: ${payload.selectedMode}`);
-    console.log(`candidates: ${payload.candidateCount}`);
-    console.log(`dreamBacklog: ${JSON.stringify(payload.status)}`);
-    if (payload.governance) console.log(`governance: ${JSON.stringify(payload.governance)}`);
-    return;
-  }
   if (command === 'govern') {
     const decisions = Array.isArray(payload.decisions) ? payload.decisions : [];
     if (payload.warning) console.log(`warning: ${payload.warning}`);
-    if (payload.reviewCommand) console.log(`reviewCommand: ${payload.reviewCommand}`);
+    const reviewCommands = payload.reviewCommands as Array<{ action: string; command: string }> | undefined;
+    if (reviewCommands) {
+      for (const { action, command } of reviewCommands) console.log(`review ${action}: ${command}`);
+    }
     console.log(`decisions: ${decisions.length}`);
+    if (payload.promoted_candidates !== undefined) console.log(`promoted_candidates: ${payload.promoted_candidates}`);
+    if (payload.neurons_written !== undefined) console.log(`neurons_written: ${payload.neurons_written}`);
+    if (payload.neurons_written_reason) console.log(`neurons_written_reason: ${payload.neurons_written_reason}`);
     console.log(`queue: ${JSON.stringify(payload.queue)}`);
     const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
     for (const candidate of candidates as Array<Record<string, unknown>>) {
@@ -1046,6 +1066,15 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     console.log(`rebuiltAt: ${payload.rebuiltAt}`);
     return;
   }
+  if (command === 'belief-history') {
+    const versions = Array.isArray(payload.versions) ? payload.versions : [];
+    console.log(`key: ${payload.key} project=${payload.projectId || '__global__'} versions=${versions.length}`);
+    for (const row of versions as Array<Record<string, unknown>>) {
+      const replaced = row.supersededByBeliefId ? ` supersededBy=${row.supersededByBeliefId}` : '';
+      console.log(`- ${row.status} ${row.value} validFrom=${row.validFrom}${replaced}`);
+    }
+    return;
+  }
   if (command === 'graph' || command.startsWith('graph-')) {
     console.log(`memoryAtlas: ${payload.version || 'memory_atlas.v2'} project=${payload.projectId || 'unknown'}`);
     const rows = Array.isArray(payload.nodes) ? payload.nodes
@@ -1089,13 +1118,28 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
       for (const event of rows) console.log(`- ${event.label || event.eventId} ${event.eventId} ${event.role || 'unknown'} ${event.text}`);
     }
   }
+  // Every branch above returns, so reaching here means this subcommand has no human
+  // rendering yet. Printing nothing looked like a command that failed silently; print the
+  // payload instead. Adding a branch for one command cannot make another silent again.
+  console.log(JSON.stringify(payload, null, 2));
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['action', 'actor', 'after', 'agent', 'before', 'collection', 'config', 'confirmation-event', 'cursor', 'db', 'episode', 'event', 'evidence-limit', 'exclude-session', 'from', 'global', 'hops', 'id', 'include-evidence', 'include-staged', 'intent', 'json', 'key', 'limit', 'local-date-now', 'max-episodes', 'max-hops', 'mode', 'no-refresh', 'now', 'order', 'project', 'promote-limit', 'query', 'reason', 'refresh', 'replacement', 'review-after', 'session', 'since', 'stale-ok', 'status', 'target-belief', 'thread', 'timezone', 'to', 'until', 'workspace'] });
   const args = readArgs(process.argv.slice(2));
-  if (args.help || !args.command) {
+  if (args.help) {
     console.log(usage());
     return;
+  }
+  if (!args.command) {
+    // A typo is not a help request: `isMemoryCommand` rejects the name and leaves the command
+    // unset, so this is the only place that can tell "no subcommand" from "unknown subcommand"
+    // — and answering both with exit 0 made a mistyped or removed subcommand look successful.
+    const given = process.argv.slice(2).find((arg) => !arg.startsWith('-'));
+    if (given) throw new Error(`Unknown memory subcommand: ${given}\n${usage()}`);
+    // The other half of the same hole: no subcommand at all printed usage and exited 0, so a script
+    // could not tell a successful run from one that never named a command.
+    throw new Error(`cogmem memory needs a subcommand\n${usage()}`);
   }
   if (args.command === 'status' || args.command === 'plan' || args.command === 'candidates') {
     runReadOnlyInspection(args);
@@ -1120,9 +1164,7 @@ async function main(): Promise<void> {
             ? runRecall(kernel, kernelArgs)
             : kernelArgs.command === 'show'
               ? runShow(kernel, kernelArgs)
-              : kernelArgs.command === 'dream'
-                ? await runDream(kernel, kernelArgs)
-                : kernelArgs.command === 'govern'
+              : kernelArgs.command === 'govern'
                   ? runGovern(kernel, kernelArgs)
                   : kernelArgs.command === 'candidates'
                     ? runCandidates(kernel, kernelArgs)
@@ -1138,15 +1180,13 @@ async function main(): Promise<void> {
                           ? runTopologyRebuild(kernel, kernelArgs)
                         : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill' || kernelArgs.command === 'frame-review'
                           ? runFrame(kernel, kernelArgs)
+                        : kernelArgs.command === 'belief-history'
+                          ? runBeliefHistory(kernel, kernelArgs)
                         : runGraphCommand(kernel, kernelArgs);
     if (kernelArgs.json) {
       const queue = kernelArgs.command === 'status'
         ? payload.dreamCandidateQueue as ReturnType<MemoryKernel['getDreamCandidateQueue']>
-        : kernelArgs.command === 'dream' && payload.governance
-          ? (payload.governance as { queue?: ReturnType<MemoryKernel['getDreamCandidateQueue']> }).queue
-          : kernelArgs.command === 'dream' && payload.queue
-            ? payload.queue as ReturnType<MemoryKernel['getDreamCandidateQueue']>
-            : kernelArgs.command === 'govern'
+        : kernelArgs.command === 'govern'
               ? payload.queue as ReturnType<MemoryKernel['getDreamCandidateQueue']>
               : kernelArgs.command === 'review'
                 ? payload.queue as ReturnType<MemoryKernel['getDreamCandidateQueue']>
@@ -1164,10 +1204,10 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
+  // A refusal is the one error that carries a contract: under --json it answers with the document
+  // instead of the sentence, and the exit code stays non-zero.
+  if (emitRefusalDocument(error, 'memory')) return;
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
 
-function cliArg(value: string): string {
-  return /^[A-Za-z0-9._:/=@+-]+$/u.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
-}

@@ -3,29 +3,29 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { resolveCliBinDir } from '../install/InstallSteps.js';
+import { assertCliArgs } from './CliArgs.js';
+
 const COMMANDS: Record<string, string> = {
   init: 'init',
   doctor: 'doctor',
   connect: 'connect',
   update: 'update',
-  openclaw: 'openclaw',
   compact: 'compact',
   memory: 'memory',
   'explain-recall': 'explain-recall',
   mcp: 'mcp',
   repair: 'repair',
-  'import-openclaw': 'import-openclaw',
-  'import-hermes': 'import-hermes',
+  import: 'import',
   'normalize-transcript': 'normalize-transcript',
   snapshot: 'snapshot',
-  're-embed': 're-embed',
-  'migrate-vectors': 'migrate-vectors',
-  migrate: 'migrate',
   prospective: 'prospective',
   strategy: 'strategy',
   'brain-eval': 'brain-eval',
   episode: 'episode',
   dream: 'dream',
+  'host-bridge': 'host-bridge',
+  cleanup: 'cleanup',
 };
 
 function usage(): string {
@@ -37,26 +37,24 @@ function usage(): string {
     '  doctor               validate config; use --fix --agent openclaw to repair OpenClaw auto memory wiring',
     '  connect openclaw     install OpenClaw/Hermes integration files; use --auto for OpenClaw runtime hooks',
     '  update               show or run package update command',
-    '  openclaw diagnose    inspect generated OpenClaw plugin files and hook audit without opening the DB',
     '  compact              dry-run or apply vector-only storage compaction',
     '  memory               audit/search/show raw and compiled memory; run dream/candidates queue',
-    '  import-openclaw      import OpenClaw memory files',
-    '  import-hermes        import Hermes memory files',
+    '  import <host>        import memory files from one host (openclaw | hermes)',
     '  explain-recall       explain governed recall',
     '  mcp                  start stdio MCP server',
+    '  normalize-transcript  convert a transcript export into conversation Markdown',
     '  repair               conservative upgrade repair commands such as project-scope',
     '  snapshot             export/import snapshots',
-    '  re-embed             inspect or run re-embedding',
-    '  migrate-vectors      migrate vector backend data',
-    '  migrate              plan or apply schema migrations with optional backup',
     '  prospective          manage confirmed-only future-memory candidates; never executes tasks',
     '  strategy             inspect current-turn memory policy and read-only outcome telemetry',
     '  brain-eval           evaluate recall, provenance, leakage, budget, and false activation',
     '  episode              append, import, inspect, seal, or repair conversation episodes',
     '  dream                conditionally process sealed episode backlog',
+    '  host-bridge          stdio bridge a host plugin can spawn: recall/remember without the MCP server',
+    '  cleanup              remove the managed launcher after its installation is gone',
     '',
-    'JSON output: commands with --json emit cogmem.cli.v1. Object fields stay top-level; arrays use items.',
-    'Queue commands expose candidate, promoted, needs_confirmation, and beliefs at the top level.',
+    'JSON output: commands with --json emit cogmem.cli.v1. Object fields stay top-level, and arrays are named for what they hold: items (recall, prospective list), events (list, search), decisions (govern), episodes (episode list), statuses (compact), and nodes/edges/matchedFacets/nextActions/warnings on Atlas reads.',
+    'Queue commands expose candidate, promoted, needs_confirmation, and beliefs at the top level. `dream status` and `dream night` nest the frame-stamp report as staleFrames: {checked, total, stale, truncated}. A tick that could not use the memory model carries semanticProcessorReason and, when the call threw, semanticProcessorError.',
   ].join('\n');
 }
 
@@ -67,10 +65,33 @@ function siblingEntrypoint(command: string): string {
   return join(base, `${command}.ts`);
 }
 
+/** The version this installation reports, read from the manifest beside the entry point. */
+async function readVersion(): Promise<string> {
+  const { readFile } = await import('node:fs/promises');
+  const { fileURLToPath } = await import('node:url');
+  const { join, dirname } = await import('node:path');
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 4; depth += 1) {
+    try {
+      const raw = await readFile(join(dir, 'package.json'), 'utf8');
+      const version = (JSON.parse(raw) as { version?: string }).version;
+      if (version) return version;
+    } catch { /* keep walking up: src/bin and dist/bin sit at different depths */ }
+    dir = dirname(dir);
+  }
+  return 'unknown';
+}
+
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
   if (!command || command === '--help' || command === '-h') {
     console.log(usage());
+    return;
+  }
+  // A version flag is what a person types after installing, before anything else works.
+  // It used to answer "Unknown cogmem command: --version".
+  if (command === '--version' || command === '-v' || command === 'version') {
+    console.log(await readVersion());
     return;
   }
   const entrypoint = COMMANDS[command];
@@ -80,18 +101,26 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const env = { ...process.env };
+  const binDir = resolveCliBinDir(process.argv[1], env);
+  if (binDir) env.COGMEM_BIN_DIR = binDir;
+
   const proc = Bun.spawn({
     cmd: [process.execPath || 'bun', siblingEntrypoint(entrypoint), ...rest],
     cwd: process.cwd(),
+    // Inherited, not piped. The dispatcher used to read the child's output to EOF and
+    // write it afterwards, which works for a command that exits and cannot work for
+    // one that does not: `cogmem mcp` streams JSON-RPC until its client disconnects,
+    // so every response was held until the child exited and a client that keeps the
+    // connection open never completed the handshake — pi reported `MCP request timed
+    // out after 60000ms` with an empty tool list, and the same happened to the
+    // startup line of `cogmem mcp --transport http`. Inheriting the streams makes the
+    // child write to the client directly, so output arrives as it is produced.
     stdin: 'inherit',
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: process.env,
+    stdout: 'inherit',
+    stderr: 'inherit',
+    env,
   });
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  await Bun.write(Bun.stdout, stdout);
-  await Bun.write(Bun.stderr, stderr);
   process.exit(await proc.exited);
 }
 

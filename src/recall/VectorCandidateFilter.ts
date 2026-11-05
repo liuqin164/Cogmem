@@ -89,13 +89,3 @@ export class CredibilityFilter extends MemoryGraphVectorFilterRule {
     return neuronIds.filter((id) => (this.neuron(id)?.metadata.confidence ?? 1) >= this.threshold);
   }
 }
-
-export function createDefaultVectorCandidateFilter(memoryGraph: MemoryGraph): VectorCandidateFilter {
-  return new VectorCandidateFilter([
-    new WorkspaceFilter(memoryGraph),
-    new TopicFilter(memoryGraph),
-    new StaleFilter(memoryGraph),
-    new StatusFilter(memoryGraph),
-    new CredibilityFilter(memoryGraph),
-  ]);
-}

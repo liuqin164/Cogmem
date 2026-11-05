@@ -2,6 +2,8 @@
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 import type { ProspectiveMemoryStatus, ProspectiveMemoryType } from '../prospective/index.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
+import { emitRefusalDocument } from './RefusalDocument.js';
 
 interface Args {
   command?: string;
@@ -27,7 +29,7 @@ function usage(): string {
     'Usage: cogmem prospective <list|due|create|confirm|reject|defer|complete|expire> [options]',
     '  list --project <id> [--status pending --status confirmed]',
     '  due --project <id> [--at <epoch-ms>]',
-    '  create --project <id> --type <type> --key <key> --title <text> --evidence <eventId> [--due <epoch-ms>]',
+    '  create --project <id> --type intention|commitment|reminder|open_loop|plan --key <key> --title <text> --evidence <eventId> [--due <epoch-ms>]',
     '  confirm --project <id> --id <candidateId> --evidence <userEventId>',
     '  reject|complete|expire --project <id> --id <candidateId>',
     '  defer --project <id> --id <candidateId> --until <epoch-ms>',
@@ -37,6 +39,7 @@ function usage(): string {
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['at', 'config', 'db', 'due', 'evidence', 'id', 'json', 'key', 'project', 'status', 'title', 'type', 'until'] });
   const args = parseArgs(process.argv.slice(2));
   if (!args.command || args.command === 'help' || args.values.has('help')) {
     console.log(usage());
@@ -50,10 +53,10 @@ async function main(): Promise<void> {
     const projectId = args.values.get('project')?.[0];
     let result: unknown;
     if (args.command === 'list') {
-      if (!projectId) throw new Error('--project is required');
+      if (!projectId) throw new Error(`--project is required\n${usage()}`);
       result = service.list({ projectId, statuses: args.values.get('status') as ProspectiveMemoryStatus[] | undefined });
     } else if (args.command === 'due') {
-      if (!projectId) throw new Error('--project is required');
+      if (!projectId) throw new Error(`--project is required\n${usage()}`);
       result = service.listDue({ projectId, atTime: numberValue(args.values, 'at') });
     } else if (args.command === 'create') {
       const candidateType = args.values.get('type')?.[0] as ProspectiveMemoryType | undefined;
@@ -72,7 +75,7 @@ async function main(): Promise<void> {
     } else {
       const candidateId = args.values.get('id')?.[0];
       if (!candidateId) throw new Error('--id is required');
-      if (!projectId) throw new Error('--project is required');
+      if (!projectId) throw new Error(`--project is required\n${usage()}`);
       if (args.command === 'confirm') {
         const evidence = args.values.get('evidence')?.[0];
         if (!evidence) throw new Error('confirm requires --evidence <userEventId>');
@@ -101,6 +104,9 @@ function numberValue(values: Map<string, string[]>, key: string): number | undef
 }
 
 main().catch((error) => {
+  // Every entry that can open a database emits the same refusal document under --json; without the
+  // flag the sentence on stderr is unchanged.
+  if (emitRefusalDocument(error, 'prospective')) return;
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

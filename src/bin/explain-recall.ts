@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 import { explainRecallWithKernel } from '../recall/RecallExplanation.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
+import { emitRefusalDocument } from './RefusalDocument.js';
 
 interface ExplainArgs {
   query?: string;
@@ -35,8 +37,11 @@ function readArgs(argv: string[]): ExplainArgs {
 
   return {
     query: stringArg(values, 'query'),
-    projectId: stringArg(values, 'project') || stringArg(values, 'project-id'),
-    agentId: stringArg(values, 'agent') || stringArg(values, 'agent-id'),
+    projectId: stringArg(values, 'project'),
+    // The same default `memory recall` applies (`--agent || --project || openclaw`): this command
+    // exists to explain that one, and defaulting differently made them answer 0 and 8 to the same
+    // query on a real database (#128).
+    agentId: stringArg(values, 'agent') || stringArg(values, 'project') || 'openclaw',
     limit: numberArg(values, 'limit'),
     startTime: timeArg(values, 'since'),
     endTime: timeArg(values, 'until'),
@@ -71,7 +76,7 @@ function timeArg(values: Record<string, string | boolean>, key: string): number 
 
 function usage(): string {
   return [
-    'Usage: cogmem-explain-recall --query <text> [--project <id>] [--agent <id>] [--limit <n>] [--db <memory.db>|--config <config.toml>] [--json]',
+    'Usage: cogmem explain-recall --query <text> [--project <id>] [--agent <id>] [--limit <n>] [--db <memory.db>|--config <config.toml>] [--json]',
     '',
     'Explains the memory kernel recall path: narrative, pulse trace, temporal traversal, runtime path, evidence, and filteredEvidence.',
     'filteredEvidence keeps suppressed same-project candidates with reason and optional governanceReason such as archived, suspect_llm_inference, suspect_external_tool_observation, or suspect_unverified_claim.',
@@ -121,6 +126,7 @@ function printHuman(explanation: ReturnType<typeof explainRecallWithKernel>): vo
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['agent', 'config', 'db', 'json', 'limit', 'project', 'query'] });
   const args = readArgs(process.argv.slice(2));
   if (args.help) {
     console.log(usage());
@@ -149,6 +155,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
+  if (emitRefusalDocument(error, 'explain-recall')) return;
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

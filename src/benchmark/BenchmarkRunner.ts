@@ -17,6 +17,8 @@ export interface BenchmarkGroupResult {
   suiteResult: EvalSuiteResult;
   baselineResults: BenchmarkBaselineResult[];
   passed: boolean;
+  /** False when the suite measured nothing, in which case nothing passed (#71). */
+  measured: boolean;
 }
 
 export class BenchmarkRunner {
@@ -37,6 +39,11 @@ export class BenchmarkRunner {
     }
 
     const suiteResult = await this.evalRunner.runSuite(group.suiteName);
+    if (!suiteResult.measured) {
+      // No comparison, and no verdict: comparing an absent measurement reads as a
+      // pass for anything whose threshold is zero, which is most of them.
+      return { group, suiteResult, baselineResults: [], passed: false, measured: false };
+    }
     const baselineResults = group.baselines.map((baseline) => {
       const rawValue = suiteResult.metrics[baseline.metricKey];
       const value = typeof rawValue === 'number' ? rawValue : 0;
@@ -57,7 +64,8 @@ export class BenchmarkRunner {
       group,
       suiteResult,
       baselineResults,
-      passed: baselineResults.every((result) => result.passed)
+      passed: baselineResults.every((result) => result.passed),
+      measured: true,
     };
   }
 

@@ -1,3 +1,4 @@
+import { asRecord } from '../../utils/Values.js';
 export function formatContextReply(data: unknown): string {
   const context = asRecord(data);
   const used = numberOrNull(context.used ?? context.estimatedTokens);
@@ -17,12 +18,6 @@ export function formatContextReply(data: unknown): string {
   ];
 
   return `当前上下文摘要：\n${lines.join('\n')}`;
-}
-
-function asRecord(data: unknown): Record<string, unknown> {
-  return data && typeof data === 'object' && !Array.isArray(data)
-    ? data as Record<string, unknown>
-    : {};
 }
 
 function numberOrNull(value: unknown): number | null {

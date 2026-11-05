@@ -74,8 +74,5 @@ jobs:
       - name: Verify package contents
         run: npm pack --dry-run --json
 
-      - name: Verify packed schema31 migration
-        run: bun run verify:packed-migration
-
       - name: Publish to npm
         run: npm publish --provenance --access public

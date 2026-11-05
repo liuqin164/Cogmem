@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
 import { printCliJson } from './CliJson.js';
+import { assertCliArgs } from './CliArgs.js';
+import { emitRefusalDocument } from './RefusalDocument.js';
 
 function parse(argv: string[]): { command?: string; values: Map<string, string> } {
   const [command, ...rest] = argv;
@@ -26,11 +28,13 @@ function usage(): string {
 }
 
 async function main(): Promise<void> {
+  assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['config', 'db', 'json', 'limit', 'project', 'query'] });
   const args = parse(process.argv.slice(2));
-  if (!args.command || args.command === 'help' || args.values.has('help')) {
+  if (args.command === 'help' || args.values.has('help')) {
     console.log(usage());
     return;
   }
+  if (!args.command) { console.error(usage()); process.exit(1); }
   const dbPath = args.values.get('db');
   const kernel = dbPath ? createMemoryKernel({ dbPath }) : createMemoryKernelFromConfig({ configPath: args.values.get('config') });
   try {
@@ -52,13 +56,19 @@ async function main(): Promise<void> {
       printCliJson('strategy.outcomes', kernel.contextOutcomeStore.list(projectId, limit));
       return;
     }
-    throw new Error(`unknown strategy command: ${args.command}`);
+    // `cogmem strategy --config x` used to report the flag itself as an unknown command.
+    throw new Error(args.command.startsWith('-')
+      ? `cogmem strategy needs a subcommand\n${usage()}`
+      : `unknown strategy command: ${args.command}\n${usage()}`);
   } finally {
     kernel.close();
   }
 }
 
 main().catch((error) => {
+  // Every entry that can open a database emits the same refusal document under --json; without the
+  // flag the sentence on stderr is unchanged.
+  if (emitRefusalDocument(error, 'strategy')) return;
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

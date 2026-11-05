@@ -6,16 +6,17 @@ import { join } from 'node:path';
 
 import { AesGcmEncryptionProvider, PiiRedactor, createMemoryKernel } from '../src/public.js';
 import { PRIVACY_BASELINE_CLASSIFICATION, PRIVACY_SCHEMA_CLASSIFICATION } from '../src/governance/PrivacyDeletionRegistry.js';
-import { V0_5_BASELINE_TABLES } from '../src/migrations/0001_init.js';
+import { V0_5_BASELINE_TABLES } from '../src/migrations/MigrationUtils.js';
 import type { EmbeddingProvider } from '../src/embedding/EmbeddingProvider.js';
 import { FileAssetStore } from '../src/assets/FileAssetStore.js';
 import { FileBlockStore } from '../src/assets/FileBlockStore.js';
 import { FileChunkStore } from '../src/assets/FileChunkStore.js';
 import { UserModelStore } from '../src/models/UserModelStore.js';
 import { PlanRuntimeStore } from '../src/store/PlanRuntimeStore.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 function tempDir(): string {
-  const dir = join(tmpdir(), `core-governance-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const dir = makeTempDir('core-governance-');
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -106,9 +107,11 @@ describe('Governance and security v1.14', () => {
 
     const db = new Database(dbPath);
     const row = db.prepare(`SELECT content FROM neurons LIMIT 1`).get() as { content: string };
-    expect(row.content).toContain('[REDACTED_EMAIL]');
-    expect(row.content).toContain('[REDACTED_PHONE]');
-    expect(row.content).toContain('[REDACTED_SSN]');
+    // Each marker names what was removed and how long it was, so a reader of the stored
+    // text can tell that it was altered and by how much (#115).
+    expect(row.content).toMatch(/\[REDACTED_EMAIL:\d+\]/);
+    expect(row.content).toMatch(/\[REDACTED_PHONE:\d+\]/);
+    expect(row.content).toMatch(/\[REDACTED_SSN:\d+\]/);
     expect(row.content).not.toContain('alice@example.com');
     expect(new PiiRedactor().redact('email a@b.com').findings[0]?.type).toBe('email');
     db.close();
@@ -151,7 +154,7 @@ describe('Governance and security v1.14', () => {
     await kernel.ingest({ projectId: 'classified-project', content: 'must remain until schema is classified' });
     kernel.factStore.getDatabase().exec(`CREATE TABLE privacy_unknown_payload(id TEXT PRIMARY KEY, payload TEXT)`);
     expect(kernel.forgetUser('classified-project')).rejects.toThrow('privacy_schema_unclassified:privacy_unknown_payload');
-    expect(kernel.recall('must remain until schema is classified', { projectId: 'classified-project' }).rawEvidence.length).toBeGreaterThan(0);
+    expect(kernel.evidenceFor('must remain until schema is classified', { projectId: 'classified-project' }).rawEvidence.length).toBeGreaterThan(0);
     kernel.close();
   });
 
@@ -286,8 +289,8 @@ describe('Governance and security v1.14', () => {
     expect(result.deleted.episodes).toBeGreaterThan(0);
     expect(result.deleted.brainProjections).toBeGreaterThan(0);
     expect(result.deleted.entityRecords).toBeGreaterThan(0);
-    expect(kernel.recall('delete this project memory', { projectId: 'forget-me' }).rawEvidence).toHaveLength(0);
-    expect(kernel.recall('keep this project memory', { projectId: 'keep-me' }).rawEvidence.length).toBeGreaterThan(0);
+    expect(kernel.evidenceFor('delete this project memory', { projectId: 'forget-me' }).rawEvidence).toHaveLength(0);
+    expect(kernel.evidenceFor('keep this project memory', { projectId: 'keep-me' }).rawEvidence.length).toBeGreaterThan(0);
     expect(kernel.activationStore.getTop({ projectId: 'forget-me' })).toHaveLength(0);
     expect(kernel.buildMemoryMap({ projectId: 'forget-me' }).counters.activationHotspots).toBe(0);
     expect(kernel.runMaintenanceTick({ projectId: 'forget-me' }).chargeVector.activationHotspots).toBe(0);

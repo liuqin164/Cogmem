@@ -1,6 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
@@ -11,6 +9,7 @@ import {
   StrategyCortex,
   formatStrategyContext,
 } from '../src/strategy/index.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 describe('strategy cortex v1', () => {
   test('selects a canonical source-first capsule for exact quote requests', () => {
@@ -89,7 +88,7 @@ describe('strategy cortex v1', () => {
   });
 
   test('retrieval policy prevents disabled raw-ledger lane acquisition', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'cogmem-strategy-retrieval-'));
+    const dir = makeTempDir('cogmem-strategy-retrieval-');
     const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
     const memory = new KernelAgentMemoryBackend(kernel);
     await memory.rememberTurnWithResult({

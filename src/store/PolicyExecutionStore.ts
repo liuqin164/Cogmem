@@ -83,6 +83,8 @@ export class PolicyExecutionStore {
   }
 
   private initializeSchema(): void {
+    this.db.exec('PRAGMA journal_mode=WAL');
+    this.db.exec('PRAGMA synchronous=NORMAL');
     this.db.exec('PRAGMA busy_timeout=5000');
     const existing = this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='policy_executions'`).get();
     if (existing && (!this.hasScopedIdentity()

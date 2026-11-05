@@ -45,7 +45,9 @@ export function extractEntityCues(text: string, limit = 8): EntityCue[] {
   const labels: string[] = [];
   collectEntityMatches(normalized, /(?:对|给|把|关于|有关|围绕)\s*([\p{L}][\p{L}\p{N}_-]{1,48})\s*(?:做过|做了|做|启动|安装|配置|修改|重启|停止|操作|处理|执行|有关|的|什么|哪些|吗)?/giu, labels);
   collectEntityMatches(normalized, /(?:聊过|讨论过|记得|还记得|提到过)\s*([\p{L}][\p{L}\p{N}_-]{1,48})\s*(?:什么|哪些|吗|的)?/giu, labels);
-  collectEntityMatches(normalized, /(?:启动|安装|配置|修改|重启|停止|执行|运行|start|started|launch|launched|boot|install|installed|setup|configure|configured|restart|stop|run|ran)\s*(?:本机安装的|本地的|the\s+)?([\p{L}][\p{L}\p{N}_-]{1,48})/giu, labels);
+  // The English verbs need word boundaries: without them "ran" matches inside
+  // "ranking" and the entity captured after it is the fragment "king".
+  collectEntityMatches(normalized, /(?:(?:启动|安装|配置|修改|重启|停止|执行|运行)|(?<![A-Za-z])(?:start|started|launch|launched|boot|install|installed|setup|configure|configured|restart|stop|run|ran)(?![A-Za-z]))\s*(?:本机安装的|本地的|the\s+)?([\p{L}][\p{L}\p{N}_-]{1,48})/giu, labels);
   collectEntityMatches(normalized, /\b([A-Z][A-Za-z0-9_-]{1,48})\b/g, labels);
 
   const seen = new Set<string>();

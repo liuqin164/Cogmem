@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
+import { normalizeFrameRelations } from '../semantic/RelationConstraintRegistry.js';
 import { invalidateMemoryEdgeSupportIds } from '../binding/MemoryEdgeMerge.js';
 import { validateMemoryFrame } from '../semantic/MemoryFrameValidator.js';
 import type { MemoryFrameStatus, MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
@@ -18,9 +19,11 @@ export class MemoryFrameStore {
   save(input: MemoryFrameSaveInput): MemoryFrameV1 {
     const retryAttempt = (input as MemoryFrameSaveInput & { retryAttempt?: number }).retryAttempt ?? 0;
     const requestedStatus = input.status ?? input.frame.status ?? 'staged';
-    const validation = validateMemoryFrame(input.frame, { allowEmptyEvidence: requestedStatus !== 'active' && input.frame.sourceAuthority === 'deterministic_fallback' });
+    // Normalise the model's relation names before validating: a name outside the
+    // vocabulary is recorded as RELATED_TO rather than failing the whole frame.
+    const frame = normalizeFrameRelations(input.frame);
+    const validation = validateMemoryFrame(frame, { allowEmptyEvidence: requestedStatus !== 'active' && frame.sourceAuthority === 'deterministic_fallback' });
     if (!validation.valid) throw new Error(`invalid_memory_frame:${validation.errors.join(',')}`);
-    const frame = input.frame;
     const now = input.now ?? Date.now();
     const status: MemoryFrameStatus = 'staged';
     const publishStatus = input.publishStatus ?? frame.publishStatus ?? (frame.needsReview ? 'needs_confirmation' : 'active');
@@ -108,20 +111,85 @@ export class MemoryFrameStore {
     return rows.map((row) => this.read(row));
   }
 
+  /**
+   * Frames whose stored `source_fingerprint` no longer matches their episode's current events —
+   * the read-only half of the frame repair story (#110). Nothing is written here, so a caller
+   * can report the stale set nightly without changing behaviour; acting on it is the repair
+   * path, which does not exist yet.
+   *
+   * The check is `frameSourceFingerprint` again, over `memory_episode_events` as it stands now.
+   * Measured at 0.05 ms/frame over 100 frames on the 20k-event corpus, so the report is free
+   * next to the 382 ms/frame it would take to re-project them.
+   */
+  listStaleFrames(options: { projectId?: string; statuses?: MemoryFrameStatus[]; limit?: number } = {}): { checked: number; total: number; stale: string[]; truncated: boolean } {
+    const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 1000), 5000));
+    // `active` by default, because that is the set the projector projects. A caller may widen
+    // it to `needs_confirmation` to see frames that would be stale once they are approved.
+    const statuses = options.statuses ?? ['active'];
+    if (statuses.length === 0) return { checked: 0, total: 0, stale: [], truncated: false };
+    const statusPlaceholders = statuses.map(() => '?').join(',');
+    const where = `status IN (${statusPlaceholders})${options.projectId === undefined ? '' : ' AND project_id=?'}`;
+    const args = options.projectId === undefined ? [...statuses] : [...statuses, options.projectId];
+    const rows = this.db.prepare(`SELECT frame_id,episode_id,source_fingerprint FROM memory_frames WHERE ${where} ORDER BY frame_id ASC LIMIT ?`).all(...args, limit) as Array<{ frame_id: string; episode_id: string; source_fingerprint: string }>;
+    const total = (this.db.prepare(`SELECT COUNT(*) n FROM memory_frames WHERE ${where}`).get(...args) as { n: number }).n;
+    const events = this.db.prepare('SELECT event_id FROM memory_episode_events WHERE episode_id=? ORDER BY position ASC');
+    const stale: string[] = [];
+    for (const row of rows) {
+      const ids = (events.all(row.episode_id) as Array<{ event_id: string }>).map((event) => event.event_id).filter(Boolean);
+      if (frameSourceFingerprint(ids, row.episode_id) !== row.source_fingerprint) stale.push(row.frame_id);
+    }
+    return { checked: rows.length, total, stale, truncated: total > rows.length };
+  }
+
   publish(frameId: string, from: MemoryFrameStatus, to?: MemoryFrameStatus, now = Date.now()): boolean {
-    return Boolean(this.db.transaction(() => this.publishUnsafe(frameId, from, to, now))());
+    const published = Boolean(this.db.transaction(() => this.publishUnsafe(frameId, from, to, now))());
+    if (published) this.notifyFrameActive(frameId, now);
+    return published;
   }
 
   publishStaged(frameIds: string[], now = Date.now()): void {
+    const activated: string[] = [];
     this.db.transaction(() => {
-      for (const id of frameIds) if (!this.publishUnsafe(id, 'staged', undefined, now)) throw new Error(`memory_frame_publish_conflict:${id}`);
+      for (const id of frameIds) {
+        if (!this.publishUnsafe(id, 'staged', undefined, now)) throw new Error(`memory_frame_publish_conflict:${id}`);
+        activated.push(id);
+      }
     })();
+    for (const id of activated) this.notifyFrameActive(id, now);
+  }
+
+  /**
+   * Told after a frame becomes active, outside the transaction that made it so.
+   *
+   * Outside, because the listener writes beliefs and `BeliefStore.upsert` opens its own
+   * transaction: nesting one inside this store's would fail on SQLite's single writer.
+   * One hook instead of one call per publisher, because the frame becomes active through
+   * three paths (`publish`, `publishStaged`, `review` approving) and a projection that
+   * remembers only two of them is the defect this class already has a name for.
+   */
+  setFrameActiveListener(listener: (frame: MemoryFrameV1, now: number) => void): void {
+    this.frameActiveListener = listener;
+  }
+
+  private frameActiveListener?: (frame: MemoryFrameV1, now: number) => void;
+
+  private notifyFrameActive(frameId: string, now: number): void {
+    if (!this.frameActiveListener) return;
+    const frame = this.get(frameId);
+    // `publishUnsafe` also publishes to `needs_confirmation`, which is not a claim about
+    // the world yet; only an active frame is.
+    if (!frame || frame.status !== 'active') return;
+    this.frameActiveListener(frame, now);
   }
   review(frameId: string, projectId: string, action: 'approve' | 'reject', actor: string, reason: string, now = Date.now()): boolean {
     if (!actor.trim() || !reason.trim()) throw new Error('memory_frame_review_actor_reason_required');
     const row = this.db.prepare(`SELECT project_id,status FROM memory_frames WHERE frame_id=?`).get(frameId) as { project_id?: string; status?: MemoryFrameStatus } | null;
-    if (!row || row.project_id !== projectId || row.status !== 'needs_confirmation') return false;
-    return Boolean(this.db.transaction(() => {
+    // The evidence and conflict cases below already throw named errors; this precondition was the
+    // one that answered `false`, so a caller could not tell "no such frame" from "not in the state
+    // that can be reviewed" — and `frame-review` reported `applied: false` with nothing else.
+    if (!row || row.project_id !== projectId) throw new Error(`memory_frame_not_found:${frameId}`);
+    if (row.status !== 'needs_confirmation') throw new Error(`memory_frame_review_not_applicable:${frameId}:${row.status}`);
+    const reviewed = Boolean(this.db.transaction(() => {
       if (action === 'approve') {
         const frame = this.get(frameId);
         const validation = validateMemoryFrame(frame);
@@ -141,6 +209,10 @@ export class MemoryFrameStore {
       this.markDirty(projectId, now);
       return true;
     })());
+    // Approving is the third way a frame becomes active; without this the reviewed
+    // frames would be the only ones whose relations never reached the belief layer.
+    if (reviewed && action === 'approve') this.notifyFrameActive(frameId, now);
+    return reviewed;
   }
   failStaged(frameIds: string[], now = Date.now()): void { for (const id of frameIds) this.db.prepare(`UPDATE memory_frames SET status='failed', updated_at=? WHERE frame_id=? AND status='staged'`).run(now, id); }
   failStagedForEpisode(episodeId: string, leaseId?: string, now = Date.now()): void {

@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,12 +7,13 @@ import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { callCogmemMcpTool } from '../src/mcp/CoreMcpTools.js';
 import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const memoryBin = join(coreRoot, 'src/bin/memory.ts');
 
 test('collection routing keeps Theseus creative memory out of default agent recall', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-collection-routing-'));
+  const dir = makeTempDir('cogmem-collection-routing-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -58,7 +58,7 @@ test('collection routing keeps Theseus creative memory out of default agent reca
 });
 
 test('recall pack combines direct recall with activation, belief, and entity touches', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-recall-pack-'));
+  const dir = makeTempDir('cogmem-recall-pack-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -118,7 +118,7 @@ test('recall pack combines direct recall with activation, belief, and entity tou
 });
 
 test('memory self map exposes anatomy, data lanes, bounds, and manual commands', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-map-'));
+  const dir = makeTempDir('cogmem-memory-map-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
 
   const map = kernel.buildMemoryMap({ projectId: 'demo' });
@@ -134,7 +134,7 @@ test('memory self map exposes anatomy, data lanes, bounds, and manual commands',
 });
 
 test('maintenance tick reports host-owned charge without running a hidden daemon', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-maintenance-tick-'));
+  const dir = makeTempDir('cogmem-maintenance-tick-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
 
@@ -161,7 +161,7 @@ test('maintenance tick reports host-owned charge without running a hidden daemon
 });
 
 test('maintenance tick supersedes expired confirmation candidates without deleting fresh review items', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-maintenance-review-ttl-'));
+  const dir = makeTempDir('cogmem-maintenance-review-ttl-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const store = new DeepWriteCandidateStore(kernel.factStore.getDatabase());
   const now = new Date('2026-06-18T00:00:00.000Z').getTime();
@@ -224,7 +224,7 @@ test('maintenance tick supersedes expired confirmation candidates without deleti
 });
 
 test('agent recall reports a bounded decision trace for raw-ledger selection', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-recall-decision-trace-'));
+  const dir = makeTempDir('cogmem-recall-decision-trace-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
   kernel.recordRawEvent({
@@ -253,7 +253,7 @@ test('agent recall reports a bounded decision trace for raw-ledger selection', (
 });
 
 test('raw-ledger fallback searches beyond the latest event window and prefers the original user anchor', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-recall-old-source-'));
+  const dir = makeTempDir('cogmem-recall-old-source-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
   const original = kernel.recordRawEvent({
@@ -328,7 +328,7 @@ test('raw-ledger fallback searches beyond the latest event window and prefers th
 });
 
 test('memory CLI and MCP expose map, tick, and collection routing', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cogmem-memory-map-tick-cli-'));
+  const dir = makeTempDir('cogmem-memory-map-tick-cli-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n');
@@ -371,19 +371,19 @@ test('memory CLI and MCP expose map, tick, and collection routing', async () => 
   expect(tickError).toBe('');
   expect(JSON.parse(tickOutput).hostOwned).toBe(true);
 
+  // #92: identity comes from the connection, so the read states which agent it is
+  // rather than claiming one in the arguments. The data above was written by `openclaw`.
   const defaultRecall = await callCogmemMcpTool('cogmem_recall', {
-    agentId: 'openclaw',
     projectId: 'demo',
     query: 'MoneyPrinterTurbo storyboard',
     limit: 5,
-  }, { dbPath });
+  }, { dbPath, hostId: 'openclaw' });
   const collectionRecall = await callCogmemMcpTool('cogmem_recall', {
-    agentId: 'openclaw',
     projectId: 'demo',
     collection: 'theseus',
     query: 'MoneyPrinterTurbo storyboard',
     limit: 5,
-  }, { dbPath });
+  }, { dbPath, hostId: 'openclaw' });
 
   expect(JSON.stringify(defaultRecall.structuredContent)).not.toContain('visual storyboard');
   expect(JSON.stringify(collectionRecall.structuredContent)).toContain('visual storyboard');

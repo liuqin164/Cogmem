@@ -1,4 +1,5 @@
 import Database from 'bun:sqlite';
+import { clamp } from '../utils/Values.js';
 
 export interface ActivationTouchInput {
   neuronId: string;
@@ -195,8 +196,4 @@ function mapRow(row: ActivationRow): ActivationHotspot {
     source: row.source || undefined,
     lastTouchedAt: Number(row.last_touched_at),
   };
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
 }

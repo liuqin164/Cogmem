@@ -136,4 +136,31 @@ describe('Markdown source adapters v3 hardening', () => {
     expect(adapted.records.some((record) => record.text.includes('payments reliability'))).toBe(true);
     expect(adapted.diagnostics?.some((item) => item.code === 'soul_missing_frontmatter_fields')).toBe(true);
   });
+
+  it('takes the date from a YYYY-MM-DD filename, and says which fallback it used', () => {
+    // OpenClaw's daily memory is `memory/YYYY-MM-DD.md`. Without this fallback a year of such files
+    // was dated to the import day — measured on the box: 27 files spanning 364 days all landed on
+    // the import date, because the adapter could only reach the file mtime.
+    const adapter = new SoulMarkdownAdapter();
+    const daily: SourceDefinition = {
+      sourceId: 'daily-v3',
+      adapterKind: 'soul_markdown',
+      sourcePath: '/tmp/memory/2025-11-05.md',
+      projectId: 'adapter-v3'
+    };
+    const dated = adapter.adapt(daily, makeSnapshot('soul_markdown', daily.sourcePath, '## 发布流程\n窗口锁在每月最后一个周四。'));
+    expect(dated.records.length).toBeGreaterThan(0);
+    for (const record of dated.records) {
+      expect(new Date(record.timestamp).toISOString().slice(0, 10)).toBe('2025-11-05');
+    }
+    expect(dated.diagnostics?.find((item) => item.code === 'soul_missing_frontmatter_fields')?.message)
+      .toContain('2025-11-05');
+
+    // Neither frontmatter nor a dated name: the mtime still stands in, and the warning says so
+    // instead of claiming a filename date that is not there.
+    const undated: SourceDefinition = { ...daily, sourceId: 'undated-v3', sourcePath: '/tmp/memory/notes.md' };
+    const fallback = adapter.adapt(undated, makeSnapshot('soul_markdown', undated.sourcePath, '## 备注\n没有日期。'));
+    expect(fallback.diagnostics?.find((item) => item.code === 'soul_missing_frontmatter_fields')?.message)
+      .toContain('mtime');
+  });
 });

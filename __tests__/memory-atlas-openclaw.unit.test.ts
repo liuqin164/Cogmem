@@ -1,14 +1,67 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { installOpenClawAutoMemoryPlugin } from '../src/host/openclaw/AutoMemoryPluginInstaller.js';
 import { stripCogmemRecallBlocks } from '../src/agent/ContextHygiene.js';
+import { makeTempDir } from './helpers/tmp.js';
+
+test('#90 the plugin the host loads exports the same id the config registers', () => {
+  // OpenClaw compares the plugin's exported `id` against the key it registered. The
+  // generated entry hardcoded the legacy constant while the manifest and the host config
+  // used the per-workspace id, so the host refused to load the plugin at all:
+  //   plugin id mismatch (config uses "cogmem-auto-memory-<hash>",
+  //                        export uses "cogmem-auto-memory")
+  // Two workspaces would also collide on one id, which is what the hash is for.
+  const ids: string[] = [];
+  for (const name of ['ws-one', 'ws-two']) {
+    const root = makeTempDir(`cogmem-plugin-id-${name}-`);
+    const configPath = join(root, '.cogmem', 'config.toml');
+    const openclawConfigPath = join(root, 'openclaw.json');
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+    writeFileSync(openclawConfigPath, '{}');
+    const result = installOpenClawAutoMemoryPlugin({ workspaceRoot: root, configPath, openclawConfigPath, force: true });
+
+    // What the host will actually compare, read from the artifacts rather than trusted.
+    const manifest = JSON.parse(readFileSync(join(result.pluginDir, 'openclaw.plugin.json'), 'utf8')) as { id: string };
+    const index = readFileSync(join(result.pluginDir, 'index.js'), 'utf8');
+    const exported = index.match(/const plugin = \{\s*\n\s*id: '([^']+)'/)?.[1];
+    expect(exported).toBe(manifest.id);
+    // And the id the host registered, so the three agree end to end.
+    const patched = JSON.parse(readFileSync(openclawConfigPath, 'utf8')) as { plugins: { entries: Record<string, unknown> } };
+    expect(Object.keys(patched.plugins.entries)).toContain(manifest.id);
+    ids.push(manifest.id);
+  }
+  // Per workspace, not one shared constant.
+  expect(ids[0]).not.toBe(ids[1]);
+});
+
+test('#91 the plugin hands its runtime entrypoint to the bridge it spawns', () => {
+  // The remember queue is drained by a separate bridge process. If that process is not
+  // told which Cogmem entry to load, it falls back to `import('cogmem')`, which resolves
+  // whatever the machine has cached — measured on the audit box as cogmem@3.7.5, which
+  // then refused the 4.0 database with `unsupported_database_identity` and left the turn
+  // sitting in the queue for ever. The plugin already records the entrypoint for its own
+  // `serve` spawn; the drain path has to carry it too.
+  const root = makeTempDir('cogmem-bridge-entrypoint-');
+  const configPath = join(root, '.cogmem', 'config.toml');
+  const openclawConfigPath = join(root, 'openclaw.json');
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
+  writeFileSync(openclawConfigPath, '{}');
+  const result = installOpenClawAutoMemoryPlugin({ workspaceRoot: root, configPath, openclawConfigPath, force: true });
+  const index = readFileSync(join(result.pluginDir, 'index.js'), 'utf8');
+
+  // The entrypoint is what the install recorded, and the bridge config that is sent to a
+  // spawned drainer has to include it — otherwise the child cannot know it.
+  expect(index).toContain('publicEntrypoint');
+  const bridgeConfigBody = index.slice(index.indexOf('function bridgeConfig'), index.indexOf('function rememberQueuePath'));
+  expect(bridgeConfigBody).toContain('publicEntrypoint');
+});
 
 test('installed OpenClaw plugin sanitizes generated prompt context and routes Atlas without MCP', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'cogmem-atlas-openclaw-'));
+  const root = makeTempDir('cogmem-atlas-openclaw-');
   const configPath = join(root, '.cogmem', 'config.toml');
   const openclawConfigPath = join(root, 'openclaw.json');
   mkdirSync(dirname(configPath), { recursive: true });
@@ -23,6 +76,14 @@ test('installed OpenClaw plugin sanitizes generated prompt context and routes At
     expect(syntax.exitCode).toBe(0);
     expect(syntax.stderr.toString()).toBe('');
   }
+  // The plugin records the package entry it will import at hook time. Running the
+  // installer from a checkout used to write src/public.js, which is never built.
+  const patched = JSON.parse(readFileSync(openclawConfigPath, 'utf8'));
+  const pluginEntryKey = Object.keys(patched.plugins.entries).find((k) => k.startsWith('cogmem-auto-memory-'));
+  expect(pluginEntryKey).toBeDefined();
+  const installed = patched.plugins.entries[pluginEntryKey!];
+  expect(existsSync(installed.config.publicEntrypoint)).toBe(true);
+  expect(installed.config.publicEntrypoint.endsWith('public.js')).toBe(true);
   expect(index).toContain('function classifyMemoryNavigationIntent(query)');
   expect(index).toContain("runBridge(navigationIntent === 'atlas_explore' && config.autoAtlas !== false ? 'context' : 'recall'");
   expect(index).not.toContain("runBridge('graph-explore'");
@@ -38,19 +99,31 @@ test('installed OpenClaw plugin sanitizes generated prompt context and routes At
   expect(bridge).toContain('kernel.graphPath');
   expect(bridge).toContain('kernel.graphTimeline');
   expect(bridge).toContain("command === 'context'");
-  expect(bridge).toContain('Selected memory cards:');
-  expect(bridge).toContain('memory_atlas.v2');
-  expect(bridge).toContain('matchedPaths=');
-  expect(bridge).toContain('whyMatched=');
-  expect(bridge).toContain('selectedEpisodeCards');
-  expect(bridge).toContain("result.decisionTrace.selectedLane === 'facet_graph_raw_ledger'");
-  expect(bridge).toContain('Array.isArray(item.matchedFacets) && item.matchedFacets.length > 0');
-  expect(bridge).toContain('retainedCanonicalId');
-  expect(bridge).toContain('evidenceEventIds');
   expect(bridge).toContain('nodeDetails');
-  expect(bridge).toContain('function safeAtlasText');
-  expect(bridge).toContain('function serializeUntrustedMemory');
-  expect(bridge).toContain("replace(/</g, '&lt;')");
+  // Selecting the episodes, retaining a strict facet match and assembling the
+  // result are the kernel's shared orchestration now (`recallForHost`, ADR-0004);
+  // the bridge hands over and passes back. Those rules are executed in
+  // `__tests__/host-bridge.unit.test.ts`; here the point is that the bridge no
+  // longer holds its own copy of them.
+  expect(bridge).toContain('render.recallForHost(');
+  expect(bridge).toContain('recallForHost: api.recallForHost');
+  expect(bridge).not.toContain('selectedEpisodeCards');
+  expect(bridge).not.toContain('retainedCanonicalId');
+  expect(bridge).not.toContain("result.decisionTrace.selectedLane === 'facet_graph_raw_ledger'");
+  // The Atlas/recall text itself is rendered by the kernel now (ADR-0004), so
+  // the bridge must delegate rather than carry a second copy of it. Its own
+  // test executes those renderers; here the point is that they are not here.
+  expect(bridge).toContain('formatAtlasContext: api.formatAtlasContext');
+  expect(bridge).toContain('formatRecallContext: api.formatRecallContext');
+  expect(bridge).not.toContain('memory_atlas.v2');
+  expect(bridge).not.toContain('Selected memory cards:');
+  expect(bridge).not.toContain('function safeAtlasText');
+  expect(bridge).not.toContain('function serializeUntrustedMemory');
+  expect(bridge).not.toContain('evidenceEventIds');
+  // Escaping untrusted memory into the block is the renderer's job, so it moved
+  // with the renderer; `__tests__/recall-block.unit.test.ts` asserts that a
+  // hostile item cannot escape the block it is rendered into.
+  expect(bridge).not.toContain("replace(/</g, '&lt;')");
   expect(index).not.toContain('cogmem_graph_explore');
 
   const plugin = createRequire(import.meta.url)(indexPath) as {
