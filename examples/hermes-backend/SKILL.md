@@ -442,3 +442,8 @@ A recall answer at index granularity is a list of memories you have not read yet
 falls back to the same one-line form when the budget cannot pay for whole memories. Both name the locator that
 brings the whole thing back, so nothing is unreachable — it is only unread.
 
+## Keeping something out of memory
+
+To keep a passage out of memory entirely, the user can wrap it in <COGMEM_PRIVATE> … </COGMEM_PRIVATE> or write <COGMEM_PRIVATE_ALL> to exclude the whole turn. Marked text is never stored — it does not reach the ledger, the search index or recall, so nothing has to be deleted later. Only the user's own text can be marked this way; the assistant's reply and tool results are unaffected.
+
+Two forms, one namespace: the inline pair marks a passage, the standalone marker excludes the whole turn. Marked text never becomes an event — it is not in the ledger, the search index or recall — so there is nothing to delete afterwards, which is a different promise from `cogmem forget` (after-the-fact deletion) and from the secret chain (which stores, marks and withholds).

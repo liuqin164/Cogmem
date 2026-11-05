@@ -1,3 +1,4 @@
+import { EXPLICIT_EXCLUSION_TEACHING } from '../context/ExplicitExclusion.js';
 /**
  * Tool profiles.
  *
@@ -101,6 +102,8 @@ export function buildMcpInstructions(profile: McpToolProfile): string {
     'Use cogmem_recall for a direct factual memory question and cogmem_explain_recall to audit selection.',
   );
   sentences.push(RECALL_INDEX_TEACHING);
+  // The user has to know the convention exists to use it (#133).
+  sentences.push(EXPLICIT_EXCLUSION_TEACHING);
   sentences.push(
     'When the user asks about something that happened earlier and this prompt contains no recall evidence, call cogmem_recall before answering.',
   );
