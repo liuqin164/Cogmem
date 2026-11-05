@@ -71,6 +71,8 @@ statement it replaces; the conservative rule leaves both, which is the documente
 
 ### Family B′ — the same fact, with the stale statement marked
 
+The scorecard measures the **default** vocabulary only (#132): a project's `[taxonomy]` replaces the classification vocabulary, and those runs are not comparable with the numbers below.
+
 `status:superseded` is the marker the context planner honours when it decides what reaches
 the model (`ContextCortex.hardSuppressionReason`). Nothing in `src/` writes it — it comes
 from curation or review — so a run that marks nothing measures a system that was never

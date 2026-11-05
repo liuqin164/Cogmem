@@ -322,6 +322,13 @@ if (envPath) {
   secretMarkedEvents = countMarkedSecretEvents(resolution.path);
   sharedCollections = readSharedCollections(resolution.path);
   sharedEnabledFlag = loaded.sharedEnabled === true;
+  // The vocabulary a project is compiling with, and whether a broken one fell back to the default (#132).
+  const taxonomyStatus = loaded.taxonomyStatus;
+  if (taxonomyStatus && taxonomyStatus.source === 'invalid-fell-back') {
+    warn('taxonomy_fell_back', `taxonomy config is invalid, using the default: ${taxonomyStatus.reasons.join(', ')}`);
+  } else {
+    ok(`taxonomy: ${taxonomyStatus && taxonomyStatus.source ? taxonomyStatus.source : 'default'}${taxonomyStatus && taxonomyStatus.reasons.length ? ` (${taxonomyStatus.reasons.join(', ')})` : ''}`);
+  }
   const error = loaded.diagnostics.find((diagnostic) => diagnostic.severity === 'error');
   if (error) fail(`${error.code}: ${error.message}`, error.code);
 

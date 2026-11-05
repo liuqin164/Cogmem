@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { FacetQueryPlanner } from '../src/atlas/FacetQueryPlanner.js';
 import { DEFAULT_TAXONOMY, validateTaxonomy, type MemoryTaxonomy } from '../src/config/MemoryTaxonomy.js';
 import { MEMORY_FRAME_EPISODE_KINDS } from '../src/semantic/MemoryFrameTypes.js';
@@ -67,4 +69,13 @@ test('a broken vocabulary is refused loudly enough for the caller to fall back',
   expect(validateTaxonomy({ episode_kinds: [{ id: 'a', description: '   ' }] }).reasons).toContain('empty_description:a');
   expect(validateTaxonomy({ episode_kinds: [{ id: 'a' }] }).reasons).toContain('missing_description:a');
   expect(validateTaxonomy({ episode_kinds: [{ id: 'a', description: 'x' }] })).toEqual({ ok: true, reasons: [] });
+});
+
+/** #132: a user learns the vocabulary from the host's own skill, and all three must say the same thing. */
+test('every shipped host skill states the default vocabulary from the one source', () => {
+  const sentence = `Cogmem classifies each turn as one of these episode kinds: ${DEFAULT_TAXONOMY.episodeKinds.map((kind) => kind.id).join(', ')}.`;
+  for (const file of ['examples/openclaw-backend/SKILL.md', 'examples/hermes-backend/SKILL.md', 'examples/pi-backend/SKILL.md']) {
+    const text = readFileSync(join(import.meta.dir, '..', file), 'utf8');
+    expect({ file, teaches: text.includes(sentence) }).toEqual({ file, teaches: true });
+  }
 });

@@ -173,6 +173,7 @@ import {
 import { CORE_VERSION } from './version.js';
 import { SqliteSharedMemory } from './adapters/sqlite/SqliteSharedMemory.js';
 import type { SharedCollection, SharedItem, SharedRetraction } from './ports/index.js';
+import { DEFAULT_TAXONOMY, type MemoryTaxonomy, type TaxonomyResolution } from './config/MemoryTaxonomy.js';
 
 const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 
@@ -185,6 +186,8 @@ export interface MemoryKernelOptions {
   sharedRecallLimit?: number;
   /** Sharing between agents. Read from `[shared] enabled`, off unless it is true. */
   sharedEnabled?: boolean;
+  /** The project's classification vocabulary (#132); absent means the shipped one. */
+  taxonomy?: TaxonomyResolution;
   dbPath?: string;
   embedder?: Embedder;
   embeddingProvider?: EmbeddingProvider;
@@ -694,6 +697,7 @@ export class MemoryKernel {
   private readonly ranker: TwoStagePulseRanker;
   private readonly reEmbeddingPipeline?: ReEmbeddingPipeline;
   private readonly extensions = new Map<string, unknown>();
+  private readonly taxonomyResolution: TaxonomyResolution;
   private lastEmbedSuccessAt?: number;
   private lastEmbedErrorAt?: number;
   private initialized = false;
@@ -705,6 +709,7 @@ export class MemoryKernel {
     this.configDiagnostics.push(...normalizedBoundary.diagnostics);
     if (options.projectTimeZone && normalizedBoundary.config.timezone && options.projectTimeZone !== normalizedBoundary.config.timezone) throw new Error('project_timezone_conflict');
     this.projectClock = resolveProjectClockContext({ projectTimeZone: options.projectTimeZone ?? normalizedBoundary.config.timezone });
+    this.taxonomyResolution = options.taxonomy ?? { taxonomy: DEFAULT_TAXONOMY, source: 'default', reasons: [] };
     this.dbPath = options.dbPath ?? ':memory:';
     this.encryptionProvider = options.encryptionProvider;
     this.piiRedactor = options.redactionPolicy === false ? undefined : new PiiRedactor(options.redactionPolicy);
@@ -926,6 +931,7 @@ export class MemoryKernel {
     this.summaryStore.migrateLegacyFactSummaries();
     this.deepWriteCandidateStore = new DeepWriteCandidateStore(db);
     this.dreamCuratorWorker = new DreamCuratorWorker({
+      taxonomy: this.taxonomyResolution.taxonomy,
       eventStore: this.eventStore,
       dreamLedgerStore: this.dreamLedgerStore,
       candidateStore: this.deepWriteCandidateStore,
@@ -3620,6 +3626,11 @@ export class MemoryKernel {
    * reads return nothing in that state rather than throwing, because a read that finds nothing is a
    * normal outcome and an exception is not.
    */
+  /** The vocabulary compilation uses, and where it came from (#132) — `doctor` reports the latter. */
+  get taxonomy(): MemoryTaxonomy { return this.taxonomyResolution.taxonomy; }
+
+  get taxonomyStatus(): TaxonomyResolution { return this.taxonomyResolution; }
+
   get sharedEnabled(): boolean {
     return this.options.sharedEnabled === true;
   }

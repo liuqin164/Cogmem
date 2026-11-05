@@ -101,3 +101,7 @@ brings the whole thing back, so nothing is unreachable — it is only unread.
 To keep a passage out of memory entirely, the user can wrap it in <COGMEM_PRIVATE> … </COGMEM_PRIVATE> or write <COGMEM_PRIVATE_ALL> to exclude the whole turn. Marked text is never stored — it does not reach the ledger, the search index or recall, so nothing has to be deleted later. Only the user's own text can be marked this way; the assistant's reply and tool results are unaffected.
 
 Two forms, one namespace: the inline pair marks a passage, the standalone marker excludes the whole turn. Marked text never becomes an event — it is not in the ledger, the search index or recall — so there is nothing to delete afterwards, which is a different promise from `cogmem forget` (after-the-fact deletion) and from the secret chain (which stores, marks and withholds).
+
+## How Cogmem classifies a turn
+
+Cogmem classifies each turn as one of these episode kinds: discussion, operation, decision, correction, diagnostic, planning, status_update, preference, other. A project can replace this vocabulary in its own `.cogmem/config.toml` under `[taxonomy]`; a broken vocabulary falls back to the default and `cogmem doctor` says so.

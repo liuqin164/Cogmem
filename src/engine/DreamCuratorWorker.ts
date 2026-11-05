@@ -17,9 +17,10 @@ import { frameSourceFingerprint } from '../store/MemoryFrameStore.js';
 import { deterministicFrameFallback } from '../semantic/DeterministicFrameFallback.js';
 import type { StructuredSemanticProcessor } from '../semantic/StructuredSemanticProcessor.js';
 import { StructuredSemanticProcessor as StructuredSemanticProcessorImpl } from '../semantic/StructuredSemanticProcessor.js';
-import { MEMORY_FRAME_PROMPT_VERSION, MEMORY_FRAME_SYSTEM_PROMPT } from '../semantic/SemanticProcessorPrompt.js';
+import { MEMORY_FRAME_PROMPT_VERSION, memoryFrameSystemPrompt } from '../semantic/SemanticProcessorPrompt.js';
 import type { MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
 import { truncate } from '../utils/Values.js';
+import type { MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 
 export interface DreamCuratorRunOptions {
   projectId?: string;
@@ -60,6 +61,8 @@ export interface DreamCuratorRunResult {
 }
 
 export interface DreamCuratorWorkerDeps {
+  /** The project's classification vocabulary (#132); absent means the shipped one. */
+  taxonomy?: MemoryTaxonomy;
   eventStore: EventStore;
   dreamLedgerStore: DreamLedgerStore;
   candidateStore: DeepWriteCandidateStore;
@@ -147,7 +150,7 @@ export class DreamCuratorWorker {
         // processor instead of parsing its guaranteed-empty text response.
         const frameGenerator = this.resolveGenerateText(options);
         const processor = frameGenerator
-          ? new StructuredSemanticProcessorImpl(async (input) => JSON.parse(await frameGenerator(MEMORY_FRAME_SYSTEM_PROMPT, JSON.stringify({
+          ? new StructuredSemanticProcessorImpl(async (input) => JSON.parse(await frameGenerator(memoryFrameSystemPrompt(this.deps.taxonomy), JSON.stringify({
             schemaVersion: 'memory_frame.v1', promptVersion: MEMORY_FRAME_PROMPT_VERSION,
             projectId: input.projectId, episodeId: input.episodeId, episodeType: input.episodeType,
             events: input.events.map((event) => ({ eventId: event.eventId, role: event.role, occurredAt: event.occurredAt, text: eventTextForMemory(event) })),

@@ -18,6 +18,7 @@ export type { ConfigDiagnosticLike } from './VectorDimension.js';
 import { normalizeEpisodeBoundaryConfig } from '../episode/EpisodeBoundaryPolicy.js';
 import { resolveTimeZone } from '../utils/LocalDateContext.js';
 import { asRecord } from '../utils/Values.js';
+import { resolveTaxonomy, type TaxonomyResolution } from './MemoryTaxonomy.js';
 
 export type CogmemConfigKind = 'toml' | 'missing';
 export type EnvLike = Record<string, string | undefined>;
@@ -38,6 +39,8 @@ export interface LoadedCogmemConfig {
   sharedRecallLimit?: number;
   /** The `[shared] enabled` switch. Off unless the operator turned it on. */
   sharedEnabled?: boolean;
+  /** Where the classification vocabulary came from, and why it fell back if it did (#132). */
+  taxonomyStatus?: TaxonomyResolution;
   configPath: string;
   homeDir: string;
   /**
@@ -255,6 +258,10 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
 
   const optionsOut: MemoryKernelOptions = {};
 
+  // A project's own vocabulary (#132): validated here, and a broken one falls back to the default with the
+  // reasons carried through to `doctor` rather than stopping the install.
+  optionsOut.taxonomy = resolveTaxonomy(section(root, 'taxonomy'));
+
   const projectTimeZone = stringValue(project.timezone) || stringValue(root.timezone);
   if (projectTimeZone) {
     try { resolveTimeZone(projectTimeZone); optionsOut.projectTimeZone = projectTimeZone; }
@@ -391,6 +398,11 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
     homeDir,
     workspaceRoot,
     options: optionsOut,
+    // These four were declared on the interface and never filled, so `doctor` read `undefined` for all of
+    // them: the shared switch was reported off whatever the config said, and the recall limit was unreadable.
+    sharedEnabled: optionsOut.sharedEnabled,
+    sharedRecallLimit: optionsOut.sharedRecallLimit,
+    taxonomyStatus: optionsOut.taxonomy,
     modelRegistry,
     paths: { embeddingsDir, snapshotsDir, logsDir },
     integrations: {

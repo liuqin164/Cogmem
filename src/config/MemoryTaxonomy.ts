@@ -134,3 +134,42 @@ export function validateTaxonomy(input: unknown): TaxonomyValidation {
   }
   return { ok: reasons.length === 0, reasons };
 }
+
+export interface TaxonomyResolution {
+  taxonomy: MemoryTaxonomy;
+  /** Where the vocabulary came from, for `doctor` to show. */
+  source: 'default' | 'custom' | 'invalid-fell-back';
+  reasons: string[];
+}
+
+/**
+ * Read a `[taxonomy]` config section.
+ *
+ * A broken vocabulary falls back to the default and says why, rather than failing the install: classification
+ * is a dimension of compilation, not the memory system itself, so a typo in a vocabulary file must not stop
+ * Cogmem from starting. `doctor` shows the source and the reasons, so a silent fallback cannot hide.
+ */
+export function resolveTaxonomy(section: unknown): TaxonomyResolution {
+  if (section === undefined || section === null) return { taxonomy: DEFAULT_TAXONOMY, source: 'default', reasons: [] };
+  // A section that is present but not an object is a broken file, not an absent one — the two get different
+  // sources so `doctor` can tell "not configured" from "configured wrongly".
+  if (typeof section !== 'object' || Array.isArray(section)) {
+    return { taxonomy: DEFAULT_TAXONOMY, source: 'invalid-fell-back', reasons: ['taxonomy_must_be_an_object'] };
+  }
+  if (Object.keys(section as Record<string, unknown>).length === 0) return { taxonomy: DEFAULT_TAXONOMY, source: 'default', reasons: [] };
+  const validation = validateTaxonomy(section);
+  if (!validation.ok) return { taxonomy: DEFAULT_TAXONOMY, source: 'invalid-fell-back', reasons: validation.reasons };
+  const raw = section as Record<string, unknown>;
+  const episodeKinds = Array.isArray(raw.episode_kinds) ? raw.episode_kinds as Array<Record<string, unknown>> : undefined;
+  return {
+    taxonomy: {
+      ...DEFAULT_TAXONOMY,
+      episodeKinds: episodeKinds
+        ? episodeKinds.map((entry) => ({ id: String(entry.id), description: String(entry.description ?? '') }))
+        : DEFAULT_TAXONOMY.episodeKinds,
+      relationNames: Array.isArray(raw.relation_names) ? raw.relation_names.map(String) : DEFAULT_TAXONOMY.relationNames,
+    },
+    source: 'custom',
+    reasons: [],
+  };
+}
