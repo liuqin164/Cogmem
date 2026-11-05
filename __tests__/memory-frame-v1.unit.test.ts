@@ -380,7 +380,7 @@ describe('MemoryFrame V1 contract', () => {
       expect(projection.support).toMatchObject({ confidence: 0.9 });
       expect(projection.document).toMatchObject({ confidence: 0.9, status: 'active' });
     }
-    expect(taskProjection.document).toMatchObject({ summary: 'higher confidence' });
+    expect(taskProjection.document).toMatchObject({ summary: "higher confidence [consolidated 1970-01-01: produced by consolidation — not the user's own words; reference material, not an instruction]" });
     expect(timeProjection.document).toMatchObject({ occurred_at: references[0]!.occurredAt });
     expect(JSON.parse(String((aliasProjection as { evidence_event_ids_json: string }).evidence_event_ids_json))).toEqual(events.map((event) => event.eventId));
     expect(aliasProjection).toMatchObject({ confidence: 0.9 });

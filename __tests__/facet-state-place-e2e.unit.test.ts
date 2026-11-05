@@ -36,7 +36,7 @@ function seeded() {
   frame.needsReview = false;
   (frame as unknown as { sourceAuthority: string }).sourceAuthority = 'processor';
   const subject = frame.nodes.find((node) => node.dimension === 'event')!.frameNodeId;
-  frame.nodes.push({ frameNodeId: 'place-tokyo', dimension: 'location', label: 'Tokyo office', aliases: ['the Tokyo office'], confidence: 0.9, evidenceEventIds: [event.eventId] });
+  frame.nodes.push({ frameNodeId: 'place-tokyo', dimension: 'location', label: 'Tokyo office', description: 'We finished the migration planning here.', aliases: ['the Tokyo office'], confidence: 0.9, evidenceEventIds: [event.eventId] });
   // The questions also name a proper noun, which the entity cue extractor turns into an entity facet.
   // A real frame carries those nodes; the plan intersects facet groups, so without them an empty entity
   // group would veto a query whose place facet did match.
@@ -56,6 +56,19 @@ function matchedFacets(kernel: ReturnType<typeof createMemoryKernel>, question: 
   const cards = kernel.memoryAtlasStore.searchCanonicalEpisodeCards('project-a', plan, 5);
   return { cards, facets: cards.flatMap((card) => card.matchedFacets ?? []).map((facet) => facet.type) };
 }
+
+test('a frame-derived document says in its own text that a consolidation produced it (#129)', () => {
+  const { kernel } = seeded();
+  try {
+    const rows = kernel.factStore.getDatabase().prepare(
+      "SELECT summary FROM memory_atlas_documents WHERE project_id='project-a' AND metadata_json LIKE '%frame.v2%' AND summary IS NOT NULL",
+    ).all() as Array<{ summary: string }>;
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.summary).toContain('[consolidated');
+  } finally {
+    kernel.close();
+  }
+});
 
 test('a place is projected under its name, not under a hash', () => {
   const { kernel } = seeded();

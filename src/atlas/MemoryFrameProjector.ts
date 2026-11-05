@@ -8,6 +8,7 @@ import { decodeAtlasNodeId, encodeAtlasNodeId, toAtlasNodeEndpoint } from './Atl
 import { invalidateMemoryEdgeSupportIds, mergeMemoryEdge, mergeMemoryValidityIntervals, reduceMemoryEdges, type MemoryEdgeMergeInput, type MemoryValidityInterval } from '../binding/MemoryEdgeMerge.js';
 import { memoryEdgeId } from '../binding/MemoryBindingIdentity.js';
 import { localDateFor } from '../utils/LocalDateContext.js';
+import { withConsolidationDisclosure } from './ConsolidationDisclosure.js';
 
 export interface MemoryFrameProjectionResult { frames: number; nodes: number; edges: number; needsReview: number; }
 
@@ -489,7 +490,12 @@ export class MemoryFrameProjector {
         || a.support.support_id.localeCompare(b.support.support_id));
       const winner = parsed[0]!;
       const label = typeof winner.payload.label === 'string' ? winner.payload.label : current.label;
-      const summary = typeof winner.payload.summary === 'string' ? winner.payload.summary : current.summary ?? null;
+      const rawSummary = typeof winner.payload.summary === 'string' ? winner.payload.summary : current.summary ?? null;
+      // The frame-derived body carries its own qualification (#129); the helper is idempotent so a
+      // re-projection of the same supports neither stacks the sentence nor looks like a change.
+      const summary = frameProjection(current.metadata_json)
+        ? withConsolidationDisclosure(rawSummary, Number(current.occurred_at ?? now))
+        : rawSummary;
       const confidence = Number(winner.support.confidence ?? winner.payload.confidence ?? 0);
       const evidence = [...new Set(parsed.flatMap(({ support }) => {
         try { const value = JSON.parse(String(support.evidence_event_ids_json ?? '[]')); return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []; } catch { return []; }
