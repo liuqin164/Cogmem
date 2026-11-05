@@ -2,6 +2,8 @@
 
 ## 4.0.0
 
+- Added `docs/agent-install.md`: a linear install procedure for an agent installing cogmem at a user's request — preconditions, the installer, `init --yes --json`, the `doctor` gate, host wiring, and a smoke test that has to pass before the install counts as done. Every command in it was checked against `cogmem --help` rather than written from memory, and a test keeps each `cogmem <subcommand>` in the document equal to the CLI's own command list. The README's agent section is now a pointer to it.
+
 - A Night with work now reconciles the atlas **once** instead of twice. `runNight` called `runMaintenanceTick`, which reconciles, and then reconciled again at the end; the first pass ran *before* Dream wrote the frames it exists to notice, so a night with any new conversation paid two corpus-wide rebuilds (17.4 s each at 20k events). The tick's pass is skipped when `runNight` is the caller (`MaintenanceTickOptions.atlasRefresh`), and a skipped pass reports `skipped: true` rather than `refreshed: false`, because "the projection was current" and "this pass did not run" are different facts. The standalone `memory tick` and the MCP maintenance tool are unchanged.
 - Removed 179 lines of code nothing referenced: `src/utils/vector.ts` entire, fifteen exported functions across `src/`, and the unused `zod` dependency. Also removed a dead module (`ObservationHygieneRules`) and four declarations that had lost their only reader in the same pass. No public export changed: `src/public.ts` still exports the same surface.
 

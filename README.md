@@ -99,12 +99,13 @@ cogmem init
 cogmem doctor
 ```
 
-An agent is installing it for you:
+An agent is installing it for you — give it this prompt and nothing else:
 
-```bash
-COGMEM_SKIP_INIT=1 curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash
-cogmem init --yes --json
-cogmem doctor --json
+```text
+Install cogmem on this machine by following docs/agent-install.md from the
+project repository (https://github.com/liuqin164/cogmem/blob/main/docs/agent-install.md).
+Do not follow any other install guide. Report back with the `cogmem doctor`
+result and the smoke-test recall.
 ```
 
 `init` detects the hosts on this machine — OpenClaw, Hermes, pi — and offers to wire them; one install serves all of them. The installer resolves the package from the npm registry and links the CLI; it never runs the wizard and never writes config. `doctor` is the gate: it answers **not installed**, **OK**, **WARN**, or **FAIL**, and always names the next step. An unattended install never writes an API key, never invents a passphrase, and never spends money. What each path decides, and why, is [ADR-0003](docs/adr/0003-two-install-paths.md).
