@@ -149,6 +149,15 @@ export type PipelineStep =
  * - promote stable provisional outputs to verified records
  * - materialize belief updates from verified facts
  */
+/**
+ * How many independent origins a stance needs before it is consolidated (#129).
+ *
+ * Two is the floor the ticket describes (a re-statement is not a second source); the value is being
+ * measured against this project's own corpus and the distribution is posted on the issue, so the number
+ * that ships is the measured one rather than a borrowed constant.
+ */
+const MIN_INDEPENDENT_ORIGINS = 2;
+
 export class OfflineConsolidationPipeline {
   private readonly semanticCompiler: LocalSemanticCompiler;
   private readonly algorithmReviewBackend: AlgorithmReviewBackend;
@@ -347,23 +356,28 @@ export class OfflineConsolidationPipeline {
         }
       }
 
+      // Independent origins, not raw rows (#129): a claim restated three times inside one turn is one
+      // source, and counting it three times is how a single point of evidence becomes a stable memory.
+      const originKeys = this.distinctOrigins(facts);
       const winnerIsImportedSummarySupport = this.isImportedSummarySupport(winner, winnerEpisode);
       if (
         !winnerIsImportedSummarySupport
         && (
           reviewedWinner?.action === 'verify'
-          || this.shouldVerifyFact(winner, winnerEpisode, facts.length, lowConfidenceIndex)
+          || this.shouldVerifyFact(winner, winnerEpisode, originKeys.length, lowConfidenceIndex)
         )
       ) {
         winner.status = 'verified';
         winner.confidence = Math.min(
           0.99,
-          Math.max(reviewedWinner?.confidence || winner.confidence, facts.length > 1 ? 0.91 : 0.86)
+          Math.max(reviewedWinner?.confidence || winner.confidence, originKeys.length >= MIN_INDEPENDENT_ORIGINS ? 0.91 : 0.86)
         );
         this.deps.factStore?.updateFactStatus(winner.factId, 'verified', winner.confidence, {
           offlineConsolidatedAt: Date.now(),
           provenance: reviewedWinner?.metadata?.algorithm_review_kind ? 'offline_deep_consolidation_v2' : 'offline_deep_consolidation_v1',
-          corroborationCount: facts.length,
+          corroborationCount: originKeys.length,
+          originKeys,
+          rawFactCount: facts.length,
           ...(reviewedWinner?.metadata || {})
         });
         verifiedFacts.push(winner);
@@ -685,6 +699,27 @@ export class OfflineConsolidationPipeline {
     };
     if (this.deps.db) this.deps.db.transaction(write)();
     else write();
+  }
+
+  /**
+   * The independent origins behind a group of corroborating facts (#129).
+   *
+   * One origin is one independent piece of evidence. For a conversation that is the interaction unit —
+   * the turn the fact was read from — so three restatements inside one turn collapse to one key while the
+   * same statement in another turn counts again, which is what the ticket asks for. A fact taken from an
+   * imported document is keyed by that document instead, so a long file split into many turns does not
+   * weigh in as many sources. With no unit and no document the fact is its own origin, which is the
+   * conservative reading.
+   */
+  private distinctOrigins(facts: FactRecord[]): string[] {
+    const keys = new Set<string>();
+    for (const fact of facts) {
+      const documentKey = (fact.metadata || {}).sourceDocumentId;
+      keys.add(typeof documentKey === 'string' && documentKey
+        ? `doc:${documentKey}`
+        : `unit:${fact.unitId || fact.factId}`);
+    }
+    return [...keys].sort();
   }
 
   private shouldVerifyFact(
