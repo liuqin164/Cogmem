@@ -51,8 +51,12 @@ export interface SharedMemoryPort {
   publish(items: SharedItem[]): Promise<number>;
   retract(retraction: SharedRetraction): Promise<void>;
   subscribe(collections: string[], options: { readerHost?: string; limit?: number }): Promise<SharedItem[]>;
+  /** The same read, for a synchronous caller (recall); both go through one implementation. */
+  subscribeSync?(collections: string[], options?: { readerHost?: string; limit?: number }): SharedItem[];
   explain(itemHash: string): Promise<{ item: SharedItem; retractedAt: number | null } | null>;
   grantReader(collection: string, readerHost: string, actorHost: string): Promise<void>;
   revokeReader(collection: string, readerHost: string, actorHost: string): Promise<void>;
   listCollections(): Promise<SharedCollection[]>;
+  /** The same listing, for a synchronous caller (recall). */
+  listCollectionsSync?(): SharedCollection[];
 }

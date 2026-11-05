@@ -234,6 +234,12 @@ export interface AgentRecallItem {
    * altered text from the text that was written (#115).
    */
   redaction?: { count: number; chars: number };
+  /**
+   * Present when this item came from another agent's shared collection (#67). It is a reference, not
+   * this agent's memory: the field is what lets a renderer separate the two with evidence, instead of
+   * inferring it from the text.
+   */
+  shared?: { sourceHost: string; collection: string };
 }
 
 /**
@@ -311,6 +317,9 @@ export interface AgentRecallDecisionTrace {
    * (`grey_below_floor`).
    */
   suppressed?: Array<{ reason: RecallSuppressionReason; count: number }>;
+  /** Shared items this recall appended, and how many the shared budget turned away (#67). Counts only. */
+  sharedCount?: number;
+  sharedDropped?: number;
   /**
    * Why a recall that returned nothing returned nothing.
    *
@@ -712,6 +721,62 @@ export class KernelAgentMemoryBackend {
    * lane did not (#115).
    */
   recall(query: AgentRecallQuery): AgentRecallResult {
+    const result = this.recallPrivate(query);
+    return this.withSharedLane(query, result);
+  }
+
+  /**
+   * #67: shared items ride their own lane.
+   *
+   * Another agent's text must never arrive looking like this agent's own memory, so shared items are
+   * **appended** after the private ones rather than merged into their slots: private memory keeps the
+   * budget it had, and the shared lane spends only its own. Every shared item names its source host and
+   * collection, which is what a renderer needs to present it as a reference rather than an instruction.
+   *
+   * Only collections this host owns or was granted appear here, and the read goes through the adapter's
+   * authorized `subscribeSync` — the recall path never queries the shared table itself, and an
+   * unauthorized collection is absent rather than refused. A read-only lane: nothing here writes.
+   */
+  private withSharedLane(query: AgentRecallQuery, result: AgentRecallResult): AgentRecallResult {
+    if (!this.kernel.sharedEnabled) return result;
+    const agentId = query.agentId;
+    if (!agentId) return result;
+    const readable = this.kernel.listSharedCollectionsSync()
+      .filter((collection) => collection.ownerHost === agentId || collection.readers.includes(agentId))
+      .map((collection) => collection.collection);
+    if (readable.length === 0) return result;
+
+    const injectionLimit = query.limit ?? 5;
+    // Derived default until the fitted value is configured: a third of what this recall injects, so a
+    // busy shared collection cannot crowd out the memory the agent actually owns.
+    const budget = this.kernel.sharedRecallLimit ?? Math.max(1, Math.ceil(injectionLimit / 3));
+    // One extra is fetched so `sharedDropped` reports a real count instead of "at least the budget".
+    const available = this.kernel.subscribeSharedSync(readable, agentId, { limit: budget + 1 });
+    const chosen = available.slice(0, budget);
+    const shared: AgentRecallItem[] = chosen.map((item) => {
+      const payload = item.payload as { text?: unknown; summary?: unknown };
+      const text = typeof payload.text === 'string' ? payload.text
+        : typeof payload.summary === 'string' ? payload.summary
+        : JSON.stringify(item.payload);
+      return {
+        id: `shared:${item.itemHash}`,
+        text,
+        tags: ['shared_memory', `shared_host:${item.sourceHost}`, `shared_collection:${item.collection}`],
+        source: 'shared_memory',
+        shared: { sourceHost: item.sourceHost, collection: item.collection },
+        whyMatched: `shared by ${item.sourceHost} in ${item.collection}`,
+      };
+    });
+    return {
+      ...result,
+      items: [...result.items, ...shared],
+      decisionTrace: result.decisionTrace
+        ? { ...result.decisionTrace, sharedCount: shared.length, sharedDropped: Math.max(0, available.length - chosen.length) }
+        : result.decisionTrace,
+    };
+  }
+
+  private recallPrivate(query: AgentRecallQuery): AgentRecallResult {
     SECRET_WITHHELD_COUNTS.set(this, 0);
     const queryText = String(query.query ?? '');
     const forensic = FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(query.intent ?? ''));

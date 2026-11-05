@@ -160,6 +160,11 @@ export class SqliteSharedMemory implements SharedMemoryPort {
   }
 
   async subscribe(collections: string[], options: { readerHost?: string; limit?: number } = {}): Promise<SharedItem[]> {
+    return this.subscribeSync(collections, options);
+  }
+
+  /** Sync entry point for the recall path, which is synchronous; the async one delegates here. */
+  subscribeSync(collections: string[], options: { readerHost?: string; limit?: number } = {}): SharedItem[] {
     this.ensureSchema();
     if (collections.length === 0) return [];
     // No identity, nothing to authorize: fail closed rather than hand over every collection.
@@ -228,6 +233,10 @@ export class SqliteSharedMemory implements SharedMemoryPort {
   }
 
   async listCollections(): Promise<SharedCollection[]> {
+    return this.listCollectionsSync();
+  }
+
+  listCollectionsSync(): SharedCollection[] {
     this.ensureSchema();
     const rows = this.db
       .prepare(`

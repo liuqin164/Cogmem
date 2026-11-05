@@ -34,6 +34,8 @@ export interface CogmemConfigResolutionOptions {
 }
 
 export interface LoadedCogmemConfig {
+  /** Shared items one recall may append, from `[shared] recall_limit`. */
+  sharedRecallLimit?: number;
   /** The `[shared] enabled` switch. Off unless the operator turned it on. */
   sharedEnabled?: boolean;
   configPath: string;
@@ -262,6 +264,7 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   const dbPath = stringValue(core.db_path) || 'memory.db';
   optionsOut.dbPath = resolveConfigPath(interpolate(dbPath, env, diagnostics), homeDir, env);
   optionsOut.sharedEnabled = booleanValue(shared.enabled) === true;
+  if (numberValue(shared.recall_limit) !== undefined) optionsOut.sharedRecallLimit = numberValue(shared.recall_limit);
 
   const vectorBackend = stringValue(core.vector_backend) || 'sqlite-vec';
   if (vectorBackend === 'sqlite-vec' || vectorBackend === 'hnswlib') {

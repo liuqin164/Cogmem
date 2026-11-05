@@ -181,6 +181,8 @@ export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
 export type { EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeListOptions, MemoryEpisode } from './episode/index.js';
 
 export interface MemoryKernelOptions {
+  /** Shared items one recall may append, on top of the private budget. Unset = a third of the limit. */
+  sharedRecallLimit?: number;
   /** Sharing between agents. Read from `[shared] enabled`, off unless it is true. */
   sharedEnabled?: boolean;
   dbPath?: string;
@@ -3648,12 +3650,31 @@ export class MemoryKernel {
     return this.sharedMemory.subscribe(collections, { readerHost, limit: options.limit });
   }
 
+  /** Synchronous subscribe for recall, which cannot await. Same authorization, same code path. */
+  subscribeSharedSync(collections: string[], readerHost: string | undefined, options: { limit?: number } = {}): SharedItem[] {
+    if (!this.sharedEnabled) return [];
+    return this.sharedMemory.subscribeSync(collections, { readerHost, limit: options.limit });
+  }
+
+  /**
+   * How many shared items one recall may add. Unset means the derived default (a third of the
+   * injection limit), which the recall lane computes; a number here is the fitted value.
+   */
+  get sharedRecallLimit(): number | undefined {
+    return this.options.sharedRecallLimit;
+  }
+
   async explainShared(itemHash: string): Promise<{ item: SharedItem; retractedAt: number | null } | null> {
     return this.sharedMemory.explain(itemHash);
   }
 
   async listSharedCollections(): Promise<SharedCollection[]> {
     return this.sharedMemory.listCollections();
+  }
+
+  /** Synchronous listing for recall, which cannot await. Same rows as the async form. */
+  listSharedCollectionsSync(): SharedCollection[] {
+    return this.sharedMemory.listCollectionsSync();
   }
 
   /**
