@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { refusalDocumentFor } from '../cli/RefusalDocument.js';
+import { refusalDocumentFor } from './RefusalDocument.js';
 /**
  * One host-agnostic entry point to the shared orchestration.
  *
@@ -148,18 +148,14 @@ let kernel: ReturnType<typeof createMemoryKernelFromConfig>;
 try {
   kernel = createMemoryKernelFromConfig({ configPath: readArg('--config') });
 } catch (error) {
-  const refusal = refusalDocumentFor(error, `host-bridge ${command}`);
-  if (!refusal) {
-    // This tool's callers parse stdout. An uncaught throw here printed a Bun code frame and no
-    // document at all, so a plain mistake in --config read as a crash in the host's own logs.
-    console.log(JSON.stringify({
-      ok: false,
-      command: `host-bridge ${command}`,
-      error: { code: (error as { code?: string }).code ?? 'host_bridge_failed', message: error instanceof Error ? error.message : String(error) },
-    }));
-    process.exit(1);
-  }
-  console.log(JSON.stringify(refusal));
+  // This tool's callers parse stdout, so every outcome is one document: the refusal contract when the
+  // open was refused, and otherwise the same envelope with the error in it — an uncaught throw here
+  // printed a Bun code frame and nothing to parse, on the path every host turn takes.
+  console.log(JSON.stringify(refusalDocumentFor(error, `host-bridge ${command}`) ?? {
+    ok: false,
+    command: `host-bridge ${command}`,
+    error: { code: (error as { code?: string }).code ?? 'host_bridge_failed', message: error instanceof Error ? error.message : String(error) },
+  }));
   process.exit(1);
 }
 try {

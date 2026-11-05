@@ -38,7 +38,7 @@ import {
   type InstallStep,
 } from '../install/InstallSteps.js';
 import { assertCliArgs } from './CliArgs.js';
-import { REFUSAL_NEXT_STEPS, refusalReasonOf } from '../cli/RefusalDocument.js';
+import { REFUSAL_NEXT_STEPS, refusalReasonOf } from './RefusalDocument.js';
 const DOCTOR_FLAGS = ['agent', 'auto', 'bun', 'config', 'dry-run', 'env-path', 'fix', 'force', 'hermes-config', 'json', 'openclaw-config', 'out', 'plugin-dir', 'plugin-only', 'storage', 'workspace'] as const;
 const USAGE = [
   'Usage: cogmem doctor [--config <config.toml>] [--workspace <dir>] [--json]',
@@ -83,14 +83,16 @@ function fail(message: string, code = 'doctor_failed'): never {
   if (json) {
     // Mapped, not re-worded: the ids, actions and commands come from the one refusal definition the
     // JSON contract uses, and the gate's own step fields are derived from it.
+    // The gate renders each step as an actor/command/when/purpose row; the contract keeps four fields,
+    // so the wording that has no field of its own comes from `action`.
     const gateSteps = REFUSAL_NEXT_STEPS[
       refusalReasonOf(new Error(message)) ?? 'unsupported_database_identity'
     ].map((step) => ({
       id: step.id,
-      actor: step.actor ?? 'operator',
+      actor: 'operator',
       command: step.command ?? '',
-      when: step.when ?? step.action,
-      purpose: step.purpose ?? step.action,
+      when: step.action,
+      purpose: step.action,
       safeForAutomation: step.safeForAutomation,
     }));
     // The gate's step type carries a closed id union; the refusal ids are contract-fixed, and the
@@ -130,7 +132,7 @@ function emitGate(gate: InstallGate, payload: Record<string, unknown> = {}): voi
         // Split, because the two are different facts: a redacted tool result no longer holds the
         // value, while a marked conversation turn still does and is withheld at recall instead.
         redactedOnWrite: secretRedactedEvents ?? 0,
-        markedOnly: Math.max(0, secretMarkedEvents - (secretRedactedEvents ?? 0)),
+        markedOnly: markedOnlyCount(secretMarkedEvents, secretRedactedEvents),
         scope: secretScope,
       },
     };
@@ -152,7 +154,7 @@ function emitGate(gate: InstallGate, payload: Record<string, unknown> = {}): voi
     console.log('');
     console.log(`Install gate: ${gate.level.toUpperCase()} — ${gate.summary}`);
     if (secretMarkedEvents !== undefined) {
-      console.log(`Secret-marked events: ${secretMarkedEvents} — redacted on write ${secretRedactedEvents ?? 0}, marked only ${Math.max(0, secretMarkedEvents - (secretRedactedEvents ?? 0))} (${secretScope})`);
+      console.log(`Secret-marked events: ${secretMarkedEvents} — redacted on write ${secretRedactedEvents ?? 0}, marked only ${markedOnlyCount(secretMarkedEvents, secretRedactedEvents)} (${secretScope})`);
     }
     printSteps(gate.nextSteps);
   }
@@ -185,6 +187,11 @@ const bunPath = readArg('--bun');
 let secretMarkedEvents: number | undefined;
 /** Of the marked events: those whose tool result was redacted on the way in, and those only marked. */
 let secretRedactedEvents: number | undefined;
+
+/** The marked events that were not redacted on the way in — computed where both counts are known. */
+function markedOnlyCount(marked: number, redacted: number | undefined): number {
+  return Math.max(0, marked - (redacted ?? 0));
+}
 
 /**
  * How many ledger events carry a write-path secret mark.

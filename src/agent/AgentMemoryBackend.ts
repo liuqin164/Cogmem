@@ -730,12 +730,9 @@ export class KernelAgentMemoryBackend {
     const gated = this.gateSocialEntries(result.items ?? [], query, forensic);
     const secretWithheld = SECRET_WITHHELD_COUNTS.get(this) ?? 0;
     if (secretWithheld > 0 && result.decisionTrace) {
-      result.decisionTrace = {
-        ...result.decisionTrace,
-        suppressed: mergeSuppressions(result.decisionTrace.suppressed, [
-          { reason: 'secret_bearing_withheld', count: secretWithheld },
-        ]),
-      };
+      result.decisionTrace.suppressed = mergeSuppressions(result.decisionTrace.suppressed, [
+        { reason: 'secret_bearing_withheld', count: secretWithheld },
+      ]);
     }
     const zeroExplanation = gated.items.length === 0 ? this.explainZeroResult(query) : undefined;
     return {

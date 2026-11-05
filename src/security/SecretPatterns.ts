@@ -96,7 +96,6 @@ export function redactSecretText(text: string): { text: string; count: number; c
   let count = 0;
   let chars = 0;
   for (const { pattern, replacement } of SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
     value = value.replace(pattern, (match) => {
       count += 1;
       chars += match.length;

@@ -17,7 +17,7 @@ import type { MemoryEvent } from '../types/index.js';
 import { printCliJson } from './CliJson.js';
 import { cliArg } from '../utils/CliArgument.js';
 import { assertCliArgs } from './CliArgs.js';
-import { refusalDocumentFor } from '../cli/RefusalDocument.js';
+import { emitRefusalDocument } from './RefusalDocument.js';
 
 interface MemoryArgs {
   command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show'  | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
@@ -1206,11 +1206,7 @@ async function main(): Promise<void> {
 main().catch((error) => {
   // A refusal is the one error that carries a contract: under --json it answers with the document
   // instead of the sentence, and the exit code stays non-zero.
-  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'memory') : undefined;
-  if (refusal) {
-    printCliJson('memory', refusal);
-    process.exit(1);
-  }
+  if (emitRefusalDocument(error, 'memory')) return;
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { printCliJson } from './CliJson.js';
-import { refusalDocumentFor } from '../cli/RefusalDocument.js';
+import { refusalDocumentFor } from './RefusalDocument.js';
 /**
  * cogmem-init — Interactive configuration wizard for cogmem
  *

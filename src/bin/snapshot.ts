@@ -7,7 +7,7 @@ import { parseVectorDimensionValue } from '../config/VectorDimension.js';
 import { config } from '../utils/Config.js';
 import { printCliJson } from './CliJson.js';
 import { assertCliArgs } from './CliArgs.js';
-import { refusalDocumentFor } from '../cli/RefusalDocument.js';
+import { emitRefusalDocument } from './RefusalDocument.js';
 
 function parseArgs(argv: string[]): Record<string, string | boolean> {
   const args: Record<string, string | boolean> = {};
@@ -109,11 +109,7 @@ assertCliArgs(process.argv.slice(2), { usage: USAGE, extraFlags: ['config', 'db'
 main().catch((error) => {
   // Every entry that can open a database emits the same refusal document under --json; without the
   // flag the sentence on stderr is unchanged.
-  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'snapshot') : undefined;
-  if (refusal) {
-    printCliJson('snapshot', refusal);
-    process.exit(1);
-  }
+  if (emitRefusalDocument(error, 'snapshot')) return;
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

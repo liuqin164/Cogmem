@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -11,41 +11,42 @@ const BIN = join(import.meta.dir, '..', 'src', 'bin');
  * assertion, not a behaviour one: it fails when an entry gains a database open and is left out, which
  * is the failure mode that lets one command answer a refusal with a bare sentence.
  */
+/**
+ * Every file in `src/bin` belongs to exactly one of these three lists, and the guard asserts that
+ * exhaustively — a new bin cannot appear unclassified. A derived rule was tried first and abandoned:
+ * literal heuristics miss the entries that declare their flags through `assertCliArgs` or delegate
+ * their database open, so it flagged two of twenty-four files that were already correct.
+ */
 const WIRED = [
   'compact', 'connect', 'dream', 'episode', 'explain-recall', 'host-bridge', 'import', 'init',
-  'memory', 'repair', 'prospective', 'snapshot', 'strategy', 'update',
+  'memory', 'prospective', 'repair', 'snapshot', 'strategy', 'update',
 ];
-/** Entries that reach a refusal through a path of their own, or cannot reach one at all. */
-const NOT_WIRED: Record<string, string> = {
+/** Reaches a refusal through a path of its own, or does not speak the CLI protocol at all. */
+const EXCEPTIONS: Record<string, string> = {
   'doctor': 'renders its own failing gate, which maps the same step definition',
+  'mcp': 'answers over JSON-RPC, where a CLI refusal document is not the protocol',
   'import-support': 'a helper module for import, not a command entry: errors surface at import.ts',
+  'RefusalDocument': 'defines the shared exit every other entry calls',
 };
-/** Nothing to do with a database: they neither open a kernel nor accept a config. */
-const NO_DATABASE = ['brain-eval', 'cleanup', 'cogmem', 'mcp', 'normalize-transcript', 'update-release', 'CliArgs', 'CliJson'];
+/** No database to be refused: shared helpers, the dispatcher, and commands that never open a kernel. */
+const NO_DATABASE = ['CliArgs', 'CliJson', 'brain-eval', 'cleanup', 'cogmem', 'normalize-transcript', 'update-release'];
 
 test('every entrypoint that opens a database renders refusals through the shared document', () => {
-  // The call, not the import: a file that imports the helper and never calls it is not covered.
-  const CALL = /refusalDocumentFor\(\s*(error|err)\b/;
+  const entries = readdirSync(BIN).filter((file) => file.endsWith('.ts')).map((file) => file.slice(0, -3));
+  expect(entries.length).toBeGreaterThan(15);
+  // Exhaustive: every file is in exactly one list, so an unclassified bin fails here.
+  expect([...WIRED, ...Object.keys(EXCEPTIONS), ...NO_DATABASE].sort()).toEqual([...entries].sort());
   for (const name of WIRED) {
     const source = readFileSync(join(BIN, `${name}.ts`), 'utf8');
-    expect({ name, wired: CALL.test(source) }).toEqual({ name, wired: true });
+    // The call, not the import: a file that imports the helper and never calls it is not covered.
+    expect({ name, wired: /emitRefusalDocument\(|refusalDocumentFor\(/.test(source) }).toEqual({ name, wired: true });
   }
-  // The exceptions are named, so a new entry cannot slip in unclassified.
-  for (const [name, why] of Object.entries(NOT_WIRED)) {
-    const source = readFileSync(join(BIN, `${name}.ts`), 'utf8');
-    if (name === 'doctor') expect(source.includes('REFUSAL_NEXT_STEPS')).toBe(true);
-    else expect(CALL.test(source)).toBe(false);
-    expect(why.length).toBeGreaterThan(10);
-  }
-  for (const name of NO_DATABASE) {
-    const source = readFileSync(join(BIN, `${name}.ts`), 'utf8');
-    expect(source.includes('createMemoryKernel')).toBe(false);
-  }
+  for (const [name, why] of Object.entries(EXCEPTIONS)) expect(why.length).toBeGreaterThan(10);
 });
 
 /**
  * Its own fixtures, on purpose: a test that reads a file under `.cogmem/` passes on the machine that
- * made it and fails on a fresh clone, which is exactly how this one shipped broken.
+ * made it and fails on a fresh clone.
  */
 function refusalFixtures(): { foreign: string; old3x: string } {
   const dir = makeTempDir('cogmem-refusal-coverage-');

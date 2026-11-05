@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
-import { printCliJson } from './CliJson.js';
-import { refusalDocumentFor } from '../cli/RefusalDocument.js';
+import { emitRefusalDocument } from './RefusalDocument.js';
 import { assertCliArgs } from './CliArgs.js';
 import { runHermesImport, runOpenClawImport } from './import-support.js';
 
@@ -33,11 +32,7 @@ if (!run) {
 }
 
 run(rest).catch((error) => {
-  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'import') : undefined;
-  if (refusal) {
-    printCliJson('import', refusal);
-    process.exit(1);
-  }
+  if (emitRefusalDocument(error, 'import')) return;
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });

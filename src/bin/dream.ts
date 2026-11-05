@@ -2,7 +2,7 @@
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 import { parseCliArgs, type CliArgs as Args } from './CliArgs.js';
 import { printCliJson } from './CliJson.js';
-import { refusalDocumentFor } from '../cli/RefusalDocument.js';
+import { emitRefusalDocument } from './RefusalDocument.js';
 
 const DREAM_COMMANDS = ['tick', 'night', 'status', 'retry'] as const;
 
@@ -89,8 +89,4 @@ function modeArg(value?: string): 'auto' | 'micro' | 'normal' | 'deep' | undefin
 main().catch((error) => {
   // Every entry that can open a database emits the same refusal document under --json; without the
   // flag the sentence on stderr is unchanged.
-  const refusal = process.argv.includes('--json') ? refusalDocumentFor(error, 'dream') : undefined;
-  if (refusal) {
-    printCliJson('dream', refusal);
-    process.exit(1);
-  } console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });
+  if (emitRefusalDocument(error, 'dream')) return; console.error(error instanceof Error ? error.message : String(error)); process.exit(1); });

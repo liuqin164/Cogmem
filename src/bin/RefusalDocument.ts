@@ -1,3 +1,5 @@
+import { printCliJson } from './CliJson.js';
+
 /**
  * The machine-readable form of a refusal, and the single source of its next steps.
  *
@@ -13,10 +15,6 @@ export interface RefusalNextStep {
   action: string;
   command?: string;
   safeForAutomation: boolean;
-  /** Filled for the surfaces that render a step as a gate entry; same object, no second wording. */
-  actor?: string;
-  when?: string;
-  purpose?: string;
 }
 
 /** The two refusals, by the bare reason code the contract carries. */
@@ -27,18 +25,12 @@ export const REFUSAL_NEXT_STEPS: Record<RefusalReason, RefusalNextStep[]> = {
   unsupported_database_identity: [
     {
       id: 'use_new_database',
-      actor: 'operator',
-      when: 'when the file this configuration names is not the database you meant',
-      purpose: 'point cogmem at a recognised database path; the existing file is left untouched',
       action: 'point cogmem at a new database path and set it up there, leaving this file untouched',
       command: 'cogmem init --config <new-config.toml> --yes',
       safeForAutomation: true,
     },
     {
       id: 'verify_database_path',
-      actor: 'operator',
-      when: 'when you believe the current path is right',
-      purpose: 're-check the configuration and the database identity together',
       action: 'check that the configured database path is the file you meant to open',
       safeForAutomation: false,
     },
@@ -81,13 +73,18 @@ export function refusalDocumentFor(error: unknown, command: string): Record<stri
     status: 'refused',
     reason,
     message,
-    // Exactly the contract's fields: the gate's rendering extras are for the gate, not for this
-    // document, and the contract says not to invent fields.
-    nextSteps: REFUSAL_NEXT_STEPS[reason].map(({ id, action, command, safeForAutomation }) => ({
-      id,
-      action,
-      ...(command === undefined ? {} : { command }),
-      safeForAutomation,
-    })),
+    nextSteps: REFUSAL_NEXT_STEPS[reason],
   };
+}
+
+/**
+ * Print the refusal document for this error and exit, or return false so the caller keeps its own
+ * error handling. Every entry that can open a database calls this at its error exit, so the shape is
+ * written here once instead of in each of them.
+ */
+export function emitRefusalDocument(error: unknown, command: string, json = process.argv.includes('--json')): boolean {
+  const document = json ? refusalDocumentFor(error, command) : undefined;
+  if (!document) return false;
+  printCliJson(command, document);
+  process.exit(1);
 }
