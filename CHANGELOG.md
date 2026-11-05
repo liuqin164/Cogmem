@@ -8,6 +8,7 @@ evidence discipline for consolidation (#129), injection budget fitting and recal
 explicit capture-side exclusion (#133), configurable memory modes (#132), English support (#135), the
 phase-projection study (#130), and docs/install.md last (#137). #138 landed on main before this branch.
 
+- Shared memory can be read only by hosts a collection's owner granted (#66). A collection's owner is the host that first published into it, the reader list is explicit, and `[shared] enabled` is false unless it is set. The check lives in one place — `subscribe` filters in SQL and a call with no reader identity returns nothing — so no surface can be the one that forgot. `doctor` lists each collection with its owner, readers and item count, and reports the switch, so "off" and "on with nobody granted anything" are different states in the output.
 ## 4.0.0
 
 - Added `docs/agent-install.md`: a linear install procedure for an agent installing cogmem at a user's request — preconditions, the installer, `init --yes --json`, the `doctor` gate, host wiring, and a smoke test that has to pass before the install counts as done. Every command in it was checked against `cogmem --help` rather than written from memory, and a test keeps each `cogmem <subcommand>` in the document equal to the CLI's own command list. The README's agent section is now a pointer to it.

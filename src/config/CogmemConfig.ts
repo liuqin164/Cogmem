@@ -34,6 +34,8 @@ export interface CogmemConfigResolutionOptions {
 }
 
 export interface LoadedCogmemConfig {
+  /** The `[shared] enabled` switch. Off unless the operator turned it on. */
+  sharedEnabled?: boolean;
   configPath: string;
   homeDir: string;
   /**

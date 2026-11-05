@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import { hostWorkspaceFor, loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { NeuronEmbeddingStore } from '../embedding/NeuronEmbeddingStore.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
+import type { SharedCollection } from '../ports/index.js';
 import {
   defaultOpenClawAutoMemoryPluginDir,
   inspectOpenClawAutoMemoryPlugin,
@@ -136,12 +137,18 @@ function emitGate(gate: InstallGate, payload: Record<string, unknown> = {}): voi
         scope: secretScope,
       },
     };
+  // The switch and the collections travel together: "off" and "on with nobody granted anything" are
+  // different states an operator has to be able to tell apart.
+  const sharedPayload = sharedCollections === undefined
+    ? {}
+    : { shared: { enabled: sharedEnabledFlag === true, collections: sharedCollections } };
   if (json) {
     printJsonDocument(JSON.stringify({
       schemaVersion: 'cogmem.cli.v1',
       command: 'doctor',
       ...payload,
       ...secretPayload,
+      ...sharedPayload,
       installGate: {
         level: gate.level,
         exitCode: gate.exitCode,
@@ -155,6 +162,11 @@ function emitGate(gate: InstallGate, payload: Record<string, unknown> = {}): voi
     console.log(`Install gate: ${gate.level.toUpperCase()} — ${gate.summary}`);
     if (secretMarkedEvents !== undefined) {
       console.log(`Secret-marked events: ${secretMarkedEvents} — redacted on write ${secretRedactedEvents ?? 0}, marked only ${markedOnlyCount(secretMarkedEvents, secretRedactedEvents)} (${secretScope})`);
+    }
+    if (sharedCollections !== undefined) {
+      console.log(sharedCollections.length === 0
+        ? `Shared collections: none — sharing is ${sharedEnabledFlag === true ? 'enabled' : 'off'}`
+        : `Shared collections: ${sharedCollections.map((c) => `${c.collection} (owner ${c.ownerHost}, readers ${c.readers.length > 0 ? c.readers.join('/') : 'none'}, ${c.itemCount} item(s))`).join('; ')}`);
     }
     printSteps(gate.nextSteps);
   }
@@ -185,6 +197,10 @@ const bunPath = readArg('--bun');
  * re-scanned, so an old ledger reports 0 here without meaning it holds no secrets.
  */
 let secretMarkedEvents: number | undefined;
+/** Undefined when the shared region was never used, so the field is omitted rather than zeroed. */
+let sharedCollections: SharedCollection[] | undefined;
+/** The `[shared] enabled` switch, carried the same way the counts are: filled after the config loads. */
+let sharedEnabledFlag: boolean | undefined;
 /** Of the marked events: those whose tool result was redacted on the way in, and those only marked. */
 let secretRedactedEvents: number | undefined;
 
@@ -199,6 +215,46 @@ function markedOnlyCount(marked: number, redacted: number | undefined): number {
  * The database path comes from the kernel's own health status: reading it out of the config was the
  * first attempt and produced an empty path, so the count never ran. Read-only query, no new storage.
  */
+/** Collections someone chose to share, and who may read them. Read-only; undefined means "never used". */
+function readSharedCollections(configPath: string): SharedCollection[] | undefined {
+  let kernel: ReturnType<typeof createMemoryKernelFromConfig> | undefined;
+  try {
+    kernel = createMemoryKernelFromConfig({ configPath });
+    const dbPath = kernel.getHealthStatus().dbPath;
+    if (!dbPath || !existsSync(dbPath)) return undefined;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      // No rows here means no collection was ever published; a database that predates the registry
+      // throws on the missing tables and is reported as never used rather than as an error.
+      const rows = db.prepare(`
+        SELECT c.collection, c.owner_host, c.created_at,
+               (SELECT COUNT(*) FROM shared_items s
+                 WHERE s.collection = c.collection AND s.retracted_at IS NULL) AS items,
+               (SELECT GROUP_CONCAT(r.reader_host) FROM shared_collection_readers r
+                 WHERE r.collection = c.collection) AS readers
+          FROM shared_collections c
+         ORDER BY c.collection
+      `).all() as Array<{ collection: string; owner_host: string; created_at: number; items: number; readers: string | null }>;
+      return rows.map((row) => ({
+        collection: row.collection,
+        ownerHost: row.owner_host,
+        createdAt: row.created_at,
+        itemCount: row.items,
+        readers: row.readers ? row.readers.split(',') : [],
+      }));
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    // A database that predates the registry has no tables to read: that is "sharing has never been
+    // used here", which the operator needs to see, not an error that hides the switch.
+    if (error instanceof Error && /no such table/i.test(error.message)) return [];
+    return undefined;
+  } finally {
+    try { kernel?.close(); } catch { /* the report is already built */ }
+  }
+}
+
 function countMarkedSecretEvents(configPath: string): number | undefined {
   let kernel: ReturnType<typeof createMemoryKernelFromConfig> | undefined;
   try {
@@ -264,6 +320,8 @@ if (envPath) {
   const loaded = loadCogmemConfig({ configPath: resolution.path });
   // Filled once, after the config resolved and before any gate is emitted past this point.
   secretMarkedEvents = countMarkedSecretEvents(resolution.path);
+  sharedCollections = readSharedCollections(resolution.path);
+  sharedEnabledFlag = loaded.sharedEnabled === true;
   const error = loaded.diagnostics.find((diagnostic) => diagnostic.severity === 'error');
   if (error) fail(`${error.code}: ${error.message}`, error.code);
 
