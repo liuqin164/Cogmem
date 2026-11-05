@@ -186,6 +186,15 @@ export class MemoryFrameProjector {
 
   private nodeId(projectId: string, node: MemoryFrameNode, frame: MemoryFrameV1, now: number): string | undefined {
     if (node.dimension === 'episode') return encodeAtlasNodeId('episode', frame.episodeId, projectId);
+    // A place is keyed by its normalized name rather than by the frame's own node id (#28). State ids
+    // are hashes and stay that way — a migration of existing ids is the one thing this ticket forbids —
+    // but a place is new, and a textual cue ("Tokyo office") has to be able to name the node the
+    // projection wrote. The alias index already resolves normalized names to node ids.
+    if (node.dimension === 'location') {
+      const place = normalizeAlias(node.label);
+      if (!place) return undefined;
+      return encodeAtlasNodeId('place', place, projectId);
+    }
     if (node.dimension === 'project') return encodeAtlasNodeId('project', frame.projectId, projectId);
     if (node.dimension === 'raw_event') {
       if (node.evidenceEventIds.length !== 1) throw new Error(`raw_event_identity_requires_one_evidence:${node.frameNodeId}`);

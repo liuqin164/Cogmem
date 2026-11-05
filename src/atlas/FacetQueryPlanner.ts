@@ -3,7 +3,7 @@ import { ACTION_KIND_RULES } from '../utils/ActionKindRegistry.js';
 import { localDateFor, localDateRange, nextCivilDate, resolveTimeZone } from '../utils/LocalDateContext.js';
 import { pad2 } from '../utils/Values.js';
 
-export type FacetType = 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind';
+export type FacetType = 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind' | 'state' | 'place';
 export type FacetOperator = 'intersection' | 'union';
 
 export interface PlannedFacet {
@@ -113,6 +113,7 @@ export class FacetQueryPlanner {
     }
 
     for (const facet of parseKindFacets(normalized, options.projectId)) facets.push(facet);
+    for (const facet of parseStatePlaceFacets(normalized, options.projectId)) facets.push(facet);
     if (actionHistory && (!facets.some((facet) => facet.type === 'actionKind') || !hasSpecificActionCue(normalized))) {
       for (const value of ['started', 'installed', 'configured', 'restarted', 'stopped', 'operated', 'implemented', 'debugged']) {
         facets.push(withNodeId({ type: 'actionKind', value, label: value, relation: 'HAS_ACTION_KIND' }, options.projectId));
@@ -168,6 +169,36 @@ function parseKindFacets(query: string, projectId: string): PlannedFacet[] {
   }
   for (const rule of ACTION_KIND_RULES) {
     if (rule.pattern.test(query)) facets.push(withNodeId({ type: 'actionKind', value: rule.kind, label: rule.kind, relation: 'HAS_ACTION_KIND' }, projectId));
+  }
+  return facets;
+}
+
+/**
+ * Where and in what state (#28): two facets a person says out loud.
+ *
+ * The planner emits the **cue text** rather than a node id, because these two facets are matched by
+ * alias resolution — a place is keyed by its normalized name and a state's id is a hash, so equality
+ * against a textual cue could never work. The value is what the reader reaches for the node with.
+ */
+function parseStatePlaceFacets(query: string, projectId: string): PlannedFacet[] {
+  const facets: PlannedFacet[] = [];
+  // "while still on SQLite" / "当时还是 SQLite" — the state a subject was in, not the time it happened.
+  const stateCue = /\bwhile\s+(?:still\s+)?(?:on|using|in)\s+([\w'.-]+(?:\s+[\w'.-]+){0,3})/i.exec(query)
+    ?? /(?:当时|当时还是|那会儿|那时候)(?:还是|用的|在)?\s*([\u4e00-\u9fa5A-Za-z0-9_.-]{2,24})/u.exec(query);
+  if (stateCue?.[1]) {
+    const value = stateCue[1].trim();
+    facets.push({ type: 'state', value, label: value, relation: 'HAS_STATE' });
+  }
+  // "at the Tokyo office" / "在东京办公室". A trailing locative word is kept: it is part of the place's
+  // name as it was stored, and the alias lookup is exact on the normalized form.
+  const placeCue = /\b(?:at|in)\s+(?:the\s+)?([A-Z][\w'.-]*(?:\s+(?:[A-Z][\w'.-]*|office|store|branch)){0,3})/.exec(query)
+    ?? /在([\u4e00-\u9fa5]{2,12}?(?:办公室|会议室|门店|分部|总部|现场))/u.exec(query);
+  if (placeCue?.[1]) {
+    const value = placeCue[1].trim();
+    // "at 2:00" and "in July" are time cues the time facet already owns.
+    if (!/^(?:the\s+)?(?:\d|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(value)) {
+      facets.push({ type: 'place', value, label: value, relation: 'LOCATED_AT' });
+    }
   }
   return facets;
 }
