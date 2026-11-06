@@ -819,8 +819,23 @@ export class KernelAgentMemoryBackend {
     const eventId = (item.sourceAnchor as { eventId?: string } | undefined)?.eventId;
     if (!eventId) return false;
     try {
-      const event = this.kernel.getEventContext(eventId, { before: 0, after: 0 })?.event;
-      return event ? eventHoldsSecretMark(event) : false;
+      const context = this.kernel.getEventContext(eventId, { before: 0, after: 0 });
+      if (!context) return false;
+      if (eventHoldsSecretMark(context.event)) return true;
+      // A compiled item anchors a *compile-layer* event, which carries no turn of its own (measured: `turn_id`
+      // null, no mark), while the mark sits on the turn's events (#142, #144). The link between them is in the
+      // ledger already: that event's payload lists the raw events it was built from. So the question is asked of
+      // those events rather than answered by scanning text — a text scan is what dropped a legitimate record that
+      // merely looked like a key (#144). Bounded by one event's own source refs.
+      const sourceRefs = (context.event.payload as { sourceRefs?: unknown } | undefined)?.sourceRefs;
+      if (!Array.isArray(sourceRefs)) return false;
+      for (const ref of sourceRefs.slice(0, 16)) {
+        const refId = (ref as { eventId?: unknown } | undefined)?.eventId;
+        if (typeof refId !== 'string') continue;
+        const referenced = this.kernel.getEventContext(refId, { before: 0, after: 0 })?.event;
+        if (referenced && eventHoldsSecretMark(referenced)) return true;
+      }
+      return false;
     } catch {
       // A lane may point at an event this database no longer has; absence is not a secret.
       return false;
