@@ -174,6 +174,7 @@ import { CORE_VERSION } from './version.js';
 import { SqliteSharedMemory } from './adapters/sqlite/SqliteSharedMemory.js';
 import type { SharedCollection, SharedItem, SharedRetraction } from './ports/index.js';
 import { DEFAULT_TAXONOMY, type MemoryTaxonomy, type TaxonomyResolution } from './config/MemoryTaxonomy.js';
+import { setConfiguredLanguage } from './config/LanguagePacks.js';
 
 const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 
@@ -188,6 +189,8 @@ export interface MemoryKernelOptions {
   sharedEnabled?: boolean;
   /** The project's classification vocabulary (#132); absent means the shipped one. */
   taxonomy?: TaxonomyResolution;
+  /** The project's language for host-facing vocabulary (#135); absent means the shipped default. */
+  language?: string;
   dbPath?: string;
   embedder?: Embedder;
   embeddingProvider?: EmbeddingProvider;
@@ -698,6 +701,7 @@ export class MemoryKernel {
   private readonly reEmbeddingPipeline?: ReEmbeddingPipeline;
   private readonly extensions = new Map<string, unknown>();
   private readonly taxonomyResolution: TaxonomyResolution;
+  private readonly language?: string;
   private lastEmbedSuccessAt?: number;
   private lastEmbedErrorAt?: number;
   private initialized = false;
@@ -710,6 +714,10 @@ export class MemoryKernel {
     if (options.projectTimeZone && normalizedBoundary.config.timezone && options.projectTimeZone !== normalizedBoundary.config.timezone) throw new Error('project_timezone_conflict');
     this.projectClock = resolveProjectClockContext({ projectTimeZone: options.projectTimeZone ?? normalizedBoundary.config.timezone });
     this.taxonomyResolution = options.taxonomy ?? { taxonomy: DEFAULT_TAXONOMY, source: 'default', reasons: [] };
+    this.language = options.language;
+    // The social gate and the inlined gate source read this at call time, so a project that declares its
+    // language classifies its turns with that language's vocabulary (#135).
+    setConfiguredLanguage(this.language);
     this.dbPath = options.dbPath ?? ':memory:';
     this.encryptionProvider = options.encryptionProvider;
     this.piiRedactor = options.redactionPolicy === false ? undefined : new PiiRedactor(options.redactionPolicy);
@@ -3630,6 +3638,9 @@ export class MemoryKernel {
   get taxonomy(): MemoryTaxonomy { return this.taxonomyResolution.taxonomy; }
 
   get taxonomyStatus(): TaxonomyResolution { return this.taxonomyResolution; }
+
+  /** The language this project reads host-facing vocabulary in (#135). */
+  get projectLanguage(): string | undefined { return this.language; }
 
   get sharedEnabled(): boolean {
     return this.options.sharedEnabled === true;

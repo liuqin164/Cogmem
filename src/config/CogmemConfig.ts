@@ -41,6 +41,8 @@ export interface LoadedCogmemConfig {
   sharedEnabled?: boolean;
   /** Where the classification vocabulary came from, and why it fell back if it did (#132). */
   taxonomyStatus?: TaxonomyResolution;
+  /** The project's declared language for host-facing vocabulary (#135). */
+  language?: string;
   configPath: string;
   homeDir: string;
   /**
@@ -262,6 +264,10 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   // reasons carried through to `doctor` rather than stopping the install.
   optionsOut.taxonomy = resolveTaxonomy(section(root, 'taxonomy'));
 
+  // The language host-facing vocabulary is generated in (#135). A project config carries it, like the
+  // timezone, and `zh` stays the default so an install that says nothing behaves as it did.
+  const projectLanguage = stringValue(project.language) || stringValue(root.language);
+  if (projectLanguage) optionsOut.language = projectLanguage;
   const projectTimeZone = stringValue(project.timezone) || stringValue(root.timezone);
   if (projectTimeZone) {
     try { resolveTimeZone(projectTimeZone); optionsOut.projectTimeZone = projectTimeZone; }
@@ -403,6 +409,7 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
     sharedEnabled: optionsOut.sharedEnabled,
     sharedRecallLimit: optionsOut.sharedRecallLimit,
     taxonomyStatus: optionsOut.taxonomy,
+    language: optionsOut.language,
     modelRegistry,
     paths: { embeddingsDir, snapshotsDir, logsDir },
     integrations: {

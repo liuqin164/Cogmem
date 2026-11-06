@@ -53,14 +53,14 @@ test('the Chinese pack holds exactly the vocabulary the classifier used before t
 
 test('every Chinese verdict is what it was before the vocabulary moved', () => {
   for (const [turn, verdict, residue, cue] of CHINESE_VERDICTS) {
-    expect({ turn, verdict: classifySocialTurn(turn) }).toEqual({ turn, verdict });
-    expect({ turn, ...socialTurnResidue(turn) }).toEqual({ turn, residue, ...(cue ? { cue } : {}) });
+    expect({ turn, verdict: classifySocialTurn(turn, 'zh') }).toEqual({ turn, verdict });
+    expect({ turn, ...socialTurnResidue(turn, 'zh') }).toEqual({ turn, residue, ...(cue ? { cue } : {}) });
   }
 });
 
 test('the ticket example stays suppressed while a real question keeps normal recall', () => {
-  expect(classifySocialTurn('这次谢谢你啦')).toBe('social');
-  expect(classifySocialTurn('上次部署时间改了吗')).toBe('real');
+  expect(classifySocialTurn('这次谢谢你啦', 'zh')).toBe('social');
+  expect(classifySocialTurn('上次部署时间改了吗', 'zh')).toBe('real');
 });
 
 test('an unknown language reads the default pack rather than an empty one', () => {

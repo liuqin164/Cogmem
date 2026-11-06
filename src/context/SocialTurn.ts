@@ -35,7 +35,7 @@ function isPunctuationOnly(text: string): boolean {
  * removed when the whole message can be covered by fillers. 「好看」 therefore survives (看 is not a
  * filler) while 「这次谢谢你啦」 dissolves completely — the property that makes a token list safe here.
  */
-function fillerSpans(text: string): Array<{ start: number; end: number }> {
+function fillerSpans(text: string, fillerTokens: readonly string[]): Array<{ start: number; end: number }> {
   const lowered = text.toLowerCase();
   const length = text.length;
   const reachable = new Array<boolean>(length + 1).fill(false);
@@ -49,7 +49,7 @@ function fillerSpans(text: string): Array<{ start: number; end: number }> {
       reachable[index + 1] = true;
       from[index + 1] = index;
     }
-    for (const token of SOCIAL_FILLER_TOKENS) {
+    for (const token of fillerTokens) {
       const end = index + token.length;
       if (end <= length && lowered.slice(index, end) === token.toLowerCase()) {
         reachable[end] = true;
@@ -73,7 +73,7 @@ function fillerSpans(text: string): Array<{ start: number; end: number }> {
   const greedy: Array<{ start: number; end: number }> = [];
   let index = 0;
   while (index < length) {
-    const token = SOCIAL_FILLER_TOKENS.find((candidate) => lowered.startsWith(candidate.toLowerCase(), index));
+    const token = fillerTokens.find((candidate) => lowered.startsWith(candidate.toLowerCase(), index));
     if (token) {
       greedy.push({ start: index, end: index + token.length });
       index += token.length;
@@ -88,8 +88,9 @@ function fillerSpans(text: string): Array<{ start: number; end: number }> {
 }
 
 /** The message with its social fillers removed, and the cue that survived, if any. */
-export function socialTurnResidue(text: string): { residue: string; cue?: string } {
-  const spans = fillerSpans(text);
+export function socialTurnResidue(text: string, language?: string): { residue: string; cue?: string } {
+  const resource = socialTurnResources(language);
+  const spans = fillerSpans(text, resource.fillerTokens);
   let residue = '';
   let cursor = 0;
   for (const span of spans) {
@@ -97,7 +98,7 @@ export function socialTurnResidue(text: string): { residue: string; cue?: string
     cursor = span.end;
   }
   residue += text.slice(cursor);
-  const cue = CONTENT_CUE_PATTERNS.map((pattern) => pattern.exec(residue)?.[0]).find(Boolean);
+  const cue = resource.contentCuePatterns.map((pattern) => pattern.exec(residue)?.[0]).find(Boolean);
   return cue === undefined ? { residue } : { residue, cue };
 }
 
@@ -109,16 +110,14 @@ export function socialTurnResidue(text: string): { residue: string; cue?: string
  * back-reference, and nothing new (number, date, latin entity, task verb) may come with it — so
  * 「上次部署时间改了吗」 remains a real question and keeps normal recall.
  */
-const BACK_REFERENCE = socialTurnResources().backReference;
-const NEW_CONTENT = socialTurnResources().newContent;
-const ACK_LEAD = socialTurnResources().ackLead;
 
-export function isContinuationReference(text: string): boolean {
-  const { residue, cue } = socialTurnResidue(text);
-  if (cue === undefined || !BACK_REFERENCE.test(cue)) return false;
+export function isContinuationReference(text: string, language?: string): boolean {
+  const resource = socialTurnResources(language);
+  const { residue, cue } = socialTurnResidue(text, language);
+  if (cue === undefined || !resource.backReference.test(cue)) return false;
   const rest = residue.split(cue).join('');
-  if (/\d/.test(rest) || /[A-Za-z][A-Za-z0-9_-]{2,}/.test(rest) || NEW_CONTENT.test(rest)) return false;
-  return ACK_LEAD.test(text);
+  if (/\d/.test(rest) || /[A-Za-z][A-Za-z0-9_-]{2,}/.test(rest) || resource.newContent.test(rest)) return false;
+  return resource.ackLead.test(text);
 }
 
 export type SocialTurnVerdict = 'social' | 'real' | 'grey';
@@ -128,15 +127,15 @@ export type SocialTurnVerdict = 'social' | 'real' | 'grey';
  * `real`   — a cue survived, so the turn is about something.
  * `grey`   — words are left that prove nothing either way; the caller decides with a relevance floor.
  */
-export function classifySocialTurn(text: string): SocialTurnVerdict {
-  const { residue, cue } = socialTurnResidue(text);
+export function classifySocialTurn(text: string, language?: string): SocialTurnVerdict {
+  const { residue, cue } = socialTurnResidue(text, language);
   if (cue !== undefined) return 'real';
   if (isPunctuationOnly(residue)) return 'social';
   return 'grey';
 }
 
 /** Whether the turn is pure small talk — the verdict that suppresses recall entirely. */
-export function isSocialTurn(text: string): boolean {
+export function isSocialTurn(text: string, language?: string): boolean {
   return classifySocialTurn(text) === 'social';
 }
 
@@ -145,11 +144,12 @@ export function isSocialTurn(text: string): boolean {
  * by the installer and cannot import TypeScript. The installer embeds this, so the plugin carries the
  * same vocabulary rather than a hand-copied third version.
  */
-export function socialTurnGateSource(): string {
+export function socialTurnGateSource(language?: string): string {
+  const resource = socialTurnResources(language);
   return [
     `// --- social-turn gate: generated from src/context/SocialTurn.ts ---`,
-    `const SOCIAL_FILLER_TOKENS = ${JSON.stringify(SOCIAL_FILLER_TOKENS)};`,
-    `const CONTENT_CUE_SOURCES = ${JSON.stringify(CONTENT_CUE_PATTERNS.map((pattern) => pattern.source))};`,
+    `const SOCIAL_FILLER_TOKENS = ${JSON.stringify(resource.fillerTokens)};`,
+    `const CONTENT_CUE_SOURCES = ${JSON.stringify(resource.contentCuePatterns.map((pattern) => pattern.source))};`,
     `const SKIPPABLE = /[\\s\\p{P}\\p{S}]/u;`,
     `function fillerSpans(text, lowered) {`,
     `  const length = lowered.length;`,
@@ -192,9 +192,9 @@ export function socialTurnGateSource(): string {
     `  if (CONTENT_CUE_PATTERNS.some((pattern) => pattern.test(residue))) return 'real';`,
     `  return /^[\\s\\p{P}\\p{S}]*$/u.test(residue) ? 'social' : 'grey';`,
     `}`,
-    `const BACK_REFERENCE = ${JSON.stringify(BACK_REFERENCE.source)};`,
-    `const NEW_CONTENT = ${JSON.stringify(NEW_CONTENT.source)};`,
-    `const ACK_LEAD = ${JSON.stringify(ACK_LEAD.source)};`,
+    `const BACK_REFERENCE = ${JSON.stringify(resource.backReference.source)};`,
+    `const NEW_CONTENT = ${JSON.stringify(resource.newContent.source)};`,
+    `const ACK_LEAD = ${JSON.stringify(resource.ackLead.source)};`,
     `function socialTurnResidue(text) {`,
     `  const raw = String(text ?? '');`,
     `  const lowered = raw.toLowerCase();`,
