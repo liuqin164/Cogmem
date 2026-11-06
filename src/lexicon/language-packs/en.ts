@@ -58,6 +58,8 @@ export const EN_SOCIAL_FILLER_TOKENS: readonly string[] = [
   // thanks
   'thank you so much', 'thanks a lot', 'thank you very much', 'many thanks', 'thanks so much', 'thank you',
   'thanks', 'thx', 'ty', 'cheers', 'much appreciated', 'appreciate it', 'appreciate that', 'grateful',
+  // agreement and interjections (#145): thanks plus a reaction word is still small talk
+  'great', 'cool', 'awesome', 'perfect', 'nice', 'ok', 'okay', 'got it', 'sounds good', 'no worries', 'sure', 'alright', 'lovely',
   // greetings
   'good morning', 'good afternoon', 'good evening', 'good night', 'morning', 'evening', 'how are you doing',
   'how are you', 'how is it going', "how's it going", 'hi there', 'hey there', 'hello there', 'hi', 'hello',

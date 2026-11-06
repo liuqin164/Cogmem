@@ -42,11 +42,11 @@ const CHINESE_VERDICTS: Array<[string, string, string, string | null]> = [
 
 test('the Chinese pack holds exactly the vocabulary the classifier used before the move', () => {
   // Counts plus the families the ticket names; the verdict table below is what actually pins behaviour.
-  expect(ZH_SOCIAL_FILLER_TOKENS.length).toBe(143);
+  expect(ZH_SOCIAL_FILLER_TOKENS.length).toBe(154); // #145 added the agreement family and the 太…啦 degree particle
   expect(ZH_SOCIAL_CONTENT_CUE_PATTERNS.length).toBe(7);
   // Tokens, not phrases: a whole sentence like 「这次谢谢你啦」 matches by segmentation, which the verdict
   // table below covers — asserting the phrase were a token would pin a fiction.
-  for (const token of ['谢谢', '太感谢', '辛苦', '好的', '收到']) {
+  for (const token of ['谢谢', '太感谢', '辛苦', '好的', '收到', '太']) {
     expect({ token, present: ZH_SOCIAL_FILLER_TOKENS.includes(token) }).toEqual({ token, present: true });
   }
 });
@@ -66,6 +66,6 @@ test('the ticket example stays suppressed while a real question keeps normal rec
 test('an unknown language reads the default pack rather than an empty one', () => {
   for (const language of [undefined, null, '', 'zh', 'zh-CN', 'klingon']) {
     expect({ language: String(language), fillers: socialTurnResources(language).fillerTokens.length })
-      .toEqual({ language: String(language), fillers: 143 });
+      .toEqual({ language: String(language), fillers: 154 });
   }
 });

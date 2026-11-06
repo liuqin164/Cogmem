@@ -12,6 +12,12 @@ import { classifySocialTurn, isContinuationReference } from '../src/context/Soci
  * comparison the ticket asks for — English not below Chinese — and both numbers are printed.
  */
 const SOCIAL: Array<[string, string]> = [
+  // The variants #145's decision called out by name: the English side leaked three of four, the Chinese one, so the
+  // pairs are added together to keep the two languages aligned rather than fixing one side into a new asymmetry.
+  ["太谢谢你啦", "thanks so much!"],
+  ["好的谢谢你", "great, thanks a lot"],
+  ["嗯好的谢谢", "ok cool, thanks"],
+  ["太感谢啦", "thank you very much!"],
   ["你好", "hello"],
   ["你好呀，辛苦了", "hi there, good job"],
   ["嗯嗯", "yeah yeah"],
