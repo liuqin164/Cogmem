@@ -811,6 +811,11 @@ export class KernelAgentMemoryBackend {
   private itemHoldsSecretMark(item: AgentRecallItem): boolean {
     const meta = item as { secretFindings?: { total?: number }; sourceContext?: { event?: { text?: string } }; text?: string };
     if (Number(meta.secretFindings?.total ?? 0) > 0) return true;
+    // A compiled item — a neuron or an Atlas card — is not an event and carries no mark, but it holds the turn's
+    // text. Measured: the key came back in exactly that shape while the event itself was withheld (#142), so the
+    // text has to be asked directly. Bounded by the number of items a recall returns, and this is a security
+    // control rather than a micro-optimisation.
+    if (typeof meta.text === 'string' && countSecretFindings(meta.text).total > 0) return true;
     const eventId = (item.sourceAnchor as { eventId?: string } | undefined)?.eventId;
     if (!eventId) return false;
     try {
