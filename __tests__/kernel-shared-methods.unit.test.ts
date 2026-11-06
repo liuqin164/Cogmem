@@ -32,21 +32,24 @@ test('a kernel with sharing off refuses to write and reads nothing', async () =>
   }
 });
 
-test('with sharing on, publishing, reading, granting and revoking behave as the ACL says', async () => {
+test('with sharing on, any agent that can connect reads — the readers list is no longer a gate (#146)', async () => {
   const { kernel: k } = kernel(true);
   try {
     expect(await k.publishShared([item()])).toBe(1);
-    // The owner reads; a third host that knows the name does not.
+    // The owner reads — and so does a host that was never granted anything. That is the change: publishing stays an
+    // explicit act, reading is opened to every agent that can connect.
     expect(await k.subscribeShared(['team-standards'], 'claude')).toHaveLength(1);
-    expect(await k.subscribeShared(['team-standards'], 'hermes')).toEqual([]);
+    expect(await k.subscribeShared(['team-standards'], 'hermes')).toHaveLength(1);
+    // Identity is still required (#146 left this boundary alone): an anonymous read is not a connected agent.
     expect(await k.subscribeShared(['team-standards'], undefined)).toEqual([]);
+    // The registry is kept and reported, so a future multi-user deployment can use it — but it decides nothing now.
     expect(await k.listSharedCollections()).toMatchObject([
       { collection: 'team-standards', ownerHost: 'claude', readers: [], itemCount: 1 },
     ]);
     await k.grantSharedReader('team-standards', 'hermes', 'claude');
     expect(await k.subscribeShared(['team-standards'], 'hermes')).toHaveLength(1);
     await k.revokeSharedReader('team-standards', 'hermes', 'claude');
-    expect(await k.subscribeShared(['team-standards'], 'hermes')).toEqual([]);
+    expect(await k.subscribeShared(['team-standards'], 'hermes')).toHaveLength(1);
   } finally {
     k.close();
   }

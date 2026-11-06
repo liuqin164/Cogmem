@@ -57,23 +57,25 @@ test('shared items carry their source host and collection, and are not private m
   }
 });
 
-test('a retracted item stops being recalled, and an unauthorized collection never is', async () => {
+test('a retracted item stops being recalled, and every shared collection is readable (#146)', async () => {
   const { kernel, backend } = fixture();
   try {
-    await seedPrivate(backend, 'hermes', ['Deploy window is Tuesday.']);
+    await seedPrivate(backend, 'hermes', ['Deploy window is Tuesday.', 'Shared too, while sharing is on.']);
     await publishFrom(kernel, 'claude', 'team-standards', ['We standardised on pnpm.']);
-    await publishFrom(kernel, 'claude', 'claude-private-notes', ['Not for you.']);
-    await kernel.grantSharedReader('team-standards', 'hermes', 'claude');
+    await publishFrom(kernel, 'claude', 'claude-private-notes', ['Shared too, while sharing is on.']);
 
     const before = backend.recall({ agentId: 'hermes', projectId: 'project-a', query: 'standardised pnpm', limit: 5 });
-    expect(before.items.filter((item) => item.shared)).toHaveLength(1);
-    // The collection claude never granted to hermes is absent, not refused.
-    expect(before.items.some((item) => item.shared?.collection === 'claude-private-notes')).toBe(false);
+    // Presence of the collection, not a total: while sharing is on every readable collection may contribute (#146).
+    expect(before.items.some((item) => item.shared?.collection === 'team-standards')).toBe(true);
+    // No grant is involved any more (#146), and this is asserted where the decision puts it — on subscribe, not on a
+    // private-lane recall whose relevance filter is a different question.
+    expect((await kernel.subscribeShared(['claude-private-notes'], 'hermes')).length).toBeGreaterThan(0);
+    expect((await kernel.subscribeShared(['claude-private-notes'], 'openclaw')).length).toBeGreaterThan(0);
 
     await kernel.retractShared({ itemHash: 'team-standards-0', retractedAt: Date.UTC(2026, 0, 3), retractedBy: 'claude' });
     const after = backend.recall({ agentId: 'hermes', projectId: 'project-a', query: 'standardised pnpm', limit: 5 });
-    expect(after.items.filter((item) => item.shared)).toHaveLength(0);
-    expect(after.decisionTrace?.sharedCount).toBe(0);
+    // The retracted item is gone from the lane immediately, which is the case the decision names.
+    expect(after.items.some((item) => item.shared?.collection === 'team-standards')).toBe(false);
   } finally {
     kernel.close();
   }

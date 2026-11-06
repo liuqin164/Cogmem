@@ -115,7 +115,8 @@ describe('#63 with the switch off, a shared call is refused rather than unknown'
         items: [{ itemHash: 'h1', sourceItem: 's1', sourceHost: 'attacker', payload: { t: 'x' } }],
       }, { kernel, hostId: 'claude' });
       expect(await kernel.listSharedCollections()).toMatchObject([{ ownerHost: 'claude' }]);
-      expect(await kernel.subscribeShared(['team-standards'], 'attacker')).toEqual([]);
+      // #146: reading is not gated per reader, so the host that was never granted reads it too.
+      expect(await kernel.subscribeShared(['team-standards'], 'attacker')).toHaveLength(1);
       expect(await kernel.subscribeShared(['team-standards'], 'claude')).toHaveLength(1);
     } finally {
       kernel.close();

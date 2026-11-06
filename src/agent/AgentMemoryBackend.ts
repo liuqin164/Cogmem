@@ -747,17 +747,18 @@ export class KernelAgentMemoryBackend {
    * budget it had, and the shared lane spends only its own. Every shared item names its source host and
    * collection, which is what a renderer needs to present it as a reference rather than an instruction.
    *
-   * Only collections this host owns or was granted appear here, and the read goes through the adapter's
-   * authorized `subscribeSync` — the recall path never queries the shared table itself, and an
-   * unauthorized collection is absent rather than refused. A read-only lane: nothing here writes.
+   * Every shared collection appears here while sharing is enabled (#146: publishing is still explicit, reading is
+   * not gated per reader), and the read goes through the adapter's `subscribeSync` — the recall path never queries
+   * the shared table itself. A read-only lane: nothing here writes.
    */
   private withSharedLane(query: AgentRecallQuery, result: AgentRecallResult): AgentRecallResult {
     if (!this.kernel.sharedEnabled) return result;
     const agentId = query.agentId;
     if (!agentId) return result;
-    const readable = this.kernel.listSharedCollectionsSync()
-      .filter((collection) => collection.ownerHost === agentId || collection.readers.includes(agentId))
-      .map((collection) => collection.collection);
+    // Reading is open to any agent that can connect (#146, Ryu 2026-11-06): the readers list is no longer a gate.
+    // The registry stays in the database and is left unused on purpose — a future multi-user deployment can turn it
+    // back on — but nothing here consults it, so there is no runtime branch to keep in step.
+    const readable = this.kernel.listSharedCollectionsSync().map((collection) => collection.collection);
     if (readable.length === 0) return result;
 
     const injectionLimit = query.limit ?? 5;

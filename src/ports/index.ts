@@ -28,7 +28,8 @@ export interface SharedRetraction {
 
 /**
  * A shared collection and who may read it. The owner is the host that first published into the
- * collection; readers are granted explicitly, so a collection with no readers is readable by its owner
+ * collection; the readers list is retained from the per-reader ACL that 4.1 replaced (#146) and is no longer
+ * consulted — reading is open to any connected agent while sharing is enabled
  * alone — which is what "sharing is off by default" means at the storage layer.
  */
 export interface SharedCollection {

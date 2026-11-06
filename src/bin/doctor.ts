@@ -166,7 +166,7 @@ function emitGate(gate: InstallGate, payload: Record<string, unknown> = {}): voi
     if (sharedCollections !== undefined) {
       console.log(sharedCollections.length === 0
         ? `Shared collections: none — sharing is ${sharedEnabledFlag === true ? 'enabled' : 'off'}`
-        : `Shared collections: ${sharedCollections.map((c) => `${c.collection} (owner ${c.ownerHost}, readers ${c.readers.length > 0 ? c.readers.join('/') : 'none'}, ${c.itemCount} item(s))`).join('; ')}`);
+        : `Shared collections: ${sharedCollections.map((c) => `${c.collection} (owner ${c.ownerHost}, readable by every agent that can connect, ${c.itemCount} item(s))`).join('; ')}`);
     }
     printSteps(gate.nextSteps);
   }

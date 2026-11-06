@@ -141,14 +141,15 @@ describe('SharedMemoryPort: retraction', () => {
  * one place — the adapter — so no surface can be the one that forgot.
  */
 describe('SharedMemoryPort: collection access control (#66)', () => {
-  test('a host that knows the collection name but was never granted reads nothing', async () => {
+  test('a host that knows the collection name reads it without ever being granted (#146)', async () => {
     const db = new Database(':memory:');
     const shared = new SqliteSharedMemory(db);
     try {
       await shared.publish([item({ collection: 'team-standards', sourceHost: 'claude' })]);
-      // The owner reads it; a third host that knows the name does not.
+      // The owner reads it, and so does a third host that was never granted anything: reading is not gated per
+      // reader while sharing is on (#146). Identity is still required — the anonymous case is below.
       expect(await shared.subscribe(['team-standards'], { readerHost: 'claude' })).toHaveLength(1);
-      expect(await shared.subscribe(['team-standards'], { readerHost: 'intruder' })).toEqual([]);
+      expect(await shared.subscribe(['team-standards'], { readerHost: 'intruder' })).toHaveLength(1);
     } finally {
       db.close();
     }
@@ -190,7 +191,7 @@ describe('SharedMemoryPort: collection access control (#66)', () => {
     }
   });
 
-  test('a granted reader reads, and a revoke stops the next read', async () => {
+  test('granting and revoking change the registry, not what a reader can read (#146)', async () => {
     const db = new Database(':memory:');
     const shared = new SqliteSharedMemory(db);
     try {
@@ -198,8 +199,9 @@ describe('SharedMemoryPort: collection access control (#66)', () => {
       await shared.grantReader('team-standards', 'hermes', 'claude');
       expect(await shared.subscribe(['team-standards'], { readerHost: 'hermes' })).toHaveLength(1);
       await shared.revokeReader('team-standards', 'hermes', 'claude');
-      expect(await shared.subscribe(['team-standards'], { readerHost: 'hermes' })).toEqual([]);
-      // Revoking stops the next read; it does not rewrite what a reader already has.
+      // Reading is not gated per reader any more, so revoking an entry in a registry nobody consults changes nothing
+      // about access. The registry still records the revoke, which is what a future multi-user deployment would use.
+      expect(await shared.subscribe(['team-standards'], { readerHost: 'hermes' })).toHaveLength(1);
       expect(await shared.listCollections()).toMatchObject([{ readers: [] }]);
     } finally {
       db.close();

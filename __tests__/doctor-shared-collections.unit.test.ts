@@ -30,8 +30,8 @@ function human(configPath: string): string {
   return `${run.stdout ?? ''}${run.stderr ?? ''}`;
 }
 
-/** #66 acceptance: doctor lists the collections, their owner and their readers — and shows the switch. */
-test('doctor lists a shared collection with its owner and readers', () => {
+/** #66 acceptance: doctor lists the collections, their owner and their size — and shows the switch (#146: the read rule). */
+test('doctor lists a shared collection with its owner, its size and the read rule', () => {
   const { configPath, dbPath } = install();
   const db = new Database(dbPath);
   const shared = new SqliteSharedMemory(db);
@@ -51,7 +51,8 @@ test('doctor lists a shared collection with its owner and readers', () => {
   const text = human(configPath);
   expect(text).toContain('team-standards');
   expect(text).toContain('owner claude');
-  expect(text).toContain('readers hermes');
+  // #146: the human line states the read rule instead of printing a list nobody can change.
+  expect(text).toContain('readable by every agent that can connect');
 });
 
 /** #66 acceptance: a default install shares nothing, and says so rather than omitting the field. */

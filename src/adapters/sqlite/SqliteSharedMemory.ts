@@ -177,19 +177,19 @@ export class SqliteSharedMemory implements SharedMemoryPort {
         JOIN shared_collections c ON c.collection = s.collection
         WHERE s.collection IN (${placeholders})
           AND s.retracted_at IS NULL
-          AND (c.owner_host = ? OR EXISTS (
-            SELECT 1 FROM shared_collection_readers r
-             WHERE r.collection = s.collection AND r.reader_host = ?
-          ))
         ORDER BY s.published_at DESC
         LIMIT ?
       `)
-      .all(...collections, options.readerHost, options.readerHost, limit) as SharedRow[];
+      // Reading is not gated per reader (#146, Ryu 2026-11-06): while sharing is enabled, every agent that can
+      // connect reads every shared collection. `shared_collection_readers` and the owner column stay in the schema
+      // and are deliberately not consulted — a future multi-user deployment can turn the check back on, and until
+      // then there is no branch here to keep in step. Publishing and retraction are still owner-bound.
+      .all(...collections, limit) as SharedRow[];
 
     return rows.map(toItem);
   }
 
-  /** The first publisher of a collection owns it; anyone else needs that owner's grant. */
+  /** The first publisher of a collection owns it, which is what publishing into it and retracting from it check. */
   private claimCollection(collection: string, publisherHost: string): void {
     const row = this.db
       .prepare('SELECT owner_host FROM shared_collections WHERE collection = ?')
