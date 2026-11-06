@@ -802,6 +802,26 @@ export class KernelAgentMemoryBackend {
    * or imported item is a fact, anything else is a relation. That is a coarse reading on purpose — a finer one
    * needs the compiled corpus that is still a box-phase item on the ticket.
    */
+  /**
+   * Whether a recalled item's anchor event carries the secret mark (#142).
+   *
+   * The mark lives on the event, so this is a lookup rather than a second judgement: the lanes differ in where
+   * they read an event from, and this is the one question they must all ask before handing it to a caller.
+   */
+  private itemHoldsSecretMark(item: AgentRecallItem): boolean {
+    const meta = item as { secretFindings?: { total?: number }; sourceContext?: { event?: { text?: string } }; text?: string };
+    if (Number(meta.secretFindings?.total ?? 0) > 0) return true;
+    const eventId = (item.sourceAnchor as { eventId?: string } | undefined)?.eventId;
+    if (!eventId) return false;
+    try {
+      const event = this.kernel.getEventContext(eventId, { before: 0, after: 0 })?.event;
+      return event ? eventHoldsSecretMark(event) : false;
+    } catch {
+      // A lane may point at an event this database no longer has; absence is not a secret.
+      return false;
+    }
+  }
+
   private projectPhases(items: AgentRecallItem[], query: AgentRecallQuery): { items: AgentRecallItem[]; suppressed: Array<{ reason: RecallSuppressionReason; count: number }> } {
     if (!this.kernel.phaseProjectionEnabled) return { items, suppressed: [] };
     const now = Number(query.now ?? Date.now());
@@ -848,9 +868,21 @@ export class KernelAgentMemoryBackend {
         { reason: 'secret_bearing_withheld', count: secretWithheld },
       ]);
     }
+    // The secret mark is enforced here, and not only in the raw lane's scope test (#142). Measured while fixing
+    // this: with the event withheld from the raw lane, the same turn still came back as an item from another
+    // lane — text and `sourceContext.event.text` both — so a caller received the key with
+    // `suppressed: secret_bearing_withheld` beside it. Every lane returns through here, which is the same reason
+    // the social gate sits here; the forensic and exact-quote intents never reach this method.
+    const secretKept = forensic
+      ? gated.items
+      : gated.items.filter((item) => !this.itemHoldsSecretMark(item));
+    const secretWithheldByItems = gated.items.length - secretKept.length;
+    if (secretWithheldByItems > 0 && result.decisionTrace) {
+      SECRET_WITHHELD_COUNTS.set(this, (SECRET_WITHHELD_COUNTS.get(this) ?? 0) + secretWithheldByItems);
+    }
     // Phase projection (#130): the third admission, next to the social and secret ones and in the same place,
     // so it cannot apply to some lanes and not others. Off by default; with it off this is the identity.
-    const phased = this.projectPhases(gated.items, query);
+    const phased = this.projectPhases(secretKept, query);
     const zeroExplanation = phased.items.length === 0 ? this.explainZeroResult(query) : undefined;
     return {
       ...result,
@@ -2206,8 +2238,18 @@ export class KernelAgentMemoryBackend {
       before: beforeCount,
       after: afterCount,
     });
+    // The anchor was never checked and the scope test passes everything when no scope is given, which is how a
+    // marked turn came back inside another item's window with its text intact (#142, second measurement) — the
+    // key arrived even though the raw lane had already withheld the event itself. A marked event is therefore
+    // excluded from a window by default, and only an exempt (forensic / exact-quote) intent may see it; the by-id
+    // read does not come through here at all, so it stays whole.
+    const secretExempt = Boolean(scope && FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(scope.intent ?? '')));
+    if (eventHoldsSecretMark(context.event) && !secretExempt) return undefined;
     const event = this.toAgentSourceContextEvent(context.event);
-    const inScope = (event: MemoryEvent) => !scope || (this.isAgentRawEvent(event, scope.agentId) && this.isRawEventInRecallScope(event, scope, scope.intent));
+    const inScope = (candidate: MemoryEvent) => {
+      if (!secretExempt && eventHoldsSecretMark(candidate)) return false;
+      return !scope || (this.isAgentRawEvent(candidate, scope.agentId) && this.isRawEventInRecallScope(candidate, scope, scope.intent));
+    };
     return {
       event,
       before: normalized.before.filter(inScope).map((item) => this.toAgentSourceContextEvent(item)),
