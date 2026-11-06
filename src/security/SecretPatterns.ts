@@ -104,3 +104,17 @@ export function redactSecretText(text: string): { text: string; count: number; c
   }
   return { text: value, count, chars };
 }
+
+/**
+ * The write-path secret mark for one conversation text (#142), keyed by which side of the turn it belongs to.
+ *
+ * Written where the ledger is appended, so every writer gets it — the host bridge, the MCP tool and any direct
+ * kernel call — rather than only the callers that remembered to ask.
+ */
+export function secretFindingsMetadata(
+  text: string | undefined,
+  key: 'secretFindings' | 'secretFindingsAssistant' = 'secretFindings',
+): Record<string, unknown> {
+  const found = countSecretFindings(String(text ?? ''));
+  return found.total > 0 ? { [key]: { total: found.total, byKind: found.byKind } } : {};
+}

@@ -175,6 +175,7 @@ import { SqliteSharedMemory } from './adapters/sqlite/SqliteSharedMemory.js';
 import type { SharedCollection, SharedItem, SharedRetraction } from './ports/index.js';
 import { DEFAULT_TAXONOMY, type MemoryTaxonomy, type TaxonomyResolution } from './config/MemoryTaxonomy.js';
 import { setConfiguredLanguage } from './config/LanguagePacks.js';
+import { secretFindingsMetadata } from './security/SecretPatterns.js';
 
 const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 
@@ -1687,7 +1688,12 @@ export class MemoryKernel {
         ?? (input.turnSeq !== undefined || input.eventOrdinal !== undefined || input.sourceOffset !== undefined || input.lineStart !== undefined ? 'high' : 'low'),
       payload: {
         text,
-        metadata: input.metadata,
+        // The secret mark is written where the ledger is appended (#142), so the host bridge, the MCP tool
+        // and any direct kernel call all get it; the role decides which side's key it belongs to.
+        metadata: {
+          ...(input.metadata || {}),
+          ...secretFindingsMetadata(text, input.role === 'assistant' ? 'secretFindingsAssistant' : 'secretFindings'),
+        },
       },
     });
   }
