@@ -32,7 +32,7 @@ export function deterministicFrameFallback(input: { projectId: string; episodeId
   // (`__tests__/facet-state-place-e2e.unit.test.ts`), which is what "align with the model path" means here.
   const placePatterns: Array<{ pattern: RegExp; label: (match: RegExpMatchArray) => string }> = [
     { pattern: /在\s*([^\s，。；、]{1,12}?(?:办公室|会议室|门店|总部|现场))/u, label: (m) => m[1]! },
-    { pattern: /\b(?:at|in)\s+(?:the\s+)?([A-Z][\w'-]*(?:\s+[A-Z][\w'-]*)*)/u, label: (m) => m[1]! },
+    { pattern: /\b(?:at|in)\s+(?:the\s+)?([A-Z][\w'-]*(?:\s+(?!(?:and|or|but|while|when|because|so|that|to|for|with|we|i|they|it|he|she)\b)[A-Za-z][\w'-]*){0,2})/u, label: (m) => m[1]! },
   ];
   const statePatterns = [
     /(?:当时还是|用的还是)\s*([^\s，。；、]{1,24})/u,

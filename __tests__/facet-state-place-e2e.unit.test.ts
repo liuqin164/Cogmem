@@ -36,15 +36,16 @@ function seeded() {
   frame.needsReview = false;
   (frame as unknown as { sourceAuthority: string }).sourceAuthority = 'processor';
   const subject = frame.nodes.find((node) => node.dimension === 'event')!.frameNodeId;
-  frame.nodes.push({ frameNodeId: 'place-tokyo', dimension: 'location', label: 'Tokyo office', description: 'We finished the migration planning here.', aliases: ['the Tokyo office'], confidence: 0.9, evidenceEventIds: [event.eventId] });
   // The questions also name a proper noun, which the entity cue extractor turns into an entity facet.
   // A real frame carries those nodes; the plan intersects facet groups, so without them an empty entity
   // group would veto a query whose place facet did match.
   for (const [frameNodeId, label] of [['entity-tokyo', 'Tokyo'], ['entity-sqlite', 'SQLite']] as const) {
     frame.nodes.push({ frameNodeId, dimension: 'entity', label, confidence: 0.9, evidenceEventIds: [event.eventId] });
   }
-  frame.relations.push({ sourceFrameNodeId: subject, relationType: 'LOCATED_AT', targetFrameNodeId: 'place-tokyo', confidence: 0.9, evidenceEventIds: [event.eventId] });
-  frame.stateTransitions.push({ subjectFrameNodeId: subject, to: 'SQLite', confidence: 0.9, evidenceEventIds: [event.eventId] });
+  // #141: nothing is added by hand — the fallback itself produces the place and the state in the shape the
+  // query side looks up.
+  expect(frame.nodes.some((node) => node.dimension === 'location')).toBe(true);
+  expect(frame.stateTransitions.length).toBeGreaterThan(0);
   const saved = kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'facet-state-place', status: 'active', now: 0 });
   kernel.memoryFrameStore.publish(saved.frameId, 'staged', 'active', 1);
   kernel.rebuildMemoryAtlas({ projectId: 'project-a' });
