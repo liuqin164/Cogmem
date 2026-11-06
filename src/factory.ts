@@ -191,6 +191,8 @@ export interface MemoryKernelOptions {
   taxonomy?: TaxonomyResolution;
   /** The project's language for host-facing vocabulary (#135); absent means the shipped default. */
   language?: string;
+  /** Phase projection (#130): a research sample, off unless a caller turns it on. */
+  phaseProjectionEnabled?: boolean;
   dbPath?: string;
   embedder?: Embedder;
   embeddingProvider?: EmbeddingProvider;
@@ -702,6 +704,7 @@ export class MemoryKernel {
   private readonly extensions = new Map<string, unknown>();
   private readonly taxonomyResolution: TaxonomyResolution;
   private readonly language?: string;
+  private readonly phaseProjection: boolean;
   private lastEmbedSuccessAt?: number;
   private lastEmbedErrorAt?: number;
   private initialized = false;
@@ -715,6 +718,7 @@ export class MemoryKernel {
     this.projectClock = resolveProjectClockContext({ projectTimeZone: options.projectTimeZone ?? normalizedBoundary.config.timezone });
     this.taxonomyResolution = options.taxonomy ?? { taxonomy: DEFAULT_TAXONOMY, source: 'default', reasons: [] };
     this.language = options.language;
+    this.phaseProjection = options.phaseProjectionEnabled === true;
     // The social gate and the inlined gate source read this at call time, so a project that declares its
     // language classifies its turns with that language's vocabulary (#135).
     setConfiguredLanguage(this.language);
@@ -3641,6 +3645,9 @@ export class MemoryKernel {
 
   /** The language this project reads host-facing vocabulary in (#135). */
   get projectLanguage(): string | undefined { return this.language; }
+
+  /** Whether the read-time phase projection is applied to the default lane (#130). Off by default. */
+  get phaseProjectionEnabled(): boolean { return this.phaseProjection; }
 
   get sharedEnabled(): boolean {
     return this.options.sharedEnabled === true;

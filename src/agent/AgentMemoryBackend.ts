@@ -25,6 +25,7 @@ import { inferActionKinds } from '../utils/ActionKindRegistry.js';
 import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
 import { cliArg } from '../utils/CliArgument.js';
 import { pad2 } from '../utils/Values.js';
+import { phaseFor, phaseGist, toMillis, type PhaseCategory } from '../recall/PhaseProjection.js';
 
 export type AgentTurnIngestMode =
   | 'immediate_compile'
@@ -340,7 +341,11 @@ export type RecallSuppressionReason =
   | 'no_discriminative_hit'
   | 'grey_below_floor'
   // A conversation turn holding a secret: written verbatim, marked, and not injected by default.
-  | 'secret_bearing_withheld';
+  | 'secret_bearing_withheld'
+  // Phase projection (#130), off by default: an item too old for the default lane, and one shown as a gist
+  // rather than in full. Both are reported so a caller can tell "not remembered" from "not shown here".
+  | 'phase_dormant'
+  | 'phase_gist';
 
 export interface AgentRecallEntityCard {
   entityId: string;
@@ -776,6 +781,41 @@ export class KernelAgentMemoryBackend {
     };
   }
 
+  /**
+   * Apply the read-time phase to the default lane (#130).
+   *
+   * Read-time and store-free: the phase is computed from the timestamp every time, so switching it off restores
+   * the previous behaviour with no migration and no data to roll back. Forensic and exact-quote lanes never
+   * reach this method, and a by-ID read does not either, which is the ticket's rule that those channels always
+   * return the whole thing.
+   *
+   * The category is what an item's own fields can say, and nothing more: a raw turn is a scenario, a compiled
+   * or imported item is a fact, anything else is a relation. That is a coarse reading on purpose — a finer one
+   * needs the compiled corpus that is still a box-phase item on the ticket.
+   */
+  private projectPhases(items: AgentRecallItem[], query: AgentRecallQuery): { items: AgentRecallItem[]; suppressed: Array<{ reason: RecallSuppressionReason; count: number }> } {
+    if (!this.kernel.phaseProjectionEnabled) return { items, suppressed: [] };
+    const now = Number(query.now ?? Date.now());
+    const kept: AgentRecallItem[] = [];
+    let dormant = 0;
+    let gist = 0;
+    for (const item of items) {
+      const sourceType = String(item.sourceType ?? '');
+      const category: PhaseCategory = sourceType.startsWith('raw_ledger') ? 'scenario'
+        : sourceType === 'compiled_memory' || sourceType === 'imported_summary' ? 'fact'
+        : 'relation';
+      const occurredAt = toMillis((item.sourceAnchor as { occurredAt?: unknown } | undefined)?.occurredAt);
+      const phase = phaseFor({ occurredAt, category }, now);
+      if (phase === 'dormant') { dormant += 1; continue; }
+      if (phase === 'gist') { gist += 1; kept.push({ ...item, ...phaseGist(item as unknown as Record<string, unknown>) } as AgentRecallItem); continue; }
+      kept.push(item);
+    }
+    const suppressed: Array<{ reason: RecallSuppressionReason; count: number }> = [];
+    if (dormant > 0) suppressed.push({ reason: 'phase_dormant', count: dormant });
+    if (gist > 0) suppressed.push({ reason: 'phase_gist', count: gist });
+    return { items: kept, suppressed };
+  }
+
   private recallPrivate(query: AgentRecallQuery): AgentRecallResult {
     SECRET_WITHHELD_COUNTS.set(this, 0);
     const queryText = String(query.query ?? '');
@@ -799,14 +839,18 @@ export class KernelAgentMemoryBackend {
         { reason: 'secret_bearing_withheld', count: secretWithheld },
       ]);
     }
-    const zeroExplanation = gated.items.length === 0 ? this.explainZeroResult(query) : undefined;
+    // Phase projection (#130): the third admission, next to the social and secret ones and in the same place,
+    // so it cannot apply to some lanes and not others. Off by default; with it off this is the identity.
+    const phased = this.projectPhases(gated.items, query);
+    const zeroExplanation = phased.items.length === 0 ? this.explainZeroResult(query) : undefined;
     return {
       ...result,
-      items: gated.items.map(withRedactionMarks),
+      items: phased.items.map(withRedactionMarks),
       decisionTrace: result.decisionTrace
         ? {
           ...result.decisionTrace,
           ...(gated.suppressed.length ? { suppressed: mergeSuppressions(result.decisionTrace.suppressed, gated.suppressed) } : {}),
+          ...(phased.suppressed.length ? { suppressed: mergeSuppressions(result.decisionTrace.suppressed, phased.suppressed) } : {}),
           ...(zeroExplanation ? { zeroExplanation } : {}),
         }
         : result.decisionTrace,
