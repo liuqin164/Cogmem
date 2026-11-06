@@ -73,6 +73,8 @@ cogmem init --yes --json
   deterministic rule-only mode: recall still works by literal match, but it
   will not match paraphrases. That is a legitimate end state, not a failure.
 
+**When the user asks why the install stopped here**, hand them `docs/install.md`: it is the operator-facing account of the same behaviour — why an unattended run leaves `rule_only`, what that state can do, and the two ways to finish it. It is written for the person, not for you; ADR-0003 remains the authority for the sectioning.
+
 ## 4. Gate
 
 ```bash

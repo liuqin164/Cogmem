@@ -68,6 +68,7 @@
     "CONTRIBUTING.md",
     "RELEASE_CHECKLIST.md",
     "docs/agent-install.md",
+    "docs/install.md",
     "docs/mcp-hosts.md",
     "docs/openclaw-runtime.md",
     "SECURITY.md",
