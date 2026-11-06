@@ -26,6 +26,7 @@ import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
 import { cliArg } from '../utils/CliArgument.js';
 import { pad2 } from '../utils/Values.js';
 import { phaseFor, phaseGist, toMillis, type PhaseCategory } from '../recall/PhaseProjection.js';
+import { countSecretFindings } from '../security/SecretPatterns.js';
 
 export type AgentTurnIngestMode =
   | 'immediate_compile'
@@ -458,7 +459,12 @@ export class KernelAgentMemoryBackend {
       timeZone: turn.timeZone,
       projectTimeZone: turn.projectTimeZone,
       sourceId,
-      metadata: this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
+      metadata: {
+        ...this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
+        // The secret mark belongs to this event and is written where every write routes (#142), not only in
+        // the host bridge: an MCP write used to reach the ledger unmarked and recall returned it verbatim.
+        ...secretFindingsFor(turn.userText, 'secretFindings'),
+      },
     });
     let userEvent: ReturnType<typeof writeUserEvent>;
     try {
@@ -507,7 +513,10 @@ export class KernelAgentMemoryBackend {
         // This event carries its own findings only. The turn metadata channel is shared with the user
         // event, so spreading it would put the user's mark on the assistant turn as well, and the
         // event marks would then disagree with the hygiene summary that counts them.
-        metadata: this.metadataWithCollection({ ...omitSecretFindings(turn.metadata), sourceAgent: turn.agentId }, turn.collection),
+        metadata: {
+          ...this.metadataWithCollection({ ...omitSecretFindings(turn.metadata), sourceAgent: turn.agentId }, turn.collection),
+          ...secretFindingsFor(turn.assistantText, 'secretFindingsAssistant'),
+        },
       })
       : undefined;
     if (assistantEvent) {
@@ -2601,6 +2610,19 @@ function isFillerProbe(probe: string): boolean {
 const SECRET_WITHHELD_COUNTS = new WeakMap<object, number>();
 
 /** Whether this event's own metadata says it holds something secret-looking. */
+/**
+ * The secret mark for one conversation text (#142).
+ *
+ * Written here, in the one method every write goes through, rather than only in the host bridge: a
+ * `cogmem_remember_turn` over MCP — or any direct backend call — used to reach the ledger with no mark at all, so
+ * recall handed the secret back verbatim. The bridge keeps the rest of its job (redacting tool results, hygiene
+ * counters, explicit exclusion) and passes already-cleaned text down, so the two agree.
+ */
+function secretFindingsFor(text: string | undefined, key: 'secretFindings' | 'secretFindingsAssistant'): Record<string, unknown> {
+  const found = countSecretFindings(String(text ?? ''));
+  return found.total > 0 ? { [key]: { total: found.total, byKind: found.byKind } } : {};
+}
+
 function eventHoldsSecretMark(event: MemoryEvent): boolean {
   const metadata = (event.payload as { metadata?: { secretFindings?: { total?: number }; secretFindingsAssistant?: { total?: number } } })?.metadata;
   return Number(metadata?.secretFindings?.total ?? 0) > 0 || Number(metadata?.secretFindingsAssistant?.total ?? 0) > 0;
