@@ -260,7 +260,17 @@ export function createCogmemMcpServer(
         content: [
           {
             type: 'text',
-            text: `tool_not_in_profile: ${request.params.name} is not exposed by profile "${effectiveOptions.profile}". Start the server with --profile admin or --profile full to use it.`,
+            text: (() => {
+              // Only the profiles that would actually work (#147). The old text told a caller on `admin` to
+              // start the server with `--profile admin`, which is a dead end that costs a real debugging
+              // detour: `full` was the answer, and the sentence hid it behind the profile already in use.
+              const eligible = (['core', 'admin', 'full'] as const)
+                .filter((candidate) => candidate !== effectiveOptions.profile && isToolAllowed(candidate, request.params.name));
+              const hint = eligible.length
+                ? ` It is available under ${eligible.map((candidate) => `--profile ${candidate}`).join(' or ')}.`
+                : ' No profile exposes it; the name may be wrong.';
+              return `tool_not_in_profile: ${request.params.name} is not exposed by profile "${effectiveOptions.profile}".${hint}`;
+            })(),
           },
         ],
       };
