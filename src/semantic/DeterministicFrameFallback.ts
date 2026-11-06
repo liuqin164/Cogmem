@@ -38,9 +38,14 @@ export function deterministicFrameFallback(input: { projectId: string; episodeId
     /(?:当时还是|用的还是)\s*([^\s，。；、]{1,24})/u,
     /while\s+still\s+on\s+([^\s,.;]{1,24})/iu,
   ];
-  const actorNodeId = nodes.find((node) => node.dimension === 'actor')?.frameNodeId;
-  const subjectNodeId = actorNodeId ?? 'episode';
-  const slug = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 12);
+  // The projector only accepts an edge whose source is task/entity/event/object, and it turns a state transition into
+  // CHANGED_TO only when the subject is an `event` node (MemoryFrameProjector). The actor node the fallback already
+  // builds is neither, so the place and the state hang off the event they were read from, which is also the truer
+  // subject: the place is where that event happened, the state is what it was on then.
+  const eventNodeId = (event: MemoryEvent) => `event:${event.eventId}`;
+  // The Atlas derives a node's id from `place:` plus the lowercased label (that is the id the query side looks up,
+  // and the existing end-to-end fixture writes it by hand), so the frame node has to use the same spelling.
+  const placeNodeId = (value: string) => `place:${value.toLowerCase()}`;
   for (const event of events) {
     const text = String((event.payload as { text?: string } | undefined)?.text ?? '');
     for (const { pattern, label } of placePatterns) {
@@ -48,11 +53,11 @@ export function deterministicFrameFallback(input: { projectId: string; episodeId
       if (!match) continue;
       const place = label(match).trim().replace(/[，。；、,.;:]+$/u, '');
       if (!place) continue;
-      const frameNodeId = `place:${slug(place)}`;
+      const frameNodeId = placeNodeId(place);
       if (!nodes.some((node) => node.frameNodeId === frameNodeId)) {
         nodes.push({ frameNodeId, dimension: 'location', label: place, description: text.slice(0, 200), aliases: [place], confidence: 0.6, evidenceEventIds: [event.eventId] });
       }
-      relations.push({ sourceFrameNodeId: subjectNodeId, relationType: 'LOCATED_AT', targetFrameNodeId: frameNodeId, confidence: 0.6, evidenceEventIds: [event.eventId] });
+      relations.push({ sourceFrameNodeId: eventNodeId(event), relationType: 'LOCATED_AT', targetFrameNodeId: frameNodeId, confidence: 0.6, evidenceEventIds: [event.eventId] });
       break;
     }
     for (const pattern of statePatterns) {
@@ -60,7 +65,7 @@ export function deterministicFrameFallback(input: { projectId: string; episodeId
       if (!match) continue;
       const to = match[1]!.trim().replace(/[，。；、,.;:]+$/u, '');
       if (!to) continue;
-      stateTransitions.push({ subjectFrameNodeId: subjectNodeId, to, confidence: 0.6, evidenceEventIds: [event.eventId] } as unknown as MemoryFrameV1['stateTransitions'][number]);
+      stateTransitions.push({ subjectFrameNodeId: eventNodeId(event), to, confidence: 0.6, evidenceEventIds: [event.eventId] } as unknown as MemoryFrameV1['stateTransitions'][number]);
       break;
     }
   }
