@@ -357,7 +357,6 @@ export function fitRecallItems(
 
 /** The item projection the recall block renders. */
 export function compactRecallItems(items: Payload[], config: Payload): Payload[] {
-  const maxItems = Number(config.memoryContextMaxItems || config.limit || 3);
   // Shared items are projected too, but they are taken last and never consume the private budget
   // (#67): a shared collection that filled the window would otherwise hide the agent's own memory.
   const all = Array.isArray(items) ? items : [];
@@ -402,14 +401,6 @@ export function contextCandidateFromRecallItem(item: Payload): Payload {
   };
 }
 
-/**
- * The recall block itself.
- *
- * Its rules are stated inside the block rather than in a host's system prompt,
- * because the block is what a hook can inject; the model has to be told that
- * this text is background memory and not a user instruction or current intent,
- * and that it must not be persisted back as new memory.
- */
 /** The lines one recall item prints, full or as its index line (#131). One renderer, one costing basis. */
 export function recallItemLines(
   item: Payload,
@@ -469,7 +460,11 @@ export function recallItemLines(
 }
 
 /**
- * Render the block and report what it cost to fit (#131).
+ * The recall block itself, rendered, and what it cost to fit (#131).
+ *
+ * Its rules are stated inside the block rather than in a host's system prompt, because the block is what a hook
+ * can inject; the model has to be told that this text is background memory and not a user instruction or current
+ * intent, and that it must not be persisted back as new memory.
  *
  * The fit is returned rather than only acted upon, so the caller that assembles a decision trace can say how
  * much of the budget was spent and how many memories had to be reduced — the same numbers the block itself
@@ -504,9 +499,6 @@ export function renderRecallBlock(result: Payload, config: Payload): { text: str
   if (result.narrative && result.narrative.summary) {
     lines.push(serializeUntrustedMemory(result.narrative.summary, 800));
   }
-  const maxItems = Number(config.memoryContextMaxItems || config.limit || 3);
-  const sourceWindowMaxChars = Number(config.sourceWindowMaxChars || 1200);
-  const includeSourceWindow = config.includeSourceWindowByDefault === true;
   const sharedItems = result.items.filter((item: Payload) => item.shared);
   const privateItems = result.items.filter((item: Payload) => !item.shared);
   // Fit by measuring the lines that will actually be printed (#131). Every fixed cost is counted first —
@@ -546,7 +538,7 @@ export function renderRecallBlock(result: Payload, config: Payload): { text: str
   lines.push('</COGMEM_RECALL_CONTEXT>');
   return {
     text: clampRecallContext(lines.join('\n'), Number(config.memoryContextMaxChars || 3500)),
-    fit: { ...fit, measuredCost: fit.measuredCost },
+    fit,
   };
 }
 
