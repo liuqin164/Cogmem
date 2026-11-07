@@ -65,7 +65,7 @@ export function deterministicFrameFallback(input: { projectId: string; episodeId
       if (!match) continue;
       const to = match[1]!.trim().replace(/[，。；、,.;:]+$/u, '');
       if (!to) continue;
-      stateTransitions.push({ subjectFrameNodeId: eventNodeId(event), to, confidence: 0.6, evidenceEventIds: [event.eventId] } as unknown as MemoryFrameV1['stateTransitions'][number]);
+      stateTransitions.push({ subjectFrameNodeId: eventNodeId(event), to, confidence: 0.6, evidenceEventIds: [event.eventId] });
       break;
     }
   }

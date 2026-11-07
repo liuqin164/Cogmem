@@ -74,7 +74,6 @@ function main(): void {
   if (command !== 'project-scope' && command !== 'secret-marks') {
     console.error(usage());
     process.exit(1);
-    process.exit(command === 'project-scope' ? 0 : 1);
   }
   if (command === 'secret-marks') {
     const applySecretMarks = hasFlag('--apply');
