@@ -1,4 +1,5 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
+import { excludeExplicitSpans } from '../context/ExplicitExclusion.js';
 import { SOCIAL_FILLER_TOKENS, classifySocialTurn, isSocialTurn } from '../context/SocialTurn.js';
 import type { MemoryAtlasCard, MemoryAtlasNode, MemoryAtlasRelatedCard, MemoryAtlasRelaxationStep } from '../atlas/MemoryAtlasTypes.js';
 import {
@@ -407,6 +408,12 @@ export class KernelAgentMemoryBackend {
   }
 
   async rememberTurnWithResult(turn: AgentTurnMemory): Promise<AgentTurnMemoryResult> {
+    // Explicit exclusion (#133) runs here, at the one place every write path inside the kernel calls, and in the
+    // order the host bridge already uses: a passage the user marked is never stored, so it must not be claimed,
+    // scanned, compiled or written either. The bridge strips before calling this and reports the counts; by the
+    // time the text arrives here the markers are gone, which makes this pass a no-op rather than a second policy
+    // (#152: the MCP tool reached the store without ever asking).
+    const excludedUser = excludeExplicitSpans(turn.userText);
     const occurredAt = turn.timestamp ?? Date.now();
     const threadId = turn.threadId || turn.sessionId;
     const sourceId = `${turn.agentId}:${turn.sessionId}`;
@@ -420,7 +427,7 @@ export class KernelAgentMemoryBackend {
         agentId: turn.agentId,
         sessionId: turn.sessionId,
         turnId: turn.turnId,
-        userText: turn.userText,
+        userText: excludedUser.text,
         assistantText: turn.assistantText,
       })
       : undefined;
@@ -452,7 +459,7 @@ export class KernelAgentMemoryBackend {
       turnId,
       turnSeq,
       role: 'user',
-      content: turn.userText,
+      content: excludedUser.text,
       eventOrdinal: 1,
       occurredAt,
       localDate: turn.localDate,
@@ -463,7 +470,7 @@ export class KernelAgentMemoryBackend {
         ...this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
         // The secret mark belongs to this event and is written where every write routes (#142), not only in
         // the host bridge: an MCP write used to reach the ledger unmarked and recall returned it verbatim.
-        ...secretFindingsFor(turn.userText, 'secretFindings'),
+        ...secretFindingsFor(excludedUser.text, 'secretFindings'),
       },
     });
     let userEvent: ReturnType<typeof writeUserEvent>;
@@ -476,7 +483,7 @@ export class KernelAgentMemoryBackend {
           agentId: turn.agentId,
           sessionId: turn.sessionId,
           turnId: turn.turnId,
-          userText: turn.userText,
+          userText: excludedUser.text,
           assistantText: turn.assistantText,
         })
         : undefined;
@@ -570,10 +577,10 @@ export class KernelAgentMemoryBackend {
       orderingConfidence: event!.orderingConfidence,
     }));
     const content = [
-      `User: ${turn.userText}`,
+      `User: ${excludedUser.text}`,
       turn.assistantText ? `Agent: ${turn.assistantText}` : '',
     ].filter(Boolean).join('\n');
-    const compileSignalText = `User: ${turn.userText}`;
+    const compileSignalText = `User: ${excludedUser.text}`;
 
     const decision = this.shouldCompileTurn(mode, compileSignalText);
     const rawEventIds = [userEvent, assistantEvent].filter(Boolean).map((event) => event!.eventId);
