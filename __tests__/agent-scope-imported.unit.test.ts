@@ -25,12 +25,37 @@ test('an episode imported by one agent is readable by another agent in the same 
     await kernel.appendEpisodeMessageAsync({
       projectId: 'project-a', sessionId: 'ingest-1', sourceAgent: 'pi', role: 'user',
       text: 'Imported note: the deployment window is Tuesday.', externalMessageId: 'msg-1',
+      metadata: { imported: true },
     });
     const other = backend.recall({ agentId: 'hermes', projectId: 'project-a', query: 'deployment window Tuesday', limit: 5 });
     expect(other.items.map((item) => item.text).join(' ')).toContain('deployment window');
     // The project boundary is not what this rule moves: the same import stays invisible next door.
     const elsewhere = backend.recall({ agentId: 'hermes', projectId: 'project-b', query: 'deployment window Tuesday', limit: 5 });
     expect(elsewhere.items).toHaveLength(0);
+  } finally {
+    kernel.close();
+  }
+});
+
+/**
+ * #153: `externalMessageId` is the replay key, not an import marker.
+ *
+ * Reading it as an import made a turn somebody had project-public. Measured on the box before this
+ * guard existed: the same write handed `hermes`'s appended turn to `pi`, and four Atlas candidates
+ * with it; the build before the marker was widened handed over nothing.
+ */
+test('a turn one agent appended stays with that agent, message id and all (#153)', async () => {
+  const { kernel, backend } = fixture();
+  try {
+    await kernel.appendEpisodeMessageAsync({
+      projectId: 'project-a', sessionId: 'hermes-s1', sourceAgent: 'hermes', role: 'user',
+      text: 'Private note: the on-call number is 010-8888-1234.', externalMessageId: 'hermes-own-msg-1',
+    });
+    const stranger = backend.recall({ agentId: 'pi', projectId: 'project-a', query: 'on-call number 010', limit: 5 });
+    expect(stranger.items).toHaveLength(0);
+    // The owner still reads its own turn: this is scoping, not withholding.
+    const owner = backend.recall({ agentId: 'hermes', projectId: 'project-a', query: 'on-call number 010', limit: 5 });
+    expect(owner.items.map((item) => item.text).join(' ')).toContain('010-8888-1234');
   } finally {
     kernel.close();
   }

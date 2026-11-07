@@ -864,17 +864,22 @@ export class KernelAgentMemoryBackend {
   /**
    * Whether material reached the project by being *imported* rather than by being said (#143).
    *
-   * The marker is an explicit fact of the import path, never a guess about the text:
-   *   - the CLI adapters write `metadata.imported` (`src/bin/import-support.ts`);
-   *   - everything that arrives through the episode ingest path — `episode_append`, `episode_import`, and
-   *     `cogmem episode append` — goes through `appendEpisodeMessageAsync`, which records the caller's
-   *     `externalMessageId` on the event.
+   * The marker is an explicit fact of the write, and it is the import act itself — `metadata.imported`,
+   * written by the CLI adapters (`src/bin/import-support.ts`), by `cogmem import`, and by the two
+   * episode import paths (`cogmem episode import`, `cogmem_episode_import`).
+   *
+   * It is deliberately **not** `externalMessageId`. That field is the replay key — "the same id with the
+   * same text writes nothing the second time" — and a host sets it on its own turns, including through
+   * `cogmem_episode_append`. Reading it as an import marker made a turn that someone had project-public,
+   * with its compiled products: measured on the box (#153), the build that counted it handed `hermes`'s
+   * appended turn and four Atlas candidates to `pi`, while the build before it handed over nothing.
+   * Ryu's rule of 2026-11-06 scopes records that name an agent to that agent; only the records nobody
+   * owns are project-public, and an import is the write that says so.
    */
   private isImportedMaterial(event: MemoryEvent): boolean {
     const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
     if (!metadata) return false;
-    if (metadata.imported === true) return true;
-    return typeof metadata.externalMessageId === 'string' && metadata.externalMessageId.length > 0;
+    return metadata.imported === true;
   }
 
   /**

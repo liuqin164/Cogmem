@@ -982,7 +982,12 @@ async function episodeImport(kernel: MemoryKernel, input: Record<string, unknown
   const messageResults: Array<Record<string, unknown>> = [];
   for (const [index, message] of messages.entries()) {
     try {
-      const result = await kernel.appendEpisodeMessageAsync({ projectId, sessionId, sourceAgent, ...message });
+      // The import act, said out loud (#153): `externalMessageId` is the replay key every turn may
+      // carry, so it cannot be what makes this material project-public. `episode_append` stays a turn
+      // with an owner; this tool is the one that puts knowledge into the project.
+      const result = await kernel.appendEpisodeMessageAsync({
+        projectId, sessionId, sourceAgent, ...message, metadata: { imported: true, importFormat: 'mcp_episode_import' },
+      });
       results.push(result);
       messageResults.push({ index, processed: true, externalMessageId: message.externalMessageId, ...result });
     } catch (error) {
