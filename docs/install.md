@@ -85,6 +85,22 @@ in the environment instead of the file. Valid providers are `deterministic_local
 `doctor` reports the WARN. Setting it to a real provider and running `cogmem doctor` again is what
 turns the gate back to `OK`.
 
+### The language the social vocabulary speaks
+
+Recall drops small talk before it looks anything up — `thanks so much!`, 「这次谢谢你啦」 — and the
+words it matches against are **per language**. The project's own `language` selects the pack; without
+it, the Chinese vocabulary is the one in use:
+
+```toml
+[project]
+language = "en"        # zh is the default when nothing is declared
+```
+
+Both spellings are accepted — `[project] language` wins over a top-level `language`, the same way
+`timezone` works. One language per project, so a project whose turns are English wants them declared:
+measured on a fresh install, `thanks so much!` comes back with an answer while no language is declared,
+and comes back empty with `residue_empty` once `language = "en"` is set.
+
 ## 4. Installer environment variables
 
 `install.sh` installs the package and links the CLI, then stops. It never runs the wizard and
