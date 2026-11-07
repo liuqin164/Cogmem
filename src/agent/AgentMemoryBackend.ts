@@ -799,18 +799,6 @@ export class KernelAgentMemoryBackend {
   }
 
   /**
-   * Apply the read-time phase to the default lane (#130).
-   *
-   * Read-time and store-free: the phase is computed from the timestamp every time, so switching it off restores
-   * the previous behaviour with no migration and no data to roll back. Forensic and exact-quote lanes never
-   * reach this method, and a by-ID read does not either, which is the ticket's rule that those channels always
-   * return the whole thing.
-   *
-   * The category is what an item's own fields can say, and nothing more: a raw turn is a scenario, a compiled
-   * or imported item is a fact, anything else is a relation. That is a coarse reading on purpose — a finer one
-   * needs the compiled corpus that is still a box-phase item on the ticket.
-   */
-  /**
    * Whether a recalled item's anchor event carries the secret mark (#142).
    *
    * The mark lives on the event, so this is a lookup rather than a second judgement: the lanes differ in where
@@ -902,6 +890,18 @@ export class KernelAgentMemoryBackend {
     return chain.some((event) => this.isAgentRawEvent(event, agentId));
   }
 
+  /**
+   * Apply the read-time phase to the default lane (#130).
+   *
+   * Read-time and store-free: the phase is computed from the timestamp every time, so switching it off restores
+   * the previous behaviour with no migration and no data to roll back. Forensic and exact-quote lanes never
+   * reach this method, and a by-ID read does not either, which is the ticket's rule that those channels always
+   * return the whole thing.
+   *
+   * The category is what an item's own fields can say, and nothing more: a raw turn is a scenario, a compiled
+   * or imported item is a fact, anything else is a relation. That is a coarse reading on purpose — a finer one
+   * needs the compiled corpus that is still a box-phase item on the ticket.
+   */
   private projectPhases(items: AgentRecallItem[], query: AgentRecallQuery): { items: AgentRecallItem[]; suppressed: Array<{ reason: RecallSuppressionReason; count: number }> } {
     if (!this.kernel.phaseProjectionEnabled) return { items, suppressed: [] };
     const now = Number(query.now ?? Date.now());
