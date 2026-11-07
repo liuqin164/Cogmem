@@ -25,7 +25,7 @@ describe('SharedMemoryPort: publish', () => {
     expect(await shared.publish([item()])).toBe(1);
     expect(await shared.publish([item()])).toBe(0);
 
-    const subscribed = await shared.subscribe(['team-standards']);
+    const subscribed = await shared.subscribe(['team-standards'], { readerHost: 'claude' });
     expect(subscribed).toHaveLength(1);
   });
 
@@ -46,7 +46,7 @@ describe('SharedMemoryPort: publish', () => {
     const { shared } = fresh();
     await shared.publish([item({ payload: { nested: { a: [1, 2] }, ok: true } })]);
 
-    const [read] = await shared.subscribe(['team-standards']);
+    const [read] = await shared.subscribe(['team-standards'], { readerHost: 'claude' });
     expect(read.payload).toEqual({ nested: { a: [1, 2] }, ok: true });
   });
 
@@ -64,14 +64,14 @@ describe('SharedMemoryPort: subscribe', () => {
       item({ itemHash: 'b', collection: 'secrets' }),
     ]);
 
-    const standards = await shared.subscribe(['standards']);
+    const standards = await shared.subscribe(['standards'], { readerHost: 'claude' });
     expect(standards.map((i) => i.itemHash)).toEqual(['a']);
   });
 
   test('subscribing to nothing returns nothing', async () => {
     const { shared } = fresh();
     await shared.publish([item()]);
-    expect(await shared.subscribe([])).toEqual([]);
+    expect(await shared.subscribe([], { readerHost: 'claude' })).toEqual([]);
   });
 
   test('newest published item comes first', async () => {
@@ -81,7 +81,7 @@ describe('SharedMemoryPort: subscribe', () => {
       item({ itemHash: 'new', publishedAt: 2 }),
     ]);
 
-    const list = await shared.subscribe(['team-standards']);
+    const list = await shared.subscribe(['team-standards'], { readerHost: 'claude' });
     expect(list.map((i) => i.itemHash)).toEqual(['new', 'old']);
   });
 });
@@ -93,7 +93,7 @@ describe('SharedMemoryPort: retraction', () => {
 
     await shared.retract({ itemHash: 'hash-1', retractedAt: 1_700_000_100_000, retractedBy: 'claude' });
 
-    expect(await shared.subscribe(['team-standards'])).toEqual([]);
+    expect(await shared.subscribe(['team-standards'], { readerHost: 'claude' })).toEqual([]);
 
     const explained = await shared.explain('hash-1');
     expect(explained).not.toBeNull();
@@ -133,5 +133,91 @@ describe('SharedMemoryPort: retraction', () => {
     // is specified here, next to the adapter, instead of through the dispatcher.
     const { shared } = fresh();
     expect(await shared.explain('never-published')).toBeNull();
+  });
+});
+
+/**
+ * #66 acceptance: a collection has an owner and an explicit reader list, and reading is authorized in
+ * one place — the adapter — so no surface can be the one that forgot.
+ */
+describe('SharedMemoryPort: collection access control (#66)', () => {
+  test('a host that knows the collection name reads it without ever being granted (#146)', async () => {
+    const db = new Database(':memory:');
+    const shared = new SqliteSharedMemory(db);
+    try {
+      await shared.publish([item({ collection: 'team-standards', sourceHost: 'claude' })]);
+      // The owner reads it, and so does a third host that was never granted anything: reading is not gated per
+      // reader while sharing is on (#146). Identity is still required — the anonymous case is below.
+      expect(await shared.subscribe(['team-standards'], { readerHost: 'claude' })).toHaveLength(1);
+      expect(await shared.subscribe(['team-standards'], { readerHost: 'intruder' })).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('a subscribe with no identity reads nothing, so a missing identity fails closed', async () => {
+    const db = new Database(':memory:');
+    const shared = new SqliteSharedMemory(db);
+    try {
+      await shared.publish([item({ collection: 'team-standards', sourceHost: 'claude' })]);
+      expect(await shared.subscribe(['team-standards'])).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('a fresh collection has its publisher as owner and no readers at all', async () => {
+    const db = new Database(':memory:');
+    const shared = new SqliteSharedMemory(db);
+    try {
+      expect(await shared.listCollections()).toEqual([]);
+      await shared.publish([item({ collection: 'team-standards', sourceHost: 'claude' })]);
+      const [collection] = await shared.listCollections();
+      expect(collection).toMatchObject({ collection: 'team-standards', ownerHost: 'claude', readers: [], itemCount: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  test('only the owner may publish into an existing collection', async () => {
+    const db = new Database(':memory:');
+    const shared = new SqliteSharedMemory(db);
+    try {
+      await shared.publish([item({ collection: 'team-standards', sourceHost: 'claude' })]);
+      await expect(shared.publish([item({ itemHash: 'other', collection: 'team-standards', sourceHost: 'hermes' })]))
+        .rejects.toThrow(/shared_collection_not_owned:team-standards/);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('granting and revoking change the registry, not what a reader can read (#146)', async () => {
+    const db = new Database(':memory:');
+    const shared = new SqliteSharedMemory(db);
+    try {
+      await shared.publish([item({ collection: 'team-standards', sourceHost: 'claude' })]);
+      await shared.grantReader('team-standards', 'hermes', 'claude');
+      expect(await shared.subscribe(['team-standards'], { readerHost: 'hermes' })).toHaveLength(1);
+      await shared.revokeReader('team-standards', 'hermes', 'claude');
+      // Reading is not gated per reader any more, so revoking an entry in a registry nobody consults changes nothing
+      // about access. The registry still records the revoke, which is what a future multi-user deployment would use.
+      expect(await shared.subscribe(['team-standards'], { readerHost: 'hermes' })).toHaveLength(1);
+      expect(await shared.listCollections()).toMatchObject([{ readers: [] }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('only the owner may grant or revoke, and unknown collections are named', async () => {
+    const db = new Database(':memory:');
+    const shared = new SqliteSharedMemory(db);
+    try {
+      await shared.publish([item({ collection: 'team-standards', sourceHost: 'claude' })]);
+      await expect(shared.grantReader('team-standards', 'hermes', 'hermes')).rejects.toThrow(/shared_collection_not_owned/);
+      await expect(shared.revokeReader('team-standards', 'hermes', 'hermes')).rejects.toThrow(/shared_collection_not_owned/);
+      await expect(shared.grantReader('nope', 'hermes', 'claude')).rejects.toThrow(/shared_collection_not_found:nope/);
+    } finally {
+      db.close();
+    }
   });
 });

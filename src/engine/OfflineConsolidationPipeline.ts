@@ -80,6 +80,14 @@ export interface OfflineConsolidationOutput {
     reason: string;
   }>;
   consolidatedBeliefs: BeliefRecord[];
+  /**
+   * Consolidations that were generated but not landed, with the reason (#129).
+   *
+   * A blocked consolidation is a fact the run decided **not** to publish: the origin evidence disagreed, or
+   * it was no longer current by the time the item was ready to be written. Kept in the output so the
+   * decision is observable — silence would look the same as "there was nothing to consolidate".
+   */
+  blockedConsolidations: Array<{ factId: string; subject: string; predicate: string; reason: 'origin_polarity_conflict' | 'origin_superseded_before_dispatch' }>;
   archivedFactIds: string[];
   rejectedFactIds: string[];
   archivedEntityIds: string[];
@@ -149,6 +157,15 @@ export type PipelineStep =
  * - promote stable provisional outputs to verified records
  * - materialize belief updates from verified facts
  */
+/**
+ * How many independent origins a stance needs before it is consolidated (#129).
+ *
+ * Two is the floor the ticket describes (a re-statement is not a second source); the value is being
+ * measured against this project's own corpus and the distribution is posted on the issue, so the number
+ * that ships is the measured one rather than a borrowed constant.
+ */
+const MIN_INDEPENDENT_ORIGINS = 2;
+
 export class OfflineConsolidationPipeline {
   private readonly semanticCompiler: LocalSemanticCompiler;
   private readonly algorithmReviewBackend: AlgorithmReviewBackend;
@@ -347,23 +364,28 @@ export class OfflineConsolidationPipeline {
         }
       }
 
+      // Independent origins, not raw rows (#129): a claim restated three times inside one turn is one
+      // source, and counting it three times is how a single point of evidence becomes a stable memory.
+      const originKeys = this.distinctOrigins(facts);
       const winnerIsImportedSummarySupport = this.isImportedSummarySupport(winner, winnerEpisode);
       if (
         !winnerIsImportedSummarySupport
         && (
           reviewedWinner?.action === 'verify'
-          || this.shouldVerifyFact(winner, winnerEpisode, facts.length, lowConfidenceIndex)
+          || this.shouldVerifyFact(winner, winnerEpisode, originKeys.length, lowConfidenceIndex)
         )
       ) {
         winner.status = 'verified';
         winner.confidence = Math.min(
           0.99,
-          Math.max(reviewedWinner?.confidence || winner.confidence, facts.length > 1 ? 0.91 : 0.86)
+          Math.max(reviewedWinner?.confidence || winner.confidence, originKeys.length >= MIN_INDEPENDENT_ORIGINS ? 0.91 : 0.86)
         );
         this.deps.factStore?.updateFactStatus(winner.factId, 'verified', winner.confidence, {
           offlineConsolidatedAt: Date.now(),
           provenance: reviewedWinner?.metadata?.algorithm_review_kind ? 'offline_deep_consolidation_v2' : 'offline_deep_consolidation_v1',
-          corroborationCount: facts.length,
+          corroborationCount: originKeys.length,
+          originKeys,
+          rawFactCount: facts.length,
           ...(reviewedWinner?.metadata || {})
         });
         verifiedFacts.push(winner);
@@ -508,9 +530,37 @@ export class OfflineConsolidationPipeline {
       rejectedFactIds
     });
 
-    for (const fact of verifiedFacts) {
-      const candidate = this.factToBeliefCandidate(fact, episodeById.get(fact.neuronId), input.window.projectId);
-      if (!candidate || !this.deps.beliefStore) continue;
+    const blockedConsolidations: OfflineConsolidationOutput['blockedConsolidations'] = [];
+    const beliefCandidates = verifiedFacts
+      .map((fact) => ({ fact, candidate: this.factToBeliefCandidate(fact, episodeById.get(fact.neuronId), input.window.projectId) }))
+      .filter((entry): entry is { fact: FactRecord; candidate: BeliefCandidate } => Boolean(entry.candidate));
+    for (const { fact, candidate } of beliefCandidates) {
+      if (!this.deps.beliefStore) break;
+      // (1) Origins that disagree about the same thing: `likes` and `dislikes` both land on `preference`,
+      //     so the polarity is what distinguishes them. Two origins holding it both ways is an observation,
+      //     not a resolution — nothing is consolidated, and the reason is recorded rather than swallowed.
+      const disagreeing = beliefCandidates.find((other) => other.fact !== fact
+        && other.candidate.subject === candidate.subject
+        && other.candidate.predicate === candidate.predicate
+        && other.candidate.metadata?.polarity !== candidate.metadata?.polarity);
+      if (disagreeing) {
+        blockedConsolidations.push({ factId: fact.factId, subject: candidate.subject, predicate: candidate.predicate, reason: 'origin_polarity_conflict' });
+        continue;
+      }
+      // (2) Re-verified before it is dispatched, not cleaned up after: if this fact was superseded, or a
+      //     newer stance on the same subject and predicate exists in this run, its item was built on evidence
+      //     that is no longer current. The item is void — the fact keeps whatever status it earned, and
+      //     nothing is re-keyed and sent under a new id.
+      const superseding = workingFacts.find((other) => other !== fact
+        && other.subject === fact.subject
+        && other.predicateFamily === fact.predicateFamily
+        && other.validFrom > fact.validFrom
+        && other.status !== 'archived'
+        && other.status !== 'rejected');
+      if (fact.status === 'superseded' || superseding) {
+        blockedConsolidations.push({ factId: fact.factId, subject: candidate.subject, predicate: candidate.predicate, reason: 'origin_superseded_before_dispatch' });
+        continue;
+      }
       const result = this.deps.beliefStore.upsert(candidate, fact.validFrom);
       if (result.belief) {
         this.deps.beliefStore.attachEvidence([
@@ -553,6 +603,7 @@ export class OfflineConsolidationPipeline {
       verifiedEvents,
       correctedEntityBindings,
       consolidatedBeliefs,
+      blockedConsolidations,
       archivedFactIds,
       rejectedFactIds,
       archivedEntityIds,
@@ -687,6 +738,27 @@ export class OfflineConsolidationPipeline {
     else write();
   }
 
+  /**
+   * The independent origins behind a group of corroborating facts (#129).
+   *
+   * One origin is one independent piece of evidence. For a conversation that is the interaction unit —
+   * the turn the fact was read from — so three restatements inside one turn collapse to one key while the
+   * same statement in another turn counts again, which is what the ticket asks for. A fact taken from an
+   * imported document is keyed by that document instead, so a long file split into many turns does not
+   * weigh in as many sources. With no unit and no document the fact is its own origin, which is the
+   * conservative reading.
+   */
+  private distinctOrigins(facts: FactRecord[]): string[] {
+    const keys = new Set<string>();
+    for (const fact of facts) {
+      const documentKey = (fact.metadata || {}).sourceDocumentId;
+      keys.add(typeof documentKey === 'string' && documentKey
+        ? `doc:${documentKey}`
+        : `unit:${fact.unitId || fact.factId}`);
+    }
+    return [...keys].sort();
+  }
+
   private shouldVerifyFact(
     fact: FactRecord,
     episode: Neuron | undefined,
@@ -752,7 +824,11 @@ export class OfflineConsolidationPipeline {
       metadata: {
         factId: fact.factId,
         entityId: fact.entityId,
-        source: 'offline_deep_consolidation_v1'
+        source: 'offline_deep_consolidation_v1',
+        // `likes` and `dislikes` both land on the `preference` predicate, so without this the polarity is
+        // lost at exactly the point where two origins disagreeing about it has to be visible (#129).
+        polarity: fact.predicateFamily === 'dislikes' ? 'negative' : 'positive',
+        predicateFamily: fact.predicateFamily
       },
       extractionReason: fact.predicateFamily === 'likes' || fact.predicateFamily === 'dislikes'
         ? 'preference_signal'

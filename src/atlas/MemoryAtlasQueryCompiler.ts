@@ -21,7 +21,8 @@ const ACTION_MARKERS = new RegExp(
   `${CJK_ACTIONS}|(?<![\\p{L}\\p{N}_])(?:${LATIN_ACTIONS})(?![\\p{L}\\p{N}_])`,
   'iu',
 );
-const MEMORY_KIND_MARKERS: Array<[RegExp, string]> = [
+/** Exported so the taxonomy can define it in one place (#132) without moving it away from its consumer. */
+export const MEMORY_KIND_MARKERS: Array<[RegExp, string]> = [
   [/决策|决定|decision/iu, 'decision'], [/修正|纠正|correction/iu, 'correction'],
   [/目标|goal/iu, 'goal'], [/偏好|preference/iu, 'preference'], [/计划|plan/iu, 'plan'],
   [/事件|经历|event/iu, 'event'], [/证据|原文|evidence/iu, 'evidence'],

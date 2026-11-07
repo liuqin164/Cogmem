@@ -9,7 +9,7 @@
 
 import type { Database } from 'bun:sqlite';
 
-import type { SharedItem, SharedMemoryPort, SharedRetraction } from '../../ports/index.js';
+import type { SharedCollection, SharedItem, SharedMemoryPort, SharedRetraction } from '../../ports/index.js';
 
 interface SharedRow {
   item_hash: string;
@@ -34,7 +34,17 @@ function toItem(row: SharedRow): SharedItem {
 }
 
 export class SqliteSharedMemory implements SharedMemoryPort {
-  constructor(private readonly db: Database) {
+  private schemaReady = false;
+
+  constructor(private readonly db: Database) {}
+
+  /**
+   * Tables are created on first use, not on construction: a kernel that never shares must leave a
+   * database exactly as 4.0 left it — no shared tables at all — and `#68`'s fresh-database guard
+   * asserts precisely that. Idempotent, and paid once per adapter instance.
+   */
+  private ensureSchema(): void {
+    if (this.schemaReady) return;
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS shared_items (
         item_hash     TEXT PRIMARY KEY,
@@ -48,11 +58,33 @@ export class SqliteSharedMemory implements SharedMemoryPort {
       );
       CREATE INDEX IF NOT EXISTS idx_shared_collection
         ON shared_items(collection, published_at DESC);
+
+      -- Who owns a collection and who may read it. Kept beside the shared region rather than in each
+      -- host's config file: the owner is a runtime fact (whoever published first), and every host
+      -- shares this one database, while config files are per host and would disagree.
+      CREATE TABLE IF NOT EXISTS shared_collections (
+        collection  TEXT PRIMARY KEY,
+        owner_host  TEXT NOT NULL,
+        created_at  INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS shared_collection_readers (
+        collection  TEXT NOT NULL,
+        reader_host TEXT NOT NULL,
+        PRIMARY KEY (collection, reader_host)
+      );
     `);
+    this.schemaReady = true;
   }
 
   async publish(items: SharedItem[]): Promise<number> {
+    this.ensureSchema();
     if (items.length === 0) return 0;
+
+    // Ownership first: a publisher that does not own the collection must not get as far as writing an
+    // item, and the first publisher of a collection becomes its owner.
+    for (const item of items) {
+      if (item.collection && item.sourceHost) this.claimCollection(item.collection, item.sourceHost);
+    }
 
     for (const item of items) {
       if (!item.itemHash) throw new Error('shared_item_hash_required');
@@ -111,6 +143,7 @@ export class SqliteSharedMemory implements SharedMemoryPort {
   }
 
   async retract(retraction: SharedRetraction): Promise<void> {
+    this.ensureSchema();
     const row = this.db
       .prepare('SELECT source_host, retracted_at FROM shared_items WHERE item_hash = ?')
       .get(retraction.itemHash) as { source_host: string; retracted_at: number | null } | null;
@@ -126,23 +159,108 @@ export class SqliteSharedMemory implements SharedMemoryPort {
       .run(retraction.retractedAt, retraction.retractedBy, retraction.itemHash);
   }
 
-  async subscribe(collections: string[], options: { limit?: number } = {}): Promise<SharedItem[]> {
+  async subscribe(collections: string[], options: { readerHost?: string; limit?: number } = {}): Promise<SharedItem[]> {
+    return this.subscribeSync(collections, options);
+  }
+
+  /** Sync entry point for the recall path, which is synchronous; the async one delegates here. */
+  subscribeSync(collections: string[], options: { readerHost?: string; limit?: number } = {}): SharedItem[] {
+    this.ensureSchema();
     if (collections.length === 0) return [];
+    // No identity, nothing to authorize: fail closed rather than hand over every collection.
+    if (!options.readerHost) return [];
     const limit = options.limit ?? 100;
     const placeholders = collections.map(() => '?').join(', ');
     const rows = this.db
       .prepare(`
-        SELECT * FROM shared_items
-        WHERE collection IN (${placeholders}) AND retracted_at IS NULL
-        ORDER BY published_at DESC
+        SELECT s.* FROM shared_items s
+        JOIN shared_collections c ON c.collection = s.collection
+        WHERE s.collection IN (${placeholders})
+          AND s.retracted_at IS NULL
+        ORDER BY s.published_at DESC
         LIMIT ?
       `)
+      // Reading is not gated per reader (#146, Ryu 2026-11-06): while sharing is enabled, every agent that can
+      // connect reads every shared collection. `shared_collection_readers` and the owner column stay in the schema
+      // and are deliberately not consulted — a future multi-user deployment can turn the check back on, and until
+      // then there is no branch here to keep in step. Publishing and retraction are still owner-bound.
       .all(...collections, limit) as SharedRow[];
 
     return rows.map(toItem);
   }
 
+  /** The first publisher of a collection owns it, which is what publishing into it and retracting from it check. */
+  private claimCollection(collection: string, publisherHost: string): void {
+    const row = this.db
+      .prepare('SELECT owner_host FROM shared_collections WHERE collection = ?')
+      .get(collection) as { owner_host: string } | null;
+    if (!row) {
+      this.db
+        .prepare('INSERT INTO shared_collections (collection, owner_host, created_at) VALUES (?, ?, ?)')
+        .run(collection, publisherHost, Date.now());
+      return;
+    }
+    if (row.owner_host !== publisherHost) {
+      // Same shape as `shared_item_not_owned`: the code names the thing that was refused.
+      throw new Error(`shared_collection_not_owned:${collection}`);
+    }
+  }
+
+  private requireOwner(collection: string, actorHost: string): void {
+    const row = this.db
+      .prepare('SELECT owner_host FROM shared_collections WHERE collection = ?')
+      .get(collection) as { owner_host: string } | null;
+    if (!row) throw new Error(`shared_collection_not_found:${collection}`);
+    if (row.owner_host !== actorHost) throw new Error(`shared_collection_not_owned:${collection}`);
+  }
+
+  async grantReader(collection: string, readerHost: string, actorHost: string): Promise<void> {
+    this.ensureSchema();
+    if (!readerHost) throw new Error('shared_reader_host_required');
+    this.requireOwner(collection, actorHost);
+    this.db
+      .prepare('INSERT OR IGNORE INTO shared_collection_readers (collection, reader_host) VALUES (?, ?)')
+      .run(collection, readerHost);
+  }
+
+  async revokeReader(collection: string, readerHost: string, actorHost: string): Promise<void> {
+    this.ensureSchema();
+    this.requireOwner(collection, actorHost);
+    // Grants already delivered into someone's session are not recalled; this stops the next read.
+    this.db
+      .prepare('DELETE FROM shared_collection_readers WHERE collection = ? AND reader_host = ?')
+      .run(collection, readerHost);
+  }
+
+  async listCollections(): Promise<SharedCollection[]> {
+    return this.listCollectionsSync();
+  }
+
+  listCollectionsSync(): SharedCollection[] {
+    this.ensureSchema();
+    const rows = this.db
+      .prepare(`
+        SELECT c.collection, c.owner_host, c.created_at,
+               (SELECT COUNT(*) FROM shared_items s
+                 WHERE s.collection = c.collection AND s.retracted_at IS NULL) AS item_count
+          FROM shared_collections c
+         ORDER BY c.collection
+      `)
+      .all() as Array<{ collection: string; owner_host: string; created_at: number; item_count: number }>;
+    const readerRows = this.db
+      .prepare('SELECT collection, reader_host FROM shared_collection_readers ORDER BY reader_host')
+      .all() as Array<{ collection: string; reader_host: string }>;
+    return rows.map((row) => ({
+      collection: row.collection,
+      ownerHost: row.owner_host,
+      createdAt: row.created_at,
+      itemCount: row.item_count,
+      readers: readerRows.filter((r) => r.collection === row.collection).map((r) => r.reader_host),
+    }));
+  }
+
   async explain(itemHash: string): Promise<{ item: SharedItem; retractedAt: number | null } | null> {
+    this.ensureSchema();
     const row = this.db
       .prepare('SELECT * FROM shared_items WHERE item_hash = ?')
       .get(itemHash) as SharedRow | null;

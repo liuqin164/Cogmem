@@ -30,6 +30,7 @@ import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfi
 import { resolve, join, basename, relative } from 'node:path';
 import { existsSync, statSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { recallIndexFields } from '../host/RecallBlock.js';
 
 export interface CogmemMcpTool {
   name: string;
@@ -147,6 +148,11 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
           now: NUMBER_SCHEMA,
           localDateNow: STRING_SCHEMA,
           timeZone: STRING_SCHEMA,
+          granularity: {
+            type: 'string',
+            enum: ['full', 'index'],
+            description: "How much of each result to return. `full` (default) is the whole item. `index` returns one entry per memory — id, title, date and the locator that fetches the whole thing — for a caller that wants to see what is available before paying for it; fetch the ones it picks with cogmem_graph_node's batch `ids`, or the locator itself.",
+          },
         },
         required: ['query'],
       },
@@ -408,8 +414,8 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
       projectId: STRING_SCHEMA, query: STRING_SCHEMA, limit: NUMBER_SCHEMA, now: NUMBER_SCHEMA, localDateNow: STRING_SCHEMA, timeZone: STRING_SCHEMA,
     }, ['projectId', 'query']),
     graphTool('cogmem_graph_node', 'Inspect Memory Node', 'Inspect one source-anchored node, its neighbors, evidence event ids, and exact raw drilldown commands.', {
-      projectId: STRING_SCHEMA, id: STRING_SCHEMA, includeEvidence: { type: 'boolean' }, evidenceLimit: NUMBER_SCHEMA,
-    }, ['projectId', 'id']),
+      projectId: STRING_SCHEMA, id: STRING_SCHEMA, ids: { type: 'array', items: STRING_SCHEMA }, includeEvidence: { type: 'boolean' }, evidenceLimit: NUMBER_SCHEMA,
+    }, ['projectId']),
     graphTool('cogmem_graph_neighbors', 'Expand Memory Neighbors', 'Expand one Memory Atlas node by one or two bounded hops.', {
       projectId: STRING_SCHEMA, id: STRING_SCHEMA, hops: NUMBER_SCHEMA, limit: NUMBER_SCHEMA,
     }, ['projectId', 'id']),
@@ -554,6 +560,49 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
         idempotentHint: true,
       },
     },
+    {
+      name: 'cogmem_shared_publish',
+      description: 'Publish memory items into a shared collection other hosts can subscribe to. Only the collection\'s owner may publish into it, and the first publisher of a collection becomes its owner. Disabled entirely unless the install set `[shared] enabled`; a refused publish answers `shared_disabled`. The publishing host is the identity of this connection — it is not taken from the arguments.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          collection: STRING_SCHEMA,
+          items: { type: 'array', items: { type: 'object' }, description: 'Items to publish: each needs itemHash, sourceItem and payload.' },
+        },
+        required: ['collection', 'items'],
+      },
+      annotations: { title: 'Shared Publish', readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: 'cogmem_shared_retract',
+      description: 'Retract an item from a shared collection. Soft: the item leaves subscriptions, stays explainable, and only the host that published it may retract it. Disabled unless `[shared] enabled`.',
+      inputSchema: {
+        type: 'object',
+        properties: { itemHash: STRING_SCHEMA },
+        required: ['itemHash'],
+      },
+      annotations: { title: 'Shared Retract', readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    {
+      name: 'cogmem_shared_subscribe',
+      description: 'Read items from shared collections this connection is allowed to read. Filtering is by the connection\'s identity: an unauthorized collection is absent from the result rather than refused, and an install with sharing off returns nothing.',
+      inputSchema: {
+        type: 'object',
+        properties: { collections: { type: 'array', items: { type: 'string' } }, limit: NUMBER_SCHEMA },
+        required: ['collections'],
+      },
+      annotations: { title: 'Shared Subscribe', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    {
+      name: 'cogmem_shared_explain',
+      description: 'Look up one shared item by hash, including whether and when it was retracted. Read-only.',
+      inputSchema: {
+        type: 'object',
+        properties: { itemHash: STRING_SCHEMA },
+        required: ['itemHash'],
+      },
+      annotations: { title: 'Shared Explain', readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
   ];
 }
 
@@ -656,8 +705,11 @@ export async function callCogmemMcpTool(
     switch (name) {
       case 'cogmem_remember_turn':
         return await rememberTurn(opened.kernel, input);
-      case 'cogmem_recall':
-        return recall(opened.kernel, input, false, runtime);
+      case 'cogmem_recall': {
+        // `granularity: 'index'` is a view of the same result, not a second query (#131).
+        const recalled = recall(opened.kernel, input, false, runtime);
+        return optionalString(input.granularity) === 'index' ? asIndexView(recalled) : recalled;
+      }
       case 'cogmem_explain_recall':
         return recall(opened.kernel, input, true, runtime);
       case 'cogmem_strategy_plan': {
@@ -736,6 +788,41 @@ export async function callCogmemMcpTool(
         return await handleImportApply(opened.kernel, input);
       case 'cogmem_import_status':
         return handleImportStatus(opened.kernel, input);
+      case 'cogmem_shared_publish': {
+        // The publisher is this connection's identity (ADR-0006), never an argument.
+        const sourceHost = connectionAgentId(runtime, input) ?? '';
+        if (!sourceHost) throw new Error('shared_source_host_required');
+        const collection = requiredString(input.collection, 'collection');
+        const items = Array.isArray(input.items) ? input.items as Array<Record<string, unknown>> : [];
+        return jsonResult({ published: await opened.kernel.publishShared(items.map((raw) => ({
+          itemHash: requiredString(raw.itemHash, 'itemHash'),
+          sourceHost,
+          sourceItem: requiredString(raw.sourceItem, 'sourceItem'),
+          collection,
+          payload: (raw.payload ?? {}) as Record<string, unknown>,
+          publishedAt: Date.now(),
+        }))) });
+      }
+      case 'cogmem_shared_retract': {
+        const retractedBy = connectionAgentId(runtime, input) ?? '';
+        if (!retractedBy) throw new Error('shared_source_host_required');
+        await opened.kernel.retractShared({
+          itemHash: requiredString(input.itemHash, 'itemHash'), retractedAt: Date.now(), retractedBy,
+        });
+        return jsonResult({ retracted: true });
+      }
+      case 'cogmem_shared_subscribe': {
+        const collections = Array.isArray(input.collections) ? input.collections.map(String) : [];
+        const items = await opened.kernel.subscribeShared(collections, connectionAgentId(runtime, input), {
+          limit: typeof input.limit === 'number' ? input.limit : undefined,
+        });
+        return jsonResult({ items, count: items.length });
+      }
+      case 'cogmem_shared_explain': {
+        //  is "no such item", which the JSON result cannot carry, so it is spelled out.
+        const found = await opened.kernel.explainShared(requiredString(input.itemHash, 'itemHash'));
+        return jsonResult({ item: found?.item ?? null, retractedAt: found?.retractedAt ?? null });
+      }
       case 'cogmem_candidate_review':
         return jsonResult(opened.kernel.reviewDreamCandidate({
           candidateId: requiredString(input.candidateId, 'candidateId'),
@@ -784,6 +871,17 @@ export async function callCogmemMcpTool(
       }
       case 'cogmem_graph_node': {
         const projectId = requiredString(input.projectId, 'projectId');
+        const ids = Array.isArray(input.ids) ? input.ids.map(String).filter(Boolean) : [];
+        const openKernel = opened.kernel;
+        if (ids.length) {
+          // Batch fetch by id (#131), which is how a caller turns an index line back into the whole thing.
+          // The same lookup the single-id form uses, once per id; an id that is not there is reported in
+          // place rather than failing the batch, because the caller asked for several and can use the rest.
+          const nodes = ids.map((id) => openKernel.graphNode(id, {
+            projectId, includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit), refresh: false, staleOk: true,
+          }) ?? { id, found: false });
+          return jsonResult({ nodes, requested: ids.length, found: nodes.filter((node) => (node as { found?: boolean }).found !== false).length });
+        }
         const result = opened.kernel.graphNode(requiredString(input.id, 'id'), { projectId, includeEvidence: input.includeEvidence === true, evidenceLimit: optionalNumber(input.evidenceLimit), refresh: false, staleOk: true });
         if (!result) throw new Error('Memory Atlas node not found in the requested project');
         return jsonResult(result);
@@ -884,7 +982,12 @@ async function episodeImport(kernel: MemoryKernel, input: Record<string, unknown
   const messageResults: Array<Record<string, unknown>> = [];
   for (const [index, message] of messages.entries()) {
     try {
-      const result = await kernel.appendEpisodeMessageAsync({ projectId, sessionId, sourceAgent, ...message });
+      // The import act, said out loud (#153): `externalMessageId` is the replay key every turn may
+      // carry, so it cannot be what makes this material project-public. `episode_append` stays a turn
+      // with an owner; this tool is the one that puts knowledge into the project.
+      const result = await kernel.appendEpisodeMessageAsync({
+        projectId, sessionId, sourceAgent, ...message, metadata: { imported: true, importFormat: 'mcp_episode_import' },
+      });
       results.push(result);
       messageResults.push({ index, processed: true, externalMessageId: message.externalMessageId, ...result });
     } catch (error) {
@@ -1767,38 +1870,26 @@ function handleImportStatus(
   kernel: MemoryKernel,
   input: Record<string, unknown>,
 ): CogmemMcpCallResult {
+  // The logic lives on the kernel (#63) so host plugins reach the same code through the public entry;
+  // this handler only parses arguments. It used to hold its own copy of the query.
   const projectId = requiredString(input.projectId, 'projectId');
   const requested = optionalNumber(input.limit);
-  if (requested !== undefined && (!Number.isInteger(requested) || requested < 1)) {
-    throw new Error('limit must be a positive integer');
-  }
-  const limit = requested ?? 50;
+  return jsonResult(kernel.importStatus(projectId, requested === undefined ? {} : { limit: requested }));
+}
 
-  const cursors = kernel.cursorStore.listRegisteredSources().filter((c) => c.projectId === projectId);
-  const processedRecords = cursors.map((cursor) => {
-    const hashes = kernel.cursorStore.listProcessedRecordHashes(cursor.sourceId, cursor.contentWindowStart || 0, cursor.contentWindowEnd || 0, projectId);
-    return {
-      sourceId: cursor.sourceId,
-      sourcePath: cursor.sourcePath,
-      sourceType: cursor.sourceType,
-      lastProcessedAt: cursor.lastProcessedAt,
-      lastSeenHash: cursor.lastSeenHash,
-      lastSeenMtime: cursor.lastSeenMtime,
-      contentWindowStart: cursor.contentWindowStart,
-      contentWindowEnd: cursor.contentWindowEnd,
-      processedRecordCount: hashes.size,
-    };
-  });
-  // listRegisteredSources() is ordered updated_at DESC, source_id ASC, so slicing is stable
-  // and the newest sources are the ones a caller with a small limit sees.
-  const sources = processedRecords.slice(0, limit);
-
+/**
+ * Reduce a recall result to one entry per memory: id, title, date and the locator that fetches the whole
+ * thing (#131). The fields come from `recallIndexFields`, the same source the injected index line renders,
+ * so the index a host's prompt shows and the index this tool returns cannot disagree.
+ */
+function asIndexView(result: CogmemMcpCallResult): CogmemMcpCallResult {
+  const body = result.structuredContent as { items?: Array<Record<string, unknown>> } | undefined;
+  const items = Array.isArray(body?.items) ? body.items : [];
   return jsonResult({
-    projectId,
-    sources,
-    totalSources: cursors.length,
-    returnedSources: sources.length,
-    limit,
+    ...(result.structuredContent as Record<string, unknown>),
+    granularity: 'index',
+    items: items.map((item) => recallIndexFields(item)),
+    itemCount: items.length,
   });
 }
 

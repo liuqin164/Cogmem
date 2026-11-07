@@ -8,6 +8,7 @@ import { decodeAtlasNodeId, encodeAtlasNodeId, toAtlasNodeEndpoint } from './Atl
 import { invalidateMemoryEdgeSupportIds, mergeMemoryEdge, mergeMemoryValidityIntervals, reduceMemoryEdges, type MemoryEdgeMergeInput, type MemoryValidityInterval } from '../binding/MemoryEdgeMerge.js';
 import { memoryEdgeId } from '../binding/MemoryBindingIdentity.js';
 import { localDateFor } from '../utils/LocalDateContext.js';
+import { withConsolidationDisclosure } from './ConsolidationDisclosure.js';
 
 export interface MemoryFrameProjectionResult { frames: number; nodes: number; edges: number; needsReview: number; }
 
@@ -135,6 +136,10 @@ export class MemoryFrameProjector {
             confidence: transition.confidence, supportCount: 1, status: 'active', evidenceEventIds: transition.evidenceEventIds,
             metadata: { projection: 'memory_atlas.frame.v2', frameId: frame.frameId }, updatedAt: now });
           this.contributeSupport(nodeSnapshots, stateId, frame, transition.evidenceEventIds, { label: transition.to, confidence: transition.confidence, kind: 'state' });
+          // A state is named in words too, so it goes into the same alias index places use (#28). Its id
+          // is a hash, and the only other name for it lived in the frame's transition — which a reader's
+          // cue can never reach. This is what makes `state` resolvable at all.
+          this.contributeAlias(aliasSnapshots, projectId, stateId, { dimension: 'state', evidenceEventIds: transition.evidenceEventIds, confidence: transition.confidence }, transition.to);
           if (isCurrentState) this.contributeEdge(edgeSnapshots, projectId, subject, stateId, { sourceFrameNodeId: transition.subjectFrameNodeId, relationType: 'HAS_STATE', targetFrameNodeId: stateId,
             confidence: transition.confidence, evidenceEventIds: transition.evidenceEventIds }, frame, now, currentStateStatus);
           if (transition.from && subjectNode.dimension === 'event') {
@@ -186,6 +191,15 @@ export class MemoryFrameProjector {
 
   private nodeId(projectId: string, node: MemoryFrameNode, frame: MemoryFrameV1, now: number): string | undefined {
     if (node.dimension === 'episode') return encodeAtlasNodeId('episode', frame.episodeId, projectId);
+    // A place is keyed by its normalized name rather than by the frame's own node id (#28). State ids
+    // are hashes and stay that way — a migration of existing ids is the one thing this ticket forbids —
+    // but a place is new, and a textual cue ("Tokyo office") has to be able to name the node the
+    // projection wrote. The alias index already resolves normalized names to node ids.
+    if (node.dimension === 'location') {
+      const place = normalizeAlias(node.label);
+      if (!place) return undefined;
+      return encodeAtlasNodeId('place', place, projectId);
+    }
     if (node.dimension === 'project') return encodeAtlasNodeId('project', frame.projectId, projectId);
     if (node.dimension === 'raw_event') {
       if (node.evidenceEventIds.length !== 1) throw new Error(`raw_event_identity_requires_one_evidence:${node.frameNodeId}`);
@@ -325,7 +339,7 @@ export class MemoryFrameProjector {
     }
   }
 
-  private contributeAlias(snapshots: Map<string, AliasSupportSnapshot>, projectId: string, nodeId: string, node: MemoryFrameNode, alias: string): void {
+  private contributeAlias(snapshots: Map<string, AliasSupportSnapshot>, projectId: string, nodeId: string, node: Pick<MemoryFrameNode, 'dimension' | 'evidenceEventIds' | 'confidence'>, alias: string): void {
     const normalized = normalizeAlias(alias);
     if (!normalized) return;
     const aliasId = createHash('sha256').update(`${projectId}\0${nodeId}\0${normalized}`).digest('hex');
@@ -476,7 +490,12 @@ export class MemoryFrameProjector {
         || a.support.support_id.localeCompare(b.support.support_id));
       const winner = parsed[0]!;
       const label = typeof winner.payload.label === 'string' ? winner.payload.label : current.label;
-      const summary = typeof winner.payload.summary === 'string' ? winner.payload.summary : current.summary ?? null;
+      const rawSummary = typeof winner.payload.summary === 'string' ? winner.payload.summary : current.summary ?? null;
+      // The frame-derived body carries its own qualification (#129); the helper is idempotent so a
+      // re-projection of the same supports neither stacks the sentence nor looks like a change.
+      const summary = frameProjection(current.metadata_json)
+        ? withConsolidationDisclosure(rawSummary, Number(current.occurred_at ?? now))
+        : rawSummary;
       const confidence = Number(winner.support.confidence ?? winner.payload.confidence ?? 0);
       const evidence = [...new Set(parsed.flatMap(({ support }) => {
         try { const value = JSON.parse(String(support.evidence_event_ids_json ?? '[]')); return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []; } catch { return []; }

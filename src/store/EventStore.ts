@@ -1328,6 +1328,43 @@ export class EventStore {
     return [...new Set(tokens)].slice(0, 48);
   }
 
+  /**
+   * The events a one-time back-scan looks at (#142): id, role and text, nothing else.
+   *
+   * Narrow on purpose. A repair walks the whole ledger, and handing it the ordinary query surface would invite it to
+   * grow into a second reader with its own ideas about scope.
+   */
+  listEventsForSecretBackScan(): Array<{ eventId: string; role: string; text: string }> {
+    const rows = this.db.prepare('SELECT event_id, role, payload_json FROM memory_events').all() as Array<{ event_id: string; role: string | null; payload_json: string }>;
+    return rows.map((row) => {
+      const payload = JSON.parse(this.decodePayload(row.payload_json)) as { text?: unknown; content?: unknown };
+      const text = typeof payload.text === 'string' ? payload.text : (typeof payload.content === 'string' ? payload.content : '');
+      return { eventId: row.event_id, role: row.role ?? '', text };
+    });
+  }
+
+  /**
+   * Stamp the write-path secret mark onto an existing event (#142), leaving its text untouched.
+   *
+   * The mark has to be byte-for-byte the shape `recordRawEvent` writes, because the reader that withholds the event
+   * reads exactly those fields. Idempotent: an event already carrying the key is left alone and reports false.
+   * `payload_hash` is recomputed because it tracks the payload; `content_hash` is deliberately left alone — it
+   * describes the text, the text is not changing, and rewriting it would change the record's content identity.
+   */
+  addSecretFindings(eventId: string, key: 'secretFindings' | 'secretFindingsAssistant', findings: { total: number; byKind: Record<string, number> }): boolean {
+    const row = this.db.prepare('SELECT payload_json FROM memory_events WHERE event_id=?').get(eventId) as { payload_json: string } | undefined;
+    if (!row) return false;
+    const payload = JSON.parse(this.decodePayload(row.payload_json)) as Record<string, unknown>;
+    const metadata = (payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}) as Record<string, unknown>;
+    const existing = metadata[key] as { total?: number } | undefined;
+    if (existing && Number(existing.total ?? 0) > 0) return false;
+    payload.metadata = { ...metadata, [key]: { total: findings.total, byKind: findings.byKind } };
+    const payloadJson = JSON.stringify(payload);
+    this.db.prepare('UPDATE memory_events SET payload_json=?, payload_hash=? WHERE event_id=?')
+      .run(this.encodePayload(payloadJson), createHash('sha256').update(payloadJson).digest('hex'), eventId);
+    return true;
+  }
+
   private encodePayload(payloadJson: string): string {
     return this.encryptionProvider?.encrypt(payloadJson) ?? payloadJson;
   }

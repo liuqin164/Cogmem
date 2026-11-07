@@ -134,6 +134,24 @@ describe('streamable HTTP transport', () => {
     expect(called.json.result.content[0].text).toContain('tool_not_in_profile');
   });
 
+  test('the refusal names a profile that would work, not the one already in use (#147)', async () => {
+    const handle = await start({ profile: 'admin' });
+    const sessionId = await connect(handle.url);
+
+    const called = await rpc(handle.url, {
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'tools/call',
+      params: { name: 'cogmem_episode_status', arguments: { projectId: 'p' } },
+    }, { sessionId });
+
+    const text = called.json.result.content[0].text;
+    expect(text).toContain('tool_not_in_profile');
+    // The point of the fix: telling a caller on `admin` to use `--profile admin` is a dead end.
+    expect(text).toContain('--profile full');
+    expect(text).not.toContain('--profile admin');
+  });
+
   test('an unknown session id is rejected instead of silently opening a session', async () => {
     const handle = await start();
     const response = await rpc(

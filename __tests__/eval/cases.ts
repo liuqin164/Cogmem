@@ -122,3 +122,108 @@ export const EVAL_CASES: EvalCase[] = [
     unanswerable: true,
   },
 ];
+
+/**
+ * The same cases, asked in English (#135).
+ *
+ * 1:1 with `EVAL_CASES`: same order, same `expectsSection`, same `unanswerable` flags — only the question is
+ * translated — so the two sets are comparable rather than two differently-built ones. The corpus is the
+ * project's Chinese round ledger, so an English question is a cross-lingual retrieval: the vocabulary does not
+ * overlap, and the measured rate is what it is. What is asserted here is the structure and the two cases whose
+ * expectation is language-neutral (nothing in the corpus is about them, so no lane may claim its words were
+ * found); the measured rate is reported on the ticket.
+ */
+export const EVAL_CASES_ENGLISH: EvalCase[] = [
+  {
+    question: 'why could the pi agent not connect to cogmem at first',
+    expectsSection: '4.57 第 53 轮',
+    note: 'English counterpart: a decision, asked the same way',
+  },
+  {
+    question: 'why is the cogmem command not found after a global install',
+    expectsSection: '4.54 第 50 轮',
+    note: 'English counterpart: the shim-layout failure',
+  },
+  {
+    question: 'why did init still write the config in dry-run mode',
+    expectsSection: '4.13 第 11 轮',
+    note: 'English counterpart: a flag that was ignored',
+  },
+  {
+    question: 'why was it decided to stop committing dist to git',
+    expectsSection: '4.7 #53',
+    note: 'English counterpart: a repository decision and its reason',
+  },
+  {
+    question: 'why did the test temporary directory fill the disk',
+    expectsSection: '4.18 第 14 轮',
+    note: 'English counterpart: the temp-directory leak',
+  },
+  {
+    question: 'how were the two install paths decided',
+    expectsSection: '4.5 #39',
+    note: 'English counterpart: the install-path spec',
+  },
+  {
+    question: 'how is the end of the install flow pinned down by assertions',
+    expectsSection: '4.39 第 35 轮',
+    note: 'English counterpart: the install gate',
+  },
+  {
+    question: 'why do the write tools require fields like agentId',
+    expectsSection: '4.51 第 47 轮',
+    note: 'English counterpart: the write-tool contract',
+  },
+  {
+    question: 'why does a host that reports its own agentId fail to see its own memory',
+    expectsSection: '4.50 第 46 轮',
+    note: 'English counterpart: the identity scope',
+  },
+  {
+    question: 'connect hermes reported success but was not connected, which issue was that',
+    expectsSection: '4.56 第 52 轮',
+    note: 'English counterpart: a false success report',
+  },
+  {
+    question: 'why did cogmem update install into the wrong location',
+    expectsSection: '4.47 第 43 轮',
+    note: 'English counterpart: the update location',
+  },
+  {
+    question: 'Dream finished processing but recall is still empty',
+    expectsSection: '4.44 第 40 轮',
+    note: 'English counterpart: an empty recall after a Dream run',
+  },
+  {
+    question: 'why is a conversation written through MCP never recalled',
+    expectsSection: '4.43 第 39 轮',
+    note: 'English counterpart: the MCP write path',
+  },
+  {
+    question: 'why does the snapshot export fail',
+    expectsSection: '4.9 #64',
+    note: 'English counterpart: the export failure',
+  },
+  {
+    question: 'does 4.0 support upgrading from an older database',
+    expectsSection: '4.3 #59',
+    note: 'English counterpart: the upgrade question',
+  },
+  {
+    question: 'how are several agents isolated when they share one memory',
+    expectsSection: '4.2 #65',
+    note: 'English counterpart: scope isolation',
+  },
+  {
+    question: 'what should I have for lunch this week',
+    expectsSection: '',
+    note: 'English counterpart: unanswerable, and it must not claim a cue match',
+    unanswerable: true,
+  },
+  {
+    question: 'what is the decoherence time of a quantum computer',
+    expectsSection: '',
+    note: 'English counterpart: unanswerable, and it must not claim a cue match',
+    unanswerable: true,
+  },
+];

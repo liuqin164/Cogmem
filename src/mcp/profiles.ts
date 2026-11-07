@@ -1,3 +1,4 @@
+import { EXPLICIT_EXCLUSION_TEACHING } from '../context/ExplicitExclusion.js';
 /**
  * Tool profiles.
  *
@@ -37,6 +38,10 @@ export const ADMIN_TOOLS = [
   'cogmem_import_preview',
   'cogmem_import_apply',
   'cogmem_import_status',
+  'cogmem_shared_publish',
+  'cogmem_shared_retract',
+  'cogmem_shared_subscribe',
+  'cogmem_shared_explain',
 ] as const;
 
 export function isToolAllowed(profile: McpToolProfile, toolName: string): boolean {
@@ -44,6 +49,16 @@ export function isToolAllowed(profile: McpToolProfile, toolName: string): boolea
   const set = profile === 'core' ? CORE_TOOLS : ADMIN_TOOLS;
   return (set as readonly string[]).includes(toolName);
 }
+
+/**
+ * What an index-granularity answer is, and what to do with it (#131).
+ *
+ * One source for the MCP instructions and for the host skill bundles: `cogmem_recall` can answer with index
+ * entries instead of bodies, and an agent that does not know what an index entry is will treat it as the
+ * memory itself and answer from a title. A guard asserts the three shipped skills carry this exact sentence,
+ * so the teaching cannot drift from the surface it describes.
+ */
+export const RECALL_INDEX_TEACHING = 'A recall answer at index granularity is a list of memories you have not read yet: each entry carries an id, a title, a date and a locator. Fetch the ones the question needs with cogmem_graph_node (pass several ids at once) or by running the locator, and never answer from an index entry as though it were the memory.';
 
 export const DEFAULT_TOOL_PROFILE: McpToolProfile = 'core';
 
@@ -86,6 +101,9 @@ export function buildMcpInstructions(profile: McpToolProfile): string {
   sentences.push(
     'Use cogmem_recall for a direct factual memory question and cogmem_explain_recall to audit selection.',
   );
+  sentences.push(RECALL_INDEX_TEACHING);
+  // The user has to know the convention exists to use it (#133).
+  sentences.push(EXPLICIT_EXCLUSION_TEACHING);
   sentences.push(
     'When the user asks about something that happened earlier and this prompt contains no recall evidence, call cogmem_recall before answering.',
   );

@@ -218,7 +218,7 @@ describe('#65 a credential decides the identity, and a header cannot change it',
       { sessionId: widened, token: AGENT_A_TOKEN, identity: { profile: 'full' } });
     // "full" is wider than the credential's admin ceiling, so it is refused down
     // to the ceiling rather than granted.
-    expect(listedWide.json.result.tools.length).toBe(22);
+    expect(listedWide.json.result.tools.length).toBe(26);
   });
 });
 
@@ -238,6 +238,6 @@ describe('#65 a connection with no credential gets no identity', () => {
     const elevated = await connect(handle.url, { identity: { hostId: 'impersonated', profile: 'full' } });
     const listedElevated = await rpc(handle.url, { jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} },
       { sessionId: elevated, identity: { hostId: 'impersonated', profile: 'full' } });
-    expect(listedElevated.json.result.tools.length).toBe(22);
+    expect(listedElevated.json.result.tools.length).toBe(26);
   });
 });
