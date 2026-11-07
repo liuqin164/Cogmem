@@ -27,7 +27,7 @@ import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
 import { cliArg } from '../utils/CliArgument.js';
 import { pad2 } from '../utils/Values.js';
 import { phaseFor, phaseGist, toMillis, type PhaseCategory } from '../recall/PhaseProjection.js';
-import { countSecretFindings } from '../security/SecretPatterns.js';
+import { countSecretFindings, secretFindingsMetadata } from '../security/SecretPatterns.js';
 
 export type AgentTurnIngestMode =
   | 'immediate_compile'
@@ -470,7 +470,7 @@ export class KernelAgentMemoryBackend {
         ...this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
         // The secret mark belongs to this event and is written where every write routes (#142), not only in
         // the host bridge: an MCP write used to reach the ledger unmarked and recall returned it verbatim.
-        ...secretFindingsFor(excludedUser.text, 'secretFindings'),
+        ...secretFindingsMetadata(excludedUser.text),
       },
     });
     let userEvent: ReturnType<typeof writeUserEvent>;
@@ -522,7 +522,7 @@ export class KernelAgentMemoryBackend {
         // event marks would then disagree with the hygiene summary that counts them.
         metadata: {
           ...this.metadataWithCollection({ ...omitSecretFindings(turn.metadata), sourceAgent: turn.agentId }, turn.collection),
-          ...secretFindingsFor(turn.assistantText, 'secretFindingsAssistant'),
+          ...secretFindingsMetadata(turn.assistantText, 'secretFindingsAssistant'),
         },
       })
       : undefined;
@@ -823,6 +823,9 @@ export class KernelAgentMemoryBackend {
     // text. Measured: the key came back in exactly that shape while the event itself was withheld (#142), so the
     // text has to be asked directly. Bounded by the number of items a recall returns, and this is a security
     // control rather than a micro-optimisation.
+    // Not dead code (#144): dropping this to rely on the mark alone turns
+    // `secret-backscan-repair.unit.test.ts`'s "an ordinary old turn is not touched" red — a *pre-fix* row carries
+    // no mark, and this scan is the only thing holding its body back until `repair secret-marks` runs.
     if (typeof meta.text === 'string' && countSecretFindings(meta.text).total > 0) return true;
     return this.itemChainEvents(item).some((event) => eventHoldsSecretMark(event));
   }
@@ -841,24 +844,21 @@ export class KernelAgentMemoryBackend {
   private itemChainEvents(item: AgentRecallItem): MemoryEvent[] {
     const eventId = (item.sourceAnchor as { eventId?: string } | undefined)?.eventId;
     if (!eventId) return [];
-    try {
-      const context = this.kernel.getEventContext(eventId, { before: 0, after: 0 });
-      if (!context) return [];
-      const chain: MemoryEvent[] = [context.event];
-      const sourceRefs = (context.event.payload as { sourceRefs?: unknown } | undefined)?.sourceRefs;
-      if (!Array.isArray(sourceRefs)) return chain;
-      for (const ref of sourceRefs.slice(0, 16)) {
-        const refId = (ref as { eventId?: unknown } | undefined)?.eventId;
-        if (typeof refId !== 'string') continue;
-        const referenced = this.kernel.getEventContext(refId, { before: 0, after: 0 })?.event;
-        if (referenced) chain.push(referenced);
-      }
-      return chain;
-    } catch {
-      // A lane may point at an event this database no longer has; absence is not a secret and says nothing
-      // about who owns it.
-      return [];
+    const context = this.kernel.getEventContext(eventId, { before: 0, after: 0 });
+    // A lane may point at an event this database no longer has; absence is not a secret and says nothing about
+    // who owns it. A read that *fails* is not absence and is not swallowed here: it would make the item both
+    // visible and unmarked.
+    if (!context) return [];
+    const chain: MemoryEvent[] = [context.event];
+    const sourceRefs = (context.event.payload as { sourceRefs?: unknown } | undefined)?.sourceRefs;
+    if (!Array.isArray(sourceRefs)) return chain;
+    for (const ref of sourceRefs.slice(0, 16)) {
+      const refId = (ref as { eventId?: unknown } | undefined)?.eventId;
+      if (typeof refId !== 'string') continue;
+      const referenced = this.kernel.getEventContext(refId, { before: 0, after: 0 })?.event;
+      if (referenced) chain.push(referenced);
     }
+    return chain;
   }
 
   /**
@@ -2742,19 +2742,6 @@ function isFillerProbe(probe: string): boolean {
 const SECRET_WITHHELD_COUNTS = new WeakMap<object, number>();
 
 /** Whether this event's own metadata says it holds something secret-looking. */
-/**
- * The secret mark for one conversation text (#142).
- *
- * Written here, in the one method every write goes through, rather than only in the host bridge: a
- * `cogmem_remember_turn` over MCP — or any direct backend call — used to reach the ledger with no mark at all, so
- * recall handed the secret back verbatim. The bridge keeps the rest of its job (redacting tool results, hygiene
- * counters, explicit exclusion) and passes already-cleaned text down, so the two agree.
- */
-function secretFindingsFor(text: string | undefined, key: 'secretFindings' | 'secretFindingsAssistant'): Record<string, unknown> {
-  const found = countSecretFindings(String(text ?? ''));
-  return found.total > 0 ? { [key]: { total: found.total, byKind: found.byKind } } : {};
-}
-
 function eventHoldsSecretMark(event: MemoryEvent): boolean {
   const metadata = (event.payload as { metadata?: { secretFindings?: { total?: number }; secretFindingsAssistant?: { total?: number } } })?.metadata;
   return Number(metadata?.secretFindings?.total ?? 0) > 0 || Number(metadata?.secretFindingsAssistant?.total ?? 0) > 0;
