@@ -136,7 +136,7 @@ export function classifySocialTurn(text: string, language?: string): SocialTurnV
 
 /** Whether the turn is pure small talk — the verdict that suppresses recall entirely. */
 export function isSocialTurn(text: string, language?: string): boolean {
-  return classifySocialTurn(text) === 'social';
+  return classifySocialTurn(text, language) === 'social';
 }
 
 /**

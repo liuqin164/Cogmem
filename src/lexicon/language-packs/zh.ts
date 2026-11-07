@@ -83,16 +83,6 @@ export const ZH_SOCIAL_FILLER_TOKENS: readonly string[] = [
 ].sort((a, b) => b.length - a.length);
 
 /** What proves there is something to look up. Generous on purpose: failing to suppress is survivable. */
-export const CONTENT_CUE_PATTERNS: readonly RegExp[] = [
-  /\d/,                                                                    // numbers, versions, dates
-  /\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/,                                         // explicit dates
-  /(今天|明天|昨天|前天|后天|上周|下周|本周|上个月|下个月|今年|去年|明年|周[一二三四五六日天]|星期[一二三四五六日天]|个月|年度)/,
-  /(之前|以前|上次|上回|那次|那时候|那时|当时|记得|记不记得|说过|提过|讲过|曾经|原来的|原先)/,   // memory cues
-  /(什么|啥|哪个|哪一个|哪里|哪儿|谁|多少|几个|几天|几点|怎么|怎样|如何|为什么|为何|是否|吗|呢\?|？|\?)/, // content questions
-  /(部署|发布|上线|回滚|修复|修改|改动|更新|升级|迁移|配置|设置|安排|决定|处理|检查|排查|评审|复盘|写|加|删|实现|支持|调研|计划|方案|时间|日期|窗口|阈值|保留|归档|清理|权限|成本|预算|容量|告警|演练|值班|契约|接口|版本|依赖)/, // task verbs and domains
-  /[A-Za-z][A-Za-z0-9_-]{2,}/,                                             // latin identifiers and names
-];
-
 export const ZH_SOCIAL_CONTENT_CUE_PATTERNS: readonly RegExp[] = [
   /\d/,                                                                    // numbers, versions, dates
   /\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/,                                         // explicit dates
