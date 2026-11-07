@@ -1641,6 +1641,10 @@ async function importSources(input: {
     rawRecordsAnchored: summary.recordsIngested,
     emptyEpisodesSkipped,
     reindexRaw: false,
+    // #168: the offline consolidation's blocked decisions, the same array `kernel.consolidate()`
+    // returns. Without it a caller reading this result cannot tell a blocked consolidation from
+    // a batch that had nothing to consolidate.
+    blockedConsolidations: summary.offline.blockedConsolidations,
     processedSourceIds: summary.processedSourceIds,
     diagnostics: summary.adapterDiagnostics,
     sourceResults: summary.sourceResults.map((item) => ({
