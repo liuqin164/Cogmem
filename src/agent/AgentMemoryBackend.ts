@@ -817,30 +817,77 @@ export class KernelAgentMemoryBackend {
     // text has to be asked directly. Bounded by the number of items a recall returns, and this is a security
     // control rather than a micro-optimisation.
     if (typeof meta.text === 'string' && countSecretFindings(meta.text).total > 0) return true;
+    return this.itemChainEvents(item).some((event) => eventHoldsSecretMark(event));
+  }
+
+  /**
+   * The events an item's own chain points at (#142, #144, #143): its anchor, then the raw events a compile-layer
+   * anchor was built from.
+   *
+   * A compiled item anchors an event that carries no turn of its own (measured: `turn_id` null, no mark), while
+   * both the secret mark and the source agent sit on the turn's events. The link between them is in the ledger
+   * already — that event's payload lists the raw events it was built from — so the questions are asked of those
+   * events rather than answered by scanning text, which is what dropped a legitimate record that merely looked
+   * like a key (#144). One walk, shared by the secret gate and the agent scope, because two walks would drift
+   * apart; bounded by one event's own source refs.
+   */
+  private itemChainEvents(item: AgentRecallItem): MemoryEvent[] {
     const eventId = (item.sourceAnchor as { eventId?: string } | undefined)?.eventId;
-    if (!eventId) return false;
+    if (!eventId) return [];
     try {
       const context = this.kernel.getEventContext(eventId, { before: 0, after: 0 });
-      if (!context) return false;
-      if (eventHoldsSecretMark(context.event)) return true;
-      // A compiled item anchors a *compile-layer* event, which carries no turn of its own (measured: `turn_id`
-      // null, no mark), while the mark sits on the turn's events (#142, #144). The link between them is in the
-      // ledger already: that event's payload lists the raw events it was built from. So the question is asked of
-      // those events rather than answered by scanning text — a text scan is what dropped a legitimate record that
-      // merely looked like a key (#144). Bounded by one event's own source refs.
+      if (!context) return [];
+      const chain: MemoryEvent[] = [context.event];
       const sourceRefs = (context.event.payload as { sourceRefs?: unknown } | undefined)?.sourceRefs;
-      if (!Array.isArray(sourceRefs)) return false;
+      if (!Array.isArray(sourceRefs)) return chain;
       for (const ref of sourceRefs.slice(0, 16)) {
         const refId = (ref as { eventId?: unknown } | undefined)?.eventId;
         if (typeof refId !== 'string') continue;
         const referenced = this.kernel.getEventContext(refId, { before: 0, after: 0 })?.event;
-        if (referenced && eventHoldsSecretMark(referenced)) return true;
+        if (referenced) chain.push(referenced);
       }
-      return false;
+      return chain;
     } catch {
-      // A lane may point at an event this database no longer has; absence is not a secret.
-      return false;
+      // A lane may point at an event this database no longer has; absence is not a secret and says nothing
+      // about who owns it.
+      return [];
     }
+  }
+
+  /**
+   * Whether material reached the project by being *imported* rather than by being said (#143).
+   *
+   * The marker is an explicit fact of the import path, never a guess about the text:
+   *   - the CLI adapters write `metadata.imported` (`src/bin/import-support.ts`);
+   *   - everything that arrives through the episode ingest path — `episode_append`, `episode_import`, and
+   *     `cogmem episode append` — goes through `appendEpisodeMessageAsync`, which records the caller's
+   *     `externalMessageId` on the event.
+   */
+  private isImportedMaterial(event: MemoryEvent): boolean {
+    const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
+    if (!metadata) return false;
+    if (metadata.imported === true) return true;
+    return typeof metadata.externalMessageId === 'string' && metadata.externalMessageId.length > 0;
+  }
+
+  /**
+   * Whether an agent may read an item, read from the same chain as the secret mark (#143).
+   *
+   * The rule (Ryu 2026-11-07, route 1): imported material is project-level public whatever `sourceAgent` says,
+   * because making an import worth doing means the other agents in the project can read it; a turn someone had
+   * is scoped to the agent that had it; material whose chain names no agent — a migration, an old row, a record
+   * written by a connection that had no identity — is public too. Cross-project isolation is untouched: this
+   * only ever widens within one project, and the shared lane stays the one deliberate cross-agent channel.
+   */
+  private itemVisibleToAgent(item: AgentRecallItem, agentId: string): boolean {
+    const chain = this.itemChainEvents(item);
+    if (chain.length === 0) return true;
+    if (chain.some((event) => this.isImportedMaterial(event))) return true;
+    // The same standard the raw lane applies to its own events, applied to the material a compiled product was
+    // built from: a product is readable by whoever could have read what it was made of. Reusing the predicate,
+    // rather than re-deriving an owner, keeps the two from disagreeing — including the leniency the raw lane
+    // grants a record that carries no source of its own.
+    return chain.some((event) => this.isAgentRawEvent(event, agentId));
   }
 
   private projectPhases(items: AgentRecallItem[], query: AgentRecallQuery): { items: AgentRecallItem[]; suppressed: Array<{ reason: RecallSuppressionReason; count: number }> } {
@@ -897,13 +944,23 @@ export class KernelAgentMemoryBackend {
     const secretKept = forensic
       ? gated.items
       : gated.items.filter((item) => !this.itemHoldsSecretMark(item));
+    // The agent scope of compiled material (#143), in the same place and off the same chain as the secret mark.
+    // The raw lane has always scoped its own events, but a compiled product — a neuron, an Atlas card — is not an
+    // event, so it was readable by every agent in the project. The shared lane is skipped: it is the one
+    // deliberate cross-agent channel, and its items say so.
     const secretWithheldByItems = gated.items.length - secretKept.length;
     if (secretWithheldByItems > 0 && result.decisionTrace) {
       SECRET_WITHHELD_COUNTS.set(this, (SECRET_WITHHELD_COUNTS.get(this) ?? 0) + secretWithheldByItems);
     }
+    // Dropping an item for scope is not the same fact as withholding it for a secret, so it is not counted as one:
+    // the trace's `secret_bearing_withheld` has to keep meaning what it says.
+    const agentKept = query.agentId
+      ? secretKept.filter((item) => Boolean((item as { shared?: unknown }).shared)
+        || this.itemVisibleToAgent(item, String(query.agentId)))
+      : secretKept;
     // Phase projection (#130): the third admission, next to the social and secret ones and in the same place,
     // so it cannot apply to some lanes and not others. Off by default; with it off this is the identity.
-    const phased = this.projectPhases(secretKept, query);
+    const phased = this.projectPhases(agentKept, query);
     const zeroExplanation = phased.items.length === 0 ? this.explainZeroResult(query) : undefined;
     return {
       ...result,
@@ -2137,7 +2194,7 @@ export class KernelAgentMemoryBackend {
     if (explicitAgentTags.length > 0) {
       return explicitAgentTags.includes(`agent:${agentId}`);
     }
-    if (metadata.imported === true) return true;
+    if (this.isImportedMaterial(event)) return true;
     const sourceType = typeof metadata.sourceType === 'string' ? metadata.sourceType : '';
     if (/^(hermes_state_db|conversation_markdown|openclaw_|soul_markdown)/.test(sourceType)) return true;
     if (/^(hermes_state_db|conversation_markdown|openclaw_|soul_markdown)/.test(event.sourceId)) return true;
