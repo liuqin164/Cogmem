@@ -18,11 +18,12 @@ import { socialTurnResources } from '../config/LanguagePacks.js';
  * incident, injecting one extra pleasantry is not. Anything the residue cannot disprove stays real.
  */
 
-/** The filler and cue vocabularies live in the language packs (#135): this file has one implementation and reads the pack for its language. */
+/**
+ * The filler vocabulary, for the two callers that need the token list itself rather than a verdict
+ * (`AgentMemoryBackend`'s pleasantry-character set). Read from the pack at module load, so it is the
+ * default pack unless `setConfiguredLanguage` ran before this module was imported — see #174.
+ */
 export const SOCIAL_FILLER_TOKENS: readonly string[] = socialTurnResources().fillerTokens;
-
-/** What proves there is something to look up. Generous on purpose: failing to suppress is survivable. */
-export const CONTENT_CUE_PATTERNS: readonly RegExp[] = socialTurnResources().contentCuePatterns;
 
 const SKIPPABLE = /[\s\p{P}\p{S}]/u;
 
