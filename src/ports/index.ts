@@ -44,9 +44,10 @@ export interface SharedCollection {
  * Shared region. Publishing is idempotent on `itemHash`; retraction is soft, so
  * a subscriber's earlier reasoning stays explainable.
  *
- * Reading takes the reader's identity and filters unauthorized collections out in SQL: every surface
- * routes through `subscribe`, so this is the one place the check can live. A `subscribe` with no reader
- * returns nothing rather than everything — a missing identity must fail closed.
+ * Reading takes the reader's identity, and a call with none returns nothing rather than everything — a
+ * missing identity must fail closed. While sharing is enabled, identity does not narrow the result further
+ * (#146, Ryu 2026-11-06): every agent that can connect reads every collection, so the one check left here
+ * is that there *is* an identity to answer with.
  */
 export interface SharedMemoryPort {
   publish(items: SharedItem[]): Promise<number>;

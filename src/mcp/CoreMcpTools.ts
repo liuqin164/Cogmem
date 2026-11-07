@@ -585,7 +585,7 @@ export function listCogmemMcpTools(): CogmemMcpTool[] {
     },
     {
       name: 'cogmem_shared_subscribe',
-      description: 'Read items from shared collections this connection is allowed to read. Filtering is by the connection\'s identity: an unauthorized collection is absent from the result rather than refused, and an install with sharing off returns nothing.',
+      description: 'Read items from shared collections. While `[shared] enabled` is true, every agent that can connect reads every shared collection (#146); an install with sharing off returns nothing rather than refusing.',
       inputSchema: {
         type: 'object',
         properties: { collections: { type: 'array', items: { type: 'string' } }, limit: NUMBER_SCHEMA },
@@ -819,7 +819,7 @@ export async function callCogmemMcpTool(
         return jsonResult({ items, count: items.length });
       }
       case 'cogmem_shared_explain': {
-        //  is "no such item", which the JSON result cannot carry, so it is spelled out.
+        // `null` is "no such item", which the JSON result cannot carry, so it is spelled out.
         const found = await opened.kernel.explainShared(requiredString(input.itemHash, 'itemHash'));
         return jsonResult({ item: found?.item ?? null, retractedAt: found?.retractedAt ?? null });
       }

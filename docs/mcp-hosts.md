@@ -179,7 +179,7 @@ the only adapter on it.
 ## Shared memory — opt-in, off by default
 
 Sharing between agents ships in 4.1 and is **off unless the operator turns it on**: `[shared] enabled`
-in `config.toml` is the switch, and a default install registers no collection and grants no reader.
+in `config.toml` is the switch, and a default install shares nothing.
 
 With the switch on, four `admin`-profile tools cover the region:
 
@@ -187,24 +187,25 @@ With the switch on, four `admin`-profile tools cover the region:
 |---|---|---|
 | `cogmem_shared_publish` | admin | Publishes items into a collection. The first publisher of a collection owns it, and only the owner may publish into it afterwards |
 | `cogmem_shared_retract` | admin | Soft retraction: the item leaves subscriptions, stays explainable, and only its publisher may retract it |
-| `cogmem_shared_subscribe` | admin | Reads the collections this connection may read |
+| `cogmem_shared_subscribe` | admin | Reads the shared collections |
 | `cogmem_shared_explain` | admin | Looks up one item by hash, including when and by whom it was retracted |
 
-Three rules make this safe to turn on ([#66](https://github.com/liuqin164/cogmem/issues/66),
-[#134](https://github.com/liuqin164/cogmem/issues/134)):
+The model is **publish and read** ([#146](https://github.com/liuqin164/cogmem/issues/146), Ryu 2026-11-06):
+while the switch is on, every agent that can connect reads every shared collection. Three rules bound it:
 
-- **A collection has an owner and an explicit reader list.** Reading is authorized in one place, and an
-  unauthorized collection is simply absent from a `subscribe` result — a host that knows a collection's
-  name still reads nothing. Revoking a reader stops the next read; it does not recall what a reader
-  already has.
+- **Writing is explicit and owner-only, reading is not gated per reader.** The first publisher of a
+  collection owns it; only the owner may publish into it or retract from it, and a retraction takes effect
+  immediately. Reading is open to any connected agent, so the per-reader list that 4.1 first shipped with
+  is retained in the schema but consulted nowhere — a future multi-user deployment can turn that check
+  back on, and until then there is no branch to keep in step.
 - **Identity comes from the connection, never from the arguments.** A caller cannot name itself a
-  different publisher or reader (ADR-0006: a `hostId` needs a credential).
+  different publisher or retractor, and a call with no identity reads nothing rather than everything
+  (ADR-0006: a `hostId` needs a credential).
 - **Writing is refused while the switch is off**: `shared_disabled`, rather than a silent no-op.
 
-`cogmem doctor` lists every collection with its owner, readers and item count, and reports the switch —
-so "off" and "on with nobody granted anything" are different states in the output. Publishing and
-retraction are recorded; **who subscribed is not**, so read-side auditing is not something this release
-can answer.
+`cogmem doctor` lists every collection with its owner, item count, and the fact that it is readable by
+every agent that can connect, and it reports the switch. Publishing and retraction are recorded;
+**who subscribed is not**, so read-side auditing is not something this release can answer.
 
 ## Importing host history
 
@@ -720,7 +721,7 @@ Restarting loses live MCP sessions; hosts reconnect on the next call.
 | Symptom | Cause |
 |---|---|
 | `401 unauthorized` | Server has `--token`; the host is not sending the header. The body is the bare word `unauthorized` |
-| `tool_not_in_profile` | Tool is outside the active profile; restart with `--profile admin` |
+| `tool_not_in_profile` | Tool is outside the active profile. The message names every profile that does expose it, so restart with one of those |
 | `session_not_found` (HTTP 404) | The MCP session expired or the server restarted; reconnect the host |
 | `Bad Request: Server not initialized` (HTTP 400) | A request arrived without `mcp-session-id`, or before `initialize`. Send the session header |
 | `Failed to start server. Is port 7337 in use?` | Another process holds the port; check with `ss -ltnp` |
