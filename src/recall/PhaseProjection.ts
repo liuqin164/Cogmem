@@ -34,7 +34,7 @@
 export type MemoryPhase = 'protected' | 'detail' | 'gist' | 'dormant';
 
 /** Which kind of memory the item is, as far as its own fields can say. */
-export type PhaseCategory = 'scenario' | 'fact' | 'relation';
+type PhaseCategory = 'scenario' | 'fact' | 'relation';
 
 export interface PhaseThresholds {
   scenarioDetailDays: number;
@@ -69,7 +69,7 @@ const DAY_MS = 86_400_000;
  * which the phase function reads as "nothing to age against" and leaves at detail. A silent detail is the least
  * visible outcome of all, so the conversion is explicit here rather than a cast at the call site.
  */
-export function toMillis(value: unknown): number | undefined {
+function toMillis(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim()) {
     const parsed = Date.parse(value);
@@ -129,7 +129,7 @@ export function phaseGist(item: Record<string, unknown>): Record<string, unknown
  * `sourceContext` and all — exactly what the whitelist exists to keep out. A gist is the gist; a field not named
  * by `phaseGist` does not travel.
  */
-export function gistItem<T>(item: T): T {
+function gistItem<T>(item: T): T {
   return phaseGist(item as Record<string, unknown>) as unknown as T;
 }
 
@@ -141,7 +141,7 @@ interface PhaseProjectable {
   sourceAnchor?: { occurredAt?: unknown } | undefined;
 }
 
-export interface PhaseProjectionOutcome<T> {
+interface PhaseProjectionOutcome<T> {
   items: T[];
   /** How many were kept out of the default lane, and how many became a gist. */
   dormant: number;
