@@ -4,6 +4,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FacetQueryPlanner } from '../src/atlas/FacetQueryPlanner.js';
+import { EpisodeTitleGenerator } from '../src/atlas/EpisodeTitleGenerator.js';
+import { compileAgentRecallQuery } from '../src/agent/AgentRecallQueryCompiler.js';
 import { loadCogmemConfig } from '../src/config/CogmemConfig.js';
 import { resolveTaxonomy } from '../src/config/MemoryTaxonomy.js';
 import { createMemoryKernel } from '../src/factory.js';
@@ -11,6 +13,7 @@ import { deterministicFrameFallback, StructuredSemanticProcessor } from '../src/
 import { MEMORY_FRAME_EPISODE_KINDS, normalizeEpisodeKind } from '../src/semantic/MemoryFrameTypes.js';
 import { memoryFrameSystemPrompt } from '../src/semantic/SemanticProcessorPrompt.js';
 import { frameSourceFingerprint } from '../src/store/MemoryFrameStore.js';
+import { inferOperationalActionCue } from '../src/utils/EntityCueExtractor.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 /** Writes a workspace with a project config, the way a user would. */
@@ -201,4 +204,51 @@ test('a backfill on a project vocabulary completes, instead of failing every epi
   const episodeId = kernel.listEpisodes({ projectId: 'p', limit: 1 })[0]!.episodeId;
   expect(kernel.getMemoryFrame(episodeId, 'p', { includeStaged: true })?.episodeKind).toBe('other');
   kernel.close();
+});
+
+/** A user turn with just enough shape for the title generator and the query compiler. */
+function userTurn(text: string) {
+  return {
+    eventId: 'evt-182', streamId: 'thread', streamType: 'thread', eventType: 'MESSAGE', eventVersion: 1,
+    role: 'user', projectId: 'p', occurredAt: 0, payload: { text }, payloadHash: 'h', createdAt: 0,
+  } as never;
+}
+
+/**
+ * #182: `action_kinds[].label` and `.verb` were validated and then ignored — `EntityCueExtractor` called the
+ * shipped registry's `inferFirstActionKind`, so a project that overrode a label or invented a kind saw the
+ * shipped answer, or none at all. The cue reads the project's vocabulary now, and its two consumers
+ * (`compileAgentRecallQuery`, `EpisodeTitleGenerator`) hand it the resolved taxonomy.
+ */
+test('the entity cue reads the project action vocabulary, label and verb included', () => {
+  const project = resolveTaxonomy({ action_kinds: [
+    { kind: 'started', label: '点火', verb: '发射', pattern: '点火|launch' },
+    { kind: 'brewed', label: '冲', verb: '冲泡', pattern: 'brewed' },
+  ] }).taxonomy;
+  // A shipped kind whose label/verb the project overrode.
+  expect(inferOperationalActionCue('点火 Rocket', project)).toEqual({ kind: 'started', label: '点火', verb: '发射' });
+  // A kind the shipped registry does not know at all.
+  expect(inferOperationalActionCue('brewed the espresso', project)).toEqual({ kind: 'brewed', label: '冲', verb: '冲泡' });
+  // The shipped vocabulary answers neither: no `brewed`, and `launch` is 启动, not 点火.
+  expect(inferOperationalActionCue('brewed the espresso')).toBeUndefined();
+  expect(inferOperationalActionCue('launch now')).toEqual({ kind: 'started', label: '启动', verb: '启动' });
+});
+
+test('the recall query carries the project label in its entity cue phrases', () => {
+  const project = resolveTaxonomy({ action_kinds: [
+    { kind: 'started', label: '点火', verb: '发射', pattern: '点火|launch' },
+  ] }).taxonomy;
+  expect(compileAgentRecallQuery({ query: '点火 Rocket', taxonomy: project }).semanticCuePhrases).toContain('点火 Rocket');
+  // The shipped vocabulary finds no action in this query, so the phrase is not there without the project's.
+  expect(compileAgentRecallQuery({ query: '点火 Rocket' }).semanticCuePhrases).not.toContain('点火 Rocket');
+});
+
+test('the episode title renders the project action label, not the shipped one', () => {
+  const project = resolveTaxonomy({ action_kinds: [
+    { kind: 'started', label: '发射', verb: '发射', pattern: 'launch' },
+  ] }).taxonomy;
+  const input = { episodeId: 'ep-182', episodeType: 'operation', startedAt: 0, events: [userTurn('launch Rocket')] };
+  expect(new EpisodeTitleGenerator(project).generate(input).displayTitle).toBe('Rocket 发射');
+  // Rollback-red: without the taxonomy the title falls back to the shipped label.
+  expect(new EpisodeTitleGenerator().generate(input).displayTitle).toBe('Rocket 启动');
 });

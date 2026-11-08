@@ -1,4 +1,4 @@
-import { inferFirstActionKind } from './ActionKindRegistry.js';
+import { DEFAULT_TAXONOMY, type MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 
 export interface EntityCue {
   label: string;
@@ -62,8 +62,17 @@ export function extractEntityCues(text: string, limit = 8): EntityCue[] {
   return cues;
 }
 
-export function inferOperationalActionCue(text: string): OperationalActionCue | undefined {
-  const rule = inferFirstActionKind(text);
+/**
+ * The action cue a query names, read from the project's action vocabulary (#182).
+ *
+ * It used to call the shipped registry's `inferFirstActionKind`, so a project that overrode a kind's `label`/`verb`
+ * or invented a kind with `[taxonomy] action_kinds` had those fields validated and then ignored: the cue came back
+ * with the shipped label, or with nothing for a kind the registry did not know. The rule table is the taxonomy's
+ * now, so the label and verb in the cue are the project's. The default taxonomy is built from the same registry,
+ * so a project that declares none sees exactly what it saw before (#170's wiring pattern).
+ */
+export function inferOperationalActionCue(text: string, taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY): OperationalActionCue | undefined {
+  const rule = taxonomy.actionKinds.find((candidate) => candidate.pattern.test(text));
   return rule ? { kind: rule.kind, label: rule.label, verb: rule.verb } : undefined;
 }
 

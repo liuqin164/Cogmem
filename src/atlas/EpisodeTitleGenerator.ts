@@ -1,6 +1,7 @@
 import type { MemoryEvent } from '../types/index.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import { extractEntityCues, inferOperationalActionCue } from '../utils/EntityCueExtractor.js';
+import { DEFAULT_TAXONOMY, type MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 
 export interface EpisodeTitleInput {
   episodeId: string;
@@ -92,6 +93,9 @@ const TITLE_RULES: TitleRule[] = [
 ];
 
 export class EpisodeTitleGenerator {
+  /** The project's action vocabulary, so the operation title uses the project's label and verb (#182). */
+  constructor(private readonly taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY) {}
+
   generate(input: EpisodeTitleInput): EpisodeTitleResult {
     const userEvents = input.events.filter((event) => event.role === 'user');
     const assistantEvents = input.events.filter((event) => event.role === 'assistant' || event.role === 'agent');
@@ -99,7 +103,7 @@ export class EpisodeTitleGenerator {
     const assistantText = normalizeText(assistantEvents.map(eventTextForMemory).join('\n'));
     const summaryText = normalizeText([input.summary, input.topicPath, input.episodeType].filter(Boolean).join('\n'));
     const preferredText = [userText, summaryText, assistantText].filter(Boolean).join('\n');
-    const operationTitle = inferOperationTitle(preferredText);
+    const operationTitle = inferOperationTitle(preferredText, this.taxonomy);
     const matchedRule = TITLE_RULES.find((rule) => rule.test(preferredText));
     const localDate = inferLocalDate(input.events, input.startedAt);
     const sourceEventIds = sourceIdsFor(userEvents.length > 0 ? userEvents : input.events);
@@ -127,7 +131,7 @@ export class EpisodeTitleGenerator {
     }
 
     if (operationTitle) {
-      const matchedSourceEventIds = sourceIdsForMatching(userEvents.length > 0 ? userEvents : input.events, (text) => Boolean(inferOperationTitle(text))) || sourceEventIds;
+      const matchedSourceEventIds = sourceIdsForMatching(userEvents.length > 0 ? userEvents : input.events, (text) => Boolean(inferOperationTitle(text, this.taxonomy))) || sourceEventIds;
       return {
         displayTitle: boundTitle(operationTitle.displayTitle),
         oneLineSummary: operationTitle.oneLineSummary,
@@ -173,8 +177,8 @@ function normalizeText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-function inferOperationTitle(text: string): { displayTitle: string; oneLineSummary: string; topicHints: string[] } | undefined {
-  const action = inferOperationalActionCue(text);
+function inferOperationTitle(text: string, taxonomy: MemoryTaxonomy): { displayTitle: string; oneLineSummary: string; topicHints: string[] } | undefined {
+  const action = inferOperationalActionCue(text, taxonomy);
   const entity = extractEntityCues(text, 1)[0];
   if (!action || !entity) return undefined;
   return {

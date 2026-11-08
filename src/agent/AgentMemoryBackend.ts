@@ -982,7 +982,7 @@ export class KernelAgentMemoryBackend {
   private explainZeroResult(query: AgentRecallQuery): ZeroExplanation {
     const text = String(query.query ?? query.anchorText ?? '').trim();
     if (!text) return { kind: 'no_match', thisScope: 0, otherScopes: 0 };
-    const queryPlan = compileAgentRecallQuery({ query: query.query, intent: query.intent, anchorText: query.anchorText });
+    const queryPlan = compileAgentRecallQuery({ query: query.query, intent: query.intent, anchorText: query.anchorText, taxonomy: this.kernel.taxonomy });
     let events: MemoryEvent[] = [];
     try {
       events = this.kernel.searchRawEvents(text, {
@@ -1007,7 +1007,7 @@ export class KernelAgentMemoryBackend {
 
   /** An answer with no items, keeping the shape every caller already handles. */
   private emptyRecallResult(query: AgentRecallQuery, reason: AgentRecallDecisionTrace['reason']): RecallCoreResult {
-    const queryPlan = compileAgentRecallQuery({ query: query.query, intent: query.intent, anchorText: query.anchorText });
+    const queryPlan = compileAgentRecallQuery({ query: query.query, intent: query.intent, anchorText: query.anchorText, taxonomy: this.kernel.taxonomy });
     return {
       recallMode: 'social_turn_suppressed',
       items: [],
@@ -1097,6 +1097,7 @@ export class KernelAgentMemoryBackend {
       query: query.query,
       intent: query.intent,
       anchorText: query.anchorText,
+      taxonomy: this.kernel.taxonomy,
     });
     const limit = query.limit ?? 5;
     const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');

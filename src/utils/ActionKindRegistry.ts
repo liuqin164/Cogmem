@@ -21,7 +21,3 @@ export const ACTION_KIND_RULES: ActionKindRule[] = [
 export function inferActionKinds(text: string): string[] {
   return ACTION_KIND_RULES.filter((rule) => rule.pattern.test(text)).map((rule) => rule.kind);
 }
-
-export function inferFirstActionKind(text: string): ActionKindRule | undefined {
-  return ACTION_KIND_RULES.find((rule) => rule.pattern.test(text));
-}

@@ -7,6 +7,7 @@ import type { MemoryEvent } from '../types/index.js';
 import { EpisodeTitleGenerator } from './EpisodeTitleGenerator.js';
 import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
 import { inferActionKinds } from '../utils/ActionKindRegistry.js';
+import { DEFAULT_TAXONOMY, type MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 import { localDateFor } from '../utils/LocalDateContext.js';
 import {
   invalidateMemoryEdgeSupportIds,
@@ -77,13 +78,17 @@ const FACET_EDGE_RELATIONS = new Set([
 ]);
 
 export class GraphCurator {
-  private readonly titleGenerator = new EpisodeTitleGenerator();
+  private readonly titleGenerator: EpisodeTitleGenerator;
 
   constructor(
     private readonly db: Database,
     private readonly eventStore: EventStore,
     private readonly atlasStore: MemoryAtlasStore,
-  ) {}
+    taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY,
+  ) {
+    // The episode title's action cue is the project's, not the shipped registry's (#182).
+    this.titleGenerator = new EpisodeTitleGenerator(taxonomy);
+  }
 
   rebuild(projectId: string, now = Date.now()): GraphCuratorResult {
     const staleEdgeIds = this.deleteFacetEdges(projectId, now);

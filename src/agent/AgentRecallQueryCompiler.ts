@@ -1,5 +1,6 @@
 import { extractEntityCues, inferOperationalActionCue } from '../utils/EntityCueExtractor.js';
 import { escapeRegExp } from '../utils/Values.js';
+import type { MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 
 export type AgentRecallIntent = 'memory_recall' | 'previous_session_summary' | 'forensic_quote' | 'historical_discussion' | 'action_history';
 
@@ -7,6 +8,8 @@ export interface AgentRecallQueryCompileInput {
   query: string;
   intent?: AgentRecallIntent;
   anchorText?: string;
+  /** The project's action vocabulary, so the cue phrases carry the project's labels rather than the shipped ones (#182). */
+  taxonomy?: MemoryTaxonomy;
 }
 
 export interface AgentRecallQueryPlan {
@@ -109,7 +112,7 @@ export function compileAgentRecallQuery(input: AgentRecallQueryCompileInput): Ag
     : keywordSource;
   const residual = stripFillers(originalQuery);
   const anchorResidual = stripFillers(anchorText);
-  const semanticCuePhrases = buildSemanticCuePhrases(keywords, originalQuery, anchorText);
+  const semanticCuePhrases = buildSemanticCuePhrases(keywords, originalQuery, anchorText, input.taxonomy);
   const temporalHints = extractTemporalHints(originalQuery);
   const searchTexts = uniqueNonEmpty([
     joinKeywords(keywords),
@@ -232,7 +235,7 @@ function joinKeywords(keywords: string[]): string {
   return mergeKeywords(keywords).join(' ');
 }
 
-function buildSemanticCuePhrases(keywords: string[], query: string, anchorText: string): string[] {
+function buildSemanticCuePhrases(keywords: string[], query: string, anchorText: string, taxonomy?: MemoryTaxonomy): string[] {
   const merged = mergeKeywords(keywords);
   const text = `${query}\n${anchorText}`;
   const out: string[] = [];
@@ -272,7 +275,7 @@ function buildSemanticCuePhrases(keywords: string[], query: string, anchorText: 
     out.push('产品コード');
     out.push('数量');
   }
-  const action = inferOperationalActionCue(text);
+  const action = inferOperationalActionCue(text, taxonomy);
   for (const entity of extractEntityCues(text, 4)) {
     out.push(entity.label);
     out.push(`${entity.label} 操作`);
