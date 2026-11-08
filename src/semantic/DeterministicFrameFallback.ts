@@ -2,7 +2,13 @@ import { createHash } from 'node:crypto';
 import type { MemoryEvent } from '../types/index.js';
 import { normalizeEpisodeKind, type MemoryFrameV1 } from './MemoryFrameTypes.js';
 
-export function deterministicFrameFallback(input: { projectId: string; episodeId: string; episodeType?: MemoryFrameV1['episodeKind']; events: MemoryEvent[]; promptVersion?: string; now?: number }): MemoryFrameV1 {
+/**
+ * The fallback frame for an episode, built without a model.
+ *
+ * `episodeKinds` is the project's `[taxonomy] episode_kinds` when it declared one; the kind is mapped through it so
+ * the frame the store then validates is one that vocabulary accepts (#175).
+ */
+export function deterministicFrameFallback(input: { projectId: string; episodeId: string; episodeType?: string; episodeKinds?: readonly string[]; events: MemoryEvent[]; promptVersion?: string; now?: number }): MemoryFrameV1 {
   const events = input.events.slice().sort((a, b) => a.occurredAt - b.occurredAt || a.eventId.localeCompare(b.eventId));
   const evidenceEventIds = events.map((event) => event.eventId);
   const frameId = `frame:${createHash('sha256').update(`${input.episodeId}:${evidenceEventIds.join(',')}`).digest('hex').slice(0, 32)}`;
@@ -70,7 +76,7 @@ export function deterministicFrameFallback(input: { projectId: string; episodeId
     }
   }
   return { schemaVersion: 'memory_frame.v1', frameId, projectId: input.projectId, episodeId: input.episodeId,
-    title: input.episodeId, summary: '', episodeKind: normalizeEpisodeKind(input.episodeType), nodes,
+    title: input.episodeId, summary: '', episodeKind: normalizeEpisodeKind(input.episodeType, input.episodeKinds), nodes,
     relations, temporalReferences: events.length ? [{ label: events[0]!.localDate ?? new Date(events[0]!.occurredAt).toISOString().slice(0, 10), occurredAt: events[0]!.occurredAt, evidenceEventIds: [events[0]!.eventId], confidence: 0.8 }] : [], stateTransitions, confidence: 0.8, evidenceEventIds,
     processor: { promptVersion: input.promptVersion ?? 'deterministic-fallback', generatedAt: input.now ?? Date.now() },
     status: 'needs_confirmation', sourceAuthority: 'deterministic_fallback', semanticCompleteness: 'minimal', needsReview: true };

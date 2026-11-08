@@ -18,6 +18,7 @@ import { deterministicFrameFallback } from '../semantic/DeterministicFrameFallba
 import type { StructuredSemanticProcessor } from '../semantic/StructuredSemanticProcessor.js';
 import { StructuredSemanticProcessor as StructuredSemanticProcessorImpl } from '../semantic/StructuredSemanticProcessor.js';
 import { MEMORY_FRAME_PROMPT_VERSION, memoryFrameSystemPrompt } from '../semantic/SemanticProcessorPrompt.js';
+import { normalizeEpisodeKind } from '../semantic/MemoryFrameTypes.js';
 import type { MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
 import { truncate } from '../utils/Values.js';
 import type { MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
@@ -142,7 +143,7 @@ export class DreamCuratorWorker {
     if (options.sourceEpisodeId && this.deps.memoryFrameStore) {
       const frameInput = {
         projectId: options.projectId || events[0]?.projectId || '', episodeId: options.sourceEpisodeId,
-        episodeType: frameEpisodeKind(options.episodeType), events,
+        episodeType: normalizeEpisodeKind(options.episodeType, this.deps.taxonomy?.episodeKinds.map((kind) => kind.id)), events,
       };
       let frame: MemoryFrameV1 | undefined;
       try {
@@ -963,11 +964,6 @@ export class DreamCuratorWorker {
     const sessionIds = new Set(events.map((event) => event.sessionId).filter((id): id is string => Boolean(id)));
     return sessionIds.size === 1 ? [...sessionIds][0] : undefined;
   }
-}
-
-function frameEpisodeKind(value: string | undefined): 'discussion' | 'operation' | 'decision' | 'correction' | 'diagnostic' | 'planning' | 'status_update' | 'preference' | 'other' {
-  const allowed = new Set(['discussion', 'operation', 'decision', 'correction', 'diagnostic', 'planning', 'status_update', 'preference', 'other']);
-  return value && allowed.has(value) ? value as ReturnType<typeof frameEpisodeKind> : 'other';
 }
 
 function hasPairedConflictClaims(record: Record<string, unknown>): boolean {

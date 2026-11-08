@@ -84,8 +84,18 @@ export interface MemoryFrameV1 {
  */
 export const MEMORY_FRAME_EPISODE_KINDS = ['discussion', 'operation', 'decision', 'correction', 'diagnostic', 'planning', 'status_update', 'preference', 'other'] as const;
 
-export function normalizeEpisodeKind(value: unknown): MemoryFrameV1['episodeKind'] {
-  return typeof value === 'string' && (MEMORY_FRAME_EPISODE_KINDS as readonly string[]).includes(value)
+/**
+ * A frame kind the vocabulary knows, else the vocabulary's own `other` (#175).
+ *
+ * `episodeKinds` is the project's `[taxonomy] episode_kinds` when it declared one. It has to be honoured here, and
+ * not only by the validator: this mapping is what the deterministic fallback uses to name a frame built without a
+ * model, so reading the shipped list while the store validates against the project's list made every backfilled
+ * frame of a project with its own vocabulary either a mislabelled `other` or an `invalid_episode_kind` failure.
+ * The sentinel stays `other`, so a vocabulary that does not declare it has no valid fallback kind — that is a loud
+ * per-episode failure rather than a frame the project's own list rejects.
+ */
+export function normalizeEpisodeKind(value: unknown, episodeKinds: readonly string[] = MEMORY_FRAME_EPISODE_KINDS): MemoryFrameV1['episodeKind'] {
+  return typeof value === 'string' && episodeKinds.includes(value)
     ? (value as MemoryFrameV1['episodeKind'])
     : 'other';
 }

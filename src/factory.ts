@@ -2718,7 +2718,8 @@ export class MemoryKernel {
       // threw out of the loop, so a single unknown episode type left every episode after
       // it unbackfilled with no record of which one stopped it.
       try {
-        const frame = deterministicFrameFallback({ projectId: options.projectId, episodeId: episode.episodeId, episodeType: episode.episodeType as MemoryFrameV1['episodeKind'], events });
+        // The project's own vocabulary, so a frame the store then validates is one that vocabulary accepts (#175).
+        const frame = deterministicFrameFallback({ projectId: options.projectId, episodeId: episode.episodeId, episodeType: episode.episodeType, episodeKinds: this.taxonomyResolution.taxonomy.episodeKinds.map((kind) => kind.id), events });
         const saved = this.memoryFrameStore.save({
         frame,
         sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), episode.episodeId),

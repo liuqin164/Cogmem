@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FacetQueryPlanner } from '../src/atlas/FacetQueryPlanner.js';
@@ -6,7 +7,7 @@ import { loadCogmemConfig } from '../src/config/CogmemConfig.js';
 import { resolveTaxonomy } from '../src/config/MemoryTaxonomy.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { deterministicFrameFallback, StructuredSemanticProcessor } from '../src/semantic/index.js';
-import { MEMORY_FRAME_EPISODE_KINDS, type MemoryFrameV1 } from '../src/semantic/MemoryFrameTypes.js';
+import { MEMORY_FRAME_EPISODE_KINDS, normalizeEpisodeKind, type MemoryFrameV1 } from '../src/semantic/MemoryFrameTypes.js';
 import { memoryFrameSystemPrompt } from '../src/semantic/SemanticProcessorPrompt.js';
 import { frameSourceFingerprint } from '../src/store/MemoryFrameStore.js';
 import { makeTempDir } from './helpers/tmp.js';
@@ -110,4 +111,74 @@ test('a custom episode kind passes the processor and the frame store, not just t
   } finally {
     kernel.close();
   }
+});
+
+/**
+ * #175 left one mapping on the shipped list: the deterministic fallback — the only producer on a rule-only install,
+ * and what `frame-backfill` uses — named its frame kind through `MEMORY_FRAME_EPISODE_KINDS`, while the store now
+ * validates against the project's own list. So a project with a vocabulary of its own got frames the same store
+ * rejected (`invalid_episode_kind`, every episode of the batch failing) or, if it happened to keep the shipped
+ * kind, a frame mislabelled with it. The honest target is the vocabulary's own `other`, which is what the shipped
+ * list has always done for a type the frame layer does not know.
+ */
+test('the fallback names its frame kind through the project vocabulary, not the shipped one', () => {
+  // `story` is a kind only this project declares; the shipped list has no answer for it but `other`.
+  const custom = resolveTaxonomy({ episode_kinds: [
+    { id: 'story', description: 'What the user told me about their day.' },
+    { id: 'other', description: 'None of the above.' },
+  ] });
+  const declared = custom.taxonomy.episodeKinds.map((kind) => kind.id);
+  // Rollback-red on both halves: the shipped list answers `other` for `story`, and `preference` — a kind this
+  // project never declared, which the store then rejects — for an episode type outside its list.
+  expect(normalizeEpisodeKind('story')).toBe('other');
+  expect(normalizeEpisodeKind('story', declared)).toBe('story');
+  expect(normalizeEpisodeKind('preference')).toBe('preference');
+  expect(normalizeEpisodeKind('preference', declared)).toBe('other');
+
+  const dir = makeTempDir('cogmem-taxonomy-fallback-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec', taxonomy: custom });
+  try {
+    // A declared kind survives the store that validates against the same list.
+    const storyFrame = deterministicFrameFallback({
+      projectId: 'p', episodeId: 'ep-story', episodeType: 'story',
+      episodeKinds: declared, events: [{ eventId: 'evt-story', occurredAt: 0 } as never],
+    });
+    expect(storyFrame.episodeKind).toBe('story');
+    const savedStory = kernel.memoryFrameStore.save({ frame: storyFrame, sourceFingerprint: frameSourceFingerprint(['evt-story'], 'ep-story') });
+    expect(savedStory.episodeKind).toBe('story');
+    expect(kernel.memoryFrameStore.get(savedStory.frameId)?.episodeKind).toBe('story');
+
+    // One it does not declare falls to the project's own `other` and still saves.
+    const otherFrame = deterministicFrameFallback({
+      projectId: 'p', episodeId: 'ep-preference', episodeType: 'preference',
+      episodeKinds: declared, events: [{ eventId: 'evt-pref', occurredAt: 0 } as never],
+    });
+    expect(otherFrame.episodeKind).toBe('other');
+    const savedOther = kernel.memoryFrameStore.save({ frame: otherFrame, sourceFingerprint: frameSourceFingerprint(['evt-pref'], 'ep-preference') });
+    expect(savedOther.episodeKind).toBe('other');
+  } finally {
+    kernel.close();
+  }
+});
+
+test('a backfill on a project vocabulary completes, instead of failing every episode', () => {
+  const custom = resolveTaxonomy({ episode_kinds: [
+    { id: 'discussion', description: 'A conversation.' },
+    { id: 'other', description: 'None of the above.' },
+  ] });
+  const dir = makeTempDir('cogmem-taxonomy-backfill-');
+  const dbPath = join(dir, 'memory.db');
+  const kernel = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec', taxonomy: custom });
+  kernel.appendEpisodeMessage({ projectId: 'p', sessionId: 's1', sourceAgent: 'a', role: 'user', text: '归档保留期定成七年。', timestamp: Date.now() - 3_600_000 });
+  // A kind the project's list does not declare: the shipped default would emit it and the store would reject it.
+  const db = new Database(dbPath);
+  db.prepare("UPDATE memory_episodes SET episode_type = 'preference'").run();
+  db.close();
+
+  const result = kernel.backfillMemoryFrames({ projectId: 'p', limit: 50 });
+  expect(result.failed).toBe(0);
+  expect(result.created).toBe(1);
+  const episodeId = kernel.listEpisodes({ projectId: 'p', limit: 1 })[0]!.episodeId;
+  expect(kernel.getMemoryFrame(episodeId, 'p', { includeStaged: true })?.episodeKind).toBe('other');
+  kernel.close();
 });
