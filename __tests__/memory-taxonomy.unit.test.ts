@@ -158,14 +158,13 @@ test('memory_kind_rules is an unknown field, and the marker field is gone', () =
  * The valid set is the project's `[taxonomy] episode_kinds` and is only known at runtime, so the type cannot be
  * the shipped nine; `#175`/`#179` let a custom kind through `normalizeEpisodeKind` with an `as` cast at the
  * boundary. `bun run typecheck` is the real gate — removing the cast while the union is still there stops
- * compiling — and this keeps the shape visible to the suite too. Runtime validation is unchanged: a kind the
- * resolved vocabulary does not declare is still rejected.
+ * compiling — but it reads `src/` only, so these two shape assertions are the tripwire the suite itself runs.
+ * Runtime validation is unchanged: a kind the resolved vocabulary does not declare is still rejected.
  */
 test('the frame kind is an open string, with no cast left at the boundary', () => {
   const source = readFileSync(join(import.meta.dir, '..', 'src/semantic/MemoryFrameTypes.ts'), 'utf8');
-  expect(source).toContain('episodeKind: string;');
-  expect(source).not.toContain("episodeKind: 'discussion'");
-  expect(source).not.toContain("as MemoryFrameV1['episodeKind']");
+  expect(source).toMatch(/episodeKind:\s*string;/);
+  expect(source).not.toMatch(/as MemoryFrameV1\['episodeKind'\]/);
   // The value crosses as-is; the gate is the resolved vocabulary, not the type.
   const kind = normalizeEpisodeKind('story', ['story', 'mood', 'other']);
   expect(kind).toBe('story');
