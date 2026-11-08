@@ -14,6 +14,7 @@
  * edits needs to say what a kind means; the ids, and therefore the behaviour, are unchanged.
  */
 import { ACTION_KIND_RULES, type ActionKindRule } from '../utils/ActionKindRegistry.js';
+import { escapeRegExp } from '../utils/Values.js';
 import { RELATION_ENDPOINTS_TEXT } from '../semantic/RelationConstraintRegistry.js';
 import { MEMORY_FRAME_EPISODE_KINDS } from '../semantic/MemoryFrameTypes.js';
 
@@ -82,10 +83,6 @@ const PRESENTATION_RELATION_NAMES = [
 /** The action vocabulary as the shipped registry defines it, with the one-line meanings. */
 function actionKindsFromRegistry(): Array<ActionKindRule & { description: string }> {
   return ACTION_KIND_RULES.map((rule) => ({ ...rule, description: ACTION_KIND_DESCRIPTIONS[rule.kind] ?? '' }));
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**

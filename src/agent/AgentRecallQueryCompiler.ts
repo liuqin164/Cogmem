@@ -1,4 +1,5 @@
 import { extractEntityCues, inferOperationalActionCue } from '../utils/EntityCueExtractor.js';
+import { escapeRegExp } from '../utils/Values.js';
 
 export type AgentRecallIntent = 'memory_recall' | 'previous_session_summary' | 'forensic_quote' | 'historical_discussion' | 'action_history';
 
@@ -370,8 +371,4 @@ function uniqueNonEmpty(values: string[]): string[] {
 
 function normalizeWhitespace(value: string): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
