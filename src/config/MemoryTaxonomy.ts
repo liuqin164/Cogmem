@@ -156,9 +156,9 @@ export function validateTaxonomy(input: unknown): TaxonomyValidation {
   };
   const episodeKinds = list((input as Record<string, unknown>).episode_kinds, 'episode_kinds');
   const actionKinds = list((input as Record<string, unknown>).action_kinds, 'action_kinds');
-  // `relation_names` is a list of strings rather than entries, so it needs the empty check without the id checks.
-  const relationNames = (input as Record<string, unknown>).relation_names;
-  if (Array.isArray(relationNames) && relationNames.length === 0) reasons.push('relation_names_must_not_be_empty');
+  // `relation_names` is a list of strings rather than entries: it wants the same shape and emptiness check, not
+  // the per-entry id checks. The value is read again in `resolveTaxonomy`, so the result is not kept here.
+  list((input as Record<string, unknown>).relation_names, 'relation_names');
   checkIds(episodeKinds, 'episode_kinds', 'id');
   // The action kind's id key is `kind`, not `id` (#170). With `id` every well-formed `action_kinds` entry was
   // judged missing its id, the whole section fell back to the default, and the reason named the wrong fault.

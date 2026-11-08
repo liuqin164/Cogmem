@@ -93,6 +93,10 @@ test('an empty vocabulary list falls back to the default instead of accepting no
   }
   // A non-empty list is still `custom`: the check did not turn the surface off.
   expect(resolveTaxonomy({ episode_kinds: [{ id: 'story', description: 'x' }] })).toMatchObject({ source: 'custom' });
+  // The same shape check now covers a non-array `relation_names`, which used to resolve `custom` while quietly
+  // keeping the default names — the same "validated but ineffective" one shape over.
+  expect(validateTaxonomy({ relation_names: 'PARTICIPATED_IN' }).reasons).toContain('relation_names_must_be_an_array');
+  expect(resolveTaxonomy({ relation_names: 'PARTICIPATED_IN' }).source).toBe('invalid-fell-back');
 });
 
 /** #132: a user learns the vocabulary from the host's own skill, and all three must say the same thing. */
