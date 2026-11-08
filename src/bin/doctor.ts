@@ -198,7 +198,7 @@ const bunPath = readArg('--bun');
  */
 let secretMarkedEvents: number | undefined;
 /** Undefined when the shared region was never used, so the field is omitted rather than zeroed. */
-let sharedCollections: SharedCollection[] | undefined;
+let sharedCollections: Array<Omit<SharedCollection, 'readers'>> | undefined;
 /** The `[shared] enabled` switch, carried the same way the counts are: filled after the config loads. */
 let sharedEnabledFlag: boolean | undefined;
 /** Of the marked events: those whose tool result was redacted on the way in, and those only marked. */
@@ -215,8 +215,15 @@ function markedOnlyCount(marked: number, redacted: number | undefined): number {
  * The database path comes from the kernel's own health status: reading it out of the config was the
  * first attempt and produced an empty path, so the count never ran. Read-only query, no new storage.
  */
-/** Collections someone chose to share, and who may read them. Read-only; undefined means "never used". */
-function readSharedCollections(configPath: string): SharedCollection[] | undefined {
+/**
+ * Collections someone chose to share. Read-only; undefined means "never used".
+ *
+ * The `readers` list is deliberately not read or printed (#146, #172). Reading is open to every agent that can
+ * connect, and no surface can change that list, so printing it would advertise a per-reader ACL that is not in
+ * effect. The registry keeps the data and `listCollections` still returns it — this is a display decision, not a
+ * storage one.
+ */
+function readSharedCollections(configPath: string): Array<Omit<SharedCollection, 'readers'>> | undefined {
   let kernel: ReturnType<typeof createMemoryKernelFromConfig> | undefined;
   try {
     kernel = createMemoryKernelFromConfig({ configPath });
@@ -229,18 +236,15 @@ function readSharedCollections(configPath: string): SharedCollection[] | undefin
       const rows = db.prepare(`
         SELECT c.collection, c.owner_host, c.created_at,
                (SELECT COUNT(*) FROM shared_items s
-                 WHERE s.collection = c.collection AND s.retracted_at IS NULL) AS items,
-               (SELECT GROUP_CONCAT(r.reader_host) FROM shared_collection_readers r
-                 WHERE r.collection = c.collection) AS readers
+                 WHERE s.collection = c.collection AND s.retracted_at IS NULL) AS items
           FROM shared_collections c
          ORDER BY c.collection
-      `).all() as Array<{ collection: string; owner_host: string; created_at: number; items: number; readers: string | null }>;
+      `).all() as Array<{ collection: string; owner_host: string; created_at: number; items: number }>;
       return rows.map((row) => ({
         collection: row.collection,
         ownerHost: row.owner_host,
         createdAt: row.created_at,
         itemCount: row.items,
-        readers: row.readers ? row.readers.split(',') : [],
       }));
     } finally {
       db.close();
