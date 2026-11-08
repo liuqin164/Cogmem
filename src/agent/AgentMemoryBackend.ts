@@ -26,7 +26,7 @@ import { inferActionKinds } from '../utils/ActionKindRegistry.js';
 import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
 import { cliArg } from '../utils/CliArgument.js';
 import { pad2 } from '../utils/Values.js';
-import { phaseFor, phaseGist, toMillis, type PhaseCategory } from '../recall/PhaseProjection.js';
+import { projectPhaseItems } from '../recall/PhaseProjection.js';
 import { secretFindingsMetadata } from '../security/SecretPatterns.js';
 
 export type AgentTurnIngestMode =
@@ -890,31 +890,18 @@ export class KernelAgentMemoryBackend {
    * reach this method, and a by-ID read does not either, which is the ticket's rule that those channels always
    * return the whole thing.
    *
-   * The category is what an item's own fields can say, and nothing more: a raw turn is a scenario, a compiled
-   * or imported item is a fact, anything else is a relation. That is a coarse reading on purpose — a finer one
-   * needs the compiled corpus that is still a box-phase item on the ticket.
+   * The rules live in `PhaseProjection.projectPhaseItems`, which is pure and takes the items directly, so the
+   * projection has a unit test that does not need a lane to seed a timestamp (#171). This method only adds the
+   * trace's suppression reasons and the off switch.
    */
   private projectPhases(items: AgentRecallItem[], query: AgentRecallQuery): { items: AgentRecallItem[]; suppressed: Array<{ reason: RecallSuppressionReason; count: number }> } {
     if (!this.kernel.phaseProjectionEnabled) return { items, suppressed: [] };
     const now = Number(query.now ?? Date.now());
-    const kept: AgentRecallItem[] = [];
-    let dormant = 0;
-    let gist = 0;
-    for (const item of items) {
-      const sourceType = String(item.sourceType ?? '');
-      const category: PhaseCategory = sourceType.startsWith('raw_ledger') ? 'scenario'
-        : sourceType === 'compiled_memory' || sourceType === 'imported_summary' ? 'fact'
-        : 'relation';
-      const occurredAt = toMillis((item.sourceAnchor as { occurredAt?: unknown } | undefined)?.occurredAt);
-      const phase = phaseFor({ occurredAt, category }, now);
-      if (phase === 'dormant') { dormant += 1; continue; }
-      if (phase === 'gist') { gist += 1; kept.push({ ...item, ...phaseGist(item as unknown as Record<string, unknown>) } as AgentRecallItem); continue; }
-      kept.push(item);
-    }
+    const projected = projectPhaseItems(items, String(query.query ?? query.anchorText ?? ''), now);
     const suppressed: Array<{ reason: RecallSuppressionReason; count: number }> = [];
-    if (dormant > 0) suppressed.push({ reason: 'phase_dormant', count: dormant });
-    if (gist > 0) suppressed.push({ reason: 'phase_gist', count: gist });
-    return { items: kept, suppressed };
+    if (projected.dormant > 0) suppressed.push({ reason: 'phase_dormant', count: projected.dormant });
+    if (projected.gist > 0) suppressed.push({ reason: 'phase_gist', count: projected.gist });
+    return { items: projected.items, suppressed };
   }
 
   private recallPrivate(query: AgentRecallQuery): AgentRecallResult {

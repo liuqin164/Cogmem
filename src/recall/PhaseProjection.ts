@@ -121,3 +121,89 @@ export function phaseGist(item: Record<string, unknown>): Record<string, unknown
     : undefined;
   return gist;
 }
+
+/**
+ * The one-line projection of an item: the whitelist only, nothing merged over it (#171).
+ *
+ * `projectPhases` used to push `{ ...item, ...phaseGist(item) }`, which put the whole record back — `text`,
+ * `sourceContext` and all — exactly what the whitelist exists to keep out. A gist is the gist; a field not named
+ * by `phaseGist` does not travel.
+ */
+export function gistItem<T>(item: T): T {
+  return phaseGist(item as Record<string, unknown>) as unknown as T;
+}
+
+/** The fields the projection reads off an item; the rest travels untouched. */
+interface PhaseProjectable {
+  text?: unknown;
+  displayTitle?: unknown;
+  sourceType?: unknown;
+  sourceAnchor?: { occurredAt?: unknown } | undefined;
+}
+
+export interface PhaseProjectionOutcome<T> {
+  items: T[];
+  /** How many were kept out of the default lane, and how many became a gist. */
+  dormant: number;
+  gist: number;
+}
+
+function phaseCategory(sourceType: string): PhaseCategory {
+  return sourceType.startsWith('raw_ledger') ? 'scenario'
+    : sourceType === 'compiled_memory' || sourceType === 'imported_summary' ? 'fact'
+    : 'relation';
+}
+
+function queryTerms(text: string): string[] {
+  return Array.from(new Set(text.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? []));
+}
+
+function searchableText(item: unknown): string {
+  const value = item as PhaseProjectable;
+  const text = typeof value.text === 'string' ? value.text : '';
+  const title = typeof value.displayTitle === 'string' ? value.displayTitle : '';
+  return `${text} ${title}`.toLowerCase();
+}
+
+/**
+ * Apply the read-time phase to a lane's items (#130, #171). Pure: the same items, query and clock give the same
+ * answer, and nothing is written.
+ *
+ * `dormant` leaves the default lane but keeps a keyword entry: a question that names the memory with a word only
+ * it carries still reaches it. The test is batch-relative on purpose — a word the question shares with every
+ * candidate ("deploy window" over a batch of deploys) was the retrieval that already happened, not a name.
+ *
+ * ponytail: substring match with a half-the-batch rarity cut, no stemming and no document-frequency table.
+ * Upgrade to the term-DF cache the raw lane already keeps if dormant recall needs to be judged, not offered.
+ */
+export function projectPhaseItems<T>(items: readonly T[], queryText: string, now: number): PhaseProjectionOutcome<T> {
+  const terms = queryTerms(queryText);
+  const presence = new Map<string, number>();
+  for (const item of items) {
+    const text = searchableText(item);
+    for (const term of terms) {
+      if (text.includes(term)) presence.set(term, (presence.get(term) ?? 0) + 1);
+    }
+  }
+  const rarityCut = Math.max(1, Math.floor(items.length / 2));
+  const namesMemory = (item: T): boolean => {
+    const text = searchableText(item);
+    return terms.some((term) => text.includes(term) && (presence.get(term) ?? 0) <= rarityCut);
+  };
+
+  const kept: T[] = [];
+  let dormant = 0;
+  let gist = 0;
+  for (const item of items) {
+    const value = item as PhaseProjectable;
+    const phase = phaseFor({ occurredAt: toMillis(value.sourceAnchor?.occurredAt), category: phaseCategory(String(value.sourceType ?? '')) }, now);
+    if (phase === 'dormant') {
+      if (!namesMemory(item)) { dormant += 1; continue; }
+      kept.push(item);
+      continue;
+    }
+    if (phase === 'gist') { gist += 1; kept.push(gistItem(item)); continue; }
+    kept.push(item);
+  }
+  return { items: kept, dormant, gist };
+}

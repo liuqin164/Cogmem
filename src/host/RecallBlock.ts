@@ -412,7 +412,17 @@ export function recallItemLines(
   const sourceWindowMaxChars = Number(config.sourceWindowMaxChars || 1200);
   const includeSourceWindow = config.includeSourceWindowByDefault === true;
   const source = item.source ? ' [' + serializeUntrustedMemory(item.source, 220) + ']' : '';
-  lines.push('- ' + serializeUntrustedMemory(item.text, 500) + source);
+  // A gist is a pointer to a memory, not the memory (#130, #171). It carries no `text`, so printing the usual
+  // line would render `undefined`; and the one thing it does carry is named `agent_interpretation_not_fact`, so
+  // the label travels with it rather than being dropped — a reader must not mistake a generated line for a record.
+  if (item.phase === 'gist') {
+    const interpretation = typeof item.agent_interpretation_not_fact === 'string' && item.agent_interpretation_not_fact.trim()
+      ? serializeUntrustedMemory(item.agent_interpretation_not_fact, 500)
+      : 'provenance only';
+    lines.push(`- [gist — agent interpretation, not fact] ${interpretation}`);
+  } else {
+    lines.push('- ' + serializeUntrustedMemory(item.text, 500) + source);
+  }
   const sourceType = item.sourceType || 'compiled_memory';
   const quote = item.canAnswerExactQuote === true ? 'true' : 'false';
   const confidence = Number.isFinite(item.confidence) ? String(item.confidence) : 'unknown';

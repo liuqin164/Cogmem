@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
-import { phaseFor, phaseGist, PROVISIONAL_PHASE_THRESHOLDS } from '../src/recall/PhaseProjection.js';
+import { phaseFor, phaseGist, projectPhaseItems, PROVISIONAL_PHASE_THRESHOLDS } from '../src/recall/PhaseProjection.js';
+import { recallItemLines } from '../src/host/RecallBlock.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const DAY = 86_400_000;
@@ -100,4 +101,59 @@ test('with the projection on, an item carrying no timestamp is left exactly as i
   } finally {
     kernel.close();
   }
+});
+
+/**
+ * #171: a gist is a pointer, not the memory.
+ *
+ * `projectPhases` used to push `{ ...item, ...phaseGist(item) }`, which put the whole record — text, sourceContext
+ * and all — back beside the whitelist the module describes. These items are constructed rather than seeded because
+ * the projection is pure: it reads `sourceAnchor.occurredAt`, which the lanes do not send yet (recorded above), so
+ * a lane fixture could not reach the gist path at all.
+ */
+test('a gist item carries the whitelist and not the body, and the renderer labels it', () => {
+  const body = 'The rollback plan for the harbour deployment was rehearsed twice and the runbook was updated afterwards, with the certificate rotation moved to the Tuesday window.';
+  expect(body.length).toBeGreaterThan(120);
+  const item = {
+    id: 'raw_ledger:old', sourceType: 'raw_ledger', displayTitle: 'Harbour rollback',
+    sourceAnchor: { eventId: 'evt-old', occurredAt: NOW - 20 * DAY },
+    text: body,
+    sourceContext: { event: { text: body } },
+  };
+
+  const projected = projectPhaseItems([item], 'harbour deployment rollback', NOW);
+  expect(projected.gist).toBe(1);
+  const gist = projected.items[0] as Record<string, unknown>;
+  expect(gist.phase).toBe('gist');
+  expect(gist.text).toBeUndefined();
+  expect(gist.sourceContext).toBeUndefined();
+  // The one thing that does travel is bounded and named for what it is.
+  expect(String(gist.agent_interpretation_not_fact).length).toBeLessThanOrEqual(120);
+  expect(JSON.stringify(gist)).not.toContain(body);
+
+  const rendered = recallItemLines(gist, {}, 'full').join('\n');
+  expect(rendered).not.toContain(body);
+  expect(rendered).toContain('agent interpretation, not fact');
+});
+
+/**
+ * #171: dormant leaves the default lane but keeps a keyword entry.
+ *
+ * The two items share every word of the first question, which is exactly the retrieval that already happened; the
+ * second question names one of them with a word only it carries, and only that one comes back.
+ */
+test('a dormant memory is reached by a keyword that names it, and not by the words the whole batch shares', () => {
+  const old = { sourceType: 'raw_ledger', sourceAnchor: { occurredAt: NOW - 200 * DAY } };
+  const items = [
+    { ...old, id: 'a', text: 'The deploy window discussion for zebraquay ferry timetable.' },
+    { ...old, id: 'b', text: 'The deploy window discussion for the other service.' },
+  ];
+
+  const shared = projectPhaseItems(items, 'deploy window', NOW);
+  expect(shared.items).toHaveLength(0);
+  expect(shared.dormant).toBe(2);
+
+  const named = projectPhaseItems(items, 'zebraquay deploy window', NOW);
+  expect(named.items.map((item) => item.id)).toEqual(['a']);
+  expect(named.dormant).toBe(1);
 });
