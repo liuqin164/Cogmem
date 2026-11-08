@@ -3,8 +3,11 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadCogmemConfig } from '../src/config/CogmemConfig.js';
 import { resolveTaxonomy } from '../src/config/MemoryTaxonomy.js';
-import { MEMORY_FRAME_EPISODE_KINDS } from '../src/semantic/MemoryFrameTypes.js';
+import { createMemoryKernel } from '../src/factory.js';
+import { deterministicFrameFallback, StructuredSemanticProcessor } from '../src/semantic/index.js';
+import { MEMORY_FRAME_EPISODE_KINDS, type MemoryFrameV1 } from '../src/semantic/MemoryFrameTypes.js';
 import { memoryFrameSystemPrompt } from '../src/semantic/SemanticProcessorPrompt.js';
+import { frameSourceFingerprint } from '../src/store/MemoryFrameStore.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 /** Writes a workspace with a project config, the way a user would. */
@@ -53,4 +56,37 @@ test('the fallback never throws, so a typo cannot stop Cogmem from starting', ()
   expect(resolveTaxonomy({ episode_kinds: 'not an array' }).source).toBe('invalid-fell-back');
   expect(resolveTaxonomy(null).source).toBe('default');
   expect(resolveTaxonomy('nonsense').source).toBe('invalid-fell-back');
+});
+
+/**
+ * A custom vocabulary has to survive the two validators between the prompt and the database.
+ *
+ * Measured on the box (#132): with `[taxonomy] episode_kinds = [story, mood]`, a real provider returned an
+ * episode kind the shipped vocabulary does not contain and Dream answered
+ * `invalid_memory_frame_output:invalid_episode_kind` — the prompt said `story, mood`, but the processor
+ * validated against the shipped list because neither it nor the frame store was told the project's taxonomy.
+ */
+test('a custom episode kind passes the processor and the frame store, not just the prompt', async () => {
+  const custom = resolveTaxonomy({ episode_kinds: [
+    { id: 'story', description: 'What the user told me about their day.' },
+    { id: 'mood', description: 'How the user sounded.' },
+  ] });
+  const frame = {
+    ...deterministicFrameFallback({ projectId: 'p', episodeId: 'ep-story', events: [{ eventId: 'evt-1', occurredAt: 0 } as never], now: 0 }),
+    episodeKind: 'story' as MemoryFrameV1['episodeKind'],
+  };
+
+  const processor = new StructuredSemanticProcessor(async () => frame, custom.taxonomy);
+  const processed = await processor.process({ projectId: 'p', episodeId: 'ep-story', events: [{ eventId: 'evt-1' } as never] });
+  expect(processed.episodeKind).toBe('story');
+
+  const dir = makeTempDir('cogmem-taxonomy-frame-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec', taxonomy: custom });
+  try {
+    const saved = kernel.memoryFrameStore.save({ frame, sourceFingerprint: frameSourceFingerprint(['evt-1'], 'ep-story') });
+    expect(saved.episodeKind).toBe('story');
+    expect(kernel.memoryFrameStore.get(saved.frameId)?.episodeKind).toBe('story');
+  } finally {
+    kernel.close();
+  }
 });

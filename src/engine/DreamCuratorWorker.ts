@@ -154,7 +154,7 @@ export class DreamCuratorWorker {
             schemaVersion: 'memory_frame.v1', promptVersion: MEMORY_FRAME_PROMPT_VERSION,
             projectId: input.projectId, episodeId: input.episodeId, episodeType: input.episodeType,
             events: input.events.map((event) => ({ eventId: event.eventId, role: event.role, occurredAt: event.occurredAt, text: eventTextForMemory(event) })),
-          }))))
+          }))), this.deps.taxonomy)
           : this.deps.semanticProcessor;
         if (!processor) {
           semanticProcessorUnavailable = true;

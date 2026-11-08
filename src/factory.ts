@@ -865,7 +865,7 @@ export class MemoryKernel {
     installRuntimeProvenanceGuards(db);
     this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
     this.memoryAtlasStore = new MemoryAtlasStore(db, this.projectClock.timeZone);
-    this.memoryFrameStore = new MemoryFrameStore(db);
+    this.memoryFrameStore = new MemoryFrameStore(db, this.taxonomyResolution.taxonomy);
     // A frame's preference and relationship relations also belong in the belief layer:
     // the frame answers "what did this episode say", the belief path answers "what is
     // true now and what did it replace", and that is the one recall reads (#102).
