@@ -2734,7 +2734,13 @@ function isFillerProbe(probe: string): boolean {
 const SECRET_WITHHELD_COUNTS = new WeakMap<object, number>();
 
 /** Whether this event's own metadata says it holds something secret-looking. */
-function eventHoldsSecretMark(event: MemoryEvent): boolean {
+/**
+ * Whether an event carries the secret mark (#142).
+ *
+ * Exported because the explanation surface reads event windows of its own and must apply the same rule; a second
+ * hand-written predicate is how a window and a lane drift apart.
+ */
+export function eventHoldsSecretMark(event: MemoryEvent): boolean {
   const metadata = (event.payload as { metadata?: { secretFindings?: { total?: number }; secretFindingsAssistant?: { total?: number } } })?.metadata;
   return Number(metadata?.secretFindings?.total ?? 0) > 0 || Number(metadata?.secretFindingsAssistant?.total ?? 0) > 0;
 }
