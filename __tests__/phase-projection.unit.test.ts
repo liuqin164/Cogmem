@@ -134,6 +134,18 @@ test('a gist item carries the whitelist and not the body, and the renderer label
   const rendered = recallItemLines(gist, {}, 'full').join('\n');
   expect(rendered).not.toContain(body);
   expect(rendered).toContain('agent interpretation, not fact');
+
+  // #181: the budget-demoted form carries the same label. `recallItemLines` returns the index line before the gist
+  // branch, and the title chain reads `text` — which a gist deliberately does not have — so this line was blank.
+  const indexed = recallItemLines(gist, {}, 'index').join('\n');
+  expect(indexed).toContain('index[raw_ledger:old]');
+  expect(indexed).toContain('agent interpretation, not fact');
+  expect(indexed).not.toContain(body);
+
+  // A non-gist index line is untouched by the gist branch: same fields, byte for byte.
+  expect(recallItemLines({ id: 'plain', text: 'hello world' }, {}, 'index')).toEqual([
+    '- index[plain] hello world · unknown · cogmem memory show --event &lt;id&gt; --json',
+  ]);
 });
 
 /**

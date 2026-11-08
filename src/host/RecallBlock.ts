@@ -264,6 +264,21 @@ export interface RecallItemFit {
 }
 
 /**
+ * The label a gist carries wherever it is rendered (#171).
+ *
+ * A gist is a generated pointer, not a record, and the reader has to be told so in both forms: the full line, and
+ * the index line a budget squeeze demotes it to (#181).
+ */
+const GIST_LABEL = '[gist — agent interpretation, not fact]';
+
+/** The bounded line a gist shows, or the fact that only its provenance travelled. */
+function gistText(item: Payload): string {
+  return typeof item.agent_interpretation_not_fact === 'string' && item.agent_interpretation_not_fact.trim()
+    ? String(item.agent_interpretation_not_fact)
+    : 'provenance only';
+}
+
+/**
  * The fields that stand for an item when the whole thing is not what the caller wants (#131).
  *
  * One source for both forms: `recallIndexLine` renders exactly these fields into the prompt's one-line
@@ -272,7 +287,11 @@ export interface RecallItemFit {
  */
 export function recallIndexFields(item: Payload): { id: string; title: string; when: string; sourceLocator: string } {
   const id = String(item.id || item.canonicalId || 'unknown');
-  const title = String(item.displayTitle || item.text || '');
+  // A gist carries no `text` by design (#171), so the usual title chain leaves it blank and the label the gist
+  // exists to carry is lost exactly where the budget is tightest. Its one line is the titled interpretation.
+  const title = String(item.phase === 'gist'
+    ? `${GIST_LABEL} ${gistText(item)}`
+    : item.displayTitle || item.text || '');
   const when = Number.isFinite(item.sourceAnchor?.occurredAt) ? new Date(Number(item.sourceAnchor?.occurredAt)).toISOString().slice(0, 10)
     : item.sourceAnchor?.eventId ? String(item.sourceAnchor.eventId)
     : 'unknown';
@@ -416,10 +435,7 @@ export function recallItemLines(
   // line would render `undefined`; and the one thing it does carry is named `agent_interpretation_not_fact`, so
   // the label travels with it rather than being dropped — a reader must not mistake a generated line for a record.
   if (item.phase === 'gist') {
-    const interpretation = typeof item.agent_interpretation_not_fact === 'string' && item.agent_interpretation_not_fact.trim()
-      ? serializeUntrustedMemory(item.agent_interpretation_not_fact, 500)
-      : 'provenance only';
-    lines.push(`- [gist — agent interpretation, not fact] ${interpretation}`);
+    lines.push(`- ${GIST_LABEL} ${serializeUntrustedMemory(gistText(item), 500)}`);
   } else {
     lines.push('- ' + serializeUntrustedMemory(item.text, 500) + source);
   }
