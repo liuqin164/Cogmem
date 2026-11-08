@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FacetQueryPlanner } from '../src/atlas/FacetQueryPlanner.js';
 import { DEFAULT_TAXONOMY, resolveTaxonomy, validateTaxonomy, type MemoryTaxonomy } from '../src/config/MemoryTaxonomy.js';
-import { MEMORY_FRAME_EPISODE_KINDS } from '../src/semantic/MemoryFrameTypes.js';
+import { MEMORY_FRAME_EPISODE_KINDS, normalizeEpisodeKind } from '../src/semantic/MemoryFrameTypes.js';
 import { MEMORY_FRAME_JSON_SCHEMA, memoryFrameJsonSchema } from '../src/semantic/MemoryFrameSchema.js';
 import { MEMORY_FRAME_SYSTEM_PROMPT, memoryFrameSystemPrompt } from '../src/semantic/SemanticProcessorPrompt.js';
 import { validateMemoryFrame } from '../src/semantic/MemoryFrameValidator.js';
@@ -122,4 +122,25 @@ test('memory_kind_rules is an unknown field, and the marker field is gone', () =
   expect(validateTaxonomy({ memory_kind_rules: [{ id: 'bug', pattern: 'bug' }] }).reasons).toContain('unknown_field:memory_kind_rules');
   expect(resolveTaxonomy({ memory_kind_rules: [{ id: 'bug', pattern: 'bug' }] }).source).toBe('invalid-fell-back');
   expect(Object.keys(DEFAULT_TAXONOMY)).not.toContain('memoryKindMarkers');
+});
+
+/**
+ * #182: the frame kind is an open `string`, not a closed union.
+ *
+ * The valid set is the project's `[taxonomy] episode_kinds` and is only known at runtime, so the type cannot be
+ * the shipped nine; `#175`/`#179` let a custom kind through `normalizeEpisodeKind` with an `as` cast at the
+ * boundary. `bun run typecheck` is the real gate — removing the cast while the union is still there stops
+ * compiling — and this keeps the shape visible to the suite too. Runtime validation is unchanged: a kind the
+ * resolved vocabulary does not declare is still rejected.
+ */
+test('the frame kind is an open string, with no cast left at the boundary', () => {
+  const source = readFileSync(join(import.meta.dir, '..', 'src/semantic/MemoryFrameTypes.ts'), 'utf8');
+  expect(source).toContain('episodeKind: string;');
+  expect(source).not.toContain("episodeKind: 'discussion'");
+  expect(source).not.toContain("as MemoryFrameV1['episodeKind']");
+  // The value crosses as-is; the gate is the resolved vocabulary, not the type.
+  const kind = normalizeEpisodeKind('story', ['story', 'mood', 'other']);
+  expect(kind).toBe('story');
+  expect(validateMemoryFrame(frameWithKind('story')).errors).toContain('invalid_episode_kind');
+  expect(validateMemoryFrame(frameWithKind('story'), { taxonomy: COMPANION }).valid).toBe(true);
 });

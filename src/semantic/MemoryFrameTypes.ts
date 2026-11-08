@@ -61,7 +61,13 @@ export interface MemoryFrameV1 {
   title: string;
   summary: string;
   primaryLanguage?: string;
-  episodeKind: 'discussion' | 'operation' | 'decision' | 'correction' | 'diagnostic' | 'planning' | 'status_update' | 'preference' | 'other';
+  /**
+   * The project's classification for this episode. A `string`, not a closed union (#182): the project's
+   * `[taxonomy] episode_kinds` decides what is valid, and that list is only known at runtime — a union of the
+   * shipped nine made every value outside it a type error at the boundary and forced a cast to let it through.
+   * `validateMemoryFrame` still rejects a kind the resolved vocabulary does not declare.
+   */
+  episodeKind: string;
   nodes: MemoryFrameNode[];
   relations: MemoryFrameRelation[];
   temporalReferences: TemporalReference[];
@@ -94,9 +100,9 @@ export const MEMORY_FRAME_EPISODE_KINDS = ['discussion', 'operation', 'decision'
  * The sentinel stays `other`, so a vocabulary that does not declare it has no valid fallback kind — that is a loud
  * per-episode failure rather than a frame the project's own list rejects.
  */
-export function normalizeEpisodeKind(value: unknown, episodeKinds: readonly string[] = MEMORY_FRAME_EPISODE_KINDS): MemoryFrameV1['episodeKind'] {
+export function normalizeEpisodeKind(value: unknown, episodeKinds: readonly string[] = MEMORY_FRAME_EPISODE_KINDS): string {
   return typeof value === 'string' && episodeKinds.includes(value)
-    ? (value as MemoryFrameV1['episodeKind'])
+    ? value
     : 'other';
 }
 

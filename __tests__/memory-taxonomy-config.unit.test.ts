@@ -7,7 +7,7 @@ import { loadCogmemConfig } from '../src/config/CogmemConfig.js';
 import { resolveTaxonomy } from '../src/config/MemoryTaxonomy.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { deterministicFrameFallback, StructuredSemanticProcessor } from '../src/semantic/index.js';
-import { MEMORY_FRAME_EPISODE_KINDS, normalizeEpisodeKind, type MemoryFrameV1 } from '../src/semantic/MemoryFrameTypes.js';
+import { MEMORY_FRAME_EPISODE_KINDS, normalizeEpisodeKind } from '../src/semantic/MemoryFrameTypes.js';
 import { memoryFrameSystemPrompt } from '../src/semantic/SemanticProcessorPrompt.js';
 import { frameSourceFingerprint } from '../src/store/MemoryFrameStore.js';
 import { makeTempDir } from './helpers/tmp.js';
@@ -95,7 +95,7 @@ test('a custom episode kind passes the processor and the frame store, not just t
   ] });
   const frame = {
     ...deterministicFrameFallback({ projectId: 'p', episodeId: 'ep-story', events: [{ eventId: 'evt-1', occurredAt: 0 } as never], now: 0 }),
-    episodeKind: 'story' as MemoryFrameV1['episodeKind'],
+    episodeKind: 'story',
   };
 
   const processor = new StructuredSemanticProcessor(async () => frame, custom.taxonomy);
