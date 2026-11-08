@@ -934,12 +934,6 @@ export class KernelAgentMemoryBackend {
     }
     const result = this.recallCore(query);
     const gated = this.gateSocialEntries(result.items ?? [], query, forensic);
-    const secretWithheld = SECRET_WITHHELD_COUNTS.get(this) ?? 0;
-    if (secretWithheld > 0 && result.decisionTrace) {
-      result.decisionTrace.suppressed = mergeSuppressions(result.decisionTrace.suppressed, [
-        { reason: 'secret_bearing_withheld', count: secretWithheld },
-      ]);
-    }
     // The secret mark is enforced here, and not only in the raw lane's scope test (#142). Measured while fixing
     // this: with the event withheld from the raw lane, the same turn still came back as an item from another
     // lane — text and `sourceContext.event.text` both — so a caller received the key with
@@ -948,14 +942,20 @@ export class KernelAgentMemoryBackend {
     const secretKept = forensic
       ? gated.items
       : gated.items.filter((item) => !this.itemHoldsSecretMark(item));
+    // The raw lane counts events it dropped while it ran; this second half counts items no raw window owned.
+    // Both are merged here, before the trace is built: the item-level count used to be written to the map after
+    // the merge, so a recall that withheld only a compiled item reported no reason at all (found while deleting
+    // the read-time text rescan, #169).
+    const secretWithheld = (SECRET_WITHHELD_COUNTS.get(this) ?? 0) + (gated.items.length - secretKept.length);
+    if (secretWithheld > 0 && result.decisionTrace) {
+      result.decisionTrace.suppressed = mergeSuppressions(result.decisionTrace.suppressed, [
+        { reason: 'secret_bearing_withheld', count: secretWithheld },
+      ]);
+    }
     // The agent scope of compiled material (#143), in the same place and off the same chain as the secret mark.
-    // The raw lane has always scoped its own events, but a compiled product — a neuron, an Atlas card — is not an
+    // The raw lane has always scoped its own events, but a compiled product — a neuron or an Atlas card — is not an
     // event, so it was readable by every agent in the project. The shared lane is skipped: it is the one
     // deliberate cross-agent channel, and its items say so.
-    const secretWithheldByItems = gated.items.length - secretKept.length;
-    if (secretWithheldByItems > 0 && result.decisionTrace) {
-      SECRET_WITHHELD_COUNTS.set(this, (SECRET_WITHHELD_COUNTS.get(this) ?? 0) + secretWithheldByItems);
-    }
     // Dropping an item for scope is not the same fact as withholding it for a secret, so it is not counted as one:
     // the trace's `secret_bearing_withheld` has to keep meaning what it says.
     const agentKept = query.agentId
