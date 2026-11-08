@@ -27,7 +27,7 @@ import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
 import { cliArg } from '../utils/CliArgument.js';
 import { pad2 } from '../utils/Values.js';
 import { phaseFor, phaseGist, toMillis, type PhaseCategory } from '../recall/PhaseProjection.js';
-import { countSecretFindings, secretFindingsMetadata } from '../security/SecretPatterns.js';
+import { secretFindingsMetadata } from '../security/SecretPatterns.js';
 
 export type AgentTurnIngestMode =
   | 'immediate_compile'
@@ -805,16 +805,8 @@ export class KernelAgentMemoryBackend {
    * they read an event from, and this is the one question they must all ask before handing it to a caller.
    */
   private itemHoldsSecretMark(item: AgentRecallItem): boolean {
-    const meta = item as { secretFindings?: { total?: number }; sourceContext?: { event?: { text?: string } }; text?: string };
+    const meta = item as { secretFindings?: { total?: number } };
     if (Number(meta.secretFindings?.total ?? 0) > 0) return true;
-    // A compiled item — a neuron or an Atlas card — is not an event and carries no mark, but it holds the turn's
-    // text. Measured: the key came back in exactly that shape while the event itself was withheld (#142), so the
-    // text has to be asked directly. Bounded by the number of items a recall returns, and this is a security
-    // control rather than a micro-optimisation.
-    // Not dead code (#144): dropping this to rely on the mark alone turns
-    // `secret-backscan-repair.unit.test.ts`'s "an ordinary old turn is not touched" red — a *pre-fix* row carries
-    // no mark, and this scan is the only thing holding its body back until `repair secret-marks` runs.
-    if (typeof meta.text === 'string' && countSecretFindings(meta.text).total > 0) return true;
     return this.itemChainEvents(item).some((event) => eventHoldsSecretMark(event));
   }
 

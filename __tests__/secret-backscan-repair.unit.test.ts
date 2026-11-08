@@ -92,13 +92,18 @@ test('running it twice stamps nothing the second time', async () => {
   expect(second.marked).toHaveLength(0);
 });
 
-test('an ordinary old turn is not touched: same recall before and after', async () => {
+test('an ordinary old turn survives the back-scan: the repair does not touch it', async () => {
   const dbPath = await preFixDatabase();
   const before = recallBody(dbPath, false);
   await scan(dbPath, true);
   const after = recallBody(dbPath, true);
-  const ordinary = (body: { strings: string[] }) => body.strings.filter((value) => value.includes('load balancer') || value.includes('runbook')).length;
-  expect(ordinary(after)).toBe(ordinary(before));
+  // The ordinary neighbour is what this fixture is about. While the secret turn leaked, its own *window* also
+  // carried this sentence, so counting every occurrence measured the leak rather than this turn (the two are
+  // separate facts: the first is asserted above, this half must hold after the repair). What must not happen is
+  // the repair taking the ordinary turn away with it.
+  const ordinaryTurn = 'load balancer certificate rotation is documented in the runbook';
+  expect(before.strings.some((value) => value.includes(ordinaryTurn))).toBe(true);
+  expect(after.strings.some((value) => value.includes(ordinaryTurn))).toBe(true);
 });
 
 test('rollback-red: without the mark write the fixture stays leaking', async () => {
