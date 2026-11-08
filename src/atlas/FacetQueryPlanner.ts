@@ -1,8 +1,7 @@
 import { extractEntityCues } from '../utils/EntityCueExtractor.js';
-import { ACTION_KIND_RULES } from '../utils/ActionKindRegistry.js';
 import { localDateFor, localDateRange, nextCivilDate, resolveTimeZone } from '../utils/LocalDateContext.js';
 import { pad2 } from '../utils/Values.js';
-import { DEFAULT_TAXONOMY } from '../config/MemoryTaxonomy.js';
+import { DEFAULT_TAXONOMY, type MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 
 export type FacetType = 'time' | 'topic' | 'issue' | 'entity' | 'session' | 'thread' | 'memoryKind' | 'actionKind' | 'state' | 'place';
 export type FacetOperator = 'intersection' | 'union';
@@ -79,6 +78,8 @@ const TOPIC_RULES = [
 ];
 
 export class FacetQueryPlanner {
+  constructor(private readonly taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY) {}
+
   plan(query: string, options: FacetQueryPlannerOptions): FacetQueryPlan {
     const normalized = query.trim();
     const facets: PlannedFacet[] = [];
@@ -113,11 +114,14 @@ export class FacetQueryPlanner {
       }
     }
 
-    for (const facet of parseKindFacets(normalized, options.projectId)) facets.push(facet);
+    for (const facet of this.parseKindFacets(normalized, options.projectId)) facets.push(facet);
     for (const facet of parseStatePlaceFacets(normalized, options.projectId)) facets.push(facet);
     if (actionHistory && (!facets.some((facet) => facet.type === 'actionKind') || !hasSpecificActionCue(normalized))) {
-      for (const value of ['started', 'installed', 'configured', 'restarted', 'stopped', 'operated', 'implemented', 'debugged']) {
-        facets.push(withNodeId({ type: 'actionKind', value, label: value, relation: 'HAS_ACTION_KIND' }, options.projectId));
+      // "What did I have you do" with no verb of its own means every action kind this project knows (#170): the
+      // list comes from the project's taxonomy, not from the shipped registry, so a project that replaced its
+      // action vocabulary is asked about its own.
+      for (const rule of this.taxonomy.actionKinds) {
+        facets.push(withNodeId({ type: 'actionKind', value: rule.kind, label: rule.kind, relation: 'HAS_ACTION_KIND' }, options.projectId));
       }
     }
 
@@ -132,6 +136,25 @@ export class FacetQueryPlanner {
       keywords: extractKeywords(normalized),
       query: normalized,
     };
+  }
+
+  /**
+   * The kind facets a query names: the memory-kind rules and the action vocabulary, both read from the taxonomy
+   * this planner was built with (#132, #170).
+   *
+   * The planner used to reach for `DEFAULT_TAXONOMY.memoryKindRules` and the global `ACTION_KIND_RULES`, so a
+   * project's `[taxonomy]` never reached it however the rest of the pipeline was wired; `MemoryAtlasService` now
+   * hands it the resolved taxonomy.
+   */
+  private parseKindFacets(query: string, projectId: string): PlannedFacet[] {
+    const facets: PlannedFacet[] = [];
+    for (const rule of this.taxonomy.memoryKindRules) {
+      if (rule.pattern.test(query)) facets.push(withNodeId({ type: 'memoryKind', value: rule.id, label: rule.id, relation: 'HAS_MEMORY_KIND' }, projectId));
+    }
+    for (const rule of this.taxonomy.actionKinds) {
+      if (rule.pattern.test(query)) facets.push(withNodeId({ type: 'actionKind', value: rule.kind, label: rule.kind, relation: 'HAS_ACTION_KIND' }, projectId));
+    }
+    return facets;
   }
 }
 
@@ -156,19 +179,6 @@ function isConceptFacetEntity(entity: { label: string; id: string }, facets: Pla
     const facetSlug = facet.value.split('/').pop()?.toLocaleLowerCase();
     return label === facetLabel || label.includes(facetLabel) || Boolean(facetSlug && entity.id === facetSlug);
   });
-}
-
-function parseKindFacets(query: string, projectId: string): PlannedFacet[] {
-  const facets: PlannedFacet[] = [];
-  // The rules live in the taxonomy (#132): one definition, read here rather than restated.
-  const memoryKindRules: Array<[string, RegExp]> = DEFAULT_TAXONOMY.memoryKindRules.map((rule) => [rule.id, rule.pattern]);
-  for (const [value, test] of memoryKindRules) {
-    if (test.test(query)) facets.push(withNodeId({ type: 'memoryKind', value, label: value, relation: 'HAS_MEMORY_KIND' }, projectId));
-  }
-  for (const rule of ACTION_KIND_RULES) {
-    if (rule.pattern.test(query)) facets.push(withNodeId({ type: 'actionKind', value: rule.kind, label: rule.kind, relation: 'HAS_ACTION_KIND' }, projectId));
-  }
-  return facets;
 }
 
 /**

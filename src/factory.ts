@@ -873,7 +873,7 @@ export class MemoryKernel {
       projectFrameRelationsToBeliefs(this.beliefStore, frame, now);
     });
     this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore, this.memoryFrameStore);
-    this.memoryAtlasService = new MemoryAtlasService(this.memoryAtlasStore, this.eventStore);
+    this.memoryAtlasService = new MemoryAtlasService(this.memoryAtlasStore, this.eventStore, this.taxonomyResolution.taxonomy);
     this.multidimensionalQueryPlanner = new MultidimensionalQueryPlanner();
     this.atlasPathRetriever = new AtlasPathRetriever(this.memoryAtlasService, this.multidimensionalQueryPlanner);
     this.entityGovernanceService = new EntityGovernanceService(

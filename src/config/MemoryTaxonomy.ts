@@ -15,7 +15,6 @@
  */
 import { ACTION_KIND_RULES, type ActionKindRule } from '../utils/ActionKindRegistry.js';
 import { RELATION_ENDPOINTS_TEXT } from '../semantic/RelationConstraintRegistry.js';
-import { MEMORY_KIND_MARKERS } from '../atlas/MemoryAtlasQueryCompiler.js';
 import { MEMORY_FRAME_EPISODE_KINDS } from '../semantic/MemoryFrameTypes.js';
 
 export interface TaxonomyKind {
@@ -30,10 +29,9 @@ export interface TaxonomyRule {
 
 export interface MemoryTaxonomy {
   episodeKinds: TaxonomyKind[];
-  /** The rules the facet planner matches a query against. */
+  /** The rules the facet planner matches a query against. Defaults only: not a `[taxonomy]` key (#170). */
   memoryKindRules: TaxonomyRule[];
-  /** The markers the Atlas query compiler matches a query against. */
-  memoryKindMarkers: TaxonomyRule[];
+  /** The action vocabulary, and the planner's action-kind rules. A project replaces it with `action_kinds`. */
   actionKinds: Array<ActionKindRule & { description: string }>;
   /** Relation names, as the processor prompt lists them. */
   relationNames: string[];
@@ -68,9 +66,6 @@ const PRESENTATION_MEMORY_KIND_RULES: TaxonomyRule[] = [
   { id: 'plan', pattern: /(计划|下一步|策略|plan)/i },
 ];
 
-/** The markers the Atlas query compiler used, unchanged. */
-const PRESENTATION_MEMORY_KIND_MARKERS: TaxonomyRule[] = MEMORY_KIND_MARKERS.map(([pattern, id]) => ({ id, pattern }));
-
 /**
  * The relation names exactly as the prompt lists them today, in that order. Kept as data rather than derived
  * from the registry, because deriving it would reorder a prompt sentence that hosts already read — the ticket's
@@ -84,11 +79,39 @@ const PRESENTATION_RELATION_NAMES = [
   'FAMILY_OF',
 ];
 
+/** The action vocabulary as the shipped registry defines it, with the one-line meanings. */
+function actionKindsFromRegistry(): Array<ActionKindRule & { description: string }> {
+  return ACTION_KIND_RULES.map((rule) => ({ ...rule, description: ACTION_KIND_DESCRIPTIONS[rule.kind] ?? '' }));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * A project's action vocabulary.
+ *
+ * An entry names a `kind`; `label`, `verb` and `pattern` are optional. A known kind keeps the shipped label and
+ * pattern unless the project overrides them, so `action_kinds = [{ kind = "started" }]` narrows the vocabulary
+ * without silently dropping the keyword rule behind it. A kind the registry does not know matches its own name,
+ * which is what makes a project-invented action findable at all.
+ */
+function actionKindsFromConfig(entries: Array<Record<string, unknown>>): Array<ActionKindRule & { description: string }> {
+  const known = new Map(ACTION_KIND_RULES.map((rule) => [rule.kind, rule] as const));
+  return entries.map((entry) => {
+    const kind = String(entry.kind);
+    const base = known.get(kind);
+    const label = typeof entry.label === 'string' && entry.label.trim() ? entry.label : base?.label ?? kind;
+    const verb = typeof entry.verb === 'string' && entry.verb.trim() ? entry.verb : base?.verb ?? kind;
+    const patternSource = typeof entry.pattern === 'string' && entry.pattern.trim() ? entry.pattern : base?.pattern.source ?? escapeRegExp(kind);
+    return { kind, label, verb, pattern: new RegExp(patternSource, 'iu'), description: String(entry.description ?? '') };
+  });
+}
+
 export const DEFAULT_TAXONOMY: MemoryTaxonomy = {
   episodeKinds: MEMORY_FRAME_EPISODE_KINDS.map((id) => ({ id, description: EPISODE_KIND_DESCRIPTIONS[id] ?? '' })),
   memoryKindRules: PRESENTATION_MEMORY_KIND_RULES,
-  memoryKindMarkers: PRESENTATION_MEMORY_KIND_MARKERS,
-  actionKinds: ACTION_KIND_RULES.map((rule) => ({ ...rule, description: ACTION_KIND_DESCRIPTIONS[rule.kind] ?? '' })),
+  actionKinds: actionKindsFromRegistry(),
   relationNames: PRESENTATION_RELATION_NAMES,
   relationEndpointsText: RELATION_ENDPOINTS_TEXT,
 };
@@ -101,11 +124,16 @@ export interface TaxonomyValidation {
 /**
  * Unknown fields, duplicate ids and empty descriptions are the three ways a taxonomy file goes wrong. It fails
  * loudly here so the caller can decide; the caller falls back to the default and says so in `doctor`.
+ *
+ * The `[taxonomy]` surface is `episode_kinds`, `action_kinds` and `relation_names` (#170). `memory_kind_rules`
+ * used to be accepted and then dropped on the floor — validated as present, never validated as content, never
+ * applied — so a project could set it and `doctor` would still say `custom`. It is an unknown field now, which
+ * is the same answer any other key nobody reads gets, and it falls back loudly rather than pretending.
  */
 export function validateTaxonomy(input: unknown): TaxonomyValidation {
   const reasons: string[] = [];
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, reasons: ['taxonomy_must_be_an_object'] };
-  const allowed = new Set(['episode_kinds', 'memory_kind_rules', 'action_kinds', 'relation_names']);
+  const allowed = new Set(['episode_kinds', 'action_kinds', 'relation_names']);
   for (const key of Object.keys(input as Record<string, unknown>)) {
     if (!allowed.has(key)) reasons.push(`unknown_field:${key}`);
   }
@@ -128,9 +156,20 @@ export function validateTaxonomy(input: unknown): TaxonomyValidation {
   const episodeKinds = list((input as Record<string, unknown>).episode_kinds, 'episode_kinds');
   const actionKinds = list((input as Record<string, unknown>).action_kinds, 'action_kinds');
   checkIds(episodeKinds, 'episode_kinds', 'id');
-  checkIds(actionKinds, 'action_kinds', 'id');
+  // The action kind's id key is `kind`, not `id` (#170). With `id` every well-formed `action_kinds` entry was
+  // judged missing its id, the whole section fell back to the default, and the reason named the wrong fault.
+  checkIds(actionKinds, 'action_kinds', 'kind');
   for (const entry of episodeKinds) {
     if (entry?.description === undefined) reasons.push(`missing_description:${String(entry?.id ?? 'unknown')}`);
+  }
+  // A pattern a project supplies is compiled when the vocabulary is resolved, so an uncompilable one has to be
+  // caught here rather than throwing inside `resolveTaxonomy`.
+  for (const entry of actionKinds) {
+    const pattern = entry?.pattern;
+    if (pattern === undefined) continue;
+    const kind = String(entry?.kind ?? 'unknown');
+    if (typeof pattern !== 'string') { reasons.push(`invalid_pattern:${kind}`); continue; }
+    try { new RegExp(pattern, 'iu'); } catch { reasons.push(`invalid_pattern:${kind}`); }
   }
   return { ok: reasons.length === 0, reasons };
 }
@@ -161,12 +200,14 @@ export function resolveTaxonomy(section: unknown): TaxonomyResolution {
   if (!validation.ok) return { taxonomy: DEFAULT_TAXONOMY, source: 'invalid-fell-back', reasons: validation.reasons };
   const raw = section as Record<string, unknown>;
   const episodeKinds = Array.isArray(raw.episode_kinds) ? raw.episode_kinds as Array<Record<string, unknown>> : undefined;
+  const actionKinds = Array.isArray(raw.action_kinds) ? raw.action_kinds as Array<Record<string, unknown>> : undefined;
   return {
     taxonomy: {
       ...DEFAULT_TAXONOMY,
       episodeKinds: episodeKinds
         ? episodeKinds.map((entry) => ({ id: String(entry.id), description: String(entry.description ?? '') }))
         : DEFAULT_TAXONOMY.episodeKinds,
+      actionKinds: actionKinds ? actionKindsFromConfig(actionKinds) : DEFAULT_TAXONOMY.actionKinds,
       relationNames: Array.isArray(raw.relation_names) ? raw.relation_names.map(String) : DEFAULT_TAXONOMY.relationNames,
     },
     source: 'custom',

@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { FacetQueryPlanner } from '../src/atlas/FacetQueryPlanner.js';
 import { loadCogmemConfig } from '../src/config/CogmemConfig.js';
 import { resolveTaxonomy } from '../src/config/MemoryTaxonomy.js';
 import { createMemoryKernel } from '../src/factory.js';
@@ -36,6 +37,26 @@ test('no taxonomy section means the shipped vocabulary, and nothing else changes
   expect(loaded.taxonomyStatus?.source).toBe('default');
   expect(loaded.taxonomyStatus?.reason ?? loaded.taxonomyStatus?.reasons).toEqual([]);
   expect(loaded.options.taxonomy?.taxonomy.episodeKinds.map((kind) => kind.id)).toEqual([...MEMORY_FRAME_EPISODE_KINDS]);
+});
+
+/**
+ * #170: the action vocabulary is a `[taxonomy]` key, and the planner is one of its consumers.
+ *
+ * `action_kinds` used to be validated with the wrong field name (so a good entry fell back) and the planner read
+ * the shipped registry instead of the project's list, so nothing a project wrote here reached a query. This walks
+ * the real path — file, loader, resolved taxonomy, planner — rather than a hand-built object.
+ */
+test('a project action vocabulary changes what the planner emits', () => {
+  const path = withConfig(`[taxonomy]\naction_kinds = [\n  { kind = "brewed", label = "煮", pattern = "煮咖啡|brewed" },\n  { kind = "started" },\n]\n`);
+  const loaded = loadCogmemConfig({ configPath: path, env: { HOME: '/nonexistent' } as never });
+  expect(loaded.taxonomyStatus?.source).toBe('custom');
+  const planner = new FacetQueryPlanner(loaded.options.taxonomy?.taxonomy);
+  const kindsOf = (query: string) => planner.plan(query, { projectId: 'p', now: 0 })
+    .facets.filter((facet) => facet.type === 'actionKind').map((facet) => facet.value);
+  // The project's own kind, through its pattern ...
+  expect(kindsOf('今天煮咖啡了吗')).toContain('brewed');
+  // ... and the shipped `installed` is absent because this project did not list it.
+  expect(kindsOf('安装还是启动')).toEqual(['started']);
 });
 
 test('a broken vocabulary falls back to the default and says why', () => {

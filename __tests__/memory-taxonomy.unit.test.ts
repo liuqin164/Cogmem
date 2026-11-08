@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FacetQueryPlanner } from '../src/atlas/FacetQueryPlanner.js';
-import { DEFAULT_TAXONOMY, validateTaxonomy, type MemoryTaxonomy } from '../src/config/MemoryTaxonomy.js';
+import { DEFAULT_TAXONOMY, resolveTaxonomy, validateTaxonomy, type MemoryTaxonomy } from '../src/config/MemoryTaxonomy.js';
 import { MEMORY_FRAME_EPISODE_KINDS } from '../src/semantic/MemoryFrameTypes.js';
 import { MEMORY_FRAME_JSON_SCHEMA, memoryFrameJsonSchema } from '../src/semantic/MemoryFrameSchema.js';
 import { MEMORY_FRAME_SYSTEM_PROMPT, memoryFrameSystemPrompt } from '../src/semantic/SemanticProcessorPrompt.js';
@@ -78,4 +78,48 @@ test('every shipped host skill states the default vocabulary from the one source
     const text = readFileSync(join(import.meta.dir, '..', file), 'utf8');
     expect({ file, teaches: text.includes(sentence) }).toEqual({ file, teaches: true });
   }
+});
+
+/**
+ * #170: the two mis-wired fields and the two dead ones.
+ *
+ * The planner's rules and its action vocabulary both come from the project's `[taxonomy]` now; the config key that
+ * was accepted and then dropped (`memory_kind_rules`) is an unknown field, and the consumer-less marker field is
+ * gone from the type.
+ */
+test('action_kinds judges existence by `kind`, the field the entries actually carry', () => {
+  // The old check read `id`, so this well-formed entry was judged `action_kinds_entry_without_id` and the whole
+  // section fell back with a reason naming the wrong fault.
+  expect(validateTaxonomy({ action_kinds: [{ kind: 'brewed', label: '煮', pattern: 'brewed' }] })).toEqual({ ok: true, reasons: [] });
+  expect(validateTaxonomy({ action_kinds: [{ id: 'brewed' }] }).reasons).toContain('action_kinds_entry_without_kind');
+  expect(validateTaxonomy({ action_kinds: [{ kind: 'brewed' }, { kind: 'brewed' }] }).reasons).toContain('duplicate_kind:brewed');
+  // A pattern that cannot compile is caught at validation, not thrown out of `resolveTaxonomy`.
+  expect(validateTaxonomy({ action_kinds: [{ kind: 'brewed', pattern: '(' }] }).reasons).toContain('invalid_pattern:brewed');
+});
+
+test('the planner follows the project action vocabulary, not the shipped one', () => {
+  const kindsOf = (planner: FacetQueryPlanner, query: string) => planner.plan(query, { projectId: 'p', now: 0 })
+    .facets.filter((facet) => facet.type === 'actionKind').map((facet) => facet.value);
+
+  // A project-invented kind is findable through its own pattern ...
+  const project = resolveTaxonomy({ action_kinds: [{ kind: 'brewed', label: '煮', pattern: '煮咖啡|brewed' }] });
+  expect(kindsOf(new FacetQueryPlanner(project.taxonomy), '今天煮咖啡了吗')).toContain('brewed');
+  expect(kindsOf(new FacetQueryPlanner(), '今天煮咖啡了吗')).not.toContain('brewed');
+
+  // ... and narrowing the vocabulary narrows the planner: `installed` is not in this project's list.
+  const narrowed = resolveTaxonomy({ action_kinds: [{ kind: 'started' }] });
+  expect(kindsOf(new FacetQueryPlanner(narrowed.taxonomy), '安装还是启动')).toEqual(['started']);
+  expect(kindsOf(new FacetQueryPlanner(), '安装还是启动').sort()).toEqual(['installed', 'started']);
+
+  // The generic "what did I have you do" expansion asks about the project's kinds too.
+  const generic = new FacetQueryPlanner(narrowed.taxonomy)
+    .plan('查查还记不记得我之前让你对 Hermes 做过什么', { projectId: 'p', now: 0 })
+    .facets.filter((facet) => facet.type === 'actionKind').map((facet) => facet.value);
+  expect(generic).toEqual(['started']);
+});
+
+test('memory_kind_rules is an unknown field, and the marker field is gone', () => {
+  expect(validateTaxonomy({ memory_kind_rules: [{ id: 'bug', pattern: 'bug' }] }).reasons).toContain('unknown_field:memory_kind_rules');
+  expect(resolveTaxonomy({ memory_kind_rules: [{ id: 'bug', pattern: 'bug' }] }).source).toBe('invalid-fell-back');
+  expect(Object.keys(DEFAULT_TAXONOMY)).not.toContain('memoryKindMarkers');
 });
