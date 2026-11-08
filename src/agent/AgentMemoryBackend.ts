@@ -1,6 +1,7 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
 import { excludeExplicitSpans } from '../context/ExplicitExclusion.js';
-import { SOCIAL_FILLER_TOKENS, classifySocialTurn, isSocialTurn } from '../context/SocialTurn.js';
+import { classifySocialTurn, isSocialTurn } from '../context/SocialTurn.js';
+import { socialTurnResources } from '../config/LanguagePacks.js';
 import type { MemoryAtlasCard, MemoryAtlasNode, MemoryAtlasRelatedCard, MemoryAtlasRelaxationStep } from '../atlas/MemoryAtlasTypes.js';
 import {
   memoryEventCharRange,
@@ -2687,8 +2688,21 @@ export function discriminativeProbes(text: string): string[] {
   return discriminativeProbesOf(text);
 }
 
-/** The characters the pleasantry vocabulary is made of, computed once. */
-const FILLER_CHARACTERS = new Set(SOCIAL_FILLER_TOKENS.join(''));
+/**
+ * The characters a pack's pleasantry vocabulary is made of, built once per pack.
+ *
+ * Keyed by the token array itself, so switching languages does not rebuild the set and the two packs cannot
+ * collide.
+ */
+const FILLER_CHARACTERS_BY_PACK = new WeakMap<readonly string[], Set<string>>();
+function fillerCharacters(tokens: readonly string[]): Set<string> {
+  let characters = FILLER_CHARACTERS_BY_PACK.get(tokens);
+  if (!characters) {
+    characters = new Set(tokens.join(''));
+    FILLER_CHARACTERS_BY_PACK.set(tokens, characters);
+  }
+  return characters;
+}
 
 /**
  * Whether a probe is made only of pleasantry characters — the shape a social overlap has.
@@ -2696,20 +2710,26 @@ const FILLER_CHARACTERS = new Set(SOCIAL_FILLER_TOKENS.join(''));
  * Character-level rather than token-level because the probes are n-grams: 「的收」 is a bigram of
  * 「好的收到」 and every character in it comes from the pleasantry vocabulary. A content character never
  * qualifies, which is what keeps an answer out of this rule.
+ *
+ * The vocabulary is read here, at call time (#174), not frozen into a module constant at import. The constant
+ * was built before `MemoryKernel`'s constructor called `setConfiguredLanguage`, so in an `en` project this half
+ * of the judgement token-checked against the Chinese pack while `classifySocialTurn` — which reads the pack per
+ * call — used English.
  */
 function isFillerProbe(probe: string): boolean {
   if (probe.length === 0) return false;
+  const tokens = socialTurnResources().fillerTokens;
   // Token coverage first, which is what keeps a latin word safe: 「later」 and 「ty」 contribute the
   // letters of 「retry」 to the character set, so a character test alone would call a content word
   // small talk.
   let rest = probe;
-  for (const token of SOCIAL_FILLER_TOKENS) {
+  for (const token of tokens) {
     while (rest.includes(token)) rest = rest.split(token).join('');
   }
   if (rest.length === 0) return true;
   // Then CJK n-grams, where the probes are bigrams of pleasantries like 「好的收到」 and the individual
   // characters are what can be checked. Never applied to a probe holding a non-CJK character.
-  return /^\p{Script=Han}+$/u.test(probe) && [...probe].every((character) => FILLER_CHARACTERS.has(character));
+  return /^\p{Script=Han}+$/u.test(probe) && [...probe].every((character) => fillerCharacters(tokens).has(character));
 }
 
 /**

@@ -18,13 +18,6 @@ import { socialTurnResources } from '../config/LanguagePacks.js';
  * incident, injecting one extra pleasantry is not. Anything the residue cannot disprove stays real.
  */
 
-/**
- * The filler vocabulary, for the two callers that need the token list itself rather than a verdict
- * (`AgentMemoryBackend`'s pleasantry-character set). Read from the pack at module load, so it is the
- * default pack unless `setConfiguredLanguage` ran before this module was imported — see #174.
- */
-export const SOCIAL_FILLER_TOKENS: readonly string[] = socialTurnResources().fillerTokens;
-
 const SKIPPABLE = /[\s\p{P}\p{S}]/u;
 
 function isPunctuationOnly(text: string): boolean {
