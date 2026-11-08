@@ -71,6 +71,30 @@ test('a broken vocabulary is refused loudly enough for the caller to fall back',
   expect(validateTaxonomy({ episode_kinds: [{ id: 'a', description: 'x' }] })).toEqual({ ok: true, reasons: [] });
 });
 
+/**
+ * #182: an empty list is a broken file, not a way to declare "none".
+ *
+ * `episode_kinds = []` passed the shape check and validated no entry, so `resolveTaxonomy` answered
+ * `source: custom` with an empty kind list — every frame was then `invalid_episode_kind` and the prompt read
+ * `episodeKind must be one of .`. The three lists now fall back to the shipped vocabulary together and say why.
+ */
+test('an empty vocabulary list falls back to the default instead of accepting nothing', () => {
+  for (const [field, section] of [
+    ['episode_kinds', { episode_kinds: [] }],
+    ['action_kinds', { action_kinds: [] }],
+    ['relation_names', { relation_names: [] }],
+  ] as const) {
+    expect(validateTaxonomy(section).reasons).toContain(`${field}_must_not_be_empty`);
+    const resolved = resolveTaxonomy(section);
+    expect({ field, source: resolved.source }).toEqual({ field, source: 'invalid-fell-back' });
+    expect(resolved.taxonomy.episodeKinds.map((kind) => kind.id)).toEqual([...MEMORY_FRAME_EPISODE_KINDS]);
+    expect(resolved.taxonomy.actionKinds).toEqual(DEFAULT_TAXONOMY.actionKinds);
+    expect(resolved.taxonomy.relationNames).toEqual(DEFAULT_TAXONOMY.relationNames);
+  }
+  // A non-empty list is still `custom`: the check did not turn the surface off.
+  expect(resolveTaxonomy({ episode_kinds: [{ id: 'story', description: 'x' }] })).toMatchObject({ source: 'custom' });
+});
+
 /** #132: a user learns the vocabulary from the host's own skill, and all three must say the same thing. */
 test('every shipped host skill states the default vocabulary from the one source', () => {
   const sentence = `Cogmem classifies each turn as one of these episode kinds: ${DEFAULT_TAXONOMY.episodeKinds.map((kind) => kind.id).join(', ')}.`;

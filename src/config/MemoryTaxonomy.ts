@@ -137,6 +137,10 @@ export function validateTaxonomy(input: unknown): TaxonomyValidation {
   const list = (value: unknown, field: string): Array<Record<string, unknown>> => {
     if (value === undefined) return [];
     if (!Array.isArray(value)) { reasons.push(`${field}_must_be_an_array`); return []; }
+    // Absent means "keep the default"; an empty list means a vocabulary that accepts no value at all, which is a
+    // broken file rather than a way to declare none (#182). Leaving it through resolved to `source: custom` with
+    // `episodeKinds: []`, so every frame was judged `invalid_episode_kind`.
+    if (value.length === 0) reasons.push(`${field}_must_not_be_empty`);
     return value as Array<Record<string, unknown>>;
   };
   const checkIds = (entries: Array<Record<string, unknown>>, field: string, idKey: string) => {
@@ -152,6 +156,9 @@ export function validateTaxonomy(input: unknown): TaxonomyValidation {
   };
   const episodeKinds = list((input as Record<string, unknown>).episode_kinds, 'episode_kinds');
   const actionKinds = list((input as Record<string, unknown>).action_kinds, 'action_kinds');
+  // `relation_names` is a list of strings rather than entries, so it needs the empty check without the id checks.
+  const relationNames = (input as Record<string, unknown>).relation_names;
+  if (Array.isArray(relationNames) && relationNames.length === 0) reasons.push('relation_names_must_not_be_empty');
   checkIds(episodeKinds, 'episode_kinds', 'id');
   // The action kind's id key is `kind`, not `id` (#170). With `id` every well-formed `action_kinds` entry was
   // judged missing its id, the whole section fell back to the default, and the reason named the wrong fault.
