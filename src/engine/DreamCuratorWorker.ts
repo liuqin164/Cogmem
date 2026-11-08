@@ -14,7 +14,6 @@ import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import type { CorrectionResolver } from '../episode/CorrectionResolver.js';
 import type { MemoryFrameStore } from '../store/MemoryFrameStore.js';
 import { frameSourceFingerprint } from '../store/MemoryFrameStore.js';
-import { deterministicFrameFallback } from '../semantic/DeterministicFrameFallback.js';
 import type { StructuredSemanticProcessor } from '../semantic/StructuredSemanticProcessor.js';
 import { StructuredSemanticProcessor as StructuredSemanticProcessorImpl } from '../semantic/StructuredSemanticProcessor.js';
 import { MEMORY_FRAME_PROMPT_VERSION, memoryFrameSystemPrompt } from '../semantic/SemanticProcessorPrompt.js';
