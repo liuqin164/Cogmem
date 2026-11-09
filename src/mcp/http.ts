@@ -14,12 +14,16 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { Database } from 'bun:sqlite';
+
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 
 import { createCogmemMcpServer, parseSessionIdentity, type CogmemMcpServerOptions } from './server.js';
 import type { CogmemMcpRuntime } from './CoreMcpTools.js';
 import type { AgentRegistry } from './AgentRegistry.js';
-import { createMemoryKernel, createMemoryKernelFromConfig } from '../factory.js';
+import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
+import { MemoryObservatory } from '../observatory/MemoryObservatory.js';
+import { createObservatoryRoutes, OBSERVATORY_PREFIX } from '../observatory/routes.js';
 
 export interface CogmemMcpHttpOptions extends CogmemMcpServerOptions {
   port: number;
@@ -46,6 +50,8 @@ export interface CogmemMcpHttpOptions extends CogmemMcpServerOptions {
 
 export interface CogmemMcpHttpHandle {
   url: string;
+  /** Where a person opens the read-only star map. Loopback only, whatever `hostname` the MCP face uses. */
+  observatoryUrl: string;
   port: number;
   sessions(): number;
   stop(): void;
@@ -115,6 +121,20 @@ export async function startCogmemMcpHttpServer(
   const maxSessions = options.maxSessions ?? 32;
   const ownsKernel = !runtime.kernel;
 
+  // The observatory rides this process rather than opening a second one: there is already one
+  // writer here, and a page that only reads does not need its own lifecycle. Its connection is
+  // opened read-only, so "the observatory writes nothing" is a property of the handle, not of
+  // everyone's memory of the SQL.
+  const observatoryDb = openObservatoryDatabase(kernel);
+  const observatory = new MemoryObservatory({
+    db: observatoryDb.db,
+    nodeDetail: (nodeId, projectId) => kernel.memoryAtlasService.node(nodeId, {
+      projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true,
+    }),
+    connectedAgents: () => (options.agents?.list() ?? []).map((agent) => agent.hostId),
+  });
+  const handleObservatory = createObservatoryRoutes({ observatory });
+
   function checkOrigin(request: Request): boolean {
     const origin = request.headers.get('origin');
     const host = request.headers.get('host');
@@ -137,8 +157,11 @@ export async function startCogmemMcpHttpServer(
   const httpServer = Bun.serve({
     port: options.port,
     hostname,
-    async fetch(request: Request): Promise<Response> {
+    async fetch(request: Request, server): Promise<Response> {
       const url = new URL(request.url);
+
+      const observatoryResponse = await handleObservatory(request, server.requestIP(request)?.address ?? undefined);
+      if (observatoryResponse) return observatoryResponse;
 
       if (url.pathname !== path) {
         return new Response('not_found', { status: 404 });
@@ -259,6 +282,7 @@ export async function startCogmemMcpHttpServer(
 
   return {
     url: `http://${hostname}:${actualPort}${path}`,
+    observatoryUrl: `http://${hostname}:${actualPort}${OBSERVATORY_PREFIX}/`,
     port: actualPort,
     sessions: () => transports.size,
     stop() {
@@ -269,8 +293,32 @@ export async function startCogmemMcpHttpServer(
       sessionIdentities.clear();
       sessionAgents.clear();
       httpServer.stop(true);
+      observatoryDb.close();
       // Only close what this server opened: an injected kernel belongs to the caller.
       if (ownsKernel) kernel.close();
     },
   };
+}
+
+/**
+ * A connection the observatory cannot write through.
+ *
+ * SQLite refuses a write on a read-only handle, so the guarantee does not depend on the observatory
+ * remembering to be careful. An in-memory or `file:`-URI database has no second connection to open,
+ * and borrows the kernel's handle instead — which is why the guard test also reads the SQL.
+ */
+function openObservatoryDatabase(kernel: MemoryKernel): { db: Database; close: () => void } {
+  const path = kernel.databasePath;
+  if (!path || path === ':memory:' || path.startsWith('file:')) {
+    return { db: kernel.memoryAtlasStore.db, close: () => {} };
+  }
+  const db = new Database(path, { readonly: true });
+  // The snapshot orders every candidate node, which SQLite would otherwise spill to a temporary
+  // file; on a read-only handle that needs a writable temp directory, so the page used to fail on
+  // a host whose TMPDIR is not writable with `unable to open database file`. The sort is bounded by
+  // SNAPSHOT_NODE_LIMIT, so holding it in memory is the cheaper dependency.
+  // ponytail: sort held in memory; revisit if a corpus ever exceeds the snapshot's node budget by
+  // orders of magnitude, where the spill would be the thing keeping RAM flat.
+  db.exec('PRAGMA temp_store = MEMORY');
+  return { db, close: () => db.close() };
 }

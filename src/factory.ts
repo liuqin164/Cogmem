@@ -670,6 +670,15 @@ export class MemoryKernel {
 
   private readonly dbPath: string;
   private readonly projectClock: ProjectClockContext;
+
+  /**
+   * The file backing this kernel, so a read-only surface can open its own connection to the same
+   * data instead of borrowing this one. `:memory:` has no second connection to open.
+   */
+  get databasePath(): string {
+    return this.dbPath;
+  }
+
   private readonly embedder: Embedder;
   private readonly embeddingProvider?: EmbeddingProvider;
   private readonly modelRegistry: ModelRegistry;

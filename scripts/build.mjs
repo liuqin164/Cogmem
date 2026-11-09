@@ -1,6 +1,6 @@
 // Compile into a staging directory and swap it in only after tsc exits clean.
 // `dist/` is generated and not tracked in git; a fresh checkout must run `bun run build` first.
-import { rmSync, renameSync } from 'node:fs'
+import { cpSync, rmSync, renameSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 
 const staging = 'dist.next'
@@ -26,6 +26,10 @@ if (tsc.status !== 0) {
   console.error('build failed; the previous dist/ was left untouched')
   process.exit(tsc.status ?? 1)
 }
+
+// The observatory's page is not TypeScript, so tsc copies none of it. It is served from beside the
+// compiled route module, which is why it lands at the same relative path it has in src/.
+cpSync('src/observatory/web', `${staging}/observatory/web`, { recursive: true })
 
 rmSync('dist', { recursive: true, force: true })
 renameSync(staging, 'dist')

@@ -56,6 +56,7 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
+    "dist/observatory/web/**",
     "examples/**/*.md",
     "install.sh",
     "README.md",

@@ -181,6 +181,7 @@ async function main(): Promise<void> {
 
   const registered = agents ? `, agents=${agents.list().length}` : '';
   console.error(`cogmem mcp listening on ${handle.url} (profile=${args.profile}${args.hostId ? `, host=${args.hostId}` : ''}${registered})`);
+  console.error(`cogmem memory observatory (read-only) on ${handle.observatoryUrl}`);
 
   const shutdown = (): void => {
     handle.stop();
