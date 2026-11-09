@@ -62,6 +62,22 @@ export class TraceStore {
     );
   }
 
+  /**
+   * Keep the newest `maxRows` events and delete the rest.
+   *
+   * The trace is append-only by nature and nothing else trims it, so without this the table the
+   * observatory lists grows without bound. One statement; the writer that owns the retention policy
+   * runs it in the background of its own appends rather than on every recall.
+   */
+  pruneToLimit(maxRows: number): number {
+    const result = this.db.prepare(`
+      DELETE FROM trace_events WHERE id IN (
+        SELECT id FROM trace_events ORDER BY timestamp DESC, id DESC LIMIT -1 OFFSET ?
+      )
+    `).run(Math.max(0, Math.floor(maxRows)));
+    return Number(result.changes ?? 0);
+  }
+
   queryByTaskId(taskId: string): TraceEvent[] {
     const rows = this.db.prepare(`
       SELECT id, timestamp, task_id, project_id, event_type, payload, parent_event_id

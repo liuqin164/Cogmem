@@ -621,8 +621,8 @@ export class MemoryObservatory {
   }
 
   /**
-   * Stored recall decisions. The read side lives in `RecallTraces` so that the day a producer exists
-   * (#187) is the day one small file changes, not this one.
+   * Stored recall decisions, written by the default recall lane (#187) and read here. The read side
+   * lives in `RecallTraces` so the producer and this file never have to change together.
    */
   recalls(view: ObservatoryView & { limit?: number } = {}): ObservatoryRecalls {
     const projectId = this.resolveProject(view.projectId) ?? '';

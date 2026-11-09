@@ -102,4 +102,16 @@ describe('TraceStore', () => {
 
     expect(store.queryByTaskId('ordered').map((event) => event.id)).toEqual(['earlier', 'later']);
   });
+
+  it('pruneToLimit keeps the newest rows and reports how many it deleted', () => {
+    const { store } = makeStore();
+    for (let timestamp = 1; timestamp <= 5; timestamp += 1) {
+      store.append(makeEvent({ id: `e${timestamp}`, timestamp }));
+    }
+
+    expect(store.pruneToLimit(2)).toBe(3);
+    expect(store.queryByEventType('recall.request').map((event) => event.id)).toEqual(['e4', 'e5']);
+    // Nothing to do when the table is already inside the cap.
+    expect(store.pruneToLimit(2)).toBe(0);
+  });
 });

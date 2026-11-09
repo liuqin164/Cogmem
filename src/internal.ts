@@ -94,6 +94,7 @@ export * from './models/WorkingMemoryReporter.js';
 export * from './models/adapters/MemoryReviewAdapter.js';
 export * from './models/index.js';
 export * from './observability/DecisionExplainer.js';
+export * from './observability/RecallDecisionTrace.js';
 export * from './observability/TraceEvent.js';
 export * from './observability/TraceQuery.js';
 export * from './observability/TraceStore.js';

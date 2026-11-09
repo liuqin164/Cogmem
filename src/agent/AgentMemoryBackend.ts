@@ -29,6 +29,8 @@ import { cliArg } from '../utils/CliArgument.js';
 import { pad2 } from '../utils/Values.js';
 import { projectPhaseItems } from '../recall/PhaseProjection.js';
 import { secretFindingsMetadata } from '../security/SecretPatterns.js';
+import { RecallDecisionTrace, type RecallTraceSuppression } from '../observability/RecallDecisionTrace.js';
+import { TraceStore } from '../observability/TraceStore.js';
 
 export type AgentTurnIngestMode =
   | 'immediate_compile'
@@ -743,8 +745,82 @@ export class KernelAgentMemoryBackend {
    * lane did not (#115).
    */
   recall(query: AgentRecallQuery): AgentRecallResult {
-    const result = this.recallPrivate(query);
-    return this.withSharedLane(query, result);
+    const { result, suppressedIds } = this.recallPrivate(query);
+    const answered = this.withSharedLane(query, result);
+    this.recordRecallTrace(query, answered, suppressedIds);
+    return answered;
+  }
+
+  /**
+   * The stored decision behind a recall: ids, reasons and the lane, never an item's text (#187).
+   *
+   * Written after the answer is assembled and after the shared lane has had its say, so the row names
+   * what the caller actually received — and never instead of returning it: a trace that cannot be
+   * written is a non-fatal pipeline event, and the recall is unaffected. The whole body is guarded,
+   * including the failure report, because nothing on this path may turn a written trace into a lost
+   * answer.
+   */
+  private recordRecallTrace(
+    query: AgentRecallQuery,
+    result: AgentRecallResult,
+    suppressedIds: RecallTraceSuppression[],
+  ): void {
+    try {
+      const trace = this.recallTrace(query);
+      if (!trace) return;
+      const decision = result.decisionTrace;
+      trace.record({
+        projectId: query.projectId,
+        agentId: query.agentId,
+        // The question only. `anchorText` is deliberately not a fallback: a caller may fill it with a
+        // returned item's text (the OpenClaw plugin does), and an item's text must never reach this row.
+        query: String(query.query ?? ''),
+        lane: decision?.selectedLane ?? 'none',
+        reason: decision?.reason ?? 'unknown',
+        selectedIds: result.items.map((item) => item.id),
+        suppressed: suppressionsForTrace(decision?.suppressed, suppressedIds),
+      });
+    } catch (error) {
+      this.recordTraceFailure(query, error);
+    }
+  }
+
+  /**
+   * The trace table, created on the first recall rather than when the kernel opens.
+   *
+   * Deliberately not part of kernel setup: the 4.0 baseline schema is pinned object-for-object against
+   * the installer's own output, and this table is not the installer's. It appears when there is a
+   * decision to record, which is also the first moment it can have rows. `null` means "this kernel
+   * cannot write one", which is not an error — recall still answers.
+   */
+  private recallTraceWriter: RecallDecisionTrace | null | undefined;
+
+  private recallTrace(query: AgentRecallQuery): RecallDecisionTrace | null {
+    if (this.recallTraceWriter !== undefined) return this.recallTraceWriter;
+    try {
+      const store = new TraceStore(this.kernel.factStore.getDatabase());
+      store.initSchema();
+      this.recallTraceWriter = new RecallDecisionTrace(store);
+    } catch (error) {
+      // Recorded, not silent: "a trace that cannot be written leaves a mark" applies to failing to
+      // open the writer as much as to failing to append. Once, not per recall — there is nothing to
+      // retry, and a per-recall record would be noise on the hot path.
+      this.recallTraceWriter = null;
+      this.recordTraceFailure(query, error);
+    }
+    return this.recallTraceWriter;
+  }
+
+  /** The failure record for a trace that could not be written. Never allowed to escape. */
+  private recordTraceFailure(query: AgentRecallQuery, error: unknown): void {
+    try {
+      this.kernel.pipelineMetrics.recordNonFatal('recall_trace_failed', {
+        projectId: query.projectId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } catch {
+      // The answer is already built; a second failure has nowhere useful to go.
+    }
   }
 
   /**
@@ -879,8 +955,8 @@ export class KernelAgentMemoryBackend {
     return { items: projected.items, suppressed };
   }
 
-  private recallPrivate(query: AgentRecallQuery): AgentRecallResult {
-    SECRET_WITHHELD_COUNTS.set(this, 0);
+  private recallPrivate(query: AgentRecallQuery): { result: AgentRecallResult; suppressedIds: RecallTraceSuppression[] } {
+    SECRET_WITHHELD_EVENT_IDS.set(this, new Set());
     const queryText = String(query.query ?? '');
     const forensic = FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(query.intent ?? ''));
     // Defence 1, at the one place every caller routes through: a social turn asks nothing, so no
@@ -892,7 +968,7 @@ export class KernelAgentMemoryBackend {
         ...empty.decisionTrace!,
         suppressed: [{ reason: 'residue_empty', count: 0 }],
       };
-      return { ...empty, decisionTrace: trace, semanticIndex: this.kernel.semanticIndexEnabled() };
+      return { result: { ...empty, decisionTrace: trace, semanticIndex: this.kernel.semanticIndexEnabled() }, suppressedIds: [] };
     }
     const result = this.recallCore(query);
     const gated = this.gateSocialEntries(result.items ?? [], query, forensic);
@@ -901,14 +977,26 @@ export class KernelAgentMemoryBackend {
     // lane — text and `sourceContext.event.text` both — so a caller received the key with
     // `suppressed: secret_bearing_withheld` beside it. Every lane returns through here, which is the same reason
     // the social gate sits here; the forensic and exact-quote intents never reach this method.
-    const secretKept = forensic
-      ? gated.items
-      : gated.items.filter((item) => !this.itemHoldsSecretMark(item));
-    // The raw lane counts events it dropped while it ran; this second half counts items no raw window owned.
-    // Both are merged here, before the trace is built: the item-level count used to be written to the map after
-    // the merge, so a recall that withheld only a compiled item reported no reason at all (found while deleting
-    // the read-time text rescan, #169).
-    const secretWithheld = (SECRET_WITHHELD_COUNTS.get(this) ?? 0) + (gated.items.length - secretKept.length);
+    // One pass, not two: the withheld entries are what the trace has to name by id (#187), and
+    // `itemHoldsSecretMark` walks the ledger, so asking it twice per item would be the only cost this
+    // change adds to the hot path.
+    const secretWithheldItems = forensic ? [] : gated.items.filter((item) => this.itemHoldsSecretMark(item));
+    const withheld = new Set(secretWithheldItems);
+    const secretKept = forensic ? gated.items : gated.items.filter((item) => !withheld.has(item));
+    // The raw lane records the events it dropped while it ran (#142); this second half covers items no
+    // raw window owned. Both are merged here, before the trace is built: the item-level count used to be
+    // written to the map after the merge, so a recall that withheld only a compiled item reported no
+    // reason at all (found while deleting the read-time text rescan, #169).
+    // The raw ids matter to the trace even more than to the count: an event dropped before it could
+    // become an item exists nowhere else, so without them a decision that withheld a secret could not
+    // name what it withheld (#187).
+    const rawWithheldIds = [...(SECRET_WITHHELD_EVENT_IDS.get(this) ?? [])];
+    const secretWithheld = rawWithheldIds.length + secretWithheldItems.length;
+    const secretIds = [...rawWithheldIds, ...secretWithheldItems.map((item) => item.id)];
+    const suppressedIds: RecallTraceSuppression[] = [
+      ...gated.suppressedIds,
+      ...(secretIds.length ? [{ reason: 'secret_bearing_withheld' as const, count: secretIds.length, ids: secretIds }] : []),
+    ];
     if (secretWithheld > 0 && result.decisionTrace) {
       result.decisionTrace.suppressed = mergeSuppressions(result.decisionTrace.suppressed, [
         { reason: 'secret_bearing_withheld', count: secretWithheld },
@@ -929,19 +1017,22 @@ export class KernelAgentMemoryBackend {
     const phased = this.projectPhases(agentKept, query);
     const zeroExplanation = phased.items.length === 0 ? this.explainZeroResult(query) : undefined;
     return {
-      ...result,
-      items: phased.items.map(withRedactionMarks),
-      decisionTrace: result.decisionTrace
-        ? {
-          ...result.decisionTrace,
-          ...(gated.suppressed.length ? { suppressed: mergeSuppressions(result.decisionTrace.suppressed, gated.suppressed) } : {}),
-          ...(phased.suppressed.length ? { suppressed: mergeSuppressions(result.decisionTrace.suppressed, phased.suppressed) } : {}),
-          ...(zeroExplanation ? { zeroExplanation } : {}),
-        }
-        : result.decisionTrace,
-      // One place, because every lane returns through here. A caller that needs to know
-      // whether an answer came from a semantic index should not have to read the config.
-      semanticIndex: this.kernel.semanticIndexEnabled(),
+      result: {
+        ...result,
+        items: phased.items.map(withRedactionMarks),
+        decisionTrace: result.decisionTrace
+          ? {
+            ...result.decisionTrace,
+            ...(gated.suppressed.length ? { suppressed: mergeSuppressions(result.decisionTrace.suppressed, gated.suppressed) } : {}),
+            ...(phased.suppressed.length ? { suppressed: mergeSuppressions(result.decisionTrace.suppressed, phased.suppressed) } : {}),
+            ...(zeroExplanation ? { zeroExplanation } : {}),
+          }
+          : result.decisionTrace,
+        // One place, because every lane returns through here. A caller that needs to know
+        // whether an answer came from a semantic index should not have to read the config.
+        semanticIndex: this.kernel.semanticIndexEnabled(),
+      },
+      suppressedIds,
     };
   }
 
@@ -1006,16 +1097,21 @@ export class KernelAgentMemoryBackend {
     items: AgentRecallItem[],
     query: AgentRecallQuery,
     forensic: boolean,
-  ): { items: AgentRecallItem[]; suppressed: Array<{ reason: RecallSuppressionReason; count: number }> } {
-    if (forensic) return { items, suppressed: [] };
+  ): {
+    items: AgentRecallItem[];
+    suppressed: Array<{ reason: RecallSuppressionReason; count: number }>;
+    /** The same removals, by id, for the trace (#187). Counts alone cannot name what was dropped. */
+    suppressedIds: RecallTraceSuppression[];
+  } {
+    if (forensic) return { items, suppressed: [], suppressedIds: [] };
     const { frequent, rare } = this.queryTermFrequencies(query);
     const measurable = frequent.size > 0 && rare.size > 0;
     const grey = classifySocialTurn(String(query.query ?? '')) === 'grey';
     const kept: AgentRecallItem[] = [];
-    let entrySocial = 0, noDiscriminativeHit = 0, belowFloor = 0;
+    const entrySocialIds: string[] = [], noDiscriminativeHitIds: string[] = [], belowFloorIds: string[] = [];
     for (const item of items) {
       const text = String(item.text ?? '');
-      if (isSocialTurn(text)) { entrySocial += 1; continue; }
+      if (isSocialTurn(text)) { entrySocialIds.push(item.id); continue; }
       if (measurable) {
         const overlap = [...frequent, ...rare].filter((term) => text.includes(term));
         // "Resting only on high-frequency words" is measured against the shared filler vocabulary as
@@ -1026,17 +1122,25 @@ export class KernelAgentMemoryBackend {
         // frequency alone suppresses exactly that answer.
         const onlyCommonWords = overlapIsOnlySmallTalk(overlap, frequent);
         if (onlyCommonWords) {
-          if (grey) { belowFloor += 1; continue; }
-          if (item.sourceType === 'raw_ledger') { noDiscriminativeHit += 1; continue; }
+          if (grey) { belowFloorIds.push(item.id); continue; }
+          if (item.sourceType === 'raw_ledger') { noDiscriminativeHitIds.push(item.id); continue; }
         }
       }
       kept.push(item);
     }
-    const suppressed: Array<{ reason: RecallSuppressionReason; count: number }> = [];
-    if (entrySocial) suppressed.push({ reason: 'entry_social', count: entrySocial });
-    if (noDiscriminativeHit) suppressed.push({ reason: 'no_discriminative_hit', count: noDiscriminativeHit });
-    if (belowFloor) suppressed.push({ reason: 'grey_below_floor', count: belowFloor });
-    return { items: kept, suppressed };
+    // One shape, two projections: the trace's counts and the same removals by id. Two parallel
+    // if-chains here would be the same fact written twice (#187).
+    const removals: Array<{ reason: RecallSuppressionReason; ids: string[] }> = [
+      { reason: 'entry_social', ids: entrySocialIds },
+      { reason: 'no_discriminative_hit', ids: noDiscriminativeHitIds },
+      { reason: 'grey_below_floor', ids: belowFloorIds },
+    ];
+    const dropped = removals.filter((removal) => removal.ids.length > 0);
+    return {
+      items: kept,
+      suppressed: dropped.map((removal) => ({ reason: removal.reason, count: removal.ids.length })),
+      suppressedIds: dropped.map((removal) => ({ reason: removal.reason, count: removal.ids.length, ids: removal.ids })),
+    };
   }
 
   private queryTermFrequencies(query: AgentRecallQuery): { frequent: Set<string>; rare: Set<string> } {
@@ -2152,7 +2256,7 @@ export class KernelAgentMemoryBackend {
     // do not hand it back. A question about the words someone used still may — that is the caller's
     // explicit intent — and both outcomes are counted for the trace.
     if (eventHoldsSecretMark(event) && !FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(effectiveIntent ?? ''))) {
-      SECRET_WITHHELD_COUNTS.set(this, (SECRET_WITHHELD_COUNTS.get(this) ?? 0) + 1);
+      SECRET_WITHHELD_EVENT_IDS.set(this, (SECRET_WITHHELD_EVENT_IDS.get(this) ?? new Set()).add(event.eventId));
       return false;
     }
     if (query.projectId !== undefined && (event.projectId ?? '') !== query.projectId) return false;
@@ -2692,7 +2796,14 @@ function isFillerProbe(probe: string): boolean {
  * Keyed by the backend instance rather than a module global, for the same reason the document
  * frequency cache is: one process may serve more than one database.
  */
-const SECRET_WITHHELD_COUNTS = new WeakMap<object, number>();
+/**
+ * The raw events a running recall withheld because they carry the secret mark (#142), by id.
+ *
+ * A set rather than a counter: the trace has to name the withheld entries (#187), and the lane can
+ * reach the same event through more than one search text. Reset at the top of every recall, so it
+ * never describes a previous one.
+ */
+const SECRET_WITHHELD_EVENT_IDS = new WeakMap<object, Set<string>>();
 
 /** Whether this event's own metadata says it holds something secret-looking. */
 /**
@@ -2734,6 +2845,29 @@ function mergeSuppressions(
     else merged.push({ ...entry });
   }
   return merged;
+}
+
+/**
+ * The trace's suppression list: the lane trace's counts, with the ids the gates kept (#187).
+ *
+ * A reason can be counted without an id — the raw lane drops secret-marked events before any item
+ * exists — so an entry with a count and no ids is the honest answer, not a missing one. Ids are only
+ * ever added, never turned into a second count.
+ */
+function suppressionsForTrace(
+  suppressed: Array<{ reason: RecallSuppressionReason; count: number }> | undefined,
+  byId: RecallTraceSuppression[],
+): RecallTraceSuppression[] | undefined {
+  const merged = new Map<string, RecallTraceSuppression>();
+  for (const entry of suppressed ?? []) merged.set(entry.reason, { reason: entry.reason, count: entry.count });
+  for (const entry of byId) {
+    if (entry.ids?.length) {
+      const existing = merged.get(entry.reason);
+      if (existing) existing.ids = [...(existing.ids ?? []), ...entry.ids];
+      else merged.set(entry.reason, { reason: entry.reason, count: entry.ids.length, ids: [...entry.ids] });
+    }
+  }
+  return merged.size ? [...merged.values()] : undefined;
 }
 
 function recallDecisionTrace(

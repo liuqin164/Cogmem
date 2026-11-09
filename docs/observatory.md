@@ -19,7 +19,8 @@ cogmem mcp --transport http            # prints the observatory URL beside the M
 | Live and demo never mix | Demo mode is a single explicit entry (`?demo=1`), loads `web/demo.json`, never calls the API, and marks every page with a fictional badge and no watermark. |
 
 The page cannot run `explain` on demand in this version. That path can write a trace row, and the
-observatory reads stored traces instead (`GET /observatory/recalls`).
+observatory reads stored traces instead (`GET /observatory/recalls`) — written by the default recall
+lane, see [Recall decisions](#recall-decisions-and-who-writes-them).
 
 ## Endpoints
 
@@ -132,8 +133,43 @@ Then re-add the `/*! … */` header, copy it to `src/observatory/web/three.bundl
 `package/LICENSE` to `web/three.LICENSE`. `bun run build` copies the whole `web/` directory into
 `dist/observatory/web`, and `package.json` ships it.
 
-## Known gap
+## Recall decisions, and who writes them
 
-No product path writes `trace_events`: `TraceStore.initSchema` is the only place the table is created
-and nothing constructs a `TraceStore`. So the recall page is empty on every real database, with the
-empty state saying why. Tracked separately rather than fixed here.
+The recall page reads decisions that a real recall already stored (#187). The producer is the default
+lane itself: `KernelAgentMemoryBackend.recall()` is where the MCP tool, the CLI, the host bridge,
+`recallPack()` and explain's re-run all arrive, so one row is written there per recall rather than at
+each call site. `RecallDecisionTrace` owns the payload, and it carries ids, reasons and the lane:
+the question, the lane that answered, why, the ids the recall returned, and the ids each gate
+withheld with the reason it withheld them. An item's text is never in a row — a secret-marked turn is
+withheld from every lane (#142, #177, #178), and this is the surface an operator audits those lanes
+with, so it must not become the leak the lanes closed.
+
+Two consequences worth stating rather than discovering:
+
+- `explain` re-runs the default lane, so an explain is a recall and it records one. The *page* still
+  never runs `explain`: it reads stored rows, which is what keeps its connection read-only.
+- The table is created on the first recall rather than when the kernel opens. The 4.0 baseline schema
+  is pinned object-for-object against the installer's own output, and this table is not the
+  installer's; it appears when there is a decision to record. Until then `available: false` is the
+  honest answer to "has anything recalled here".
+- `cogmem_recall` keeps `readOnlyHint: true`. That hint is about canonical memory, which recall still
+  never changes: the row is audit telemetry, the same shape as the activation a recall pack touches
+  or `cogmem_graph_touch` records. Nothing a later recall can read is written.
+
+**Retention.** `trace_events` is append-only, so `RECALL_TRACE_MAX_ROWS` (5,000 rows, newest win)
+bounds it: the writer sweeps with one `DELETE` per 256 appends, and the sweep target sits one interval
+below the ceiling so the table cannot pass it. `cogmem doctor --storage` reports
+`recall_decisions=<rows>/<cap>`; a database where nothing has recalled reports `0`, and a table that
+cannot be read at all is left out rather than printed as zero.
+
+**Cost.** Measured on the 20,343-event corpus: recall median 209.84 ms before the write existed and
+205.35 ms after (25 samples each, same script, fresh copies of the same file — the difference is inside
+run-to-run noise). The write itself is 26.9 µs median / 47.0 µs p95 per row, and the retention sweep is
+amortized at 17.8 µs per recall. A write that throws is a `recall_trace_failed` non-fatal pipeline
+event; the recall returns as if nothing had happened.
+
+**One number moved.** The secret gate used to count a withheld event per encounter — the same marked
+turn reached by two search texts counted twice. It counts distinct events now, because the row has to
+name them and naming one event twice would be a lie about how many there were. So
+`decisionTrace.suppressed[].count` for `secret_bearing_withheld` is "distinct events", not "gates
+fired"; nothing about what recall returns changed.
