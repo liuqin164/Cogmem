@@ -76,6 +76,17 @@ export function inferOperationalActionCue(text: string, taxonomy: MemoryTaxonomy
   return rule ? { kind: rule.kind, label: rule.label, verb: rule.verb } : undefined;
 }
 
+/**
+ * Every action kind the text carries, from the project's vocabulary (#183).
+ *
+ * Its two consumers — the Atlas `HAS_ACTION_KIND` facet and the compiled action filter — used to read the
+ * shipped registry directly, so a project's own `action_kinds` pattern reached neither. The default is the same
+ * taxonomy the registry is built from, so a project that declares none sees what it saw before.
+ */
+export function inferActionKinds(text: string, taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY): string[] {
+  return taxonomy.actionKinds.filter((rule) => rule.pattern.test(text)).map((rule) => rule.kind);
+}
+
 export function normalizeEntityCueId(label: string): string {
   return String(label || '')
     .trim()

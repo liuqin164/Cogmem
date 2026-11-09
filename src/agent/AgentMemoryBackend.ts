@@ -22,8 +22,7 @@ import {
   type AgentRecallIntent,
   type AgentRecallQueryPlan,
 } from './AgentRecallQueryCompiler.js';
-import { extractEntityCues } from '../utils/EntityCueExtractor.js';
-import { inferActionKinds } from '../utils/ActionKindRegistry.js';
+import { extractEntityCues, inferActionKinds } from '../utils/EntityCueExtractor.js';
 import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
 import { cliArg } from '../utils/CliArgument.js';
 import { pad2 } from '../utils/Values.js';
@@ -1986,9 +1985,11 @@ export class KernelAgentMemoryBackend {
       if (queryPlan.intent === 'action_history') {
         const entityTerms = extractEntityCues(queryPlan.originalQuery).map((entity) => entity.label.toLowerCase());
         const entityMatched = entityTerms.length === 0 || entityTerms.some((term) => haystack.includes(term));
-        const queryKinds = inferActionKinds(queryPlan.originalQuery);
-        const allowedKinds = queryKinds.length ? queryKinds : ['started', 'installed', 'configured', 'restarted', 'stopped', 'operated', 'implemented'];
-        const itemKinds = inferActionKinds(haystack);
+        const queryKinds = inferActionKinds(queryPlan.originalQuery, this.kernel.taxonomy);
+        // A query that names no action still means "any action": that is the project's whole vocabulary, not a
+        // hand-copied shipped subset that had already lost reviewed/decided/debugged (#183).
+        const allowedKinds = queryKinds.length ? queryKinds : this.kernel.taxonomy.actionKinds.map((rule) => rule.kind);
+        const itemKinds = inferActionKinds(haystack, this.kernel.taxonomy);
         const actionMatched = itemKinds.some((kind) => allowedKinds.includes(kind));
         return entityMatched && actionMatched;
       }

@@ -17,7 +17,3 @@ export const ACTION_KIND_RULES: ActionKindRule[] = [
   { kind: 'decided', label: '决定', verb: '决定', pattern: /决定|decided|方案|策略|结论/i },
   { kind: 'debugged', label: '排查', verb: '排查', pattern: /debug|排查|卡死|locked|zombie|报错|错误/i },
 ];
-
-export function inferActionKinds(text: string): string[] {
-  return ACTION_KIND_RULES.filter((rule) => rule.pattern.test(text)).map((rule) => rule.kind);
-}
