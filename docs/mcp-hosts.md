@@ -522,6 +522,62 @@ One gotcha when you want an agent turn that is not the live gateway session:
   the running gateway and, without `--deliver`, sends the reply nowhere. That is
   enough to exercise MCP tools without touching any chat channel.
 
+### Several agents in one OpenClaw config
+
+OpenClaw defines its agents once and its MCP servers once: `mcp.servers` has no per-agent
+form (openclaw/openclaw#72591). An agent therefore gets a Cogmem identity of its own by
+getting an entry of its own, and by being denied every other agent's entry — and a missing
+denial is a silent merge, because nothing about the leaked call looks wrong.
+
+`cogmem connect openclaw --auto` writes both halves when the config defines more than one
+agent. A single-agent config gets nothing invented for it: that integration is unchanged.
+
+```bash
+cogmem connect openclaw --auto --workspace /path/to/ws --openclaw-config ~/.openclaw/openclaw.json
+```
+
+For each agent in `agents.entries`, or in the older `agents.list`, the command writes one
+entry named `cogmem-<agentId>`:
+
+```json
+"mcp": {
+  "servers": {
+    "cogmem-susan": {
+      "command": "/absolute/path/to/cogmem",
+      "args": ["mcp", "--host", "susan", "--project", "susan", "--config", "/path/to/ws/.cogmem/config.toml"]
+    }
+  }
+}
+```
+
+`--host` is the identity the connection speaks as (ADR-0006). Without it every agent speaks
+as the same server, which is one memory scope however many agents read it.
+
+OpenClaw names that server's tools `cogmem-susan__cogmem_recall` and so on — measured on
+2026.11.5-beta.1: the name is `<safeServerName>__<tool name>`, `tools.deny` patterns are
+matched against it, and `*` is the only wildcard. So each *other* agent also gets:
+
+```json
+"susan": { "tools": { "deny": ["cogmem-writer__*"] } }
+```
+
+Both halves are checked before the write and after it. If one agent can still reach
+another's entry, `connect` refuses, names the agent and the exact pattern that is missing,
+and writes nothing; re-running changes nothing when the config is already correct.
+`--force` restores a denial somebody deleted, and `connect openclaw --remove` takes the
+entries and the denials back out.
+
+The check also starts each agent's entry and asks it to recall, and the `agentId` in that
+answer has to be the agent's own — the half of the wiring a file cannot show.
+
+A machine with an agent registry (`~/.cogmem/agents.json`) is refused instead of wired:
+once identities exist, a stdio server needs a credential (#80), and one credential per
+agent is #185.
+
+The plugin this command also installs still pins one identity for the whole workspace, so
+automatic recall and remember are not per-agent yet; that is a separate, still-open
+question (ADR-0006).
+
 ---
 
 ## pi
