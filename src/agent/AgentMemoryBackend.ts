@@ -16,6 +16,7 @@ import { readRedactionMarks } from '../governance/PiiRedactor.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
+import { isAgentRawEvent, isImportedMaterial } from './AgentScopeRules.js';
 import type { StrategyRetrievalPolicy } from '../strategy/StrategyCapsule.js';
 import {
   compileAgentRecallQuery,
@@ -842,27 +843,6 @@ export class KernelAgentMemoryBackend {
   }
 
   /**
-   * Whether material reached the project by being *imported* rather than by being said (#143).
-   *
-   * The marker is an explicit fact of the write, and it is the import act itself — `metadata.imported`,
-   * written by the CLI adapters (`src/bin/import-support.ts`), by `cogmem import`, and by the two
-   * episode import paths (`cogmem episode import`, `cogmem_episode_import`).
-   *
-   * It is deliberately **not** `externalMessageId`. That field is the replay key — "the same id with the
-   * same text writes nothing the second time" — and a host sets it on its own turns, including through
-   * `cogmem_episode_append`. Reading it as an import marker made a turn that someone had project-public,
-   * with its compiled products: measured on the box (#153), the build that counted it handed `hermes`'s
-   * appended turn and four Atlas candidates to `pi`, while the build before it handed over nothing.
-   * Ryu's rule of 2026-11-06 scopes records that name an agent to that agent; only the records nobody
-   * owns are project-public, and an import is the write that says so.
-   */
-  private isImportedMaterial(event: MemoryEvent): boolean {
-    const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
-    if (!metadata) return false;
-    return metadata.imported === true;
-  }
-
-  /**
    * Whether an agent may read an item, read from the same chain as the secret mark (#143).
    *
    * The rule (Ryu 2026-11-07, route 1): imported material is project-level public whatever `sourceAgent` says,
@@ -874,12 +854,12 @@ export class KernelAgentMemoryBackend {
   private itemVisibleToAgent(item: AgentRecallItem, agentId: string): boolean {
     const chain = this.itemChainEvents(item);
     if (chain.length === 0) return true;
-    if (chain.some((event) => this.isImportedMaterial(event))) return true;
+    if (chain.some((event) => isImportedMaterial(event))) return true;
     // The same standard the raw lane applies to its own events, applied to the material a compiled product was
     // built from: a product is readable by whoever could have read what it was made of. Reusing the predicate,
     // rather than re-deriving an owner, keeps the two from disagreeing — including the leniency the raw lane
     // grants a record that carries no source of its own.
-    return chain.some((event) => this.isAgentRawEvent(event, agentId));
+    return chain.some((event) => isAgentRawEvent(event, agentId));
   }
 
   /**
@@ -1387,7 +1367,7 @@ export class KernelAgentMemoryBackend {
     const items = [
       ...anchorItems,
       ...rawEvents
-      .filter((event) => this.isAgentRawEvent(event, query.agentId))
+      .filter((event) => isAgentRawEvent(event, query.agentId))
       .filter((event) => this.isRawEventInRecallScope(event, query, queryPlan.intent))
       .filter((event) => this.isQuoteSourceEvent(event))
       .filter((event) => this.hasReadableEventText(event))
@@ -1543,12 +1523,12 @@ export class KernelAgentMemoryBackend {
 
   private toAgentRecallItemFromAtlasCard(card: MemoryAtlasCard, query: AgentRecallQuery): AgentRecallItem | null {
     const eventIds = [...new Set([card.sourceLocator?.eventId, ...card.evidenceEventIds].filter((id): id is string => Boolean(id)))];
-    const scopedAnchor = eventIds.map((id) => this.kernel.eventStore.getEvent(id)).find((event): event is MemoryEvent => Boolean(event && this.isAgentRawEvent(event, query.agentId) && this.isRawEventInRecallScope(event, query, query.intent)));
+    const scopedAnchor = eventIds.map((id) => this.kernel.eventStore.getEvent(id)).find((event): event is MemoryEvent => Boolean(event && isAgentRawEvent(event, query.agentId) && this.isRawEventInRecallScope(event, query, query.intent)));
     const eventId = scopedAnchor?.eventId;
     if (!eventId || !scopedAnchor) return null;
     const sourceContext = this.toAgentSourceContext(eventId, query);
     const anchorEvent = sourceContext?.event;
-    if (!scopedAnchor || !this.isAgentRawEvent(scopedAnchor, query.agentId) || !this.isRawEventInRecallScope(scopedAnchor, query, query.intent)) return null;
+    if (!scopedAnchor || !isAgentRawEvent(scopedAnchor, query.agentId) || !this.isRawEventInRecallScope(scopedAnchor, query, query.intent)) return null;
     const allowRaw = laneAllowed(query.retrievalPolicy, 'raw_source');
     return {
       id: `facet:${card.canonicalId}`,
@@ -1574,7 +1554,7 @@ export class KernelAgentMemoryBackend {
     const scopedEvidence = (node.evidence ?? [])
       .map((evidence) => this.kernel.eventStore.getEvent(evidence.eventId))
       .filter((event): event is MemoryEvent => Boolean(event))
-      .filter((event) => this.isAgentRawEvent(event, query.agentId) && this.isRawEventInRecallScope(event, query, query.intent));
+      .filter((event) => isAgentRawEvent(event, query.agentId) && this.isRawEventInRecallScope(event, query, query.intent));
     const event = scopedEvidence[0];
     const eventId = event?.eventId;
     if (!event || !eventId) return null;
@@ -1609,7 +1589,7 @@ export class KernelAgentMemoryBackend {
     if (!context) return [];
     const candidates = [context.event, ...context.before.slice().reverse(), ...context.after];
     return candidates
-      .filter((event) => this.isAgentRawEvent(event, query.agentId))
+      .filter((event) => isAgentRawEvent(event, query.agentId))
       .filter((event) => this.isRawEventInRecallScope(event, query, queryPlan.intent))
       .filter((event) => !this.isOperationalNoiseRawEvent(event))
       .filter((event) => this.isQuoteSourceEvent(event))
@@ -2039,7 +2019,7 @@ export class KernelAgentMemoryBackend {
     const sessionIds = new Set<string>();
     for (const event of page.records) {
       if (!event.sessionId || currentSessionIds.has(event.sessionId)) continue;
-      if (!this.isAgentRawEvent(event, query.agentId)) continue;
+      if (!isAgentRawEvent(event, query.agentId)) continue;
       if (this.isOperationalNoiseRawEvent(event)) continue;
       sessionIds.add(event.sessionId);
     }
@@ -2172,29 +2152,6 @@ export class KernelAgentMemoryBackend {
     };
   }
 
-  private isAgentRawEvent(event: MemoryEvent, agentId: string): boolean {
-    if (!event.sourceId) return true;
-    if (
-      event.sourceId === agentId
-      || event.sourceId.startsWith(`${agentId}:`)
-      || event.sourceId.startsWith(`${agentId}-`)
-    ) {
-      return true;
-    }
-    const payload = event.payload as { metadata?: Record<string, unknown> };
-    const metadata = payload.metadata || {};
-    const tags = Array.isArray(metadata.tags) ? metadata.tags.filter((tag): tag is string => typeof tag === 'string') : [];
-    const explicitAgentTags = tags.filter((tag) => tag.startsWith('agent:'));
-    if (explicitAgentTags.length > 0) {
-      return explicitAgentTags.includes(`agent:${agentId}`);
-    }
-    if (this.isImportedMaterial(event)) return true;
-    const sourceType = typeof metadata.sourceType === 'string' ? metadata.sourceType : '';
-    if (/^(hermes_state_db|conversation_markdown|openclaw_|soul_markdown)/.test(sourceType)) return true;
-    if (/^(hermes_state_db|conversation_markdown|openclaw_|soul_markdown)/.test(event.sourceId)) return true;
-    return false;
-  }
-
   private isRawEventInRecallScope(event: MemoryEvent, query: AgentRecallQuery, effectiveIntent?: AgentRecallIntent): boolean {
     // A turn that holds a secret is stored verbatim and marked, never redacted, so the default lanes
     // do not hand it back. A question about the words someone used still may — that is the caller's
@@ -2206,7 +2163,7 @@ export class KernelAgentMemoryBackend {
     if (query.projectId !== undefined && (event.projectId ?? '') !== query.projectId) return false;
     if (query.workspaceId && event.workspaceId !== query.workspaceId) return false;
     if (query.threadId && event.threadId !== query.threadId) return false;
-    if (!this.isAgentRawEvent(event, query.agentId)) return false;
+    if (!isAgentRawEvent(event, query.agentId)) return false;
     if (!this.isAllowedSession(event, query, effectiveIntent)) return false;
     if (!this.isAllowedRawEventCollection(event, query.collection)) return false;
     return true;
@@ -2320,7 +2277,7 @@ export class KernelAgentMemoryBackend {
     const event = this.toAgentSourceContextEvent(context.event);
     const inScope = (candidate: MemoryEvent) => {
       if (!secretExempt && eventHoldsSecretMark(candidate)) return false;
-      return !scope || (this.isAgentRawEvent(candidate, scope.agentId) && this.isRawEventInRecallScope(candidate, scope, scope.intent));
+      return !scope || (isAgentRawEvent(candidate, scope.agentId) && this.isRawEventInRecallScope(candidate, scope, scope.intent));
     };
     return {
       event,
