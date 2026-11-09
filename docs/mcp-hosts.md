@@ -537,14 +537,16 @@ cogmem connect openclaw --auto --workspace /path/to/ws --openclaw-config ~/.open
 ```
 
 For each agent in `agents.entries`, or in the older `agents.list`, the command writes one
-entry named `cogmem-<agentId>`:
+entry named `cogmem-<agentId>` (OpenClaw sanitizes server names, so an id with characters
+outside `[A-Za-z0-9_-]` lands under the sanitized form; two ids that would collide are
+refused rather than sharing one entry):
 
 ```json
 "mcp": {
   "servers": {
     "cogmem-susan": {
       "command": "/absolute/path/to/cogmem",
-      "args": ["mcp", "--host", "susan", "--project", "susan", "--config", "/path/to/ws/.cogmem/config.toml"]
+      "args": ["mcp", "--host", "susan", "--project", "openclaw-1a2b3c4d-susan", "--config", "/path/to/ws/.cogmem/config.toml"]
     }
   }
 }
@@ -552,6 +554,12 @@ entry named `cogmem-<agentId>`:
 
 `--host` is the identity the connection speaks as (ADR-0006). Without it every agent speaks
 as the same server, which is one memory scope however many agents read it.
+
+`--project` is one project per agent, prefixed with the integration's own project, which is
+derived from the workspace. The prefix is not decoration: two OpenClaw workspaces on one
+machine can share a Cogmem config and database, and `susan` in each of them is two agents,
+so a bare `susan` would merge them (ADR-0005, ADR-0009). Read that agent's memory back with
+`cogmem memory recall --project openclaw-1a2b3c4d-susan`.
 
 OpenClaw names that server's tools `cogmem-susan__cogmem_recall` and so on — measured on
 2026.11.5-beta.1: the name is `<safeServerName>__<tool name>`, `tools.deny` patterns are
@@ -567,16 +575,22 @@ and writes nothing; re-running changes nothing when the config is already correc
 `--force` restores a denial somebody deleted, and `connect openclaw --remove` takes the
 entries and the denials back out.
 
-The check also starts each agent's entry and asks it to recall, and the `agentId` in that
-answer has to be the agent's own — the half of the wiring a file cannot show.
+The check also starts each agent's entry and asks it to recall. An entry that answers as
+another agent ends the command — that is two agents sharing one identity — while an entry
+that cannot start at all is reported without failing, the way the same check behaves for
+Hermes and pi. Two policies this command will not rewrite are reported as warnings: a shared
+`mcp.servers.cogmem` (the by-hand setup above), which every agent can call, and an agent
+`tools.allow` list that never names that agent's own entry, which would leave it wired and
+memoryless.
 
-A machine with an agent registry (`~/.cogmem/agents.json`) is refused instead of wired:
-once identities exist, a stdio server needs a credential (#80), and one credential per
-agent is #185.
+A machine with an agent registry (`agents.json`, in the workspace `.cogmem/` or beside the
+home directory) is refused instead of wired: once identities exist, a stdio server needs a
+credential (#80), and one credential per agent is #185.
 
-The plugin this command also installs still pins one identity for the whole workspace, so
-automatic recall and remember are not per-agent yet; that is a separate, still-open
-question (ADR-0006).
+The plugin this command also installs still pins one identity for the whole workspace — it
+writes to project `openclaw-<workspace-hash>` as agent `openclaw-<workspace-hash>`, not to
+the per-agent projects above — so automatic recall and remember are not per-agent yet; that
+is a separate, still-open question (ADR-0006).
 
 ---
 
