@@ -29,7 +29,7 @@ function packageJson(): {
 }
 
 describe('core release metadata', () => {
-  test('4.0.0 release metadata keeps schema 32 and OpenClaw plugin 0.7.2', () => {
+  test('4.1.0 release metadata keeps schema 32 and OpenClaw plugin 0.7.2', () => {
     const manifest = packageJson();
     const readme = readText(join(coreRoot, 'README.md'));
     const contributing = readText(join(coreRoot, 'CONTRIBUTING.md'));
@@ -37,7 +37,7 @@ describe('core release metadata', () => {
     const checklist = readText(join(coreRoot, 'RELEASE_CHECKLIST.md'));
 
     expect(manifest.name).toBe('cogmem');
-    expect(manifest.version).toBe('4.0.0');
+    expect(manifest.version).toBe('4.1.0');
     expect(manifest.description).toContain('agent-native memory kernel');
     expect(manifest.repository?.url).toBe('git+https://github.com/liuqin164/cogmem.git');
     expect(readme).toContain('curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash');
@@ -50,8 +50,8 @@ describe('core release metadata', () => {
     // The version is a release fact, not a README one: package.json owns it and the changelog has
     // to agree, so the README can stay a landing page.
     expect(changelog).toContain(manifest.version);
-    expect(changelog).toContain('## 4.0.0');
-    expect(checklist).toContain('# cogmem 4.0.0 Release Checklist');
+    expect(changelog).toContain('## 4.1.0');
+    expect(checklist).toContain('# cogmem 4.1.0 Release Checklist');
     // 4.0 ships no ordered migration list (ADR-0007): one schema, created
     // directly. What is worth pinning is that the schema is 0032 and that the
     // number the identity check writes agrees with it.

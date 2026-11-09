@@ -1,11 +1,11 @@
-# cogmem 4.0.0 Release Checklist
+# cogmem 4.1.0 Release Checklist
 
 This release is distributed through the npm registry. GitHub remains the source and review mirror.
 
 ## Required Metadata
 
 - `package.json` name is `cogmem`.
-- `package.json` version is `4.0.0`.
+- `package.json` version is `4.1.0`.
 - `package.json` has `publishConfig.access = public`.
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
@@ -161,7 +161,7 @@ printf '%s\n' \
   | cogmem mcp --db /tmp/fresh-4.0.db --profile core
 ```
 
-The fresh file must answer `initialize` with `serverInfo` 4.0.0 and `tools/list` with the tools the `core` profile exposes. There is nothing left to rehearse on the old file beyond the refusal.
+The fresh file must answer `initialize` with `serverInfo` 4.1.0 and `tools/list` with the tools the `core` profile exposes. There is nothing left to rehearse on the old file beyond the refusal.
 
 After verification, create a GitHub Release from the matching version tag, for example `v4.0.0`. The release workflow publishes through npm Trusted Publishing when the release is published. It must not publish on tag push alone.
 
