@@ -8,7 +8,16 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
+import { resolveAgentRegistryPath } from '../../mcp/AgentRegistry.js';
 import { integrationScope } from '../IntegrationScope.js';
+import {
+  openClawAgentRefs,
+  unwireOpenClawCogmemAgentEntries,
+  verifyOpenClawAgentIsolation,
+  wireOpenClawCogmemAgentEntries,
+  type OpenClawAgentEntry,
+  type OpenClawIsolationReport,
+} from './OpenClawAgentWiring.js';
 
 function makePluginId(workspaceRoot: string): string {
   const hash = createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
@@ -61,6 +70,22 @@ export interface OpenClawAutoMemoryInstallOptions {
   pluginId?: string;
   dryRun?: boolean;
   force?: boolean;
+  /**
+   * The Cogmem MCP server one OpenClaw agent should run (#148).
+   *
+   * `connect` supplies it: that is the one place that resolves the launcher a host
+   * should name (ADR-0010, #78). Without it no per-agent entry is written — an entry
+   * built from a guessed command is a server that may never start.
+   */
+  agentServerFor?: (agentId: string) => { command: string; args: string[] };
+}
+
+/** What the per-agent wiring did, and the isolation it had to establish to be worth having. */
+export interface OpenClawMultiAgentReport {
+  agents: string[];
+  entries: OpenClawAgentEntry[];
+  denialsAdded: Array<{ agentId: string; name: string; pattern: string }>;
+  isolation: OpenClawIsolationReport;
 }
 
 export interface OpenClawAutoMemoryInstallResult {
@@ -75,6 +100,8 @@ export interface OpenClawAutoMemoryInstallResult {
   configUpdated: boolean;
   hookNames: string[];
   nextCommands: string[];
+  /** Present when the OpenClaw config defines more than one agent (#148). */
+  multiAgent?: OpenClawMultiAgentReport;
 }
 
 interface PluginFiles {
@@ -177,6 +204,8 @@ export function installOpenClawAutoMemoryPlugin(
     agentId,
     projectId,
     pluginId,
+    force: options.force === true,
+    ...(options.agentServerFor ? { agentServerFor: options.agentServerFor } : {}),
   });
   const alreadyCurrent = filesAlreadyCurrent && !patchedConfig.changed;
 
@@ -213,6 +242,7 @@ export function installOpenClawAutoMemoryPlugin(
       `openclaw plugins inspect ${pluginId} --runtime --json`,
       'openclaw gateway restart',
     ],
+    ...(patchedConfig.multiAgent ? { multiAgent: patchedConfig.multiAgent } : {}),
   };
 }
 
@@ -271,7 +301,9 @@ function buildPatchedOpenClawConfig(input: {
   agentId: string;
   projectId: string;
   pluginId: string;
-}): { text: string; changed: boolean } {
+  force: boolean;
+  agentServerFor?: (agentId: string) => { command: string; args: string[] };
+}): { text: string; changed: boolean; multiAgent?: OpenClawMultiAgentReport } {
   const original = existsSync(input.openclawConfigPath)
     ? readFileSync(input.openclawConfigPath, 'utf8')
     : '{}';
@@ -426,11 +458,77 @@ function buildPatchedOpenClawConfig(input: {
     }
   }
 
+  // One agent, one Cogmem identity (#148).
+  //
+  // OpenClaw has no per-agent MCP server map (openclaw/openclaw#72591), so an agent gets
+  // its own entry plus a denial of every other agent's; without the denial the neighbour's
+  // server is callable and two agents' memory mingles with nothing to show for it. The
+  // denial is verified on the way in *and* on the way out: in, so a config that already
+  // leaks is named instead of quietly extended; out, so this installer cannot write one.
+  const multiAgent = wireOpenClawAgents(root, input);
+
   const after = JSON.stringify(root);
   return {
     text: `${JSON.stringify(root, null, 2)}\n`,
     changed: before !== after,
+    ...(multiAgent ? { multiAgent } : {}),
   };
+}
+
+/**
+ * The per-agent half of the OpenClaw integration.
+ *
+ * Only for a config that actually runs several agents: one agent keeps the integration it
+ * has always had, with no `mcp.servers` entry invented for it (the ticket's "single agent
+ * behaviour unchanged").
+ */
+function wireOpenClawAgents(
+  root: Record<string, unknown>,
+  input: { workspaceRoot: string; configPath: string; force: boolean; agentServerFor?: (agentId: string) => { command: string; args: string[] } },
+): OpenClawMultiAgentReport | undefined {
+  if (!input.agentServerFor) return undefined;
+  const refs = openClawAgentRefs(root);
+  if (refs.length < 2) return undefined;
+
+  // A registry means identities exist and `cogmem mcp` refuses a stdio connection without
+  // a credential (#80, ADR-0006). One entry per agent would therefore need one credential
+  // each, which this command does not mint — writing entries that cannot start is the
+  // "host looks wired and has no memory" failure this repository keeps re-finding (#108),
+  // so say so here instead (#185).
+  const registry = resolveAgentRegistryPath({ configPath: input.configPath, cwd: input.workspaceRoot });
+  if (registry.path) {
+    throw new Error(
+      `multi_agent_credentials_required: ${registry.path} registers agents, so a stdio Cogmem server `
+      + 'needs a credential and each OpenClaw agent would need its own. One credential per agent is not '
+      + 'implemented yet (#185); until then, point OpenClaw at a resident HTTP Cogmem server with one '
+      + 'credential per agent (docs/mcp-hosts.md), or wire the agents on a machine without that registry.',
+    );
+  }
+
+  if (!input.force) {
+    const existing = verifyOpenClawAgentIsolation(root, refs, { requireOwnEntries: false });
+    if (!existing.ok) {
+      throw new Error(
+        `openclaw_agent_isolation: this OpenClaw config already lets one agent reach another agent's Cogmem entry, `
+        + `so nothing was written:\n  ${existing.problems.join('\n  ')}\n`
+        + 'Add the named denials, or re-run with --force to have cogmem write them.',
+      );
+    }
+  }
+
+  const wiring = wireOpenClawCogmemAgentEntries({
+    root,
+    refs,
+    serverFor: input.agentServerFor,
+    force: input.force,
+  });
+  const isolation = verifyOpenClawAgentIsolation(root, refs);
+  if (!isolation.ok) {
+    // Not reachable by a correct wiring pass: this is the installer checking its own work
+    // rather than asking the operator to trust it.
+    throw new Error(`openclaw_agent_isolation_after_wiring: ${isolation.problems.join('; ')}`);
+  }
+  return { ...wiring, isolation };
 }
 
 function buildPluginFiles(pluginId?: string): PluginFiles {
@@ -2237,5 +2335,9 @@ export function unpatchOpenClawPluginEntry(original: string, pluginId: string, c
   const load = isRecord((plugins as Record<string, unknown>).load) ? (plugins as Record<string, unknown>).load as Record<string, unknown> : {};
   dropPluginEntry(entries, load, plugins as Record<string, unknown>, pluginId);
   if (Object.keys(entries).length === 0) delete (plugins as Record<string, unknown>).entries;
+  // The per-agent half of the integration (#148) goes with it: an `mcp.servers.cogmem-<agent>`
+  // entry that outlives the plugin is a server the host keeps starting for nothing, and the
+  // denials it wrote are noise once the entries they name are gone.
+  unwireOpenClawCogmemAgentEntries(root, openClawAgentRefs(root));
   return `${JSON.stringify(root, null, 2)}\n`;
 }
