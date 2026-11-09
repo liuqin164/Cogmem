@@ -11,6 +11,7 @@ const PRODUCT_FACETS: Readonly<Record<string, ProductFacet>> = {
   actor: 'person',
   event: 'event',
   location: 'place',
+  place: 'place',
   state: 'state',
 };
 

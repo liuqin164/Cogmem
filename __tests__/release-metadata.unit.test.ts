@@ -29,7 +29,7 @@ function packageJson(): {
 }
 
 describe('core release metadata', () => {
-  test('4.0.0 release metadata keeps schema 32 and OpenClaw plugin 0.7.2', () => {
+  test('4.1.0 release metadata keeps schema 32 and OpenClaw plugin 0.7.2', () => {
     const manifest = packageJson();
     const readme = readText(join(coreRoot, 'README.md'));
     const contributing = readText(join(coreRoot, 'CONTRIBUTING.md'));
@@ -37,7 +37,7 @@ describe('core release metadata', () => {
     const checklist = readText(join(coreRoot, 'RELEASE_CHECKLIST.md'));
 
     expect(manifest.name).toBe('cogmem');
-    expect(manifest.version).toBe('4.0.0');
+    expect(manifest.version).toBe('4.1.0');
     expect(manifest.description).toContain('agent-native memory kernel');
     expect(manifest.repository?.url).toBe('git+https://github.com/liuqin164/cogmem.git');
     expect(readme).toContain('curl -fsSL https://raw.githubusercontent.com/liuqin164/cogmem/main/install.sh | bash');
@@ -50,8 +50,8 @@ describe('core release metadata', () => {
     // The version is a release fact, not a README one: package.json owns it and the changelog has
     // to agree, so the README can stay a landing page.
     expect(changelog).toContain(manifest.version);
-    expect(changelog).toContain('## 4.0.0');
-    expect(checklist).toContain('# cogmem 4.0.0 Release Checklist');
+    expect(changelog).toContain('## 4.1.0');
+    expect(checklist).toContain('# cogmem 4.1.0 Release Checklist');
     // 4.0 ships no ordered migration list (ADR-0007): one schema, created
     // directly. What is worth pinning is that the schema is 0032 and that the
     // number the identity check writes agrees with it.
@@ -247,8 +247,8 @@ describe('documented tool profile counts match the shipped registry', () => {
     const changelog = readText(join(coreRoot, 'CHANGELOG.md'));
 
     expect(core).toBe(6);
-    expect(admin).toBe(22);
-    expect(full).toBe(36);
+    expect(admin).toBe(26);
+    expect(full).toBe(40);
 
     expect(hosts).toContain(`The server exposes ${full} tools.`);
     expect(hosts).toContain('| `core` | ' + core + ' |');
@@ -262,19 +262,16 @@ describe('documented tool profile counts match the shipped registry', () => {
     expect(changelog).toContain('`core` (' + core + '), `admin` (' + admin + '), `full` (' + full + ')');
   });
 
-  test('no shipped document promises a shared-memory tool in 4.0', () => {
-    // #68: 4.0 does not expose shared memory; it is planned for 4.1. A document
-    // that still names one of the four removed tools is a promise a 4.0 host
-    // would follow into `tool_not_found`.
+  test('a shipped document that names a shared-memory tool names one that exists', () => {
+    // 4.0 asserted the four names appeared nowhere, because 4.0 exposed none of them (#68). 4.1
+    // exposes them again, so the rule that survives is the useful one: a document may name one only
+    // if the registry really ships it, or a host follows the document into `tool_not_found`.
+    const registry = new Set(listCogmemMcpTools().map((tool) => tool.name));
     for (const file of ['docs/mcp-hosts.md', 'README.md', 'CHANGELOG.md']) {
       const text = readText(join(coreRoot, file));
-      const named = [
-        'cogmem_shared_publish',
-        'cogmem_shared_retract',
-        'cogmem_shared_subscribe',
-        'cogmem_shared_explain',
-      ].filter((tool) => text.includes(tool));
-      expect({ file, named }).toEqual({ file, named: [] });
+      const named = [...text.matchAll(/cogmem_shared_[a-z]+/g)].map((match) => match[0]);
+      const missing = [...new Set(named)].filter((tool) => !registry.has(tool));
+      expect({ file, missing }).toEqual({ file, missing: [] });
     }
   });
 

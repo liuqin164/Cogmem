@@ -543,3 +543,21 @@ Expose these tools to the agent:
 Use `cogmem_recall` for normal answers. It uses the same agent-facing recall path as `cogmem memory recall`, so empty vector indexes can still return bounded `raw_ledger` evidence with `sourceContext` and a local `sourceContext.locator.command`. Pass `agentId` and `projectId` when available; if an MCP host sends only `projectId`, Cogmem infers `agentId` from it. Pass `collection: "theseus"` only for creative artifacts. Use `cogmem_strategy_plan` to inspect the read-only strategy capsule without performing recall, and `cogmem_explain_recall` only when auditing `filteredEvidence`, activation paths, or governance suppression reasons. Use `cogmem_memory_map` for self-inspection, `cogmem_maintenance_tick` for host-owned upkeep suggestions, and `cogmem_prospective` only to manage candidate state. A strategy capsule or due candidate is never authorization to execute.
 
 The OpenClaw `agent_end` queue writes raw evidence and updates a source/thread-scoped session episode using deterministic CPU rules. It does not run Dream. Related turns remain in one open episode; explicit user closure or a high-confidence host/import boundary can hard-seal it, while idle or uncertain closure is soft and may safely reopen. A timer should call `cogmem dream tick`, not force a full raw-ledger scan. Dream creates candidates grounded in raw event IDs; `cogmem memory govern` remains the separate durable-memory decision.
+
+## Reading an index answer
+
+A recall answer at index granularity is a list of memories you have not read yet: each entry carries an id, a title, a date and a locator. Fetch the ones the question needs with cogmem_graph_node (pass several ids at once) or by running the locator, and never answer from an index entry as though it were the memory.
+
+`cogmem_recall` returns this shape when it is called with `granularity: "index"`, and the injected recall block
+falls back to the same one-line form when the budget cannot pay for whole memories. Both name the locator that
+brings the whole thing back, so nothing is unreachable — it is only unread.
+
+## Keeping something out of memory
+
+To keep a passage out of memory entirely, the user can wrap it in <COGMEM_PRIVATE> … </COGMEM_PRIVATE> or write <COGMEM_PRIVATE_ALL> to exclude the whole turn. Marked text is never stored — it does not reach the ledger, the search index or recall, so nothing has to be deleted later. Only the user's own text can be marked this way; the assistant's reply and tool results are unaffected.
+
+Two forms, one namespace: the inline pair marks a passage, the standalone marker excludes the whole turn. Marked text never becomes an event — it is not in the ledger, the search index or recall — so there is nothing to delete afterwards, which is a different promise from `cogmem forget` (after-the-fact deletion) and from the secret chain (which stores, marks and withholds).
+
+## How Cogmem classifies a turn
+
+Cogmem classifies each turn as one of these episode kinds: discussion, operation, decision, correction, diagnostic, planning, status_update, preference, other. A project can replace this vocabulary in its own `.cogmem/config.toml` under `[taxonomy]`; a broken vocabulary falls back to the default and `cogmem doctor` says so.

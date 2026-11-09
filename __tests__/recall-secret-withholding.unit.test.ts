@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
+import { explainRecallWithKernel } from '../src/recall/RecallExplanation.js';
 import { EventStore } from '../src/store/EventStore.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -51,6 +52,25 @@ test('a question about the words themselves still reaches it', () => {
     try {
       const result = memory.recall({ query: '轮换', projectId: 'p', agentId: 'a', intent: 'forensic_quote' });
       expect(result.items.some((item) => item.text.includes('令牌要轮换'))).toBe(true);
+    } finally {
+      kernel.close();
+    }
+  });
+});
+
+/**
+ * #169: the explain path reads the same recall, so deleting the read-time text rescan must leave it gated too.
+ * Explain is the surface an operator uses to ask "what did recall do"; if it handed back the marked turn, the
+ * withholding would be auditable as a lie.
+ */
+test('the explain path is gated by the same mark, in its evidence and its trace', () => {
+  withLedger(({ kernel }) => {
+    try {
+      const explanation = explainRecallWithKernel(kernel, { query: '轮换', projectId: 'p', agentId: 'a', limit: 5 });
+      const body = JSON.stringify(explanation);
+      expect(body).toContain('轮换流程写在运维手册里');
+      expect(body).not.toContain('令牌要轮换');
+      expect(body).toContain('secret_bearing_withheld');
     } finally {
       kernel.close();
     }

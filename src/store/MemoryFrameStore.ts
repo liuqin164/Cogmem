@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'bun:sqlite';
+import type { MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 import { normalizeFrameRelations } from '../semantic/RelationConstraintRegistry.js';
 import { invalidateMemoryEdgeSupportIds } from '../binding/MemoryEdgeMerge.js';
 import { validateMemoryFrame } from '../semantic/MemoryFrameValidator.js';
@@ -8,7 +9,7 @@ import type { MemoryFrameStatus, MemoryFrameV1 } from '../semantic/MemoryFrameTy
 export interface MemoryFrameSaveInput { frame: MemoryFrameV1; sourceFingerprint: string; status?: MemoryFrameStatus; publishStatus?: 'active' | 'needs_confirmation'; now?: number; dreamJobLeaseId?: string; leaseUntil?: number; attemptGeneration?: number; }
 
 export class MemoryFrameStore {
-  constructor(readonly db: Database) {
+  constructor(readonly db: Database, private readonly taxonomy?: MemoryTaxonomy) {
     const columns = new Set((this.db.prepare('PRAGMA table_info(memory_frames)').all() as Array<{ name: string }>).map((column) => column.name));
     const required = ['dream_job_lease_id', 'dream_lease_until', 'attempt_generation', 'revision_id', 'revision_number', 'supersedes_frame_id', 'publish_status'];
     if (required.some((name) => !columns.has(name))) throw new Error('memory_frame_schema_not_migrated');
@@ -22,7 +23,7 @@ export class MemoryFrameStore {
     // Normalise the model's relation names before validating: a name outside the
     // vocabulary is recorded as RELATED_TO rather than failing the whole frame.
     const frame = normalizeFrameRelations(input.frame);
-    const validation = validateMemoryFrame(frame, { allowEmptyEvidence: requestedStatus !== 'active' && frame.sourceAuthority === 'deterministic_fallback' });
+    const validation = validateMemoryFrame(frame, { allowEmptyEvidence: requestedStatus !== 'active' && frame.sourceAuthority === 'deterministic_fallback', taxonomy: this.taxonomy });
     if (!validation.valid) throw new Error(`invalid_memory_frame:${validation.errors.join(',')}`);
     const now = input.now ?? Date.now();
     const status: MemoryFrameStatus = 'staged';
@@ -192,7 +193,7 @@ export class MemoryFrameStore {
     const reviewed = Boolean(this.db.transaction(() => {
       if (action === 'approve') {
         const frame = this.get(frameId);
-        const validation = validateMemoryFrame(frame);
+        const validation = validateMemoryFrame(frame, { taxonomy: this.taxonomy });
         if (!validation.valid || !this.hasPublishableEvidence(frameId, projectId, String(frame?.episodeId ?? ''))) {
           throw new Error(`memory_frame_review_evidence_invalid:${frameId}`);
         }
@@ -288,7 +289,7 @@ export class MemoryFrameStore {
     if (next === 'active' && row.needs_review) return false;
     if (next === 'active') {
       const frame = this.get(frameId);
-      const validation = validateMemoryFrame(frame);
+      const validation = validateMemoryFrame(frame, { taxonomy: this.taxonomy });
       if (!validation.valid || !this.hasPublishableEvidence(frameId, row.project_id, row.episode_id)) return false;
     }
     const publication = next === 'active' ? 'active' : next === 'needs_confirmation' ? 'needs_confirmation' : row.publish_status;
@@ -341,7 +342,7 @@ export class MemoryFrameStore {
       stateTransitions: parseJsonArray(row.state_transitions_json),
       sourceAuthority: row.source_authority, semanticCompleteness: row.semantic_completeness, needsReview: Boolean(row.needs_review),
     } as unknown as MemoryFrameV1;
-    const validation = validateMemoryFrame(frame, { allowEmptyEvidence: frame.sourceAuthority === 'deterministic_fallback' && frame.status !== 'active' });
+    const validation = validateMemoryFrame(frame, { allowEmptyEvidence: frame.sourceAuthority === 'deterministic_fallback' && frame.status !== 'active', taxonomy: this.taxonomy });
     if (!validation.valid) throw new Error(`invalid_stored_memory_frame:${frameId}:${validation.errors.join(',')}`);
     return frame;
   }

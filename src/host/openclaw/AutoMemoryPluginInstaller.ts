@@ -2230,10 +2230,12 @@ export function unpatchOpenClawPluginEntry(original: string, pluginId: string, c
   if (entryConfig.configPath !== configPath || entryConfig.projectId !== projectId) {
     return original;
   }
-  delete entries[pluginId];
+  // One helper, because "the entry" is three places: the entry map, the load path that names the plugin
+  // directory, and the allow-list name. Removing only the entry left the dead load path behind, and a
+  // `plugins.load.paths` entry whose directory is gone is the failure #116 exists to prevent: OpenClaw
+  // rejects the whole config, not just the missing plugin. Measured on the box after `connect --remove`.
+  const load = isRecord((plugins as Record<string, unknown>).load) ? (plugins as Record<string, unknown>).load as Record<string, unknown> : {};
+  dropPluginEntry(entries, load, plugins as Record<string, unknown>, pluginId);
   if (Object.keys(entries).length === 0) delete (plugins as Record<string, unknown>).entries;
-  if (Array.isArray((plugins as Record<string, unknown>).allow)) {
-    (plugins as Record<string, unknown>).allow = ((plugins as Record<string, unknown>).allow as unknown[]).filter((id) => id !== pluginId);
-  }
   return `${JSON.stringify(root, null, 2)}\n`;
 }

@@ -1,10 +1,11 @@
 import { relationConstraintRegistry } from './RelationConstraintRegistry.js';
 import { isMemoryFrame, memoryFrameShapeError, MEMORY_DIMENSIONS, MEMORY_FRAME_LIMITS, MEMORY_FRAME_REQUIRED_DIMENSIONS } from './MemoryFrameSchema.js';
 import type { MemoryFrameV1 } from './MemoryFrameTypes.js';
+import { DEFAULT_TAXONOMY, type MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 
 export interface MemoryFrameValidationResult { valid: boolean; errors: string[]; frame?: MemoryFrameV1; }
 
-export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidence?: boolean } = {}): MemoryFrameValidationResult {
+export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidence?: boolean; taxonomy?: MemoryTaxonomy } = {}): MemoryFrameValidationResult {
   const shapeError = memoryFrameShapeError(value);
   if (shapeError) return { valid: false, errors: [`invalid_memory_frame_shape:${shapeError}`] };
   const frame = value as MemoryFrameV1;
@@ -29,7 +30,7 @@ export function validateMemoryFrame(value: unknown, options: { allowEmptyEvidenc
   const limits = MEMORY_FRAME_LIMITS;
   const idLimit = limits.id;
   const invalidEvidence = (ids: unknown[]): boolean => ids.length > limits.evidence || ids.some((id) => typeof id !== 'string' || !id.trim() || id.length > idLimit);
-  const episodeKinds = new Set(['discussion','operation','decision','correction','diagnostic','planning','status_update','preference','other']);
+  const episodeKinds = new Set((options.taxonomy ?? DEFAULT_TAXONOMY).episodeKinds.map((kind) => kind.id));
   const statuses = new Set(['staged','active','needs_confirmation','superseded','failed']);
   const publishStatuses = new Set(['active','needs_confirmation']);
   if (!episodeKinds.has(frame.episodeKind)) errors.push('invalid_episode_kind');

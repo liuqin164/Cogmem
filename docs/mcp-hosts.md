@@ -61,13 +61,13 @@ instead of the raw text, or match a paraphrase. Both need a model provider.
 
 ## Profiles
 
-The server exposes 36 tools. A host does not need all of them.
+The server exposes 40 tools. A host does not need all of them.
 
 | Profile | Tools | Use for |
 |---|---|---|
 | `core` | 6 | Everyday agent work: recall, record a turn, inspect evidence |
-| `admin` | 22 | Operators: sealing episodes, dream ticks, governance review, importing host history |
-| `full` | 36 | Debugging and tool discovery |
+| `admin` | 26 | Operators: sealing episodes, dream ticks, governance review, importing host history |
+| `full` | 40 | Debugging and tool discovery |
 
 `core` is these six, and each one says which step of the retrieval chain it is (#118).
 Index first, detail by ID: a broad answer returns identifiers, and the caller pays for
@@ -176,24 +176,36 @@ that never surfaced, finds none, and concludes Cogmem does not work. Emergence
 is the property only the push path can claim, and today the OpenClaw adapter is
 the only adapter on it.
 
-## Shared memory — planned for 4.1, not in 4.0
+## Shared memory — opt-in, off by default
 
-4.0 does not expose shared memory. No profile registers a shared-memory tool, so
-a call to one is answered `tool_not_found`, and starting a server no longer
-creates the shared region's storage.
+Sharing between agents ships in 4.1 and is **off unless the operator turns it on**: `[shared] enabled`
+in `config.toml` is the switch, and a default install shares nothing.
 
-The reason is that the three things shared memory needs are not in 4.0: a
-trusted identity for each connected agent
-([#65](https://github.com/liuqin164/cogmem/issues/65)), per-collection read
-permission ([#66](https://github.com/liuqin164/cogmem/issues/66)), and
-provenance labelling that keeps another agent's memory at lower trust
-([#67](https://github.com/liuqin164/cogmem/issues/67)). Shipping
-publish/subscribe without them would hand every connected bot one shared
-namespace with no way to say who wrote what.
+With the switch on, four `admin`-profile tools cover the region:
 
-The port and its SQLite adapter stay in the tree for 4.1, reachable from neither
-the MCP surface nor a package entry point. When the three issues above land, the
-tools come back as an opt-in feature rather than a default region.
+| Tool | Profile | Behaviour |
+|---|---|---|
+| `cogmem_shared_publish` | admin | Publishes items into a collection. The first publisher of a collection owns it, and only the owner may publish into it afterwards |
+| `cogmem_shared_retract` | admin | Soft retraction: the item leaves subscriptions, stays explainable, and only its publisher may retract it |
+| `cogmem_shared_subscribe` | admin | Reads the shared collections |
+| `cogmem_shared_explain` | admin | Looks up one item by hash, including when and by whom it was retracted |
+
+The model is **publish and read** ([#146](https://github.com/liuqin164/cogmem/issues/146), Ryu 2026-11-06):
+while the switch is on, every agent that can connect reads every shared collection. Three rules bound it:
+
+- **Writing is explicit and owner-only, reading is not gated per reader.** The first publisher of a
+  collection owns it; only the owner may publish into it or retract from it, and a retraction takes effect
+  immediately. Reading is open to any connected agent, so the per-reader list that 4.1 first shipped with
+  is retained in the schema but consulted nowhere — a future multi-user deployment can turn that check
+  back on, and until then there is no branch to keep in step.
+- **Identity comes from the connection, never from the arguments.** A caller cannot name itself a
+  different publisher or retractor, and a call with no identity reads nothing rather than everything
+  (ADR-0006: a `hostId` needs a credential).
+- **Writing is refused while the switch is off**: `shared_disabled`, rather than a silent no-op.
+
+`cogmem doctor` lists every collection with its owner, item count, and the fact that it is readable by
+every agent that can connect, and it reports the switch. Publishing and retraction are recorded;
+**who subscribed is not**, so read-side auditing is not something this release can answer.
 
 ## Importing host history
 
@@ -486,7 +498,7 @@ legacy SSE transport, sends a GET to the endpoint, and fails with
 `SSE error: Non-200 status code (400)`.
 
 `openclaw mcp probe` reports the discovered tool count per server; 6 means the
-`core` profile, 36 means `full`.
+`core` profile, 40 means `full`.
 
 `openclaw mcp add` prints only `Saved MCP server "cogmem" to <path>`; the tool
 count comes from `openclaw mcp probe`. To remove a server, run
@@ -709,12 +721,13 @@ Restarting loses live MCP sessions; hosts reconnect on the next call.
 | Symptom | Cause |
 |---|---|
 | `401 unauthorized` | Server has `--token`; the host is not sending the header. The body is the bare word `unauthorized` |
-| `tool_not_in_profile` | Tool is outside the active profile; restart with `--profile admin` |
+| `tool_not_in_profile` | Tool is outside the active profile. The message names every profile that does expose it, so restart with one of those |
 | `session_not_found` (HTTP 404) | The MCP session expired or the server restarted; reconnect the host |
 | `Bad Request: Server not initialized` (HTTP 400) | A request arrived without `mcp-session-id`, or before `initialize`. Send the session header |
 | `Failed to start server. Is port 7337 in use?` | Another process holds the port; check with `ss -ltnp` |
 | Host connects but sees 6 tools | Expected: `core` profile |
-| `tool_not_found` | The name is not a Cogmem tool at all, in any profile. Check the name; on 4.0 this is the answer for the shared-memory tools that shipped before 4.0 and return in 4.1 |
+| `tool_not_found` | The name is not a Cogmem tool at all, in any profile. Check the name |
+| `shared_disabled` | A `cogmem_shared_*` call on an install that did not set `[shared] enabled` |
 
 Check the endpoint by hand. The first call has no session; take the
 `mcp-session-id` response header and send it on every later call:

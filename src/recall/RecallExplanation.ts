@@ -1,6 +1,7 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
-import type { MemoryEventContext, MemorySourceRef, Neuron } from '../types/index.js';
+import type { MemoryEvent, MemoryEventContext, MemorySourceRef, Neuron } from '../types/index.js';
 import {
+  eventHoldsSecretMark,
   KernelAgentMemoryBackend,
   type AgentRecallDecisionTrace,
   type AgentRecallItem,
@@ -221,7 +222,7 @@ function sourceAnchorForAgentItem(
   }
   const eventId = item.sourceAnchor?.eventId;
   if (!eventId) return undefined;
-  const context = kernel.getEventContext(eventId, { before: 1, after: 1 }) || undefined;
+  const context = withoutSecretMarked(kernel.getEventContext(eventId, { before: 1, after: 1 }));
   const payload = context?.event.payload as { sourceRefs?: unknown } | undefined;
   const sourceRefs = Array.isArray(payload?.sourceRefs)
     ? payload.sourceRefs.filter((entry): entry is MemorySourceRef => Boolean(entry && typeof entry === 'object'))
@@ -308,7 +309,7 @@ function toNavigationFilteredEvidence(
 function sourceAnchorFor(neuron: Neuron, kernel?: MemoryKernel): RecallExplanationSourceAnchor | undefined {
   const eventId = neuron.metadata.sourceEventId;
   if (!eventId || !kernel) return undefined;
-  const context = kernel.getEventContext(eventId, { before: 1, after: 1 }) || undefined;
+  const context = withoutSecretMarked(kernel.getEventContext(eventId, { before: 1, after: 1 }));
   if (!context) {
     return { eventId, sourceRefs: [] };
   }
@@ -321,6 +322,26 @@ function sourceAnchorFor(neuron: Neuron, kernel?: MemoryKernel): RecallExplanati
     sourceEventType: context.event.eventType,
     sourceRefs,
     context,
+  };
+}
+
+/**
+ * An event window with the secret-marked events taken out (#142, #169).
+ *
+ * The explanation reads its own windows, and a marked turn used to come back inside the anchor's `before` array
+ * with its text intact even though recall itself had withheld it — the same leak #142 fixed for the recall lanes,
+ * on the one surface an operator uses to audit them. A marked anchor means there is nothing to explain.
+ */
+function withoutSecretMarked(context: MemoryEventContext | null | undefined): MemoryEventContext | undefined {
+  if (!context) return undefined;
+  if (eventHoldsSecretMark(context.event)) return undefined;
+  const keep = (event: MemoryEvent) => !eventHoldsSecretMark(event);
+  return {
+    ...context,
+    before: context.before.filter(keep),
+    after: context.after.filter(keep),
+    parent: context.parent && keep(context.parent) ? context.parent : undefined,
+    children: (context.children ?? []).filter(keep),
   };
 }
 

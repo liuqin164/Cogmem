@@ -110,9 +110,20 @@ describe('the recall block', () => {
     expect(block.endsWith('</COGMEM_RECALL_CONTEXT>')).toBe(true);
   });
 
-  test('only memoryContextMaxItems items are rendered', () => {
-    const block = formatRecallContext({ items: [item({ id: 'a' }), item({ id: 'b' }), item({ id: 'c' })] }, { ...CONFIG, memoryContextMaxItems: 1 });
-    expect(block.match(/sourceType=/g)).toHaveLength(1);
+  test('how much renders is decided by the measured budget, not by a count (#131)', () => {
+    const items = [item({ id: 'a' }), item({ id: 'b' }), item({ id: 'c' }), item({ id: 'd' })];
+    // A budget that affords the first item whole and no second one: the rest are still named, as index
+    // lines, rather than vanishing — which is exactly what a count ceiling does to them.
+    // The header alone costs a few hundred characters, so the budget has to be a realistic one.
+    const tight = formatRecallContext({ items }, { ...CONFIG, memoryContextMaxChars: 1200 });
+    expect((tight.match(/sourceType=/g) ?? []).length).toBeLessThan(items.length);
+    expect(tight).toContain('- index[');
+
+    // With room for everything, nothing is degraded and the old behaviour is unchanged.
+    const roomy = formatRecallContext({ items }, { ...CONFIG, memoryContextMaxChars: 200_000 });
+    expect(roomy.match(/sourceType=/g)).toHaveLength(items.length);
+    expect(roomy).not.toContain('- index[');
+    expect(roomy).not.toContain('overBudget=true');
   });
 });
 

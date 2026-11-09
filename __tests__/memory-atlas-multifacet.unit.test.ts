@@ -328,12 +328,12 @@ test('action-history recall selects Hermes operation and suppresses unrelated co
   }
 });
 
-test('action-history compiled fallback requires entity and operational action match', async () => {
+test('action-history compiled fallback requires entity and action match', async () => {
   const kernel = createKernel();
   try {
     await kernel.ingest({
       projectId: 'openclaw',
-      content: '检查 Hermes 数据库是否被锁，memory graph zombie process 和 Bun factory bug 导致 database locked。',
+      content: 'Hermes 的名字来自希腊神话，是众神的信使。',
       tags: ['agent:openclaw'],
     });
     await kernel.ingest({
@@ -351,7 +351,9 @@ test('action-history compiled fallback requires entity and operational action ma
     });
     const text = result.items.map((item) => item.text).join('\n');
     expect(text).toContain('启动本机安装的 Hermes');
-    expect(text).not.toContain('database locked');
+    // Entity alone is not enough: the fallback lists the project's action kinds, so a memory that names
+    // Hermes but does nothing with it stays out (#183).
+    expect(text).not.toContain('希腊神话');
     expect(result.decisionTrace?.reason).toBe('action_history');
   } finally {
     kernel.close();

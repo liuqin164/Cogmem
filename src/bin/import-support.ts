@@ -25,6 +25,7 @@ import { InstalledBatchProcessor } from '../batch/InstalledBatchProcessor.js';
 import type { BatchProgressEvent } from '../batch/InstalledBatchProcessor.js';
 import { loadCogmemConfig, resolveCogmemConfigPath, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
 import { integrationScope } from '../host/IntegrationScope.js';
+import type { OfflineConsolidationOutput } from '../engine/OfflineConsolidationPipeline.js';
 import {
   createMemoryKernel,
   createMemoryKernelFromConfig,
@@ -58,6 +59,15 @@ export interface AgentImportResult {
   rawRecordsAnchored?: number;
   emptyEpisodesSkipped?: number;
   reindexRaw?: boolean;
+  /**
+   * The offline consolidation's blocked decisions (#129, #168).
+   *
+   * Same array the API returns from `kernel.consolidate()`, carried through unsummarised so a
+   * CLI import reports "two origins disagreed and nothing was consolidated" rather than looking
+   * identical to "this batch had nothing to consolidate". Absent on paths that do not run an
+   * offline window (dry-run, `--reindex-raw`).
+   */
+  blockedConsolidations?: OfflineConsolidationOutput['blockedConsolidations'];
   processedSourceIds: string[];
   diagnostics: SourceAdapterDiagnostic[];
   sourceResults: Array<{
@@ -315,6 +325,7 @@ async function importSources(input: {
       rawRecordsAnchored: summary.recordsIngested,
       emptyEpisodesSkipped,
       reindexRaw: false,
+      blockedConsolidations: summary.offline.blockedConsolidations,
       processedSourceIds: summary.processedSourceIds,
       diagnostics: [...opened.diagnostics, ...summary.adapterDiagnostics],
       sourceResults: summary.sourceResults.map((item) => ({
@@ -649,6 +660,11 @@ function printHumanSummary(result: AgentImportResult): void {
   if (result.rawRecordsAnchored !== undefined) console.log(`raw ledger anchors: ${result.rawRecordsAnchored}`);
   if (result.emptyEpisodesSkipped) console.log(`empty episodes skipped: ${result.emptyEpisodesSkipped}`);
   console.log(`records skipped: ${result.skippedRecords}`);
+  // Only when non-empty: the normal import prints exactly what it printed before (#168). A blocked
+  // consolidation is the one case where "0 consolidated" and "nothing to consolidate" must differ.
+  for (const item of result.blockedConsolidations ?? []) {
+    console.log(`blocked consolidation: ${item.reason} ${item.subject}/${item.predicate} (${item.factId})`);
+  }
   if (result.diagnostics.length > 0) {
     console.log('diagnostics:');
     for (const diagnostic of result.diagnostics) {

@@ -5,8 +5,8 @@ import { MemoryAtlasStore } from '../store/MemoryAtlasStore.js';
 import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import type { MemoryEvent } from '../types/index.js';
 import { EpisodeTitleGenerator } from './EpisodeTitleGenerator.js';
-import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
-import { inferActionKinds } from '../utils/ActionKindRegistry.js';
+import { extractEntityCues, inferActionKinds, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
+import { DEFAULT_TAXONOMY, type MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 import { localDateFor } from '../utils/LocalDateContext.js';
 import {
   invalidateMemoryEdgeSupportIds,
@@ -77,13 +77,17 @@ const FACET_EDGE_RELATIONS = new Set([
 ]);
 
 export class GraphCurator {
-  private readonly titleGenerator = new EpisodeTitleGenerator();
+  private readonly titleGenerator: EpisodeTitleGenerator;
 
   constructor(
     private readonly db: Database,
     private readonly eventStore: EventStore,
     private readonly atlasStore: MemoryAtlasStore,
-  ) {}
+    private readonly taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY,
+  ) {
+    // The episode title's action cue is the project's, not the shipped registry's (#182).
+    this.titleGenerator = new EpisodeTitleGenerator(taxonomy);
+  }
 
   rebuild(projectId: string, now = Date.now()): GraphCuratorResult {
     const staleEdgeIds = this.deleteFacetEdges(projectId, now);
@@ -320,7 +324,7 @@ export class GraphCurator {
     }
     const memoryKind = normalizeKind(projection.issueHints[0] ? issueKind(projection.issueHints[0]) : projection.row.episode_type || 'discussion');
     targets.push({ type: 'memoryKind', id: memoryKind, nodeId: `memoryKind:${projection.row.project_id}:${memoryKind}`, label: memoryKind, relation: 'HAS_MEMORY_KIND', confidence: 0.75 });
-    for (const actionKind of actionKindsFor(projection)) {
+    for (const actionKind of actionKindsFor(projection, this.taxonomy)) {
       targets.push({ type: 'actionKind', id: actionKind, nodeId: `actionKind:${projection.row.project_id}:${actionKind}`, label: actionKind, relation: 'HAS_ACTION_KIND', confidence: 0.7 });
     }
     for (const eventId of projection.eventIds.slice(0, 30)) {
@@ -527,9 +531,9 @@ function issueKind(value: string): string {
   return 'diagnostic';
 }
 
-function actionKindsFor(projection: EpisodeProjection): string[] {
+function actionKindsFor(projection: EpisodeProjection, taxonomy: MemoryTaxonomy): string[] {
   const text = projection.events.map(eventTextForMemory).join('\n');
-  return inferActionKinds(text);
+  return inferActionKinds(text, taxonomy);
 }
 
 function entityHints(events: MemoryEvent[]): string[] {

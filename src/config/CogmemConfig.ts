@@ -18,6 +18,7 @@ export type { ConfigDiagnosticLike } from './VectorDimension.js';
 import { normalizeEpisodeBoundaryConfig } from '../episode/EpisodeBoundaryPolicy.js';
 import { resolveTimeZone } from '../utils/LocalDateContext.js';
 import { asRecord } from '../utils/Values.js';
+import { resolveTaxonomy, type TaxonomyResolution } from './MemoryTaxonomy.js';
 
 export type CogmemConfigKind = 'toml' | 'missing';
 export type EnvLike = Record<string, string | undefined>;
@@ -34,6 +35,14 @@ export interface CogmemConfigResolutionOptions {
 }
 
 export interface LoadedCogmemConfig {
+  /** Shared items one recall may append, from `[shared] recall_limit`. */
+  sharedRecallLimit?: number;
+  /** The `[shared] enabled` switch. Off unless the operator turned it on. */
+  sharedEnabled?: boolean;
+  /** Where the classification vocabulary came from, and why it fell back if it did (#132). */
+  taxonomyStatus?: TaxonomyResolution;
+  /** The project's declared language for host-facing vocabulary (#135). */
+  language?: string;
   configPath: string;
   homeDir: string;
   /**
@@ -240,6 +249,9 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   const reasoningModel = section(root, 'reasoning_model');
   const governance = section(root, 'governance');
   const episodeBoundary = section(root, 'episode_boundary');
+  // Sharing between agents is off unless the operator turns it on: the default install shares
+  // nothing, and a host only becomes a reader by an explicit grant.
+  const shared = section(root, 'shared');
   const project = section(root, 'project');
   const integrations = section(root, 'integrations');
   const openclaw = section(integrations, 'openclaw');
@@ -248,6 +260,14 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
 
   const optionsOut: MemoryKernelOptions = {};
 
+  // A project's own vocabulary (#132): validated here, and a broken one falls back to the default with the
+  // reasons carried through to `doctor` rather than stopping the install.
+  optionsOut.taxonomy = resolveTaxonomy(section(root, 'taxonomy'));
+
+  // The language host-facing vocabulary is generated in (#135). A project config carries it, like the
+  // timezone, and `zh` stays the default so an install that says nothing behaves as it did.
+  const projectLanguage = stringValue(project.language) || stringValue(root.language);
+  if (projectLanguage) optionsOut.language = projectLanguage;
   const projectTimeZone = stringValue(project.timezone) || stringValue(root.timezone);
   if (projectTimeZone) {
     try { resolveTimeZone(projectTimeZone); optionsOut.projectTimeZone = projectTimeZone; }
@@ -256,6 +276,8 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
 
   const dbPath = stringValue(core.db_path) || 'memory.db';
   optionsOut.dbPath = resolveConfigPath(interpolate(dbPath, env, diagnostics), homeDir, env);
+  optionsOut.sharedEnabled = booleanValue(shared.enabled) === true;
+  if (numberValue(shared.recall_limit) !== undefined) optionsOut.sharedRecallLimit = numberValue(shared.recall_limit);
 
   const vectorBackend = stringValue(core.vector_backend) || 'sqlite-vec';
   if (vectorBackend === 'sqlite-vec' || vectorBackend === 'hnswlib') {
@@ -382,6 +404,12 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
     homeDir,
     workspaceRoot,
     options: optionsOut,
+    // These four were declared on the interface and never filled, so `doctor` read `undefined` for all of
+    // them: the shared switch was reported off whatever the config said, and the recall limit was unreadable.
+    sharedEnabled: optionsOut.sharedEnabled,
+    sharedRecallLimit: optionsOut.sharedRecallLimit,
+    taxonomyStatus: optionsOut.taxonomy,
+    language: optionsOut.language,
     modelRegistry,
     paths: { embeddingsDir, snapshotsDir, logsDir },
     integrations: {

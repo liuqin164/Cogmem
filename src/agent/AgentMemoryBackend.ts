@@ -1,5 +1,7 @@
 import type { MemoryKernel, MemoryKernelNavigationResult } from '../factory.js';
-import { SOCIAL_FILLER_TOKENS, classifySocialTurn, isSocialTurn } from '../context/SocialTurn.js';
+import { excludeExplicitSpans } from '../context/ExplicitExclusion.js';
+import { classifySocialTurn, isSocialTurn } from '../context/SocialTurn.js';
+import { socialTurnResources } from '../config/LanguagePacks.js';
 import type { MemoryAtlasCard, MemoryAtlasNode, MemoryAtlasRelatedCard, MemoryAtlasRelaxationStep } from '../atlas/MemoryAtlasTypes.js';
 import {
   memoryEventCharRange,
@@ -20,11 +22,12 @@ import {
   type AgentRecallIntent,
   type AgentRecallQueryPlan,
 } from './AgentRecallQueryCompiler.js';
-import { extractEntityCues } from '../utils/EntityCueExtractor.js';
-import { inferActionKinds } from '../utils/ActionKindRegistry.js';
+import { extractEntityCues, inferActionKinds } from '../utils/EntityCueExtractor.js';
 import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
 import { cliArg } from '../utils/CliArgument.js';
 import { pad2 } from '../utils/Values.js';
+import { projectPhaseItems } from '../recall/PhaseProjection.js';
+import { secretFindingsMetadata } from '../security/SecretPatterns.js';
 
 export type AgentTurnIngestMode =
   | 'immediate_compile'
@@ -234,6 +237,12 @@ export interface AgentRecallItem {
    * altered text from the text that was written (#115).
    */
   redaction?: { count: number; chars: number };
+  /**
+   * Present when this item came from another agent's shared collection (#67). It is a reference, not
+   * this agent's memory: the field is what lets a renderer separate the two with evidence, instead of
+   * inferring it from the text.
+   */
+  shared?: { sourceHost: string; collection: string };
 }
 
 /**
@@ -311,6 +320,9 @@ export interface AgentRecallDecisionTrace {
    * (`grey_below_floor`).
    */
   suppressed?: Array<{ reason: RecallSuppressionReason; count: number }>;
+  /** Shared items this recall appended, and how many the shared budget turned away (#67). Counts only. */
+  sharedCount?: number;
+  sharedDropped?: number;
   /**
    * Why a recall that returned nothing returned nothing.
    *
@@ -331,7 +343,11 @@ export type RecallSuppressionReason =
   | 'no_discriminative_hit'
   | 'grey_below_floor'
   // A conversation turn holding a secret: written verbatim, marked, and not injected by default.
-  | 'secret_bearing_withheld';
+  | 'secret_bearing_withheld'
+  // Phase projection (#130), off by default: an item too old for the default lane, and one shown as a gist
+  // rather than in full. Both are reported so a caller can tell "not remembered" from "not shown here".
+  | 'phase_dormant'
+  | 'phase_gist';
 
 export interface AgentRecallEntityCard {
   entityId: string;
@@ -392,6 +408,12 @@ export class KernelAgentMemoryBackend {
   }
 
   async rememberTurnWithResult(turn: AgentTurnMemory): Promise<AgentTurnMemoryResult> {
+    // Explicit exclusion (#133) runs here, at the one place every write path inside the kernel calls, and in the
+    // order the host bridge already uses: a passage the user marked is never stored, so it must not be claimed,
+    // scanned, compiled or written either. The bridge strips before calling this and reports the counts; by the
+    // time the text arrives here the markers are gone, which makes this pass a no-op rather than a second policy
+    // (#152: the MCP tool reached the store without ever asking).
+    const excludedUser = excludeExplicitSpans(turn.userText);
     const occurredAt = turn.timestamp ?? Date.now();
     const threadId = turn.threadId || turn.sessionId;
     const sourceId = `${turn.agentId}:${turn.sessionId}`;
@@ -405,7 +427,7 @@ export class KernelAgentMemoryBackend {
         agentId: turn.agentId,
         sessionId: turn.sessionId,
         turnId: turn.turnId,
-        userText: turn.userText,
+        userText: excludedUser.text,
         assistantText: turn.assistantText,
       })
       : undefined;
@@ -437,14 +459,19 @@ export class KernelAgentMemoryBackend {
       turnId,
       turnSeq,
       role: 'user',
-      content: turn.userText,
+      content: excludedUser.text,
       eventOrdinal: 1,
       occurredAt,
       localDate: turn.localDate,
       timeZone: turn.timeZone,
       projectTimeZone: turn.projectTimeZone,
       sourceId,
-      metadata: this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
+      metadata: {
+        ...this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
+        // The secret mark belongs to this event and is written where every write routes (#142), not only in
+        // the host bridge: an MCP write used to reach the ledger unmarked and recall returned it verbatim.
+        ...secretFindingsMetadata(excludedUser.text),
+      },
     });
     let userEvent: ReturnType<typeof writeUserEvent>;
     try {
@@ -456,7 +483,7 @@ export class KernelAgentMemoryBackend {
           agentId: turn.agentId,
           sessionId: turn.sessionId,
           turnId: turn.turnId,
-          userText: turn.userText,
+          userText: excludedUser.text,
           assistantText: turn.assistantText,
         })
         : undefined;
@@ -493,7 +520,10 @@ export class KernelAgentMemoryBackend {
         // This event carries its own findings only. The turn metadata channel is shared with the user
         // event, so spreading it would put the user's mark on the assistant turn as well, and the
         // event marks would then disagree with the hygiene summary that counts them.
-        metadata: this.metadataWithCollection({ ...omitSecretFindings(turn.metadata), sourceAgent: turn.agentId }, turn.collection),
+        metadata: {
+          ...this.metadataWithCollection({ ...omitSecretFindings(turn.metadata), sourceAgent: turn.agentId }, turn.collection),
+          ...secretFindingsMetadata(turn.assistantText, 'secretFindingsAssistant'),
+        },
       })
       : undefined;
     if (assistantEvent) {
@@ -547,10 +577,10 @@ export class KernelAgentMemoryBackend {
       orderingConfidence: event!.orderingConfidence,
     }));
     const content = [
-      `User: ${turn.userText}`,
+      `User: ${excludedUser.text}`,
       turn.assistantText ? `Agent: ${turn.assistantText}` : '',
     ].filter(Boolean).join('\n');
-    const compileSignalText = `User: ${turn.userText}`;
+    const compileSignalText = `User: ${excludedUser.text}`;
 
     const decision = this.shouldCompileTurn(mode, compileSignalText);
     const rawEventIds = [userEvent, assistantEvent].filter(Boolean).map((event) => event!.eventId);
@@ -712,6 +742,169 @@ export class KernelAgentMemoryBackend {
    * lane did not (#115).
    */
   recall(query: AgentRecallQuery): AgentRecallResult {
+    const result = this.recallPrivate(query);
+    return this.withSharedLane(query, result);
+  }
+
+  /**
+   * #67: shared items ride their own lane.
+   *
+   * Another agent's text must never arrive looking like this agent's own memory, so shared items are
+   * **appended** after the private ones rather than merged into their slots: private memory keeps the
+   * budget it had, and the shared lane spends only its own. Every shared item names its source host and
+   * collection, which is what a renderer needs to present it as a reference rather than an instruction.
+   *
+   * Every shared collection appears here while sharing is enabled (#146: publishing is still explicit, reading is
+   * not gated per reader), and the read goes through the adapter's `subscribeSync` — the recall path never queries
+   * the shared table itself. A read-only lane: nothing here writes.
+   */
+  private withSharedLane(query: AgentRecallQuery, result: AgentRecallResult): AgentRecallResult {
+    if (!this.kernel.sharedEnabled) return result;
+    const agentId = query.agentId;
+    if (!agentId) return result;
+    // Reading is open to any agent that can connect (#146, Ryu 2026-11-06): the readers list is no longer a gate.
+    // The registry stays in the database and is left unused on purpose — a future multi-user deployment can turn it
+    // back on — but nothing here consults it, so there is no runtime branch to keep in step.
+    const readable = this.kernel.listSharedCollectionsSync().map((collection) => collection.collection);
+    if (readable.length === 0) return result;
+
+    const injectionLimit = query.limit ?? 5;
+    // Derived default until the fitted value is configured: a third of what this recall injects, so a
+    // busy shared collection cannot crowd out the memory the agent actually owns.
+    const budget = this.kernel.sharedRecallLimit ?? Math.max(1, Math.ceil(injectionLimit / 3));
+    // One extra is fetched so `sharedDropped` reports a real count instead of "at least the budget".
+    const available = this.kernel.subscribeSharedSync(readable, agentId, { limit: budget + 1 });
+    const chosen = available.slice(0, budget);
+    const shared: AgentRecallItem[] = chosen.map((item) => {
+      const payload = item.payload as { text?: unknown; summary?: unknown };
+      const text = typeof payload.text === 'string' ? payload.text
+        : typeof payload.summary === 'string' ? payload.summary
+        : JSON.stringify(item.payload);
+      return {
+        id: `shared:${item.itemHash}`,
+        text,
+        tags: ['shared_memory', `shared_host:${item.sourceHost}`, `shared_collection:${item.collection}`],
+        source: 'shared_memory',
+        shared: { sourceHost: item.sourceHost, collection: item.collection },
+        whyMatched: `shared by ${item.sourceHost} in ${item.collection}`,
+      };
+    });
+    return {
+      ...result,
+      items: [...result.items, ...shared],
+      decisionTrace: result.decisionTrace
+        ? { ...result.decisionTrace, sharedCount: shared.length, sharedDropped: Math.max(0, available.length - chosen.length) }
+        : result.decisionTrace,
+    };
+  }
+
+  /**
+   * Whether a recalled item's anchor event carries the secret mark (#142).
+   *
+   * The mark lives on the event, so this is a lookup rather than a second judgement: the lanes differ in where
+   * they read an event from, and this is the one question they must all ask before handing it to a caller.
+   */
+  private itemHoldsSecretMark(item: AgentRecallItem): boolean {
+    const meta = item as { secretFindings?: { total?: number } };
+    if (Number(meta.secretFindings?.total ?? 0) > 0) return true;
+    return this.itemChainEvents(item).some((event) => eventHoldsSecretMark(event));
+  }
+
+  /**
+   * The events an item's own chain points at (#142, #144, #143): its anchor, then the raw events a compile-layer
+   * anchor was built from.
+   *
+   * A compiled item anchors an event that carries no turn of its own (measured: `turn_id` null, no mark), while
+   * both the secret mark and the source agent sit on the turn's events. The link between them is in the ledger
+   * already — that event's payload lists the raw events it was built from — so the questions are asked of those
+   * events rather than answered by scanning text, which is what dropped a legitimate record that merely looked
+   * like a key (#144). One walk, shared by the secret gate and the agent scope, because two walks would drift
+   * apart; bounded by one event's own source refs.
+   */
+  private itemChainEvents(item: AgentRecallItem): MemoryEvent[] {
+    const eventId = (item.sourceAnchor as { eventId?: string } | undefined)?.eventId;
+    if (!eventId) return [];
+    const context = this.kernel.getEventContext(eventId, { before: 0, after: 0 });
+    // A lane may point at an event this database no longer has; absence is not a secret and says nothing about
+    // who owns it. A read that *fails* is not absence and is not swallowed here: it would make the item both
+    // visible and unmarked.
+    if (!context) return [];
+    const chain: MemoryEvent[] = [context.event];
+    const sourceRefs = (context.event.payload as { sourceRefs?: unknown } | undefined)?.sourceRefs;
+    if (!Array.isArray(sourceRefs)) return chain;
+    for (const ref of sourceRefs.slice(0, 16)) {
+      const refId = (ref as { eventId?: unknown } | undefined)?.eventId;
+      if (typeof refId !== 'string') continue;
+      const referenced = this.kernel.getEventContext(refId, { before: 0, after: 0 })?.event;
+      if (referenced) chain.push(referenced);
+    }
+    return chain;
+  }
+
+  /**
+   * Whether material reached the project by being *imported* rather than by being said (#143).
+   *
+   * The marker is an explicit fact of the write, and it is the import act itself — `metadata.imported`,
+   * written by the CLI adapters (`src/bin/import-support.ts`), by `cogmem import`, and by the two
+   * episode import paths (`cogmem episode import`, `cogmem_episode_import`).
+   *
+   * It is deliberately **not** `externalMessageId`. That field is the replay key — "the same id with the
+   * same text writes nothing the second time" — and a host sets it on its own turns, including through
+   * `cogmem_episode_append`. Reading it as an import marker made a turn that someone had project-public,
+   * with its compiled products: measured on the box (#153), the build that counted it handed `hermes`'s
+   * appended turn and four Atlas candidates to `pi`, while the build before it handed over nothing.
+   * Ryu's rule of 2026-11-06 scopes records that name an agent to that agent; only the records nobody
+   * owns are project-public, and an import is the write that says so.
+   */
+  private isImportedMaterial(event: MemoryEvent): boolean {
+    const metadata = (event.payload as { metadata?: Record<string, unknown> } | undefined)?.metadata;
+    if (!metadata) return false;
+    return metadata.imported === true;
+  }
+
+  /**
+   * Whether an agent may read an item, read from the same chain as the secret mark (#143).
+   *
+   * The rule (Ryu 2026-11-07, route 1): imported material is project-level public whatever `sourceAgent` says,
+   * because making an import worth doing means the other agents in the project can read it; a turn someone had
+   * is scoped to the agent that had it; material whose chain names no agent — a migration, an old row, a record
+   * written by a connection that had no identity — is public too. Cross-project isolation is untouched: this
+   * only ever widens within one project, and the shared lane stays the one deliberate cross-agent channel.
+   */
+  private itemVisibleToAgent(item: AgentRecallItem, agentId: string): boolean {
+    const chain = this.itemChainEvents(item);
+    if (chain.length === 0) return true;
+    if (chain.some((event) => this.isImportedMaterial(event))) return true;
+    // The same standard the raw lane applies to its own events, applied to the material a compiled product was
+    // built from: a product is readable by whoever could have read what it was made of. Reusing the predicate,
+    // rather than re-deriving an owner, keeps the two from disagreeing — including the leniency the raw lane
+    // grants a record that carries no source of its own.
+    return chain.some((event) => this.isAgentRawEvent(event, agentId));
+  }
+
+  /**
+   * Apply the read-time phase to the default lane (#130).
+   *
+   * Read-time and store-free: the phase is computed from the timestamp every time, so switching it off restores
+   * the previous behaviour with no migration and no data to roll back. Forensic and exact-quote lanes never
+   * reach this method, and a by-ID read does not either, which is the ticket's rule that those channels always
+   * return the whole thing.
+   *
+   * The rules live in `PhaseProjection.projectPhaseItems`, which is pure and takes the items directly, so the
+   * projection has a unit test that does not need a lane to seed a timestamp (#171). This method only adds the
+   * trace's suppression reasons and the off switch.
+   */
+  private projectPhases(items: AgentRecallItem[], query: AgentRecallQuery): { items: AgentRecallItem[]; suppressed: Array<{ reason: RecallSuppressionReason; count: number }> } {
+    if (!this.kernel.phaseProjectionEnabled) return { items, suppressed: [] };
+    const now = Number(query.now ?? Date.now());
+    const projected = projectPhaseItems(items, String(query.query ?? query.anchorText ?? ''), now);
+    const suppressed: Array<{ reason: RecallSuppressionReason; count: number }> = [];
+    if (projected.dormant > 0) suppressed.push({ reason: 'phase_dormant', count: projected.dormant });
+    if (projected.gist > 0) suppressed.push({ reason: 'phase_gist', count: projected.gist });
+    return { items: projected.items, suppressed };
+  }
+
+  private recallPrivate(query: AgentRecallQuery): AgentRecallResult {
     SECRET_WITHHELD_COUNTS.set(this, 0);
     const queryText = String(query.query ?? '');
     const forensic = FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(query.intent ?? ''));
@@ -728,20 +921,46 @@ export class KernelAgentMemoryBackend {
     }
     const result = this.recallCore(query);
     const gated = this.gateSocialEntries(result.items ?? [], query, forensic);
-    const secretWithheld = SECRET_WITHHELD_COUNTS.get(this) ?? 0;
+    // The secret mark is enforced here, and not only in the raw lane's scope test (#142). Measured while fixing
+    // this: with the event withheld from the raw lane, the same turn still came back as an item from another
+    // lane — text and `sourceContext.event.text` both — so a caller received the key with
+    // `suppressed: secret_bearing_withheld` beside it. Every lane returns through here, which is the same reason
+    // the social gate sits here; the forensic and exact-quote intents never reach this method.
+    const secretKept = forensic
+      ? gated.items
+      : gated.items.filter((item) => !this.itemHoldsSecretMark(item));
+    // The raw lane counts events it dropped while it ran; this second half counts items no raw window owned.
+    // Both are merged here, before the trace is built: the item-level count used to be written to the map after
+    // the merge, so a recall that withheld only a compiled item reported no reason at all (found while deleting
+    // the read-time text rescan, #169).
+    const secretWithheld = (SECRET_WITHHELD_COUNTS.get(this) ?? 0) + (gated.items.length - secretKept.length);
     if (secretWithheld > 0 && result.decisionTrace) {
       result.decisionTrace.suppressed = mergeSuppressions(result.decisionTrace.suppressed, [
         { reason: 'secret_bearing_withheld', count: secretWithheld },
       ]);
     }
-    const zeroExplanation = gated.items.length === 0 ? this.explainZeroResult(query) : undefined;
+    // The agent scope of compiled material (#143), in the same place and off the same chain as the secret mark.
+    // The raw lane has always scoped its own events, but a compiled product — a neuron or an Atlas card — is not an
+    // event, so it was readable by every agent in the project. The shared lane is skipped: it is the one
+    // deliberate cross-agent channel, and its items say so.
+    // Dropping an item for scope is not the same fact as withholding it for a secret, so it is not counted as one:
+    // the trace's `secret_bearing_withheld` has to keep meaning what it says.
+    const agentKept = query.agentId
+      ? secretKept.filter((item) => Boolean((item as { shared?: unknown }).shared)
+        || this.itemVisibleToAgent(item, String(query.agentId)))
+      : secretKept;
+    // Phase projection (#130): the third admission, next to the social and secret ones and in the same place,
+    // so it cannot apply to some lanes and not others. Off by default; with it off this is the identity.
+    const phased = this.projectPhases(agentKept, query);
+    const zeroExplanation = phased.items.length === 0 ? this.explainZeroResult(query) : undefined;
     return {
       ...result,
-      items: gated.items.map(withRedactionMarks),
+      items: phased.items.map(withRedactionMarks),
       decisionTrace: result.decisionTrace
         ? {
           ...result.decisionTrace,
           ...(gated.suppressed.length ? { suppressed: mergeSuppressions(result.decisionTrace.suppressed, gated.suppressed) } : {}),
+          ...(phased.suppressed.length ? { suppressed: mergeSuppressions(result.decisionTrace.suppressed, phased.suppressed) } : {}),
           ...(zeroExplanation ? { zeroExplanation } : {}),
         }
         : result.decisionTrace,
@@ -762,7 +981,7 @@ export class KernelAgentMemoryBackend {
   private explainZeroResult(query: AgentRecallQuery): ZeroExplanation {
     const text = String(query.query ?? query.anchorText ?? '').trim();
     if (!text) return { kind: 'no_match', thisScope: 0, otherScopes: 0 };
-    const queryPlan = compileAgentRecallQuery({ query: query.query, intent: query.intent, anchorText: query.anchorText });
+    const queryPlan = compileAgentRecallQuery({ query: query.query, intent: query.intent, anchorText: query.anchorText, taxonomy: this.kernel.taxonomy });
     let events: MemoryEvent[] = [];
     try {
       events = this.kernel.searchRawEvents(text, {
@@ -787,7 +1006,7 @@ export class KernelAgentMemoryBackend {
 
   /** An answer with no items, keeping the shape every caller already handles. */
   private emptyRecallResult(query: AgentRecallQuery, reason: AgentRecallDecisionTrace['reason']): RecallCoreResult {
-    const queryPlan = compileAgentRecallQuery({ query: query.query, intent: query.intent, anchorText: query.anchorText });
+    const queryPlan = compileAgentRecallQuery({ query: query.query, intent: query.intent, anchorText: query.anchorText, taxonomy: this.kernel.taxonomy });
     return {
       recallMode: 'social_turn_suppressed',
       items: [],
@@ -877,6 +1096,7 @@ export class KernelAgentMemoryBackend {
       query: query.query,
       intent: query.intent,
       anchorText: query.anchorText,
+      taxonomy: this.kernel.taxonomy,
     });
     const limit = query.limit ?? 5;
     const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
@@ -1765,9 +1985,11 @@ export class KernelAgentMemoryBackend {
       if (queryPlan.intent === 'action_history') {
         const entityTerms = extractEntityCues(queryPlan.originalQuery).map((entity) => entity.label.toLowerCase());
         const entityMatched = entityTerms.length === 0 || entityTerms.some((term) => haystack.includes(term));
-        const queryKinds = inferActionKinds(queryPlan.originalQuery);
-        const allowedKinds = queryKinds.length ? queryKinds : ['started', 'installed', 'configured', 'restarted', 'stopped', 'operated', 'implemented'];
-        const itemKinds = inferActionKinds(haystack);
+        const queryKinds = inferActionKinds(queryPlan.originalQuery, this.kernel.taxonomy);
+        // A query that names no action still means "any action": that is the project's whole vocabulary, not a
+        // hand-copied shipped subset that had already lost reviewed/decided/debugged (#183).
+        const allowedKinds = queryKinds.length ? queryKinds : this.kernel.taxonomy.actionKinds.map((rule) => rule.kind);
+        const itemKinds = inferActionKinds(haystack, this.kernel.taxonomy);
         const actionMatched = itemKinds.some((kind) => allowedKinds.includes(kind));
         return entityMatched && actionMatched;
       }
@@ -1966,7 +2188,7 @@ export class KernelAgentMemoryBackend {
     if (explicitAgentTags.length > 0) {
       return explicitAgentTags.includes(`agent:${agentId}`);
     }
-    if (metadata.imported === true) return true;
+    if (this.isImportedMaterial(event)) return true;
     const sourceType = typeof metadata.sourceType === 'string' ? metadata.sourceType : '';
     if (/^(hermes_state_db|conversation_markdown|openclaw_|soul_markdown)/.test(sourceType)) return true;
     if (/^(hermes_state_db|conversation_markdown|openclaw_|soul_markdown)/.test(event.sourceId)) return true;
@@ -2088,8 +2310,18 @@ export class KernelAgentMemoryBackend {
       before: beforeCount,
       after: afterCount,
     });
+    // The anchor was never checked and the scope test passes everything when no scope is given, which is how a
+    // marked turn came back inside another item's window with its text intact (#142, second measurement) — the
+    // key arrived even though the raw lane had already withheld the event itself. A marked event is therefore
+    // excluded from a window by default, and only an exempt (forensic / exact-quote) intent may see it; the by-id
+    // read does not come through here at all, so it stays whole.
+    const secretExempt = Boolean(scope && FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(scope.intent ?? '')));
+    if (eventHoldsSecretMark(context.event) && !secretExempt) return undefined;
     const event = this.toAgentSourceContextEvent(context.event);
-    const inScope = (event: MemoryEvent) => !scope || (this.isAgentRawEvent(event, scope.agentId) && this.isRawEventInRecallScope(event, scope, scope.intent));
+    const inScope = (candidate: MemoryEvent) => {
+      if (!secretExempt && eventHoldsSecretMark(candidate)) return false;
+      return !scope || (this.isAgentRawEvent(candidate, scope.agentId) && this.isRawEventInRecallScope(candidate, scope, scope.intent));
+    };
     return {
       event,
       before: normalized.before.filter(inScope).map((item) => this.toAgentSourceContextEvent(item)),
@@ -2458,8 +2690,21 @@ export function discriminativeProbes(text: string): string[] {
   return discriminativeProbesOf(text);
 }
 
-/** The characters the pleasantry vocabulary is made of, computed once. */
-const FILLER_CHARACTERS = new Set(SOCIAL_FILLER_TOKENS.join(''));
+/**
+ * The characters a pack's pleasantry vocabulary is made of, built once per pack.
+ *
+ * Keyed by the token array itself, so switching languages does not rebuild the set and the two packs cannot
+ * collide.
+ */
+const FILLER_CHARACTERS_BY_PACK = new WeakMap<readonly string[], Set<string>>();
+function fillerCharacters(tokens: readonly string[]): Set<string> {
+  let characters = FILLER_CHARACTERS_BY_PACK.get(tokens);
+  if (!characters) {
+    characters = new Set(tokens.join(''));
+    FILLER_CHARACTERS_BY_PACK.set(tokens, characters);
+  }
+  return characters;
+}
 
 /**
  * Whether a probe is made only of pleasantry characters — the shape a social overlap has.
@@ -2467,20 +2712,26 @@ const FILLER_CHARACTERS = new Set(SOCIAL_FILLER_TOKENS.join(''));
  * Character-level rather than token-level because the probes are n-grams: 「的收」 is a bigram of
  * 「好的收到」 and every character in it comes from the pleasantry vocabulary. A content character never
  * qualifies, which is what keeps an answer out of this rule.
+ *
+ * The vocabulary is read here, at call time (#174), not frozen into a module constant at import. The constant
+ * was built before `MemoryKernel`'s constructor called `setConfiguredLanguage`, so in an `en` project this half
+ * of the judgement token-checked against the Chinese pack while `classifySocialTurn` — which reads the pack per
+ * call — used English.
  */
 function isFillerProbe(probe: string): boolean {
   if (probe.length === 0) return false;
+  const tokens = socialTurnResources().fillerTokens;
   // Token coverage first, which is what keeps a latin word safe: 「later」 and 「ty」 contribute the
   // letters of 「retry」 to the character set, so a character test alone would call a content word
   // small talk.
   let rest = probe;
-  for (const token of SOCIAL_FILLER_TOKENS) {
+  for (const token of tokens) {
     while (rest.includes(token)) rest = rest.split(token).join('');
   }
   if (rest.length === 0) return true;
   // Then CJK n-grams, where the probes are bigrams of pleasantries like 「好的收到」 and the individual
   // characters are what can be checked. Never applied to a probe holding a non-CJK character.
-  return /^\p{Script=Han}+$/u.test(probe) && [...probe].every((character) => FILLER_CHARACTERS.has(character));
+  return /^\p{Script=Han}+$/u.test(probe) && [...probe].every((character) => fillerCharacters(tokens).has(character));
 }
 
 /**
@@ -2492,7 +2743,13 @@ function isFillerProbe(probe: string): boolean {
 const SECRET_WITHHELD_COUNTS = new WeakMap<object, number>();
 
 /** Whether this event's own metadata says it holds something secret-looking. */
-function eventHoldsSecretMark(event: MemoryEvent): boolean {
+/**
+ * Whether an event carries the secret mark (#142).
+ *
+ * Exported because the explanation surface reads event windows of its own and must apply the same rule; a second
+ * hand-written predicate is how a window and a lane drift apart.
+ */
+export function eventHoldsSecretMark(event: MemoryEvent): boolean {
   const metadata = (event.payload as { metadata?: { secretFindings?: { total?: number }; secretFindingsAssistant?: { total?: number } } })?.metadata;
   return Number(metadata?.secretFindings?.total ?? 0) > 0 || Number(metadata?.secretFindingsAssistant?.total ?? 0) > 0;
 }

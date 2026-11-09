@@ -3,6 +3,8 @@ import { emitRefusalDocument } from './RefusalDocument.js';
 import Database from 'bun:sqlite';
 
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
+import { createMemoryKernel } from '../factory.js';
+import { countSecretFindings } from '../security/SecretPatterns.js';
 import { assertCliArgs } from './CliArgs.js';
 
 function readArg(name: string): string | undefined {
@@ -18,8 +20,13 @@ function hasFlag(name: string): boolean {
 function usage(): string {
   return [
     'Usage: cogmem repair project-scope --from <projectId> --to <projectId> [--db <memory.db>|--config <config.toml>] [--dry-run|--apply] [--json]',
+    '       cogmem repair secret-marks [--db <memory.db>|--config <config.toml>] [--dry-run|--apply] [--json]',
     '',
     'Conservatively moves empty-project upgrade residue into a real project scope.',
+    '',
+    'secret-marks is the one-time back-scan for events written before the write path marked secrets (#142): it',
+    're-reads each event with the same table the writer uses and stamps the mark, leaving every text untouched. It',
+    'never runs on its own — an operator asks for it, and running it twice stamps nothing the second time.',
   ].join('\n');
 }
 
@@ -64,10 +71,45 @@ function nonEmptyProjectIds(db: Database, table: string): string[] {
 function main(): void {
   assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['apply', 'config', 'db', 'dry-run', 'from', 'json', 'to'] });
   const [command] = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
-  if (command !== 'project-scope') {
+  if (command !== 'project-scope' && command !== 'secret-marks') {
     console.error(usage());
     process.exit(1);
-    process.exit(command === 'project-scope' ? 0 : 1);
+  }
+  if (command === 'secret-marks') {
+    const applySecretMarks = hasFlag('--apply');
+    const dbPathForScan = dbPathFromArgs();
+    const kernel = createMemoryKernel({ dbPath: dbPathForScan, vectorBackend: 'sqlite-vec' });
+    try {
+      const events = kernel.eventStore.listEventsForSecretBackScan();
+      const byKind: Record<string, number> = {};
+      const eventIds: string[] = [];
+      for (const event of events) {
+        const found = countSecretFindings(event.text);
+        if (found.total === 0) continue;
+        for (const [kind, count] of Object.entries(found.byKind)) byKind[kind] = (byKind[kind] ?? 0) + count;
+        if (!applySecretMarks) continue;
+        const key = event.role === 'assistant' ? 'secretFindingsAssistant' : 'secretFindings';
+        if (kernel.eventStore.addSecretFindings(event.eventId, key, { total: found.total, byKind: found.byKind })) eventIds.push(event.eventId);
+      }
+      const payload = {
+        schemaVersion: 'cogmem.cli.v1',
+        command: 'repair.secret-marks',
+        dbPath: dbPathForScan,
+        dryRun: !applySecretMarks,
+        apply: applySecretMarks,
+        scanned: events.length,
+        newlyMarked: eventIds.length,
+        byKind,
+        // Ids of the events this run stamped, so the operator has a record of what changed. The text itself is never
+        // printed: the mark exists precisely so the value stays out of logs.
+        eventIds,
+      };
+      if (hasFlag('--json')) console.log(JSON.stringify(payload));
+      else console.log(`${applySecretMarks ? 'applied' : 'dry-run'} secret-marks repair ${JSON.stringify({ scanned: payload.scanned, newlyMarked: payload.newlyMarked, byKind })}`);
+      return;
+    } finally {
+      kernel.close();
+    }
   }
   const from = readArg('--from');
   const to = readArg('--to');

@@ -171,6 +171,11 @@ import {
   type SnapshotMeta,
 } from './snapshot/index.js';
 import { CORE_VERSION } from './version.js';
+import { SqliteSharedMemory } from './adapters/sqlite/SqliteSharedMemory.js';
+import type { SharedCollection, SharedItem, SharedRetraction } from './ports/index.js';
+import { DEFAULT_TAXONOMY, type MemoryTaxonomy, type TaxonomyResolution } from './config/MemoryTaxonomy.js';
+import { setConfiguredLanguage } from './config/LanguagePacks.js';
+import { secretFindingsMetadata } from './security/SecretPatterns.js';
 
 const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
 
@@ -179,6 +184,16 @@ export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
 export type { EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeListOptions, MemoryEpisode } from './episode/index.js';
 
 export interface MemoryKernelOptions {
+  /** Shared items one recall may append, on top of the private budget. Unset = a third of the limit. */
+  sharedRecallLimit?: number;
+  /** Sharing between agents. Read from `[shared] enabled`, off unless it is true. */
+  sharedEnabled?: boolean;
+  /** The project's classification vocabulary (#132); absent means the shipped one. */
+  taxonomy?: TaxonomyResolution;
+  /** The project's language for host-facing vocabulary (#135); absent means the shipped default. */
+  language?: string;
+  /** Phase projection (#130): a research sample, off unless a caller turns it on. */
+  phaseProjectionEnabled?: boolean;
   dbPath?: string;
   embedder?: Embedder;
   embeddingProvider?: EmbeddingProvider;
@@ -636,6 +651,8 @@ export class MemoryKernel {
   readonly memoryAtlasStore: MemoryAtlasStore;
   readonly memoryFrameStore: MemoryFrameStore;
   readonly memoryAtlasService: MemoryAtlasService;
+  /** Shared region between hosts. Reads are authorized in the adapter; writes need the switch on. */
+  readonly sharedMemory: SqliteSharedMemory;
   readonly multidimensionalQueryPlanner: MultidimensionalQueryPlanner;
   readonly memoryGovernanceStore: MemoryGovernanceStore;
   readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;
@@ -686,6 +703,9 @@ export class MemoryKernel {
   private readonly ranker: TwoStagePulseRanker;
   private readonly reEmbeddingPipeline?: ReEmbeddingPipeline;
   private readonly extensions = new Map<string, unknown>();
+  private readonly taxonomyResolution: TaxonomyResolution;
+  private readonly language?: string;
+  private readonly phaseProjection: boolean;
   private lastEmbedSuccessAt?: number;
   private lastEmbedErrorAt?: number;
   private initialized = false;
@@ -697,6 +717,12 @@ export class MemoryKernel {
     this.configDiagnostics.push(...normalizedBoundary.diagnostics);
     if (options.projectTimeZone && normalizedBoundary.config.timezone && options.projectTimeZone !== normalizedBoundary.config.timezone) throw new Error('project_timezone_conflict');
     this.projectClock = resolveProjectClockContext({ projectTimeZone: options.projectTimeZone ?? normalizedBoundary.config.timezone });
+    this.taxonomyResolution = options.taxonomy ?? { taxonomy: DEFAULT_TAXONOMY, source: 'default', reasons: [] };
+    this.language = options.language;
+    this.phaseProjection = options.phaseProjectionEnabled === true;
+    // The social gate and the inlined gate source read this at call time, so a project that declares its
+    // language classifies its turns with that language's vocabulary (#135).
+    setConfiguredLanguage(this.language);
     this.dbPath = options.dbPath ?? ':memory:';
     this.encryptionProvider = options.encryptionProvider;
     this.piiRedactor = options.redactionPolicy === false ? undefined : new PiiRedactor(options.redactionPolicy);
@@ -759,6 +785,12 @@ export class MemoryKernel {
     if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_token')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_token TEXT`);
     if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_lease_until')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_lease_until INTEGER`);
     db.exec(`CREATE TABLE IF NOT EXISTS vector_write_outbox (neuron_id TEXT PRIMARY KEY, vector_json TEXT NOT NULL, created_at INTEGER NOT NULL)`);
+    // Built after the schema phase on purpose: `createFinalSchema` detaches every view, trigger and
+    // index it does not own and replays them afterwards, so a shared index created before it would be
+    // saved and replayed against a table the final schema does not contain. Same connection as the
+    // kernel (ADR-0004: the bridge/kernel holds the only one), tables created IF NOT EXISTS, so a 4.0
+    // database opens unchanged and its version marker stays put — no migration.
+    this.sharedMemory = new SqliteSharedMemory(db);
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
     const vectorDimension = options.vectorDimension ?? config.vector.dimension;
@@ -833,15 +865,15 @@ export class MemoryKernel {
     installRuntimeProvenanceGuards(db);
     this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
     this.memoryAtlasStore = new MemoryAtlasStore(db, this.projectClock.timeZone);
-    this.memoryFrameStore = new MemoryFrameStore(db);
+    this.memoryFrameStore = new MemoryFrameStore(db, this.taxonomyResolution.taxonomy);
     // A frame's preference and relationship relations also belong in the belief layer:
     // the frame answers "what did this episode say", the belief path answers "what is
     // true now and what did it replace", and that is the one recall reads (#102).
     this.memoryFrameStore.setFrameActiveListener((frame, now) => {
       projectFrameRelationsToBeliefs(this.beliefStore, frame, now);
     });
-    this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore, this.memoryFrameStore);
-    this.memoryAtlasService = new MemoryAtlasService(this.memoryAtlasStore, this.eventStore);
+    this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore, this.memoryFrameStore, this.taxonomyResolution.taxonomy);
+    this.memoryAtlasService = new MemoryAtlasService(this.memoryAtlasStore, this.eventStore, this.taxonomyResolution.taxonomy);
     this.multidimensionalQueryPlanner = new MultidimensionalQueryPlanner();
     this.atlasPathRetriever = new AtlasPathRetriever(this.memoryAtlasService, this.multidimensionalQueryPlanner);
     this.entityGovernanceService = new EntityGovernanceService(
@@ -912,6 +944,7 @@ export class MemoryKernel {
     this.summaryStore.migrateLegacyFactSummaries();
     this.deepWriteCandidateStore = new DeepWriteCandidateStore(db);
     this.dreamCuratorWorker = new DreamCuratorWorker({
+      taxonomy: this.taxonomyResolution.taxonomy,
       eventStore: this.eventStore,
       dreamLedgerStore: this.dreamLedgerStore,
       candidateStore: this.deepWriteCandidateStore,
@@ -1655,7 +1688,12 @@ export class MemoryKernel {
         ?? (input.turnSeq !== undefined || input.eventOrdinal !== undefined || input.sourceOffset !== undefined || input.lineStart !== undefined ? 'high' : 'low'),
       payload: {
         text,
-        metadata: input.metadata,
+        // The secret mark is written where the ledger is appended (#142), so the host bridge, the MCP tool
+        // and any direct kernel call all get it; the role decides which side's key it belongs to.
+        metadata: {
+          ...(input.metadata || {}),
+          ...secretFindingsMetadata(text, input.role === 'assistant' ? 'secretFindingsAssistant' : 'secretFindings'),
+        },
       },
     });
   }
@@ -1800,6 +1838,7 @@ export class MemoryKernel {
         verifiedEvents: outputs.flatMap((output) => output.verifiedEvents),
         correctedEntityBindings: outputs.flatMap((output) => output.correctedEntityBindings),
         consolidatedBeliefs: outputs.flatMap((output) => output.consolidatedBeliefs),
+        blockedConsolidations: outputs.flatMap((output) => output.blockedConsolidations),
         archivedFactIds: outputs.flatMap((output) => output.archivedFactIds),
         rejectedFactIds: outputs.flatMap((output) => output.rejectedFactIds),
         archivedEntityIds: outputs.flatMap((output) => output.archivedEntityIds),
@@ -2679,7 +2718,8 @@ export class MemoryKernel {
       // threw out of the loop, so a single unknown episode type left every episode after
       // it unbackfilled with no record of which one stopped it.
       try {
-        const frame = deterministicFrameFallback({ projectId: options.projectId, episodeId: episode.episodeId, episodeType: episode.episodeType as MemoryFrameV1['episodeKind'], events });
+        // The project's own vocabulary, so a frame the store then validates is one that vocabulary accepts (#175).
+        const frame = deterministicFrameFallback({ projectId: options.projectId, episodeId: episode.episodeId, episodeType: episode.episodeType, episodeKinds: this.taxonomyResolution.taxonomy.episodeKinds.map((kind) => kind.id), events });
         const saved = this.memoryFrameStore.save({
         frame,
         sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), episode.episodeId),
@@ -3592,6 +3632,129 @@ export class MemoryKernel {
 
   private getEmbeddingDimension(): number {
     return this.embeddingProvider?.dimensions ?? this.vectorStore.getStats().dimension;
+  }
+
+  /**
+   * Shared-memory methods for surfaces (MCP tools, host plugins via the public entry).
+   *
+   * Every method takes the caller's host identity explicitly, and each surface fills it from its
+   * authenticated channel (`connectionAgentId` in the MCP layer, the bridge's configured agent):
+   * sharing must never trust an identity the caller typed into a request (ADR-0006).
+   *
+   * Writes are refused while `[shared] enabled` is off, so a default install cannot share by accident;
+   * reads return nothing in that state rather than throwing, because a read that finds nothing is a
+   * normal outcome and an exception is not.
+   */
+  /** The vocabulary compilation uses, and where it came from (#132) — `doctor` reports the latter. */
+  get taxonomy(): MemoryTaxonomy { return this.taxonomyResolution.taxonomy; }
+
+  get taxonomyStatus(): TaxonomyResolution { return this.taxonomyResolution; }
+
+  /** The language this project reads host-facing vocabulary in (#135). */
+  get projectLanguage(): string | undefined { return this.language; }
+
+  /** Whether the read-time phase projection is applied to the default lane (#130). Off by default. */
+  get phaseProjectionEnabled(): boolean { return this.phaseProjection; }
+
+  get sharedEnabled(): boolean {
+    return this.options.sharedEnabled === true;
+  }
+
+  /** Publish items into shared collections. The first publisher of a collection becomes its owner. */
+  async publishShared(items: SharedItem[]): Promise<number> {
+    if (!this.sharedEnabled) throw new Error('shared_disabled');
+    return this.sharedMemory.publish(items);
+  }
+
+  async retractShared(retraction: SharedRetraction): Promise<void> {
+    if (!this.sharedEnabled) throw new Error('shared_disabled');
+    return this.sharedMemory.retract(retraction);
+  }
+
+  async grantSharedReader(collection: string, readerHost: string, actorHost: string): Promise<void> {
+    if (!this.sharedEnabled) throw new Error('shared_disabled');
+    return this.sharedMemory.grantReader(collection, readerHost, actorHost);
+  }
+
+  async revokeSharedReader(collection: string, readerHost: string, actorHost: string): Promise<void> {
+    if (!this.sharedEnabled) throw new Error('shared_disabled');
+    return this.sharedMemory.revokeReader(collection, readerHost, actorHost);
+  }
+
+  /** Authorized in the adapter; an unauthorized collection is simply absent from the result. */
+  async subscribeShared(collections: string[], readerHost: string | undefined, options: { limit?: number } = {}): Promise<SharedItem[]> {
+    if (!this.sharedEnabled) return [];
+    return this.sharedMemory.subscribe(collections, { readerHost, limit: options.limit });
+  }
+
+  /** Synchronous subscribe for recall, which cannot await. Same authorization, same code path. */
+  subscribeSharedSync(collections: string[], readerHost: string | undefined, options: { limit?: number } = {}): SharedItem[] {
+    if (!this.sharedEnabled) return [];
+    return this.sharedMemory.subscribeSync(collections, { readerHost, limit: options.limit });
+  }
+
+  /**
+   * How many shared items one recall may add. Unset means the derived default (a third of the
+   * injection limit), which the recall lane computes; a number here is the fitted value.
+   */
+  get sharedRecallLimit(): number | undefined {
+    return this.options.sharedRecallLimit;
+  }
+
+  async explainShared(itemHash: string): Promise<{ item: SharedItem; retractedAt: number | null } | null> {
+    return this.sharedMemory.explain(itemHash);
+  }
+
+  async listSharedCollections(): Promise<SharedCollection[]> {
+    return this.sharedMemory.listCollections();
+  }
+
+  /** Synchronous listing for recall, which cannot await. Same rows as the async form. */
+  listSharedCollectionsSync(): SharedCollection[] {
+    return this.sharedMemory.listCollectionsSync();
+  }
+
+  /**
+   * Import state for one project: every registered source with its path, adapter kind, last processed
+   * timestamp and how many records it has already ingested, newest first.
+   *
+   * On the kernel rather than only behind the MCP tool (#63): the OpenClaw plugin loads the public
+   * entry and builds its API from `createMemoryKernelFromConfig`, so a capability that exists only as
+   * an MCP tool is one the automatic path cannot ask about. Read-only, so it carries no new authority.
+   */
+  importStatus(projectId: string, options: { limit?: number } = {}): {
+    projectId: string;
+    sources: Array<Record<string, unknown>>;
+    totalSources: number;
+    returnedSources: number;
+    limit: number;
+  } {
+    const requested = options.limit;
+    if (requested !== undefined && (!Number.isInteger(requested) || requested < 1)) {
+      throw new Error('limit must be a positive integer');
+    }
+    const limit = requested ?? 50;
+    const cursors = this.cursorStore.listRegisteredSources().filter((cursor) => cursor.projectId === projectId);
+    const processed = cursors.map((cursor) => {
+      const hashes = this.cursorStore.listProcessedRecordHashes(
+        cursor.sourceId, cursor.contentWindowStart || 0, cursor.contentWindowEnd || 0, projectId,
+      );
+      return {
+        sourceId: cursor.sourceId,
+        sourcePath: cursor.sourcePath,
+        sourceType: cursor.sourceType,
+        lastProcessedAt: cursor.lastProcessedAt,
+        lastSeenHash: cursor.lastSeenHash,
+        lastSeenMtime: cursor.lastSeenMtime,
+        contentWindowStart: cursor.contentWindowStart,
+        contentWindowEnd: cursor.contentWindowEnd,
+        processedRecordCount: hashes.size,
+      };
+    });
+    // listRegisteredSources() is ordered updated_at DESC, source_id ASC, so slicing is stable and the
+    // newest sources are the ones a caller with a small limit sees.
+    const sources = processed.slice(0, limit);
+    return { projectId, sources, totalSources: cursors.length, returnedSources: sources.length, limit };
   }
 
   private ensureMetaTable(db: ReturnType<FactStore['getDatabase']>): void {

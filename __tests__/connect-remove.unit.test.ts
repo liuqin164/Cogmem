@@ -79,6 +79,21 @@ test('the openclaw entry goes only when it points at this workspace and project 
   expect(mixed.plugins.entries['cogmem-auto-memory-abc']).toBeUndefined();
 });
 
+test('connect openclaw --remove drops the plugin load path too, not only the entry (#176)', () => {
+  const original = JSON.stringify({
+    plugins: {
+      load: { paths: ['/w/extensions/cogmem-auto-memory-abc', '/opt/keepme-plugin'] },
+      entries: { 'cogmem-auto-memory-abc': { config: { configPath: '/w/.cogmem/config.toml', projectId: 'p1' } } },
+      allow: ['cogmem-auto-memory-abc', 'keepme'],
+    },
+  });
+  const gone = JSON.parse(unpatchOpenClawPluginEntry(original, 'cogmem-auto-memory-abc', '/w/.cogmem/config.toml', 'p1')) as Record<string, any>;
+  // The dead path is what makes OpenClaw reject the whole config, so removing the entry alone is not removal.
+  expect(gone.plugins.load.paths).toEqual(['/opt/keepme-plugin']);
+  expect(gone.plugins.entries).toBeUndefined();
+  expect(gone.plugins.allow).toEqual(['keepme']);
+});
+
 const bin = join(import.meta.dir, '..', 'src', 'bin', 'connect.ts');
 
 async function connectIn(cwd: string, env: Record<string, string>, args: string[]) {

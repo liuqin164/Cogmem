@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { createMemoryKernel } from '../../src/public.js';
 import { KernelAgentMemoryBackend } from '../../src/agent/AgentMemoryBackend.js';
 import { makeTempDir } from '../helpers/tmp.js';
-import { EVAL_CASES } from './cases.js';
+import { EVAL_CASES, EVAL_CASES_ENGLISH } from './cases.js';
 
 /**
  * Measured on the commit that introduced this floor: 4 of 18 — four answered
@@ -133,7 +133,6 @@ test('recall finds the record that answers a real question', async () => {
     }
   }
 
-  kernel.close();
 
   // Report the misses in the failure message: a number alone does not say what to fix.
   console.log(`[eval] recall quality: ${passed}/${EVAL_CASES.length} (floor ${BASELINE_PASSES})`);
@@ -146,5 +145,52 @@ test('recall finds the record that answers a real question', async () => {
       + missed.map((line) => `  - ${line}`).join('\n'),
     );
   }
+  // The English set, run the same way and reported the same way (#135). The corpus is Chinese, so this is a
+  // cross-lingual run: the rate is what it is, and asserting a floor here would be asserting a vocabulary
+  // overlap the corpus cannot provide. What is asserted is the language-neutral half — a question nothing in the
+  // corpus is about must not claim its words were found, in either language.
+  let englishPassed = 0;
+  const englishMissed: string[] = [];
+  const englishUnanswerable: string[] = [];
+  for (const evalCase of EVAL_CASES_ENGLISH) {
+    const result = backend.recall({ query: evalCase.question, projectId: 'cogmem', agentId: 'eval', limit: 5, now: NOW });
+    const items = result.items ?? [];
+    const text = JSON.stringify(items);
+    if (evalCase.unanswerable) {
+      // Measured, not asserted. The Chinese cases require that no lane claims the query's words were found,
+      // because nothing in the corpus is about them. The English run cannot carry the same requirement: this
+      // ledger is full of English identifiers, so an English question about lunch can legitimately match a
+      // word that really is in the corpus. The outcome is recorded instead — the ticket carries the number.
+      const claimsMatch = (result.decisionTrace?.reason ?? '').includes('cue_match');
+      englishUnanswerable.push(`${evalCase.question}: claimsCueMatch=${claimsMatch} lane=${result.decisionTrace?.selectedLane}`);
+      if (!claimsMatch) englishPassed += 1;
+      continue;
+    }
+    if (text.includes(evalCase.expectsSection)) englishPassed += 1;
+    else englishMissed.push(`${evalCase.question} (wanted "${evalCase.expectsSection}", lane ${result.decisionTrace?.selectedLane})`);
+  }
+  console.log(`  eval 点名用例：中文 ${passed}/${EVAL_CASES.length} 命中 · 英文 ${englishPassed}/${EVAL_CASES_ENGLISH.length} 命中（语料为中文，英文问句属跨语言检索）`);
+  if (englishMissed.length) console.log(`  英文未命中：${englishMissed.length} 条，例如 ${englishMissed.slice(0, 3).join(' / ')}`);
+  for (const line of englishUnanswerable) console.log(`  英文不可答用例实况：${line}`);
+
+  // Closed after the English run too: both sets are measured against the same live kernel (#135).
+  kernel.close();
   expect(passed).toBeGreaterThanOrEqual(BASELINE_PASSES);
 }, 120_000);
+
+/**
+ * #135: the English set is 1:1 with the Chinese one — the whole basis for comparing the two runs. This part needs
+ * no corpus, so it fails with the structure rather than with retrieval.
+ */
+test('the English eval set is one-for-one with the Chinese one', () => {
+  expect(EVAL_CASES_ENGLISH).toHaveLength(EVAL_CASES.length);
+  EVAL_CASES.forEach((chinese, index) => {
+    const english = EVAL_CASES_ENGLISH[index]!;
+    expect({
+      index,
+      section: english.expectsSection === chinese.expectsSection,
+      unanswerable: Boolean(english.unanswerable) === Boolean(chinese.unanswerable),
+      translated: english.question !== chinese.question,
+    }).toEqual({ index, section: true, unanswerable: true, translated: true });
+  });
+});

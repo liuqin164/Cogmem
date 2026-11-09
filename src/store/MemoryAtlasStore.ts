@@ -856,6 +856,52 @@ export class MemoryAtlasStore {
   }
 
   private episodeEdgesForFacet(projectId: string, facet: PlannedFacet): FacetEdgeRow[] {
+    // `state` and `place` are the two facets a reader names in words (#28). Their ids cannot be a cue —
+    // a state's id is a hash and a place's is its normalized name — so the cue is resolved through the
+    // alias index. `memory_edges` stores an endpoint as `<type>` plus the id with its type prefix
+    // stripped, which is what the resolved ids are reduced to before matching.
+    const byAlias = facet.type === 'state' || facet.type === 'place';
+    const resolvedIds = byAlias
+      ? this.findAliasNodes(projectId, facet.type === 'place' ? 'location' : 'state', normalizeAlias(facet.value))
+      : [];
+    const edgeKeys = resolvedIds.map((nodeId) => (nodeId.includes(':') ? nodeId.slice(nodeId.indexOf(':') + 1) : nodeId));
+    if (byAlias && edgeKeys.length === 0) return [];
+    if (byAlias) {
+      // Their edges hang off the event that was in that state or at that place, not off the episode, so
+      // the entrance is reversed — and it answers with the **episode**, because that is the id every
+      // caller of this method groups cards by. Two hops: the edge's source node is named by a document
+      // citing one of the episode's evidence events, and the episode is the edge that cites that event.
+      // Only these two facet types take this path.
+      const placeholders = edgeKeys.map(() => '?').join(',');
+      const relationFilter = facet.relation ? 'AND edge.relation_type=?' : '';
+      const params: Array<string | number> = [projectId, ...edgeKeys];
+      if (facet.relation) params.push(facet.relation);
+      // One more `project_id` for the document lookup inside the reverse entrance.
+      params.push(projectId);
+      return this.db.prepare(`
+        SELECT episode_edge.source_id AS source_id, edge.relation_type, edge.target_type, edge.target_id,
+               edge.confidence, edge.evidence_event_ids_json
+        FROM memory_edges edge
+        JOIN memory_edges episode_edge
+          ON episode_edge.project_id = edge.project_id
+         AND episode_edge.source_type = 'episode'
+         AND episode_edge.relation_type IN ('HAS_EVIDENCE','SUPPORTED_BY')
+         AND episode_edge.status IN ('active','weak')
+        WHERE edge.project_id=? AND edge.target_id IN (${placeholders}) ${relationFilter}
+          AND edge.status IN ('active','weak')
+          AND edge.source_id IN (
+            SELECT CASE WHEN instr(d.node_id, ':') > 0 THEN substr(d.node_id, instr(d.node_id, ':') + 1) ELSE d.node_id END
+              FROM memory_atlas_documents d
+             WHERE d.project_id=?
+               AND EXISTS (
+                 SELECT 1 FROM json_each(d.evidence_event_ids_json) cited
+                  WHERE cited.value = episode_edge.target_id
+               )
+          )
+        ORDER BY edge.confidence DESC
+        LIMIT 5000
+      `).all(...params) as FacetEdgeRow[];
+    }
     const relationFilter = facet.relation ? 'AND relation_type=?' : '';
     const params: Array<string | number> = facet.relation
       ? [projectId, facet.type, facet.value, facet.relation]

@@ -27,12 +27,38 @@ export interface SharedRetraction {
 }
 
 /**
+ * A shared collection and who may read it. The owner is the host that first published into the
+ * collection; the readers list is retained from the per-reader ACL that 4.1 replaced (#146) and is no longer
+ * consulted — reading is open to any connected agent while sharing is enabled
+ * alone — which is what "sharing is off by default" means at the storage layer.
+ */
+export interface SharedCollection {
+  collection: string;
+  ownerHost: string;
+  readers: string[];
+  createdAt: number;
+  itemCount: number;
+}
+
+/**
  * Shared region. Publishing is idempotent on `itemHash`; retraction is soft, so
  * a subscriber's earlier reasoning stays explainable.
+ *
+ * Reading takes the reader's identity, and a call with none returns nothing rather than everything — a
+ * missing identity must fail closed. While sharing is enabled, identity does not narrow the result further
+ * (#146, Ryu 2026-11-06): every agent that can connect reads every collection, so the one check left here
+ * is that there *is* an identity to answer with.
  */
 export interface SharedMemoryPort {
   publish(items: SharedItem[]): Promise<number>;
   retract(retraction: SharedRetraction): Promise<void>;
-  subscribe(collections: string[], options?: { limit?: number }): Promise<SharedItem[]>;
+  subscribe(collections: string[], options: { readerHost?: string; limit?: number }): Promise<SharedItem[]>;
+  /** The same read, for a synchronous caller (recall); both go through one implementation. */
+  subscribeSync?(collections: string[], options?: { readerHost?: string; limit?: number }): SharedItem[];
   explain(itemHash: string): Promise<{ item: SharedItem; retractedAt: number | null } | null>;
+  grantReader(collection: string, readerHost: string, actorHost: string): Promise<void>;
+  revokeReader(collection: string, readerHost: string, actorHost: string): Promise<void>;
+  listCollections(): Promise<SharedCollection[]>;
+  /** The same listing, for a synchronous caller (recall). */
+  listCollectionsSync?(): SharedCollection[];
 }

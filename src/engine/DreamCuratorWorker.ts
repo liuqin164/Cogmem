@@ -14,12 +14,13 @@ import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
 import type { CorrectionResolver } from '../episode/CorrectionResolver.js';
 import type { MemoryFrameStore } from '../store/MemoryFrameStore.js';
 import { frameSourceFingerprint } from '../store/MemoryFrameStore.js';
-import { deterministicFrameFallback } from '../semantic/DeterministicFrameFallback.js';
 import type { StructuredSemanticProcessor } from '../semantic/StructuredSemanticProcessor.js';
 import { StructuredSemanticProcessor as StructuredSemanticProcessorImpl } from '../semantic/StructuredSemanticProcessor.js';
-import { MEMORY_FRAME_PROMPT_VERSION, MEMORY_FRAME_SYSTEM_PROMPT } from '../semantic/SemanticProcessorPrompt.js';
+import { MEMORY_FRAME_PROMPT_VERSION, memoryFrameSystemPrompt } from '../semantic/SemanticProcessorPrompt.js';
+import { normalizeEpisodeKind } from '../semantic/MemoryFrameTypes.js';
 import type { MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
 import { truncate } from '../utils/Values.js';
+import type { MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 
 export interface DreamCuratorRunOptions {
   projectId?: string;
@@ -60,6 +61,8 @@ export interface DreamCuratorRunResult {
 }
 
 export interface DreamCuratorWorkerDeps {
+  /** The project's classification vocabulary (#132); absent means the shipped one. */
+  taxonomy?: MemoryTaxonomy;
   eventStore: EventStore;
   dreamLedgerStore: DreamLedgerStore;
   candidateStore: DeepWriteCandidateStore;
@@ -139,7 +142,7 @@ export class DreamCuratorWorker {
     if (options.sourceEpisodeId && this.deps.memoryFrameStore) {
       const frameInput = {
         projectId: options.projectId || events[0]?.projectId || '', episodeId: options.sourceEpisodeId,
-        episodeType: frameEpisodeKind(options.episodeType), events,
+        episodeType: normalizeEpisodeKind(options.episodeType, this.deps.taxonomy?.episodeKinds.map((kind) => kind.id)), events,
       };
       let frame: MemoryFrameV1 | undefined;
       try {
@@ -147,11 +150,11 @@ export class DreamCuratorWorker {
         // processor instead of parsing its guaranteed-empty text response.
         const frameGenerator = this.resolveGenerateText(options);
         const processor = frameGenerator
-          ? new StructuredSemanticProcessorImpl(async (input) => JSON.parse(await frameGenerator(MEMORY_FRAME_SYSTEM_PROMPT, JSON.stringify({
+          ? new StructuredSemanticProcessorImpl(async (input) => JSON.parse(await frameGenerator(memoryFrameSystemPrompt(this.deps.taxonomy), JSON.stringify({
             schemaVersion: 'memory_frame.v1', promptVersion: MEMORY_FRAME_PROMPT_VERSION,
             projectId: input.projectId, episodeId: input.episodeId, episodeType: input.episodeType,
             events: input.events.map((event) => ({ eventId: event.eventId, role: event.role, occurredAt: event.occurredAt, text: eventTextForMemory(event) })),
-          }))))
+          }))), this.deps.taxonomy)
           : this.deps.semanticProcessor;
         if (!processor) {
           semanticProcessorUnavailable = true;
@@ -960,11 +963,6 @@ export class DreamCuratorWorker {
     const sessionIds = new Set(events.map((event) => event.sessionId).filter((id): id is string => Boolean(id)));
     return sessionIds.size === 1 ? [...sessionIds][0] : undefined;
   }
-}
-
-function frameEpisodeKind(value: string | undefined): 'discussion' | 'operation' | 'decision' | 'correction' | 'diagnostic' | 'planning' | 'status_update' | 'preference' | 'other' {
-  const allowed = new Set(['discussion', 'operation', 'decision', 'correction', 'diagnostic', 'planning', 'status_update', 'preference', 'other']);
-  return value && allowed.has(value) ? value as ReturnType<typeof frameEpisodeKind> : 'other';
 }
 
 function hasPairedConflictClaims(record: Record<string, unknown>): boolean {

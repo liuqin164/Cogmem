@@ -1,4 +1,5 @@
 import type { MemoryFrameV1 } from './MemoryFrameTypes.js';
+import { DEFAULT_TAXONOMY, type MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 
 export const MEMORY_FRAME_SCHEMA_VERSION = 'memory_frame.v1' as const;
 export const MEMORY_FRAME_LIMITS = {
@@ -32,7 +33,8 @@ export const MEMORY_FRAME_JSON_SCHEMA = {
     revisionId: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.id, pattern: NON_WHITESPACE_PATTERN }, revisionNumber: { type: 'integer', minimum: 1 }, supersedesFrameId: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.id, pattern: NON_WHITESPACE_PATTERN },
     title: { type: 'string', maxLength: MEMORY_FRAME_LIMITS.text }, summary: { type: 'string', maxLength: MEMORY_FRAME_LIMITS.text }, confidence: { type: 'number', minimum: 0, maximum: 1 },
     evidenceEventIds: { type: 'array', minItems: 1, maxItems: MEMORY_FRAME_LIMITS.evidence, items: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.id, pattern: NON_WHITESPACE_PATTERN } },
-    episodeKind: { type: 'string', enum: ['discussion','operation','decision','correction','diagnostic','planning','status_update','preference','other'] },
+    // One list of kinds, read from the taxonomy (#132) rather than restated here.
+    episodeKind: { type: 'string', enum: DEFAULT_TAXONOMY.episodeKinds.map((kind) => kind.id) },
     nodes: { type: 'array', minItems: 1, maxItems: MEMORY_FRAME_LIMITS.nodes, items: { type: 'object', additionalProperties: false, required: ['frameNodeId','dimension','label','confidence','evidenceEventIds'], properties: { frameNodeId: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.id, pattern: NON_WHITESPACE_PATTERN }, dimension: { type: 'string', enum: MEMORY_DIMENSIONS }, label: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.text, pattern: NON_WHITESPACE_PATTERN }, description: { type: 'string', maxLength: MEMORY_FRAME_LIMITS.text }, aliases: { type: 'array', maxItems: MEMORY_FRAME_LIMITS.aliases, items: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.alias, pattern: NON_WHITESPACE_PATTERN } }, canonicalHint: { type: 'object', additionalProperties: false, properties: { nodeId: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.id, pattern: NON_WHITESPACE_PATTERN }, canonicalLabel: { type: 'string', maxLength: MEMORY_FRAME_LIMITS.text }, confidence: { type: 'number', minimum: 0, maximum: 1 } } }, confidence: { type: 'number', minimum: 0, maximum: 1 }, evidenceEventIds: { type: 'array', minItems: 1, maxItems: MEMORY_FRAME_LIMITS.evidence, items: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.id, pattern: NON_WHITESPACE_PATTERN } } } } },
     relations: { type: 'array', maxItems: MEMORY_FRAME_LIMITS.relations, items: { type: 'object', additionalProperties: false, required: ['sourceFrameNodeId','relationType','targetFrameNodeId','confidence','evidenceEventIds'], properties: { sourceFrameNodeId: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.id, pattern: NON_WHITESPACE_PATTERN }, relationType: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.id, pattern: NON_WHITESPACE_PATTERN }, targetFrameNodeId: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.id, pattern: NON_WHITESPACE_PATTERN }, confidence: { type: 'number', minimum: 0, maximum: 1 }, evidenceEventIds: { type: 'array', minItems: 1, maxItems: MEMORY_FRAME_LIMITS.evidence, items: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.id, pattern: NON_WHITESPACE_PATTERN } }, validFrom: { type: 'number' }, validTo: { type: 'number' } } } },
     temporalReferences: { type: 'array', maxItems: MEMORY_FRAME_LIMITS.temporalReferences, items: { type: 'object', additionalProperties: false, required: ['label','confidence','evidenceEventIds'], properties: { label: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.text, pattern: NON_WHITESPACE_PATTERN }, occurredAt: { type: 'number' }, confidence: { type: 'number', minimum: 0, maximum: 1 }, evidenceEventIds: { type: 'array', minItems: 1, maxItems: MEMORY_FRAME_LIMITS.evidence, items: { type: 'string', minLength: 1, maxLength: MEMORY_FRAME_LIMITS.id, pattern: NON_WHITESPACE_PATTERN } } } } },
@@ -44,9 +46,13 @@ export const MEMORY_FRAME_JSON_SCHEMA = {
   },
 } as const;
 
-export function memoryFrameJsonSchema(options: { allowEmptyEvidence?: boolean } = {}): Record<string, unknown> {
-  if (!options.allowEmptyEvidence) return MEMORY_FRAME_JSON_SCHEMA as unknown as Record<string, unknown>;
+export function memoryFrameJsonSchema(options: { allowEmptyEvidence?: boolean; taxonomy?: MemoryTaxonomy } = {}): Record<string, unknown> {
+  if (!options.allowEmptyEvidence && !options.taxonomy) return MEMORY_FRAME_JSON_SCHEMA as unknown as Record<string, unknown>;
   const schema = structuredClone(MEMORY_FRAME_JSON_SCHEMA) as any;
+  // A project's own vocabulary has to pass this schema too, or a custom kind would be rejected by the very
+  // validation that is supposed to accept it (#132).
+  if (options.taxonomy) schema.properties.episodeKind.enum = options.taxonomy.episodeKinds.map((kind) => kind.id);
+  if (!options.allowEmptyEvidence) return schema as Record<string, unknown>;
   schema.properties.evidenceEventIds.minItems = 0;
   for (const key of ['nodes', 'relations', 'temporalReferences', 'stateTransitions']) {
     schema.properties[key].items.properties.evidenceEventIds.minItems = 0;

@@ -8,15 +8,16 @@ import { ActionFrameExtractor } from './ActionFrameExtractor.js';
 import { GraphCurator } from './GraphCurator.js';
 import type { MemoryFrameStore } from '../store/MemoryFrameStore.js';
 import { MemoryFrameProjector } from './MemoryFrameProjector.js';
+import { DEFAULT_TAXONOMY, type MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 
 export class MemoryAtlasIndexer {
   private readonly actions: ActionFrameExtractor;
   private readonly curator: GraphCurator;
   private readonly frameProjector?: MemoryFrameProjector;
-  constructor(private db: Database, eventStore: EventStore, private store: MemoryAtlasStore, frameStore?: MemoryFrameStore) {
+  constructor(private db: Database, eventStore: EventStore, private store: MemoryAtlasStore, frameStore?: MemoryFrameStore, taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY) {
     installAtlasProjectionDirtyTriggersV3(db);
     this.actions = new ActionFrameExtractor(db, eventStore, store);
-    this.curator = new GraphCurator(db, eventStore, store);
+    this.curator = new GraphCurator(db, eventStore, store, taxonomy);
     if (frameStore) this.frameProjector = new MemoryFrameProjector(db, frameStore, store, eventStore.getProjectTimeZone());
   }
   rebuild(options: { projectId?: string } = {}): { documents: number; actions: number; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {

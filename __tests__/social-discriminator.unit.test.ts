@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { discriminativeProbes, overlapIsOnlySmallTalk } from '../src/agent/AgentMemoryBackend.js';
+import { setConfiguredLanguage } from '../src/config/LanguagePacks.js';
 
 test('a question reduces to probes that can tell small talk from an answer', () => {
   const probes = discriminativeProbes('好的收到，归档保留期几年');
@@ -21,4 +22,27 @@ test('a hit whose whole overlap with the question is small talk is not a hit', (
   expect(overlapIsOnlySmallTalk(['retry'], new Set(['retry']))).toBe(false);
   // Nothing readable: nothing demonstrated, so nothing discarded.
   expect(overlapIsOnlySmallTalk([], frequent)).toBe(false);
+});
+
+/**
+ * #174: the probe reads the same pack `classifySocialTurn` reads, at call time.
+ *
+ * `cheers` is an English pleasantry the Chinese pack does not carry, so it is the word that tells the two packs
+ * apart. The old code froze the vocabulary into a module constant at import — before `MemoryKernel` set the
+ * project language — so an `en` project token-checked against Chinese and this word was not a filler; the
+ * verdict next to it came from the English pack.
+ */
+test('the filler probe follows the configured language, not an import-time snapshot', () => {
+  const frequent = new Set(['cheers']);
+  try {
+    setConfiguredLanguage('en');
+    expect(overlapIsOnlySmallTalk(['cheers'], frequent)).toBe(true);
+    setConfiguredLanguage('zh');
+    expect(overlapIsOnlySmallTalk(['cheers'], frequent)).toBe(false);
+    // And the Chinese pack still answers for Chinese words, so the switch is not a one-way door.
+    setConfiguredLanguage('zh');
+    expect(overlapIsOnlySmallTalk(['好的'], new Set(['好的']))).toBe(true);
+  } finally {
+    setConfiguredLanguage('zh');
+  }
 });

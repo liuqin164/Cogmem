@@ -51,3 +51,8 @@ export function tableExists(db: Database, name: string): boolean {
 export function pad2(value: number): string {
   return String(value).padStart(2, '0');
 }
+
+/** `value` with the characters a regex reads as syntax escaped. Written out in two places before this. */
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

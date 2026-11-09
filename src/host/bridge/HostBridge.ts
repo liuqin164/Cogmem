@@ -20,7 +20,9 @@ import {
   compactRecallItems,
   contextCandidateFromRecallItem,
   formatRecallContext,
+  renderRecallBlock,
 } from '../RecallBlock.js';
+import { excludeExplicitSpans } from '../../context/ExplicitExclusion.js';
 
 /** Anything arriving from a host as JSON. */
 type Payload = any;
@@ -158,14 +160,17 @@ export async function recallForHost(
     ? result.atlasCards.filter((card: Payload) => card && selectedCanonicalIds.has(card.canonicalId))
     : [];
   plannedResult = { ...plannedResult, atlasCards: selectedEpisodeCards };
-  const recallContext = formatRecallContext(plannedResult, config);
+  const { text: recallContext, fit } = renderRecallBlock(plannedResult, config);
   return {
     context: recallContext ? (strategyCapsule ? formatStrategyContext(strategyCapsule) + '\n\n' : '') + recallContext : '',
     items: compactRecallItems(plannedResult.items, config), itemCount: plannedResult.items.length,
     recallMode: result.recallMode, fallbackUsed: result.fallbackUsed,
     intent: (result.queryPlan && result.queryPlan.intent) || input.intent || 'memory_recall',
     anchorEventId: anchorItem && anchorItem.sourceAnchor && anchorItem.sourceAnchor.eventId,
-    anchorText: anchorItem && anchorItem.text, queryPlan: result.queryPlan, decisionTrace: result.decisionTrace,
+    anchorText: anchorItem && anchorItem.text, queryPlan: result.queryPlan,
+    // The fit travels with the trace (#131): how many memories were whole, how many were reduced to index
+    // lines, what the block cost and whether it had to leave something out.
+    decisionTrace: { ...((result.decisionTrace ?? {}) as Record<string, unknown>), recallFit: fit },
     atlasCards: result.atlasCards, selectedEpisodeCards,
     relatedButNotSelected: result.relatedButNotSelected, relaxationTrace: result.relaxationTrace,
     activationReceipt, strategyCapsule,
@@ -232,23 +237,36 @@ export async function rememberForHost(
   const projectId = config.projectId || identity.projectId;
   const sessionId = payload.sessionId || identity.sessionId;
 
+  // Both spellings, for the same reason the tool fields read both (#133, and the snake_case lesson from the
+  // secret chain before it): a host that sends `user_text` had its whole user half silently dropped, so the
+  // turn was stored as an assistant reply to nothing.
+  const rawUserText = payload.userText || payload.user_text || '';
+  const rawAssistantText = payload.assistantText || payload.assistant_text || '';
   const cleanUser = config.stripRecallBlocksBeforeRemember === false
-    ? { text: payload.userText || '', stripped: false, strippedChars: 0, blockCount: 0 }
-    : stripCogmemRecallBlocks(payload.userText || '');
+    ? { text: rawUserText, stripped: false, strippedChars: 0, blockCount: 0 }
+    : stripCogmemRecallBlocks(rawUserText);
   const cleanAssistant = config.stripRecallBlocksBeforeRemember === false
-    ? { text: payload.assistantText || '', stripped: false, strippedChars: 0, blockCount: 0 }
-    : stripCogmemRecallBlocks(payload.assistantText || '');
+    ? { text: rawAssistantText, stripped: false, strippedChars: 0, blockCount: 0 }
+    : stripCogmemRecallBlocks(rawAssistantText);
+  // Explicit exclusion runs here, between stripping the echo blocks and scanning for secrets (#133): the
+  // order is the promise — a passage the user marked is never stored, so it must not be scanned, written or
+  // indexed either. It applies to the user's own text only; the assistant's reply is not the user's to mark.
+  const excludedUser = excludeExplicitSpans(cleanUser.text);
   const secretTally = { total: 0, events: 0 };
   const hygiene = {
     ...(payload.hygiene || {}),
     strippedRecallBlocks: Boolean(payload.hygiene && payload.hygiene.strippedRecallBlocks) || cleanUser.stripped || cleanAssistant.stripped,
     strippedBlockCount: Number(payload.hygiene && payload.hygiene.strippedBlockCount || 0) + cleanUser.blockCount + cleanAssistant.blockCount,
     strippedChars: Number(payload.hygiene && payload.hygiene.strippedChars || 0) + cleanUser.strippedChars + cleanAssistant.strippedChars,
+    // Counts only (#133): how many spans were excluded and how many characters they held. The content and
+    // each span's own length are deliberately not recorded anywhere.
+    excludedSpanCount: Number(payload.hygiene && payload.hygiene.excludedSpanCount || 0) + excludedUser.excludedSpanCount,
+    excludedChars: Number(payload.hygiene && payload.hygiene.excludedChars || 0) + excludedUser.excludedChars,
     get secretFindings() { return { total: secretTally.total, events: secretTally.events }; },
   };
   // One scan per conversation text: the user's mark is what the event carries, the assistant's rides
   // beside it because the turn metadata channel is shared by both events.
-  const userSecretFindings = countSecretFindings(cleanUser.text);
+  const userSecretFindings = countSecretFindings(excludedUser.text);
   const assistantSecretFindings = countSecretFindings(cleanAssistant.text);
   if (userSecretFindings.total > 0) { secretTally.total += userSecretFindings.total; secretTally.events += 1; }
   // The assistant's marks are reported by the same summary, or the count would disagree with what
@@ -260,7 +278,8 @@ export async function rememberForHost(
     projectId,
     workspaceId: projectId,
     sessionId,
-    userText: cleanUser.text,
+    // The excluded spans are gone by here: this is what reaches the ledger (#133).
+    userText: excludedUser.text,
     assistantText: cleanAssistant.text,
     ingestMode: config.ingestMode || 'selective_compile',
     timestamp: Date.now(),
