@@ -16,6 +16,7 @@ import {
   type OpenClawAutoMemoryPluginInspection,
 } from '../host/openclaw/AutoMemoryPluginInstaller.js';
 import { compactStorage } from '../storage/StorageCompactor.js';
+import { RECALL_TRACE_MAX_ROWS } from '../observability/RecallDecisionTrace.js';
 import {
   buildGate,
   defaultHermesConfigPath,
@@ -259,6 +260,28 @@ function readSharedCollections(configPath: string): Array<Omit<SharedCollection,
   }
 }
 
+/**
+ * How many recall decisions are stored, against the cap that keeps them bounded (#187).
+ *
+ * Read-only. A database where nothing has recalled reports zero rows — the table does not exist yet,
+ * which is a real answer rather than an error. Any other failure is reported as nothing at all, the
+ * way the shared-collection reader does: an unreadable table must not be printed as "nothing has
+ * recalled here".
+ */
+function readRecallTraceRetention(dbPath: string): { rows: number; maxRows: number } | undefined {
+  let db: Database | undefined;
+  try {
+    db = new Database(dbPath, { readonly: true });
+    const row = db.prepare(`SELECT COUNT(*) AS c FROM trace_events`).get() as { c?: number } | undefined;
+    return { rows: Number(row?.c ?? 0), maxRows: RECALL_TRACE_MAX_ROWS };
+  } catch (error) {
+    if (error instanceof Error && /no such table/i.test(error.message)) return { rows: 0, maxRows: RECALL_TRACE_MAX_ROWS };
+    return undefined;
+  } finally {
+    try { db?.close(); } catch { /* the report is already built */ }
+  }
+}
+
 function countMarkedSecretEvents(configPath: string): number | undefined {
   let kernel: ReturnType<typeof createMemoryKernelFromConfig> | undefined;
   try {
@@ -440,6 +463,9 @@ if (envPath) {
     // could only ever report: the re-embedding itself runs in the host, and the numbers are
     // storage state. It reads here instead, so the command is gone (#141).
     const embeddings = new NeuronEmbeddingStore(new Database(kernelDbPath!, { readonly: true })).getProgress();
+    // #187: the decision log is append-only and capped, so the operator needs the current count next to
+    // the cap — a table at its ceiling is normal, a table missing is "nothing has recalled here yet".
+    const trace = readRecallTraceRetention(kernelDbPath!);
     storageReport = {
       rawEvents: storageStats.rawEventsBefore,
       vectorCount: storageStats.vectorCountBefore,
@@ -447,6 +473,7 @@ if (envPath) {
       eligibleVectorBytes: storageStats.eligibleVectorBytes,
       vectorBytesPerRawEvent: storageStats.vectorBytesPerRawEventBefore,
       embeddings: { completed: embeddings.completed, total: embeddings.total, failed: embeddings.failed },
+      ...(trace ? { recallDecisions: trace } : {}),
     };
     ok([
       `storage raw_events=${storageStats.rawEventsBefore}`,
@@ -456,6 +483,7 @@ if (envPath) {
       `vector_bytes_per_raw_event=${storageStats.vectorBytesPerRawEventBefore.toFixed(2)}`,
       `embeddings=${embeddings.completed}/${embeddings.total}`,
       ...(embeddings.failed > 0 ? [`embedding_failures=${embeddings.failed}`] : []),
+      ...(trace ? [`recall_decisions=${trace.rows}/${trace.maxRows}`] : []),
     ].join(' '));
     if (storageStats.rawEventsBefore > 0 && storageStats.vectorBytesPerRawEventBefore >= 8192) {
       warn('vector_storage_growth', 'Vector bytes per raw event are high; consider selective_compile/raw_then_dream and cogmem compact --dry-run.');
