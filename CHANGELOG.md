@@ -1,5 +1,9 @@
 # Changelog
 
+## 4.2.0 (unreleased)
+
+- `cogmem connect openclaw --auto` now wires one Cogmem MCP server per OpenClaw agent (#148). OpenClaw keeps one global `mcp.servers` map (openclaw/openclaw#72591), so an agent's own identity is an entry of its own — `cogmem-<agentId>`, run with `--host <agentId> --project <agentId>` so the connection speaks as that agent (ADR-0006) — plus a `tools.deny` pattern that hides every *other* agent's entry from it. The denial is the whole feature: without it the neighbour's server is callable and two agents' memory mingles silently, so both halves are checked before the write and again after it, and a config that already leaks is refused by name (`agent "susan" can see mcp.servers.cogmem-writer … missing "cogmem-writer__*"`) instead of being quietly extended. The self-check also starts each written entry and asks it to recall, and the answer's `agentId` has to be that agent's. Re-running is a no-op, a single-agent config is untouched, `connect openclaw --remove` takes the entries and the denials back out, and a machine with an `agents.json` registry is refused rather than wired to a server that cannot start without a credential (#185).
+
 ## 4.1.0
 
 Scope for this line, in the order it is worked: the shared-memory design comparison (#134, whose
