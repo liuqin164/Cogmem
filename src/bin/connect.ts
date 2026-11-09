@@ -530,6 +530,19 @@ async function verifyOpenClawPlugin(install: OpenClawAutoMemoryInstallResult): P
     entry,
     identity: await verifyMcpEntryIdentity({ command: entry.command, args: entry.args }, { expectedAgentId: entry.agentId }),
   })));
+  // An entry that answered as *somebody else* is not a check that could not run, it is the
+  // silent merge this wiring exists to prevent: two agents, one identity. That failure ends
+  // the command rather than being reported as "not verified" (#148). An entry that could not
+  // start at all stays a report, the way the same check does for Hermes and pi — a machine
+  // without the launcher on PATH is a fact about the machine, not about the wiring.
+  const mismatched = probes.filter((probe) => probe.identity.agentId && probe.identity.agentId !== probe.entry.agentId);
+  if (mismatched.length > 0) {
+    throw new Error(
+      'openclaw_agent_identity: an entry does not run as the agent it belongs to, so those agents would share one memory — '
+      + mismatched.map((probe) => `${probe.entry.name} answered as agentId=${probe.identity.agentId}, not ${probe.entry.agentId}`).join('; ')
+      + `. Fix the entry's --host in ${install.openclawConfigPath} and re-run; the rest of the config was written.`,
+    );
+  }
   const unverified = probes.filter((probe) => !probe.identity.ok);
   const ok = filesPresent && entryEnabled && unverified.length === 0;
   return {
@@ -540,6 +553,7 @@ async function verifyOpenClawPlugin(install: OpenClawAutoMemoryInstallResult): P
         ? `plugin ${install.pluginId} is enabled in ${install.openclawConfigPath} with files present`
         : pluginDetail,
       ...probes.map((probe) => `${probe.entry.agentId}: ${probe.identity.ok ? 'verified' : 'not verified'} — ${probe.identity.detail}`),
+      ...(install.multiAgent?.isolation.warnings ?? []).map((warning) => `warning: ${warning}`),
     ].join('; '),
   };
 }
@@ -734,7 +748,12 @@ function installForHost(agent: AgentKind, args: ConnectArgs): ConnectResult {
       // One entry per OpenClaw agent, each running the server under its own identity
       // (#148). The installer writes and checks them; this is the command they run,
       // resolved here because this is where a host's launcher is resolved (ADR-0010).
-      agentServerFor: (agentId) => resolveCogmemMcpServer(hostWorkspaceRoot, agentId, agentId),
+      //
+      // The project is per-agent and derived from the integration's own scope, not the bare
+      // agent id: the identity is the agent (`--host`), and its memory is its own project
+      // (ADR-0009) — but two OpenClaw workspaces on one machine can share one config and
+      // one database, and `susan` in each of them is two agents, not one (ADR-0005).
+      agentServerFor: (agentId) => resolveCogmemMcpServer(hostWorkspaceRoot, `${integrationProject}-${agentId}`, agentId),
     });
   } else if (agent === 'hermes' && args.auto) {
     hermesMcp = installHermesMcpConfig({

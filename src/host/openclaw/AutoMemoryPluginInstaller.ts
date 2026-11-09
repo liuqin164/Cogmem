@@ -11,6 +11,7 @@ import { resolveCogmemConfigPath } from '../../config/CogmemConfig.js';
 import { resolveAgentRegistryPath } from '../../mcp/AgentRegistry.js';
 import { integrationScope } from '../IntegrationScope.js';
 import {
+  openClawAgentIds,
   openClawAgentRefs,
   unwireOpenClawCogmemAgentEntries,
   verifyOpenClawAgentIsolation,
@@ -463,8 +464,9 @@ function buildPatchedOpenClawConfig(input: {
   // OpenClaw has no per-agent MCP server map (openclaw/openclaw#72591), so an agent gets
   // its own entry plus a denial of every other agent's; without the denial the neighbour's
   // server is callable and two agents' memory mingles with nothing to show for it. The
-  // denial is verified on the way in *and* on the way out: in, so a config that already
-  // leaks is named instead of quietly extended; out, so this installer cannot write one.
+  // denial is checked on the way in and on the way out: in, so a config that already leaks
+  // is named instead of quietly extended (skipped under --force, which is the operator
+  // saying they know); out, so this installer cannot write one whatever it was told.
   const multiAgent = wireOpenClawAgents(root, input);
 
   const after = JSON.stringify(root);
@@ -487,8 +489,12 @@ function wireOpenClawAgents(
   input: { workspaceRoot: string; configPath: string; force: boolean; agentServerFor?: (agentId: string) => { command: string; args: string[] } },
 ): OpenClawMultiAgentReport | undefined {
   if (!input.agentServerFor) return undefined;
+  // Counted leniently first, and by distinct agent: one agent carried in both `entries` and
+  // `list` is still one agent, and a config this command has no business rewriting must not
+  // be the one that fails. An agent that cannot carry a tool policy is a refusal only once
+  // there are two agents to keep apart.
+  if (openClawAgentIds(openClawAgentRefs(root, { strict: false })).length < 2) return undefined;
   const refs = openClawAgentRefs(root);
-  if (refs.length < 2) return undefined;
 
   // A registry means identities exist and `cogmem mcp` refuses a stdio connection without
   // a credential (#80, ADR-0006). One entry per agent would therefore need one credential

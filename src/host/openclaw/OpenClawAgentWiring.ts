@@ -40,6 +40,12 @@ export interface OpenClawIsolationReport {
   ok: boolean;
   /** One line per hole, naming the agent, the entry and the pattern that is missing. */
   problems: string[];
+  /**
+   * Things this command will not rewrite but the operator has to know: a policy that hides
+   * an agent from its *own* memory, or a shared entry that bypasses the whole arrangement.
+   * Reported, never fatal — neither is this command's to change.
+   */
+  warnings: string[];
 }
 
 /** The name a Json-parsed OpenClaw agent id gets in `mcp.servers`. */
@@ -53,7 +59,7 @@ export function openClawCogmemServerName(agentId: string): string {
  * prefix, and a long one is truncated). Mirrored rather than assumed, because the
  * denial patterns have to name whatever OpenClaw actually calls the server.
  */
-export function openClawSafeServerName(raw: string): string {
+function openClawSafeServerName(raw: string): string {
   const normalized = raw.trim().replace(/[^A-Za-z0-9_-]/g, '-') || 'mcp';
   const providerSafe = /^[A-Za-z]/.test(normalized) ? normalized : `mcp-${normalized}`;
   return providerSafe.slice(0, 30);
@@ -66,8 +72,14 @@ export function openClawSafeServerName(raw: string): string {
  * keyed by agent id (what current OpenClaw writes) and `agents.list` is the older array
  * form. An entry that names no id is refused rather than skipped — silently leaving an
  * agent out of the isolation wiring is the failure this whole file exists to prevent.
+ *
+ * `strict: false` reads the same names without that refusal, for the callers that only
+ * need to know how many agents there are (and for `--remove`, which must not fail on a
+ * config this command never wired). Strictness belongs where a denial has to be written,
+ * not in the count that decides whether there is anything to write.
  */
-export function openClawAgentRefs(root: Record<string, unknown>): OpenClawAgentRef[] {
+export function openClawAgentRefs(root: Record<string, unknown>, options: { strict?: boolean } = {}): OpenClawAgentRef[] {
+  const strict = options.strict !== false;
   const agents = isRecord(root.agents) ? root.agents : undefined;
   if (!agents) return [];
   const refs: OpenClawAgentRef[] = [];
@@ -75,7 +87,15 @@ export function openClawAgentRefs(root: Record<string, unknown>): OpenClawAgentR
   const fromMap = (value: unknown): void => {
     if (!isRecord(value)) return;
     for (const [key, node] of Object.entries(value)) {
-      if (!isRecord(node)) continue;
+      if (!isRecord(node)) {
+        if (!strict) {
+          refs.push({ id: key, node: {} });
+          continue;
+        }
+        throw new Error(
+          `agents.entries.${key} is not an object, so it has nowhere to carry a tool policy and its Cogmem identity cannot be denied to the others.`,
+        );
+      }
       refs.push({ id: key, node });
     }
   };
@@ -88,6 +108,10 @@ export function openClawAgentRefs(root: Record<string, unknown>): OpenClawAgentR
     if (!Array.isArray(value)) return;
     for (const item of value) {
       if (typeof item === 'string') {
+        if (!strict) {
+          refs.push({ id: item, node: {} });
+          continue;
+        }
         throw new Error(
           `agents.list names the agent "${item}" as a bare string, so it has nowhere to carry a tool policy. `
           + 'Give it an object with an id and the Cogmem wiring can deny every other agent\'s server.',
@@ -96,6 +120,7 @@ export function openClawAgentRefs(root: Record<string, unknown>): OpenClawAgentR
       if (!isRecord(item)) continue;
       const id = typeof item.id === 'string' ? item.id : typeof item.name === 'string' ? item.name : '';
       if (!id) {
+        if (!strict) continue;
         throw new Error(`An agents.list entry has no id or name, so its Cogmem identity cannot be named: ${JSON.stringify(item)}`);
       }
       refs.push({ id, node: item });
@@ -156,27 +181,23 @@ export function wireOpenClawCogmemAgentEntries(input: {
     const name = openClawCogmemServerName(agentId);
     const { command, args } = input.serverFor(agentId);
     const existing = servers[name];
-    if (isRecord(existing) && !isOursFor(existing, agentId)) {
-      if (!input.force) {
-        throw new Error(
-          `mcp.servers.${name} already exists and was not written for agent "${agentId}" (args: ${JSON.stringify(existing.args ?? null)}). `
-          + `It is either a hand-written entry or one for another identity; re-run with --force to replace it with the agent's own.`,
-        );
-      }
-      delete servers[name];
+    const ours = isRecord(existing) && isEntryWeWroteFor(existing, agentId);
+    if (isRecord(existing) && !ours && !input.force) {
+      throw new Error(
+        `mcp.servers.${name} already exists and was not written for agent "${agentId}" (args: ${JSON.stringify(existing.args ?? null)}). `
+        + `It is either a hand-written entry or one for another identity; re-run with --force to replace it with the agent's own.`,
+      );
     }
-    const created = !isRecord(servers[name]);
     // Everything the user put in the entry besides the command line — an env, a cwd — is
     // kept: only the two fields that decide which identity this server speaks are ours.
-    const kept = isRecord(servers[name]) ? (servers[name] as Record<string, unknown>) : {};
-    servers[name] = { ...kept, command, args };
-    entries.push({ agentId, name, command, args, created });
+    servers[name] = { ...(ours ? (existing as Record<string, unknown>) : {}), command, args };
+    entries.push({ agentId, name, command, args, created: !ours });
 
     for (const other of agents) {
       if (other === agentId) continue;
       const otherName = openClawCogmemServerName(other);
       for (const node of nodesByAgent.get(agentId) ?? []) {
-        if (namespaceDenied(denyPatterns(node), otherName)) continue;
+        if (denialHiding(denyPatterns(node), otherName)) continue;
         const pattern = `${otherName}__*`;
         addDenial(node, pattern);
         denialsAdded.push({ agentId, name: otherName, pattern });
@@ -208,7 +229,8 @@ export function verifyOpenClawAgentIsolation(
   const requireOwnEntries = options.requireOwnEntries !== false;
   const agents = openClawAgentIds(refs);
   const problems: string[] = [];
-  if (agents.length < 2) return { ok: true, problems };
+  const warnings: string[] = [];
+  if (agents.length < 2) return { ok: true, problems, warnings };
 
   const servers = isRecord(isRecord(root.mcp) ? root.mcp.servers : undefined)
     ? (root.mcp as Record<string, unknown>).servers as Record<string, unknown>
@@ -222,14 +244,24 @@ export function verifyOpenClawAgentIsolation(
     }
     for (const node of nodes) {
       const patterns = denyPatterns(node);
-      if (isRecord(servers?.[own]) && namespaceDenied(patterns, own)) {
-        problems.push(`agent "${agentId}" denies its own entry mcp.servers.${own}: remove "${matchingPattern(patterns, own)}" from agents...${agentId}.tools.deny`);
+      // A denial hides the agent from a neighbour; an allow list can hide it from itself,
+      // and "the host is wired and has no memory" is the failure that reads as a Cogmem bug
+      // (#108). Only the agent's own list is judged here: the layers above it (defaults, the
+      // root policy) are OpenClaw's to merge, and guessing at them would be a warning that
+      // is sometimes wrong.
+      const allow = allowPatterns(node);
+      if (allow.length > 0 && !allow.some((pattern) => pattern.startsWith(`${own}__`) || globMatches(pattern.toLowerCase(), `${own}__`))) {
+        warnings.push(`agent "${agentId}" has a tools.allow list that does not name "${own}__*", so its own Cogmem tools are hidden from it`);
+      }
+      const selfDenial = isRecord(servers?.[own]) ? denialHiding(patterns, own) : undefined;
+      if (selfDenial) {
+        problems.push(`agent "${agentId}" denies its own entry mcp.servers.${own}: remove "${selfDenial}" from agents...${agentId}.tools.deny`);
       }
       for (const other of agents) {
         if (other === agentId) continue;
         const otherName = openClawCogmemServerName(other);
         if (!isRecord(servers?.[otherName])) continue;
-        if (namespaceDenied(patterns, otherName)) continue;
+        if (denialHiding(patterns, otherName)) continue;
         problems.push(
           `agent "${agentId}" can see mcp.servers.${otherName} (agent "${other}"'s entry): `
           + `agents...${agentId}.tools.deny is missing "${otherName}__*"`,
@@ -237,21 +269,30 @@ export function verifyOpenClawAgentIsolation(
       }
     }
   }
-  return { ok: problems.length === 0, problems };
+
+  // The manual path this ticket automates — `openclaw mcp add cogmem` — leaves one server
+  // that every agent can call. It is not this command's to remove, but leaving it unreported
+  // would hand back a config that looks isolated and is not.
+  if (isRecord(servers?.cogmem)) {
+    warnings.push('mcp.servers.cogmem is shared by every agent, so what one agent writes under it another can recall; the agents already have one entry each, so remove it or deny it per agent');
+  }
+  return { ok: problems.length === 0, problems, warnings };
+}
+
+/** The `tools.allow` list of one agent entry, or an empty list when it has none. */
+function allowPatterns(node: Record<string, unknown>): string[] {
+  const tools = isRecord(node.tools) ? node.tools : undefined;
+  return stringList(tools?.allow);
 }
 
 /** The `tools.deny` list of one agent entry, or an empty list when it has none. */
 function denyPatterns(node: Record<string, unknown>): string[] {
   const tools = isRecord(node.tools) ? node.tools : undefined;
-  const deny = tools?.deny;
-  return Array.isArray(deny) ? deny.filter((entry): entry is string => typeof entry === 'string') : [];
+  return stringList(tools?.deny);
 }
 
-export interface OpenClawAgentTeardown {
-  /** `mcp.servers` keys this removed, because they were the entries this command writes. */
-  servers: string[];
-  /** Denials this removed, always ones naming a Cogmem agent's entry. */
-  denials: Array<{ agentId: string; pattern: string }>;
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }
 
 /**
@@ -262,22 +303,21 @@ export interface OpenClawAgentTeardown {
  * guard as everywhere else applies: an entry whose command line is not the one written
  * here for that agent is somebody else's and stays.
  */
-export function unwireOpenClawCogmemAgentEntries(root: Record<string, unknown>, refs: OpenClawAgentRef[]): OpenClawAgentTeardown {
+export function unwireOpenClawCogmemAgentEntries(root: Record<string, unknown>, refs: OpenClawAgentRef[]): void {
   const agents = openClawAgentIds(refs);
-  const removals: OpenClawAgentTeardown = { servers: [], denials: [] };
-  if (agents.length === 0) return removals;
-  const names = new Set(agents.map((agentId) => openClawCogmemServerName(agentId)));
+  if (agents.length === 0) return;
 
   const mcp = isRecord(root.mcp) ? root.mcp : undefined;
   const servers = isRecord(mcp?.servers) ? mcp.servers : undefined;
+  const removed = new Set<string>();
   if (servers) {
     for (const agentId of agents) {
       const name = openClawCogmemServerName(agentId);
-      if (!isRecord(servers[name]) || !isOursFor(servers[name] as Record<string, unknown>, agentId)) continue;
+      if (!isRecord(servers[name]) || !isEntryWeWroteFor(servers[name] as Record<string, unknown>, agentId)) continue;
       delete servers[name];
-      removals.servers.push(name);
+      removed.add(name);
     }
-    if (removals.servers.length > 0 && Object.keys(servers).length === 0 && mcp) {
+    if (removed.size > 0 && Object.keys(servers).length === 0 && mcp) {
       delete mcp.servers;
       if (Object.keys(mcp).length === 0) delete root.mcp;
     }
@@ -286,11 +326,11 @@ export function unwireOpenClawCogmemAgentEntries(root: Record<string, unknown>, 
   for (const ref of refs) {
     const tools = isRecord(ref.node.tools) ? ref.node.tools : undefined;
     if (!tools || !Array.isArray(tools.deny)) continue;
+    // Only the denials that named a server this removed: a `cogmem-<agent>` entry somebody
+    // else wrote is still there, and it still has to stay hidden from the other agents.
     const kept = tools.deny.filter((entry: unknown) => {
       if (typeof entry !== 'string' || !entry.endsWith('__*')) return true;
-      if (!names.has(entry.slice(0, -3))) return true;
-      removals.denials.push({ agentId: ref.id, pattern: entry });
-      return false;
+      return !removed.has(entry.slice(0, -3));
     });
     if (kept.length === 0) delete tools.deny;
     else tools.deny = kept;
@@ -299,14 +339,11 @@ export function unwireOpenClawCogmemAgentEntries(root: Record<string, unknown>, 
     // as a change the removal did not explain (#116 review).
     if (Object.keys(tools).length === 0) delete ref.node.tools;
   }
-  return removals;
 }
 
 function addDenial(node: Record<string, unknown>, pattern: string): void {
   const tools = ensureObject(node, 'tools');
-  const deny = Array.isArray(tools.deny) ? tools.deny.filter((entry): entry is string => typeof entry === 'string') : [];
-  deny.push(pattern);
-  tools.deny = deny;
+  tools.deny = [...stringList(tools.deny), pattern];
 }
 
 /**
@@ -317,14 +354,9 @@ function addDenial(node: Record<string, unknown>, pattern: string): void {
  * so a namespace is hidden exactly when such a pattern matches. Both sides are lowered
  * because `normalizeToolPolicyName` lowercases everything before matching.
  */
-function namespaceDenied(patterns: string[], server: string): boolean {
+function denialHiding(patterns: string[], server: string): string | undefined {
   const namespace = `${server}__`.toLowerCase();
-  return patterns.some((pattern) => pattern.endsWith('*') && globMatches(pattern.toLowerCase(), namespace));
-}
-
-function matchingPattern(patterns: string[], server: string): string {
-  const namespace = `${server}__`.toLowerCase();
-  return patterns.find((pattern) => pattern.endsWith('*') && globMatches(pattern.toLowerCase(), namespace)) ?? `${server}__*`;
+  return patterns.find((pattern) => pattern.endsWith('*') && globMatches(pattern.toLowerCase(), namespace));
 }
 
 /** OpenClaw's glob: `*` is the only wildcard, everything else is literal. */
@@ -334,12 +366,32 @@ function globMatches(pattern: string, value: string): boolean {
   return new RegExp(`^${escaped}$`).test(value);
 }
 
-/** True when this entry is the one this command writes for this agent. */
-function isOursFor(entry: Record<string, unknown>, agentId: string): boolean {
+/** The flags the entry this command writes carries. */
+const OUR_FLAGS = new Set(['--host', '--project', '--config']);
+
+/**
+ * True when this entry is the one this command writes for this agent.
+ *
+ * Two facts, both needed. It has to name this agent (`--host`), which is the identity —
+ * `cogmem mcp` and the standalone `cogmem-mcp` entry point write different args, the
+ * second without the positional `mcp`, so the shape of the line is not the test. And it
+ * must carry no flag this command does not write: `--db`, `--profile`, `--agents`,
+ * `--transport` are somebody's deliberate configuration, and rewriting that would retarget
+ * an integration the operator built on purpose. Same judgment as the Hermes patcher's
+ * `isSupersededCogmemMcpArgs`, and the same outcome: a conflict a human resolves, not a
+ * silent replacement (#79).
+ */
+function isEntryWeWroteFor(entry: Record<string, unknown>, agentId: string): boolean {
   const args = Array.isArray(entry.args) ? entry.args.filter((value): value is string => typeof value === 'string') : [];
-  if (args[0] !== 'mcp') return false;
-  const at = args.indexOf('--host');
-  return at !== -1 && args[at + 1] === agentId;
+  const flags = new Map<string, string>();
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!;
+    if (!token.startsWith('--')) continue;
+    flags.set(token, args[index + 1] ?? '');
+    index += 1;
+  }
+  if (flags.get('--host') !== agentId) return false;
+  return [...flags.keys()].every((flag) => OUR_FLAGS.has(flag));
 }
 
 function ensureObject(parent: Record<string, unknown>, key: string): Record<string, unknown> {
