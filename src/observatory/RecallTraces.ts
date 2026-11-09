@@ -1,14 +1,11 @@
 /**
  * The stored recall decisions, read.
  *
- * The observatory's recall page shows what the default lane actually decided, and in this version it
- * reads decisions that were already stored rather than running `explain` to make one — that path can
- * write a row, and a read-only page may not. The table is checked for existence rather than
- * initialized, because `TraceStore.initSchema` is a write.
- *
- * Known gap, and the reason this file is small: nothing in the product constructs a `TraceStore`, so
- * `trace_events` does not exist on a real database and every answer here is empty. The page says so.
- * When a producer lands (#187), this is the one file that has to change.
+ * The observatory's recall page shows what the default lane actually decided, and it reads decisions
+ * that were already stored rather than running `explain` to make one — that path can write a row, and
+ * a read-only page may not. The producer is `RecallDecisionTrace` (#187), written by
+ * `KernelAgentMemoryBackend.recall()`; this side only reads. The table is still checked for existence
+ * rather than initialized, because `TraceStore.initSchema` is a write.
  */
 
 import type Database from 'bun:sqlite';
@@ -83,16 +80,17 @@ function recallNamesAgent(payload: Record<string, unknown>, agent: string): bool
   return named.length === 0 || named.includes(agent);
 }
 
-/** Whether the trace table exists. Cached per connection: `sqlite_master` does not change under a reader. */
-const traceTablePresence = new WeakMap<object, boolean>();
-
+/**
+ * Whether the trace table exists.
+ *
+ * Asked per read rather than cached. The table is created by the kernel's own connection on the first
+ * recall (#187), and the observatory opens its read-only connection before any recall has happened —
+ * a cached "no" from that moment would outlive the table it is about and leave the page empty forever.
+ * One `sqlite_master` lookup against a page load is the price.
+ */
 export function traceTableExists(db: Database): boolean {
-  const cached = traceTablePresence.get(db as unknown as object);
-  if (cached !== undefined) return cached;
   const rows = db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'trace_events'`).all() as Array<{ name: string }>;
-  const present = rows.length > 0;
-  traceTablePresence.set(db as unknown as object, present);
-  return present;
+  return rows.length > 0;
 }
 
 export function readRecalls(
