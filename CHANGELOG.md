@@ -1,6 +1,6 @@
 # Changelog
 
-## 4.1.0 (Unreleased)
+## 4.1.0
 
 Scope for this line, in the order it is worked: the shared-memory design comparison (#134, whose
 conclusion is written into #66) and the shared-memory implementations (#63, #66, #67, #28), then the
