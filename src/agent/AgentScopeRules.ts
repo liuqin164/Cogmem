@@ -80,6 +80,22 @@ export function isAgentRawEvent(event: ScopedEvent, agentId: string): boolean {
 }
 
 /**
+ * Whether an agent may read something, judged from the events its chain reaches (#143).
+ *
+ * The composition, not only the predicate: the recall lanes judge a recalled item this way and the
+ * observatory judges an Atlas node this way, and the two have to agree about all three clauses, not
+ * just about `isAgentRawEvent`.
+ *
+ * A chain that reached nothing is readable: absence is not ownership, which is the same leniency the
+ * raw lane grants a row that names no source.
+ */
+export function eventsVisibleToAgent(chain: ScopedEvent[], agentId: string): boolean {
+  if (chain.length === 0) return true;
+  if (chain.some((event) => isImportedMaterial(event))) return true;
+  return chain.some((event) => isAgentRawEvent(event, agentId));
+}
+
+/**
  * The agent identities one event names, in the order the scope predicate would consider them.
  *
  * Used to build the roster the observatory offers, never to decide visibility: visibility asks

@@ -16,7 +16,7 @@ import { readRedactionMarks } from '../governance/PiiRedactor.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
-import { isAgentRawEvent, isImportedMaterial } from './AgentScopeRules.js';
+import { eventsVisibleToAgent, isAgentRawEvent, isImportedMaterial } from './AgentScopeRules.js';
 import type { StrategyRetrievalPolicy } from '../strategy/StrategyCapsule.js';
 import {
   compileAgentRecallQuery,
@@ -852,14 +852,9 @@ export class KernelAgentMemoryBackend {
    * only ever widens within one project, and the shared lane stays the one deliberate cross-agent channel.
    */
   private itemVisibleToAgent(item: AgentRecallItem, agentId: string): boolean {
-    const chain = this.itemChainEvents(item);
-    if (chain.length === 0) return true;
-    if (chain.some((event) => isImportedMaterial(event))) return true;
-    // The same standard the raw lane applies to its own events, applied to the material a compiled product was
-    // built from: a product is readable by whoever could have read what it was made of. Reusing the predicate,
-    // rather than re-deriving an owner, keeps the two from disagreeing — including the leniency the raw lane
-    // grants a record that carries no source of its own.
-    return chain.some((event) => isAgentRawEvent(event, agentId));
+    // One composition for both surfaces (`eventsVisibleToAgent`): the chain is derived here, because
+    // an item and an Atlas node reach their events differently, and the judgement is shared.
+    return eventsVisibleToAgent(this.itemChainEvents(item), agentId);
   }
 
   /**
